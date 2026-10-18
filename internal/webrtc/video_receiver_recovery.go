@@ -37,6 +37,11 @@ func (r *Router) ResetStreamReceiver(subscriber, publisher, slot string, generat
 // membership, publication and watch ownership through output replacement.
 func (r *Router) resetStreamReceiverLocked(peer *PeerConnectionWrapper, subscriber, publisher, slot string, generation, session, revision uint64) (bool, func(string), error) {
 	r.mu.Lock()
+	// Recovery retires the sender before adding its replacement inside one
+	// critical section: the remove-then-add order is what lets Pion recycle
+	// the alternating video transceiver pair and keeps the growth budget at
+	// one. Recovery is rare and rate limited, so it does not take the
+	// deferred-removal path the frequent control updates use.
 	defer r.mu.Unlock()
 	channel := r.clientChan[subscriber]
 	if r.pubPeers[subscriber] != peer || channel <= 0 || channel != r.clientChan[publisher] || !r.publisherAllowedLocked(subscriber, publisher) {

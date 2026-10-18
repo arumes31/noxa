@@ -9,6 +9,7 @@ import { hardwareRecoveryCodec, knownSoftwareVideoEncoder } from "./video-hevc.j
 import { preferPublicationCodec } from "./video-codecs.js";
 import { startShareStatus, stopShareStatus, refreshShareStatus } from "./share-status.js";
 import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
+import { applyVideoNetworkPriority } from "./voice-priority.js";
 import { shareQuality, screenShareConstraints, createShareQualityControls } from "./screen-share-quality.js";
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { labelButton } from "./icons.js";
@@ -222,6 +223,7 @@ export function createVideoPublication({ policy }) {
                 }
                 for (const encoding of parameters.encodings || []) {
                     encoding.priority = sender === screenSender ? "high" : "medium";
+                    applyVideoNetworkPriority(encoding); // never in the voice class
                     if (sender === screenSender) {
                         const fps = capturePreferences.get(screenTrack)?.fps;
                         if (fps > 0) encoding.maxFramerate = fps;
@@ -321,6 +323,7 @@ export function createVideoPublication({ policy }) {
         capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : 0);
         encodings[0].active = encodings[0].active && publicationUploadActive("screen", track) !== false;
         encodings[0].priority = "high";
+        applyVideoNetworkPriority(encodings[0]);
         if (profile?.fps > 0) encodings[0].maxFramerate = profile.fps;
         return encodings;
     }

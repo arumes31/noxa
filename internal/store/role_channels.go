@@ -31,6 +31,10 @@ type RoleChannelCreate struct {
 	OpusStereo      bool
 	Description     string
 	SlowModeSeconds int
+	// TextOnly creates a text channel (no voice membership). It is fixed at
+	// creation and cannot be combined with a temporary channel, which would be
+	// pruned as soon as it is created because nobody can occupy it.
+	TextOnly bool
 }
 
 // RoleChannelSettings replaces editable metadata at an expected policy
@@ -59,7 +63,8 @@ func (r RoleChannelCreate) valid() bool {
 	return strings.TrimSpace(r.Name) != "" && len(r.Name) <= 255 && validChannelText(r.Name) &&
 		r.ChannelType >= 0 && r.ChannelType <= 2 && r.MaxClients >= 0 && r.MaxClients <= 2_147_483_647 &&
 		r.OpusBitrate >= 0 && r.OpusBitrate <= 510_000 && r.OrderIndex >= -2_147_483_648 && r.OrderIndex <= 2_147_483_647 &&
-		r.SlowModeSeconds >= 0 && r.SlowModeSeconds <= 2_147_483_647 && validChannelText(r.Topic) && validChannelText(r.Description)
+		r.SlowModeSeconds >= 0 && r.SlowModeSeconds <= 2_147_483_647 && validChannelText(r.Topic) && validChannelText(r.Description) &&
+		(!r.TextOnly || (r.ChannelType != 0 && r.PasswordHash == ""))
 }
 
 // PostgreSQL text rejects NUL even though it is valid UTF-8. Reject it as
@@ -157,14 +162,22 @@ func (s *Store) changeRoleChannel(ctx context.Context, actorID int64, change aut
 			change.ChannelID, settings.Name, settings.Topic, settings.Description, settings.OrderIndex, settings.MaxClients, settings.SlowModeSeconds,
 			settings.OpusBitrate, settings.OpusFEC, settings.OpusDTX, settings.OpusStereo)
 		if err == nil && settings.PasswordHash != nil {
-			_, err = tx.ExecContext(ctx, `UPDATE channels SET password_hash=$2 WHERE id=$1`, change.ChannelID, *settings.PasswordHash)
+			// Text channels are reached through chat subscriptions, which never
+			// check a password, so one would only pretend to protect them.
+			var res sql.Result
+			res, err = tx.ExecContext(ctx, `UPDATE channels SET password_hash=$2 WHERE id=$1 AND (NOT text_only OR $2 = '')`, change.ChannelID, *settings.PasswordHash)
+			if err == nil {
+				if n, rowsErr := res.RowsAffected(); rowsErr != nil || n == 0 {
+					return authorization.RolePolicy{}, 0, authorization.ErrRoleInvalid
+				}
+			}
 		}
 	case authorization.ChannelCreate:
 		_, err = tx.ExecContext(ctx, `INSERT INTO channels
-			(id,parent_id,name,topic,order_index,channel_type,max_clients,password_hash,created_by,opus_bitrate,opus_fec,opus_dtx,opus_stereo,description,slow_mode_seconds)
-			VALUES($1,NULLIF($2,0),$3,$4,$5,$6,NULLIF($7,0),NULLIF($8,''),$9,$10,$11,$12,$13,$14,$15)`,
+			(id,parent_id,name,topic,order_index,channel_type,max_clients,password_hash,created_by,opus_bitrate,opus_fec,opus_dtx,opus_stereo,description,slow_mode_seconds,text_only)
+			VALUES($1,NULLIF($2,0),$3,$4,$5,$6,NULLIF($7,0),NULLIF($8,''),$9,$10,$11,$12,$13,$14,$15,$16)`,
 			change.ChannelID, change.ParentID, create.Name, create.Topic, create.OrderIndex, create.ChannelType, create.MaxClients, create.PasswordHash,
-			actorID, create.OpusBitrate, create.OpusFEC, create.OpusDTX, create.OpusStereo, create.Description, create.SlowModeSeconds)
+			actorID, create.OpusBitrate, create.OpusFEC, create.OpusDTX, create.OpusStereo, create.Description, create.SlowModeSeconds, create.TextOnly)
 	case authorization.ChannelMove:
 		_, err = tx.ExecContext(ctx, `UPDATE channels SET parent_id=NULLIF($1,0),order_index=COALESCE($3,order_index) WHERE id=$2`, change.ParentID, change.ChannelID, change.OrderIndex)
 	case authorization.ChannelDelete:

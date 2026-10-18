@@ -67,8 +67,8 @@ func TestRoleMediaDeliveryChecksSlotScopesAndLiveRevocation(t *testing.T) {
 		if err := env.srv.guardRoleMedia(d, func() error {
 			written = true
 			sender, _ := env.srv.clientByID(d.SenderID)
-			if sender.roleActionMu.TryLock() {
-				sender.roleActionMu.Unlock()
+			if sender.mediaFence.TryLock() {
+				sender.mediaFence.Unlock()
 				t.Error("packet write did not protect source membership")
 			}
 			return nil

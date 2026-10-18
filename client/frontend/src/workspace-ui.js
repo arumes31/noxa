@@ -70,6 +70,7 @@ export function renderWorkspace() {
     for (const element of document.querySelectorAll("#channel-tree .avatar[data-uid]")) {
         element.style.setProperty("--avatar-color", avatarColor(element.dataset.uid));
     }
+    window.__noxaShell?.renderVoiceCard?.();
 }
 
 export function renderMember() {
@@ -240,7 +241,10 @@ export function initWorkspace() {
     const closeChannels = () => {
         document.body.classList.remove("channels-open");
         $("workspace-sidebar-toggle").setAttribute("aria-expanded", "false");
-        const groupToggle = document.querySelector("#center.private-group-active .group-show-channels");
+        // The Messages view hides both #chat-head and the group navigation, so
+        // its own toggle takes the focus back there.
+        const groupToggle = document.querySelector("#center.dm-view-active .dm-show-channels")
+            || document.querySelector("#center.private-group-active .group-show-channels");
         groupToggle?.setAttribute("aria-expanded", "false");
         (groupToggle || $("workspace-sidebar-toggle")).focus();
     };
@@ -306,7 +310,7 @@ function translateWorkspace() {
     $("ptt-btn").title = t("workspace.ptt");
     $("chat-text").setAttribute("aria-label", t("workspace.message"));
     labelButton($("voice-settings"), "settings", t("workspace.audioPreferences"));
-    labelButton($("voice-options").querySelector("summary"), "more", t("context.voiceMore"));
+    labelButton($("voice-options").querySelector("summary"), "effects", t("context.voiceMore"));
     $("voice-options").querySelector("summary").setAttribute("aria-label", t("context.voiceMoreLabel"));
     labelButton($("voice-disconnect"), "disconnect", t("workspace.disconnect"));
 
@@ -315,7 +319,7 @@ function translateWorkspace() {
         ["chat-info-btn", "info", "workspace.channelInfo"],
         ["chat-e2ee-btn", "lock", "workspace.encryption"],
         ["chat-export-btn", "download", "workspace.export"],
-        ["voice-leave-channel", "leave", "workspace.leaveChannel"],
+        ["voice-leave-channel", "hangup", "workspace.leaveChannel"],
     ]) {
         labelButton($(id), glyph, t(key));
         $(id).title = t(key);

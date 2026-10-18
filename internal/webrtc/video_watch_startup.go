@@ -126,6 +126,17 @@ func (r *Router) finishVideoStartupBindings(subscriber string, peer *PeerConnect
 	}
 }
 
+func (r *Router) watchStartupPending(subscriber string) bool {
+	r.watchMu.RLock()
+	defer r.watchMu.RUnlock()
+	for key, watch := range r.watches {
+		if key.subscriber == subscriber && watch.startupPending {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Router) flushWatchStartup(subscriber string, peer *PeerConnectionWrapper) time.Duration {
 	r.finishVideoStartupBindings(subscriber, peer)
 	type request struct {
@@ -141,6 +152,13 @@ func (r *Router) flushWatchStartup(subscriber string, peer *PeerConnectionWrappe
 	case <-peer.closed:
 		return 0
 	default:
+	}
+	// Binding and connection notifications arrive for every renegotiation of
+	// every recipient. Without a pending startup there is nothing to claim;
+	// a needless watch writer would make concurrent final media writes of all
+	// recipients fail their non-blocking scope check.
+	if !r.watchStartupPending(subscriber) {
+		return 0
 	}
 	r.mu.Lock()
 	r.watchMu.Lock()
@@ -204,16 +222,30 @@ func (r *Router) flushWatchStartup(subscriber string, peer *PeerConnectionWrappe
 			epoch = input.started
 			input.mu.Unlock()
 		}
+		// A live source with a fresh cached keyframe starts this viewer on its
+		// next unit without disturbing the publisher. If that has not happened
+		// within gopRefillTimeout (source paused, admission failed), ask upstream.
+		if peer.egress != nil && tracks != nil && tracks.video[key.slot] != nil &&
+			r.gopCacheLocked(key.publisher, key.slot, rid).servable(now, tracks.video[key.slot].track.Codec().MimeType) {
+			if watch.cacheStart.IsZero() {
+				watch.cacheStart = now
+				r.watches[key] = watch
+			}
+			if waited := now.Sub(watch.cacheStart); waited < gopRefillTimeout {
+				if delay := gopRefillTimeout - waited; retry == 0 || delay < retry {
+					retry = delay
+				}
+				continue
+			}
+		}
 		input.recordKeyframeRequest(keyframeWatchStart, keyframeRequested, &epoch)
-		if last := r.keyframeLast[ssrc]; !last.IsZero() && now.Sub(last) < keyframeRequestWindow {
+		if delay, ok := r.claimKeyframeRequest(ssrc, now); !ok {
 			input.recordKeyframeRequest(keyframeWatchStart, keyframeCoalesced, &epoch)
-			delay := keyframeRequestWindow - now.Sub(last)
 			if retry == 0 || delay < retry {
 				retry = delay
 			}
 			continue
 		}
-		r.keyframeLast[ssrc] = now
 		watch.startupPending = false
 		r.watches[key] = watch
 		requests = append(requests, request{key.publisher, ssrc, writer, input, epoch})

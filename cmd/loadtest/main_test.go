@@ -111,7 +111,7 @@ func TestLoadtestSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := server.New(&config.Config{TCPAddr: addr, ChatAllowPlaintext: true}, logger, &server.Deps{
+	srv := server.New(&config.Config{TCPAddr: addr}, logger, &server.Deps{
 		Auth:      fakeAuth{},
 		State:     sm,
 		Broadcast: bc,

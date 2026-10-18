@@ -1,7 +1,7 @@
 .settings-dialog:has(.notification-settings) { width: 860px; }
 .notification-settings { display: flex; flex-direction: column; gap: 24px; }
 .notification-section { min-width: 0; }
-.notification-section > h3, .notification-section > summary {
+.notification-section > h4, .notification-section > summary {
     margin: 0 0 10px; font-size: 1rem; font-weight: 600; color: var(--text);
 }
 .notification-settings summary {

@@ -156,6 +156,27 @@ test("receiver telemetry attributes every inbound audio track and excludes video
     assert.equal(report.tracks[0].codec, "audio/opus");
 });
 
+test("reused MIDs with duplicate browser track ids are attributed by the current remote MSID", () => {
+    // pb reused pa's screen-audio MID 3 (its receiver keeps track id
+    // "c-pa|screenaudio"); pa rejoined on MID 5 with the same browser id.
+    const section = (mid, id) => `m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:${mid}\r\na=sendonly\r\na=msid:noxa-${id} ${id}\r\n`;
+    const state = stateFixture();
+    state.pc = { ...state.pc, remoteDescription: { sdp: `v=0\r\n${section("3", "c-pb|screenaudio")}${section("5", "c-pa|screenaudio")}${section("7", "c-pb")}` } };
+    state.trackUsers = new Map([["c-pb|screenaudio", { client_id: "c-pb", track_id: "c-pb|screenaudio" }],
+        ["c-pa|screenaudio", { client_id: "c-pa", track_id: "c-pa|screenaudio" }], ["c-pb", { client_id: "c-pb", track_id: "c-pb" }]]);
+    state.clients = [{ client_id: "c-pb", is_speaking: true }];
+    const rows = [receiver({ id: "reused", mid: "3", trackIdentifier: "c-pa|screenaudio" }),
+        receiver({ id: "rejoined", mid: "5", trackIdentifier: "c-pa|screenaudio" }),
+        receiver({ id: "microphone", mid: "7", trackIdentifier: "c-pa" })];
+    const before = snapshot(...rows.map(row => previous({ id: row.id, mid: row.mid, trackIdentifier: row.trackIdentifier })));
+    const report = collectVoiceTelemetry(state, snapshot(...rows), before, {});
+    assert.deepEqual(report.tracks.map(row => [row.track_id, row.publisher_id]), [
+        ["c-pb|screenaudio", "c-pb"], ["c-pa|screenaudio", "c-pa"], ["c-pb", "c-pb"],
+    ], "neither duplicate-id receiver is dropped or attributed to the other publisher");
+    assert.equal(report.tracks[0].audio_active, null, "pb's speech does not activate its share audio");
+    assert.equal(report.tracks[2].audio_active, true, "pb's reused microphone MID follows pb's speech");
+});
+
 test("loss, concealment and jitter buffers describe the recent interval instead of lifetime averages", () => {
     const { tracks: [track] } = collectVoiceTelemetry(stateFixture(), snapshot(receiver()), snapshot(previous()), {});
     assert.equal(track.sample_ms, 1000);

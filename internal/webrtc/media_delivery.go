@@ -56,6 +56,32 @@ func (r *Router) mediaCommit(delivery MediaDelivery, guard MediaGuard, videoRevi
 	}
 }
 
+// mediaAdmit is mediaCommit for the ingress dispatcher's queue admission. A
+// declined admission skips a packet whose sequence number the continuity has
+// already reserved, so contended scope gates are awaited instead of failed.
+// The rare policy replacement still declines without waiting.
+func (r *Router) mediaAdmit(delivery MediaDelivery, guard MediaGuard, videoRevision uint64) MediaCommit {
+	return func(write func() error) error {
+		commit := func() error {
+			if delivery.Slot == SlotCam || delivery.Slot == SlotScreen {
+				if !r.videoPolicyMu.TryRLock() {
+					return nil
+				}
+				defer r.videoPolicyMu.RUnlock()
+				if r.videoPolicy.revision != videoRevision {
+					return nil
+				}
+			}
+			_, err := r.gatedMediaScope(delivery, mediaScopeWait, write)
+			return err
+		}
+		if guard != nil {
+			return guard(delivery, commit)
+		}
+		return commit()
+	}
+}
+
 // MediaGuard must synchronously authorize and execute write under the same
 // policy revision. It runs outside the router lock, may decline to call write,
 // and must never retain write or start asynchronous work with it.

@@ -7,9 +7,15 @@ import { openChannelAccess } from "./channel-access-ui.js";
 import { channelImpactPanel } from "./channel-impact-ui.js";
 import "./roles.css";
 
+// editingTextChannel reports whether the channel being edited is a text
+// channel, from the live channel tree (the edit snapshot does not carry it).
+export function editingTextChannel(channelID, channels = window.__noxa?.state?.channels || []) {
+    return !!channels.find((channel) => channel.ChannelID === channelID)?.TextOnly;
+}
+
 // One acknowledged operation per dialog. IDs and revision are captured from
 // the same server-scoped query; a rejected or uncertain save requires reload.
-export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex } = {}) {
+export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex, textOnly = false } = {}) {
     const app = window.go.main.App;
     const tabID = window.__noxa.state.activeTabID;
     const overlay = roleElement("div", "dlg-overlay");
@@ -90,10 +96,15 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
         if (kind === "channel_create" || kind === "channel_edit") {
             field("name"); field("topic"); field("description");
             if (kind === "channel_edit") {
-                select("roles.channel.passwordAction", [["keep", t("roles.channel.passwordKeep")], ["set", t("roles.channel.passwordSet")], ["remove", t("roles.channel.passwordRemove")]], passwordAction, value => {
+                // The server refuses a password on a text channel; clearing
+                // one left from before stays possible.
+                const textChannel = editingTextChannel(channelID);
+                if (textChannel && passwordAction === "set") { passwordAction = "keep"; draft.password = ""; }
+                select("roles.channel.passwordAction", [["keep", t("roles.channel.passwordKeep")], ["set", t("roles.channel.passwordSet"), textChannel], ["remove", t("roles.channel.passwordRemove")]], passwordAction, value => {
                     passwordAction = value; draft.password = ""; render();
                 });
-                if (passwordAction === "set") field("password", "password");
+                if (textChannel) form.append(roleElement("p", "role-hint", t("roles.channel.textNoPassword")));
+                if (passwordAction === "set" && !textChannel) field("password", "password");
                 form.append(roleButton(t("roles.accessTitle"), async () => {
                     if (busy || !current()) return;
                     if (dirty && !await confirm(t("roles.channel.discard"))) return;
@@ -121,10 +132,23 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
             }));
         }
         if (kind === "channel_create") {
-            select("roles.channel.type", [[0, t("roles.channel.temporary"), !snapshot.can_create_temporary],
+            // Text channels hold chat only (no voice). They cannot be temporary:
+            // an unoccupiable channel would be pruned the moment it exists.
+            const textLabel = roleElement("label", "role-checkbox");
+            const textInput = roleElement("input"); textInput.type = "checkbox"; textInput.checked = !!draft.text_only;
+            textInput.dataset.field = "roles.channel.textOnly";
+            textInput.disabled = !snapshot.can_create_permanent;
+            textInput.onchange = () => {
+                draft.text_only = textInput.checked; dirty = true;
+                if (draft.text_only) { draft.channel_type = 2; draft.password = ""; }
+                render(); controls();
+            };
+            textLabel.append(textInput, document.createTextNode(t("roles.channel.textOnly")));
+            form.append(textLabel, roleElement("p", "role-hint", t(draft.text_only ? "roles.channel.textOnlyHelp" : "roles.channel.voiceHelp")));
+            select("roles.channel.type", [[0, t("roles.channel.temporary"), !snapshot.can_create_temporary || draft.text_only],
                 [1, t("roles.channel.semiPermanent"), !snapshot.can_create_permanent], [2, t("roles.channel.permanent"), !snapshot.can_create_permanent]],
             draft.channel_type, (value) => { draft.channel_type = Number(value); });
-            field("password", "password");
+            if (!draft.text_only) field("password", "password");
             const presets = ["inherit", "public", "private", "readOnlyPreset", "listenOnly"];
             select("roles.channel.access", presets.map((key) => {
                 const required = applyChannelPreset([], snapshot.everyone_id, key).map((entry) => entry.capability);
@@ -162,7 +186,7 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
                 reviewed: value => { reviewedTree = value ? JSON.stringify(treeChange()) : ""; controls(); } });
             content.append(impactView.element);
         }
-        if (focusedField) [...form.querySelectorAll("select")].find((input) => input.dataset.field === focusedField)?.focus();
+        if (focusedField) [...form.querySelectorAll("select, input[data-field]")].find((input) => input.dataset.field === focusedField)?.focus();
     };
     const load = async () => {
         busy = true; controls();
@@ -171,6 +195,7 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
             if (!current()) return;
             snapshot = next; draft = structuredClone(next.settings);
             draft.channel_type = next.can_create_permanent ? 2 : 0; draft.password = "";
+            draft.text_only = kind === "channel_create" && textOnly && next.can_create_permanent;
             preset = "inherit"; selectedRoles = new Set(); sync = false;
             passwordAction = "keep";
             destination = destinationID ?? next.destinations[0]?.id ?? 0;
@@ -190,7 +215,7 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
         }
         const request = { kind, expected_revision: snapshot.revision, channel_id: kind === "channel_create" ? 0 : channelID };
         if (kind === "channel_create" || kind === "channel_edit") {
-            const { channel_type: channelType, password, ...settings } = draft;
+            const { channel_type: channelType, password, text_only: textChannel, ...settings } = draft;
             request.settings = { ...settings, name: settings.name.trim() };
             if (kind === "channel_edit" && passwordAction !== "keep") {
                 request.set_password = true;
@@ -198,6 +223,7 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
             }
             if (kind === "channel_create") {
                 request.channel_type = channelType; request.password = password; request.parent_id = channelID;
+                if (textChannel) { request.text_only = true; request.password = ""; }
                 if (preset !== "inherit") {
                     request.access = access();
                 }

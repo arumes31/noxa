@@ -3,7 +3,8 @@ import { OVERLAY_MOTION_SPEED, OVERLAY_COMB_AMPLITUDE, OVERLAY_CONTOUR_GAP, over
 // Breathing light halo + glyph-hugging comb. This is decorative activity, never
 // an audio meter; native and settings previews share the selected 2.4x / 8px preset.
 export function lightHaloPreview(sample) {
-    const rows = [...sample.querySelectorAll('.overlay-sample-person')].map(person => {
+    // Quiet sample members keep the still avatar + name look: no halo, no comb.
+    const rows = [...sample.querySelectorAll('.overlay-sample-person:not(.overlay-sample-quiet)')].map(person => {
         const canvas = document.createElement('canvas'); canvas.className = 'overlay-animation-canvas';
         canvas.setAttribute('aria-hidden', 'true'); person.prepend(canvas);
         return { person, canvas, ctx: canvas.getContext('2d'), mask: document.createElement('canvas') };

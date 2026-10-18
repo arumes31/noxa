@@ -92,7 +92,7 @@ func attachmentSaveApp(path string, blob []byte) (*App, *int) {
 	a.chatAttachmentSaveDialog = func(context.Context, wailsRuntime.SaveDialogOptions) (string, error) {
 		return path, nil
 	}
-	a.chatAttachmentFetch = func(*connManager, int64, string) ([]byte, error) {
+	a.chatAttachmentFetch = func(*connManager, int64, string, string) ([]byte, error) {
 		fetches++
 		return append([]byte(nil), blob...), nil
 	}
@@ -200,7 +200,7 @@ func TestSaveChatAttachment(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), "failed.txt")
 			a, _ := attachmentSaveApp(dest, test.blob)
 			if test.want != nil {
-				a.chatAttachmentFetch = func(*connManager, int64, string) ([]byte, error) { return nil, test.want }
+				a.chatAttachmentFetch = func(*connManager, int64, string, string) ([]byte, error) { return nil, test.want }
 			}
 			if _, err := a.SaveChatAttachment(7, "blob.vcx", test.key, "failed.txt"); err == nil {
 				t.Fatal("save unexpectedly succeeded")
@@ -293,9 +293,13 @@ func TestSealedChatAttachmentMaximumRoundTrip(t *testing.T) {
 	}
 
 	body := strings.TrimSuffix(strings.TrimPrefix(token, "[file:"), "]")
-	storage, keyB64, _ := parseFileRef(body)
-	if storage == "" || keyB64 == "" {
+	storage, keyB64, name, meta := splitFileRef(body)
+	if storage == "" || keyB64 == "" || name != "maximum.bin" {
 		t.Fatalf("upload token = %q", token)
+	}
+	// The sealed token carries the PLAINTEXT size, not the larger ciphertext.
+	if meta.Size != int64(len(plain)) {
+		t.Fatalf("token size = %d, want %d", meta.Size, len(plain))
 	}
 	chunks := transferChunks(upload.data)
 	_, downloadDone := serveTransferDownload(

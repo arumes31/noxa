@@ -97,8 +97,14 @@ func (a *App) ftPutBytes(channelID int64, name string, data []byte) error {
 }
 
 func ftPutBytesWith(cm *connManager, channelID int64, name string, data []byte) error {
+	return ftPutBytesInFolder(cm, channelID, "", name, data)
+}
+
+// ftPutBytesInFolder uploads into a virtual folder of the scope. Private-group
+// attachments use their membership-checked folder of the server-wide scope.
+func ftPutBytesInFolder(cm *connManager, channelID int64, folder, name string, data []byte) error {
 	f, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
-		netproto.FileTransferInit{ChannelID: channelID, Direction: "upload", Name: name, Size: int64(len(data))},
+		netproto.FileTransferInit{ChannelID: channelID, Folder: folder, Direction: "upload", Name: name, Size: int64(len(data))},
 		10*time.Second)
 	if err != nil {
 		return err
@@ -128,8 +134,12 @@ func (a *App) ftGetBytesForCM(cm *connManager, channelID int64, name string) ([]
 }
 
 func (a *App) ftGetBytesForCMWithLimit(cm *connManager, channelID int64, name string, maxBytes int64) ([]byte, error) {
+	return a.ftGetBytesInFolderWithLimit(cm, channelID, "", name, maxBytes)
+}
+
+func (a *App) ftGetBytesInFolderWithLimit(cm *connManager, channelID int64, folder, name string, maxBytes int64) ([]byte, error) {
 	f, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
-		netproto.FileTransferInit{ChannelID: channelID, Direction: "download", Name: name},
+		netproto.FileTransferInit{ChannelID: channelID, Folder: folder, Direction: "download", Name: name},
 		10*time.Second)
 	if err != nil {
 		return nil, err

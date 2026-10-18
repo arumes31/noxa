@@ -56,6 +56,22 @@ func (s *Server) checkFileOwner(ctx context.Context, scope int64, folder, name s
 	return nil
 }
 
+type transferFolderKey struct{}
+
+// WithTransferFolder records the token folder for the AccessGuard.
+func WithTransferFolder(ctx context.Context, folder string) context.Context {
+	return context.WithValue(ctx, transferFolderKey{}, folder)
+}
+
+// TransferFolder reports the sanitized virtual folder of the token whose
+// bytes an AccessGuard is about to move. Guards use it for folder-bound
+// authorization (for example private-group attachment folders); it is absent
+// for guard calls that do not belong to a transfer token.
+func TransferFolder(ctx context.Context) (string, bool) {
+	folder, ok := ctx.Value(transferFolderKey{}).(string)
+	return folder, ok
+}
+
 func WithPrincipal(ctx context.Context, principal Principal) context.Context {
 	return context.WithValue(ctx, principalKey{}, principal)
 }
@@ -95,7 +111,7 @@ func (s *Server) withTransferAccess(ctx context.Context, tr *transfer, effect fu
 	if tr.Principal == nil {
 		return ErrAccessRevoked
 	}
-	return guard(ctx, *tr.Principal, tr.ChannelID, tr.Direction, func(ctx context.Context) error {
+	return guard(WithTransferFolder(ctx, tr.Folder), *tr.Principal, tr.ChannelID, tr.Direction, func(ctx context.Context) error {
 		if tr.revoked.Load() {
 			return ErrAccessRevoked
 		}

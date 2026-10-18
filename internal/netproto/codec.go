@@ -586,7 +586,11 @@ type ChatBroadcast struct {
 	Direct     bool   `json:"direct,omitempty"`
 	ToUniqueID string `json:"to_unique_id,omitempty"`
 	// EncVerified is set only by the receiving native client after opening.
-	EncVerified  bool   `json:"enc_verified,omitempty"`
+	EncVerified bool `json:"enc_verified,omitempty"`
+	// EncMode is set only by the receiving native client next to
+	// EncVerified: "e2e" for a body opened with end-to-end keys, "server" for
+	// one opened with a server-distributed scope key (client→server→client).
+	EncMode      string `json:"enc_mode,omitempty"`
 	FromClientID string `json:"from_client_id,omitempty"`
 	FromUniqueID string `json:"from_unique_id,omitempty"`
 	From         string `json:"from"`
@@ -1145,6 +1149,9 @@ type ChatHistoryEntry struct {
 	// history message is visually indistinguishable from one the server
 	// handed over in the clear.
 	EncVerified bool `json:"enc_verified,omitempty"`
+	// EncMode is set by the CLIENT next to EncVerified ("server" for a scope
+	// body, "e2e" for a local end-to-end DM record); never by a server.
+	EncMode string `json:"enc_mode,omitempty"`
 
 	SentAt    int64          `json:"sent_at"` // unix seconds
 	EditedAt  int64          `json:"edited_at,omitempty"`
@@ -1306,9 +1313,16 @@ type ComplaintClear struct {
 // or global relay reaches the SENDER too, so receivers must drop their own
 // unique_id. A ToUniqueID naming an offline user, or a ChannelID the sender
 // is not currently in, is dropped without an error frame.
+//
+// ConversationID addresses a private group instead (it excludes the other two
+// fields). The server relays it as a "conversation_typing" event, never as
+// "typing", and only to the group's current accepted members; it requires
+// CapabilityConversationActivity, because a server without it would read the
+// frame as a global indicator.
 type Typing struct {
-	ChannelID  int64  `json:"channel_id,omitempty"`
-	ToUniqueID string `json:"to_unique_id,omitempty"`
+	ChannelID      int64  `json:"channel_id,omitempty"`
+	ToUniqueID     string `json:"to_unique_id,omitempty"`
+	ConversationID string `json:"conversation_id,omitempty"`
 }
 
 // ChatDelivered is the recipient's ack that a DM arrived (client-side ref).

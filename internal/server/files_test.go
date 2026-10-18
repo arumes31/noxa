@@ -32,6 +32,7 @@ type fakeFileTransfer struct {
 	downloads       []ftCall
 	files           []store.FileRecord
 	deleted         []string
+	foldersDeleted  []string
 	renamed         [][2]string
 	moved           []ftMove
 	channelsMarked  []int64
@@ -138,6 +139,20 @@ func (f *fakeFileTransfer) DeleteFile(_ context.Context, channelID int64, folder
 	keep := f.files[:0]
 	for _, rec := range f.files {
 		if rec.Folder != folder || rec.Name != name {
+			keep = append(keep, rec)
+		}
+	}
+	f.files = keep
+	return nil
+}
+
+func (f *fakeFileTransfer) DeleteFolder(_ context.Context, channelID int64, folder string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.foldersDeleted = append(f.foldersDeleted, folder)
+	keep := f.files[:0]
+	for _, rec := range f.files {
+		if rec.Folder != folder {
 			keep = append(keep, rec)
 		}
 	}

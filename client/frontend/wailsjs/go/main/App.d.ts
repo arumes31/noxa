@@ -174,6 +174,8 @@ export function DMSearch(arg1:string,arg2:string,arg3:number):Promise<main.ChatS
 
 export function DMSearchForContext(arg1:main.DMHistoryContext,arg2:string,arg3:string,arg4:number):Promise<main.ChatSearchResult>;
 
+export function DefaultSettingsSnapshot():Promise<main.Settings>;
+
 export function DeleteIdentity(arg1:string,arg2:boolean):Promise<string>;
 
 export function Disconnect():Promise<void>;
@@ -189,6 +191,8 @@ export function DownloadAndApply(arg1:main.UpdateInfo):Promise<string>;
 export function DownloadChatAttachment(arg1:number,arg2:string,arg3:string):Promise<string>;
 
 export function DownloadChatAttachmentForTab(arg1:string,arg2:number,arg3:string,arg4:string):Promise<string>;
+
+export function DownloadConversationAttachmentForTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function DownloadFile(arg1:number,arg2:string):Promise<string>;
 
@@ -396,6 +400,8 @@ export function SaveChatAttachmentForTab(arg1:string,arg2:number,arg3:string,arg
 
 export function SaveChatTabLayoutForContext(arg1:main.DMHistoryContext,arg2:main.ChatTabLayout):Promise<string>;
 
+export function SaveConversationAttachmentForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<string>;
+
 export function SaveSettings(arg1:main.Settings):Promise<string>;
 
 export function SavedMessagesForTab(arg1:string,arg2:main.SavedMessageRequest):Promise<main.SavedMessageResult>;
@@ -415,6 +421,8 @@ export function SendChatReadForTab(arg1:string,arg2:string,arg3:string):Promise<
 export function SendChatReply(arg1:string,arg2:string,arg3:string,arg4:number):Promise<string>;
 
 export function SendChatReplyForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number):Promise<string>;
+
+export function SendConversationTypingForTab(arg1:string,arg2:string):Promise<string>;
 
 export function SendConversationForTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<number>;
 
@@ -506,7 +514,9 @@ export function SetStatusForTab(arg1:string,arg2:string,arg3:string):Promise<str
 
 export function SetStreamVideoQualityForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<string>;
 
-export function SetTrayVoiceState(arg1:boolean,arg2:boolean,arg3:boolean):Promise<void>;
+export function SetTrayUnread(arg1:number):Promise<void>;
+
+export function SetTrayVoiceState(arg1:boolean,arg2:boolean,arg3:boolean,arg4:boolean):Promise<void>;
 
 export function SetVideoQuality(arg1:string):Promise<string>;
 
@@ -553,6 +563,8 @@ export function UpdateGamingOverlay(arg1:main.GamingOverlaySnapshot):Promise<str
 export function UploadChatAttachment(arg1:number,arg2:string,arg3:string):Promise<string>;
 
 export function UploadChatAttachmentForTab(arg1:string,arg2:number,arg3:string,arg4:string):Promise<string>;
+
+export function UploadConversationAttachmentForTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
 export function UploadFile(arg1:number,arg2:string,arg3:string):Promise<string>;
 

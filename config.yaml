@@ -90,9 +90,9 @@ tls_cert_file: ""
 tls_key_file: ""
 file_tls_enabled: true  # DEVELOPMENT ONLY false: production action: leave true
 
-# Chat payload encryption (wave 4b). Plaintext chat is rejected by default;
-# allow_plaintext is a dev escape hatch for old clients.
-chat_allow_plaintext: false  # DEVELOPMENT ONLY true: production action: leave false
+# Chat payload encryption (wave 4b). Plaintext chat is always rejected: every
+# chat body is end-to-end or client->server->client encrypted. The former
+# chat_allow_plaintext escape hatch was removed (a leftover key only warns).
 chat_master_key_file: "./data/keys/chat_master.key"
 chat_legacy_history: encrypt       # encrypt | purge
 chat_key_rotate_min_seconds: 60

@@ -5,7 +5,6 @@ import (
 	"net"
 	"testing"
 
-	"noxa/internal/config"
 	"noxa/internal/netproto"
 )
 
@@ -20,7 +19,7 @@ func TestDirectMessagesReachOnlineGuestsByUniqueID(t *testing.T) {
 		{name: "guest to registered", senderGuest: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			env := startTestEnvFull(t, nil, func(cfg *config.Config) { cfg.ChatAllowPlaintext = false })
+			env := startTestEnv(t, nil)
 			defer env.stop()
 			connect := func(nickname string, guest bool) (net.Conn, string) {
 				t.Helper()

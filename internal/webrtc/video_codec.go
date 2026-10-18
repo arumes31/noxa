@@ -16,6 +16,11 @@ func (r *Router) setVideoCodec(clientID, slot, rid string, token uint64, codec w
 	if !strings.EqualFold(codec.MimeType, webrtc.MimeTypeVP8) && !strings.EqualFold(codec.MimeType, webrtc.MimeTypeH264) && !strings.EqualFold(codec.MimeType, webrtc.MimeTypeH265) {
 		return true
 	}
+	// Every forwarded packet passes here. The unchanged-codec case only reads
+	// router state; take the exclusive lock only to rebind on a real change.
+	if admitted, unchanged := r.currentVideoCodec(clientID, slot, rid, token, codec); unchanged {
+		return admitted
+	}
 	r.mu.Lock()
 	if r.slotClaims[clientID][slot+slotSep+rid].token != token {
 		r.mu.Unlock()
@@ -50,19 +55,43 @@ func (r *Router) setVideoCodec(clientID, slot, rid string, token uint64, codec w
 	}
 	r.videoCodecs[ref] = codec
 	var changed []string
+	r.beginDeferredTrackRemovalsLocked()
 	for sub := range r.pubTracks {
 		if r.syncSubscriberVideoCodecLocked(sub, clientID, slot) {
 			changed = append(changed, sub)
 		}
 	}
 	hook := r.onRenegotiate
-	r.mu.Unlock()
+	r.unlockFlushingTrackRemovals()
 	if hook != nil {
 		for _, sub := range changed {
 			hook(sub)
 		}
 	}
 	return true
+}
+
+// currentVideoCodec answers setVideoCodec under shared locks when the source
+// keeps its bound codec. unchanged=false defers to the exclusive path.
+func (r *Router) currentVideoCodec(clientID, slot, rid string, token uint64, codec webrtc.RTPCodecCapability) (admitted, unchanged bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.slotClaims[clientID][slot+slotSep+rid].token != token {
+		return false, true
+	}
+	previous, exists := r.videoCodecs[videoSourceRef{clientID, slot}]
+	if !exists || !sameVideoCodec(previous, codec) {
+		return false, false
+	}
+	if strings.EqualFold(codec.MimeType, webrtc.MimeTypeH265) {
+		level, valid := admittedH265Level(codec)
+		r.watchMu.RLock()
+		key := publicationKey{clientID, slot}
+		admitted := valid && r.publicationCodecCapabilities[key]&videoCodecH265 != 0 && r.publicationHEVCLevels[key] == level
+		r.watchMu.RUnlock()
+		return admitted, true
+	}
+	return true, true
 }
 
 // Unknown receivers must be able to finish their initial voice negotiation.
@@ -112,9 +141,10 @@ func (r *Router) syncSubscriberVideoCodecLocked(subscriber, publisher, slot stri
 
 func (r *Router) syncSubscriberVideoCodec(subscriber, publisher, slot string) {
 	r.mu.Lock()
+	r.beginDeferredTrackRemovalsLocked()
 	changed := r.syncSubscriberVideoCodecLocked(subscriber, publisher, slot)
 	hook := r.onRenegotiate
-	r.mu.Unlock()
+	r.unlockFlushingTrackRemovals()
 	if changed && hook != nil {
 		hook(subscriber)
 	}

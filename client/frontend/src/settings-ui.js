@@ -1,5 +1,8 @@
-// settings-ui.js — TS3-style settings dialog with left icon nav.
+// settings-ui.js — the settings dialog: a centred modal with a category rail
+// on the left and grouped rows (label + help left, control right) per page.
+// Page ids, their saved keys and deep links live in settings-catalog.js.
 import { icon } from "./icons.js";
+import { SETTINGS_CATEGORIES, resetPageDraft, resolveSettingsTarget } from "./settings-catalog.js";
 import { capturedHotkey, hotkeyLabel } from "./hotkey-input.js";
 import { gamingOverlaySettings } from "./gaming-overlay-settings.js";
 import { securitySettings } from "./security-settings.js";
@@ -19,23 +22,26 @@ import { createMediaDeviceInventory } from "./media-devices.js";
 import { closeDialog, mountDialog } from "./modal.js";
 import { captureCamera, prepareCameraBackground, applyCameraPreview } from "./camera-capture.js";
 import "./settings-ui.css";
+import "./arctic-settings.css";
 
 const V = () => window.__noxa;
 
-const PAGES = [
-    { id: "application", icon: "settings", label: "settings.application" },
-    { id: "capture", icon: "mic", label: "settings.capture" },
-    { id: "camera", icon: "camera", label: "settings.camera" },
-    { id: "playback", icon: "speaker", label: "settings.playback" },
-    { id: "overlay", icon: "screen", label: "settings.overlay" },
-    { id: "hotkeys", icon: "keyboard", label: "settings.hotkeys" },
-    { id: "whisper", icon: "whisper", label: "settings.whisper" },
-    { id: "downloads", icon: "download", label: "settings.downloads" },
-    { id: "chat", icon: "chat", label: "settings.chat" },
-    { id: "security", icon: "lock", label: "settings.security" },
-    { id: "server", icon: "screen", label: "settings.server" },
-    { id: "notifications", icon: "bell", label: "settings.notifications" },
-];
+const PAGES = SETTINGS_CATEGORIES.map(category => ({
+    id: category.id, icon: category.icon, rail: category.rail,
+    label: `settings.cat.${category.id}`, description: `settings.cat.${category.id}.desc`,
+}));
+
+// Rail glyphs the shared icon set does not have yet (24px outline, same stroke).
+const RAIL_ICONS = {
+    streams: '<circle cx="12" cy="12" r="2"/><path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8"/>',
+    layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+    palette: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.6-.8 1.6-1.6 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5C21 6.4 17 3 12 3z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10.5" cy="7.5" r="1"/><circle cx="15" cy="7.5" r="1"/>',
+};
+
+function railIcon(name) {
+    if (!RAIL_ICONS[name]) return icon(name);
+    return `<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${RAIL_ICONS[name]}</svg>`;
+}
 
 let draft = null; // working copy of settings while the dialog is open
 let stopCameraTest = () => {};
@@ -85,14 +91,32 @@ function timingNote(key, controls = []) {
     return note;
 }
 
-function row(label, control, timing) {
+let helpSerial = 0;
+
+// row lays out one setting: label (+ optional help and timing note) on the
+// left, the control on the right. opts.help adds a one-line description and
+// opts.key tags the row with the saved preference it edits, for deep links.
+function row(label, control, timing, opts = {}) {
     const el = document.createElement("div");
     el.className = "set-row";
+    if (opts.key) el.dataset.setting = opts.key;
     const l = document.createElement("label");
     l.className = "set-label";
     l.textContent = label;
     el.appendChild(l);
     el.appendChild(control);
+    if (opts.help) {
+        const caption = document.createElement("div");
+        caption.className = "set-field-caption";
+        const help = document.createElement("div");
+        help.className = "set-help";
+        help.id = `settings-help-${++helpSerial}`;
+        help.textContent = opts.help;
+        l.replaceWith(caption);
+        caption.append(l, help);
+        const described = control.matches?.("input, select, textarea, button") ? [control] : [...control.querySelectorAll("input, select, textarea, button")];
+        for (const item of described) item.setAttribute("aria-describedby", [item.getAttribute("aria-describedby"), help.id].filter(Boolean).join(" "));
+    }
     let target = control.matches?.("input:not([type=hidden]), select, textarea") ? control : null;
     if (!target) {
         const nested = control.querySelectorAll?.("input:not([type=hidden]), select, textarea") || [];
@@ -104,21 +128,51 @@ function row(label, control, timing) {
         control.querySelector(".audio-percent").setAttribute("aria-label", label + " (%)");
     }
     if (timing) {
-        const caption = document.createElement("div");
-        caption.className = "set-field-caption";
-        l.replaceWith(caption);
+        let caption = l.parentElement;
+        if (!caption?.classList.contains("set-field-caption")) {
+            caption = document.createElement("div");
+            caption.className = "set-field-caption";
+            l.replaceWith(caption);
+            caption.append(l);
+        }
         const controls = control.matches?.("input, select, textarea, button") ? [control] : [...control.querySelectorAll("input, select, textarea, button")];
-        caption.append(l, timingNote(timing, controls));
+        caption.append(timingNote(timing, controls));
     }
     return el;
 }
 
+// checkbox is a native checkbox drawn as a switch (see arctic-settings.css);
+// keeping the native role leaves keyboard and screen-reader behaviour intact.
 function checkbox(checked, onchange = () => {}) {
     const c = document.createElement("input");
     c.type = "checkbox";
+    c.className = "set-switch";
     c.checked = !!checked;
     c.onchange = () => onchange(c.checked);
     return c;
+}
+
+// group renders a titled block of rows on a page. id is the deep-link
+// section name (openSettings("audio", { section: "output" })).
+function group(title, id = "", ...children) {
+    const el = document.createElement("section");
+    el.className = "set-group";
+    if (id) el.dataset.section = id;
+    if (title) {
+        const heading = document.createElement("h4");
+        heading.className = "set-group-title";
+        heading.textContent = title;
+        el.appendChild(heading);
+    }
+    el.append(...children.filter(Boolean));
+    return el;
+}
+
+function page(...groups) {
+    const el = document.createElement("div");
+    el.className = "set-page";
+    el.append(...groups.filter(Boolean));
+    return el;
 }
 
 function numberInput(value, min, max, onchange = () => {}) {
@@ -271,96 +325,105 @@ function devicePicker(kind, selectedId, onchange, label) {
 
 // --- pages ---------------------------------------------------------------------
 
-function pageApplication() {
-    const s = settings();
-    const el = document.createElement("div");
-    const langSel = document.createElement("select");
-    for (const [value, label] of [["system", t("settings.system.default")], ["en", "English"], ["de", "Deutsch"]]) {
+function selectOf(options, value, onchange) {
+    const sel = document.createElement("select");
+    for (const [v, label] of options) {
         const option = document.createElement("option");
-        option.value = value;
+        option.value = v;
         option.textContent = label;
-        langSel.appendChild(option);
+        sel.appendChild(option);
     }
-    langSel.value = s.language || "system";
-    langSel.onchange = () => { s.language = langSel.value; };
-    el.appendChild(row(t("settings.language"), langSel));
-    el.appendChild(hint(t("settings.language.help")));
-    el.appendChild(row(t("settings.chat.max.lines"), numberInput(s.chat_max_lines, 10, 5000, (v) => { s.chat_max_lines = v; })));
-    el.appendChild(row(t("settings.toasts.for.join.leave"), checkbox(s.notify_join_leave, (v) => { s.notify_join_leave = v; })));
-    el.appendChild(row(t("settings.toasts.for.connection.events"), checkbox(s.notify_connection, (v) => { s.notify_connection = v; })));
-    el.appendChild(row(t("settings.reconnect.on.connection.loss.5.tries"), checkbox(s.reconnect_on_loss, (v) => { s.reconnect_on_loss = v; })));
-    el.appendChild(row(t("settings.install.updates.at.startup"), checkbox(s.updates_auto_install !== false, (v) => { s.updates_auto_install = v; }), "startup"));
-    el.appendChild(hint(t("settings.install.updates.at.startup.help")));
-    el.appendChild(row(t("settings.check.for.updates.at.startup"), checkbox(s.updates_auto_check !== false, (v) => { s.updates_auto_check = v; }), "startup"));
-    el.appendChild(row(t("settings.check.for.updates.on.reconnect"), checkbox(s.updates_check_on_reconnect !== false, (v) => { s.updates_check_on_reconnect = v; })));
+    sel.value = value;
+    sel.onchange = () => onchange(sel.value);
+    return sel;
+}
 
-    // Presence (308/390): the idle timer and the status line it publishes.
-    const psep = document.createElement("div");
-    psep.className = "set-subhead";
-    psep.textContent = t("settings.presence");
-    el.appendChild(psep);
-    el.appendChild(row(t("settings.auto.away.after.minutes.0.off"), numberInput(s.auto_away_minutes ?? 15, 0, 240, (v) => { s.auto_away_minutes = v; })));
+function pageGeneral() {
+    const s = settings();
+    const langSel = selectOf([["system", t("settings.system.default")], ["en", "English"], ["de", "Deutsch"]],
+        s.language || "system", v => { s.language = v; });
+
     const awayMsg = document.createElement("input");
     awayMsg.className = "dlg-input";
     awayMsg.maxLength = 200;
     awayMsg.placeholder = t("settings.auto.away");
     awayMsg.value = s.auto_away_message ?? "";
     awayMsg.onchange = () => { s.auto_away_message = awayMsg.value; };
-    el.appendChild(row(t("settings.auto.away.status.message"), awayMsg));
-    el.appendChild(hint(t("settings.other.clients.see.this.text.next.to.your.away.icon.while.you.are.idle")));
 
-    // Window / system integration (wave 8a).
-    const sep = document.createElement("div");
-    sep.className = "set-subhead";
-    sep.textContent = t("settings.window.appearance");
-    el.appendChild(sep);
-    const themeSel = document.createElement("select");
-    for (const [v, label] of [["dark", t("settings.dark.default")], ["light", t("settings.light")], ["hc", t("settings.high.contrast")]]) {
-        const o = document.createElement("option");
-        o.value = v;
-        o.textContent = label;
-        themeSel.appendChild(o);
-    }
-    themeSel.value = s.theme || "dark";
-    themeSel.onchange = () => { s.theme = themeSel.value; };
-    el.appendChild(row(t("settings.theme"), themeSel));
+    // Downloads (formerly its own page).
+    const folder = document.createElement("span");
+    folder.className = "mono set-folder-path";
+    folder.textContent = s.download_folder || t("settings.not.set");
+    const change = document.createElement("button");
+    change.type = "button";
+    change.textContent = t("settings.change");
+    change.onclick = async () => {
+        const dir = await window.go.main.App.PickDownloadFolder();
+        if (dir) {
+            s.download_folder = dir;
+            folder.textContent = dir;
+            change.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+    };
+    const folderWrap = document.createElement("div");
+    folderWrap.className = "set-folder";
+    folderWrap.append(folder, change);
+
+    return page(
+        group(t("settings.group.language"), "language",
+            row(t("settings.language"), langSel, "", { key: "language", help: t("settings.language.help") })),
+        // Presence (308/390): the idle timer and the status line it publishes.
+        group(t("settings.presence"), "presence",
+            row(t("settings.auto.away.after.minutes.0.off"), numberInput(s.auto_away_minutes ?? 15, 0, 240, (v) => { s.auto_away_minutes = v; }), "", { key: "auto_away_minutes" }),
+            row(t("settings.auto.away.status.message"), awayMsg, "", { key: "auto_away_message", help: t("settings.other.clients.see.this.text.next.to.your.away.icon.while.you.are.idle") })),
+        group(t("settings.group.window"), "window",
+            row(t("settings.always.on.top"), checkbox(s.always_on_top, (v) => { s.always_on_top = v; }), "", { key: "always_on_top" }),
+            row(t("settings.close.to.tray"), checkbox(s.close_to_tray, (v) => { s.close_to_tray = v; }), "", { key: "close_to_tray" }),
+            row(t("settings.minimize.to.tray"), checkbox(s.minimize_to_tray, (v) => { s.minimize_to_tray = v; }), "", { key: "minimize_to_tray" })),
+        group(t("settings.group.updates"), "updates",
+            row(t("settings.install.updates.at.startup"), checkbox(s.updates_auto_install !== false, (v) => { s.updates_auto_install = v; }), "startup", { key: "updates_auto_install", help: t("settings.install.updates.at.startup.help") }),
+            row(t("settings.check.for.updates.at.startup"), checkbox(s.updates_auto_check !== false, (v) => { s.updates_auto_check = v; }), "startup", { key: "updates_auto_check" }),
+            row(t("settings.check.for.updates.on.reconnect"), checkbox(s.updates_check_on_reconnect !== false, (v) => { s.updates_check_on_reconnect = v; }), "", { key: "updates_check_on_reconnect" })),
+        group(t("settings.downloads"), "downloads",
+            row(t("settings.download.folder"), folderWrap, "", { key: "download_folder", help: t("settings.downloads.from.the.file.browser.land.here.without.asking.leave.it.unset.to") })),
+    );
+}
+
+function pageAppearance() {
+    const s = settings();
+    const themeSel = selectOf([["arctic", t("settings.arctic.default")], ["dark", t("settings.dark.default")], ["light", t("settings.light")], ["hc", t("settings.high.contrast")]],
+        s.theme || "arctic", v => { s.theme = v; });
     const accent = document.createElement("input");
     accent.type = "color";
     accent.value = s.accent_color || "#2ee6a8";
     accent.onchange = () => { s.accent_color = accent.value; };
-    el.appendChild(row(t("settings.accent.color"), accent));
-    const fontSel = document.createElement("select");
-    for (const [v, label] of [["outfit", "Outfit"], ["sora", "Sora"], ["jetbrains", "JetBrains Mono"]]) {
-        const o = document.createElement("option");
-        o.value = v;
-        o.textContent = label;
-        fontSel.appendChild(o);
-    }
-    fontSel.value = s.ui_font || "outfit";
-    fontSel.onchange = () => { s.ui_font = fontSel.value; };
-    el.appendChild(row(t("settings.ui.font"), fontSel));
-    el.appendChild(row(t("settings.ui.font.size"), slider(s.ui_font_size || 14, 10, 20, (v) => { s.ui_font_size = v; })));
-    el.appendChild(row(t("settings.always.on.top"), checkbox(s.always_on_top, (v) => { s.always_on_top = v; })));
-    el.appendChild(row(t("settings.compact.mode"), checkbox(s.compact_mode, (v) => { s.compact_mode = v; })));
-    el.appendChild(row(t("settings.reduce.motion"), checkbox(s.reduce_motion, (v) => { s.reduce_motion = v; })));
-    el.appendChild(row(t("settings.close.to.tray"), checkbox(s.close_to_tray, (v) => { s.close_to_tray = v; })));
-    el.appendChild(row(t("settings.minimize.to.tray"), checkbox(s.minimize_to_tray, (v) => { s.minimize_to_tray = v; })));
+    const fontSel = selectOf([["outfit", "Outfit"], ["sora", "Sora"], ["jetbrains", "JetBrains Mono"]],
+        s.ui_font || "outfit", v => { s.ui_font = v; });
     // (292) the floor keeps the window clickable. Applied on release, not per
     // drag frame: the binding persists the settings file on every call.
     const opacity = slider(s.window_opacity || 100, 20, 100, (v) => { s.window_opacity = v; });
     opacity.querySelector("input").addEventListener("change",
         () => window.go.main.App.SetWindowOpacity(s.window_opacity || 100));
-    el.appendChild(row(t("settings.window.opacity"), opacity, "appearancePreview"));
     const css = document.createElement("textarea");
     css.className = "dlg-input user-css";
     css.rows = 4;
     css.placeholder = t("settings.custom.css.overrides.e.g.channel.letter.spacing.0.5px");
     css.value = s.user_css || "";
     const themeColors = themeEditor(s, value => { css.value = value; });
-    el.appendChild(themeColors.root); // (295)
     css.onchange = () => { s.user_css = css.value; themeColors.refresh(); };
-    el.appendChild(row(t("settings.user.css"), css));
-    return el;
+    return page(
+        group(t("settings.window.appearance"), "theme",
+            row(t("settings.theme"), themeSel, "", { key: "theme" }),
+            row(t("settings.accent.color"), accent, "", { key: "accent_color" }),
+            row(t("settings.ui.font"), fontSel, "", { key: "ui_font" }),
+            row(t("settings.ui.font.size"), slider(s.ui_font_size || 14, 10, 20, (v) => { s.ui_font_size = v; }), "", { key: "ui_font_size" })),
+        group(t("settings.group.layout"), "layout",
+            row(t("settings.compact.mode"), checkbox(s.compact_mode, (v) => { s.compact_mode = v; }), "", { key: "compact_mode" }),
+            row(t("settings.reduce.motion"), checkbox(s.reduce_motion, (v) => { s.reduce_motion = v; }), "", { key: "reduce_motion" }),
+            row(t("settings.window.opacity"), opacity, "appearancePreview", { key: "window_opacity" })),
+        group("", "colors", themeColors.root), // (295)
+        group(t("settings.group.customCSS"), "css", row(t("settings.user.css"), css, "", { key: "user_css" })),
+    );
 }
 
 function pageServer({ load = true } = {}) {
@@ -545,7 +608,7 @@ function pageServer({ load = true } = {}) {
     reload.onclick = () => {
         if (!el.isConnected || busy) return;
         // An explicit reload creates a fresh scope on the newly selected server.
-        if (!current()) renderPage("server");
+        if (!current()) renderPage("connection");
         else void refresh();
     };
     controls();
@@ -680,26 +743,16 @@ function themeEditor(s, onChange) {
     return { root: wrap, refresh };
 }
 
-function pageCapture() {
+function pageAudio() {
     const s = settings();
-    const el = document.createElement("div");
-    el.appendChild(row(t("settings.capture.device"), devicePicker(
-        "audioinput",
-        s.capture_device_id,
-        (v) => { s.capture_device_id = v; },
-        t("settings.capture.devices"),
-    ), "saved"));
-
     const microphone = createMicCheck(s, {
         onStart: cleanup => { stopMicCheck(); stopMicCheck = cleanup; },
     });
-    el.append(timingNote("localPreview"), microphone.root);
-    el.append(createNetworkEchoTest());
-    el.append(createConnectionBenchmark());
-    el.addEventListener("change", () => microphone.refresh());
     // Activation mode.
     const modeWrap = document.createElement("div");
     modeWrap.className = "set-modes";
+    modeWrap.setAttribute("role", "radiogroup");
+    modeWrap.setAttribute("aria-label", t("settings.activation.mode"));
     for (const [id, label] of [["ptt", t("settings.push.to.talk")], ["vad", t("settings.voice.activity.detection")], ["continuous", t("settings.continuous.transmission")]]) {
         const l = document.createElement("label");
         const r = document.createElement("input");
@@ -714,21 +767,85 @@ function pageCapture() {
         l.appendChild(document.createTextNode(" " + label));
         modeWrap.appendChild(l);
     }
-    el.prepend(timingNote("saved", modeWrap.querySelectorAll("input")), modeWrap);
+    const modeRow = document.createElement("div");
+    modeRow.className = "set-row set-row-block";
+    modeRow.dataset.setting = "activation_mode";
+    const modeCaption = document.createElement("div");
+    modeCaption.className = "set-field-caption";
+    const modeLabel = document.createElement("div");
+    modeLabel.className = "set-label";
+    modeLabel.textContent = t("settings.activation.mode");
+    modeCaption.append(modeLabel, timingNote("saved", modeWrap.querySelectorAll("input")));
+    modeRow.append(modeCaption, modeWrap);
 
-    el.appendChild(row(t("settings.echo.cancellation"), checkbox(s.echo_cancellation !== false, (v) => { s.echo_cancellation = v; }), "saved"));
-    el.appendChild(row(t("settings.noise.suppression"), checkbox(s.noise_suppression !== false, (v) => { s.noise_suppression = v; }), "saved"));
-    el.appendChild(row(t("settings.ptt.delay"), slider(s.ptt_release_delay_ms || 0, 0, 2000, (v) => { s.ptt_release_delay_ms = v; }), "saved"));
-    // The music profile overrides these two, so say so where they live.
-    el.appendChild(hint(t("settings.music.channels.stereo.96.kbit.s.or.more.capture.in.stereo.with.echo.cancell")));
-    return el;
+    const input = group(t("settings.capture"), "input",
+        modeRow,
+        row(t("settings.capture.device"), devicePicker(
+            "audioinput",
+            s.capture_device_id,
+            (v) => { s.capture_device_id = v; },
+            t("settings.capture.devices"),
+        ), "saved", { key: "capture_device_id" }),
+        timingNote("localPreview"), microphone.root,
+        row(t("settings.echo.cancellation"), checkbox(s.echo_cancellation !== false, (v) => { s.echo_cancellation = v; }), "saved", { key: "echo_cancellation" }),
+        row(t("settings.noise.suppression"), checkbox(s.noise_suppression !== false, (v) => { s.noise_suppression = v; }), "saved", { key: "noise_suppression" }),
+        row(t("settings.ptt.delay"), slider(s.ptt_release_delay_ms || 0, 0, 2000, (v) => { s.ptt_release_delay_ms = v; }), "saved", { key: "ptt_release_delay_ms" }),
+        // The music profile overrides these two, so say so where they live.
+        hint(t("settings.music.channels.stereo.96.kbit.s.or.more.capture.in.stereo.with.echo.cancell")));
+    input.addEventListener("change", () => microphone.refresh());
+
+    const positionPath = document.createElement("button");
+    positionPath.type = "button";
+    positionPath.textContent = t("settings.positional.copyPath");
+    positionPath.onclick = async () => {
+        try {
+            const path = await window.go.main.App.PositionalInputPath();
+            if (path) await copyToClipboard(path);
+        } catch (error) { V().toast(String(error), "warn"); }
+    };
+    const testBtn = document.createElement("button");
+    testBtn.type = "button";
+    testBtn.textContent = t("settings.play.test.sound");
+    testBtn.onclick = () => previewSounds(["own_channel_join"], s);
+    const output = group(t("settings.playback"), "output",
+        audioStatusPanel(),
+        row(t("settings.output.device"), devicePicker(
+            "audiooutput",
+            s.playback_device_id,
+            (v) => { s.playback_device_id = v; },
+            t("settings.playback.devices"),
+        ), "saved", { key: "playback_device_id" }),
+        row(t("settings.voice.volume"), slider(s.volume, 0, 200, (v) => {
+            s.volume = v;
+            const rv = document.getElementById("remote-video");
+            if (rv) V().applyOutputSettings(rv);
+        }, true), "saved", { key: "volume" }),
+        row(t("settings.voice.limiter.compressor"), checkbox(s.voice_limiter !== false, (v) => { s.voice_limiter = v; }), "reconnect", { key: "voice_limiter" }),
+        // (53) each publisher is levelled on its own chain, so a loud speaker no
+        // longer sets the gain for a quiet one.
+        row(t("settings.per.user.gain.normalization.cap.4x"), checkbox(s.gain_normalize, (v) => { s.gain_normalize = v; }), "reconnect",
+            { key: "gain_normalize", help: t("settings.normalization.levels.every.speaker.separately.limiter.and.normalizer.apply") }),
+        row(t("settings.positional.enabled"), checkbox(!!s.positional_audio, (v) => { s.positional_audio = v; }), "", { key: "positional_audio", help: t("settings.positional.hint") }),
+        row(t("settings.positional.source"), positionPath),
+        row(t("settings.test"), testBtn, "localPreview"));
+    return page(input, output);
 }
 
-function pageCamera() {
+function pageConnection({ detached = false } = {}) {
+    const s = settings();
+    return page(
+        group(t("settings.group.connection"), "reconnect",
+            row(t("settings.reconnect.on.connection.loss.5.tries"), checkbox(s.reconnect_on_loss, (v) => { s.reconnect_on_loss = v; }), "", { key: "reconnect_on_loss" })),
+        group(t("settings.group.diagnostics"), "diagnostics", createNetworkEchoTest(), createConnectionBenchmark()),
+        group(t("settings.server"), "server", pageServer({ load: !detached })),
+    );
+}
+
+function pageStreams() {
     const s = settings();
     const el = document.createElement("div");
 
-    el.appendChild(row(t("camera.device"), devicePicker("videoinput", s.camera_device_id, value => { s.camera_device_id = value; }, t("camera.device")), "camera"));
+    el.appendChild(row(t("camera.device"), devicePicker("videoinput", s.camera_device_id, value => { s.camera_device_id = value; }, t("camera.device")), "camera", { key: "camera_device_id" }));
     const effect = document.createElement("select");
     for (const [value, label] of [["none", "camera.none"], ["blur", "camera.blur"], ["replace", "camera.replace"]]) {
         const option = document.createElement("option"); option.value = value; option.textContent = t(label); effect.appendChild(option);
@@ -740,10 +857,10 @@ function pageCamera() {
     }
     scene.value = s.camera_background_scene || "slate";
     scene.onchange = () => { s.camera_background_scene = scene.value; };
-    const sceneRow = row(t("camera.scene"), scene, "camera");
+    const sceneRow = row(t("camera.scene"), scene, "camera", { key: "camera_background_scene" });
     sceneRow.classList.toggle("hidden", effect.value !== "replace");
     effect.onchange = () => { s.camera_background = effect.value; sceneRow.classList.toggle("hidden", effect.value !== "replace"); };
-    el.append(row(t("camera.effect"), effect, "camera"), sceneRow, hint(t("camera.private")));
+    el.append(row(t("camera.effect"), effect, "camera", { key: "camera_background", help: t("camera.private") }), sceneRow);
     const imagePicker = document.createElement("input"); imagePicker.type = "file"; imagePicker.accept = "image/png,image/jpeg,image/webp";
     const imageStatus = hint(""); imageStatus.setAttribute("role", "status");
     const removeImage = document.createElement("button"); removeImage.type = "button"; removeImage.textContent = t("camera.removeImage"); removeImage.disabled = !s.camera_background_image;
@@ -760,10 +877,10 @@ function pageCamera() {
         } catch (error) { if (el.isConnected && revision === imageRevision) imageStatus.textContent = error.message || String(error); }
     };
     removeImage.onclick = () => { imageRevision++; s.camera_background_image = ""; s.camera_background_scene = "slate"; scene.value = "slate"; imagePicker.value = ""; removeImage.disabled = true; el.dispatchEvent(new Event("change", {bubbles:true})); };
-    el.append(row(t("camera.chooseImage"), imagePicker, "camera"), hint(t("camera.imageHint")), removeImage, imageStatus);
-    el.append(row(t("camera.blurStrength"), slider(s.camera_blur_strength ?? 14, 2, 30, value => { s.camera_blur_strength = value; }), "camera"));
+    el.append(row(t("camera.chooseImage"), imagePicker, "camera", { key: "camera_background_image", help: t("camera.imageHint") }), removeImage, imageStatus);
+    el.append(row(t("camera.blurStrength"), slider(s.camera_blur_strength ?? 14, 2, 30, value => { s.camera_blur_strength = value; }), "camera", { key: "camera_blur_strength" }));
     const mirror = checkbox(s.camera_mirror_preview !== false, value => { s.camera_mirror_preview = value; applyCameraPreview(preview, s); });
-    el.append(row(t("camera.mirror"), mirror));
+    el.append(row(t("camera.mirror"), mirror, "", { key: "camera_mirror_preview" }));
 
     // Camera capture starts only when enabled or explicitly tested.
     const fpsSelect = document.createElement("select");
@@ -775,8 +892,7 @@ function pageCamera() {
     }
     fpsSelect.value = String(s.camera_fps || 30);
     fpsSelect.onchange = () => { s.camera_fps = parseInt(fpsSelect.value, 10); };
-    el.appendChild(row(t("settings.camera.frame.rate"), fpsSelect, "camera"));
-    el.appendChild(hint(t("settings.camera.is.off.when.joining.turn.it.on.in.the.voice.controls.or.test.it.here")));
+    el.appendChild(row(t("settings.camera.frame.rate"), fpsSelect, "camera", { key: "camera_fps", help: t("settings.camera.is.off.when.joining.turn.it.on.in.the.voice.controls.or.test.it.here") }));
     const cameraTest = document.createElement("div");
     cameraTest.className = "camera-test";
     const cameraBtn = document.createElement("button");
@@ -850,9 +966,8 @@ function pageCamera() {
     });
     cameraTest.append(timingNote("localPreview", [cameraBtn]), cameraBtn, preview, cameraStatus);
     el.appendChild(cameraTest);
-    el.appendChild(createVideoCodecCapabilities());
-
-    return el;
+    return page(group(t("settings.camera"), "camera", el),
+        group(t("settings.group.codecs"), "codecs", createVideoCodecCapabilities()));
 }
 
 function renderAudioStatus(panel) {
@@ -870,44 +985,6 @@ function audioStatusPanel() {
     preview.className = "audio-preview-status"; preview.setAttribute("role", "status");
     wrap.append(status, preview);
     return wrap;
-}
-
-function pagePlayback() {
-    const s = settings();
-    const el = document.createElement("div");
-    el.appendChild(audioStatusPanel());
-    el.appendChild(row(t("settings.output.device"), devicePicker(
-        "audiooutput",
-        s.playback_device_id,
-        (v) => { s.playback_device_id = v; },
-        t("settings.playback.devices"),
-    ), "saved"));
-    el.appendChild(row(t("settings.voice.volume"), slider(s.volume, 0, 200, (v) => {
-        s.volume = v;
-        const rv = document.getElementById("remote-video");
-        if (rv) V().applyOutputSettings(rv);
-    }, true), "saved"));
-    el.appendChild(row(t("settings.voice.limiter.compressor"), checkbox(s.voice_limiter !== false, (v) => { s.voice_limiter = v; }), "reconnect"));
-    el.appendChild(row(t("settings.positional.enabled"), checkbox(!!s.positional_audio, (v) => { s.positional_audio = v; })));
-    el.appendChild(hint(t("settings.positional.hint")));
-    const positionPath = document.createElement("button");
-    positionPath.textContent = t("settings.positional.copyPath");
-    positionPath.onclick = async () => {
-        try {
-            const path = await window.go.main.App.PositionalInputPath();
-            if (path) await copyToClipboard(path);
-        } catch (error) { V().toast(String(error), "warn"); }
-    };
-    el.appendChild(row(t("settings.positional.source"), positionPath));
-    el.appendChild(row(t("settings.per.user.gain.normalization.cap.4x"), checkbox(s.gain_normalize, (v) => { s.gain_normalize = v; }), "reconnect"));
-    // (53) each publisher is levelled on its own chain, so a loud speaker no
-    // longer sets the gain for a quiet one.
-    el.appendChild(hint(t("settings.normalization.levels.every.speaker.separately.limiter.and.normalizer.apply")));
-    const testBtn = document.createElement("button");
-    testBtn.textContent = t("settings.play.test.sound");
-    testBtn.onclick = () => previewSounds(["own_channel_join"], s);
-    el.appendChild(row(t("settings.test"), testBtn, "localPreview"));
-    return el;
 }
 
 // hkErrors tracks the last activation error per action (301 conflict
@@ -1044,7 +1121,7 @@ function pageHotkeys() {
                 renderRows();
             };
             if (hkErrors.has(action)) errEl.textContent = hkErrors.get(action);
-            wrap.appendChild(row(label, cap));
+            wrap.appendChild(row(label, cap, "", { key: field }));
             wrap.appendChild(unbind);
             wrap.appendChild(errEl);
             if (override) wrap.classList.add("hk-override");
@@ -1053,120 +1130,47 @@ function pageHotkeys() {
     };
     renderRows();
 
-    const reset = document.createElement("button");
-    reset.textContent = t("settings.reset.to.defaults.ptt.unbound.ctrl.m");
-    reset.onclick = () => {
-        s.hotkey_ptt = ""; s.hotkey_mute = "Ctrl+M";
-        renderPage("hotkeys");
-    };
-    el.appendChild(reset);
-    el.appendChild(hint(t("settings.hotkey.supported")));
-    el.appendChild(hint(t("settings.hotkey.numpad")));
-    el.appendChild(hint(t("settings.hotkeys.are.applied.when.you.apply.or.ok.on.windows.they.do.not.reserve.or")));
-    return el;
+    // "Reset to default" in the footer restores every base binding; named
+    // profiles are kept (bookmarks refer to them).
+    return page(group(t("settings.group.bindings"), "bindings", el),
+        group(t("settings.group.keyHelp"), "help",
+            hint(t("settings.hotkey.supported")),
+            hint(t("settings.hotkey.numpad")),
+            hint(t("settings.hotkeys.are.applied.when.you.apply.or.ok.on.windows.they.do.not.reserve.or"))));
 }
 
 function pageWhisper() {
     const s = settings();
     const st = V().state;
-    const el = document.createElement("div");
-    el.appendChild(row(t("settings.activate.whisper"), checkbox(s.whisper_active, (v) => { s.whisper_active = v; })));
-    el.appendChild(hint(t("settings.while.active.your.voice.goes.to.the.checked.targets.instead.of.your.channel")));
-
-    const clientsWrap = document.createElement("div");
-    clientsWrap.className = "set-subhead";
-    clientsWrap.textContent = t("settings.clients.online.now");
-    el.appendChild(clientsWrap);
     const clients = st.clients.filter((c) => c.client_id !== st.myClientID);
-    if (clients.length === 0) el.appendChild(hint(t("settings.no.other.clients.online")));
-    for (const c of clients) {
-        el.appendChild(row(c.nickname || c.unique_id, checkbox(
-            (s.whisper_clients || []).includes(c.unique_id),
-            (v) => {
-                s.whisper_clients = s.whisper_clients || [];
-                if (v && !s.whisper_clients.includes(c.unique_id)) s.whisper_clients.push(c.unique_id);
-                if (!v) s.whisper_clients = s.whisper_clients.filter((u) => u !== c.unique_id);
-            })));
-    }
-
-    const chWrap = document.createElement("div");
-    chWrap.className = "set-subhead";
-    chWrap.textContent = t("settings.channels");
-    el.appendChild(chWrap);
-    for (const ch of st.channels) {
-        el.appendChild(row(ch.Name, checkbox(
-            (s.whisper_channels || []).includes(ch.ChannelID),
-            (v) => {
-                s.whisper_channels = s.whisper_channels || [];
-                if (v && !s.whisper_channels.includes(ch.ChannelID)) s.whisper_channels.push(ch.ChannelID);
-                if (!v) s.whisper_channels = s.whisper_channels.filter((id) => id !== ch.ChannelID);
-            })));
-    }
-
-    el.appendChild(hint(t("settings.applying.also.sends.the.whisper.list.to.the.server.now")));
-    return el;
-}
-
-function pageDownloads() {
-    const s = settings();
-    const el = document.createElement("div");
-    const folder = document.createElement("span");
-    folder.className = "mono";
-    folder.textContent = s.download_folder || t("settings.not.set");
-    const change = document.createElement("button");
-    change.textContent = t("settings.change");
-    change.onclick = async () => {
-        const dir = await window.go.main.App.PickDownloadFolder();
-        if (dir) {
-            s.download_folder = dir;
-            folder.textContent = dir;
-            change.dispatchEvent(new Event("change", { bubbles: true }));
-        }
-    };
-    const wrap = document.createElement("div");
-    wrap.className = "set-folder";
-    wrap.appendChild(folder); wrap.appendChild(change);
-    el.appendChild(row(t("settings.download.folder"), wrap));
-    el.appendChild(hint(t("settings.downloads.from.the.file.browser.land.here.without.asking.leave.it.unset.to")));
-    return el;
+    const clientRows = clients.map(c => row(c.nickname || c.unique_id, checkbox(
+        (s.whisper_clients || []).includes(c.unique_id),
+        (v) => {
+            s.whisper_clients = s.whisper_clients || [];
+            if (v && !s.whisper_clients.includes(c.unique_id)) s.whisper_clients.push(c.unique_id);
+            if (!v) s.whisper_clients = s.whisper_clients.filter((u) => u !== c.unique_id);
+        })));
+    const channelRows = st.channels.map(ch => row(ch.Name, checkbox(
+        (s.whisper_channels || []).includes(ch.ChannelID),
+        (v) => {
+            s.whisper_channels = s.whisper_channels || [];
+            if (v && !s.whisper_channels.includes(ch.ChannelID)) s.whisper_channels.push(ch.ChannelID);
+            if (!v) s.whisper_channels = s.whisper_channels.filter((id) => id !== ch.ChannelID);
+        })));
+    return page(
+        group(t("settings.whisper"), "whisper",
+            row(t("settings.activate.whisper"), checkbox(s.whisper_active, (v) => { s.whisper_active = v; }), "",
+                { key: "whisper_active", help: t("settings.while.active.your.voice.goes.to.the.checked.targets.instead.of.your.channel") }),
+            hint(t("settings.applying.also.sends.the.whisper.list.to.the.server.now"))),
+        group(t("settings.clients.online.now"), "clients",
+            ...(clientRows.length ? clientRows : [hint(t("settings.no.other.clients.online"))])),
+        group(t("settings.channels"), "channels", ...channelRows),
+    );
 }
 
 function pageChat() {
     const s = settings();
-    const el = document.createElement("div");
-
     // (126-129) display prefs — applied live via CSS classes on #chat-log.
-    const sel = (options, value, onchange) => {
-        const i = document.createElement("select");
-        for (const [v, label] of options) {
-            const o = document.createElement("option");
-            o.value = v;
-            o.textContent = label;
-            i.appendChild(o);
-        }
-        i.value = value;
-        i.onchange = () => onchange(i.value);
-        return i;
-    };
-    el.appendChild(row(t("settings.timestamps"), sel(
-        [["absolute", t("settings.absolute")], ["relative", t("settings.relative")], ["off", t("settings.off")]],
-        s.chat_timestamps || "absolute", (v) => { s.chat_timestamps = v; })));
-    el.appendChild(row(t("settings.density"), sel(
-        [["comfortable", t("settings.comfortable")], ["compact", t("settings.compact")]],
-        s.chat_density || "comfortable", (v) => { s.chat_density = v; })));
-    el.appendChild(row(t("settings.layout"), sel(
-        [["irc", t("settings.irc.lines")], ["bubbles", t("settings.bubbles")]],
-        s.chat_layout || "irc", (v) => { s.chat_layout = v; })));
-    el.appendChild(row(t("settings.font.size"), slider(s.chat_font_size || 14, 12, 18, (v) => { s.chat_font_size = v; })));
-    // (130) system-message category filters.
-    el.appendChild(row(t("settings.show.join.leave.system.lines"), checkbox(s.sys_join_leave !== false, (v) => { s.sys_join_leave = v; })));
-    el.appendChild(row(t("settings.show.kick.system.lines"), checkbox(s.sys_kick !== false, (v) => { s.sys_kick = v; })));
-
-    el.appendChild(row(t("settings.chat.max.lines"), numberInput(s.chat_max_lines, 10, 5000, (v) => { s.chat_max_lines = v; })));
-    el.appendChild(row(t("settings.log.channel.chats.to.file"), checkbox(s.log_channel_chat, (v) => { s.log_channel_chat = v; })));
-    el.appendChild(row(t("settings.log.private.chats.to.file"), checkbox(s.log_private_chat, (v) => { s.log_private_chat = v; })));
-    el.appendChild(row(t("settings.log.server.global.chats.to.file"), checkbox(s.log_server_chat, (v) => { s.log_server_chat = v; })));
-
     // (388) keyword highlights for the current server (one per line).
     const kwAddr = V().state.lastConnect?.addr || "";
     const kw = document.createElement("textarea");
@@ -1178,18 +1182,44 @@ function pageChat() {
         s.keywords = s.keywords || {};
         s.keywords[kwAddr] = kw.value.split("\n").map((x) => x.trim()).filter(Boolean);
     };
-    el.appendChild(row(t("settings.keywords"), kw));
-
-    el.appendChild(hint(t("settings.chat.log.config.noxa.chat.log.help.open.log.folder")));
-    // (4b) encryption note.
-    const enc = document.createElement("div");
-    enc.className = "set-hint";
-    enc.textContent = t("settings.encryption.direct.messages.are.end.to.end.encrypted.the.server.cannot.read");
-    el.appendChild(enc);
-    return el;
+    return page(
+        group(t("settings.group.chatDisplay"), "display",
+            row(t("settings.timestamps"), selectOf(
+                [["absolute", t("settings.absolute")], ["relative", t("settings.relative")], ["off", t("settings.off")]],
+                s.chat_timestamps || "absolute", (v) => { s.chat_timestamps = v; }), "", { key: "chat_timestamps" }),
+            row(t("settings.density"), selectOf(
+                [["comfortable", t("settings.comfortable")], ["compact", t("settings.compact")]],
+                s.chat_density || "comfortable", (v) => { s.chat_density = v; }), "", { key: "chat_density" }),
+            row(t("settings.layout"), selectOf(
+                [["irc", t("settings.irc.lines")], ["bubbles", t("settings.bubbles")]],
+                s.chat_layout || "irc", (v) => { s.chat_layout = v; }), "", { key: "chat_layout" }),
+            row(t("settings.font.size"), slider(s.chat_font_size || 14, 12, 18, (v) => { s.chat_font_size = v; }), "", { key: "chat_font_size" })),
+        // (130) system-message category filters.
+        group(t("settings.group.systemLines"), "system",
+            row(t("settings.show.join.leave.system.lines"), checkbox(s.sys_join_leave !== false, (v) => { s.sys_join_leave = v; }), "", { key: "sys_join_leave" }),
+            row(t("settings.show.kick.system.lines"), checkbox(s.sys_kick !== false, (v) => { s.sys_kick = v; }), "", { key: "sys_kick" })),
+        group(t("settings.group.history"), "history",
+            row(t("settings.chat.max.lines"), numberInput(s.chat_max_lines, 10, 5000, (v) => { s.chat_max_lines = v; }), "", { key: "chat_max_lines" }),
+            row(t("settings.keywords"), kw, "", { key: "keywords" })),
+    );
 }
 
-function pageSecurity() { return securitySettings(settings()); }
+function pagePrivacy() {
+    const s = settings();
+    // (4b) encryption note.
+    return page(
+        group("", "identity", securitySettings(s)),
+        // One switch for read receipts and typing, DMs and private groups.
+        group(t("settings.group.chatActivity"), "activity",
+            row(t("dm.privacy.activity"), checkbox(!s.hide_chat_activity, (v) => { s.hide_chat_activity = !v; }), "", { key: "hide_chat_activity" })),
+        group(t("settings.group.chatLogs"), "logs",
+            row(t("settings.log.channel.chats.to.file"), checkbox(s.log_channel_chat, (v) => { s.log_channel_chat = v; }), "", { key: "log_channel_chat" }),
+            row(t("settings.log.private.chats.to.file"), checkbox(s.log_private_chat, (v) => { s.log_private_chat = v; }), "", { key: "log_private_chat" }),
+            row(t("settings.log.server.global.chats.to.file"), checkbox(s.log_server_chat, (v) => { s.log_server_chat = v; }), "", { key: "log_server_chat" }),
+            hint(t("settings.chat.log.config.noxa.chat.log.help.open.log.folder")),
+            hint(t("settings.encryption.direct.messages.are.end.to.end.encrypted.the.server.cannot.read"))),
+    );
+}
 
 function pageNotifications() {
     const s = settings();
@@ -1197,8 +1227,10 @@ function pageNotifications() {
     el.className = "notification-settings";
     const section = (key, className, collapsible = false) => {
         const group = document.createElement(collapsible ? "details" : "section");
-        group.className = "notification-section " + className;
-        const title = document.createElement(collapsible ? "summary" : "h3");
+        group.className = "notification-section set-group " + className;
+        group.dataset.section = key;
+        const title = document.createElement(collapsible ? "summary" : "h4");
+        if (!collapsible) title.className = "set-group-title";
         title.textContent = t("settings.notifications." + key);
         group.appendChild(title);
         el.appendChild(group);
@@ -1402,29 +1434,58 @@ function pageNotifications() {
     return el;
 }
 
-function pageOverlay() { return gamingOverlaySettings(settings(), { row, checkbox, slider, hint }); }
+function pageOverlay() { return gamingOverlaySettings(settings(), { row, checkbox, slider, hint, group, page }); }
 
 const PAGE_BUILDERS = {
-    application: pageApplication,
-    capture: pageCapture,
-    camera: pageCamera,
-    playback: pagePlayback,
+    general: pageGeneral,
+    audio: pageAudio,
+    streams: pageStreams,
     overlay: pageOverlay,
     hotkeys: pageHotkeys,
-    whisper: pageWhisper,
-    downloads: pageDownloads,
+    appearance: pageAppearance,
+    privacy: pagePrivacy,
     chat: pageChat,
-    security: pageSecurity,
-    server: pageServer,
     notifications: pageNotifications,
+    whisper: pageWhisper,
+    connection: pageConnection,
 };
 
-function renderPage(id) {
+function setPageHeader(title, description) {
+    const heading = document.getElementById("settings-page-title");
+    const desc = document.getElementById("settings-page-desc");
+    if (heading) heading.textContent = title;
+    if (desc) { desc.textContent = description; desc.hidden = !description; }
+}
+
+// revealSettingsTarget scrolls to and focuses a deep-linked section or row.
+function revealSettingsTarget(container, { section = "", setting = "" } = {}) {
+    const escape = value => globalThis.CSS?.escape ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
+    const target = (setting && container.querySelector(`[data-setting="${escape(setting)}"]`))
+        || (section && container.querySelector(`[data-section="${escape(section)}"]`));
+    if (!target) return false;
+    for (let parent = target; parent && parent !== container; parent = parent.parentElement) {
+        if (parent.tagName === "DETAILS") parent.open = true;
+    }
+    target.scrollIntoView?.({ block: "start" });
+    const selector = "input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])";
+    const control = setting ? target.querySelector(selector) : null;
+    if (setting) target.classList.add("set-hit");
+    if (control) control.focus({ preventScroll: true });
+    else {
+        const heading = target.querySelector(".set-group-title, summary") || target;
+        if (heading.tabIndex < 0 && !heading.matches("summary")) heading.tabIndex = -1;
+        heading.focus({ preventScroll: true });
+    }
+    return true;
+}
+
+function renderPage(id, focus = {}) {
     document.querySelector(".security-page")?.dispose();
     stopPreviews();
     stopMicCheck();
     stopCameraTest();
     cancelHotkeyCapture();
+    if (!PAGE_BUILDERS[id]) id = "general";
     document.querySelectorAll(".settings-nav-item").forEach((n) => {
         const active = n.dataset.page === id;
         n.classList.toggle("active", active);
@@ -1434,9 +1495,17 @@ function renderPage(id) {
     const container = document.getElementById("settings-content");
     const summary = document.querySelector(".settings-search-summary");
     if (summary) { summary.textContent = ""; summary.hidden = true; }
+    const info = PAGES.find(p => p.id === id);
+    setPageHeader(t(info.label), t(info.description));
     container.setAttribute("aria-labelledby", `settings-page-${id}`);
     container.innerHTML = "";
-    container.appendChild(PAGE_BUILDERS[id]());
+    const built = PAGE_BUILDERS[id]();
+    container.appendChild(built);
+    container.scrollTop = 0;
+    document.querySelector(".settings-footer-extra")?.replaceChildren(...(built.footerActions || []));
+    const reset = document.getElementById("set-reset");
+    if (reset) reset.hidden = false;
+    if (focus.section || focus.setting) revealSettingsTarget(container, focus);
 }
 
 function translateDialog(overlay) {
@@ -1444,17 +1513,26 @@ function translateDialog(overlay) {
     overlay.querySelector(".settings-nav").setAttribute("aria-label", t("settings.settings.sections"));
     overlay.querySelector('label[for="settings-search"]').textContent = t("settings.search.settings");
     overlay.querySelector("#settings-search").placeholder = t("settings.searchPlaceholder");
-    for (const [id, key] of [["set-ok", "ok"], ["set-cancel", "cancel"], ["set-apply", "apply"]]) {
-        overlay.querySelector("#" + id).textContent = t("common." + key);
+    for (const [id, key] of [["set-ok", "settings.done"], ["set-cancel", "common.cancel"], ["set-apply", "common.apply"], ["set-reset", "settings.resetPage"]]) {
+        overlay.querySelector("#" + id).textContent = t(key);
     }
+    overlay.querySelector(".settings-close").setAttribute("aria-label", t("settings.close"));
+    overlay.querySelector(".settings-close").title = t("settings.close");
     for (const page of PAGES) {
         overlay.querySelector(`#settings-page-${page.id} span:last-child`).textContent = t(page.label);
     }
+    const active = overlay.querySelector(".settings-nav-item.active")?.dataset.page;
+    const info = PAGES.find(p => p.id === active);
+    if (info) setPageHeader(t(info.label), t(info.description));
 }
 
-function openSettings(pageId = "application") {
+// openSettings opens the dialog on a page. target is a page id (current or
+// pre-redesign, e.g. "capture"), "page/section", or { page, section,
+// setting }; options may add section / setting to focus a group or a row.
+function openSettings(target = "general", options = {}) {
     if (document.getElementById("settings-overlay")?.getAttribute("aria-busy") === "true") return;
     if (document.getElementById("settings-overlay")?.dataset.identityBusy === "true") return;
+    const destination = resolveSettingsTarget(target, options);
     draft = JSON.parse(JSON.stringify(V().state.settings || {}));
     const whisperScope = captureMediaScope();
     const whisperConfig = (s) => JSON.stringify([!!s?.whisper_active, s?.whisper_clients || [], s?.whisper_channels || []]);
@@ -1468,21 +1546,32 @@ function openSettings(pageId = "application") {
 
     overlay = document.createElement("div");
     overlay.id = "settings-overlay";
-    overlay.className = "dlg-overlay";
+    overlay.className = "dlg-overlay settings-modal-overlay";
     overlay.innerHTML = `
-        <div class="settings-dialog">
-            <h2 id="settings-title" class="sr-only"></h2>
-            <div class="settings-nav" role="tablist" aria-orientation="vertical"></div>
-            <div class="settings-main">
+        <div class="settings-dialog settings-modal">
+            <aside class="settings-rail">
+                <h2 id="settings-title" class="settings-rail-title"></h2>
                 <label class="sr-only" for="settings-search"></label>
-                <input id="settings-search" class="dlg-input" placeholder="" autocomplete="off" />
+                <input id="settings-search" class="dlg-input settings-search" placeholder="" autocomplete="off" />
+                <div class="settings-nav" role="tablist" aria-orientation="vertical"></div>
+            </aside>
+            <div class="settings-main">
+                <header class="settings-head">
+                    <div class="settings-head-text">
+                        <h3 id="settings-page-title" class="settings-page-title"></h3>
+                        <p id="settings-page-desc" class="settings-page-desc"></p>
+                    </div>
+                    <button type="button" class="settings-close icon-btn">${icon("close")}</button>
+                </header>
                 <div class="settings-search-summary set-hint" role="status" hidden></div>
-                <div id="settings-content" role="tabpanel"></div>
-                <div class="settings-save-status set-hint" role="status" hidden></div>
+                <div id="settings-content" role="tabpanel" tabindex="-1"></div>
                 <div class="settings-footer">
-                    <button id="set-ok"></button>
-                    <button id="set-cancel"></button>
-                    <button id="set-apply"></button>
+                    <button id="set-reset" type="button" class="settings-reset"></button>
+                    <div class="settings-save-status set-hint" role="status" hidden></div>
+                    <div class="settings-footer-extra"></div>
+                    <button id="set-cancel" type="button"></button>
+                    <button id="set-apply" type="button"></button>
+                    <button id="set-ok" type="button"></button>
                 </div>
             </div>
         </div>`;
@@ -1520,15 +1609,18 @@ function openSettings(pageId = "application") {
         cancelHotkeyCapture();
         const q = search.value.trim().toLowerCase();
         if (!q) {
-            renderPage(document.querySelector(".settings-nav-item.active")?.dataset.page || "application");
+            renderPage(document.querySelector(".settings-nav-item.active")?.dataset.page || "general");
             return;
         }
+        setPageHeader(t("settings.searchResults"), "");
+        overlay.querySelector(".settings-footer-extra").replaceChildren();
+        overlay.querySelector("#set-reset").hidden = true;
         if (!searchIndex || searchLanguage !== currentLanguage()) {
             searchIndex = [];
             searchLanguage = currentLanguage();
             for (const p of PAGES) {
-                const pageEl = p.id === "server" ? pageServer({ load: false }) : PAGE_BUILDERS[p.id]();
-                pageEl.querySelectorAll(".set-row, .set-subhead, .set-hint, button").forEach((r) => {
+                const pageEl = PAGE_BUILDERS[p.id]({ detached: true });
+                pageEl.querySelectorAll(".set-row, .set-subhead, .set-group-title, .ovl-side-label, .set-hint, button").forEach((r) => {
                     const label = (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase().trim();
                     searchIndex.push({ page: p.id, label });
                 });
@@ -1557,7 +1649,7 @@ function openSettings(pageId = "application") {
             row.onclick = () => {
                 search.value = "";
                 renderPage(h.page);
-                const match = [...content.querySelectorAll(".set-row, .set-subhead, .set-hint, button")].find(r =>
+                const match = [...content.querySelectorAll(".set-row, .set-subhead, .set-group-title, .ovl-side-label, .set-hint, button")].find(r =>
                     (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase().trim() === h.label);
                 if (!match) return;
                 for (let parent = match.parentElement; parent && parent !== content; parent = parent.parentElement) {
@@ -1567,7 +1659,7 @@ function openSettings(pageId = "application") {
                 highlighted.classList.add("set-hit");
                 highlighted.scrollIntoView({ block: "center" });
                 const selector = "input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])";
-                const target = match.matches(selector) ? match : match.querySelector(selector);
+                const target = match.matches(selector) ? match : match.querySelector(selector) || (match.htmlFor && document.getElementById(match.htmlFor));
                 if (target) target.focus({ preventScroll: true });
                 else { highlighted.tabIndex = -1; highlighted.focus({ preventScroll: true }); }
             };
@@ -1590,13 +1682,15 @@ function openSettings(pageId = "application") {
         item.setAttribute("aria-controls", "settings-content");
         item.setAttribute("aria-selected", "false");
         item.tabIndex = -1;
-        item.innerHTML = `<span class="nav-icon" aria-hidden="true">${icon(p.icon)}</span><span>${t(p.label)}</span>`;
+        if (p.rail === "more" && !nav.querySelector(".rail-more-start")) item.classList.add("rail-more-start");
+        item.innerHTML = `<span class="nav-icon" aria-hidden="true">${railIcon(p.icon)}</span><span>${t(p.label)}</span>`;
         item.onclick = () => { search.value = ""; renderPage(p.id); };
         item.addEventListener("keydown", (event) => {
-            if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
+            if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
             event.preventDefault();
             const items = [...nav.querySelectorAll(".settings-nav-item")];
-            const next = wrappedIndex(items.indexOf(item), items.length, ["ArrowDown", "ArrowRight"].includes(event.key) ? 1 : -1);
+            const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+                : wrappedIndex(items.indexOf(item), items.length, ["ArrowDown", "ArrowRight"].includes(event.key) ? 1 : -1);
             items[next].focus();
             items[next].click();
         });
@@ -1627,7 +1721,7 @@ function openSettings(pageId = "application") {
         const snapshot = structuredClone(draft);
         const protectionMode = value => value === "off" ? "off" : "auto";
         protectionPending ||= protectionMode(snapshot.identity_key_protection) !== protectionMode(V().state.settings.identity_key_protection)
-            || overlay.querySelector(".settings-nav-item.active")?.dataset.page === "security";
+            || overlay.querySelector(".settings-nav-item.active")?.dataset.page === "privacy";
         const applyingProtection = protectionPending;
         let persisted = false;
         const nextWhisperConfig = whisperConfig(snapshot);
@@ -1641,7 +1735,7 @@ function openSettings(pageId = "application") {
             if (previousLanguage !== currentLanguage()) translateDialog(overlay);
             invalidateSearch();
             if (search.value) search.oninput();
-            else renderPage(overlay.querySelector(".settings-nav-item.active")?.dataset.page || "application");
+            else renderPage(overlay.querySelector(".settings-nav-item.active")?.dataset.page || "general");
         };
         const focused = document.activeElement;
         overlay.setAttribute("aria-busy", "true");
@@ -1715,10 +1809,47 @@ function openSettings(pageId = "application") {
     const cancel = () => closeDialog(overlay, "cancel");
     overlay.querySelector("#set-cancel").onclick = cancel;
     overlay.querySelector("#set-apply").onclick = applyAll;
+    overlay.querySelector(".settings-close").onclick = cancel;
     overlay.onclick = (e) => { if (e.target === overlay) cancel(); };
+
+    // "Reset to default" restores the active page's keys in the draft only;
+    // Done/Apply saves them and Cancel discards them like any other edit.
+    let defaultsRequest = null;
+    overlay.querySelector("#set-reset").onclick = async () => {
+        const pageId = overlay.querySelector(".settings-nav-item.active")?.dataset.page;
+        if (!pageId || saving || search.value) return;
+        defaultsRequest ||= Promise.resolve()
+            .then(() => window.go.main.App.DefaultSettingsSnapshot?.())
+            .catch(() => null);
+        const defaults = await defaultsRequest;
+        if (!overlay.isConnected || saving) return;
+        saveStatus.hidden = false;
+        if (!defaults || typeof defaults !== "object") {
+            defaultsRequest = null;
+            saveStatus.classList.add("warn");
+            saveStatus.textContent = t("settings.resetUnavailable");
+            return;
+        }
+        const changed = resetPageDraft(draft, defaults, pageId);
+        if (pageId === "appearance") {
+            // Theme swatches and window opacity preview live; show the reset too.
+            const style = document.getElementById("user-css");
+            if (style) style.textContent = draft.user_css || "";
+            window.go.main.App.SetWindowOpacity?.(draft.window_opacity || 100);
+        }
+        renderPage(pageId);
+        markChanges();
+        const label = t(PAGES.find(p => p.id === pageId).label);
+        queueMicrotask(() => {
+            if (!overlay.isConnected) return;
+            saveStatus.classList.remove("warn");
+            saveStatus.textContent = changed.length ? t("settings.resetDone", { page: label }) : t("settings.resetNothing", { page: label });
+        });
+    };
 
     translateDialog(overlay);
     mountDialog(overlay, {
+        initialFocus: () => overlay.querySelector(".settings-nav-item.active"),
         onCancel: () => !saving && overlay.dataset.identityBusy !== "true",
         onClose: () => {
             content.querySelector(".security-page")?.dispose();
@@ -1732,11 +1863,26 @@ function openSettings(pageId = "application") {
             revertLivePreview();
         },
     });
-    renderPage(pageId);
+    renderPage(destination.page, destination);
+}
+
+// settingsPages lists the dialog's pages for launchers such as the quick
+// switcher: { id, label, description, keywords } in rail order.
+export function settingsPages() {
+    return PAGES.map(p => ({
+        id: p.id, label: t(p.label), description: t(p.description),
+        keywords: SETTINGS_CATEGORIES.find(c => c.id === p.id).keys,
+    }));
 }
 
 export function initSettingsUI() {
     window.__noxa.openSettings = openSettings;
+    window.__noxa.settingsPages = settingsPages;
+    // Deep links from UI that does not import this module:
+    // window.dispatchEvent(new CustomEvent("noxa-open-settings", { detail: { page: "overlay" } })).
+    window.addEventListener("noxa-open-settings", event => {
+        openSettings(event.detail || "general");
+    });
     // (301) track registration errors for the hotkey map rows.
     window.runtime.EventsOn("hotkey_status", (st) => {
         if (st.error) hkErrors.set(st.action, st.error);

@@ -78,6 +78,18 @@ export async function startPrivateCall(target = "", conversationID = "") {
     finally { starting = false; }
 }
 
+// startPrivateVideoCall is the Messages view's video button: it starts (or
+// reuses) the private call and turns the camera on once this side has joined.
+// It never turns an active or pending camera off.
+export async function startPrivateVideoCall(target = "", conversationID = "") {
+    const sameCall = owner => conversationID ? owner.call.conversation_id === conversationID
+        : !owner.call.conversation_id && owner.call.participants.some(peer => peer.unique_id === target);
+    if (session && !sameCall(session)) { V().toast?.(t("call.busy"), "warn"); return; }
+    if (!session) await startPrivateCall(target, conversationID);
+    const owner = session;
+    if (owner && current(owner) && owner.call.participants.some(peer => peer.unique_id === owner.uid && peer.state === "accepted")) await owner.media.start("camera");
+}
+
 export function stopPrivateCall() {
     const owner = session;
     if (!owner) return;

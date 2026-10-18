@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -54,6 +55,9 @@ type Client struct {
 	Username string // nickname, once authenticated
 	UniqueID string // TS3-style unique ID, once authenticated
 	UserID   int64  // database users.id, once authenticated
+
+	// talkDecision caches the last uncontended Speak evaluation (canTalk).
+	talkDecision atomic.Pointer[talkDecision]
 
 	mu                 sync.RWMutex
 	lastOwnChannelMove *broadcast.OwnChannelMove // recipient-only cause, protected by mu
@@ -107,8 +111,27 @@ type Client struct {
 	wmu contextMutex // serializes frame writes to Conn
 	// Role-mode member operations lock after acquiring the policy lease, so
 	// a concurrent move cannot change the scope checked by a moderation action.
-	// Packet writes share read leases; scope mutations retain exclusive access.
+	// Scope mutations retain exclusive access through lockRoleAction.
 	roleActionMu sync.RWMutex
+	// mediaFence is the realtime packet side of roleActionMu. Packet writes
+	// take only this fence (TryRLock, never waiting). lockRoleAction acquires it
+	// exclusively after roleActionMu, so media-scope mutations still exclude
+	// every in-flight packet, while shared roleActionMu leases (renegotiation
+	// offers, ICE/answer signaling) and writers merely queued behind them never
+	// block voice. Never acquire mediaFence without first holding roleActionMu.
+	mediaFence sync.RWMutex
+}
+
+// lockRoleAction takes the exclusive member barrier including the packet
+// fence. Use it for any change to an input of guardRoleMedia.
+func (c *Client) lockRoleAction() {
+	c.roleActionMu.Lock()
+	c.mediaFence.Lock()
+}
+
+func (c *Client) unlockRoleAction() {
+	c.mediaFence.Unlock()
+	c.roleActionMu.Unlock()
 }
 
 // isAuthed reports whether the client has completed authentication.
@@ -302,7 +325,11 @@ type TCPServer struct {
 	// Order: Authority, roleMetadataMu, client roleActionMu, backend locks.
 	// SDP metadata must not cross membership/status changes. Packet delivery
 	// does not acquire this mutex, so a slow SDP reader cannot stall all audio.
-	roleMetadataMu      sync.Mutex
+	roleMetadataMu sync.Mutex
+	// publisherGuardMu makes snapshot and installation of the voice publisher
+	// guard atomic, so the last installed guard is always the newest snapshot
+	// (taken after roleMetadataMu/roleActionMu, before backend locks).
+	publisherGuardMu    sync.Mutex
 	cfg                 *config.Config
 	logger              *zap.Logger
 	deps                *Deps
@@ -357,13 +384,18 @@ type TCPServer struct {
 	chatRate             *chatRateLimiter
 	callSignalRate       *chatRateLimiter
 	conversationReadRate *chatRateLimiter
-	chatSpam             *spamTracker
-	chatSlow             *slowTracker
-	typingRate           *typingTracker
-	chatFilters          *chatFilterCache
-	pokes                pokeTracker
-	beforeHandle         func()
-	afterAccept          func()
+	// conversationSignalRate bounds private-group typing relays per user
+	// across all groups, before any membership lookup.
+	conversationSignalRate *chatRateLimiter
+	conversationFiles      conversationFileAccess
+	conversationActivity   conversationActivityRevocations
+	chatSpam               *spamTracker
+	chatSlow               *slowTracker
+	typingRate             *typingTracker
+	chatFilters            *chatFilterCache
+	pokes                  pokeTracker
+	beforeHandle           func()
+	afterAccept            func()
 
 	loginLimiter *auth.LoginFailureLimiter
 
@@ -434,13 +466,14 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 		rotationAfter: func(delay time.Duration, callback func()) {
 			time.AfterFunc(delay, callback)
 		},
-		chatRate:             newChatRateLimiter(cfg.ChatRateMsgs, time.Duration(cfg.ChatRateWindowSeconds)*time.Second),
-		callSignalRate:       newChatRateLimiter(32, time.Second),
-		conversationReadRate: newChatRateLimiter(32, time.Second),
-		chatSpam:             newSpamTracker(),
-		chatSlow:             newSlowTracker(),
-		typingRate:           newTypingTracker(),
-		loginLimiter:         loginLimiter,
+		chatRate:               newChatRateLimiter(cfg.ChatRateMsgs, time.Duration(cfg.ChatRateWindowSeconds)*time.Second),
+		callSignalRate:         newChatRateLimiter(32, time.Second),
+		conversationReadRate:   newChatRateLimiter(32, time.Second),
+		conversationSignalRate: newChatRateLimiter(8, 4*time.Second),
+		chatSpam:               newSpamTracker(),
+		chatSlow:               newSlowTracker(),
+		typingRate:             newTypingTracker(),
+		loginLimiter:           loginLimiter,
 
 		chatFilters: &chatFilterCache{},
 	}
@@ -460,7 +493,12 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 				if !ok {
 					return authorization.ErrRoleForbidden
 				}
-				return s.withRoleChannelControl(context.Background(), client, authorization.Connect, true, func(ctx context.Context, _ int64) error {
+				// A shared member lease: the offer write (up to the TCP write
+				// ceiling) must not close this client's packet fence, or every
+				// renegotiation (e.g. a screen share starting) would drop all
+				// voice to and from it. Membership/moderation changes still
+				// serialize against it, and roleMetadataMu stays exclusive.
+				return s.withRoleChannelLease(context.Background(), client, authorization.Connect, true, true, func(ctx context.Context, _ int64) error {
 					s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
 					return send()
 				})
@@ -1221,8 +1259,8 @@ func (s *TCPServer) onDisconnect(client *Client) {
 		if s.deps.Authority != nil {
 			s.roleMetadataMu.Lock()
 			defer s.roleMetadataMu.Unlock()
-			client.roleActionMu.Lock()
-			defer client.roleActionMu.Unlock()
+			client.lockRoleAction()
+			defer client.unlockRoleAction()
 		}
 		if !client.needsDisconnectCleanup() {
 			alreadyCleaned = true

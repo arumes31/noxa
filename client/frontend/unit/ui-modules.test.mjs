@@ -321,12 +321,18 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.deepEqual(chat.normalize({
             body: "hello", enc_verified: true, from_nickname: "Ada", id: "8", reply_to_id: "3", sent_at: 7,
         }, 5), {
-            channelID: 5, clientMsgID: "", deleted: false, edited: false, e2e: false, direct: false, enc: true, encVerified: true, from: "Ada", fromUID: "",
+            channelID: 5, clientMsgID: "", deleted: false, edited: false, e2e: false, direct: false, enc: true, encVerified: true, encMode: "", from: "Ada", fromUID: "",
             id: 8, mentioned: false, mentions: [], role_mentions: [], offline: false, reactions: null, replyToID: 3, self: false, text: "hello", ts: 7000, version: 1,
         });
         const plaintextDM = chat.normalize({ direct: true, text: "clear" });
         assert.equal(plaintextDM.direct, true);
         assert.equal(plaintextDM.encVerified, false);
+        // The encryption mode is local evidence: it counts only next to the
+        // native layer's verification flag.
+        assert.equal(chat.normalize({ text: "x", enc_verified: true, enc_mode: "server" }).encMode, "server");
+        assert.equal(chat.normalize({ direct: true, text: "x", enc_verified: true, enc_mode: "e2e" }).encMode, "e2e");
+        assert.equal(chat.normalize({ text: "x", enc_mode: "e2e" }).encMode, "");
+        assert.equal(chat.normalize({ text: "x", enc_verified: true, enc_mode: "bogus" }).encMode, "");
         const legacyDM = chat.normalize({ e2e: true, text: "legacy" });
         assert.equal(legacyDM.direct, true);
         assert.equal(legacyDM.encVerified, false);
@@ -343,6 +349,151 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal(chat.qsScore("alp", "Alpha"), 100);
         assert.ok(chat.qsScore("apa", "Alpha") > 0);
         assert.equal(chat.qsScore("zzz", "Alpha"), -1);
+    });
+
+    await t.test("chat notifications never carry attachment keys or unopened bodies", async (t) => {
+        replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });
+        const chat = await import("../src/chat-ui.js");
+        const channel = (text, extra = {}) => chat.normalize({ text, from_nickname: "Ada", enc_verified: true, enc_mode: "server", ...extra }, 4);
+        const file = chat.notificationLine(channel("[file:store#secret-key#nx1;size=4#plan.pdf]"));
+        assert.equal(file, "Ada: File · plan.pdf");
+        assert.doesNotMatch(file, /secret-key|store#/);
+        assert.equal(chat.notificationLine(channel("see [file:store#secret-key#plan.pdf] now")), "Ada: see 📎 plan.pdf now");
+        const sealed = chat.notificationLine(channel("[encrypted message — key unavailable]"));
+        assert.doesNotMatch(sealed, /\[encrypted message/);
+        assert.match(sealed, /^Ada: This message is encrypted\./);
+        assert.match(chat.notificationLine(chat.normalize({ text: "in the clear", from_nickname: "Ada" }, 4)), /^Ada: This message was blocked/);
+        assert.equal(chat.notificationLine(channel("x".repeat(200))).length <= "Ada: ".length + 80, true);
+        // addChat builds keyword, mention and channel notifications only from it.
+        const source = await (await import("node:fs/promises")).readFile(new URL("../src/chat-ui.js", import.meta.url), "utf8");
+        const addChat = source.slice(source.indexOf("export function addChat("), source.indexOf("function pushMsg("));
+        assert.doesNotMatch(addChat, /m\.text \|\| ""\)\.slice/);
+        assert.equal(addChat.match(/notificationLine\(m\)/g)?.length, 3);
+    });
+
+    await t.test("chat keyword highlights match only sanitized message text", async (t) => {
+        replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });
+        const chat = await import("../src/chat-ui.js");
+        const channel = (text, extra = {}) => chat.normalize({ text, from_nickname: "Ada", enc_verified: true, enc_mode: "server", ...extra }, 4);
+        const token = channel("[file:raid#secretkey#nx1;size=4#plan.pdf]");
+        assert.equal(chat.keywordText(token), "plan.pdf");
+        assert.doesNotMatch(chat.keywordText(token), /raid|secretkey|nx1/);
+        assert.equal(chat.keywordText(channel("see\n[file:raid#secretkey#plan.pdf]  now")), "see plan.pdf now");
+        const long = "x ".repeat(60) + "raid tonight";
+        assert.equal(chat.keywordText(channel(long)), long.trim(), "no preview truncation");
+        assert.equal(chat.keywordText(channel("[encrypted message — key unavailable]")), "");
+        assert.equal(chat.keywordText(chat.normalize({ text: "raid in the clear", from_nickname: "Ada" }, 4)), "");
+        assert.equal(chat.keywordText({ ...channel("raid"), deleted: true }), "");
+        // With the real matcher: a keyword inside the token or key never matches.
+        window.__noxa.state.lastConnect = { addr: "srv" };
+        window.__noxa.state.settings = { keywords: { srv: ["raid", "secretkey", "plan"] } };
+        const { matchKeyword } = await import("../src/notifications.js");
+        assert.equal(matchKeyword(chat.keywordText(token)), "plan");
+        window.__noxa.state.settings.keywords.srv = ["raid", "secretkey"];
+        assert.equal(matchKeyword(chat.keywordText(token)), "");
+        assert.equal(matchKeyword(chat.keywordText(channel(long))), "raid");
+        const source = await (await import("node:fs/promises")).readFile(new URL("../src/chat-ui.js", import.meta.url), "utf8");
+        assert.match(source, /matchKeyword\(keywordText\(m\)\)/);
+        assert.doesNotMatch(source, /matchKeyword\(m\.text/);
+    });
+
+    await t.test("chat keeps a downgraded DM unverified live, after reload and in search", async (t) => {
+        replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });
+        const chat = await import("../src/chat-ui.js");
+        const { encryptionBadge } = await import("../src/message-encryption.js");
+        const { conversationEncryption } = await import("../src/dm-model.js");
+        const live = chat.normalize({ direct: true, text: "raid at 8", from: "Mia", from_unique_id: "u-mia", enc_mode: "downgraded" });
+        assert.equal(live.encVerified, false);
+        assert.equal(live.encMode, "downgraded");
+        assert.deepEqual(encryptionBadge(live), { kind: "warning", label: "chat.downgradedHelp", bodyKey: "" });
+        // The body is shown (it was opened with the server key), never as verified.
+        assert.equal(chat.notificationLine(live), "Mia: raid at 8");
+        assert.equal(chat.keywordText(live), "");
+        assert.equal(conversationEncryption({ last: live }).kind, "warning");
+        assert.equal(conversationEncryption({ last: live }).helpKey, "chat.downgradedHelp");
+        // A forged verified pair never becomes downgraded-verified or verified-e2e.
+        assert.equal(chat.normalize({ direct: true, text: "x", enc_verified: true, enc_mode: "downgraded" }).encMode, "");
+        // Reload from the local log draws the same badge.
+        const stored = chat.directMessageFromEntry({ from_unique_id: "u-mia", from_nickname: "Mia", body: "raid at 8", sent_at: 5, enc_mode: "downgraded" });
+        assert.equal(stored.encVerified, false);
+        assert.equal(stored.encMode, "downgraded");
+        assert.equal(encryptionBadge(stored).label, "chat.downgradedHelp");
+        // A record verified as "server" (the retired fallback) reloads as
+        // downgraded, never verified; legacy verified records stay e2e.
+        const retired = chat.directMessageFromEntry({ from_unique_id: "u-mia", body: "old", sent_at: 6, enc_verified: true, enc_mode: "server" });
+        assert.deepEqual([retired.encVerified, retired.enc, retired.encMode, encryptionBadge(retired).kind], [false, false, "downgraded", "warning"]);
+        const legacy = chat.directMessageFromEntry({ from_unique_id: "u-mia", body: "old", sent_at: 6, enc_verified: true });
+        assert.deepEqual([legacy.encVerified, legacy.encMode, encryptionBadge(legacy).kind], [true, "e2e", "lock"]);
+        const bogus = chat.directMessageFromEntry({ from_unique_id: "u-mia", body: "old", sent_at: 6, enc_verified: true, enc_mode: "bogus" });
+        assert.deepEqual([bogus.encVerified, bogus.encMode, encryptionBadge(bogus).label], [false, "", "chat.unverifiedHelp"]);
+        // A live DM in "server" mode is a warning too; channels keep the shield.
+        assert.equal(encryptionBadge(chat.normalize({ direct: true, text: "x", enc_verified: true, enc_mode: "server" })).kind, "warning");
+        assert.equal(encryptionBadge(chat.normalize({ text: "x", enc_verified: true, enc_mode: "server" }, 4)).kind, "shield");
+        const source = await (await import("node:fs/promises")).readFile(new URL("../src/chat-ui.js", import.meta.url), "utf8");
+        // The local log keeps the mode, and search hits map it the same way.
+        assert.match(source, /enc_mode: m\.encVerified \? m\.encMode : encModeFrom\(false, m\.encMode\)/);
+        assert.match(source, /encMode: encModeFrom\(verified, r\.enc_mode\)/);
+    });
+
+    await t.test("channel edit offers no new password on a text channel", async (t) => {
+        replaceGlobal(t, "window", { __noxa: { state: { channels: [{ ChannelID: 3, TextOnly: true }, { ChannelID: 4 }] } } });
+        const { editingTextChannel } = await import("../src/channel-lifecycle-ui.js");
+        assert.equal(editingTextChannel(3), true);
+        assert.equal(editingTextChannel(4), false);
+        assert.equal(editingTextChannel(9), false);
+        assert.equal(editingTextChannel(3, []), false);
+        const source = await (await import("node:fs/promises")).readFile(new URL("../src/channel-lifecycle-ui.js", import.meta.url), "utf8");
+        // "set" is disabled for a text channel; "remove" stays available.
+        assert.match(source, /\["set", t\("roles\.channel\.passwordSet"\), textChannel\]/);
+        assert.match(source, /\["remove", t\("roles\.channel\.passwordRemove"\)\]/);
+        assert.match(source, /passwordAction === "set" && !textChannel\) field\("password"/);
+    });
+
+    await t.test("chat replaces an unopened copy with a later verified copy", async (t) => {
+        const changed = [];
+        replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });
+        window.addEventListener("noxa-direct-changed", () => changed.push(true));
+        const chat = await import("../src/chat-ui.js");
+        const placeholder = { text: "[encrypted message — key unavailable]", direct: true, enc: false, encVerified: false, encMode: "" };
+        assert.equal(chat.upgradeEncryption(placeholder, { text: "hello", encVerified: false }), false);
+        assert.equal(placeholder.text, "[encrypted message — key unavailable]");
+        assert.equal(chat.upgradeEncryption(placeholder, { text: "[encrypted message — decryption failed]", encVerified: true, encMode: "e2e" }), false);
+        assert.equal(chat.upgradeEncryption(placeholder, { text: "hello", encVerified: true, encMode: "e2e", e2e: true }), true);
+        assert.deepEqual({ text: placeholder.text, enc: placeholder.enc, encVerified: placeholder.encVerified, encMode: placeholder.encMode },
+            { text: "hello", enc: true, encVerified: true, encMode: "e2e" });
+        assert.equal(changed.length, 1);
+        // A verified body is never replaced; an equal body only gains evidence.
+        assert.equal(chat.upgradeEncryption(placeholder, { text: "other", encVerified: true, encMode: "e2e" }), false);
+        assert.equal(placeholder.text, "hello");
+        const weak = { text: "same", enc: false, encVerified: false, localUnverified: true };
+        assert.equal(chat.upgradeEncryption(weak, { text: "same", encVerified: true, encMode: "server" }), true);
+        assert.equal(weak.encVerified, true);
+        assert.equal(weak.localUnverified, false);
+        assert.equal(chat.upgradeEncryption({ text: "a", encVerified: false }, { text: "b", encVerified: true }), false);
+        assert.equal(chat.upgradeEncryption({ text: "[encrypted message — key unavailable]", deleted: true }, { text: "b", encVerified: true }), false);
+    });
+
+    await t.test("chat log trimming counts message rows, not day separators", async (t) => {
+        replaceGlobal(t, "window", { __noxa: { state: {} } });
+        const chat = await import("../src/chat-ui.js");
+        const log = { children: [] };
+        Object.defineProperty(log, "firstElementChild", { get() { return this.children[0] || null; } });
+        const child = (name, separator = false) => {
+            const item = { name, classList: { contains: cls => separator && cls === "dm-day" } };
+            item.remove = () => { const i = log.children.indexOf(item); if (i >= 0) log.children.splice(i, 1); };
+            Object.defineProperty(item, "nextElementSibling", { get() { return log.children[log.children.indexOf(item) + 1] || null; } });
+            return item;
+        };
+        log.children.push(child("dayA", true), child("a1"), child("a2"), child("dayB", true), child("b1"), child("b2"));
+        const names = () => log.children.map(item => item.name);
+        chat.trimLog(log, 4); // four messages fit; the two separators do not count
+        assert.deepEqual(names(), ["dayA", "a1", "a2", "dayB", "b1", "b2"]);
+        chat.trimLog(log, 3);
+        assert.deepEqual(names(), ["dayA", "a2", "dayB", "b1", "b2"]);
+        chat.trimLog(log, 2); // dayA loses its last message and goes with it
+        assert.deepEqual(log.children.map(item => item.name), ["dayB", "b1", "b2"]);
+        chat.trimLog(log, 5);
+        assert.deepEqual(log.children.map(item => item.name), ["dayB", "b1", "b2"]);
     });
 
     await t.test("chat connection setup keeps best-effort failures and late replies scoped", async (t) => {

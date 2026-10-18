@@ -37,7 +37,7 @@ test.beforeEach(async ({ page }) => {
             Object.defineProperty(track, "id", { value: `${stream.publisher_id}|screen` });
             tracks.set(stream.publisher_id, track);
             bindings.push({ mid: stream.publisher_id, currentDirection: "recvonly", receiver: { track } });
-            controls.receiveStreamTrack(track, { client_id: stream.publisher_id });
+            controls.receiveStreamTrack(track, { client_id: stream.publisher_id }, `${stream.publisher_id}|screen`);
         }
         const sharedAudio = { enabled: true };
         controls.receiveShareAudio(sharedAudio, "alice");
@@ -426,7 +426,7 @@ test("three active streams never overlap in a height-constrained chat pane", asy
         window.__streams.streams.push({ publisher_id: "bob", slot: "cam", generation: "3", preview_at: 0, watch_revision: "0" });
         const track = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
         Object.defineProperty(track, "id", { value: "bob|cam" });
-        window.__streams.controls.receiveStreamTrack(track, { client_id: "bob" });
+        window.__streams.controls.receiveStreamTrack(track, { client_id: "bob" }, "bob|cam");
     });
     await expect(page.getByRole("button", { name: "Watch", exact: true })).toHaveCount(3);
     for (let i = 0; i < 3; i++) await page.getByRole("button", { name: "Watch", exact: true }).first().click();
@@ -444,7 +444,7 @@ test("one channel member can show camera and screen tiles and stop either indepe
         const track = document.createElement("canvas").captureStream(1).getVideoTracks()[0];
         Object.defineProperty(track, "id", { value: "alice|cam" });
         window.__streams.camera = track;
-        window.__streams.controls.receiveStreamTrack(track, { client_id: "alice" });
+        window.__streams.controls.receiveStreamTrack(track, { client_id: "alice" }, "alice|cam");
     });
     const camera = page.locator('[data-publisher="alice"][data-slot="cam"]');
     const screen = page.locator('[data-publisher="alice"][data-slot="screen"]');
@@ -666,7 +666,7 @@ test("camera diagnostics expose a stalled stream and successful retry clears the
         const track = s.canvas.captureStream(1).getVideoTracks()[0];
         Object.defineProperty(track, "id", { value: "alice|cam" });
         s.camera = track;
-        s.controls.receiveStreamTrack(track, { client_id: "alice" });
+        s.controls.receiveStreamTrack(track, { client_id: "alice" }, "alice|cam");
         const binding = { mid: "cam", currentDirection: "recvonly", receiver: { track } };
         window.__noxa.state.pc.getTransceivers = () => [binding];
         window.__noxa.state.pc.getStats = async () => new Map([["camera", { id: "camera", ssrc: 1, timestamp: performance.now(), type: "inbound-rtp", kind: "video", trackIdentifier: "alice|cam", frameWidth: 640, framesDecoded: 1 }]]);

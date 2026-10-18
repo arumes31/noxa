@@ -23,7 +23,14 @@ export function initGroupSidebarLayout({ tree, body, title }) {
     toggle.type = "button"; toggle.className = "group-collapse";
     toggle.setAttribute("aria-controls", body.id);
     title.replaceWith(toggle); toggle.append(title);
-    let pointer = null;
+    let pointer = null, dragStart = null;
+    // The tree and the group list share what the fixed rows leave: the
+    // divider and any sidebar sections placed between them (Text, Direct).
+    const available = () => {
+        let fixed = 0;
+        for (const child of split.children) if (child !== tree && !child.contains(body)) fixed += child.offsetHeight;
+        return split.clientHeight - fixed;
+    };
     const save = () => {
         try { localStorage.setItem(storageKey, JSON.stringify({ size: automatic ? null : size, collapsed })); }
         catch { /* Persistence is optional; the current layout still works. */ }
@@ -48,20 +55,20 @@ export function initGroupSidebarLayout({ tree, body, title }) {
     divider.onpointerdown = event => {
         if (event.button !== 0 || !event.isPrimary) return;
         event.preventDefault(); pointer = event.pointerId;
+        dragStart = { y: event.clientY, tree: tree.getBoundingClientRect().height };
         divider.setPointerCapture(pointer); divider.focus({ preventScroll: true });
         split.classList.add("group-split-dragging");
     };
     divider.onpointermove = event => {
         if (pointer !== event.pointerId) return;
-        const bounds = split.getBoundingClientRect();
-        const available = bounds.height - divider.offsetHeight;
-        if (available <= 0) return;
-        size = clamp((event.clientY - bounds.top - divider.offsetHeight / 2) / available * 100);
+        const space = available();
+        if (space <= 0 || !dragStart) return;
+        size = clamp((dragStart.tree + event.clientY - dragStart.y) / space * 100);
         automatic = false;
         apply();
     };
     const finish = () => {
-        const id = pointer; pointer = null;
+        const id = pointer; pointer = null; dragStart = null;
         split.classList.remove("group-split-dragging");
         if (id !== null && divider.hasPointerCapture(id)) divider.releasePointerCapture(id);
         if (id !== null) save();
@@ -73,9 +80,9 @@ export function initGroupSidebarLayout({ tree, body, title }) {
     };
     const observer = new ResizeObserver(() => {
         if (!automatic || collapsed) return;
-        const available = split.clientHeight - divider.offsetHeight;
-        if (available <= 0) return;
-        size = tree.getBoundingClientRect().height / available * 100;
+        const space = available();
+        if (space <= 0) return;
+        size = tree.getBoundingClientRect().height / space * 100;
         divider.setAttribute("aria-valuenow", String(Math.round(size)));
     });
     observer.observe(tree);

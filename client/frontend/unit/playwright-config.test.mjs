@@ -6,7 +6,7 @@ import test from "node:test";
 
 const frontendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const configScript = `import config from "./playwright.config.js";
-console.log(JSON.stringify({ retries: config.retries, reporter: config.reporter, trace: config.use.trace, screenshot: config.use.screenshot, reducedMotion: config.use.reducedMotion }));`;
+console.log(JSON.stringify({ fullyParallel: config.fullyParallel, workers: config.workers, retries: config.retries, reporter: config.reporter, trace: config.use.trace, screenshot: config.use.screenshot, reducedMotion: config.use.reducedMotion }));`;
 
 function readConfig(ci) {
     const env = { ...process.env };
@@ -21,6 +21,7 @@ function readConfig(ci) {
 
 test("uses local and CI Playwright retry/reporting policies", () => {
     assert.deepEqual(readConfig(false), {
+        fullyParallel: true,
         retries: 0,
         reporter: "list",
         trace: "on-first-retry",
@@ -28,6 +29,8 @@ test("uses local and CI Playwright retry/reporting policies", () => {
         reducedMotion: "reduce",
     });
     assert.deepEqual(readConfig(true), {
+        fullyParallel: true,
+        workers: 2,
         retries: 2,
         reporter: [["github"], ["html", { open: "never" }]],
         trace: "on-first-retry",

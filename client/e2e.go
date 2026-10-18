@@ -780,15 +780,49 @@ func (m *connManager) requestKeys(scope int64, ids []uint32) error {
 }
 
 // peerPubKey resolves a user's X25519 public key: cache first, then the
-// server directory. Returns ok=false when the user never published one.
+// server directory. Returns ok=false when no key could be obtained.
 func (m *connManager) peerPubKey(uniqueID string) ([32]byte, bool) {
+	key, lookup := m.lookupPeerPubKey(uniqueID)
+	return key, lookup == peerKeyFound
+}
+
+// peerKeyLookup is the outcome of a directory lookup for a peer's E2E key.
+// Only a clean answer that the peer published no key is peerKeyAbsent:
+// timeouts, rate limits, disconnects and malformed or mismatched replies are
+// peerKeyFailed and must never be read as "the peer has no key".
+type peerKeyLookup uint8
+
+const (
+	peerKeyFailed peerKeyLookup = iota
+	peerKeyFound
+	peerKeyAbsent
+)
+
+// lookupPeerPubKey is peerPubKey with the reason a key is missing: only a
+// clean directory answer naming this peer with no key is peerKeyAbsent.
+func (m *connManager) lookupPeerPubKey(uniqueID string) ([32]byte, peerKeyLookup) {
 	cachedKey, cached, leader, done, epoch := m.pubKeys.getOrClaimFetch(uniqueID)
 	if cached {
-		return cachedKey, true
+		return cachedKey, peerKeyFound
 	}
 	if !leader {
 		<-done
-		return m.pubKeys.get(uniqueID)
+		if key, ok := m.pubKeys.get(uniqueID); ok {
+			return key, peerKeyFound
+		}
+		// The leader's outcome is not shared; ask once more on the same
+		// connection generation, so an absent key is still reported as such.
+		cachedKey, cached, leader, done, epoch = m.pubKeys.getOrClaimFetch(uniqueID)
+		if cached {
+			return cachedKey, peerKeyFound
+		}
+		if !leader {
+			<-done
+			if key, ok := m.pubKeys.get(uniqueID); ok {
+				return key, peerKeyFound
+			}
+			return [32]byte{}, peerKeyFailed
+		}
 	}
 	defer m.pubKeys.finishFetch(uniqueID, epoch)
 	// The directory request happens without the cache lock. Followers wait on
@@ -801,7 +835,7 @@ func (m *connManager) peerPubKey(uniqueID string) ([32]byte, bool) {
 	for attempt := 0; ; attempt++ {
 		select {
 		case <-done: // Disconnect cleared this cache generation.
-			return [32]byte{}, false
+			return [32]byte{}, peerKeyFailed
 		default:
 		}
 		var err error
@@ -812,34 +846,37 @@ func (m *connManager) peerPubKey(uniqueID string) ([32]byte, bool) {
 		}
 		var failure *requestFailure
 		if attempt >= 2 || !errors.As(err, &failure) || failure.response.RetryAfterMS <= 0 || failure.response.RetryAfterMS > 10_000 {
-			return [32]byte{}, false
+			return [32]byte{}, peerKeyFailed
 		}
 		delay := time.Duration(failure.response.RetryAfterMS) * time.Millisecond
 		if time.Now().Add(delay).After(deadline) {
-			return [32]byte{}, false
+			return [32]byte{}, peerKeyFailed
 		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-done:
 			timer.Stop()
-			return [32]byte{}, false
+			return [32]byte{}, peerKeyFailed
 		case <-timer.C:
 		}
 	}
 	var resp netproto.KeyResponse
-	if err := netproto.Decode(f, &resp); err != nil || resp.UniqueID != uniqueID || resp.PublicKey == "" {
-		return [32]byte{}, false
+	if err := netproto.Decode(f, &resp); err != nil || resp.UniqueID != uniqueID {
+		return [32]byte{}, peerKeyFailed
+	}
+	if resp.PublicKey == "" {
+		return [32]byte{}, peerKeyAbsent
 	}
 	raw, err := base64.StdEncoding.DecodeString(resp.PublicKey)
 	if err != nil || len(raw) != 32 {
-		return [32]byte{}, false
+		return [32]byte{}, peerKeyFailed
 	}
 	var k [32]byte
 	copy(k[:], raw)
 	if !m.pubKeys.putAt(uniqueID, k, epoch) {
-		return [32]byte{}, false
+		return [32]byte{}, peerKeyFailed
 	}
-	return k, true
+	return k, peerKeyFound
 }
 
 // encryptChat seals an outgoing chat message for the scope. It returns the
@@ -857,9 +894,15 @@ func (m *connManager) encryptChat(scope, target, text string) (netproto.ChatSend
 	switch scope {
 	case "direct":
 		uniqueID := target
-		peer, ok := m.peerPubKey(uniqueID)
-		if !ok {
-			return netproto.ChatSend{}, fmt.Errorf("no encryption key for %s (old client?)", uniqueID)
+		peer, lookup := m.lookupPeerPubKey(uniqueID)
+		if lookup == peerKeyAbsent {
+			// DMs are end-to-end only. A peer without an E2E key also never
+			// receives scope keys, so a server-encrypted DM could not be
+			// opened by it: there is no fallback, and never plaintext.
+			return netproto.ChatSend{}, errPeerNoE2EKey
+		}
+		if lookup != peerKeyFound {
+			return netproto.ChatSend{}, fmt.Errorf("could not fetch the end-to-end key for %s; try again", uniqueID)
 		}
 		blob, err := sealDM(text, peer, priv)
 		if err != nil {
@@ -875,7 +918,7 @@ func (m *connManager) encryptChat(scope, target, text string) (netproto.ChatSend
 		}
 		keyID, key, ok := m.scopeKeys.current(channelID)
 		if !ok {
-			return netproto.ChatSend{}, fmt.Errorf("no chat key for this channel yet (rejoin or wait for re-key)")
+			return netproto.ChatSend{}, fmt.Errorf("no chat key for this channel yet (rejoin or wait for re-key); plaintext messages are not allowed")
 		}
 		blob, err := sealScope(text, key)
 		if err != nil {
@@ -886,7 +929,7 @@ func (m *connManager) encryptChat(scope, target, text string) (netproto.ChatSend
 	default: // global
 		keyID, key, ok := m.scopeKeys.current(0)
 		if !ok {
-			return netproto.ChatSend{}, fmt.Errorf("no global chat key yet (wait for key delivery)")
+			return netproto.ChatSend{}, fmt.Errorf("no global chat key yet (wait for key delivery); plaintext messages are not allowed")
 		}
 		blob, err := sealScope(text, key)
 		if err != nil {
@@ -955,18 +998,24 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 		return payload
 	}
 	// Verification is local evidence, never a claim accepted from the wire.
-	claimedVerified := chat.EncVerified
-	chat.EncVerified = false
+	chat.EncVerified, chat.EncMode = false, ""
 	if !chat.Enc {
-		if claimedVerified || chat.E2E {
-			chat.Direct = chat.Direct || chat.E2E
-			presentChat(&chat)
-			return rewrapChat("chat", chat, payload)
-		}
-		return payload
+		// Plaintext chat is never displayed: every body must be end-to-end
+		// or client→server→client encrypted. The refusal keeps the scope so
+		// the placeholder lands in the right tab with a warning badge.
+		chat.Direct = chat.Direct || chat.E2E
+		chat.Text = refusedPlainText
+		presentChat(&chat)
+		return rewrapChat("chat", chat, payload)
 	}
 
-	if chat.Direct || chat.E2E || chat.KeyID == 0 {
+	// A direct message with a scope generation and no E2E flag was sealed
+	// with the global scope key, so the server could read or have written
+	// it. DMs are end-to-end only (this client never sends one like that and
+	// current servers refuse them): it opens like a global message, stays a
+	// direct message, and is always shown as downgraded, never verified.
+	serverDM := chat.Direct && !chat.E2E && chat.KeyID != 0
+	if !serverDM && (chat.Direct || chat.E2E || chat.KeyID == 0) {
 		// Legacy servers only supplied e2e. Keep scope after presentChat strips
 		// encryption metadata, even for a missing-key placeholder.
 		chat.Direct = true
@@ -984,6 +1033,9 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 	}
 
 	scope := scopeOf(chat)
+	if serverDM {
+		scope = 0
+	}
 	blob := chat.Text
 	text, ok := m.resolveScopeText(scope, chat.KeyID, blob)
 	if !ok {
@@ -993,7 +1045,11 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 		if !m.startScopeDecrypt(scope, chat.KeyID, func() string {
 			return m.scopeTextAfterFetch(scope, chat.KeyID, blob)
 		}, func(text string) {
-			chat.Text = text
+			chat.Text, chat.EncVerified = text, openedChatText(text)
+			chat.EncMode = verifiedMode(chat.EncVerified, "server")
+			if serverDM {
+				markDowngradedDM(&chat)
+			}
 			presentChat(&chat)
 			m.emit("event", rewrapChat("chat", chat, payload))
 		}) {
@@ -1003,9 +1059,56 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 		}
 		return ""
 	}
-	chat.Text = text
+	// The shield is drawn from this flag: set it only for a body this client
+	// opened itself, never for a placeholder.
+	chat.Text, chat.EncVerified = text, openedChatText(text)
+	chat.EncMode = verifiedMode(chat.EncVerified, "server")
+	if serverDM {
+		markDowngradedDM(&chat)
+	}
 	presentChat(&chat)
 	return rewrapChat("chat", chat, payload)
+}
+
+// dmModeDowngraded marks an opened server-encrypted DM. It is never a
+// verified mode: enc_verified stays false wherever it appears (live event,
+// stored record, search, export).
+const dmModeDowngraded = "downgraded"
+
+// errPeerNoE2EKey refuses a DM to a peer whose client published no
+// end-to-end key. The text reaches the UI as the send error.
+var errPeerNoE2EKey = errors.New("this contact's client has no end-to-end encryption key — they need to update noxa")
+
+// markDowngradedDM withdraws the shield from a server-encrypted DM: DMs must
+// be end-to-end, and the server could have written this body itself. A body
+// opened with the server key is shown, but unverified under the "downgraded"
+// warning badge; an unopened placeholder keeps no mode.
+func markDowngradedDM(chat *netproto.ChatBroadcast) {
+	mode := ""
+	if chat.EncVerified {
+		mode = dmModeDowngraded
+	}
+	chat.EncVerified, chat.EncMode = false, mode
+}
+
+// verifiedMode names the encryption path of a body this client opened; an
+// unopened body has none.
+func verifiedMode(verified bool, mode string) string {
+	if !verified {
+		return ""
+	}
+	return mode
+}
+
+// openedChatText reports whether text is a body this client opened, as
+// opposed to one of the placeholders substituted for a sealed or refused
+// body.
+func openedChatText(text string) bool {
+	switch text {
+	case missingKeyText, refusedKeyText, refusedPlainText, decryptFailedText:
+		return false
+	}
+	return true
 }
 
 // decryptEventField unseals one sealed field of a scope event (the edited
@@ -1016,8 +1119,11 @@ func (m *connManager) decryptEventField(envType, field string, data json.RawMess
 	if !ok {
 		return payload
 	}
+	delete(obj, "enc_verified") // local evidence only, never a wire claim
 	if enc, _ := obj["enc"].(bool); !enc {
-		return payload // old server, or an unsealed event
+		// An unsealed edit or announcement is refused like a plaintext chat
+		// body.
+		return finishEventField(envType, field, obj, refusedPlainText, payload)
 	}
 	blob, _ := obj[field].(string)
 	scope := jsonInt64(obj["channel_id"]) // absent on announcements = global
@@ -1175,7 +1281,7 @@ func (m *connManager) decryptDMAsync(chat netproto.ChatBroadcast, payload string
 		chat.Text = missingKeyText
 	} else {
 		chat.Text = plain
-		chat.EncVerified = true
+		chat.EncVerified, chat.EncMode = true, "e2e"
 	}
 	presentChat(&chat)
 	m.emit("event", rewrapChat("chat", chat, payload))
@@ -1209,6 +1315,11 @@ func rewrapChat(envType string, chat netproto.ChatBroadcast, fallback string) st
 // drops the crypto state and re-wraps the envelope.
 func finishEventField(envType, field string, obj map[string]any, text, fallback string) string {
 	obj[field] = text
+	if openedChatText(text) {
+		obj["enc_verified"] = true
+	} else {
+		delete(obj, "enc_verified")
+	}
 	delete(obj, "enc")
 	delete(obj, "key_id")
 	// Compatibility/event variants carry these aliases. Once a placeholder or

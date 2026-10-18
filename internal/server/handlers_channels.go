@@ -156,8 +156,8 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 		return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
 			s.roleMetadataMu.Lock()
 			defer s.roleMetadataMu.Unlock()
-			client.roleActionMu.Lock()
-			defer client.roleActionMu.Unlock()
+			client.lockRoleAction()
+			defer client.unlockRoleAction()
 			if err := s.leaveOwnChannelInContext(ctx, client); err != nil {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, err.Error())
 			}
@@ -172,8 +172,8 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 func (s *TCPServer) joinChannelAllowed(ctx context.Context, client *Client, msg netproto.JoinChannel) error {
 	s.roleMetadataMu.Lock()
 	defer s.roleMetadataMu.Unlock()
-	client.roleActionMu.Lock()
-	defer client.roleActionMu.Unlock()
+	client.lockRoleAction()
+	defer client.unlockRoleAction()
 	// (215) acceptance is a condition of entry, not a notice: an unanswered
 	// rules prompt keeps the client in the lobby, where the only thing it can
 	// still do is answer.
@@ -183,6 +183,11 @@ func (s *TCPServer) joinChannelAllowed(ctx context.Context, client *Client, msg 
 	ch, ok := s.deps.State.GetChannel(msg.ChannelID)
 	if !ok {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "channel not found")
+	}
+	// Text channels are read and written through chat subscriptions. Refuse
+	// before the password check so a voice join never probes the password.
+	if ch.TextOnly {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, state.ErrTextChannel.Error())
 	}
 
 	bypassPassword := s.roleAllowed(ctx, client, msg.ChannelID, authorization.BypassChannelPassword)

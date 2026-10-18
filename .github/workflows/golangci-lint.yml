@@ -3,6 +3,7 @@ name: golangci-lint
 on:
   workflow_call:
   push:
+    branches: [main]
   pull_request:
 
 permissions:

@@ -173,7 +173,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		UniqueID:           id.uniqueID,
 		Nickname:           id.nickname,
 		TLSFingerprint:     s.tlsFingerprint,
-		Capabilities:       []string{netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery},
+		Capabilities:       []string{netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity},
 	}
 	if s.deps.ICEServers != nil {
 		resp.ICEServers = s.deps.ICEServers(id.uniqueID)
@@ -260,14 +260,10 @@ func (s *TCPServer) publishAuthenticatedSession(ctx context.Context, client *Cli
 // ordering rule, no race (133).
 //
 // A client that published no encryption key gets neither: it could not open
-// them. Under the plaintext escape hatch such a client still sees the MOTD,
-// which is the only reason that branch exists.
+// them, and the MOTD is never handed out in plaintext.
 func (s *TCPServer) attachChatKeysAndMOTD(ctx context.Context, client *Client, resp *netproto.AuthResponse) {
 	pub := client.x25519()
 	if pub == "" {
-		if s.cfg != nil && s.cfg.ChatAllowPlaintext {
-			resp.MOTD = s.serverSettingPlain(ctx, "motd")
-		}
 		return
 	}
 	if s.chatKeys == nil || !s.chatKeys.configured() {

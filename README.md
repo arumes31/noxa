@@ -709,6 +709,13 @@ npm run quality
 npm run test:e2e
 ```
 
+CI runs once per pull-request update, plus pushes to `main` and `v*` release
+tags. Browser tests run in four shards with two workers each; tests within the
+same spec file can run in parallel. To reproduce one shard locally, run
+`npm run test:e2e -- --shard=1/4 --workers=2` from `client/frontend` (replace `1`
+with `2`, `3`, or `4`). The `frontend-e2e` check requires all four shards and the
+separate frontend build, unit, and SFU browser checks to pass.
+
 On Linux, install the desktop libraries listed above and Playwright's Chromium
 system dependencies (`npx playwright install --with-deps chromium`). Headless
 native-client tests in CI use `xvfb-run -a go test ./...`.

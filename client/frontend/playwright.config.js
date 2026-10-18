@@ -4,6 +4,9 @@ const ci = Boolean(process.env.CI);
 
 export default defineConfig({
     testDir: "./tests",
+    // Balance individual tests across shards, including large spec files.
+    fullyParallel: true,
+    workers: ci ? 2 : undefined,
     timeout: 30_000,
     retries: ci ? 2 : 0,
     reporter: ci ? [["github"], ["html", { open: "never" }]] : "list",

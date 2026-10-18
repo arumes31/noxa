@@ -62,7 +62,7 @@ func TestChatAttachmentsRejectStaleTabBeforePreparation(t *testing.T) {
 		t.Error("stale request opened save dialog")
 		return "", nil
 	}
-	app.chatAttachmentFetch = func(*connManager, int64, string) ([]byte, error) {
+	app.chatAttachmentFetch = func(*connManager, int64, string, string) ([]byte, error) {
 		t.Error("stale request fetched attachment")
 		return nil, nil
 	}
@@ -94,7 +94,7 @@ func TestChatAttachmentSaveForTabRetainsManagerThroughDialog(t *testing.T) {
 		}
 		return dest, nil
 	}
-	app.chatAttachmentFetch = func(got *connManager, channel int64, name string) ([]byte, error) {
+	app.chatAttachmentFetch = func(got *connManager, channel int64, _ string, name string) ([]byte, error) {
 		if got != cm || channel != 7 || name != "file.txt" {
 			t.Error("attachment retargeted")
 		}
@@ -114,7 +114,7 @@ func TestChatAttachmentSaveForTabRetainsManagerThroughDialog(t *testing.T) {
 	if _, err := app.DownloadChatAttachmentForTab("a", 7, "file.txt", ""); err == nil {
 		t.Fatal("old tab accepted after activation")
 	}
-	app.chatAttachmentFetch = func(got *connManager, channel int64, name string) ([]byte, error) {
+	app.chatAttachmentFetch = func(got *connManager, channel int64, _ string, name string) ([]byte, error) {
 		if got != other.cmLoad() || channel != 8 || name != "other.txt" {
 			t.Error("wrong preview source")
 		}

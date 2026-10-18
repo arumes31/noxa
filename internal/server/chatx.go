@@ -168,10 +168,14 @@ func bodyDigest(body string) [32]byte {
 }
 
 // attachmentRefRe matches the chat attachment token
-// [file:<storage>#<base64 file key>#<display name>] (12).
-var attachmentRefRe = regexp.MustCompile(`\[file:([^\]#]*)#([^\]#]*)#([^\]]*)\]`)
+// [file:<storage>#<base64 file key>#<display name>] (12), including the
+// metadata form [file:<storage>#<key>#nx1;...#<display name>] whose sealed
+// segment carries the plaintext size and voice-note duration/waveform.
+var attachmentRefRe = regexp.MustCompile(`\[file:([^\]#]*)#([^\]#]*)#(?:nx1(?:;[^\]#]*)?#)?([^\]]*)\]`)
 
 // stripAttachmentRefs rewrites attachment tokens to [file:<display name>].
+// The metadata segment is dropped with the key, so the heuristic below and
+// the word filter see the same token for a file with or without metadata.
 // The per-file key is fresh random base64 on every paste, so without this no
 // two image posts are ever equal and the "same message 3x in 30s" heuristic
 // (116) stops catching image spam. The word filter still sees the file name.
@@ -859,8 +863,8 @@ func (s *TCPServer) handleChatEdit(ctx context.Context, client *Client, f *netpr
 	if s.deps == nil || s.deps.Chat == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "chat store unavailable")
 	}
-	if !msg.Enc && (s.cfg == nil || !s.cfg.ChatAllowPlaintext) {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "plaintext chat is disabled on this server — update your client (chat encryption is mandatory)")
+	if !msg.Enc {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, errPlaintextChat)
 	}
 	stored, err := s.deps.Chat.GetChatMessage(ctx, msg.MessageID)
 	if err != nil {
@@ -1156,6 +1160,11 @@ type typingEvent struct {
 	UniqueID  string `json:"unique_id"`
 	Nickname  string `json:"nickname"`
 	ChannelID int64  `json:"channel_id"`
+	// Direct marks a relay addressed to one user (a DM). Without it a DM
+	// indicator is indistinguishable from a global one, so the recipient
+	// could only file it under the global scope. Additive: older clients
+	// ignore the field.
+	Direct bool `json:"direct,omitempty"`
 }
 
 // handleTyping relays a typing indicator. It is never stored — there is no
@@ -1179,6 +1188,9 @@ func (s *TCPServer) relaySessionTyping(ctx context.Context, client *Client, f *n
 	if s.deps == nil || s.deps.Broadcast == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "broadcast backend unavailable")
 	}
+	if msg.ConversationID != "" {
+		return s.relayConversationTyping(ctx, client, msg)
+	}
 	typingScope := "global"
 	if msg.ToUniqueID != "" {
 		typingScope = "dm:" + msg.ToUniqueID
@@ -1193,6 +1205,7 @@ func (s *TCPServer) relaySessionTyping(ctx context.Context, client *Client, f *n
 		UniqueID:  client.UniqueID,
 		Nickname:  client.nickname(),
 		ChannelID: msg.ChannelID,
+		Direct:    msg.ToUniqueID != "",
 	}
 	if msg.ToUniqueID == "" {
 		_ = s.withRoleAccess(ctx, client, msg.ChannelID, authorization.SendMessages, func(ctx context.Context) error {
@@ -1419,6 +1432,15 @@ func (s *TCPServer) handleEmojiGet(ctx context.Context, client *Client, f *netpr
 // Everything else (server_name, max_clients_override) is machine
 // configuration, not message content, and stays plain.
 func sealedSetting(key string) bool { return key == "motd" || key == "announcement" }
+
+// errServerSealedDM refuses a direct message sealed with a scope key: DMs
+// are end-to-end only.
+const errServerSealedDM = "direct messages must be end-to-end encrypted"
+
+// errPlaintextChat is the refusal for any unencrypted chat body. There is no
+// configuration that admits plaintext chat bodies (chat_allow_plaintext is
+// ignored for message content).
+const errPlaintextChat = "plaintext chat is not allowed — chat messages must be end-to-end or channel encrypted (update your client)"
 
 // serverSetting returns an UNSEALED server setting ("" when unset or no
 // store). Callers must not use it for sealed keys — see serverSettingPlain.

@@ -198,7 +198,7 @@ func TestMediaRTXSequenceAuthorizationAndCoalescing(t *testing.T) {
 	original.SSRC = 22
 	original.Payload = []byte{0, 7, 0x65}
 	flushTerminalDiagnosticPacket(t, p, original)
-	if *writes != 0 || p.rtxSequences[22].next != 300 {
+	if writes.Load() != 0 || p.rtxSequences[22].next != 300 {
 		t.Fatal("denied repair consumed sequence or reached writer")
 	}
 	allowed = true
@@ -212,7 +212,7 @@ func TestMediaRTXSequenceAuthorizationAndCoalescing(t *testing.T) {
 	}
 	p.writePacket(p.popLocked())
 	flushTerminalDiagnosticPacket(t, p, original)
-	if *writes != 2 || p.rtxSequences[22].next != 302 {
+	if writes.Load() != 2 || p.rtxSequences[22].next != 302 {
 		t.Fatal("later NACK did not receive fresh sequence")
 	}
 }

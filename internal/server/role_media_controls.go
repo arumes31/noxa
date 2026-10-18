@@ -42,8 +42,8 @@ func (s *TCPServer) withRoleChannelLease(ctx context.Context, client *Client, ca
 			client.roleActionMu.RLock()
 			defer client.roleActionMu.RUnlock()
 		} else {
-			client.roleActionMu.Lock()
-			defer client.roleActionMu.Unlock()
+			client.lockRoleAction()
+			defer client.unlockRoleAction()
 		}
 		if s.deps.State == nil {
 			return authorization.ErrAuthorizationUnavailable
@@ -61,8 +61,10 @@ func (s *TCPServer) withRoleChannelLease(ctx context.Context, client *Client, ca
 
 // Signaling callbacks run after the request that created a peer has returned.
 // They must acquire their own lease instead of retaining its authorization.
+// A shared lease keeps voice flowing while a trickled candidate or answer is
+// written to a slow client; see the OfferGuard in NewTCPServer.
 func (s *TCPServer) writeVoiceSignal(client *Client, kind netproto.MessageType, body any) error {
-	return s.withRoleChannelControl(context.Background(), client, authorization.Connect, true, func(context.Context, int64) error {
+	return s.withRoleChannelLease(context.Background(), client, authorization.Connect, true, true, func(context.Context, int64) error {
 		return s.writeMessage(client, kind, body)
 	})
 }

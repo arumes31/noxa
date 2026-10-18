@@ -170,8 +170,10 @@ func TestWatchStartupPendingCannotSurviveRevocation(t *testing.T) {
 				}
 				r.mu.Lock()
 				r.pubPeers["viewer"] = peer
-				r.keyframeLast[42] = time.Now()
 				r.mu.Unlock()
+				r.keyframeMu.Lock()
+				r.keyframeLast[42] = time.Now()
+				r.keyframeMu.Unlock()
 				r.requestWatchStartup("viewer")
 				synctest.Wait()
 				switch kind {
@@ -233,9 +235,9 @@ func TestWatchStartupAdmittedFrameCancelsPendingThrottleRetry(t *testing.T) {
 			t.Fatal("keyframe already admitted but pending retry still wrote")
 		}
 		// The old admitted watch epoch must not consume a later explicit retry.
-		r.mu.Lock()
+		r.keyframeMu.Lock()
 		r.keyframeLast[42] = time.Now()
-		r.mu.Unlock()
+		r.keyframeMu.Unlock()
 		if _, err = r.WatchVideo("viewer", "pub", SlotScreen, generation, 2, session, true); err != nil {
 			t.Fatal(err)
 		}

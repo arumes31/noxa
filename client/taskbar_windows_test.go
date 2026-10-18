@@ -34,7 +34,12 @@ func TestTaskbarVoiceIconsChangeOnHiddenWindow(t *testing.T) {
 		}
 	}
 	seen := make(map[uintptr]bool)
-	for mode := trayIdle; mode <= trayTalkingDeafened; mode++ {
+	keys := []trayIconKey{}
+	for state := range trayStateCount {
+		keys = append(keys, trayIconKey{state: state})
+	}
+	keys = append(keys, trayIconKey{state: trayIdle, unread: 3}, trayIconKey{state: trayMicMuted, unread: trayUnreadMax})
+	for _, mode := range keys {
 		if err := setTaskbarWindowIcon(hwnd, mode); err != nil {
 			t.Fatal(err)
 		}
@@ -42,7 +47,7 @@ func TestTaskbarVoiceIconsChangeOnHiddenWindow(t *testing.T) {
 		big, _, _ := getIcon.Call(hwnd, 0x7f, 1, 0)
 		small, _, _ := getIcon.Call(hwnd, 0x7f, 0, 0)
 		if big == 0 || small == 0 || seen[big] {
-			t.Fatalf("state %d did not install distinct small/large icons: %d/%d", mode, small, big)
+			t.Fatalf("state %+v did not install distinct small/large icons: %d/%d", mode, small, big)
 		}
 		seen[big] = true
 		if err := setTaskbarWindowIcon(hwnd, mode); err != nil {
@@ -56,18 +61,32 @@ func TestTaskbarVoiceIconsChangeOnHiddenWindow(t *testing.T) {
 	}
 	// A busy UI must eventually display the newest queued state even when
 	// several voice transitions arrive before it processes window messages.
-	for _, mode := range []trayIconState{trayTalking, trayMicMuted, trayBothMuted} {
-		if err := setTaskbarWindowIcon(hwnd, mode); err != nil {
+	for _, state := range []trayIconState{trayTalking, trayMicMuted, trayBothMuted} {
+		if err := setTaskbarWindowIcon(hwnd, trayIconKey{state: state, unread: 2}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	pump()
-	icons, err := taskbarIcons()
+	icons, err := taskbarWindowIcons(trayIconKey{state: trayBothMuted, unread: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, _, _ := getIcon.Call(hwnd, 0x7f, 1, 0)
-	if got != icons[trayBothMuted][1] {
+	if got != icons[1] {
 		t.Fatal("busy window lost the latest mute state")
+	}
+	overlays := map[uintptr]bool{}
+	for state := range trayStateCount {
+		handle, err := taskbarOverlayIcon(state)
+		if err != nil || handle == 0 || overlays[handle] {
+			t.Fatalf("state %d: overlay icon %d: %v", state, handle, err)
+		}
+		overlays[handle] = true
+		if again, _ := taskbarOverlayIcon(state); again != handle {
+			t.Fatal("overlay icon was recreated")
+		}
+	}
+	if _, err := taskbarOverlayIcon(trayStateCount); err == nil {
+		t.Fatal("invalid overlay state accepted")
 	}
 }

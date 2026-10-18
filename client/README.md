@@ -360,9 +360,12 @@ The files UI (`frontend/src/files-ui.js`, bindings in `files.go`) adds a
   leaving, disconnecting or moving out of your current voice channel. English
   and German recordings follow Notifications speech and join/leave preferences.
   Initial connection, reconnect and tab-history replay do not announce old changes.
-- **Themes & fonts (294-297)**: dark/light/high-contrast variable sets,
-  accent color picker, scoped user-CSS textarea, UI font family + size, all
-  live-applied.
+- **Themes & fonts (294-297)**: Arctic Night (default; design 45, scoped in
+  `frontend/src/arctic-night.css`), classic dark, light and high-contrast
+  variable sets, accent color picker, scoped user-CSS textarea, UI font
+  family + size, all live-applied. Outfit, Sora and JetBrains Mono are
+  bundled from `@fontsource-variable/*` (SIL Open Font License 1.1); no
+  fonts are fetched at runtime.
 - **Keyboard navigation (298)**: Esc closes dialogs/menus, `:focus-visible`
   outlines, arrow-key channel-tree navigation.
 - **Hotkey map (299-301)**: settings page lists all six bindable actions

@@ -9,6 +9,7 @@ import { createLoginMemory } from './login-memory.js';
 import { createLoginFeedback } from './login-errors.js';
 import { initLoginBackground } from './login-background.js';
 import { watchMicrophone } from "./microphone-recovery.js";
+import { voiceSendEncoding, applyVoicePriority } from "./voice-priority.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { startVoiceDiagnostics, noteVoiceActivity } from './voice-diagnostics.js';
 import { createVoiceRecovery } from './voice-recovery.js';
@@ -25,7 +26,8 @@ import "./streams.css";
 import "./voice-diagnostics.css";
 import "./polls.css";
 import "./conversations.css";
-import { conversationChanged } from "./conversations.js";
+import { conversationChanged, conversationRead, conversationTyping } from "./conversations.js";
+import { initDirectMessages } from "./dm-view.js";
 import "./private-calls.css";
 import { privateCallChanged, privateCallSignal, stopPrivateCall, applyPrivateCallAudioSettings } from "./private-calls.js";
 import { createTabReconnects, reconnectDelay } from "./tab-reconnect.js";
@@ -36,7 +38,7 @@ import "@fontsource-variable/jetbrains-mono";
 import { initMenu } from "./menu.js";
 import { updateLocalSettings } from "./settings-store.js";
 import { initSettingsUI } from "./settings-ui.js";
-import { initGamingOverlay } from "./gaming-overlay.js";
+import { initGamingOverlay, noteOverlayChat } from "./gaming-overlay.js";
 import { initChannelUndocking } from "./call-undocking.js";
 import { refreshVoicePlayback } from "./voice-messages.js";
 import { discussionChanged } from "./discussions.js";
@@ -56,6 +58,7 @@ import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget } from "./stream-controls.js";
 import { startRemoteMedia, reconcileRemoteMedia } from "./remote-media.js";
 import { remoteTrackID } from "./media-track-id.js";
+import { createReceiverRegistry, attributeReceiver, releaseReceiver } from "./remote-receivers.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
 import { isCurrentPublication } from "./stream-publication.js";
 import { initPermsUI } from "./roles-access-ui.js";
@@ -75,7 +78,8 @@ import { dialogFocusableSelector, initModalSystem, mountServerDialog, closeServe
 import { parseRuntimeObject } from "./runtime-json.js";
 
 import { initWorkspace, renderMember, renderVoiceHints, cancelMemberVolumePreview } from "./workspace-ui.js";
-import { createTrayVoiceSync } from "./tray-state.js";
+import { initAppShell } from "./app-shell.js";
+import { createTrayVoiceSync, createTrayUnreadModel, trayInChannel } from "./tray-state.js";
 import { capturePresenceScope, presenceIsCurrent, desiredPresence, restorePresenceOnActivity, setPresence } from "./presence.js";
 import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
 
@@ -89,9 +93,16 @@ const publishTrayVoice = createTrayVoiceSync((...flags) => window.go.main.App.Se
 
 function syncTrayVoice() {
     const me = state.clients.find((client) => client.client_id === state.myClientID);
-    const speaking = !!(state.pc && !state.replayingTabID && state.myChannelID &&
-        me?.channel_id === state.myChannelID && me.is_speaking && !state.muted);
-    publishTrayVoice(speaking, state.muted, state.deafened);
+    const inChannel = trayInChannel(state);
+    const speaking = !!(inChannel && me?.channel_id === state.myChannelID && me.is_speaking && !state.muted);
+    publishTrayVoice(speaking, state.muted, state.deafened, inChannel);
+}
+
+// Tray unread counter: chat-ui reports the active tab's channel/DM badges,
+// conversations.js private groups, tabs.js background servers.
+const trayUnread = createTrayUnreadModel((count) => window.go.main.App.SetTrayUnread?.(count));
+function syncTrayUnread() {
+    trayUnread.set("chat", chatUI.unreadTotal());
 }
 
 const liveAnnouncements = createLiveAnnouncementQueue({
@@ -144,7 +155,11 @@ const state = {
     reconnectInFlight: false,
     vadMonitor: null,
     voiceMonitorCtx: null,
-    trackUsers: new Map(), // media track ID -> {client_id, unique_id, nickname} (per-publisher tracks; wave-3 video tiles)
+    // Negotiated publisher track ID ("<client>" or "<client>|<slot>", from the
+    // CURRENT remote MSID) -> {client_id, unique_id, nickname, track_id}. Never
+    // keyed by browser track.id: a reused MID keeps its creation-time id, so two
+    // live receivers can share one (see remote-receivers.js).
+    trackUsers: new Map(),
     shareStream: null,     // getDisplayMedia result while screen sharing
     shareAudioSender: null, // RTCRtpSender of the optional share system-audio track
     shareVideoTransceiver: null, // dedicated screen source, independent of camera
@@ -158,8 +173,14 @@ const { startQualitySampler, stopQualitySampler } = createConnectionQuality({ $,
 
 
 const remoteAudio = createRemoteAudio({ state, toast, sysMsg, voiceEpoch: () => voiceSessionEpoch });
-const { selectAudioOutput, applyOutputSettings, remoteChain, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, attachShareAudio, detachRemoteAudio } = remoteAudio;
-const channelAudioAttached = (track, id = remoteTrackID(state.pc, track)) => remoteAudio.hasRemoteAudio(track) && state.trackUsers.get(track.id)?.track_id === id;
+const { selectAudioOutput, applyOutputSettings, remoteChain, reconcileSpatialVoice, attachRemoteAudio, readRemoteAudioLevel, resolveTrackUsers, shareAudio, applyDucking, applyShareAudio, setShareAudioStageGains, attachShareAudio, detachRemoteAudio } = remoteAudio;
+// Attachment is judged per receiver track object and its current publisher
+// MSID, never by browser track.id (two live receivers may share one).
+// trackUserReceivers remembers which receiver track object owns each
+// state.trackUsers key, so only that receiver's removal can drop attribution.
+const trackUserReceivers = createReceiverRegistry();
+const channelAudioAttached = (track, id = remoteTrackID(state.pc, track)) => remoteAudio.hasRemoteAudio(track, id) &&
+    trackUserReceivers.owns(id, track) && state.trackUsers.get(id)?.track_id === id;
 const recoverVoice = createVoiceRecovery({ state,
         attached: channelAudioAttached,
         repair: pc => reconcileRemoteMedia(pc),
@@ -250,7 +271,8 @@ function applyAppearance() {
     renderVoiceStatus();
     initMenu();
     // (294/295) theme sets the full variable palette via [data-theme].
-    root.dataset.theme = s.theme || "dark";
+    // Arctic Night is the default look; "dark" keeps the classic palette.
+    root.dataset.theme = s.theme || "arctic";
     // (344) reduce motion: toggle + media query both gate animations.
     root.dataset.reduceMotion = s.reduce_motion ? "1" : "";
     // (296) custom accent overrides the theme's accent.
@@ -1170,6 +1192,7 @@ function actionSoundsSuppressed() {
 window.runtime.EventsOn("tab_replay_done", (tabID) => {
     if (String(tabID || "") !== state.replayingTabID) return;
     state.replayingTabID = "";
+    syncTrayVoice();
     // Identity resolution may have won or lost the race with this marker.
     // In either case, this resolves a new tab's first own-channel cue exactly
     // once, while restored tabs have no pending cue to play.
@@ -1257,6 +1280,7 @@ function syncOwnChannel({ audible = true, ownMove } = {}) {
     }
     const previousChannelID = state.myChannelID;
     state.myChannelID = channelID;
+    syncTrayVoice();
     // Snapshot/identity reconciliation is not an explicit request to unmute.
     // In particular, recovering a server must retain deafen and its mute state.
     const initialCuePending = state.pendingInitialChannelCueTabID === state.activeTabID;
@@ -1320,6 +1344,9 @@ function flattenChannel(node) {
         // (304) lock icon — the field is read under both spellings so a json
         // tag on the server's Channel struct cannot silently drop the lock.
         HasPassword: !!(node.has_password ?? node.HasPassword),
+        // Text channels (chat only, no voice) list in the sidebar's Text
+        // section; older servers omit the field and every channel is voice.
+        TextOnly: !!(node.text_only ?? node.TextOnly),
         Access: node.access || null,
         ClientCount: node.ClientCount || 0, // (303) [n/max]
         Topic: node.Topic || "",
@@ -1410,6 +1437,7 @@ window.runtime.EventsOn("event", (json) => {
                 const forcedMove = nextChannelID > 0 && nextChannelID !== previousChannelID
                     && d.by_client_id && d.by_client_id !== state.myClientID;
                 state.myChannelID = nextChannelID;
+                syncTrayVoice();
                 if (nextChannelID > 0 && nextChannelID !== previousChannelID && !actionSoundsSuppressed() && !automaticRestore) setDeafened(false);
                 let playedOwnCue = false;
                 if (!actionSoundsSuppressed()) {
@@ -1452,7 +1480,7 @@ window.runtime.EventsOn("event", (json) => {
             break;
         }
         case "channel_created":
-            state.channels.push({ ChannelID: d.channel_id, ParentID: d.parent_id || 0, Name: d.name, HasIcon: false });
+            state.channels.push({ ChannelID: d.channel_id, ParentID: d.parent_id || 0, Name: d.name, HasIcon: false, TextOnly: !!d.text_only });
             break;
         case "channel_deleted": {
             // New servers include the complete cascaded subtree; older ones
@@ -1569,7 +1597,7 @@ window.runtime.EventsOn("event", (json) => {
             if (c && d.channel_id !== undefined && d.channel_id !== c.channel_id) break;
             const speaking = !!d.speaking && !!c && !isClientMicrophoneMuted(c, state);
             if (c?.is_speaking || speaking) noteVoiceActivity(state, d.client_id);
-            if (c) c.is_speaking = speaking;
+            if (c) { c.is_speaking = speaking; c.is_whispering = speaking && !!d.whisper; }
             if (speaking && d.client_id === state.myClientID && state.myChannelID &&
                 d.channel_id === state.myChannelID && !state.replayingTabID && !state.muted && !state.deafened) noteActivity();
             // (343) announce speaking events to the screen-reader region.
@@ -1607,6 +1635,14 @@ window.runtime.EventsOn("event", (json) => {
             return;
         case "conversation_changed":
             void conversationChanged(d);
+            return;
+        // Private-group activity: addressed relays, no content. Like typing,
+        // they change nothing in the tree and return early.
+        case "conversation_typing":
+            conversationTyping(d);
+            return;
+        case "conversation_read":
+            conversationRead(d);
             return;
         case "private_call":
             void privateCallChanged(d);
@@ -1763,7 +1799,10 @@ function trayMention() {
     window.go.main.App.TrayMention();
 }
 
-window.addEventListener("focus", () => window.go.main.App.TrayClearMentions());
+window.addEventListener("focus", () => {
+    window.go.main.App.TrayClearMentions();
+    trayUnread.clearUnseen();
+});
 
 // ---------------------------------------------------------------------------
 // Avatars
@@ -1846,6 +1885,12 @@ function addChat(d) {
     // in chat-ui.js. Only a successfully routed E2EE message is a DM; global
     // chat also has no channel_id and must never enter the direct path.
     const result = chatUI.addChat(d);
+    window.__noxaFullscreen?.chatMessage(d, result); // design 45 fullscreen chat peek / quick reply
+    // In-game overlay chat peek (opt-in); it applies the notification rules.
+    if (result?.added) noteOverlayChat(d);
+    // A message rendered into the open chat is unseen while the window is
+    // unfocused (hidden to tray, minimized, or behind another window).
+    if (result?.live && !state.replayingTabID && !document.hasFocus()) trayUnread.noteUnseen();
     if (result?.incomingDM) {
         // Track the last DM sender for the Ctrl+R whisper-reply hotkey (33).
         if (d.from_client_id) {
@@ -2233,6 +2278,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     if (state.pc && state.pc !== pc) resetICERestart(state.pc);
     state.pc = pc;
     state.voiceTabID = tabID;
+    syncTrayVoice(); // joined: the tray leaves the gray "not in a channel" state
     // A queued event can run between the read helper returning and this
     // continuation installing the peer. Reconcile it after startup's offer.
     if (limitsSequence !== mediaLimitsSequence) refreshLiveMediaLimits();
@@ -2245,7 +2291,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
             audioTrack.stop(); pc.close();
             return false;
         }
-        pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream] });
+        pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream], sendEncodings: [voiceSendEncoding()] });
         applyVoiceState();
     } else {
         pc.addTransceiver("audio", { direction: "recvonly" });
@@ -2270,9 +2316,8 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     stopRemoteMedia = startRemoteMedia(pc, () => current() && state.pc === pc, (track, trackID) => {
         const { clientID, slot } = parseTrackID(trackID);
         const publisher = state.clients.find((c) => String(c.client_id) === clientID) || null;
-        state.trackUsers.set(track.id, {
-            client_id: clientID, unique_id: publisher?.unique_id || "", nickname: publisher?.nickname || "", track_id: trackID,
-        });
+        // Attribution follows the negotiated publisher track ID, not track.id.
+        attributeReceiver(state.trackUsers, trackUserReceivers, track, trackID, clientID, publisher);
         if (track.kind === "video") {
             receiveStreamTrack(track, publisher, trackID);
             return;
@@ -2284,16 +2329,18 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
             return;
         }
         track.enabled = true;
-        attachRemoteAudio(track, publisher);
+        attachRemoteAudio(track, publisher, trackID);
     }, (track, trackID) => {
-        state.trackUsers.delete(track.id);
+        // Only the receiver that owns this publisher track ID may drop it; a
+        // duplicate browser track.id never removes another user's state.
+        releaseReceiver(state.trackUsers, trackUserReceivers, track, trackID);
         if (track.kind === "video") removeStreamTrack(track, trackID);
         else if (parseTrackID(trackID).slot === SLOT_SCREEN_AUDIO) {
             const { clientID } = parseTrackID(trackID);
             removeShareAudio(track, clientID);
-            remoteAudio.detachShareAudio(clientID);
+            if (shareAudio.get(String(clientID))?.track === track) remoteAudio.detachShareAudio(clientID);
         }
-        else remoteAudio.detachRemoteTrack(track.id);
+        else remoteAudio.detachRemoteTrack(track);
     }, (track, trackID) => track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID));
 
     await renegotiate(pc, state.serverGeneration, undefined, () => expectedEpoch === voiceSessionEpoch);
@@ -2328,9 +2375,9 @@ async function applyChannelAudio() {
         const p = sender.getParameters();
         if (p.encodings?.length) {
             p.encodings[0].maxBitrate = bitrate > 0 ? bitrate : undefined;
-            // Keep voice in the highest allocation class alongside screen media.
-            // This parameter belongs to the existing channel-audio update owner.
-            p.encodings[0].priority = "high";
+            // Voice stays in the highest allocation and network class.
+            // These parameters belong to the existing channel-audio update owner.
+            applyVoicePriority(p);
             await sender.setParameters(p).catch(() => {});
         }
     }
@@ -2566,6 +2613,7 @@ function renderVoiceStatus() {
     const key = { "voice on": "voice.on", "voice off": "voice.off", "voice connecting…": "voice.connecting", "voice unavailable": "voice.unavailable" }[voiceStatusBase];
     $("voice-status").textContent = (key ? t(key) : voiceStatusBase) +
         (state.whisperArmed ? " · " + t("polish.whisper", { name: uidName(state.whisperTargetUID) }) : "");
+    $("voice-status").dataset.state = { "voice on": "connected", "voice connecting…": "connecting", "voice unavailable": "unavailable" }[voiceStatusBase] || "off";
 }
 
 function resetVoiceUI() {
@@ -2660,6 +2708,7 @@ async function retryMicrophoneCapture() {
         transceiver = peerConnection.addTransceiver(sent, {
             direction: "sendrecv",
             streams: [localStream],
+            sendEncodings: [voiceSendEncoding()],
         });
         await renegotiate(peerConnection, generation);
         if (!current()) throw new DOMException("voice session changed", "AbortError");
@@ -3194,6 +3243,7 @@ window.__noxa = {
     setDeafened, refreshPermissions, applyVoiceState, applyOutputSettings, applyLiveAudioSettings,
     startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor, prepareChannelMicrophone, readRemoteAudioLevel,
     connectFromLogin, renderTree, setChannelExpanded, setDetailsOpen, setDirectTargetVisible,
+    trayUnread, syncTrayUnread,
     clientName, initials, fetchAvatar,
     applyAppearance, toggleCompact, recentChannels, syncOwnChannel,
     playConnectionCue: (event = "connection_connected") => playEvent(event),
@@ -3228,6 +3278,8 @@ window.__noxa = {
             n.volume = Math.max(0, Math.min(200, pct | 0));
             applyShareAudio(clientID);
         },
+        // Multiview ducking: scales screen-share audio only, never voice.
+        setStageGains: setShareAudioStageGains,
     },
 };
 
@@ -3249,7 +3301,9 @@ initMetaUI();   // wave-8b debug/stats/onboarding (registers window.__noxaMeta)
 initPolishUI(); // wave-8c polish/a11y (registers window.__noxaPolish)
 initNotifications(); // wave-9 notification matrix (registers window.__noxaNotify)
 chatUI.initChat(); // wave-5b chat UI (must run after __noxa exists)
+initDirectMessages(); // Direct › Messages view (after the chat composer exists)
 initWorkspace();
+initAppShell(); // top bar search/ping, sidebar sections, voice card
 
 // A replacement is ready only once native settings and all UI modules have
 // initialized. A startup exception leaves the old app's recovery guard active.

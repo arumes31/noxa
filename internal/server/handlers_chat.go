@@ -24,10 +24,13 @@ const maxChatBytes = 16 * 1024
 // direct message to an online connection by client ID (echoed back to the
 // sender), or a global message to all clients.
 //
-// Encryption (4b): plaintext is rejected unless chat_allow_plaintext is set.
-// For encrypted messages the server validates the scope key id (channel and
-// global scopes only; direct messages are true E2EE and unverifiable by
-// design) and the ciphertext size — it cannot read the body.
+// Encryption (4b): plaintext is always rejected and no setting admits it;
+// every send is a scope (client→server→client) or E2E ciphertext.
+// For scope messages the server validates the scope key id and opens the body
+// for moderation. A direct message must be E2EE (unverifiable by design): a
+// direct message carrying a scope key id would be server-readable and is
+// rejected, so the rule is plaintext never, DMs end-to-end, channels and
+// global chat client→server→client.
 func (s *TCPServer) handleChatSend(ctx context.Context, client *Client, f *netproto.Frame) error {
 	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
 		return s.sendSessionChat(ctx, client, f)
@@ -54,8 +57,8 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 	if len(msg.Text) > maxChatBytes {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "chat message too large")
 	}
-	if !msg.Enc && !s.cfg.ChatAllowPlaintext {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "plaintext chat is disabled on this server — update your client (chat encryption is mandatory)")
+	if !msg.Enc {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, errPlaintextChat)
 	}
 	if msg.Enc && msg.KeyID == 0 && msg.ChannelID != "" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "channel chat requires a scope key id")
@@ -115,7 +118,13 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 		})
 	}
 
-	// Direct messages are true E2EE: relay/spool only, no moderation.
+	// A key id would mean a body sealed with a scope key the server holds.
+	// Direct messages are end-to-end only, so that is refused outright.
+	if msg.KeyID != 0 {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, errServerSealedDM)
+	}
+
+	// Direct messages are relayed without moderation.
 	chat := netproto.ChatBroadcast{
 		Direct:       true,
 		ToUniqueID:   msg.ToUniqueID,
@@ -229,12 +238,13 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 			return s.rejectStaleDMKey(client)
 		}
 	}
-	// A DM has no scope key, so the server cannot seal one on the sender's
-	// behalf: a plaintext DM to an offline user would land in the spool in
-	// the clear. Relaying it live is the sender's choice; persisting it is
-	// not, so the escape hatch stops at the spool (91).
+	// Only end-to-end ciphertext is spooled (sendSessionChat already refused
+	// plaintext and scope-sealed DMs; this guards the spool itself).
 	if !msg.Enc {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "target user is offline and plaintext direct messages are never spooled — encrypt the message")
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, errPlaintextChat)
+	}
+	if msg.KeyID != 0 {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, errServerSealedDM)
 	}
 	// E2EE DMs are spooled as ciphertext the server cannot read; the sender's
 	// unique ID travels along so the recipient can fetch the public key.

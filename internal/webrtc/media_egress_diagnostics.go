@@ -15,6 +15,9 @@ const (
 	mediaDropPolicyRevision
 	mediaDropScopeDeclined
 	mediaDropGuardDeclined
+	// mediaDropScopeBusy is a contended final-write gate, not a denial. The
+	// pacer retries the packet on its next tick instead of counting a drop.
+	mediaDropScopeBusy
 	mediaDropReasonCount
 )
 

@@ -106,3 +106,90 @@ test("replacement peers retain the same channel recovery cooldown", async () => 
     assert.equal(f.calls.length,6);
     f.time(7000); await recover(peer,f.stats()); assert.equal(f.calls.length,9);
 });
+
+// A (listener, speaker) path that the server reports as active but that
+// delivers nothing here is the "one person cannot hear one other" failure.
+function speakerFixture() {
+    const f = fixture();
+    f.healthy();
+    f.state.myClientID = "me";
+    f.state.clients = [
+        { client_id: "me", channel_id: 9, is_speaking: false },
+        { client_id: "c-new", channel_id: 9, is_speaking: false },
+        { client_id: "c-missing", channel_id: 9, is_speaking: false },
+    ];
+    let packets = 0, timestamp = 0;
+    f.frozenStats = (advance = false) => {
+        if (advance) packets += 5;
+        return new Map([["a", { id: "a", type: "inbound-rtp", kind: "audio", mid: "0", ssrc: 1, trackIdentifier: f.track.id, packetsReceived: packets, timestamp: ++timestamp }]]);
+    };
+    return f;
+}
+
+test("a speaking member with no receiver triggers one bounded resync", async () => {
+    const f = speakerFixture(), recover = createVoiceRecovery(f.options);
+    f.state.clients[2].is_speaking = true;
+    await recover(f.pc, f.frozenStats(true)); assert.deepEqual(f.calls, []);
+    await recover(f.pc, f.frozenStats(true)); assert.deepEqual(f.calls, ["repair", "resync", "repair"]);
+    for (let i = 0; i < 4; i++) await recover(f.pc, f.frozenStats(true));
+    assert.equal(f.calls.length, 3, "retry budget respected");
+});
+
+test("a speaking member whose receiver stopped advancing triggers resync", async () => {
+    const f = speakerFixture(), recover = createVoiceRecovery(f.options);
+    f.state.clients[1].is_speaking = true;
+    await recover(f.pc, f.frozenStats()); // baseline
+    await recover(f.pc, f.frozenStats()); assert.deepEqual(f.calls, []);
+    await recover(f.pc, f.frozenStats()); assert.deepEqual(f.calls, ["repair", "resync", "repair"]);
+});
+
+test("advancing, quiet, whispering, foreign or own speech never triggers resync", async () => {
+    for (const mode of ["advancing", "quiet", "whisper", "other-channel", "self"]) {
+        const f = speakerFixture(), recover = createVoiceRecovery(f.options);
+        const speaker = mode === "self" ? f.state.clients[0] : f.state.clients[1];
+        speaker.is_speaking = mode !== "quiet";
+        if (mode === "whisper") speaker.is_whispering = true;
+        if (mode === "other-channel") speaker.channel_id = 10;
+        for (let i = 0; i < 6; i++) await recover(f.pc, f.frozenStats(mode === "advancing"));
+        assert.deepEqual(f.calls, [], mode);
+    }
+});
+
+test("speech after silence resets the evidence instead of firing on stale counters", async () => {
+    const f = speakerFixture(), recover = createVoiceRecovery(f.options);
+    await recover(f.pc, f.frozenStats()); await recover(f.pc, f.frozenStats());
+    f.state.clients[1].is_speaking = true;
+    await recover(f.pc, f.frozenStats(true));
+    await recover(f.pc, f.frozenStats(true));
+    f.state.clients[1].is_speaking = false;
+    await recover(f.pc, f.frozenStats());
+    f.state.clients[1].is_speaking = true;
+    await recover(f.pc, f.frozenStats(true));
+    assert.deepEqual(f.calls, []);
+});
+
+test("a server-deafened listener or server-muted speaker never renegotiates over withheld audio", async () => {
+    for (const mode of ["deafened", "muted"]) {
+        const f = speakerFixture(), recover = createVoiceRecovery(f.options);
+        if (mode === "deafened") f.state.clients[0].server_deafened = true;
+        f.state.clients[1].is_speaking = true; f.state.clients[2].is_speaking = true;
+        if (mode === "muted") { f.state.clients[1].server_muted = true; f.state.clients[2].server_muted = true; }
+        for (let i = 0; i < 6; i++) { f.time(i * 60000); await recover(f.pc, f.frozenStats()); }
+        assert.deepEqual(f.calls, [], mode);
+    }
+});
+
+test("an SSRC change restarting the inbound counter is a baseline, not a strike", async () => {
+    const f = speakerFixture(), recover = createVoiceRecovery(f.options);
+    f.state.clients[1].is_speaking = true;
+    let timestamp = 0;
+    const sample = (ssrc, packets) => new Map([["a", { id: "a", type: "inbound-rtp", kind: "audio", mid: "0", ssrc, trackIdentifier: f.track.id, packetsReceived: packets, timestamp: ++timestamp }]]);
+    await recover(f.pc, sample(1, 100)); // baseline
+    await recover(f.pc, sample(1, 100)); // one quiet interval: strike 1
+    await recover(f.pc, sample(2, 3));   // new SSRC, lower counter: baseline only
+    assert.deepEqual(f.calls, []);
+    await recover(f.pc, sample(2, 9));   // new stream progressing
+    assert.deepEqual(f.calls, []);
+    await recover(f.pc, sample(2, 9)); await recover(f.pc, sample(2, 9));
+    assert.deepEqual(f.calls, ["repair", "resync", "repair"], "a stalled new stream is still detected");
+});

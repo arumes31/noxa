@@ -2,6 +2,6 @@
 
 package main
 
-func setTaskbarIcon(trayIconState) error { return nil }
+func setTaskbarIcon(trayIconKey) error { return nil }
 
 func shutdownTaskbarOverlay() error { return nil }

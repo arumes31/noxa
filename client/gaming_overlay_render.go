@@ -18,6 +18,8 @@ type overlayRenderer struct {
 	base, frame *image.RGBA
 	scale       float64
 	animation   *overlayAnimation
+	bands       []overlayBand
+	layer       float64 // opacity of the row being animated (1 unless fading)
 }
 
 type overlayLabel func(text string, width, height, fontSize int, centered bool) (*image.Alpha, error)

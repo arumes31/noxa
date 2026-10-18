@@ -1,8 +1,9 @@
 package main
 
 import (
-	"encoding/binary"
+	"bytes"
 	"fmt"
+	"image/png"
 	"os"
 	"runtime"
 	"sync"
@@ -11,42 +12,125 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Keep a bounded set of twelve HICONs for the process lifetime. Windows still
-// references installed icons, so transitions must not destroy the previous
-// handle (which may also belong to Wails). The OS reclaims them at process exit.
-var taskbarIcons = sync.OnceValues(func() (map[trayIconState][2]uintptr, error) {
-	icons := make(map[trayIconState][2]uintptr)
-	create := user32.NewProc("CreateIconFromResourceEx")
-	for mode, data := range trayIcons() {
-		if len(data) < 22 {
-			return nil, fmt.Errorf("invalid taskbar icon %d", mode)
-		}
-		size := uint64(binary.LittleEndian.Uint32(data[14:18]))
-		offset := uint64(binary.LittleEndian.Uint32(data[18:22]))
-		if size == 0 || offset+size > uint64(len(data)) {
-			return nil, fmt.Errorf("invalid taskbar icon resource %d", mode)
-		}
-		// The native API requires DWORD-aligned resource bytes, unlike an ICO's
-		// directory offset. Copy the PNG/DIB payload to its own aligned buffer.
-		resource := append([]byte(nil), data[offset:offset+size]...)
-		var handles [2]uintptr
-		for i, dimension := range []uintptr{16, 32} {
-			// #nosec G103 -- CreateIconFromResourceEx reads this owned resource buffer synchronously.
-			handle, _, err := create.Call(uintptr(unsafe.Pointer(&resource[0])), uintptr(len(resource)), 1, 0x30000, dimension, dimension, 0)
-			runtime.KeepAlive(resource)
-			if handle == 0 {
-				return nil, fmt.Errorf("create taskbar icon %d: %w", mode, err)
-			}
-			handles[i] = handle
-		}
-		icons[mode] = handles
+// Window icons are created lazily per (state, unread bucket) and kept for the
+// process lifetime: at most trayStateCount×trayUnreadBuckets pairs, plus one
+// glyph-only overlay per state. Windows still references installed icons, so
+// transitions must not destroy the previous handle (which may also belong to
+// Wails). The OS reclaims them at process exit.
+var taskbarIconCache struct {
+	sync.Mutex
+	window  [trayStateCount][trayUnreadBuckets][2]uintptr
+	overlay [trayStateCount]uintptr
+}
+
+var (
+	procCreateIconFromResourceEx = user32.NewProc("CreateIconFromResourceEx")
+	procDestroyIcon              = user32.NewProc("DestroyIcon")
+	procGetSystemMetrics         = user32.NewProc("GetSystemMetrics")
+)
+
+// taskbarCreateIcon builds an HICON from PNG resource bytes at a dimension.
+func taskbarCreateIcon(resource []byte, dimension uintptr) (uintptr, error) {
+	// #nosec G103 -- CreateIconFromResourceEx reads this owned resource buffer synchronously.
+	handle, _, err := procCreateIconFromResourceEx.Call(uintptr(unsafe.Pointer(&resource[0])), uintptr(len(resource)), 1, 0x30000, dimension, dimension, 0)
+	runtime.KeepAlive(resource)
+	if handle == 0 {
+		return 0, err
 	}
-	return icons, nil
-})
+	return handle, nil
+}
+
+// taskbarWindowIcons returns the small/large window icons for key; the tray
+// and the taskbar button share the same cached artwork, unread counter included.
+func taskbarWindowIcons(key trayIconKey) ([2]uintptr, error) {
+	if !key.valid() {
+		return [2]uintptr{}, fmt.Errorf("unknown taskbar icon state %d/%d", key.state, key.unread)
+	}
+	taskbarIconCache.Lock()
+	defer taskbarIconCache.Unlock()
+	if handles := taskbarIconCache.window[key.state][key.unread]; handles[0] != 0 {
+		return handles, nil
+	}
+	data := trayIconFor(key)
+	var handles [2]uintptr
+	for i, dimension := range taskbarWindowIconSizes() {
+		// The native API requires DWORD-aligned resource bytes, unlike an
+		// ICO's directory offset. Copy the chosen PNG to its own buffer.
+		entry := trayICOEntry(data, dimension)
+		if entry == nil {
+			taskbarDestroyIcons(handles[:i])
+			return [2]uintptr{}, fmt.Errorf("invalid taskbar icon resource %d", key.state)
+		}
+		handle, err := taskbarCreateIcon(append([]byte(nil), entry...), uintptr(dimension))
+		if handle == 0 {
+			// Nothing references the icons created so far: release them.
+			taskbarDestroyIcons(handles[:i])
+			return [2]uintptr{}, fmt.Errorf("create taskbar icon %d: %w", key.state, err)
+		}
+		handles[i] = handle
+	}
+	taskbarIconCache.window[key.state][key.unread] = handles
+	return handles, nil
+}
+
+// taskbarDestroyIcons releases icons that were never installed.
+func taskbarDestroyIcons(handles []uintptr) {
+	for _, handle := range handles {
+		_, _, _ = procDestroyIcon.Call(handle)
+	}
+}
+
+// taskbarSystemMetric reads a GetSystemMetrics size, clamped to icon bounds.
+func taskbarSystemMetric(index uintptr, fallback int) int {
+	size, _, _ := procGetSystemMetrics.Call(index)
+	if size == 0 {
+		return fallback
+	}
+	return min(max(int(size), 16), 256)
+}
+
+// The system icon sizes are read once, at the scale of the primary display
+// when the first icon is built: the cached handles stay installed on the
+// window, so they are not rebuilt on a later DPI change (Windows rescales).
+var (
+	// taskbarOverlaySize is the system small-icon size (16px at 100% DPI).
+	// The overlay glyph is rendered natively at that size instead of shrunk.
+	taskbarOverlaySize = sync.OnceValue(func() int {
+		return min(taskbarSystemMetric(49, 16), 64) // SM_CXSMICON
+	})
+	// taskbarWindowIconSizes are the ICON_SMALL and ICON_BIG dimensions.
+	taskbarWindowIconSizes = sync.OnceValue(func() [2]int {
+		return [2]int{taskbarOverlaySize(), taskbarSystemMetric(11, 32)} // SM_CXICON
+	})
+)
+
+// taskbarOverlayIcon returns the glyph-only status disc for state. It never
+// contains the logo, which Windows already shows as the button icon.
+func taskbarOverlayIcon(state trayIconState) (uintptr, error) {
+	if state >= trayStateCount {
+		return 0, fmt.Errorf("invalid taskbar state")
+	}
+	taskbarIconCache.Lock()
+	defer taskbarIconCache.Unlock()
+	if handle := taskbarIconCache.overlay[state]; handle != 0 {
+		return handle, nil
+	}
+	size := taskbarOverlaySize()
+	var out bytes.Buffer
+	if err := png.Encode(&out, trayOverlayImage(state, size)); err != nil {
+		return 0, err
+	}
+	handle, err := taskbarCreateIcon(out.Bytes(), uintptr(size))
+	if handle == 0 {
+		return 0, fmt.Errorf("create taskbar overlay %d: %w", state, err)
+	}
+	taskbarIconCache.overlay[state] = handle
+	return handle, nil
+}
 
 // Match the Wails class and this process, including while minimized or hidden.
 // A visible-window search can select a dialog or miss close-to-tray updates.
-func setTaskbarIcon(mode trayIconState) error {
+func setTaskbarIcon(key trayIconKey) error {
 	class, err := windows.UTF16PtrFromString("wailsWindow")
 	if err != nil {
 		return err
@@ -64,22 +148,20 @@ func setTaskbarIcon(mode trayIconState) error {
 		// #nosec G103 -- GetWindowThreadProcessId writes the provided DWORD.
 		_, _, _ = procGetWindowPID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
 		if uint64(pid) == uint64(os.Getpid()) {
-			if err := setTaskbarWindowIcon(hwnd, mode); err != nil {
+			if err := setTaskbarWindowIcon(hwnd, key); err != nil {
 				return err
 			}
-			return queueTaskbarOverlay(hwnd, mode)
+			// The overlay is keyed by voice state only: one 16px slot cannot
+			// carry both a status glyph and a legible counter.
+			return queueTaskbarOverlay(hwnd, key.state)
 		}
 	}
 }
 
-func setTaskbarWindowIcon(hwnd uintptr, mode trayIconState) error {
-	icons, err := taskbarIcons()
+func setTaskbarWindowIcon(hwnd uintptr, key trayIconKey) error {
+	handles, err := taskbarWindowIcons(key)
 	if err != nil {
 		return err
-	}
-	handles, ok := icons[mode]
-	if !ok {
-		return fmt.Errorf("unknown taskbar icon state %d", mode)
 	}
 	send := user32.NewProc("PostMessageW")
 	for i, handle := range handles {

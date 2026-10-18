@@ -1,16 +1,28 @@
 // Recover structural receiver/playback failures, never infer failure from silence.
+// The one silence that does prove a failure: the server reports a channel
+// member as speaking (its VAD runs on the very packets it forwards to us), yet
+// we have no receiver for that member, or its receiver got no packets since the
+// previous sample. That is one broken (listener, speaker) path on the server;
+// a client re-offer makes the server re-check and rebuild this subscriber's
+// outputs. It costs nothing while audio flows.
 import { remoteTrackID, parseTrackID } from "./media-track-id.js";
+
+// SPEAKER_STRIKES consecutive samples (5 s apart) of a speaking member without
+// fresh packets trigger a resync.
+const SPEAKER_STRIKES = 2;
 
 export function createVoiceRecovery({ state, attached, repair, resync, rebuild, now = () => performance.now() }) {
     let scope = "", peer = null, previous = new Map(), strikes = new Map(), busy = false, attempts = 0, next = 0;
+    let speakerPackets = new Map(), speakerStrikes = new Map();
     return async (pc, stats) => {
         const key = JSON.stringify([state.activeTabID, state.serverGeneration, state.myChannelID]);
-        if (key !== scope) { scope = key; attempts = 0; next = 0; previous = new Map(); strikes = new Map(); }
-        if (pc !== peer) { peer = pc; previous = new Map(); strikes = new Map(); }
+        if (key !== scope) { scope = key; attempts = 0; next = 0; previous = new Map(); strikes = new Map(); speakerPackets = new Map(); speakerStrikes = new Map(); }
+        if (pc !== peer) { peer = pc; previous = new Map(); strikes = new Map(); speakerPackets = new Map(); speakerStrikes = new Map(); }
         const current = () => state.pc === pc && key === JSON.stringify([state.activeTabID, state.serverGeneration, state.myChannelID]);
         if (busy || !current() || pc.connectionState !== "connected" || pc.signalingState !== "stable") return;
         const failed = [];
         const seen = new Set();
+        const micPackets = new Map(); // publisher client ID -> Map(stat token -> packets) on its live mic receiver
         for (const stat of stats.values()) {
             if (stat.type !== "inbound-rtp" || (stat.kind || stat.mediaType) !== "audio") continue;
             const transceivers = pc.getTransceivers();
@@ -20,6 +32,9 @@ export function createVoiceRecovery({ state, attached, repair, resync, rebuild, 
             const track = transceiver.receiver.track, id = remoteTrackID(pc, track, transceiver);
             if (!id || transceiver.stopped || !["recvonly", "sendrecv"].includes(transceiver.currentDirection) || parseTrackID(id).slot) continue;
             const token = `${stat.id}:${stat.ssrc}`;
+            const publisher = parseTrackID(id).clientID;
+            if (!micPackets.has(publisher)) micPackets.set(publisher, new Map());
+            micPackets.get(publisher).set(token, stat.packetsReceived || 0);
             seen.add(token);
             const old = previous.get(token);
             previous.set(token, { packets: stat.packetsReceived, timestamp: stat.timestamp });
@@ -29,7 +44,8 @@ export function createVoiceRecovery({ state, attached, repair, resync, rebuild, 
             if (strikes.get(token) >= 2) failed.push({track,id});
         }
         for (const token of previous.keys()) if (!seen.has(token)) { previous.delete(token); strikes.delete(token); }
-        if (!failed.length || now() < next) return;
+        const silent = silentSpeakers(state, micPackets, speakerPackets, speakerStrikes);
+        if ((!failed.length && !silent.length) || now() < next) return;
         busy = true;
         // Keep the budget across replacement peers in the same server/channel.
         next = now() + [2000, 5000, 15000, 30000][Math.min(attempts++, 3)];
@@ -37,10 +53,49 @@ export function createVoiceRecovery({ state, attached, repair, resync, rebuild, 
             repair(pc);
             if (!current()) return;
             if (failed.some(({track}) => track.readyState === "ended")) await rebuild(pc);
-            else if (failed.some(({track,id}) => !attached(track,id))) {
+            else if (silent.length || failed.some(({track,id}) => !attached(track,id))) {
+                for (const id of silent) speakerStrikes.delete(id);
                 await resync(pc);
                 if (current()) repair(pc);
             }
         } finally { busy = false; }
     };
+}
+
+// silentSpeakers returns channel members the server reports as speaking whose
+// microphone has produced no packets here for SPEAKER_STRIKES samples. A
+// whisper to someone else is not addressed to us and is ignored. micPackets
+// maps publisher -> Map(inbound stat token "id:ssrc" -> packetsReceived);
+// progress is judged per token so an SSRC change (a new stream whose counter
+// restarts) is a fresh baseline, never a dropped sum.
+export function silentSpeakers(state, micPackets, lastPackets, strikes) {
+    const out = [];
+    const speaking = new Set();
+    // The server withholds every mic/screen-audio packet from a server-deafened
+    // listener while still reporting who speaks: silence then proves nothing.
+    const me = (state.clients || []).find(client => String(client.client_id ?? "") === String(state.myClientID));
+    const withheld = !!me?.server_deafened;
+    for (const client of withheld ? [] : state.clients || []) {
+        const id = String(client.client_id ?? "");
+        if (!id || id === String(state.myClientID) || client.channel_id !== state.myChannelID) continue;
+        // A server-muted publisher's audio is dropped at the server as well.
+        if (!client.is_speaking || client.is_whispering || client.server_muted) continue;
+        speaking.add(id);
+        const tokens = micPackets.get(id);
+        const before = lastPackets.get(id);
+        let progressed = false, baseline = before === undefined;
+        for (const [token, packets] of tokens || []) {
+            if (!before?.has(token)) baseline = true;
+            else if (packets > before.get(token)) progressed = true;
+        }
+        if (tokens !== undefined) lastPackets.set(id, new Map(tokens));
+        // The first sample of a speaker's receiver stream only sets the
+        // baseline; a missing receiver is evidence right away.
+        const evidence = tokens === undefined || (!progressed && !baseline);
+        strikes.set(id, evidence ? (strikes.get(id) || 0) + 1 : 0);
+        if (strikes.get(id) >= SPEAKER_STRIKES) out.push(id);
+    }
+    for (const id of strikes.keys()) if (!speaking.has(id)) strikes.delete(id);
+    for (const [id, tokens] of micPackets) if (!speaking.has(id)) lastPackets.set(id, new Map(tokens));
+    return out;
 }

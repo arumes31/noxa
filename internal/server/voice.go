@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -359,15 +360,54 @@ func (s *TCPServer) recordingControlAllowed(ctx context.Context, client *Client,
 // --- voice callbacks (installed on the voice backend at server construction) -
 
 // canTalk evaluates Speak in the client's current channel and current mute state.
+// canTalk is the per-packet ingress pre-filter for every microphone packet.
+// It must never block: a blocking policy lease here stalled every speaker's
+// read loop whenever a policy writer queued behind a slow signaling write.
+// guardRoleMedia re-authorizes each recipient write, so when the packet
+// gate is momentarily closed by a policy commit the pre-filter defers to it
+// instead of flapping the speaking indicator.
 func (s *TCPServer) canTalk(clientID string) bool {
 	client, ok := s.clientByID(clientID)
-	if !ok {
+	if !ok || s.deps == nil || s.deps.Authority == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), mediaPermissionTimeout)
-	defer cancel()
 	member, present := s.deps.State.GetClient(clientID)
-	return present && member.ChannelID > 0 && !member.ServerMuted && !client.rulesBlocked() && s.roleAllowed(ctx, client, member.ChannelID, authorization.Speak)
+	if !present || member.ChannelID <= 0 || member.ServerMuted || client.rulesBlocked() || client.sessionRevoked() {
+		return false
+	}
+	allowed := false
+	err := s.deps.Authority.TryWithPolicy(func(e *authorization.RoleEvaluator) error {
+		allowed = e.Evaluate(client.userID(), member.ChannelID, authorization.Speak).Allowed
+		return nil
+	})
+	return resolveTalk(&client.talkDecision, member.ChannelID, allowed, err)
+}
+
+// resolveTalk turns one Speak evaluation into the per-packet talk decision.
+// A successful evaluation is authoritative and remembered. While a policy
+// commit momentarily holds the gate (ErrAuthorizationBusy) the speaker keeps
+// its last real decision in the same channel instead of flapping; without one
+// (new speaker, or moved channel) the packet is dropped. A missing or failed
+// policy is never permission and clears the remembered decision.
+func resolveTalk(last *atomic.Pointer[talkDecision], channelID int64, allowed bool, err error) bool {
+	switch {
+	case err == nil:
+		last.Store(&talkDecision{channelID: channelID, allowed: allowed})
+		return allowed
+	case errors.Is(err, authorization.ErrAuthorizationBusy):
+		previous := last.Load()
+		return previous != nil && previous.channelID == channelID && previous.allowed
+	default:
+		last.Store(nil)
+		return false
+	}
+}
+
+// talkDecision is a client's last uncontended Speak evaluation, reused only
+// while the policy gate is momentarily busy.
+type talkDecision struct {
+	channelID int64
+	allowed   bool
 }
 
 // canPublishVideo checks the client's current video capabilities and channel.

@@ -14,7 +14,9 @@ const eventConversationChanged = "conversation_changed"
 
 type conversationStore interface {
 	CreateConversation(context.Context, string, string) (netproto.Conversation, error)
-	ChangeConversation(context.Context, string, netproto.ConversationRequest) ([]string, error)
+	// ChangeConversation reports deleted=true when the change removed the
+	// last member and with it the group itself.
+	ChangeConversation(context.Context, string, netproto.ConversationRequest) (recipients []string, deleted bool, err error)
 	SendConversation(context.Context, string, netproto.ConversationRequest) (int64, []string, error)
 	MarkConversationRead(context.Context, string, string, int64) error
 	WithConversations(context.Context, string, netproto.ConversationRequest, func(netproto.ConversationResult) error) error
@@ -72,10 +74,17 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 		}
 		result := netproto.ConversationResult{Action: request.Action, Conversations: []netproto.Conversation{}, Messages: []netproto.ConversationMessage{}}
 		var recipients []string
+		var deleted bool
 		var err error
 		switch request.Action {
 		case "mark_read":
-			err = backend.MarkConversationRead(ctx, client.UniqueID, request.ID, request.ReadMessageID)
+			shared := false
+			if request.ShareRead {
+				shared, err = s.shareConversationRead(ctx, backend, client.UniqueID, request.ID, request.ReadMessageID)
+			}
+			if !shared {
+				err = backend.MarkConversationRead(ctx, client.UniqueID, request.ID, request.ReadMessageID)
+			}
 		case "create":
 			var c netproto.Conversation
 			c, err = backend.CreateConversation(ctx, client.UniqueID, request.Name)
@@ -85,16 +94,23 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 		case "send":
 			result.MessageID, recipients, err = backend.SendConversation(ctx, client.UniqueID, request)
 		default:
-			recipients, err = backend.ChangeConversation(ctx, client.UniqueID, request)
+			recipients, deleted, err = backend.ChangeConversation(ctx, client.UniqueID, request)
 		}
 		if err != nil {
 			return s.conversationError(ctx, client, err)
 		}
 		if request.Action == "leave" {
 			s.removeConversationCaller(request.ID, client.UniqueID)
+			s.conversationFiles.revoke(client.UniqueID, request.ID)
+			s.conversationActivity.revoke(client.UniqueID, request.ID, time.Now())
 		}
 		if request.Action == "remove" {
 			s.removeConversationCaller(request.ID, request.Target)
+			s.conversationFiles.revoke(request.Target, request.ID)
+			s.conversationActivity.revoke(request.Target, request.ID, time.Now())
+		}
+		if deleted {
+			s.deleteConversationFiles(ctx, request.ID)
 		}
 		// Queue only an opaque invalidation. Clients fetch content through a fresh
 		// membership lease; queued events never contain messages or new members.

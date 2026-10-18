@@ -54,12 +54,12 @@ test("account-authenticated outgoing DM stays in the recipient thread and retain
 
 test("account-authenticated channel messages retain own-message controls live and in history", async ({ page }) => {
     await page.evaluate(() => {
-        window.__history = [{ id: 101, channel_id: 7, from_unique_id: "account-uid", from: "Me", text: "My stored channel message" }];
+        window.__history = [{ id: 101, channel_id: 7, from_unique_id: "account-uid", from: "Me", text: "My stored channel message", enc_verified: true, enc_mode: "server" }];
         window.__noxaChat.resetView();
         window.__noxaChat.onMyChannelChanged();
     });
     await expect(page.locator('#chat-log .msg.own')).toContainText("My stored channel message");
-    await page.evaluate(() => window.__noxaChat.addChat({ id: 102, channel_id: 7, from_unique_id: "account-uid", from: "Me", text: "My live channel message" }));
+    await page.evaluate(() => window.__noxaChat.addChat({ id: 102, channel_id: 7, from_unique_id: "account-uid", from: "Me", text: "My live channel message", enc_verified: true, enc_mode: "server" }));
     await expect(page.locator('#chat-log .msg.own')).toHaveCount(2);
     await page.locator('#chat-log .msg.own').last().hover();
     await expect(page.locator('#chat-log .msg.own').last().getByRole('button', { name: /^edit$/i })).toBeVisible();

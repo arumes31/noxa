@@ -121,7 +121,7 @@ export function createChatTabs(root, { onLayoutChange, onRefresh } = {}) {
         for (const [index, item] of tabs.entries()) {
             const tab = document.createElement("div"); tab.dataset.chatKey = item.key;
             const current = () => scope === captured && root.contains(tab);
-            tab.className = "pm-tab" + (item.key.startsWith("ch:") ? " channel-tab" : "") + (item.active ? " active" : "") + (pinned(item.key) ? " pinned" : "");
+            tab.className = "pm-tab" + (item.key.startsWith("ch:") ? " channel-tab" : "") + (item.key.startsWith("grp:") ? " group-tab" : "") + (item.active ? " active" : "") + (pinned(item.key) ? " pinned" : "");
             tab.setAttribute("role", "presentation"); tab.tabIndex = -1;
             tab.title = item.title || item.name;
             const button = document.createElement("button"); button.type = "button"; button.className = "pm-tab-select";

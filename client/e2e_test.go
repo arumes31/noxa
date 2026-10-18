@@ -348,12 +348,22 @@ func TestEncryptChatScopes(t *testing.T) {
 		t.Fatalf("open global = %q, %v", text, err)
 	}
 
+	// A failed key lookup (here: not connected) is not proof that the peer
+	// has no end-to-end key, so it never falls back to server encryption.
+	if msg, err := cm.encryptChat("direct", "missing", "server path"); err == nil {
+		t.Fatalf("direct send without a key lookup answer = %+v", msg)
+	}
+	keyless := newConnManager(context.Background())
+	keyless.id = mustTempIdentity(t)
+	if msg, err := keyless.encryptChat("global", "", "text"); err == nil || !strings.Contains(err.Error(), "plaintext messages are not allowed") {
+		t.Fatalf("global without any key = %+v, %v", msg, err)
+	}
+
 	for _, tc := range []struct {
 		name   string
 		scope  string
 		target string
 	}{
-		{name: "missing direct key", scope: "direct", target: "missing"},
 		{name: "invalid channel id", scope: "channel", target: "nope"},
 		{name: "missing channel key", scope: "channel", target: "99"},
 	} {
@@ -458,10 +468,25 @@ func TestEncryptedEventTransformation(t *testing.T) {
 	for _, unchanged := range []string{
 		"not json",
 		wrap("presence", map[string]any{"status": "online"}),
-		wrap("chat_edited", map[string]any{"body": "plain"}),
 	} {
 		if got := cm.maybeDecryptEvent(unchanged); got != unchanged {
 			t.Fatalf("unsealed event changed from %q to %q", unchanged, got)
+		}
+	}
+	// Unsealed bodies are refused, never displayed, and cannot claim local
+	// verification.
+	for _, plain := range []struct{ event, field string }{
+		{wrap("chat_edited", map[string]any{"body": "plain", "enc_verified": true}), "body"},
+		{wrap("announcement", map[string]any{"text": "plain"}), "text"},
+	} {
+		var out struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(cm.maybeDecryptEvent(plain.event)), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Data[plain.field] != refusedPlainText || out.Data["enc_verified"] != nil {
+			t.Fatalf("plaintext event displayed: %+v", out.Data)
 		}
 	}
 

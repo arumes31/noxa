@@ -21,14 +21,14 @@ func lockConversation(ctx context.Context, tx *sql.Tx, id string, write bool) (n
 	if err != nil {
 		return c, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT unique_id,pending,joined_epoch FROM private_conversation_members WHERE conversation_id=$1 ORDER BY unique_id`, id)
+	rows, err := tx.QueryContext(ctx, `SELECT unique_id,pending,joined_epoch,seen_message_id FROM private_conversation_members WHERE conversation_id=$1 ORDER BY unique_id`, id)
 	if err != nil {
 		return c, err
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var member netproto.ConversationMember
-		if err := rows.Scan(&member.UniqueID, &member.Pending, &member.JoinedEpoch); err != nil {
+		if err := rows.Scan(&member.UniqueID, &member.Pending, &member.JoinedEpoch, &member.SeenMessageID); err != nil {
 			return c, err
 		}
 		c.Members = append(c.Members, member)
@@ -76,23 +76,26 @@ func (s *Store) CreateConversation(ctx context.Context, uid, name string) (_ net
 	return c, tx.Commit()
 }
 
-func (s *Store) ChangeConversation(ctx context.Context, uid string, request netproto.ConversationRequest) (_ []string, retErr error) {
+// ChangeConversation applies one membership/metadata change. deleted reports
+// that the change removed the last member and with it the whole group, so the
+// caller can reclaim resources bound to the group (its attachment folder).
+func (s *Store) ChangeConversation(ctx context.Context, uid string, request netproto.ConversationRequest) (_ []string, deleted bool, retErr error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rollbackRoleTx(tx, &retErr)
 	current, err := lockConversation(ctx, tx, request.ID, true)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	next, err := netproto.ChangeConversation(current, uid, request)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if request.Action == "invite" {
 		if err := conversationQuota(ctx, tx, request.Target); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	recipients := make([]string, 0, len(current.Members)+1)
@@ -102,7 +105,8 @@ func (s *Store) ChangeConversation(ctx context.Context, uid string, request netp
 	if request.Action == "invite" {
 		recipients = append(recipients, request.Target)
 	}
-	if len(next.Members) == 0 {
+	deleted = len(next.Members) == 0
+	if deleted {
 		_, err = tx.ExecContext(ctx, `DELETE FROM private_conversations WHERE id=$1`, current.ID)
 	} else {
 		_, err = tx.ExecContext(ctx, `UPDATE private_conversations SET name=$2,owner_uid=$3,revision=$4,epoch=$5 WHERE id=$1`, next.ID, next.Name, next.Owner, next.Revision, next.Epoch)
@@ -120,9 +124,12 @@ func (s *Store) ChangeConversation(ctx context.Context, uid string, request netp
 		}
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return recipients, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, false, err
+	}
+	return recipients, deleted, nil
 }
 
 // WithConversations holds membership locks until the bounded socket write
@@ -181,6 +188,12 @@ func (s *Store) WithConversations(ctx context.Context, uid string, request netpr
 		if !member.Pending {
 			if err := conversationReadState(ctx, tx, &c, uid, member.JoinedEpoch); err != nil {
 				return err
+			}
+		} else {
+			// Read receipts are for accepted members; an invitation does not
+			// reveal who has read what.
+			for i := range c.Members {
+				c.Members[i].SeenMessageID = 0
 			}
 		}
 		result.Conversations = append(result.Conversations, c)

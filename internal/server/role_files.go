@@ -52,13 +52,18 @@ func (s *TCPServer) guardRoleFileTransfer(ctx context.Context, principal filetra
 				return filetransfer.ErrAccessRevoked
 			}
 		}
+		if err := s.guardConversationTransfer(ctx, client, scope); err != nil {
+			return err
+		}
 		return effect(s.roleFileContext(ctx, client, scope))
 	})
 }
 
 func (s *TCPServer) roleFileLink(ctx context.Context, client *Client, msg netproto.FileLink) error {
 	return s.fileReadAction(ctx, client, msg.ChannelID, func(ctx context.Context) error {
-		if client.rulesBlocked() {
+		// Bearer links bypass session authorization on the HTTP path, so a
+		// private-group file can never be published through one.
+		if client.rulesBlocked() || conversationFolderReserved(msg.ChannelID, msg.Folder) {
 			return authorization.ErrRoleForbidden
 		}
 		if err := s.fileManageAllowed(ctx, client, msg.ChannelID, msg.Folder, msg.Name); err != nil {
@@ -95,6 +100,11 @@ func (s *TCPServer) roleFileTransferInit(ctx context.Context, client *Client, ms
 		if msg.ChannelID > 0 {
 			if _, ok := s.deps.State.GetChannel(msg.ChannelID); !ok {
 				return authorization.ErrRoleForbidden
+			}
+		}
+		if conversationFolderReserved(msg.ChannelID, msg.Folder) {
+			if err := s.authorizeConversationFile(ctx, client.uniqueID(), msg.Folder, msg.Direction, msg.Name); err != nil {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
 			}
 		}
 		ctx = s.roleFileContext(ctx, client, msg.ChannelID)

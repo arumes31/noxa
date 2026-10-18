@@ -40,7 +40,7 @@ func TestBlockedMediaWriterDoesNotBlockOtherViewerAdmission(t *testing.T) {
 	}()
 	select {
 	case ok := <-forwarded:
-		if !ok || *healthyWrites != 1 {
+		if !ok || healthyWrites.Load() != 1 {
 			t.Fatal("healthy viewer did not receive its admitted packet")
 		}
 	case <-time.After(time.Second):

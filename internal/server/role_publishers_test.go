@@ -63,6 +63,18 @@ func TestRoleChannelWhisperHidesSourceMetadataFromIneligibleRecipient(t *testing
 			env.srv.roleMetadataMu.Unlock()
 			t.Error("SDP did not pin membership metadata")
 		}
+		// Renegotiation pins the subscriber's membership, but voice to and
+		// from it keeps flowing: its packet fence stays shareable.
+		receiver, _ := env.srv.clientByID(receiverID)
+		if receiver.roleActionMu.TryLock() {
+			receiver.roleActionMu.Unlock()
+			t.Error("SDP did not pin subscriber membership")
+		}
+		if !receiver.mediaFence.TryRLock() {
+			t.Error("SDP closed the subscriber's voice packet fence")
+		} else {
+			receiver.mediaFence.RUnlock()
+		}
 		// A slow subscriber must not acquire unrelated senders' packet locks.
 		if !sender.roleActionMu.TryLock() {
 			t.Error("SDP blocked unrelated audio delivery")

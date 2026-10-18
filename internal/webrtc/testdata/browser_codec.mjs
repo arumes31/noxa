@@ -142,10 +142,15 @@ try {
                 assert.equal(after.audioId,before.audioId,'receiver recovery replaced audio binding');
                 assert.ok(after.audioPackets>before.audioPackets,'audio packets stopped during recovery');
                 assert.equal(await receiver.evaluate(()=>pc===recoveryPeer&&pc.connectionState==='connected'),true);
-                if(cycle===0){serverTransceivers=result.transceivers;recoveryGrowth=result.growth;}
+                if(cycle===0){
+                    serverTransceivers=result.transceivers;recoveryGrowth=result.growth;
+                    // Prior codec/watch changes can leave a reusable video slot.
+                    // Charge only actual growth, with at most one extra slot.
+                    assert.equal(recoveryGrowth,serverTransceivers-before.transceivers,'recovery growth does not match new transceivers');
+                    assert.ok(recoveryGrowth===0||recoveryGrowth===1,'first recovery grew beyond its alternating pair');
+                }
                 assert.equal(result.transceivers,serverTransceivers,'server transceivers grew after first reset');
                 assert.equal(result.growth,recoveryGrowth,'transceiver reuse consumed recovery growth budget');
-                assert.equal(result.growth,1,'expected one extra transceiver for alternating recovery');
                 assert.equal(after.transceivers,serverTransceivers,'browser/server transceiver count differs');
                 recoveryMids.push(after.mid);
                 if(cycle>1)assert.equal(after.mid,recoveryMids[cycle-2],'recovery did not recycle alternating MIDs');

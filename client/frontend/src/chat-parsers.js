@@ -1,23 +1,30 @@
 import { escapeHTML } from "./markdown.js";
 import { isSafeImageDataURL } from "./safe-media.js";
+import { splitNameMeta } from "./attachment-meta.js";
 
 // parseFileRef mirrors client/chat_attachments.go. Zero or one separator remains a plain
 // legacy reference so historical messages stay readable; only two separators
-// carry an attachment storage key and display name.
+// carry an attachment storage key and display name. A sealed reference may
+// carry a metadata segment before the name (attachment-meta.js); meta is null
+// when it does not, and the name never includes it.
 export function parseFileRef(capture) {
     if (typeof capture !== "string") {
-        return { storage: "", key: "", name: "", valid: false, legacy: false };
+        return { storage: "", key: "", name: "", valid: false, legacy: false, meta: null };
     }
     const first = capture.indexOf("#");
-    if (first < 0) return { storage: capture, key: "", name: capture, valid: true, legacy: true };
+    if (first < 0) return { storage: capture, key: "", name: capture, valid: true, legacy: true, meta: null };
     const second = capture.indexOf("#", first + 1);
-    if (second < 0) return { storage: capture, key: "", name: capture, valid: true, legacy: true };
+    if (second < 0) return { storage: capture, key: "", name: capture, valid: true, legacy: true, meta: null };
+    const key = capture.slice(first + 1, second);
+    // Like the Go parser, only a keyed (sealed) reference has a segment.
+    const { name, meta } = key ? splitNameMeta(capture.slice(second + 1)) : { name: capture.slice(second + 1), meta: null };
     return {
         storage: capture.slice(0, first),
-        key: capture.slice(first + 1, second),
-        name: capture.slice(second + 1),
+        key,
+        name,
         valid: true,
         legacy: false,
+        meta,
     };
 }
 

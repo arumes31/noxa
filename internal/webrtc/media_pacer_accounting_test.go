@@ -39,9 +39,9 @@ func TestMediaPacerExpiredRepairDoesNotSpendPrimaryBudget(t *testing.T) {
 		time.Sleep(4 * time.Millisecond)
 		synctest.Wait()
 		got := p.diagnosticSnapshot(time.Now())
-		if *writes != 1 || got.SentPackets != 1 || got.QueuedPackets != 0 || got.DroppedExpired != 0 ||
+		if writes.Load() != 1 || got.SentPackets != 1 || got.QueuedPackets != 0 || got.DroppedExpired != 0 ||
 			got.DroppedScope != 1 || got.TerminalDrops.RTX.ExpiredTicket != 1 {
-			t.Fatalf("expired repair spent primary pacing budget: writes=%d sent=%d queued=%d queueExpired=%d denied=%d repairExpired=%d", *writes, got.SentPackets, got.QueuedPackets, got.DroppedExpired, got.DroppedScope, got.TerminalDrops.RTX.ExpiredTicket)
+			t.Fatalf("expired repair spent primary pacing budget: writes=%d sent=%d queued=%d queueExpired=%d denied=%d repairExpired=%d", writes.Load(), got.SentPackets, got.QueuedPackets, got.DroppedExpired, got.DroppedScope, got.TerminalDrops.RTX.ExpiredTicket)
 		}
 	})
 }

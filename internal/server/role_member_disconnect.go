@@ -23,8 +23,8 @@ func (s *TCPServer) disconnectRoleMember(ctx context.Context, e *authorization.R
 	if !ok || !target.isAuthed() {
 		return netproto.MemberDisconnectResult{}, authorization.ErrRoleForbidden
 	}
-	target.roleActionMu.Lock()
-	defer target.roleActionMu.Unlock()
+	target.lockRoleAction()
+	defer target.unlockRoleAction()
 	before, ok := s.deps.State.GetClient(targetID)
 	if !ok || before.ChannelID <= 0 || (expectedChannel != 0 && before.ChannelID != expectedChannel) ||
 		!e.CanManageMember(actorID, target.userID()) || !e.Evaluate(actorID, before.ChannelID, authorization.DisconnectMembers).Allowed ||

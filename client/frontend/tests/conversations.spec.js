@@ -41,7 +41,9 @@ test.beforeEach(async ({ page }) => {
                     latest_message_id: Math.max(0, ...window.__groupMessages.filter(message => message.conversation_id === group.id).map(message => message.id)),
                     unread_count: window.__groupMessages.filter(message => message.conversation_id === group.id && message.from_unique_id !== "alice" && message.id > (window.__readPositions[group.id] || 0)).length,
                 }));
-                return { conversations: structuredClone(summaries), messages: command.action === "history" ? structuredClone(window.__groupMessages.filter(message => message.conversation_id === command.id)) : [] };
+                // The Go client marks every group message whose envelope it authenticated
+                // as enc_verified; unverified bodies are refused by the frontend.
+                return { conversations: structuredClone(summaries), messages: command.action === "history" ? structuredClone(window.__groupMessages.filter(message => message.conversation_id === command.id).map(message => ({ enc_verified: true, ...message }))) : [] };
             },
             async SendConversationForTab(tab, id, body, reference) {
                 window.__groupCalls.push([tab, { action: "send", id, body, reference }]);
@@ -72,7 +74,7 @@ test("group voice recording survives incoming messages and sends to the same gro
                 this.addEventListener('dataavailable', event => { if (event.data.size) window.__encodedVoiceChunks++; });
             }
         };
-        window.go.main.App.UploadChatAttachmentForTab = async () => "[file:recording#key#voice.weba]";
+        window.go.main.App.UploadConversationAttachmentForTab = async () => "[file:recording#key#voice.weba]";
     });
     await page.getByRole("button", { name: "Raid <script>", exact: true }).click();
     await page.getByRole("button", { name: "Record voice message", exact: true }).click();
@@ -113,7 +115,7 @@ test("group voice rerecord uses a new send reference while retries retain the or
                 this.addEventListener('dataavailable', event => { if (event.data.size) window.__encodedVoiceChunks++; });
             }
         };
-        window.go.main.App.UploadChatAttachmentForTab = async () => `[file:recording-${++window.__voiceUploads}#key#voice.weba]`;
+        window.go.main.App.UploadConversationAttachmentForTab = async () => `[file:recording-${++window.__voiceUploads}#key#voice.weba]`;
         window.go.main.App.SendConversationForTab = async (_tab, _group, body, reference) => {
             window.__voiceSends.push({ body, reference });
             // Simulate the server's reference deduplication and a lost response.

@@ -43,8 +43,8 @@ func (s *TCPServer) kickRoleMember(ctx context.Context, e *authorization.RoleEva
 	if !ok || !target.isAuthed() {
 		return false, authorization.ErrRoleForbidden
 	}
-	target.roleActionMu.Lock()
-	defer target.roleActionMu.Unlock()
+	target.lockRoleAction()
+	defer target.unlockRoleAction()
 	before, ok := s.deps.State.GetClient(targetID)
 	if !ok || !e.CanManageMember(actorID, target.userID()) || !e.Evaluate(actorID, before.ChannelID, authorization.ViewChannel).Allowed ||
 		(before.Status == "invisible" && !e.Evaluate(actorID, 0, authorization.ViewConnectionInfo).Allowed) {

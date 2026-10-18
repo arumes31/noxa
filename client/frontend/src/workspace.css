@@ -155,9 +155,9 @@ body.details-collapsed #details-toggle { display: inline-flex; position: static;
 .msg-time .msg-save:hover { color: var(--accent); background: var(--accent-dim); }
 .msg-time .msg-save:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Grouped messages hide their header; keep each DM's save action reachable. */
-#chat-log .msg.grouped .msg-time:has(.msg-save) { display: inline-block; position: absolute; inset-inline-end: 2px; top: 2px; }
-#chat-log .msg.grouped .msg-time:has(.msg-save) .msg-timestamp { display: none; }
-#chat-log .msg.grouped:has(.msg-save) .msg-text { padding-inline-end: 56px; min-height: 24px; }
+#chat-log .msg.grouped .msg-time:is(:has(.msg-save), :has(.msg-lock)) { display: inline-block; position: absolute; inset-inline-end: 2px; top: 2px; }
+#chat-log .msg.grouped .msg-time:is(:has(.msg-save), :has(.msg-lock)) .msg-timestamp { display: none; }
+#chat-log .msg.grouped:is(:has(.msg-save), :has(.msg-lock)) .msg-text { padding-inline-end: 56px; min-height: 24px; }
 .msg.rich .msg-tag { grid-column: 4; grid-row: 1; justify-self: start; font-size: .72rem; }
 .msg.rich .msg-text { grid-column: 2 / -1; grid-row: 2; line-height: 1.55; }
 .msg.rich .msg-edited, .msg.rich .msg-receipt, .msg.rich .msg-reactions { grid-column: 2 / -1; }

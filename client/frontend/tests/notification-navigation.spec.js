@@ -30,7 +30,7 @@ test.beforeEach(async ({ page }) => {
             }
             if (method === "ConversationForTab") {
                 const group = { id: "g1", name: "Friends", owner: "bob", revision: 1, epoch: 1, members: [{ unique_id: `account-${args[0]}`, pending: !!window.__noticeInvitation }, { unique_id: "bob" }] };
-                const messages = window.__noticeGroupMessages || [{ id: 61, conversation_id: "g1", from_unique_id: "bob", body: `Exact group message on ${args[0]}`, created_at: 1700000000 }];
+                const messages = window.__noticeGroupMessages || [{ id: 61, conversation_id: "g1", from_unique_id: "bob", body: `Exact group message on ${args[0]}`, created_at: 1700000000, enc_verified: true }];
                 return { conversations: window.__noticeRevoked ? [] : [group], messages: args[1].action === "history" ? messages.filter(message => !args[1].before_id || message.id < args[1].before_id).sort((a, b) => b.id - a.id).slice(0, 25) : [] };
             }
             if (method === "DiscussionForTab") {
@@ -179,7 +179,7 @@ test("a channel alert opens visible context while a group hides the retained cha
 
 test("opening another notification does not disable later group history paging", async ({ page }) => {
     await page.evaluate(() => {
-        window.__noticeGroupMessages = Array.from({ length: 61 }, (_, index) => ({ id: index + 1, conversation_id: "g1", from_unique_id: "bob", body: `Group message ${index + 1}`, created_at: 1700000000 }));
+        window.__noticeGroupMessages = Array.from({ length: 61 }, (_, index) => ({ id: index + 1, conversation_id: "g1", from_unique_id: "bob", body: `Group message ${index + 1}`, created_at: 1700000000, enc_verified: true }));
         window.__noxaPolish.recordNotification("dm", "Group paging notice", { reference: { kind: "group", group_id: "g1", message_id: 61 } });
         window.__noxaPolish.recordNotification("mention", "Another notice", { reference: { kind: "channel", channel_id: 2, message_id: 42 } });
         window.__noxaPolish.openNotifCenter();

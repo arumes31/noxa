@@ -73,15 +73,24 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             for (const c of h.members) sec.appendChild(clientRow(c));
             root.appendChild(sec);
         }
-        if (state.channels.length === 0) {
+        if (!state.channels.some((ch) => !ch.TextOnly)) {
             const empty = document.createElement("div");
             empty.className = "empty-state";
             empty.textContent = t("runtime.noChannels");
             root.appendChild(empty);
         }
+        // Text channels (chat only) live in the sidebar's Text section; a
+        // voice channel below one is shown under the nearest voice ancestor.
+        const channelByID = new Map(state.channels.map((ch) => [ch.ChannelID, ch]));
+        const voiceParent = (ch) => {
+            let parent = ch.ParentID || 0, guard = 0;
+            while (parent && channelByID.get(parent)?.TextOnly && guard++ < 1000) parent = channelByID.get(parent).ParentID || 0;
+            return parent;
+        };
         const byParent = new Map();
         for (const ch of state.channels) {
-            const key = ch.ParentID || 0;
+            if (ch.TextOnly) continue;
+            const key = voiceParent(ch);
             if (!byParent.has(key)) byParent.set(key, []);
             byParent.get(key).push(ch);
         }
@@ -126,6 +135,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         restoreTreeFocus(root, focusState);
         speakingAvatars ||= createSpeakingAvatars(root);
         speakingAvatars.refresh();
+        window.__noxaShell?.renderSidebarSections?.();
     }
 
     function captureTreeFocus(root) {
@@ -405,9 +415,11 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         row.appendChild(speakingHere ? speakingAvatar(av) : av);
         row.appendChild(name);
         if (sharing) {
+            // "● LIVE": the badge carries its state in text, not colour alone.
             const indicator = document.createElement("span");
-            indicator.className = "client-stream-state" + (stream?.watching ? " watching" : "");
-            indicator.innerHTML = icon(stream?.watching ? "streamWatching" : "streamLive");
+            indicator.className = "client-stream-state client-live" + (stream?.watching ? " watching" : "");
+            indicator.innerHTML = `${stream?.watching ? icon("streamWatching") : ""}<span class="client-live-text" aria-hidden="true"></span>`;
+            indicator.querySelector(".client-live-text").textContent = t("shell.live");
             indicator.title = streamLabel;
             indicator.setAttribute("role", "img");
             indicator.setAttribute("aria-label", streamLabel);

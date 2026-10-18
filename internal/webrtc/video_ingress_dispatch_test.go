@@ -312,6 +312,7 @@ func waitVideoDispatchIdle(t *testing.T, r *Router) {
 		}
 		r.mu.RUnlock()
 		if idle {
+			waitAsyncKeyframeRequests(t, r)
 			return
 		}
 		if time.Now().After(deadline) {

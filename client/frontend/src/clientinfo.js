@@ -383,7 +383,7 @@ async function refreshVoiceStats(overlay, client) {
             : "—");
         setVal("packets", recv + t("desktop.recv") + lost + t("desktop.lost"));
         const receiver = pc.getTransceivers?.().find(transceiver => transceiver.mid === inbound.mid)?.receiver;
-        const level = V().readRemoteAudioLevel?.(receiver?.track?.id || inbound.trackIdentifier) ?? inbound.audioLevel;
+        const level = V().readRemoteAudioLevel?.(receiver?.track || inbound.trackIdentifier) ?? inbound.audioLevel;
         setVal("level", level != null ? (level * 100).toFixed(0) + " %" : "—");
     } catch { /* stats unavailable */ }
 }
@@ -664,7 +664,8 @@ function openChannelMenu(x, y, channel, trigger) {
     const isCurrent = channel.ChannelID === V().state.myChannelID;
     const isSubscribed = !!window.__noxaChat?.isSubscribed?.(channel.ChannelID);
     // (320) recent channels for quick rejoin.
-    const recent = (V().recentChannels ? V().recentChannels() : [])
+    const textOnly = !!channel.TextOnly; // text channels have chat only, no voice
+    const recent = (textOnly ? [] : V().recentChannels ? V().recentChannels() : [])
         .map((id) => V().state.channels.find((c) => c.ChannelID === id))
         .filter(Boolean)
         .filter((c) => c.ChannelID !== channel.ChannelID)
@@ -684,10 +685,11 @@ function openChannelMenu(x, y, channel, trigger) {
         ${recent.length ? `<div class="ctx-divider"></div>${recent.join("")}` : ""}
         <div class="ctx-divider"></div>
         <a data-act="delete" class="ctx-danger">${escapeTranslation(t("desktop.delete.channel"))}</a>`;
+    if (textOnly) for (const act of ["voice", "create-sub"]) menuEl.querySelector(`[data-act="${act}"]`)?.remove();
     menuEl.style.left = Math.min(x, window.innerWidth - 240) + "px";
     menuEl.style.top = Math.min(y, window.innerHeight - 260) + "px";
     menuEl.onclick = (e) => e.stopPropagation();
-    menuEl.querySelector('[data-act="voice"]').onclick = async () => {
+    if (!textOnly) menuEl.querySelector('[data-act="voice"]').onclick = async () => {
         closeMenu();
         if (generation !== V().state.serverGeneration || tabID !== V().state.activeTabID) return;
         try {
@@ -722,7 +724,7 @@ function openChannelMenu(x, y, channel, trigger) {
     move.textContent = t("roles.channel.channel_move");
     move.onclick = () => { closeMenu(); roleChannelDialog("channel_move", channel.ChannelID); };
     access.after(move);
-    menuEl.querySelector('[data-act="create-sub"]').onclick = () => {
+    if (!textOnly) menuEl.querySelector('[data-act="create-sub"]').onclick = () => {
         closeMenu();
         openChannelCreate(channel);
     };
@@ -843,7 +845,7 @@ export function initClientInfo() {
             if (client) { e.preventDefault(); e.stopPropagation(); openContextMenu(x, y, client, row); }
             return;
         }
-        const chRow = e.target.closest("#channel-tree .channel");
+        const chRow = e.target.closest("#channel-tree .channel, #text-channels .channel");
         if (!chRow || !chRow.dataset.chid) return;
         const channel = V().state.channels.find((c) => c.ChannelID === Number(chRow.dataset.chid));
         if (channel) { e.preventDefault(); e.stopPropagation(); openChannelMenu(x, y, channel, chRow); }

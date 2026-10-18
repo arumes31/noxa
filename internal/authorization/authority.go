@@ -10,6 +10,13 @@ import (
 
 var ErrAuthorizationUnavailable = errors.New("authorization unavailable")
 
+// ErrAuthorizationBusy is returned by TryWithPolicy when a policy writer
+// momentarily holds the packet gate. It wraps ErrAuthorizationUnavailable, so
+// existing checks still treat it as "no decision"; realtime callers can tell
+// a transient contention apart from a missing or failed policy, which must
+// never be read as permission.
+var ErrAuthorizationBusy = fmt.Errorf("policy gate busy: %w", ErrAuthorizationUnavailable)
+
 // ErrLifecycleUnchanged is returned only by trusted maintenance callbacks
 // that revalidated a timer and found no work. It never acknowledges a commit.
 var ErrLifecycleUnchanged = errors.New("channel lifecycle unchanged")
@@ -37,10 +44,18 @@ type ReconcilePolicy func(context.Context, *RoleEvaluator, *RoleEvaluator) error
 // All writers in a serving process must use this authority; offline maintenance
 // requires stopping that process. No background refresh can publish stale state.
 type Authority struct {
-	gate      sync.RWMutex
-	backend   PolicyBackend
-	reconcile ReconcilePolicy
-	policy    RolePolicy
+	gate sync.RWMutex
+	// packetGate is the realtime packet side of gate. Every exclusive gate
+	// holder also holds packetGate exclusively for its whole critical section,
+	// but only after it has acquired gate. A policy writer that is merely
+	// waiting behind long WithPolicy leases (e.g. a signaling write to a slow
+	// client) therefore does not make TryWithPolicy fail: Go's RWMutex rejects
+	// TryRLock while any writer waits, which used to drop all voice server-wide
+	// during every login refresh queued behind such a lease.
+	packetGate sync.RWMutex
+	backend    PolicyBackend
+	reconcile  ReconcilePolicy
+	policy     RolePolicy
 	// revision includes a known commit even if reconciliation has not finished.
 	// policy remains the last published snapshot for conservative revocation.
 	revision  int64
@@ -94,14 +109,25 @@ func (a *Authority) WithPolicy(ctx context.Context, effect func(*RoleEvaluator) 
 // A packet must not wait for reconciliation, which may be joining its worker.
 // Contention drops the packet; it never bypasses the authorization check.
 func (a *Authority) TryWithPolicy(effect func(*RoleEvaluator) error) error {
-	if !a.gate.TryRLock() {
-		return ErrAuthorizationUnavailable
+	if !a.packetGate.TryRLock() {
+		return ErrAuthorizationBusy
 	}
-	defer a.gate.RUnlock()
+	defer a.packetGate.RUnlock()
 	if a.evaluator == nil {
 		return ErrAuthorizationUnavailable
 	}
 	return effect(a.evaluator)
+}
+
+// lockExclusive acquires the policy gate and then its packet side. Packet
+// leases are bounded single writes, so the second wait is short.
+func (a *Authority) lockExclusive() func() {
+	a.gate.Lock()
+	a.packetGate.Lock()
+	return func() {
+		a.packetGate.Unlock()
+		a.gate.Unlock()
+	}
 }
 
 // WithExclusivePolicy quiesces protected effects for trusted runtime session
@@ -112,8 +138,7 @@ func (a *Authority) WithExclusivePolicy(ctx context.Context, effect func(*RoleEv
 	if effect == nil {
 		return ErrRoleInvalid
 	}
-	a.gate.Lock()
-	defer a.gate.Unlock()
+	defer a.lockExclusive()()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -181,8 +206,7 @@ func (a *Authority) changeLifecyclePolicy(ctx context.Context, expectedRevision 
 	if commit == nil {
 		return RolePolicy{}, ErrRoleInvalid
 	}
-	a.gate.Lock()
-	defer a.gate.Unlock()
+	defer a.lockExclusive()()
 	if err := ctx.Err(); err != nil {
 		return RolePolicy{}, err
 	}
@@ -241,8 +265,20 @@ func (a *Authority) RefreshIfChanged(ctx context.Context, admittedUserID int64, 
 }
 
 func (a *Authority) reload(ctx context.Context, force bool, admittedUserID int64, noLiveSession func(int64) bool) error {
-	a.gate.Lock()
-	defer a.gate.Unlock()
+	// Login refreshes are frequent and usually find nothing new. Compare under
+	// a shared lease first so they never close the packet gate (which would
+	// drop realtime voice for every session) just to read the database.
+	if !force && ctx.Err() == nil {
+		if p, err := a.backend.RolePolicy(ctx); err == nil {
+			a.gate.RLock()
+			unchanged := a.evaluator != nil && p.Revision == a.revision && reflect.DeepEqual(p, a.policy)
+			a.gate.RUnlock()
+			if unchanged {
+				return nil
+			}
+		}
+	}
+	defer a.lockExclusive()()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
