@@ -19,6 +19,7 @@ type UpdateCompatibilityPolicy string
 
 const (
 	LegacyUpdateDefault           UpdateCompatibilityPolicy = "default"
+	LegacyUpdateHardware2026      UpdateCompatibilityPolicy = "hardware-2026"
 	LegacyUpdateDuplicateFeatures UpdateCompatibilityPolicy = "duplicate-features"
 	LegacyUpdateMergedHardware    UpdateCompatibilityPolicy = "merged-hardware"
 )
@@ -42,7 +43,7 @@ func SetLegacyUpdateCompatibility(policy UpdateCompatibilityPolicy) error {
 func (s *updateBrowserStartupState) enableLegacy(policy UpdateCompatibilityPolicy) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if policy != LegacyUpdateDefault && policy != LegacyUpdateDuplicateFeatures && policy != LegacyUpdateMergedHardware {
+	if policy != LegacyUpdateDefault && policy != LegacyUpdateDuplicateFeatures && policy != LegacyUpdateMergedHardware && policy != LegacyUpdateHardware2026 {
 		return fmt.Errorf("unknown WebView2 update compatibility policy")
 	}
 	if s.started || s.legacy != "" {
@@ -61,7 +62,7 @@ func (s *updateBrowserStartupState) arguments(fragments []string) (string, error
 	if legacy == "" {
 		return hardwareBrowserArguments(fragments)
 	}
-	// The authenticated releases through v0.5.87 leave Windows options unset.
+	// The authenticated releases through v0.5.88 leave Windows options unset.
 	// Wails adds precisely this fragment. Reject future/default drift instead of broadening the exception
 	// into an arbitrary browser-argument override.
 	const legacyArguments = "--disable-features=msSmartScreenProtection"
@@ -69,6 +70,9 @@ func (s *updateBrowserStartupState) arguments(fragments []string) (string, error
 		return "", fmt.Errorf("unexpected browser options for the legacy update bridge")
 	}
 	switch legacy {
+	case LegacyUpdateHardware2026:
+		// Freeze the v0.5.88 policy even if the ordinary policy changes later.
+		return legacyArguments + ",ForceSoftwareForRtcLowResolutions,MediaFoundationUseSWBRCForH264Camera", nil
 	case LegacyUpdateDuplicateFeatures:
 		return "--disable-features=ForceSoftwareForRtcLowResolutions " + legacyArguments, nil
 	case LegacyUpdateMergedHardware:

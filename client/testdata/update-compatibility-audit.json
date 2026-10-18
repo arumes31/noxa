@@ -1,0 +1,517 @@
+[
+  {
+    "version": "v0.5.24",
+    "commit": "9b6eff8730403dc7206004016cd18f12c2a3cf43",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.25",
+    "commit": "f6e5715c14c64d708c96cc94c2da492da2fec8f7",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.26",
+    "commit": "bdd36a914bc5e1e63d60c8ace0b0d479a451c488",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.27",
+    "commit": "d5da2b642f4700fe9cb8cbd9a1b9e125928f4d2c",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.28",
+    "commit": "b8ed6a2f8886e23940184bf3f97e027b89db6c33",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.29",
+    "commit": "91c56537272f9faed8cdc97066787b236d53f0d0",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.30",
+    "commit": "c4f730d13fd200209ed0a5ea00f502f33ce78ee1",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.31",
+    "commit": "aa9e42facd248eee965c493d4454840837531fab",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.32",
+    "commit": "87b678d2f6354304dbfbf8af6613d09b6d2f1872",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.33",
+    "commit": "b828f9fa2e898e96f91354d08d44843e9fbb5a86",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.34",
+    "commit": "9d7ae0f93f6f09fefc99a2d5aa95a68ec0db1a9c",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.35",
+    "commit": "3132d2fd83ae4e298034ab7f38930bfe43126f4d",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.36",
+    "commit": "8efbdbf97de3289ecd3f24370d02463945511f1d",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.37",
+    "commit": "78511bf11aeda52eef7269a814215a19eda8567b",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.38",
+    "commit": "41e78ba6bc5d2b1cefa4662d31318b8faad8d616",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.39",
+    "commit": "fbbadfa56fdfb6ae770cee79baefb5fe656de3f0",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.40",
+    "commit": "b00db1a545f10fe0769c8a1dc4d1bda38302ec40",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.41",
+    "commit": "755087a59860f81581bc042984b1ef4c8c0233aa",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.42",
+    "commit": "d8a91c98f2ba459bb2cb251a16921fb09bd1721d",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.43",
+    "commit": "eafb006c3fb3c400e7f74b9d991a9298b464d391",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.44",
+    "commit": "57300fb52f7302f9e7ff8d1d9276e67cd814d933",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.45",
+    "commit": "fb3c9bada8b9c883c4d087059fd4afa12f431f89",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.46",
+    "commit": "87f8173baabbe1e676fb766e8a64cced08d3643b",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.47",
+    "commit": "968b26c5f1ac6ed601d166a101a20a25c9a36f15",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.48",
+    "commit": "2997de67d9a3bb2e5f3b935d7bfcfc28891278e2",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.49",
+    "commit": "a987341efe23e2b404081050fe28c9903472f61b",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.50",
+    "commit": "e1c770ae1df353638264cf6f40c9169454ced63e",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.51",
+    "commit": "4f39f2f666c17fac7d3e5b4d6e6f2f2332f999b3",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.52",
+    "commit": "59196cdd07d03bd484a8dfe3cf45146af6a29e00",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.53",
+    "commit": "6d0725aab4f81016c8d28a747e76026abdac3194",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.54",
+    "commit": "76b2c792eb070c89d3a404e25ecf8fcd94187692",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.55",
+    "commit": "e51d22c260fc1c2530437fb05cd8ee56c53548bf",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.56",
+    "commit": "b6d313bc994f1f3b70f9a2743ae04b09ea3a2f65",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.57",
+    "commit": "0a3107664cc465a92b8f80a7dd341ef35f45e5f4",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.58",
+    "commit": "37ab6833ef148e94c77b84248e0d8b06512356df",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.59",
+    "commit": "466205cde3e4f1e80e9b598ef8db1110d43ff15f",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.60",
+    "commit": "d467292de44dd0931abbcbec70a5b5fbf1d46d61",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.61",
+    "commit": "52feee5fa5de231fea5d28ef74c690656361790b",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.62",
+    "commit": "dba7ee5a5612c0c35a0eda54577136992cde4876",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.63",
+    "commit": "93240d8ea526c87b33ef432e6c13f010e5ef633a",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.64",
+    "commit": "94a71cba9d92b4185f22f40c7980945ec9c59eb0",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.65",
+    "commit": "0c2be85cd773ccdb7f5f46da0e8e4689682a7274",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.66",
+    "commit": "ec72be72ebb0427d57f2e30a1dc74b6d936eaa65",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.67",
+    "commit": "02363c5f3696babb7e92df5e2e66bc4869ab7fda",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.68",
+    "commit": "6cced2a91e73ea94dec4107641777543670a7b34",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.69",
+    "commit": "233f5830d20c583f80fc16eae653ec222ec08daf",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.70",
+    "commit": "face372086724fd7e4981f634a4e1b21dee5e4ba",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.71",
+    "commit": "db122428fd0354af1dcef059fceccc4983e5ca77",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.72",
+    "commit": "7cfd298ed0837c260ac286b5f5f87e1b13799e11",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.73",
+    "commit": "5f966624346e98eb8169e958fdbc9e17b4904476",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.74",
+    "commit": "7d895af94a97472aa5a315f341a9a7b72767a6fb",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.75",
+    "commit": "63ea51153029d20a216b9b60981818ccef5ca3a6",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.76",
+    "commit": "f0399402222e2ae35bb7fb36e75b96f7f56686f0",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.77",
+    "commit": "a73c770f3e4e3567f663a44d9157d52e68f3a52a",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.78",
+    "commit": "803af23226b49251c00e2cec869deef000f75185",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.79",
+    "commit": "0be6bc396231a40ba095fd25216e64e02b5347e1",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.80",
+    "commit": "e8534cd90c358cb96706e51b14ad9bdfdc3880a5",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.81",
+    "commit": "0f3584cb82e2f899ae5f8c9be4b2be8f0aabbe5c",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.82",
+    "commit": "39e7f1d0ea209aab31d434c70d69f01848d882aa",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.83",
+    "commit": "9877bb31148c8ac8b5782527092807e933da7b6b",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.84",
+    "commit": "4989b774e516f7155572e8779419c9ede7a1d47d",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.85",
+    "commit": "eccf8b5a6fe4033b59f6c7465e00a4c8ad724d47",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.86",
+    "commit": "be4c273f54ea8410656a3d25109868c8bde09c33",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.87",
+    "commit": "4e2b1b3ae94cfcef248c8c5b0e3b355ac964523d",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.88",
+    "commit": "7d0a8366e1ecd03725d769a877a141a97b574f45",
+    "protocol": "shared-profile-bridge"
+  },
+  {
+    "version": "v0.5.89",
+    "commit": "5037b43be1696332910e1d9cd2299b9a0eb30565",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.90",
+    "commit": "eda1a915f20c3612307dd06d95f5eb4b71c218b1",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.91",
+    "commit": "23cd03cbcb3a87b80c51529261bcb6d1b26582f5",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.92",
+    "commit": "471c530c2077e79c2e06a941a6fdb401fe98a8d3",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.93",
+    "commit": "16fe39ccaa04870228189f20e528d3749dd19c9b",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.94",
+    "commit": "22ae219d34e39b75515f0c54bd583899a8062d16",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.95",
+    "commit": "859b6583319ed9603de4e9b94495fc4204f7c954",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.96",
+    "commit": "919415d2f8fe151f16c114b193477160974d350f",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.97",
+    "commit": "5033a8a30e41e2c2dd2aad7ed90ff6878ab698d5",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.98",
+    "commit": "13991cda706b255f00798d71e9660486df39aaa1",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.99",
+    "commit": "5b50107171475d2a80a0f8129d5ef051366095ee",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.100",
+    "commit": "5501ec3d6adaea7337b8dcd16b350cf5afb4cee2",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.101",
+    "commit": "311b7881dcb6f9173006b059ea806235b0acd6e7",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.102",
+    "commit": "3ac413e0559b74cf2fefb99eb47a8ea04a628ca2",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.103",
+    "commit": "99a43efe916b043454ea833256e1c0d45f2b26c6",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.104",
+    "commit": "fe295830440d9e9cbd50936870d71abb0ee959da",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.105",
+    "commit": "509d6baf8ad8f3aac8e6056682e53cec89244dd8",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.106",
+    "commit": "490f2c840683b65a83e6fad3cf25efbd99d9e8e3",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.107",
+    "commit": "85a4fc4e49a38b2f1a853ebf00878872bf203efe",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.108",
+    "commit": "843b3776ea8656f02807d95d3138d67ed4fa0c0f",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.109",
+    "commit": "399bd4a7fbde3b41f60df3410e19b6f8db50d823",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.110",
+    "commit": "72cc4ebabc99c168cc3872c2d151dd8d85b1a75e",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.111",
+    "commit": "215fea470c748f1472d92cbb45b156a2fcd43b95",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.112",
+    "commit": "e282706d1e78b3e555705103fae62ebc754746ef",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.113",
+    "commit": "0ad4407dd308fd824de47b134868ec4dd5ca0435",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.114",
+    "commit": "dd691d97ba44894ad06a2ec1645aab5b858773ca",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.115",
+    "commit": "81935dc06c2eafd74f896fc3cd49bf9e591af006",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.116",
+    "commit": "77bccd49a9a984464e27f93948fc379c48e416b9",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.117",
+    "commit": "70a404e72f389be5a55da985da600389754f858f",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.118",
+    "commit": "794d58c8a0db9e680dd7d3c8d57b996e736cc41d",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.119",
+    "commit": "a100748bdfd296aab5b55c8ce27572b8c9975d12",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.120",
+    "commit": "c8cfea0dffd6425a7eb71c09941c238d6567c6e9",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.121",
+    "commit": "6114abb4fbaa3a47af49da04b265bc45bc6aacab",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.122",
+    "commit": "7f19ddc98d363ca2e3c8cca4b56aedc8d8bd2167",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.123",
+    "commit": "e4275f63d4a5c6d44e2e3ffc3a758c9bf2d56635",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.124",
+    "commit": "093a9bbffd99404aaf458aca7f31e1ea29e8ccba",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.125",
+    "commit": "377bde26a69474186e01369ce3505b748e277dc9",
+    "protocol": "supervisor-v1"
+  },
+  {
+    "version": "v0.5.126",
+    "commit": "a6b4070a946139b8757ca2396395f2b0e37be9bf",
+    "protocol": "supervisor-v1"
+  }
+]

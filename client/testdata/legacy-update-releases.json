@@ -510,5 +510,13 @@
     "manifest": "# noxa-version: v0.5.87\nb7a02c3230bb5c149b054a06aaba9a954f7f479cf99e7e6178f055d6fa8bfcf8  noxa-client-windows-amd64.exe\nec3118e79a85a753e4f1086d059a64dbbdb562cc03e1acb35fa9194f5b8da990  noxa-server-linux-amd64\n",
     "signature": "edVSE9aVoXCL883hv0Hc2deyd600WH4VuTZbNNyruAMPoNrV/JbTuINGPmvMLTuzb6axpv1sBJR3PjuLtko4DA==",
     "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.88",
+    "commit": "7d0a8366e1ecd03725d769a877a141a97b574f45",
+    "sha256": "28e01383138ba1ac6f2f24b3688a8b6ac3bbde606b2e554b0d1a26bf750c7eb2",
+    "manifest": "# noxa-version: v0.5.88\n28e01383138ba1ac6f2f24b3688a8b6ac3bbde606b2e554b0d1a26bf750c7eb2  noxa-client-windows-amd64.exe\n7da2af1576d765a7d769dfe9ea97aa882b628faea62b4d66917d6e82351eef6d  noxa-server-linux-amd64\n",
+    "signature": "kiN6bH2Q2TnxzW/MPp+9qFGDbSCit46UfRxUIVs+dNdRXVWDxRDX9yCRYTiEIQY+VFL5rSyT6t8eJqCgBm/xBw==",
+    "browser_policy": "hardware-2026"
   }
 ]

@@ -144,6 +144,8 @@ func legacyUpdateReleasePolicy(hash [sha256.Size]byte) (string, edge.UpdateCompa
 		return "v0.5.86", edge.LegacyUpdateMergedHardware
 	case "b7a02c3230bb5c149b054a06aaba9a954f7f479cf99e7e6178f055d6fa8bfcf8":
 		return "v0.5.87", edge.LegacyUpdateMergedHardware
+	case "28e01383138ba1ac6f2f24b3688a8b6ac3bbde606b2e554b0d1a26bf750c7eb2":
+		return "v0.5.88", edge.LegacyUpdateHardware2026
 	default:
 		return "", ""
 	}

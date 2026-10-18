@@ -163,6 +163,7 @@ func TestUpdateBrowserHistoricalPolicies(t *testing.T) {
 		want   string
 	}{
 		{LegacyUpdateDefault, "--disable-features=msSmartScreenProtection"},
+		{LegacyUpdateHardware2026, "--disable-features=msSmartScreenProtection,ForceSoftwareForRtcLowResolutions,MediaFoundationUseSWBRCForH264Camera"},
 		{LegacyUpdateDuplicateFeatures, "--disable-features=ForceSoftwareForRtcLowResolutions --disable-features=msSmartScreenProtection"},
 		{LegacyUpdateMergedHardware, "--disable-features=msSmartScreenProtection,ForceSoftwareForRtcLowResolutions"},
 	} {

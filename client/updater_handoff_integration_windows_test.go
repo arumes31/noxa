@@ -254,7 +254,12 @@ func runHandoffFixtureParent(dir, name string) error {
 		return err
 	}
 	plan := updateSupervisorPlan{Version: 1, Target: target, Previous: parent.image, OldHash: oldHash, NewHash: newHash, Parent: parent.identity, Browser: browser.identity}
-	helper, err := armUpdateSupervisor(plan)
+	var helper *armedUpdateSupervisor
+	if name == "v0.5.89 protocol" {
+		helper, err = armHistoricalV1Supervisor(plan)
+	} else {
+		helper, err = armUpdateSupervisor(plan)
+	}
 	if err != nil {
 		return err
 	}
@@ -354,7 +359,7 @@ func TestUpdateHandoffSupervisorIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalHash := sha256.Sum256(originalBytes)
-	for _, name := range []string{"ready", "target path alias", "final exits", "final timeout", "final crash after ready", "browser timeout", "parent timeout"} {
+	for _, name := range []string{"ready", "v0.5.89 protocol", "target path alias", "final exits", "final timeout", "final crash after ready", "browser timeout", "parent timeout"} {
 		t.Run(name, func(t *testing.T) {
 			dir, err := os.MkdirTemp("", "noxa-handoff-fixture-")
 			if err != nil {
@@ -592,4 +597,73 @@ func TestUpdateHandoffLostAcknowledgementIntegration(t *testing.T) {
 	if err := <-helperExited; err != nil {
 		t.Fatalf("retained helper did not exit naturally: %v", err)
 	}
+}
+
+// Frozen sender contract from v0.5.89 (unchanged through v0.5.126).
+// Do not replace this payload or handshake with production serialization:
+// an old installed client cannot acquire new fields/protocol before restarting.
+func armHistoricalV1Supervisor(plan updateSupervisorPlan) (*armedUpdateSupervisor, error) {
+	readiness, err := newUpdateReadiness()
+	if err != nil {
+		return nil, err
+	}
+	defer readiness.close()
+	payload, err := json.Marshal(map[string]any{
+		"version": 1, "target": plan.Target, "previous": plan.Previous,
+		"oldHash": plan.OldHash, "newHash": plan.NewHash,
+		"parent":       map[string]any{"pid": plan.Parent.PID, "created": plan.Parent.Created},
+		"browser":      map[string]any{"pid": plan.Browser.PID, "created": plan.Browser.Created},
+		"armedAddress": readiness.address(), "armedNonce": readiness.nonce,
+	})
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(context.Background(), plan.Target, "--noxa-update-supervisor")
+	cmd.Stdin = bytes.NewReader(payload)
+	cmd.Env = updateChildEnvironment(os.Environ(), "", "")
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait(); close(exited) }()
+	ctx, cancel := context.WithTimeout(context.Background(), handoffFixturePhase)
+	defer cancel()
+	ready := make(chan error, 1)
+	go func() { ready <- waitHistoricalV1Readiness(ctx, readiness, cmd.Process.Pid) }()
+	if err := awaitUpdatedClient(ctx, ready, exited); err != nil {
+		if stopErr := stopUpdatedClient(cmd.Process, exited); stopErr != nil {
+			return nil, fmt.Errorf("%w; stop historical fixture: %v", err, stopErr)
+		}
+		return nil, err
+	}
+	return &armedUpdateSupervisor{process: cmd.Process, exited: exited}, nil
+}
+
+// Historical parents accept exactly 32 nonce bytes, then a big-endian uint64
+// child PID, and reply with byte 1. Freeze this independently of both current
+// acceptUpdateReadiness and confirmUpdateReadiness.
+func waitHistoricalV1Readiness(ctx context.Context, readiness *updateReadiness, childPID int) error {
+	stop := context.AfterFunc(ctx, readiness.close)
+	defer stop()
+	conn, err := readiness.listener.Accept()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return err
+	}
+	var message [40]byte
+	if _, err := io.ReadFull(conn, message[:]); err != nil {
+		return err
+	}
+	nonce, err := hex.DecodeString(readiness.nonce)
+	if err != nil || len(nonce) != 32 || !bytes.Equal(message[:32], nonce) || binary.BigEndian.Uint64(message[32:]) != uint64(childPID) {
+		return fmt.Errorf("replacement does not speak the historical readiness protocol")
+	}
+	_, err = conn.Write([]byte{1})
+	return err
 }

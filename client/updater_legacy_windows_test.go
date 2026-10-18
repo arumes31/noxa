@@ -34,8 +34,8 @@ func verifiedLegacyReleaseFixtures(t *testing.T) []legacyReleaseFixture {
 	if err := json.Unmarshal(data, &releases); err != nil {
 		t.Fatal(err)
 	}
-	if len(releases) != 64 {
-		t.Fatalf("expected every published release v0.5.24 through v0.5.87; got %d", len(releases))
+	if len(releases) != 65 {
+		t.Fatalf("expected every published release v0.5.24 through v0.5.88; got %d", len(releases))
 	}
 	// Independently pinned release key, not supplied by a fixture or live server.
 	const key = "V2gJha/+dbSOAz0F8EBCX6358VJJD0JDtD+wKZeemFg="
