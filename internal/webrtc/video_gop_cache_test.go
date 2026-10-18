@@ -311,11 +311,17 @@ func TestGOPCacheStaleKeyframeRequestsOnce(t *testing.T) {
 // sequence numbers, without an upstream request.
 func TestGOPCacheServesViewerPLI(t *testing.T) {
 	verifyNoLeaks(t)
-	f, arrivals := startGOPFixture(t, 1500*time.Millisecond)
+	f, arrivals := startGOPFixture(t, 0)
 	time.Sleep(200 * time.Millisecond)
 	f.watch(t)
-	got := receiveDecodable(t, arrivals, 500*time.Millisecond)
+	// The initial cache join also consumes the per-viewer refill interval.
+	// Wait it out and disable periodic keyframes so only a real refill can pass.
+	got := receiveDecodable(t, arrivals, gopRefillInterval+100*time.Millisecond)
 	keyframes := f.keyframes.Load()
+	// Startup has its own no-upstream-PLI test. Measure only feedback caused
+	// by this viewer request, not an earlier transport-start recovery.
+	beforePLI, _ := f.upstream.counts()
+	beforeRefill := f.output.gopRefilledAt.Load()
 	last := got[len(got)-1].packet.SequenceNumber
 	if err := f.receiver.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: f.output.egress.outputSSRC.Load()}}); err != nil {
 		t.Fatal(err)
@@ -334,8 +340,11 @@ func TestGOPCacheServesViewerPLI(t *testing.T) {
 			t.Fatal("viewer PLI was not answered from the GOP cache")
 		}
 	}
-	if plis, _ := f.upstream.counts(); plis != 0 || f.keyframes.Load() > keyframes+1 {
-		t.Fatalf("viewer PLI reached the publisher: %d requests", plis)
+	if plis, _ := f.upstream.counts(); plis != beforePLI || f.keyframes.Load() > keyframes+1 {
+		t.Fatalf("viewer PLI reached the publisher: %d new requests", plis-beforePLI)
+	}
+	if f.output.gopRefilledAt.Load() <= beforeRefill {
+		t.Fatal("received keyframe was not a GOP cache refill")
 	}
 }
 

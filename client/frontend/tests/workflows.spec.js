@@ -6871,7 +6871,7 @@ test.describe("chat tab layout storage", () => {
     test.beforeEach(async ({ page }) => {
         await page.evaluate(() => {
             window.__dmStorageIdentity = "alpha";
-            Object.assign(window.__noxa.state, { activeTabID: "layout-a", myUniqueID: "alpha", myChannelID: 1,
+            Object.assign(window.__noxa.state, { activeTabID: "layout-a", myUniqueID: "alpha", myClientID: "self", myChannelID: 1,
                 channels: [{ ChannelID: 1, Name: "Lobby" }, { ChannelID: 2, Name: "Gaming" }] });
             const original = window.go.main.App;
             window.go.main.App = new Proxy(original, { get(target, key) {
@@ -6882,6 +6882,32 @@ test.describe("chat tab layout storage", () => {
             } });
             window.__noxa.showWorkspace(false);
         });
+    });
+
+    test("defers server layout storage until the active session is connected", async ({ page }) => {
+        await page.evaluate(async () => {
+            const original = window.go.main.App;
+            window.__layoutLoads = 0;
+            window.go.main.App = new Proxy(original, { get(target, key) {
+                if (key === "ChatTabLayoutForContext") return async () => {
+                    window.__layoutLoads++;
+                    if (!window.__noxa.state.myClientID) throw new Error("chat tab layout requires a connected server");
+                    return { order: ["ch:2", "ch:1"], pinned: [] };
+                };
+                return target[key];
+            } });
+            window.__noxa.state.myClientID = "";
+            window.__noxaChat.resetView();
+            await new Promise(resolve => setTimeout(resolve, 50));
+        });
+        expect(await page.evaluate(() => window.__layoutLoads)).toBe(0);
+        await page.evaluate(async () => {
+            window.__noxa.state.myClientID = "connected-client";
+            await window.__noxaChat.onConnect();
+        });
+        await expect.poll(() => page.evaluate(() => window.__layoutLoads)).toBe(1);
+        await expect(page.locator('#pm-tabs .pm-tab').first()).toHaveAttribute("data-chat-key", "ch:2");
+        await expect(page.getByText("Chat order could not be loaded. Reconnect to try again.", { exact: true })).toHaveCount(0);
     });
 
     test("read pinned conversations stay in Messages and the channel bar stays on one row", async ({ page }) => {
