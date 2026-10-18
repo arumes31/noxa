@@ -367,7 +367,6 @@ func (r *Router) SetRenegotiateHook(fn func(subscriberID string)) {
 // the echo channel.
 func (r *Router) SetEchoChannel(channelID int64) {
 	r.mu.Lock()
-	r.beginDeferredTrackRemovalsLocked()
 	r.echoChannel = channelID
 	r.refreshEchoScopeLocked()
 	r.refreshWhisperScopesLocked()
@@ -380,7 +379,7 @@ func (r *Router) SetEchoChannel(channelID int64) {
 		}
 	}
 	hook := r.onRenegotiate
-	r.unlockFlushingTrackRemovals()
+	r.mu.Unlock()
 	if hook != nil {
 		for sub := range renegotiate {
 			hook(sub)
@@ -462,7 +461,6 @@ func (r *Router) SetVideoHandlers(canVideo func(clientID string) bool) {
 // schedules renegotiation for peers that have a connection.
 func (r *Router) JoinChannel(channelID int64, clientID string) {
 	r.mu.Lock()
-	r.beginDeferredTrackRemovalsLocked()
 
 	if prev, ok := r.clientChan[clientID]; ok && prev != channelID {
 		r.leaveChannelLocked(prev, clientID)
@@ -508,7 +506,7 @@ func (r *Router) JoinChannel(channelID int64, clientID string) {
 	pref := r.layerPrefLocked(clientID)
 	members := len(set)
 	hook := r.onRenegotiate
-	r.unlockFlushingTrackRemovals()
+	r.mu.Unlock()
 
 	for _, ref := range keyframeTargets {
 		r.requestKeyframe(ref.publisher, ref.slot, pref, keyframeConsumerStart)
@@ -1101,7 +1099,6 @@ func (r *Router) SetWhisper(clientID string, clients []string, channels []int64,
 	}
 
 	r.mu.Lock()
-	r.beginDeferredTrackRemovalsLocked()
 	old := r.whispers[clientID]
 	r.whispers[clientID] = cfg
 	r.refreshWhisperScopesLocked()
@@ -1143,7 +1140,7 @@ func (r *Router) SetWhisper(clientID string, clients []string, channels []int64,
 		}
 	}
 	hook := r.onRenegotiate
-	r.unlockFlushingTrackRemovals()
+	r.mu.Unlock()
 
 	if hook != nil {
 		for sub := range renegotiate {

@@ -55,14 +55,13 @@ func (r *Router) setVideoCodec(clientID, slot, rid string, token uint64, codec w
 	}
 	r.videoCodecs[ref] = codec
 	var changed []string
-	r.beginDeferredTrackRemovalsLocked()
 	for sub := range r.pubTracks {
 		if r.syncSubscriberVideoCodecLocked(sub, clientID, slot) {
 			changed = append(changed, sub)
 		}
 	}
 	hook := r.onRenegotiate
-	r.unlockFlushingTrackRemovals()
+	r.mu.Unlock()
 	if hook != nil {
 		for _, sub := range changed {
 			hook(sub)
@@ -141,10 +140,9 @@ func (r *Router) syncSubscriberVideoCodecLocked(subscriber, publisher, slot stri
 
 func (r *Router) syncSubscriberVideoCodec(subscriber, publisher, slot string) {
 	r.mu.Lock()
-	r.beginDeferredTrackRemovalsLocked()
 	changed := r.syncSubscriberVideoCodecLocked(subscriber, publisher, slot)
 	hook := r.onRenegotiate
-	r.unlockFlushingTrackRemovals()
+	r.mu.Unlock()
 	if changed && hook != nil {
 		hook(subscriber)
 	}
