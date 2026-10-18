@@ -76,7 +76,9 @@ try {
             document.getElementById("voice-screen").onclick = () => publication.shareToggle();
         }, { id, width, height, fps });
         await page.locator("#voice-screen").click();
-        await page.locator(".sh-preset").selectOption(fps === 60 ? "hdMotion" : "original");
+        await page.locator(".sp-quality-toggle").click();
+        await page.locator(`.sh-preset input[value="${fps === 60 ? "hdMotion" : "original"}"]`).check();
+        await page.keyboard.press("Escape");
         await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect(page.locator("#sharing-status")).toBeVisible();
@@ -238,7 +240,7 @@ try {
     // Choose the new sender size through production live quality controls.
     // Every receiver must see the same change, with no second encoding.
     await publishers[0].locator(".sharing-quality").click();
-    await publishers[0].locator(".live-share-quality .sh-preset").selectOption("custom");
+    await publishers[0].locator('.live-share-quality .sh-preset input[value="custom"]').check();
     await publishers[0].locator(".live-share-quality .sh-width").fill(String(width / 2));
     await publishers[0].locator(".live-share-quality .sh-height").fill(String(height / 2));
     await publishers[0].locator(".live-share-quality .sh-fps").selectOption(String(fps));

@@ -13,10 +13,21 @@ import (
 // browser argument, or JavaScript binding can select the compatibility policy.
 var updateBrowserStartup updateBrowserStartupState
 
+// UpdateCompatibilityPolicy selects an exact, audited historical startup policy.
+// Callers must authenticate the parent executable before selecting a policy.
+type UpdateCompatibilityPolicy string
+
+const (
+	LegacyUpdateDefault           UpdateCompatibilityPolicy = "default"
+	LegacyUpdateHardware2026      UpdateCompatibilityPolicy = "hardware-2026"
+	LegacyUpdateDuplicateFeatures UpdateCompatibilityPolicy = "duplicate-features"
+	LegacyUpdateMergedHardware    UpdateCompatibilityPolicy = "merged-hardware"
+)
+
 type updateBrowserStartupState struct {
 	mu      sync.Mutex
 	started bool
-	legacy  bool
+	legacy  UpdateCompatibilityPolicy
 	pid     atomic.Uint32
 }
 
@@ -25,17 +36,20 @@ type updateBrowserStartupState struct {
 // before Wails starts. The updater must automatically restart this stage with
 // the normal hardware policy after the original browser process has exited.
 // It does not change the user data folder or persist a compatibility setting.
-func SetLegacyUpdateCompatibility() error {
-	return updateBrowserStartup.enableLegacy()
+func SetLegacyUpdateCompatibility(policy UpdateCompatibilityPolicy) error {
+	return updateBrowserStartup.enableLegacy(policy)
 }
 
-func (s *updateBrowserStartupState) enableLegacy() error {
+func (s *updateBrowserStartupState) enableLegacy(policy UpdateCompatibilityPolicy) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.started || s.legacy {
+	if policy != LegacyUpdateDefault && policy != LegacyUpdateDuplicateFeatures && policy != LegacyUpdateMergedHardware && policy != LegacyUpdateHardware2026 {
+		return fmt.Errorf("unknown WebView2 update compatibility policy")
+	}
+	if s.started || s.legacy != "" {
 		return fmt.Errorf("WebView2 update compatibility must be selected once before browser startup")
 	}
-	s.legacy = true
+	s.legacy = policy
 	return nil
 }
 
@@ -45,17 +59,27 @@ func (s *updateBrowserStartupState) arguments(fragments []string) (string, error
 	legacy := s.legacy
 	s.pid.Store(0)
 	s.mu.Unlock()
-	if !legacy {
+	if legacy == "" {
 		return hardwareBrowserArguments(fragments)
 	}
-	// The authenticated releases through v0.5.64 leave Windows options unset.
+	// The authenticated releases through v0.5.88 leave Windows options unset.
 	// Wails adds precisely this fragment. Reject future/default drift instead of broadening the exception
 	// into an arbitrary browser-argument override.
 	const legacyArguments = "--disable-features=msSmartScreenProtection"
 	if len(fragments) != 1 || fragments[0] != legacyArguments {
 		return "", fmt.Errorf("unexpected browser options for the legacy update bridge")
 	}
-	return legacyArguments, nil
+	switch legacy {
+	case LegacyUpdateHardware2026:
+		// Freeze the v0.5.88 policy even if the ordinary policy changes later.
+		return legacyArguments + ",ForceSoftwareForRtcLowResolutions,MediaFoundationUseSWBRCForH264Camera", nil
+	case LegacyUpdateDuplicateFeatures:
+		return "--disable-features=ForceSoftwareForRtcLowResolutions " + legacyArguments, nil
+	case LegacyUpdateMergedHardware:
+		return legacyArguments + ",ForceSoftwareForRtcLowResolutions", nil
+	default:
+		return legacyArguments, nil
+	}
 }
 
 // UpdateBrowserProcessID returns the real WebView2 browser PID for this process,

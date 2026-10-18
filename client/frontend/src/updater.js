@@ -255,6 +255,14 @@ async function startDownload(m, info) {
             status.classList.toggle("warn", !cancelled);
             prog.classList.add("hidden");
             btn.disabled = false;
+            // The native updater refuses to install a different release from
+            // the one shown. Discard this stale offer and require a fresh check
+            // and confirmation instead of repeatedly submitting its version.
+            if (err.startsWith("update changed from ") || err === "update is no longer available") {
+                btn.classList.add("hidden");
+                btn.onclick = null;
+                m.querySelector(".upd-retry").classList.remove("hidden");
+            }
             return;
         }
         applied = true;

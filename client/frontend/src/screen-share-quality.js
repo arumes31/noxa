@@ -36,47 +36,77 @@ export function screenShareConstraints(profile, limits) {
     return constraints;
 }
 
-export function createShareQualityControls(id, { preset = "balanced", custom = {}, bitrateCeiling = 0 } = {}) {
+export const SHARE_PRESETS = ["balanced", "text", "motion", "hd", "hdMotion", "qhd", "uhd", "original", "custom"];
+export const SHARE_BITRATES = [0, 2000000, 4000000, 6000000, 8000000];
+export const DEFAULT_SHARE_PRESET = "hd";
+
+// presetSpec is the short technical line shown next to a preset name.
+export function presetSpec(preset, custom = {}) {
+    if (preset === "custom") return `${custom.width}×${custom.height} · ${custom.fps} fps`;
+    const profile = presets[preset] || presets[DEFAULT_SHARE_PRESET];
+    if (profile.original) return t("share.specSource", { fps: profile.fps });
+    return `${profile.height}p · ${profile.fps} fps`;
+}
+
+export const bitrateLabel = bitrate => bitrate ? `${bitrate / 1000000} Mbit/s` : t("share.bitrateAuto");
+
+// shareSummary is the preset name and one line of numbers for the share bar.
+export function shareSummary({ preset, custom = {}, bitrateCeiling = 0 }) {
+    return { name: t(`share.preset.${SHARE_PRESETS.includes(preset) ? preset : DEFAULT_SHARE_PRESET}`),
+        spec: `${presetSpec(preset, custom)} · ${bitrateLabel(bitrateCeiling)}` };
+}
+
+export function createShareQualityControls(id, { preset = DEFAULT_SHARE_PRESET, custom = {}, bitrateCeiling = 0 } = {}) {
     const element = document.createElement("div");
     element.className = "share-quality-controls";
     element.innerHTML = `
-        <label class="dlg-label" for="${id}">${t("polish.preset")}</label>
-        <select class="dlg-input sh-preset" id="${id}" aria-describedby="${id}-help ${id}-budget ${id}-warning"></select>
+        <fieldset class="sh-preset sq-presets" aria-describedby="${id}-help ${id}-budget ${id}-warning">
+            <legend class="dlg-label">${t("polish.preset")}</legend>
+        </fieldset>
         <div class="share-custom" hidden>
             <div><label for="${id}-width">${t("share.width")}</label><input id="${id}-width" class="dlg-input sh-width" type="number" min="160" max="8192" step="1" required /></div>
             <div><label for="${id}-height">${t("share.height")}</label><input id="${id}-height" class="dlg-input sh-height" type="number" min="160" max="8192" step="1" required /></div>
             <div><label for="${id}-fps">${t("share.frameRate")}</label><select id="${id}-fps" class="dlg-input sh-fps" required><option value="15">15 fps</option><option value="30">30 fps</option><option value="60">60 fps</option></select></div>
         </div>
-        <label class="dlg-label" for="${id}-bitrate">${t("share.bitrateCeiling")}</label>
-        <select class="dlg-input sh-bitrate" id="${id}-bitrate" aria-describedby="${id}-bitrate-help">
-            <option value="0">${t("share.bitrateAutomatic")}</option>
-            <option value="2000000">2 Mbit/s</option><option value="4000000">4 Mbit/s</option>
-            <option value="6000000">6 Mbit/s</option><option value="8000000">8 Mbit/s</option>
-        </select>
-        <p class="set-hint" id="${id}-bitrate-help">${t("share.bitrateHelp")}</p>
+        <fieldset class="sh-bitrate sq-bitrates" aria-describedby="${id}-budget">
+            <legend class="dlg-label">${t("share.bitrateCeiling")}</legend>
+        </fieldset>
         <p class="set-hint share-quality-help" id="${id}-help"></p>
         <p class="set-hint share-budget" id="${id}-budget" role="status"></p>
         <p class="set-hint warn share-quality-warning" id="${id}-warning" role="status" hidden></p>`;
-    const select = element.querySelector(".sh-preset");
-    for (const [value, key] of [
-        ["balanced", "polish.presetBalanced"], ["text", "polish.presetText"], ["motion", "polish.presetMotion"],
-        ["hd", "share.hd"], ["hdMotion", "share.hdMotion"], ["qhd", "share.qhd"], ["uhd", "share.uhd"],
-        ["original", "share.original"], ["custom", "share.custom"],
-    ]) {
-        const option = document.createElement("option");
-        option.value = value; option.textContent = t(key); select.appendChild(option);
+    const presetGroup = element.querySelector(".sh-preset"), bitrateGroup = element.querySelector(".sh-bitrate");
+    for (const value of SHARE_PRESETS) {
+        const option = document.createElement("label");
+        option.className = "sq-option";
+        option.innerHTML = `<input type="radio" name="${id}-preset" value="${value}" /><span class="sq-name"></span><span class="sq-spec"></span>`;
+        option.querySelector(".sq-name").textContent = t(`share.preset.${value}`);
+        presetGroup.appendChild(option);
     }
-    select.value = preset;
-    if (!select.value) select.value = "balanced";
+    for (const value of SHARE_BITRATES) {
+        const option = document.createElement("label");
+        option.className = "sq-segment";
+        option.innerHTML = `<input type="radio" name="${id}-bitrate" value="${value}" /><span></span>`;
+        option.querySelector("span").textContent = value ? String(value / 1000000) : t("share.bitrateAuto");
+        if (value) option.title = bitrateLabel(value);
+        bitrateGroup.appendChild(option);
+    }
+    const radio = (group, value) => group.querySelector(`input[value="${value}"]`);
+    (radio(presetGroup, preset) || radio(presetGroup, DEFAULT_SHARE_PRESET)).checked = true;
+    (radio(bitrateGroup, bitrateCeiling ?? 0) || radio(bitrateGroup, 0)).checked = true;
     const width = element.querySelector(".sh-width"), height = element.querySelector(".sh-height"), fps = element.querySelector(".sh-fps");
     width.value = custom.width ?? 2560; height.value = custom.height ?? 1440; fps.value = custom.fps ?? 30;
-    const bitrate = element.querySelector(".sh-bitrate");
-    bitrate.value = String(bitrateCeiling ?? 0);
-    if (!bitrate.value) bitrate.value = "0";
-    const selection = () => ({ preset: select.value, custom: { width: Number(width.value), height: Number(height.value), fps: Number(fps.value) }, bitrateCeiling: Number(bitrate.value) });
+    const checked = group => group.querySelector("input:checked")?.value;
+    const selection = () => ({ preset: checked(presetGroup), custom: { width: Number(width.value), height: Number(height.value), fps: Number(fps.value) }, bitrateCeiling: Number(checked(bitrateGroup)) });
+    const listeners = new Set();
     const update = () => {
         const selected = selection(), profile = shareQuality(selected.preset, selected.custom, selected.bitrateCeiling);
         const isCustom = selected.preset === "custom";
+        for (const option of presetGroup.querySelectorAll(".sq-option")) {
+            const input = option.querySelector("input");
+            option.querySelector(".sq-spec").textContent = presetSpec(input.value, selected.custom);
+            option.classList.toggle("selected", input.checked);
+        }
+        for (const option of bitrateGroup.querySelectorAll(".sq-segment")) option.classList.toggle("selected", option.querySelector("input").checked);
         element.querySelector(".share-custom").hidden = !isCustom;
         width.disabled = height.disabled = fps.disabled = !isCustom;
         element.querySelector(".share-quality-help").textContent = t(selected.preset === "original" ? "share.originalHelp" : isCustom ? "share.customHelp" : "share.resolutionHelp");
@@ -84,12 +114,23 @@ export function createShareQualityControls(id, { preset = "balanced", custom = {
         const warning = element.querySelector(".share-quality-warning");
         warning.hidden = !profile || !(profile.original || profile.width > 1920 || profile.height > 1080 || profile.fps > 30);
         warning.textContent = warning.hidden ? "" : t("share.performanceWarning");
+        for (const listener of listeners) listener(selected, profile);
     };
-    select.onchange = bitrate.onchange = update;
-    for (const control of [width, height, fps]) control.oninput = update;
+    presetGroup.onchange = bitrateGroup.onchange = update;
+    for (const control of [width, height, fps]) control.oninput = control.onchange = update;
     update();
-    return { element, read: () => {
-        if (select.value === "custom" && ![width, height, fps].every(control => control.reportValidity())) return null;
-        return selection();
-    } };
+    return {
+        element,
+        read: () => {
+            if (checked(presetGroup) === "custom" && ![width, height, fps].every(control => control.reportValidity())) return null;
+            return selection();
+        },
+        selection,
+        // onChange runs now and after every edit, so callers can mirror the choice.
+        onChange: listener => {
+            listeners.add(listener);
+            const selected = selection();
+            listener(selected, shareQuality(selected.preset, selected.custom, selected.bitrateCeiling));
+        },
+    };
 }

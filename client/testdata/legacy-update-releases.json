@@ -4,286 +4,519 @@
     "commit": "9b6eff8730403dc7206004016cd18f12c2a3cf43",
     "sha256": "141444ace48e2506c1f5570dc90ef746f8e84b0102dc50bc5627580de6419d12",
     "manifest": "# noxa-version: v0.5.24\n141444ace48e2506c1f5570dc90ef746f8e84b0102dc50bc5627580de6419d12  noxa-client-windows-amd64.exe\nf8967c0ed78e664e42e8d654effc4062e96791935a9632d6fcacb9246589cab0  noxa-server-linux-amd64\n",
-    "signature": "xKfCbtoiUprpLTM1T21lhxyK6ch1H0O6kmQomabWO8t6zHBJU+an2zERNTBmxjErNTkxRzoh3AliZgBGExKRDQ=="
+    "signature": "xKfCbtoiUprpLTM1T21lhxyK6ch1H0O6kmQomabWO8t6zHBJU+an2zERNTBmxjErNTkxRzoh3AliZgBGExKRDQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.25",
     "commit": "f6e5715c14c64d708c96cc94c2da492da2fec8f7",
     "sha256": "d941be207e0e11b9871dfa637afb307e97b1c0278e0e9aafd66ea32d8bd7ba60",
     "manifest": "# noxa-version: v0.5.25\nd941be207e0e11b9871dfa637afb307e97b1c0278e0e9aafd66ea32d8bd7ba60  noxa-client-windows-amd64.exe\n549bc4b994c56ba73fb7f5fd45a231277c65c968e00f6a1fe85908208bd670a3  noxa-server-linux-amd64\n",
-    "signature": "uqVRnK/cEwVte9Vo0hG8E+fi3+VwyIJHxAia4yLoNwUPHNUcH2TAei4RFUGRPO/3X6pcUuzVj/qnXKN021DrDw=="
+    "signature": "uqVRnK/cEwVte9Vo0hG8E+fi3+VwyIJHxAia4yLoNwUPHNUcH2TAei4RFUGRPO/3X6pcUuzVj/qnXKN021DrDw==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.26",
     "commit": "bdd36a914bc5e1e63d60c8ace0b0d479a451c488",
     "sha256": "941ecb37c1d0a2d04485660041fdd20144b40ebb8d23d8a4754741b94efde2c3",
     "manifest": "# noxa-version: v0.5.26\n941ecb37c1d0a2d04485660041fdd20144b40ebb8d23d8a4754741b94efde2c3  noxa-client-windows-amd64.exe\n99e7857957c2219702ba82ab1ea5f740f1811077bc49267d4db0d3e04a80460d  noxa-server-linux-amd64\n",
-    "signature": "wYTJHvPn+QSFuifSVfTP2POZcSiDhG9NbF2sgg9xKbmJfoTwYHUgQzgOJ7QvLko2gVOwfqVpwnpdsO6esyUKBQ=="
+    "signature": "wYTJHvPn+QSFuifSVfTP2POZcSiDhG9NbF2sgg9xKbmJfoTwYHUgQzgOJ7QvLko2gVOwfqVpwnpdsO6esyUKBQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.27",
     "commit": "d5da2b642f4700fe9cb8cbd9a1b9e125928f4d2c",
     "sha256": "db1efaab82c8b3eb90094a03c7173ec2650ca4285af23c4e1e68bc22c205d0d2",
     "manifest": "# noxa-version: v0.5.27\ndb1efaab82c8b3eb90094a03c7173ec2650ca4285af23c4e1e68bc22c205d0d2  noxa-client-windows-amd64.exe\n2381947c06c89ef41e89c57f8a884ef14a1f499e43567e094703e05bd97c6eb7  noxa-server-linux-amd64\n",
-    "signature": "YATJRXfpacDz0Q7lDZxVJW4kqiOf/nwuadftl9Dr7Pk1Z7nnNvJB4MWJJTbOEuv3r2Q4uFyA/MqfCTV7pG4LCQ=="
+    "signature": "YATJRXfpacDz0Q7lDZxVJW4kqiOf/nwuadftl9Dr7Pk1Z7nnNvJB4MWJJTbOEuv3r2Q4uFyA/MqfCTV7pG4LCQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.28",
     "commit": "b8ed6a2f8886e23940184bf3f97e027b89db6c33",
     "sha256": "cd8f753c757c717e58e107a6d2ad3d1865e12b67cb003911c9551266cabc609d",
     "manifest": "# noxa-version: v0.5.28\ncd8f753c757c717e58e107a6d2ad3d1865e12b67cb003911c9551266cabc609d  noxa-client-windows-amd64.exe\n624f48dbd0a9bc61a594e332ccfd2d073732bb4cfc27adeeac3a4563be1784b3  noxa-server-linux-amd64\n",
-    "signature": "fZAe9uhe8/ybpj9j/ZzSrThNrhaJRtfCTbxHj8CX2wV97hLAE3xfWfe+rdDzG0egZ5tVoYTkoZZ1uLL59FDvAw=="
+    "signature": "fZAe9uhe8/ybpj9j/ZzSrThNrhaJRtfCTbxHj8CX2wV97hLAE3xfWfe+rdDzG0egZ5tVoYTkoZZ1uLL59FDvAw==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.29",
     "commit": "91c56537272f9faed8cdc97066787b236d53f0d0",
     "sha256": "560a4f81dd8a52981af91d2286892935006244040638a29e94eb8d542b9d3c17",
     "manifest": "# noxa-version: v0.5.29\n560a4f81dd8a52981af91d2286892935006244040638a29e94eb8d542b9d3c17  noxa-client-windows-amd64.exe\ncd9b4520dd51c5e5e99e8b9024178858e129337b5dbab0bb2de363df783876d0  noxa-server-linux-amd64\n",
-    "signature": "G6XX27XKB1EVsOi7u3lvcVdNl3Ky8j3nklu/fu46jjtTps89WxlBcjJs+3byvV+V20rJngFibM8KUwVBUWN8Bw=="
+    "signature": "G6XX27XKB1EVsOi7u3lvcVdNl3Ky8j3nklu/fu46jjtTps89WxlBcjJs+3byvV+V20rJngFibM8KUwVBUWN8Bw==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.30",
     "commit": "c4f730d13fd200209ed0a5ea00f502f33ce78ee1",
     "sha256": "c3c2bfc0cc4bb49f88776481f9ab0d8c90fad45565c319251d70ead453636952",
     "manifest": "# noxa-version: v0.5.30\nc3c2bfc0cc4bb49f88776481f9ab0d8c90fad45565c319251d70ead453636952  noxa-client-windows-amd64.exe\n289796c1543b06622578f648c73f1ba0f451718c2006f694654a02ce8655220d  noxa-server-linux-amd64\n",
-    "signature": "kh8v+/RM5V17/mSw957HjcCAKBWCcgJwFkcHDhqlwVh+5p8XYJFsnYibyufAoB0MgoAtni4q2pfbCwvoq2z/Cw=="
+    "signature": "kh8v+/RM5V17/mSw957HjcCAKBWCcgJwFkcHDhqlwVh+5p8XYJFsnYibyufAoB0MgoAtni4q2pfbCwvoq2z/Cw==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.31",
     "commit": "aa9e42facd248eee965c493d4454840837531fab",
     "sha256": "f67d8de8e31f380e24bff4292fb29f9a7e4ed516a3af3c1dbd86618c3285ec8b",
     "manifest": "# noxa-version: v0.5.31\nf67d8de8e31f380e24bff4292fb29f9a7e4ed516a3af3c1dbd86618c3285ec8b  noxa-client-windows-amd64.exe\n4bdcd1898ffc7f45e83d26c4710564dea0e3c09f7c2946fb563e3e499bfab15d  noxa-server-linux-amd64\n",
-    "signature": "WXiZ7dx9wiJTKfkPSIzCkfz+qY7kYpTffu8ciD4hmtnCRAju3v5jHK9WfQBF7d7NxOQWoNRC22qkiqif+yA8Bw=="
+    "signature": "WXiZ7dx9wiJTKfkPSIzCkfz+qY7kYpTffu8ciD4hmtnCRAju3v5jHK9WfQBF7d7NxOQWoNRC22qkiqif+yA8Bw==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.32",
     "commit": "87b678d2f6354304dbfbf8af6613d09b6d2f1872",
     "sha256": "1401516acb6e79b1a1888f4e7f23a8622a8bac6f13e3d2fe925a43479fc858b9",
     "manifest": "# noxa-version: v0.5.32\n1401516acb6e79b1a1888f4e7f23a8622a8bac6f13e3d2fe925a43479fc858b9  noxa-client-windows-amd64.exe\n46f91f7acc5481d08024ee1eb2603c403cd87e507d9585f60fe3914ffa35e22e  noxa-server-linux-amd64\n",
-    "signature": "6Sz84U4V7NoYyIvvBtZgqEA8ll3x3C7NJQDsSr9RE7fMissJNJ7Wx71jAbc8lrnOKLa65/NrcdCCY/p6UCMBAg=="
+    "signature": "6Sz84U4V7NoYyIvvBtZgqEA8ll3x3C7NJQDsSr9RE7fMissJNJ7Wx71jAbc8lrnOKLa65/NrcdCCY/p6UCMBAg==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.33",
     "commit": "b828f9fa2e898e96f91354d08d44843e9fbb5a86",
     "sha256": "0d2abd2cda092e0b51d2a0cfc2cdaf065e4813facb5d88c65001aa92cae89219",
     "manifest": "# noxa-version: v0.5.33\n0d2abd2cda092e0b51d2a0cfc2cdaf065e4813facb5d88c65001aa92cae89219  noxa-client-windows-amd64.exe\n2f534799bba7a5bf4bad6ae265b8b0072b0ec4cd278ef76adfa3cc69d579c22d  noxa-server-linux-amd64\n",
-    "signature": "B2OjtVgnwZdN70QpCOI2tKzS4+q8EJHKZfqWqKnsbEkVY0HQtaM+P0hvZ3sKiX4tUdrxG1xhoPrFL1h/P42oDQ=="
+    "signature": "B2OjtVgnwZdN70QpCOI2tKzS4+q8EJHKZfqWqKnsbEkVY0HQtaM+P0hvZ3sKiX4tUdrxG1xhoPrFL1h/P42oDQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.34",
     "commit": "9d7ae0f93f6f09fefc99a2d5aa95a68ec0db1a9c",
     "sha256": "731365b0b912997d4cccf285d1c3d3c9b59a695363b485539ab16930affc546b",
     "manifest": "# noxa-version: v0.5.34\n731365b0b912997d4cccf285d1c3d3c9b59a695363b485539ab16930affc546b  noxa-client-windows-amd64.exe\n3b0eb80f4d122401aac13c6a1b4880a01949aed52df26dd1dc13c6378b927d58  noxa-server-linux-amd64\n",
-    "signature": "KSkSiXxJAqQX2mrshiSBqI3m3brJZNHE/xkeZcVAPojzRe2hmdn2uiOGLMlVK07pmzHpWj5QHpiLHAg17BP+Cw=="
+    "signature": "KSkSiXxJAqQX2mrshiSBqI3m3brJZNHE/xkeZcVAPojzRe2hmdn2uiOGLMlVK07pmzHpWj5QHpiLHAg17BP+Cw==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.35",
     "commit": "3132d2fd83ae4e298034ab7f38930bfe43126f4d",
     "sha256": "71cd821139efae87f9aaa0bfb32951895a676e0652505c614686c281943b68b5",
     "manifest": "# noxa-version: v0.5.35\n71cd821139efae87f9aaa0bfb32951895a676e0652505c614686c281943b68b5  noxa-client-windows-amd64.exe\nf0bfcde637a4035040a84e5fdac9cb759a7bd28d28c638d17aaa9e591753c328  noxa-server-linux-amd64\n",
-    "signature": "EaZl+b553qANc4i92FAggwdzoYDw64zPD6lYDwy1n+lirVEUYs1oerLuKfk4yr42mXqL4o4ZOGC2MSobo6mAAA=="
+    "signature": "EaZl+b553qANc4i92FAggwdzoYDw64zPD6lYDwy1n+lirVEUYs1oerLuKfk4yr42mXqL4o4ZOGC2MSobo6mAAA==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.36",
     "commit": "8efbdbf97de3289ecd3f24370d02463945511f1d",
     "sha256": "873139721f829ffa82047fb27df78e0490e4f5d454d620c5ca636e04b09cae4c",
     "manifest": "# noxa-version: v0.5.36\n873139721f829ffa82047fb27df78e0490e4f5d454d620c5ca636e04b09cae4c  noxa-client-windows-amd64.exe\n95090bc29df3796e72f399a6f7c1a459054a137d6afd737e25ecee6a338f8979  noxa-server-linux-amd64\n",
-    "signature": "6fR6e00U9pUs9pUwtAWLahg+l9XjyYc8UQiVn1NLsf42yjrNUcC9sOcDm/gt4spsvrcv6WWVUzYtJeEdL9kvBA=="
+    "signature": "6fR6e00U9pUs9pUwtAWLahg+l9XjyYc8UQiVn1NLsf42yjrNUcC9sOcDm/gt4spsvrcv6WWVUzYtJeEdL9kvBA==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.37",
     "commit": "78511bf11aeda52eef7269a814215a19eda8567b",
     "sha256": "bae390db4653ca83f225bfbebbbccdc3c9a5b9588a2e0f255335d5638444cc7c",
     "manifest": "# noxa-version: v0.5.37\nbae390db4653ca83f225bfbebbbccdc3c9a5b9588a2e0f255335d5638444cc7c  noxa-client-windows-amd64.exe\ndbe30fbbb8d6910247134f6c8eb2dfa7ee2971033a9702b2bfbd7c8c575cb3f8  noxa-server-linux-amd64\n",
-    "signature": "OMnYHsPYBiJ/cLcmRjhzNS8aW0J70CmOAo06h/PTx0Ouh0lNOCB94yqchd0OyQKZd2OiLJGQffhYF1SoEJPBAQ=="
+    "signature": "OMnYHsPYBiJ/cLcmRjhzNS8aW0J70CmOAo06h/PTx0Ouh0lNOCB94yqchd0OyQKZd2OiLJGQffhYF1SoEJPBAQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.38",
     "commit": "41e78ba6bc5d2b1cefa4662d31318b8faad8d616",
     "sha256": "47401fb444091f660b84c772f2f111525017a1477a825f297c96fff64d5c67a3",
     "manifest": "# noxa-version: v0.5.38\n47401fb444091f660b84c772f2f111525017a1477a825f297c96fff64d5c67a3  noxa-client-windows-amd64.exe\n8b8d8e9f601b394f014884a4c77065ea4e2bd336c69368ac472bb6297262b588  noxa-server-linux-amd64\n",
-    "signature": "fWbM87uKqXhC1VsQCFlU5H8wpGohl/TG30EyaH7+MyvV7J+U5GG20kEvYzrSFZ/uWOvOisyuS4jQlm0NPLLvCQ=="
+    "signature": "fWbM87uKqXhC1VsQCFlU5H8wpGohl/TG30EyaH7+MyvV7J+U5GG20kEvYzrSFZ/uWOvOisyuS4jQlm0NPLLvCQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.39",
     "commit": "fbbadfa56fdfb6ae770cee79baefb5fe656de3f0",
     "sha256": "779f2af7a583efa82160194b20c990847921bbbe31c92591f623fc8684d3c06c",
     "manifest": "# noxa-version: v0.5.39\n779f2af7a583efa82160194b20c990847921bbbe31c92591f623fc8684d3c06c  noxa-client-windows-amd64.exe\n78256bfeff179888c8232f159feb90cd5fc98a086213409a80a9995b61ca1cfd  noxa-server-linux-amd64\n",
-    "signature": "M1DFG3qf2miucyucce4aLqRIfJxgtfXMK3KQwA7g6gaSPk47QW2PqTlapyHBkGLRLlc1fVj0Q8eAD6xUyKCLAQ=="
+    "signature": "M1DFG3qf2miucyucce4aLqRIfJxgtfXMK3KQwA7g6gaSPk47QW2PqTlapyHBkGLRLlc1fVj0Q8eAD6xUyKCLAQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.40",
     "commit": "b00db1a545f10fe0769c8a1dc4d1bda38302ec40",
     "sha256": "34891d995a7b14ddf65c4333c877e8499490845fa065e8ca3c6952387cd441eb",
     "manifest": "# noxa-version: v0.5.40\n34891d995a7b14ddf65c4333c877e8499490845fa065e8ca3c6952387cd441eb  noxa-client-windows-amd64.exe\nb0c8f84479c1ba3811c0e928306b5ee1d80bf360ebefb4cd21f65eb1517f5335  noxa-server-linux-amd64\n",
-    "signature": "mpCICHOlTyLzUp8Oe1CnumfLmJui3+OdiJoJDKaJAtC5WPE8xqsroFYCTieL9Vrwaz15oDXa9ep/mRzUG0+ZDA=="
+    "signature": "mpCICHOlTyLzUp8Oe1CnumfLmJui3+OdiJoJDKaJAtC5WPE8xqsroFYCTieL9Vrwaz15oDXa9ep/mRzUG0+ZDA==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.41",
     "commit": "755087a59860f81581bc042984b1ef4c8c0233aa",
     "sha256": "bb300a0e21cc4cda696739d110509291237a55cbcfc1abccc80d3ed46da514a0",
     "manifest": "# noxa-version: v0.5.41\nbb300a0e21cc4cda696739d110509291237a55cbcfc1abccc80d3ed46da514a0  noxa-client-windows-amd64.exe\ncf3e5e2c22d56802b1e7b51097f54048dfbf1d1f5ab7a1c773a9d5dd98ec6315  noxa-server-linux-amd64\n",
-    "signature": "3aK4ccnLSLZoWNPOgEa/iW5T2J2uL+9J8iae+6UraEZq2qasgseAPf6Leuf6tLJnAHtaoobOQ2kQekwBUO/9BQ=="
+    "signature": "3aK4ccnLSLZoWNPOgEa/iW5T2J2uL+9J8iae+6UraEZq2qasgseAPf6Leuf6tLJnAHtaoobOQ2kQekwBUO/9BQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.42",
     "commit": "d8a91c98f2ba459bb2cb251a16921fb09bd1721d",
     "sha256": "5cdfe1f64aa2a71792cb27d1c614cf7e23d039819a481b939365f47c3c6b0a18",
     "manifest": "# noxa-version: v0.5.42\n5cdfe1f64aa2a71792cb27d1c614cf7e23d039819a481b939365f47c3c6b0a18  noxa-client-windows-amd64.exe\n655810aa815aa1348265663347f05ee6d2680b96a63ee031e144fced384e5c24  noxa-server-linux-amd64\n",
-    "signature": "hTw9l/T1WalTDUx2tdYDnAQeFBkHblo+dv7K+3/s/9H5HvrU0gv0RKKPLw4UsKtHaFQY4oPNV+fw9U/tPtTHCA=="
+    "signature": "hTw9l/T1WalTDUx2tdYDnAQeFBkHblo+dv7K+3/s/9H5HvrU0gv0RKKPLw4UsKtHaFQY4oPNV+fw9U/tPtTHCA==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.43",
     "commit": "eafb006c3fb3c400e7f74b9d991a9298b464d391",
     "sha256": "1ad71c5f005e672176c1d3805df691e03c08a23a6acb4c3985aea1af3bdf2699",
     "manifest": "# noxa-version: v0.5.43\n1ad71c5f005e672176c1d3805df691e03c08a23a6acb4c3985aea1af3bdf2699  noxa-client-windows-amd64.exe\nbc2168dbfebc1efdb693dca0560ab345b01c072a9bd919eda4876e1d43a01f95  noxa-server-linux-amd64\n",
-    "signature": "fjCOnvVSb7el1owbQjaMRnr0z1GoYGSSIpRVGytUNiNt+yRiGCyW3WUdgzCA4ut7M9vORQ/R2lip+Vw+1xK8Bg=="
+    "signature": "fjCOnvVSb7el1owbQjaMRnr0z1GoYGSSIpRVGytUNiNt+yRiGCyW3WUdgzCA4ut7M9vORQ/R2lip+Vw+1xK8Bg==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.44",
     "commit": "57300fb52f7302f9e7ff8d1d9276e67cd814d933",
     "sha256": "04bc3fd2186ab90ce0df157a282cae5bdf1c3789ea08b02163a7957177d44d40",
     "manifest": "# noxa-version: v0.5.44\n04bc3fd2186ab90ce0df157a282cae5bdf1c3789ea08b02163a7957177d44d40  noxa-client-windows-amd64.exe\nde8e6d192c244dfec5c95bb2c8656f8381a3d20949ecca360b5d64d71db38ba2  noxa-server-linux-amd64\n",
-    "signature": "toIwejEyQ0SZMICqYl0nZEqL32oQokdpprNB47U6heUURoYHui3kZCgYtyDz3riUs2wy9MQO7hgLCs/6ghIZCg=="
+    "signature": "toIwejEyQ0SZMICqYl0nZEqL32oQokdpprNB47U6heUURoYHui3kZCgYtyDz3riUs2wy9MQO7hgLCs/6ghIZCg==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.45",
     "commit": "fb3c9bada8b9c883c4d087059fd4afa12f431f89",
     "sha256": "9f32df273cdf17abdb7fa73b58241cc16ed174f6499ac0ec7094822eb995c99c",
     "manifest": "# noxa-version: v0.5.45\n9f32df273cdf17abdb7fa73b58241cc16ed174f6499ac0ec7094822eb995c99c  noxa-client-windows-amd64.exe\n8b884bfaeff0041cc2f4d2f4a0907684285f847572eda3a784094662e43635f4  noxa-server-linux-amd64\n",
-    "signature": "m6TyEGBWj2DkiPb2xKCF+pCsPs6zlH2fLUH7s09CoZRLaymoodSRtTWr6qVHFguFgEfR7FWj2ICtjUZSaafPBg=="
+    "signature": "m6TyEGBWj2DkiPb2xKCF+pCsPs6zlH2fLUH7s09CoZRLaymoodSRtTWr6qVHFguFgEfR7FWj2ICtjUZSaafPBg==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.46",
     "commit": "87f8173baabbe1e676fb766e8a64cced08d3643b",
     "sha256": "fdff89f23185a928a590a218a4d70e86fd5099748a400278d56b7bec99e6a688",
     "manifest": "# noxa-version: v0.5.46\nfdff89f23185a928a590a218a4d70e86fd5099748a400278d56b7bec99e6a688  noxa-client-windows-amd64.exe\n0f3f7d084b6385f91868573e8cbbb53601081b7026d9b7b67b8eba26f6bc82ee  noxa-server-linux-amd64\n",
-    "signature": "0Z+AAobMvpOrvLdpA5ZZRhZhdFQNmaH0i48PMebKlnCq/VrgjLc1ZWJ4VDgIAMLBX0Jv14qyJ98w17MBvXmVDw=="
+    "signature": "0Z+AAobMvpOrvLdpA5ZZRhZhdFQNmaH0i48PMebKlnCq/VrgjLc1ZWJ4VDgIAMLBX0Jv14qyJ98w17MBvXmVDw==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.47",
     "commit": "968b26c5f1ac6ed601d166a101a20a25c9a36f15",
     "sha256": "d07390561fa64f2041648b755152f7a4eab621e96ba095991721065aa0084a45",
     "manifest": "# noxa-version: v0.5.47\nd07390561fa64f2041648b755152f7a4eab621e96ba095991721065aa0084a45  noxa-client-windows-amd64.exe\nefa1f814a55b2367db14fe932f8fdc34cf6fef1cfce70d6aac1a09017c649dba  noxa-server-linux-amd64\n",
-    "signature": "NAAnWY49Q/QvABooiKwVVVo/Bfg5BAb/VCETys7nF3AyetXUdkUL+95vaGAHX+z0dUL31JLzRB8by4x4dtv+CQ=="
+    "signature": "NAAnWY49Q/QvABooiKwVVVo/Bfg5BAb/VCETys7nF3AyetXUdkUL+95vaGAHX+z0dUL31JLzRB8by4x4dtv+CQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.48",
     "commit": "2997de67d9a3bb2e5f3b935d7bfcfc28891278e2",
     "sha256": "b4d58ff4d03bbb79e7d1894b788e5c7fdbc87df53b4bc666c3f37765d3c700ba",
     "manifest": "# noxa-version: v0.5.48\nb4d58ff4d03bbb79e7d1894b788e5c7fdbc87df53b4bc666c3f37765d3c700ba  noxa-client-windows-amd64.exe\na94a55942d4e387cd97bf8c2d3cc40196a7336e74b720479bbe3d36a56ae4b29  noxa-server-linux-amd64\n",
-    "signature": "LXJDVcgITmHJ4Eygnzlen/VAbmyMBHgqmJcvKRgGfdF3KJIYTVocRabD8FvjUj6Pt/lFg0P6/I7ZsLZiki/tAg=="
+    "signature": "LXJDVcgITmHJ4Eygnzlen/VAbmyMBHgqmJcvKRgGfdF3KJIYTVocRabD8FvjUj6Pt/lFg0P6/I7ZsLZiki/tAg==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.49",
     "commit": "a987341efe23e2b404081050fe28c9903472f61b",
     "sha256": "7ba8f27d91c1a11cc0743b3007aa1e5f6b3d0c423a04f358732217765e972892",
     "manifest": "# noxa-version: v0.5.49\n7ba8f27d91c1a11cc0743b3007aa1e5f6b3d0c423a04f358732217765e972892  noxa-client-windows-amd64.exe\nd30076d555c9f112c5d4470a2a25d5d5dc3b1b58db764d333c996300ab5a23d6  noxa-server-linux-amd64\n",
-    "signature": "H9phbELrbE62j76qLEfByCkR0GaDlLh9vnQefXIkcxhzmxM2FYrGFq+xydrUbwZ4xPNddZZU59w/THnGyKmOBw=="
+    "signature": "H9phbELrbE62j76qLEfByCkR0GaDlLh9vnQefXIkcxhzmxM2FYrGFq+xydrUbwZ4xPNddZZU59w/THnGyKmOBw==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.50",
     "commit": "e1c770ae1df353638264cf6f40c9169454ced63e",
     "sha256": "62089961c71c054f6b65df38a95242ff3e5e22f5a103636d20c31916724a9b7f",
     "manifest": "# noxa-version: v0.5.50\n62089961c71c054f6b65df38a95242ff3e5e22f5a103636d20c31916724a9b7f  noxa-client-windows-amd64.exe\ne7d7ad3b377bb7b2e1e543231ac76d3b49f50dacb2ef4f71bd084b26c4537e6a  noxa-server-linux-amd64\n",
-    "signature": "1eNxMIbkNVwdUID2oMei0kvaCsSGPAf5EEwSMqIdsZJux2qB+xb370hFMAGWbHDrM+dqHLhTDo0lCpGPtPmqDA=="
+    "signature": "1eNxMIbkNVwdUID2oMei0kvaCsSGPAf5EEwSMqIdsZJux2qB+xb370hFMAGWbHDrM+dqHLhTDo0lCpGPtPmqDA==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.51",
     "commit": "4f39f2f666c17fac7d3e5b4d6e6f2f2332f999b3",
     "sha256": "16c1cb937548a98f1c28dbdd1e03e7de2d0c05dcfbbb7e41f0a4ce30585b6be0",
     "manifest": "# noxa-version: v0.5.51\n16c1cb937548a98f1c28dbdd1e03e7de2d0c05dcfbbb7e41f0a4ce30585b6be0  noxa-client-windows-amd64.exe\nc11a14c2053bedf11a39ff7a8c4ae3f70136bd560cb44f3ce9660a5db2487ccb  noxa-server-linux-amd64\n",
-    "signature": "g2wM1hXLjyB8Qo/PjrU9qOVE2ff4j+ZstNVa9FOuufNb49ihgdCl+q+K8NUoT2GvhBu2AODwmp0N0UNE5C2bCw=="
+    "signature": "g2wM1hXLjyB8Qo/PjrU9qOVE2ff4j+ZstNVa9FOuufNb49ihgdCl+q+K8NUoT2GvhBu2AODwmp0N0UNE5C2bCw==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.52",
     "commit": "59196cdd07d03bd484a8dfe3cf45146af6a29e00",
     "sha256": "b925bfa837528771048d8dafbe437e3a18881e6c1455d7c6504f6feb45f7f05c",
     "manifest": "# noxa-version: v0.5.52\nb925bfa837528771048d8dafbe437e3a18881e6c1455d7c6504f6feb45f7f05c  noxa-client-windows-amd64.exe\n33c393010794bad22f07c5e43334125b86a9357802ceedb01a87c56ce2be9c14  noxa-server-linux-amd64\n",
-    "signature": "JZtHuFEvTew5lFkcP9xEeFDKBgHFPMJelXrOdfaAqq9wJzAYojiSrj1D1xVnpKSClSRfbwKXhaLfsnASf50MCQ=="
+    "signature": "JZtHuFEvTew5lFkcP9xEeFDKBgHFPMJelXrOdfaAqq9wJzAYojiSrj1D1xVnpKSClSRfbwKXhaLfsnASf50MCQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.53",
     "commit": "6d0725aab4f81016c8d28a747e76026abdac3194",
     "sha256": "e64c27bf6423b9796a3307b8f9e1ecd966189c47f462d0eefe9c5a22e991c7c2",
     "manifest": "# noxa-version: v0.5.53\ne64c27bf6423b9796a3307b8f9e1ecd966189c47f462d0eefe9c5a22e991c7c2  noxa-client-windows-amd64.exe\nf0cdb56922bf6ae5488f4bd54340be801672cd4c32671d65183cbfa6495d3b55  noxa-server-linux-amd64\n",
-    "signature": "ZXBRCFBVXx4Zafn1OITLtqWOI1eIQxgU8c6ZvpIeX4fvBOfO1BXosdZS2wdnY9TkmaNgXMQQy1VDX9y6sbKTCA=="
+    "signature": "ZXBRCFBVXx4Zafn1OITLtqWOI1eIQxgU8c6ZvpIeX4fvBOfO1BXosdZS2wdnY9TkmaNgXMQQy1VDX9y6sbKTCA==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.54",
     "commit": "76b2c792eb070c89d3a404e25ecf8fcd94187692",
     "sha256": "07cd9803a5ad7ce9aa6bdf4316f2a38e77bfc2c5fb881848bebb0c32813bcc0a",
     "manifest": "# noxa-version: v0.5.54\n07cd9803a5ad7ce9aa6bdf4316f2a38e77bfc2c5fb881848bebb0c32813bcc0a  noxa-client-windows-amd64.exe\ndfbf50c56af2662c6e3a7055f7c213bbcf01706aa325f29da78fd9645c38728c  noxa-server-linux-amd64\n",
-    "signature": "oaZAmthzbyb3SgFwF1UprJDjFHxXbT/Ch5wR5HagoHGJKNVUowfen82ibSUDPUnvoXuazhH6aH7GsAtq45jhAA=="
+    "signature": "oaZAmthzbyb3SgFwF1UprJDjFHxXbT/Ch5wR5HagoHGJKNVUowfen82ibSUDPUnvoXuazhH6aH7GsAtq45jhAA==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.55",
     "commit": "e51d22c260fc1c2530437fb05cd8ee56c53548bf",
     "sha256": "ed87f6d6ec1225f31eebf3fe1fcd46d8759c8503926338c417a29f2cb0e7f94d",
     "manifest": "# noxa-version: v0.5.55\ned87f6d6ec1225f31eebf3fe1fcd46d8759c8503926338c417a29f2cb0e7f94d  noxa-client-windows-amd64.exe\n620fc0c238dd137ef39ff06eef5ce853e07773904b924005a781cd0e1a6372fe  noxa-server-linux-amd64\n",
-    "signature": "mqUeglCcuYLBbfQ/irewY9/h76hpCJFzGCprn50DSXQCegRzCAvWRfrrciGCRjPX2WSM6+XcrHjvJKgt5LT/AA=="
+    "signature": "mqUeglCcuYLBbfQ/irewY9/h76hpCJFzGCprn50DSXQCegRzCAvWRfrrciGCRjPX2WSM6+XcrHjvJKgt5LT/AA==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.56",
     "commit": "b6d313bc994f1f3b70f9a2743ae04b09ea3a2f65",
     "sha256": "cf2a4869e99863a91a2239905b0377b071b5f4dac5f23d60fb0ab49d8fe61771",
     "manifest": "# noxa-version: v0.5.56\ncf2a4869e99863a91a2239905b0377b071b5f4dac5f23d60fb0ab49d8fe61771  noxa-client-windows-amd64.exe\n430e5cd3aeca648a60c980cc4563c28c556686d4f25412bf99e280dc8408e919  noxa-server-linux-amd64\n",
-    "signature": "I0fxqPeajLsKPWQ2GP4QBE1ReqEy1p+Boziv0wiH8Zm7ax9HgI8S/ypgScu9qrRUNf/k4u7sdWQgTXp6zgiMBQ=="
+    "signature": "I0fxqPeajLsKPWQ2GP4QBE1ReqEy1p+Boziv0wiH8Zm7ax9HgI8S/ypgScu9qrRUNf/k4u7sdWQgTXp6zgiMBQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.57",
     "commit": "0a3107664cc465a92b8f80a7dd341ef35f45e5f4",
     "sha256": "184ef414a6d127deb89a3a66ac4f614b4245102601c000000997bcf96191580c",
     "manifest": "# noxa-version: v0.5.57\n184ef414a6d127deb89a3a66ac4f614b4245102601c000000997bcf96191580c  noxa-client-windows-amd64.exe\n3e7238aa422aa599a2d9c9266e3adb49f5d265949f8cdc72e04373a6f9f896a3  noxa-server-linux-amd64\n",
-    "signature": "CupNPV67lmS9+j+4GM+RuL0q/c6RRqdxlgdvR2fOLjCz6dWnF1Ibdf+29W4ybGfryExXc3TZ3NrIM4045ijiBg=="
+    "signature": "CupNPV67lmS9+j+4GM+RuL0q/c6RRqdxlgdvR2fOLjCz6dWnF1Ibdf+29W4ybGfryExXc3TZ3NrIM4045ijiBg==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.58",
     "commit": "37ab6833ef148e94c77b84248e0d8b06512356df",
     "sha256": "b8a77718ec1dcd6c68f21dfe843d3733be7e338dd324d1e0ba782f457e934233",
     "manifest": "# noxa-version: v0.5.58\nb8a77718ec1dcd6c68f21dfe843d3733be7e338dd324d1e0ba782f457e934233  noxa-client-windows-amd64.exe\ndc89d82eaaf64b4a46467cd465afd44a52a40b937caea7c3e4fe1a0a56ba896e  noxa-server-linux-amd64\n",
-    "signature": "HVzqK8AHmblHjV7A/OK04j8u2XIifMbD/jHhbKcYCHqen/FlUvB86/tLSwGa8+GKw0qN1naKfdvyv73sPPFDAw=="
+    "signature": "HVzqK8AHmblHjV7A/OK04j8u2XIifMbD/jHhbKcYCHqen/FlUvB86/tLSwGa8+GKw0qN1naKfdvyv73sPPFDAw==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.59",
     "commit": "466205cde3e4f1e80e9b598ef8db1110d43ff15f",
     "sha256": "70bafbae4991ffd31c51927f3559dc20409ec519651294e96c04807041310ff6",
     "manifest": "# noxa-version: v0.5.59\n70bafbae4991ffd31c51927f3559dc20409ec519651294e96c04807041310ff6  noxa-client-windows-amd64.exe\n478b707279a66a965c2ec15180a300cbd261a85587d65d041c292647c8e62319  noxa-server-linux-amd64\n",
-    "signature": "aQO0QkvY1FKAaeIJ5DOSy3POS3cTD6VhwfBEkHACfoLpFHyV0h+8Qq2X5DSVtsHJ3RCsXNBTyGXLnP9vmrSrDQ=="
+    "signature": "aQO0QkvY1FKAaeIJ5DOSy3POS3cTD6VhwfBEkHACfoLpFHyV0h+8Qq2X5DSVtsHJ3RCsXNBTyGXLnP9vmrSrDQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.60",
     "commit": "d467292de44dd0931abbcbec70a5b5fbf1d46d61",
     "sha256": "92c7934e6b9b25666301de51c02526bcd217e5a4e63f470e3c89184fc7b40444",
     "manifest": "# noxa-version: v0.5.60\n92c7934e6b9b25666301de51c02526bcd217e5a4e63f470e3c89184fc7b40444  noxa-client-windows-amd64.exe\n6694d45a6d2a3c547ae24f43e32933bca75abd9deab23ea60fced658305aa200  noxa-server-linux-amd64\n",
-    "signature": "N8Y32StujcFwYukv7XTiWB1rmaBT2iCoiDotE9dt58wekzA+KPTZI3GmJyge7ZklFaLypgXI30fDQTPNpN/SCQ=="
+    "signature": "N8Y32StujcFwYukv7XTiWB1rmaBT2iCoiDotE9dt58wekzA+KPTZI3GmJyge7ZklFaLypgXI30fDQTPNpN/SCQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.61",
     "commit": "52feee5fa5de231fea5d28ef74c690656361790b",
     "sha256": "a596047c4c5510d62d925668aa99a2be9f5be9b0526854fdb9374c59a6bec37c",
     "manifest": "# noxa-version: v0.5.61\na596047c4c5510d62d925668aa99a2be9f5be9b0526854fdb9374c59a6bec37c  noxa-client-windows-amd64.exe\nb2951cf794d1c588560b2b12f97917ff9e3355cab3c43aab0eebdb87d9a2ac09  noxa-server-linux-amd64\n",
-    "signature": "HBSxcasYsU8GzlAwTAR6UsoNcZpL17d6PDuCBDkxwwbG1NpEODfPwIZiTDHlPViTC1gKWwmM+uz9qGHxyUkGAQ=="
+    "signature": "HBSxcasYsU8GzlAwTAR6UsoNcZpL17d6PDuCBDkxwwbG1NpEODfPwIZiTDHlPViTC1gKWwmM+uz9qGHxyUkGAQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.62",
     "commit": "dba7ee5a5612c0c35a0eda54577136992cde4876",
     "sha256": "934a75e1f5be70c2afed9b4fab508ea390786a3850323bea29cc64991f9603f2",
     "manifest": "# noxa-version: v0.5.62\n934a75e1f5be70c2afed9b4fab508ea390786a3850323bea29cc64991f9603f2  noxa-client-windows-amd64.exe\n7a823e6833a894dfada67c7a191cdc621281da2fd785704f3b303aba5e5a40c6  noxa-server-linux-amd64\n",
-    "signature": "zXgiPb2j/S952FhQzOuAyaUe83kdVb7fmezwN4vq/DEslcsr/ZRKdu4AI5Nv1V+k2pBAVowi7HUbilnWONvQDg=="
+    "signature": "zXgiPb2j/S952FhQzOuAyaUe83kdVb7fmezwN4vq/DEslcsr/ZRKdu4AI5Nv1V+k2pBAVowi7HUbilnWONvQDg==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.63",
     "commit": "93240d8ea526c87b33ef432e6c13f010e5ef633a",
     "sha256": "61a3e2b9d176c60f1a9c0f9225f0bfd13c7c3c1a2bc1c6082a45c70d61a6020c",
     "manifest": "# noxa-version: v0.5.63\n61a3e2b9d176c60f1a9c0f9225f0bfd13c7c3c1a2bc1c6082a45c70d61a6020c  noxa-client-windows-amd64.exe\n77f8c64a4591276c39c1ab2188bcab5a3de465dacf2993a76d88ade09f7cfac0  noxa-server-linux-amd64\n",
-    "signature": "20zSLj0XyBGZJzH0T1gp9DIW4We18UgMUg2LB4nOvTd6WvpNu+cEBrlRdpw8OMw5EmLzVRc4o3I5vUUvCWovCQ=="
+    "signature": "20zSLj0XyBGZJzH0T1gp9DIW4We18UgMUg2LB4nOvTd6WvpNu+cEBrlRdpw8OMw5EmLzVRc4o3I5vUUvCWovCQ==",
+    "browser_policy": "default"
   },
   {
     "version": "v0.5.64",
     "commit": "94a71cba9d92b4185f22f40c7980945ec9c59eb0",
     "sha256": "fba89056e4c7ff23775a3b059e9aa9d55c7df3bb37a6672433a96bb5d0e9c514",
     "manifest": "# noxa-version: v0.5.64\nfba89056e4c7ff23775a3b059e9aa9d55c7df3bb37a6672433a96bb5d0e9c514  noxa-client-windows-amd64.exe\n7212b2f78763d242d73ec78bb699c435efe2a428e12ca8fe2a24dc61515485db  noxa-server-linux-amd64\n",
-    "signature": "DLckHRiNbUJ2UX1P6OQu+1WRP9rWQm1zaY55gosYj65dnfNCNFZyjjtn+pP1MhLZsK1YxoIeqiOayaNjmHpNAA=="
+    "signature": "DLckHRiNbUJ2UX1P6OQu+1WRP9rWQm1zaY55gosYj65dnfNCNFZyjjtn+pP1MhLZsK1YxoIeqiOayaNjmHpNAA==",
+    "browser_policy": "default"
+  },
+  {
+    "version": "v0.5.65",
+    "commit": "0c2be85cd773ccdb7f5f46da0e8e4689682a7274",
+    "sha256": "245b51eee39d4cc7c8a88ccaf5364f95caf6d06da1de587cf3aa6642efdba821",
+    "manifest": "# noxa-version: v0.5.65\n245b51eee39d4cc7c8a88ccaf5364f95caf6d06da1de587cf3aa6642efdba821  noxa-client-windows-amd64.exe\n99520021bcd2e86f5de86187397526609e1bf35e1765a84c5dea3a7685ca7db3  noxa-server-linux-amd64\n",
+    "signature": "fSpC6tytP37IqUW4Lexf9ibURKffG3dyAGuCVXE+sPTFVCECsFWZiIkfYq3Mbx9GxkhoqAi7ScS+/yO8UmvUCg==",
+    "browser_policy": "duplicate-features"
+  },
+  {
+    "version": "v0.5.66",
+    "commit": "ec72be72ebb0427d57f2e30a1dc74b6d936eaa65",
+    "sha256": "1e4ea7da8e50cabe58d52e7ed0be2852e8739fbddd1fda66f8f56b0ba60ddc13",
+    "manifest": "# noxa-version: v0.5.66\n1e4ea7da8e50cabe58d52e7ed0be2852e8739fbddd1fda66f8f56b0ba60ddc13  noxa-client-windows-amd64.exe\nd00a4c45b39f0d1c3034908c5cf09dcce96b03c92f7a5291e50945492f06db18  noxa-server-linux-amd64\n",
+    "signature": "aQWNeobyRwI/fuGG3Yh9r/XCXFsL2vSk3bNxxynG1ce/5LlJg+SlQajfgrvZsj3tlj2IXHi7ZFjYubDCnoghBA==",
+    "browser_policy": "duplicate-features"
+  },
+  {
+    "version": "v0.5.67",
+    "commit": "02363c5f3696babb7e92df5e2e66bc4869ab7fda",
+    "sha256": "75d6e051acc868586e0b30f90bd34f77bd2e899c86c42a621125282a96f9c708",
+    "manifest": "# noxa-version: v0.5.67\n75d6e051acc868586e0b30f90bd34f77bd2e899c86c42a621125282a96f9c708  noxa-client-windows-amd64.exe\nbfe026ba6d883425d3c09f5438de30dc4b7e29d42c77cb3f50dd0e6a2a8b1a3b  noxa-server-linux-amd64\n",
+    "signature": "Jkc+YNx9/MCqjGens/fui2SC/ZJ1bCUxJfUXAuuJABsbL2b+OBnMBhWMJ0M4t4LKtcRyRIeRGBE/2pnQwSAuDg==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.68",
+    "commit": "6cced2a91e73ea94dec4107641777543670a7b34",
+    "sha256": "6f523e850ba2cd2407b4507e97ce76a501ffd4e613a4f0111e0faf17ac9844e9",
+    "manifest": "# noxa-version: v0.5.68\n6f523e850ba2cd2407b4507e97ce76a501ffd4e613a4f0111e0faf17ac9844e9  noxa-client-windows-amd64.exe\nb4a0129e8076b26f6a1df7c13f874b88c459eb9d5ba4dffbf33eeb17ae32a1c4  noxa-server-linux-amd64\n",
+    "signature": "LwSE9P7HQP2HF7FeJ3YWccGXxNoYqK71Ssvbz/gooXs8HFBJ2w3GV6N5V3DXSeeBeCDLbtIZbqDgwDOl2xsnCw==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.69",
+    "commit": "233f5830d20c583f80fc16eae653ec222ec08daf",
+    "sha256": "c5cb8187f328eb8a1dd3c43e99647e031aed24eb13ad5bcfedfed858c19a29b6",
+    "manifest": "# noxa-version: v0.5.69\nc5cb8187f328eb8a1dd3c43e99647e031aed24eb13ad5bcfedfed858c19a29b6  noxa-client-windows-amd64.exe\n6668dd94fa9d2b8daa9da180a83af4e18fd989c156d8a811fec26671506394ef  noxa-server-linux-amd64\n",
+    "signature": "FZOv/0VSqBfzmEDPmrlR10auB8ILlxCN+lcVh3LGuY68Y9jk8iWvenydYUqcp6JR2blZauvLmMm0bEu77OWLAA==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.70",
+    "commit": "face372086724fd7e4981f634a4e1b21dee5e4ba",
+    "sha256": "3743a6f229bb2d7fea47d6cd72d44849afaa10c075d678e6c480265eacc7d3f7",
+    "manifest": "# noxa-version: v0.5.70\n3743a6f229bb2d7fea47d6cd72d44849afaa10c075d678e6c480265eacc7d3f7  noxa-client-windows-amd64.exe\n8fd407d5b8063cfce203ed1c3f7837ee8959949049b550ed22158d014ce94501  noxa-server-linux-amd64\n",
+    "signature": "/rpsp12zr75P7IkybUYE5ArHCDBQYpAiaW6U0lv+ok/96kHLEUKJdoHmZPdLzQ4u2bbdz9syTWJ2tTS75U99BQ==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.71",
+    "commit": "db122428fd0354af1dcef059fceccc4983e5ca77",
+    "sha256": "64b8c9f1060d2480c7efcc012025ada84f77a53fc2c3e6b379d366de26eb6f20",
+    "manifest": "# noxa-version: v0.5.71\n64b8c9f1060d2480c7efcc012025ada84f77a53fc2c3e6b379d366de26eb6f20  noxa-client-windows-amd64.exe\nc38813836f027bd370cb3381e0bdc115117d06a744b8279a8738c86641d14906  noxa-server-linux-amd64\n",
+    "signature": "uc2NV+gC/qseSKo0KMMEaUfQa0NTkU0T7+zJUgkigPVJfb8eEDNBVc6ll+odZ3bMm9E77JLvzTvrCs46B2yiCA==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.72",
+    "commit": "7cfd298ed0837c260ac286b5f5f87e1b13799e11",
+    "sha256": "950c54ff2d96e0484de531b1714993f61187c6b404717f4f8fbc845c174729b3",
+    "manifest": "# noxa-version: v0.5.72\n950c54ff2d96e0484de531b1714993f61187c6b404717f4f8fbc845c174729b3  noxa-client-windows-amd64.exe\n079887ade383877d97e9333ad960e87f25ecf1160bcb7c3327556d4f906334dd  noxa-server-linux-amd64\n",
+    "signature": "Syv9YLk3Js7hI4y0d6KMawgEuMUKcmN00LnzvXHzHS48Gm7P9n2Ht2FXr/XWKafwEXwVrHsYFHtkHC57c2RWAQ==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.73",
+    "commit": "5f966624346e98eb8169e958fdbc9e17b4904476",
+    "sha256": "3ba69cdbc47755eb6b650fc17f8fe82ab96236d30e5043a68fc228003372a058",
+    "manifest": "# noxa-version: v0.5.73\n3ba69cdbc47755eb6b650fc17f8fe82ab96236d30e5043a68fc228003372a058  noxa-client-windows-amd64.exe\n50e639cb585e647c815d4ce721636d444339f04de745c86e2003826b9167388c  noxa-server-linux-amd64\n",
+    "signature": "x//73xCi27nb73K8ZGbUj0leH0EixDfcpAk/xb6zQZGlvYHvwDbv66bz/wDd4N4r9f7TTD8sk/lUHb4tpEtIDw==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.74",
+    "commit": "7d895af94a97472aa5a315f341a9a7b72767a6fb",
+    "sha256": "fb04e524282eeaf75bfe49d7dcf7ad46b5e2d4d490870b6135938a37aae17caa",
+    "manifest": "# noxa-version: v0.5.74\nfb04e524282eeaf75bfe49d7dcf7ad46b5e2d4d490870b6135938a37aae17caa  noxa-client-windows-amd64.exe\n970f9c2fd660ab2efb8b21bfa07cef5a7b1639b80edb1c91ddc171ca32c8f5d1  noxa-server-linux-amd64\n",
+    "signature": "4rgb6zwGte6vcMuJpKsn0QlsPVQZUF+pSDcvDBHE1z7N7zaU7XWkMuiGgrb+04CYBhaU6lOubULgt5u1XmqXBQ==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.75",
+    "commit": "63ea51153029d20a216b9b60981818ccef5ca3a6",
+    "sha256": "e62319f866b0e44235956d8bb07daee3d2f96da988312ac10f7ac597b4b8ea33",
+    "manifest": "# noxa-version: v0.5.75\ne62319f866b0e44235956d8bb07daee3d2f96da988312ac10f7ac597b4b8ea33  noxa-client-windows-amd64.exe\n0b282ce8009f51c62feef0663e7b90abdecf6c39016af631398203705c99d342  noxa-server-linux-amd64\n",
+    "signature": "746dGdNjUc3UQA9Zc5lLb9ldZAGLQ9cUjle8cUcMSub8Bt/eXUJF2tYvf8EaFPGUy5hj8QzuHrJci/bD+kLyBQ==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.76",
+    "commit": "f0399402222e2ae35bb7fb36e75b96f7f56686f0",
+    "sha256": "8bcbef66f13f576158ee01174fc29257070af97ee9c30687ef94e12db35d3bff",
+    "manifest": "# noxa-version: v0.5.76\n8bcbef66f13f576158ee01174fc29257070af97ee9c30687ef94e12db35d3bff  noxa-client-windows-amd64.exe\n1fa5abba80635ce9fa9692aa89da876fe907a8772038c9fb8eec7e9a1a1bcfce  noxa-server-linux-amd64\n",
+    "signature": "rpxHAra1x5m+f+MrLV+VFPGXw/9dYdAm3H34+jiSNysxsTKFKauvT/ntzo3DPz56POreLBYQTIDblsNAn0lkBw==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.77",
+    "commit": "a73c770f3e4e3567f663a44d9157d52e68f3a52a",
+    "sha256": "f1a40e3b7c15b8812e934f391a0a5da87365dd688db573b752a35a61a43877a6",
+    "manifest": "# noxa-version: v0.5.77\nf1a40e3b7c15b8812e934f391a0a5da87365dd688db573b752a35a61a43877a6  noxa-client-windows-amd64.exe\ncbde86a223c55d06c27778bcddd0c646170d6ba02fb93005dc858e71c1b6d429  noxa-server-linux-amd64\n",
+    "signature": "TBm11TSAvM7PyzH7LEXCFMW61RnG6XyWQ2KI83M+O+AfPMg9jHUtzRQAqgDF0S/+eh/94rp6fmCZpplmJB5TCA==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.78",
+    "commit": "803af23226b49251c00e2cec869deef000f75185",
+    "sha256": "d6b612548b030d9ae03428771f5c887715e6a85603eff78e5cd7af70465230ca",
+    "manifest": "# noxa-version: v0.5.78\nd6b612548b030d9ae03428771f5c887715e6a85603eff78e5cd7af70465230ca  noxa-client-windows-amd64.exe\n39ba1658a3a8af2d50d44b4e13d5f642465bbeb0dd781c38edfefebabaace6cc  noxa-server-linux-amd64\n",
+    "signature": "XKRB+2NxPHXp31IONgsC6r1yCEL7jCGOU6CoP7uY0FUdWEvYoXO6/ZFQeUmEv14E/lTjYURR0oBpJMbg/kuWBA==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.79",
+    "commit": "0be6bc396231a40ba095fd25216e64e02b5347e1",
+    "sha256": "d962d8999572574de9e97bd594576ba1a4a240b7cf7be4c90918559cbea3e3cc",
+    "manifest": "# noxa-version: v0.5.79\nd962d8999572574de9e97bd594576ba1a4a240b7cf7be4c90918559cbea3e3cc  noxa-client-windows-amd64.exe\nc3e78f62bed791b616293c5dadfb0bdfacca4d8d76024fd21092e67441cf7e27  noxa-server-linux-amd64\n",
+    "signature": "j5dDp5jahqxorQi3CcOZyPBRxR6PrySmqE874hQNfvP4sN+KO0OjsNNNyG1FKh3vxv9irSnqutyeYqXXIUxRBw==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.80",
+    "commit": "e8534cd90c358cb96706e51b14ad9bdfdc3880a5",
+    "sha256": "ab0f6500884970a1fbf16a1843de3916b1c5563206fb62635db83a29515efcfb",
+    "manifest": "# noxa-version: v0.5.80\nab0f6500884970a1fbf16a1843de3916b1c5563206fb62635db83a29515efcfb  noxa-client-windows-amd64.exe\n2ed4238da4eef62ba4a85a1204036b1dbed32984e672e6a270789652a98f95bd  noxa-server-linux-amd64\n",
+    "signature": "191zx+y6Y4oz9fdInAKCGCpfg97syAURBCJep0vGgf+2Oppr7EECl4VwGeQwYWGV+YExT3EgIrqomTs+YMCDDA==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.81",
+    "commit": "0f3584cb82e2f899ae5f8c9be4b2be8f0aabbe5c",
+    "sha256": "6f1ad3694302523ca3b1236d44d8624b39505a951ba42088e46d34fd140b3caf",
+    "manifest": "# noxa-version: v0.5.81\n6f1ad3694302523ca3b1236d44d8624b39505a951ba42088e46d34fd140b3caf  noxa-client-windows-amd64.exe\nc263a6e14f46ce5644bcc129886c5079bc46d07b044bc14de237c72d9170fc45  noxa-server-linux-amd64\n",
+    "signature": "cAaWRyb9yN3TEH1POVIsX4t530Tx4IJqLSEnUy0raANiWwtvO/5SyoRiYrgGAl/iAMVkTXhAshLUQhqcWzETAg==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.82",
+    "commit": "39e7f1d0ea209aab31d434c70d69f01848d882aa",
+    "sha256": "db5f5502eca814e5e17f4ad3ec3e8cd35b7e24619b38879aa9244d24d5cd503a",
+    "manifest": "# noxa-version: v0.5.82\ndb5f5502eca814e5e17f4ad3ec3e8cd35b7e24619b38879aa9244d24d5cd503a  noxa-client-windows-amd64.exe\nb3ead849ff38907d72179d73767cf08a4610c096845b2e8720bb6169b7e96d99  noxa-server-linux-amd64\n",
+    "signature": "NQLP7iIOAOt3/XccrfpbaptBmh6797bNmpdumzmMIUwm1lkcWTQJIBq+f3gIqetBdodA9mWvJX8KmlWJHXDJCg==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.83",
+    "commit": "9877bb31148c8ac8b5782527092807e933da7b6b",
+    "sha256": "14806022f07fd61ee1f3e13b82b7a3e869d6c796b9db2fbcce9a9ea1a6ea7c12",
+    "manifest": "# noxa-version: v0.5.83\n14806022f07fd61ee1f3e13b82b7a3e869d6c796b9db2fbcce9a9ea1a6ea7c12  noxa-client-windows-amd64.exe\n16273a430d90e56b3bf36661ae49460cfa309c0dd860dd3b3fe717f0b4ae0ac6  noxa-server-linux-amd64\n",
+    "signature": "rALqxpRj+3yNoaU4DmsBtAslw3zQXN5CwpeUluRraT5Fx0wFD/l2hqCq0K2ak0FIJZUNY7aJHdnF/IXnYq/3Dw==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.84",
+    "commit": "4989b774e516f7155572e8779419c9ede7a1d47d",
+    "sha256": "87974c07cf7462265c9c6ed17104a482338a434dba61fde47e49004fd6d46be9",
+    "manifest": "# noxa-version: v0.5.84\n87974c07cf7462265c9c6ed17104a482338a434dba61fde47e49004fd6d46be9  noxa-client-windows-amd64.exe\n168accdc4cccc4000d0485f0a1602b9c0644d2219c2736d1fcfaec49eda0b61d  noxa-server-linux-amd64\n",
+    "signature": "85FsnM3cVV8EpI8l7m1X3gfQs7O2qkDvaRCiYIZX/aKM3A5JJjXBVWxZgMONiHXsO8FP73iBgeVVFn00WQUFBQ==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.85",
+    "commit": "eccf8b5a6fe4033b59f6c7465e00a4c8ad724d47",
+    "sha256": "ee509efd217e941d3b793b9cdcc6a79c05835f4aa83f47464db5d837805f446d",
+    "manifest": "# noxa-version: v0.5.85\nee509efd217e941d3b793b9cdcc6a79c05835f4aa83f47464db5d837805f446d  noxa-client-windows-amd64.exe\n57b36688bf911b999a5a5d4c6e1df09b70952684b775b2d1f36b3bc9a11f5f2d  noxa-server-linux-amd64\n",
+    "signature": "J8NFeNRQiovQmy2tbVRQ5UWZ/3y07B6b2HdldP9dTX/NdiRFtKcAyG48MMUdwf6kuvdTANrhVbrvbfa33pNnDA==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.86",
+    "commit": "be4c273f54ea8410656a3d25109868c8bde09c33",
+    "sha256": "cfd3aa285ba6dd1606c3a524bb81ec29ddde2aa38d4357c0f2d49b52fe2aaa88",
+    "manifest": "# noxa-version: v0.5.86\ncfd3aa285ba6dd1606c3a524bb81ec29ddde2aa38d4357c0f2d49b52fe2aaa88  noxa-client-windows-amd64.exe\n6d0002a87c7cd4a53e39211fea5fecdb39c07006c2e674807a833e67d8bad5c3  noxa-server-linux-amd64\n",
+    "signature": "o8fhkZMoZkuW9S1oigXFzX+OXW46M4Cl2ASM0pdsidSa7anhF4bsIdn/CWlPGMUY1Dl0rSjX77fjXpdrjH8EAQ==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.87",
+    "commit": "4e2b1b3ae94cfcef248c8c5b0e3b355ac964523d",
+    "sha256": "b7a02c3230bb5c149b054a06aaba9a954f7f479cf99e7e6178f055d6fa8bfcf8",
+    "manifest": "# noxa-version: v0.5.87\nb7a02c3230bb5c149b054a06aaba9a954f7f479cf99e7e6178f055d6fa8bfcf8  noxa-client-windows-amd64.exe\nec3118e79a85a753e4f1086d059a64dbbdb562cc03e1acb35fa9194f5b8da990  noxa-server-linux-amd64\n",
+    "signature": "edVSE9aVoXCL883hv0Hc2deyd600WH4VuTZbNNyruAMPoNrV/JbTuINGPmvMLTuzb6axpv1sBJR3PjuLtko4DA==",
+    "browser_policy": "merged-hardware"
+  },
+  {
+    "version": "v0.5.88",
+    "commit": "7d0a8366e1ecd03725d769a877a141a97b574f45",
+    "sha256": "28e01383138ba1ac6f2f24b3688a8b6ac3bbde606b2e554b0d1a26bf750c7eb2",
+    "manifest": "# noxa-version: v0.5.88\n28e01383138ba1ac6f2f24b3688a8b6ac3bbde606b2e554b0d1a26bf750c7eb2  noxa-client-windows-amd64.exe\n7da2af1576d765a7d769dfe9ea97aa882b628faea62b4d66917d6e82351eef6d  noxa-server-linux-amd64\n",
+    "signature": "kiN6bH2Q2TnxzW/MPp+9qFGDbSCit46UfRxUIVs+dNdRXVWDxRDX9yCRYTiEIQY+VFL5rSyT6t8eJqCgBm/xBw==",
+    "browser_policy": "hardware-2026"
   }
 ]

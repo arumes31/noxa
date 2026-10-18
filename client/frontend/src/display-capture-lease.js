@@ -77,6 +77,10 @@ const displayLeases = createDisplayCaptureLeases();
 export function retainDisplayCapture(stream) {
     for (const track of stream?.getVideoTracks() || []) displayLeases.retain(track);
 }
+// releaseDisplayCapture drops the lease but leaves the tracks running.
+export function releaseDisplayCapture(stream) {
+    for (const track of stream?.getTracks() || []) displayLeases.release(track);
+}
 export function stopDisplayCapture(stream) {
     for (const track of stream?.getTracks() || []) {
         displayLeases.release(track); // MediaStreamTrack.stop() does not emit ended.

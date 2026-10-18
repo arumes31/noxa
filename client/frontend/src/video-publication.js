@@ -1,6 +1,5 @@
 import { updateStartupBlocked } from "./update-transition.js";
-import { retainDisplayCapture, stopDisplayCapture } from "./display-capture-lease.js";
-import { escapeHTML as escapeTranslation } from "./markdown.js";
+import { retainDisplayCapture, releaseDisplayCapture, stopDisplayCapture } from "./display-capture-lease.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
 import { captureCamera, applyCameraPreview } from "./camera-capture.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
@@ -10,7 +9,9 @@ import { preferPublicationCodec } from "./video-codecs.js";
 import { startShareStatus, stopShareStatus, refreshShareStatus } from "./share-status.js";
 import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 import { applyVideoNetworkPriority } from "./voice-priority.js";
-import { shareQuality, screenShareConstraints, createShareQualityControls } from "./screen-share-quality.js";
+import { shareQuality, screenShareConstraints, createShareQualityControls, DEFAULT_SHARE_PRESET } from "./screen-share-quality.js";
+import { createSharePicker } from "./share-picker.js";
+import { cropDisplayStream, regionCropSupported } from "./share-region.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { labelButton } from "./icons.js";
 import { renderMicStatus } from "./audio.js";
@@ -456,14 +457,8 @@ export function createVideoPublication({ policy }) {
     // Screen share (69-72, 85)
     // ---------------------------------------------------------------------------
 
-    // (71) Chromium puts cropTo on BrowserCaptureMediaStreamTrack, a SUBCLASS of
-    // MediaStreamTrack — probing the base prototype reports "unsupported" on every
-    // browser that actually has the API. The base check stays as a fallback for
-    // builds that shipped it there.
-    const regionSupported = typeof CropTarget !== "undefined" && (
-        (typeof BrowserCaptureMediaStreamTrack !== "undefined" &&
-            "cropTo" in BrowserCaptureMediaStreamTrack.prototype) ||
-        (typeof MediaStreamTrack !== "undefined" && "cropTo" in MediaStreamTrack.prototype));
+    // Region crops a picked screen or window frame by frame (share-region.js).
+    const regionSupported = regionCropSupported();
 
     let shareDialogID = 0;
 
@@ -495,89 +490,60 @@ export function createVideoPublication({ policy }) {
         openShareDialog();
     }
 
-    function openShareDialog(replacing = false, initialPreset = "balanced", initialAudio = "none", initialSurface = "monitor", custom = {}, bitrateCeiling = 0) {
+    function openShareDialog(replacing = false, initialPreset = DEFAULT_SHARE_PRESET, initialAudio = "none", initialSurface = "monitor", custom = {}, bitrateCeiling = 0) {
         const dialogID = ++shareDialogID;
-        const sourceName = `shsrc-${dialogID}`;
-        const qualityID = `share-quality-${dialogID}`;
-        const audioID = `share-audio-${dialogID}`;
         const overlay = document.createElement("div");
         overlay.className = "dlg-overlay";
-        overlay.innerHTML = `
-            <div class="dlg share-dlg">
-                <h3>${tLabel("polish.shareTitle")}</h3>
-                <fieldset class="share-sources">
-                    <legend class="dlg-label">${tLabel("polish.source")}</legend>
-                    <label><input type="radio" name="${sourceName}" value="monitor" checked /> ${tLabel("polish.monitor")}</label>
-                    <label><input type="radio" name="${sourceName}" value="window" /> ${tLabel("polish.window")}</label>
-                    <label title="${tLabel(regionSupported ? "polish.cropHelp" : "polish.cropUnavailable")}">
-                        <input type="radio" name="${sourceName}" value="region" ${regionSupported ? "" : "disabled"} /> ${tLabel("polish.region")}
-                    </label>
-                </fieldset>
-                <button type="button" class="sh-choose">${tLabel("share.chooseSource")}</button>
-                <p class="set-hint">${tLabel("share.chooseHelp")}</p>
-                <video class="sh-preview" autoplay muted playsinline hidden aria-label="${tLabel("share.selectionPreview")}"></video>
-                <p class="sh-source-label" hidden></p>
-                <p class="sh-error" role="alert"></p>
-                <div class="sh-quality"></div>
-                <label class="dlg-label" for="${audioID}">${tLabel("share.audio")}</label>
-                <select class="dlg-input sh-audio" id="${audioID}" aria-describedby="${audioID}-help">
-                    <option value="none">${tLabel("share.audioNone")}</option>
-                    <option value="application">${tLabel("share.audioApplication")}</option>
-                    <option value="system">${tLabel("share.audioSystem")}</option>
-                </select>
-                <p class="set-hint" id="${audioID}-help">${tLabel("share.applicationHelp")}</p>
-                <div class="dlg-buttons">
-                    <button class="dlg-ok">${tLabel("voice.startShare")}</button>
-                    <button class="dlg-cancel">${tLabel("polish.cancel")}</button>
-                </div>
-            </div>`;
-        overlay.querySelector(".dlg-cancel").onclick = () => closeDialog(overlay, "cancel");
-        const quality = createShareQualityControls(qualityID, { preset: initialPreset, custom, bitrateCeiling });
-        overlay.querySelector(".sh-quality").appendChild(quality.element);
-        const audioSelect = overlay.querySelector(".sh-audio");
+        const view = createSharePicker({ id: `share-${dialogID}`, preset: initialPreset, custom, bitrateCeiling,
+            surface: initialSurface, audio: initialAudio, regionSupported });
+        overlay.appendChild(view.element);
+        const { quality, $ } = view;
+        const sources = () => overlay.querySelectorAll(`input[name="${view.sourceName}"]`);
         const audioChoices = new Map();
         if (replacing) audioChoices.set(initialSurface,
             V().state.shareStream?.getAudioTracks().some(track => track.readyState === "live") ? initialAudio : "none");
-        overlay.querySelector(`input[value="${initialSurface}"]`).checked = true;
-        const selectedSurface = () => overlay.querySelector(`input[name="${sourceName}"]:checked`).value;
         // Keep explicit choices per source so toggling sources cannot undo an override.
-        audioSelect.onchange = () => { audioChoices.set(selectedSurface(), audioSelect.value); discardSelection(); };
+        $(".sh-audio").addEventListener("change", () => { audioChoices.set(view.surface(), view.audio()); discardSelection(); });
         const syncAudioSource = () => {
-            const surface = selectedSurface();
+            const surface = view.surface();
             const application = surface === "window";
-            audioSelect.querySelector('[value="application"]').disabled = !application;
-            audioSelect.value = audioChoices.get(surface) ?? (application ? "application" : "none");
-            if (!application && audioSelect.value === "application") audioSelect.value = "none";
+            view.setApplicationAudio(application);
+            let audio = audioChoices.get(surface) ?? (application ? "application" : "none");
+            if (!application && audio === "application") audio = "none";
+            view.setAudio(audio);
         };
         let selectedDisplay = null, picking = false, publishing = false, pickToken = 0;
-        const preview = overlay.querySelector(".sh-preview");
-        const sourceLabel = overlay.querySelector(".sh-source-label");
-        const error = overlay.querySelector(".sh-error");
-        const choose = overlay.querySelector(".sh-choose");
-        const start = overlay.querySelector(".dlg-ok");
+        const error = $(".sh-error");
+        const choosers = [$(".sh-choose"), $(".sp-change")];
+        const start = $(".dlg-ok"), cancel = $(".dlg-cancel"), close = $(".sp-close");
         const update = () => {
-            choose.disabled = picking || publishing;
-            overlay.querySelector(".dlg-cancel").disabled = publishing;
-            start.disabled = picking || publishing || !selectedDisplay;
-            for (const input of overlay.querySelectorAll(`input[name="${sourceName}"]`)) input.disabled = publishing || (input.value === "region" && !regionSupported);
-            audioSelect.disabled = publishing; quality.element.inert = publishing;
+            for (const button of choosers) button.disabled = picking || publishing;
+            cancel.disabled = close.disabled = publishing;
+            start.disabled = picking || publishing || !selectedDisplay || (view.surface() === "region" && !view.region());
+            for (const input of sources()) input.disabled = publishing || (input.value === "region" && !regionSupported);
+            $(".sh-audio").disabled = publishing; quality.element.inert = publishing;
         };
+        view.onRegionChange(update);
         const discardSelection = () => {
             ++pickToken;
             stopDisplayCapture(selectedDisplay); selectedDisplay = null;
-            preview.srcObject = null; preview.hidden = true; sourceLabel.hidden = true;
+            view.clearPreview();
             update();
         };
-        choose.onclick = async () => {
+        const choose = async () => {
             if (picking || publishing || !isCurrentServerDialog(overlay)) return;
-            const selection = quality.read(); if (!selection) return;
+            const selection = quality.read();
+            if (!selection) { view.closePanels(); $(".sp-quality-toggle").click(); quality.read(); return; }
             discardSelection(); const token = pickToken;
             error.textContent = ""; picking = true; update();
-            const surface = selectedSurface();
-            const video = screenShareConstraints(shareQuality(selection.preset, selection.custom, selection.bitrateCeiling), V().state.mediaLimits);
-            if (surface !== "region") video.displaySurface = surface;
-            const options = { video, ...displayAudioOptions(audioSelect.value),
-                ...(surface === "region" ? { preferCurrentTab: true, selfBrowserSurface: "include" } : {}) };
+            const surface = view.surface();
+            const profile = shareQuality(selection.preset, selection.custom, selection.bitrateCeiling);
+            // Region crops afterwards, so it captures at the source's own size.
+            const video = surface === "region"
+                ? screenShareConstraints({ width: 0, height: 0, fps: profile.fps, original: true }, null)
+                : screenShareConstraints(profile, V().state.mediaLimits);
+            video.displaySurface = surface === "region" ? "monitor" : surface;
+            const options = { video, ...displayAudioOptions(view.audio()) };
             try {
                 // Must run directly from the click to retain user activation.
                 let display;
@@ -590,57 +556,64 @@ export function createVideoPublication({ policy }) {
                 const track = display.getVideoTracks()[0];
                 if (!track || track.readyState === "ended") { stopDisplayCapture(display); throw new Error(tLabel("desktop.screen.capture.produced.no.video.track")); }
                 selectedDisplay = display; retainDisplayCapture(display);
-                preview.srcObject = display; preview.hidden = false;
-                sourceLabel.textContent = track.label || tLabel(surface === "window" ? "polish.window" : "polish.monitor"); sourceLabel.hidden = false;
+                view.showPreview(display, track.label || tLabel(surface === "window" ? "polish.window" : "polish.monitor"));
                 track.addEventListener("ended", () => { if (selectedDisplay === display) { discardSelection(); error.textContent = tLabel("share.sourceEnded"); } }, { once: true });
-                void preview.play().catch(() => {});
             } catch (failure) {
                 if (isCurrentServerDialog(overlay) && token === pickToken) error.textContent = tLabel("desktop.screen.capture.failed") + (failure.message || failure.name);
             } finally { picking = false; if (isCurrentServerDialog(overlay)) update(); }
         };
-        for (const source of overlay.querySelectorAll(`input[name="${sourceName}"]`)) source.onchange = () => { syncAudioSource(); discardSelection(); };
+        for (const button of choosers) button.onclick = choose;
+        for (const source of sources()) source.addEventListener("change", () => { syncAudioSource(); discardSelection(); });
         syncAudioSource(); update();
+        cancel.onclick = close.onclick = () => closeDialog(overlay, "cancel");
         overlay.onclick = (event) => { if (event.target === overlay && !publishing) closeDialog(overlay, "cancel"); };
         start.onclick = async () => {
             if (!isCurrentServerDialog(overlay) || publishing || !selectedDisplay) return;
-            const selected = quality.read(); if (!selected) return;
+            const selected = quality.read();
+            if (!selected) { view.closePanels(); $(".sp-quality-toggle").click(); quality.read(); return; }
+            const surface = view.surface(), region = view.region();
+            if (surface === "region" && !region) return;
             const { state } = V();
             if (!state.pc || state.pc.connectionState === "closed" || state.pc.connectionState === "failed") { error.textContent = tLabel("share.connectionRequired"); return; }
             if (state.shareStarting || state.shareStopping || (!!state.screenSharing !== replacing)) { error.textContent = tLabel("share.stateChanged"); return; }
-            const display = selectedDisplay; selectedDisplay = null;
-            preview.srcObject = null; preview.hidden = true;
+            let display = selectedDisplay; selectedDisplay = null;
+            view.closePanels();
             const request = {}; state.shareStarting = request;
             publishing = true; error.textContent = ""; update(); syncShareButton();
-            const surface = selectedSurface();
-            if (surface === "region") closeDialog(overlay, "region");
             try {
-                const started = await startShare({ surface, ...selected, audioMode: audioSelect.value, replacing, selectedDisplay: display });
+                if (surface === "region") {
+                    // The cropped track owns the capture from here; its own lease
+                    // replaces the picker's one in startShare.
+                    const cropped = cropDisplayStream(display, region);
+                    releaseDisplayCapture(display);
+                    display = cropped.stream;
+                }
+                const started = await startShare({ surface, ...selected, audioMode: view.audio(), replacing, selectedDisplay: display });
                 if (started) closeDialog(overlay, "started");
-                else if (isCurrentServerDialog(overlay)) error.textContent = tLabel("share.startFailed");
+                else if (isCurrentServerDialog(overlay)) { view.clearPreview(); error.textContent = tLabel("share.startFailed"); }
             } catch (failure) {
                 stopDisplayCapture(display);
-                if (isCurrentServerDialog(overlay)) error.textContent = tLabel("desktop.screen.capture.failed") + (failure.message || failure.name);
+                if (isCurrentServerDialog(overlay)) { view.clearPreview(); error.textContent = tLabel("desktop.screen.capture.failed") + (failure.message || failure.name); }
             } finally {
                 publishing = false;
                 if (state.shareStarting === request) { state.shareStarting = null; syncShareButton(); }
                 if (isCurrentServerDialog(overlay)) update();
             }
         };
-        mountServerDialog(overlay, { onCancel: () => !publishing, onClose: discardSelection });
+        mountServerDialog(overlay, { onCancel: () => !publishing, onClose: () => { view.dispose(); discardSelection(); } });
         const hint = mediaLimitHint();
         if (hint) {
             const note = document.createElement("p");
             note.className = "set-hint media-limit-hint";
             note.textContent = hint;
-            overlay.querySelector(".sh-preset").after(note);
+            $(".sp-notes").appendChild(note);
         }
         if (!regionSupported) {
-            // (71) the radio is disabled, so the dialog has to say why and what to
-            // do instead — a disabled control with no explanation reads as a bug.
-            const note = document.createElement("div");
+            // The tab is disabled, so the dialog has to say why.
+            const note = document.createElement("p");
             note.className = "set-hint warn";
             note.textContent = tLabel("polish.cropNeedsUpdate");
-            overlay.querySelector(".share-sources").appendChild(note);
+            $(".sp-notes").appendChild(note);
         }
     }
 
@@ -658,9 +631,7 @@ export function createVideoPublication({ policy }) {
         const shareScope = captureMediaScope();
         const current = () => mediaScopeIsCurrent(shareScope) && state.serverGeneration === generation && state.activeTabID === tabID && state.pc === peerConnection;
         let shareTransceiver = null;
-        let nextRegion = null;
         const discardDisplay = (stream) => {
-            nextRegion?.remove();
             stopDisplayCapture(stream);
             shareTransceiver?.stop();
             if (state.shareVideoTransceiver === shareTransceiver) state.shareVideoTransceiver = null;
@@ -676,15 +647,8 @@ export function createVideoPublication({ policy }) {
         const selection = { preset, custom, bitrateCeiling };
         const limits = state.mediaLimits;
         const video = screenShareConstraints(p, limits);
-        if (surface !== "region") video.displaySurface = surface; // 69: "monitor" | "window"
+        video.displaySurface = surface === "region" ? "monitor" : surface; // 69: "monitor" | "window"
         const gdm = { video, ...displayAudioOptions(audioMode) };
-        if (surface === "region") {
-            // (71) Region Capture only applies to a self-capture of this app's own
-            // surface. Without these the picker hands back a monitor/window track
-            // and cropTo() rejects it, so the region path could never succeed.
-            gdm.preferCurrentTab = true;
-            gdm.selfBrowserSurface = "include";
-        }
         let display;
         try {
             display = selectedDisplay || await navigator.mediaDevices.getDisplayMedia(gdm);
@@ -736,16 +700,7 @@ export function createVideoPublication({ policy }) {
             }
             if (state.shareStream === display) state.shareStream = null;
             discardDisplay(display);
-            clearRegionBox();
         };
-
-        if (surface === "region") {
-            nextRegion = await pickRegionAndCrop(screenTrack, current);
-            if (!nextRegion || !current()) {
-                discardDisplay(display);
-                return; // cancelled
-            }
-        }
 
         if (!trackFitsVideoLimits(screenTrack, state.mediaLimits)) {
             discardDisplay(display);
@@ -756,10 +711,9 @@ export function createVideoPublication({ policy }) {
         if (replacing) {
             if (state.shareStream !== previousDisplay || !state.screenSharing) { discardDisplay(display); return; }
             await doStopShare();
-            if (!current() || shareEnded || screenTrack.readyState === "ended") { nextRegion?.remove(); discardDisplay(display); return; }
+            if (!current() || shareEnded || screenTrack.readyState === "ended") { discardDisplay(display); return; }
         }
         state.shareStream = display;
-        state.regionBox = nextRegion;
         if (peerConnection) {
             // The dedicated screen transceiver survives publication stops.
             try {
@@ -812,7 +766,6 @@ export function createVideoPublication({ policy }) {
                 discardDisplay(display);
                 state.shareStream = null;
                 applySendCaps();
-                clearRegionBox(); // (71) nothing is being cropped after this
                 return;
             }
         }
@@ -873,7 +826,6 @@ export function createVideoPublication({ policy }) {
         if (!current() || shareEnded || screenTrack.readyState === "ended") {
             if (state.shareStream === display) state.shareStream = null;
             discardDisplay(display);
-            clearRegionBox();
             return;
         }
         state.screenSharing = true;
@@ -982,94 +934,6 @@ export function createVideoPublication({ policy }) {
         mountServerDialog(overlay);
     }
 
-    // pickRegionAndCrop shows a draggable/resizable box over the app; on confirm
-    // the track is cropped to it via the Region Capture API (71). The box then
-    // STAYS in the document: a crop target with no layout box produces no frames,
-    // so removing it would blank the share. It is torn down in doStopShare.
-    // The crop itself lives on the MediaStreamTrack, so it survives the
-    // renegotiation that publishes the share (and any later one).
-    let cancelPendingRegion = null;
-
-    function pickRegionAndCrop(track, isCurrent = () => true) {
-        return new Promise((resolve) => {
-            cancelPendingRegion?.();
-            const box = document.createElement("div");
-            box.className = "region-box";
-            box.innerHTML = `
-                <div class="region-title">${escapeTranslation(tLabel("desktop.drag.to.move.drag.corner.to.resize"))}</div>
-                <button class="region-ok">${escapeTranslation(tLabel("desktop.crop.share"))}</button>
-                <button class="region-cancel">${escapeTranslation(tLabel("desktop.cancel"))}</button>`;
-            document.body.appendChild(box);
-            let settled = false;
-            const finish = (value) => {
-                if (settled) return;
-                settled = true;
-                if (cancelPendingRegion === cancel) cancelPendingRegion = null;
-                resolve(value);
-            };
-            const cancel = () => {
-                box.remove();
-                finish(null);
-            };
-            cancelPendingRegion = cancel;
-
-            // Drag by the title bar; resize via CSS resize handle.
-            const title = box.querySelector(".region-title");
-            title.onpointerdown = (e) => {
-                const startX = e.clientX - box.offsetLeft;
-                const startY = e.clientY - box.offsetTop;
-                const move = (ev) => {
-                    box.style.left = Math.max(0, ev.clientX - startX) + "px";
-                    box.style.top = Math.max(0, ev.clientY - startY) + "px";
-                };
-                const up = () => {
-                    document.removeEventListener("pointermove", move);
-                    document.removeEventListener("pointerup", up);
-                };
-                document.addEventListener("pointermove", move);
-                document.addEventListener("pointerup", up);
-            };
-
-            box.querySelector(".region-cancel").onclick = cancel;
-            box.querySelector(".region-ok").onclick = async () => {
-                if (settled || !isCurrent()) {
-                    cancel();
-                    return;
-                }
-                try {
-                    const target = await CropTarget.fromElement(box);
-                    await track.cropTo(target);
-                    if (settled || !isCurrent()) {
-                        cancel();
-                        return;
-                    }
-                    // the box is inside its own crop rect from now on, so it has to
-                    // stop painting anything: .cropping leaves a transparent hole
-                    // and marks the region with an outline, which is drawn outside
-                    // the border box and therefore outside the captured rect.
-                    box.innerHTML = "";
-                    box.classList.add("cropping");
-                    finish(box);
-                } catch (e) {
-                    if (!settled && isCurrent()) V().sysMsg(tLabel("desktop.region.capture.failed") + (e.message || e.name));
-                    cancel();
-                }
-            };
-        });
-    }
-
-    // clearRegionBox drops the persistent crop target (71).
-    function clearRegionBox() {
-        const cancel = cancelPendingRegion;
-        cancelPendingRegion = null;
-        cancel?.();
-        const { state } = V();
-        if (state.regionBox) {
-            state.regionBox.remove();
-            state.regionBox = null;
-        }
-    }
-
     // receiverCount is the set of users the SFU could be forwarding my video to:
     // it only fans a publisher out to peers in the publisher's own channel.
     function receiverCount() {
@@ -1170,7 +1034,6 @@ export function createVideoPublication({ policy }) {
             stopDisplayCapture(state.shareStream);
             state.shareStream = null;
         }
-        clearRegionBox(); // (71)
         applySendCaps();
         syncCameraButton();
         try {
@@ -1345,5 +1208,5 @@ export function createVideoPublication({ policy }) {
         }
     }
 
-    return { applyVideoLimits, shareToggle, clearRegionBox, resetCameraState, cameraToggle, applySendCaps, retryVideoHardware, syncCameraButton, syncShareButton };
+    return { applyVideoLimits, shareToggle, resetCameraState, cameraToggle, applySendCaps, retryVideoHardware, syncCameraButton, syncShareButton };
 }

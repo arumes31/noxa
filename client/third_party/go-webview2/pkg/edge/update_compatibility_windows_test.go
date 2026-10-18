@@ -23,7 +23,7 @@ func TestUpdateBrowserNormalPolicyIgnoresLegacyEnvironment(t *testing.T) {
 
 func TestUpdateBrowserLegacyPolicyIsExactAndProcessLocal(t *testing.T) {
 	var bridge updateBrowserStartupState
-	if err := bridge.enableLegacy(); err != nil {
+	if err := bridge.enableLegacy(LegacyUpdateDefault); err != nil {
 		t.Fatal(err)
 	}
 	fragments := []string{"--disable-features=msSmartScreenProtection"}
@@ -47,7 +47,7 @@ func TestUpdateBrowserLegacyRejectsUnexpectedOptions(t *testing.T) {
 		{"--disable-features=msSmartScreenProtection\x00"},
 	} {
 		var state updateBrowserStartupState
-		if err := state.enableLegacy(); err != nil {
+		if err := state.enableLegacy(LegacyUpdateDefault); err != nil {
 			t.Fatal(err)
 		}
 		if got, err := state.arguments(fragments); err == nil || got != "" {
@@ -61,14 +61,14 @@ func TestUpdateBrowserCompatibilityCannotChangeAfterStartup(t *testing.T) {
 	if _, err := state.arguments(nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.enableLegacy(); err == nil {
+	if err := state.enableLegacy(LegacyUpdateDefault); err == nil {
 		t.Fatal("changed policy after startup")
 	}
 	var configured updateBrowserStartupState
-	if err := configured.enableLegacy(); err != nil {
+	if err := configured.enableLegacy(LegacyUpdateDefault); err != nil {
 		t.Fatal(err)
 	}
-	if err := configured.enableLegacy(); err == nil {
+	if err := configured.enableLegacy(LegacyUpdateDefault); err == nil {
 		t.Fatal("accepted repeated compatibility preparation")
 	}
 }
@@ -81,7 +81,7 @@ func TestUpdateBrowserConcurrentSelectionHasOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results <- state.enableLegacy()
+			results <- state.enableLegacy(LegacyUpdateDefault)
 		}()
 	}
 	wg.Wait()
@@ -140,7 +140,7 @@ func TestUpdateBrowserSelectionCannotRacePastStartup(t *testing.T) {
 		selection := make(chan error, 1)
 		go func() {
 			<-start
-			selection <- state.enableLegacy()
+			selection <- state.enableLegacy(LegacyUpdateDefault)
 		}()
 		close(start)
 		got, err := state.arguments([]string{"--disable-features=msSmartScreenProtection"})
@@ -151,8 +151,45 @@ func TestUpdateBrowserSelectionCannotRacePastStartup(t *testing.T) {
 		if selected != (got == "--disable-features=msSmartScreenProtection") {
 			t.Fatalf("selection success %v disagrees with startup policy %q", selected, got)
 		}
-		if err := state.enableLegacy(); err == nil {
+		if err := state.enableLegacy(LegacyUpdateDefault); err == nil {
 			t.Fatal("startup did not seal the policy")
+		}
+	}
+}
+
+func TestUpdateBrowserHistoricalPolicies(t *testing.T) {
+	for _, tc := range []struct {
+		policy UpdateCompatibilityPolicy
+		want   string
+	}{
+		{LegacyUpdateDefault, "--disable-features=msSmartScreenProtection"},
+		{LegacyUpdateHardware2026, "--disable-features=msSmartScreenProtection,ForceSoftwareForRtcLowResolutions,MediaFoundationUseSWBRCForH264Camera"},
+		{LegacyUpdateDuplicateFeatures, "--disable-features=ForceSoftwareForRtcLowResolutions --disable-features=msSmartScreenProtection"},
+		{LegacyUpdateMergedHardware, "--disable-features=msSmartScreenProtection,ForceSoftwareForRtcLowResolutions"},
+	} {
+		t.Run(string(tc.policy), func(t *testing.T) {
+			var state updateBrowserStartupState
+			if err := state.enableLegacy(tc.policy); err != nil {
+				t.Fatal(err)
+			}
+			got, err := state.arguments([]string{"--disable-features=msSmartScreenProtection"})
+			if err != nil || got != tc.want {
+				t.Fatalf("historical policy = %q, %v; want %q", got, err, tc.want)
+			}
+			var successor updateBrowserStartupState
+			normal, err := successor.arguments([]string{"--disable-features=msSmartScreenProtection"})
+			if err != nil || !strings.Contains(normal, "MediaFoundationUseSWBRCForH264Camera") {
+				t.Fatalf("successor lost current policy: %q, %v", normal, err)
+			}
+		})
+	}
+	for _, policy := range []UpdateCompatibilityPolicy{"", "--disable-gpu", "unknown"} {
+		var state updateBrowserStartupState
+		if err := state.enableLegacy(policy); err == nil {
+			t.Fatalf("accepted unknown policy %q", policy)
+		}
+		if state.legacy != "" {
+			t.Fatal("invalid selection mutated policy")
 		}
 	}
 }

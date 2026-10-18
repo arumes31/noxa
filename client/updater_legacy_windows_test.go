@@ -11,15 +11,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wailsapp/go-webview2/pkg/edge"
 	"noxa/internal/updatemanifest"
 )
 
 type legacyReleaseFixture struct {
-	Version   string `json:"version"`
-	Commit    string `json:"commit"`
-	SHA256    string `json:"sha256"`
-	Manifest  string `json:"manifest"`
-	Signature string `json:"signature"`
+	Version       string                         `json:"version"`
+	Commit        string                         `json:"commit"`
+	SHA256        string                         `json:"sha256"`
+	Manifest      string                         `json:"manifest"`
+	Signature     string                         `json:"signature"`
+	BrowserPolicy edge.UpdateCompatibilityPolicy `json:"browser_policy"`
 }
 
 func verifiedLegacyReleaseFixtures(t *testing.T) []legacyReleaseFixture {
@@ -32,8 +34,8 @@ func verifiedLegacyReleaseFixtures(t *testing.T) []legacyReleaseFixture {
 	if err := json.Unmarshal(data, &releases); err != nil {
 		t.Fatal(err)
 	}
-	if len(releases) != 41 {
-		t.Fatalf("expected every published release v0.5.24 through v0.5.64; got %d", len(releases))
+	if len(releases) != 65 {
+		t.Fatalf("expected every published release v0.5.24 through v0.5.88; got %d", len(releases))
 	}
 	// Independently pinned release key, not supplied by a fixture or live server.
 	const key = "V2gJha/+dbSOAz0F8EBCX6358VJJD0JDtD+wKZeemFg="
@@ -59,7 +61,8 @@ func TestUpdateHandoffAllPublishedLegacyReleases(t *testing.T) {
 				t.Fatal("invalid published digest")
 			}
 			digest := [sha256.Size]byte(decoded)
-			if legacyUpdateRelease(digest) != release.Version || !legacyUpdateHash(digest) {
+			name, policy := legacyUpdateReleasePolicy(digest)
+			if name != release.Version || policy != release.BrowserPolicy || !legacyUpdateHash(digest) {
 				t.Fatal("authenticated legacy release cannot use update bridge")
 			}
 			digest[0] ^= 1

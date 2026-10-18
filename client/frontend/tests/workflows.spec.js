@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, test, chooseShareOption } from "./fixtures.js";
 
 test.describe("echo channel icon", () => {
     test.beforeEach(async ({ page }) => {
@@ -8666,16 +8666,19 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
     const shareDialog = page.getByRole("dialog", { name: "Share screen" });
     await expect(shareDialog.getByRole("group", { name: "Source" })).toBeVisible();
     await expect(shareDialog.getByRole("radio")).toHaveCount(3);
-    await expect(shareDialog.getByRole("combobox", { name: "Quality preset" })).toBeVisible();
-    await expect(shareDialog.getByRole("combobox", { name: "Share audio", exact: true })).toHaveValue("none");
+    await expect(shareDialog.getByRole("radio", { name: "Screen", exact: true })).toBeChecked();
+    await expect(shareDialog.locator(".sp-quality-toggle")).toContainText("Full HD");
+    await expect(shareDialog.locator(".sp-quality-toggle")).toContainText("1080p · 30 fps · Auto");
+    await expect(shareDialog.getByRole("button", { name: "Share audio: No audio", exact: true })).toBeVisible();
     await auditAccessibility(page, "screen-share dialog");
-    await shareDialog.getByRole("combobox", { name: "Quality preset" }).selectOption("uhd");
+    await chooseShareOption(shareDialog, "preset", "uhd");
     await expect(shareDialog.locator(".share-budget")).toContainText("Higher resolutions or frame rates can use more");
-    await expect(shareDialog.getByRole("combobox", { name: "Quality preset" })).toHaveAccessibleDescription(
+    await expect(shareDialog.getByRole("group", { name: "Quality preset" })).toHaveAccessibleDescription(
         /Full HD at 60 fps uses an 8 Mbps video budget.*Higher resolutions or frame rates can use more/,
     );
     await expect(shareDialog.locator(".share-quality-warning")).toBeVisible();
-    await shareDialog.getByRole("combobox", { name: "Quality preset" }).selectOption("custom");
+    await expect(shareDialog.locator(".sp-quality-toggle")).toContainText("2160p · 30 fps");
+    await chooseShareOption(shareDialog, "preset", "custom");
     await shareDialog.getByLabel("Width (px)", { exact: true }).fill("3440");
     await shareDialog.getByLabel("Height (px)", { exact: true }).fill("1440");
     await shareDialog.getByLabel("Frame rate", { exact: true }).selectOption("60");
