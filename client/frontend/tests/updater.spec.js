@@ -12,7 +12,7 @@ async function boot(page, scenario = {}) {
             },
             EventsEmit() {},
         };
-        window.go = { main: { App: new Proxy({}, { get: (_, method) => method === "UpdateStartupPending" && window.__scenario.legacyBridge ? undefined : async () => {
+        window.go = { main: { App: new Proxy({}, { get: (_, method) => method === "UpdateStartupPending" && window.__scenario.legacyBridge ? undefined : async (...args) => {
             window.__calls[method] = (window.__calls[method] || 0) + 1;
             const s = window.__scenario;
             if (method === "UpdateStartupPending") {
@@ -30,9 +30,10 @@ async function boot(page, scenario = {}) {
             if (method === "CheckForUpdate") {
                 if (s.checkPending) await new Promise((resolve) => { window.__finishCheck = resolve; });
                 if (s.offline) throw new Error("offline");
-                return { available: s.available !== false, version: "v0.4.1", size: 1048576 };
+                return { available: s.available !== false, version: s.versions?.[Math.min(window.__calls.CheckForUpdate - 1, s.versions.length - 1)] || "v0.4.1", size: 1048576 };
             }
             if (method === "DownloadAndApply") {
+                (window.__downloadVersions ||= []).push(args[0]?.version);
                 for (const cb of window.__events.update_progress || []) cb(50);
                 if (s.downloadPending) await new Promise((resolve) => { window.__finishDownload = resolve; });
                 if (s.downloadThrows) throw new Error("connection lost");
@@ -622,4 +623,18 @@ test("bloom runs only once on transition and observers retire with the dialog", 
     await expect(page.locator(".upd-status")).toHaveText("Download cancelled. You can try again.");
     await page.locator(".upd-close").click();
     expect(await page.evaluate(() => (window.__events.update_progress || []).length)).toBe(0);
+});
+
+test("changed release requires a fresh offer and confirmation before downloading again", async ({ page }) => {
+    await boot(page, { autoInstall: true, versions: ["v0.4.1", "v0.4.2"], downloadError: "update changed from v0.4.1 to v0.4.2; confirm the new version", restartPending: true });
+    const dialog = page.getByRole("dialog", { name: "Check for updates", exact: true });
+    await expect(dialog.locator(".upd-status")).toContainText("confirm the new version");
+    await expect(dialog.locator(".upd-update")).toBeHidden();
+    await expect(dialog.locator(".upd-retry")).toBeVisible();
+    await dialog.locator(".upd-retry").click();
+    await expect(dialog.locator(".upd-next")).toHaveText("v0.4.2");
+    expect(await page.evaluate(() => window.__downloadVersions)).toEqual(["v0.4.1"]);
+    await page.evaluate(() => { window.__scenario.downloadError = ""; });
+    await dialog.locator(".upd-update").click();
+    await expect.poll(() => page.evaluate(() => window.__downloadVersions)).toEqual(["v0.4.1", "v0.4.2"]);
 });

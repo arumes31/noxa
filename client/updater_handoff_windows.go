@@ -502,7 +502,7 @@ func prepareLegacyUpdateBootstrap() error {
 	if err != nil {
 		return fmt.Errorf("verify update parent: %w", err)
 	}
-	release := legacyUpdateRelease(hash)
+	release, policy := legacyUpdateReleasePolicy(hash)
 	if release == "" {
 		return nil
 	}
@@ -529,7 +529,7 @@ func prepareLegacyUpdateBootstrap() error {
 		removeVerifiedUpdateSnapshot(previous, identity)
 		return fmt.Errorf("legacy update parent exited during preparation")
 	}
-	if err := edge.SetLegacyUpdateCompatibility(); err != nil {
+	if err := edge.SetLegacyUpdateCompatibility(policy); err != nil {
 		removeVerifiedUpdateSnapshot(previous, identity)
 		return err
 	}
