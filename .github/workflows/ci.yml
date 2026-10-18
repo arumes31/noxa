@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
     # Label changes must rerun the visible, reviewable one-time breaking skip.
     types: [opened, synchronize, reopened, labeled, unlabeled]
@@ -99,7 +101,7 @@ jobs:
           echo "::warning::Buf breaking check skipped because this PR has the explicit 'buf skip breaking' label."
           echo "Remove the label to rerun breaking-change detection against ${{ github.event.pull_request.base.sha }}."
 
-  frontend-e2e:
+  frontend-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:
@@ -127,20 +129,57 @@ jobs:
       - name: Validate deterministic video workload and measurement counters
         working-directory: .
         run: node --test internal/webrtc/testdata/browser_desktop_workload.test.mjs internal/webrtc/testdata/browser_fanout_metrics.test.mjs internal/webrtc/testdata/browser_source_timing.test.mjs
-      - run: npm run test:e2e
       - name: Verify single-quality streams and codec switching through the SFU
         working-directory: .
         run: go test -tags integration -count=1 -timeout=4m -run '^TestBrowser(ScreenSingleSource|SingleCodecSwitch)$' -v ./internal/webrtc
+
+  frontend-e2e-shard:
+    name: Browser tests (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    defaults:
+      run:
+        working-directory: client/frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: client/frontend/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
       - name: Preserve browser failure diagnostics
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: frontend-e2e-failure-${{ github.run_attempt }}
+          name: frontend-e2e-failure-${{ matrix.shard }}-${{ github.run_attempt }}
           path: |
             client/frontend/test-results/
             client/frontend/playwright-report/
           if-no-files-found: ignore
           retention-days: 1
+
+  # Keep the existing required check and release dependency stable. A failed,
+  # cancelled, or skipped shard must never turn this aggregate check green.
+  frontend-e2e:
+    needs: [frontend-checks, frontend-e2e-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require all frontend checks and browser shards
+        env:
+          CHECKS_RESULT: ${{ needs.frontend-checks.result }}
+          SHARDS_RESULT: ${{ needs.frontend-e2e-shard.result }}
+        run: test "$CHECKS_RESULT" = success && test "$SHARDS_RESULT" = success
 
   webview2:
     name: Standalone WebView2 fork

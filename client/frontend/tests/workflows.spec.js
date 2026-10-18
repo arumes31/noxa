@@ -3798,7 +3798,11 @@ test("@quickwins transfer estimates and new-message counts translate without cha
     });
     await expect(page.locator("#chat-log .msg.rich")).toHaveCount(35);
     await expect(page.locator('#chat-log [data-msg-id="35"] .msg-lock')).toHaveAttribute("aria-label", /channel key/);
-    await page.locator("#chat-log").evaluate(log => { log.scrollTop = 0; log.dispatchEvent(new Event("scroll")); });
+    // Let the browser deliver a real scroll after the initial layout settles;
+    // a synthetic event can race the resize observer that follows new messages.
+    await page.locator("#chat-log").hover();
+    await page.mouse.wheel(0, -10000);
+    await expect.poll(() => page.locator("#chat-log").evaluate(log => log.scrollTop)).toBe(0);
     await page.evaluate(() => {
         for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "chat", data: { id: 36, channel_id: 42, from: "Bob", from_unique_id: "peer", text: "New message", enc_verified: true, enc_mode: "server" } }));
     });
