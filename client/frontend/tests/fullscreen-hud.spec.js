@@ -260,3 +260,93 @@ test("reduced motion removes the HUD slide", async ({ page }) => {
     const transition = await page.locator(".fs-dock").evaluate(node => getComputedStyle(node).transitionDuration);
     expect(transition.split(",").every(value => parseFloat(value) === 0)).toBe(true);
 });
+
+test("fullscreen channel cache does not cross server scopes", async ({ page }) => {
+    await enterSingle(page);
+    await page.evaluate(() => window.__fs.say("bob", "server-one-secret", 77));
+    await page.keyboard.press("Escape");
+    await expect.poll(() => fullscreenClass(page)).toBe("");
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        window.__fs.video.clearVideoGrid();
+        v.state.activeTabID = "two";
+        v.state.serverGeneration++;
+        v.state.channels = [{ ChannelID: 1, Name: "server-two-channel" }];
+        const canvas = document.createElement("canvas");
+        canvas.getContext("2d").fillRect(0, 0, 100, 100);
+        window.__fs.video.videoTrackAdded("alice|screen", canvas.captureStream(5), v.state.clients.find(c => c.client_id === "alice"));
+    });
+    await page.locator(".stage-info").getByRole("button", { name: /^Full screen/ }).click();
+    await expect.poll(() => fullscreenClass(page)).toContain("fs-hud-host");
+    await page.keyboard.press("c");
+    await expect(page.locator(".fs-quick-name")).toHaveText("#server-two-channel");
+    await expect(page.locator(".fs-quick-log")).not.toContainText("server-one-secret");
+    // Numeric IDs are independently allocated by each server.
+    await page.evaluate(() => window.__fs.say("bob", "server-two-message", 77));
+    await expect(page.locator(".fs-quick-log")).toContainText("server-two-message");
+});
+
+
+test("downgraded direct messages retain their warning in fullscreen", async ({ page }) => {
+    await enterSingle(page);
+    await page.evaluate(() => window.__noxaFullscreen.chatMessage({
+        from: "Bob", from_client_id: "bob", from_unique_id: "u-bob", to_unique_id: "u-me",
+        text: "server-readable-message", direct: true, enc_verified: false, enc_mode: "downgraded"
+    }, { added: true, incomingDM: true }));
+    await expect(page.locator(".fs-quick-log")).toContainText("server-readable-message");
+    const warning = page.locator('.fs-bubble-encryption[data-kind="warning"]');
+    await expect(warning).toBeVisible();
+    await expect(warning).toHaveAttribute("aria-label", /server can read/);
+    await expect(page.locator('.fs-bubble-encryption[data-kind="lock"]')).toHaveCount(0);
+    // A later verified DM must not relabel the downgraded message.
+    await page.evaluate(() => window.__fs.dm("bob", "private-message"));
+    await expect(warning).toHaveCount(1);
+    await expect(page.locator('.fs-bubble-encryption[data-kind="lock"]')).toHaveCount(1);
+});
+
+for (const generation of ["serverGeneration", "sessionGeneration"]) {
+    test(`fullscreen history and drafts reset when ${generation} changes`, async ({ page }) => {
+        await enterSingle(page);
+        await page.evaluate(() => window.__fs.say("bob", "old-session-message", 88));
+        await page.keyboard.press("c");
+        await page.locator(".fs-quick-input").fill("old-session-draft");
+        await page.evaluate(key => {
+            window.__noxa.state[key]++;
+            document.dispatchEvent(new Event("fullscreenchange"));
+        }, generation);
+        await expect(page.locator(".fs-quick")).toBeHidden();
+        await page.locator(".fs-chat").click();
+        await expect(page.locator(".fs-quick-input")).toHaveValue("");
+        await expect(page.locator(".fs-quick-log")).not.toContainText("old-session-message");
+        await page.evaluate(() => window.__fs.say("bob", "new-session-message", 88));
+        await expect(page.locator(".fs-quick-log")).toContainText("new-session-message");
+    });
+}
+
+test("unopened direct messages show a warning instead of an encryption lock", async ({ page }) => {
+    await enterSingle(page);
+    await page.evaluate(() => window.__fs.dm("bob", "[encrypted message — decryption failed]"));
+    await expect(page.locator('.fs-bubble-encryption[data-kind="warning"]')).toBeVisible();
+    await expect(page.locator('.fs-bubble-encryption[data-kind="lock"]')).toHaveCount(0);
+    await expect(page.locator(".fs-bubble-text")).toHaveText(/could not be decrypted/i);
+});
+
+test("a reply completion from an old server cannot populate the new server's bubble", async ({ page }) => {
+    await enterSingle(page);
+    await page.evaluate(() => {
+        window.go.main.App.SendChatForTab = () => new Promise(resolve => { window.__fs.finishSend = resolve; });
+        window.__fs.dm("bob", "old-server-dm");
+    });
+    await page.locator(".fs-quick-input").fill("old-server-reply");
+    await page.locator(".fs-quick-input").press("Enter");
+    await expect.poll(() => page.evaluate(() => !!window.__fs.finishSend)).toBe(true);
+    await page.evaluate(() => {
+        window.__noxa.state.activeTabID = "two";
+        window.__noxa.state.serverGeneration++;
+        window.__fs.dm("bob", "new-server-dm");
+    });
+    await page.locator(".fs-quick-input").fill("new-server-draft");
+    await page.evaluate(() => window.__fs.finishSend(""));
+    await expect(page.locator(".fs-quick-log")).toHaveText("new-server-dm");
+    await expect(page.locator(".fs-quick-input")).toHaveValue("new-server-draft");
+});

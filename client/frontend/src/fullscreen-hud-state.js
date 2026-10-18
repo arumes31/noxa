@@ -150,10 +150,10 @@ export function createQuickReply({ keep = QUICK_MESSAGES, idle = QUICK_IDLE_MS, 
     return {
         // receive records an incoming direct message and opens it if nothing
         // else is being answered. Returns "open" or "queued".
-        receive({ uid, name, text, at = clock.now() }) {
+        receive({ uid, name, text, badge, at = clock.now() }) {
             if (!uid) return "ignored";
             const item = thread(uid, name);
-            item.messages = [...item.messages, { text, self: false, at }].slice(-keep);
+            item.messages = [...item.messages, { text, badge, self: false, at }].slice(-keep);
             item.at = at;
             const showing = target?.kind === "dm" && target.uid === uid;
             if (showing) {
@@ -179,9 +179,9 @@ export function createQuickReply({ keep = QUICK_MESSAGES, idle = QUICK_IDLE_MS, 
             return "open";
         },
         // sent appends the user's own reply to the open conversation.
-        sent(text, at = clock.now()) {
+        sent(text, at = clock.now(), badge) {
             if (!target) return;
-            const message = { text, self: true, at };
+            const message = { text, badge, self: true, at };
             if (target.kind === "dm") {
                 const item = thread(target.uid, target.name);
                 item.messages = [...item.messages, message].slice(-keep);

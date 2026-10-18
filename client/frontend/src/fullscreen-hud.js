@@ -19,7 +19,7 @@ import { speakingAvatar, createSpeakingAvatars } from "./speaking-avatar.js";
 import { isClientMicrophoneMuted } from "./audio-state.js";
 import { currentWhisperRouting } from "./media-controls.js";
 import { previewLine } from "./dm-model.js";
-import { encModeFrom } from "./message-encryption.js";
+import { encModeFrom, encryptionBadge } from "./message-encryption.js";
 import { SLOT_SCREEN } from "./media-track-id.js";
 import { STAGE_MODES } from "./multiview-state.js";
 import { avatarColor } from "./workspace-ui.js";
@@ -71,11 +71,12 @@ function setText(node, text) {
 // chatPreview builds the same safe one-line preview the DM list uses: an
 // attachment shows its name and a refused or unopened body its refusal text.
 function chatPreview(d) {
-    return previewLine({
+    const message = {
         text: d.text ?? d.body ?? "", deleted: !!d.deleted, e2e: !!d.e2e, direct: !!d.direct || !!d.e2e,
         enc: !!d.enc || !!d.enc_verified, encVerified: !!d.enc_verified,
         encMode: encModeFrom(!!d.enc_verified, d.enc_mode), self: false,
-    });
+    };
+    return { text: previewLine(message), badge: encryptionBadge(message) };
 }
 
 export function createFullscreenHud(stage) {
@@ -90,12 +91,38 @@ export function createFullscreenHud(stage) {
     let quickKey = "";
     let peekKey = "";
     let chatUnread = 0;
-    let sending = false;
+    let sending = null;
+    let chatScope = "";
     const channelRing = [];
 
     const autoHide = createAutoHide({ onChange: visible => applyVisibility(visible) });
     const peek = createChatPeek({ onChange: () => renderPeek() });
     const quick = createQuickReply({ onChange: () => renderQuick() });
+
+    // This HUD outlives server tabs and reconnects; message IDs are local to
+    // a server. Drop cached history and drafts before using a new scope.
+    function currentChatScope() {
+        const state = V()?.state || {};
+        return JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration]);
+    }
+
+    function syncChatScope() {
+        const scope = currentChatScope();
+        if (scope === chatScope) return;
+        chatScope = scope;
+        channelRing.length = 0;
+        chatUnread = 0;
+        quick.reset();
+        peek.clear();
+        sending = null;
+        quickKey = "";
+        if (hud) {
+            parts.input.value = "";
+            hud.querySelector(".fs-quick-error").hidden = true;
+            autoHide.release("focus");
+            renderQuick();
+        }
+    }
 
     // ------------------------------------------------------------ building
     function build() {
@@ -126,7 +153,6 @@ export function createFullscreenHud(stage) {
                 <header class="fs-quick-head">
                     <span class="fs-quick-avatar"></span>
                     <span class="fs-quick-who"><b class="fs-quick-name"></b><span class="fs-quick-sub"></span></span>
-                    <span class="fs-quick-lock" role="img">${svg("lock")}</span>
                     <button type="button" class="fs-quick-close">${svg("close")}</button>
                 </header>
                 <ol class="fs-quick-log"></ol>
@@ -263,6 +289,7 @@ export function createFullscreenHud(stage) {
     }
 
     function sync() {
+        syncChatScope();
         const element = document.fullscreenElement;
         if (eligible(element)) {
             if (host !== element) attach(element);
@@ -386,6 +413,7 @@ export function createFullscreenHud(stage) {
 
     // ------------------------------------------------------------- render
     function update() {
+        syncChatScope();
         if (!host || !hud) return;
         hud.dataset.kind = hostKind();
         hud.setAttribute("aria-label", t("fs.region"));
@@ -647,10 +675,6 @@ export function createFullscreenHud(stage) {
         avatarHolder.replaceChildren(speaking ? speakingAvatar(avatar) : avatar);
         setText(box.querySelector(".fs-quick-name"), dm ? target.name : `#${target.name}`);
         setText(box.querySelector(".fs-quick-sub"), dm ? t("fs.privateMessage") : t("fs.channelChat"));
-        const lock = box.querySelector(".fs-quick-lock");
-        lock.hidden = !dm;
-        lock.setAttribute("aria-label", t("fs.encrypted"));
-        lock.title = t("fs.encrypted");
         setLabel(box.querySelector(".fs-quick-close"), t("fs.close"));
         box.querySelector(".fs-quick-log").replaceChildren(...snap.messages.map(message => {
             const li = el("li", `fs-bubble${message.self ? " self" : ""}`);
@@ -662,6 +686,13 @@ export function createFullscreenHud(stage) {
             const text = el("span", "fs-bubble-text");
             text.textContent = message.text;
             li.append(text);
+            if (message.badge?.kind) {
+                const badge = el("span", "fs-bubble-encryption", svg(message.badge.kind));
+                badge.dataset.kind = message.badge.kind;
+                badge.setAttribute("role", "img");
+                setLabel(badge, t(message.badge.label));
+                li.append(badge);
+            }
             if (message.self) {
                 const sr = el("span", "fs-sr");
                 sr.textContent = t("fs.you");
@@ -746,6 +777,7 @@ export function createFullscreenHud(stage) {
     }
 
     function replyLatest(focusInput) {
+        syncChatScope();
         if (!host) return;
         const target = quick.openLatest();
         if (target && focusInput) {
@@ -754,6 +786,7 @@ export function createFullscreenHud(stage) {
     }
 
     function toggleChatDrawer() {
+        syncChatScope();
         if (!host) return;
         if (quick.state.target?.kind === "channel") { closeQuick(true); return; }
         const state = V()?.state || {};
@@ -767,6 +800,7 @@ export function createFullscreenHud(stage) {
     }
 
     async function sendQuick() {
+        syncChatScope();
         const snap = quick.state;
         const text = parts.input.value.trim();
         const error = hud.querySelector(".fs-quick-error");
@@ -774,20 +808,28 @@ export function createFullscreenHud(stage) {
         const state = V()?.state || {};
         const send = app()?.SendChatForTab;
         if (typeof send !== "function") return;
-        sending = true;
+        const request = {};
+        sending = request;
+        const scope = chatScope;
+        const stillCurrent = () => sending === request && scope === currentChatScope()
+            && JSON.stringify(snap.target) === JSON.stringify(quick.state.target);
         error.hidden = true;
         try {
             const result = snap.target.kind === "dm"
                 ? await send(state.activeTabID, "direct", snap.target.uid, text)
                 : await send(state.activeTabID, "channel", String(snap.target.id), text);
+            if (!stillCurrent()) return;
             if (result) throw new Error(String(result));
-            if (snap.target.kind === "dm") quick.sent(text);
+            // encryptChat rejects DMs without an E2E key; successful native
+            // sends cannot fall back to a server-held scope key.
+            if (snap.target.kind === "dm") quick.sent(text, Date.now(), encryptionBadge({ direct: true, e2e: true }));
             parts.input.value = "";
         } catch (failure) {
+            if (!stillCurrent()) return;
             error.textContent = t("fs.sendFailed", { error: failure?.message || String(failure) });
             error.hidden = false;
         } finally {
-            sending = false;
+            if (sending === request) sending = null;
         }
     }
 
@@ -799,6 +841,7 @@ export function createFullscreenHud(stage) {
         if (!d || !result) return;
         const state = V()?.state || {};
         if (state.replayingTabID) return;
+        syncChatScope();
         const direct = !!d.direct || !!d.e2e;
         const self = (d.from_client_id && d.from_client_id === state.myClientID) || (d.from_unique_id && d.from_unique_id === state.myUniqueID);
         const sender = state.clients?.find(c => (d.from_client_id && c.client_id === d.from_client_id) || (d.from_unique_id && c.unique_id === d.from_unique_id)) || null;
@@ -811,13 +854,13 @@ export function createFullscreenHud(stage) {
             if (channel === null || channel !== state.myChannelID) return;
             const key = d.id ? `ch:${d.id}` : "";
             if (key && channelRing.some(item => item.key === key)) return;
-            const text = chatPreview(d);
-            channelRing.push({ key, channel, name, text, self: !!self, at: Date.now() });
+            const { text, badge } = chatPreview(d);
+            channelRing.push({ key, channel, name, text, badge, self: !!self, at: Date.now() });
             while (channelRing.length > CHANNEL_RING) channelRing.shift();
             if (!host || self) return;
             if (window.__noxaNotify?.channelOverride?.(channel)?.muted) return;
             if (quick.state.target?.kind === "channel") {
-                quick.channelMessage({ name, text, self: false });
+                quick.channelMessage({ name, text, badge, self: false });
                 return;
             }
             chatUnread++;
@@ -828,7 +871,7 @@ export function createFullscreenHud(stage) {
         if (!host || !result.incomingDM || self) return;
         const uid = senderUID;
         if (!uid) return;
-        quick.receive({ uid, name, text: chatPreview(d) });
+        quick.receive({ uid, name, ...chatPreview(d) });
     }
 
     function voiceChanged() {
