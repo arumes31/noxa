@@ -118,7 +118,7 @@ func (a *App) chatTabLayoutStore(owner DMHistoryContext) (chatTabLayoutStore, er
 	if !ready || addr == "" {
 		return empty, errors.New("chat tab layout requires a connected server")
 	}
-	canonical, err := normalizeServerAddr(addr)
+	canonical, err := canonicalServerDestination(addr)
 	if err != nil {
 		return empty, fmt.Errorf("chat tab layout server: %w", err)
 	}

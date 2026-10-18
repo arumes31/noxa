@@ -117,7 +117,7 @@ func (a *App) SavedMessagesForTab(tabID string, request SavedMessageRequest) (Sa
 	if addr == "" {
 		return result, errors.New("server identity unavailable")
 	}
-	canonical, err := normalizeServerAddr(addr)
+	canonical, err := canonicalServerDestination(addr)
 	if err != nil {
 		return result, err
 	}

@@ -1046,6 +1046,10 @@ export function StartConnectionBenchmark(arg1) {
   return window['go']['main']['App']['StartConnectionBenchmark'](arg1);
 }
 
+export function StartedAfterUpdate() {
+  return window['go']['main']['App']['StartedAfterUpdate']();
+}
+
 export function StopPrivateCallForTab(arg1, arg2) {
   return window['go']['main']['App']['StopPrivateCallForTab'](arg1, arg2);
 }

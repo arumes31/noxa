@@ -99,6 +99,19 @@ func updateChildEnvironment(env []string, address, nonce string) []string {
 	return append(clean, updateReadyAddressEnv+"="+address, updateReadyNonceEnv+"="+nonce)
 }
 
+// startedAfterUpdate records at process start, before ConfirmUpdateStartup
+// clears the readiness variables, whether the updater launched this process.
+var startedAfterUpdate = updateLaunchedProcess(os.Getenv)
+
+func updateLaunchedProcess(getenv func(string) string) bool {
+	return getenv(updateReadyAddressEnv) != "" && getenv(updateReadyNonceEnv) != ""
+}
+
+// StartedAfterUpdate reports whether this is the first start of a freshly
+// installed update, so the frontend can play its one-time intro. It carries
+// no address, nonce or path.
+func (a *App) StartedAfterUpdate() bool { return startedAfterUpdate }
+
 // ConfirmUpdateStartup is called after the frontend's modules and native
 // settings have initialized. It exposes no callback address, path, or command
 // to JavaScript, and does nothing on an ordinary/manual application launch.

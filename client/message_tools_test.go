@@ -180,3 +180,26 @@ func TestSavedDirectMessagesRequireOriginalHistoryOwner(t *testing.T) {
 		t.Fatal("stale identity removed DM reference")
 	}
 }
+
+func TestSavedMessagesDefaultPortSharesExplicitScope(t *testing.T) {
+	a, cm := newPipedApp(t, func(*netproto.Frame) (netproto.MessageType, any, bool) { return 0, nil, false })
+	a.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+	a.tabs = map[string]*tabState{"a": {cm: cm}}
+	a.activeID = "a"
+	cm.addr = "EXAMPLE.org."
+	cm.fingerprint = "server-one"
+	ref := SavedMessageReference{Kind: "channel", ChannelID: 7, MessageID: 31, Collection: "Work"}
+	if _, err := a.SavedMessagesForTab("a", SavedMessageRequest{Action: "save", Reference: ref}); err != nil {
+		t.Fatal(err)
+	}
+	cm.addr = "example.org:12333"
+	got, err := a.SavedMessagesForTab("a", SavedMessageRequest{Action: "list"})
+	if err != nil || len(got.References) != 1 || got.References[0].MessageID != 31 {
+		t.Fatalf("explicit port: %+v / %v", got, err)
+	}
+	cm.addr = "example.org:12334"
+	got, err = a.SavedMessagesForTab("a", SavedMessageRequest{Action: "list"})
+	if err != nil || len(got.References) != 0 {
+		t.Fatalf("different port: %+v / %v", got, err)
+	}
+}

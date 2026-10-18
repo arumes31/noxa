@@ -127,3 +127,17 @@ test("offline TLS connection shows network recovery without plaintext advice", a
     await expect(page.locator("#login-error")).not.toContainText("verify the certificate");
     await expect(page.locator("#login-addr")).toBeFocused();
 });
+
+
+test("pending connect splash closes immediately when another tab is activated", async ({ page }) => {
+    await page.evaluate(() => { window.__hold = new Promise(resolve => { window.__finish = resolve; }); });
+    await page.locator("#login-connect").click();
+    await expect(page.locator(".connect-splash")).toBeVisible();
+    await expect(page.locator(".connect-splash-title")).toContainText("voice.example");
+    await page.evaluate(() => { for (const callback of window.__events.tab_reset || []) callback("another-tab"); });
+    await expect(page.locator(".connect-splash")).toHaveCount(0);
+    await expect(page.locator("#login-connect")).toBeDisabled();
+    await page.evaluate(() => window.__finish());
+    await expect(page.locator("#login-connect")).toBeEnabled();
+    await expect(page.locator(".connect-splash")).toHaveCount(0);
+});

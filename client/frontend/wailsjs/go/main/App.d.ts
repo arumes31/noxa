@@ -526,6 +526,8 @@ export function SetWindowOpacity(arg1:number):Promise<string>;
 
 export function StartConnectionBenchmark(arg1:string):Promise<main.ConnectionBenchmarkStatus>;
 
+export function StartedAfterUpdate():Promise<boolean>;
+
 export function StopPrivateCallForTab(arg1:string,arg2:string):Promise<void>;
 
 export function StreamDiagnosticsForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<netproto.VideoStreamDiagnostics>;
