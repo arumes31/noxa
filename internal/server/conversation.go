@@ -29,7 +29,7 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 	}
 	read := request.Action == "list" || request.Action == "get" || request.Action == "history"
 	switch request.Action {
-	case "list", "create", "get", "history", "invite", "accept", "decline", "leave", "remove", "transfer", "rename", "send", "mark_read":
+	case "list", "create", "get", "history", "invite", "accept", "decline", "leave", "remove", "transfer", "rename", "delete", "delete_message", "send", "mark_read":
 	default:
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid conversation action")
 	}
@@ -39,7 +39,7 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid conversation id")
 		}
 	}
-	if request.BeforeID < 0 || request.ReadMessageID < 0 || (request.Action == "mark_read" && request.ReadMessageID == 0) || (request.Action == "send") != (request.Message != nil) {
+	if request.MessageID < 0 || (request.Action == "delete_message") != (request.MessageID > 0) || request.BeforeID < 0 || request.ReadMessageID < 0 || (request.Action == "mark_read" && request.ReadMessageID == 0) || (request.Action == "send") != (request.Message != nil) {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid conversation request")
 	}
 	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
@@ -110,6 +110,11 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 			s.conversationActivity.revoke(request.Target, request.ID, time.Now())
 		}
 		if deleted {
+			for _, uid := range recipients {
+				s.removeConversationCaller(request.ID, uid)
+				s.conversationFiles.revoke(uid, request.ID)
+				s.conversationActivity.revoke(uid, request.ID, time.Now())
+			}
 			s.deleteConversationFiles(ctx, request.ID)
 		}
 		// Queue only an opaque invalidation. Clients fetch content through a fresh

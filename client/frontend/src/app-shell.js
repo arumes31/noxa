@@ -254,7 +254,12 @@ export function initAppShell() {
         $("tree-filter-toggle").focus();
     });
     $("text-channel-create").onclick = () => void createTextChannel().catch(() => v.toast(t("roles.unavailable"), "warn"));
-    $("direct-messages").onclick = openDirectMessages;
+    $("direct-messages").onclick = () => {
+        if (v.isDirectMessagesOpen?.()) {
+            v.closeDirectMessages();
+            void chatUI.openChannelTab(v.state.myChannelID);
+        } else openDirectMessages();
+    };
 
     // Unread changes: chat-ui reports every badge change through
     // syncTrayUnread, private groups through the tray "groups" source.

@@ -261,6 +261,7 @@ for (const pendingStage of ["target", "crop"]) {
             window.__regionVideo.shareToggle();
         }, pendingStage);
         await page.getByRole("radio", { name: "Region of this app", exact: true }).check();
+        await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
         await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
         await page.locator(".region-ok").click();
         await expect.poll(() => page.evaluate(() => typeof window.__finishOldRegion)).toBe("function");
@@ -270,6 +271,7 @@ for (const pendingStage of ["target", "crop"]) {
         await expect.poll(() => page.evaluate(() => window.__regionReleased)).toEqual(["region-0"]);
         await page.evaluate(() => window.__regionVideo.shareToggle());
         await page.getByRole("radio", { name: "Region of this app", exact: true }).check();
+        await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
         await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect(page.locator(".region-box")).toHaveCount(1);
         await expect.poll(() => page.evaluate(() => window.__regionLeaseIDs.length)).toBe(2);

@@ -86,6 +86,7 @@ for (const supported of [true, false]) test(`live publication ${supported ? "rec
     try {
         await page.locator("#voice-screen").click();
         await page.locator(".sh-preset").selectOption("original");
+        await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
         await page.getByRole("button", { name: "Start sharing", exact: true }).click();
         await expect.poll(() => page.evaluate(async () => (await codecFixture.read()).vp8)).toBeGreaterThan(20);
         const before = await page.evaluate(async () => {

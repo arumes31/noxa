@@ -145,3 +145,86 @@ test('German shell strings', async ({ page }) => {
     await expect(page.locator('#quick-switch-open')).toHaveAccessibleName('Suchen oder springen');
     await expect(page.locator('#direct-messages')).toHaveAccessibleName('Nachrichten');
 });
+
+for (const width of [1000, 640, 390]) test(`My Roles inspector stays inside a ${width}px window`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 600 });
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'arctic'; document.body.classList.remove('details-collapsed'); });
+    await expect(page.locator('#details-close')).toBeVisible();
+    const bounds = await page.locator('#details').boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(601);
+    await page.locator('#details-close').click();
+    await expect(page.locator('#details')).toBeHidden();
+});
+test('server tabs scroll with a mouse wheel and reveal newly active servers', async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await page.evaluate(() => {
+        window.__testTabs = Array.from({length:12},(_,i)=>({id:'s'+i,addr:'server-'+i+'.example.test',nickname:'Daniel',connected:true,active:i===0}));
+        window.__noxaTabs.renderTabs(window.__testTabs);
+    });
+    const tabs = page.locator('#server-tabs');
+    await tabs.hover(); await page.mouse.wheel(0, 500);
+    await expect.poll(() => tabs.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
+    await page.evaluate(() => { window.__testTabs.forEach((t,i)=>t.active=i===11); window.__noxaTabs.renderTabs(window.__testTabs); });
+    const bar = await tabs.boundingBox(), active = await page.locator('.srv-tab.active').boundingBox();
+    expect(active.x).toBeGreaterThanOrEqual(bar.x);
+    expect(active.x + active.width).toBeLessThanOrEqual(bar.x + bar.width + 1);
+    const before = await tabs.evaluate(el => el.scrollLeft);
+    await page.evaluate(() => window.__noxaTabs.renderTabs(window.__testTabs));
+    expect(await tabs.evaluate(el=>el.scrollLeft)).toBe(before);
+});
+test('unread DM shortcut opens Messages and disappears after reading', async ({ page }) => {
+    await page.evaluate(() => window.__noxaChat.addChat({direct:true,enc_verified:true,from_unique_id:'u-mira',to_unique_id:'u-self',from:'Mira',client_msg_id:'fresh',text:'New message'}));
+    const shortcut = page.locator('#pm-tabs [data-chat-key="dm:u-mira"]');
+    await expect(shortcut).toBeVisible(); await shortcut.locator('.pm-tab-select').click();
+    await expect(page.locator('#dm-head-name')).toHaveText('Mira');
+    await expect(page.locator('#center')).toHaveClass(/dm-view-active/);
+    await expect(shortcut).toHaveCount(0);
+    await expect(page.locator('#dm-conversations')).toContainText('Mira');
+});
+test('private groups are created and opened inside Messages', async ({ page }) => {
+    await page.evaluate(async () => {
+        const original=window.go.main.App, groups=[];
+        window.go.main.App=new Proxy(original,{get(target,key){
+            if(key!=='ConversationForTab')return target[key];
+            return async (_tab,c)=>{
+                if(c.action==='create') groups.push({id:'created',name:c.name,owner:'u-self',revision:1,epoch:1,members:[{unique_id:'u-self',pending:false}]});
+                return {conversations:structuredClone(groups),messages:[]};
+            };
+        }});
+        await (await import('/src/conversations.js')).conversationChanged();
+    });
+    await page.locator('#direct-messages').click();
+    await page.getByRole('button',{name:'New conversation',exact:true}).click();
+    await page.getByRole('menuitem',{name:'New private group…',exact:true}).click();
+    await page.getByRole('textbox',{name:'Group name',exact:true}).fill('Weekend team');
+    await page.getByRole('button',{name:'OK',exact:true}).click();
+    await expect(page.locator('#dm-head-name')).toHaveText('Weekend team');
+    await expect(page.locator('#dm-conversations')).toContainText('Weekend team');
+    await expect(page.locator('#sidebar .group-sidebar, #sidebar .group-list')).toHaveCount(0);
+});
+test('menu actions are grouped under Connections, Settings and Tools', async ({ page }) => {
+    const bar=page.getByRole('menubar');
+    await expect(bar.locator(':scope > .menu-item > span')).toHaveText(['Connections','Settings','View','Tools','Help']);
+    await bar.getByRole('menuitem',{name:'Connections',exact:true}).click();
+    await expect(page.getByRole('menuitem',{name:/Manage bookmarks/})).toBeVisible();
+    await page.keyboard.press('Escape');
+    await bar.getByRole('menuitem',{name:'Settings',exact:true}).click();
+    await expect(page.getByRole('menuitem',{name:/Settings…/})).toBeVisible();
+    await page.keyboard.press('Escape');
+    await bar.getByRole('menuitem',{name:'Tools',exact:true}).click();
+    await expect(page.getByRole('menuitem',{name:'My roles',exact:true})).toBeVisible();
+});
+
+test('Messages toggles closed and clicking the current voice channel closes it immediately', async ({ page }) => {
+    await page.locator('#direct-messages').click();
+    await expect(page.locator('#center')).toHaveClass(/dm-view-active/);
+    await page.locator('#direct-messages').click();
+    await expect(page.locator('#center')).not.toHaveClass(/dm-view-active/);
+    await expect(page.locator('#chat-pane')).toBeVisible();
+    await page.locator('#direct-messages').click();
+    await page.locator('#channel-tree .channel[data-chid="2"]').click();
+    await expect(page.locator('#center')).not.toHaveClass(/dm-view-active/);
+    await expect(page.locator('#chat-pane')).toBeVisible();
+});

@@ -375,11 +375,11 @@
 #center.dm-view-active #private-groups .group-message > time .group-time-short { display: inline; }
 #center.dm-view-active #private-groups .group-message > time .msg-lock { margin: 0; }
 #center.dm-view-active #private-groups .group-message > time .msg-lock .ui-icon { width: 12px; height: 12px; }
-#center.dm-view-active #private-groups .group-message > button {
+#center.dm-view-active #private-groups .group-message > .group-message-actions {
     position: absolute; top: -11px; right: 10px; height: 22px; padding: 0 8px;
     border: 1px solid var(--dm-line); border-radius: 7px; background: var(--dm-s1); color: var(--text-dim); font-size: .72rem; opacity: 0;
 }
-#center.dm-view-active #private-groups .group-message:is(:hover, :focus-within) > button { opacity: 1; }
+#center.dm-view-active #private-groups .group-message:is(:hover, :focus-within) > .group-message-actions { opacity: 1; }
 #center.dm-view-active #private-groups .group-composer {
     align-items: center; flex-wrap: wrap; gap: 4px; margin: 8px 18px 16px; padding: 5px 6px 5px 8px; min-height: 46px;
     border: 1px solid var(--dm-line); border-radius: 11px; background: var(--dm-s2);

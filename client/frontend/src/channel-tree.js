@@ -1,5 +1,4 @@
 // channel-tree.js — channel/member rendering and tree interaction.
-import { filterConversations, privateGroupViewToken } from "./conversations.js";
 import { isUserMuted } from "./audio.js";
 import * as chatUI from "./chat-ui.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
@@ -126,7 +125,6 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             root.appendChild(empty);
         }
         renderDirectTargets();
-        filterConversations();
         renderClientCard();
         chatUI.refreshHeader(); // (111) topic/title follows tree + channel updates
         renderWorkspace();
@@ -225,11 +223,13 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         el.onclick = async () => {
             if (generation !== state.serverGeneration) return;
             if (cannotJoin) { toast(t("channel.access.denied"), "warn"); return; }
-            const groupView = privateGroupViewToken();
+            // Channel chat navigation is immediate, even when joining the same
+            // voice channel emits no new membership event.
+            window.__noxa.closeDirectMessages?.();
+            void chatUI.openChannelTab(ch.ChannelID);
             try {
                 const err = await window.go.main.App.JoinChannelForTab(tabID, ch.ChannelID);
                 if (err && generation === state.serverGeneration) toast(t("runtime.joinFailed", { error: String(err) }), "warn");
-                if (!err && generation === state.serverGeneration && tabID === state.activeTabID && groupView && groupView === privateGroupViewToken()) await chatUI.openChannelTab(ch.ChannelID);
             } catch (err) {
                 if (generation === state.serverGeneration) toast(t("runtime.joinFailed", { error: String(err) }), "warn");
             }

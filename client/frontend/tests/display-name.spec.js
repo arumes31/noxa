@@ -47,7 +47,7 @@ async function connected(page) {
 }
 
 async function openRename(page) {
-    await page.locator("#menubar > .menu-item").filter({ hasText: /^Self/ }).click();
+    await page.locator("#menubar > .menu-item").filter({ hasText: /^Settings/ }).click();
     await page.getByRole("menuitem", { name: "Change display name…", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Change display name", exact: true })).toBeVisible();
 }
@@ -171,7 +171,7 @@ test("bookmark display names preserve the stored account login", async ({ page }
         window.__noxa.state.settings.display_name = "Default name";
         window.__noxa.state.settings.bookmarks = [{ name: "My server", addr: "server.example:12333", nickname: "owner", nickname_override: "Daniel" }];
     });
-    await page.getByRole("menuitem", { name: "Bookmarks", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Connections", exact: true }).click();
     await page.getByRole("menuitem", { name: /My server/ }).click();
     await expect(page.locator("#login-nick")).toHaveValue("owner");
     await expect(page.locator("#login-display-name")).toHaveValue("Daniel");

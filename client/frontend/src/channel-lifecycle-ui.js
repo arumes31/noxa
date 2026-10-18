@@ -41,7 +41,8 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
     const treeChange = () => ({ kind, expected_revision: snapshot.revision, channel_id: kind === "channel_create" ? 0 : channelID,
         parent_id: kind === "channel_create" ? channelID : destination,
         ...(kind === "channel_create" ? { temporary: draft.channel_type === 0, access: { channel_id: 0, parent_id: channelID, ...access() } } : { sync_to_parent: sync }) });
-    const requiresReview = () => (kind === "channel_create" && preset !== "inherit") || (kind === "channel_move" && sync);
+    const requiresReview = () => kind === "channel_move" && sync;
+    const textUnavailable = () => kind === "channel_create" && draft?.text_only && (!snapshot?.supports_text_channels || !snapshot.can_create_permanent);
     const reviewed = () => !requiresReview() || reviewedTree === JSON.stringify(treeChange());
     const invalidateImpact = () => { reviewedTree = ""; impactView?.invalidate(); };
     const current = () => isCurrentServerDialog(overlay);
@@ -49,11 +50,12 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
         confirmLabel: t("common.apply"), cancelLabel: t("common.cancel"), serverScoped: true });
     const controls = () => {
         form.disabled = busy || !snapshot || committed;
-        save.disabled = busy || !snapshot || needsRefresh || committed || !reviewed() || (kind === "channel_move" && !snapshot.destinations.some(entry => entry.id === destination));
+        save.disabled = busy || !snapshot || needsRefresh || committed || textUnavailable() || !reviewed() || (kind === "channel_move" && !snapshot.destinations.some(entry => entry.id === destination));
         refresh.disabled = busy || committed;
         close.disabled = busy;
         overlay.dataset.blocking = String(busy);
         status.textContent = busy ? t(snapshot ? "roles.saving" : "roles.channel.loading") : committed ? t("roles.enforcementPending") :
+            textUnavailable() ? t(snapshot.supports_text_channels ? "roles.channel.textPermission" : "roles.channel.textUnsupported") :
             snapshot && !needsRefresh && !reviewed() ? t(kind === "channel_create" ? "roles.channel.reviewCreate" : "roles.channel.reviewMove") : feedback;
         save.title = !reviewed() ? status.textContent : "";
         impactView?.update();
@@ -137,7 +139,7 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
             const textLabel = roleElement("label", "role-checkbox");
             const textInput = roleElement("input"); textInput.type = "checkbox"; textInput.checked = !!draft.text_only;
             textInput.dataset.field = "roles.channel.textOnly";
-            textInput.disabled = !snapshot.can_create_permanent;
+            textInput.disabled = !snapshot.can_create_permanent || !snapshot.supports_text_channels;
             textInput.onchange = () => {
                 draft.text_only = textInput.checked; dirty = true;
                 if (draft.text_only) { draft.channel_type = 2; draft.password = ""; }
@@ -195,7 +197,8 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
             if (!current()) return;
             snapshot = next; draft = structuredClone(next.settings);
             draft.channel_type = next.can_create_permanent ? 2 : 0; draft.password = "";
-            draft.text_only = kind === "channel_create" && textOnly && next.can_create_permanent;
+            draft.text_only = kind === "channel_create" && textOnly;
+            if (draft.text_only) draft.channel_type = 2;
             preset = "inherit"; selectedRoles = new Set(); sync = false;
             passwordAction = "keep";
             destination = destinationID ?? next.destinations[0]?.id ?? 0;
@@ -206,7 +209,7 @@ export function openRoleChannel(kind, channelID = 0, { destinationID, orderIndex
         finally { if (current()) { busy = false; controls(); } }
     };
     const save = roleButton(t(`roles.channel.action.${kind}`), async () => {
-        if (busy || committed || needsRefresh || !snapshot || !reviewed() || !current()) return;
+        if (busy || committed || needsRefresh || !snapshot || textUnavailable() || !reviewed() || !current()) return;
         if (!dialog.checkValidity() || ((kind === "channel_create" || kind === "channel_edit") && !draft.name.trim())) {
             const invalid = form.querySelector("input:invalid,select:invalid,textarea:invalid");
             error.textContent = invalid?.validity.customError ? invalid.validationMessage : t("roles.channel.invalid");

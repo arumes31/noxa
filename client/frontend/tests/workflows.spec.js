@@ -205,8 +205,8 @@ test.describe("own role overview", () => {
         });
         await expect(page.locator("#perm-area")).toContainText("No assigned roles.");
         await expect(page.locator("#perm-area .role-chip")).toHaveCount(0);
-        await page.getByRole("menubar").getByRole("menuitem", { name: "Permissions", exact: true }).click();
-        await page.getByRole("menuitem", { name: "My roles", exact: true }).click();
+        await page.getByRole("menubar").getByRole("menuitem", { name: "Tools", exact: true }).click();
+        await page.getByRole("menuitem", { name: /^My roles/ }).click();
         await expect(page.locator("#perm-area h3")).toHaveText("My roles");
         await expect(page.locator("#perm-area")).toContainText("Server owner");
         await expect(page.locator("#perm-area")).toContainText("Own role");
@@ -1081,8 +1081,7 @@ test.describe("DM identity context lifecycle", () => {
     test("identity change before notification cannot redirect a pending clear", async ({ page }) => {
         await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
         await expect(page.locator("#chat-log")).toContainText("stored for storage-identity");
-        await page.locator(".pm-tab").click({ button: "right" });
-        await page.getByRole("menuitem", { name: "Delete local history…", exact: true }).click();
+        await page.evaluate(() => window.__noxaChat.clearDirectHistory(window.__noxaChat.activeDirectPeer()));
         await page.evaluate(() => { window.__dmIdentity.native.identity_uid = "replacement-identity"; window.__dmIdentity.native.identity_revision = "2"; });
         await page.getByRole("button", { name: "Delete history", exact: true }).click();
         await expect.poll(() => page.evaluate(() => window.__dmIdentity.calls.filter(call => call[0] === "DMHistoryClear").length)).toBe(1);
@@ -1158,7 +1157,7 @@ test.describe("DM identity context lifecycle", () => {
         await expect.poll(() => page.evaluate(() => window.__dmIdentity.pending.length)).toBe(1);
         await page.evaluate(() => window.__dmIdentity.pending[0].reject(new Error("temporary context failure")));
         await expect.poll(() => page.evaluate(() => window.__dmIdentity.toasts.length)).toBe(1);
-        await page.locator(".pm-tab .pm-close").click();
+        await page.evaluate(() => window.__noxaChat.closeDirectConversation(window.__noxaChat.activeDirectPeer()));
         await page.evaluate(() => { window.__dmIdentity.hold = false; window.__noxaChat.openPM("peer", "Peer"); });
         await expect(page.locator("#chat-log")).toContainText("stored for storage-identity");
         expect(await page.evaluate(() => window.__dmIdentity.effects.filter(call => call[0] === "DMHistoryLoad").length)).toBe(1);
@@ -1255,14 +1254,14 @@ test.describe("DM history callback ownership", () => {
         await page.evaluate(() => window.__noxaChat.openPM("bootstrap", "Bootstrap"));
         await expect.poll(() => page.evaluate(() => window.__dmScope.loads.length)).toBe(1);
         await page.evaluate(() => window.__dmScope.loads[0].resolve([]));
-        await page.locator(".pm-tab .pm-close").click();
+        await page.evaluate(() => window.__noxaChat.closeDirectConversation(window.__noxaChat.activeDirectPeer()));
         await page.evaluate(() => { window.__dmScope.loads.length = 0; });
     });
     for (const reject of [false, true]) {
         test(`obsolete history ${reject ? "failure" : "completion"} cannot repaint a reopened peer`, async ({ page }) => {
             await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
             await expect.poll(() => page.evaluate(() => window.__dmScope.loads.length)).toBe(1);
-            await page.locator(".pm-tab .pm-close").click();
+            await page.evaluate(() => window.__noxaChat.closeDirectConversation(window.__noxaChat.activeDirectPeer()));
             await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
             await expect.poll(() => page.evaluate(() => window.__dmScope.loads.length)).toBe(2);
             await page.evaluate(() => window.__dmScope.loads[1].resolve([{ body: "current history", sent_at: 1 }]));
@@ -1308,7 +1307,7 @@ test.describe("DM history callback ownership", () => {
     });
     test("old persistence failure cannot warn in a reopened peer", async ({ page }) => {
         await page.evaluate(() => { window.__noxaChat.openPM("peer", "Peer"); window.__dmIncoming("first"); });
-        await page.locator(".pm-tab .pm-close").click();
+        await page.evaluate(() => window.__noxaChat.closeDirectConversation(window.__noxaChat.activeDirectPeer()));
         await page.evaluate(() => {
             window.__noxaChat.openPM("peer", "Peer");
             window.__dmIncoming("second");
@@ -1322,8 +1321,7 @@ test.describe("DM history callback ownership", () => {
         expect(await page.evaluate(() => window.__dmScope.toasts[0][0])).toContain("current failure");
     });
     async function requestClear(page) {
-        await page.locator(".pm-tab").first().click({ button: "right" });
-        await page.getByRole("menuitem", { name: "Delete local history…", exact: true }).click();
+        await page.evaluate(() => window.__noxaChat.clearDirectHistory(window.__noxaChat.activeDirectPeer()));
         await page.getByRole("button", { name: "Delete history", exact: true }).click();
         await expect.poll(() => page.evaluate(() => window.__dmScope.clears.length)).toBe(1);
     }
@@ -1359,7 +1357,7 @@ test.describe("DM history callback ownership", () => {
     }
     test("closing a peer while enumeration is pending keeps it closed", async ({ page }) => {
         await page.evaluate(() => { window.__noxaChat.resetView(); window.__noxaChat.openPM("peer", "Peer"); });
-        await page.locator(".pm-tab .pm-close").click();
+        await page.evaluate(() => window.__noxaChat.closeDirectConversation(window.__noxaChat.activeDirectPeer()));
         await page.evaluate(() => window.__dmScope.peers[0].resolve([{ unique_id: "peer", nickname: "Peer" }]));
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
         await expect(page.locator(".pm-tab")).toHaveCount(0);
@@ -1367,10 +1365,10 @@ test.describe("DM history callback ownership", () => {
     });
     test("detached peer controls cannot act on a replacement peer", async ({ page }) => {
         await page.evaluate(() => {
-            window.__noxaChat.openPM("peer", "Peer");
+            window.__dmIncoming("Unread old peer");
             window.__oldDMTab = document.querySelector(".pm-tab");
             window.__noxaChat.resetView();
-            window.__noxaChat.openPM("peer", "Replacement peer");
+            window.__noxaChat.addChat({ direct:true, enc_verified:true, from_unique_id:"peer", from:"Replacement peer", client_msg_id:"replacement", text:"Unread new peer" });
             window.__oldDMTab.querySelector(".pm-close").click();
             window.__oldDMTab.click();
             window.__oldDMTab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
@@ -1392,10 +1390,9 @@ test.describe("DM history callback ownership", () => {
     });
     test("clear confirmation cannot delete a reopened peer", async ({ page }) => {
         await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
-        await page.locator(".pm-tab").click({ button: "right" });
-        await page.getByRole("menuitem", { name: "Delete local history…", exact: true }).click();
+        await page.evaluate(() => window.__noxaChat.clearDirectHistory(window.__noxaChat.activeDirectPeer()));
         await page.evaluate(() => {
-            document.querySelector(".pm-tab .pm-close").click();
+            window.__noxaChat.closeDirectConversation(window.__noxaChat.activeDirectPeer());
             window.__noxaChat.openPM("peer", "Peer");
         });
         await page.getByRole("button", { name: "Delete history", exact: true }).click();
@@ -1406,7 +1403,7 @@ test.describe("DM history callback ownership", () => {
         test(`old clear ${reject ? "failure" : "completion"} cannot change a reopened peer`, async ({ page }) => {
             await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
             await requestClear(page);
-            await page.locator(".pm-tab .pm-close").click();
+            await page.evaluate(() => window.__noxaChat.closeDirectConversation(window.__noxaChat.activeDirectPeer()));
             await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
             await page.evaluate(() => window.__dmScope.loads[1].resolve([{ body: "replacement history", sent_at: 1 }]));
             await expect(page.locator("#chat-log")).toContainText("replacement history");
@@ -3253,7 +3250,7 @@ test.describe("tab-bound member actions and branding", () => {
                 }, rejected);
                 const chooserPromise = page.waitForEvent("filechooser");
                 if (kind === "icon") {
-                    await page.locator("#menubar > .menu-item > span").filter({ hasText: /^Self$/ }).click();
+                    await page.locator("#menubar > .menu-item > span").filter({ hasText: /^Settings$/ }).click();
                     await page.getByRole("menuitem", { name: /^Set server icon/ }).click();
                 } else {
                     await page.locator("#tab-files").click();
@@ -3281,7 +3278,7 @@ test.describe("tab-bound member actions and branding", () => {
         test(`${kind} picker stays on its original native tab`, async ({ page }) => {
             const chooserPromise = page.waitForEvent("filechooser");
             if (kind === "icon") {
-                await page.locator("#menubar > .menu-item > span").filter({ hasText: /^Self$/ }).click();
+                await page.locator("#menubar > .menu-item > span").filter({ hasText: /^Settings$/ }).click();
                 await page.getByRole("menuitem", { name: /^Set server icon/ }).click();
             } else {
                 await page.locator("#tab-files").click();
@@ -3992,7 +3989,7 @@ test("bookmark retries after persistence succeeds but refreshing settings fails"
         } });
         window.__noxa.showWorkspace(false);
     });
-    await page.locator("#menubar > .menu-item").filter({ hasText: /^Bookmarks/ }).click();
+    await page.locator("#menubar > .menu-item").filter({ hasText: /^Connections/ }).click();
     await page.getByRole("menuitem", { name: "Manage bookmarks…", exact: true }).click();
     await page.locator(".bm-edit").click();
     const dialog = page.getByRole("dialog", { name: "Edit bookmark", exact: true });
@@ -4040,7 +4037,7 @@ test("settings save blocks duplicates, retains draft after failure and retries",
 test("bookmark save keeps edits on failure and commits only on success", async ({ page }) => {
     await installSaveScenario(page, { bookmarks: [{ name: "Original", addr: "example.test:12333", nickname: "Alice" }] });
     await page.evaluate(() => window.__noxa.showWorkspace(false));
-    await page.locator("#menubar > .menu-item").filter({ hasText: /^Bookmarks/ }).click();
+    await page.locator("#menubar > .menu-item").filter({ hasText: /^Connections/ }).click();
     await page.getByRole("menuitem", { name: "Manage bookmarks…", exact: true }).click();
     await page.locator(".bm-edit").click();
     const dialog = page.getByRole("dialog", { name: "Edit bookmark", exact: true });
@@ -4201,7 +4198,7 @@ test("German menus translate remaining actions and bookmark dialogs", async ({ p
     }
     await page.screenshot({ path: testInfo.outputPath("german-view-menu.png") });
     await page.keyboard.press("Escape");
-    await page.getByRole("menuitem", { name: "Lesezeichen", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Verbindungen", exact: true }).click();
     await expect(page.getByRole("menuitem", { name: "Aktuellen Server als Lesezeichen speichern", exact: true })).toBeVisible();
     await page.getByRole("menuitem", { name: "Lesezeichen verwalten…", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Lesezeichen verwalten", exact: true });
@@ -5034,39 +5031,15 @@ test("private groups restore persisted unread state after native tab activation"
         } });
         for (const callback of window.__events.tab_reset || []) callback("restored-server");
     });
-    await expect(page.locator('.group-list-item[data-group-id="restored"] .group-unread')).toHaveText("3");
+    await expect(page.locator('[data-chat-key="grp:restored"] .pm-unread')).toHaveText("3");
 });
 
-test("private group sidebar resizes and collapses within the full application layout", async ({ page }, testInfo) => {
+test("private groups are managed in Messages without a separate sidebar", async ({ page }) => {
     await showB3Workspace(page);
-    await page.evaluate(async () => {
-        // The resizable channel/group split is the classic layout; Arctic Night
-        // (the default) scrolls the sidebar sections together without a divider.
-        window.__noxa.state.settings.theme = "dark";
-        window.__noxa.applyAppearance();
-        window.__noxa.state.activeTabID = "group-layout-server";
-        const app = window.go.main.App;
-        window.go.main.App = new Proxy(app, { get(target, key) {
-            if (key === "ConversationForTab") return async () => ({ conversations: [], messages: [] });
-            return target[key];
-        } });
-        const groups = await import("/src/conversations.js"); groups.initConversations();
-    });
-    const split = page.locator("#sidebar-scroll");
-    const divider = page.getByRole("separator", { name: "Resize channels and private groups" });
-    await expect(page.locator(".group-sidebar-status")).toHaveText("No private groups yet.");
-    const initial = await divider.boundingBox(), bounds = await split.boundingBox();
-    expect(initial.y).toBeGreaterThan(bounds.y + bounds.height * 0.7);
-    await page.screenshot({ path: testInfo.outputPath("group-sidebar-empty.png") });
-    await page.mouse.move(initial.x + initial.width / 2, initial.y + 4);
-    await page.mouse.down(); await page.mouse.move(initial.x + initial.width / 2, bounds.y + bounds.height / 2, { steps: 6 }); await page.mouse.up();
-    expect((await divider.boundingBox()).y).toBeLessThan(initial.y - 50);
-    await page.getByRole("button", { name: "Private groups", exact: true }).click();
-    await expect(page.locator(".group-sidebar-body")).toBeHidden();
-    await page.evaluate(() => { window.__noxa.state.settings.language = "de"; window.__noxa.applyAppearance(); });
-    await page.getByRole("button", { name: "Private Gruppen", exact: true }).click();
-    await expect(page.getByRole("separator", { name: "Größe von Kanälen und privaten Gruppen anpassen" })).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath("group-sidebar-resized.png") });
+    await page.locator("#direct-messages").click();
+    await expect(page.locator("#dm-list")).toBeVisible();
+    await expect(page.locator("#private-groups-sidebar")).toHaveCount(0);
+    await expect(page.getByRole("separator", { name: "Resize channels and private groups" })).toHaveCount(0);
 });
 
 test("private group workspace keeps hidden channel messages unread until returning to channel", async ({ page }) => {
@@ -5088,7 +5061,7 @@ test("private group workspace keeps hidden channel messages unread until returni
     });
     await expect(page.locator('#chat-log [data-msg-id="9201"]')).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.__savedSettings?.last_read_channels?.[2])).toBe(9201);
-    await page.locator("#private-groups-sidebar").getByRole("button", { name: "Private team", exact: true }).click();
+    await page.evaluate(() => window.__noxa.openDirectMessages({ groupID: "read-group" }));
     await expect(page.locator("#private-groups .group-content h3")).toHaveText("Private team");
     await expect(page.locator("#chat-pane")).toBeHidden();
     await page.evaluate(() => {
@@ -5102,7 +5075,7 @@ test("private group workspace keeps hidden channel messages unread until returni
     await page.evaluate(() => window.dispatchEvent(new Event("noxa-language-changed")));
     expect(await page.evaluate(() => window.__noxa.state.settings.last_read_channels[2])).toBe(9201);
     expect(await page.evaluate(() => window.__savedSettings.last_read_channels[2])).toBe(9201);
-    await page.getByRole("button", { name: "Back to channel", exact: true }).click();
+    await page.locator("#direct-messages").click();
     await expect(page.locator("#chat-pane")).toBeVisible();
     await expect(page.locator('#chat-log [data-msg-id="9202"]')).toBeVisible();
     expect(await page.evaluate(() => window.__noxa.chatUnread(2))).toBeNull();
@@ -6909,21 +6882,18 @@ test.describe("chat tab layout storage", () => {
         });
     });
 
-    test("restores older pinned conversations before the recent-chat limit and keeps the bar on one row", async ({ page }) => {
+    test("read pinned conversations stay in Messages and the channel bar stays on one row", async ({ page }) => {
         await page.setViewportSize({ width: 800, height: 700 });
         await page.evaluate(async () => {
             window.__chatTabLayout = { order: ["dm:peer-8", "ch:2", "ch:1"], pinned: ["dm:peer-8"] };
             await window.__noxaChat.onConnect();
         });
-        await expect(page.locator('#pm-tabs .pm-tab').first()).toHaveAttribute("data-chat-key", "dm:peer-8");
-        await expect(page.locator('#pm-tabs .pm-tab')).toHaveCount(9);
-        await expect(page.locator('[data-chat-key="dm:peer-8"]')).toHaveClass(/pinned/);
+        await expect(page.locator('#pm-tabs .pm-tab').first()).toHaveAttribute("data-chat-key", "ch:2");
+        await expect(page.locator('#pm-tabs .pm-tab')).toHaveCount(2);
         expect(await page.locator('#pm-tabs .pm-tab').evaluateAll(tabs => new Set(tabs.map(tab => Math.round(tab.getBoundingClientRect().top))).size)).toBe(1);
-        await page.getByRole("button", { name: "All chats", exact: true }).click();
-        await page.getByRole("menuitem", { name: "Person 5", exact: true }).click();
-        await expect(page.locator('[data-chat-key="dm:peer-5"] .pm-tab-select')).toHaveAttribute("aria-selected", "true");
-        await expect(page.locator(".group-sidebar-status")).toHaveText("No private groups yet.");
-        await page.screenshot({ path: test.info().outputPath("chat-tabs-workspace.png") });
+        await page.evaluate(() => window.__noxa.openDirectMessages({ uid: "peer-8" }));
+        await expect(page.locator("#chat-head-title")).toHaveText("DM — Person 8");
+        await expect(page.locator('[data-chat-key="dm:peer-8"]')).toHaveCount(0);
     });
 
     test("pins and reorders through the captured native owner and restores after reconnect", async ({ page }) => {
@@ -6956,17 +6926,16 @@ test.describe("chat tab layout storage", () => {
         await expect(page.locator('[data-chat-key="ch:2"]')).not.toHaveClass(/pinned/);
     });
 
-    test("empty pinned chats restore their names and closing removes their saved pin", async ({ page }) => {
-        await page.evaluate(async () => { await window.__noxaChat.onConnect(); window.__noxaChat.openPM("empty-peer", "Empty friend"); });
-        await page.locator('[data-chat-key="dm:empty-peer"]').click({ button: "right" });
-        await page.getByRole("menuitem", { name: "Pin chat", exact: true }).click();
-        await expect.poll(() => page.evaluate(() => window.__chatTabLayout?.names)).toEqual({ "dm:empty-peer": "Empty friend" });
-        await page.evaluate(async () => { window.__noxaChat.resetView(); await window.__noxaChat.onConnect(); });
-        await expect(page.locator('[data-chat-key="dm:empty-peer"] .pm-tab-name')).toHaveText("Empty friend");
-        await page.getByRole("button", { name: "Close Empty friend", exact: true }).click();
-        await expect.poll(() => page.evaluate(() => window.__chatTabLayout?.pinned)).toEqual([]);
-        await page.evaluate(async () => { window.__noxaChat.resetView(); await window.__noxaChat.onConnect(); });
+    test("old empty pinned chats retain their names and closing removes their saved pin", async ({ page }) => {
+        await page.evaluate(async () => {
+            window.__chatTabLayout = { order: ["dm:empty-peer"], pinned: ["dm:empty-peer"], names: { "dm:empty-peer": "Empty friend" } };
+            await window.__noxaChat.onConnect();
+            window.__noxa.openDirectMessages({ uid: "empty-peer" });
+        });
+        await expect(page.locator("#chat-head-title")).toHaveText("DM — Empty friend");
         await expect(page.locator('[data-chat-key="dm:empty-peer"]')).toHaveCount(0);
+        await page.evaluate(() => window.__noxaChat.closeDirectConversation("empty-peer"));
+        await expect.poll(() => page.evaluate(() => window.__chatTabLayout?.pinned)).toEqual([]);
     });
 
     test("closing before layout loading finishes removes a saved pin", async ({ page }) => {
@@ -6976,10 +6945,11 @@ test.describe("chat tab layout storage", () => {
                 if (key === "ChatTabLayoutForContext") return () => new Promise(resolve => { window.__lateLayout = resolve; });
                 return target[key];
             } });
+            window.__noxaChat.onSubscriptions({ channel_ids: [1, 2] });
             window.__noxaChat.openPM("empty-peer", "Empty friend");
         });
         await expect.poll(() => page.evaluate(() => typeof window.__lateLayout)).toBe("function");
-        await page.getByRole("button", { name: "Close Empty friend", exact: true }).click();
+        await page.evaluate(() => window.__noxaChat.closeDirectConversation("empty-peer"));
         await page.evaluate(() => window.__lateLayout({ order: ["dm:empty-peer"], pinned: ["dm:empty-peer"], names: { "dm:empty-peer": "Empty friend" } }));
         await expect.poll(() => page.evaluate(() => window.__chatTabLayout?.pinned)).toEqual([]);
         await expect(page.locator('[data-chat-key="dm:empty-peer"]')).toHaveCount(0);
@@ -7046,7 +7016,7 @@ test.describe("recently closed chats", () => {
     test("reopens the last explicitly closed DM with Ctrl+Shift+T and keeps only ten recent chats", async ({ page }) => {
         for (let index = 0; index < 12; index++) {
             await page.evaluate(index => window.__noxaChat.openPM("closed-" + index, "Friend " + index), index);
-            await page.getByRole("button", { name: "Close Friend " + index, exact: true }).click();
+            await page.evaluate(index => window.__noxaChat.closeDirectConversation("closed-" + index), index);
         }
         await page.getByRole("button", { name: "All chats", exact: true }).click();
         await expect(page.getByText("Recently closed", { exact: true })).toBeVisible();
@@ -7058,11 +7028,13 @@ test.describe("recently closed chats", () => {
         await page.keyboard.press("Escape");
         await page.locator("#chat-text").focus();
         await page.keyboard.press("Control+Shift+T");
-        await expect(page.locator('[data-chat-key="dm:closed-11"] .pm-tab-select')).toHaveAttribute("aria-selected", "true");
+        await expect(page.locator("#chat-head-title")).toHaveText("DM — Friend 11");
+        await page.locator("#direct-messages").click();
         await page.getByRole("button", { name: "All chats", exact: true }).click();
         await expect(page.getByRole("menuitem", { name: /^Reopen Friend/ })).toHaveCount(9);
         await page.getByRole("menuitem", { name: "Reopen Friend 5", exact: true }).click();
-        await expect(page.locator('[data-chat-key="dm:closed-5"] .pm-tab-select')).toHaveAttribute("aria-selected", "true");
+        await expect(page.locator("#chat-head-title")).toHaveText("DM — Friend 5");
+        await expect(page.locator("#center")).toHaveClass(/dm-view-active/);
     });
 
     test("channel reopen waits for authorization and preserves history after rejection", async ({ page }) => {
@@ -7108,7 +7080,7 @@ test.describe("recently closed chats", () => {
         await expect.poll(() => page.evaluate(() => window.__recentState.requests.length)).toBe(2);
         await page.evaluate(() => window.__noxaChat.onSubscriptions({ channel_ids: [1, 3] }));
         await page.evaluate(() => window.__noxaChat.openPM("new-close", "New close"));
-        await page.getByRole("button", { name: "Close New close", exact: true }).click();
+        await page.evaluate(() => window.__noxaChat.closeDirectConversation("new-close"));
         await page.evaluate(() => window.__noxaChat.onSubscriptions({ channel_ids: [1, 2, 3] }));
         await expect(page.locator('[data-chat-key="ch:2"] .pm-tab-select')).toHaveAttribute("aria-selected", "true");
         await page.getByRole("button", { name: "All chats", exact: true }).click();
@@ -7164,7 +7136,7 @@ test.describe("recently closed chats", () => {
 
     test("identity changes clear recent chats and modal dialogs keep the undo shortcut inactive", async ({ page }) => {
         await page.evaluate(() => window.__noxaChat.openPM("identity-peer", "Identity friend"));
-        await page.getByRole("button", { name: "Close Identity friend", exact: true }).click();
+        await page.evaluate(() => window.__noxaChat.closeDirectConversation("identity-peer"));
         await page.evaluate(() => window.__noxa.openSettings("application"));
         await page.keyboard.press("Control+Shift+T");
         await expect(page.locator('[data-chat-key="dm:identity-peer"]')).toHaveCount(0);
@@ -7186,7 +7158,7 @@ test.describe("unread private-message tab pulse", () => {
         await page.clock.setFixedTime(new Date("2026-10-04T12:00:00Z"));
         await page.evaluate(() => {
             window.__dmStorageIdentity = "alpha";
-            Object.assign(window.__noxa.state, { myUniqueID: "alpha", myNickname: "ALPHA" });
+            Object.assign(window.__noxa.state, { activeTabID: "messages-server", myUniqueID: "alpha", myNickname: "ALPHA" });
             window.__noxa.showWorkspace();
             window.__receivePM = (id, peer = "bravo", self = false) => window.__noxaChat.addChat({
                 direct: true, to_unique_id: self ? peer : "alpha", from_unique_id: self ? "alpha" : peer,
@@ -7243,10 +7215,10 @@ test.describe("unread private-message tab pulse", () => {
         await tab.click();
         await expect(tab.locator(".pm-unread")).toHaveCount(0);
         await expect(tab.locator(".pm-unread-plasma")).toHaveCount(0);
-        await expect(tab).toHaveCSS("animation-name", "none");
+        await expect(tab).toHaveCount(0);
         await page.evaluate(() => window.__receivePM("already-open"));
         await expect(tab.locator(".pm-unread")).toHaveCount(0);
-        await expect(tab).toHaveCSS("animation-name", "none");
+        await expect(tab).toHaveCount(0);
         await page.evaluate(() => window.__receivePM("own-message", "charlie", true));
         await expect(page.locator("#pm-tabs .has-unread")).toHaveCount(0);
     });
@@ -7296,7 +7268,7 @@ test.describe("unread private-message tab pulse", () => {
         await expect(tab).toHaveCSS("border-top-color", unreadBorder);
         await tab.click();
         await expect(tab.locator(".pm-unread")).toHaveCount(0);
-        await expect(tab).not.toHaveClass(/has-unread/);
+        await expect(tab).toHaveCount(0);
     });
 
     test("keeps both echo rings centered on multi-digit counters and echoes after the border", async ({ page }) => {
@@ -7334,6 +7306,7 @@ test("routes decrypted direct messages and echoes without mixing global chat or 
         const { state } = window.__noxa;
         window.__dmStorageIdentity = "alpha";
         state.myUniqueID = "alpha";
+        state.activeTabID = "messages-server";
         state.myNickname = "ALPHA";
         window.__noxa.showWorkspace();
         for (const callback of window.__events.event || []) callback(JSON.stringify({
@@ -7358,7 +7331,7 @@ test("routes decrypted direct messages and echoes without mixing global chat or 
         }));
     });
     await expect(page.locator("#chat-log")).not.toContainText("echo for Bravo");
-    await bravoTab.click();
+    await page.evaluate(() => window.__noxa.openDirectMessages({ uid: "bravo" }));
     await expect(page.locator("#chat-log")).toContainText("echo for Bravo");
     await page.evaluate(() => {
         for (const callback of window.__events.event || []) callback(JSON.stringify({
@@ -8714,6 +8687,7 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
     await page.evaluate(() => {
         navigator.mediaDevices.getDisplayMedia = async () => document.createElement("canvas").captureStream(1);
     });
+    await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await shareDialog.getByRole("button", { name: "Start sharing" }).click();
     await expect(shareButton).toHaveAttribute("title", "Stop sharing");
     await expect(shareButton).toHaveAccessibleName("Stop sharing");
@@ -10032,8 +10006,7 @@ test("nests connected members below channels and offers them as direct-message t
     await page.locator("#chat-target-options .target-option", { hasText: "Carol" }).click();
     await expect(page.locator("#chat-target")).toHaveValue("Carol");
     await expect(page.locator("#chat-head-title")).toHaveText("DM — Carol");
-    await expect(page.locator("#pm-tabs .pm-tab:not(.channel-tab)")).toContainText("Carol");
-    await expect(page.locator("#pm-tabs .pm-tab:not(.channel-tab)")).toHaveCount(1);
+    await expect(page.locator("#pm-tabs .pm-tab:not(.channel-tab)")).toHaveCount(0);
     await page.locator("#chat-target-toggle").click();
     await expect(page.locator("#chat-target-options")).toBeVisible();
     await page.locator("#chat-target-toggle").click();
@@ -10076,7 +10049,7 @@ test("offline DM names recover from history instead of keeping a cached identity
     });
     await expect(page.locator("#chat-target")).toHaveValue("becksn");
     await expect(page.locator("#chat-head-title")).toHaveText("DM — becksn");
-    await expect(page.locator("#pm-tabs .pm-tab:not(.channel-tab)")).toContainText("becksn");
+    await expect(page.locator("#pm-tabs .pm-tab:not(.channel-tab)")).toHaveCount(0);
 });
 
 test("an edited recipient cannot send to the previous selection or an ambiguous name", async ({ page }) => {
@@ -10725,7 +10698,7 @@ test("cancels server-bound image actions across active-tab resets", async ({ pag
     const reset = (tabID) => page.evaluate((id) => {
         for (const callback of window.__events.tab_reset || []) callback(id);
     }, tabID);
-    const selfMenu = page.locator("#menubar > .menu-item > span").filter({ hasText: /^Self$/ }).locator("..");
+    const selfMenu = page.locator("#menubar > .menu-item > span").filter({ hasText: /^Settings$/ }).locator("..");
     const chooseFromSelf = async (name) => {
         await selfMenu.click();
         const pending = page.waitForEvent("filechooser");
@@ -10967,7 +10940,7 @@ test("closes menus when keyboard focus exits and keeps expansion state in sync",
     await tools.focus();
     await page.keyboard.press("Enter");
     await expect(tools).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByRole("menuitem", { name: /^Settings/ })).toBeFocused();
+    await expect(page.getByRole("menuitem", { name: /^My roles/ })).toBeFocused();
 
     await page.keyboard.press("Tab");
     await expect(tools).toHaveAttribute("aria-expanded", "false");

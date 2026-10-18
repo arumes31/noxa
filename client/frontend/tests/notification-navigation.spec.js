@@ -169,7 +169,7 @@ test("newer same-server notification wins over delayed history", async ({ page }
 
 test("a channel alert opens visible context while a group hides the retained chat log", async ({ page }) => {
     await page.evaluate(() => window.__noxaChat.addChat({ id: 42, channel_id: 1, from_unique_id: "bob", from: "Bob", text: "Hidden channel notice", enc_verified: true }));
-    await page.getByRole("button", { name: "Friends", exact: true }).click();
+    await page.evaluate(() => window.__noxa.openDirectMessages({ groupID: "g1" }));
     await expect(page.locator("#private-groups")).toBeVisible();
     await page.evaluate(() => window.__noxaPolish.openNotifCenter());
     await page.locator(".nc-row").filter({ hasText: "Hidden channel notice" }).click();

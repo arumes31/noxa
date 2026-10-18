@@ -93,6 +93,21 @@ func (s *Store) ChangeConversation(ctx context.Context, uid string, request netp
 	if err != nil {
 		return nil, false, err
 	}
+	if request.Action == "delete_message" {
+		var messageID int64
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM private_conversation_messages WHERE conversation_id=$1 AND id=$2`, current.ID, request.MessageID).Scan(&messageID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, false, netproto.ErrConversationInvalid
+			}
+			return nil, false, err
+		}
+		// Retain the routing row/reference as a tombstone so a retried send
+		// cannot resurrect deleted content. History and unread counts join
+		// envelopes, so removing every ciphertext hides it from all members.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM private_conversation_envelopes WHERE message_id=$1`, messageID); err != nil {
+			return nil, false, err
+		}
+	}
 	if request.Action == "invite" {
 		if err := conversationQuota(ctx, tx, request.Target); err != nil {
 			return nil, false, err

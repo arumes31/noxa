@@ -453,3 +453,54 @@ func TestConversationChangeReportsGroupDeletion(t *testing.T) {
 		t.Fatalf("group row kept: %d (%v)", remaining, err)
 	}
 }
+
+func TestConversationOwnerDeletesMessagesWithoutResurrection(t *testing.T) {
+	s, c := conversationTestStore(t)
+	c = conversationTestChange(t, s, c, "owner", "invite", "member")
+	c = conversationTestChange(t, s, c, "member", "accept", "")
+	send := conversationTestSend(c, 1)
+	id, _, err := s.SendConversation(t.Context(), "member", send)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := netproto.ConversationRequest{Action: "delete_message", ID: c.ID, Revision: c.Revision, MessageID: id}
+	if _, _, err = s.ChangeConversation(t.Context(), "member", request); !errors.Is(err, netproto.ErrConversationDenied) {
+		t.Fatalf("member delete: %v", err)
+	}
+	request.MessageID = id + 100
+	if _, _, err = s.ChangeConversation(t.Context(), "owner", request); !errors.Is(err, netproto.ErrConversationInvalid) {
+		t.Fatalf("unknown message: %v", err)
+	}
+	request.MessageID = id
+	if _, deleted, err := s.ChangeConversation(t.Context(), "owner", request); err != nil || deleted {
+		t.Fatalf("delete message: %v %v", deleted, err)
+	}
+	for _, uid := range []string{"owner", "member"} {
+		got := conversationTestRead(t, s, uid, netproto.ConversationRequest{Action: "history", ID: c.ID})
+		if len(got.Messages) != 0 || got.Conversations[0].UnreadCount != 0 || got.Conversations[0].LatestMessageID != 0 {
+			t.Fatalf("deleted content for %s: %+v", uid, got)
+		}
+	}
+	send.Revision++
+	if retry, _, err := s.SendConversation(t.Context(), "member", send); err != nil || retry != id {
+		t.Fatalf("retry: %d %v", retry, err)
+	}
+	if got := conversationTestRead(t, s, "owner", netproto.ConversationRequest{Action: "history", ID: c.ID}); len(got.Messages) != 0 {
+		t.Fatal("retry resurrected deleted message")
+	}
+	request.Action = "delete"
+	request.MessageID = 0
+	request.Revision++
+	if recipients, deleted, err := s.ChangeConversation(t.Context(), "owner", request); err != nil || !deleted || len(recipients) != 2 {
+		t.Fatalf("delete group: %v %v %v", recipients, deleted, err)
+	}
+	for _, uid := range []string{"owner", "member"} {
+		if got := conversationTestRead(t, s, uid, netproto.ConversationRequest{Action: "list"}); len(got.Conversations) != 0 {
+			t.Fatal("deleted group still listed")
+		}
+	}
+	var count int
+	if err := s.DB().QueryRowContext(t.Context(), "SELECT count(*) FROM private_conversation_messages WHERE conversation_id=$1", c.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("orphan message: %d %v", count, err)
+	}
+}

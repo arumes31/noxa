@@ -45,7 +45,7 @@ func (s *TCPServer) buildRoleChannelState(ctx context.Context, p authorization.R
 	if actor < 1 || !e.Evaluate(actor, query.ChannelID, authorization.ViewChannel).Allowed {
 		return netproto.RoleChannelState{}, authorization.ErrRoleForbidden
 	}
-	response := netproto.RoleChannelState{Revision: p.Revision, ChannelID: query.ChannelID, Capabilities: authorization.Capabilities(), Roles: []netproto.RoleChannelOption{}, Destinations: []netproto.RoleChannelOption{}, GrantableCapabilities: []authorization.Capability{}}
+	response := netproto.RoleChannelState{SupportsTextChannels: true, Revision: p.Revision, ChannelID: query.ChannelID, Capabilities: authorization.Capabilities(), Roles: []netproto.RoleChannelOption{}, Destinations: []netproto.RoleChannelOption{}, GrantableCapabilities: []authorization.Capability{}}
 	response.CanCreatePermanent = e.Evaluate(actor, query.ChannelID, authorization.ManageChannels).Allowed
 	response.CanCreateTemporary = response.CanCreatePermanent || e.Evaluate(actor, query.ChannelID, authorization.CreateTemporaryChannels).Allowed
 	response.CanManageAccess = e.Evaluate(actor, query.ChannelID, authorization.ManageChannelAccess).Allowed
