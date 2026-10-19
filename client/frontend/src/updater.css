@@ -61,7 +61,7 @@
 .update-dlg .upd-block-size { display: none; color: var(--upd-muted); font-size: 10px; }
 .update-dlg .dlg-buttons { margin: 0; display: flex; justify-content: center; gap: 9px; flex-wrap: wrap; }
 .update-dlg button { border: 1px solid var(--upd-line); background: transparent; color: var(--upd-text); border-radius: 9px; padding: 9px 14px; min-height: 40px; }
-.update-dlg .upd-update { color: var(--upd-on); background: var(--upd-accent); border-color: var(--upd-accent); font-weight: 600; }
+.dlg.dlg-wide.update-dlg .dlg-buttons > .upd-update { color: var(--upd-on); background: var(--upd-accent); border-color: var(--upd-accent); font-weight: 600; }
 .update-dlg button:focus-visible { outline: 2px solid var(--upd-accent); outline-offset: 3px; }
 .update-dlg button:disabled { opacity: .55; }
 .update-dlg .upd-countdown { text-align: center; margin-top: 17px; color: var(--upd-accent); font-size: 14px; }
