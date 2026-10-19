@@ -412,7 +412,7 @@ async function connectFromLogin() {
         const revision = ++resetRevision;
         const active = await activeTabInfo();
         if (!loginPending || revision !== resetRevision) return;
-        if (!active?.connected || active.id !== tabID || previousTabIDs.has(tabID) ||
+        if (!active || active.id !== tabID || previousTabIDs.has(tabID) ||
             active.addr !== addr || active.nickname !== nick) splash.finish(false);
     });
     let connected = false;

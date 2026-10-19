@@ -11817,20 +11817,28 @@ test.describe("link hover lifecycle", () => {
 });
 
 
-test("fast login activation keeps its connect animation without delaying the workspace", async ({ page }, testInfo) => {
+for (const connectedAtActivation of [true, false]) test(`fast login activation keeps its connect animation without delaying the workspace (${connectedAtActivation})`, async ({ page }, testInfo) => {
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.clock.install();
-    await page.evaluate(() => {
+    await page.evaluate(connectedAtActivation => {
         window.__connectBookmarkHandler = async (_bookmark, addr, nickname) => {
-            window.__tabs = [{ id: "splash-own", addr, nickname, connected: true, active: true }];
+            window.__tabs = [{ id: "splash-own", addr, nickname, connected: connectedAtActivation, active: true }];
             for (const callback of window.__events.tab_reset || []) callback("splash-own");
             for (const callback of window.__events.tab_update || []) callback(structuredClone(window.__tabs));
+            if (!connectedAtActivation) await new Promise(resolve => {
+                window.__markSplashConnected = () => { window.__tabs[0].connected = true; resolve(); };
+            });
             return { tab_id: "splash-own", error: "" };
         };
-    });
+    }, connectedAtActivation);
     await page.locator("#login-addr").fill("voice.example");
     await page.locator("#login-nick").fill("Daniel");
     await page.locator("#login-connect").click();
+    if (!connectedAtActivation) {
+        await page.clock.runFor(100);
+        await expect(page.locator(".connect-splash")).toBeVisible();
+        await page.evaluate(() => window.__markSplashConnected());
+    }
     await expect(page.locator("#app")).toBeVisible();
     await expect(page.locator("#login-connect")).toBeEnabled();
     await expect(page.locator(".connect-splash")).toBeVisible();
