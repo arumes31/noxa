@@ -325,6 +325,7 @@ function cancelChatSearch() {
 }
 
 function invalidateChatViewWork() {
+    closeLinkCard();
     $("chat-send-error").classList.add("hidden");
     chatViewGeneration++;
     exportAttempt++;
@@ -959,13 +960,7 @@ export function bindSharedLinks(root) {
         const url = link.getAttribute("data-url");
         if (url) window.runtime.BrowserOpenURL(url);
     });
-    root.addEventListener("mouseover", (e) => {
-        const link = e.target.closest(".md-link");
-        if (link && root.contains(link)) scheduleLinkCard(link);
-    });
-    root.addEventListener("mouseout", (e) => {
-        if (e.target.closest(".md-link")) closeLinkCard();
-    });
+    bindLinkCardHover(root);
 }
 
 // downloadChip builds the "📎 name" button. ref carries the attachment key,
@@ -3303,8 +3298,18 @@ function toggleEmojiPanel(target = null) {
 const linkCards = new Map(); // url -> {title: string | null}
 let linkCardEl = null;
 let linkCardTimer = null;
+let linkCardGeneration = 0;
+let linkCardRequest = null;
+let linkCardAnchor = null;
+let linkCardObserver = null;
 
 function closeLinkCard() {
+    linkCardGeneration++;
+    linkCardRequest?.abort();
+    linkCardRequest = null;
+    linkCardAnchor = null;
+    linkCardObserver?.disconnect();
+    linkCardObserver = null;
     if (linkCardTimer) {
         clearTimeout(linkCardTimer);
         linkCardTimer = null;
@@ -3327,14 +3332,13 @@ function metaContent(html, key) {
     return v || null;
 }
 
-async function linkPreview(url) {
+async function linkPreview(url, controller) {
     if (linkCards.has(url)) return linkCards.get(url);
     let card = { title: null, desc: null, image: null };
     if (!/^https?:\/\//i.test(url)) {
         linkCards.set(url, card);
         return card;
     }
-    const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
     try {
         const resp = await fetch(url, { signal: controller.signal });
@@ -3363,22 +3367,65 @@ async function linkPreview(url) {
         if (card.desc) card.desc = card.desc.slice(0, 200);
     } catch { /* CORS/timeout — domain-only card */ }
     finally { clearTimeout(timer); }
-    linkCards.set(url, card);
+    // A cancelled request must not repopulate a cleared server cache.
+    if (!controller.signal.aborted) linkCards.set(url, card);
     return card;
+}
+
+function bindLinkCardHover(root) {
+    root.addEventListener("mouseover", (event) => {
+        const link = event.target.closest(".md-link");
+        if (link && root.contains(link) && link !== linkCardAnchor) scheduleLinkCard(link);
+    });
+    root.addEventListener("mouseout", (event) => {
+        const link = event.target.closest(".md-link");
+        if (link && !link.contains(event.relatedTarget)) closeLinkCard();
+    });
+}
+
+function initLinkCardDismissal() {
+    window.addEventListener("scroll", closeLinkCard, true);
+    window.addEventListener("resize", closeLinkCard);
+    window.addEventListener("blur", closeLinkCard);
+    document.addEventListener("mouseleave", closeLinkCard);
+    document.addEventListener("pointerdown", closeLinkCard, true);
+    document.addEventListener("mousemove", event => {
+        if (linkCardAnchor && !linkCardAnchor.contains(event.target)) closeLinkCard();
+    });
+    document.addEventListener("visibilitychange", () => { if (document.hidden) closeLinkCard(); });
+    document.addEventListener("keydown", event => { if (event.key === "Escape") closeLinkCard(); });
 }
 
 function scheduleLinkCard(linkEl) {
     closeLinkCard();
-    const settings = V().settings || {};
+    const settings = V().state.settings || {};
     if (settings.link_previews === false) return;
     const url = linkEl.getAttribute("data-url");
     if (!url) return;
+    const generation = linkCardGeneration;
+    linkCardAnchor = linkEl;
+    // Chat rerenders can remove/hide a hovered link without a mouseout event.
+    linkCardObserver = new MutationObserver(() => {
+        if (!linkEl.isConnected || !linkEl.getClientRects().length) closeLinkCard();
+    });
+    linkCardObserver.observe(document, { childList: true, subtree: true });
+    // Watch visibility on this link's ancestors without observing unrelated
+    // per-frame style changes (for example microphone meters) across the app.
+    for (let node = linkEl; node; node = node.parentElement) {
+        linkCardObserver.observe(node, { attributes: true, attributeFilter: ["hidden", "class", "style"] });
+    }
     linkCardTimer = setTimeout(async () => {
+        linkCardTimer = null;
+        const controller = new AbortController();
+        linkCardRequest = controller;
         let domain = url;
         try {
             domain = new URL(url).host;
         } catch { /* show the raw URL */ }
-        const card = await linkPreview(url);
+        const card = await linkPreview(url, controller);
+        if (generation !== linkCardGeneration || !linkEl.isConnected ||
+            !linkEl.matches(":hover") || !linkEl.getClientRects().length) return;
+        linkCardRequest = null;
         linkCardEl = document.createElement("div");
         linkCardEl.className = "link-card";
         if (card.image) {
@@ -4569,13 +4616,8 @@ export function initChat() {
         if (q) scrollToQuote(q);
     });
     // (94) hover preview cards.
-    log.addEventListener("mouseover", (e) => {
-        const link = e.target.closest(".md-link");
-        if (link) scheduleLinkCard(link);
-    });
-    log.addEventListener("mouseout", (e) => {
-        if (e.target.closest(".md-link")) closeLinkCard();
-    });
+    bindLinkCardHover(log);
+    initLinkCardDismissal();
 
     // Header buttons.
     $("chat-pins-btn").onclick = togglePinsPanel;

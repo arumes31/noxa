@@ -11729,3 +11729,89 @@ for (const { width, mode, language, fontSize } of [
         await expect(page.locator("#voice-mute")).toHaveAttribute("aria-pressed", "true");
     });
 }
+
+
+test.describe("link hover lifecycle", () => {
+    test.beforeEach(async ({ page }) => {
+        await showB3Workspace(page);
+        await page.evaluate(() => {
+            const originalFetch = window.fetch;
+            window.__linkRequests = [];
+            window.fetch = (url, options) => {
+                if (!String(url).startsWith("https://hover.example/")) return originalFetch(url, options);
+                return new Promise(resolve => window.__linkRequests.push({ url, signal: options.signal,
+                    resolve: title => resolve(new Response(`<title>${title}</title>`)),
+                }));
+            };
+            window.__noxaChat.onMyChannelChanged();
+            window.__noxaChat.addChat({ id: 99001, channel_id: 2, from: "Alex", from_unique_id: "uid-alex",
+                text: "https://hover.example/first https://hover.example/second", enc_verified: true, enc_mode: "server" });
+        });
+        await expect(page.locator('#chat-log .md-link[data-url="https://hover.example/first"]')).toBeVisible();
+    });
+
+    test("disabled link previews do not start requests", async ({ page }) => {
+        await page.clock.install();
+        await page.evaluate(() => { window.__noxa.state.settings.link_previews = false; });
+        await page.locator('#chat-log .md-link').first().hover();
+        await page.clock.runFor(1000);
+        expect(await page.evaluate(() => window.__linkRequests.length)).toBe(0);
+        await expect(page.locator(".link-card")).toHaveCount(0);
+    });
+
+    test("a late preview cannot reopen after leaving its link", async ({ page }) => {
+        await page.locator('#chat-log .md-link').first().hover();
+        await expect.poll(() => page.evaluate(() => window.__linkRequests.length)).toBe(1);
+        await page.locator("#chat-head-title").hover();
+        await page.evaluate(() => window.__linkRequests[0].resolve("Late preview"));
+        await expect(page.locator(".link-card")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__linkRequests[0].signal.aborted)).toBe(true);
+    });
+
+    for (const surface of ["channel", "shared"]) test(`${surface} out-of-order previews leave only the currently hovered card`, async ({ page }) => {
+        if (surface === "shared") await page.evaluate(() => {
+            // Private-group message surfaces bind the same exported link policy.
+            const old = document.getElementById("chat-log");
+            const root = old.cloneNode(true);
+            old.replaceWith(root);
+            window.__noxaChat.bindSharedLinks(root);
+        });
+        const links = page.locator('#chat-log .md-link');
+        await links.first().hover();
+        await expect.poll(() => page.evaluate(() => window.__linkRequests.length)).toBe(1);
+        await links.last().hover();
+        await expect.poll(() => page.evaluate(() => window.__linkRequests.length)).toBe(2);
+        await page.evaluate(() => window.__linkRequests[1].resolve("Current preview"));
+        await expect(page.locator(".link-card")).toHaveText(/Current preview/);
+        await page.evaluate(() => window.__linkRequests[0].resolve("Old preview"));
+        await expect(page.locator(".link-card")).toHaveCount(1);
+        await expect(page.locator(".link-card")).toHaveText(/Current preview/);
+        await page.locator("#chat-head-title").hover();
+        await expect(page.locator(".link-card")).toHaveCount(0);
+    });
+
+    for (const change of ["scroll", "blur", "escape", "remove", "hide", "channel"]) {
+        for (const phase of ["visible", "pending"]) test(`dismisses ${phase} previews on ${change}`, async ({ page }) => {
+            const link = page.locator('#chat-log .md-link').first();
+            await link.hover();
+            await expect.poll(() => page.evaluate(() => window.__linkRequests.length)).toBe(1);
+            if (phase === "visible") {
+                await page.evaluate(() => window.__linkRequests[0].resolve("Visible preview"));
+                await expect(page.locator(".link-card")).toBeVisible();
+            }
+            await page.evaluate(change => {
+                if (change === "scroll") document.getElementById("chat-log").dispatchEvent(new Event("scroll"));
+                if (change === "blur") window.dispatchEvent(new Event("blur"));
+                if (change === "escape") document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+                if (change === "remove") document.querySelector('#chat-log .md-link').remove();
+                if (change === "hide") document.getElementById("chat-pane").hidden = true;
+                if (change === "channel") window.__noxaChat.onMyChannelChanged();
+            }, change);
+            if (phase === "pending") {
+                await expect.poll(() => page.evaluate(() => window.__linkRequests[0].signal.aborted)).toBe(true);
+                await page.evaluate(() => window.__linkRequests[0].resolve("Cancelled preview"));
+            }
+            await expect(page.locator(".link-card")).toHaveCount(0);
+        });
+    }
+});
