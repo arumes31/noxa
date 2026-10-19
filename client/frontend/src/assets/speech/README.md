@@ -33,14 +33,19 @@ and the interface keep the normal wording:
 
 | Language | Written | Rendered |
 | --- | --- | --- |
-| en, de | noXa | Noksa |
+| en | noXa | Noksa |
+| de | noXa | Nocksa |
 | de | Server | Sörwa |
 | de | Serveraktion | Sörwaraktion |
 | de | Channel | Tschännel |
 | de | online | onlein |
+| de | Ton | Tohn |
+| de | angestupst | angeschtupst |
 
-The German respellings were chosen by listening to alternatives. "Stream" and
-"gebannt" are rendered as written.
+Sörwa, Sörwaraktion, Tschännel and onlein were chosen by listening to
+alternatives; "Stream" and "gebannt" are rendered as written. Tohn,
+angeschtupst and Nocksa fix clips that Whisper repeatedly heard as "Tun",
+"angestopst" and "Nuxa"; they still need a listening check.
 
 ## Regeneration
 
@@ -58,8 +63,8 @@ python tools/generate-speech.py --catalog-only
 render verifies every model file hash, builds the blended style, applies the
 respellings and masters each clip with the shared contract in
 generate-speech.py. review transcribes every clip with Whisper and accepts it
-only when the transcript has every intended word (spacing and punctuation may
-differ). Re-render rejected clips with `render --events ...` and review again;
+only when the transcript matches the intended text within one letter (spacing
+and punctuation may differ; the edit count is recorded). Re-render rejected clips with `render --events ...` and review again;
 publish refuses unless all 68 clips are accepted. Synthesis is not
 bit-reproducible, so the shipped hashes identify the accepted recordings.
 st13-content-review.json binds each accepted check to its WAV hash. ASR checks

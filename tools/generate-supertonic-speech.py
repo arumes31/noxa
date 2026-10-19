@@ -142,6 +142,15 @@ def render(args):
     previous.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
+def distance(a, b):
+    row = list(range(len(b) + 1))
+    for i, x in enumerate(a, 1):
+        prev, row[0] = row[0], i
+        for j, y in enumerate(b, 1):
+            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (x != y))
+    return row[-1]
+
+
 def letters(text):
     return re.sub(r'[^\w]|_', '', text.lower())
 
@@ -168,11 +177,13 @@ def review(args):
             for written, spoken in PROVENANCE['pronunciation_aliases'].get(language, {}).items():
                 heard = heard.replace(spoken.lower(), written.lower())
             # Compare letters only: Whisper splits or joins compounds and words freely.
-            exact = letters(heard) == letters(clip['text'])
+            edits = distance(letters(heard), letters(clip['text']))
+            exact = edits <= 1  # one letter: Whisper spelling (e.g. Bennachrichtigung) or b/p
             results[key] = {'sha256': clip['sha256'], 'expected': clip['text'], 'renderText': clip['renderText'],
                 'language': language, 'automatic_transcript': transcript, 'duration': round(clip['duration'], 3),
                 'asr': 'Whisper small (sherpa-onnx int8)',
                 'note': 'Automatic content review; not a human listening or timbre assessment.',
+                'letterEdits': edits,
                 'reviewStatus': 'accepted-automatic-content-review' if exact else 'needs-review'}
             print(key, 'ok' if exact else 'CHECK', '|', transcript)
     (out / 'st13-content-review.json').write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')

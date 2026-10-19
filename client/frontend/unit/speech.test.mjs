@@ -91,7 +91,7 @@ test("German announcements use ST13 with the listened-to respellings and keep Ch
     assert.equal(provenance.authoring.runtime_generation, false);
     assert.deepEqual(provenance.pronunciation_aliases, {
         en: { noXa: "Noksa" },
-        de: { noXa: "Noksa", Serveraktion: "Sörwaraktion", Server: "Sörwa", Channel: "Tschännel", online: "onlein" },
+        de: { noXa: "Nocksa", Serveraktion: "Sörwaraktion", Server: "Sörwa", Channel: "Tschännel", online: "onlein", Ton: "Tohn", angestupst: "angeschtupst" },
     });
     for (const language of ["en", "de"]) {
         assert.equal(provenance.providers[language].engine, "supertonic");
@@ -102,13 +102,15 @@ test("German announcements use ST13 with the listened-to respellings and keep Ch
     assert.equal(voice.id, "ST13");
     assert.deepEqual(voice.blend, { M5: 1.25, M1: -0.25 });
     assert.equal(SPEECH_ASSETS.de.user_join.transcript, "Benutzer ist dem Channel beigetreten.");
-    for (const clip of Object.values(SPEECH_ASSETS.de)) assert.doesNotMatch(clip.transcript, /kanal|Tschännel|Sörwa|onlein|Noksa/i);
+    for (const clip of Object.values(SPEECH_ASSETS.de)) assert.doesNotMatch(clip.transcript, /kanal|Tschännel|Sörwa|onlein|Nocksa|Tohn|angeschtupst/i);
     const metrics = JSON.parse(readFileSync(new URL("../src/assets/speech/metrics.json", import.meta.url)));
     assert.equal(metrics["de/user_join"].renderText, "Benutzer ist dem Tschännel beigetreten.");
     assert.equal(metrics["de/server_error"].renderText, "Die Sörwaraktion ist fehlgeschlagen.");
     assert.equal(metrics["de/buddy_online"].renderText, "Ein beobachteter Kontakt ist onlein.");
     assert.equal(metrics["de/banned"].renderText, "Du wurdest vom Sörwa gebannt.");
     assert.equal(metrics["de/stream_watch_started"].renderText, "Jemand schaut deinem Stream zu.");
+    assert.equal(metrics["de/sound_muted"].renderText, "Tohn stummgeschaltet.");
+    assert.equal(metrics["de/poke"].renderText, "Du wurdest angeschtupst.");
     const notice = readFileSync(new URL("../public/noxa-audio-licenses.txt", import.meta.url), "utf8");
     assert.match(notice, /ST13/);
     assert.match(notice, /Supertonic 3/);

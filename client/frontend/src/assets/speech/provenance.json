@@ -5,11 +5,13 @@
       "noXa": "Noksa"
     },
     "de": {
-      "noXa": "Noksa",
+      "noXa": "Nocksa",
       "Serveraktion": "Sörwaraktion",
       "Server": "Sörwa",
       "Channel": "Tschännel",
-      "online": "onlein"
+      "online": "onlein",
+      "Ton": "Tohn",
+      "angestupst": "angeschtupst"
     }
   },
   "providers": {
