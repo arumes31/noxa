@@ -2259,10 +2259,15 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 					translate()
 					return nil
 				})
+				// Negotiation can finish between cache admission and fallback.
+				// Share one readiness snapshot so a packet that could not try
+				// the cache yet cannot ask the publisher for a keyframe instead.
+				transportReady := (cached != nil || needsKeyframe) &&
+					(output.egress == nil || output.videoTransportReady(r, w.delivery.RecipientID))
 				if cached != nil {
 					fresh := !output.videoContinuity.seen || output.videoContinuity.pendingEpoch
 					started, advanced := false, false
-					if output.videoTransportReady(r, w.delivery.RecipientID) {
+					if transportReady {
 						started, advanced = r.injectGOP(output, mediaTicket{delivery: w.delivery, guard: guard, router: r, videoRevision: policy.revision, videoRID: rid}, mime, cached, now)
 					}
 					if advanced {
@@ -2303,7 +2308,7 @@ func (r *Router) forwardVideoFrameAtPolicyCodecSource(senderID, slot, rid string
 					// The write runs asynchronously: this fanout still has other
 					// viewers to serve, and the publisher's RTCP path may be slow.
 					if needsKeyframe && w.delivery.WatchEpoch != 0 && !isVideoPadding(pkt) &&
-						(output.egress == nil || output.videoTransportReady(r, w.delivery.RecipientID)) {
+						transportReady {
 						// Readiness may change after the unit's first packet. Its
 						// suffix cannot snapshot the cache, but the next boundary
 						// can. Give that refill its bounded chance before asking
