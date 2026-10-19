@@ -101,20 +101,17 @@ func TestPacerRetriesFinalWriteBehindControlUpdate(t *testing.T) {
 	for {
 		p.mu.Lock()
 		count := p.count
+		written = writes.Load()
 		p.mu.Unlock()
-		if count == 0 {
+		// An empty queue can mean the worker has only popped the packet.
+		// Wait for the final write as well as the queue draining.
+		if count == 0 && written == 1 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("retried packet was never written")
+			t.Fatalf("retried packet: queued=%d written=%d, want drained and written once", count, written)
 		}
 		time.Sleep(5 * time.Millisecond)
-	}
-	p.mu.Lock()
-	written = writes.Load()
-	p.mu.Unlock()
-	if written != 1 {
-		t.Fatalf("packet written %d times after the update", written)
 	}
 }
 
