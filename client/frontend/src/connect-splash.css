@@ -10,6 +10,8 @@
     color: #d6e4f0; font-family: var(--font-body, "Outfit", system-ui, sans-serif);
     animation: connect-splash-in 220ms ease-out both;
 }
+/* An automatic connection can start during the post-update greeting. */
+.update-intro { z-index: 9001; }
 :root[data-theme="light"] :is(.connect-splash, .update-intro) {
     --logo-ring: #0f8fa3; --logo-hi: #19a9bd; --logo-lo: #0b7f95; --logo-bar: #138ea3; --logo-comet: #0b7f95;
     background: radial-gradient(circle at 50% 42%, #e3f2f9 0%, #f6fafd 70%); color: #10202e;

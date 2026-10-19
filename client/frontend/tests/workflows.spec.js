@@ -11815,3 +11815,90 @@ test.describe("link hover lifecycle", () => {
         });
     }
 });
+
+
+for (const connectedAtActivation of [true, false]) test(`fast login activation keeps its connect animation without delaying the workspace (${connectedAtActivation})`, async ({ page }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.clock.install();
+    await page.evaluate(connectedAtActivation => {
+        window.__connectBookmarkHandler = async (_bookmark, addr, nickname) => {
+            window.__tabs = [{ id: "splash-own", addr, nickname, connected: connectedAtActivation, active: true }];
+            for (const callback of window.__events.tab_reset || []) callback("splash-own");
+            for (const callback of window.__events.tab_update || []) callback(structuredClone(window.__tabs));
+            if (!connectedAtActivation) await new Promise(resolve => {
+                window.__markSplashConnected = () => { window.__tabs[0].connected = true; resolve(); };
+            });
+            return { tab_id: "splash-own", error: "" };
+        };
+    }, connectedAtActivation);
+    await page.locator("#login-addr").fill("voice.example");
+    await page.locator("#login-nick").fill("Daniel");
+    await page.locator("#login-connect").click();
+    if (!connectedAtActivation) {
+        await page.clock.runFor(100);
+        await expect(page.locator(".connect-splash")).toBeVisible();
+        await page.evaluate(() => window.__markSplashConnected());
+    }
+    await expect(page.locator("#app")).toBeVisible();
+    await expect(page.locator("#login-connect")).toBeEnabled();
+    await expect(page.locator(".connect-splash")).toBeVisible();
+    await page.clock.runFor(2500);
+    await expect(page.locator(".connect-splash")).not.toHaveClass(/leaving/);
+    await page.screenshot({ path: testInfo.outputPath("fast-connect-splash.png") });
+    await page.clock.runFor(1000);
+    await expect(page.locator(".connect-splash")).toHaveCount(0);
+});
+
+for (const outcome of ["failure", "cancel hold", "skip hold", "already visible", "reduced motion"]) {
+    test(`connect animation handles ${outcome} without extra waiting`, async ({ page }) => {
+        await page.emulateMedia({ reducedMotion: outcome === "reduced motion" ? "reduce" : "no-preference" });
+        await page.clock.install();
+        await page.evaluate(async () => {
+            const { showConnectSplash } = await import("/src/connect-splash.js");
+            window.__testConnectSplash = showConnectSplash("voice.example");
+        });
+        if (outcome === "already visible") await page.clock.runFor(3300);
+        await page.evaluate(outcome => window.__testConnectSplash.finish(outcome !== "failure"), outcome);
+        if (outcome === "cancel hold") await page.evaluate(() => window.__testConnectSplash.finish(false));
+        if (outcome === "skip hold") await page.keyboard.press("Escape");
+        if (outcome === "already visible") await page.clock.runFor(400);
+        await expect(page.locator(".connect-splash")).toHaveCount(0);
+        await page.clock.runFor(4000);
+        await expect(page.locator(".connect-splash")).toHaveCount(0);
+    });
+}
+
+
+test("a new connect animation retires the previous pending animation", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.evaluate(async () => {
+        const { showConnectSplash } = await import("/src/connect-splash.js");
+        window.__oldSplash = showConnectSplash("old.example");
+        window.__newSplash = showConnectSplash("new.example");
+        window.__oldSplash.finish(true);
+    });
+    await expect(page.locator(".connect-splash")).toHaveCount(1);
+    await expect(page.locator(".connect-splash-title")).toContainText("new.example");
+    await page.evaluate(() => window.__newSplash.finish(false));
+    await expect(page.locator(".connect-splash")).toHaveCount(0);
+});
+
+
+test("switching to an existing tab at the same address cancels a pending connect animation", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.evaluate(() => {
+        window.__tabs = [{ id: "existing", addr: "voice.example", nickname: "Daniel", connected: true, active: true }];
+        window.__noxaTabs.renderTabs(window.__tabs);
+        window.__noxa.showLogin();
+        window.__connectBookmarkGate = new Promise(resolve => { window.__finishPendingLogin = resolve; });
+    });
+    await page.locator("#login-addr").fill("voice.example");
+    await page.locator("#login-nick").fill("Daniel");
+    await page.locator("#login-connect").click();
+    await expect(page.locator(".connect-splash")).toBeVisible();
+    await page.evaluate(() => { for (const callback of window.__events.tab_reset || []) callback("existing"); });
+    await expect(page.locator(".connect-splash")).toHaveCount(0);
+    await page.evaluate(() => window.__finishPendingLogin());
+    await expect(page.locator("#login-connect")).toBeEnabled();
+    await expect(page.locator(".connect-splash")).toHaveCount(0);
+});
