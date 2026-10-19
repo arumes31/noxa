@@ -23,6 +23,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("server password failure reveals its field, explains recovery and clears on edit", async ({ page }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.locator("#login-connect").click();
     const field = page.locator("#login-serverpw");
     await expect(field).toBeVisible();

@@ -20,10 +20,11 @@ async function boot(page, scenario = {}) {
                 if (s.transitionQueryThrows) throw new Error("startup status unavailable");
                 return s.transitionPending === true;
             }
+            if (method === "StartedAfterUpdate") return s.afterUpdate === true;
             if (method === "GetSettings") {
                 if (s.settingsThrows) throw new Error("settings bridge unavailable");
                 if (s.settingsPending) await new Promise(resolve => { window.__finishSettings = resolve; });
-                return { onboarding_done: s.onboardingDone !== false, alpha_dismissed: "0.4.0", updates_auto_check: s.enabled !== false, updates_auto_install: s.autoInstall === true ? undefined : false, updates_check_on_reconnect: s.reconnectEnabled !== false, notification_matrix: {}, notify_connection: s.previousCrash === true, language: s.language || "en", bookmarks: s.bookmarks || [] };
+                return { reduce_motion: s.reduceMotion === true, onboarding_done: s.onboardingDone !== false, alpha_dismissed: "0.4.0", updates_auto_check: s.enabled !== false, updates_auto_install: s.autoInstall === true ? undefined : false, updates_check_on_reconnect: s.reconnectEnabled !== false, notification_matrix: {}, notify_connection: s.previousCrash === true, language: s.language || "en", bookmarks: s.bookmarks || [] };
             }
             if (method === "SessionInfoForTab") return { connected: !s.disconnected, client_id: s.clientID || "alice" };
             if (method === "ClientVersionShort") return "0.4.0";
@@ -637,4 +638,54 @@ test("changed release requires a fresh offer and confirmation before downloading
     await page.evaluate(() => { window.__scenario.downloadError = ""; });
     await dialog.locator(".upd-update").click();
     await expect.poll(() => page.evaluate(() => window.__downloadVersions)).toEqual(["v0.4.1", "v0.4.2"]);
+});
+
+
+test("post-update intro waits for startup and remains visible after a fast launch", async ({ page }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.clock.install();
+    await boot(page, { afterUpdate: true, transitionQueryPending: true, settingsPending: true, enabled: false });
+    await page.waitForFunction(() => typeof window.__finishTransitionQuery === "function");
+    await expect(page.locator(".update-intro")).toHaveCount(0);
+    await page.evaluate(() => window.__finishTransitionQuery());
+    await page.waitForFunction(() => typeof window.__finishSettings === "function");
+    await expect(page.locator(".update-intro")).toHaveCount(0);
+    await page.evaluate(() => window.__finishSettings());
+    await expect(page.locator(".update-intro")).toBeVisible();
+    expect(await page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBe(1);
+    await page.clock.runFor(3800);
+    await expect(page.locator(".update-intro")).toBeVisible();
+    await expect(page.locator(".update-intro")).not.toHaveClass(/leaving/);
+    await page.screenshot({ path: testInfo.outputPath("post-update-intro.png") });
+    await page.clock.runFor(1200);
+    await expect(page.locator(".update-intro")).toHaveCount(0);
+});
+
+test("post-update intro honors the loaded reduced-motion preference", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.clock.install();
+    await boot(page, { afterUpdate: true, reduceMotion: true, enabled: false });
+    await expect(page.locator(".update-intro")).toBeVisible();
+    await page.clock.runFor(1400);
+    await expect(page.locator(".update-intro")).toHaveCount(0);
+});
+
+test("compatibility process does not play a post-update intro before final startup", async ({ page }) => {
+    await boot(page, { afterUpdate: true, transitionPending: true, enabled: false });
+    await expect(page.locator("#update-transition")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.__calls.ConfirmUpdateStartup || 0)).toBe(1);
+    await expect(page.locator(".update-intro")).toHaveCount(0);
+});
+
+
+test("fast automatic bookmark connection also shows the full connect animation", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.clock.install();
+    await boot(page, { enabled: false, bookmarks: [{ name: "Auto", addr: "voice.example", nickname: "Daniel", auto_connect: true }] });
+    await expect.poll(() => page.evaluate(() => window.__calls.ConnectGuestBookmarkTabWithID || 0)).toBe(1);
+    await expect(page.locator(".connect-splash-title")).toContainText("voice.example");
+    await page.clock.runFor(2000);
+    await expect(page.locator(".connect-splash")).not.toHaveClass(/leaving/);
+    await page.clock.runFor(2000);
+    await expect(page.locator(".connect-splash")).toHaveCount(0);
 });

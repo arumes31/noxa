@@ -1,4 +1,5 @@
 import { updateStartupBlocked } from "./update-transition.js";
+import { showConnectSplash } from "./connect-splash.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 import { t as translate } from "./i18n.js";
 // tabs.js — wave-8a multi-server tabs (281): the TS3-style server tab bar
@@ -324,20 +325,27 @@ async function autoConnectBookmarks() {
         const displayName = b.nickname_override || "";
         const requestServerGeneration = V().state.serverGeneration;
         const requestTabID = activeTabID;
-        const { error: err, tabID } = await connectGuestBookmarkWithID(b.name, b.addr, nick, displayName);
-        if (err !== "") {
-            playSourceConnectionFailure(requestTabID, requestServerGeneration);
-            // Account login needed: prefill for the user.
-            void V().prefillLogin({ ...b, display_name: displayName });
-            V().state.pendingBookmark = { name: b.name, addr: b.addr };
-            V().sysMsg?.(translate("desktop.auto.connect.needs.your.password.for") + b.addr);
-        } else {
-            // The successful call activates its tab and emits tab_reset before
-            // resolving. Capture that generation now, then make the delayed
-            // certificate check conditional on the same active tab.
-            const connectedGeneration = V().state.serverGeneration;
-            await V().checkCertificateClock?.(b.addr, tabID);
-            playActiveConnectionCue(tabID, connectedGeneration);
+        const splash = !document.getElementById("login-overlay").classList.contains("hidden") ? showConnectSplash(b.addr) : null;
+        let connected = false;
+        try {
+            const { error: err, tabID } = await connectGuestBookmarkWithID(b.name, b.addr, nick, displayName);
+            connected = err === "";
+            if (err !== "") {
+                playSourceConnectionFailure(requestTabID, requestServerGeneration);
+                // Account login needed: prefill for the user.
+                void V().prefillLogin({ ...b, display_name: displayName });
+                V().state.pendingBookmark = { name: b.name, addr: b.addr };
+                V().sysMsg?.(translate("desktop.auto.connect.needs.your.password.for") + b.addr);
+            } else {
+                // The successful call activates its tab and emits tab_reset before
+                // resolving. Capture that generation now, then make the delayed
+                // certificate check conditional on the same active tab.
+                const connectedGeneration = V().state.serverGeneration;
+                await V().checkCertificateClock?.(b.addr, tabID);
+                playActiveConnectionCue(tabID, connectedGeneration);
+            }
+        } finally {
+            splash?.finish(connected);
         }
     }
 }

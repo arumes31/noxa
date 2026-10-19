@@ -4,7 +4,7 @@
 import { createLogoMotion, prefersReducedMotion } from "./logo-motion.js";
 import "./connect-splash.css";
 
-const INTRO_MS = 3200;
+const INTRO_MS = 4500;
 const LEAVE_MS = 260;
 
 export function playUpdateIntro({ duration = INTRO_MS } = {}) {

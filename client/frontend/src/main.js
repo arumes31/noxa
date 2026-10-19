@@ -404,9 +404,17 @@ async function connectFromLogin() {
     const displayName = $("login-display-name").value.trim();
     // C04: the comet draws the mark while this login connects to `addr`.
     const splash = showConnectSplash(addr);
-    // A tab activation (including successful connect) owns the workspace now.
-    // Do not obscure it while an older native login is still pending.
-    const stopSplashOnTabReset = window.runtime.EventsOn("tab_reset", () => splash.finish(false));
+    // The new connection activates its own tab before the native call returns.
+    // Keep its animation, but dismiss it for an unrelated tab activation.
+    const previousTabIDs = new Set([...document.querySelectorAll("#server-tabs .srv-tab")].map(tab => tab.dataset.tabId));
+    let resetRevision = 0, loginPending = true;
+    const stopSplashOnTabReset = window.runtime.EventsOn("tab_reset", async tabID => {
+        const revision = ++resetRevision;
+        const active = await activeTabInfo();
+        if (!loginPending || revision !== resetRevision) return;
+        if (!active?.connected || active.id !== tabID || previousTabIDs.has(tabID) ||
+            active.addr !== addr || active.nickname !== nick) splash.finish(false);
+    });
     let connected = false;
     const pw = $("login-accountpw").value;
     const spw = $("login-serverpw").value;
@@ -496,6 +504,7 @@ async function connectFromLogin() {
         playCurrentConnectionFailure();
         if (currentAttempt()) loginFeedback.show(e, { displayName });
     } finally {
+        loginPending = false;
         stopSplashOnTabReset?.();
         splash.finish(connected);
         submit.disabled = false;
@@ -3320,7 +3329,9 @@ void startupInitialized.then(ready => ready && window.go.main.App.ConfirmUpdateS
 
 // C20: the first start after an update restart greets with the wordmark.
 void Promise.resolve(window.go?.main?.App?.StartedAfterUpdate?.())
-    .then(afterUpdate => { if (afterUpdate === true && !updateStartupBlocked()) playUpdateIntro(); })
+    .then(async afterUpdate => {
+        if (afterUpdate === true && await startupInitialized && !updateStartupBlocked()) playUpdateIntro();
+    })
     .catch(() => { /* An older native side has no flag: no intro. */ });
 
 const stopAvatarPlayback = manageAvatarPlayback(document.body);

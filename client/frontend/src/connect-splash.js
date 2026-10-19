@@ -7,10 +7,12 @@ import { createLogoMotion, prefersReducedMotion } from "./logo-motion.js";
 import "./connect-splash.css";
 
 const QUIP_MS = 2400;
-const MIN_VISIBLE_MS = 900;
+const MIN_VISIBLE_MS = 3000;
 const LEAVE_MS = 260;
+let activeSplash = null;
 
 export function showConnectSplash(host, { now = () => performance.now() } = {}) {
+    activeSplash?.finish(false);
     const overlay = document.createElement("div");
     overlay.className = "connect-splash";
     overlay.setAttribute("role", "status");
@@ -24,7 +26,8 @@ export function showConnectSplash(host, { now = () => performance.now() } = {}) 
     document.body.appendChild(overlay);
     const shownAt = now();
     const motion = createLogoMotion(overlay.querySelector("canvas"), { choreography: "trace", busy: true });
-    let order = shuffledQuips(), position = 0, timer = 0, finished = false;
+    let order = shuffledQuips(), position = 0, timer = 0, finished = false, removed = false;
+    let leaveTimer = 0, removeTimer = 0;
     const nextQuip = () => {
         if (position >= order.length) { order = shuffledQuips(undefined, undefined, order[order.length - 1]); position = 0; }
         quip.textContent = t(quipKey(order[position++]));
@@ -36,22 +39,38 @@ export function showConnectSplash(host, { now = () => performance.now() } = {}) 
     };
     nextQuip();
     timer = setInterval(nextQuip, QUIP_MS);
-    const remove = () => { motion.dispose(); overlay.remove(); };
-    return {
+    const remove = () => {
+        if (removed) return;
+        removed = true;
+        clearInterval(timer);
+        clearTimeout(leaveTimer);
+        clearTimeout(removeTimer);
+        window.removeEventListener("pointerdown", remove, true);
+        window.removeEventListener("keydown", remove, true);
+        motion.dispose(); overlay.remove();
+        if (activeSplash?.element === overlay) activeSplash = null;
+    };
+    // The decoration must not obscure a user moving on to another task.
+    window.addEventListener("pointerdown", remove, true);
+    window.addEventListener("keydown", remove, true);
+    const splash = {
         element: overlay,
         // A successful connection fades the splash out once it has been seen;
         // a failure removes it at once so the login error is visible.
         finish(success) {
-            if (finished) return;
+            if (!success) { remove(); return; }
+            if (finished || removed) return;
             finished = true;
             clearInterval(timer);
             motion.settle();
-            if (!success || prefersReducedMotion()) { remove(); return; }
+            if (prefersReducedMotion()) { remove(); return; }
             const wait = Math.max(0, MIN_VISIBLE_MS - (now() - shownAt));
-            setTimeout(() => {
+            leaveTimer = setTimeout(() => {
                 overlay.classList.add("leaving");
-                setTimeout(remove, LEAVE_MS);
+                removeTimer = setTimeout(remove, LEAVE_MS);
             }, wait);
         },
     };
+    activeSplash = splash;
+    return splash;
 }
