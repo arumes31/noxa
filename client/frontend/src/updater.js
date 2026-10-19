@@ -62,8 +62,8 @@ function showUpdateModal() {
                 <div class="dlg-buttons">
                     <button class="upd-retry hidden">${t("common.retry")}</button>
                     <button class="upd-cancel hidden">${t("updater.cancelDownload")}</button>
-                    <button class="upd-update hidden">${t("updater.updateNow")}</button>
                     <button class="upd-close">${t("common.close")}</button>
+                    <button class="upd-update hidden">${t("updater.updateNow")}</button>
                 </div>
             </footer>
         </div>`;
