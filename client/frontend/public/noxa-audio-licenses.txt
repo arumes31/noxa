@@ -168,37 +168,34 @@ https://opengameart.org/content/various-paper-sound-effects
 Archive SHA-256: aa1889414310c7cfdd8dc291c19d4e4fc21ec987e9238b0d961fb72449c263a4
 
 Speech: complete fixed noXa English and German sentences rendered offline.
-English: selected synthetic EA60 voice, "Epic adventure narrator", authored with
-Qwen3-TTS VoiceDesign and reproduced from its original WAV and complete transcript
-using Qwen3-TTS Base. Historical Piper/LJ Speech English WAVs are retired.
-
-German: selected synthetic AN06 voice, authored with Qwen3-TTS VoiceDesign
-and reproduced from its original WAV and complete transcript using Qwen3-TTS Base.
-Original fictional adult voice; no actor recording or identifiable character imitation.
-Qwen3-TTS-12Hz-1.7B-VoiceDesign and Qwen3-TTS-12Hz-1.7B-Base: Apache-2.0.
-https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
-https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+Both languages use the synthetic ST13 voice ("Eisbrecher"), chosen from the
+ST01-ST20 auditions. ST13 is a weighted blend of the Supertonic 3 preset voice
+styles (M5 x 1.25, M1 x -0.25); no recording of a real person and no imitation of
+an identifiable character was used. The earlier EA60/AN06 recordings are retired.
+Supertonic 3 model weights: Supertone Inc., OpenRAIL-M.
+https://huggingface.co/Supertone/supertonic-3
+Supertonic code: MIT License, Copyright (c) 2025 Supertone Inc.
+https://github.com/supertone-inc/supertonic
+INT8 conversion and offline runtime: sherpa-onnx v1.13.8, Apache-2.0,
+Xiaomi Corporation and contributors.
+https://github.com/k2-fsa/sherpa-onnx
 https://www.apache.org/licenses/LICENSE-2.0
-Q8 conversion: audio-cpp/audio.cpp-gguf
-Revision: e479ac197bae727f69574261a8025696bc51de48
-https://huggingface.co/audio-cpp/audio.cpp-gguf
-Offline runtime: audio.cpp v0.9.1, Apache-2.0, Copyright 2026 ShugoAI LLC.
-https://github.com/0xShug0/audio.cpp
+Model archive: sherpa-onnx-supertonic-3-tts-int8-2026-05-11.tar.bz2
+Model archive SHA-256: 82fa96f91c4ef8abaae3a14a3f4153facf88bed821d1f7331cec2700f432c427
 
 Model/tool licenses identify authoring sources; they do not automatically
-establish the license of generated recordings. Original noXa English/German fixed
-recordings and the synthetic EA60/AN06 references are distributed under the project's
-MIT license below. Changes: generated complete noXa sentences, silence trimming,
-DC removal, endpoint fades and loudness normalization.
-EA60 reference SHA-256: 4d016355ffef426b9b1bcb9a369c67bcaeaa8cbaa93d3ce34063c85e37aa6d5d
-AN06 reference SHA-256: 38f2ae669bbda13d21a6ad446fbbd97ac734729a83cd1633a6e0248fe847b35b
-Full model hashes, reference provenance and rendering settings are tracked at:
+establish the license of generated recordings. The model, its voice styles and
+the runtime are not included in the application. The original noXa English/German
+fixed recordings are distributed under the project's MIT license below.
+Changes: generated complete noXa sentences, pronunciation respellings for German
+loanwords, resampling to 24 kHz, silence trimming, DC removal, endpoint fades and
+loudness normalization.
+Voice definition, model hashes, rendering settings and per-clip hashes:
+tools/voices/ST13.json
 client/frontend/src/assets/speech/provenance.json
-tools/voices/EA60-provenance.json
-tools/voices/AN06-provenance.json
+client/frontend/src/assets/speech/metrics.json
 
-Piper tooling, Qwen/audio.cpp engines and all model weights are not included
-in the application. This notice does not imply endorsement by their authors.
+This notice does not imply endorsement by the authors of these tools.
 
 MIT License
 

@@ -75,66 +75,66 @@ test("each fixed speech event has valid English/German PCM and no orphaned clips
     }
 });
 
-test("German announcements use the pinned AN06 reference offline and retain Channel wording and attribution", () => {
-    const provenance = JSON.parse(readFileSync(new URL("../src/assets/speech/provenance.json", import.meta.url)));
-    assert.equal(provenance.schema_version, 2);
-    assert.equal(provenance.models.de, "Qwen/Qwen3-TTS-12Hz-1.7B-Base");
-    assert.equal(provenance.providers.de.engine, "qwen3_tts");
-    assert.equal(provenance.providers.de.revision, "e479ac197bae727f69574261a8025696bc51de48");
-    assert.equal(provenance.providers.de.sha256, "b55e06c7890d43c208d15aed8b4ed3f18215f295e47d5960e061b15bff338ab0");
-    assert.equal(provenance.authoring.runtime_generation, false);
-    assert.equal(provenance.authoring.de.audition, "AN06");
-    assert.equal(provenance.authoring.de.task, "tts");
-    const reference = provenance.authoring.de.reference;
-    assert.equal(reference.path, "tools/voices/AN06.wav");
-    assert.equal(reference.sha256, "38f2ae669bbda13d21a6ad446fbbd97ac734729a83cd1633a6e0248fe847b35b");
-    const referenceWav = readFileSync(new URL("../../../" + reference.path, import.meta.url));
-    assert.equal(createHash("sha256").update(referenceWav).digest("hex"), reference.sha256);
-    assert.ok(reference.text.includes("Mikrofon stummgeschaltet."));
-    assert.equal(provenance.authoring.de.runtime.version, "v0.9.1");
-    assert.equal(provenance.authoring.de.runtime.archive_sha256, "57a17896aba4447f088b27d2875e90a6563afd7860023d50da03a61fb143609f");
-    assert.equal(SPEECH_ASSETS.de.user_join.transcript, "Benutzer ist dem Channel beigetreten.");
-    for (const clip of Object.values(SPEECH_ASSETS.de)) assert.doesNotMatch(clip.transcript, /kanal/i);
-    const notice = readFileSync(new URL("../public/noxa-audio-licenses.txt", import.meta.url), "utf8");
-    assert.match(notice, /AN06/);
-    assert.match(notice, /Qwen3-TTS/);
-    assert.match(notice, /Apache-2\.0/);
-});
+function renderText(text, aliases) {
+    // Mirrors tools/generate-supertonic-speech.py: whole words, longest first.
+    for (const word of Object.keys(aliases).sort((x, y) => y.length - x.length)) {
+        text = text.replace(new RegExp(`(?<![\\p{L}\\p{N}_])${word}(?![\\p{L}\\p{N}_])`, "gu"), aliases[word]);
+    }
+    return text;
+}
 
-test("every English announcement uses the exact selected EA60 reference with reviewed static output", () => {
+test("German announcements use ST13 with the listened-to respellings and keep Channel wording", () => {
     const root = new URL("../../../", import.meta.url);
     const provenance = JSON.parse(readFileSync(new URL("../src/assets/speech/provenance.json", import.meta.url)));
-    assert.equal(provenance.models.en, "Qwen/Qwen3-TTS-12Hz-1.7B-Base");
-    assert.deepEqual(provenance.providers.en, provenance.providers.de);
+    const voice = JSON.parse(readFileSync(new URL("tools/voices/ST13.json", root)));
+    assert.equal(provenance.schema_version, 3);
     assert.equal(provenance.authoring.runtime_generation, false);
-    assert.equal(provenance.authoring.en.audition, "EA60");
-    assert.equal(provenance.authoring.en.language, "English");
-    const reference = provenance.authoring.en.reference;
-    assert.equal(reference.path, "tools/voices/EA60.wav");
-    assert.equal(reference.sha256, "4d016355ffef426b9b1bcb9a369c67bcaeaa8cbaa93d3ce34063c85e37aa6d5d");
-    assert.equal(createHash("sha256").update(readFileSync(new URL(reference.path, root))).digest("hex"), reference.sha256);
-    const original = JSON.parse(readFileSync(new URL(reference.provenance, root)));
-    assert.equal(original.voice.id, "EA60");
-    assert.equal(original.voice.sha256, reference.sha256);
-    assert.equal(original.transcript, reference.text);
-    assert.equal(original.voice.seed, 203085240);
-    const metrics = JSON.parse(readFileSync(new URL("../src/assets/speech/metrics.json", import.meta.url)));
-    const review = JSON.parse(readFileSync(new URL("../src/assets/speech/ea60-content-review.json", import.meta.url)));
-    assert.deepEqual(Object.keys(review).sort(), Object.keys(SPEECH_ASSETS.en).sort());
-    for (const [event, clip] of Object.entries(SPEECH_ASSETS.en)) {
-        const metric = metrics["en/" + event];
-        assert.equal(metric.voice, "EA60", event);
-        assert.equal(metric.referenceSha256, reference.sha256, event);
-        assert.equal(metric.modelSha256, provenance.providers.en.sha256, event);
-        assert.equal(metric.sampleRate, 24000, event);
-        assert.equal(review[event].sha256, metric.sha256, event);
-        assert.equal(review[event].expected, clip.transcript, event);
-        assert.equal(review[event].reviewStatus, "accepted-automatic-content-review", event);
+    assert.deepEqual(provenance.pronunciation_aliases, {
+        en: { noXa: "Noksa" },
+        de: { noXa: "Noksa", Serveraktion: "Sörwaraktion", Server: "Sörwa", Channel: "Tschännel", online: "onlein" },
+    });
+    for (const language of ["en", "de"]) {
+        assert.equal(provenance.providers[language].engine, "supertonic");
+        assert.equal(provenance.providers[language].sha256, voice.model.archive_sha256);
+        assert.equal(provenance.authoring[language].voice, "ST13");
+        assert.equal(provenance.authoring[language].definition, "tools/voices/ST13.json");
     }
+    assert.equal(voice.id, "ST13");
+    assert.deepEqual(voice.blend, { M5: 1.25, M1: -0.25 });
+    assert.equal(SPEECH_ASSETS.de.user_join.transcript, "Benutzer ist dem Channel beigetreten.");
+    for (const clip of Object.values(SPEECH_ASSETS.de)) assert.doesNotMatch(clip.transcript, /kanal|Tschännel|Sörwa|onlein|Noksa/i);
+    const metrics = JSON.parse(readFileSync(new URL("../src/assets/speech/metrics.json", import.meta.url)));
+    assert.equal(metrics["de/user_join"].renderText, "Benutzer ist dem Tschännel beigetreten.");
+    assert.equal(metrics["de/server_error"].renderText, "Die Sörwaraktion ist fehlgeschlagen.");
+    assert.equal(metrics["de/buddy_online"].renderText, "Ein beobachteter Kontakt ist onlein.");
+    assert.equal(metrics["de/banned"].renderText, "Du wurdest vom Sörwa gebannt.");
+    assert.equal(metrics["de/stream_watch_started"].renderText, "Jemand schaut deinem Stream zu.");
     const notice = readFileSync(new URL("../public/noxa-audio-licenses.txt", import.meta.url), "utf8");
-    assert.match(notice, /EA60/);
-    assert.match(notice, /Qwen3-TTS/);
+    assert.match(notice, /ST13/);
+    assert.match(notice, /Supertonic 3/);
+    assert.match(notice, /OpenRAIL-M/);
+    assert.match(notice, /sherpa-onnx v1\.13\.8, Apache-2\.0/);
     assert.match(notice, /MIT License/);
+});
+
+test("every announcement in both languages is a reviewed ST13 recording of its respelled text", () => {
+    const provenance = JSON.parse(readFileSync(new URL("../src/assets/speech/provenance.json", import.meta.url)));
+    const metrics = JSON.parse(readFileSync(new URL("../src/assets/speech/metrics.json", import.meta.url)));
+    const review = JSON.parse(readFileSync(new URL("../src/assets/speech/st13-content-review.json", import.meta.url)));
+    const keys = ["en", "de"].flatMap(language => Object.keys(SPEECH_ASSETS[language]).map(event => `${language}/${event}`));
+    assert.deepEqual(Object.keys(review).sort(), keys.sort());
+    assert.deepEqual(Object.keys(metrics).sort(), keys.sort());
+    for (const key of keys) {
+        const [language, event] = key.split("/");
+        const clip = SPEECH_ASSETS[language][event], metric = metrics[key];
+        assert.equal(metric.voice, "ST13", key);
+        assert.equal(metric.modelSha256, provenance.providers[language].sha256, key);
+        assert.equal(metric.sampleRate, 24000, key);
+        assert.equal(metric.renderText, renderText(clip.transcript, provenance.pronunciation_aliases[language]), key);
+        assert.equal(review[key].sha256, metric.sha256, key);
+        assert.equal(review[key].expected, clip.transcript, key);
+        assert.equal(review[key].reviewStatus, "accepted-automatic-content-review", key);
+    }
 });
 
 test("preview never interrupts a live critical announcement", () => {

@@ -1,7 +1,7 @@
 """Shared offline speech mastering and catalog publication. Never run by noXa.
 
 Usage: python tools/generate-speech.py --catalog-only
-Render reviewed EA60/AN06 candidates with generate-reference-speech.py.
+Render, review and publish ST13 recordings with generate-supertonic-speech.py first.
 """
 import argparse
 import hashlib
@@ -86,7 +86,7 @@ def main():
     parser.add_argument('--catalog-only', action='store_true', help='Publish the catalog from complete, reviewed metrics without inference')
     args = parser.parse_args()
     if not args.catalog_only:
-        parser.error('Render candidates with generate-reference-speech.py, then use --catalog-only after review')
+        parser.error("Publish reviewed recordings with generate-supertonic-speech.py, then use --catalog-only")
     root = Path(__file__).resolve().parents[1]
     out = root / 'client/frontend/src/assets/speech'
     lines = json.loads((Path(__file__).parent / 'speech-lines.json').read_text(encoding='utf-8'))

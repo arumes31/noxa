@@ -8,78 +8,72 @@ Status, channel activity, administrative actions and poke use localized speech.
 Mentions, keywords, direct/channel messages, announcements, whispers and PTT
 retain short effects. Notification preferences and queue policy are unchanged.
 
-## Selected voices and redistribution
+## Voice
 
-- English: **EA60**, "Epic adventure narrator", the exact original synthetic
-  adult fictional voice selected from the English previews.
-- German: **AN06**, "Schelmischer Begleiter", the previously selected synthetic
-  adult fictional voice. Its accepted recordings are preserved.
-- References were designed with [Qwen3-TTS VoiceDesign](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign).
-  Complete fixed sentences use [Qwen3-TTS Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base)
-  conditioned on each unmodified reference WAV and its complete actual transcript.
-- Both upstream models and the offline [audio.cpp](https://github.com/0xShug0/audio.cpp)
-  runtime are Apache-2.0. Q8 conversions use the pinned audio-cpp/audio.cpp-gguf
-  revision in provenance.json. en-MODEL_CARD and de-MODEL_CARD record sources.
-- Original noXa fixed recordings and references use this repository's MIT
-  license. Model licenses identify authoring sources; they do not automatically
-  license generated audio. public/noxa-audio-licenses.txt records this distinction.
-  No actor recording or identifiable character imitation was used.
+Both languages use **ST13 "Eisbrecher"**, chosen from the ST01–ST20 auditions:
+a synthetic adult voice with a very low pitch (median about 83 Hz) and a calm
+pace. ST13 is a weighted blend of the Supertonic 3 preset styles, defined in
+tools/voices/ST13.json (M5 × 1.25, M1 × −0.25, speed 0.97, 8 flow steps). No
+actor recording or identifiable character imitation was used. The earlier EA60
+(English) and AN06 (German) recordings are retired.
+
+- Model: [Supertonic 3](https://huggingface.co/Supertone/supertonic-3), INT8
+  conversion from the sherpa-onnx `tts-models` release, OpenRAIL-M weights.
+- Runtime: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) v1.13.8 CLI,
+  Apache-2.0. Both are pinned by SHA-256 in tools/voices/ST13.json.
+- Original noXa recordings use this repository's MIT license; model licenses
+  identify authoring sources. public/noxa-audio-licenses.txt records this.
+
+## Pronunciation
+
+Supertonic reads characters directly, without a pronunciation dictionary, so
+German text follows German spelling rules. provenance.json maps words to the
+spelling the model receives (`renderText` in metrics.json); the catalog text
+and the interface keep the normal wording:
+
+| Language | Written | Rendered |
+| --- | --- | --- |
+| en, de | noXa | Noksa |
+| de | Server | Sörwa |
+| de | Serveraktion | Sörwaraktion |
+| de | Channel | Tschännel |
+| de | online | onlein |
+
+The German respellings were chosen by listening to alternatives. "Stream" and
+"gebannt" are rendered as written.
 
 ## Regeneration
 
-Use an isolated environment with numpy==2.5.3 and the pinned Windows x64
-audio.cpp v0.9.1 CPU runtime. Models and engines are never invoked by the build
-or shipped client. Download the authoring model explicitly when needed:
+Download the pinned model archive and the sherpa-onnx runtime listed in
+tools/voices/ST13.json, plus the sherpa-onnx Whisper small model for the
+content check, then:
 
 ```text
-python tools/download-speech-models.py --languages en de
-python tools/generate-reference-speech.py --language en --model .cache/noxa-speech-models/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf --runtime .cache/noxa-accent-local/runtime-fast/bin/audiocpp_cli.exe --output .cache/noxa-ea60-speech
-python tools/generate-reference-speech.py --language de --model .cache/noxa-speech-models/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf --runtime .cache/noxa-accent-local/runtime-fast/bin/audiocpp_cli.exe --output .cache/noxa-an06-speech
-```
-
-The shared reference tool replaces generate-an06-speech.py. German remains its
-default language. It verifies the pinned model, executable and selected reference
-SHA-256, then uses task tts, the explicit language, voice_ref and reference_text.
-Four CPU threads, a 192-token budget and a bounded timeout apply to each batch.
-Seeds follow canonical event indices even for event subsets. Raw WAVs, native
-manifests and authoring requests are retained outside production assets.
-
-`--events` selects canonical IDs. `--prepare-only` writes requests without
-inference. `--import-raw DIR --import-manifest FILE` only accepts raw recordings
-whose recorded provider, reference, runtime, text, seed and hashes match.
-Retries use a recorded `--seed-offset` and a fresh development directory.
-
-Review complete transcripts before copying candidates and their measurements
-into production metrics.json. ea60-content-review.json and an06-content-review.json
-bind accepted automatic content checks to each shipped SHA-256. ASR can detect
-omissions, repetition and added words but does not certify listening comfort,
-voice identity or native accent. A clone can drift in tone or pronunciation.
-No human listening review is claimed without recorded evidence.
-
-The pronunciation_aliases.de map renders noXa as Noksa for German synthesis.
-Canonical catalog text remains noXa; renderText records actual native input.
-The exact full reference transcript is never replaced with a desired target line.
-
-After reviewing and publishing the candidates:
-
-```text
+python tools/generate-supertonic-speech.py render --model-dir <model dir> --tts <sherpa-onnx-offline-tts> --out .cache/noxa-st13-speech
+python tools/generate-supertonic-speech.py review --out .cache/noxa-st13-speech --asr <sherpa-onnx-offline> --whisper-dir <whisper dir>
+python tools/generate-supertonic-speech.py publish --out .cache/noxa-st13-speech
 python tools/generate-speech.py --catalog-only
 ```
 
-generate-speech.py now shares mastering and publishes the reviewed catalog only;
-the retired Piper generation path cannot overwrite the selected English voice.
-Neural synthesis can vary between runs despite seeds; shipped hashes identify
-the accepted recordings.
+render verifies every model file hash, builds the blended style, applies the
+respellings and masters each clip with the shared contract in
+generate-speech.py. review transcribes every clip with Whisper and accepts it
+only when the transcript has every intended word (spacing and punctuation may
+differ). Re-render rejected clips with `render --events ...` and review again;
+publish refuses unless all 68 clips are accepted. Synthesis is not
+bit-reproducible, so the shipped hashes identify the accepted recordings.
+st13-content-review.json binds each accepted check to its WAV hash. ASR checks
+completeness, not listening comfort, timbre or accent.
 
 ## Audio contract and runtime policy
 
-Mastering trims silence, removes DC and applies endpoint fades. Both selected
-voices use 24 kHz mono PCM16, 40/60 ms leading/trailing padding and 6 ms fades,
+Mastering trims silence, removes DC and applies endpoint fades. Both languages
+use 24 kHz mono PCM16, 40/60 ms leading/trailing padding and 6 ms fades,
 targeting -31 dBFS RMS subject to the existing 0.115 peak ceiling. Every phrase
 is 0.5–6 seconds with zero endpoints, absolute DC below 0.0001 and a unique hash.
-Malformed, silent, clipped, overlong and token-truncated raw audio is rejected.
+Malformed, silent, clipped and overlong audio is rejected.
 No pitch shifting, time stretch or repeated sample substitution is applied.
-metrics.json records text, duration, rate, RMS, peak, seed and source/output hashes.
+metrics.json records text, render text, duration, rate, RMS, peak and source/output hashes.
 
 German UI/system locale selects German; English and unsupported locales select
 English. The speech-language preference can override that choice. Missing selected
