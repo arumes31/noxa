@@ -60,6 +60,8 @@ type ChannelAccess struct {
 	Restricted      bool `json:"restricted"`
 	CanConnect      bool `json:"can_connect"`
 	CanManageAccess bool `json:"can_manage_access"`
+	MemberCount     int  `json:"member_count"`
+	GuestCount      int  `json:"guest_count"`
 }
 
 // OwnChannelMove describes the recipient's most recent channel transition.

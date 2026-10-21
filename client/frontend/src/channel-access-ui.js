@@ -63,9 +63,8 @@ export function openChannelAccess(channelID) {
         summarySection.append(summaryTitle);
         const summary = roleElement("div", "access-summary"); summary.setAttribute("aria-label", t("midnight.accessSummary"));
         const stat = (value, label) => { const card = roleElement("div", "access-summary-card"); card.append(roleElement("strong", "", String(value)), roleElement("span", "", label)); summary.append(card); };
-        const presentMembers = window.__noxa.state.clients.filter(member => member.channel_id === channelID);
-        stat(presentMembers.filter(member => Number(member.user_id) > 0).length, t("midnight.membersPresent"));
-        stat(presentMembers.filter(member => !Number(member.user_id)).length, t("midnight.guestsPresent"));
+        stat(channel?.Access?.member_count ?? "—", t("midnight.membersPresent"));
+        stat(channel?.Access?.guest_count ?? "—", t("midnight.guestsPresent"));
         stat(window.__noxa.state.clients.filter(member => member.channel_id === channelID).length, t("midnight.permissionVoice"));
         summarySection.append(summary); content.append(summarySection);
         const syncRow = roleElement("div", "roles-header access-sync-row");

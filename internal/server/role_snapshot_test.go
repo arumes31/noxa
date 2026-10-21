@@ -183,3 +183,35 @@ func TestRoleSnapshotCosmeticsFollowVisibilityAndCurrentAssignments(t *testing.T
 		}
 	}
 }
+
+func TestRoleSnapshotCountsVisibleMembersAndGuestsWithoutAccountIDs(t *testing.T) {
+	sm := state.New(testLogger())
+	sm.AddChannel(&state.Channel{ChannelID: 1, Name: "Public"})
+	sm.AddClient(&state.Client{ClientID: "member", UserID: 4, UniqueID: "member", ChannelID: 1})
+	sm.AddClient(&state.Client{ClientID: "guest", UniqueID: "guest", ChannelID: 1})
+	sm.AddClient(&state.Client{ClientID: "invisible", UserID: 5, UniqueID: "invisible", ChannelID: 1, Status: "invisible"})
+	policy := serverRoleFixture().policy
+	policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel}
+	evaluator, err := authorization.NewRoleEvaluator(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, viewer := range []struct {
+		actor    int64
+		uniqueID string
+		members  int
+	}{{1, "viewer", 1}, {1, "invisible", 2}, {2, "owner", 2}} {
+		snapshot := buildRoleSnapshot(sm, evaluator, viewer.actor, viewer.uniqueID)
+		channel := snapshot.RootChannels[0]
+		if channel.Access.MemberCount != viewer.members || channel.Access.GuestCount != 1 || channel.Access.MemberCount+channel.Access.GuestCount != len(channel.Clients) {
+			t.Fatalf("viewer %+v: inconsistent visible counts %+v", viewer, channel.Access)
+		}
+		raw, err := json.Marshal(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "user_id") {
+			t.Fatal("aggregate counts exposed internal account IDs")
+		}
+	}
+}

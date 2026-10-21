@@ -7,8 +7,8 @@ test.describe("Midnight workspace concepts", () => {
         await page.evaluate(() => {
             const v = window.__noxa;
             Object.assign(v.state, { activeTabID: "midnight", myClientID: "self", myUniqueID: "self", myChannelID: 1, lastConnect: { addr: "wowcraft.pw:9987" }, authorizationModel: "roles-v1", ownAuthority: "owner",
-                channels: [{ ChannelID: 1, Name: "Private1", Topic: "Private room for the crew", Access: { can_manage_access: true } }, { ChannelID: 2, Name: "Lobby" }, { ChannelID: 3, Name: "general", TextOnly: true }],
-                clients: [{ client_id: "self", unique_id: "self", user_id: 2, nickname: "Daniel", channel_id: 1 }, { client_id: "bene", unique_id: "bene", user_id: 3, nickname: "Bene", channel_id: 1, is_speaking: true }, { client_id: "joshi", unique_id: "joshi", user_id: 4, nickname: "Joshibär", channel_id: 1 }],
+                channels: [{ ChannelID: 1, Name: "Private1", Topic: "Private room for the crew", Access: { can_manage_access: true, member_count: 3, guest_count: 0 } }, { ChannelID: 2, Name: "Lobby" }, { ChannelID: 3, Name: "general", TextOnly: true }],
+                clients: [{ client_id: "self", unique_id: "self", nickname: "Daniel", channel_id: 1 }, { client_id: "bene", unique_id: "bene", nickname: "Bene", channel_id: 1, is_speaking: true }, { client_id: "joshi", unique_id: "joshi", nickname: "Joshibär", channel_id: 1 }],
             });
             v.state.settings.dnd_enabled = true;
             v.showWorkspace(false); v.setDetailsOpen(true); v.renderTree(); window.__noxaChat.refreshHeader();
@@ -200,6 +200,7 @@ test.describe("Midnight workspace concepts", () => {
             } });
             const { openChannelAccess } = await import("/src/channel-access-ui.js"); openChannelAccess(1);
         });
+        await expect(page.locator(".access-summary-card strong")).toHaveText(["3", "0", "3"]);
         const cell = page.getByRole("switch", { name: "Use Voice — Members", exact: true });
         await expect(cell).toHaveAttribute("aria-checked", "false"); await cell.click();
         await expect(cell).toHaveAttribute("aria-checked", "true");
