@@ -62,3 +62,6 @@ GOAL.md
 graphify-out/
 
 /temp/
+
+# Python bytecode from offline authoring tools
+__pycache__/
