@@ -187,18 +187,26 @@ func (s *TCPServer) VoiceDiagnosticsHandler() http.Handler {
 			return
 		}
 		s.mu.RLock()
-		clients := make([]*Client, 0, len(s.clients))
-		for _, client := range s.clients {
-			clients = append(clients, client)
+		var clients []*Client
+		// ⚡ Bolt optimization: Avoid O(N) map copy and sort when looking up a specific client ID.
+		// Direct map lookup is O(1) and saves significant CPU time and memory allocation for large numbers of clients.
+		if id != "" {
+			if c, ok := s.clients[id]; ok {
+				clients = []*Client{c}
+			}
+		} else {
+			clients = make([]*Client, 0, len(s.clients))
+			for _, client := range s.clients {
+				clients = append(clients, client)
+			}
 		}
 		s.mu.RUnlock()
-		sort.Slice(clients, func(i, j int) bool { return clients[i].ID < clients[j].ID })
+		if id == "" {
+			sort.Slice(clients, func(i, j int) bool { return clients[i].ID < clients[j].ID })
+		}
 		results := make([]*netproto.VoiceDiagnostics, 0)
 		truncated := false
 		for _, client := range clients {
-			if id != "" && client.ID != id {
-				continue
-			}
 			diagnostic := s.voiceDiagnostics(client)
 			if diagnostic == nil || (nickname != "" && !strings.EqualFold(diagnostic.Nickname, nickname)) {
 				continue
