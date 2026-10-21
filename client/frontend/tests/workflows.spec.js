@@ -7,7 +7,7 @@ test.describe("Midnight workspace concepts", () => {
         await page.evaluate(() => {
             const v = window.__noxa;
             Object.assign(v.state, { activeTabID: "midnight", myClientID: "self", myUniqueID: "self", myChannelID: 1, lastConnect: { addr: "wowcraft.pw:9987" }, authorizationModel: "roles-v1", ownAuthority: "owner",
-                channels: [{ ChannelID: 1, Name: "Private1", Topic: "Private room for the crew" }, { ChannelID: 2, Name: "Lobby" }, { ChannelID: 3, Name: "general", TextOnly: true }],
+                channels: [{ ChannelID: 1, Name: "Private1", Topic: "Private room for the crew", Access: { can_manage_access: true } }, { ChannelID: 2, Name: "Lobby" }, { ChannelID: 3, Name: "general", TextOnly: true }],
                 clients: [{ client_id: "self", unique_id: "self", user_id: 2, nickname: "Daniel", channel_id: 1 }, { client_id: "bene", unique_id: "bene", user_id: 3, nickname: "Bene", channel_id: 1, is_speaking: true }, { client_id: "joshi", unique_id: "joshi", user_id: 4, nickname: "Joshibär", channel_id: 1 }],
             });
             v.state.settings.dnd_enabled = true;
@@ -107,6 +107,8 @@ test.describe("Midnight workspace concepts", () => {
     });
 
     test("compact toolbar, media popup and conditional hang-up bar", async ({ page }) => {
+        await expect(page.locator("#voice-channel-name")).toBeHidden();
+        await expect(page.locator("#voice-context")).toContainText("Private1");
         await expect(page.locator("#tree-tools")).toBeHidden();
         await page.locator("#tree-filter-toggle").click();
         await expect(page.locator("#tree-filter")).toBeFocused();
@@ -139,6 +141,32 @@ test.describe("Midnight workspace concepts", () => {
         await page.evaluate(async () => { window.__noxa.state.myChannelID = 0; (await import("/src/workspace-ui.js")).renderWorkspace(); });
         await expect(page.locator("#voice-leave-channel")).toBeHidden();
     });
+    test("permission tab follows channel access grants and revocations", async ({ page }) => {
+        await expect(page.locator("#tab-permissions")).toBeVisible();
+        await page.evaluate(() => {
+            window.__noxa.state.ownAuthority = "member";
+            window.__noxaChat.refreshHeader();
+        });
+        await expect(page.locator("#tab-permissions")).toBeVisible();
+        await page.evaluate(() => {
+            window.__noxa.state.channels[0].Access.can_manage_access = false;
+            window.__noxaChat.refreshHeader();
+            document.getElementById("tab-permissions").click();
+        });
+        await expect(page.locator("#tab-permissions")).toBeHidden();
+        await expect(page.locator(".channel-access-dialog")).toHaveCount(0);
+        await expect(page.locator(".room-actions button").last()).toBeHidden();
+        await page.evaluate(() => {
+            window.__noxa.state.channels[0].Access.can_manage_access = true;
+            window.__noxaChat.refreshHeader();
+        });
+        await expect(page.locator("#tab-permissions")).toBeVisible();
+        await page.locator('#text-channels [data-chid="3"]').click();
+        await page.evaluate(() => { for (const callback of window.__events.subscriptions || []) callback(JSON.stringify({ channel_ids: [1, 3] })); });
+        await expect(page.locator("#chat-head-title")).toHaveText("general");
+        await expect(page.locator("#tab-permissions")).toBeHidden();
+    });
+
     test("typing searches history automatically and cancels stale requests", async ({ page }) => {
         await page.evaluate(() => {
             window.__autoSearch = [];

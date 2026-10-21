@@ -1,3 +1,4 @@
+import { canEditChannelPermissions } from "./workspace-ui.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { memberTarget } from "./member-target.js";
@@ -35,10 +36,11 @@ export function renderRoomOverview({ avatarColor, voiceState }) {
         const tabID = state.activeTabID, generation = state.serverGeneration;
         try {
             const { openChannelAccess } = await import("./channel-access-ui.js");
-            if (state.activeTabID === tabID && state.serverGeneration === generation) openChannelAccess(channelID);
+            if (state.activeTabID === tabID && state.serverGeneration === generation && channelID === window.__noxaChat?.activeChannelID?.() && canEditChannelPermissions()) openChannelAccess(channelID);
         } catch { if (state.activeTabID === tabID && state.serverGeneration === generation) v.toast(t("roles.unavailable"), "warn"); }
     });
-    settings.disabled = !channel || state.authorizationModel !== "roles-v1";
+    settings.hidden = !canEditChannelPermissions();
+    settings.disabled = settings.hidden;
     const content = [hero, title, subtitle, actions];
     const inRoom = channel ? state.clients.filter(client => client.channel_id === channelID) : [];
     const section = (label, members) => {

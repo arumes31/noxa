@@ -85,6 +85,7 @@ func TestRoleSnapshotDescribesChannelAccessForEachViewer(t *testing.T) {
 		{ChannelID: 2, Overrides: []authorization.RoleOverride{
 			{RoleID: 10, Capability: authorization.Connect, Effect: authorization.Deny},
 			{RoleID: 20, Capability: authorization.Connect, Effect: authorization.Allow},
+			{RoleID: 20, Capability: authorization.ManageChannelAccess, Effect: authorization.Allow},
 		}},
 		{ChannelID: 3, ParentID: 2, Synced: true},
 		{ChannelID: 4, Overrides: []authorization.RoleOverride{{RoleID: 10, Capability: authorization.ViewChannel, Effect: authorization.Deny}}},
@@ -108,6 +109,10 @@ func TestRoleSnapshotDescribesChannelAccessForEachViewer(t *testing.T) {
 			}
 			wantRestricted := channel.ChannelID != 1
 			wantConnect := channel.ChannelID == 1 || actorID != 0
+			wantManageAccess := actorID == 2 || (actorID == 1 && (channel.ChannelID == 2 || channel.ChannelID == 3))
+			if channel.Access.CanManageAccess != wantManageAccess {
+				t.Fatalf("actor %d channel %d: manage access = %v, want %v", actorID, channel.ChannelID, channel.Access.CanManageAccess, wantManageAccess)
+			}
 			if channel.Access.Restricted != wantRestricted || channel.Access.CanConnect != wantConnect {
 				t.Fatalf("actor %d channel %d: unexpected access %+v", actorID, channel.ChannelID, channel.Access)
 			}

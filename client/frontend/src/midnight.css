@@ -347,3 +347,14 @@
 :root[data-theme="midnight"] .side-section .side-head { margin-inline: 6px 0; }
 :root[data-theme="midnight"] #server-icon { width: 32px; height: 32px; flex: 0 0 32px; object-fit: cover; border: 1px solid var(--border); border-radius: 6px; }
 :root[data-theme="midnight"] .brand:has(#server-icon.hidden)::before { content: ""; display: block; width: 32px; height: 32px; flex: 0 0 32px; border: 1px solid var(--border); border-radius: 6px; background: url('/branding/logo.png') center / contain no-repeat; }
+
+/* The server/context line already names the active voice channel. */
+:root[data-theme="midnight"] #voice-channel-name { display: none; }
+
+/* Keep the server chevron unboxed and center toolbar icons in their row. */
+:root[data-theme="midnight"] #server-menu-btn { border: 0; background: transparent; box-shadow: none; }
+:root[data-theme="midnight"] #server-menu-btn:hover { background: var(--bg-hover); }
+:root[data-theme="midnight"] #center-tabs #tab-transfers { align-self: center; justify-content: center; width: 32px; height: 32px; padding: 0; margin: 0 0 0 auto; border: 0; border-radius: 6px; }
+:root[data-theme="midnight"] .msg.rich .msg-time { display: inline-flex; align-items: center; gap: 6px; align-self: center; line-height: 16px; }
+:root[data-theme="midnight"] .msg.rich .msg-lock { display: inline-flex; align-items: center; margin: 0; vertical-align: middle; line-height: 1; }
+:root[data-theme="midnight"] .msg.rich .msg-lock .ui-icon { display: block; width: 14px; height: 14px; }

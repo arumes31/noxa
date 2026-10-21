@@ -57,8 +57,9 @@ type ChannelNode struct {
 // role names. CanConnect is specific to the snapshot's viewer; passwords are
 // advertised separately by HasPassword. Legacy snapshots omit this metadata.
 type ChannelAccess struct {
-	Restricted bool `json:"restricted"`
-	CanConnect bool `json:"can_connect"`
+	Restricted      bool `json:"restricted"`
+	CanConnect      bool `json:"can_connect"`
+	CanManageAccess bool `json:"can_manage_access"`
 }
 
 // OwnChannelMove describes the recipient's most recent channel transition.
