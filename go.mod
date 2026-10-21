@@ -1,6 +1,6 @@
 module noxa
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/bluenviron/mediacommon/v2 v2.9.6
