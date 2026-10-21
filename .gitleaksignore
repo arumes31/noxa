@@ -1,0 +1,12 @@
+
+# Reviewed historical false positives: deterministic bytes0..31 attachment fixtures,
+# translation identifiers, comparison expressions, and the public RFC6455 sample nonce.
+d8660890e4eaf9b062edc2d8453344c03c2f1164:client/frontend/unit/attachment-meta.test.mjs:generic-api-key:11
+8278a2323a0fc7684a26d187b1c618c3257cfcd4:client/chat_attachment_meta_test.go:generic-api-key:16
+93401fe73309d4fd9610271f8298cb2f2e848002:client/frontend/src/dm-model.js:generic-api-key:140
+93401fe73309d4fd9610271f8298cb2f2e848002:client/frontend/src/dm-model.js:generic-api-key:141
+93401fe73309d4fd9610271f8298cb2f2e848002:client/frontend/src/dm-model.js:generic-api-key:144
+93401fe73309d4fd9610271f8298cb2f2e848002:client/frontend/unit/dm-model.test.mjs:generic-api-key:128
+7e88bff37b5b2123482b36995a27698cae46f7a6:client/identity_settings_test.go:generic-api-key:39
+bf1bb255e2a4ef1798a60848e70388c181c5ceef:internal/eventbus/ws_security_test.go:generic-api-key:239
+86b9b08fcf2c01fc477bd6e5734b736ddccb97ec:internal/server/e2e_test.go:generic-api-key:169
