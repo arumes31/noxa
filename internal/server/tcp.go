@@ -991,6 +991,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.sendErrorFor(client, mt, errCodePermissionDenied, "accept the server rules before continuing")
 	}
 	switch mt {
+	case netproto.MsgChannelInviteRequest:
+		return s.handleChannelInvite(ctx, client, f)
 	case netproto.MsgRoleChannelQuery:
 		return s.handleRoleChannelQuery(ctx, client, f)
 	case netproto.MsgRoleChannelChange:

@@ -20,8 +20,8 @@ function selectorsOf(text) {
 }
 
 describe("Arctic Night theme", () => {
-    it("is the default theme before settings load", () => {
-        assert.match(html, /<html lang="en" data-theme="arctic">/);
+    it("remains available alongside the default Midnight theme", () => {
+        assert.match(html, /<html lang="en" data-theme="midnight">/);
         assert.ok(html.indexOf("/src/arctic-night.css") > html.indexOf("/src/workspace.css"));
     });
 

@@ -22,6 +22,7 @@ type ChatSearchResult struct {
 	Messages      []netproto.ChatHistoryEntry `json:"messages"`
 	Scanned       int                         `json:"scanned"`
 	Undecryptable int                         `json:"undecryptable"`
+	Complete      bool                        `json:"complete"`
 }
 
 // chatScanWith pages a scope's history backwards from newest, decrypting each
@@ -38,7 +39,8 @@ func chatScanWith(m *connManager, channelID int64, maxMessages int, progress, re
 	scanned := 0
 	before := int64(0)
 	for scanned < maxMessages {
-		resp, err := chatHistoryWith(m, channelID, before, chatSearchPage)
+		pageSize := min(chatSearchPage, maxMessages-scanned)
+		resp, err := chatHistoryWith(m, channelID, before, pageSize)
 		if err != nil {
 			if scanned == 0 {
 				return 0, false, err // nothing to show; surface it
@@ -49,11 +51,14 @@ func chatScanWith(m *connManager, channelID int64, maxMessages int, progress, re
 			return scanned, true, nil
 		}
 		for _, m := range resp.Messages {
+			if scanned >= maxMessages {
+				return scanned, false, nil
+			}
 			scanned++
 			visit(m)
 		}
 		before = resp.Messages[len(resp.Messages)-1].ID // pages are newest-first
-		if len(resp.Messages) < chatSearchPage {
+		if len(resp.Messages) < pageSize {
 			return scanned, true, nil
 		}
 		if progress != "" {
@@ -105,7 +110,7 @@ func chatSearchWith(m *connManager, requestID string, channelID int64, query str
 	}
 	var out []netproto.ChatHistoryEntry
 	undecryptable := 0
-	scanned, _, err := chatScanWith(m, channelID, maxMessages, "chatsearch:progress", requestID, func(m netproto.ChatHistoryEntry) {
+	scanned, complete, err := chatScanWith(m, channelID, maxMessages, "chatsearch:progress", requestID, func(m netproto.ChatHistoryEntry) {
 		if m.Deleted {
 			return
 		}
@@ -120,5 +125,5 @@ func chatSearchWith(m *connManager, requestID string, channelID int64, query str
 	if err != nil {
 		return ChatSearchResult{}, err
 	}
-	return ChatSearchResult{Messages: out, Scanned: scanned, Undecryptable: undecryptable}, nil
+	return ChatSearchResult{Messages: out, Scanned: scanned, Undecryptable: undecryptable, Complete: complete}, nil
 }

@@ -94,6 +94,7 @@ export function stopPrivateCall() {
     const owner = session;
     if (!owner) return;
     session = null;
+    window.dispatchEvent(new Event("noxa-private-call-changed"));
     rememberCall(callKey(owner.tabID, owner.generation, owner.call.id), Infinity);
     clearInterval(owner.poll);
     clearInterval(owner.audioTick);
@@ -183,6 +184,7 @@ async function applyCall(call, tabID, generation) {
 }
 
 function render(owner) {
+    window.dispatchEvent(new Event("noxa-private-call-changed"));
     owner.ptt = false;
     owner.hold = null;
     const me = owner.call.participants.find(peer => peer.unique_id === owner.uid);
@@ -568,7 +570,10 @@ function overlaySnapshot() {
         }),
     };
 }
-window.__noxaPrivateCalls = { overlaySnapshot };
+window.__noxaPrivateCalls = { overlaySnapshot,
+    active: () => !!session && current(session) && session.call.participants.some(peer => peer.unique_id === session.uid && peer.state === "accepted"),
+    end: () => { if (session && current(session)) stopPrivateCall(); },
+};
 
 export async function showCallHistory() {
     const overlay = node("div"); overlay.className = "dlg-overlay";

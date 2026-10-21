@@ -16,7 +16,7 @@ import { openChatMediaLightbox } from "./chat-media-lightbox.js";
 import { createUnreadTabEffects } from "./chat-unread.js";
 import { createChatTabs } from "./chat-tabs.js";
 import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
-import { initMessageTools, saveMessageReference } from "./message-tools.js";
+import { initMessageTools, saveMessageReference, openHistorySearch } from "./message-tools.js";
 import { roleMentionChoices, roleMentionLabel, mentionFlags } from "./role-mentions.js";
 import { memberTarget } from "./member-target.js";
 import { mountContextMenu, closeContextMenu, contextMenuKey } from "./context-menu.js";
@@ -38,7 +38,9 @@ import { captureScope, scopeIsCurrent } from "./scoped-actions.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { copyToClipboard } from "./clipboard.js";
-import { avatarColor } from "./workspace-ui.js";
+import { avatarColor, renderWorkspace } from "./workspace-ui.js";
+import { youtubeVideo, renderYouTubePreviews } from "./youtube-previews.js";
+import { createSearchWorkspace } from "./search-workspace.js";
 
 const V = () => window.__noxa;
 const $ = (id) => document.getElementById(id);
@@ -104,7 +106,10 @@ let pinsRequest = 0;
 let searchQ = ""; // live search filter (110)
 let chatViewGeneration = 0;
 let activeSearch = null;
+let historySearchTimer = null;
 let searchResultsPanel = null;
+let searchChannel = "current";
+let linkPreviewPreference;
 let activeExport = null;
 let exportAttempt = 0;
 let threadPanel = null; // open thread panel element (108)
@@ -185,7 +190,7 @@ function activeKey() {
 
 // activeChannelID returns the channel the active view reads, or null for the
 // global and DM views.
-function activeChannelID() {
+export function activeChannelID() {
     if (view.kind === "chan") return view.id;
     if (view.kind === "channel") return V().state.myChannelID || null;
     return null;
@@ -317,10 +322,12 @@ function resetDMHistoryView() {
 }
 
 function cancelChatSearch() {
+    clearTimeout(historySearchTimer);
+    historySearchTimer = null;
     activeSearch?.unsubscribe?.();
     activeSearch = null;
     const button = $("chat-search-server");
-    if (button) { button.disabled = false; button.textContent = t("polish.searchAll"); }
+    if (button) { button.disabled = false; button.textContent = t("messages.run"); }
     if (searchResultsPanel) closeDialog(searchResultsPanel);
 }
 
@@ -830,6 +837,12 @@ function renderBody(container, m) {
         container.insertBefore(q, container.firstChild);
     }
     for (let i = 1; i < parts.length; i += 2) attachFileRef(container, m, parts[i]);
+    const previewScope = captureScope(readExportScope);
+    renderYouTubePreviews(container, {
+        enabled: V().state.settings?.link_previews !== false,
+        scope: previewScope,
+        isCurrent: () => exportScopeIsCurrent(previewScope) && V().state.settings?.link_previews !== false,
+    });
 }
 
 const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp"];
@@ -1058,6 +1071,8 @@ function renderReacts(m) {
         if (myReactions.get(m.id)?.has(emoji)) chip.classList.add("own");
         chip.textContent = `${emoji} ${count}`;
         chip.title = t("chat.reactionToggle");
+        chip.setAttribute("aria-label", t("midnight.reactionCount", { emoji, count }));
+        chip.setAttribute("aria-pressed", String(!!myReactions.get(m.id)?.has(emoji)));
         chip.onclick = (e) => {
             e.stopPropagation();
             if (!exportScopeIsCurrent(scope)) return;
@@ -1065,6 +1080,19 @@ function renderReacts(m) {
         };
         row.appendChild(chip);
     }
+    for (const emoji of ["❤️", "👍", "🔥"]) {
+        if (rx[emoji]) continue;
+        const quick = document.createElement("button");
+        quick.type = "button"; quick.className = "react-choice react-quick"; quick.textContent = emoji;
+        quick.setAttribute("aria-label", t("chat.reactWith", { emoji }));
+        quick.onclick = event => { event.stopPropagation(); if (exportScopeIsCurrent(scope)) void toggleReaction(m, emoji); };
+        row.append(quick);
+    }
+    const add = document.createElement("button");
+    add.type = "button"; add.className = "react-choice react-add"; add.innerHTML = icon("smile");
+    add.setAttribute("aria-label", t("midnight.addReaction"));
+    add.onclick = event => { event.stopPropagation(); if (exportScopeIsCurrent(scope)) openReactStrip(m, row.closest(".msg")); };
+    row.append(add);
     return row;
 }
 
@@ -1465,6 +1493,7 @@ function setView(v) {
     closeConversations();
     invalidateChatViewWork();
     view = v;
+    searchChannel = "current";
     closeThreadPanel(); // a chain belongs to one scope (108)
     resetTypingOut(); // (120) the next keystroke pings the new scope at once
     const key = activeKey();
@@ -3401,7 +3430,7 @@ function scheduleLinkCard(linkEl) {
     const settings = V().state.settings || {};
     if (settings.link_previews === false) return;
     const url = linkEl.getAttribute("data-url");
-    if (!url) return;
+    if (!url || youtubeVideo(url)) return;
     const generation = linkCardGeneration;
     linkCardAnchor = linkEl;
     // Chat rerenders can remove/hide a hovered link without a mouseout event.
@@ -3577,6 +3606,7 @@ function closeSearch() {
     $("chat-search-btn").setAttribute("aria-expanded", "false");
     $("chat-search").value = "";
     searchQ = "";
+    searchChannel = "current";
     applySearchFilter();
     $("chat-search-btn").focus();
 }
@@ -3668,7 +3698,7 @@ async function searchAll() {
         return;
     }
     cancelChatSearch();
-    const operation = { id: crypto.randomUUID(), scope, unsubscribe: null };
+    const operation = { id: crypto.randomUUID(), scope, unsubscribe: null, scanned: 0 };
     activeSearch = operation;
     const current = () => activeSearch === operation && exportScopeIsCurrent(scope);
     btn.disabled = true;
@@ -3677,85 +3707,86 @@ async function searchAll() {
     // and a page can use the store's cap of 200 instead of the UI's 50 (110).
     operation.unsubscribe = window.runtime.EventsOn("chatsearch:progress", data => {
         const count = scanProgressCount(data, operation.id);
-        if (current() && count !== null) btn.textContent = t("polish.searching", { count });
+        if (current() && count !== null) btn.textContent = t("polish.searching", { count: operation.scanned + count });
     });
     let res = null;
     try {
-        res = scope.kind === "dm"
-            ? await callDMHistory(dm, "DMSearchForContext", scope.uid, q, SEARCH_MAX)
-            : await app().ChatSearchForTab(scope.tabID, operation.id, scope.channelID, q, SEARCH_MAX);
+        if (scope.kind === "dm") res = await callDMHistory(dm, "DMSearchForContext", scope.uid, q, SEARCH_MAX);
+        else {
+            const visible = V().state.channels.map(channel => Number(channel.ChannelID)).filter(id => Number.isSafeInteger(id) && id > 0);
+            const targets = searchChannel === "all" ? [...new Set([scope.channelID, 0, ...visible])]
+                : searchChannel === "current" ? [scope.channelID] : [Number(searchChannel)];
+            res = { messages: [], scanned: 0, undecryptable: 0, failed: 0, complete: true };
+            for (const [index, channelID] of targets.entries()) {
+                if (!current()) return;
+                if (res.scanned >= SEARCH_MAX) { res.complete = false; break; }
+                if (channelID !== 0 && channelID !== scope.channelID && !visible.includes(channelID)) throw new Error("channel unavailable");
+                try {
+                    operation.scanned = res.scanned;
+                    const page = await app().ChatSearchForTab(scope.tabID, operation.id, channelID, q, SEARCH_MAX - res.scanned);
+                    if (!current()) return;
+                    res.messages.push(...(page.messages || []).map(message => ({ ...message, channel_id: channelID })));
+                    res.scanned += page.scanned || 0; res.undecryptable += page.undecryptable || 0;
+                    if (page.complete === false) res.complete = false;
+                } catch (error) {
+                    if (targets.length === 1) throw error;
+                    res.failed++; res.complete = false;
+                }
+                if (index < targets.length - 1 && res.scanned >= SEARCH_MAX) res.complete = false;
+            }
+        }
     } catch (e) {
         if (current()) V().toast(t("polish.searchFailed", { error: String(e) }), "warn");
     }
     operation.unsubscribe?.();
     if (!current()) return;
     cancelChatSearch();
-    if (res) showSearchResults(q.toLowerCase(), res.messages || [], res.scanned || 0, res.undecryptable || 0, scope);
+    if (res) showSearchResults(q, res, scope);
 }
 
-function showSearchResults(q, results, scanned, undecryptable, scope) {
-    const overlay = document.createElement("div");
-    overlay.className = "dlg-overlay";
-    const dlg = document.createElement("div");
-    dlg.className = "dlg dlg-wide search-results";
-    const h = document.createElement("h3");
-    // A partial search must never look complete: messages under a generation
-    // this client cannot obtain are counted, not silently dropped.
-    h.textContent = undecryptable > 0
-        ? t("polish.searchPartial", { count: results.length, missing: undecryptable })
-        : t("polish.searchMatches", { count: results.length });
-    dlg.appendChild(h);
-    const sub = document.createElement("div");
-    sub.className = "set-hint";
-    // Scanned is the honest denominator: the search stops at the Go layer's
-    // cap, so "0 matches" over a truncated scan is not "not in the history".
-    sub.textContent = t("polish.searched", { count: scanned }) +
-        (scanned >= SEARCH_MAX ? " · " + t("polish.searchCap", { count: SEARCH_MAX }) : "");
-    dlg.appendChild(sub);
-    const list = document.createElement("div");
-    list.className = "search-list";
-    if (results.length === 0) {
-        const hint = document.createElement("div");
-        hint.className = "set-hint";
-        hint.textContent = t("chat.noMatches");
-        list.appendChild(hint);
-    }
-    for (const r of results) {
-        const row = document.createElement("div");
-        row.className = "search-hit";
-        row.textContent = (r.body || "").slice(0, 200);
-        markIn(row, q);
-        const meta = document.createElement("span");
-        meta.className = "search-meta";
-        meta.textContent = `${r.from_nickname || "?"} · ${fmtFull((typeof r.sent_at === "number" ? r.sent_at * 1000 : Date.parse(r.sent_at)) || 0)}`;
-        row.insertBefore(meta, row.firstChild);
-        // A hit names its encryption like the message it points to.
-        const verified = !!r.enc_verified;
-        const hitBadge = encryptionBadgeElement(encryptionBadge({
-            text: r.body, direct: scope.kind === "dm", enc: verified, encVerified: verified,
-            encMode: encModeFrom(verified, r.enc_mode),
-        }));
-        if (hitBadge) meta.appendChild(hitBadge);
-        row.onclick = () => {
-            closeDialog(overlay);
-            if (!exportScopeIsCurrent(scope)) return;
-            if (!flashMsg(r.id)) V().toast(t("polish.notLoaded"), "info", "alert");
-        };
-        list.appendChild(row);
-    }
-    dlg.appendChild(list);
-    const btns = document.createElement("div");
-    btns.className = "dlg-buttons";
-    const ok = document.createElement("button");
-    ok.className = "dlg-ok";
-    ok.textContent = t("polish.close");
-    ok.onclick = () => closeDialog(overlay);
-    btns.appendChild(ok);
-    dlg.appendChild(btns);
-    overlay.appendChild(dlg);
-    overlay.onclick = (e) => {
-        if (e.target === overlay) closeDialog(overlay);
-    };
+export function searchEncryptionBadge(message, direct = false) {
+    const verified = !!message.enc_verified;
+    return encryptionBadge({ text: message.body, direct, enc: verified, encVerified: verified, encMode: encModeFrom(verified, message.enc_mode) });
+}
+
+function showSearchResults(q, response, scope) {
+    const results = response.messages || [], scanned = response.scanned || 0, undecryptable = response.undecryptable || 0;
+    const channels = [{ id: "current", name: t("midnight.searchCurrent") }];
+    if (scope.kind !== "dm") channels.push({ id: "all", name: t("midnight.searchAllChannels") }, { id: 0, name: t("chat.globalTitle") },
+        ...V().state.channels.map(channel => ({ id: channel.ChannelID, name: channel.Name })));
+    let summary = (undecryptable ? t("polish.searchPartial", { count: results.length, missing: undecryptable }) : t("polish.searchMatches", { count: results.length })) + " · " + t("polish.searched", { count: scanned });
+    if (scanned >= SEARCH_MAX) summary += " · " + t("polish.searchCap", { count: SEARCH_MAX });
+    else if (response.complete === false) summary += " · " + t("midnight.searchIncomplete");
+    if (response.failed) summary += " · " + t("midnight.searchPartial", { count: response.failed });
+    const current = () => exportScopeIsCurrent(scope);
+    const overlay = createSearchWorkspace({ query: q, results, summary, channels, selectedChannel: searchChannel, current,
+        highlight: markIn,
+        renderBadge: message => encryptionBadgeElement(searchEncryptionBadge(message, scope.kind === "dm")),
+        onAdvanced: scope.kind !== "dm" ? openHistorySearch : null,
+        renderBody: (container, message) => renderBody(container, normalize(message, Number(message.channel_id ?? scope.channelID))),
+        onSearch: (query, channel) => { $("chat-search").value = query; searchChannel = channel; searchQ = query; applySearchFilter(); void searchAll(); },
+        onOpen: (message, panel) => {
+            closeDialog(panel);
+            void jumpMessageReference(scope.kind === "dm" ? { kind: "dm", peer_id: scope.uid, client_message_id: message.client_msg_id, local_seq: message.seq || message.id }
+                : { kind: "channel", channel_id: message.channel_id ?? scope.channelID, message_id: message.id }, { isCurrent: current, continueConversation: true });
+        },
+        loadContext: async message => {
+            if (scope.kind === "dm") {
+                const owner = getDMOwner();
+                const rows = await callDMHistory(owner, "DMHistoryLoadForContext", scope.uid);
+                if (!current() || !dmOwnerIsCurrent(owner)) return [];
+                const index = rows.findIndex(row => Number(row.seq) === Number(message.id));
+                return index < 0 ? [] : rows.slice(Math.max(0, index - 2), index + 3).map(row => ({ ...row, id: row.seq }));
+            }
+            const page = await app().ChatHistoryForTab(scope.tabID, message.channel_id ?? scope.channelID, Number(message.id) + 1, 6);
+            if (!current()) return [];
+            return (page.messages || []).filter(entry => entry.enc_verified && !entry.deleted).reverse();
+        },
+    });
+    overlay.addEventListener("click", event => {
+        const link = event.target.closest(".md-link[data-url]");
+        if (link && current()) { event.preventDefault(); window.runtime.BrowserOpenURL(link.dataset.url); }
+    });
     searchResultsPanel = overlay;
     mountServerDialog(overlay, { onClose: () => { if (searchResultsPanel === overlay) searchResultsPanel = null; } });
 }
@@ -3821,6 +3852,7 @@ function updateHeader() {
     slowEl.classList.toggle("hidden", slow <= 0);
     $("chat-pins-btn").classList.toggle("hidden", view.kind === "dm");
     $("chat-info-btn").classList.toggle("hidden", !showChanBtns);
+    renderWorkspace();
 }
 
 function openDescription() {
@@ -4246,6 +4278,18 @@ export function applyChatPrefs() {
     log.classList.toggle("chat-compact", (s.chat_density || "comfortable") === "compact");
     log.classList.toggle("chat-bubbles", (s.chat_layout || "irc") === "bubbles");
     log.style.setProperty("--chat-font-size", (s.chat_font_size || 14) + "px");
+    const previewsEnabled = s.link_previews !== false;
+    if (linkPreviewPreference !== previewsEnabled) {
+        linkPreviewPreference = previewsEnabled;
+        if (!previewsEnabled) { closeLinkCard(); document.querySelectorAll(".youtube-preview").forEach(card => card.remove()); }
+        else {
+            const scope = captureScope(readExportScope);
+            for (const message of getStore(activeKey()).msgs) {
+                const body = log.querySelector(`[data-scroll-key="${CSS.escape(message.renderKey || "")}"] .msg-text`);
+                if (body && !body.querySelector(".youtube-preview")) renderYouTubePreviews(body, { enabled: true, scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
+            }
+        }
+    }
     // Timestamps re-render live when the mode changes (126).
     log.querySelectorAll(".msg[data-ts]").forEach((el) => {
         const t = el.querySelector(".msg-timestamp");
@@ -4630,11 +4674,12 @@ export function initChat() {
         cancelChatSearch();
         searchQ = $("chat-search").value.trim();
         applySearchFilter();
+        if (searchQ) historySearchTimer = setTimeout(() => { historySearchTimer = null; void searchAll(); }, 450);
     });
     $("chat-search").addEventListener("keydown", (e) => {
         e.stopPropagation();
         if (e.key === "Escape") closeSearch();
-        if (e.key === "Enter") searchAll(); // Enter escalates the live filter (110)
+        if (e.key === "Enter") { clearTimeout(historySearchTimer); void searchAll(); }
     });
     $("chat-search-server").onclick = searchAll;
 

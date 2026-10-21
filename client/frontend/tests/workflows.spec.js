@@ -1,5 +1,189 @@
 import { expect, test, chooseShareOption } from "./fixtures.js";
 
+test.describe("Midnight workspace concepts", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.route("https://i.ytimg.com/**", route => route.fulfill({ contentType: "image/svg+xml", body: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"480\" height=\"270\" viewBox=\"0 0 480 270\"><rect width=\"480\" height=\"270\" fill=\"#294859\"/><circle cx=\"380\" cy=\"65\" r=\"27\" fill=\"#edcf9b\"/><path d=\"M0 210L90 85L168 172L266 45L390 186L480 90V270H0Z\" fill=\"#a0b6bd\"/><path d=\"M205 124L266 45L326 113L278 95L251 111L233 91Z\" fill=\"#e0e9e7\"/><path d=\"M0 229L120 153L240 230L345 155L480 240V270H0Z\" fill=\"#103f47\"/><path d=\"M0 255L480 243V270H0Z\" fill=\"#397489\"/></svg>" }));
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            Object.assign(v.state, { activeTabID: "midnight", myClientID: "self", myUniqueID: "self", myChannelID: 1, lastConnect: { addr: "wowcraft.pw:9987" }, authorizationModel: "roles-v1", ownAuthority: "owner",
+                channels: [{ ChannelID: 1, Name: "Private1", Topic: "Private room for the crew" }, { ChannelID: 2, Name: "Lobby" }, { ChannelID: 3, Name: "general", TextOnly: true }],
+                clients: [{ client_id: "self", unique_id: "self", user_id: 2, nickname: "Daniel", channel_id: 1 }, { client_id: "bene", unique_id: "bene", user_id: 3, nickname: "Bene", channel_id: 1, is_speaking: true }, { client_id: "joshi", unique_id: "joshi", user_id: 4, nickname: "Joshibär", channel_id: 1 }],
+            });
+            v.state.settings.dnd_enabled = true;
+            v.showWorkspace(false); v.setDetailsOpen(true); v.renderTree(); window.__noxaChat.refreshHeader();
+            for (const callback of window.__events.tab_update || []) callback([{ id: "midnight", active: true, connected: true, addr: "wowcraft.pw", nickname: "Daniel" }]);
+            v.startQualitySampler();
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "YouTubePreviewForTab") return async () => ({ title: "A weekend in the mountains", author: "Bene" });
+                if (key === "ChatHistoryForTab") return async () => ({ messages: [] });
+                return target[key];
+            } });
+            window.__noxaChat.onMyChannelChanged();
+        });
+    });
+
+    test("default Midnight layout shows room presence and inline YouTube reactions", async ({ page }, testInfo) => {
+        await page.evaluate(() => {
+            window.__noxaChat.addChat({ id: 7001, enc_verified: true, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "Check out this clip https://youtu.be/Fvr-SJPAh7o" });
+            window.__noxaChat.addChat({ id: 7002, enc_verified: true, channel_id: 1, from_unique_id: "joshi", from: "Joshibär", text: "Looks great. Ready for another round?" });
+        });
+        await expect(page.locator(".youtube-title")).toHaveText("A weekend in the mountains");
+        await expect(page.locator("#room-overview")).toContainText("In voice (3)");
+        await expect(page.locator("#text-channels")).toContainText("general");
+        await expect(page.locator("#direct-messages")).toBeVisible();
+        await expect(page.locator("#menubar > .menu-item").filter({ hasText: /^Bookmarks/ })).toHaveCount(0);
+        await expect(page.locator("#sidebar > #voice-bar")).toBeVisible();
+        expect(await page.locator("#voice-bar").evaluate(bar => { const bounds = bar.getBoundingClientRect(); return [...bar.querySelectorAll(":scope > #ptt-btn, :scope > #voice-leave-channel, .voice-buttons > .voice-control, .voice-microphone > .voice-control, .voice-buttons > details > summary")].filter(control => control.checkVisibility()).flatMap(control => { const r = control.getBoundingClientRect(); return r.left >= bounds.left && r.right <= bounds.right ? [] : [{ id: control.id || control.parentElement.id, left: r.left, right: r.right, barLeft: bounds.left, barRight: bounds.right }]; }); })).toEqual([]);
+        await expect(page.locator('.msg[data-msg-id="7001"] .react-quick')).toHaveCount(3);
+        await page.locator(".youtube-preview").click();
+        await expect.poll(() => page.evaluate(() => window.__browserURLs)).toContain("https://youtu.be/Fvr-SJPAh7o");
+        expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim())).toBe("#03070a");
+        await page.screenshot({ path: testInfo.outputPath("15-midnight-workspace.png") });
+        await page.evaluate(async () => { window.__noxa.state.selectedClientID = "bene"; (await import("/src/workspace-ui.js")).renderMember(); });
+        await page.getByRole("button", { name: "Back to room", exact: true }).click();
+        await expect(page.locator("#room-overview")).toBeVisible();
+        await page.setViewportSize({ width: 700, height: 800 });
+        await expect(page.locator("#app > #voice-bar")).toBeVisible();
+    });
+
+    test("search filters results and opens selected message context", async ({ page }, testInfo) => {
+        await page.evaluate(() => {
+            window.go.main.App = new Proxy(window.go.main.App, { get(target, key) { if (key === "ChatSearchForTab") return async () => ({ scanned: 3, complete: true, messages: [
+                { id: 101, from_unique_id: "bene", from_nickname: "Bene", body: "weekend notes [file:one#key#notes.txt]", sent_at: Date.now() / 1000, enc_verified: true },
+                { id: 102, from_unique_id: "joshi", from_nickname: "Joshibär", body: "weekend plans", sent_at: Date.now() / 1000, enc_verified: true },
+            ] }); return target[key]; } });
+            document.getElementById("chat-search-btn").click(); document.getElementById("chat-search").value = "weekend"; document.getElementById("chat-search-server").click();
+        });
+        await expect(page.locator(".search-workspace .search-hit")).toHaveCount(2);
+        await page.getByLabel("People", { exact: true }).selectOption("bene");
+        await page.getByLabel("With attachments", { exact: true }).check();
+        await expect(page.locator(".search-workspace .search-hit")).toHaveCount(1);
+        await expect(page.locator(".search-preview-message")).toContainText("weekend notes");
+        await expect(page.locator(".search-hit mark").first()).toHaveText("weekend");
+        await expect(page.locator(".search-hit")).toContainText("Attachment: notes.txt");
+        await expect(page.locator(".search-hit")).not.toContainText("one#key");
+        await page.screenshot({ path: testInfo.outputPath("26-search-workspace.png") });
+    });
+
+
+    test("YouTube previews respect the saved preference and re-enable without duplicating cards", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.settings.link_previews = false;
+            window.__noxaChat.applyChatPrefs();
+            window.__noxaChat.addChat({ id: 7050, enc_verified: true, channel_id: 1, from: "Bene", from_unique_id: "bene", text: "https://youtu.be/Fvr-SJPAh7o" });
+        });
+        await expect(page.locator(".youtube-preview")).toHaveCount(0);
+        await page.evaluate(() => { window.__noxa.state.settings.link_previews = true; window.__noxaChat.applyChatPrefs(); window.__noxaChat.applyChatPrefs(); });
+        await expect(page.locator(".youtube-preview")).toHaveCount(1);
+        await expect(page.locator(".youtube-title")).toHaveText("A weekend in the mountains");
+    });
+
+    test("all-channel search preserves the shared scan budget and identifies partial access", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__midnightSearchCalls = [];
+            window.go.main.App = new Proxy(window.go.main.App, { get(target, key) {
+                if (key === "ChatSearchForTab") return async (tab, request, channel, query, maximum) => {
+                    window.__midnightSearchCalls.push({ tab, channel, maximum });
+                    if (channel === 2) throw new Error("read history denied");
+                    return { scanned: 1, complete: true, messages: [{ id: 8000 + channel, body: "needle in a conversation", from_nickname: "Bene", from_unique_id: "bene", sent_at: Date.now() / 1000, enc_verified: true }] };
+                };
+                return target[key];
+            } });
+            document.getElementById("chat-search-btn").click(); document.getElementById("chat-search").value = "needle"; document.getElementById("chat-search-server").click();
+        });
+        await expect(page.locator(".search-hit")).toHaveCount(1);
+        await page.getByRole("combobox", { name: "Channels", exact: true }).selectOption("all");
+        await expect(page.locator(".search-hit")).toHaveCount(3);
+        await expect(page.locator(".search-workspace-header")).toContainText("Some channels could not be searched (1)");
+        await expect.poll(() => page.evaluate(() => window.__midnightSearchCalls)).toEqual([
+            { tab: "midnight", channel: 1, maximum: 2000 },
+            { tab: "midnight", channel: 1, maximum: 2000 },
+            { tab: "midnight", channel: 0, maximum: 1999 },
+            { tab: "midnight", channel: 2, maximum: 1998 },
+            { tab: "midnight", channel: 3, maximum: 1998 },
+        ]);
+    });
+
+    test("compact toolbar, media popup and conditional hang-up bar", async ({ page }) => {
+        const menu = await page.locator("#menubar").boundingBox(), tabs = await page.locator("#server-tabs").boundingBox();
+        expect(Math.abs(menu.y - tabs.y)).toBeLessThan(3); expect(tabs.x).toBeGreaterThanOrEqual(menu.x + menu.width - 1);
+        await expect(page.locator("#message-tools-actions").getByRole("button")).toHaveCount(2);
+        await expect(page.getByRole("button", { name: "Saved messages", exact: true })).toBeVisible();
+        await expect(page.locator("#ptt-btn svg")).toHaveCount(0);
+        await expect(page.locator(".topbar-tools #voice-latency")).toHaveCount(1);
+        await page.locator("#quick-switch-open").click();
+        await expect(page.locator(".qs-overlay")).toBeVisible();
+        await page.locator(".qs-overlay input").press("Escape");
+        await expect(page.locator("#voice-video")).toBeVisible();
+        await expect(page.locator("#voice-screen")).toBeVisible();
+        await expect(page.locator("#voice-media")).toBeHidden();
+        await page.locator(".voice-buttons").evaluate(row => { row.style.width = "165px"; });
+        await expect(page.locator("#voice-video")).not.toBeVisible();
+        await page.locator("#voice-media summary").click();
+        await expect(page.locator("#voice-video")).toBeVisible(); await expect(page.locator("#voice-screen")).toBeVisible();
+        await page.locator("#voice-video").press("Escape"); await expect(page.locator("#voice-video")).not.toBeVisible();
+        await page.locator(".voice-buttons").evaluate(row => { row.style.width = ""; });
+        await expect(page.locator("#voice-video")).toBeVisible();
+        const bar = await page.locator("#voice-leave-channel").boundingBox(), buttons = await page.locator(".voice-buttons").boundingBox();
+        expect(bar.y).toBeGreaterThanOrEqual(buttons.y + buttons.height); expect(bar.width).toBeGreaterThan(200);
+        await page.evaluate(async () => { window.__noxa.state.myChannelID = 0; (await import("/src/workspace-ui.js")).renderWorkspace(); });
+        await expect(page.locator("#voice-leave-channel")).toBeHidden();
+    });
+    test("typing searches history automatically and cancels stale requests", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__autoSearch = [];
+            window.go.main.App = new Proxy(window.go.main.App, { get(target, key) {
+                if (key === "ChatSearchForTab") return (tab, id, channel, query) => new Promise(resolve => window.__autoSearch.push({ query, resolve }));
+                return target[key];
+            } });
+        });
+        await page.locator("#chat-search-btn").click(); await page.locator("#chat-search").fill("old");
+        await expect.poll(() => page.evaluate(() => window.__autoSearch.length)).toBe(1);
+        await page.locator("#chat-search").fill("new");
+        await expect.poll(() => page.evaluate(() => window.__autoSearch.length)).toBe(2);
+        await page.evaluate(() => { for (const item of [...window.__autoSearch].reverse()) item.resolve({ messages: [{ id: 93, body: item.query, from_nickname: "Bene" }], scanned: 1, complete: true }); });
+        await expect(page.locator(".search-hit")).toHaveCount(1); await expect(page.locator(".search-hit")).toContainText("new");
+        await expect(page.locator(".search-hit")).not.toContainText("old");
+    });
+    test("permission matrix stages real role overrides and requires impact review", async ({ page }, testInfo) => {
+        await page.evaluate(async () => {
+            const roles = [{ id: 10, name: "Guests" }, { id: 11, name: "Members" }];
+            const capabilities = [["view_channel", "View channel"], ["read_history", "Read history"], ["connect", "Join voice"], ["speak", "Use voice"], ["share_camera", "Use video"], ["share_screen", "Screen share"], ["send_messages", "Send messages"], ["upload_files", "Upload files"], ["invite_others", "Invite others"]].map(([key, en]) => ({ key, en, de: en, channel: true }));
+            let revision = 4, channel = { channel_id: 1, synced: false, overrides: [] };
+            window.__midnightChanges = [];
+            window.go.main.App = new Proxy(window.go.main.App, { get(target, key) {
+                if (key === "ChannelInviteForTab") return async (tab, request) => ({ ...request, active: request.action !== "revoke", access: request.access || "guest", token: request.action === "regenerate" ? "A".repeat(43) : "" });
+                if (key === "RoleStateForTab") return async () => ({ policy: { revision, everyone_id: 10, default_member_role_id: 11, roles, members: [], channels: [channel] }, capabilities,
+                    manageable_role_ids: [11], grantable_capabilities: capabilities.map(c => c.key) });
+                if (key === "PreviewChannelAccessForTab") return async () => ({ revision, channel_id: 1,
+                    roles: roles.map(role => ({ name: role.name, changes: [] })), members: [{ user_id: 0, changes: [] }] });
+                if (key === "RoleChangeForTab") return async (tab, change) => { window.__midnightChanges.push([tab, structuredClone(change)]); channel = structuredClone(change.channel); return { revision: ++revision }; };
+                return target[key];
+            } });
+            const { openChannelAccess } = await import("/src/channel-access-ui.js"); openChannelAccess(1);
+        });
+        const cell = page.getByRole("switch", { name: "Use Voice — Members", exact: true });
+        await expect(cell).toHaveAttribute("aria-checked", "false"); await cell.click();
+        await expect(cell).toHaveAttribute("aria-checked", "true");
+        await expect(page.locator(".channel-access-dialog .roles-footer").getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+        expect(await page.evaluate(() => window.__calls.RoleChangeForTab || 0)).toBe(0);
+        await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
+        const save = page.locator(".channel-access-dialog .roles-footer").getByRole("button", { name: "Save", exact: true });
+        await expect(save).toBeEnabled(); await save.click();
+        await expect.poll(() => page.evaluate(() => window.__midnightChanges)).toEqual([["midnight", { kind: "channel_access_set", expected_revision: 4, channel: { channel_id: 1, synced: false, overrides: [{ role_id: 11, capability: "connect", effect: "allow" }, { role_id: 11, capability: "speak", effect: "allow" }] } }]]);
+        await expect(page.locator(".roles-footer .role-status")).toHaveText("Channel access saved.");
+        await page.getByRole("button", { name: "Regenerate link", exact: true }).click();
+        await expect(page.getByRole("textbox", { name: "Invite link", exact: true })).toHaveValue("noxa://wowcraft.pw:9987/invite/1#" + "A".repeat(43));
+        await expect(page.getByRole("button", { name: "Copy invite link", exact: true })).toBeEnabled();
+        await page.locator(".channel-access-content").evaluate(content => { content.scrollTop = 0; });
+        const matrixBounds = await page.locator(".access-matrix").boundingBox(), viewport = await page.locator(".channel-access-content").boundingBox();
+        expect(matrixBounds.y + matrixBounds.height).toBeLessThanOrEqual(viewport.y + viewport.height);
+        await page.screenshot({ path: testInfo.outputPath("31-channel-permissions.png") });
+    });
+});
+
 test.describe("echo channel icon", () => {
     test.beforeEach(async ({ page }) => {
         await page.evaluate(() => {

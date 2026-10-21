@@ -746,22 +746,23 @@ func TestMigrateSettingsRestoresPlaySounds(t *testing.T) {
 	}
 }
 
-// TestMigrateSettingsArcticNightTheme: Arctic Night is the default look. Older
-// files (which always carried "dark") move to it; a current "dark" (classic)
-// choice and the other palettes are kept.
-func TestMigrateSettingsArcticNightTheme(t *testing.T) {
-	if got := DefaultSettings().Theme; got != "arctic" {
-		t.Fatalf("default theme = %q, want arctic", got)
+// TestMigrateSettingsMidnightTheme moves the former defaults once and keeps
+// explicit alternate palettes and later selections.
+func TestMigrateSettingsMidnightTheme(t *testing.T) {
+	if got := DefaultSettings().Theme; got != "midnight" {
+		t.Fatalf("default theme = %q, want midnight", got)
 	}
 	for _, tc := range []struct {
 		version     int
 		theme, want string
 	}{
-		{12, "dark", "arctic"},
-		{12, "", "arctic"},
+		{12, "dark", "midnight"},
+		{12, "", "midnight"},
 		{12, "light", "light"},
 		{12, "hc", "hc"},
 		{settingsVersion, "dark", "dark"},
+		{13, "arctic", "midnight"},
+		{settingsVersion, "arctic", "arctic"},
 	} {
 		s := DefaultSettings()
 		s.SettingsVersion = tc.version

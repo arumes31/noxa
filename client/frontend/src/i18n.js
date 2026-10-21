@@ -13,6 +13,7 @@
 
 import { settingsEnglish, settingsGerman } from "./settings-messages.js";
 import { settingsShellEnglish, settingsShellGerman } from "./settings-shell-messages.js";
+import { midnightEnglish, midnightGerman } from "./midnight-messages.js";
 import { loginErrorEnglish, loginErrorGerman } from "./login-error-messages.js";
 import { streamHealthEnglish, streamHealthGerman } from "./stream-health-messages.js";
 import { audioRecoveryEnglish, audioRecoveryGerman } from "./audio-recovery-messages.js";
@@ -50,6 +51,7 @@ import { fullscreenEnglish, fullscreenGerman } from "./fullscreen-messages.js";
 const en = {
     ...directMessageEnglish,
     ...fullscreenEnglish,
+    ...midnightEnglish,
     ...loginErrorEnglish, ...streamHealthEnglish,
     ...voiceDiagnosticsEnglish,
     ...desktopEnglish,
@@ -158,6 +160,7 @@ const en = {
 const de = {
     ...directMessageGerman,
     ...fullscreenGerman,
+    ...midnightGerman,
     ...loginErrorGerman, ...streamHealthGerman,
     ...voiceDiagnosticsGerman,
     ...desktopGerman,

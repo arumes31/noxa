@@ -122,8 +122,10 @@ test('voice card names the channel and the streaming identity', async ({ page })
     await expect(page.locator('#voice-leave-channel')).toHaveAccessibleName('Leave voice channel');
     await expect(page.locator('#voice-options > summary')).toHaveAccessibleName(/\S/);
     const left = id => page.locator(id).evaluate(element => element.getBoundingClientRect().left);
-    const order = await Promise.all(['#voice-mute', '#voice-deafen', '#voice-screen', '#voice-video', '#voice-options > summary', '#voice-leave-channel'].map(left));
+    const order = await Promise.all(['#voice-mute', '#voice-deafen', '#voice-video', '#voice-screen', '#voice-options > summary'].map(left));
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+    const controls = await page.locator('.voice-buttons').boundingBox(), hangup = await page.locator('#voice-leave-channel').boundingBox();
+    expect(hangup.y).toBeGreaterThanOrEqual(controls.y + controls.height);
 });
 
 test('ping readout lives in the top bar and keeps its server-information action', async ({ page }) => {

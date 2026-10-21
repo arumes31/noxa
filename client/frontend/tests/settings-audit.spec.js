@@ -36,7 +36,7 @@ test("settings search selection focuses the matching control and navigation clea
 
 test("history search submits with Enter and explains invalid dates", async ({ page }, testInfo) => {
     await page.evaluate(() => { window.__noxa.showWorkspace(false); Object.assign(window.__noxa.state, { activeTabID: "a", serverGeneration: 1, myUniqueID: "me", channels: [{ ChannelID: 7, Name: "Lobby" }] }); });
-    await page.getByRole("button", { name: "Search history", exact: true }).click();
+    await page.evaluate(async () => (await import("/src/message-tools.js")).openHistorySearch());
     await page.getByLabel("After", { exact: true }).fill("2026-09-29");
     await page.getByLabel("Before", { exact: true }).fill("2026-09-28");
     await page.getByRole("dialog").getByRole("button", { name: "Search", exact: true }).click();

@@ -25,7 +25,7 @@ test("unified inbox shows unread channels mentions groups and followed threads",
     expect(await page.evaluate(() => window.__jumps[0])).toMatchObject({ kind: "channel", channel_id: 7, message_id: 42 });
 });
 test("history search filters server pages and reports inaccessible messages", async ({ page }) => {
-    await open(page); await page.getByRole("button", { name: "Search history", exact: true }).click();
+    await open(page); await page.evaluate(async () => (await import("/src/message-tools.js")).openHistorySearch());
     await page.getByLabel("Search text", { exact: true }).fill("older");
     await page.getByLabel("Sender", { exact: true }).fill("Bob");
     await page.getByLabel("Channel", { exact: true }).selectOption("7");
@@ -63,7 +63,7 @@ test("saved messages can close while their backend request is pending", async ({
     await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 test("late search results cannot enter another server session", async ({ page }) => {
-    await open(page); await page.getByRole("button", { name: "Search history", exact: true }).click();
+    await open(page); await page.evaluate(async () => (await import("/src/message-tools.js")).openHistorySearch());
     await page.evaluate(() => { window.__hold = true; });
     await page.getByRole("dialog").getByRole("button", { name: "Search", exact: true }).click();
     await page.waitForFunction(() => !!window.__resolve);
@@ -124,7 +124,7 @@ test("full client saves a channel message and opens older authorized context", a
 });
 
 test("search stop waits for current page and does not issue another page", async ({ page }) => {
-    await open(page); await page.getByRole("button", { name: "Search history", exact: true }).click();
+    await open(page); await page.evaluate(async () => (await import("/src/message-tools.js")).openHistorySearch());
     await page.evaluate(() => { window.__hold = true; });
     await page.getByRole("dialog").getByRole("button", { name: "Search", exact: true }).click();
     await page.waitForFunction(() => !!window.__resolve);

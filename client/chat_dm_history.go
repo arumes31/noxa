@@ -412,7 +412,7 @@ func (a *App) DMSearch(peer, query string, maxMessages int) (ChatSearchResult, e
 }
 
 func (s dmHistoryStore) search(peer, query string, maxMessages int) ChatSearchResult {
-	res := ChatSearchResult{Messages: []netproto.ChatHistoryEntry{}}
+	res := ChatSearchResult{Messages: []netproto.ChatHistoryEntry{}, Complete: true}
 	q := strings.ToLower(strings.TrimSpace(query))
 	if maxMessages <= 0 {
 		maxMessages = chatSearchDefaultMax
@@ -431,10 +431,12 @@ func (s dmHistoryStore) search(peer, query string, maxMessages int) ChatSearchRe
 		}
 		l, err := s.load(uid)
 		if err != nil {
+			res.Complete = false
 			continue
 		}
 		for i := len(l.Messages) - 1; i >= 0; i-- { // newest first, like ChatSearch
 			if res.Scanned >= maxMessages {
+				res.Complete = false
 				return res
 			}
 			m := l.Messages[i]

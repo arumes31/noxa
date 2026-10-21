@@ -134,6 +134,10 @@ const (
 // String returns a human-readable name for the message type.
 func (m MessageType) String() string {
 	switch m {
+	case MsgChannelInviteRequest:
+		return "ChannelInviteRequest"
+	case MsgChannelInviteResult:
+		return "ChannelInviteResult"
 	case MsgVoiceTelemetry:
 		return "VoiceTelemetry"
 	case MsgDiscussionRequest:

@@ -1,16 +1,19 @@
+import { channelInvitePanel } from "./channel-invite-ui.js";
+import { icon } from "./icons.js";
 import { currentLanguage, t } from "./i18n.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { roleButton, roleElement } from "./role-editor-view.js";
 import { applyChannelPreset, channelOverrideChanges, setChannelOverride } from "./channel-access-state.js";
 import { accessCheckPanel } from "./access-check-ui.js";
 import { channelImpactPanel } from "./channel-impact-ui.js";
+import { channelPermissionMatrix } from "./channel-permission-matrix.js";
 import "./roles.css";
 
 export function openChannelAccess(channelID) {
     const app = window.go.main.App;
     const tabID = window.__noxa.state.activeTabID;
-    const overlay = roleElement("div", "dlg-overlay");
-    const dialog = roleElement("section", "dlg roles-dialog");
+    const overlay = roleElement("div", "dlg-overlay channel-access-overlay");
+    const dialog = roleElement("section", "dlg roles-dialog channel-access-dialog");
     const header = roleElement("header", "roles-header");
     header.append(roleElement("h3", "", t("roles.accessTitle")), roleButton(t("common.close"), () => closeDialog(overlay, "cancel")));
     const content = roleElement("div", "channel-access-content");
@@ -19,7 +22,7 @@ export function openChannelAccess(channelID) {
     const error = roleElement("p", "role-error");
     error.setAttribute("role", "alert");
     let snapshot, saved, draft, busy = false, dirty = false, needsRefresh = false, subject = { role_id: 0 }, searchSerial = 0;
-    let impactView, reviewedDraft = "";
+    let impactView, invitePanel, reviewedDraft = "";
     let saving = false, savedMessage = false;
     const memberNames = new Map();
     const current = () => isCurrentServerDialog(overlay);
@@ -42,6 +45,7 @@ export function openChannelAccess(channelID) {
         save.disabled = busy || !dirty || needsRefresh || reviewedDraft !== JSON.stringify(draft);
         discard.disabled = busy || !dirty;
         refreshButton.disabled = busy;
+        reset.disabled = busy || needsRefresh;
         status.textContent = busy ? t(saving ? "roles.saving" : "roles.channel.loading") : dirty ? t("roles.unsaved") : savedMessage ? t("roles.accessSaved") : "";
         save.textContent = t(saving ? "roles.saving" : "common.save");
         impactView?.update();
@@ -49,15 +53,42 @@ export function openChannelAccess(channelID) {
     const render = () => {
         content.replaceChildren();
         if (!snapshot) return;
-        const syncRow = roleElement("div", "roles-header");
+        const channel = window.__noxa.state.channels.find(entry => entry.ChannelID === channelID);
+        header.querySelector("h3").textContent = `${channel?.Name || `#${channelID}`} · ${t("midnight.permissions")}`;
+        if (!invitePanel) invitePanel = channelInvitePanel({ tabID, channelID, current });
+        content.append(invitePanel);
+        const summarySection = roleElement("section", "access-section");
+        const summaryTitle = roleElement("h4", "access-section-title", t("midnight.accessSummary"));
+        summarySection.append(summaryTitle);
+        const summary = roleElement("div", "access-summary"); summary.setAttribute("aria-label", t("midnight.accessSummary"));
+        const stat = (value, label) => { const card = roleElement("div", "access-summary-card"); card.append(roleElement("strong", "", String(value)), roleElement("span", "", label)); summary.append(card); };
+        const presentMembers = window.__noxa.state.clients.filter(member => member.channel_id === channelID);
+        stat(presentMembers.filter(member => Number(member.user_id) > 0).length, t("midnight.membersPresent"));
+        stat(presentMembers.filter(member => !Number(member.user_id)).length, t("midnight.guestsPresent"));
+        stat(window.__noxa.state.clients.filter(member => member.channel_id === channelID).length, t("midnight.permissionVoice"));
+        summarySection.append(summary); content.append(summarySection);
+        const syncRow = roleElement("div", "roles-header access-sync-row");
         syncRow.append(roleElement("p", "role-hint", t(draft.synced ? "roles.synced" : "roles.custom")));
         syncRow.append(roleButton(t(draft.synced ? "roles.customize" : "roles.sync"), async () => {
             if (!draft.synced && (!await confirm(syncDescription()) || !current())) return;
             draft = { ...draft, synced: !draft.synced, overrides: draft.synced ? structuredClone(syncedOverrides()) : [] };
             setDirty(); render();
         }, busy || (!draft.synced && (!draft.parent_id || snapshot.parent_access_available === false))));
-        content.append(syncRow);
+
+        const help = roleElement("p", "role-hint access-rules-help", t("midnight.permissionMatrixShort")); help.title = t("midnight.permissionMatrixHelp");
+        const permissionTitle = roleElement("h4", "access-section-title"); permissionTitle.innerHTML = icon("shield"); permissionTitle.append(document.createTextNode(t("midnight.permissions"))); content.append(permissionTitle);
+        content.append(channelPermissionMatrix({ snapshot, overrides: draft.synced ? syncedOverrides() : draft.overrides || [], disabled: busy || draft.synced,
+            change: (target, capability, effect, focusCapability) => {
+                if (busy || draft.synced || !current()) return;
+                const capabilities = Array.isArray(capability) ? capability : [capability];
+                for (const key of capabilities) draft.overrides = setChannelOverride(draft.overrides || [], target, key, effect);
+                capability = focusCapability || capabilities.at(-1);
+                setDirty(); render();
+                content.querySelector(`[data-role="${target.role_id}"][data-capability="${CSS.escape(capability)}"]`)?.focus();
+            },
+        }));
         if (snapshot.parent_access_available === false && draft.parent_id) content.append(roleElement("p", "role-hint", t("roles.parentAccessUnavailable")));
+        if (draft.synced) content.append(syncRow);
         const form = roleElement("fieldset", "role-form");
         form.disabled = busy || draft.synced;
         const presets = roleElement("div", "roles-header");
@@ -113,10 +144,18 @@ export function openChannelAccess(channelID) {
                 const option = roleElement("option", "", t(`roles.${effect}`)); option.value = effect; select.append(option);
             }
             select.value = overrides.find((o) => Number(o.role_id || 0) === Number(subject.role_id || 0) && Number(o.user_id || 0) === Number(subject.user_id || 0) && o.capability === capability.key)?.effect || "inherit";
-            select.onchange = () => { draft.overrides = setChannelOverride(draft.overrides || [], subject, capability.key, select.value); setDirty(); };
+            select.onchange = () => {
+                draft.overrides = setChannelOverride(draft.overrides || [], subject, capability.key, select.value); setDirty();
+                const matrix = content.querySelector(`[data-role="${subject.role_id || 0}"][data-capability="${CSS.escape(capability.key)}"]`);
+                if (matrix) render();
+            };
             row.append(select); form.append(row);
         }
-        content.append(form);
+        const advanced = roleElement("details", "access-advanced"); advanced.open = false;
+        advanced.append(roleElement("summary", "", t("midnight.permissionAdvanced")));
+        if (!draft.synced) advanced.append(syncRow);
+        const maintenance = roleElement("div", "roles-header"); maintenance.append(refreshButton, discard);
+        advanced.append(help, form, maintenance); content.append(advanced);
         impactView = channelImpactPanel({ tabID, channelID, snapshot, current, change,
             enabled: () => !busy && dirty && !needsRefresh,
             reviewed: value => { reviewedDraft = value ? JSON.stringify(draft) : ""; buttons(); } });
@@ -160,8 +199,16 @@ export function openChannelAccess(channelID) {
     });
     const discard = roleButton(t("roles.discard"), () => { draft = structuredClone(saved); dirty = false; buttons(); render(); });
     const refreshButton = roleButton(t("roles.refresh"), async () => { if ((!dirty || await confirm(t("roles.discardAsk"))) && current()) load(); });
+    const reset = roleButton(t("midnight.resetDefaults"), () => {
+        if (busy || !current()) return;
+        draft.synced = !!draft.parent_id && snapshot.parent_access_available !== false;
+        draft.overrides = draft.synced ? [] : (draft.overrides || []).filter(entry => !snapshot.grantable_capabilities.includes(entry.capability) || (entry.role_id && entry.role_id !== snapshot.policy.everyone_id && !snapshot.manageable_role_ids.includes(entry.role_id)) || entry.user_id);
+        setDirty(); render();
+    });
+    reset.classList.add("access-reset");
+    save.classList.add("access-save");
     const footer = roleElement("footer", "roles-footer");
-    footer.append(status, refreshButton, discard, save);
+    footer.append(status, reset, save);
     dialog.append(header, content, error, footer); overlay.append(dialog);
     mountServerDialog(overlay, { onCancel: () => {
         if (busy) return false;

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="arctic">
+<html lang="en" data-theme="midnight">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -9,9 +9,11 @@
     <link rel="apple-touch-icon" href="/branding/apple-touch-icon.png" sizes="180x180" />
     <link rel="stylesheet" href="/src/style.css" />
     <link rel="stylesheet" href="/src/workspace.css" />
+    <link rel="stylesheet" href="/src/midnight.css" />
     <link rel="stylesheet" href="/src/login.css" />
     <link rel="stylesheet" href="/src/arctic-night.css" />
     <link rel="stylesheet" href="/src/arctic-shell.css" />
+    <link rel="stylesheet" href="/src/midnight.css" />
 </head>
 <body class="details-collapsed">
     <!-- Login overlay -->
@@ -112,6 +114,7 @@
                     <details class="channel-actions">
                         <summary aria-label="More channel actions" title="More channel actions">•••</summary>
                         <div class="channel-actions-menu">
+                            <button id="chat-invite-btn" class="icon-btn" type="button"></button>
                             <button id="chat-pins-btn" class="icon-btn" title="Pinned messages" aria-label="Pinned messages"></button>
                             <button id="chat-info-btn" class="icon-btn hidden" title="Channel description" aria-label="Channel description"></button>
                             <button id="chat-e2ee-btn" class="icon-btn" title="Encryption diagnostics" aria-label="Encryption diagnostics"></button>
@@ -125,6 +128,7 @@
                     <button id="tab-chat" class="active" role="tab" aria-selected="true" aria-controls="chat-pane" tabindex="0">Chat</button>
                     <button id="tab-files" role="tab" aria-selected="false" aria-controls="files-pane" tabindex="-1">Files</button>
                 </div>
+                <button id="tab-permissions" type="button" aria-haspopup="dialog"></button>
                 <button id="tab-transfers" class="icon-btn" title="Transfers" aria-label="Open transfers" aria-haspopup="dialog">⇅</button>
             </div>
             <section id="sharing-status" class="sharing-status" hidden></section>
@@ -133,10 +137,10 @@
             <div id="talk-banner" class="hidden" role="status" aria-live="assertive">● TALKING</div>
             <div id="video-grid" class="hidden"></div>
             <div id="chat-search-row" class="hidden">
-                <label class="sr-only" for="chat-search">Filter loaded messages</label>
-                <input id="chat-search" placeholder="filter loaded messages… (Esc closes)" autocomplete="off" />
+                <label class="sr-only" for="chat-search">Search messages and history</label>
+                <input id="chat-search" placeholder="Search messages and history…" autocomplete="off" />
                 <span id="chat-search-count" role="status" aria-live="polite" class="hidden"></span>
-                <button id="chat-search-server" title="Decrypt and scan the whole scope history in this client">search all history</button>
+                <button id="chat-search-server" title="Decrypt and scan the whole scope history in this client">Search</button>
                 <button id="chat-search-close" class="icon-btn" title="Close search" aria-label="Close chat search">✕</button>
             </div>
             <div id="pm-tabs" class="hidden"></div>
@@ -176,23 +180,26 @@
 
         <aside id="details" aria-hidden="true">
             <div class="details-head">
+                <button id="room-overview-back" class="icon-btn" type="button" hidden></button>
                 <h2 id="member-heading" class="pane-head">Member details</h2>
                 <button id="details-close" class="icon-btn" title="Close details" aria-label="Close details">✕</button>
             </div>
+            <div id="room-overview"></div>
             <div id="client-card"></div>
-            <details class="inspector-section" open><summary>Server connection</summary><div id="news-area"></div></details>
+            <details class="inspector-section"><summary>Server connection</summary><div id="news-area"></div></details>
             <details class="inspector-section"><summary>Roles</summary><div id="perm-area"></div></details>
         </aside>
         </div>
         <footer id="voice-bar" aria-label="Voice controls">
             <div class="voice-hints"><span id="voice-shortcut-hint" hidden></span><span id="voice-whisper-preview" hidden></span></div>
+            <button id="ptt-btn" class="voice-control" title="Hold to talk" aria-label="Push to talk" aria-pressed="false"></button>
             <div class="voice-buttons">
                 <div class="voice-microphone"><button id="voice-mute" class="voice-control" aria-label="Mute microphone" aria-pressed="false"></button><div id="mic-meter" class="hidden" role="meter" aria-label="Microphone input level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="mic-fill cool"></div></div><span id="mic-warning" class="hidden" role="status" aria-live="polite"></span></div>
-                <button id="ptt-btn" class="voice-control" title="Hold to talk" aria-label="Push to talk" aria-pressed="false"></button>
                 <button id="voice-deafen" class="voice-control" aria-label="Deafen" aria-pressed="false"></button>
+                <details id="voice-media"><summary class="voice-control" aria-label="Camera and screen sharing"></summary><div class="voice-media-menu">
                 <button id="voice-video" class="voice-control" title="Camera" aria-label="Camera" aria-pressed="false"></button>
                 <button id="voice-screen" class="voice-control" title="Start sharing" aria-label="Start sharing" aria-pressed="false"></button>
-                <button id="voice-leave-channel" class="voice-control" type="button"></button>
+                </div></details>
                 <details id="voice-options"><summary class="voice-control" aria-label="More voice options">More</summary><div class="voice-options-menu">
                     <dl class="voice-devices"><dt id="voice-input-label">Microphone</dt><dd id="voice-input-device"></dd><dt id="voice-output-label">Audio output</dt><dd id="voice-output-device"></dd></dl>
                     <button id="voice-settings" class="voice-control" type="button"></button>
@@ -203,6 +210,7 @@
                     <button id="voice-disconnect" class="voice-control" type="button"></button>
                 </div></details>
             </div>
+            <button id="voice-leave-channel" class="voice-control voice-hangup" type="button" hidden></button>
             <div class="voice-info"><div class="voice-summary"><span class="voice-signal" aria-hidden="true"></span><div id="voice-status" role="status" aria-live="polite">Voice disconnected</div><span id="voice-channel-name" class="voice-channel-name"></span></div>
                 <div id="voice-self" class="voice-self" hidden><span class="avatar voice-self-avatar" aria-hidden="true"></span><span class="voice-self-text"><span class="voice-self-name"></span><span class="voice-self-stream" hidden><span class="voice-live-badge">LIVE</span><span class="voice-self-stats"></span></span></span></div>
                 <span id="voice-context"></span><span id="conn-pill" class="pill">offline</span></div>

@@ -432,7 +432,9 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         const source = await (await import("node:fs/promises")).readFile(new URL("../src/chat-ui.js", import.meta.url), "utf8");
         // The local log keeps the mode, and search hits map it the same way.
         assert.match(source, /enc_mode: m\.encVerified \? m\.encMode : encModeFrom\(false, m\.encMode\)/);
-        assert.match(source, /encMode: encModeFrom\(verified, r\.enc_mode\)/);
+        assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_mode: "downgraded" }, true).label, "chat.downgradedHelp");
+        assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_verified: true, enc_mode: "server" }, true).kind, "warning");
+        assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_verified: true, enc_mode: "e2e" }, true).kind, "lock");
     });
 
     await t.test("channel edit offers no new password on a text channel", async (t) => {

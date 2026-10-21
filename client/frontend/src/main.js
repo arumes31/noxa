@@ -4,6 +4,7 @@ import { createConnectionOverlay } from "./connection-overlay.js";
 import { initializeUpdateTransition, updateStartupBlocked, refreshUpdateTransition } from "./update-transition.js";
 import "./update-transition.css";
 import { stopDisplayCapture } from "./display-capture-lease.js";
+import { parseChannelInvite } from "./channel-invite-links.js";
 import { createConnectionQuality } from './connection-quality.js';
 import { createLoginMemory } from './login-memory.js';
 import { createLoginFeedback } from './login-errors.js';
@@ -273,7 +274,7 @@ function applyAppearance() {
     initMenu();
     // (294/295) theme sets the full variable palette via [data-theme].
     // Arctic Night is the default look; "dark" keeps the classic palette.
-    root.dataset.theme = s.theme || "arctic";
+    root.dataset.theme = s.theme || "midnight";
     // (344) reduce motion: toggle + media query both gate animations.
     root.dataset.reduceMotion = s.reduce_motion ? "1" : "";
     // (296) custom accent overrides the theme's accent.
@@ -394,12 +395,14 @@ async function connectFromLogin() {
     loginFeedback.clear();
     if (!$("login-addr").value.trim()) { loginFeedback.show("server address is required"); return; }
     if (!$("login-nick").value.trim()) { loginFeedback.show("nickname is required"); return; }
+    const invitation = parseChannelInvite($("login-addr").value.trim());
+    if ($("login-addr").value.trim().startsWith("noxa://") && !invitation) { loginFeedback.show(t("midnight.inviteInvalid")); return; }
     const label = $("login-connect-label");
     const submitLabel = label.textContent;
     submit.disabled = true;
     label.textContent = t("login.connecting");
     document.querySelector(".login-card").setAttribute("aria-busy", "true");
-    const addr = $("login-addr").value.trim();
+    const addr = invitation?.address || $("login-addr").value.trim();
     const nick = $("login-nick").value.trim();
     const displayName = $("login-display-name").value.trim();
     // C04: the comet draws the mark while this login connects to `addr`.
@@ -436,7 +439,7 @@ async function connectFromLogin() {
     try {
         const loginRequest = await loginMemory.request();
         const { error: err, tabID, warning } = loginRequest
-            ? normalizeConnectResult(await window.go.main.App.ConnectLogin({ ...loginRequest, bookmark }))
+            ? normalizeConnectResult(await window.go.main.App.ConnectLogin({ ...loginRequest, addr, bookmark, ...(invitation ? { use_saved_account: false, use_saved_server: false } : {}) }))
             : await connectBookmarkTabWithID(bookmark, addr, nick, pw, spw, displayName);
         if (err) {
             if (!currentAttempt()) return;
@@ -500,6 +503,15 @@ async function connectFromLogin() {
         if (session.security) sysMsg(t("runtime.connected", { security: session.security }));
         warnCertificateClock(clockWarning, addr);
         if (warning) toast(warning, "warn");
+        if (invitation) {
+            try {
+                await window.go.main.App.ChannelInviteForTab(tabID, { action: "resolve", channel_id: invitation.channelID, token: invitation.token });
+                if (!await tabIsActive(tabID)) return;
+                if (state.serverGeneration !== finalizationGeneration || state.sessionGeneration !== sessionGeneration) return;
+                const error = await window.go.main.App.JoinChannelForTab(tabID, invitation.channelID);
+                if (error) throw new Error(error);
+            } catch { if (state.serverGeneration === finalizationGeneration) toast(t("midnight.inviteJoinFailed"), "warn"); }
+        }
     } catch (e) {
         playCurrentConnectionFailure();
         if (currentAttempt()) loginFeedback.show(e, { displayName });

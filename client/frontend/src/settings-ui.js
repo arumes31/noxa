@@ -391,8 +391,8 @@ function pageGeneral() {
 
 function pageAppearance() {
     const s = settings();
-    const themeSel = selectOf([["arctic", t("settings.arctic.default")], ["dark", t("settings.dark.default")], ["light", t("settings.light")], ["hc", t("settings.high.contrast")]],
-        s.theme || "arctic", v => { s.theme = v; });
+    const themeSel = selectOf([["midnight", t("midnight.defaultTheme")], ["arctic", "Arctic Night"], ["dark", t("settings.dark.default")], ["light", t("settings.light")], ["hc", t("settings.high.contrast")]],
+        s.theme || "midnight", v => { s.theme = v; });
     const accent = document.createElement("input");
     accent.type = "color";
     accent.value = s.accent_color || "#2ee6a8";
@@ -1193,6 +1193,7 @@ function pageChat() {
             row(t("settings.layout"), selectOf(
                 [["irc", t("settings.irc.lines")], ["bubbles", t("settings.bubbles")]],
                 s.chat_layout || "irc", (v) => { s.chat_layout = v; }), "", { key: "chat_layout" }),
+            row(t("midnight.linkPreviews"), checkbox(s.link_previews !== false, value => { s.link_previews = value; }), "", { key: "link_previews", help: t("midnight.linkPreviewsHelp") }),
             row(t("settings.font.size"), slider(s.chat_font_size || 14, 12, 18, (v) => { s.chat_font_size = v; }), "", { key: "chat_font_size" })),
         // (130) system-message category filters.
         group(t("settings.group.systemLines"), "system",

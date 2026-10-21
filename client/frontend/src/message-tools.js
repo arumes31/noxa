@@ -1,3 +1,4 @@
+import { icon } from "./icons.js";
 import { t } from "./i18n.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { openConversationsAt } from "./conversations.js";
@@ -203,11 +204,17 @@ export function openHistorySearch() {
 
 export function initMessageTools(callbacks) {
     hooks = callbacks;
-    window.__noxaMessageTools = { save: saveMessageReference, inbox: openUnreadInbox, search: openHistorySearch, saved: openSavedMessages };
+    window.__noxaMessageTools = { save: saveMessageReference, inbox: openUnreadInbox, search: () => document.getElementById("chat-search-btn").click(), saved: openSavedMessages };
     if (document.getElementById("message-tools-actions")) return;
     const actions = el("div", "message-tools-actions"); actions.id = "message-tools-actions";
-    const entries = [["messages.inbox", openUnreadInbox], ["messages.search", openHistorySearch], ["messages.saved", openSavedMessages]];
+    const entries = [["messages.inbox", openUnreadInbox], ["messages.saved", openSavedMessages]];
     for (const [key, action] of entries) actions.append(button(key, action));
+    const translateActions = () => {
+        [...actions.children].forEach((node, index) => { node.textContent = t(entries[index][0]); });
+        const saved = actions.lastElementChild; saved.innerHTML = icon("bookmark");
+        saved.classList.add("icon-btn"); saved.title = t("messages.saved"); saved.setAttribute("aria-label", t("messages.saved"));
+    };
+    translateActions();
     document.getElementById("chat-head")?.append(actions);
-    window.addEventListener("noxa-language-changed", () => [...actions.children].forEach((node, index) => { node.textContent = t(entries[index][0]); }));
+    window.addEventListener("noxa-language-changed", translateActions);
 }

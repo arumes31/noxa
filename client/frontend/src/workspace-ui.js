@@ -5,6 +5,7 @@ import { memberTarget } from "./member-target.js";
 import { currentWhisperRouting } from "./media-controls.js";
 import { t } from "./i18n.js";
 import { setSafeImage } from "./safe-media.js";
+import { renderRoomOverview } from "./room-overview.js";
 
 const V = () => window.__noxa;
 const $ = (id) => document.getElementById(id);
@@ -60,13 +61,20 @@ export function renderWorkspace() {
     $("channel-member-count").textContent = t("workspace.inVoice", { count: members.length });
     $("channel-member-count").title = ownChannel ? t("workspace.countIn", { count: members.length, channel: ownChannel.Name }) : t("workspace.noVoice");
     $("channel-member-count").setAttribute("aria-label", $("channel-member-count").textContent);
-    $("voice-leave-channel").disabled = !state.myChannelID;
+    const inPrivateCall = window.__noxaPrivateCalls?.active?.() || false;
+    $("voice-leave-channel").disabled = !state.myChannelID && !inPrivateCall;
+    $("voice-leave-channel").hidden = !state.myChannelID && !inPrivateCall;
+    const hangupLabel = t(inPrivateCall ? "call.end" : "workspace.leaveChannel");
+    labelButton($("voice-leave-channel"), "disconnect", hangupLabel);
+    $("voice-leave-channel").setAttribute("aria-label", hangupLabel);
     $("voice-deafen").classList.toggle("active", state.deafened);
     $("voice-deafen").setAttribute("aria-pressed", String(state.deafened));
     $("voice-deafen").setAttribute("aria-label", state.deafened ? t("workspace.undeafen") : t("workspace.deafen"));
     labelButton($("voice-deafen"), state.deafened ? "headphonesOff" : "headphones", state.deafened ? t("workspace.undeafen") : t("workspace.deafen"));
     $("ptt-btn").classList.toggle("hidden", (state.settings?.activation_mode || "ptt") !== "ptt");
+    $("tab-permissions").disabled = !(window.__noxaChat?.activeChannelID?.() ?? state.myChannelID);
     renderVoiceHints();
+    renderRoomOverview({ avatarColor, voiceState });
     for (const element of document.querySelectorAll("#channel-tree .avatar[data-uid]")) {
         element.style.setProperty("--avatar-color", avatarColor(element.dataset.uid));
     }
@@ -83,10 +91,12 @@ export function renderMember() {
     if (!client) {
         memberKey = "";
         card.innerHTML = `<p class="empty-state">${t("workspace.selectMember")}</p>`;
-        $("member-heading").textContent = t("workspace.memberDetails");
+        $("member-heading").textContent = t("midnight.roomDetails");
+        renderRoomOverview({ avatarColor, voiceState });
         return;
     }
     const key = `${state.serverGeneration}:${client.client_id}:${client.unique_id}`;
+    renderRoomOverview({ avatarColor, voiceState });
     if (key !== memberKey) {
         memberKey = key;
         card.innerHTML = `<div class="member-profile"><div class="card-avatar"></div><div class="member-identity"><div class="card-nick"></div><div class="card-channel"></div><div class="card-groups"></div></div></div>
@@ -157,9 +167,41 @@ export function renderVoiceHints() {
 }
 
 export function initWorkspace() {
+    const dock = () => {
+        const footer = $("voice-bar");
+        const parent = innerWidth > 1100 && !document.body.classList.contains("compact") ? $("sidebar") : $("app");
+        if (footer.parentElement === parent) return;
+        const focused = footer.contains(document.activeElement) ? document.activeElement : null;
+        parent.append(footer);
+        focused?.focus({ preventScroll: true });
+    };
+    dock();
+    initMediaMenu();
+    window.addEventListener("noxa-private-call-changed", renderWorkspace);
+    $("room-overview-back").onclick = () => {
+        V().state.selectedClientID = "";
+        renderMember(); V().renderTree();
+        $("room-overview").querySelector("button")?.focus();
+    };
+    window.addEventListener("resize", dock);
+    new MutationObserver(dock).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+    $("chat-invite-btn").onclick = async () => {
+        const state = V().state, generation = state.serverGeneration;
+        const channelID = window.__noxaChat?.activeChannelID?.() ?? state.myChannelID;
+        if (!channelID) return;
+        const { openChannelInvite } = await import("./channel-invite-ui.js");
+        if (generation === state.serverGeneration) openChannelInvite(channelID);
+    };
+    $("tab-permissions").onclick = async () => {
+        const state = V().state, generation = state.serverGeneration;
+        const channelID = window.__noxaChat?.activeChannelID?.() ?? state.myChannelID;
+        if (!channelID) return;
+        const { openChannelAccess } = await import("./channel-access-ui.js");
+        if (generation === state.serverGeneration) openChannelAccess(channelID);
+    };
     $("compact-exit").onclick = () => V().toggleCompact();
     const icons = {
-        "details-close": "close", "details-toggle": "users", "channel-create-btn": "plus", "workspace-sidebar-close": "close",
+        "details-close": "close", "details-toggle": "users", "room-overview-back": "chevron", "channel-create-btn": "plus", "workspace-sidebar-close": "close",
         "notif-bell": "bell", "chat-search-btn": "search", "chat-pins-btn": "pin",
         "chat-info-btn": "info", "chat-e2ee-btn": "lock", "chat-export-btn": "download",
         "chat-attach": "attach", "chat-emoji": "smile", "chat-send": "send", "tab-transfers": "transfer",
@@ -177,6 +219,7 @@ export function initWorkspace() {
     $("voice-settings").onclick = () => V().openSettings("capture");
     $("voice-disconnect").onclick = () => V().disconnect();
     $("voice-leave-channel").onclick = async () => {
+        if (window.__noxaPrivateCalls?.active?.()) { window.__noxaPrivateCalls.end(); return; }
         const generation = V().state.serverGeneration;
         const tabID = V().state.activeTabID;
         const channel = V().state.myChannelID;
@@ -275,8 +318,8 @@ function translateWorkspace() {
         ["#chat-search-btn", "aria-label", "workspace.labels.searchChat"],
         ["#chat-search-btn", "title", "workspace.labels.searchChatCtrlF"],
         [".channel-actions > summary", "aria-label", "workspace.labels.moreChannelActions"],
-        ["#chat-search", "placeholder", "workspace.labels.filterLoadedMessages"],
-        ["#chat-search-server", "text", "workspace.labels.searchAllHistory"],
+        ["#chat-search", "placeholder", "midnight.searchPlaceholder"],
+        ["#chat-search-server", "text", "messages.run"],
         ["#chat-search-close", "aria-label", "workspace.labels.closeChatSearch"],
         ["#chat-attach", "aria-label", "workspace.labels.attachFiles"],
         ["#chat-emoji", "aria-label", "workspace.labels.openEmojiPicker"],
@@ -305,7 +348,10 @@ function translateWorkspace() {
     $("chat-send").setAttribute("aria-label", t("workspace.send"));
     labelButton($("tab-chat"), "chat", t("workspace.chat"));
     labelButton($("tab-files"), "file", t("workspace.files"));
-    labelButton($("ptt-btn"), "mic", t("workspace.ptt"));
+    labelButton($("tab-permissions"), "shield", t("midnight.permissionTab"));
+    $("ptt-btn").textContent = t("workspace.ptt");
+    labelButton($("voice-media").querySelector("summary"), "screen", t("midnight.mediaControls"));
+    $("voice-media").querySelector("summary").setAttribute("aria-label", t("midnight.mediaControls"));
     $("ptt-btn").setAttribute("aria-label", t("workspace.ptt"));
     $("ptt-btn").title = t("workspace.ptt");
     $("chat-text").setAttribute("aria-label", t("workspace.message"));
@@ -316,6 +362,7 @@ function translateWorkspace() {
 
     for (const [id, glyph, key] of [
         ["chat-pins-btn", "pin", "workspace.pins"],
+        ["chat-invite-btn", "users", "midnight.permission.invite"],
         ["chat-info-btn", "info", "workspace.channelInfo"],
         ["chat-e2ee-btn", "lock", "workspace.encryption"],
         ["chat-export-btn", "download", "workspace.export"],
@@ -356,4 +403,42 @@ async function refreshVoiceDevices() {
     $("voice-output-device").textContent = output.active
         ? deviceName("audiooutput", output.id)
         : t("workspace.deviceSelected", { name: deviceName("audiooutput", state.settings?.playback_device_id) });
+}
+
+function initMediaMenu() {
+    const menu = $("voice-media"), panel = menu.querySelector(".voice-media-menu"), trigger = menu.querySelector("summary");
+    const position = () => {
+        if (!menu.open) return;
+        const rect = trigger.getBoundingClientRect();
+        panel.style.left = Math.max(8, Math.min(rect.left, innerWidth - panel.offsetWidth - 8)) + "px";
+        panel.style.top = Math.max(8, rect.top - panel.offsetHeight - 8) + "px";
+    };
+    menu.addEventListener("toggle", () => { trigger.setAttribute("aria-expanded", String(menu.open)); position(); });
+    menu.addEventListener("keydown", event => {
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); menu.open = false; trigger.focus(); }
+    });
+    panel.addEventListener("click", event => { if (event.target.closest("button")) { menu.open = false; trigger.focus(); } });
+    document.addEventListener("pointerdown", event => { if (!menu.contains(event.target)) menu.open = false; });
+    window.addEventListener("resize", position);
+    const state = () => trigger.classList.toggle("active", [$("voice-video"), $("voice-screen")].some(button => button.getAttribute("aria-pressed") === "true"));
+    const observer = new MutationObserver(state);
+    for (const button of [$("voice-video"), $("voice-screen")]) observer.observe(button, { attributes: true, attributeFilter: ["aria-pressed"] });
+    state();
+    const row = menu.parentElement, camera = $("voice-video"), screen = $("voice-screen");
+    let combined = null;
+    const fit = () => {
+        const available = row.clientWidth;
+        if (!available) return;
+        const gap = parseFloat(getComputedStyle(row).gap) || 5;
+        const minimum = parseFloat(getComputedStyle(row).getPropertyValue("--voice-control-min")) || 34;
+        const compact = available < minimum * 5 + gap * 4;
+        if (combined === compact) return;
+        const focused = [camera, screen].includes(document.activeElement) ? document.activeElement : null;
+        combined = compact; menu.open = false; menu.hidden = !compact;
+        if (compact) panel.append(camera, screen);
+        else { row.insertBefore(camera, menu); row.insertBefore(screen, menu); }
+        if (focused) (compact ? trigger : focused).focus({ preventScroll: true });
+    };
+    new ResizeObserver(fit).observe(row);
+    fit();
 }

@@ -101,7 +101,7 @@ type HotkeyProfile struct {
 // serialized default changes, and add the repair to migrateSettings:
 // loading merges the file ONTO the defaults, so a field an older client always
 // wrote wins over the new default unless it is explicitly repaired.
-const settingsVersion = 13
+const settingsVersion = 14
 
 // Settings holds all user preferences.
 type Settings struct {
@@ -123,7 +123,7 @@ type Settings struct {
 	MinimizeToTray bool   `json:"minimize_to_tray"` // (287)
 	CloseToTray    bool   `json:"close_to_tray"`    // (287) close button hides instead of quitting
 	CompactMode    bool   `json:"compact_mode"`     // (293)
-	Theme          string `json:"theme"`            // (294/295) "arctic" | "dark" | "light" | "hc"
+	Theme          string `json:"theme"`            // (294/295) "midnight" | "arctic" | "dark" | "light" | "hc"
 	AccentColor    string `json:"accent_color"`     // (296) custom accent hex ("" = theme default)
 	UserCSS        string `json:"user_css"`         // (296) scoped overrides
 	UIFont         string `json:"ui_font"`          // (297) "outfit" | "sora" | "jetbrains"
@@ -254,14 +254,15 @@ type Settings struct {
 	E2EEVerified   map[string]string `json:"e2ee_verified,omitempty"` // uniqueID -> verified safety number
 
 	// Chat display (wave 5b).
-	ChatTimestamps        string           `json:"chat_timestamps"`        // "absolute" | "relative" | "off"
-	ChatDensity           string           `json:"chat_density"`           // "comfortable" | "compact"
-	ChatFontSize          int              `json:"chat_font_size"`         // px, default 14
-	ChatLayout            string           `json:"chat_layout"`            // "irc" | "bubbles"
-	SysJoinLeave          bool             `json:"sys_join_leave"`         // show join/leave system lines (default on)
-	SysKick               bool             `json:"sys_kick"`               // show kick system lines (default on)
-	LastReadChannels      map[string]int64 `json:"last_read_channels"`     // channelID -> last-read message id (121)
-	DismissedAnnouncement string           `json:"dismissed_announcement"` // hash of the dismissed announcement (132)
+	LinkPreviews          *bool            `json:"link_previews,omitempty"` // nil keeps previews enabled for existing profiles
+	ChatTimestamps        string           `json:"chat_timestamps"`         // "absolute" | "relative" | "off"
+	ChatDensity           string           `json:"chat_density"`            // "comfortable" | "compact"
+	ChatFontSize          int              `json:"chat_font_size"`          // px, default 14
+	ChatLayout            string           `json:"chat_layout"`             // "irc" | "bubbles"
+	SysJoinLeave          bool             `json:"sys_join_leave"`          // show join/leave system lines (default on)
+	SysKick               bool             `json:"sys_kick"`                // show kick system lines (default on)
+	LastReadChannels      map[string]int64 `json:"last_read_channels"`      // channelID -> last-read message id (121)
+	DismissedAnnouncement string           `json:"dismissed_announcement"`  // hash of the dismissed announcement (132)
 
 	// Social & meta (wave 8b).
 	Contacts           []Contact `json:"contacts,omitempty"`      // (316)
@@ -306,7 +307,7 @@ func DefaultSettings() Settings {
 		HotkeyMute:            "Ctrl+M",
 		HotkeyQuickConnect:    "Ctrl+Shift+C",
 		HotkeyZen:             "Ctrl+Shift+Z",
-		Theme:                 "arctic",
+		Theme:                 "midnight",
 		UIFont:                "outfit",
 		UIFontSize:            14,
 		WindowOpacity:         100,
@@ -502,6 +503,10 @@ func migrateSettings(s Settings) Settings {
 		// move those profiles over; light, high contrast and later explicit
 		// "dark" (classic) choices are left alone.
 		s.Theme = "arctic"
+	}
+	if s.SettingsVersion < 14 && (s.Theme == "arctic" || s.Theme == "") {
+		// Move the former default to Midnight once; explicit classic/light/high-contrast choices remain.
+		s.Theme = "midnight"
 	}
 	if s.SettingsVersion < 11 && s.GamingOverlayPosition == "top-right" {
 		s.GamingOverlayPosition = "center-left"

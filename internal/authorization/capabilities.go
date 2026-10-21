@@ -28,6 +28,7 @@ const (
 	BanMembers              Capability = "ban_members"
 	ManageChannels          Capability = "manage_channels"
 	ManageChannelAccess     Capability = "manage_channel_access"
+	InviteOthers            Capability = "invite_others"
 	CreateTemporaryChannels Capability = "create_temporary_channels"
 	BypassChannelPassword   Capability = "bypass_channel_password"
 	ManageRoles             Capability = "manage_roles"
@@ -76,6 +77,7 @@ var capabilityCatalog = []CapabilityInfo{
 	{KickMembers, "moderation", "Kick members from server", "Mitglieder vom Server entfernen", false, nil},
 	{BanMembers, "moderation", "Ban members", "Mitglieder sperren", false, nil},
 	{ManageChannels, "access", "Manage channels", "Kanäle verwalten", true, []Capability{ViewChannel}},
+	{InviteOthers, "access", "Invite others", "Andere einladen", true, []Capability{ViewChannel}},
 	{ManageChannelAccess, "access", "Manage channel access", "Kanalzugriff verwalten", true, []Capability{ViewChannel}},
 	{CreateTemporaryChannels, "access", "Create temporary channels", "Temporäre Kanäle erstellen", true, []Capability{ViewChannel}},
 	{BypassChannelPassword, "access", "Bypass channel password", "Kanalpasswort umgehen", true, []Capability{ViewChannel}},
