@@ -9,11 +9,23 @@ export function createConnectionOverlay({ getState, translate, retry, cancel, ca
     overlay.id = "channel-connection-overlay"; overlay.hidden = true;
     overlay.innerHTML = '<div class="connection-overlay-card"><button type="button" data-close-channels></button><h2 tabindex="-1"></h2><p class="connection-overlay-explanation"></p><p class="connection-overlay-countdown" aria-live="off"></p><p class="connection-overlay-reason"></p><div class="connection-overlay-actions"><button type="button" data-retry></button><button type="button" data-cancel></button></div><span class="sr-only" role="status" aria-live="polite"></span></div>';
     sidebar?.append(overlay);
+    const position = () => {
+        const footer = document.getElementById("voice-bar");
+        overlay.style.bottom = footer?.parentElement === sidebar
+            ? `${Math.max(8, sidebar.getBoundingClientRect().bottom - footer.getBoundingClientRect().top + 8)}px` : ".5rem";
+    };
+    window.addEventListener("resize", position);
+    if (typeof ResizeObserver === "function") {
+        const observer = new ResizeObserver(position);
+        if (sidebar) observer.observe(sidebar);
+        const footer = document.getElementById("voice-bar"); if (footer) observer.observe(footer);
+    }
     let announced = "", blocked = false;
     const matches = (tabID, generation, session) => { const state = getState();
         return state.activeTabID === tabID && state.serverGeneration === generation && state.sessionGeneration === session; };
     function entry(tabID) { if (!records.has(tabID)) records.set(tabID, { phase: "checking", retry: null, reason: "", terminal: false }); return records.get(tabID); }
     function render() {
+        position();
         const state = getState(), record = records.get(state.activeTabID), visible = !!state.activeTabID && !!record && record.phase !== "connected";
         let hadPaneFocus = visible && !blocked && [sidebar, details].some(pane => pane?.contains(document.activeElement));
         if (visible && !blocked) { closeMenus(); hadPaneFocus ||= [sidebar, details].some(pane => pane?.contains(document.activeElement)); }
@@ -21,7 +33,7 @@ export function createConnectionOverlay({ getState, translate, retry, cancel, ca
             if (!pane) continue;
             pane.classList.toggle("connection-unavailable", visible);
             for (const child of pane.children) {
-                if (child === overlay) continue;
+                if (child === overlay || child.id === "voice-bar") continue;
                 if (visible) { if (!previousInert.has(child)) previousInert.set(child, child.inert); child.inert = true; }
                 else if (previousInert.has(child)) { child.inert = previousInert.get(child); previousInert.delete(child); }
             }

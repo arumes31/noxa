@@ -359,6 +359,7 @@ function translateWorkspace() {
     labelButton($("voice-options").querySelector("summary"), "effects", t("context.voiceMore"));
     $("voice-options").querySelector("summary").setAttribute("aria-label", t("context.voiceMoreLabel"));
     labelButton($("voice-disconnect"), "disconnect", t("workspace.disconnect"));
+    $("voice-disconnect").setAttribute("aria-label", t("workspace.disconnect"));
 
     for (const [id, glyph, key] of [
         ["chat-pins-btn", "pin", "workspace.pins"],

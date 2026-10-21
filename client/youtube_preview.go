@@ -49,7 +49,7 @@ func fetchYouTubePreview(ctx context.Context, videoID string, do func(*http.Requ
 	if err != nil {
 		return YouTubePreview{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return YouTubePreview{}, fmt.Errorf("YouTube preview unavailable (%d)", resp.StatusCode)
 	}

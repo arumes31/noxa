@@ -327,3 +327,9 @@
 :root[data-theme] #voice-bar .voice-microphone > #voice-mute { width: 100%; min-width: 0; }
 
 :root[data-theme] #sidebar > #voice-bar #voice-options > summary { box-sizing: border-box; width: 100%; min-width: 0; padding-inline: 4px; }
+
+:root[data-theme="midnight"] #sidebar > #voice-bar > .voice-info { width: 100%; min-width: 0; align-items: stretch; }
+:root[data-theme="midnight"] #voice-bar .voice-summary { display: flex; flex-wrap: wrap; min-width: 0; max-width: 100%; gap: 5px; }
+:root[data-theme="midnight"] #voice-playback-quality { flex: 0 1 auto; min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+:root[data-theme="midnight"] #sidebar > #voice-bar .voice-options-menu .voice-control { width: 100%; height: auto; justify-content: flex-start; }
+:root[data-theme="midnight"] #sidebar > #voice-bar .voice-options-menu .voice-control > span { display: inline; }

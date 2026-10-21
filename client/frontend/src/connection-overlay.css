@@ -8,7 +8,7 @@
 .connection-overlay-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
 .connection-overlay-actions button { color: var(--text); background: var(--bg-hover); border: 1px solid var(--border); padding: .5rem .7rem; border-radius: 5px; font: inherit; cursor: pointer; }
 .connection-overlay-actions button:disabled { opacity: .6; cursor: default; }
-#sidebar.connection-unavailable > :not(#channel-connection-overlay), #details.connection-unavailable > * { opacity: .3; }
+#sidebar.connection-unavailable > :not(#channel-connection-overlay):not(#voice-bar), #details.connection-unavailable > * { opacity: .3; }
 #details.connection-unavailable { pointer-events: none; }
 
 #channel-connection-overlay [data-close-channels] { display: none; }

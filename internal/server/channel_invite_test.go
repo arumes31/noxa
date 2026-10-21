@@ -48,9 +48,9 @@ func TestChannelInviteRotationAndPermissionEnforcement(t *testing.T) {
 	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority; d.Chat = invites })
 	defer env.stop()
 	owner, _ := dialAuthed(t, env.addr, "user-uid")
-	defer owner.Close()
+	defer func() { _ = owner.Close() }()
 	other, otherID := dialAuthed(t, env.addr, "admin-uid")
-	defer other.Close()
+	defer func() { _ = other.Close() }()
 	send(t, other, netproto.MsgChannelInviteRequest, netproto.ChannelInviteRequest{Action: "regenerate", ChannelID: 1, Access: "guest"})
 	if got := readError(t, other); got.Code != errCodePermissionDenied {
 		t.Fatal(got)

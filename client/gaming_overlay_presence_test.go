@@ -329,7 +329,7 @@ func TestOverlayBehaviourSettingsPersistAndDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := loadSettingsAt(path)
-	if !got.GamingOverlayOnlySpeaking || got.GamingOverlayChatPeek || got.GamingOverlayAutoHide || got.GamingOverlayScale != 120 || got.SettingsVersion != 13 {
+	if !got.GamingOverlayOnlySpeaking || got.GamingOverlayChatPeek || got.GamingOverlayAutoHide || got.GamingOverlayScale != 120 || got.SettingsVersion != settingsVersion {
 		t.Fatalf("legacy load = %+v", got)
 	}
 	a := &App{settings: DefaultSettings(), hotkeys: map[string]*hotkeyReg{}, settingsPath: path}
