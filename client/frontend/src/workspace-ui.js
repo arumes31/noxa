@@ -364,7 +364,7 @@ function translateWorkspace() {
     $("ptt-btn").title = t("workspace.ptt");
     $("chat-text").setAttribute("aria-label", t("workspace.message"));
     labelButton($("voice-settings"), "settings", t("workspace.audioPreferences"));
-    labelButton($("voice-options").querySelector("summary"), "effects", t("context.voiceMore"));
+    labelButton($("voice-options").querySelector("summary"), "settings", t("context.voiceMore"));
     $("voice-options").querySelector("summary").setAttribute("aria-label", t("context.voiceMoreLabel"));
     labelButton($("voice-disconnect"), "disconnect", t("workspace.disconnect"));
     $("voice-disconnect").setAttribute("aria-label", t("workspace.disconnect"));

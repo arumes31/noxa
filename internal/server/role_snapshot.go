@@ -66,7 +66,7 @@ func buildRoleSnapshotContext(ctx context.Context, sm *state.Manager, evaluator 
 				Restricted: !evaluator.Evaluate(0, node.ChannelID, authorization.ViewChannel).Allowed ||
 					!evaluator.Evaluate(0, node.ChannelID, authorization.Connect).Allowed,
 				CanConnect:      evaluator.Evaluate(actorID, node.ChannelID, authorization.Connect).Allowed,
-				CanManageAccess: evaluator.Evaluate(actorID, node.ChannelID, authorization.ManageChannelAccess).Allowed,
+				CanManageAccess: actorID > 0 && evaluator.Evaluate(actorID, node.ChannelID, authorization.ManageChannelAccess).Allowed,
 			}
 			if err := decorateMembers(node.Clients); err != nil {
 				return err

@@ -77,11 +77,11 @@ func TestRoleSnapshotDescribesChannelAccessForEachViewer(t *testing.T) {
 	sm.AddChannel(&state.Channel{ChannelID: 3, ParentID: 2, Name: "Inherited"})
 	sm.AddChannel(&state.Channel{ChannelID: 4, Name: "Hidden"})
 	policy := serverRoleFixture().policy
-	policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect}
+	policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect, authorization.ManageChannelAccess}
 	policy.Roles = append(policy.Roles, authorization.Role{ID: 20, Name: "Private role", Position: 1})
 	policy.Members = []authorization.RoleMember{{UserID: 1, RoleIDs: []int64{20}}}
 	policy.Channels = []authorization.ChannelPolicy{
-		{ChannelID: 1},
+		{ChannelID: 1, Overrides: []authorization.RoleOverride{{RoleID: 20, Capability: authorization.ManageChannelAccess, Effect: authorization.Deny}}},
 		{ChannelID: 2, Overrides: []authorization.RoleOverride{
 			{RoleID: 10, Capability: authorization.Connect, Effect: authorization.Deny},
 			{RoleID: 20, Capability: authorization.Connect, Effect: authorization.Allow},
