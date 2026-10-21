@@ -77,14 +77,15 @@ func TestRoleSnapshotDescribesChannelAccessForEachViewer(t *testing.T) {
 	sm.AddChannel(&state.Channel{ChannelID: 3, ParentID: 2, Name: "Inherited"})
 	sm.AddChannel(&state.Channel{ChannelID: 4, Name: "Hidden"})
 	policy := serverRoleFixture().policy
-	policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect}
+	policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect, authorization.ManageChannelAccess}
 	policy.Roles = append(policy.Roles, authorization.Role{ID: 20, Name: "Private role", Position: 1})
 	policy.Members = []authorization.RoleMember{{UserID: 1, RoleIDs: []int64{20}}}
 	policy.Channels = []authorization.ChannelPolicy{
-		{ChannelID: 1},
+		{ChannelID: 1, Overrides: []authorization.RoleOverride{{RoleID: 20, Capability: authorization.ManageChannelAccess, Effect: authorization.Deny}}},
 		{ChannelID: 2, Overrides: []authorization.RoleOverride{
 			{RoleID: 10, Capability: authorization.Connect, Effect: authorization.Deny},
 			{RoleID: 20, Capability: authorization.Connect, Effect: authorization.Allow},
+			{RoleID: 20, Capability: authorization.ManageChannelAccess, Effect: authorization.Allow},
 		}},
 		{ChannelID: 3, ParentID: 2, Synced: true},
 		{ChannelID: 4, Overrides: []authorization.RoleOverride{{RoleID: 10, Capability: authorization.ViewChannel, Effect: authorization.Deny}}},
@@ -108,6 +109,10 @@ func TestRoleSnapshotDescribesChannelAccessForEachViewer(t *testing.T) {
 			}
 			wantRestricted := channel.ChannelID != 1
 			wantConnect := channel.ChannelID == 1 || actorID != 0
+			wantManageAccess := actorID == 2 || (actorID == 1 && (channel.ChannelID == 2 || channel.ChannelID == 3))
+			if channel.Access.CanManageAccess != wantManageAccess {
+				t.Fatalf("actor %d channel %d: manage access = %v, want %v", actorID, channel.ChannelID, channel.Access.CanManageAccess, wantManageAccess)
+			}
 			if channel.Access.Restricted != wantRestricted || channel.Access.CanConnect != wantConnect {
 				t.Fatalf("actor %d channel %d: unexpected access %+v", actorID, channel.ChannelID, channel.Access)
 			}

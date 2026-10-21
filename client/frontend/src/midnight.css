@@ -333,3 +333,28 @@
 :root[data-theme="midnight"] #voice-playback-quality { flex: 0 1 auto; min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 :root[data-theme="midnight"] #sidebar > #voice-bar .voice-options-menu .voice-control { width: 100%; height: auto; justify-content: flex-start; }
 :root[data-theme="midnight"] #sidebar > #voice-bar .voice-options-menu .voice-control > span { display: inline; }
+
+/* Compact channel tools match the classic sidebar. */
+:root[data-theme="midnight"] #tree-filter-toggle { display: inline-flex; }
+:root[data-theme="midnight"] #sidebar:not(.tree-tools-open) #tree-tools { display: none; }
+:root[data-theme="midnight"] #sidebar.tree-tools-open #tree-filter-toggle { color: var(--accent); background: var(--accent-dim); }
+:root[data-theme="midnight"] .side-head { min-height: 22px; margin: 10px 8px 4px 14px; padding: 0; border: 0; }
+:root[data-theme="midnight"] .side-head .pane-head-btn { width: 22px; height: 22px; min-height: 22px; padding: 0; border: 0; background: transparent; color: var(--text-faint); }
+:root[data-theme="midnight"] .side-head .pane-head-btn .ui-icon { width: 14px; height: 14px; }
+:root[data-theme="midnight"] .side-head .pane-head-btn:hover,
+:root[data-theme="midnight"] .side-head .pane-head-btn:focus-visible { color: var(--accent); background: var(--bg-hover); }
+:root[data-theme="midnight"] .side-label { font: 600 .7857rem var(--font-body); letter-spacing: .05em; color: var(--text-faint); }
+:root[data-theme="midnight"] .side-section .side-head { margin-inline: 6px 0; }
+:root[data-theme="midnight"] #server-icon { width: 32px; height: 32px; flex: 0 0 32px; object-fit: cover; border: 1px solid var(--border); border-radius: 6px; }
+:root[data-theme="midnight"] .brand:has(#server-icon.hidden)::before { content: ""; display: block; width: 32px; height: 32px; flex: 0 0 32px; border: 1px solid var(--border); border-radius: 6px; background: url('/branding/logo.png') center / contain no-repeat; }
+
+/* The server/context line already names the active voice channel. */
+:root[data-theme="midnight"] #voice-channel-name { display: none; }
+
+/* Keep the server chevron unboxed and center toolbar icons in their row. */
+:root[data-theme="midnight"] #server-menu-btn { border: 0; background: transparent; box-shadow: none; }
+:root[data-theme="midnight"] #server-menu-btn:hover { background: var(--bg-hover); }
+:root[data-theme="midnight"] #center-tabs #tab-transfers { align-self: center; justify-content: center; width: 32px; height: 32px; padding: 0; margin: 0 0 0 auto; border: 0; border-radius: 6px; }
+:root[data-theme="midnight"] .msg.rich .msg-time { display: inline-flex; align-items: center; gap: 6px; align-self: center; line-height: 16px; }
+:root[data-theme="midnight"] .msg.rich .msg-lock { display: inline-flex; align-items: center; margin: 0; vertical-align: middle; line-height: 1; }
+:root[data-theme="midnight"] .msg.rich .msg-lock .ui-icon { display: block; width: 14px; height: 14px; }

@@ -1,5 +1,10 @@
 import { expect, test } from "./fixtures.js";
 
+async function openAdvancedChannelAccess(page) {
+    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await page.locator(".access-advanced > summary").click();
+}
+
 test("protected roles require an owner save before modal-confirmed deletion", async ({ page }) => {
     await page.evaluate(() => { window.__roleState.policy.roles.find(r => r.id === 20).deletion_protected = true; });
     await page.getByRole("button", { name: "Roles", exact: true }).click();
@@ -114,7 +119,7 @@ test("child access remains editable without disclosing parent policy", async ({ 
         state.effective_overrides = [{ role_id: 10, capability: "view_channel", effect: "deny" }];
         state.policy.channels[0].synced = true;
     });
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     await expect(page.getByRole("combobox", { name: "View channel", exact: true })).toHaveValue("deny");
     await page.getByRole("button", { name: "Customize this channel", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "View channel", exact: true })).toHaveValue("deny");
@@ -128,7 +133,7 @@ test("child access remains editable without disclosing parent policy", async ({ 
 
 test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
-        window.__noxa = { state: { serverGeneration: 1 } };
+        window.__noxa = { state: { serverGeneration: 1, channels: [], clients: [] } };
         window.__roleCalls = [];
         const permissions = [
             { key: "view_channel", group: "access", en: "View channel", de: "Kanal sehen", channel: true },
@@ -215,7 +220,7 @@ test.beforeEach(async ({ page }) => {
             app[name] = () => { throw new Error("unscoped native call"); };
         }
     });
-    await page.route("**/__role_editor_test__", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/src/style.css"></head><body><button id="launch">Roles</button><button id="channel">Channel access</button><script type="module">
+    await page.route("**/__role_editor_test__", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/src/style.css"><link rel="stylesheet" href="/src/midnight.css"></head><body><button id="launch">Roles</button><button id="channel">Channel access</button><script type="module">
         import { openRolesManager } from '/src/roles-ui.js';
         import { openChannelAccess } from '/src/channel-access-ui.js';
         import { initModalSystem } from '/src/modal.js';
@@ -278,7 +283,7 @@ test("parent draft previews a synced descendant without enumerating members", as
         window.__roleState.impact_channel_ids = [4];
         window.__noxa.state.channels = [{ ChannelID: 4, Name: "Design" }];
     });
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     await page.getByRole("button", { name: "Private", exact: true }).click();
     const scope = page.getByRole("combobox", { name: "Preview channel", exact: true });
     await expect(scope.getByRole("option")).toHaveCount(2);
@@ -300,7 +305,7 @@ test("parent draft previews a synced descendant without enumerating members", as
 
 test("late scoped preview cannot authorize a different descendant", async ({ page }) => {
     await page.evaluate(() => { window.__roleState.impact_channel_ids = [4, 5]; });
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     await page.getByRole("button", { name: "Private", exact: true }).click();
     const scope = page.getByRole("combobox", { name: "Preview channel", exact: true });
     await scope.selectOption("4");
@@ -321,7 +326,7 @@ test("scoped preview rejects a response for the edited parent", async ({ page })
         window.__roleState.impact_channel_ids = [4];
         window.__impactResponse = { revision: 1, channel_id: 2, members: [0, 1, 2, 3].map(user_id => ({ user_id, changes: [] })) };
     });
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     await page.getByRole("button", { name: "Private", exact: true }).click();
     await page.getByRole("combobox", { name: "Preview channel", exact: true }).selectOption("4");
     await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
@@ -331,7 +336,7 @@ test("scoped preview rejects a response for the edited parent", async ({ page })
 
 test("changing override subject cannot retain a descendant review after panel recreation", async ({ page }) => {
     await page.evaluate(() => { window.__roleState.impact_channel_ids = [4]; });
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     await page.getByRole("button", { name: "Private", exact: true }).click();
     const scope = page.getByRole("combobox", { name: "Preview channel", exact: true });
     await scope.selectOption("4");
@@ -363,7 +368,7 @@ test("member batch stops on native activation between acknowledgements", async (
 });
 
 test("channel access save and preview stay bound to the opening tab", async ({ page }) => {
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     await page.getByRole("button", { name: "Private", exact: true }).click();
     await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
@@ -493,7 +498,7 @@ test("member batch shows committed and failed results separately", async ({ page
 });
 
 test("channel access confirms saving and retains success until the next edit", async ({ page }, testInfo) => {
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     await page.getByRole("button", { name: "Private", exact: true }).click();
     await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await page.evaluate(() => { window.__roleGate = new Promise(resolve => { window.__finishRole = resolve; }); });
@@ -509,7 +514,7 @@ test("channel access confirms saving and retains success until the next edit", a
 });
 
 test("channel access distinguishes an acknowledged save from a failed reload", async ({ page }) => {
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     await page.getByRole("button", { name: "Private", exact: true }).click();
     await page.getByRole("button", { name: "Preview role changes", exact: true }).click();
     await page.evaluate(() => { window.go.main.App.RoleStateForTab = async () => { throw new Error("offline"); }; });
@@ -520,7 +525,7 @@ test("channel access distinguishes an acknowledged save from a failed reload", a
 });
 
 test("channel presets save ordinary overrides and access check stays read-only", async ({ page }) => {
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     await page.getByRole("button", { name: "Private", exact: true }).click();
     await expect(page.getByRole("combobox", { name: "View channel", exact: true })).toHaveValue("deny");
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
@@ -538,7 +543,7 @@ test("channel presets save ordinary overrides and access check stays read-only",
 });
 
 test("sync confirmation replaces custom policy and Customize copies parent overrides", async ({ page }) => {
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     await page.getByRole("button", { name: "Public", exact: true }).click();
     await page.getByRole("button", { name: "Sync with parent", exact: true }).click();
     await expect(page.getByRole("dialog").last()).toContainText("@everyone · View channel: Allow → Deny");
@@ -566,7 +571,7 @@ test("member selection retains keyboard focus", async ({ page }) => {
 });
 
 test("customizing an unsaved sync copies the displayed parent rules", async ({ page }) => {
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     await page.getByRole("button", { name: "Public", exact: true }).click();
     await page.getByRole("button", { name: "Sync with parent", exact: true }).click();
     await page.getByRole("button", { name: "Apply", exact: true }).click();
@@ -576,7 +581,7 @@ test("customizing an unsaved sync copies the displayed parent rules", async ({ p
 });
 
 test("read-only access picker includes protected members and explains hierarchy and prerequisites", async ({ page }) => {
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     const panel = page.locator(".access-check");
     await panel.getByRole("searchbox", { name: "Find a member to check", exact: true }).fill("Owner");
     await panel.getByRole("searchbox").press("Tab");
@@ -591,7 +596,7 @@ test("read-only access picker includes protected members and explains hierarchy 
 });
 
 test("access preview discards replies after selecting a different member and rejects stale revisions", async ({ page }) => {
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     const panel = page.locator(".access-check");
     await panel.getByRole("searchbox").fill("Alice");
     await panel.getByRole("searchbox").press("Tab");
@@ -614,7 +619,7 @@ test("German access preview supports keyboard checking in a compact dialog", asy
         window.setTestLanguage("de");
         window.__checkResponse = { decision: { allowed: true, reason: "role_grant", role_ids: [20], revision: 1 }, can_manage_member: true };
     });
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     const panel = page.locator(".access-check");
     await panel.getByRole("combobox", { name: "Zu prüfendes Mitglied", exact: true }).focus();
     await page.keyboard.press("Tab");
@@ -704,7 +709,7 @@ for (const reason of ["actor", "target", "server switch"]) test(`member context 
 
 test.describe("draft role and member impact", () => {
     test.beforeEach(async ({ page }) => {
-        await page.getByRole("button", { name: "Channel access", exact: true }).click();
+        await openAdvancedChannelAccess(page);
         await page.getByRole("button", { name: "Private", exact: true }).click();
     });
     test("shows roles without enumerating members, then invalidates on edit", async ({ page }) => {
@@ -799,7 +804,7 @@ test.describe("draft role and member impact", () => {
 test("German draft impact fits a compact dialog and supports keyboard review", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 800 });
     await page.evaluate(() => { window.setTestLanguage("de"); window.__roleState.impact_channel_ids = [4]; });
-    await page.getByRole("button", { name: "Channel access", exact: true }).click();
+    await openAdvancedChannelAccess(page);
     await page.getByRole("button", { name: "Privat", exact: true }).click();
     const scope = page.getByRole("combobox", { name: "Kanal für die Vorschau", exact: true });
     await scope.focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");

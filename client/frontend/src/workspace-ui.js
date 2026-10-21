@@ -46,6 +46,13 @@ function voiceState(client) {
     return "idle";
 }
 
+export function canEditChannelPermissions() {
+    const state = V().state;
+    const channelID = window.__noxaChat?.activeChannelID?.();
+    return state.authorizationModel === "roles-v1" && !!state.myClientID &&
+        state.channels.some(channel => channel.ChannelID === channelID && channel.Access?.can_manage_access === true);
+}
+
 export function renderWorkspace() {
     const state = V().state;
     const members = state.myChannelID ? state.clients.filter((c) => c.channel_id === state.myChannelID) : [];
@@ -72,7 +79,8 @@ export function renderWorkspace() {
     $("voice-deafen").setAttribute("aria-label", state.deafened ? t("workspace.undeafen") : t("workspace.deafen"));
     labelButton($("voice-deafen"), state.deafened ? "headphonesOff" : "headphones", state.deafened ? t("workspace.undeafen") : t("workspace.deafen"));
     $("ptt-btn").classList.toggle("hidden", (state.settings?.activation_mode || "ptt") !== "ptt");
-    $("tab-permissions").disabled = !(window.__noxaChat?.activeChannelID?.() ?? state.myChannelID);
+    $("tab-permissions").hidden = !canEditChannelPermissions();
+    $("tab-permissions").disabled = !canEditChannelPermissions();
     renderVoiceHints();
     renderRoomOverview({ avatarColor, voiceState });
     for (const element of document.querySelectorAll("#channel-tree .avatar[data-uid]")) {
@@ -195,9 +203,9 @@ export function initWorkspace() {
     $("tab-permissions").onclick = async () => {
         const state = V().state, generation = state.serverGeneration;
         const channelID = window.__noxaChat?.activeChannelID?.() ?? state.myChannelID;
-        if (!channelID) return;
+        if (!canEditChannelPermissions()) return;
         const { openChannelAccess } = await import("./channel-access-ui.js");
-        if (generation === state.serverGeneration) openChannelAccess(channelID);
+        if (generation === state.serverGeneration && channelID === window.__noxaChat?.activeChannelID?.() && canEditChannelPermissions()) openChannelAccess(channelID);
     };
     $("compact-exit").onclick = () => V().toggleCompact();
     const icons = {
@@ -356,7 +364,7 @@ function translateWorkspace() {
     $("ptt-btn").title = t("workspace.ptt");
     $("chat-text").setAttribute("aria-label", t("workspace.message"));
     labelButton($("voice-settings"), "settings", t("workspace.audioPreferences"));
-    labelButton($("voice-options").querySelector("summary"), "effects", t("context.voiceMore"));
+    labelButton($("voice-options").querySelector("summary"), "settings", t("context.voiceMore"));
     $("voice-options").querySelector("summary").setAttribute("aria-label", t("context.voiceMoreLabel"));
     labelButton($("voice-disconnect"), "disconnect", t("workspace.disconnect"));
     $("voice-disconnect").setAttribute("aria-label", t("workspace.disconnect"));

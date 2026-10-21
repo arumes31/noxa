@@ -51,6 +51,7 @@ export function openChannelAccess(channelID) {
         impactView?.update();
     };
     const render = () => {
+        const advancedOpen = content.querySelector(".access-advanced")?.open ?? false;
         content.replaceChildren();
         if (!snapshot) return;
         const channel = window.__noxa.state.channels.find(entry => entry.ChannelID === channelID);
@@ -151,7 +152,7 @@ export function openChannelAccess(channelID) {
             };
             row.append(select); form.append(row);
         }
-        const advanced = roleElement("details", "access-advanced"); advanced.open = false;
+        const advanced = roleElement("details", "access-advanced"); advanced.open = advancedOpen;
         advanced.append(roleElement("summary", "", t("midnight.permissionAdvanced")));
         if (!draft.synced) advanced.append(syncRow);
         const maintenance = roleElement("div", "roles-header"); maintenance.append(refreshButton, discard);
