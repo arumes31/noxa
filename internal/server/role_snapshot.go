@@ -68,6 +68,14 @@ func buildRoleSnapshotContext(ctx context.Context, sm *state.Manager, evaluator 
 				CanConnect:      evaluator.Evaluate(actorID, node.ChannelID, authorization.Connect).Allowed,
 				CanManageAccess: actorID > 0 && evaluator.Evaluate(actorID, node.ChannelID, authorization.ManageChannelAccess).Allowed,
 			}
+			// Count only the presence already visible to this snapshot recipient.
+			for _, member := range node.Clients {
+				if member.UserID > 0 {
+					node.Access.MemberCount++
+				} else {
+					node.Access.GuestCount++
+				}
+			}
 			if err := decorateMembers(node.Clients); err != nil {
 				return err
 			}
