@@ -107,6 +107,14 @@ test.describe("Midnight workspace concepts", () => {
     });
 
     test("compact toolbar, media popup and conditional hang-up bar", async ({ page }) => {
+        await expect(page.locator("#tree-tools")).toBeHidden();
+        await page.locator("#tree-filter-toggle").click();
+        await expect(page.locator("#tree-filter")).toBeFocused();
+        await page.locator("#tree-filter").fill("Lobby");
+        await expect(page.locator('#channel-tree .channel[data-chid="1"]')).toHaveCount(0);
+        await page.locator("#tree-filter").press("Escape");
+        await page.locator("#tree-filter").press("Escape");
+        await expect(page.locator("#tree-tools")).toBeHidden();
         const menu = await page.locator("#menubar").boundingBox(), tabs = await page.locator("#server-tabs").boundingBox();
         expect(Math.abs(menu.y - tabs.y)).toBeLessThan(3); expect(tabs.x).toBeGreaterThanOrEqual(menu.x + menu.width - 1);
         await expect(page.locator("#message-tools-actions").getByRole("button")).toHaveCount(2);
