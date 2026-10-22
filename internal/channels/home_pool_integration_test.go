@@ -82,7 +82,7 @@ func TestPublicPoolWorkerRecoversCommittedPolicyAndKeepsOccupiedRooms(t *testing
 	m.requestPublicPool()
 	wait := func(check func() bool) {
 		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(2 * publicPoolMinInterval)
 		for time.Now().Before(deadline) {
 			if check() {
 				return
@@ -109,10 +109,44 @@ func TestPublicPoolWorkerRecoversCommittedPolicyAndKeepsOccupiedRooms(t *testing
 	if c, _ := sm.GetClient("member"); c.ChannelID != room {
 		t.Fatal("occupied membership changed")
 	}
+	before, err := s.RolePolicy(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A burst of occupancy changes must not publish one policy per toggle.
+	// The final leave remains pending until the global maintenance floor.
+	started := time.Now()
+	for range 30 {
+		if _, err := m.LeaveClient("member"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m.MoveClient("member", room); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := m.LeaveClient("member"); err != nil {
 		t.Fatal(err)
 	}
+	time.Sleep(100 * time.Millisecond)
+	afterBurst, err := s.RolePolicy(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterBurst.Revision != before.Revision || count() != 3 {
+		t.Fatal("membership churn bypassed the global reconciliation interval")
+	}
 	wait(func() bool { return count() == 2 })
+	if time.Since(started) < publicPoolMinInterval-200*time.Millisecond {
+		t.Fatal("cleanup ran before the cooldown")
+	}
+	after, err := s.RolePolicy(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != before.Revision+1 {
+		t.Fatalf("burst made %d policy writes", after.Revision-before.Revision)
+	}
+
 	if err := a.WithPolicy(t.Context(), func(*authorization.RoleEvaluator) error { return nil }); err != nil {
 		t.Fatal(err)
 	}

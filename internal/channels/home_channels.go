@@ -17,12 +17,17 @@ func (m *ChannelManager) requestPublicPool() {
 	}
 }
 
+// publicPoolMinInterval bounds global policy publications and database writes
+// even when one member continuously joins and leaves a managed room.
+const publicPoolMinInterval = 5 * time.Second
+
 // MaintainPublicChannels coalesces membership changes. Idle ticks inspect RAM
 // only; the database is touched solely when the pool actually needs resizing.
 func (m *ChannelManager) MaintainPublicChannels(ctx context.Context, authority *authorization.Authority) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	recoverPolicy := false
+	var nextReconcile time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -30,6 +35,23 @@ func (m *ChannelManager) MaintainPublicChannels(ctx context.Context, authority *
 		case <-m.publicPoolWake:
 		case <-ticker.C:
 		}
+		if !recoverPolicy && !m.publicPoolNeedsWork() {
+			continue
+		}
+		if delay := time.Until(nextReconcile); delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+		// Churn that settles during the cooldown needs no storage work.
+		if !recoverPolicy && !m.publicPoolNeedsWork() {
+			continue
+		}
+		nextReconcile = time.Now().Add(publicPoolMinInterval)
 		if recoverPolicy {
 			recovery, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err := authority.Reload(recovery)
