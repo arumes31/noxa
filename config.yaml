@@ -9,10 +9,12 @@ client_min_version: "0.0.0"
 
 # SECURITY: this sample is a development starting point, not a production
 # profile. Before production set dev_mode: false, choose a strong non-empty
-# server_password, replace the development database credentials, and keep TLS
-# enabled for both control and file-transfer listeners.
+# server_password (or set allow_anonymous: true for a deliberately open server),
+# replace the development database credentials, set redis_password for a remote
+# Redis, and keep TLS enabled for both control and file-transfer listeners.
 server_name: noXa
 server_password: ""  # DEVELOPMENT ONLY: production action: set a strong non-empty password
+allow_anonymous: false  # production refuses an empty server_password unless this is true
 log_level: info        # debug | info | warn | error
 dev_mode: true        # DEVELOPMENT ONLY: production action: set false (JSON logging and production validation)
 
@@ -21,7 +23,11 @@ udp_addr: ":12334"    # UDP keepalive/media support
 udp_rate_limit_pps: 200   # per-source-IP UDP rate limit (pkt/s); 0 = disabled
 udp_rate_burst: 400       # per-source-IP UDP burst allowance
 grpc_addr: "127.0.0.1:12338"   # plaintext gRPC is restricted to loopback
-health_addr: ":12337"  # /healthz and /readyz; /dl bearer links are plaintext HTTP: bind loopback or proxy HTTPS
+health_addr: ":12337"  # /healthz, /readyz, /events, /hooks and /dl links
+health_tls_enabled: false  # serve health_addr over TLS with the control certificate (requires tls_enabled)
+# Production refuses /events credentials and /hooks secrets over plaintext from
+# remote peers (loopback and X-Forwarded-Proto: https proxies pass); true accepts the risk.
+health_allow_plaintext_credentials: false
 metrics_allow_remote: false  # explicit opt-in; exposes operational metrics
 pprof_enabled: false         # explicit opt-in; exposes profiling only to direct loopback callers
 shutdown_timeout: 30s        # total grace period shared by every service during orderly shutdown

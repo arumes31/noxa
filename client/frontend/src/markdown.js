@@ -112,8 +112,11 @@ export function renderMarkdown(text) {
     t = t.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
     t = t.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;!?]|$)/g, "$1<em>$2</em>");
     // Images (channel descriptions; 113). http(s) only — no javascript:.
-    t = t.replace(/!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)/g,
-        `<img class="md-img" alt="$1" src="$2">`);
+    // Remote images are never fetched on render: a click-to-load placeholder
+    // keeps senders from learning each reader's IP address and read time.
+    // The markup is stashed so later passes never re-scan its attributes.
+    t = t.replace(/!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)/g, (_m, alt, url) =>
+        push(`<button type="button" class="md-img-load" data-img="${imageID(url)}" data-alt="${alt}" title="${url}">🖼 ${alt || "image"}</button>`));
     // Autolink URLs (93): tooltip carries the full URL.
     t = t.replace(/(?<![="'\w])(https?:\/\/[^\s<>"'\])}]+)/g,
         (u) => `<a href="#" class="md-link" data-url="${u}" title="${u}">${u}</a>`);
@@ -125,4 +128,53 @@ export function renderMarkdown(text) {
     // Restore stashed code.
     t = t.replace(/\u0001(\d+)\u0002/g, (_m, i) => stash[Number(i)]);
     return t;
+}
+
+// Image URLs validated by renderMarkdown, keyed by the opaque id a placeholder
+// carries. The source is never read back from DOM attributes, so nothing in
+// the page can make a placeholder fetch an unvalidated URL. One entry exists
+// per distinct (unescaped) URL.
+const imageURLs = new Map();
+const imageIDs = new Map();
+
+function imageID(escapedURL) {
+    const url = escapedURL.replace(/&(lt|gt|quot|#39);/g, (_m, name) =>
+        ({ lt: "<", gt: ">", quot: '"', "#39": "'" }[name])).replace(/&amp;/g, "&");
+    let id = imageIDs.get(url);
+    if (id === undefined) {
+        id = String(imageIDs.size + 1);
+        imageIDs.set(url, id);
+        imageURLs.set(id, url);
+    }
+    return id;
+}
+
+// loadImagePlaceholder swaps a click-to-load placeholder for the remote image
+// it names. Only http(s) URLs registered while rendering are ever fetched, and
+// no referrer is sent to the image host.
+export function loadImagePlaceholder(button) {
+    const src = imageURLs.get(button?.getAttribute?.("data-img") || "") || "";
+    if (!/^https?:\/\//i.test(src)) return null;
+    const img = button.ownerDocument.createElement("img");
+    img.className = "md-img";
+    img.alt = button.getAttribute("data-alt") || "";
+    img.referrerPolicy = "no-referrer";
+    img.decoding = "async";
+    img.src = src;
+    button.replaceWith(img);
+    return img;
+}
+
+// bindImagePlaceholders installs one delegated click handler that loads a
+// placeholder's image only after the reader asks for it (idempotent per root).
+export function bindImagePlaceholders(root) {
+    if (!root?.addEventListener || root.__noxaImagePlaceholders) return;
+    root.__noxaImagePlaceholders = true;
+    root.addEventListener("click", (event) => {
+        const button = event.target?.closest?.(".md-img-load");
+        if (!button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        loadImagePlaceholder(button);
+    }, true);
 }

@@ -28,6 +28,10 @@ const minRegistrationPasswordBytes = 12
 // given unique ID exists in the database.
 var ErrUserNotFound = errors.New("user not found")
 
+// ErrPublicKeyInUse is returned by BindPublicKey when the identity key is
+// already bound to, or derives the unique ID of, a different account.
+var ErrPublicKeyInUse = errors.New("public key belongs to another account")
+
 // AuthService provides user registration and authentication (password and
 // challenge-response) backed by the PostgreSQL store. Passwords are verified
 // on every call: there is deliberately NO positive-result cache — a cache
@@ -299,27 +303,64 @@ func (a *AuthService) passwordVerifier() func(password, encodedHash string) erro
 // LookupUserByPublicKey returns the user whose stored public key matches, or
 // ErrUserNotFound. Used to resolve accounts whose identity key was bound via
 // a nickname login (the account's unique ID stays canonical).
+// A key held by more than one account is refused rather than resolved to
+// whichever row the database returns first.
 func (a *AuthService) LookupUserByPublicKey(ctx context.Context, publicKey string) (*User, error) {
-	var u User
-	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot FROM users WHERE public_key = $1`
-	err := a.store.DB().QueryRowContext(ctx, q, publicKey).
-		Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsBot)
+	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot FROM users WHERE public_key = $1 LIMIT 2`
+	rows, err := a.store.DB().QueryContext(ctx, q, publicKey)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrUserNotFound
-		}
 		return nil, fmt.Errorf("querying user by public key: %w", err)
 	}
-	return &u, nil
+	defer func() { _ = rows.Close() }()
+	var found []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsBot); err != nil {
+			return nil, fmt.Errorf("scanning user by public key: %w", err)
+		}
+		found = append(found, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("querying user by public key: %w", err)
+	}
+	switch len(found) {
+	case 0:
+		return nil, ErrUserNotFound
+	case 1:
+		return &found[0], nil
+	default:
+		return nil, errors.New("public key is bound to more than one account")
+	}
 }
 
 // BindPublicKey records a client's identity public key on an account (after
 // a successful nickname login), enabling future challenge-response logins
-// with that key.
+// with that key. A key already bound to another account, or one whose derived
+// unique ID is another account's, is refused with ErrPublicKeyInUse so a
+// password login cannot claim someone else's identity key.
 func (a *AuthService) BindPublicKey(ctx context.Context, userID int64, publicKey string) error {
-	const q = `UPDATE users SET public_key = $2 WHERE id = $1`
-	if _, err := a.store.DB().ExecContext(ctx, q, userID, publicKey); err != nil {
+	derivedUniqueID, err := UniqueIDFromPublicKey(publicKey)
+	if err != nil {
 		return fmt.Errorf("binding public key: %w", err)
+	}
+	const q = `UPDATE users SET public_key = $2
+		WHERE id = $1 AND NOT EXISTS (
+			SELECT 1 FROM users other
+			WHERE other.id <> $1 AND (other.public_key = $2 OR other.unique_id = $3)
+		)`
+	result, err := a.store.DB().ExecContext(ctx, q, userID, publicKey, derivedUniqueID)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrPublicKeyInUse
+		}
+		return fmt.Errorf("binding public key: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("binding public key: %w", err)
+	}
+	if affected == 0 {
+		return ErrPublicKeyInUse
 	}
 	return nil
 }

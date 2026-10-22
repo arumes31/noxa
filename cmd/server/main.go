@@ -676,6 +676,17 @@ func run() (retErr error) {
 		}
 		return readiness(ctx)
 	})
+	if cfg.HealthTLSEnabled {
+		// Validation guarantees tls_enabled, so tlsCert holds the control
+		// certificate and /dl links stay under the client's existing pin.
+		healthServer.SetTLSCertificate(tlsCert)
+	}
+	// Integration passwords (/events) and webhook secrets (/hooks) must not
+	// cross the network in plaintext in production unless the operator opts in.
+	credentialTransport := func(h http.Handler) http.Handler { return h }
+	if !cfg.DevMode && !cfg.HealthTLSEnabled && !cfg.HealthAllowPlaintextCredentials {
+		credentialTransport = health.RequireSecureCredentials
+	}
 	if cfg.MetricsAllowRemote {
 		healthServer.HandleGET("/metrics", m.Handler())
 	} else {
@@ -789,8 +800,8 @@ func run() (retErr error) {
 	queryServer.SetMetrics(m)
 	// (231) the event stream for bots, on the health listener next to
 	// /metrics. Integration roles govern the filtered stream.
-	healthServer.Handle("/events", eventbus.HandlerWithRoleBackend(events, qBackend, logger, loginLimiter, m))
-	healthServer.Handle("/hooks/", tcpServer.IncomingWebhookHandler())
+	healthServer.Handle("/events", credentialTransport(eventbus.HandlerWithRoleBackend(events, qBackend, logger, loginLimiter, m)))
+	healthServer.Handle("/hooks/", credentialTransport(tcpServer.IncomingWebhookHandler()))
 	registerEventBusMetrics(m.Registry(), events, logger)
 
 	// (232) the gRPC API on the reserved port shares the roles-v1 backend.

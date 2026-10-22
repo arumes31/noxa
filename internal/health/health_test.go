@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -255,5 +256,52 @@ func TestSchemaVersionHandlerTreatsNilProbeAsUnavailable(t *testing.T) {
 	}
 	if logs.Len() != 1 || logs.All()[0].Level != zap.WarnLevel {
 		t.Fatalf("nil-probe logs = %+v, want one warning", logs.All())
+	}
+}
+
+func TestRequireSecureCredentials(t *testing.T) {
+	handler := RequireSecureCredentials(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, test := range []struct {
+		name      string
+		remote    string
+		tls       bool
+		forwarded string
+		want      int
+	}{
+		{name: "remote plaintext", remote: "198.51.100.10:4000", want: http.StatusForbidden},
+		{name: "remote forged http proto", remote: "198.51.100.10:4000", forwarded: "http", want: http.StatusForbidden},
+		{name: "remote TLS", remote: "198.51.100.10:4000", tls: true, want: http.StatusNoContent},
+		{name: "HTTPS reverse proxy", remote: "172.18.0.1:4000", forwarded: "https", want: http.StatusNoContent},
+		{name: "loopback", remote: "127.0.0.1:4000", want: http.StatusNoContent},
+		{name: "IPv6 loopback", remote: "[::1]:4000", want: http.StatusNoContent},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/hooks/1", nil)
+			request.RemoteAddr = test.remote
+			if test.tls {
+				request.TLS = &tls.ConnectionState{}
+			}
+			if test.forwarded != "" {
+				request.Header.Set("X-Forwarded-Proto", test.forwarded)
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != test.want {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.want)
+			}
+		})
+	}
+}
+
+func TestSetTLSCertificateEnablesHTTPS(t *testing.T) {
+	srv := New("127.0.0.1:0", nil, nil)
+	if srv.srv.TLSConfig != nil {
+		t.Fatal("new health server unexpectedly has TLS configured")
+	}
+	srv.SetTLSCertificate(tls.Certificate{})
+	if srv.srv.TLSConfig == nil || len(srv.srv.TLSConfig.Certificates) != 1 || srv.srv.TLSConfig.MinVersion < tls.VersionTLS12 {
+		t.Fatalf("TLSConfig = %+v", srv.srv.TLSConfig)
 	}
 }

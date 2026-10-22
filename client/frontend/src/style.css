@@ -1122,6 +1122,7 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
 .md-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); cursor: pointer; }
 .md-link:hover { border-bottom-style: solid; }
 .md-img { max-width: 320px; max-height: 200px; border-radius: 8px; display: block; margin: 4px 0; }
+.md-img-load { display: inline-flex; align-items: center; gap: 4px; margin: 4px 0; padding: 4px 10px; border: 1px dashed var(--accent); border-radius: 8px; background: transparent; color: var(--accent); font: inherit; cursor: pointer; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .md-table-wrap { overflow-x: auto; margin: 5px 0; }
 .md-table { border-collapse: collapse; font-size: .93em; }
 .md-table th, .md-table td { border: 1px solid var(--border); padding: 3px 8px; text-align: left; }

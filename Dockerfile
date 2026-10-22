@@ -110,9 +110,11 @@ USER 10001:10001
 #   12339/tcp  - ServerQuery over SSH (disabled by default)
 EXPOSE 12333/tcp 12334/udp 12335/tcp 12336/tcp 12337/tcp 12338/tcp 12339/tcp
 
-# Liveness probe against the health endpoint.
+# Liveness probe against the health endpoint. The HTTPS retry covers
+# health_tls_enabled: the self-signed control certificate cannot be verified
+# here, and a loopback probe needs no peer authentication.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["wget", "-qO-", "http://127.0.0.1:12337/healthz"]
+    CMD ["/bin/sh", "-c", "wget -qO- http://127.0.0.1:12337/healthz || wget -qO- --no-check-certificate https://127.0.0.1:12337/healthz"]
 
 STOPSIGNAL SIGTERM
 

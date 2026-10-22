@@ -6,11 +6,13 @@ package health
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -106,6 +108,15 @@ func (s *Server) HandleLocalGET(pattern string, h http.Handler) {
 	s.Handle(pattern, localGET(h))
 }
 
+// SetTLSCertificate makes Start serve HTTPS with cert. The server passes the
+// control certificate so clients can reuse the fingerprint they pinned.
+func (s *Server) SetTLSCertificate(cert tls.Certificate) {
+	s.srv.TLSConfig = &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}
+}
+
 // Handler returns the server's HTTP handler, primarily for tests.
 func (s *Server) Handler() http.Handler {
 	return s.srv.Handler
@@ -114,8 +125,14 @@ func (s *Server) Handler() http.Handler {
 // Start serves HTTP until Shutdown is called or the listener fails. A clean
 // shutdown returns nil.
 func (s *Server) Start() error {
-	s.logger.Info("health listener started", zap.String("addr", s.srv.Addr))
-	if err := s.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	s.logger.Info("health listener started", zap.String("addr", s.srv.Addr), zap.Bool("tls", s.srv.TLSConfig != nil))
+	var err error
+	if s.srv.TLSConfig != nil {
+		err = s.srv.ListenAndServeTLS("", "")
+	} else {
+		err = s.srv.ListenAndServe()
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
@@ -182,6 +199,21 @@ func localGET(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	}))
+}
+
+// RequireSecureCredentials refuses requests that would carry credentials
+// over plaintext HTTP from a remote peer. TLS connections, loopback peers and
+// requests an HTTPS reverse proxy marks with X-Forwarded-Proto: https pass.
+// The header is trusted only to avoid refusing proxied clients: a peer that
+// forges it exposes nothing but its own credentials.
+func RequireSecureCredentials(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS == nil && !remoteIsLoopback(r.RemoteAddr) && !strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+			http.Error(w, "credentials require HTTPS", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func remoteIsLoopback(remoteAddr string) bool {

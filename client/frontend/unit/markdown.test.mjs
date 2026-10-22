@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { EMOJI, escapeHTML, renderMarkdown } from "../src/markdown.js";
+import { EMOJI, bindImagePlaceholders, escapeHTML, loadImagePlaceholder, renderMarkdown } from "../src/markdown.js";
 
 describe("escapeHTML", () => {
     it("escapes every HTML-significant character and coerces values", () => {
@@ -41,7 +41,8 @@ describe("renderMarkdown", () => {
 
     it("renders safe images and autolinks with escaped query separators", () => {
         const html = renderMarkdown("![diagram](https://example.test/a.png) https://example.test/?a=1&b=2");
-        assert.match(html, /<img class="md-img" alt="diagram" src="https:\/\/example\.test\/a\.png">/);
+        assert.doesNotMatch(html, /<img/);
+        assert.match(html, /<button type="button" class="md-img-load" data-img="\d+" data-alt="diagram" title="https:\/\/example\.test\/a\.png"/);
         assert.match(html, /class="md-link"/);
         assert.match(html, /data-url="https:\/\/example\.test\/\?a=1&amp;b=2"/);
     });
@@ -89,5 +90,69 @@ describe("renderMarkdown", () => {
             renderMarkdown("```txt\nhello\n"),
             '<pre class="md-pre language-txt"><code>hello</code></pre>',
         );
+    });
+
+    it("never autolinks inside image placeholder attributes", () => {
+        const html = renderMarkdown('![see https://evil.test/x](https://example.test/a.png)');
+        assert.doesNotMatch(html, /md-link/);
+        assert.match(html, /data-alt="see https:\/\/evil\.test\/x"/);
+        assert.equal((html.match(/"/g) || []).length % 2, 0);
+    });
+});
+
+function fakePlaceholder(attributes) {
+    const created = [];
+    const button = {
+        replaced: null,
+        getAttribute: (name) => attributes[name] ?? null,
+        replaceWith(node) { this.replaced = node; },
+        ownerDocument: { createElement: (tag) => { const node = { tag }; created.push(node); return node; } },
+    };
+    return { button, created };
+}
+
+describe("image placeholders", () => {
+    it("loads only http(s) images, without a referrer, when asked", () => {
+        const id = renderMarkdown("![diagram](https://example.test/a.png?x=1&y=2)").match(/data-img="(\d+)"/)[1];
+        const { button, created } = fakePlaceholder({ "data-img": id, "data-alt": "diagram" });
+        const img = loadImagePlaceholder(button);
+        assert.equal(created.length, 1);
+        assert.equal(button.replaced, img);
+        assert.equal(img.tag, "img");
+        assert.equal(img.className, "md-img");
+        assert.equal(img.src, "https://example.test/a.png?x=1&y=2");
+        assert.equal(img.alt, "diagram");
+        assert.equal(img.referrerPolicy, "no-referrer");
+
+        const unsafe = fakePlaceholder({ "data-src": "javascript:alert(1)", "data-img": "999999" });
+        assert.equal(loadImagePlaceholder(unsafe.button), null);
+        assert.equal(unsafe.created.length, 0);
+        assert.equal(loadImagePlaceholder(null), null);
+    });
+
+    it("binds one delegated click handler per root", () => {
+        const listeners = [];
+        const root = { addEventListener: (type, fn, capture) => listeners.push({ type, fn, capture }) };
+        bindImagePlaceholders(root);
+        bindImagePlaceholders(root);
+        bindImagePlaceholders(null);
+        assert.equal(listeners.length, 1);
+        assert.equal(listeners[0].type, "click");
+
+        const bid = renderMarkdown("![](https://example.test/b.png)").match(/data-img="(\d+)"/)[1];
+        const { button } = fakePlaceholder({ "data-img": bid });
+        let prevented = 0;
+        let stopped = 0;
+        const click = (target) => listeners[0].fn({
+            target: { closest: () => target },
+            preventDefault: () => { prevented++; },
+            stopPropagation: () => { stopped++; },
+        });
+        click(null);
+        assert.equal(prevented, 0);
+        click(button);
+        assert.equal(prevented, 1);
+        assert.equal(stopped, 1);
+        assert.equal(button.replaced.src, "https://example.test/b.png");
     });
 });

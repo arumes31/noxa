@@ -15,6 +15,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("NOXA_SERVER_NAME", "env-server")
 	t.Setenv("NOXA_LOG_LEVEL", "warn")
 	t.Setenv("NOXA_DEV_MODE", "false")
+	t.Setenv("NOXA_SERVER_PASSWORD", "env-server-password")
 	t.Setenv("NOXA_TCP_ADDR", ":11111")
 	t.Setenv("NOXA_UDP_ADDR", ":22222")
 	t.Setenv("NOXA_GRPC_ADDR", "127.0.0.1:33333")
@@ -214,6 +215,7 @@ tcp_addr: ":20011"
 udp_addr: ":19987"
 max_clients: 256
 dev_mode: false
+server_password: "yaml-server-password"
 log_level: "error"
 database_url: "postgres://app:secret@db:5432/noxa?sslmode=require"
 webrtc:
@@ -486,6 +488,7 @@ func TestValidateRecordingFailsClosedWithoutWindowsACLAcknowledgement(t *testing
 func TestValidateProductionDatabaseTLSModes(t *testing.T) {
 	base := loadDefaultConfig(t)
 	base.DevMode = false
+	base.ServerPassword = "server-password"
 	for _, mode := range []string{"require", "verify-ca", "verify-full"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := cloneConfig(base)
@@ -567,6 +570,87 @@ func TestWarningsCoverProductionCredentialsAndRemoteExposure(t *testing.T) {
 	cfg.HealthAddr = "[::1]:12337"
 	warnings = strings.Join(cfg.Warnings(), "\n")
 	for _, text := range []string{"turn.secret is shorter", "redis_password", "health_addr is reachable"} {
+		if strings.Contains(warnings, text) {
+			t.Errorf("Warnings() = %q, did not want %q", warnings, text)
+		}
+	}
+}
+
+func TestValidateProductionRequiresServerPasswordOrAnonymousOptIn(t *testing.T) {
+	cfg := loadDefaultConfig(t)
+	cfg.DevMode = false
+	cfg.DatabaseURL = "postgres://app:secret@db:5432/noxa?sslmode=require"
+	cfg.ServerPassword = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "allow_anonymous") {
+		t.Fatalf("Validate() = %v, want allow_anonymous error", err)
+	}
+	cfg.AllowAnonymous = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() with allow_anonymous = %v", err)
+	}
+	cfg.AllowAnonymous = false
+	cfg.ServerPassword = "server-password"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() with server_password = %v", err)
+	}
+	cfg.DevMode = true
+	cfg.ServerPassword = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() in dev mode = %v", err)
+	}
+}
+
+func TestValidateProductionRequiresRemoteRedisPassword(t *testing.T) {
+	cfg := loadDefaultConfig(t)
+	cfg.DevMode = false
+	cfg.DatabaseURL = "postgres://app:secret@db:5432/noxa?sslmode=require"
+	cfg.ServerPassword = "server-password"
+	cfg.RedisAddr = "redis:6379"
+	cfg.RedisPassword = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "redis_password") {
+		t.Fatalf("Validate() = %v, want redis_password error", err)
+	}
+	cfg.RedisPassword = "redis-secret"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() with redis_password = %v", err)
+	}
+	cfg.RedisPassword = ""
+	cfg.RedisEnabled = false
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() with redis disabled = %v", err)
+	}
+	cfg.RedisEnabled = true
+	cfg.RedisAddr = "127.0.0.1:6379"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() with loopback redis = %v", err)
+	}
+}
+
+func TestValidateHealthTLSRequiresControlTLS(t *testing.T) {
+	cfg := loadDefaultConfig(t)
+	cfg.HealthTLSEnabled = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+	cfg.TLSEnabled = false
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "health_tls_enabled") {
+		t.Fatalf("Validate() = %v, want health_tls_enabled error", err)
+	}
+}
+
+func TestWarningsHealthListenerTransport(t *testing.T) {
+	cfg := loadDefaultConfig(t)
+	cfg.HealthAddr = ":12337"
+	cfg.HealthAllowPlaintextCredentials = true
+	warnings := strings.Join(cfg.Warnings(), "\n")
+	for _, text := range []string{"health_addr is reachable", "health_allow_plaintext_credentials"} {
+		if !strings.Contains(warnings, text) {
+			t.Errorf("Warnings() = %q, want text %q", warnings, text)
+		}
+	}
+	cfg.HealthTLSEnabled = true
+	warnings = strings.Join(cfg.Warnings(), "\n")
+	for _, text := range []string{"health_addr is reachable", "health_allow_plaintext_credentials"} {
 		if strings.Contains(warnings, text) {
 			t.Errorf("Warnings() = %q, did not want %q", warnings, text)
 		}

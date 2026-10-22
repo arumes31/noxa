@@ -527,6 +527,26 @@ func TestFileLink(t *testing.T) {
 	}
 }
 
+func TestFileLinkAdvertisesHTTPSWithHealthTLS(t *testing.T) {
+	env := startTestEnvFull(t, nil, func(cfg *config.Config) {
+		cfg.HealthTLSEnabled = true
+	})
+	defer env.stop()
+	env.state.AddChannel(testChannel(1))
+	env.ft.files = []store.FileRecord{{ChannelID: 1, Name: "a.txt", Size: 1, Uploader: "user-uid"}}
+
+	conn, _ := dialAuthed(t, env.addr, "user-uid")
+	defer closeFileTestResource(t, conn)
+	send(t, conn, netproto.MsgFileLink, netproto.FileLink{ChannelID: 1, Name: "a.txt"})
+	var resp netproto.FileLinkResponse
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgFileLinkResponse), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Scheme != "https" {
+		t.Fatalf("scheme = %q, want https", resp.Scheme)
+	}
+}
+
 func TestFileLinkRejectsMalformedHealthAddress(t *testing.T) {
 	env := startTestEnvFull(t, nil, func(cfg *config.Config) {
 		cfg.HealthAddr = "not-a-listen-address"
