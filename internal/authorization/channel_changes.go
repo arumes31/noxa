@@ -52,6 +52,12 @@ func ApplyChannelTreeChange(p RolePolicy, actorID int64, change ChannelTreeChang
 	if change.ChannelID <= 0 || change.ParentID < 0 {
 		return RolePolicy{}, ErrRoleInvalid
 	}
+	if channel, exists := e.channels[change.ChannelID]; exists && channel.SystemKind != "" {
+		return RolePolicy{}, ErrRoleForbidden
+	}
+	if parent, exists := e.channels[change.ParentID]; exists && parent.SystemKind == "public" {
+		return RolePolicy{}, ErrRoleForbidden
+	}
 	next := cloneRolePolicy(p)
 	switch change.Kind {
 	case ChannelEdit:

@@ -43,10 +43,11 @@ type RoleOverride struct {
 }
 
 type ChannelPolicy struct {
-	ChannelID int64          `json:"channel_id"`
-	ParentID  int64          `json:"parent_id"`
-	Synced    bool           `json:"synced"`
-	Overrides []RoleOverride `json:"overrides"`
+	SystemKind string         `json:"system_kind,omitempty"`
+	ChannelID  int64          `json:"channel_id"`
+	ParentID   int64          `json:"parent_id"`
+	Synced     bool           `json:"synced"`
+	Overrides  []RoleOverride `json:"overrides"`
 }
 
 // RolePolicy is a consistent committed authorization snapshot. User IDs are
@@ -190,6 +191,19 @@ func (e *RoleEvaluator) Evaluate(userID, channelID int64, capability Capability)
 	if channelID != 0 {
 		if _, ok := e.channels[channelID]; !ok {
 			d.Reason = "unknown_channel"
+			return d
+		}
+	}
+	if ch, exists := e.channels[channelID]; exists && ch.SystemKind == "home" {
+		// This is a presence anchor, never a media/chat scope, even for owners.
+		switch capability {
+		case ViewChannel:
+			d.Allowed, d.Reason = true, "home_channel"
+			return d
+		case Connect, Speak, ShareCamera, ShareScreen, Whisper, PrioritySpeaker, RecordChannel,
+			ReadHistory, SendMessages, MentionEveryone, ManageMessages, BypassSlowmode,
+			UploadFiles, DownloadFiles, ManageFiles:
+			d.Reason = "home_channel"
 			return d
 		}
 	}

@@ -103,7 +103,8 @@ type Channel struct {
 	// its chat through channel subscriptions, but nobody can join it for
 	// voice. It is fixed at creation. Snapshots marshal it as "TextOnly";
 	// older clients ignore the field and get a join error instead.
-	TextOnly bool
+	TextOnly   bool
+	SystemKind string // "home" is neutral membership; "public" is an automatic room.
 }
 
 // SpeakingState records that a client is currently speaking in a channel.

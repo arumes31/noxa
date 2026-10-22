@@ -1331,7 +1331,7 @@ function syncOwnChannel({ audible = true, ownMove } = {}) {
             const forcedMove = ownMove?.forced === true && Number(ownMove.channel_id) === channelID;
             playAlert(forcedMove ? "moved_by_admin" : "channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
             playedCue = true;
-        } else if (previousChannelID > 0) {
+        } else if (previousChannelID > 0 && !state.channels.some(ch => ch.SystemKind === "home")) {
             playAlert("channel_leave");
             playedCue = true;
         }
@@ -1388,6 +1388,7 @@ function flattenChannel(node) {
         // Text channels (chat only, no voice) list in the sidebar's Text
         // section; older servers omit the field and every channel is voice.
         TextOnly: !!(node.text_only ?? node.TextOnly),
+        SystemKind: node.SystemKind || "",
         Access: node.access || null,
         ClientCount: node.ClientCount || 0, // (303) [n/max]
         Topic: node.Topic || "",
@@ -1486,7 +1487,7 @@ window.runtime.EventsOn("event", (json) => {
                         if (forcedMove) playAlert("moved_by_admin", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
                         else playAlert("channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
                         playedOwnCue = true;
-                    } else if (nextChannelID === 0 && previousChannelID > 0) {
+                    } else if (nextChannelID === 0 && previousChannelID > 0 && !state.channels.some(ch => ch.SystemKind === "home")) {
                         playAlert("channel_leave");
                         playedOwnCue = true;
                     }

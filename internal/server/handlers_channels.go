@@ -150,6 +150,10 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 	if s.deps == nil || s.deps.State == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
 	}
+	requested := msg // A home-anchor request acknowledges its requested alias; membership remains zero.
+	if ch, ok := s.deps.State.GetChannel(msg.ChannelID); ok && ch.SystemKind == "home" {
+		msg.ChannelID = 0
+	}
 	// Channel zero is the connected lobby. Leaving your own channel requires
 	// no moderation or join permission and never closes the server connection.
 	if msg.ChannelID == 0 {
@@ -161,7 +165,7 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 			if err := s.leaveOwnChannelInContext(ctx, client); err != nil {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, err.Error())
 			}
-			return s.acknowledgeJoin(client, msg)
+			return s.acknowledgeJoin(client, requested)
 		})
 	}
 	return s.roleAction(ctx, client, msg.ChannelID, authorization.Connect, func(ctx context.Context) error {

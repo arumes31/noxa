@@ -218,9 +218,9 @@ func readRolePolicy(ctx context.Context, tx *sql.Tx, lock bool) (authorization.R
 		return p, err
 	}
 	channelIndex := map[int64]int{}
-	err = roleRows(ctx, tx, `SELECT a.channel_id,COALESCE(c.parent_id,0),a.synced FROM auth_channel_access a JOIN channels c ON c.id=a.channel_id ORDER BY a.channel_id`, func(rows *sql.Rows) error {
+	err = roleRows(ctx, tx, `SELECT a.channel_id,COALESCE(c.parent_id,0),a.synced,c.system_kind FROM auth_channel_access a JOIN channels c ON c.id=a.channel_id ORDER BY a.channel_id`, func(rows *sql.Rows) error {
 		var ch authorization.ChannelPolicy
-		if err := rows.Scan(&ch.ChannelID, &ch.ParentID, &ch.Synced); err != nil {
+		if err := rows.Scan(&ch.ChannelID, &ch.ParentID, &ch.Synced, &ch.SystemKind); err != nil {
 			return err
 		}
 		channelIndex[ch.ChannelID] = len(p.Channels)

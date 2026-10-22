@@ -20,6 +20,8 @@ func (s *TCPServer) moveRoleMember(ctx context.Context, e *authorization.RoleEva
 	if s.deps.State == nil {
 		return authorization.ErrAuthorizationUnavailable
 	}
+	destination, exists := s.deps.State.GetChannel(msg.ChannelID)
+	isHome := exists && destination.SystemKind == "home"
 	if !e.Evaluate(actorID, msg.ChannelID, authorization.MoveMembers).Allowed {
 		return authorization.ErrRoleForbidden
 	}
@@ -32,12 +34,19 @@ func (s *TCPServer) moveRoleMember(ctx context.Context, e *authorization.RoleEva
 	before, ok := s.deps.State.GetClient(target.ID)
 	if !ok || target.rulesBlocked() || !e.CanMoveMember(actorID, target.userID()) ||
 		!e.Evaluate(actorID, before.ChannelID, authorization.MoveMembers).Allowed ||
-		!e.Evaluate(target.userID(), msg.ChannelID, authorization.Connect).Allowed ||
+		(!isHome && !e.Evaluate(target.userID(), msg.ChannelID, authorization.Connect).Allowed) ||
 		(before.Status == "invisible" && !e.Evaluate(actorID, 0, authorization.ViewConnectionInfo).Allowed) {
 		return authorization.ErrRoleForbidden
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if isHome {
+		if err := s.leaveOwnChannelInContext(ctx, target); err != nil {
+			return err
+		}
+		s.auditInChannels(ctx, actorUniqueID, "member_moved", target.uniqueID(), fmt.Sprintf("channel=%d->home", before.ChannelID), before.ChannelID, msg.ChannelID)
+		return nil
 	}
 	// Moderation can originate from an integration without a desktop session.
 	if err := s.moveClientWithCause(ctx, target.ID, msg.ChannelID, actorClientID, actorClientID != target.ID); err != nil {

@@ -119,3 +119,29 @@ func TestBuildSnapshot_NilManager(t *testing.T) {
 		t.Fatalf("expected zero totals for nil manager")
 	}
 }
+
+func TestHomeSystemKindSurvivesWireSnapshot(t *testing.T) {
+	sm := newTestManager()
+	sm.AddChannel(&state.Channel{ChannelID: 1, Name: "Lobby", SystemKind: "home"})
+	sm.AddChannel(&state.Channel{ChannelID: 2, ParentID: 1, Name: "Public1", SystemKind: "public"})
+	sm.AddClient(&state.Client{ClientID: "self", ChannelID: 0})
+	data, err := json.Marshal(BuildSnapshot(sm, false, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Root []struct {
+			SystemKind string
+			Children   []struct{ SystemKind string } `json:"children"`
+		} `json:"root_channels"`
+		HomeMembers []struct {
+			ChannelID int64 `json:"channel_id"`
+		} `json:"unassigned_clients"`
+	}
+	if err = json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Root) != 1 || wire.Root[0].SystemKind != "home" || len(wire.Root[0].Children) != 1 || wire.Root[0].Children[0].SystemKind != "public" || len(wire.HomeMembers) != 1 || wire.HomeMembers[0].ChannelID != 0 {
+		t.Fatalf("invalid home wire snapshot: %s", data)
+	}
+}

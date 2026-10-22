@@ -338,7 +338,8 @@ type ChannelUpdate struct {
 	SlowModeSeconds *int
 	Description     *string
 	// TextOnly is only mirrored from the database row; no operation edits it.
-	TextOnly *bool
+	TextOnly   *bool
+	SystemKind *string
 }
 
 // UpdateChannel applies a field patch while holding the manager lock. It
@@ -394,6 +395,9 @@ func (m *Manager) UpdateChannel(channelID int64, update ChannelUpdate) bool {
 	}
 	if update.Description != nil {
 		channel.Description = *update.Description
+	}
+	if update.SystemKind != nil {
+		channel.SystemKind = *update.SystemKind
 	}
 	if update.TextOnly != nil {
 		channel.TextOnly = *update.TextOnly
@@ -481,7 +485,7 @@ func (m *Manager) JoinChannel(clientID string, channelID int64) error {
 	if !ok {
 		return ErrChannelNotFound
 	}
-	if ch.TextOnly {
+	if ch.TextOnly || ch.SystemKind == "home" {
 		return ErrTextChannel
 	}
 
@@ -606,7 +610,7 @@ func (m *Manager) moveClient(clientID string, targetChannelID int64, enforceCapa
 	if !ok {
 		return ErrChannelNotFound
 	}
-	if ch.TextOnly {
+	if ch.TextOnly || ch.SystemKind == "home" {
 		return ErrTextChannel
 	}
 

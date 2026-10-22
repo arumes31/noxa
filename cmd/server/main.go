@@ -411,6 +411,9 @@ func run() (retErr error) {
 		zap.Int64("scope_key_generations", scopeKeyCount),
 	)
 
+	if _, err := dbStore.EnsureHomeChannels(ctx); err != nil {
+		return fmt.Errorf("ensuring home channels: %w", err)
+	}
 	// Provision before either authority or channel state captures the tree.
 	echoChannelID, err := ensureEchoChannel(ctx, dbStore, cfg)
 	if err != nil {
@@ -818,6 +821,8 @@ func run() (retErr error) {
 	if err := roleAuthority.Reload(ctx); err != nil {
 		return fmt.Errorf("reconciling roles-v1 authorization before serving: %w", err)
 	}
+
+	go channelMgr.MaintainPublicChannels(ctx, roleAuthority)
 
 	if relayManager != nil {
 		closeRelay, err := turn.Listen(ctx, managedTURNConfig(cfg), relayManager, trafficCounter)
