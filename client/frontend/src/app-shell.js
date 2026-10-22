@@ -82,7 +82,7 @@ function renderTextSection() {
         item.setAttribute("role", "listitem");
         const row = document.createElement("button");
         row.type = "button";
-        row.className = "channel text-channel side-row";
+        row.className = (channel.TextOnly ? "channel " : "") + "text-channel side-row";
         row.dataset.chid = String(channel.ChannelID);
         row.classList.toggle("voice-linked", !channel.TextOnly);
         row.classList.toggle("voice-linked-current", !channel.TextOnly && channel.ChannelID === state.myChannelID);
