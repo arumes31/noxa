@@ -1,4 +1,5 @@
 // connection-quality.js — connection quality sampling and freshness.
+import { setStatusIcon } from "./icons.js";
 import { t } from "./i18n.js";
 import { voicePlaybackHealth } from "./voice-diagnostics.js";
 import { createVoicePlaybackTooltip } from "./voice-playback-tooltip.js";
@@ -67,7 +68,7 @@ export function createConnectionQuality({ $, state }) {
             if (playback.dataset.quality !== playbackQuality) playback.dataset.quality = playbackQuality;
             const playbackText = currentVoice ? t("diagnostics.healthBadge", { quality: t(`diagnostics.health.${health.quality}`) }) : "";
             const route = currentVoice ? voiceSample.report.transport : null;
-            if (playback.textContent !== playbackText) playback.textContent = playbackText;
+            setStatusIcon(playback, health.quality === "poor" ? "warning" : ["measuring", "stale"].includes(health.quality) ? "refresh" : "signal", playbackText);
             if (playback.getAttribute("aria-label") !== playbackText) playback.setAttribute("aria-label", playbackText);
             playbackTooltip?.update(currentVoice ? health : null, route);
         }

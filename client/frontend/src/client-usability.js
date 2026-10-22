@@ -1,3 +1,4 @@
+import { setStatusIcon } from "./icons.js";
 import { t } from "./i18n.js";
 import "./client-usability.css";
 
@@ -32,14 +33,15 @@ export function initClientUsability() {
         preferred = sidebarWidth(preferred, innerWidth); apply(); save();
     };
     const status = document.createElement("div"); status.id = "workspace-connection-status"; status.setAttribute("role", "status");
-    document.querySelector("#voice-bar .voice-info").prepend(status);
+    status.tabIndex = 0;
+    document.querySelector("#voice-bar .voice-summary").prepend(status);
     const render = () => {
         const state = window.__noxa.state, pill = document.getElementById("conn-pill");
         const phase = document.getElementById("channel-connection-overlay")?.dataset.phase;
         const connected = pill.classList.contains("up") && (!phase || phase === "connected");
         const server = state.reconnectInFlight || state.reconnectAttempts ? "reconnecting" : connected ? "connected" : "offline";
         const voice = window.__noxaPrivateCalls?.active?.() ? "privateCall" : !connected ? "voiceOffline" : state.myChannelID ? "voiceConnected" : "noVoice";
-        status.textContent = t("usability.server." + server);
+        setStatusIcon(status, { connected: "server", reconnecting: "refresh", offline: "serverOff" }[server], t("usability.server." + server));
         status.title = status.textContent + " · " + t("usability." + voice);
         status.dataset.state = server;
         grip.setAttribute("aria-label", t("usability.resize")); grip.title = t("usability.resizeHelp");

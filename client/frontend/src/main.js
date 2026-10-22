@@ -1,3 +1,4 @@
+import { setStatusIcon } from "./icons.js";
 import { maintainRelay } from "./relay-renewal.js";
 import { manageAvatarPlayback } from "./avatar-playback.js";
 import { closeContextMenu } from "./context-menu.js";
@@ -2647,9 +2648,8 @@ function teardownVoice() {
     $("remote-video").classList.add("hidden");
 }
 
-// voiceStatusBase is the plain voice on/off text. renderVoiceStatus appends the
-// whisper-reply marker (33): an armed reply reroutes every transmission, so it
-// must not be invisible.
+// Keep the transport state in the accessible label. An armed whisper reply
+// also changes the visible icon because it reroutes every transmission.
 let voiceStatusBase = "voice off";
 
 function setVoiceStatus(text) {
@@ -2660,9 +2660,14 @@ function setVoiceStatus(text) {
 function renderVoiceStatus() {
     renderVoiceHints();
     const key = { "voice on": "voice.on", "voice off": "voice.off", "voice connecting…": "voice.connecting", "voice unavailable": "voice.unavailable" }[voiceStatusBase];
-    $("voice-status").textContent = (key ? t(key) : voiceStatusBase) +
+    const status = $("voice-status");
+    const label = (key ? t(key) : voiceStatusBase) +
         (state.whisperArmed ? " · " + t("polish.whisper", { name: uidName(state.whisperTargetUID) }) : "");
-    $("voice-status").dataset.state = { "voice on": "connected", "voice connecting…": "connecting", "voice unavailable": "unavailable" }[voiceStatusBase] || "off";
+    status.dataset.state = { "voice on": "connected", "voice connecting…": "connecting", "voice unavailable": "unavailable" }[voiceStatusBase] || "off";
+    status.dataset.whisper = String(!!state.whisperArmed);
+    setStatusIcon(status, state.whisperArmed ? "whisper" : { connected: "headphones", connecting: "refresh", unavailable: "warning", off: "headphonesOff" }[status.dataset.state], label);
+    status.title = label;
+    status.tabIndex = 0;
 }
 
 function resetVoiceUI() {

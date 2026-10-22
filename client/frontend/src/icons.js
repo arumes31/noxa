@@ -1,5 +1,7 @@
 // Shared 24px outline icons. Names and paths are fixed application assets.
 const paths = {
+    server: '<rect x="3" y="3" width="18" height="7" rx="1"/><rect x="3" y="14" width="18" height="7" rx="1"/><path d="M7 6.5h.01M7 17.5h.01M16 6.5h2M16 17.5h2"/>',
+    serverOff: '<path d="m3 3 18 18M7 3h14v7h-7M3 7v3h4M3 14h10M3 14v7h14M21 17v4M7 17.5h.01M16 6.5h2"/>',
     home: '<path d="m3 10 9-8 9 8M5 9v12h5v-7h4v7h5V9"/>',
     hand: '<path d="M8 13V5a2 2 0 0 1 4 0v7-9a2 2 0 0 1 4 0v9-6a2 2 0 0 1 4 0v10a7 7 0 0 1-13 3l-4-6a2 2 0 0 1 3-2l2 2Z"/>',
     outbox: '<path d="M4 14H2v7h20v-7h-2M12 16V2M7 7l5-5 5 5"/>',
@@ -71,4 +73,20 @@ export function labelButton(button, name, label) {
     text.className = "control-label";
     text.textContent = label;
     button.appendChild(text);
+}
+
+// Keep the live text available to assistive technology while using a compact
+// fixed asset visually. Avoid replacing DOM on unchanged telemetry ticks.
+export function setStatusIcon(element, name, label) {
+    if (!element) return;
+    element.classList.add("status-icon");
+    if (element.dataset.icon !== name || element.textContent !== label) {
+        element.innerHTML = icon(name);
+        const text = document.createElement("span");
+        text.className = "status-icon-label";
+        text.textContent = label;
+        element.append(text);
+        element.dataset.icon = name;
+    }
+    element.setAttribute("aria-label", label);
 }
