@@ -11,12 +11,15 @@ try {
         window.setInterval = (fn, ms) => interval(fn, ms === 15000 ? 100 : ms);
         const { maintainRelay } = await import("/module.js");
         const load = id => fetch(`/lease?id=${id}`, { headers: { "X-Test-Token": token } }).then(r => { if (!r.ok) throw Error("lease denied"); return r.json(); });
+        const trace = [];
+        const record = (event, details) => trace.push({ at: Math.round(performance.now()), event, ...details });
         const leases = [await load("a"), await load("b")];
         const pcs = leases.map(l => new RTCPeerConnection({ iceServers: l.ice_servers, iceTransportPolicy: "relay" }));
         const pendingCandidates = [[], []];
         const remoteVideos = [], frameTimes = new Map(), frameGaps = [];
         let measuring = false;
         for (let i = 0; i < 2; i++) {
+            pcs[i].addEventListener("iceconnectionstatechange", () => record("ice", { peer: i, state: pcs[i].iceConnectionState }));
             pcs[i].onicecandidate = e => {
                 if (!e.candidate) return;
                 if (!pcs[1-i].remoteDescription) pendingCandidates[1-i].push(e.candidate);
@@ -38,13 +41,14 @@ try {
         let chain = Promise.resolve();
         const negotiate = i => {
             const task = chain.then(async () => {
+                record("negotiate", { peer: i, generation: leases[i].generation });
                 const pc=pcs[i], other=pcs[1-i];
                 await pc.setLocalDescription(await pc.createOffer({ iceRestart: true }));
                 await other.setRemoteDescription(pc.localDescription);
                 await other.setLocalDescription(await other.createAnswer());
                 await pc.setRemoteDescription(other.localDescription);
                 for (let j=0;j<2;j++) for (const c of pendingCandidates[j].splice(0)) await pcs[j].addIceCandidate(c);
-            }); chain = task.catch(() => {}); return task;
+            }); chain = task.catch(error => record("negotiation-error", { peer: i, message: String(error) })); return task;
         };
         let lastData = 0, maxDataGap = 0, received = 0, sent = 0, expected = 0;
         const dc = pcs[0].createDataChannel("continuity");
@@ -68,12 +72,12 @@ try {
             if(packets>audioCounts[i]){const now=performance.now();maxAudioGap=Math.max(maxAudioGap,now-audioTimes[i]);audioTimes[i]=now;audioCounts[i]=packets;}
         }},25);
         const stops=pcs.map((pc,i)=>maintainRelay(pc,{
-            app:{GetRelayLeaseForTab:async()=>{leases[i]=await load(i?"b":"a");generations[i].add(leases[i].generation);return leases[i];},GetICEServersForTab:async()=>leases[i].ice_servers},
-            tabID:String(i),current:()=>true,restart:()=>negotiate(i),
+            app:{GetRelayLeaseForTab:async()=>{leases[i]=await load(i?"b":"a");if(!generations[i].has(leases[i].generation))record("lease",{peer:i,generation:leases[i].generation});generations[i].add(leases[i].generation);return leases[i];},GetICEServersForTab:async()=>leases[i].ice_servers},
+            tabID:String(i),current:()=>true,restart:()=>negotiate(i),onFailure:()=>record("renewal-failure",{peer:i}),
         }));
         await new Promise(r=>setTimeout(r,14000));
         measuring=false;clearInterval(sendTimer);clearInterval(samplers);stops.forEach(stop=>stop());await new Promise(r=>setTimeout(r,100));
-        const result={maxDataGap,maxAudioGap,maxVideoGap:Math.max(...frameGaps),received,sent,endpoints:endpoints.map(e=>e.size),generations:generations.map(g=>g.size),audioCounts,connected:pcs.every(p=>p.connectionState==="connected")};
+        const result={trace,maxDataGap,maxAudioGap,maxVideoGap:Math.max(...frameGaps),received,sent,endpoints:endpoints.map(e=>e.size),generations:generations.map(g=>g.size),audioCounts,connected:pcs.every(p=>p.connectionState==="connected")};
         pcs.forEach(p=>p.close());return result;
     }, process.env.NOXA_TEST_RELAY_TOKEN);
     console.log(JSON.stringify(result));

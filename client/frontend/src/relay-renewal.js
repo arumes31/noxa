@@ -1,7 +1,7 @@
 // Credential delivery, ICE negotiation and selected-path migration are separate
 // steps. Keep the existing peer/tracks alive while a replacement is prepared.
 export function maintainRelay(pc, { app, tabID, current, restart, onFailure = () => {} }) {
-    let stopped = false, running = false, generation = 0, attempts = 0, retryAt = 0, oldRelay = null, needsRestart = false;
+    let stopped = false, running = false, generation = 0, attempts = 0, retryAt = 0, oldRelay = null, needsRestart = false, restartAfter = 0;
     const live = () => !stopped && current() && pc.signalingState !== "closed";
     const selected = async () => {
         const stats = await pc.getStats();
@@ -27,7 +27,12 @@ export function maintainRelay(pc, { app, tabID, current, restart, onFailure = ()
                 pc.setConfiguration({ ...pc.getConfiguration(), iceServers });
                 generation = lease.generation; attempts = 0; retryAt = 0;
                 needsRestart = !!pc.remoteDescription;
-                if (needsRestart) { await restart(); needsRestart = false; }
+                if (needsRestart) {
+                    await restart(); needsRestart = false;
+                    // Negotiation finishes before ICE nominates its replacement
+                    // path. Wake events must not restart this work immediately.
+                    restartAfter = Date.now() + 1000;
+                }
                 // A setConfiguration call does not prove migration. For an
                 // existing relay path, wait for a different selected endpoint.
             } else if ((oldRelay || needsRestart) && pc.remoteDescription) {
@@ -35,10 +40,12 @@ export function maintainRelay(pc, { app, tabID, current, restart, onFailure = ()
                 if (!live()) return;
                 if (!needsRestart && nowRelay !== undefined && nowRelay !== oldRelay && ["connected", "completed"].includes(pc.iceConnectionState)) {
                     oldRelay = null; attempts = 0;
-                } else if (attempts < 4) {
-                    attempts++; retryAt = Date.now() + [1000, 5000, 15000, 30000][attempts - 1];
+                } else if (Date.now() >= restartAfter && attempts < 4) {
+                    const delay = [1000, 5000, 15000, 30000][attempts++];
                     await restart(); needsRestart = false;
-                } else onFailure();
+                    restartAfter = Date.now() + delay;
+                    retryAt = restartAfter;
+                } else if (attempts >= 4 && Date.now() >= restartAfter) onFailure();
             }
         } catch {
             // Native cache and server clock enforce the finite credential
