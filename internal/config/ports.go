@@ -22,7 +22,7 @@ const (
 	DefaultUDPAddr      = ":12334"
 	DefaultQueryAddr    = "127.0.0.1:12335"
 	DefaultFileAddr     = ":12336"
-	DefaultHealthAddr   = ":12337"
+	DefaultHealthAddr   = "127.0.0.1:12337"
 	DefaultGRPCAddr     = "127.0.0.1:12338"
 	DefaultQuerySSHAddr = ":12339"
 )

@@ -700,14 +700,16 @@ func run() (retErr error) {
 	})
 	if cfg.HealthTLSEnabled {
 		// Validation guarantees tls_enabled, so tlsCert holds the control
-		// certificate and /dl links stay under the client's existing pin.
+		// certificate. Browser download links still need browser-trusted TLS.
 		healthServer.SetTLSCertificate(tlsCert)
 	}
 	// Integration passwords (/events) and webhook secrets (/hooks) must not
-	// cross the network in plaintext in production unless the operator opts in.
+	// cross the network in plaintext in production.
 	credentialTransport := func(h http.Handler) http.Handler { return h }
-	if !cfg.DevMode && !cfg.HealthTLSEnabled && !cfg.HealthAllowPlaintextCredentials {
-		credentialTransport = health.RequireSecureCredentials
+	if !cfg.DevMode {
+		credentialTransport = func(h http.Handler) http.Handler {
+			return health.RequireSecureCredentials(h, cfg.HealthProxyNetworks()...)
+		}
 	}
 	if cfg.MetricsAllowRemote {
 		healthServer.HandleGET("/metrics", m.Handler())
@@ -717,8 +719,8 @@ func run() (retErr error) {
 	registerPprofEndpoints(healthServer, cfg.PprofEnabled)
 	healthServer.Handle("/api/v1/schema/version", health.SchemaVersionHandler(logger, dbStore.SchemaVersion))
 	// Download links (267): the control channel mints expiring tokens; the
-	// health HTTP server serves them (LAN-friendly, no extra auth).
-	healthServer.Handle("/dl/", ftServer.Links())
+	// HTTP handler rechecks their authorization and requires secure transport.
+	healthServer.Handle("/dl/", health.RequireSecureCredentials(ftServer.Links(), cfg.HealthProxyNetworks()...))
 
 	// Global server password (plaintext in config, hashed once at startup
 	// with Argon2id). Empty means an open server.

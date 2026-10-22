@@ -40,9 +40,13 @@ type Config struct {
 	// HealthTLSEnabled serves the health listener (probes, /events, /hooks and
 	// /dl links) over TLS with the control certificate. Requires tls_enabled.
 	HealthTLSEnabled bool `mapstructure:"health_tls_enabled"`
-	// HealthAllowPlaintextCredentials accepts /events Basic credentials and
-	// /hooks bearer secrets over plaintext HTTP from remote peers when
-	// dev_mode=false. Prefer health_tls_enabled or an HTTPS reverse proxy.
+	// DownloadPublicOrigin is an explicit HTTPS origin, never derived from
+	// Host or forwarding headers. Empty uses the native health TLS endpoint.
+	DownloadPublicOrigin string `mapstructure:"download_public_origin"`
+	// Only these immediate proxy peers may assert X-Forwarded-Proto: https.
+	HealthTrustedProxies []string `mapstructure:"health_trusted_proxies"`
+	// HealthAllowPlaintextCredentials is a legacy development option.
+	// Production rejects it; use health TLS or explicit HTTPS proxy trust.
 	HealthAllowPlaintextCredentials bool   `mapstructure:"health_allow_plaintext_credentials"`
 	QueryAddr                       string `mapstructure:"query_addr"`
 	// QueryAllowRemote is an explicit acknowledgement that the plaintext
@@ -278,6 +282,8 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("grpc_addr", DefaultGRPCAddr)
 	v.SetDefault("health_addr", DefaultHealthAddr)
 	v.SetDefault("health_tls_enabled", false)
+	v.SetDefault("download_public_origin", "")
+	v.SetDefault("health_trusted_proxies", []string{})
 	v.SetDefault("health_allow_plaintext_credentials", false)
 	v.SetDefault("query_addr", DefaultQueryAddr)
 	v.SetDefault("query_allow_remote", false)
@@ -579,10 +585,27 @@ func (c *Config) Validate() error {
 	if c.QuerySSHEnabled && strings.TrimSpace(c.QuerySSHHostKey) == "" {
 		errs = append(errs, errors.New("query_ssh_host_key must not be empty when query_ssh_enabled=true"))
 	}
+	if c.DownloadPublicOrigin != "" {
+		if _, err := ValidateHTTPSOrigin(c.DownloadPublicOrigin); err != nil {
+			errs = append(errs, err)
+		}
+		if !c.HealthTLSEnabled && len(c.HealthTrustedProxies) == 0 {
+			errs = append(errs, errors.New("download_public_origin without native health TLS requires health_trusted_proxies for the HTTPS proxy"))
+		}
+	}
+	for _, raw := range c.HealthTrustedProxies {
+		prefix, err := netip.ParsePrefix(raw)
+		if err != nil || prefix.Bits() == 0 || prefix.Addr().Is4In6() || prefix != prefix.Masked() {
+			errs = append(errs, errors.New("health_trusted_proxies must contain canonical, specific IPv4/IPv6 CIDRs (not /0 or mapped IPv6)"))
+		}
+	}
 	if c.HealthTLSEnabled && !c.TLSEnabled {
 		errs = append(errs, errors.New("health_tls_enabled requires tls_enabled=true"))
 	}
 	if !c.DevMode {
+		if c.HealthAllowPlaintextCredentials {
+			errs = append(errs, errors.New("health_allow_plaintext_credentials is not allowed in production; configure native HTTPS or a trusted HTTPS proxy"))
+		}
 		if !c.TLSEnabled {
 			errs = append(errs, errors.New("tls_enabled must be true when dev_mode=false"))
 		}

@@ -5,19 +5,31 @@ import { buildFileLink } from "../src/file-links.js";
 
 const response = {
     health_port: 12337,
+    scheme: "https",
     path: "/dl/0123456789abcdef0123456789abcdef",
 };
 
 describe("buildFileLink", () => {
-    it("normalizes DNS, IPv4, IPv6, full control URLs, and old-server schemes", () => {
+    it("normalizes DNS, IPv4, IPv6, full control URLs, and explicitly secure server schemes", () => {
         assert.equal(buildFileLink("voice.example:12333", response),
-            "http://voice.example:12337/dl/0123456789abcdef0123456789abcdef");
+            "https://voice.example:12337/dl/0123456789abcdef0123456789abcdef");
         assert.equal(buildFileLink("127.0.0.1:12333", { ...response, scheme: "HTTPS" }),
             "https://127.0.0.1:12337/dl/0123456789abcdef0123456789abcdef");
         assert.equal(buildFileLink("[2001:db8::7]:12333", response),
-            "http://[2001:db8::7]:12337/dl/0123456789abcdef0123456789abcdef");
+            "https://[2001:db8::7]:12337/dl/0123456789abcdef0123456789abcdef");
         assert.equal(buildFileLink("tls://Voice.Example:12333", response),
-            "http://voice.example:12337/dl/0123456789abcdef0123456789abcdef");
+            "https://voice.example:12337/dl/0123456789abcdef0123456789abcdef");
+    });
+
+    it("uses only an explicit HTTPS public origin for proxy URLs", () => {
+        assert.equal(buildFileLink("voice.example:12333", { ...response, public_origin: "https://files.example:8443/" }),
+            "https://files.example:8443/dl/0123456789abcdef0123456789abcdef");
+        for (const public_origin of ["http://files.example", "https://user:secret@files.example", "https://files.example/path", "https://files.example?", "https://files.example#", "https://files.example/\\evil", " https://files.example", null, 1]) {
+            assert.equal(buildFileLink("voice.example:12333", { ...response, public_origin }), null);
+        }
+        for (const scheme of [undefined, null, "", "http"]) {
+            assert.equal(buildFileLink("voice.example:12333", { ...response, scheme }), null);
+        }
     });
 
     it("fails closed for malformed addresses and hostile protocol fields", () => {
@@ -27,7 +39,7 @@ describe("buildFileLink", () => {
         }
         for (const invalid of [
             { ...response, scheme: "javascript" },
-            { ...response, scheme: "http://evil.example" },
+            { ...response, scheme: "https://evil.example" },
             { ...response, health_port: "12337" },
             { ...response, health_port: 0 },
             { ...response, path: "//evil.example" },

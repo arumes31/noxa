@@ -201,15 +201,29 @@ func localGET(next http.Handler) http.Handler {
 	}))
 }
 
-// RequireSecureCredentials refuses requests that would carry credentials
-// over plaintext HTTP from a remote peer. TLS connections, loopback peers and
-// requests an HTTPS reverse proxy marks with X-Forwarded-Proto: https pass.
-// The header is trusted only to avoid refusing proxied clients: a peer that
-// forges it exposes nothing but its own credentials.
-func RequireSecureCredentials(next http.Handler) http.Handler {
+// RequireSecureCredentials requires TLS, local access, or an HTTPS assertion
+// from an explicitly trusted immediate proxy. Forwarded client addresses and
+// Host never establish proxy trust. Proxies must overwrite this header.
+func RequireSecureCredentials(next http.Handler, trusted ...netip.Prefix) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.TLS == nil && !remoteIsLoopback(r.RemoteAddr) && !strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-			http.Error(w, "credentials require HTTPS", http.StatusForbidden)
+		peer, err := netip.ParseAddrPort(r.RemoteAddr)
+		proxyHTTPS := false
+		values := r.Header.Values("X-Forwarded-Proto")
+		if err == nil && len(values) == 1 && strings.EqualFold(values[0], "https") {
+			for _, network := range trusted {
+				if network.Bits() > 0 && network.Contains(peer.Addr().Unmap()) {
+					proxyHTTPS = true
+					break
+				}
+			}
+		}
+		// A local reverse proxy must not turn an HTTP request into local
+		// trusted access merely by forwarding it over loopback.
+		directLocal := remoteIsLoopback(r.RemoteAddr) && len(values) == 0 &&
+			r.Header.Get("Forwarded") == "" && r.Header.Get("X-Forwarded-For") == ""
+		if r.TLS == nil && !directLocal && !proxyHTTPS {
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, "content and credentials require HTTPS", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)

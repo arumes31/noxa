@@ -125,7 +125,7 @@ func (s *UDPServer) Start(ctx context.Context) error {
 	}
 	s.conn = conn
 	close(s.started)
-	s.logger.Info("UDP media listener started", zap.String("addr", s.cfg.UDPAddr))
+	s.logger.Info("UDP probe listener started", zap.String("addr", s.cfg.UDPAddr))
 
 	// Close the socket when the context is cancelled so ReadFromUDP unblocks.
 	go func() {
@@ -152,7 +152,7 @@ func (s *UDPServer) Start(ctx context.Context) error {
 	// processing anything already queued.
 	close(s.inbound)
 	s.wg.Wait()
-	s.logger.Info("UDP media listener stopped",
+	s.logger.Info("UDP probe listener stopped",
 		zap.Uint64("received", s.packetsReceived.Load()),
 		zap.Uint64("dropped", s.packetsDropped.Load()),
 		zap.Uint64("processed", s.packetsProcessed.Load()),

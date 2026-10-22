@@ -66,8 +66,8 @@ services:
       noxa-turn-net:
         ipv4_address: ${TURN_NOXA_IP:-10.213.254.2}
     ports:
-      # TeamSpeak-style voice transport (UDP)
-      - "12334:12334/udp"
+      # Optional legacy ping/pong probe; voice/media use WebRTC, not this port.
+      # - "12334:12334/udp"
       # TLS control channel
       - "12333:12333"
       # Raw ServerQuery is loopback-only inside the container by default.
@@ -82,7 +82,7 @@ services:
       # Health/readiness/metrics HTTP endpoint, also /events, /hooks and /dl.
       # Set NOXA_HEALTH_TLS_ENABLED=true (or front it with an HTTPS reverse
       # proxy) before exposing it beyond a trusted network.
-      - "12337:12337"
+      - "127.0.0.1:12337:12337"
     volumes:
       # Writable data (uploaded files, avatars, icons, recordings) so the
       # root filesystem can stay read-only.
@@ -147,6 +147,11 @@ services:
       # gRPC carries Basic credentials over plaintext and is loopback-only.
       NOXA_GRPC_ADDR: "127.0.0.1:12338"
       NOXA_HEALTH_ADDR: ":12337"
+      # Proxy CIDRs identify immediate peers; proxies must overwrite the
+      # forwarded-proto header. Host-loopback publication does not isolate
+      # the listener from other containers on noxa-net.
+      NOXA_DOWNLOAD_PUBLIC_ORIGIN: ${NOXA_DOWNLOAD_PUBLIC_ORIGIN:-}
+      NOXA_HEALTH_TRUSTED_PROXIES: ${NOXA_HEALTH_TRUSTED_PROXIES:-}
       NOXA_HEALTH_TLS_ENABLED: ${NOXA_HEALTH_TLS_ENABLED:-false}
       NOXA_HEALTH_ALLOW_PLAINTEXT_CREDENTIALS: ${NOXA_HEALTH_ALLOW_PLAINTEXT_CREDENTIALS:-false}
       NOXA_METRICS_ALLOW_REMOTE: ${NOXA_METRICS_ALLOW_REMOTE:-false}

@@ -493,7 +493,7 @@ func TestFileVersions(t *testing.T) {
 // TestFileLink verifies link creation is uploader/admin only (267) and the
 // response carries a /dl/ URL.
 func TestFileLink(t *testing.T) {
-	env := startTestEnv(t, nil)
+	env := startTestEnvFull(t, nil, func(cfg *config.Config) { cfg.HealthTLSEnabled = true })
 	defer env.stop()
 	env.state.AddChannel(testChannel(1))
 	env.ft.files = []store.FileRecord{
@@ -519,7 +519,7 @@ func TestFileLink(t *testing.T) {
 	if err := netproto.Decode(f, &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Path == "" || resp.Scheme != "http" || resp.ExpiresAt == 0 || resp.HealthPort == 0 {
+	if resp.Path == "" || resp.Scheme != "https" || resp.ExpiresAt == 0 || resp.HealthPort == 0 {
 		t.Fatalf("link response = %+v", resp)
 	}
 	if resp.Path != "/dl/deadbeef" {
@@ -607,5 +607,32 @@ func TestServerIconSetGet(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("server icon not readable after set")
 		}
+	}
+}
+
+func TestFileLinkRefusesPlaintextAndUsesConfiguredOrigin(t *testing.T) {
+	for _, origin := range []string{"", "http://unsafe.example", "https://files.example:8443"} {
+		t.Run(origin, func(t *testing.T) {
+			env := startTestEnvFull(t, nil, func(cfg *config.Config) { cfg.DownloadPublicOrigin = origin; cfg.HealthTLSEnabled = false })
+			defer env.stop()
+			env.state.AddChannel(testChannel(1))
+			env.ft.files = []store.FileRecord{{ChannelID: 1, Name: "a.txt", Size: 1, Uploader: "user-uid"}}
+			conn, _ := dialAuthed(t, env.addr, "user-uid")
+			defer closeFileTestResource(t, conn)
+			send(t, conn, netproto.MsgFileLink, netproto.FileLink{ChannelID: 1, Name: "a.txt"})
+			if origin != "https://files.example:8443" {
+				if got := readError(t, conn); got.Code != errCodeUnavailable {
+					t.Fatalf("response %+v", got)
+				}
+				return
+			}
+			var got netproto.FileLinkResponse
+			if err := netproto.Decode(readOfType(t, conn, netproto.MsgFileLinkResponse), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Scheme != "https" || got.PublicOrigin != origin || !got.SessionBound {
+				t.Fatalf("response %+v", got)
+			}
+		})
 	}
 }

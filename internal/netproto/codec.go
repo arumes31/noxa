@@ -935,12 +935,12 @@ type FileLink struct {
 	Name      string `json:"name"`
 }
 
-// FileLinkResponse carries the link path, scheme, and expiry. The client
-// builds the full URL from its own control host plus HealthPort (the server
-// cannot know its published address behind Docker/NAT). Scheme is optional
-// for compatibility with old servers and must never be inferred from the
-// TLS control connection.
+// FileLinkResponse carries an HTTPS capability path and expiry. PublicOrigin
+// is the operator-configured HTTPS origin for a reverse proxy. When absent,
+// clients combine an explicit HTTPS Scheme with their control host and HealthPort.
+// Missing schemes from old servers must not silently fall back to plaintext.
 type FileLinkResponse struct {
+	PublicOrigin string `json:"public_origin,omitempty"`
 	// SessionBound links also expire when the issuing session ends or loses access.
 	SessionBound bool   `json:"session_bound,omitempty"`
 	Path         string `json:"path"`
