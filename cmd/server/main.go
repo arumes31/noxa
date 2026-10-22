@@ -820,7 +820,7 @@ func run() (retErr error) {
 	}
 
 	if relayManager != nil {
-		closeRelay, err := turn.Listen(ctx, managedTURNConfig(cfg), relayManager)
+		closeRelay, err := turn.Listen(ctx, managedTURNConfig(cfg), relayManager, trafficCounter)
 		if err != nil {
 			return fmt.Errorf("starting managed TURN: %w", err)
 		}

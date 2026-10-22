@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"noxa/internal/traffic"
+
 	pion "github.com/pion/turn/v5"
 	"golang.org/x/time/rate"
 )
@@ -211,6 +213,7 @@ func (m *Manager) Close() {
 // Generator restricts relay sockets to an explicit UDP range and destinations.
 // TCP/TLS client transports still use UDP relays; RFC6062 relays are disabled.
 type Generator struct {
+	Traffic     *traffic.Counter
 	Manager     *Manager
 	Base        *pion.RelayAddressGeneratorPortRange
 	AllowedPeer func(net.Addr) bool
@@ -247,7 +250,7 @@ func (g *Generator) AllocatePacketConn(c pion.AllocateListenerConfig) (net.Packe
 		return nil, nil, err
 	}
 	session := m.sessions[grant.session]
-	socket := &relaySocket{PacketConn: conn, manager: m, grant: grant, allowed: g.AllowedPeer, in: session.in, out: session.out}
+	socket := &relaySocket{PacketConn: traffic.WrapPacketConn(conn, g.Traffic), manager: m, grant: grant, allowed: g.AllowedPeer, in: session.in, out: session.out}
 	endpoint := addr.(*net.UDPAddr).AddrPort()
 	socket.endpoint = netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port())
 	m.endpoints[socket.endpoint] = socket

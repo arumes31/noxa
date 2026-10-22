@@ -10,6 +10,7 @@ import (
 	"github.com/pion/logging"
 	pion "github.com/pion/turn/v5"
 	"noxa/internal/config"
+	"noxa/internal/traffic"
 )
 
 // DestinationPolicy checks exact private endpoints. Optional public peers are
@@ -55,7 +56,7 @@ func DestinationPolicy(exact []string, public bool, self ...netip.Addr) func(net
 
 // Listen serves TURN over UDP and TCP with UDP relay sockets. Listeners are
 // never opened on a partially validated configuration and share one registry.
-func Listen(ctx context.Context, cfg config.TURNConfig, m *Manager) (func() error, error) {
+func Listen(ctx context.Context, cfg config.TURNConfig, m *Manager, counter *traffic.Counter) (func() error, error) {
 	host, _, err := net.SplitHostPort(cfg.ListenAddr)
 	if err != nil {
 		return nil, err
@@ -63,7 +64,7 @@ func Listen(ctx context.Context, cfg config.TURNConfig, m *Manager) (func() erro
 	if host == "" {
 		host = "0.0.0.0"
 	}
-	generator := &Generator{Manager: m, Base: &pion.RelayAddressGeneratorPortRange{RelayAddress: net.ParseIP(cfg.PublicIP), Address: host, MinPort: cfg.RelayMinPort, MaxPort: cfg.RelayMaxPort}, AllowedPeer: DestinationPolicy(cfg.AllowedPeers, cfg.AllowPublicPeers, netip.MustParseAddr(cfg.PublicIP))}
+	generator := &Generator{Traffic: counter, Manager: m, Base: &pion.RelayAddressGeneratorPortRange{RelayAddress: net.ParseIP(cfg.PublicIP), Address: host, MinPort: cfg.RelayMinPort, MaxPort: cfg.RelayMaxPort}, AllowedPeer: DestinationPolicy(cfg.AllowedPeers, cfg.AllowPublicPeers, netip.MustParseAddr(cfg.PublicIP))}
 	if err := generator.Validate(); err != nil {
 		return nil, err
 	}
@@ -79,8 +80,8 @@ func Listen(ctx context.Context, cfg config.TURNConfig, m *Manager) (func() erro
 	logger := logging.NewDefaultLoggerFactory()
 	logger.DefaultLogLevel = logging.LogLevelDisabled
 	relay, err := pion.NewServer(pion.ServerConfig{Realm: cfg.Realm, AuthHandler: m.Authenticate, LoggerFactory: logger,
-		PacketConnConfigs: []pion.PacketConnConfig{{PacketConn: udp, RelayAddressGenerator: generator}},
-		ListenerConfigs:   []pion.ListenerConfig{{Listener: limitedTCPListener(tcp, min(10000, cfg.MaxAllocations*2+64)), RelayAddressGenerator: generator}},
+		PacketConnConfigs: []pion.PacketConnConfig{{PacketConn: traffic.WrapPacketConn(udp, counter), RelayAddressGenerator: generator}},
+		ListenerConfigs:   []pion.ListenerConfig{{Listener: limitedTCPListener(traffic.WrapListener(tcp, counter), min(10000, cfg.MaxAllocations*2+64)), RelayAddressGenerator: generator}},
 	})
 	if err != nil {
 		_ = udp.Close()

@@ -3,6 +3,7 @@ package turn
 import (
 	"net"
 	"net/netip"
+	"noxa/internal/traffic"
 	"testing"
 	"time"
 
@@ -20,7 +21,8 @@ func TestLocalRelayPairDoesNotRequireNATHairpin(t *testing.T) {
 	// The advertised documentation address cannot be routed to these sockets.
 	// Both directions must use the registry's local-address translation.
 	public := netip.MustParseAddr("203.0.113.77")
-	generator := &Generator{Manager: m, Base: &pion.RelayAddressGeneratorPortRange{RelayAddress: net.IP(public.AsSlice()), Address: "0.0.0.0", MinPort: 30000, MaxPort: 39999}, AllowedPeer: DestinationPolicy(nil, false, public)}
+	counter := &traffic.Counter{}
+	generator := &Generator{Traffic: counter, Manager: m, Base: &pion.RelayAddressGeneratorPortRange{RelayAddress: net.IP(public.AsSlice()), Address: "0.0.0.0", MinPort: 30000, MaxPort: 39999}, AllowedPeer: DestinationPolicy(nil, false, public)}
 	logger := logging.NewDefaultLoggerFactory()
 	logger.DefaultLogLevel = logging.LogLevelDisabled
 	srv, err := pion.NewServer(pion.ServerConfig{Realm: "pair", AuthHandler: m.Authenticate, LoggerFactory: logger, PacketConnConfigs: []pion.PacketConnConfig{{PacketConn: listener, RelayAddressGenerator: generator}}})
@@ -73,6 +75,9 @@ func TestLocalRelayPairDoesNotRequireNATHairpin(t *testing.T) {
 		if err != nil || string(buf[:n]) != "local relay packet" || from.String() != pair[0].LocalAddr().String() {
 			t.Fatalf("mapped relay: n=%d from=%v err=%v", n, from, err)
 		}
+	}
+	if counts := counter.Snapshot(); counts.In != 2*int64(len("local relay packet")) || counts.Out != counts.In {
+		t.Fatalf("relay socket traffic: %+v", counts)
 	}
 	m.Revoke("b")
 	_, _ = ra.WriteTo([]byte("revoked relay packet"), rb.LocalAddr())
