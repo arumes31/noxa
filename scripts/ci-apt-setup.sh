@@ -2,7 +2,7 @@
 set -euo pipefail
 # Some hosted runners stall on azure.archive.ubuntu.com. Keep the same signed
 # Ubuntu suites/components and keyrings, using the official archive instead.
-for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
   if [[ -f "$source" ]]; then
     sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|https://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' "$source"
   fi
