@@ -46,3 +46,10 @@ test("backoff is exponential, jittered and capped at thirty seconds", () => {
         assert.ok(reconnectDelay(attempt, () => 0.99999) <= 30000);
     }
 });
+
+test("retry now skips backoff, refuses parallel attempts and works with auto retry disabled", async t => {
+    t.mock.timers.enable({apis:["setTimeout","setInterval"]});let calls=0,release;
+    const reconnects=createTabReconnects({enabled:()=>false,connect:async()=>{calls++;return await new Promise(resolve=>release=resolve);},complete:async()=>true});
+    assert.equal(reconnects.retryNow("a",{addr:"original"}),true);t.mock.timers.tick(0);await Promise.resolve();
+    assert.equal(calls,1);assert.equal(reconnects.retryNow("a"),false);release({error:"offline"});for(let i=0;i<8;i++)await Promise.resolve();t.mock.timers.tick(60000);assert.equal(calls,1);reconnects.cancelAll();
+});

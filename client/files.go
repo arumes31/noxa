@@ -645,7 +645,7 @@ func (cm *connManager) uploadFileProgress(id string, channelID int64, folder, na
 var errTransferCanceled = errors.New("transfer canceled")
 
 // ftUploadProgress streams data with per-chunk progress callbacks.
-func (m *connManager) ftUploadProgress(id string, ep ftEndpoint, token, transferID string, data []byte, p *ftProgress) error {
+func (m *connManager) ftUploadProgress(id string, ep ftEndpoint, token, transferID string, data []byte, p *ftProgress, canceled ...func() bool) error {
 	conn, err := transferDial(ep)
 	if err != nil {
 		return err
@@ -657,6 +657,9 @@ func (m *connManager) ftUploadProgress(id string, ep ftEndpoint, token, transfer
 		return errTransferCanceled
 	}
 	defer untrack()
+	if len(canceled) > 0 && canceled[0]() {
+		return errTransferCanceled
+	}
 
 	if err := ftWriteJSON(conn, ftInit, map[string]string{"token": token, "transfer_id": transferID}); err != nil {
 		return err

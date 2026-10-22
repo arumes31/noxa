@@ -24,9 +24,10 @@ export function createTabReconnects(options) {
     }
     function schedule(entry) {
         if (!current(entry)) return;
-        if (!options.enabled()) { cancel(entry.tabID); return; }
+        if (!options.enabled() && !entry.manual) { cancel(entry.tabID); return; }
         entry.attempts++;
-        const delay = (options.delay || reconnectDelay)(entry.attempts);
+        const delay = entry.immediate ? 0 : (options.delay || reconnectDelay)(entry.attempts);
+        entry.immediate = false;
         entry.remaining = Math.ceil(delay / 1000);
         options.scheduled?.(entry.tabID, entry);
         entry.countdown = setInterval(() => {
@@ -37,7 +38,7 @@ export function createTabReconnects(options) {
         entry.timer = setTimeout(async () => {
             clear(entry);
             if (!current(entry)) return;
-            if (!options.enabled()) { cancel(entry.tabID); return; }
+            if (!options.enabled() && !entry.manual) { cancel(entry.tabID); return; }
             entry.inFlight = true;
             notify(entry);
             const lossVersion = entry.lossVersion;
@@ -62,7 +63,7 @@ export function createTabReconnects(options) {
                 }
             } catch (cause) { error = String(cause || "reconnect failed"); }
             if (!current(entry)) return;
-            entry.inFlight = false;
+            entry.inFlight = false; entry.manual = false;
             if (error) options.failed?.(entry.tabID, error);
             schedule(entry);
         }, delay);
@@ -70,7 +71,7 @@ export function createTabReconnects(options) {
     }
     return {
         start(tabID, target) {
-            if (!tabID || !target || !options.enabled()) return;
+            if (!tabID || !target) return;
             const existing = entries.get(tabID);
             if (existing) {
                 // A newly recovered socket can fail while its status query is
@@ -78,9 +79,16 @@ export function createTabReconnects(options) {
                 existing.lossVersion++;
                 return;
             }
+            if (!options.enabled()) return;
             const entry = { tabID, target: { ...target }, attempts: 0, inFlight: false, lossVersion: 0 };
             entries.set(tabID, entry);
             schedule(entry);
+        },
+        retryNow(tabID, target = null) {
+            let entry = entries.get(tabID);
+            if (!entry && target) { entry = { tabID, target: { ...target }, attempts: 0, inFlight: false, lossVersion: 0 }; entries.set(tabID, entry); }
+            if (!entry || entry.inFlight) return false;
+            clear(entry); entry.immediate = true; entry.manual = true; schedule(entry); return true;
         },
         cancel,
         cancelAll() { for (const tabID of [...entries.keys()]) cancel(tabID); },

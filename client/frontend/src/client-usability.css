@@ -1,0 +1,26 @@
+#sidebar { position: relative; }
+#sidebar-resize { position: absolute; inset: 0 -3px 0 auto; width: 7px; z-index: 20; cursor: col-resize; touch-action: none; }
+#sidebar-resize:hover, #sidebar-resize:focus-visible, .resizing-sidebar #sidebar-resize { background: var(--accent); opacity: .7; outline: none; }
+.resizing-sidebar { user-select: none; cursor: col-resize; }
+#workspace-connection-status { font-size: .75rem; line-height: 1.4; color: var(--text-dim); overflow-wrap: anywhere; }
+#workspace-connection-status[data-state="reconnecting"] { color: var(--warn); }
+#workspace-connection-status[data-state="offline"] { color: var(--text-faint); }
+body:not(.details-collapsed) #details-toggle[aria-expanded="true"] { display: inline-flex; color: var(--accent); background: var(--accent-dim); }
+#details-toggle .ui-icon, #chat-search-btn .ui-icon, #chat-head-actions .ui-icon, #center-tabs .ui-icon { display: block; margin: 0; }
+#chat-head-actions > button, #center-tabs > button { align-items: center; justify-content: center; }
+#voice-bar .voice-buttons > .voice-control, #voice-bar .voice-microphone > button, #voice-bar .voice-buttons > details > summary { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }
+#voice-bar .voice-buttons .ui-icon { display: block; flex: 0 0 auto; width: 20px; height: 20px; margin: 0; }
+.ch-count.full { color: var(--warn); }
+.ch-unread.reply, .pm-unread.reply { color: var(--accent); border: 1px solid var(--accent); }
+.ch-unread.mention, .pm-unread.mention { font-weight: 700; }
+.portal-broadcast { display: block; font-size: .8rem; color: var(--text-dim); overflow-wrap: anywhere; }
+.portal-broadcast[data-state="live"] { color: var(--danger); }
+.chat-upload-queue { display: flex; flex-direction: column; gap: 5px; max-height: 160px; overflow: auto; padding: 6px 0; }
+.chat-upload-item { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 6px; font-size: .8rem; }
+.chat-upload-item .upload-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-upload-item progress { grid-column: 1 / -1; width: 100%; height: 4px; accent-color: var(--accent); }
+.chat-upload-item button { min-height: 26px; }
+@media (max-width: 720px) { #sidebar-resize { display: none; } }
+body.compact #sidebar-resize { display: none; }
+
+#voice-bar #voice-options > summary > .ui-icon { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }

@@ -1,3 +1,4 @@
+import { unreadLabel } from "./client-usability-model.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { appendUnreadBadge } from "./chat-unread.js";
@@ -32,7 +33,7 @@ export function createChatTabs(root, { onLayoutChange, onRefresh } = {}) {
         if (scroll) reveal(key);
     }
     function description(item) {
-        return [item.name, pinned(item.key) && t("chat.tabsPinned"), item.unread > 0 && t("chat.tabsUnread", { count: item.unread }), item.offline && t("chat.offline")].filter(Boolean).join(", ");
+        return [item.name, pinned(item.key) && t("chat.tabsPinned"), item.unread > 0 && unreadLabel(item.unread, item.mentions || Number(item.mention), item.replies), item.offline && t("chat.offline")].filter(Boolean).join(", ");
     }
     function save(order, pins, key) {
         if (!ready) return;
@@ -133,7 +134,7 @@ export function createChatTabs(root, { onLayoutChange, onRefresh } = {}) {
             const name = document.createElement("span"); name.className = "pm-tab-name"; name.textContent = item.name; button.append(name);
             tab.append(button);
             if (item.offline) { const badge = document.createElement("span"); badge.className = "pm-badge offline"; badge.textContent = t("chat.offline"); tab.append(badge); }
-            if (item.unread > 0) appendUnreadBadge(tab, item.unread, item.arrivedAt, item.mention);
+            if (item.unread > 0) appendUnreadBadge(tab, item.unread, item.arrivedAt, item.mention, item.mentions, item.replies);
             if (item.close) {
                 const close = document.createElement("button"); close.type = "button"; close.className = "pm-close"; close.textContent = "✕"; close.tabIndex = -1;
                 close.setAttribute("aria-label", t("chat.tabsCloseNamed", { name: item.name })); close.title = t("chat.tabClose");

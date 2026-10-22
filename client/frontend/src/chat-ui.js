@@ -13,6 +13,7 @@ import { resolveParent, directPeer } from "./chat-relations.js";
 import { fileCardText, previewLine } from "./dm-model.js";
 import { manageChatGIFPlayback } from "./chat-gif-playback.js";
 import { openChatMediaLightbox } from "./chat-media-lightbox.js";
+import { createChatUploadQueue } from "./chat-upload-queue.js";
 import { createUnreadTabEffects } from "./chat-unread.js";
 import { createChatTabs } from "./chat-tabs.js";
 import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
@@ -101,6 +102,7 @@ let replyTo = null; // message object being replied to (107)
 let replyRevision = 0;
 let draftRevision = 0;
 let activeSend = null;
+let attachmentQueue = null;
 let pendingFiles = []; // {name, dataBase64, isImage, dataURL} staged for send (98/100)
 let emojiPanel = null; // open emoji panel element (95)
 let pinsPanel = null; // open pins panel element (109)
@@ -345,6 +347,7 @@ function invalidateChatViewWork() {
     activeSend = null;
     $("chat-send").disabled = false;
     pendingFiles = [];
+    attachmentQueue?.reset();
     renderFilePreview();
     clearReply();
     resetTypingOut();
@@ -1942,7 +1945,7 @@ function renderTabs() {
         items.push({
             key: "ch:" + id, name: "# " + channelName(id),
             active: activeChannelID() === id && view.kind !== "global" && view.kind !== "dm",
-            unread: badge?.n || 0, arrivedAt: badge?.unreadAt, mention: badge?.mention,
+            unread: badge?.n || 0, arrivedAt: badge?.unreadAt, mention: badge?.mention, mentions: badge?.mentions, replies: badge?.replies,
             title: t(joined ? "chat.joinedChannel" : "chat.subscribedChannel"),
             open: () => { if (current() && chanTabs.has(id)) activateChannel(id); },
             close: joined ? null : () => { if (current() && chanTabs.has(id)) closeChannelTab(id); },
@@ -2532,7 +2535,9 @@ export function addChat(d) {
         // through the tree.
         const u = unread.get(chID) || { n: 0, mention: false };
         u.n++;
-        u.mention = u.mention || m.mentioned;
+        u.mention = u.mention || directMention || roleMention;
+        u.mentions = (u.mentions || 0) + Number(directMention || roleMention);
+        u.replies = (u.replies || 0) + Number(!m.self && !!m.replyToID && !!findMsg(m.replyToID)?.self);
         if (!st.replayingTabID) u.unreadAt = Date.now();
         unread.set(chID, u);
         V().renderTree();
@@ -3007,33 +3012,48 @@ export async function sendMessage() {
     const { sendScope: scope, target } = captured;
     const parentID = scope === "direct" ? 0 : (replyTo?.id || 0);
     const files = pendingFiles.splice(0);
+    const jobs = files.length ? attachmentQueue.add(files, captured.tabID, async (file, job) => {
+        if (!scopeIsCurrent(captured, readSendScope) || activeSend) return;
+        const retryOperation = { scope: captured }; activeSend = retryOperation; $("chat-send").disabled = true;
+        const retryCurrent = () => activeSend === retryOperation && scopeIsCurrent(captured, readSendScope);
+        try {
+            const token = await attachmentQueue.upload(job, captured.sendScope === "channel" ? captured.channelID : 0, retryCurrent);
+            if (!token || !retryCurrent()) return;
+            const error = await app().SendChatForTab(captured.tabID, captured.sendScope, captured.target, token);
+            if (!retryCurrent()) return;
+            attachmentQueue.finish(job, error);
+            if (!error) { pendingFiles = pendingFiles.filter(entry => entry !== file); renderFilePreview(); }
+        } catch (error) { if (retryCurrent()) attachmentQueue.finish(job, error); }
+        finally { if (activeSend === retryOperation) { activeSend = null; $("chat-send").disabled = false; } }
+    }) : [];
     renderFilePreview();
     if (scope === "direct") {
         if (target && !pmTabs.has(target)) openPMKeepView(target);
     }
     try {
         const chID = scope === "channel" ? captured.channelID : 0;
-        for (const f of files) {
+        for (const [index, f] of files.entries()) {
+            const job = jobs[index];
             if (!current()) return;
+            if (job.canceled) continue;
             let token;
             try {
-                token = await app().UploadChatAttachmentForTab(captured.tabID, chID, f.name, f.dataBase64);
+                token = await attachmentQueue.upload(job, chID, current);
+                if (!token) continue;
             } catch (e) {
                 if (!current()) return;
-                failure = e;
-                retryFiles.push(f);
+                if (!job.canceled) { failure = e; retryFiles.push(f); }
                 continue;
             }
             if (!current()) return;
             try {
                 const err = await app().SendChatForTab(captured.tabID, scope, target, token);
                 if (!current()) return;
-                if (err) {
-                    failure = err;
-                    retryFiles.push(f);
-                }
+                attachmentQueue.finish(job, err);
+                if (err) { failure = err; retryFiles.push(f); }
             } catch (e) {
                 if (!current()) return;
+                attachmentQueue.finish(job, e);
                 failure = e;
                 retryFiles.push(f);
             }
@@ -4196,6 +4216,7 @@ export function resetView(options = {}) {
     pendingChannelTab = 0;
     replyTo = null;
     pendingFiles = [];
+    attachmentQueue?.reset();
     newCount = 0;
     jl.verb = null;
     jl.names = [];
@@ -4562,6 +4583,10 @@ function handleTabComplete(e) {
 export function initChat() {
     chatTabs?.dispose();
     unreadEffects?.dispose();
+    const uploadHost = document.createElement("div"); uploadHost.className = "chat-upload-queue"; uploadHost.hidden = true;
+    $("file-preview-row").after(uploadHost);
+    attachmentQueue = createChatUploadQueue({ app, currentTab: () => V().state.activeTabID, container: uploadHost });
+    window.runtime.EventsOn("ft_progress", event => attachmentQueue.progress(event));
     unreadEffects = createUnreadTabEffects($("pm-tabs"));
     chatTabs = createChatTabs($("pm-tabs"), { onLayoutChange: saveTabLayout, onRefresh: () => unreadEffects?.refresh() });
     initMessageTools({ unread: unreadMessageReferences, jump: jumpMessageReference });

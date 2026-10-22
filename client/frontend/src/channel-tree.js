@@ -1,4 +1,5 @@
 // channel-tree.js — channel/member rendering and tree interaction.
+import { joinFailure, unreadLabel } from "./client-usability-model.js";
 import { isUserMuted } from "./audio.js";
 import * as chatUI from "./chat-ui.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
@@ -210,28 +211,35 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             const count = document.createElement("span");
             count.className = "ch-count mono";
             count.textContent = `${ch.ClientCount}${ch.MaxClients > 0 ? "/" + ch.MaxClients : ""}`;
+            if (ch.MaxClients > 0) {
+                const capacity = t("usability.capacity", { occupied: ch.ClientCount, capacity: ch.MaxClients, available: Math.max(0, ch.MaxClients - ch.ClientCount) });
+                count.title = capacity; count.setAttribute("aria-label", capacity);
+                count.classList.toggle("full", ch.ClientCount >= ch.MaxClients);
+                el.title += " · " + capacity; el.setAttribute("aria-label", el.getAttribute("aria-label") + ", " + capacity);
+            }
             el.appendChild(count);
         }
         // (104) unread badge; accent variant when it includes a mention of me.
         const ub = chatUI.unreadFor(ch.ChannelID);
         if (ub && ub.n > 0) {
             const badge = document.createElement("span");
-            badge.className = "ch-unread" + (ub.mention ? " mention" : "");
-            badge.textContent = ub.n > 99 ? "99+" : ub.n;
+            badge.className = "ch-unread" + (ub.mention ? " mention" : ub.replies ? " reply" : "");
+            badge.title = unreadLabel(ub.n, ub.mentions || Number(ub.mention), ub.replies); badge.setAttribute("aria-label", badge.title);
+            badge.textContent = (ub.mention ? "@ " : ub.replies ? "↩ " : "") + (ub.n > 99 ? "99+" : ub.n);
             el.appendChild(badge);
         }
         el.onclick = async () => {
             if (generation !== state.serverGeneration) return;
-            if (cannotJoin) { toast(t("channel.access.denied"), "warn"); return; }
+            if (cannotJoin) { toast(joinFailure("permission denied"), "warn", "alert", { bypassDND: true }); return; }
             // Channel chat navigation is immediate, even when joining the same
             // voice channel emits no new membership event.
             window.__noxa.closeDirectMessages?.();
             void chatUI.openChannelTab(ch.ChannelID);
             try {
                 const err = await window.go.main.App.JoinChannelForTab(tabID, ch.ChannelID);
-                if (err && generation === state.serverGeneration) toast(t("runtime.joinFailed", { error: String(err) }), "warn");
+                if (err && generation === state.serverGeneration) toast(joinFailure(err), "warn", "alert", { bypassDND: true });
             } catch (err) {
-                if (generation === state.serverGeneration) toast(t("runtime.joinFailed", { error: String(err) }), "warn");
+                if (generation === state.serverGeneration) toast(joinFailure(err), "warn", "alert", { bypassDND: true });
             }
         };
         // (163) drag a channel onto another to take that channel's slot among its
