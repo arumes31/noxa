@@ -29,13 +29,13 @@
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource-variable/outfit": "^5.3.0",
     "@fontsource-variable/sora": "^5.3.0",
-    "@mediapipe/tasks-vision": "1.1.0",
-    "livekit-client": "2.22.3"
+    "@mediapipe/tasks-vision": "1.1.1",
+    "livekit-client": "2.22.4"
   },
   "devDependencies": {
-    "@playwright/test": "^1.64.0",
+    "@playwright/test": "^1.64.1",
     "acorn": "8.19.0",
     "eslint-scope": "9.1.2",
-    "vite": "^8.3.3"
+    "vite": "^8.3.4"
   }
 }
