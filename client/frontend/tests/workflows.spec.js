@@ -3419,7 +3419,7 @@ test.describe("tab-bound member actions and branding", () => {
         expect(await page.evaluate(() => window.__noxa.state.myChannelID)).toBe(1);
         await expect(page.locator("#toasts .toast")).toHaveCount(0);
         await page.evaluate(() => window.__actions.release());
-        await expect(page.locator("#toasts .toast")).toHaveText("join failed: channel access denied");
+        await expect(page.locator("#toasts .toast")).toHaveText("You do not have permission to join this room. Ask a server administrator for access.");
         expect(await page.evaluate(() => window.__noxa.state.myChannelID)).toBe(1);
     });
 
@@ -5909,13 +5909,15 @@ test("B3 ignores a volume save failure after selecting another member", async ({
     await expect(page.locator("#member-action-error")).toBeHidden();
 });
 
-test("B3 shows the details opener only while the pane is closed", async ({ page }) => {
+test("B3 keeps the room-details toggle visible and reflects the pane state", async ({ page }) => {
     await showB3Workspace(page);
     const opener = page.locator("#details-toggle");
     await expect(opener).toBeVisible();
     await opener.click();
-    await expect(opener).toBeHidden();
+    await expect(opener).toBeVisible();
+    await expect(opener).toHaveAttribute("aria-expanded", "true");
     await page.locator("#details-close").click();
+    await expect(opener).toHaveAttribute("aria-expanded", "false");
     await expect(opener).toBeVisible();
     await expect(opener).toBeFocused();
 });
