@@ -39,7 +39,8 @@ export function initClientUsability() {
         const connected = pill.classList.contains("up") && (!phase || phase === "connected");
         const server = state.reconnectInFlight || state.reconnectAttempts ? "reconnecting" : connected ? "connected" : "offline";
         const voice = window.__noxaPrivateCalls?.active?.() ? "privateCall" : !connected ? "voiceOffline" : state.myChannelID ? "voiceConnected" : "noVoice";
-        status.textContent = t("usability.server." + server) + " · " + t("usability." + voice);
+        status.textContent = t("usability.server." + server);
+        status.title = status.textContent + " · " + t("usability." + voice);
         status.dataset.state = server;
         grip.setAttribute("aria-label", t("usability.resize")); grip.title = t("usability.resizeHelp");
     };
