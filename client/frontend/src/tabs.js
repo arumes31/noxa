@@ -276,6 +276,7 @@ function onTabReset(tabID) {
     window.__noxaNotify?.resetBuddyWatch(); // (383) buddy alerts re-arm per connect
     window.__noxaNotify?.resetServerRules?.(); // (216) gate belongs to one server tab
     state.myChannelID = 0;
+    state.supportsVoiceQueue = false;
     state.selectedClientID = "";
     V().setDetailsOpen(false);
     state.trackUsers.clear();

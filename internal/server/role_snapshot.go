@@ -63,6 +63,7 @@ func buildRoleSnapshotContext(ctx context.Context, sm *state.Manager, evaluator 
 		node.Children = nil
 		if evaluator.Evaluate(actorID, node.ChannelID, authorization.ViewChannel).Allowed {
 			node.Access = &broadcast.ChannelAccess{
+				CanManageVoiceQueue: evaluator.Evaluate(actorID, node.ChannelID, authorization.MuteMembers).Allowed,
 				Restricted: !evaluator.Evaluate(0, node.ChannelID, authorization.ViewChannel).Allowed ||
 					!evaluator.Evaluate(0, node.ChannelID, authorization.Connect).Allowed,
 				CanConnect:      evaluator.Evaluate(actorID, node.ChannelID, authorization.Connect).Allowed,

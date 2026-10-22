@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"noxa/internal/traffic"
 	"time"
 
 	"noxa/internal/auth"
@@ -238,6 +239,8 @@ type ScopeKeyStore interface {
 // tests and during partial startups.
 type Deps struct {
 	Relay          *turn.Manager
+	Traffic        *traffic.Counter
+	TrafficHistory *traffic.Recorder
 	Auth           AuthBackend
 	State          *state.Manager
 	Channels       ChannelBackend

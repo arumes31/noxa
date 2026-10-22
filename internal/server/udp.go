@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"noxa/internal/traffic"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -61,9 +62,10 @@ type UDPStats struct {
 // sync.Pool of MTU-sized buffers to avoid per-packet allocations and a
 // bounded worker pool to avoid unbounded goroutine creation under load.
 type UDPServer struct {
-	cfg    *config.Config
-	logger *zap.Logger
-	conn   *net.UDPConn
+	traffic *traffic.Counter
+	cfg     *config.Config
+	logger  *zap.Logger
+	conn    *net.UDPConn
 
 	bufPool sync.Pool
 
@@ -174,6 +176,7 @@ func (s *UDPServer) readLoop() {
 		buf := *bufp
 
 		n, remote, err := s.conn.ReadFromUDP(buf)
+		s.traffic.In(n)
 		if err != nil {
 			// Return the buffer to the pool regardless of error path.
 			s.bufPool.Put(bufp)
@@ -299,7 +302,9 @@ func (s *UDPServer) metric() metrics.Sink {
 
 // handlePing replies with a Pong datagram to the sender's address.
 func (s *UDPServer) handlePing(remote *net.UDPAddr, _ []byte) {
-	if _, err := s.conn.WriteToUDP([]byte{netproto.UDPMsgPong}, remote); err != nil {
+	n, err := s.conn.WriteToUDP([]byte{netproto.UDPMsgPong}, remote)
+	s.traffic.Out(n)
+	if err != nil {
 		if !s.isClosed(err) {
 			s.logger.Warn("udp pong write error",
 				zap.String("remote", remote.String()),
@@ -349,3 +354,6 @@ func (s *UDPServer) InboundQueueDepth() int {
 func (s *UDPServer) isClosed(err error) bool {
 	return errors.Is(err, net.ErrClosed)
 }
+
+// SetTrafficCounter must be called before Start.
+func (s *UDPServer) SetTrafficCounter(counter *traffic.Counter) { s.traffic = counter }

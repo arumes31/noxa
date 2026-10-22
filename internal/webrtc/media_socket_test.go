@@ -3,6 +3,7 @@ package webrtc
 import (
 	"errors"
 	"net"
+	"noxa/internal/traffic"
 	"os"
 	"testing"
 	"time"
@@ -48,5 +49,43 @@ func TestMediaSocketWaitConsumesWriteBudget(t *testing.T) {
 	<-done
 	if !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("waiting writer: %v", err)
+	}
+}
+
+func TestMeteredSharedMediaSocketPreservesVoiceWrites(t *testing.T) {
+	raw, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	peer, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = peer.Close() }()
+	counter := &traffic.Counter{}
+	socket := &boundedPacketConn{PacketConn: raw, traffic: counter}
+	for _, packet := range [][]byte{{0x80, 111, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, []byte("video")} {
+		if _, err := socket.WriteTo(packet, peer.LocalAddr()); err != nil {
+			t.Fatal(err)
+		}
+		if err := peer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if n, _, err := peer.ReadFrom(make([]byte, 100)); err != nil || n != len(packet) {
+			t.Fatal(n, err)
+		}
+	}
+	if _, err := peer.WriteTo([]byte("incoming"), raw.LocalAddr()); err != nil {
+		t.Fatal(err)
+	}
+	if err := socket.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := socket.ReadFrom(make([]byte, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if counter.Snapshot() != (traffic.Counts{In: 8, Out: 17}) {
+		t.Fatal(counter.Snapshot())
 	}
 }

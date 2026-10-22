@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"noxa/internal/traffic"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,7 +85,8 @@ type Client struct {
 	bytesOut            int64     // payload bytes sent
 	lastPingAt          time.Time // last server-initiated Ping sent
 	rttNs               int64     // smoothed RTT in nanoseconds (EWMA)
-	rttKnown            bool      // whether any Pong was received
+	rttObservedAt       time.Time
+	rttKnown            bool // whether any Pong was received
 	voiceTelemetry      *netproto.VoiceTelemetry
 	voiceTelemetryAt    time.Time
 	voiceTelemetryEpoch uint64
@@ -248,6 +250,7 @@ func (c *Client) notePong() {
 	sample := time.Since(c.lastPingAt).Nanoseconds()
 	c.rttNs = ewmaRTT(c.rttNs, sample, c.rttKnown)
 	c.rttKnown = true
+	c.rttObservedAt = time.Now()
 }
 
 // ewmaRTT folds a new RTT sample into the exponentially weighted moving
@@ -577,6 +580,9 @@ func (s *TCPServer) Start(ctx context.Context) error {
 			return err
 		}
 		return nil
+	}
+	if s.deps != nil {
+		ln = traffic.WrapListener(ln, s.deps.Traffic)
 	}
 	if s.cfg.TLSEnabled {
 		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
@@ -1075,6 +1081,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handleSetStatus(ctx, client, f)
 	case netproto.MsgDisplayNameSet:
 		return s.handleDisplayNameSet(ctx, client, f)
+	case netproto.MsgVoiceQueueRequest:
+		return s.handleVoiceQueue(ctx, client, f)
 	case netproto.MsgAudioStateSet:
 		return s.handleAudioStateSet(ctx, client, f)
 	case netproto.MsgPoke:

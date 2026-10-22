@@ -12370,3 +12370,48 @@ test("switching to an existing tab at the same address cancels a pending connect
     await expect(page.locator("#login-connect")).toBeEnabled();
     await expect(page.locator(".connect-splash")).toHaveCount(0);
 });
+
+
+test("server information shows live server-wide quality and retained traffic windows @a11y", async ({ page }, testInfo) => {
+    await prepareServerInformation(page);
+    await page.clock.install();
+    await page.evaluate(() => {
+        window.__serverInfo.overview = {
+            clients: 4, latency_ms: 42, latency_samples: 3, loss_percent: 0, loss_samples: 2,
+            jitter_ms: null, jitter_samples: 0,
+            traffic: {
+                since_start: { in_bytes: 1024, out_bytes: 2048 },
+                days_7: { in_bytes: 1048576, out_bytes: 2097152 },
+                days_30: { in_bytes: 3145728, out_bytes: 4194304 },
+                all_time: { in_bytes: 5242880, out_bytes: 6291456 },
+                recording_since: 1792600000, persisted_at: 1792700000, storage_ok: true,
+            },
+        };
+    });
+    await page.locator("#server-name").click();
+    const dialog = page.getByRole("dialog", { name: "Server information" });
+    const overview = dialog.getByRole("region", { name: "Server-wide overview" });
+    await expect(overview.locator('[data-overview-stat="latency"]')).toHaveText("42 ms");
+    await expect(overview.locator('[data-overview-stat="loss"]')).toHaveText("0.00 %");
+    await expect(overview.locator('[data-overview-stat="jitter"]')).toHaveText("—");
+    for (const [key, amounts] of Object.entries({ start:["1.00 KiB","2.00 KiB"],days7:["1.00 MiB","2.00 MiB"],days30:["3.00 MiB","4.00 MiB"],all:["5.00 MiB","6.00 MiB"] })) {
+        await expect(overview.locator(`[data-overview-window="${key}"] td`)).toHaveText(amounts);
+    }
+    await expect(overview.getByText(/Database checkpoints every 5 minutes/)).toBeVisible();
+    await expect(overview.locator('[role="status"]')).toBeHidden();
+    await overview.getByText("Measurement details", { exact: true }).click();
+    await expect(overview.getByText(/In = received by the server/)).toBeVisible();
+    await auditAccessibility(page, "server-wide overview");
+    await dialog.locator(".server-info").screenshot({path:testInfo.outputPath("server-overview.png")});
+    await page.evaluate(() => { window.__serverInfo.overview.latency_ms = 25;window.__serverInfo.overview.traffic.storage_ok = false; });
+    await page.clock.runFor(2000);
+    await expect(overview.locator('[data-overview-stat="latency"]')).toHaveText("25 ms");
+    await expect(overview.locator('[role="status"]')).toBeVisible();
+    await expect(dialog.locator('[data-stat="control-in"]')).toHaveText("2.00 KiB");
+    await page.setViewportSize({width:420,height:600});
+    expect(await dialog.locator(".server-info-body").evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.evaluate(() => { delete window.__serverInfo.overview; });
+    await page.clock.runFor(2000);
+    await expect(overview.getByText(/metrics require a supporting server/)).toBeVisible();
+    await expect(overview.locator('[data-overview-stat="latency"]')).toBeHidden();
+});

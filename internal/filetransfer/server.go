@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"noxa/internal/traffic"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -148,6 +149,7 @@ func quotaFor(used int64, limitMB int64) Quota {
 // Config holds the file-transfer server settings (populated from the
 // "file_*" config keys).
 type Config struct {
+	Traffic *traffic.Counter
 	// Addr is the listen address (e.g. ":12336").
 	Addr string
 	// RootDir is where uploaded files are stored, laid out per channel.
@@ -1154,6 +1156,7 @@ func (s *Server) Start(ctx context.Context) error {
 		s.lifecycleMu.Unlock()
 		return fmt.Errorf("filetransfer listen on %s: %w", s.cfg.Addr, err)
 	}
+	ln = traffic.WrapListener(ln, s.cfg.Traffic)
 	if s.cfg.TLSEnabled {
 		ln = tls.NewListener(ln, &tls.Config{
 			Certificates: []tls.Certificate{s.cfg.Cert},

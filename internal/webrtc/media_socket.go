@@ -2,6 +2,7 @@ package webrtc
 
 import (
 	"net"
+	"noxa/internal/traffic"
 	"os"
 	"sync"
 	"time"
@@ -151,14 +152,20 @@ func (g *socketWriteGate) writePriority(voice bool, set func(time.Time) error, w
 }
 
 type boundedPacketConn struct {
+	traffic *traffic.Counter
 	net.PacketConn
 	writes socketWriteGate
 	dscp   voiceDSCP
 }
 
+func (c *boundedPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	n, addr, err := c.PacketConn.ReadFrom(p)
+	c.traffic.In(n)
+	return n, addr, err
+}
 func (c *boundedPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	voice := isVoiceRTP(b)
-	return c.writes.writePriority(voice, c.PacketConn.SetWriteDeadline, func() (int, error) {
+	n, err := c.writes.writePriority(voice, c.PacketConn.SetWriteDeadline, func() (int, error) {
 		if voice {
 			if n, ok, err := writeVoiceMarked(&c.dscp, c.PacketConn, b, addr); ok {
 				return n, err
@@ -166,6 +173,8 @@ func (c *boundedPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 		}
 		return c.PacketConn.WriteTo(b, addr)
 	})
+	c.traffic.Out(n)
+	return n, err
 }
 func (c *boundedPacketConn) SetWriteDeadline(t time.Time) error {
 	return c.writes.setDeadline(t, c.PacketConn.SetWriteDeadline)
@@ -226,7 +235,10 @@ func (c *boundedTCPConn) SetDeadline(t time.Time) error {
 // These are the socket constructors used by the pinned ICE implementation for
 // direct candidates, STUN and UDP/TCP/TLS TURN. The shared UDP mux is wrapped
 // separately because it is constructed outside transport.Net.
-type boundedMediaNet struct{ transport.Net }
+type boundedMediaNet struct {
+	transport.Net
+	traffic *traffic.Counter
+}
 
 func (n boundedMediaNet) ListenUDP(network string, addr *net.UDPAddr) (transport.UDPConn, error) {
 	c, err := n.Net.ListenUDP(network, addr)
@@ -236,26 +248,26 @@ func (n boundedMediaNet) ListenUDP(network string, addr *net.UDPAddr) (transport
 	if buffer, ok := c.(interface{ SetWriteBuffer(int) error }); ok {
 		_ = buffer.SetWriteBuffer(mediaSendBufferBytes) // Best effort, as for the shared socket.
 	}
-	return &boundedUDPConn{UDPConn: c}, nil
+	return &boundedUDPConn{UDPConn: &meteredMediaUDP{UDPConn: c, counter: n.traffic}}, nil
 }
 func (n boundedMediaNet) ListenPacket(network, addr string) (net.PacketConn, error) {
 	c, err := n.Net.ListenPacket(network, addr)
 	if err != nil {
 		return nil, err
 	}
-	return &boundedPacketConn{PacketConn: c}, nil
+	return &boundedPacketConn{PacketConn: c, traffic: n.traffic}, nil
 }
 func (n boundedMediaNet) DialUDP(network string, local, remote *net.UDPAddr) (transport.UDPConn, error) {
 	c, err := n.Net.DialUDP(network, local, remote)
 	if err != nil {
 		return nil, err
 	}
-	return &boundedUDPConn{UDPConn: c}, nil
+	return &boundedUDPConn{UDPConn: &meteredMediaUDP{UDPConn: c, counter: n.traffic}}, nil
 }
 func (n boundedMediaNet) DialTCP(network string, local, remote *net.TCPAddr) (transport.TCPConn, error) {
 	c, err := n.Net.DialTCP(network, local, remote)
 	if err != nil {
 		return nil, err
 	}
-	return &boundedTCPConn{TCPConn: c}, nil
+	return &boundedTCPConn{TCPConn: &meteredMediaTCP{TCPConn: c, counter: n.traffic}}, nil
 }

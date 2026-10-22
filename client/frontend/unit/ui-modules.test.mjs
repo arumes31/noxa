@@ -548,7 +548,7 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         const state = { activeTabID: "a", serverGeneration: 1, myChannelID: 7 };
         const nodes = new Map(["chat-text", "chat-send", "chat-scope", "file-preview-row", "reply-bar", "chat-send-error", "chat-retry"].map(id => [id, { ...element(), value: "" }]));
         const errorText = element();
-        nodes.get("chat-send-error").querySelector = () => errorText;
+        nodes.get("chat-send-error").querySelector = selector => selector === "span" ? errorText : null;
         nodes.get("chat-scope").value = "channel";
         const input = nodes.get("chat-text"), button = nodes.get("chat-send");
         const notices = [], calls = [];

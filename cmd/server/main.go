@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"noxa/internal/traffic"
 	"os"
 	"os/signal"
 	"strings"
@@ -370,6 +371,21 @@ func run() (retErr error) {
 	}
 	dbStore.SetPIICipher(piiCipher)
 	logger.Info("fresh-version schema ready")
+	trafficCounter := &traffic.Counter{}
+	trafficCtx, cancelTraffic := context.WithTimeout(ctx, 5*time.Second)
+	trafficHistory, err := traffic.NewRecorder(trafficCtx, trafficCounter, dbStore)
+	cancelTraffic()
+	if err != nil {
+		return fmt.Errorf("initializing traffic history: %w", err)
+	}
+	trafficHistory.Start()
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := trafficHistory.Close(flushCtx); err != nil {
+			logger.Warn("traffic checkpoint failed during shutdown", zap.Error(err))
+		}
+	}()
 
 	// (91) chat key material. --reset-chat-keys runs first so an operator who
 	// lost the master key can start over instead of being locked out forever;
@@ -491,6 +507,7 @@ func run() (retErr error) {
 	}
 	videoBounds := webrtc.VideoBounds{Width: cfg.VideoMaxWidth, Height: cfg.VideoMaxHeight}
 	engine, err := webrtc.NewWithVideoBounds(logger, cfg.WebRTC.ICEServers, cfg.WebRTC.EnableAV1, webrtc.NetworkConfig{
+		Traffic: trafficCounter,
 		UDPAddr: cfg.WebRTC.UDPAddr, ExternalIPs: cfg.WebRTC.ExternalIPs,
 	}, videoBounds)
 	if err != nil {
@@ -580,6 +597,7 @@ func run() (retErr error) {
 	// Construct the UDP listener and register its scrape-time queue callback
 	// before the metrics endpoint starts serving.
 	udpServer := server.NewUDP(cfg, logger)
+	udpServer.SetTrafficCounter(trafficCounter)
 	udpServer.Metrics = m
 	m.RegisterUDPInboundQueueDepth(udpServer.InboundQueueDepth)
 
@@ -621,6 +639,7 @@ func run() (retErr error) {
 	// references it for token issuance). The control channel issues transfer
 	// tokens (permission-checked); the file port trusts only the token.
 	ftServer := filetransfer.New(filetransfer.Config{
+		Traffic:         trafficCounter,
 		Addr:            cfg.FileAddr,
 		RootDir:         cfg.FileRoot,
 		MaxKBps:         cfg.FileMaxKBps,
@@ -735,6 +754,8 @@ func run() (retErr error) {
 	}
 	tcpServer = server.New(cfg, logger, &server.Deps{
 		Relay:              relayManager,
+		Traffic:            trafficCounter,
+		TrafficHistory:     trafficHistory,
 		Auth:               authSvc,
 		State:              stateManager,
 		Channels:           channelMgr,

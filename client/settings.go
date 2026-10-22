@@ -257,6 +257,7 @@ type Settings struct {
 	LinkPreviews          *bool            `json:"link_previews,omitempty"` // nil keeps previews enabled for existing profiles
 	ChatTimestamps        string           `json:"chat_timestamps"`         // "absolute" | "relative" | "off"
 	ChatDensity           string           `json:"chat_density"`            // "comfortable" | "compact"
+	ChatUndoSeconds       int              `json:"chat_undo_seconds"`       // 0 disables the undo window; maximum 30 seconds
 	ChatFontSize          int              `json:"chat_font_size"`          // px, default 14
 	ChatLayout            string           `json:"chat_layout"`             // "irc" | "bubbles"
 	SysJoinLeave          bool             `json:"sys_join_leave"`          // show join/leave system lines (default on)
@@ -380,6 +381,7 @@ func DefaultSettings() Settings {
 		ChatTimestamps:            "absolute",
 		ChatDensity:               "comfortable",
 		ChatFontSize:              14,
+		ChatUndoSeconds:           5,
 		ChatLayout:                "irc",
 		SysJoinLeave:              true,
 		SysKick:                   true,
@@ -565,6 +567,7 @@ func normalizeSettings(s Settings) Settings {
 	}
 	s.WindowOpacity = clampSetting(s.WindowOpacity, 20, 100)
 	s.UIFontSize = clampSetting(s.UIFontSize, 10, 20)
+	s.ChatUndoSeconds = clampSetting(s.ChatUndoSeconds, 0, 30)
 	s.ChatFontSize = clampSetting(s.ChatFontSize, 12, 18)
 	s.SidebarWidth = normalizePanelWidth(s.SidebarWidth)
 	s.DetailsWidth = normalizePanelWidth(s.DetailsWidth)

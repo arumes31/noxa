@@ -1,0 +1,43 @@
+/* Linked entries refer to the same channel; voice membership is secondary to chat selection. */
+#text-channels .voice-linked-current { background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 40%, transparent); }
+#text-channels .voice-linked-current[aria-current="true"] { background: var(--accent-dim); }
+.linked-voice-mark { display: inline-flex; color: var(--text-faint); margin-left: auto; }
+.linked-voice-mark .ui-icon { width: 12px; height: 12px; }
+.voice-linked-current .linked-voice-mark { color: var(--accent); }
+#sidebar-scroll > #direct-section { margin: 0 0 8px; }
+.raised-hand-badge { font-size: 12px; margin-inline-start: 5px; }
+#voice-raise-hand[aria-pressed="true"] { color: var(--accent); background: var(--accent-dim); }
+#voice-raise-hand .ui-icon { width: 18px; height: 18px; }
+.voice-queue { border-top: 1px solid var(--border); padding: 12px 0; }
+.voice-queue h4 { margin: 0 0 8px; }
+.voice-queue-list { padding-left: 22px; margin: 8px 0; }
+.voice-queue-list li { padding: 4px 0; }
+.voice-queue-list li button { margin-left: 8px; font-size: .75rem; }
+.voice-queue-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.voice-queue-help { color: var(--text-dim); font-size: .75rem; }
+.voice-queue-called { color: var(--accent); font-size: .8rem; }
+.chat-delivery-strip { display: flex; align-items: center; gap: 8px; font-size: .8rem; padding: 6px 10px; background: var(--accent-dim); }
+.chat-delivery-strip button { min-height: 28px; }
+.chat-delivery-strip .delivery-countdown { flex: 1; }
+.outbox-dialog { width: min(620px, 90vw); max-height: 85vh; display: flex; flex-direction: column; }
+.outbox-list { overflow: auto; min-height: 0; }
+.outbox-entry { padding: 12px 0; border-top: 1px solid var(--border); }
+.outbox-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 100px; overflow: auto; margin: 6px 0; }
+.outbox-state, .outbox-help { color: var(--text-dim); font-size: .8rem; }
+.outbox-error { color: var(--warn); overflow-wrap: anywhere; font-size: .8rem; }
+.outbox-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+#chat-outbox-open[data-count]:not([data-count="0"]) { color: var(--accent); }
+.chat-offline-queue { margin-left: 8px; }
+
+.chat-delivery-strip[hidden] { display: none; }
+
+#chat-outbox-open { position: relative; }
+#chat-outbox-open:not([data-count="0"])::after { content: attr(data-count); position: absolute; top: -3px; right: -4px; min-width: 12px; padding: 1px 3px; background: var(--accent); color: var(--bg); font-size: 9px; line-height: 12px; border-radius: 6px; }
+
+.voice-queue button, .chat-delivery-strip button, .outbox-dialog button, .chat-offline-queue {
+ color: var(--text); background: var(--bg-panel); border: 1px solid var(--border);
+ padding: 4px 8px; min-height: 28px; border-radius: 4px; font: inherit; cursor: pointer;
+}
+.voice-queue button:hover, .chat-delivery-strip button:hover, .outbox-dialog button:hover, .chat-offline-queue:hover { border-color: var(--accent); }
+.voice-queue button:focus-visible, .chat-delivery-strip button:focus-visible, .outbox-dialog button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#sidebar-scroll > #direct-section > .side-head { margin-top: 10px; }

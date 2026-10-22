@@ -1194,6 +1194,8 @@ function pageChat() {
                 [["irc", t("settings.irc.lines")], ["bubbles", t("settings.bubbles")]],
                 s.chat_layout || "irc", (v) => { s.chat_layout = v; }), "", { key: "chat_layout" }),
             row(t("midnight.linkPreviews"), checkbox(s.link_previews !== false, value => { s.link_previews = value; }), "", { key: "link_previews", help: t("midnight.linkPreviewsHelp") }),
+            row(t("delivery.delay"), selectOf([[0, t("delivery.off")], ...[5, 10, 30].map(seconds => [seconds, t("delivery.seconds", { seconds })])],
+                s.chat_undo_seconds ?? 5, value => { s.chat_undo_seconds = Number(value); }), "", { key: "chat_undo_seconds", help: t("delivery.delayHelp") }),
             row(t("settings.font.size"), slider(s.chat_font_size || 14, 12, 18, (v) => { s.chat_font_size = v; }), "", { key: "chat_font_size" })),
         // (130) system-message category filters.
         group(t("settings.group.systemLines"), "system",

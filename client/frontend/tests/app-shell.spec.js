@@ -41,10 +41,10 @@ test('text channels list under Text, never in the voice tree, and open their cha
     await expect(page.locator('#channel-tree .channel[data-chid="11"]')).toHaveCount(0);
     await expect(page.locator('#channel-tree .channel[data-chid="2"]')).toBeVisible();
     const rows = page.locator('#text-channels .text-channel');
-    await expect(rows).toHaveText(['general', 'loot-council']);
+    await expect(rows).toHaveText(['Lobby', 'Raid Night', 'War Room', 'general', 'loot-council']);
     await expect(page.getByRole('heading', { name: 'Text', exact: true })).toBeVisible();
-    await expect(rows.first()).toHaveAccessibleName('Text channel general');
-    await rows.first().click();
+    await expect(rows.nth(3)).toHaveAccessibleName('Text channel general');
+    await rows.nth(3).click();
     await expect.poll(() => page.evaluate(() => window.__calls.filter(([method]) => method === 'SubscribeChannelsForTab').map(([, tab, ids, on]) => [tab, ids, on])))
         .toEqual([['shell-test', [11], true]]);
     expect(await page.evaluate(() => window.__calls.some(([method, , id]) => method === 'JoinChannelForTab' && id === 11))).toBe(false);

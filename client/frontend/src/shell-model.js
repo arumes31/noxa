@@ -1,9 +1,10 @@
 // shell-model.js — pure helpers for the app shell (no DOM, unit tested).
 
-// textChannels lists text-only channels by sort index, then snapshot order.
+// Every visible channel has one chat. Voice entries here are links to that
+// same channel, not duplicated server channels or independent subscriptions.
 export function textChannels(channels = []) {
     const position = new Map(channels.map((channel, index) => [channel.ChannelID, index]));
-    return channels.filter((channel) => channel.TextOnly)
+    return channels.filter((channel) => channel.ChannelID > 0)
         .sort((a, b) => (a.OrderIndex || 0) - (b.OrderIndex || 0) || position.get(a.ChannelID) - position.get(b.ChannelID));
 }
 

@@ -8,15 +8,15 @@ const css = (await readFile(new URL("../src/arctic-shell.css", import.meta.url),
 const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
 
 describe("app shell model", () => {
-    it("lists only text channels, by sort index then snapshot order", () => {
+    it("lists real text channels and voice-chat links in stable order", () => {
         const channels = [
             { ChannelID: 1, Name: "Lobby" },
             { ChannelID: 5, Name: "clips", TextOnly: true, OrderIndex: 3 },
             { ChannelID: 3, Name: "general", TextOnly: true, OrderIndex: 0 },
             { ChannelID: 4, Name: "lobby", TextOnly: true, OrderIndex: 0 },
         ];
-        assert.deepEqual(textChannels(channels).map((channel) => channel.Name), ["general", "lobby", "clips"]);
-        assert.deepEqual(textChannels([{ ChannelID: 1, Name: "legacy" }]), []);
+        assert.deepEqual(textChannels(channels).map((channel) => channel.Name), ["Lobby", "general", "lobby", "clips"]);
+        assert.deepEqual(textChannels([{ ChannelID: 1, Name: "legacy" }]).map(channel => channel.Name), ["legacy"]);
         assert.deepEqual(textChannels(), []);
     });
 

@@ -61,7 +61,7 @@ body.compact .topbar-tools { display: none; }
 .side-section[hidden] { display: none; }
 #sidebar-scroll > #channel-tree { order: 1; }
 #sidebar-scroll > #text-section { order: 2; }
-#sidebar-scroll > #direct-section { order: 3; }
+#sidebar-scroll > #direct-section { order: -1; }
 #sidebar-scroll > .group-divider { order: 4; }
 #sidebar-scroll > .group-sidebar { order: 5; }
 .side-head { display: flex; align-items: center; gap: 6px; }

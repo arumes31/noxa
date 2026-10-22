@@ -45,8 +45,9 @@ func (s wailsSink) Emit(name string, payload any) {
 
 // connManager owns the control-channel connection and its read loop.
 type connManager struct {
-	sink      eventSink
-	lookupSRV srvLookup // nil uses the system resolver; injectable for DNS tests
+	outboxServer *chatOutboxServer // last authenticated storage binding; survives transport teardown
+	sink         eventSink
+	lookupSRV    srvLookup // nil uses the system resolver; injectable for DNS tests
 
 	// tabID identifies the owning server tab (281). Empty means the legacy
 	// single-connection manager (tests, headless tools): events go out under
@@ -553,6 +554,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.transferEpoch++
 	m.acceptingTransfers = true
 	m.mu.Unlock()
+	m.rememberOutboxServer()
 
 	// The KeyPublish above triggers the server to answer with sealed
 	// scope keys on the read loop below. Account reconnect and state

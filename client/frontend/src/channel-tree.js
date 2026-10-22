@@ -439,6 +439,11 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         if (g) {
             row.appendChild(roleChip(g));
         }
+        if (c.hand_raised_order > 0) {
+            const hand = document.createElement("span");
+            hand.className = "raised-hand-badge"; hand.textContent = "✋";
+            hand.title = t("queue.handRaised"); row.appendChild(hand);
+        }
         // (307) priority speaker: the flag is broadcast for every client, so it
         // belongs on their row and not only on my own voice-bar button.
         if (c.priority_speaker) {
