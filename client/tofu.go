@@ -134,6 +134,22 @@ func (k *knownServers) verify(addr, fp string) (trustStatus, error) {
 	return trustOK, nil
 }
 
+// pinned reports whether addr already has a TLS fingerprint on record. A
+// pinned server proved it speaks TLS, so it must never be downgraded.
+func (k *knownServers) pinned(addr string) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.loadErr != nil {
+		return false
+	}
+	key, err := normalizeServerAddr(addr)
+	if err != nil {
+		return false
+	}
+	_, ok := k.Servers[key]
+	return ok
+}
+
 // secureEqualFold compares normalized fingerprints without a data-dependent
 // early exit. Fingerprints, transfer tokens, and authentication material must
 // not use ordinary string equality in verification paths.

@@ -265,3 +265,72 @@ func TestFingerprintMismatchMessageIncludesPresentedFingerprint(t *testing.T) {
 		t.Fatalf("mismatch message = %q", message)
 	}
 }
+
+func TestDialTransportPlaintextFallbackRefusedForPinnedServer(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		pinned    bool
+		wantPlain bool
+	}{
+		{name: "unpinned development server", wantPlain: true},
+		{name: "server pinned over TLS", pinned: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			defer func() { _ = listener.Close() }()
+			accepted := make(chan int, 4)
+			go func() {
+				for i := 1; ; i++ {
+					conn, acceptErr := listener.Accept()
+					if acceptErr != nil {
+						return
+					}
+					accepted <- i
+					// A plaintext server (or an attacker) answers the
+					// ClientHello with something that is not TLS.
+					_, _ = conn.Write([]byte("not tls\n"))
+					_ = conn.Close()
+				}
+			}()
+
+			store := loadKnownServersAt(filepath.Join(t.TempDir(), "known_servers.json"))
+			if test.pinned {
+				if err := store.trust(listener.Addr().String(), "pinned-fingerprint"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			manager := newConnManager(context.Background())
+			manager.knownServers = store
+			manager.allowPlaintext = true
+			conn, err := manager.dialTransport(listener.Addr().String())
+			if conn != nil {
+				_ = conn.Close()
+			}
+			if test.wantPlain && err != nil {
+				t.Fatalf("unpinned plaintext fallback failed: %v", err)
+			}
+			if !test.wantPlain && (err == nil || conn != nil) {
+				t.Fatal("pinned server was downgraded to plaintext")
+			}
+			// The TLS attempt is always made first.
+			select {
+			case <-accepted:
+			case <-time.After(time.Second):
+				t.Fatal("no TLS attempt observed")
+			}
+			select {
+			case <-accepted:
+				if !test.wantPlain {
+					t.Fatal("pinned server retried over plaintext")
+				}
+			case <-time.After(200 * time.Millisecond):
+				if test.wantPlain {
+					t.Fatal("unpinned server did not retry over plaintext")
+				}
+			}
+		})
+	}
+}

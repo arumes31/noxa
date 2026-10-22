@@ -112,8 +112,11 @@ export function renderMarkdown(text) {
     t = t.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
     t = t.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;!?]|$)/g, "$1<em>$2</em>");
     // Images (channel descriptions; 113). http(s) only — no javascript:.
-    t = t.replace(/!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)/g,
-        `<img class="md-img" alt="$1" src="$2">`);
+    // Remote images are never fetched on render: a click-to-load placeholder
+    // keeps senders from learning each reader's IP address and read time.
+    // The markup is stashed so later passes never re-scan its attributes.
+    t = t.replace(/!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)/g, (_m, alt, url) =>
+        push(`<button type="button" class="md-img-load" data-src="${url}" data-alt="${alt}" title="${url}">🖼 ${alt || "image"}</button>`));
     // Autolink URLs (93): tooltip carries the full URL.
     t = t.replace(/(?<![="'\w])(https?:\/\/[^\s<>"'\])}]+)/g,
         (u) => `<a href="#" class="md-link" data-url="${u}" title="${u}">${u}</a>`);
@@ -125,4 +128,34 @@ export function renderMarkdown(text) {
     // Restore stashed code.
     t = t.replace(/\u0001(\d+)\u0002/g, (_m, i) => stash[Number(i)]);
     return t;
+}
+
+// loadImagePlaceholder swaps a click-to-load placeholder for the remote image
+// it names. The URL is re-checked so only http(s) sources are ever fetched,
+// and no referrer is sent to the image host.
+export function loadImagePlaceholder(button) {
+    const src = button?.getAttribute?.("data-src") || "";
+    if (!/^https?:\/\//i.test(src)) return null;
+    const img = button.ownerDocument.createElement("img");
+    img.className = "md-img";
+    img.alt = button.getAttribute("data-alt") || "";
+    img.referrerPolicy = "no-referrer";
+    img.decoding = "async";
+    img.src = src;
+    button.replaceWith(img);
+    return img;
+}
+
+// bindImagePlaceholders installs one delegated click handler that loads a
+// placeholder's image only after the reader asks for it (idempotent per root).
+export function bindImagePlaceholders(root) {
+    if (!root?.addEventListener || root.__noxaImagePlaceholders) return;
+    root.__noxaImagePlaceholders = true;
+    root.addEventListener("click", (event) => {
+        const button = event.target?.closest?.(".md-img-load");
+        if (!button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        loadImagePlaceholder(button);
+    }, true);
 }

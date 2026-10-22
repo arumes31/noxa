@@ -207,7 +207,9 @@ func (m *connManager) identity() (*identity, error) {
 // certificate fingerprint against the TOFU store: first-seen servers are
 // accepted and pinned; a changed fingerprint fails hard
 // (errFingerprintMismatch). When the server does not speak TLS, it falls
-// back to plaintext only if allowPlaintext is set.
+// back to plaintext only if allowPlaintext is set and the server has no TLS
+// pin: an attacker who breaks the handshake of a known TLS server must not be
+// able to downgrade the session to cleartext.
 func (m *connManager) dialEndpoint(ctx context.Context, addr, trustAddr string) (net.Conn, error) {
 	m.mu.Lock()
 	ks := m.knownServers
@@ -312,6 +314,9 @@ func (m *connManager) dialEndpoint(ctx context.Context, addr, trustAddr string) 
 	m.mu.Unlock()
 	if !allowPlain {
 		return nil, fmt.Errorf("TLS connection failed: %v", tlsErr)
+	}
+	if ks != nil && ks.pinned(canonicalAddr) {
+		return nil, fmt.Errorf("TLS connection failed for a server pinned over TLS; refusing plaintext fallback: %v", tlsErr)
 	}
 
 	m.mu.Lock()
