@@ -160,14 +160,17 @@ func (m *Manager) Authenticate(a *pion.RequestAttributes) (string, []byte, bool)
 	// returning an account ID here would permit cross-generation refresh.
 	return a.Username, append([]byte(nil), g.key...), true
 }
-func (m *Manager) Revoke(session string) {
+func (m *Manager) Revoke(session string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	changed := false
 	if s := m.sessions[session]; s != nil {
+		changed = !s.blocked
 		s.blocked = true
 		s.validUntil = time.Time{}
 	}
 	m.closeSessionLocked(session)
+	return changed
 }
 func (m *Manager) Remove(session string) {
 	m.mu.Lock()

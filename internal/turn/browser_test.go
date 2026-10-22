@@ -51,7 +51,8 @@ func TestBrowserRelayContinuity(t *testing.T) {
 			logger := logging.NewDefaultLoggerFactory()
 			logger.DefaultLogLevel = logging.LogLevelDisabled
 			generator := &Generator{Manager: m, Base: &pion.RelayAddressGeneratorPortRange{RelayAddress: net.ParseIP(testIP), Address: testIP, MinPort: 40000, MaxPort: 49999}, AllowedPeer: func(a net.Addr) bool { u, ok := a.(*net.UDPAddr); return ok && u.IP.Equal(net.ParseIP(testIP)) }}
-			srv, err := pion.NewServer(pion.ServerConfig{Realm: "browser", AuthHandler: m.Authenticate, LoggerFactory: logger, PacketConnConfigs: []pion.PacketConnConfig{{PacketConn: udp, RelayAddressGenerator: generator}}, ListenerConfigs: []pion.ListenerConfig{{Listener: tcp, RelayAddressGenerator: generator}}})
+			limited := limitedTCPListener(tcp, 64)
+			srv, err := pion.NewServer(pion.ServerConfig{Realm: "browser", AuthHandler: m.Authenticate, EventHandler: limited.events(), LoggerFactory: logger, PacketConnConfigs: []pion.PacketConnConfig{{PacketConn: udp, RelayAddressGenerator: generator}}, ListenerConfigs: []pion.ListenerConfig{{Listener: limited, RelayAddressGenerator: generator}}})
 			if err != nil {
 				t.Fatal(err)
 			}

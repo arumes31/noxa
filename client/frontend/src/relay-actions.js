@@ -3,7 +3,7 @@ import { t } from "./i18n.js";
 import { closeContextMenu } from "./context-menu.js";
 
 // Resolve authorization before exposing moderation entries. The mutation repeats
-// these checks against the live target under the server's exclusive policy gate.
+// these checks against the live target under the server's pinned policy and registry lock.
 export function attachRelayActions(menu, member, tabID, current) {
     const app = window.go.main.App;
     if (!member.client_id || !app.SessionInfoForTab || !app.RevokeRelayForTab) return;

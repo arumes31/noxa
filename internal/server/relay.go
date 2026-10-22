@@ -86,14 +86,27 @@ func (s *TCPServer) handleRelay(ctx context.Context, client *Client, frame *netp
 	})
 }
 func (s *TCPServer) revokeRelay(ctx context.Context, actor *Client, request netproto.RelayRequest) error {
-	err := s.withExclusiveRolePolicy(ctx, func(ctx context.Context) error {
+	actor.mu.Lock()
+	allowed := !time.Now().Before(actor.relayRevokeAfter)
+	if allowed {
+		actor.relayRevokeAfter = time.Now().Add(time.Second)
+	}
+	actor.mu.Unlock()
+	if !allowed {
+		return s.sendErrorFor(actor, requestOrigin(ctx), errCodeMalformed, "relay revocation rate limit exceeded")
+	}
+	var targetID, targetUniqueID string
+	changed := false
+	// The registry lock serializes revocation with issuance. A shared policy
+	// lease pins authority without stopping unrelated realtime policy readers.
+	err := s.withRoleSession(ctx, actor, func(ctx context.Context) error {
 		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
 		if actor.sessionRevoked() {
 			return authorization.ErrRoleForbidden
 		}
 		s.roleMetadataMu.Lock()
 		defer s.roleMetadataMu.Unlock()
-		targetID := request.SessionID
+		targetID = request.SessionID
 		if targetID == "" {
 			targetID = actor.ID
 		}
@@ -106,16 +119,21 @@ func (s *TCPServer) revokeRelay(ctx context.Context, actor *Client, request netp
 				return authorization.ErrRoleForbidden
 			}
 		}
+		targetUniqueID = target.uniqueID()
 		for _, member := range s.deps.State.ListClients() {
 			if member.ClientID == targetID || (request.AllSessions && member.UniqueID == target.uniqueID()) {
-				s.deps.Relay.Revoke(member.ClientID)
+				changed = s.deps.Relay.Revoke(member.ClientID) || changed
 			}
 		}
-		s.auditInChannels(ctx, actor.uniqueID(), "relay_revoked", target.uniqueID(), "session="+targetID)
-		return s.writeMessageInContext(ctx, actor, netproto.MsgRelayResponse, netproto.RelayResponse{Action: "revoke", SessionID: targetID, ServerTime: time.Now().UnixMilli()})
+		return nil
 	})
 	if err != nil {
 		return s.roleError(ctx, actor, err)
 	}
-	return nil
+	if changed {
+		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		s.auditInChannels(auditCtx, actor.uniqueID(), "relay_revoked", targetUniqueID, "session="+targetID)
+	}
+	return s.writeMessageInContext(ctx, actor, netproto.MsgRelayResponse, netproto.RelayResponse{Action: "revoke", SessionID: targetID, ServerTime: time.Now().UnixMilli()})
 }

@@ -105,7 +105,9 @@ func TestRealTURNRevocationAndExpiry(t *testing.T) {
 			logger := logging.NewDefaultLoggerFactory()
 			logger.DefaultLogLevel = logging.LogLevelDisabled
 			generator := &Generator{Manager: m, Base: &pion.RelayAddressGeneratorPortRange{RelayAddress: net.ParseIP("127.0.0.1"), Address: "127.0.0.1", MinPort: 30000, MaxPort: 39999}, AllowedPeer: DestinationPolicy([]string{peer.LocalAddr().String()}, false)}
-			srv, err := pion.NewServer(pion.ServerConfig{Realm: "test", AuthHandler: m.Authenticate, LoggerFactory: logger, PacketConnConfigs: []pion.PacketConnConfig{{PacketConn: udp, RelayAddressGenerator: generator}}, ListenerConfigs: []pion.ListenerConfig{{Listener: tcp, RelayAddressGenerator: generator}}})
+			limited := limitedTCPListener(tcp, 64)
+			limited.preAuthLifetime = 500 * time.Millisecond
+			srv, err := pion.NewServer(pion.ServerConfig{Realm: "test", AuthHandler: m.Authenticate, EventHandler: limited.events(), LoggerFactory: logger, PacketConnConfigs: []pion.PacketConnConfig{{PacketConn: udp, RelayAddressGenerator: generator}}, ListenerConfigs: []pion.ListenerConfig{{Listener: limited, RelayAddressGenerator: generator}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -157,6 +159,14 @@ func TestRealTURNRevocationAndExpiry(t *testing.T) {
 			rb, err := allocate(b)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if transport == "tcp" {
+				limited.mu.Lock()
+				pending, active := limited.pending, len(limited.conns)
+				limited.mu.Unlock()
+				if pending != 0 || active != 2 {
+					t.Fatalf("successful allocations were not admitted: pending=%d active=%d", pending, active)
+				}
 			}
 			exchange := func(relay net.PacketConn) {
 				t.Helper()

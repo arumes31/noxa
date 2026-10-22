@@ -79,9 +79,10 @@ func Listen(ctx context.Context, cfg config.TURNConfig, m *Manager, counter *tra
 	}
 	logger := logging.NewDefaultLoggerFactory()
 	logger.DefaultLogLevel = logging.LogLevelDisabled
-	relay, err := pion.NewServer(pion.ServerConfig{Realm: cfg.Realm, AuthHandler: m.Authenticate, LoggerFactory: logger,
+	limited := limitedTCPListener(traffic.WrapListener(tcp, counter), cfg.MaxAllocations*2+64)
+	relay, err := pion.NewServer(pion.ServerConfig{Realm: cfg.Realm, AuthHandler: m.Authenticate, EventHandler: limited.events(), LoggerFactory: logger,
 		PacketConnConfigs: []pion.PacketConnConfig{{PacketConn: traffic.WrapPacketConn(udp, counter), RelayAddressGenerator: generator}},
-		ListenerConfigs:   []pion.ListenerConfig{{Listener: limitedTCPListener(traffic.WrapListener(tcp, counter), min(10000, cfg.MaxAllocations*2+64)), RelayAddressGenerator: generator}},
+		ListenerConfigs:   []pion.ListenerConfig{{Listener: limited, RelayAddressGenerator: generator}},
 	})
 	if err != nil {
 		_ = udp.Close()

@@ -78,12 +78,12 @@ Receiving credentials or calling setConfiguration alone is not migration proof.
 `managed-relay-v1`. Refresh accepts no identity argument. Revoke selects a live
 session; `all_sessions` resolves its authenticated account on the server. Self
 revocation is allowed. Other accounts require KickMembers, ViewConnectionInfo
-and strict member hierarchy. The participant context menu exposes the matching
+and strict member hierarchy. Revocation requests are limited to one per second per control session. Only a newly blocked session produces an audit; database writes and replies run after releasing the policy lease. The participant context menu exposes the matching
 session/all-session actions when available. Revocation lasts for these sessions;
 a new login needs a fresh, independently authorized grant.
 
 Issuance shares the existing authoritative policy gate. Explicit revocation is
-exclusive with issuance, marks the session blocked, invalidates every generation
+serialized with issuance by the registry lock under a shared policy lease, marks the session blocked, invalidates every generation
 including replacements, and closes its UDP relay sockets. Kick, ban and control
 disconnect also remove relay access. Permission reconciliation revokes relay
 access when no permitted Connect scope remains. Slot-specific voice/camera/screen
@@ -93,8 +93,7 @@ Pending rules revoke relay access immediately.
 Socket wrappers recheck grant expiry, authorization lease, destination and byte
 limits on actual traffic. The byte budget is shared per session across every
 allocation and generation; allocation caps are 16 per session, 64 per account
-and the configured server total. Accepted TCP connections are bounded and expire
-after 60 seconds without inbound transport traffic. New allocations and authenticated TURN refresh requests
+and the configured server total. Accepted TCP connections are capped at 512, with at most 64 pending authentication globally and eight per source IP. Pending streams close after a fixed 30 seconds even if bytes trickle in. Only a successfully created allocation cancels that deadline; the earlier credential-key lookup cannot authenticate a stream. Allocation deletion closes its TCP transport. Admitted streams also expire after 60 seconds without inbound transport traffic. New allocations and authenticated TURN refresh requests
 check the live registry. Registry teardown serializes against allocation creation
 and bounded UDP writes; no client disconnect acknowledgment is trusted. In-flight
 network packets can still arrive after the revocation call. A 5-second normal

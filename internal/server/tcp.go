@@ -79,6 +79,7 @@ type Client struct {
 	mediaLimitsTimerGeneration uint64
 
 	// Activity and connection stats (Client Info dialog).
+	relayRevokeAfter    time.Time // guarded by mu; bounds client-driven relay mutations
 	lastActive          time.Time // last received frame
 	lastPositionAt      time.Time // last accepted positional metadata update
 	bytesIn             int64     // payload bytes received

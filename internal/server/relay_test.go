@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,5 +101,65 @@ func TestRelayRejectsUntrustedPrincipals(t *testing.T) {
 				t.Fatal("unauthorized relay")
 			}
 		})
+	}
+}
+
+type relayBlockingAudit struct {
+	AuditStore
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (a *relayBlockingAudit) AuditScoped(ctx context.Context, _, _, _, _ string, _ []int64) {
+	if a.calls.Add(1) == 1 {
+		close(a.entered)
+	}
+	select {
+	case <-a.release:
+	case <-ctx.Done():
+	}
+}
+func TestRelayRevocationReleasesPolicyBeforeAuditAndDeduplicates(t *testing.T) {
+	roles := serverRoleFixture()
+	authority, err := authorization.NewAuthority(t.Context(), roles, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay := turn.NewManager("test", 32, 1<<20)
+	defer relay.Close()
+	audit := &relayBlockingAudit{entered: make(chan struct{}), release: make(chan struct{})}
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority; d.Relay = relay; d.Groups = audit })
+	defer env.stop()
+	conn, id := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = conn.Close() }()
+	send(t, conn, netproto.MsgRelayRequest, netproto.RelayRequest{Action: "revoke"})
+	select {
+	case <-audit.entered:
+	case <-time.After(time.Second):
+		t.Fatal("audit not reached")
+	}
+	// Both realtime readers and policy mutations must proceed during slow I/O.
+	readErr := authority.TryWithPolicy(func(*authorization.RoleEvaluator) error { return nil })
+	ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
+	writeErr := authority.WithExclusivePolicy(ctx, func(*authorization.RoleEvaluator) error { return nil })
+	cancel()
+	close(audit.release)
+	if readErr != nil || writeErr != nil {
+		t.Fatalf("audit retained policy lease: read=%v write=%v", readErr, writeErr)
+	}
+	readOfType(t, conn, netproto.MsgRelayResponse)
+	send(t, conn, netproto.MsgRelayRequest, netproto.RelayRequest{Action: "revoke"})
+	if readError(t, conn).Message != "relay revocation rate limit exceeded" {
+		t.Fatal("unbounded revocation requests")
+	}
+	client, _ := env.srv.clientByID(id)
+	client.mu.Lock()
+	client.relayRevokeAfter = time.Time{}
+	client.mu.Unlock()
+	send(t, conn, netproto.MsgRelayRequest, netproto.RelayRequest{Action: "revoke"})
+	readOfType(t, conn, netproto.MsgRelayResponse)
+	if audit.calls.Load() != 1 {
+		t.Fatal("no-op revocation wrote another audit row")
 	}
 }
