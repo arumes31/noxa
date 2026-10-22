@@ -41,6 +41,7 @@ import { copyToClipboard } from "./clipboard.js";
 import { avatarColor, renderWorkspace } from "./workspace-ui.js";
 import { youtubeVideo, renderYouTubePreviews } from "./youtube-previews.js";
 import { xPost, renderXPostPreviews } from "./x-previews.js";
+import { videoPortal, renderVideoPortalPreviews } from "./video-portal-previews.js";
 import { createSearchWorkspace } from "./search-workspace.js";
 
 const V = () => window.__noxa;
@@ -846,6 +847,7 @@ function renderBody(container, m) {
     };
     renderYouTubePreviews(container, previewOptions);
     renderXPostPreviews(container, previewOptions);
+    renderVideoPortalPreviews(container, previewOptions);
 }
 
 const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp"];
@@ -3421,6 +3423,8 @@ function scheduleLinkCard(linkEl) {
     if (settings.link_previews === false) return;
     const url = linkEl.getAttribute("data-url");
     if (!url || youtubeVideo(url)) return;
+    const video = videoPortal(url);
+    if (video && [...(linkEl.closest(".msg-text")?.querySelectorAll(".video-portal-preview") || [])].some(card => card.dataset.portalKey === video.key)) return;
     const post = xPost(url);
     if (post && linkEl.closest(".msg-text")?.querySelector(`.x-post-preview[data-post-id="${post.id}"]`)) return;
     const generation = linkCardGeneration;
@@ -4280,6 +4284,7 @@ export function applyChatPrefs() {
                 const body = log.querySelector(`[data-scroll-key="${CSS.escape(message.renderKey || "")}"] .msg-text`);
                 if (body && !body.querySelector(".youtube-preview")) renderYouTubePreviews(body, { enabled: true, scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
                 if (body && !body.querySelector(".x-post-preview")) renderXPostPreviews(body, { enabled: true, scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
+                if (body && !body.querySelector(".video-portal-preview")) renderVideoPortalPreviews(body, { enabled: true, scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
             }
         }
     }

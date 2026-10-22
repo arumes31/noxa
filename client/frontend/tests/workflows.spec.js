@@ -130,6 +130,77 @@ test.describe("Midnight workspace concepts", () => {
         }
     });
 
+    test("video portals show safe thumbnails and open canonical browser links", async ({ page }, testInfo) => {
+        for (const host of ["static-cdn.jtvnw.net", "i.vimeocdn.com", "s2.dmcdn.net", "images.whatnot.com"]) await page.route("https://" + host + "/**", route => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="270"><rect width="480" height="270" fill="#294859"/><path d="M0 270L160 60L280 210L380 100L480 270Z" fill="#70b7f5"/></svg>' }));
+        await page.evaluate(() => {
+            window.__portalCalls = [];
+            const thumbs = { twitch: "https://static-cdn.jtvnw.net/clip.jpg", vimeo: "https://i.vimeocdn.com/video/demo.jpg", dailymotion: "https://s2.dmcdn.net/v/demo/x720", whatnot: "https://images.whatnot.com/show.jpg" };
+            const preview = async (tab, provider, id) => { window.__portalCalls.push({ tab, provider, id }); return { title: provider + " preview", author: "Creator", thumbnail: thumbs[provider] }; };
+            window.go.main.App = new Proxy(window.go.main.App, { get(target, key) { return key === "VideoPortalPreviewForTab" ? preview : target[key]; } });
+            window.__noxaChat.addChat({ id: 7100, enc_verified: true, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "https://clips.twitch.tv/PublicClip_123 https://www.twitch.tv/creator/clip/PublicClip_123 https://vimeo.com/22439234 https://dai.ly/x84sh87" });
+            window.__noxaChat.addChat({ id: 7101, enc_verified: true, channel_id: 1, from_unique_id: "joshi", from: "Joshibär", text: "https://www.whatnot.com/s/Zz64h7wC" });
+        });
+        const cards = page.locator(".video-portal-preview");
+        await expect(cards).toHaveCount(4);
+        await expect(cards.locator(".youtube-title")).toHaveText(["twitch preview", "vimeo preview", "dailymotion preview", "whatnot preview"]);
+        for (const image of await cards.locator("img").all()) await expect(image).toBeVisible();
+        await expect(cards.locator("script, iframe")).toHaveCount(0);
+        await expect(cards.first()).toHaveAccessibleName(/Twitch twitch preview Creator/);
+        expect(await page.evaluate(() => window.__portalCalls.length)).toBe(4);
+        await cards.last().click();
+        await expect.poll(() => page.evaluate(() => window.__browserURLs)).toContain("https://www.whatnot.com/s/Zz64h7wC");
+        await page.screenshot({ path: testInfo.outputPath("video-portal-previews.png") });
+    });
+
+    test("portal previews reject unsafe images and retain links when metadata is unavailable", async ({ page }) => {
+        await page.evaluate(() => {
+            const preview = async (_tab, _provider, id) => {
+                if (id === "video:404") throw Error("unavailable");
+                return { title: "<script>plain text</script>", thumbnail: "http://127.0.0.1/private" };
+            };
+            window.go.main.App = new Proxy(window.go.main.App, { get(target, key) { return key === "VideoPortalPreviewForTab" ? preview : target[key]; } });
+            window.__noxaChat.addChat({ id: 7102, enc_verified: true, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "https://www.twitch.tv/videos/123 https://www.twitch.tv/videos/404" });
+        });
+        const cards = page.locator(".video-portal-preview");
+        await expect(cards.first().locator(".youtube-title")).toHaveText("<script>plain text</script>");
+        await expect(cards.last()).toContainText("Preview unavailable");
+        await expect(cards.locator("img[src], script, iframe")).toHaveCount(0);
+        await cards.last().click();
+        await expect.poll(() => page.evaluate(() => window.__browserURLs)).toContain("https://www.twitch.tv/videos/404");
+    });
+
+    test("portal previews honor preferences and discard late responses", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.settings.link_previews = false; window.__noxaChat.applyChatPrefs(); window.__portalCalls = 0; window.__portalPending = [];
+            const preview = async () => { window.__portalCalls++; return new Promise(resolve => window.__portalPending.push(resolve)); };
+            window.go.main.App = new Proxy(window.go.main.App, { get(target, key) { return key === "VideoPortalPreviewForTab" ? preview : target[key]; } });
+            window.__noxaChat.addChat({ id: 7103, enc_verified: true, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "https://www.twitch.tv/twitch https://vimeo.com/22439234 https://www.whatnot.com/user/whatnot" });
+        });
+        await expect(page.locator(".video-portal-preview")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__portalCalls)).toBe(0);
+        await page.evaluate(() => { window.__noxa.state.settings.link_previews = true; window.__noxaChat.applyChatPrefs(); window.__noxaChat.applyChatPrefs(); });
+        await expect(page.locator(".video-portal-preview")).toHaveCount(3);
+        await expect.poll(() => page.evaluate(() => window.__portalCalls)).toBe(3);
+        await page.evaluate(() => { window.__noxa.state.settings.link_previews = false; window.__noxaChat.applyChatPrefs(); });
+        await expect(page.locator(".video-portal-preview")).toHaveCount(0);
+        await page.evaluate(() => { window.__noxa.state.myChannelID = 2; window.__noxaChat.onMyChannelChanged(); for (const resolve of window.__portalPending) resolve({ title: "Late portal title" }); });
+        await expect(page.locator("#chat-log")).not.toContainText("Late portal title");
+    });
+
+    test("settings gear stays centered independently of the dropdown caret", async ({ page }) => {
+        await page.evaluate(() => window.__noxa.setDetailsOpen(false));
+        for (const width of [1000, 700]) for (const fontSize of [14, 20]) {
+            await page.setViewportSize({ width, height: 800 });
+            await page.evaluate(fontSize => { document.documentElement.style.fontSize = fontSize + "px"; document.getElementById("app-body").style.setProperty("--sidebar-width", "220px"); }, fontSize);
+            await expect(page.locator(width > 720 ? "#sidebar > #voice-bar" : "#app > #voice-bar")).toBeVisible();
+            await expect(page.locator("#voice-options > summary")).toBeVisible();
+            await expect(page.locator("#voice-options > summary > .ui-icon")).toBeVisible();
+            const box = await page.locator("#voice-options > summary").boundingBox(), gear = await page.locator("#voice-options > summary > .ui-icon").boundingBox();
+            expect(Math.abs((gear.x + gear.width / 2) - (box.x + box.width / 2))).toBeLessThanOrEqual(.5);
+            expect(Math.abs((gear.y + gear.height / 2) - (box.y + box.height / 2))).toBeLessThanOrEqual(.5);
+        }
+    });
+
     test("search filters results and opens selected message context", async ({ page }, testInfo) => {
         await page.evaluate(() => {
             window.go.main.App = new Proxy(window.go.main.App, { get(target, key) { if (key === "ChatSearchForTab") return async () => ({ scanned: 3, complete: true, messages: [
