@@ -177,7 +177,8 @@ export function renderVoiceHints() {
 export function initWorkspace() {
     const dock = () => {
         const footer = $("voice-bar");
-        const parent = innerWidth > 1100 && !document.body.classList.contains("compact") ? $("sidebar") : $("app");
+        // Keep the controls in the sidebar for as long as the sidebar is visible.
+        const parent = innerWidth > 720 && !document.body.classList.contains("compact") ? $("sidebar") : $("app");
         if (footer.parentElement === parent) return;
         const focused = footer.contains(document.activeElement) ? document.activeElement : null;
         parent.append(footer);

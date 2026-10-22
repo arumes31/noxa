@@ -1,4 +1,5 @@
 import { t } from "./i18n.js";
+import { loadPreviewMetadata } from "./preview-metadata.js";
 
 // Parse only YouTube video URLs. Neither arbitrary hosts nor provider HTML
 // are used by the native metadata request or the image renderer.
@@ -19,26 +20,8 @@ export function youtubeVideo(value) {
     } catch { return null; }
 }
 
-const metadata = new Map();
-const queue = [];
-let running = 0;
-function drain() {
-    while (running < 4 && queue.length) {
-        const job = queue.shift();
-        running++;
-        Promise.resolve().then(job.run).then(job.resolve, () => job.resolve(null)).finally(() => { running--; drain(); });
-    }
-}
 function loadMetadata(video, scope, isCurrent) {
-    const key = `${scope.generation}:${scope.tabID}:${video.id}`;
-    if (!metadata.has(key)) {
-        if (metadata.size >= 128) metadata.delete(metadata.keys().next().value);
-        metadata.set(key, new Promise(resolve => {
-            queue.push({ resolve, run: () => isCurrent() ? window.go.main.App.YouTubePreviewForTab(scope.tabID, video.id) : null });
-            drain();
-        }));
-    }
-    return metadata.get(key);
+    return loadPreviewMetadata("youtube", video.id, scope, isCurrent, () => window.go.main.App.YouTubePreviewForTab(scope.tabID, video.id));
 }
 
 export function renderYouTubePreviews(container, { enabled, scope, isCurrent }) {

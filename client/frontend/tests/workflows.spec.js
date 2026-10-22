@@ -36,7 +36,10 @@ test.describe("Midnight workspace concepts", () => {
         await expect(page.locator("#menubar > .menu-item").filter({ hasText: /^Bookmarks/ })).toHaveCount(0);
         await expect(page.locator("#sidebar > #voice-bar")).toBeVisible();
         expect(await page.locator("#voice-bar").evaluate(bar => { const bounds = bar.getBoundingClientRect(); return [...bar.querySelectorAll(":scope > #ptt-btn, :scope > #voice-leave-channel, .voice-buttons > .voice-control, .voice-microphone > .voice-control, .voice-buttons > details > summary")].filter(control => control.checkVisibility()).flatMap(control => { const r = control.getBoundingClientRect(); return r.left >= bounds.left && r.right <= bounds.right ? [] : [{ id: control.id || control.parentElement.id, left: r.left, right: r.right, barLeft: bounds.left, barRight: bounds.right }]; }); })).toEqual([]);
-        await expect(page.locator('.msg[data-msg-id="7001"] .react-quick')).toHaveCount(3);
+        await expect(page.locator('.msg[data-msg-id="7001"] .msg-reacts')).toBeHidden();
+        await expect(page.locator(".react-quick, .react-add")).toHaveCount(0);
+        await page.evaluate(() => window.__noxaChat.onChatReaction({ message_id: 7001, reactions: { "👍": 2 } }));
+        await expect(page.locator('.msg[data-msg-id="7001"] .react-chip')).toHaveText("👍 2");
         await page.locator(".youtube-preview").click();
         await expect.poll(() => page.evaluate(() => window.__browserURLs)).toContain("https://youtu.be/Fvr-SJPAh7o");
         expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim())).toBe("#03070a");
@@ -46,6 +49,85 @@ test.describe("Midnight workspace concepts", () => {
         await expect(page.locator("#room-overview")).toBeVisible();
         await page.setViewportSize({ width: 700, height: 800 });
         await expect(page.locator("#app > #voice-bar")).toBeVisible();
+    });
+
+    test("desktop-sized windows keep square panes and compact voice controls in the sidebar", async ({ page }, testInfo) => {
+        await page.evaluate(() => window.__noxa.setDetailsOpen(false));
+        for (const width of [1440, 1100, 1000, 800, 721]) {
+            await page.setViewportSize({ width, height: 760 });
+            await expect(page.locator("#sidebar > #voice-bar")).toBeVisible();
+            await expect(page.locator("#app > #voice-bar")).toHaveCount(0);
+            const sidebar = await page.locator("#sidebar").boundingBox();
+            const controls = await page.locator("#voice-bar").boundingBox();
+            expect(controls.width).toBeLessThan(sidebar.width);
+            expect(controls.x + controls.width).toBeLessThanOrEqual(sidebar.x + sidebar.width);
+            expect(controls.y + controls.height).toBeLessThanOrEqual(sidebar.y + sidebar.height);
+            await expect(page.locator("#sidebar")).toHaveCSS("border-radius", "0px");
+            await expect(page.locator("#center")).toHaveCSS("border-radius", "0px");
+            await expect(page.locator("#app-body")).toHaveCSS("padding", "0px");
+            await expect(page.locator("#app-body")).toHaveCSS("gap", "0px");
+            await expect(page.locator(".ch-icon > .ui-icon").first()).toHaveCSS("width", "14px");
+            if (width === 1000) await page.screenshot({ path: testInfo.outputPath("compact-midnight-1000.png") });
+        }
+        await page.setViewportSize({ width: 700, height: 760 });
+        await expect(page.locator("#app > #voice-bar")).toBeVisible();
+        await page.locator("#voice-mute").focus();
+        await page.setViewportSize({ width: 1000, height: 760 });
+        await expect(page.locator("#sidebar > #voice-bar")).toBeVisible();
+        await expect(page.locator("#voice-mute")).toBeFocused();
+    });
+
+    test("public X posts render as text cards and unavailable posts keep an external link", async ({ page }, testInfo) => {
+        await page.evaluate(() => {
+            window.__xRequests = [];
+            const xPreview = async (tab, id) => {
+                window.__xRequests.push({ tab, id });
+                if (id === "21") throw Error("private or deleted");
+                return { author: "Example author", text: "A public post\n<img src=x onerror=alert(1)>" };
+            };
+            window.go.main.App = new Proxy(window.go.main.App, { get(target, key) { return key === "XPostPreviewForTab" ? xPreview : target[key]; } });
+            window.__noxaChat.addChat({ id: 7010, enc_verified: true, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "https://x.com/example/status/20 https://twitter.com/example/status/20 https://x.com.evil.test/example/status/22" });
+            window.__noxaChat.addChat({ id: 7011, enc_verified: true, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "https://x.com/example/status/21" });
+        });
+        await expect(page.locator(".x-post-preview")).toHaveCount(2);
+        await expect(page.locator(".x-post-author").first()).toHaveText("Example author");
+        await expect(page.locator(".x-post-preview").first()).toHaveAccessibleName(/Example author A public post/);
+        await expect(page.locator(".x-post-text").first()).toContainText("<img src=x onerror=alert(1)>");
+        await expect(page.locator(".x-post-preview img, .x-post-preview script, .x-post-preview iframe")).toHaveCount(0);
+        await expect(page.locator(".x-post-text").last()).toContainText("Preview unavailable");
+        expect(await page.evaluate(() => window.__xRequests)).toEqual([{ tab: "midnight", id: "20" }, { tab: "midnight", id: "21" }]);
+        await page.locator(".x-post-preview").first().click();
+        await expect.poll(() => page.evaluate(() => window.__browserURLs)).toContain("https://x.com/i/status/20");
+        await page.screenshot({ path: testInfo.outputPath("x-post-preview.png") });
+    });
+
+    test("X previews respect preferences and ignore late results after navigation", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.settings.link_previews = false;
+            window.__noxaChat.applyChatPrefs();
+            window.__xCalls = 0;
+            const xPreview = async () => { window.__xCalls++; return new Promise(resolve => { window.__resolveX = resolve; }); };
+            window.go.main.App = new Proxy(window.go.main.App, { get(target, key) { return key === "XPostPreviewForTab" ? xPreview : target[key]; } });
+            window.__noxaChat.addChat({ id: 7012, enc_verified: true, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "https://x.com/example/status/20" });
+        });
+        await expect(page.locator(".x-post-preview")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__xCalls)).toBe(0);
+        await page.evaluate(() => { window.__noxa.state.settings.link_previews = true; window.__noxaChat.applyChatPrefs(); window.__noxaChat.applyChatPrefs(); });
+        await expect(page.locator(".x-post-preview")).toHaveCount(1);
+        await expect.poll(() => page.evaluate(() => window.__xCalls)).toBe(1);
+        await page.evaluate(() => { window.__noxa.state.myChannelID = 2; window.__noxaChat.onMyChannelChanged(); window.__resolveX({ author: "Late author", text: "Late text" }); });
+        await expect(page.locator(".x-post-preview")).toHaveCount(0);
+        await expect(page.locator("#chat-log")).not.toContainText("Late text");
+    });
+
+    test("YouTube preview uses twenty percent less width", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.addChat({ id: 7013, enc_verified: true, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "https://youtu.be/Fvr-SJPAh7o" }));
+        await expect(page.locator(".youtube-title")).toHaveText("A weekend in the mountains");
+        for (const width of [1440, 1000, 700]) {
+            await page.setViewportSize({ width, height: 1000 });
+            const bounds = await page.locator(".youtube-preview").evaluate(card => ({ width: card.getBoundingClientRect().width, available: card.parentElement.getBoundingClientRect().width }));
+            expect(bounds.width).toBeCloseTo(Math.min(680, bounds.available) * .8, 0);
+        }
     });
 
     test("search filters results and opens selected message context", async ({ page }, testInfo) => {
