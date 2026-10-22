@@ -42,7 +42,7 @@ describe("renderMarkdown", () => {
     it("renders safe images and autolinks with escaped query separators", () => {
         const html = renderMarkdown("![diagram](https://example.test/a.png) https://example.test/?a=1&b=2");
         assert.doesNotMatch(html, /<img/);
-        assert.match(html, /<button type="button" class="md-img-load" data-src="https:\/\/example\.test\/a\.png" data-alt="diagram"/);
+        assert.match(html, /<button type="button" class="md-img-load" data-img="\d+" data-alt="diagram" title="https:\/\/example\.test\/a\.png"/);
         assert.match(html, /class="md-link"/);
         assert.match(html, /data-url="https:\/\/example\.test\/\?a=1&amp;b=2"/);
     });
@@ -113,17 +113,18 @@ function fakePlaceholder(attributes) {
 
 describe("image placeholders", () => {
     it("loads only http(s) images, without a referrer, when asked", () => {
-        const { button, created } = fakePlaceholder({ "data-src": "https://example.test/a.png", "data-alt": "diagram" });
+        const id = renderMarkdown("![diagram](https://example.test/a.png?x=1&y=2)").match(/data-img="(\d+)"/)[1];
+        const { button, created } = fakePlaceholder({ "data-img": id, "data-alt": "diagram" });
         const img = loadImagePlaceholder(button);
         assert.equal(created.length, 1);
         assert.equal(button.replaced, img);
         assert.equal(img.tag, "img");
         assert.equal(img.className, "md-img");
-        assert.equal(img.src, "https://example.test/a.png");
+        assert.equal(img.src, "https://example.test/a.png?x=1&y=2");
         assert.equal(img.alt, "diagram");
         assert.equal(img.referrerPolicy, "no-referrer");
 
-        const unsafe = fakePlaceholder({ "data-src": "javascript:alert(1)" });
+        const unsafe = fakePlaceholder({ "data-src": "javascript:alert(1)", "data-img": "999999" });
         assert.equal(loadImagePlaceholder(unsafe.button), null);
         assert.equal(unsafe.created.length, 0);
         assert.equal(loadImagePlaceholder(null), null);
@@ -138,7 +139,8 @@ describe("image placeholders", () => {
         assert.equal(listeners.length, 1);
         assert.equal(listeners[0].type, "click");
 
-        const { button } = fakePlaceholder({ "data-src": "https://example.test/b.png" });
+        const bid = renderMarkdown("![](https://example.test/b.png)").match(/data-img="(\d+)"/)[1];
+        const { button } = fakePlaceholder({ "data-img": bid });
         let prevented = 0;
         let stopped = 0;
         const click = (target) => listeners[0].fn({

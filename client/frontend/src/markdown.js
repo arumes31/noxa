@@ -116,7 +116,7 @@ export function renderMarkdown(text) {
     // keeps senders from learning each reader's IP address and read time.
     // The markup is stashed so later passes never re-scan its attributes.
     t = t.replace(/!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)/g, (_m, alt, url) =>
-        push(`<button type="button" class="md-img-load" data-src="${url}" data-alt="${alt}" title="${url}">🖼 ${alt || "image"}</button>`));
+        push(`<button type="button" class="md-img-load" data-img="${imageID(url)}" data-alt="${alt}" title="${url}">🖼 ${alt || "image"}</button>`));
     // Autolink URLs (93): tooltip carries the full URL.
     t = t.replace(/(?<![="'\w])(https?:\/\/[^\s<>"'\])}]+)/g,
         (u) => `<a href="#" class="md-link" data-url="${u}" title="${u}">${u}</a>`);
@@ -130,11 +130,30 @@ export function renderMarkdown(text) {
     return t;
 }
 
+// Image URLs validated by renderMarkdown, keyed by the opaque id a placeholder
+// carries. The source is never read back from DOM attributes, so nothing in
+// the page can make a placeholder fetch an unvalidated URL. One entry exists
+// per distinct (unescaped) URL.
+const imageURLs = new Map();
+const imageIDs = new Map();
+
+function imageID(escapedURL) {
+    const url = escapedURL.replace(/&(lt|gt|quot|#39);/g, (_m, name) =>
+        ({ lt: "<", gt: ">", quot: '"', "#39": "'" }[name])).replace(/&amp;/g, "&");
+    let id = imageIDs.get(url);
+    if (id === undefined) {
+        id = String(imageIDs.size + 1);
+        imageIDs.set(url, id);
+        imageURLs.set(id, url);
+    }
+    return id;
+}
+
 // loadImagePlaceholder swaps a click-to-load placeholder for the remote image
-// it names. The URL is re-checked so only http(s) sources are ever fetched,
-// and no referrer is sent to the image host.
+// it names. Only http(s) URLs registered while rendering are ever fetched, and
+// no referrer is sent to the image host.
 export function loadImagePlaceholder(button) {
-    const src = button?.getAttribute?.("data-src") || "";
+    const src = imageURLs.get(button?.getAttribute?.("data-img") || "") || "";
     if (!/^https?:\/\//i.test(src)) return null;
     const img = button.ownerDocument.createElement("img");
     img.className = "md-img";
