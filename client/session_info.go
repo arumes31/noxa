@@ -2,6 +2,7 @@ package main
 
 // SessionInfo is one connection's UI identity and transport status.
 type SessionInfo struct {
+	ManagedRelay       bool   `json:"managed_relay"`
 	AuthorizationModel string `json:"authorization_model"`
 	ClientID           string `json:"client_id"`
 	Nickname           string `json:"nickname"`
@@ -24,6 +25,7 @@ func (a *App) SessionInfoForTab(tabID string) (SessionInfo, error) {
 	}
 	return SessionInfo{
 		AuthorizationModel: m.authorizationModel,
+		ManagedRelay:       m.managedRelay,
 		ClientID:           m.clientID, Nickname: m.nickname, IsGuest: m.isGuest,
 		Connected: true, Security: connectionSecurity(m.tlsUsed, m.fingerprint, m.newServer),
 	}, nil

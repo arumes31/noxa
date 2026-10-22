@@ -90,6 +90,9 @@ type connManager struct {
 	// iceServers are the ICE servers delivered by the server in the
 	// AuthResponse (nil = use client defaults).
 	iceServers          []netproto.ICEServer
+	managedRelay        bool
+	relayLease          netproto.RelayResponse
+	relayRefreshAt      time.Time
 	mediaLimits         netproto.MediaLimits
 	mediaLimitsRevision uint64
 	// motd is the server's message of the day from the AuthResponse
@@ -538,6 +541,9 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsConversationActivity = slices.Contains(resp.Capabilities, netproto.CapabilityConversationActivity)
 	m.isGuest = authMsg.Anonymous
 	m.iceServers = resp.ICEServers
+	m.managedRelay = slices.Contains(resp.Capabilities, netproto.CapabilityManagedRelay)
+	m.relayLease = netproto.RelayResponse{}
+	m.relayRefreshAt = time.Time{}
 	m.mediaLimits = netproto.MediaLimits{}
 	m.mediaLimitsRevision = resp.MediaLimitsRevision
 	if resp.MediaLimits != nil {
@@ -565,6 +571,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 		m.readLoop(conn)
 	})
 	go guardCrash("heartbeat", func() { m.heartbeatLoop(conn) })
+	go guardCrash("relay renewal", func() { m.relayRenewalLoop(conn) })
 	return ""
 }
 
@@ -600,6 +607,9 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	}
 	clear(m.pending)
 	m.iceServers = nil
+	m.managedRelay = false
+	m.relayLease = netproto.RelayResponse{}
+	m.relayRefreshAt = time.Time{}
 	m.authorizationModel = ""
 	m.motd = ""
 	m.tlsUsed = false
@@ -820,6 +830,9 @@ func (m *connManager) teeFrameIfEnabled(dir string, f *netproto.Frame, on bool) 
 		return
 	}
 	payload := string(f.Payload)
+	if f.Type == uint16(netproto.MsgRelayResponse) || f.Type == uint16(netproto.MsgAuthResponse) {
+		payload = "[authentication material redacted]"
+	}
 	if len(payload) > 4000 {
 		payload = payload[:4000] + "…"
 	}
@@ -905,7 +918,7 @@ func (m *connManager) requestOn(expected net.Conn, send, reply netproto.MessageT
 // Keep this explicit: queries such as pre-key retrieval can consume state.
 func canDrainRequest(send netproto.MessageType) bool {
 	switch send {
-	case netproto.MsgAvatarGet, netproto.MsgClientInfoQuery, netproto.MsgServerInfoQuery,
+	case netproto.MsgRelayRequest, netproto.MsgAvatarGet, netproto.MsgClientInfoQuery, netproto.MsgServerInfoQuery,
 		netproto.MsgServerIconGet, netproto.MsgServerBannerGet, netproto.MsgChannelIconGet,
 		netproto.MsgEmojiGet:
 		return true

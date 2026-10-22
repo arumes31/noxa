@@ -79,6 +79,7 @@ type Client struct {
 	mediaLimitsTimerGeneration uint64
 
 	// Activity and connection stats (Client Info dialog).
+	relayRevokeAfter    time.Time // guarded by mu; bounds client-driven relay mutations
 	lastActive          time.Time // last received frame
 	lastPositionAt      time.Time // last accepted positional metadata update
 	bytesIn             int64     // payload bytes received
@@ -997,6 +998,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.sendErrorFor(client, mt, errCodePermissionDenied, "accept the server rules before continuing")
 	}
 	switch mt {
+	case netproto.MsgRelayRequest:
+		return s.handleRelay(ctx, client, f)
 	case netproto.MsgChannelInviteRequest:
 		return s.handleChannelInvite(ctx, client, f)
 	case netproto.MsgRoleChannelQuery:
@@ -1253,6 +1256,9 @@ func (s *TCPServer) pingLoop(client *Client, stop <-chan struct{}) {
 // departure to the remaining clients, and trigger the temp-channel cleanup
 // check for the channel it left.
 func (s *TCPServer) onDisconnect(client *Client) {
+	if s.deps != nil && s.deps.Relay != nil {
+		s.deps.Relay.Remove(client.ID)
+	}
 	if !client.needsDisconnectCleanup() || s.deps == nil {
 		return
 	}

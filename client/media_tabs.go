@@ -49,6 +49,10 @@ func (a *App) GetICEServersForTab(tabID string) ([]netproto.ICEServer, error) {
 	if err != nil {
 		return nil, err
 	}
+	cm.mu.Lock()
+	conn := cm.conn
+	cm.mu.Unlock()
+	_ = cm.refreshRelay(conn) // Keep configured STUN and the cached path during a transient renewal failure.
 	return cm.iceServersSnapshot(), nil
 }
 

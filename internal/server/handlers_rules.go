@@ -135,6 +135,9 @@ func (s *TCPServer) setSessionRulesPending(ctx context.Context, client *Client, 
 		client.lockRoleAction()
 		defer client.unlockRoleAction()
 		client.setRulesPending(pending)
+		if pending && s.deps.Relay != nil {
+			s.deps.Relay.Authorize(client.ID, false)
+		}
 		s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
 		return nil
 	})

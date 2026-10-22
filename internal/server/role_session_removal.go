@@ -65,6 +65,9 @@ func (s *TCPServer) kickRoleMember(ctx context.Context, e *authorization.RoleEva
 // performs teardown after its caller has authorized and committed removal.
 func (s *TCPServer) removeRoleSession(ctx context.Context, target *Client, event kickEvent) (pending bool) {
 	target.revokeSession()
+	if s.deps.Relay != nil {
+		s.deps.Relay.Revoke(target.ID)
+	}
 	s.unregister(target.ID)
 	s.disconnectPrivateCall(target.ID)
 	if s.deps.FileTransfer != nil {

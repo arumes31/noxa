@@ -4366,8 +4366,8 @@ test("incoming voice resumes suspended playback and applies the selected output"
         const input = new NativeContext();
         const stream = input.createMediaStreamDestination().stream;
         navigator.mediaDevices.getUserMedia = async () => stream;
-        class FakePeerConnection {
-            constructor() { this.senders = []; this.iceConnectionState = "connected"; }
+        class FakePeerConnection extends EventTarget {
+            constructor() { super(); this.senders = []; this.iceConnectionState = "connected"; }
             addTransceiver(track) {
                 const sender = { track, getParameters: () => ({}), setParameters: async () => {} };
                 this.senders.push(sender);
@@ -6661,8 +6661,8 @@ test("retries a missing or disconnected microphone without interrupting video or
             return new MediaStream();
         };
 
-        class FakePeerConnection {
-            constructor() {
+        class FakePeerConnection extends EventTarget {
+            constructor() { super();
                 this.senders = [];
                 this.transceivers = [];
                 this.iceConnectionState = "connected";
@@ -6904,8 +6904,8 @@ async function installMediaUpdateFixture(page) {
         const v = window.__noxa;
         v.showWorkspace(false);
         window.__mediaUpdate = { reads: 0, offers: [], limits: { video_max_width: 0, video_max_height: 0, video_max_bitrate: 1000000 } };
-        class LimitPeer {
-            constructor() { this.transceivers = []; this.signalingState = "stable"; }
+        class LimitPeer extends EventTarget {
+            constructor() { super(); this.transceivers = []; this.signalingState = "stable"; }
             getTransceivers() { return this.transceivers; }
             getSenders() { return this.transceivers.map(tr => tr.sender); }
             addTransceiver(track, options) {
@@ -10303,8 +10303,8 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
         const audio = new AudioContext();
         window.__iceAudio = audio;
         navigator.mediaDevices.getUserMedia = async () => audio.createMediaStreamDestination().stream;
-        class FakePeerConnection {
-            constructor() {
+        class FakePeerConnection extends EventTarget {
+            constructor() { super();
                 this.senders = [];
                 this.transceivers = [];
                 this.iceConnectionState = "connected";

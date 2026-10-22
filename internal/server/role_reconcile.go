@@ -12,6 +12,7 @@ import (
 // failed recording stop must not leave old file links or chat keys valid.
 // Startup/cutover wiring remains separate from this runtime hook.
 func (s *TCPServer) reconcileRolePolicy(ctx context.Context, before, after *authorization.RoleEvaluator) error {
+	s.reconcileRelay(after)
 	s.reconcileRoleFiles(after)
 	channelErr := s.reconcileRoleChannels(ctx, before, after)
 	mediaErr := s.reconcileRoleMedia(ctx, before, after)

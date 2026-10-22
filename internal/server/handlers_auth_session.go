@@ -175,6 +175,9 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		TLSFingerprint:     s.tlsFingerprint,
 		Capabilities:       []string{netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity},
 	}
+	if s.deps.Relay != nil {
+		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityManagedRelay)
+	}
 	if s.deps.ICEServers != nil {
 		resp.ICEServers = s.deps.ICEServers(id.uniqueID)
 	}
@@ -237,6 +240,9 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 // role mode final ban admission, identity and this publication share the policy
 // and metadata barriers; slow handshake delivery happens after releasing them.
 func (s *TCPServer) publishAuthenticatedSession(ctx context.Context, client *Client, id authIdentity) {
+	if s.deps.Relay != nil {
+		s.deps.Relay.Register(client.ID, id.uniqueID)
+	}
 	if s.deps.State != nil {
 		s.deps.State.AddClient(&state.Client{ClientID: client.ID, UserID: id.userID, UniqueID: id.uniqueID, Nickname: id.nickname, ConnectedAt: time.Now(), Conn: client.Conn, IsBot: s.ClientIsBot(ctx, client)})
 		if x := client.x25519(); x != "" {
