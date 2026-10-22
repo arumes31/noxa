@@ -22,7 +22,7 @@ func TestBrowserRelayContinuity(t *testing.T) {
 	if os.Getenv("NOXA_TURN_BROWSER") != "1" {
 		t.Skip("set NOXA_TURN_BROWSER=1 to run real Chromium continuity verification")
 	}
-	for _, transport := range []string{"udp", "tcp"} {
+	for _, transport := range []string{"udp", "tcp", "tls"} {
 		t.Run(transport, func(t *testing.T) {
 			testIP := "127.0.0.1"
 			// Chromium does not gather UDP candidates on Windows' loopback adapter.
@@ -51,7 +51,14 @@ func TestBrowserRelayContinuity(t *testing.T) {
 			logger := logging.NewDefaultLoggerFactory()
 			logger.DefaultLogLevel = logging.LogLevelDisabled
 			generator := &Generator{Manager: m, Base: &pion.RelayAddressGeneratorPortRange{RelayAddress: net.ParseIP(testIP), Address: testIP, MinPort: 40000, MaxPort: 49999}, AllowedPeer: func(a net.Addr) bool { u, ok := a.(*net.UDPAddr); return ok && u.IP.Equal(net.ParseIP(testIP)) }}
-			limited := limitedTCPListener(tcp, 64)
+			stream := tcp
+			tlsAddress, tlsPin := "", ""
+			if transport == "tls" {
+				stream = newProxyListener(tcp, []string{testIP})
+				proxy, _, pin := testTLSProxy(t, tcp.Addr().String(), testIP)
+				tlsAddress, tlsPin = proxy.Addr().String(), pin
+			}
+			limited := limitedTCPListener(stream, 64)
 			srv, err := pion.NewServer(pion.ServerConfig{Realm: "browser", AuthHandler: m.Authenticate, EventHandler: limited.events(), LoggerFactory: logger, PacketConnConfigs: []pion.PacketConnConfig{{PacketConn: udp, RelayAddressGenerator: generator}}, ListenerConfigs: []pion.ListenerConfig{{Listener: limited, RelayAddressGenerator: generator}}})
 			if err != nil {
 				t.Fatal(err)
@@ -60,6 +67,10 @@ func TestBrowserRelayContinuity(t *testing.T) {
 			address := udp.LocalAddr().String()
 			if transport == "tcp" {
 				address = tcp.Addr().String()
+			}
+			uri := "turn:" + address + "?transport=" + transport
+			if transport == "tls" {
+				uri = "turns:" + tlsAddress + "?transport=tcp"
 			}
 			root, err := filepath.Abs("../..")
 			if err != nil {
@@ -113,7 +124,7 @@ func TestBrowserRelayContinuity(t *testing.T) {
 				m.mu.Unlock()
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Cache-Control", "no-store")
-				_ = json.NewEncoder(w).Encode(map[string]any{"generation": lease.Generation, "server_time": time.Now().UnixMilli(), "expires_at": lease.ExpiresAt, "refresh_at": lease.RefreshAt, "ice_servers": []map[string]any{{"urls": []string{"turn:" + address + "?transport=" + transport}, "username": lease.Username, "credential": lease.Password}}})
+				_ = json.NewEncoder(w).Encode(map[string]any{"generation": lease.Generation, "server_time": time.Now().UnixMilli(), "expires_at": lease.ExpiresAt, "refresh_at": lease.RefreshAt, "ice_servers": []map[string]any{{"urls": []string{uri}, "username": lease.Username, "credential": lease.Password}}})
 			})
 			httpServer := httptest.NewServer(mux)
 			defer httpServer.Close()
@@ -131,7 +142,7 @@ func TestBrowserRelayContinuity(t *testing.T) {
 				}
 			}()
 			command := exec.CommandContext(ctx, "node", filepath.Join(root, "scripts/test-turn-browser.mjs"), httpServer.URL)
-			command.Env = append(os.Environ(), "NOXA_TEST_RELAY_TOKEN="+token)
+			command.Env = append(os.Environ(), "NOXA_TEST_RELAY_TOKEN="+token, "NOXA_TEST_TLS_PIN="+tlsPin)
 			output, err := command.CombinedOutput()
 			t.Log(string(output))
 			if err != nil {

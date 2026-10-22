@@ -222,10 +222,12 @@ type RecordingConfig struct {
 	WindowsACLReady bool `mapstructure:"windows_acl_ready"`
 }
 
-// TURNConfig holds TURN server settings (coturn REST API auth, 445/446).
-// TURN is only needed for clients behind restrictive NATs; when Secret is
-// empty no TURN entries are delivered to clients.
+// TURNConfig configures the managed relay or an external coturn REST service.
 type TURNConfig struct {
+	// TLSProxyListenAddr is a private TCP backend for a TLS-terminating proxy.
+	// It requires PROXY protocol and accepts only the exact trusted peer IPs.
+	TLSProxyListenAddr string   `mapstructure:"tls_proxy_listen_addr"`
+	TLSProxyTrustedIPs []string `mapstructure:"tls_proxy_trusted_ips"`
 	// Managed runs Pion in the control-server process. It excludes REST secrets.
 	Managed          bool     `mapstructure:"managed"`
 	ListenAddr       string   `mapstructure:"listen_addr"`
@@ -348,6 +350,8 @@ func newConfigViper() *viper.Viper {
 
 	// TURN defaults: disabled (no secret) until coturn is deployed.
 	v.SetDefault("turn.managed", false)
+	v.SetDefault("turn.tls_proxy_listen_addr", "")
+	v.SetDefault("turn.tls_proxy_trusted_ips", []string{})
 	v.SetDefault("turn.listen_addr", "0.0.0.0:12340")
 	v.SetDefault("turn.public_ip", "")
 	v.SetDefault("turn.relay_min_port", 12342)
@@ -668,6 +672,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("db_conn_max_lifetime %s must not be negative", c.DBConnMaxLifetime))
 	}
 
+	errs = append(errs, c.TURN.validateTLSProxy()...)
 	if c.TURN.Managed {
 		if c.WebRTC.UDPAddr == "" {
 			errs = append(errs, errors.New("managed TURN requires webrtc.udp_addr for the exact SFU endpoint"))
@@ -676,8 +681,15 @@ func (c *Config) Validate() error {
 			errs = append(errs, errors.New("managed TURN credentials_ttl must be 1h"))
 		}
 		for _, uri := range c.TURN.URIs {
-			if strings.HasPrefix(uri, "turns:") {
-				errs = append(errs, errors.New("managed TURN currently supports turn: UDP/TCP, not turns: TLS"))
+			parsed, parseErr := url.Parse(uri)
+			if parseErr == nil && strings.EqualFold(parsed.Scheme, "turns") {
+				if c.TURN.TLSProxyListenAddr == "" {
+					errs = append(errs, errors.New("managed turns: requires a configured TLS proxy backend"))
+				}
+				transports := parsed.Query()["transport"]
+				if len(transports) > 1 || (len(transports) == 1 && transports[0] != "tcp") {
+					errs = append(errs, errors.New("managed turns: requires TCP transport"))
+				}
 			}
 		}
 		if !c.TLSEnabled || c.TURN.Secret != "" || len(c.TURN.URIs) == 0 || c.TURN.Realm == "" {

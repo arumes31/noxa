@@ -37,7 +37,7 @@ func (l *tcpListener) Accept() (net.Conn, error) {
 			_ = conn.Close()
 			return nil, net.ErrClosed
 		}
-		if err != nil || l.pending >= 64 || l.pendingByIP[ip] >= 8 {
+		if err != nil || l.pending >= 64 || l.pendingByIP[ip] >= 8 || l.conns[conn.RemoteAddr().String()] != nil {
 			l.mu.Unlock()
 			_ = conn.Close()
 			continue

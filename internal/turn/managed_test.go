@@ -2,6 +2,7 @@ package turn
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
 	"net/netip"
 	"testing"
@@ -82,10 +83,10 @@ func TestDestinationPolicy(t *testing.T) {
 	}
 }
 
-// This test moves actual datagrams over both supported TURN transports. It
+// This test moves actual datagrams over all supported TURN transports. It
 // distinguishes rejecting credentials from stopping an existing allocation.
 func TestRealTURNRevocationAndExpiry(t *testing.T) {
-	for _, transport := range []string{"udp", "tcp"} {
+	for _, transport := range []string{"udp", "tcp", "tls"} {
 		t.Run(transport, func(t *testing.T) {
 			m := NewManager("test", 32, 1<<20)
 			defer m.Close()
@@ -105,7 +106,15 @@ func TestRealTURNRevocationAndExpiry(t *testing.T) {
 			logger := logging.NewDefaultLoggerFactory()
 			logger.DefaultLogLevel = logging.LogLevelDisabled
 			generator := &Generator{Manager: m, Base: &pion.RelayAddressGeneratorPortRange{RelayAddress: net.ParseIP("127.0.0.1"), Address: "127.0.0.1", MinPort: 30000, MaxPort: 39999}, AllowedPeer: DestinationPolicy([]string{peer.LocalAddr().String()}, false)}
-			limited := limitedTCPListener(tcp, 64)
+			var tlsConfig *tls.Config
+			tlsAddress := ""
+			stream := tcp
+			if transport == "tls" {
+				stream = newProxyListener(tcp, []string{"127.0.0.1"})
+				proxy, cfg, _ := testTLSProxy(t, tcp.Addr().String(), "127.0.0.1")
+				tlsConfig, tlsAddress = cfg, proxy.Addr().String()
+			}
+			limited := limitedTCPListener(stream, 64)
 			limited.preAuthLifetime = 500 * time.Millisecond
 			srv, err := pion.NewServer(pion.ServerConfig{Realm: "test", AuthHandler: m.Authenticate, EventHandler: limited.events(), LoggerFactory: logger, PacketConnConfigs: []pion.PacketConnConfig{{PacketConn: udp, RelayAddressGenerator: generator}}, ListenerConfigs: []pion.ListenerConfig{{Listener: limited, RelayAddressGenerator: generator}}})
 			if err != nil {
@@ -116,10 +125,19 @@ func TestRealTURNRevocationAndExpiry(t *testing.T) {
 			if transport == "tcp" {
 				address = tcp.Addr().String()
 			}
+			if transport == "tls" {
+				address = tlsAddress
+			}
 			allocate := func(l Lease) (net.PacketConn, error) {
 				var conn net.PacketConn
-				if transport == "tcp" {
-					raw, e := (&net.Dialer{Timeout: time.Second}).DialContext(t.Context(), "tcp", address)
+				if transport != "udp" {
+					var raw net.Conn
+					var e error
+					if tlsConfig != nil {
+						raw, e = (&tls.Dialer{NetDialer: &net.Dialer{Timeout: time.Second}, Config: tlsConfig}).DialContext(t.Context(), "tcp", address)
+					} else {
+						raw, e = (&net.Dialer{Timeout: time.Second}).DialContext(t.Context(), "tcp", address)
+					}
 					if e != nil {
 						return nil, e
 					}
@@ -160,7 +178,7 @@ func TestRealTURNRevocationAndExpiry(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if transport == "tcp" {
+			if transport != "udp" {
 				limited.mu.Lock()
 				pending, active := limited.pending, len(limited.conns)
 				limited.mu.Unlock()

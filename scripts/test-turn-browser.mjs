@@ -2,7 +2,11 @@ import { createRequire } from "node:module";
 import assert from "node:assert/strict";
 const require = createRequire(new URL("../client/frontend/package.json", import.meta.url));
 const { chromium } = require("@playwright/test");
-const browser = await chromium.launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"] });
+const args = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"];
+// Trust only this fixture's ephemeral key. Certificate rejection is tested
+// separately with verifying Go TLS clients; never disable verification globally.
+if (process.env.NOXA_TEST_TLS_PIN) args.push(`--ignore-certificate-errors-spki-list=${process.env.NOXA_TEST_TLS_PIN}`);
+const browser = await chromium.launch({ args });
 try {
     const page = await browser.newPage({ permissions: ["microphone", "camera"] });
     await page.goto(process.argv[2]);
