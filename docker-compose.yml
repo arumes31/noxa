@@ -178,7 +178,7 @@ services:
       NOXA_TURN_ALLOW_PUBLIC_PEERS: ${NOXA_TURN_ALLOW_PUBLIC_PEERS:-false}
       NOXA_TURN_MAX_ALLOCATIONS: ${NOXA_TURN_MAX_ALLOCATIONS:-256}
       NOXA_TURN_BYTES_PER_SECOND: ${NOXA_TURN_BYTES_PER_SECOND:-8388608}
-      NOXA_TURN_CREDENTIALS_TTL: ${NOXA_TURN_CREDENTIALS_TTL:-1h}
+      NOXA_TURN_CREDENTIALS_TTL: ${NOXA_TURN_CREDENTIALS_TTL:-24h}
       # Comma-separated client URIs, e.g. turn:localhost:12340?transport=udp
       NOXA_TURN_URIS: ${NOXA_TURN_URIS:-}
   # ---------------------------------------------------------------------------

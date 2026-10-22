@@ -2,13 +2,13 @@ import { expect, test } from "./fixtures.js";
 
 test.use({ launchOptions: { args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"] }, permissions: ["microphone", "camera"] });
 
-for (const signalingMode of ["normal", "gathering", "candidates-first", "group-media", "capture-recovery"]) {
+for (const signalingMode of ["normal", "gathering", "candidates-first", "group-media", "capture-recovery", "relay-renewal", "group-renewal"]) {
 test(`real peer call captures only after acceptance and tears down without joining a channel${signalingMode === "normal" ? "" : ` (${signalingMode})`}`, async ({ newIsolatedPage }) => {
     test.setTimeout(60000);
     const pages = new Map();
     const heldDescriptions = new Map();
     const candidateBatches = [];
-    const participantIDs = signalingMode === "group-media" ? ["alice", "bob", "charlie"] : ["alice", "bob"];
+    const participantIDs = ["group-media", "group-renewal"].includes(signalingMode) ? ["alice", "bob", "charlie"] : ["alice", "bob"];
     let call = null;
     let revision = 0;
     const notify = () => { for (const page of pages.values()) void page.evaluate(id => window.__callsModule.privateCallChanged({ id }), call.id).catch(() => {}); };
@@ -71,6 +71,12 @@ test(`real peer call captures only after acceptance and tears down without joini
                 SaveSettings: async value => { window.__savedSettings = structuredClone(value); return ""; },
                 GetSettings: async () => structuredClone(window.__savedSettings),
             } } };
+            if (signalingMode.endsWith("renewal")) {
+                window.__relayGeneration = 0;
+                const nativeInterval = window.setInterval;
+                window.setInterval = (fn, delay) => nativeInterval(fn, delay === 15000 ? 100 : delay);
+                window.go.main.App.GetRelayLeaseForTab = async () => ({ generation: window.__relayGeneration });
+            }
             window.__callsModule = await import("/src/private-calls.js");
         }, { uid, signalingMode, participantIDs });
     }
@@ -173,7 +179,7 @@ test(`real peer call captures only after acceptance and tears down without joini
             const test = window.__testTone; await test.sender.replaceTrack(test.original);
             test.tone.stop(); test.output.stream.getTracks().forEach(track => track.stop()); await test.context.close();
         });
-        if (["normal", "group-media"].includes(signalingMode)) {
+        if (["normal", "group-media", "relay-renewal", "group-renewal"].includes(signalingMode)) {
             await alice.getByRole("button", { name: "Mute microphone", exact: true }).click();
             await alice.evaluate(async () => {
                 window.__previousCallMic = window.__streams[0].getAudioTracks()[0];
@@ -252,6 +258,17 @@ test(`real peer call captures only after acceptance and tears down without joini
                 await alice.evaluate(async () => {
                     const tone = window.__shareTone; await tone.sender.replaceTrack(tone.original); tone.tone.stop(); tone.output.stream.getTracks().forEach(track => track.stop()); await tone.context.close();
                 });
+            }
+            if (signalingMode.endsWith("renewal")) {
+                for (let generation = 1; generation <= 3; generation++) {
+                    const previous = await Promise.all([...pages.values()].map(page => page.evaluate(() => window.__peers.map(peer => peer.localDescription.sdp.match(/a=ice-ufrag:([^\r\n]+)/)?.[1]))));
+                    await Promise.all([...pages.values()].map(page => page.evaluate(value => { window.__relayGeneration = value; }, generation)));
+                    for (const [index, page] of [...pages.values()].entries()) {
+                        await expect.poll(() => page.evaluate(before => window.__peers.every((peer, i) => peer.localDescription.sdp.match(/a=ice-ufrag:([^\r\n]+)/)?.[1] !== before[i] && peer.connectionState === "connected" && peer.signalingState === "stable"), previous[index])).toBe(true);
+                        expect(await page.evaluate(() => window.__peers.length)).toBe(participantIDs.length - 1);
+                    }
+                    await expect.poll(() => bob.evaluate(async () => [...(await window.__peers[0].getStats()).values()].filter(stat => stat.type === "inbound-rtp" && stat.kind === "video" && stat.bytesReceived > 0).length)).toBe(2);
+                }
             }
             await alice.getByRole("button", { name: "Stop camera", exact: true }).click();
             await expect(bob.locator('.call-media-tile[data-local="false"][data-source="camera"]')).toHaveCount(participantIDs.length - 2);

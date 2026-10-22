@@ -3,6 +3,9 @@
 # and leave TURN_SECRET/TURN_SECRET_FILE empty. Match overridden port ranges.
 services:
   noxa:
+    environment:
+      NOXA_TURN_MANAGED: "true"
+      NOXA_TURN_CREDENTIALS_TTL: "1h"
     ports:
       - "12340:12340/udp"
       - "12340:12340/tcp"

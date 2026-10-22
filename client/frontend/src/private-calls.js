@@ -412,9 +412,14 @@ function ensurePeer(owner, uid) {
         restart: () => {
             const task = peer.chain.catch(() => {}).then(async () => {
                 if (!acceptedPeer(owner, uid) || owner.peers.get(uid) !== peer || pc.signalingState !== "stable") return;
-                peer.localCandidateCount = 0; peer.localCandidates = []; peer.descriptionSent = false;
-                await pc.setLocalDescription(await pc.createOffer({ iceRestart: true }));
-                await sendDescription(owner, uid, pc);
+                peer.localCandidateCount = 0; peer.remoteCandidateCount = 0; peer.localCandidates = []; peer.descriptionSent = false;
+                try {
+                    await pc.setLocalDescription(await pc.createOffer({ iceRestart: true }));
+                    await sendDescription(owner, uid, pc);
+                } catch (error) {
+                    if (pc.signalingState === "have-local-offer") await pc.setLocalDescription({ type: "rollback" }).catch(() => {});
+                    throw error;
+                }
             });
             peer.chain = task.catch(() => {});
             return task;

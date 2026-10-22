@@ -50,6 +50,7 @@ type relaySession struct {
 type Manager struct {
 	mu               sync.Mutex
 	endpoints        map[netip.AddrPort]*relaySocket
+	localEndpoints   map[netip.AddrPort]*relaySocket
 	realm            string
 	sessions         map[string]*relaySession
 	grants           map[string]*grant
@@ -61,7 +62,7 @@ type Manager struct {
 }
 
 func NewManager(realm string, maxAllocations, bytesPerSecond int) *Manager {
-	return &Manager{endpoints: make(map[netip.AddrPort]*relaySocket), realm: realm, sessions: make(map[string]*relaySession), grants: make(map[string]*grant), now: time.Now, maxAllocations: maxAllocations, bytesPerSecond: bytesPerSecond}
+	return &Manager{localEndpoints: make(map[netip.AddrPort]*relaySocket), endpoints: make(map[netip.AddrPort]*relaySocket), realm: realm, sessions: make(map[string]*relaySession), grants: make(map[string]*grant), now: time.Now, maxAllocations: maxAllocations, bytesPerSecond: bytesPerSecond}
 }
 func (m *Manager) Register(session, account string) {
 	m.mu.Lock()
@@ -250,6 +251,21 @@ func (g *Generator) AllocatePacketConn(c pion.AllocateListenerConfig) (net.Packe
 	endpoint := addr.(*net.UDPAddr).AddrPort()
 	socket.endpoint = netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port())
 	m.endpoints[socket.endpoint] = socket
+	local := conn.LocalAddr().(*net.UDPAddr).AddrPort()
+	// Pion's port-range generator replaces the IP in LocalAddr with its
+	// advertised address. Derive the bound IP from the validated bind setting.
+	localIP, parseErr := netip.ParseAddr(g.Base.Address)
+	if parseErr != nil {
+		_ = conn.Close()
+		delete(m.endpoints, socket.endpoint)
+		return nil, nil, ErrDenied
+	}
+	localIP = localIP.Unmap()
+	if localIP.IsUnspecified() {
+		localIP = netip.MustParseAddr("127.0.0.1")
+	}
+	socket.localEndpoint = netip.AddrPortFrom(localIP, local.Port())
+	m.localEndpoints[socket.localEndpoint] = socket
 	grant.sockets[socket] = struct{}{}
 	m.totalAllocations++
 	return socket, addr, nil
@@ -260,7 +276,8 @@ func (*Generator) AllocateListener(pion.AllocateListenerConfig) (net.Listener, n
 func (*Generator) AllocateConn(pion.AllocateConnConfig) (net.Conn, error) { return nil, ErrDenied }
 
 type relaySocket struct {
-	endpoint netip.AddrPort
+	localEndpoint netip.AddrPort
+	endpoint      netip.AddrPort
 	net.PacketConn
 	manager *Manager
 	grant   *grant
@@ -279,6 +296,9 @@ func (s *relaySocket) closeLocked() {
 	if s.manager.endpoints[s.endpoint] == s {
 		delete(s.manager.endpoints, s.endpoint)
 	}
+	if s.manager.localEndpoints[s.localEndpoint] == s {
+		delete(s.manager.localEndpoints, s.localEndpoint)
+	}
 	s.manager.totalAllocations--
 }
 func (s *relaySocket) Close() error {
@@ -295,6 +315,15 @@ func (s *relaySocket) ReadFrom(p []byte) (int, net.Addr, error) {
 		}
 		s.manager.mu.Lock()
 		valid := !s.closed && s.manager.validLocked(s.grant)
+		// Same-process relays bypass public NAT hairpinning. Restore the advertised
+		// source endpoint before Pion evaluates TURN permissions/channel bindings.
+		if udp, ok := addr.(*net.UDPAddr); ok {
+			endpoint := udp.AddrPort()
+			source := s.manager.localEndpoints[netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port())]
+			if source != nil && !source.closed && s.manager.validLocked(source.grant) {
+				addr = net.UDPAddrFromAddrPort(source.endpoint)
+			}
+		}
 		allowed := valid && s.allowedLocked(addr) && s.in.AllowN(s.manager.now(), n)
 		s.manager.mu.Unlock()
 		if !valid {
@@ -313,6 +342,13 @@ func (s *relaySocket) WriteTo(p []byte, addr net.Addr) (int, error) {
 	}
 	if !s.allowedLocked(addr) || !s.out.AllowN(s.manager.now(), len(p)) {
 		return 0, ErrDenied
+	}
+	if udp, ok := addr.(*net.UDPAddr); ok {
+		endpoint := udp.AddrPort()
+		peer := s.manager.endpoints[netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port())]
+		if peer != nil && !peer.closed && s.manager.validLocked(peer.grant) {
+			addr = net.UDPAddrFromAddrPort(peer.localEndpoint)
+		}
 	}
 	// No unbounded network wait under the revocation barrier.
 	if err := s.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {

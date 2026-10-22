@@ -25,12 +25,14 @@ turn:
   allow_public_peers: true # required for the existing private/group-call mesh
 ```
 
-The configured SFU UDP port is automatically allowed at its exact local and
+`webrtc.udp_addr` must bind a fixed port. The configured SFU UDP port is automatically allowed at its exact local and
 advertised IPv4 addresses. Optional `allowed_peers` entries are exact IPv4:port
 exceptions, never subnets. Other private, loopback, CGNAT, link-local, multicast,
 reserved and documentation destinations are rejected. The relay's own public
 address is denied except for explicit SFU endpoints and active registered relay
-allocations (needed for two relayed private-call participants). Permission checks
+allocations (needed for two relayed private-call participants). Same-process
+relay traffic is routed to the owned local socket, restoring its advertised
+source address for TURN permission checks, without relying on NAT hairpinning. Permission checks
 also run on the actual socket destination, not just TURN's IP-only permission.
 `allow_public_peers: false` limits traffic to those explicit endpoints and local
 active allocations. Public-peer mode permits public UDP destinations; credentials
@@ -89,7 +91,10 @@ restrictions continue to be enforced at the SFU without dropping permitted media
 Pending rules revoke relay access immediately.
 
 Socket wrappers recheck grant expiry, authorization lease, destination and byte
-limits on actual traffic. New allocations and authenticated TURN refresh requests
+limits on actual traffic. The byte budget is shared per session across every
+allocation and generation; allocation caps are 16 per session, 64 per account
+and the configured server total. Accepted TCP connections are bounded and expire
+after 60 seconds without inbound transport traffic. New allocations and authenticated TURN refresh requests
 check the live registry. Registry teardown serializes against allocation creation
 and bounded UDP writes; no client disconnect acknowledgment is trusted. In-flight
 network packets can still arrive after the revocation call. A 5-second normal

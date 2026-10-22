@@ -353,7 +353,7 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("turn.secret", "")
 	v.SetDefault("turn.realm", "noxa")
 	v.SetDefault("turn.uris", []string{})
-	v.SetDefault("turn.credentials_ttl", time.Hour)
+	v.SetDefault("turn.credentials_ttl", 24*time.Hour)
 
 	// Database pool defaults -------------------------------------------------
 	v.SetDefault("db_max_open_conns", 25)
@@ -646,6 +646,9 @@ func (c *Config) Validate() error {
 	}
 
 	if c.TURN.Managed {
+		if c.WebRTC.UDPAddr == "" {
+			errs = append(errs, errors.New("managed TURN requires webrtc.udp_addr for the exact SFU endpoint"))
+		}
 		if c.TURN.CredentialsTTL != time.Hour {
 			errs = append(errs, errors.New("managed TURN credentials_ttl must be 1h"))
 		}
@@ -662,6 +665,11 @@ func (c *Config) Validate() error {
 		}
 		if err := validateAddress("turn.listen_addr", c.TURN.ListenAddr); err != nil {
 			errs = append(errs, err)
+		}
+		if host, _, err := net.SplitHostPort(c.TURN.ListenAddr); err == nil && host != "" {
+			if ip := net.ParseIP(host); ip == nil || ip.To4() == nil {
+				errs = append(errs, errors.New("managed TURN listen_addr must bind a literal IPv4 address"))
+			}
 		}
 		if c.TURN.RelayMinPort == 0 || c.TURN.RelayMinPort > c.TURN.RelayMaxPort || c.TURN.RelayMaxPort == 65535 || c.TURN.MaxAllocations < 1 || c.TURN.MaxAllocations > 100000 || c.TURN.BytesPerSecond < 65536 || c.TURN.BytesPerSecond > 1<<30 {
 			errs = append(errs, errors.New("invalid managed TURN limits"))

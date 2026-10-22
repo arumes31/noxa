@@ -44,7 +44,7 @@ export function maintainRelay(pc, { app, tabID, current, restart, onFailure = ()
             // Native cache and server clock enforce the finite credential
             // deadline. Recheck after wake/network recovery without stale writes.
             retryAt = Date.now() + 15000;
-            onFailure();
+            if (generation > 0) onFailure();
         } finally { running = false; }
     }
     const timer = setInterval(() => { void tick(); }, 15000);
