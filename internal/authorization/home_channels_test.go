@@ -29,3 +29,35 @@ func TestHomeChannelIsVisibleButNeverMediaOrChat(t *testing.T) {
 		t.Fatal("child lost voice")
 	}
 }
+
+func TestChannelAccessEditsCannotChangeLifecycleMarkers(t *testing.T) {
+	for _, kind := range []string{"", "home", "public"} {
+		for _, supplied := range []string{"", "home", "public"} {
+			p := roleFixture()
+			p.Channels[0].SystemKind = kind
+			draft := p.Channels[0]
+			draft.SystemKind = supplied
+			next, err := ApplyRoleChange(p, p.OwnerID, RoleChange{Kind: ChannelAccessSet, ExpectedRevision: p.Revision, Channel: draft})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e, err := NewRoleEvaluator(next)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e.channels[draft.ChannelID].SystemKind != kind {
+				t.Fatalf("ACL draft changed %q to %q", kind, supplied)
+			}
+			if kind == "home" && e.Evaluate(p.OwnerID, draft.ChannelID, SendMessages).Allowed {
+				t.Fatal("ACL edit enabled home chat")
+			}
+		}
+	}
+	p := roleFixture()
+	for _, kind := range []string{"home", "public"} {
+		_, err := ApplyChannelTreeChange(p, p.OwnerID, ChannelTreeChange{Kind: ChannelCreate, ExpectedRevision: p.Revision, ChannelID: 999, Access: ChannelPolicy{ChannelID: 999, SystemKind: kind}})
+		if err != ErrRoleInvalid {
+			t.Fatalf("client created %s lifecycle: %v", kind, err)
+		}
+	}
+}

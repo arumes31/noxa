@@ -221,6 +221,8 @@ func ApplyRoleChange(p RolePolicy, actorID int64, change RoleChange) (RolePolicy
 		if !e.Evaluate(actorID, old.ChannelID, ManageChannelAccess).Allowed {
 			return RolePolicy{}, ErrRoleForbidden
 		}
+		// Lifecycle markers belong to the persisted channel, never to an ACL draft.
+		change.Channel.SystemKind = old.SystemKind
 		for i := range next.Channels {
 			if next.Channels[i].ChannelID == old.ChannelID {
 				next.Channels[i] = change.Channel

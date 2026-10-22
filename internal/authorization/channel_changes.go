@@ -65,6 +65,9 @@ func ApplyChannelTreeChange(p RolePolicy, actorID int64, change ChannelTreeChang
 			return RolePolicy{}, ErrRoleForbidden
 		}
 	case ChannelCreate:
+		if change.Access.SystemKind != "" {
+			return RolePolicy{}, ErrRoleInvalid
+		}
 		if _, exists := e.channels[change.ChannelID]; exists {
 			return RolePolicy{}, ErrRoleInvalid
 		}
