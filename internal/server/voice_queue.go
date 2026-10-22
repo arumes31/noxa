@@ -58,7 +58,7 @@ func (s *TCPServer) handleVoiceQueue(ctx context.Context, client *Client, frame 
 			affected := request.Action == "lower" && member.ClientID == target
 			affected = affected || request.Action == "clear" && (member.HandRaisedOrder > 0 || member.HandCalled)
 			affected = affected || request.Action == "next" && firstID != "" && (member.ClientID == firstID || member.HandCalled)
-			if affected && !e.CanManageMember(client.userID(), member.UserID) {
+			if affected && (!e.CanManageMember(client.userID(), member.UserID) || (member.Status == "invisible" && member.UniqueID != client.uniqueID() && !e.Evaluate(client.userID(), 0, authorization.ViewConnectionInfo).Allowed)) {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "queue moderation denied")
 			}
 		}
@@ -67,6 +67,9 @@ func (s *TCPServer) handleVoiceQueue(ctx context.Context, client *Client, frame 
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "voice queue member unavailable")
 		}
 		s.broadcastEvent(eventVoiceQueueChanged, struct{}{})
+		if moderating {
+			s.auditInChannels(ctx, client.uniqueID(), "voice_queue_moderated", target, "action="+request.Action, request.ChannelID)
+		}
 		// A moderation acknowledgement must not disclose an invisible next speaker.
 		if request.Action == "next" || request.Action == "clear" {
 			chosen = ""

@@ -74,9 +74,9 @@ func TestVoiceQueueModerationRespectsHierarchyAtomically(t *testing.T) {
 	defer env.stop()
 	env.state.AddChannel(testChannel(1))
 	moderator, mid := dialAuthed(t, env.addr, "admin-uid")
-	defer moderator.Close()
+	defer func() { _ = moderator.Close() }()
 	owner, oid := dialAuthed(t, env.addr, "user-uid")
-	defer owner.Close()
+	defer func() { _ = owner.Close() }()
 	for _, id := range []string{mid, oid} {
 		if err := env.state.MoveClient(id, 1); err != nil {
 			t.Fatal(err)
