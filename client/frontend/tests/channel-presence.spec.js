@@ -249,7 +249,7 @@ test('Lobby shows neutral members, protects its actions and returns silently wit
                 access: { can_connect: false, restricted: false }, clients: [], children: [
                     { ChannelID: 7, ParentID: 1, Name: 'Public1', SystemKind: 'public', clients: channel === 7 ? [self] : [] },
                     { ChannelID: 8, ParentID: 1, Name: 'Public2', SystemKind: 'public', clients: [] },
-                ] }], unassigned_clients: channel === 0 ? [self] : [] };
+                ] }], unassigned_clients: channel === 0 ? [self, { client_id: 'lobby-peer', nickname: 'Lobby peer', channel_id: 0, server_muted: true }] : [] };
             for (const callback of window.__events.snapshot) callback(JSON.stringify(snapshot));
         };
         window.__homeSnapshot(0);
@@ -259,6 +259,13 @@ test('Lobby shows neutral members, protects its actions and returns silently wit
     await expect(page.locator('.channel[data-chid="1"]')).not.toHaveClass(/access-denied/);
     await expect(page.locator('.channel[data-chid="1"] + .channel-members')).toContainText('Self');
     await expect(page.locator('.text-channel').filter({ hasText: 'Lobby' })).toHaveCount(0);
+    expect(await page.evaluate(async () => {
+        const { icon } = await import('/src/icons.js');
+        const normalized = name => { const node = document.createElement('span'); node.innerHTML = icon(name); return node.innerHTML; };
+        return [...document.querySelectorAll('.channel[data-chid="1"] + .channel-members .status-icons')]
+            .some(node => node.innerHTML.includes(normalized('mic')) || node.innerHTML.includes(normalized('micOff')));
+    })).toBe(false);
+    await expect(page.locator('#chat-log')).toContainText('Chat is disabled in the Lobby. Join a voice channel, use a text channel, or send a direct message.');
     await expect(page.locator('#voice-leave-channel')).toBeHidden();
     await page.locator('.channel[data-chid="1"]').click({ button: 'right' });
     await expect(page.locator('.ctx-menu [data-act="delete"]')).toHaveCount(0);
@@ -266,4 +273,6 @@ test('Lobby shows neutral members, protects its actions and returns silently wit
     expect(await page.evaluate(() => ({ muted: window.__noxa.state.muted, deafened: window.__noxa.state.deafened, spoken: window.__spoken }))).toEqual({ muted: true, deafened: true, spoken: [] });
     await page.keyboard.press('Escape');
     await page.screenshot({ path: testInfo.outputPath('lobby-home.png') });
+    await page.evaluate(() => window.__homeSnapshot(7));
+    await expect(page.locator('.channel[data-chid="7"] + .channel-members .client[data-clid="self"] .status-icons svg')).toHaveCount(2);
 });

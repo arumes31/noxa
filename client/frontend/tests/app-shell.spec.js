@@ -230,3 +230,27 @@ test('Messages toggles closed and clicking the current voice channel closes it i
     await expect(page.locator('#center')).not.toHaveClass(/dm-view-active/);
     await expect(page.locator('#chat-pane')).toBeVisible();
 });
+
+
+test('linked text chats follow the voice hierarchy even when it is collapsed', async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.state.channels = [
+            { ChannelID: 20, Name: 'Private', OrderIndex: 0 },
+            { ChannelID: 1, Name: 'Lobby', SystemKind: 'home', OrderIndex: 99 },
+            { ChannelID: 8, Name: 'Public2', ParentID: 1, OrderIndex: 2 },
+            { ChannelID: 7, Name: 'Public1', ParentID: 1, OrderIndex: 1 },
+            { ChannelID: 22, Name: 'Private2', ParentID: 20, OrderIndex: 2 },
+            { ChannelID: 21, Name: 'Private1', ParentID: 20, OrderIndex: 1 },
+            { ChannelID: 30, Name: 'general', TextOnly: true },
+        ];
+        v.state.clients = []; v.state.myChannelID = 0; v.state.collapsedChannels.clear();
+        v.renderTree();
+    });
+    const expected = ['Public1', 'Public2', 'Private', 'Private1', 'Private2'];
+    await expect(page.locator('#channel-tree .ch-name')).toHaveText(['Lobby', ...expected]);
+    await expect(page.locator('#text-channels .voice-linked .ch-name')).toHaveText(expected);
+    await page.locator('#channel-tree .channel[data-chid="1"] .ch-disclosure').click();
+    await expect(page.locator('#channel-tree .channel[data-chid="7"]')).toHaveCount(0);
+    await expect(page.locator('#text-channels .voice-linked .ch-name')).toHaveText(expected);
+});

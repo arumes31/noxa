@@ -20,6 +20,31 @@ describe("app shell model", () => {
         assert.deepEqual(textChannels(), []);
     });
 
+    it("keeps linked chats in voice-tree order across nested sibling ranks", () => {
+        const channels = [
+            { ChannelID: 20, Name: "Private", OrderIndex: 0 },
+            { ChannelID: 1, Name: "Lobby", SystemKind: "home", OrderIndex: 99 },
+            { ChannelID: 8, Name: "Public2", ParentID: 1, OrderIndex: 2 },
+            { ChannelID: 7, Name: "Public1", ParentID: 1, OrderIndex: 1 },
+            { ChannelID: 22, Name: "Private2", ParentID: 20, OrderIndex: 2 },
+            { ChannelID: 21, Name: "Private1", ParentID: 20, OrderIndex: 1 },
+            { ChannelID: 30, Name: "general", TextOnly: true, OrderIndex: 0 },
+        ];
+        const original = channels.map(channel => ({ ...channel }));
+        assert.deepEqual(textChannels(channels).map(channel => channel.Name), ["Public1", "Public2", "Private", "Private1", "Private2", "general"]);
+        assert.deepEqual(channels, original);
+    });
+
+    it("promotes voice descendants of text-only parents exactly like the voice tree", () => {
+        const channels = [
+            { ChannelID: 1, Name: "Voice" },
+            { ChannelID: 2, Name: "Text parent", ParentID: 1, TextOnly: true },
+            { ChannelID: 3, Name: "Nested voice", ParentID: 2 },
+            { ChannelID: 4, Name: "Next voice", OrderIndex: 1 },
+        ];
+        assert.deepEqual(textChannels(channels).map(channel => channel.ChannelID), [1, 3, 4, 2]);
+    });
+
     it("formats the voice card stream summary", () => {
         assert.equal(formatStreamStats({ height: 1080, fps: 59.7, bitrate: 6_200_000 }), "1080p60 · 6.2 Mbps");
         assert.equal(formatStreamStats({ height: 720, fps: 30, bitrate: 850_000 }), "720p30 · 850 kbps");

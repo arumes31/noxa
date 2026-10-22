@@ -12,6 +12,7 @@ import { memberScreenStream } from "./stream-controls.js";
 import { renderWorkspace } from "./workspace-ui.js";
 import { captureScope, scopeIsCurrent } from "./scoped-actions.js";
 import { createSpeakingAvatars, speakingAvatar } from "./speaking-avatar.js";
+import { voiceChannelTree } from "./channel-order.js";
 
 const memberNameOrder = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
@@ -79,26 +80,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             empty.textContent = t("runtime.noChannels");
             root.appendChild(empty);
         }
-        // Text channels (chat only) live in the sidebar's Text section; a
-        // voice channel below one is shown under the nearest voice ancestor.
-        const channelByID = new Map(state.channels.map((ch) => [ch.ChannelID, ch]));
-        const voiceParent = (ch) => {
-            let parent = ch.ParentID || 0, guard = 0;
-            while (parent && channelByID.get(parent)?.TextOnly && guard++ < 1000) parent = channelByID.get(parent).ParentID || 0;
-            return parent;
-        };
-        const byParent = new Map();
-        for (const ch of state.channels) {
-            if (ch.TextOnly) continue;
-            const key = voiceParent(ch);
-            if (!byParent.has(key)) byParent.set(key, []);
-            byParent.get(key).push(ch);
-        }
-        // (163) the manual sort index decides sibling order; sort is stable, so
-        // equal indices keep the order the snapshot delivered them in.
-        for (const list of byParent.values()) {
-            list.sort((a, b) => Number(b.SystemKind === "home") - Number(a.SystemKind === "home") || (a.OrderIndex || 0) - (b.OrderIndex || 0));
-        }
+        const byParent = voiceChannelTree(state.channels);
         // (319) live tree filter: matching channels/users stay; a channel stays
         // when it or a descendant or one of its users matches.
         if (state.treeFilter) {
@@ -373,6 +355,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
     }
 
     function clientRow(c) {
+        const inVoice = c.channel_id > 0 && !state.channels.some(ch => ch.ChannelID === c.channel_id && ch.SystemKind === "home");
         const tabID = state.activeTabID, generation = state.serverGeneration;
         const row = document.createElement("div");
         const speakingHere = state.myChannelID !== 0 && c.channel_id === state.myChannelID && c.is_speaking && !isClientMicrophoneMuted(c, state);
@@ -390,7 +373,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             c.status && presenceLabel(c.status), speakingHere && t("runtime.speaking"),
             c.priority_speaker && t("runtime.priority"),
             streamLabel,
-            c.client_id === state.myClientID && state.muted && t("runtime.muted"),
+            inVoice && c.client_id === state.myClientID && state.muted && t("runtime.muted"),
             c.client_id === state.myClientID && state.deafened && t("runtime.deaf")].filter(Boolean).join(", "));
         // (140/305) users are draggable (group assign in the manager; move by
         // dropping onto a channel).
@@ -465,7 +448,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         }
         // (10) Microphone and deafen status; sharing has its own named indicator.
         if (c.client_id !== state.myClientID) {
-            for (const [visible, glyph, key] of [[c.server_muted || c.self_muted || c.self_deafened, "micOff", c.server_muted ? "workspace.voice.serverMuted" : "workspace.voice.muted"],
+            for (const [visible, glyph, key] of [[inVoice && (c.server_muted || c.self_muted || c.self_deafened), "micOff", c.server_muted ? "workspace.voice.serverMuted" : "workspace.voice.muted"],
                 [c.server_deafened || c.self_deafened, "headphonesOff", c.server_deafened ? "workspace.voice.serverDeafened" : "audioState.deafened"]]) {
                 if (!visible) continue;
                 const status = document.createElement("span");
@@ -479,9 +462,9 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         if (c.client_id === state.myClientID) {
             const icons = document.createElement("span");
             icons.className = "status-icons";
-            icons.innerHTML = icon(state.muted ? "micOff" : "mic") +
+            icons.innerHTML = (inVoice ? icon(state.muted ? "micOff" : "mic") : "") +
                 (state.deafened ? icon("headphonesOff") : "");
-            row.appendChild(icons);
+            if (icons.innerHTML) row.appendChild(icons);
             // (347) DND shows on own status icons.
             if (window.__noxaPolish?.dndActive?.()) {
                 const dnd = document.createElement("span");
