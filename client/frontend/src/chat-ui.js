@@ -40,6 +40,7 @@ import { icon } from "./icons.js";
 import { copyToClipboard } from "./clipboard.js";
 import { avatarColor, renderWorkspace } from "./workspace-ui.js";
 import { youtubeVideo, renderYouTubePreviews } from "./youtube-previews.js";
+import { xPost, renderXPostPreviews } from "./x-previews.js";
 import { createSearchWorkspace } from "./search-workspace.js";
 
 const V = () => window.__noxa;
@@ -838,11 +839,13 @@ function renderBody(container, m) {
     }
     for (let i = 1; i < parts.length; i += 2) attachFileRef(container, m, parts[i]);
     const previewScope = captureScope(readExportScope);
-    renderYouTubePreviews(container, {
+    const previewOptions = {
         enabled: V().state.settings?.link_previews !== false,
         scope: previewScope,
         isCurrent: () => exportScopeIsCurrent(previewScope) && V().state.settings?.link_previews !== false,
-    });
+    };
+    renderYouTubePreviews(container, previewOptions);
+    renderXPostPreviews(container, previewOptions);
 }
 
 const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp"];
@@ -3418,6 +3421,8 @@ function scheduleLinkCard(linkEl) {
     if (settings.link_previews === false) return;
     const url = linkEl.getAttribute("data-url");
     if (!url || youtubeVideo(url)) return;
+    const post = xPost(url);
+    if (post && linkEl.closest(".msg-text")?.querySelector(`.x-post-preview[data-post-id="${post.id}"]`)) return;
     const generation = linkCardGeneration;
     linkCardAnchor = linkEl;
     // Chat rerenders can remove/hide a hovered link without a mouseout event.
@@ -4268,12 +4273,13 @@ export function applyChatPrefs() {
     const previewsEnabled = s.link_previews !== false;
     if (linkPreviewPreference !== previewsEnabled) {
         linkPreviewPreference = previewsEnabled;
-        if (!previewsEnabled) { closeLinkCard(); document.querySelectorAll(".youtube-preview").forEach(card => card.remove()); }
+        if (!previewsEnabled) { closeLinkCard(); document.querySelectorAll(".youtube-preview, .x-post-preview").forEach(card => card.remove()); }
         else {
             const scope = captureScope(readExportScope);
             for (const message of getStore(activeKey()).msgs) {
                 const body = log.querySelector(`[data-scroll-key="${CSS.escape(message.renderKey || "")}"] .msg-text`);
                 if (body && !body.querySelector(".youtube-preview")) renderYouTubePreviews(body, { enabled: true, scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
+                if (body && !body.querySelector(".x-post-preview")) renderXPostPreviews(body, { enabled: true, scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
             }
         }
     }

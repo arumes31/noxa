@@ -23,7 +23,7 @@
     "test:unit:ui": "node --test --experimental-test-module-mocks --experimental-test-coverage --test-coverage-include=src/audio.js --test-coverage-include=src/chat-ui.js --test-coverage-include=src/files-ui.js --test-coverage-include=src/grid-compositor.js --test-coverage-include=src/image-tools.js --test-coverage-include=src/clientinfo.js --test-coverage-lines=25 --test-coverage-functions=25 --test-coverage-branches=70 unit/ui-modules.test.mjs",
     "test:e2e": "playwright test",
     "test:build": "node --test unit/camera-build.test.mjs",
-    "test:unit:workspace": "node --test unit/youtube-previews.test.mjs unit/search-workspace.test.mjs unit/channel-invite-links.test.mjs"
+    "test:unit:workspace": "node --test unit/youtube-previews.test.mjs unit/search-workspace.test.mjs unit/channel-invite-links.test.mjs unit/x-previews.test.mjs"
   },
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
