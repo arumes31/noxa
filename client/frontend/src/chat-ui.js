@@ -2258,7 +2258,7 @@ function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
     if (view.kind === "channel" && !V().state.myChannelID) {
         const hint = document.createElement("div");
         hint.className = "empty-state";
-        hint.textContent = t("chat.joinEmpty");
+        hint.textContent = t(V().state.channels.some(ch => ch.SystemKind === "home") ? "chat.lobbyDisabled" : "chat.joinEmpty");
         log.appendChild(hint);
         updateHeader();
         return;

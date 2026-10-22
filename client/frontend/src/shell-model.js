@@ -1,11 +1,14 @@
 // shell-model.js — pure helpers for the app shell (no DOM, unit tested).
 
+import { orderedVoiceChannels } from "./channel-order.js";
+
 // Every visible channel has one chat. Voice entries here are links to that
 // same channel, not duplicated server channels or independent subscriptions.
 export function textChannels(channels = []) {
-    const position = new Map(channels.map((channel, index) => [channel.ChannelID, index]));
-    return channels.filter((channel) => channel.ChannelID > 0 && channel.SystemKind !== "home")
-        .sort((a, b) => (a.OrderIndex || 0) - (b.OrderIndex || 0) || position.get(a.ChannelID) - position.get(b.ChannelID));
+    const linked = orderedVoiceChannels(channels).filter(channel => channel.ChannelID > 0 && channel.SystemKind !== "home");
+    const text = channels.filter(channel => channel.TextOnly && channel.ChannelID > 0 && channel.SystemKind !== "home")
+        .sort((a, b) => (a.OrderIndex || 0) - (b.OrderIndex || 0));
+    return [...linked, ...text];
 }
 
 // formatStreamStats renders "1080p60 · 6.2 Mbps" from a share sample.
