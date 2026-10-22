@@ -1,3 +1,4 @@
+import { initClientUsability } from "./client-usability.js";
 import { icon, labelButton } from "./icons.js";
 import { isUserMuted } from "./audio.js";
 import { bindMemberVolume } from "./member-volume.js";
@@ -81,6 +82,7 @@ export function renderWorkspace() {
     $("ptt-btn").classList.toggle("hidden", (state.settings?.activation_mode || "ptt") !== "ptt");
     $("tab-permissions").hidden = !canEditChannelPermissions();
     $("tab-permissions").disabled = !canEditChannelPermissions();
+    window.dispatchEvent(new Event("noxa-workspace-rendered"));
     renderVoiceHints();
     renderRoomOverview({ avatarColor, voiceState });
     for (const element of document.querySelectorAll("#channel-tree .avatar[data-uid]")) {
@@ -186,6 +188,7 @@ export function initWorkspace() {
     };
     dock();
     initMediaMenu();
+    initClientUsability();
     window.addEventListener("noxa-private-call-changed", renderWorkspace);
     $("room-overview-back").onclick = () => {
         V().state.selectedClientID = "";
@@ -316,8 +319,8 @@ function translateWorkspace() {
         ["#chat-target", "placeholder", "workspace.labels.findAMemberOrEnterAnIdentity"],
         ["#chat-target", "aria-label", "workspace.labels.directMessageRecipient"],
         ["#chat-target-toggle", "aria-label", "workspace.labels.showConnectedMembers"],
-        ["#details-toggle", "aria-label", "workspace.labels.openDetails"],
-        ["#details-toggle", "title", "workspace.labels.memberDetails"],
+        ["#details-toggle", "aria-label", "midnight.roomDetails"],
+        ["#details-toggle", "title", "midnight.roomDetails"],
         ["#details-close", "aria-label", "workspace.labels.closeDetails"],
         ["#channel-create-btn", "aria-label", "workspace.labels.createChannel"],
         ["#tree-collapse", "aria-label", "workspace.labels.collapseAllChannels"],

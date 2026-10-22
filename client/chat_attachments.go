@@ -94,6 +94,12 @@ type attachmentLocation struct {
 }
 
 func uploadChatAttachmentTo(cm *connManager, location attachmentLocation, name, dataBase64 string) (string, error) {
+	return uploadChatAttachmentUsing(name, dataBase64, func(storage string, blob []byte) error {
+		return ftPutBytesInFolder(cm, location.channelID, location.folder, storage, blob)
+	})
+}
+
+func uploadChatAttachmentUsing(name, dataBase64 string, put func(string, []byte) error) (string, error) {
 	data, err := io.ReadAll(io.LimitReader(
 		base64.NewDecoder(base64.StdEncoding, strings.NewReader(dataBase64)),
 		int64(maxChatAttachmentBytes)+1,
@@ -113,7 +119,7 @@ func uploadChatAttachmentTo(cm *connManager, location attachmentLocation, name, 
 		return "", err
 	}
 	storage := attachmentStorageName(blob)
-	if err := ftPutBytesInFolder(cm, location.channelID, location.folder, storage, blob); err != nil {
+	if err := put(storage, blob); err != nil {
 		return "", err
 	}
 	return formatFileRef(storage, base64.StdEncoding.EncodeToString(key[:]), attachmentMeta{Size: int64(len(data))}, name), nil

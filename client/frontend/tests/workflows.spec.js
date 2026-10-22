@@ -24,6 +24,83 @@ test.describe("Midnight workspace concepts", () => {
         });
     });
 
+    test("room details toggles and sidebar resizing persists without overflowing voice controls", async ({ page }) => {
+        await page.evaluate(() => window.__noxa.setDetailsOpen(false));
+        await page.getByRole("button", { name: "Room details", exact: true }).click();
+        await expect(page.locator("#room-overview")).toBeVisible();
+        await expect(page.locator("#details-toggle")).toHaveAttribute("aria-expanded", "true");
+        await page.locator("#details-toggle").click();
+        await expect(page.locator("#details")).toHaveAttribute("aria-hidden", "true");
+        const grip = page.getByRole("separator", { name: "Resize channels sidebar" });
+        await grip.focus(); await page.keyboard.press("End");
+        await expect(grip).toHaveAttribute("aria-valuenow", "420");
+        expect(await page.locator("#sidebar").evaluate(el => Math.round(el.getBoundingClientRect().width))).toBe(420);
+        await page.keyboard.press("Home");
+        await expect(grip).toHaveAttribute("aria-valuenow", "220");
+        await expect(page.locator("#voice-media")).toBeVisible();
+        await page.keyboard.press("End");
+        await expect(page.locator("#voice-media")).toBeHidden();
+        await expect(page.locator("#voice-video")).toBeVisible();
+        await expect(page.locator("#voice-screen")).toBeVisible();
+        expect(await page.evaluate(() => localStorage.getItem("noxa.sidebar.width"))).toBe("420");
+    });
+
+    test("unread badges distinguish direct mentions and replies from ordinary messages", async ({ page }) => {
+        await page.evaluate(async () => {
+            window.__noxaChat.addChat({id:88901,enc_verified:true,channel_id:1,from_unique_id:"self",from:"Daniel",text:"My message"});
+            window.__noxa.openPM("bene", "Bene");
+            window.__noxaChat.addChat({id:88902,enc_verified:true,channel_id:1,from_unique_id:"bene",from:"Bene",reply_to_id:88901,text:"A reply"});
+        });
+        await expect(page.locator('.channel[data-chid="1"] .ch-unread')).toHaveText('↩ 1');
+        await expect(page.locator('.channel[data-chid="1"] .ch-unread')).toHaveAttribute('title','1 unread messages · 1 replies to you');
+        await page.evaluate(()=>window.__noxaChat.addChat({id:88903,enc_verified:true,channel_id:1,from_unique_id:"bene",from:"Bene",mentions:["self"],text:"@Daniel hello"}));
+        await expect(page.locator('.channel[data-chid="1"] .ch-unread')).toHaveText('@ 2');
+        await expect(page.locator('.channel[data-chid="1"] .ch-unread')).toHaveAttribute('title','2 unread messages · 1 mentions · 1 replies to you');
+    });
+
+    test("room capacity explains free slots and join failures are actionable", async ({ page }) => {
+        await page.evaluate(() => {
+            const v=window.__noxa; v.state.channels[1].MaxClients=1;
+            v.state.clients.push({client_id:"other",nickname:"Other",channel_id:2});
+            const app=window.go.main.App; window.go.main.App=new Proxy(app,{get(target,key){if(key==="JoinChannelForTab")return async()=>"channel is full";return target[key];}});v.renderTree();
+        });
+        const room=page.locator('.channel[data-chid="2"]');
+        await expect(room.locator(".ch-count")).toHaveClass(/full/);
+        await expect(room.locator(".ch-count")).toHaveAttribute("title", "1 of 1 slots occupied · 0 available");
+        await room.click(); await expect(page.locator("#toasts")).toContainText("This room is full.");
+    });
+
+    test("broadcast cards show explicit Twitch category and Whatnot seller schedule", async ({ page }) => {
+        await page.evaluate(() => {
+            const app=window.go.main.App; window.go.main.App=new Proxy(app,{get(target,key){if(key==="VideoPortalPreviewForTab")return async(_tab,provider)=>provider==="twitch"?{title:"Live adventure",author:"Streamer",category:"Minecraft",live_state:"live"}:{title:"Collector show",author:"Daniel",live_state:"scheduled",starts_at:"2030-01-02T18:00:00Z"};return target[key];}});
+            window.__noxaChat.addChat({id:88801,enc_verified:true,channel_id:1,from_unique_id:"bene",from:"Bene",text:"https://twitch.tv/streamer https://whatnot.com/live/59f6f43b-0b3f-4181-b873-2c7b4d31f77f"});
+        });
+        await expect(page.locator('[data-provider="twitch"] .portal-broadcast')).toHaveText("Live · Category: Minecraft");
+        await expect(page.locator('[data-provider="whatnot"] .portal-broadcast')).toContainText("Seller: Daniel");
+        await expect(page.locator('[data-provider="whatnot"] .portal-broadcast')).toContainText("Scheduled:");
+    });
+
+    test("attachment queue reports bytes, cancels queued work and retries one file", async ({ page }) => {
+        await page.evaluate(async () => {
+            const {createChatUploadQueue}=await import('/src/chat-upload-queue.js');
+            const host=document.createElement('div');document.body.append(host);host.id='queue-test';
+            window.__uploadCalls=[]; window.__cancelCalls=[];
+            const app={UploadChatAttachmentProgressForTab:async(...args)=>{window.__uploadCalls.push(args);return await new Promise(resolve=>window.__uploadResolve=resolve);},CancelTransferForTab:async(...args)=>window.__cancelCalls.push(args)};
+            const queue=createChatUploadQueue({app:()=>app,currentTab:()=>"midnight",container:host});window.__queue=queue;
+            const jobs=queue.add([{name:'first.txt',dataBase64:'YQ=='},{name:'second.txt',dataBase64:'Yg=='}],"midnight",async(_file,job)=>{await queue.upload(job,1,()=>true);queue.finish(job);});window.__queueJobs=jobs;
+            window.__uploadPending=queue.upload(jobs[0],1,()=>true);
+            queue.progress({id:jobs[0].id,tab_id:'midnight',total:100,transferred:40});
+        });
+        await expect(page.locator('#queue-test progress').first()).toHaveAttribute('value','40');
+        await page.getByRole('button',{name:'Cancel second.txt'}).click();
+        await expect(page.locator('#queue-test .upload-state').nth(1)).toHaveText('Cancelled');
+        await page.evaluate(async()=>{window.__uploadResolve('[file:storage#key#first.txt]');await window.__uploadPending;window.__queue.finish(window.__queueJobs[0],'network failed');});
+        await expect(page.locator('#queue-test .upload-state').first()).toHaveText('Upload failed');
+        await page.getByRole('button',{name:'Retry first.txt'}).click();
+        await expect(page.locator('#queue-test .upload-state').first()).toHaveText('Sent');
+        expect(await page.evaluate(()=>window.__uploadCalls.length)).toBe(1);
+    });
+
     test("default Midnight layout shows room presence and inline YouTube reactions", async ({ page }, testInfo) => {
         await page.evaluate(() => {
             window.__noxaChat.addChat({ id: 7001, enc_verified: true, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "Check out this clip https://youtu.be/Fvr-SJPAh7o" });
@@ -3342,7 +3419,7 @@ test.describe("tab-bound member actions and branding", () => {
         expect(await page.evaluate(() => window.__noxa.state.myChannelID)).toBe(1);
         await expect(page.locator("#toasts .toast")).toHaveCount(0);
         await page.evaluate(() => window.__actions.release());
-        await expect(page.locator("#toasts .toast")).toHaveText("join failed: channel access denied");
+        await expect(page.locator("#toasts .toast")).toHaveText("You do not have permission to join this room. Ask a server administrator for access.");
         expect(await page.evaluate(() => window.__noxa.state.myChannelID)).toBe(1);
     });
 
@@ -5832,13 +5909,15 @@ test("B3 ignores a volume save failure after selecting another member", async ({
     await expect(page.locator("#member-action-error")).toBeHidden();
 });
 
-test("B3 shows the details opener only while the pane is closed", async ({ page }) => {
+test("B3 keeps the room-details toggle visible and reflects the pane state", async ({ page }) => {
     await showB3Workspace(page);
     const opener = page.locator("#details-toggle");
     await expect(opener).toBeVisible();
     await opener.click();
-    await expect(opener).toBeHidden();
+    await expect(opener).toBeVisible();
+    await expect(opener).toHaveAttribute("aria-expanded", "true");
     await page.locator("#details-close").click();
+    await expect(opener).toHaveAttribute("aria-expanded", "false");
     await expect(opener).toBeVisible();
     await expect(opener).toBeFocused();
 });
@@ -5909,6 +5988,7 @@ test.beforeEach(async ({ page }) => {
         };
         const app = new Proxy({}, {
             get(_target, nativeMethod) {
+                if (nativeMethod === "UploadChatAttachmentProgressForTab") return undefined;
                 if (nativeMethod === "ReconnectTab" && !window.__tabScopedReconnect) return undefined;
                 return async (...args) => {
                     let method = nativeMethod;
@@ -8480,6 +8560,20 @@ test.describe("per-tab automatic reconnect", () => {
         // before exercising focus preservation during later recovery.
         await page.clock.runFor(16);
         await expect(page.locator("#conn-pill")).toHaveText("a.example:12333");
+    });
+
+    test("manual retry starts immediately with automatic reconnect disabled", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.settings.reconnect_on_loss=false;
+            window.__tabReconnectGate=new Promise(resolve=>window.__releaseManualRetry=resolve);
+            window.__loseTab("tab-a");
+        });
+        const retry=page.getByRole("button",{name:"Retry now",exact:true});
+        await expect(retry).toBeEnabled(); await retry.click(); await page.clock.runFor(1);
+        expect(await page.evaluate(()=>window.__calls.ReconnectTab)).toBe(1);
+        await expect(retry).toBeDisabled();
+        await page.evaluate(()=>window.__releaseManualRetry()); await page.clock.runFor(30);
+        await expect(page.locator("#channel-connection-overlay")).toBeHidden();
     });
 
     test("channel connection overlay blocks stale participants, preserves chat and clears only after recovery", async ({ page }, testInfo) => {

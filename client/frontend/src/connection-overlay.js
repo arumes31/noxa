@@ -2,12 +2,12 @@ import "./connection-overlay.css";
 
 // Rendering only: retry timers and native connection ownership remain with the
 // existing tab reconnect coordinator. A replayed tree is not authentication.
-export function createConnectionOverlay({ getState, translate, retry, cancel, canConfigure, closeMenus = () => {} }) {
+export function createConnectionOverlay({ getState, translate, retry, retryNow, cancel, canConfigure, closeMenus = () => {} }) {
     const records = new Map(), previousInert = new Map();
     const sidebar = document.getElementById("sidebar"), details = document.getElementById("details");
     const overlay = document.createElement("section");
     overlay.id = "channel-connection-overlay"; overlay.hidden = true;
-    overlay.innerHTML = '<div class="connection-overlay-card"><button type="button" data-close-channels></button><h2 tabindex="-1"></h2><p class="connection-overlay-explanation"></p><p class="connection-overlay-countdown" aria-live="off"></p><p class="connection-overlay-reason"></p><div class="connection-overlay-actions"><button type="button" data-retry></button><button type="button" data-cancel></button></div><span class="sr-only" role="status" aria-live="polite"></span></div>';
+    overlay.innerHTML = '<div class="connection-overlay-card"><button type="button" data-close-channels></button><h2 tabindex="-1"></h2><p class="connection-overlay-explanation"></p><p class="connection-overlay-countdown" aria-live="off"></p><p class="connection-overlay-reason"></p><div class="connection-overlay-actions"><button type="button" data-retry-now></button><button type="button" data-retry></button><button type="button" data-cancel></button></div><span class="sr-only" role="status" aria-live="polite"></span></div>';
     sidebar?.append(overlay);
     const position = () => {
         const footer = document.getElementById("voice-bar");
@@ -40,6 +40,8 @@ export function createConnectionOverlay({ getState, translate, retry, cancel, ca
         }
         const hadOverlayFocus = overlay.contains(document.activeElement);
         blocked = visible; overlay.hidden = !visible;
+        overlay.dataset.phase = visible ? record.retry?.inFlight ? "reconnecting" : record.phase : "connected";
+        window.dispatchEvent(new Event("noxa-connection-state"));
         if (!visible) {
             announced = "";
             if (hadOverlayFocus) {
@@ -57,6 +59,9 @@ export function createConnectionOverlay({ getState, translate, retry, cancel, ca
             ? translate(record.retry.inFlight ? "runtime.reconnectAttempt" : "runtime.retry", { attempt: record.retry.attempts, seconds: record.retry.remaining }) : "";
         overlay.querySelector(".connection-overlay-reason").textContent = record.reason || (record.unknown ? translate("connectionOverlay.unknown") : "");
         const retryButton = overlay.querySelector("[data-retry]"), cancelButton = overlay.querySelector("[data-cancel]");
+        const immediate = overlay.querySelector("[data-retry-now]");
+        immediate.textContent = translate("usability.retryNow"); immediate.hidden = !retryNow;
+        immediate.disabled = phase === "checking" || !!record.retry?.inFlight || !canConfigure();
         retryButton.textContent = translate("connectionOverlay.retry"); retryButton.disabled = phase === "checking" || !!record.retry?.inFlight || !canConfigure();
         cancelButton.textContent = translate("connectionOverlay.cancel"); cancelButton.hidden = !record.retry; cancelButton.disabled = !!record.retry?.inFlight;
         const announcement = `${state.activeTabID}:${phase}:${record.terminal}`;
@@ -64,6 +69,7 @@ export function createConnectionOverlay({ getState, translate, retry, cancel, ca
         if (hadPaneFocus) overlay.querySelector("h2").focus({ preventScroll: true });
     }
     overlay.querySelector("[data-close-channels]").onclick = () => document.getElementById("workspace-sidebar-close")?.click();
+    overlay.querySelector("[data-retry-now]").onclick = () => { if (!overlay.hidden && !overlay.querySelector("[data-retry-now]").disabled) void retryNow?.(); };
     overlay.querySelector("[data-retry]").onclick = () => { if (!overlay.hidden) void retry(); };
     overlay.querySelector("[data-cancel]").onclick = () => { if (!overlay.hidden) void cancel(); };
     window.addEventListener("noxa-language-changed", () => { announced = ""; render(); });

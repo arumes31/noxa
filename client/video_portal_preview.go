@@ -19,6 +19,9 @@ type VideoPortalPreview struct {
 	Author      string `json:"author"`
 	Description string `json:"description"`
 	Thumbnail   string `json:"thumbnail"`
+	LiveState   string `json:"live_state,omitempty"`
+	Category    string `json:"category,omitempty"`
+	StartsAt    string `json:"starts_at,omitempty"`
 }
 
 var portalWhatnotUUID = regexp.MustCompile(`^[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}$`)
@@ -160,9 +163,22 @@ func fetchVideoPortalPreview(ctx context.Context, provider, resource string, do 
 		result = VideoPortalPreview{Title: data.Title, Author: data.Author, Description: data.Description, Thumbnail: data.Thumbnail}
 	}
 	result.Title = limitPreviewText(result.Title, 200)
+	if result.Author == "" && provider == "whatnot" && strings.HasPrefix(resource, "user:") {
+		result.Author = strings.TrimPrefix(resource, "user:")
+	}
 	result.Author = limitPreviewText(result.Author, 120)
 	result.Description = limitPreviewText(result.Description, 160)
 	result.Thumbnail = safePortalThumbnail(provider, result.Thumbnail)
+	result.Category = limitPreviewText(result.Category, 100)
+	if provider != "twitch" && provider != "whatnot" {
+		result.LiveState = ""
+		result.Category = ""
+		result.StartsAt = ""
+	}
+	if provider == "twitch" && !strings.HasPrefix(resource, "channel:") {
+		result.LiveState = ""
+		result.StartsAt = ""
+	}
 	if result.Title == "" || (provider == "twitch" && result.Title == "Twitch") || (provider == "whatnot" && strings.HasPrefix(result.Title, "· Whatnot")) {
 		return VideoPortalPreview{}, fmt.Errorf("video preview metadata unavailable")
 	}
@@ -171,7 +187,10 @@ func fetchVideoPortalPreview(ctx context.Context, provider, resource string, do 
 
 func publicPagePreview(reader io.Reader) VideoPortalPreview {
 	tokens := html.NewTokenizer(reader)
+	tokens.SetMaxBuf(64 * 1024)
 	var result VideoPortalPreview
+	now := time.Now()
+	inHead := true
 	for {
 		kind := tokens.Next()
 		if kind == html.ErrorToken {
@@ -179,20 +198,36 @@ func publicPagePreview(reader io.Reader) VideoPortalPreview {
 		}
 		token := tokens.Token()
 		if kind == html.EndTagToken && token.Data == "head" {
-			return result
-		}
-		if (kind != html.StartTagToken && kind != html.SelfClosingTagToken) || token.Data != "meta" {
+			inHead = false
 			continue
 		}
-		var key, value string
-		for _, attr := range token.Attr {
-			switch attr.Key {
-			case "property", "name":
-				key = attr.Val
-			case "content":
-				value = attr.Val
-			}
+		if kind != html.StartTagToken && kind != html.SelfClosingTagToken {
+			continue
 		}
+		attrs := map[string]string{}
+		for _, attr := range token.Attr {
+			attrs[attr.Key] = attr.Val
+		}
+		if token.Data == "script" && strings.EqualFold(attrs["type"], "application/ld+json") {
+			if tokens.Next() == html.TextToken {
+				data := tokens.Text()
+				if len(data) <= 32*1024 {
+					var value any
+					if json.Unmarshal(data, &value) == nil {
+						applyPortalStructuredData(&result, value, now, 0)
+					}
+				}
+			}
+			continue
+		}
+		if !inHead || token.Data != "meta" {
+			continue
+		}
+		key := attrs["property"]
+		if key == "" {
+			key = attrs["name"]
+		}
+		value := attrs["content"]
 		switch key {
 		case "og:title":
 			result.Title = value
@@ -202,8 +237,69 @@ func publicPagePreview(reader io.Reader) VideoPortalPreview {
 			result.Thumbnail = value
 		case "og:profile:username":
 			result.Author = value
+		case "video:tag":
+			if result.Category == "" {
+				result.Category = value
+			}
 		}
 	}
+}
+
+// Structured data is parsed as bounded JSON, never executed. A live-event flag
+// alone describes the kind of event; dates must place it in the present.
+func applyPortalStructuredData(result *VideoPortalPreview, value any, now time.Time, depth int) {
+	if depth > 8 {
+		return
+	}
+	if list, ok := value.([]any); ok {
+		for _, entry := range list {
+			applyPortalStructuredData(result, entry, now, depth+1)
+		}
+		return
+	}
+	data, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	text := func(key string) string { value, _ := data[key].(string); return value }
+	kind := text("@type")
+	if kind == "VideoObject" || kind == "Event" || kind == "BroadcastEvent" {
+		if title := text("name"); title != "" {
+			result.Title = title
+		}
+		if result.Description == "" {
+			result.Description = text("description")
+		}
+		if result.Category == "" {
+			result.Category = text("genre")
+		}
+		if result.Thumbnail == "" {
+			result.Thumbnail = text("thumbnailUrl")
+		}
+		for _, key := range []string{"author", "creator", "organizer"} {
+			if author, ok := data[key].(map[string]any); ok {
+				if name, ok := author["name"].(string); ok && result.Author == "" {
+					result.Author = name
+				}
+			}
+		}
+		start, err := time.Parse(time.RFC3339, text("startDate"))
+		end, endErr := time.Parse(time.RFC3339, text("endDate"))
+		if err == nil {
+			result.StartsAt = start.UTC().Format(time.RFC3339)
+			if start.After(now) {
+				result.LiveState = "scheduled"
+			} else if endErr == nil && !end.After(now) {
+				result.LiveState = "offline"
+			} else if live, ok := data["isLiveBroadcast"].(bool); ok && live {
+				result.LiveState = "live"
+			}
+		}
+		if kind == "VideoObject" {
+			applyPortalStructuredData(result, data["publication"], now, depth+1)
+		}
+	}
+	applyPortalStructuredData(result, data["@graph"], now, depth+1)
 }
 
 // Only Whatnot share links may redirect, and only to another recognized public

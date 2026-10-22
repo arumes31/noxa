@@ -73,14 +73,22 @@ export function renderVideoPortalPreviews(container, { enabled, scope, isCurrent
         const provider = document.createElement("span"); provider.className = "youtube-provider"; provider.textContent = video.label;
         const title = document.createElement("strong"); title.className = "youtube-title"; title.textContent = t("midnight.portalVideo", { provider: video.label });
         const author = document.createElement("span"); author.className = "youtube-author"; author.textContent = t("midnight.portalOpen", { provider: video.label });
+        const broadcast = document.createElement("span"); broadcast.className = "portal-broadcast"; broadcast.hidden = true;
         const domain = document.createElement("span"); domain.className = "youtube-domain"; domain.textContent = new URL(video.url).hostname;
-        info.append(provider, title, author, domain); card.append(visual, info); container.append(card);
+        info.append(provider, title, author, broadcast, domain); card.append(visual, info); container.append(card);
         void loadPreviewMetadata(`portal:${video.provider}`, video.id, scope, () => card.isConnected && isCurrent(), () => window.go.main.App.VideoPortalPreviewForTab(scope.tabID, video.provider, video.id)).then(result => {
             if (!card.isConnected || !isCurrent()) return;
             if (!result) { author.textContent = t("midnight.portalUnavailable", { provider: video.label }); return; }
             if (typeof result.title === "string" && result.title) title.textContent = result.title.slice(0, 200);
             const subtitle = result.author || result.description;
             if (typeof subtitle === "string" && subtitle) author.textContent = subtitle.slice(0, 160);
+            const details = [];
+            if (video.provider === "whatnot" && result.author) details.push(t("usability.seller", { seller: String(result.author).slice(0,120) }));
+            if (video.provider === "twitch" && result.category) details.push(t("usability.category", { category: String(result.category).slice(0,100) }));
+            if (["live", "offline"].includes(result.live_state)) details.unshift(t("usability." + result.live_state));
+            if (result.live_state === "scheduled" && result.starts_at && Number.isFinite(Date.parse(result.starts_at))) details.unshift(t("usability.scheduled", { time: new Date(result.starts_at).toLocaleString() }));
+            broadcast.textContent = details.join(" · "); broadcast.hidden = !details.length;
+            broadcast.dataset.state = result.live_state || ""; broadcast.title = t("usability.statusSnapshot");
             const thumbnail = portalThumbnail(video.provider, result.thumbnail);
             if (thumbnail) {
                 image.onload = () => { if (card.isConnected && isCurrent()) { image.hidden = false; placeholder.hidden = true; } };

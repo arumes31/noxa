@@ -1,6 +1,7 @@
 const SKIPPED = Symbol("skipped");
 const metadata = new Map();
 const queue = [];
+const expires = new Map();
 let running = 0;
 
 function drain() {
@@ -14,8 +15,9 @@ function drain() {
 // Providers share one bounded queue and cache, scoped to the active connection.
 export function loadPreviewMetadata(provider, id, scope, isCurrent, request) {
     const key = JSON.stringify([scope.generation, scope.tabID, provider, id]);
+    if (expires.has(key) && expires.get(key) < Date.now()) { metadata.delete(key); expires.delete(key); }
     if (!metadata.has(key)) {
-        if (metadata.size >= 128) metadata.delete(metadata.keys().next().value);
+        if (metadata.size >= 128) { const oldest = metadata.keys().next().value; metadata.delete(oldest); expires.delete(oldest); }
         let skipped = false;
         const pending = new Promise(resolve => {
             queue.push({ resolve, run: () => {
@@ -28,6 +30,7 @@ export function loadPreviewMetadata(provider, id, scope, isCurrent, request) {
             return skipped ? SKIPPED : result;
         });
         metadata.set(key, pending);
+        if (provider.startsWith("portal:")) expires.set(key, Date.now() + 60000);
     }
     return metadata.get(key).then(result => result !== SKIPPED
         ? result

@@ -946,6 +946,7 @@ function overlayConnectionSettings() {
     cancelOverlayRetries(); showLogin(); void loginMemory.select(profile);
 }
 const connectionOverlay = createConnectionOverlay({ getState: () => state, translate: t,
+    retryNow: () => { const tabID = state.activeTabID, target = state.tabConnects.get(tabID); if (!target || state.reconnectInFlight) return; if (scopedReconnectAvailable()) tabReconnects.retryNow(tabID, target); else { clearReconnectTimer(); void attemptReconnect(target, { sourceTabID: tabID }); } },
     canConfigure: () => { const target = state.tabConnects.get(state.activeTabID); return !!target?.addr && !!target.nick; },
     retry: overlayConnectionSettings, cancel: cancelOverlayRetries, closeMenus: () => { closeContextMenu(); closeServerDialogs("disconnected"); } });
 const reconnectCancel = document.createElement("button");
@@ -1884,7 +1885,10 @@ function setDetailsOpen(open) {
 }
 
 $("details-close").onclick = () => setDetailsOpen(false);
-$("details-toggle").onclick = () => setDetailsOpen(true);
+$("details-toggle").onclick = () => {
+    if (document.body.classList.contains("details-collapsed")) { state.selectedClientID = ""; renderClientCard(); setDetailsOpen(true); }
+    else setDetailsOpen(false);
+};
 document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !document.body.classList.contains("details-collapsed") &&
         !document.querySelector(".dlg-overlay")) {

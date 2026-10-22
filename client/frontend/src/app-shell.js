@@ -3,6 +3,7 @@
 // Text and Direct sidebar sections, and the voice card's identity row.
 // Everything here renders existing state; actions call the same functions
 // as the menus and buttons they mirror.
+import { unreadLabel } from "./client-usability-model.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { setSafeImage } from "./safe-media.js";
@@ -91,11 +92,12 @@ function renderTextSection() {
         const unread = chatUI.unreadFor(channel.ChannelID);
         if (unread?.n > 0 && !current) {
             const badge = document.createElement("span");
-            badge.className = "side-count" + (unread.mention ? " mentioned" : " dot");
+            badge.className = "side-count" + (unread.mention ? " mentioned" : unread.replies ? " reply" : "");
             badge.setAttribute("aria-hidden", "true");
-            badge.textContent = unread.mention ? (unread.n > 99 ? "99+" : String(unread.n)) : "";
+            badge.textContent = (unread.mention ? "@ " : unread.replies ? "↩ " : "") + (unread.n > 99 ? "99+" : String(unread.n));
+            badge.title = unreadLabel(unread.n, unread.mentions || Number(unread.mention), unread.replies);
             row.append(badge);
-            labels.push(unread.mention ? t("shell.textMention") : t("shell.textUnread", { count: unread.n }));
+            labels.push(unreadLabel(unread.n, unread.mentions || Number(unread.mention), unread.replies));
         }
         if (channel.Topic) row.title = channel.Topic;
         row.setAttribute("aria-label", labels.join(", "));

@@ -1,6 +1,7 @@
 import "./chat-unread.css";
+import { unreadLabel } from "./client-usability-model.js";
 
-export function appendUnreadBadge(tab, count, arrivedAt, mention = false) {
+export function appendUnreadBadge(tab, count, arrivedAt, mention = false, mentions = 0, replies = 0) {
     tab.classList.add("has-unread");
     if (Number.isFinite(arrivedAt)) {
         tab.classList.add("unread-arrival");
@@ -12,7 +13,10 @@ export function appendUnreadBadge(tab, count, arrivedAt, mention = false) {
     canvas.setAttribute("aria-hidden", "true");
     const badge = document.createElement("span");
     badge.className = "pm-unread" + (mention ? " mention" : "");
-    badge.textContent = count;
+    badge.classList.toggle("reply", !mention && replies > 0);
+    badge.textContent = (mention ? "@ " : replies ? "↩ " : "") + (count > 99 ? "99+" : count);
+    badge.title = unreadLabel(count, mentions || Number(mention), replies);
+    badge.setAttribute("aria-label", badge.title);
     for (const className of ["pm-unread-halo", "pm-unread-echo"]) {
         const ring = document.createElement("span");
         ring.className = className;
