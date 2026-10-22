@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 
 	"noxa/internal/netproto"
 )
@@ -13,6 +14,11 @@ func (m *connManager) sendChatWithKeyRetry(msg netproto.ChatSend, plaintext stri
 	m.mu.Lock()
 	conn := m.conn
 	m.mu.Unlock()
+	return m.sendChatWithKeyRetryOn(conn, msg, plaintext)
+}
+
+// The outbox captures its authenticated connection before encryption, too.
+func (m *connManager) sendChatWithKeyRetryOn(conn net.Conn, msg netproto.ChatSend, plaintext string) error {
 	err := m.sendChatAcknowledgedOn(conn, msg)
 	var failure *requestFailure
 	if msg.ToUniqueID == "" || msg.RecipientPublicKey == "" || !errors.As(err, &failure) ||

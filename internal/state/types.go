@@ -29,6 +29,8 @@ type Client struct {
 	LastSpokeAt time.Time `json:"-"`
 	// PrioritySpeaker marks TS3-style priority speakers (channel commanders):
 	// clients duck other publishers while a priority speaker talks.
+	HandCalled      bool
+	HandRaisedOrder uint64
 	PrioritySpeaker bool
 	Sharing         bool
 	SelfMuted       bool

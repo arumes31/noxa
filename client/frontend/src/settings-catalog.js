@@ -37,7 +37,7 @@ export const SETTINGS_CATEGORIES = Object.freeze([
     ] },
     { id: "chat", icon: "chat", rail: "more", keys: [
         "link_previews", "chat_timestamps", "chat_density", "chat_layout", "chat_font_size", "sys_join_leave", "sys_kick",
-        "chat_max_lines", "keywords",
+        "chat_max_lines", "keywords", "chat_undo_seconds",
     ] },
     { id: "notifications", icon: "bell", rail: "more", keys: [
         "play_sounds", "sound_volume", "effects_enabled", "duck_effects_while_speaking", "spoken_messages",

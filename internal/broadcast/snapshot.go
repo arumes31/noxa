@@ -9,6 +9,7 @@
 package broadcast
 
 import (
+	"sort"
 	"time"
 
 	"noxa/internal/authorization"
@@ -29,13 +30,15 @@ type ClientInfo struct {
 	ConnectedAt time.Time                      `json:"connected_at"`
 	// PrioritySpeaker marks TS3-style priority speakers (14); clients duck
 	// other publishers while a priority speaker in their channel talks.
-	PrioritySpeaker bool  `json:"priority_speaker,omitempty"`
-	Sharing         bool  `json:"sharing,omitempty"`
-	SelfMuted       bool  `json:"self_muted,omitempty"`
-	SelfDeafened    bool  `json:"self_deafened,omitempty"`
-	ServerMuted     bool  `json:"server_muted,omitempty"`
-	ServerDeafened  bool  `json:"server_deafened,omitempty"`
-	VoiceRevision   int64 `json:"voice_revision,omitempty"`
+	HandCalled      bool   `json:"hand_called,omitempty"`
+	HandRaisedOrder uint64 `json:"hand_raised_order,omitempty"`
+	PrioritySpeaker bool   `json:"priority_speaker,omitempty"`
+	Sharing         bool   `json:"sharing,omitempty"`
+	SelfMuted       bool   `json:"self_muted,omitempty"`
+	SelfDeafened    bool   `json:"self_deafened,omitempty"`
+	ServerMuted     bool   `json:"server_muted,omitempty"`
+	ServerDeafened  bool   `json:"server_deafened,omitempty"`
+	VoiceRevision   int64  `json:"voice_revision,omitempty"`
 	// Status/StatusMessage carry the client's presence (307-309).
 	Status        string `json:"status,omitempty"`
 	StatusMessage string `json:"status_message,omitempty"`
@@ -57,11 +60,12 @@ type ChannelNode struct {
 // role names. CanConnect is specific to the snapshot's viewer; passwords are
 // advertised separately by HasPassword. Legacy snapshots omit this metadata.
 type ChannelAccess struct {
-	Restricted      bool `json:"restricted"`
-	CanConnect      bool `json:"can_connect"`
-	CanManageAccess bool `json:"can_manage_access"`
-	MemberCount     int  `json:"member_count"`
-	GuestCount      int  `json:"guest_count"`
+	CanManageVoiceQueue bool `json:"can_manage_voice_queue,omitempty"`
+	Restricted          bool `json:"restricted"`
+	CanConnect          bool `json:"can_connect"`
+	CanManageAccess     bool `json:"can_manage_access"`
+	MemberCount         int  `json:"member_count"`
+	GuestCount          int  `json:"guest_count"`
 }
 
 // OwnChannelMove describes the recipient's most recent channel transition.
@@ -74,7 +78,8 @@ type OwnChannelMove struct {
 // TreeSnapshot is the full nested view of the server's channel tree and the
 // users currently connected.
 type TreeSnapshot struct {
-	OwnChannelMove *OwnChannelMove `json:"own_channel_move,omitempty"`
+	SupportsVoiceQueue bool            `json:"supports_voice_queue"`
+	OwnChannelMove     *OwnChannelMove `json:"own_channel_move,omitempty"`
 	// OwnAuthority describes the recipient's authority, independently of cosmetic roles.
 	OwnAuthority string `json:"own_authority,omitempty"`
 	// CanSetInvisible is recipient-specific role authority, never a legacy admin flag.
@@ -103,6 +108,8 @@ func clientToInfo(c *state.Client) ClientInfo {
 		IsSpeaking:      c.IsSpeaking,
 		ConnectedAt:     c.ConnectedAt,
 		PrioritySpeaker: c.PrioritySpeaker,
+		HandRaisedOrder: c.HandRaisedOrder,
+		HandCalled:      c.HandCalled,
 		Sharing:         c.Sharing,
 		SelfMuted:       c.SelfMuted,
 		SelfDeafened:    c.SelfDeafened,
@@ -128,7 +135,8 @@ func clientToInfo(c *state.Client) ClientInfo {
 // invisible user themself (they still see everyone).
 func BuildSnapshot(sm *state.Manager, forAdmin bool, viewerUniqueID string) *TreeSnapshot {
 	snap := &TreeSnapshot{
-		GeneratedAt: time.Now(),
+		GeneratedAt:        time.Now(),
+		SupportsVoiceQueue: true,
 	}
 	if sm == nil {
 		return snap
@@ -179,6 +187,24 @@ func BuildSnapshot(sm *state.Manager, forAdmin bool, viewerUniqueID string) *Tre
 		}
 	}
 
+	// Publish viewer-relative ranks, not a server-wide sequence that reveals
+	// activity in invisible sessions or unrelated rooms.
+	for _, channel := range nodeByID {
+		var raised []*ClientInfo
+		for _, member := range channel.Clients {
+			if member.HandRaisedOrder > 0 {
+				raised = append(raised, member)
+			}
+		}
+		sort.Slice(raised, func(i, j int) bool { return raised[i].HandRaisedOrder < raised[j].HandRaisedOrder })
+		var rank uint64
+		for _, member := range raised {
+			if member.HandRaisedOrder > 0 {
+				rank++
+				member.HandRaisedOrder = rank
+			}
+		}
+	}
 	snap.TotalChannels = len(channels)
 	snap.TotalClients = total
 

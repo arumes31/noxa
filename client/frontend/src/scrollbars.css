@@ -1,0 +1,22 @@
+/* Thin rails across the workspace, dialogs, chat and file lists. */
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--text-faint) 65%, transparent) transparent; }
+
+/* Chromium/WebView2's standard scrollbar-width overrides custom scrollbar
+   painting. Use its custom path to remove OS arrow buttons consistently. */
+@supports selector(::-webkit-scrollbar) {
+ html:root[data-theme] * { scrollbar-width: auto; scrollbar-color: auto; }
+ html:root[data-theme] *::-webkit-scrollbar { width: 6px; height: 6px; }
+ html:root[data-theme] *::-webkit-scrollbar-track { background: transparent; }
+ html:root[data-theme] *::-webkit-scrollbar-thumb {
+  min-height: 28px; min-width: 28px; border: 0; border-radius: 999px;
+  background: color-mix(in srgb, var(--text-faint) 65%, transparent);
+ }
+ html:root[data-theme] *::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+ html:root[data-theme] *::-webkit-scrollbar-thumb:active { background: var(--accent); }
+ html:root[data-theme] *::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+ html:root[data-theme] *::-webkit-scrollbar-corner { background: transparent; }
+}
+@media (forced-colors: active) {
+ * { scrollbar-color: auto; }
+ html:root[data-theme] *::-webkit-scrollbar-thumb { background: CanvasText; }
+}

@@ -1,3 +1,4 @@
+import { voiceQueueSection } from "./voice-queue.js";
 import { canEditChannelPermissions } from "./workspace-ui.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
@@ -60,6 +61,8 @@ export function renderRoomOverview({ avatarColor, voiceState }) {
         }
         return group;
     };
+    const queue = voiceQueueSection(channelID);
+    if (queue) content.push(queue);
     if (channel) content.push(section(t("midnight.roomMembers", { count: inRoom.length }), inRoom));
     const other = state.clients.filter(client => !channel || client.channel_id !== channelID);
     content.push(section(t("midnight.onlineMembers", { count: other.length }), other));

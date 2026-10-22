@@ -13,6 +13,7 @@
 
 import { settingsEnglish, settingsGerman } from "./settings-messages.js";
 import { settingsShellEnglish, settingsShellGerman } from "./settings-shell-messages.js";
+import { deliveryEnglish, deliveryGerman } from "./chat-delivery-messages.js";
 import { usabilityEnglish, usabilityGerman } from "./client-usability-messages.js";
 import { midnightEnglish, midnightGerman } from "./midnight-messages.js";
 import { loginErrorEnglish, loginErrorGerman } from "./login-error-messages.js";
@@ -50,6 +51,7 @@ import { shellEnglish, shellGerman } from "./shell-messages.js";
 import { fullscreenEnglish, fullscreenGerman } from "./fullscreen-messages.js";
 
 const en = {
+    ...deliveryEnglish,
     ...usabilityEnglish,
     ...directMessageEnglish,
     ...fullscreenEnglish,
@@ -160,6 +162,7 @@ const en = {
 };
 
 const de = {
+    ...deliveryGerman,
     ...usabilityGerman,
     ...directMessageGerman,
     ...fullscreenGerman,

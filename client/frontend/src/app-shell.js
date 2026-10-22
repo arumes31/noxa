@@ -84,11 +84,19 @@ function renderTextSection() {
         row.type = "button";
         row.className = "channel text-channel side-row";
         row.dataset.chid = String(channel.ChannelID);
+        row.classList.toggle("voice-linked", !channel.TextOnly);
+        row.classList.toggle("voice-linked-current", !channel.TextOnly && channel.ChannelID === state.myChannelID);
+        row.dataset.voiceLinked = String(!channel.TextOnly);
         const current = activeKey === `ch:${channel.ChannelID}`;
         if (current) row.setAttribute("aria-current", "true");
         row.innerHTML = `<span class="ch-icon side-row-icon" aria-hidden="true">${icon("hash")}</span><span class="ch-name side-row-name"></span>`;
         row.querySelector(".side-row-name").textContent = channel.Name;
-        const labels = [t("shell.textChannel", { name: channel.Name })];
+        const labels = [t(channel.TextOnly ? "shell.textChannel" : "queue.linkedChat", { name: channel.Name })];
+        if (!channel.TextOnly) {
+            const link = document.createElement("span"); link.className = "linked-voice-mark"; link.innerHTML = icon("speaker");
+            link.setAttribute("aria-hidden", "true"); row.append(link);
+            if (channel.ChannelID === state.myChannelID) labels.push(t("queue.inVoice"));
+        }
         const unread = chatUI.unreadFor(channel.ChannelID);
         if (unread?.n > 0 && !current) {
             const badge = document.createElement("span");
