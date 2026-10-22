@@ -60,7 +60,11 @@ services:
     tmpfs:
       - /tmp
     networks:
-      - noxa-net
+      noxa-net: {}
+      # Shared with coturn only. The fixed address is the single private peer
+      # coturn may relay to (see the coturn service below).
+      noxa-turn-net:
+        ipv4_address: ${TURN_NOXA_IP:-10.213.254.2}
     ports:
       # TeamSpeak-style voice transport (UDP)
       - "12334:12334/udp"
@@ -75,7 +79,9 @@ services:
       # - "12339:12339"
       # File transfer
       - "12336:12336"
-      # Health/readiness/metrics HTTP endpoint
+      # Health/readiness/metrics HTTP endpoint, also /events, /hooks and /dl.
+      # Set NOXA_HEALTH_TLS_ENABLED=true (or front it with an HTTPS reverse
+      # proxy) before exposing it beyond a trusted network.
       - "12337:12337"
     volumes:
       # Writable data (uploaded files, avatars, icons, recordings) so the
@@ -111,6 +117,10 @@ services:
       # Required explicit choice: the sample .env selects local development.
       # Production validation adds database credential and TLS requirements.
       NOXA_DEV_MODE: ${NOXA_DEV_MODE:?set NOXA_DEV_MODE to true or false}
+      # Production refuses an empty server password unless anonymous access is
+      # acknowledged explicitly.
+      NOXA_SERVER_PASSWORD: ${NOXA_SERVER_PASSWORD:-}
+      NOXA_ALLOW_ANONYMOUS: ${NOXA_ALLOW_ANONYMOUS:-false}
 
       # --- Database (points at the postgres service) ---
       # The entrypoint builds a percent-encoded URL from these discrete values
@@ -137,6 +147,8 @@ services:
       # gRPC carries Basic credentials over plaintext and is loopback-only.
       NOXA_GRPC_ADDR: "127.0.0.1:12338"
       NOXA_HEALTH_ADDR: ":12337"
+      NOXA_HEALTH_TLS_ENABLED: ${NOXA_HEALTH_TLS_ENABLED:-false}
+      NOXA_HEALTH_ALLOW_PLAINTEXT_CREDENTIALS: ${NOXA_HEALTH_ALLOW_PLAINTEXT_CREDENTIALS:-false}
       NOXA_METRICS_ALLOW_REMOTE: ${NOXA_METRICS_ALLOW_REMOTE:-false}
       NOXA_PPROF_ENABLED: ${NOXA_PPROF_ENABLED:-false}
       NOXA_SHUTDOWN_TIMEOUT: ${NOXA_SHUTDOWN_TIMEOUT:-30s}
@@ -318,6 +330,16 @@ services:
   # unset drops the flag, which is only correct for host-local testing.
   # (Alternative to --external-ip: network_mode: host, which also drops the
   # 101-port relay publish — but it cannot coexist with the noxa-net bridge.)
+  #
+  # Relay egress is confined: coturn shares only noxa-turn-net with the noxa
+  # container (never postgres or redis) and refuses peers in loopback, RFC1918,
+  # CGNAT, link-local (cloud metadata) and ULA ranges, so a TURN credential
+  # cannot be turned into an SSRF tunnel into the host or LAN. The one private
+  # exception is noxa's fixed address on noxa-turn-net (TURN_NOXA_IP), so
+  # relays still reach the SFU's host candidate. TCP relay (RFC 6062) is
+  # disabled; media uses UDP relays. If clients relay to another private noxa
+  # media address (LAN-only deployments), allow exactly that address with
+  # TURN_ALLOWED_PEER_IP=<ip> (or <ip1>-<ip2>).
   # ---------------------------------------------------------------------------
   coturn:
     image: coturn/coturn:4.17.0-r0@sha256:7df59bcd84800c3978da2dd0d7fb17a8179e77a8bf667f678813120a9f18b094
@@ -325,7 +347,7 @@ services:
     profiles: [ "turn" ]
     restart: unless-stopped
     networks:
-      - noxa-net
+      - noxa-turn-net
     environment:
       TURN_SECRET: ${TURN_SECRET:-}
       TURN_SECRET_FILE: ${TURN_SECRET_FILE:+/run/secrets/turn_secret}
@@ -369,6 +391,24 @@ services:
       - "--min-port=12342"
       - "--max-port=12366"
       - "--no-multicast-peers"
+      - "--no-tcp-relay"
+      - "--denied-peer-ip=0.0.0.0-0.255.255.255"
+      - "--denied-peer-ip=10.0.0.0-10.255.255.255"
+      - "--denied-peer-ip=100.64.0.0-100.127.255.255"
+      - "--denied-peer-ip=127.0.0.0-127.255.255.255"
+      - "--denied-peer-ip=169.254.0.0-169.254.255.255"
+      - "--denied-peer-ip=172.16.0.0-172.31.255.255"
+      - "--denied-peer-ip=192.0.0.0-192.0.0.255"
+      - "--denied-peer-ip=192.168.0.0-192.168.255.255"
+      - "--denied-peer-ip=198.18.0.0-198.19.255.255"
+      - "--denied-peer-ip=::1"
+      - "--denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255"
+      - "--denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+      - "--denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+      # Allowed peers override the denied ranges above: noxa's own address on
+      # noxa-turn-net, plus TURN_ALLOWED_PEER_IP when set (empty otherwise).
+      - "--allowed-peer-ip=${TURN_NOXA_IP:-10.213.254.2}"
+      - "${TURN_ALLOWED_PEER_IP:+--allowed-peer-ip=$TURN_ALLOWED_PEER_IP}"
       - "--no-cli"
       # --log=stdout is ambiguous in coturn 4.16 and aborts startup with exit
       # 255 before any listener opens (445).
@@ -385,6 +425,7 @@ services:
     restart: "no"
     networks:
       - noxa-net
+      - noxa-turn-net
     ports:
       - "12365:8474"
       - "12366:12366"
@@ -396,6 +437,15 @@ networks:
   noxa-net:
     driver: bridge
     name: noxa-net
+  # noxa <-> coturn only: relays must not share a network with postgres or
+  # redis. Change TURN_NETWORK_SUBNET and TURN_NOXA_IP together if the default
+  # range collides with an existing network.
+  noxa-turn-net:
+    driver: bridge
+    name: noxa-turn-net
+    ipam:
+      config:
+        - subnet: ${TURN_NETWORK_SUBNET:-10.213.254.0/29}
 
 # ---------------------------------------------------------------------------
 # Volumes

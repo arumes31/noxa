@@ -98,7 +98,7 @@ graph TD
 | **`UDP dynamic or configured port`** | WebRTC SFU Engine | DTLS-SRTP (Opus audio, negotiated video codecs) | ICE candidate negotiation & SRTP encryption; separate from the keepalive listener |
 | **`TCP 127.0.0.1:12335`** | ServerQuery Protocol | Line-based ASCII / UTF-8 plaintext stream | Loopback by default; remote binding requires explicit opt-in, and SSH is preferred |
 | **`TCP :12336`** | File Transfer Engine | Binary frames over TLS 1.3 | TOFU-pinned certificate plus an ephemeral single-use token |
-| **`TCP :12337`** | HTTP services | Health/readiness, Prometheus, `/debug/voice`, `/debug/streams`, `/events`, `/hooks/`, `/dl/` | Media diagnostics stay loopback-only; metrics require explicit remote opt-in; pprof is opt-in and loopback-only. Remote authenticated HTTP routes need an HTTPS proxy |
+| **`TCP :12337`** | HTTP services | Health/readiness, Prometheus, `/debug/voice`, `/debug/streams`, `/events`, `/hooks/`, `/dl/` | Media diagnostics stay loopback-only; metrics require explicit remote opt-in; pprof is opt-in and loopback-only. Remote authenticated HTTP routes need `NOXA_HEALTH_TLS_ENABLED=true` or an HTTPS proxy; production refuses their credentials over remote plaintext |
 | **`TCP 127.0.0.1:12338`** | gRPC administration | Plaintext gRPC | Integration account authentication and current roles; loopback binding is mandatory |
 | **`TCP :12339`** | ServerQuery over SSH | SSH-wrapped command stream | Disabled by default; integration credentials and `roles-v1` negotiation |
 
@@ -202,7 +202,9 @@ The desktop updater verifies the signed manifest using its embedded trusted keys
    root-owned `0444`; Compose mounts individual files, never the directory.
    This permits the non-root service reader without exposing host traversal.
    Production startup rejects the sample credential and plaintext database
-   transport.
+   transport. It also requires `NOXA_SERVER_PASSWORD` (or an explicit
+   `NOXA_ALLOW_ANONYMOUS=true` for an open server) and a `REDIS_PASSWORD`
+   for the bundled Redis.
 
    For an external PostgreSQL URL, use both Compose files on every command:
    `docker compose -f docker-compose.yml -f docker-compose.external-db.yml ...`.
@@ -467,6 +469,13 @@ Forward/allow that same UDP port at the router and firewall. External IP
 advertising requires a fixed UDP listener; it does not create a port forwarding
 rule. Configure STUN/TURN for your network as needed. The bundled `turn` profile
 and its relay-port settings are described in [`.env.example`](.env.example).
+The bundled coturn shares only the dedicated `noxa-turn-net` network with the
+noxa container, disables TCP relays and refuses to relay to loopback, private,
+CGNAT, link-local and ULA addresses except noxa's fixed address on that network
+(`TURN_NOXA_IP` in `TURN_NETWORK_SUBNET`), so TURN credentials cannot reach
+PostgreSQL, Redis or other internal services. If clients relay to another
+private noxa media address (LAN-only deployments), allow exactly that address
+with `TURN_ALLOWED_PEER_IP`.
 
 Back up PostgreSQL together with the matching chat/PII keys, uploaded files,
 recordings, TLS identity and configuration. Verify a restore before relying on
@@ -507,7 +516,8 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 
 | Environment Variable | Default Value | Description |
 | :--- | :--- | :--- |
-| `NOXA_SERVER_NAME` / `NOXA_SERVER_PASSWORD` | `noXa` / empty | Displayed server name and optional admission password |
+| `NOXA_SERVER_NAME` / `NOXA_SERVER_PASSWORD` | `noXa` / empty | Displayed server name and admission password; required in production unless `NOXA_ALLOW_ANONYMOUS=true` |
+| `NOXA_ALLOW_ANONYMOUS` | `false` | Acknowledge that an empty server password admits anyone, including anonymous guests, when `NOXA_DEV_MODE=false` |
 | `NOXA_CLIENT_MIN_VERSION` | `0.0.0` | Native client minimum; `0.0.0` permits any version, exactly `9.9.9` requires the running server version or newer, e.g. `0.5.94` requires that release or newer |
 | `NOXA_DEV_MODE` | `true` | Development logging/validation; explicitly set `false` for production |
 | `NOXA_TCP_ADDR` | `:12333` | Primary control TCP listener address |
@@ -518,13 +528,16 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_QUERY_SSH_ENABLED` | `false` | Enable the SSH-wrapped ServerQuery listener |
 | `NOXA_QUERY_SSH_ADDR` | `:12339` | SSH ServerQuery listener address |
 | `NOXA_FILE_ADDR` | `:12336` | File transfer upload/download listener address |
-| `NOXA_HEALTH_ADDR` | `:12337` | Health/readiness HTTP listener; `/dl` bearer links on this listener are plaintext HTTP, so bind loopback or proxy it behind HTTPS |
+| `NOXA_HEALTH_ADDR` | `:12337` | Health/readiness HTTP listener, also serving `/events`, `/hooks/` and `/dl/` links; plaintext unless `NOXA_HEALTH_TLS_ENABLED=true`, so otherwise bind loopback or proxy it behind HTTPS |
+| `NOXA_HEALTH_TLS_ENABLED` | `false` | Serve the health listener over TLS with the control certificate (requires `NOXA_TLS_ENABLED`); download links then use `https://` |
+| `NOXA_HEALTH_ALLOW_PLAINTEXT_CREDENTIALS` | `false` | With `NOXA_DEV_MODE=false` and health TLS off, `/events` credentials and `/hooks/` secrets are refused over plaintext from remote peers (loopback and `X-Forwarded-Proto: https` proxies pass); `true` accepts that risk |
 | `NOXA_METRICS_ALLOW_REMOTE` | `false` | Permit remote `/metrics` requests; without this opt-in, only IPv4/IPv6 loopback is accepted |
 | `NOXA_PPROF_ENABLED` | `false` | Enable runtime `/debug/pprof/` diagnostics; every pprof endpoint remains GET-only and direct-loopback-only |
 | `NOXA_SHUTDOWN_TIMEOUT` | `30s` | Positive total grace period shared by all services during orderly shutdown |
 | `NOXA_DATABASE_URL` | `postgres://...` | PostgreSQL connection URL |
 | `NOXA_REDIS_ADDR` | `localhost:6379` | Optional Redis address for pub/sub fanout |
 | `NOXA_REDIS_ENABLED` | `true` | Set `false` to run without Redis; the supplied Compose stack starts Redis by default |
+| `NOXA_REDIS_PASSWORD` | empty | Redis password; required in production when `NOXA_REDIS_ADDR` is not loopback (Compose passes `REDIS_PASSWORD`) |
 | `NOXA_TLS_ENABLED` | `true` | Enable TLS 1.3 encryption on control port |
 | `NOXA_TLS_DIR` | `./data/tls` | Directory storing the generated TLS certificate and key |
 | `NOXA_TLS_CERT_FILE` / `NOXA_TLS_KEY_FILE` | empty | Custom certificate and key; both must be configured together |

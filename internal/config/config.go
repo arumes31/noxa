@@ -24,6 +24,9 @@ import (
 type Config struct {
 	ServerName     string `mapstructure:"server_name"`
 	ServerPassword string `mapstructure:"server_password"`
+	// AllowAnonymous acknowledges that an empty server_password admits any
+	// client, including anonymous guests, when dev_mode=false.
+	AllowAnonymous bool `mapstructure:"allow_anonymous"`
 	// ClientMinVersion gates native client admission. 0.0.0 accepts any version;
 	// exactly 9.9.9 uses the running server version as the minimum.
 	ClientMinVersion string `mapstructure:"client_min_version"`
@@ -33,7 +36,14 @@ type Config struct {
 	UDPAddr          string `mapstructure:"udp_addr"`
 	GRPCAddr         string `mapstructure:"grpc_addr"`
 	HealthAddr       string `mapstructure:"health_addr"`
-	QueryAddr        string `mapstructure:"query_addr"`
+	// HealthTLSEnabled serves the health listener (probes, /events, /hooks and
+	// /dl links) over TLS with the control certificate. Requires tls_enabled.
+	HealthTLSEnabled bool `mapstructure:"health_tls_enabled"`
+	// HealthAllowPlaintextCredentials accepts /events Basic credentials and
+	// /hooks bearer secrets over plaintext HTTP from remote peers when
+	// dev_mode=false. Prefer health_tls_enabled or an HTTPS reverse proxy.
+	HealthAllowPlaintextCredentials bool   `mapstructure:"health_allow_plaintext_credentials"`
+	QueryAddr                       string `mapstructure:"query_addr"`
 	// QueryAllowRemote is an explicit acknowledgement that the plaintext
 	// ServerQuery listener may bind beyond loopback. Prefer QuerySSH instead.
 	QueryAllowRemote bool `mapstructure:"query_allow_remote"`
@@ -248,12 +258,15 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("server_name", "noXa")
 	v.SetDefault("client_min_version", "0.0.0")
 	v.SetDefault("server_password", "")
+	v.SetDefault("allow_anonymous", false)
 	v.SetDefault("log_level", "info")
 	v.SetDefault("dev_mode", true)
 	v.SetDefault("tcp_addr", DefaultTCPAddr)
 	v.SetDefault("udp_addr", DefaultUDPAddr)
 	v.SetDefault("grpc_addr", DefaultGRPCAddr)
 	v.SetDefault("health_addr", DefaultHealthAddr)
+	v.SetDefault("health_tls_enabled", false)
+	v.SetDefault("health_allow_plaintext_credentials", false)
 	v.SetDefault("query_addr", DefaultQueryAddr)
 	v.SetDefault("query_allow_remote", false)
 	v.SetDefault("query_ssh_enabled", false)
@@ -545,12 +558,25 @@ func (c *Config) Validate() error {
 	if c.QuerySSHEnabled && strings.TrimSpace(c.QuerySSHHostKey) == "" {
 		errs = append(errs, errors.New("query_ssh_host_key must not be empty when query_ssh_enabled=true"))
 	}
+	if c.HealthTLSEnabled && !c.TLSEnabled {
+		errs = append(errs, errors.New("health_tls_enabled requires tls_enabled=true"))
+	}
 	if !c.DevMode {
 		if !c.TLSEnabled {
 			errs = append(errs, errors.New("tls_enabled must be true when dev_mode=false"))
 		}
 		if !c.FileTLSEnabled {
 			errs = append(errs, errors.New("file_tls_enabled must be true when dev_mode=false"))
+		}
+		if strings.TrimSpace(c.ServerPassword) == "" && !c.AllowAnonymous {
+			errs = append(errs, errors.New(
+				"server_password must be set when dev_mode=false; set allow_anonymous=true to run an open server deliberately",
+			))
+		}
+		if c.RedisEnabled && !isLoopbackAddress(c.RedisAddr) && strings.TrimSpace(c.RedisPassword) == "" {
+			errs = append(errs, errors.New(
+				"redis_password must be set when dev_mode=false and redis_addr is not loopback; disable redis_enabled if Redis is not deployed",
+			))
 		}
 	}
 
@@ -685,7 +711,7 @@ func (c *Config) Warnings() []string {
 		warnings = append(warnings, "metrics_allow_remote exposes operational metrics beyond loopback")
 	}
 	if !c.DevMode && strings.TrimSpace(c.ServerPassword) == "" {
-		warnings = append(warnings, "server_password is empty in production; any client may join unless another access control is configured")
+		warnings = append(warnings, "server_password is empty in production (allow_anonymous=true); any client, including anonymous guests, may join and receive TURN credentials")
 	}
 	if !c.TLSEnabled {
 		warnings = append(warnings, "tls_enabled=false exposes the control protocol in plaintext")
@@ -708,8 +734,11 @@ func (c *Config) Warnings() []string {
 	if c.RedisEnabled && !isLoopbackAddress(c.RedisAddr) && strings.TrimSpace(c.RedisPassword) == "" {
 		warnings = append(warnings, "redis is enabled on a non-loopback address without redis_password; require Redis ACL/password authentication")
 	}
-	if !isLoopbackAddress(c.HealthAddr) {
-		warnings = append(warnings, "health_addr is reachable beyond loopback; /dl bearer download links are served over plaintext HTTP, bind it to loopback or place it behind HTTPS")
+	if !isLoopbackAddress(c.HealthAddr) && !c.HealthTLSEnabled {
+		warnings = append(warnings, "health_addr is reachable beyond loopback over plaintext HTTP; /dl links, /events credentials and /hooks secrets are exposed, set health_tls_enabled=true or place it behind HTTPS")
+	}
+	if c.HealthAllowPlaintextCredentials && !c.HealthTLSEnabled {
+		warnings = append(warnings, "health_allow_plaintext_credentials accepts integration passwords and webhook secrets over plaintext HTTP")
 	}
 	return warnings
 }

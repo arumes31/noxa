@@ -273,10 +273,14 @@ func (s *TCPServer) fileLinkAllowed(ctx context.Context, client *Client, msg net
 
 	// The client builds the final URL from its own control host (the server
 	// cannot know its published address behind Docker/NAT). The health listener
-	// serving /dl is plaintext, regardless of the TLS control connection.
+	// serving /dl is plaintext unless health_tls_enabled is set.
+	scheme := "http"
+	if s.cfg.HealthTLSEnabled {
+		scheme = "https"
+	}
 	return s.writeMessage(client, netproto.MsgFileLinkResponse, netproto.FileLinkResponse{
 		Path:         "/dl/" + token,
-		Scheme:       "http",
+		Scheme:       scheme,
 		HealthPort:   port,
 		ExpiresAt:    expires.Unix(),
 		SessionBound: true,
