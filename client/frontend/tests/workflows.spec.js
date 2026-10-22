@@ -36,7 +36,10 @@ test.describe("Midnight workspace concepts", () => {
         await expect(page.locator("#menubar > .menu-item").filter({ hasText: /^Bookmarks/ })).toHaveCount(0);
         await expect(page.locator("#sidebar > #voice-bar")).toBeVisible();
         expect(await page.locator("#voice-bar").evaluate(bar => { const bounds = bar.getBoundingClientRect(); return [...bar.querySelectorAll(":scope > #ptt-btn, :scope > #voice-leave-channel, .voice-buttons > .voice-control, .voice-microphone > .voice-control, .voice-buttons > details > summary")].filter(control => control.checkVisibility()).flatMap(control => { const r = control.getBoundingClientRect(); return r.left >= bounds.left && r.right <= bounds.right ? [] : [{ id: control.id || control.parentElement.id, left: r.left, right: r.right, barLeft: bounds.left, barRight: bounds.right }]; }); })).toEqual([]);
-        await expect(page.locator('.msg[data-msg-id="7001"] .react-quick')).toHaveCount(3);
+        await expect(page.locator('.msg[data-msg-id="7001"] .msg-reacts')).toBeHidden();
+        await expect(page.locator(".react-quick, .react-add")).toHaveCount(0);
+        await page.evaluate(() => window.__noxaChat.onChatReaction({ message_id: 7001, reactions: { "👍": 2 } }));
+        await expect(page.locator('.msg[data-msg-id="7001"] .react-chip')).toHaveText("👍 2");
         await page.locator(".youtube-preview").click();
         await expect.poll(() => page.evaluate(() => window.__browserURLs)).toContain("https://youtu.be/Fvr-SJPAh7o");
         expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim())).toBe("#03070a");
@@ -46,6 +49,32 @@ test.describe("Midnight workspace concepts", () => {
         await expect(page.locator("#room-overview")).toBeVisible();
         await page.setViewportSize({ width: 700, height: 800 });
         await expect(page.locator("#app > #voice-bar")).toBeVisible();
+    });
+
+    test("desktop-sized windows keep square panes and compact voice controls in the sidebar", async ({ page }, testInfo) => {
+        await page.evaluate(() => window.__noxa.setDetailsOpen(false));
+        for (const width of [1440, 1100, 1000, 800, 721]) {
+            await page.setViewportSize({ width, height: 760 });
+            await expect(page.locator("#sidebar > #voice-bar")).toBeVisible();
+            await expect(page.locator("#app > #voice-bar")).toHaveCount(0);
+            const sidebar = await page.locator("#sidebar").boundingBox();
+            const controls = await page.locator("#voice-bar").boundingBox();
+            expect(controls.width).toBeLessThan(sidebar.width);
+            expect(controls.x + controls.width).toBeLessThanOrEqual(sidebar.x + sidebar.width);
+            expect(controls.y + controls.height).toBeLessThanOrEqual(sidebar.y + sidebar.height);
+            await expect(page.locator("#sidebar")).toHaveCSS("border-radius", "0px");
+            await expect(page.locator("#center")).toHaveCSS("border-radius", "0px");
+            await expect(page.locator("#app-body")).toHaveCSS("padding", "0px");
+            await expect(page.locator("#app-body")).toHaveCSS("gap", "0px");
+            await expect(page.locator(".ch-icon > .ui-icon").first()).toHaveCSS("width", "14px");
+            if (width === 1000) await page.screenshot({ path: testInfo.outputPath("compact-midnight-1000.png") });
+        }
+        await page.setViewportSize({ width: 700, height: 760 });
+        await expect(page.locator("#app > #voice-bar")).toBeVisible();
+        await page.locator("#voice-mute").focus();
+        await page.setViewportSize({ width: 1000, height: 760 });
+        await expect(page.locator("#sidebar > #voice-bar")).toBeVisible();
+        await expect(page.locator("#voice-mute")).toBeFocused();
     });
 
     test("search filters results and opens selected message context", async ({ page }, testInfo) => {

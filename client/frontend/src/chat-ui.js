@@ -1080,19 +1080,6 @@ function renderReacts(m) {
         };
         row.appendChild(chip);
     }
-    for (const emoji of ["❤️", "👍", "🔥"]) {
-        if (rx[emoji]) continue;
-        const quick = document.createElement("button");
-        quick.type = "button"; quick.className = "react-choice react-quick"; quick.textContent = emoji;
-        quick.setAttribute("aria-label", t("chat.reactWith", { emoji }));
-        quick.onclick = event => { event.stopPropagation(); if (exportScopeIsCurrent(scope)) void toggleReaction(m, emoji); };
-        row.append(quick);
-    }
-    const add = document.createElement("button");
-    add.type = "button"; add.className = "react-choice react-add"; add.innerHTML = icon("smile");
-    add.setAttribute("aria-label", t("midnight.addReaction"));
-    add.onclick = event => { event.stopPropagation(); if (exportScopeIsCurrent(scope)) openReactStrip(m, row.closest(".msg")); };
-    row.append(add);
     return row;
 }
 
