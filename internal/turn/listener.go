@@ -2,6 +2,7 @@ package turn
 
 import (
 	"context"
+	"errors"
 
 	"net"
 	"net/netip"
@@ -89,6 +90,26 @@ func Listen(ctx context.Context, cfg config.TURNConfig, m *Manager, counter *tra
 		_ = tcp.Close()
 		return nil, err
 	}
+	// Keep independent allocation events for each TCP listener; both transports
+	// share the same credentials, session limits, revocation and relay generator.
+	var proxyRelay *pion.Server
+	if cfg.TLSProxyListenAddr != "" {
+		backend, listenErr := (&net.ListenConfig{}).Listen(ctx, "tcp4", cfg.TLSProxyListenAddr)
+		if listenErr != nil {
+			_ = relay.Close()
+			return nil, listenErr
+		}
+		proxy := newProxyListener(backend, cfg.TLSProxyTrustedIPs)
+		proxied := limitedTCPListener(traffic.WrapListener(proxy, counter), cfg.MaxAllocations*2+64)
+		proxyRelay, err = pion.NewServer(pion.ServerConfig{Realm: cfg.Realm, AuthHandler: m.Authenticate, EventHandler: proxied.events(), LoggerFactory: logger,
+			ListenerConfigs: []pion.ListenerConfig{{Listener: proxied, RelayAddressGenerator: generator}},
+		})
+		if err != nil {
+			_ = proxied.Close()
+			_ = relay.Close()
+			return nil, err
+		}
+	}
 	done := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(time.Second)
@@ -105,5 +126,13 @@ func Listen(ctx context.Context, cfg config.TURNConfig, m *Manager, counter *tra
 			}
 		}
 	}()
-	return func() error { close(done); m.Close(); return relay.Close() }, nil
+	return func() error {
+		close(done)
+		m.Close()
+		err := relay.Close()
+		if proxyRelay != nil {
+			err = errors.Join(err, proxyRelay.Close())
+		}
+		return err
+	}, nil
 }
