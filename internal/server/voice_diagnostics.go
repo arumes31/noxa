@@ -186,19 +186,24 @@ func (s *TCPServer) VoiceDiagnosticsHandler() http.Handler {
 			http.Error(w, "invalid diagnostic filter", http.StatusBadRequest)
 			return
 		}
-		s.mu.RLock()
-		clients := make([]*Client, 0, len(s.clients))
-		for _, client := range s.clients {
-			clients = append(clients, client)
+		var clients []*Client
+		if id != "" {
+			// Targeted queries do not need a sorted copy of every connection.
+			if client, ok := s.clientByID(id); ok {
+				clients = []*Client{client}
+			}
+		} else {
+			s.mu.RLock()
+			clients = make([]*Client, 0, len(s.clients))
+			for _, client := range s.clients {
+				clients = append(clients, client)
+			}
+			s.mu.RUnlock()
+			sort.Slice(clients, func(i, j int) bool { return clients[i].ID < clients[j].ID })
 		}
-		s.mu.RUnlock()
-		sort.Slice(clients, func(i, j int) bool { return clients[i].ID < clients[j].ID })
 		results := make([]*netproto.VoiceDiagnostics, 0)
 		truncated := false
 		for _, client := range clients {
-			if id != "" && client.ID != id {
-				continue
-			}
 			diagnostic := s.voiceDiagnostics(client)
 			if diagnostic == nil || (nickname != "" && !strings.EqualFold(diagnostic.Nickname, nickname)) {
 				continue

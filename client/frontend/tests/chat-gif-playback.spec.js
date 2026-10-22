@@ -157,9 +157,15 @@ test("frozen GIF previews preserve large landscape and portrait layout and pixel
 for (const [format, source] of Object.entries(animations)) {
     test(`animated ${format} attachments pause offscreen and after a background minute, then resume only onscreen`, async ({ page }) => {
         await page.evaluate(async source => {
+            // Replace the fixture before observing it: pausing an offscreen image
+            // during decode changes its src and can reject decode() spuriously.
+            window.__stopGIF();
             for (const image of document.images) image.src = source;
             await Promise.all([...document.images].map(image => image.decode()));
+            const { manageChatGIFPlayback } = await import("/src/chat-gif-playback.js");
+            window.__stopGIF = manageChatGIFPlayback(document.getElementById("chat"));
         }, source);
+        await page.clock.runFor(50);
         await expect(page.locator("#offscreen")).toHaveAttribute("src", frozen);
         await expect(page.locator("#visible")).toHaveAttribute("src", source);
         await focusWindow(page, false);
