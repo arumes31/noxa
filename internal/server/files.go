@@ -13,6 +13,8 @@ import (
 
 	"go.uber.org/zap"
 
+	"noxa/internal/config"
+
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
@@ -260,6 +262,16 @@ func (s *TCPServer) handleFileLink(ctx context.Context, client *Client, f *netpr
 }
 
 func (s *TCPServer) fileLinkAllowed(ctx context.Context, client *Client, msg netproto.FileLink) error {
+	origin := ""
+	if s.cfg.DownloadPublicOrigin != "" {
+		var err error
+		origin, err = config.ValidateHTTPSOrigin(s.cfg.DownloadPublicOrigin)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "download links require a valid HTTPS origin")
+		}
+	} else if !s.cfg.HealthTLSEnabled {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "download links require HTTPS; use the secure client download or ask the administrator to configure HTTPS")
+	}
 	port, err := portFromAddress(s.cfg.HealthAddr)
 	if err != nil {
 		s.logger.Warn("invalid health address for download link", zap.String("addr", s.cfg.HealthAddr), zap.Error(err))
@@ -271,16 +283,10 @@ func (s *TCPServer) fileLinkAllowed(ctx context.Context, client *Client, msg net
 	}
 	s.auditInChannels(ctx, client.UniqueID, "file_link", fmt.Sprintf("%d:%s/%s", msg.ChannelID, msg.Folder, msg.Name), "", msg.ChannelID)
 
-	// The client builds the final URL from its own control host (the server
-	// cannot know its published address behind Docker/NAT). The health listener
-	// serving /dl is plaintext unless health_tls_enabled is set.
-	scheme := "http"
-	if s.cfg.HealthTLSEnabled {
-		scheme = "https"
-	}
 	return s.writeMessage(client, netproto.MsgFileLinkResponse, netproto.FileLinkResponse{
 		Path:         "/dl/" + token,
-		Scheme:       scheme,
+		Scheme:       "https",
+		PublicOrigin: origin,
 		HealthPort:   port,
 		ExpiresAt:    expires.Unix(),
 		SessionBound: true,

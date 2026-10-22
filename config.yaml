@@ -19,12 +19,16 @@ log_level: info        # debug | info | warn | error
 dev_mode: true        # DEVELOPMENT ONLY: production action: set false (JSON logging and production validation)
 
 tcp_addr: ":12333"    # TLS control channel
-udp_addr: ":12334"    # UDP keepalive/media support
+udp_addr: ":12334"    # Legacy ping/pong probe only; media uses WebRTC
 udp_rate_limit_pps: 200   # per-source-IP UDP rate limit (pkt/s); 0 = disabled
 udp_rate_burst: 400       # per-source-IP UDP burst allowance
 grpc_addr: "127.0.0.1:12338"   # plaintext gRPC is restricted to loopback
-health_addr: ":12337"  # /healthz, /readyz, /events, /hooks and /dl links
-health_tls_enabled: false  # serve health_addr over TLS with the control certificate (requires tls_enabled)
+health_addr: "127.0.0.1:12337"  # /healthz, /readyz, /events, /hooks and /dl links
+health_tls_enabled: false  # native HTTPS with control certificate; browsers must trust it
+# Fixed HTTPS download origin when using a reverse proxy; never read from Host.
+download_public_origin: ""
+# Canonical CIDRs of immediate HTTPS proxies. They must overwrite forwarded-proto.
+health_trusted_proxies: []
 # Production refuses /events credentials and /hooks secrets over plaintext from
 # remote peers (loopback and X-Forwarded-Proto: https proxies pass); true accepts the risk.
 health_allow_plaintext_credentials: false

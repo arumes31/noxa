@@ -3311,6 +3311,7 @@ export namespace netproto {
 		}
 	}
 	export class FileLinkResponse {
+	    public_origin?: string;
 	    session_bound?: boolean;
 	    path: string;
 	    scheme?: string;
@@ -3323,6 +3324,7 @@ export namespace netproto {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.public_origin = source["public_origin"];
 	        this.session_bound = source["session_bound"];
 	        this.path = source["path"];
 	        this.scheme = source["scheme"];

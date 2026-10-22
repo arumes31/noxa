@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -273,7 +274,7 @@ func TestRequireSecureCredentials(t *testing.T) {
 		{name: "remote plaintext", remote: "198.51.100.10:4000", want: http.StatusForbidden},
 		{name: "remote forged http proto", remote: "198.51.100.10:4000", forwarded: "http", want: http.StatusForbidden},
 		{name: "remote TLS", remote: "198.51.100.10:4000", tls: true, want: http.StatusNoContent},
-		{name: "HTTPS reverse proxy", remote: "172.18.0.1:4000", forwarded: "https", want: http.StatusNoContent},
+		{name: "untrusted HTTPS assertion", remote: "172.18.0.1:4000", forwarded: "https", want: http.StatusForbidden},
 		{name: "loopback", remote: "127.0.0.1:4000", want: http.StatusNoContent},
 		{name: "IPv6 loopback", remote: "[::1]:4000", want: http.StatusNoContent},
 	} {
@@ -303,5 +304,42 @@ func TestSetTLSCertificateEnablesHTTPS(t *testing.T) {
 	srv.SetTLSCertificate(tls.Certificate{})
 	if srv.srv.TLSConfig == nil || len(srv.srv.TLSConfig.Certificates) != 1 || srv.srv.TLSConfig.MinVersion < tls.VersionTLS12 {
 		t.Fatalf("TLSConfig = %+v", srv.srv.TLSConfig)
+	}
+}
+
+func TestCredentialTransportTrustsOnlyImmediateConfiguredProxy(t *testing.T) {
+	handler := RequireSecureCredentials(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }),
+		netip.MustParsePrefix("172.18.0.2/32"), netip.MustParsePrefix("2001:db8::2/128"), netip.MustParsePrefix("127.0.0.1/32"))
+	for _, tc := range []struct {
+		name, remote string
+		proto        []string
+		want         int
+	}{
+		{"trusted HTTPS", "172.18.0.2:1234", []string{"https"}, 204},
+		{"trusted IPv6 HTTPS", "[2001:db8::2]:1234", []string{"https"}, 204},
+		{"untrusted forged HTTPS", "172.18.0.3:1234", []string{"https"}, 403},
+		{"trusted plaintext", "172.18.0.2:1234", []string{"http"}, 403},
+		{"missing assertion", "172.18.0.2:1234", nil, 403},
+		{"list assertion", "172.18.0.2:1234", []string{"https,http"}, 403},
+		{"duplicate assertion", "172.18.0.2:1234", []string{"https", "http"}, 403},
+		{"loopback proxy HTTP", "127.0.0.1:1234", []string{"http"}, 403},
+		{"loopback proxy HTTPS", "127.0.0.1:1234", []string{"https"}, 204},
+		{"untrusted IPv6 loopback proxy", "[::1]:1234", []string{"https"}, 403},
+		{"malformed peer", "172.18.0.2:bad", []string{"https"}, 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequestWithContext(t.Context(), "GET", "http://forged.example/dl/0123456789abcdef0123456789abcdef", nil)
+			r.RemoteAddr = tc.remote
+			for _, value := range tc.proto {
+				r.Header.Add("X-Forwarded-Proto", value)
+			}
+			r.Header.Set("X-Forwarded-For", "172.18.0.2")
+			r.Header.Set("Forwarded", "for=127.0.0.1;proto=https;host=files.example")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("status %d, want %d", w.Code, tc.want)
+			}
+		})
 	}
 }

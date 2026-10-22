@@ -4,7 +4,7 @@
 // never derive its scheme from the control connection.
 
 const CONTROL_SCHEMES = new Set(["http:", "https:", "tcp:", "tls:", "noxa:"]);
-const LINK_SCHEMES = new Set(["http", "https"]);
+const LINK_SCHEMES = new Set(["https"]);
 const LINK_PATH = /^\/dl\/([0-9a-f]{32})$/;
 
 function controlAddressURL(address) {
@@ -23,7 +23,7 @@ function controlAddressURL(address) {
 }
 
 function linkScheme(value) {
-    if (value === undefined || value === null || value === "") return "http"; // old servers
+    if (value === undefined || value === null || value === "") return null; // never guess a legacy server's transport
     if (typeof value !== "string") return null;
     const scheme = value.toLowerCase();
     return LINK_SCHEMES.has(scheme) ? scheme : null;
@@ -48,9 +48,17 @@ export function buildFileLink(controlAddress, response) {
     if (!control || !scheme || !port || !path) return null;
 
     try {
-        const url = new URL(`${scheme}://placeholder.invalid`);
-        url.hostname = control.hostname;
-        url.port = String(port);
+        let url;
+        if (response.public_origin !== undefined && response.public_origin !== "") {
+            if (typeof response.public_origin !== "string" || /[\\\s?#]/.test(response.public_origin)) return null;
+            url = new URL(response.public_origin);
+            if (url.protocol !== "https:" || !url.hostname || url.username || url.password ||
+                url.search || url.hash || (url.pathname !== "" && url.pathname !== "/")) return null;
+        } else {
+            url = new URL(`${scheme}://placeholder.invalid`);
+            url.hostname = control.hostname;
+            url.port = String(port);
+        }
         url.pathname = path;
         return url.href;
     } catch {

@@ -9493,13 +9493,26 @@ test.describe("tab-bound file inspection", () => {
                     }
                     if (f.gate) await f.gate;
                     f.completed = true;
-                    return { path: "/dl/00112233445566778899aabbccddeeff", health_port: 12334, scheme: "https", expires_at: 1000, session_bound: true };
+                    return { path: "/dl/00112233445566778899aabbccddeeff", health_port: 12334, scheme: "https", expires_at: 1000, session_bound: true, ...f.linkResponse };
                 };
             } });
         });
         await page.locator("#tab-files").click();
         await expect(page.locator(".fb-filename")).toHaveText(["report.txt"]);
         await page.evaluate(() => { window.__fileScope.calls = []; window.__fileScope.effects = []; });
+    });
+    test("copy link uses the configured HTTPS proxy origin", async ({ page }) => {
+        await page.evaluate(() => { window.__fileScope.linkResponse = { public_origin: "https://downloads.example" }; });
+        await page.locator(".fb-action-menu summary").click();
+        await page.getByRole("button", { name: "Copy download link (15 min)", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__fileScope.copied)).toEqual(["https://downloads.example/dl/00112233445566778899aabbccddeeff"]);
+    });
+    test("legacy HTTP links fail safely with an upgrade/download alternative", async ({ page }) => {
+        await page.evaluate(() => { window.__fileScope.linkResponse = { scheme: "" }; });
+        await page.locator(".fb-action-menu summary").click();
+        await page.getByRole("button", { name: "Copy download link (15 min)", exact: true }).click();
+        await expect.poll(() => page.evaluate(() => window.__fileScope.toasts.join(" "))).toContain("Secure link unavailable");
+        expect(await page.evaluate(() => window.__fileScope.copied)).toEqual([]);
     });
     test("native activation cannot redirect a folder refresh", async ({ page }) => {
         await page.evaluate(() => { window.__fileScope.nativeTab = "server-b"; });
