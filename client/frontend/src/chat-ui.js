@@ -26,6 +26,7 @@ import { parsePoll } from "./poll-state.js";
 import { closeDiscussions, initDiscussions, openDiscussions, renderForumChannel, resetDiscussions } from "./discussions.js";
 import { closeConversations, initConversations, isPrivateGroupActive, openConversationsAt, resetConversations, viewedConversationID } from "./conversations.js";
 import { QUICK_SWITCH_SETTINGS } from "./shell-model.js";
+import { createChatDelivery } from "./chat-delivery.js";
 import { sessionUserID } from "./session-identity.js";
 import { DOWNGRADED, encModeFrom, encryptionBadge, UNOPENED_BODIES } from "./message-encryption.js";
 import { chatEnglish } from "./chat-messages.js";
@@ -101,6 +102,7 @@ let newCount = 0;
 let replyTo = null; // message object being replied to (107)
 let replyRevision = 0;
 let draftRevision = 0;
+let chatDelivery = null;
 let activeSend = null;
 let attachmentQueue = null;
 let pendingFiles = []; // {name, dataBase64, isImage, dataURL} staged for send (98/100)
@@ -194,6 +196,9 @@ function activeKey() {
 
 // activeChannelID returns the channel the active view reads, or null for the
 // global and DM views.
+export function rememberDisconnectedChannel() {
+    if (view.kind === "channel" && V().state.myChannelID > 0) view = { kind: "chan", id: V().state.myChannelID };
+}
 export function activeChannelID() {
     if (view.kind === "chan") return view.id;
     if (view.kind === "channel") return V().state.myChannelID || null;
@@ -2991,7 +2996,11 @@ export async function sendMessage() {
     const draft = input.value;
     const text = draft.trim();
     if (!text && pendingFiles.length === 0) return;
+    if (pendingFiles.length && chatDelivery?.enabled() && !V().state.myClientID) {
+        V().toast(t("delivery.textOnly"), "warn"); return;
+    }
     $("chat-send-error").classList.add("hidden");
+    $("chat-send-error").querySelector(".chat-offline-queue")?.remove();
     const captured = captureScope(readSendScope);
     if (captured.sendScope === "direct" && !captured.target) {
         V().toast(t("chat.chooseRecipient"), "warn");
@@ -3029,6 +3038,44 @@ export async function sendMessage() {
     renderFilePreview();
     if (scope === "direct") {
         if (target && !pmTabs.has(target)) openPMKeepView(target);
+    }
+    if (!files.length && text && chatDelivery && await chatDelivery.ready) {
+        const finishStage = async queueOffline => {
+            await chatDelivery.stage(captured, text, parentID, queueOffline);
+            if (!current()) return;
+            rememberSent(text);
+            if (replyRevision === parentRevision) clearReply();
+            if (draftRevision === inputRevision && input.value === draft) { input.value = ""; resetTypingOut(); }
+            $("chat-send-error").classList.add("hidden");
+            updateComposerCount();
+        };
+        const offerQueue = () => {
+            const panel = $("chat-send-error");
+            panel.querySelector("span").textContent = t("delivery.offline");
+            panel.classList.remove("hidden"); $("chat-retry").hidden = true;
+            panel.querySelector(".chat-offline-queue")?.remove();
+            const queue = document.createElement("button"); queue.type = "button"; queue.className = "chat-offline-queue";
+            queue.textContent = t("delivery.queue"); panel.append(queue);
+            queue.onclick = async () => {
+                if (!scopeIsCurrent(captured, readSendScope) || !canRetry() || activeSend) return;
+                activeSend = operation; queue.disabled = true;
+                try { await finishStage(true); }
+                catch (error) { if (current()) panel.querySelector("span").textContent = t("delivery.failed", { error: String(error) }); }
+                finally { if (activeSend === operation) activeSend = null; queue.disabled = false; }
+            };
+        };
+        try {
+            if (!V().state.myClientID) offerQueue();
+            else await finishStage(false);
+        } catch (error) {
+            if (current()) {
+                if (!V().state.myClientID || /offline|not connected|connection closed/i.test(String(error))) offerQueue();
+                else showSendFailure(error, captured, canRetry);
+            }
+        } finally {
+            if (activeSend === operation) { activeSend = null; $("chat-send").disabled = false; }
+        }
+        return;
     }
     try {
         const chID = scope === "channel" ? captured.channelID : 0;
@@ -4581,6 +4628,13 @@ function handleTabComplete(e) {
 // ---------------------------------------------------------------------------
 
 export function initChat() {
+    chatDelivery = createChatDelivery({ app, state: () => V().state, readScope: readSendScope, restore: entry => {
+        const input = $("chat-text");
+        draftRevision++;
+        input.value = entry.text + (input.value ? (input.tagName === "TEXTAREA" ? "\n" : " ") + input.value : "");
+        if (entry.reply_to_id) setReply({ id: entry.reply_to_id, from: "#"+entry.reply_to_id, text: "" });
+        updateComposerCount(); input.focus();
+    } });
     chatTabs?.dispose();
     unreadEffects?.dispose();
     const uploadHost = document.createElement("div"); uploadHost.className = "chat-upload-queue"; uploadHost.hidden = true;

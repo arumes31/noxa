@@ -1,3 +1,4 @@
+import { renderVoiceQueueControl } from "./voice-queue.js";
 import { initClientUsability } from "./client-usability.js";
 import { icon, labelButton } from "./icons.js";
 import { isUserMuted } from "./audio.js";
@@ -55,6 +56,7 @@ export function canEditChannelPermissions() {
 }
 
 export function renderWorkspace() {
+    renderVoiceQueueControl();
     const state = V().state;
     const members = state.myChannelID ? state.clients.filter((c) => c.channel_id === state.myChannelID) : [];
     const ownChannel = state.channels.find((c) => c.ChannelID === state.myChannelID);

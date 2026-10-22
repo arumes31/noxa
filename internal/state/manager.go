@@ -31,7 +31,8 @@ var ErrTextChannel = errors.New("text channels have no voice")
 type Manager struct {
 	logger *zap.Logger
 
-	mu sync.RWMutex
+	mu           sync.RWMutex
+	handSequence uint64
 
 	// clients maps clientID -> *Client.
 	clients map[string]*Client
@@ -271,6 +272,8 @@ func (m *Manager) removeChannelLocked(channelID int64) {
 			if c, ok := m.clients[clientID]; ok {
 				c.ChannelID = 0
 				c.ChannelEpoch++
+				c.HandRaisedOrder = 0
+				c.HandCalled = false
 			}
 		}
 		delete(m.membership, channelID)
@@ -502,6 +505,8 @@ func (m *Manager) JoinChannel(clientID string, channelID int64) error {
 
 	c.ChannelID = channelID
 	c.ChannelEpoch++
+	c.HandRaisedOrder = 0
+	c.HandCalled = false
 	members, ok := m.membership[channelID]
 	if !ok {
 		members = make(map[string]bool)
@@ -548,6 +553,8 @@ func (m *Manager) LeaveChannel(clientID string) error {
 
 	c.ChannelID = 0
 	c.ChannelEpoch++
+	c.HandRaisedOrder = 0
+	c.HandCalled = false
 	m.logger.Debug("state: client left channel",
 		zap.String("client_id", clientID),
 		zap.Int64("channel_id", channelID))
@@ -630,6 +637,8 @@ func (m *Manager) moveClient(clientID string, targetChannelID int64, enforceCapa
 	// Join target channel.
 	c.ChannelID = targetChannelID
 	c.ChannelEpoch++
+	c.HandRaisedOrder = 0
+	c.HandCalled = false
 	members, ok := m.membership[targetChannelID]
 	if !ok {
 		members = make(map[string]bool)

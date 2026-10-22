@@ -1,5 +1,7 @@
 // Shared 24px outline icons. Names and paths are fixed application assets.
 const paths = {
+    hand: '<path d="M8 13V5a2 2 0 0 1 4 0v7-9a2 2 0 0 1 4 0v9-6a2 2 0 0 1 4 0v10a7 7 0 0 1-13 3l-4-6a2 2 0 0 1 3-2l2 2Z"/>',
+    outbox: '<path d="M4 14H2v7h20v-7h-2M12 16V2M7 7l5-5 5 5"/>',
     bookmark: '<path d="M6 3h12v19l-6-4-6 4z"/>',
     copy: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
     mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/>',

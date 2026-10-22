@@ -120,5 +120,8 @@ func (s *TCPServer) buildRoleServerInfo(ctx context.Context, e *authorization.Ro
 	if !s.startedAt.IsZero() {
 		resp.UptimeSeconds = int64(time.Since(s.startedAt).Seconds())
 	}
+	if e.Evaluate(actorID, 0, authorization.ViewConnectionInfo).Allowed {
+		resp.Overview = s.serverOverview(time.Now())
+	}
 	return resp, ctx.Err()
 }

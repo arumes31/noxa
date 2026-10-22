@@ -1,0 +1,11 @@
+# Server-wide connection overview
+
+Server information includes mean fresh server-measured control RTT and audio receiver quality. RTT samples expire after 30 seconds; client receiver reports expire after 15 seconds and must match the current channel epoch. Audio loss weights received/lost packet counters across current streams; jitter averages measured audio receivers. Missing samples remain unavailable. These are current stream/session measurements, not historical quality percentiles. Server-wide information requires View connection information permission.
+
+Traffic counts completed socket bytes in server direction (In received, Out sent), including observed noXa control TLS, WebRTC media, UDP probes and file transfers. IP headers, database traffic and administrative HTTP, ServerQuery and gRPC are excluded. Socket callbacks only increment atomic RAM counters.
+
+A RAM recorder observes minute samples into five-minute buckets. UI requests read RAM exclusively. One transactional checkpoint runs every five minutes and at clean shutdown; unchanged healthy checkpoints skip storage entirely. Historical data is loaded at startup and after successful checkpoints, never per UI request. A crash may lose traffic since the last successful checkpoint (normally up to five minutes, longer during a storage outage). The UI exposes delayed storage and the actual recording start. No historical data is invented before initial deployment.
+
+Checkpoints contain absolute per-process counters and absolute per-process buckets. PostgreSQL GREATEST upserts make retries after ambiguous commits idempotent. Lifetime totals are independent of the rolling buckets retained for 31 days, so pruning does not reduce all-time totals. Last 7/30 days use five-minute bucket resolution. No member IDs, addresses, channel names or message content are stored.
+
+Validation covers RAM-only reads, idle write suppression, concurrent arrivals during a checkpoint, cancellation, uncertain commit retry, storage recovery, shutdown, restart and rolling/lifetime separation. A real PostgreSQL test checks migration, idempotency, pruning and rollback; server tests cover weighted fresh audio and permission gating; browser tests cover the four traffic windows, unavailable vs zero, live refresh, storage warning and narrow layouts. Socket tests preserve shared media voice-priority writes.

@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="/src/arctic-night.css" />
     <link rel="stylesheet" href="/src/arctic-shell.css" />
     <link rel="stylesheet" href="/src/midnight.css" />
+    <link rel="stylesheet" href="/src/scrollbars.css" />
 </head>
 <body class="details-collapsed">
     <!-- Login overlay -->
@@ -80,6 +81,11 @@
                 <span id="conn-lock" class="hidden" title="control channel TLS + chat payload encryption on">🔒</span>
                 <button id="server-menu-btn" class="icon-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Server menu" title="Server menu"></button>
             </div>
+            <div id="sidebar-scroll">
+                <section id="direct-section" class="side-section" aria-labelledby="direct-heading">
+                    <div class="pane-head sidebar-head side-head"><h3 id="direct-heading" class="side-label">Direct</h3></div>
+                    <button id="direct-messages" class="side-row" type="button"><span class="side-row-icon" aria-hidden="true"></span><span class="side-row-name">Messages</span><span class="side-count" hidden></span></button>
+                </section>
             <div class="pane-head sidebar-head side-head"><h2 id="channels-heading" class="sr-only">Channels</h2><h3 id="voice-heading" class="side-label">Voice</h3><button id="tree-filter-toggle" class="icon-btn pane-head-btn" type="button" aria-expanded="false" aria-controls="tree-tools" aria-label="Find channels, groups or people"></button><button id="workspace-sidebar-close" class="icon-btn pane-head-btn" type="button" aria-label="Close channels"></button><button id="channel-create-btn" class="icon-btn pane-head-btn" title="Create channel" aria-label="Create channel">+</button></div>
             <div id="tree-tools">
                 <label class="sr-only" for="tree-filter">Filter channels, private groups and users</label>
@@ -87,15 +93,12 @@
                 <button id="tree-collapse" class="icon-btn" title="Collapse all" aria-label="Collapse all channels">▾</button>
                 <button id="tree-expand" class="icon-btn" title="Expand all" aria-label="Expand all channels">▸</button>
             </div>
-            <div id="sidebar-scroll"><div id="channel-tree"></div>
+            <div id="channel-tree"></div>
                 <section id="text-section" class="side-section" aria-labelledby="text-heading" hidden>
                     <div class="pane-head sidebar-head side-head"><h3 id="text-heading" class="side-label">Text</h3><button id="text-channel-create" class="icon-btn pane-head-btn" type="button" aria-label="Create text channel" title="Create text channel" hidden></button></div>
                     <div id="text-channels" role="list" aria-labelledby="text-heading"></div>
                 </section>
-                <section id="direct-section" class="side-section" aria-labelledby="direct-heading">
-                    <div class="pane-head sidebar-head side-head"><h3 id="direct-heading" class="side-label">Direct</h3></div>
-                    <button id="direct-messages" class="side-row" type="button"><span class="side-row-icon" aria-hidden="true"></span><span class="side-row-name">Messages</span><span class="side-count" hidden></span></button>
-                </section>
+
             </div>
         </aside>
 

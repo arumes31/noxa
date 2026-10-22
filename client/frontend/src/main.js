@@ -1106,6 +1106,7 @@ window.runtime.EventsOn("disconnected", () => {
         clearReconnectTimer();
         state.reconnectAttempts = 0;
     }
+    chatUI.rememberDisconnectedChannel();
     state.sessionGeneration++;
     connectionOverlay.lost(state.activeTabID);
     const unexpected = !!state.lastConnect;
@@ -1119,6 +1120,7 @@ window.runtime.EventsOn("disconnected", () => {
     state.whisperTargetUID = "";
     state.whisperPrev = null;
     state.myChannelID = 0;
+    state.supportsVoiceQueue = false;
     state.myClientID = "";
     resetVoiceSession();
     state.selectedClientID = "";
@@ -1249,6 +1251,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     if (!snap) return;
     const previousPresence = captureChannelPresence(state);
     state.canSetInvisible = snap.can_set_invisible === true;
+    state.supportsVoiceQueue = snap.supports_voice_queue === true;
     state.ownAuthority = ["owner", "administrator", "member", "guest"].includes(snap.own_authority) ? snap.own_authority : "";
     state.channels = [];
     state.clients = [];

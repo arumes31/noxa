@@ -134,6 +134,10 @@ const (
 // String returns a human-readable name for the message type.
 func (m MessageType) String() string {
 	switch m {
+	case MsgVoiceQueueRequest:
+		return "VoiceQueueRequest"
+	case MsgVoiceQueueResult:
+		return "VoiceQueueResult"
 	case MsgChannelInviteRequest:
 		return "ChannelInviteRequest"
 	case MsgChannelInviteResult:
@@ -979,17 +983,18 @@ type ServerInfoQuery struct{}
 
 // ServerInfoResponse carries the server's public information.
 type ServerInfoResponse struct {
-	EchoChannelID  int64  `json:"echo_channel_id,omitempty"` // Active loopback channel, only when visible to this recipient.
-	EchoPrivate    bool   `json:"echo_private,omitempty"`    // Echo media is returned only to its publisher; absent on older shared-echo servers.
-	ChatMaxBytes   int    `json:"chat_max_bytes,omitempty"`  // Channel/global plaintext UTF-8 limit; zero means unspecified.
-	Name           string `json:"name"`
-	Version        string `json:"version"`
-	Platform       string `json:"platform,omitempty"` // Optional for compatibility with older servers.
-	UptimeSeconds  int64  `json:"uptime_seconds"`
-	ClientsOnline  int    `json:"clients_online"`
-	ChannelsOnline int    `json:"channels_online"`
-	MaxClients     int    `json:"max_clients"`
-	MOTD           string `json:"motd,omitempty"`
+	Overview       *ServerOverview `json:"overview,omitempty"`
+	EchoChannelID  int64           `json:"echo_channel_id,omitempty"` // Active loopback channel, only when visible to this recipient.
+	EchoPrivate    bool            `json:"echo_private,omitempty"`    // Echo media is returned only to its publisher; absent on older shared-echo servers.
+	ChatMaxBytes   int             `json:"chat_max_bytes,omitempty"`  // Channel/global plaintext UTF-8 limit; zero means unspecified.
+	Name           string          `json:"name"`
+	Version        string          `json:"version"`
+	Platform       string          `json:"platform,omitempty"` // Optional for compatibility with older servers.
+	UptimeSeconds  int64           `json:"uptime_seconds"`
+	ClientsOnline  int             `json:"clients_online"`
+	ChannelsOnline int             `json:"channels_online"`
+	MaxClients     int             `json:"max_clients"`
+	MOTD           string          `json:"motd,omitempty"`
 }
 
 type ServerConfigQuery struct{}
