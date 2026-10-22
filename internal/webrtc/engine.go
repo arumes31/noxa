@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"noxa/internal/traffic"
 	"strings"
 	"time"
 
@@ -60,6 +61,7 @@ func New(logger *zap.Logger, iceServers []string, enableAV1 bool) (*Engine, erro
 // NetworkConfig enables a shared IPv4 UDP listener and advertised NAT addresses.
 // Empty values preserve automatic ICE candidate gathering.
 type NetworkConfig struct {
+	Traffic     *traffic.Counter
 	UDPAddr     string
 	ExternalIPs []string
 }
@@ -116,7 +118,7 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 	if err != nil {
 		return nil, fmt.Errorf("webrtc: enumerating network interfaces: %w", err)
 	}
-	settingEngine.SetNet(boundedMediaNet{Net: networkStack})
+	settingEngine.SetNet(boundedMediaNet{Net: networkStack, traffic: network.Traffic})
 	// Use lite ICE candidate gathering by default; full ICE is configured via
 	// the ICE servers. Keep defaults conservative for a server-side SFU.
 	settingEngine.SetSCTPMaxReceiveBufferSize(16 * 1024 * 1024)
@@ -167,7 +169,7 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 		if err := configureMediaSendBuffer(conn); err != nil {
 			logger.Warn("webrtc: shared UDP send buffer request failed", zap.Int("requested_bytes", mediaSendBufferBytes), zap.Error(err))
 		}
-		udpMux = webrtc.NewICEUDPMux(nil, &faultInjectingPacketConn{PacketConn: &boundedPacketConn{PacketConn: conn}})
+		udpMux = webrtc.NewICEUDPMux(nil, &faultInjectingPacketConn{PacketConn: &boundedPacketConn{PacketConn: conn, traffic: network.Traffic}})
 		settingEngine.SetICEUDPMux(udpMux)
 		settingEngine.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	}

@@ -1,3 +1,4 @@
+import { createServerOverview } from "./server-overview.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { icon } from "./icons.js";
@@ -85,6 +86,9 @@ export function openServerInfo() {
         isCurrent: () => isCurrentServerDialog(overlay),
     });
 
+    const overview = createServerOverview();
+    overlay.querySelector(".server-info-details").after(overview.element);
+    overview.update(null);
     let timer = null;
     let busy = false;
     let server = null;
@@ -109,7 +113,7 @@ export function openServerInfo() {
             const { state } = V();
             const pc = state.pc;
             const app = window.go.main.App;
-            const refreshServer = !server || Date.now() - serverAt >= 10000;
+            const refreshServer = !server || Date.now() - serverAt >= 2000;
             const [infoResult, serverResult, mediaResult] = await Promise.allSettled([
                 Promise.resolve().then(() => app.GetClientInfoForTab(tabID, clientID)),
                 Promise.resolve().then(() => refreshServer ? app.ServerInfoForTab(tabID) : server),
@@ -130,6 +134,7 @@ export function openServerInfo() {
                 set("uptime", formatDuration(measured(server.uptime_seconds) ? server.uptime_seconds + (Date.now() - serverAt) / 1000 : null));
                 set("users", `${server.clients_online ?? "—"} / ${server.max_clients ?? "—"}`);
                 set("channels", server.channels_online);
+                overview.update(server.overview);
             }
             const info = infoResult.status === "fulfilled" ? infoResult.value : null;
             if (!info || typeof info !== "object") errors.push(t("runtime.statsUnavailable"));

@@ -2448,3 +2448,9 @@ body.details-collapsed #app-body {
 .sh-preview { width: 100%; max-height: 180px; object-fit: contain; background: #000; border-radius: 8px; }
 .sh-source-label { overflow-wrap: anywhere; }
 .sh-error { color: var(--danger); overflow-wrap: anywhere; }
+
+.server-overview { padding: 14px 0; border-top: 1px solid var(--border); }
+.server-overview h4 { margin: 0 0 14px; }
+.server-overview-warning { color: var(--warn); font-size: .8rem; }
+.server-overview [hidden] { display: none; }
+.server-overview summary { cursor: pointer; }

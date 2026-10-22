@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"noxa/internal/traffic"
 	"time"
 
 	"noxa/internal/auth"
@@ -236,6 +237,8 @@ type ScopeKeyStore interface {
 // "unavailable" error instead of panicking, which keeps the server usable in
 // tests and during partial startups.
 type Deps struct {
+	Traffic        *traffic.Counter
+	TrafficHistory *traffic.Recorder
 	Auth           AuthBackend
 	State          *state.Manager
 	Channels       ChannelBackend
