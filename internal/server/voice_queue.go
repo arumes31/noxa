@@ -39,6 +39,29 @@ func (s *TCPServer) handleVoiceQueue(ctx context.Context, client *Client, frame 
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "member not found")
 			}
 		}
+		// The metadata barrier serializes queue and membership changes. Check
+		// every member whose state will change before applying any effect.
+		members := s.deps.State.ListClients()
+		var firstID string
+		var firstOrder uint64
+		if request.Action == "next" {
+			for _, member := range members {
+				if member.ChannelID == request.ChannelID && member.HandRaisedOrder > 0 && (firstOrder == 0 || member.HandRaisedOrder < firstOrder) {
+					firstID, firstOrder = member.ClientID, member.HandRaisedOrder
+				}
+			}
+		}
+		for _, member := range members {
+			if member.ChannelID != request.ChannelID || member.ClientID == client.ID {
+				continue
+			}
+			affected := request.Action == "lower" && member.ClientID == target
+			affected = affected || request.Action == "clear" && (member.HandRaisedOrder > 0 || member.HandCalled)
+			affected = affected || request.Action == "next" && firstID != "" && (member.ClientID == firstID || member.HandCalled)
+			if affected && !e.CanManageMember(client.userID(), member.UserID) {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "queue moderation denied")
+			}
+		}
 		chosen, err := s.deps.State.UpdateVoiceQueue(request.ChannelID, target, request.Action)
 		if err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "voice queue member unavailable")
