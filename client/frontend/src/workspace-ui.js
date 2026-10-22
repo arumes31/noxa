@@ -63,7 +63,7 @@ export function renderWorkspace() {
     const context = $("voice-context");
     context.textContent = t("polish.connection", {
         server: state.lastConnect?.addr || t("status.offline"),
-        channel: ownChannel?.Name || t("workspace.noVoice"),
+        channel: ownChannel?.Name || state.channels.find(ch => ch.SystemKind === "home")?.Name || t("workspace.noVoice"),
     });
     context.title = context.textContent;
     $("mic-meter").setAttribute("aria-label", t("polish.meter"));

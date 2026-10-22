@@ -1671,6 +1671,7 @@ export async function setChannelSubscription(channelID, subscribe) {
 }
 
 export async function openChannelTab(channelID) {
+    if (V().state.channels.some(ch => ch.ChannelID === channelID && ch.SystemKind === "home")) return;
     const id = Number(channelID);
     if (!id) return;
     if (subscribed(id)) {
@@ -3875,7 +3876,7 @@ function updateHeader() {
     updateComposerCount();
     const st = V().state;
     const filesOpen = $("files-pane")?.hidden === false;
-    let title = "Chat", topic = "";
+    let title = st.myChannelID === 0 && st.channels.some(ch => ch.SystemKind === "home") ? "Lobby" : "Chat", topic = "";
     let showChanBtns = false;
     let slow = 0;
     if (filesOpen) {
@@ -4409,7 +4410,7 @@ function openQS() {
         items.push({ label: "# " + ch.Name, hint: t("chat.channelHint"), action: async () => {
             if (generation !== st.serverGeneration) return;
             try {
-                const err = await app().JoinChannelForTab(tabID, ch.ChannelID);
+                const err = await app().JoinChannelForTab(tabID, ch.SystemKind === "home" ? 0 : ch.ChannelID);
                 if (err && generation === st.serverGeneration) V().toast(err, "warn");
             } catch (err) {
                 if (generation === st.serverGeneration) V().toast(String(err), "warn");

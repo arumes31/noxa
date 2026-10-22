@@ -758,6 +758,14 @@ function openChannelMenu(x, y, channel, trigger) {
         closeMenu();
         confirmChannelDelete(channel);
     };
+    if (channel.SystemKind) {
+        for (const action of ["edit", "delete"]) menuEl.querySelector(`[data-act="${action}"]`)?.remove();
+        move.remove();
+        if (channel.SystemKind === "home") {
+            access.remove();
+            for (const action of ["voice", "open-chat", "subscription", "notify"]) menuEl.querySelector(`[data-act="${action}"]`)?.remove();
+        } else menuEl.querySelector('[data-act="create-sub"]')?.remove();
+    }
     const menu = menuEl;
     mountContextMenu(menu, { x, y, trigger, resolveTrigger: replacementTrigger(trigger), onClose: () => { if (menuEl === menu) menuEl = null; } });
 }

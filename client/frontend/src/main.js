@@ -1,3 +1,4 @@
+import { setStatusIcon } from "./icons.js";
 import { maintainRelay } from "./relay-renewal.js";
 import { manageAvatarPlayback } from "./avatar-playback.js";
 import { closeContextMenu } from "./context-menu.js";
@@ -1331,7 +1332,7 @@ function syncOwnChannel({ audible = true, ownMove } = {}) {
             const forcedMove = ownMove?.forced === true && Number(ownMove.channel_id) === channelID;
             playAlert(forcedMove ? "moved_by_admin" : "channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
             playedCue = true;
-        } else if (previousChannelID > 0) {
+        } else if (previousChannelID > 0 && !state.channels.some(ch => ch.SystemKind === "home")) {
             playAlert("channel_leave");
             playedCue = true;
         }
@@ -1388,6 +1389,7 @@ function flattenChannel(node) {
         // Text channels (chat only, no voice) list in the sidebar's Text
         // section; older servers omit the field and every channel is voice.
         TextOnly: !!(node.text_only ?? node.TextOnly),
+        SystemKind: node.SystemKind || "",
         Access: node.access || null,
         ClientCount: node.ClientCount || 0, // (303) [n/max]
         Topic: node.Topic || "",
@@ -1486,7 +1488,7 @@ window.runtime.EventsOn("event", (json) => {
                         if (forcedMove) playAlert("moved_by_admin", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
                         else playAlert("channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
                         playedOwnCue = true;
-                    } else if (nextChannelID === 0 && previousChannelID > 0) {
+                    } else if (nextChannelID === 0 && previousChannelID > 0 && !state.channels.some(ch => ch.SystemKind === "home")) {
                         playAlert("channel_leave");
                         playedOwnCue = true;
                     }
@@ -2646,9 +2648,8 @@ function teardownVoice() {
     $("remote-video").classList.add("hidden");
 }
 
-// voiceStatusBase is the plain voice on/off text. renderVoiceStatus appends the
-// whisper-reply marker (33): an armed reply reroutes every transmission, so it
-// must not be invisible.
+// Keep the transport state in the accessible label. An armed whisper reply
+// also changes the visible icon because it reroutes every transmission.
 let voiceStatusBase = "voice off";
 
 function setVoiceStatus(text) {
@@ -2659,9 +2660,14 @@ function setVoiceStatus(text) {
 function renderVoiceStatus() {
     renderVoiceHints();
     const key = { "voice on": "voice.on", "voice off": "voice.off", "voice connecting…": "voice.connecting", "voice unavailable": "voice.unavailable" }[voiceStatusBase];
-    $("voice-status").textContent = (key ? t(key) : voiceStatusBase) +
+    const status = $("voice-status");
+    const label = (key ? t(key) : voiceStatusBase) +
         (state.whisperArmed ? " · " + t("polish.whisper", { name: uidName(state.whisperTargetUID) }) : "");
-    $("voice-status").dataset.state = { "voice on": "connected", "voice connecting…": "connecting", "voice unavailable": "unavailable" }[voiceStatusBase] || "off";
+    status.dataset.state = { "voice on": "connected", "voice connecting…": "connecting", "voice unavailable": "unavailable" }[voiceStatusBase] || "off";
+    status.dataset.whisper = String(!!state.whisperArmed);
+    setStatusIcon(status, state.whisperArmed ? "whisper" : { connected: "headphones", connecting: "refresh", unavailable: "warning", off: "headphonesOff" }[status.dataset.state], label);
+    status.title = label;
+    status.tabIndex = 0;
 }
 
 function resetVoiceUI() {

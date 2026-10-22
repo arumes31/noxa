@@ -236,3 +236,34 @@ test('channel members stay alphabetical across snapshots and shift selection fol
     expect(await page.locator('.channel-members .client.selected').evaluateAll(rows => rows.map(row => row.dataset.clid))).toEqual(['alice', 'bob', 'user2']);
 });
 
+
+
+test('Lobby shows neutral members, protects its actions and returns silently without changing mute', async ({ page }, testInfo) => {
+    await page.evaluate(() => {
+        window.__noxa.showWorkspace(false);
+        window.__noxa.state.deafened = true;
+        window.__noxa.state.muted = true;
+        window.__homeSnapshot = channel => {
+            const self = { client_id: 'self', nickname: 'Self', channel_id: channel };
+            const snapshot = { root_channels: [{ ChannelID: 1, Name: 'Lobby', SystemKind: 'home',
+                access: { can_connect: false, restricted: false }, clients: [], children: [
+                    { ChannelID: 7, ParentID: 1, Name: 'Public1', SystemKind: 'public', clients: channel === 7 ? [self] : [] },
+                    { ChannelID: 8, ParentID: 1, Name: 'Public2', SystemKind: 'public', clients: [] },
+                ] }], unassigned_clients: channel === 0 ? [self] : [] };
+            for (const callback of window.__events.snapshot) callback(JSON.stringify(snapshot));
+        };
+        window.__homeSnapshot(0);
+    });
+    await expect(page.locator('.channel[data-chid="1"]')).toHaveClass(/mine/);
+    await expect(page.locator('.channel[data-chid="1"] .ch-icon svg')).toBeVisible();
+    await expect(page.locator('.channel[data-chid="1"]')).not.toHaveClass(/access-denied/);
+    await expect(page.locator('.channel[data-chid="1"] + .channel-members')).toContainText('Self');
+    await expect(page.locator('.text-channel').filter({ hasText: 'Lobby' })).toHaveCount(0);
+    await expect(page.locator('#voice-leave-channel')).toBeHidden();
+    await page.locator('.channel[data-chid="1"]').click({ button: 'right' });
+    await expect(page.locator('.ctx-menu [data-act="delete"]')).toHaveCount(0);
+    await expect(page.locator('.ctx-menu [data-act="open-chat"]')).toHaveCount(0);
+    expect(await page.evaluate(() => ({ muted: window.__noxa.state.muted, deafened: window.__noxa.state.deafened, spoken: window.__spoken }))).toEqual({ muted: true, deafened: true, spoken: [] });
+    await page.keyboard.press('Escape');
+    await page.screenshot({ path: testInfo.outputPath('lobby-home.png') });
+});

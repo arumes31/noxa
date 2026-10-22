@@ -245,7 +245,6 @@ export function initAppShell() {
     $("tree-filter-toggle").innerHTML = icon("search");
     $("text-channel-create").innerHTML = icon("plus");
     $("direct-messages").querySelector(".side-row-icon").innerHTML = icon("messages");
-    document.querySelector("#voice-bar .voice-signal").innerHTML = icon("signal");
     translateShell();
 
     // Ctrl+K is bound by the chat module's quick switcher (135).

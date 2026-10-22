@@ -4,7 +4,7 @@
 // same channel, not duplicated server channels or independent subscriptions.
 export function textChannels(channels = []) {
     const position = new Map(channels.map((channel, index) => [channel.ChannelID, index]));
-    return channels.filter((channel) => channel.ChannelID > 0)
+    return channels.filter((channel) => channel.ChannelID > 0 && channel.SystemKind !== "home")
         .sort((a, b) => (a.OrderIndex || 0) - (b.OrderIndex || 0) || position.get(a.ChannelID) - position.get(b.ChannelID));
 }
 

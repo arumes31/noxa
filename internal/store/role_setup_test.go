@@ -276,7 +276,7 @@ func TestRegistrationAssignsOnlyTheActiveDefaultMemberRole(t *testing.T) {
 	if _, err := s.PrepareRolePolicy(t.Context(), owner); err != nil {
 		t.Fatal(err)
 	}
-	stagedUser, err := s.RegisterUserWithDefaultRole(t.Context(), "staged-user", "Staged", "hash", "key")
+	stagedUser, err := s.RegisterUserWithDefaultRole(t.Context(), "staged-user", "Staged", "hash", "staged-key")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestRegistrationAssignsOnlyTheActiveDefaultMemberRole(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	memberID, err := s.RegisterUserWithDefaultRole(t.Context(), "active-user", "Active", "hash", "key")
+	memberID, err := s.RegisterUserWithDefaultRole(t.Context(), "active-user", "Active", "hash", "active-key")
 	if err != nil {
 		t.Fatal(err)
 	}

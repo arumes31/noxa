@@ -119,9 +119,10 @@ type channelManagerHooks struct {
 // timer is started; if it remains empty for the cleanup delay the channel is
 // deleted from both the database and the state manager.
 type ChannelManager struct {
-	store  *store.Store
-	state  *state.Manager
-	logger *zap.Logger
+	publicPoolWake chan struct{}
+	store          *store.Store
+	state          *state.Manager
+	logger         *zap.Logger
 
 	mu                    sync.Mutex
 	timers                map[int64]*cleanupTimer
@@ -155,11 +156,12 @@ func New(s *store.Store, sm *state.Manager, logger *zap.Logger) *ChannelManager 
 		logger = zap.NewNop()
 	}
 	return &ChannelManager{
-		store:        s,
-		state:        sm,
-		logger:       logger,
-		timers:       make(map[int64]*cleanupTimer),
-		CleanupDelay: DefaultCleanupDelay,
+		store:          s,
+		publicPoolWake: make(chan struct{}, 1),
+		state:          sm,
+		logger:         logger,
+		timers:         make(map[int64]*cleanupTimer),
+		CleanupDelay:   DefaultCleanupDelay,
 	}
 }
 
@@ -368,7 +370,7 @@ func (m *ChannelManager) LoadIntoState(ctx context.Context) (int, error) {
 	          order_index, channel_type, COALESCE(max_clients, 0), created_at,
 	          COALESCE(password_hash, ''),
 	          opus_bitrate, opus_fec, opus_dtx, opus_stereo, slow_mode_seconds,
-	          COALESCE(description, ''), text_only
+	          COALESCE(description, ''), text_only, system_kind
 	          FROM channels ORDER BY id`
 	rows, err := m.store.DB().QueryContext(ctx, q)
 	if err != nil {
@@ -385,7 +387,7 @@ func (m *ChannelManager) LoadIntoState(ctx context.Context) (int, error) {
 			&ch.OrderIndex, &channelType, &ch.MaxClients, &ch.CreatedAt,
 			&ch.PasswordHash,
 			&ch.OpusBitrate, &ch.OpusFEC, &ch.OpusDTX, &ch.OpusStereo, &ch.SlowModeSeconds,
-			&ch.Description, &ch.TextOnly); err != nil {
+			&ch.Description, &ch.TextOnly, &ch.SystemKind); err != nil {
 			return count, fmt.Errorf("scanning channel row: %w", err)
 		}
 		parsedType, err := ParseChannelType(int(channelType))
@@ -857,6 +859,7 @@ func (m *ChannelManager) MoveClientWithinCapacity(clientID string, targetChannel
 }
 
 func (m *ChannelManager) moveClientWithLifecycle(clientID string, targetChannelID int64, afterMove func(int64), enforceCapacity bool) (int64, error) {
+	defer m.requestPublicPool()
 	m.treeMu.RLock()
 	defer m.treeMu.RUnlock()
 	unlockClient := m.clientLocks.lock(clientID)
@@ -890,6 +893,7 @@ func (m *ChannelManager) moveClientWithLifecycle(clientID string, targetChannelI
 // reconciles temporary-channel cleanup under the same lifecycle locks used by
 // MoveClient.
 func (m *ChannelManager) LeaveClient(clientID string) (int64, error) {
+	defer m.requestPublicPool()
 	m.treeMu.RLock()
 	defer m.treeMu.RUnlock()
 	unlockClient := m.clientLocks.lock(clientID)
@@ -917,6 +921,7 @@ func (m *ChannelManager) LeaveClient(clientID string) (int64, error) {
 // RemoveClient atomically removes a disconnected client from state and
 // reconciles the actual channel it occupied at removal time.
 func (m *ChannelManager) RemoveClient(clientID string) (*state.Client, error) {
+	defer m.requestPublicPool()
 	m.treeMu.RLock()
 	defer m.treeMu.RUnlock()
 	unlockClient := m.clientLocks.lock(clientID)
@@ -962,6 +967,7 @@ func (m *ChannelManager) WithChannelLifecycle(channelID int64, operation func() 
 // OnClientLeftChannel starts a cleanup timer if the channel is temporary and
 // now has zero members.
 func (m *ChannelManager) OnClientLeftChannel(channelID int64) {
+	defer m.requestPublicPool()
 	m.treeMu.RLock()
 	defer m.treeMu.RUnlock()
 	unlock := m.lockChannels(channelID)
@@ -1293,6 +1299,7 @@ func (m *ChannelManager) mirrorPersistedChannel(channel *state.Channel) {
 		SlowModeSeconds: &channel.SlowModeSeconds,
 		Description:     &channel.Description,
 		TextOnly:        &channel.TextOnly,
+		SystemKind:      &channel.SystemKind,
 	}) {
 		m.state.AddChannel(channel)
 	}

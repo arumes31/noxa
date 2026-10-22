@@ -37,14 +37,14 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
     function recomputeClientCounts() {
         const counts = new Map();
         for (const c of state.clients) counts.set(c.channel_id, (counts.get(c.channel_id) || 0) + 1);
-        for (const ch of state.channels) ch.ClientCount = counts.get(ch.ChannelID) || 0;
+        for (const ch of state.channels) ch.ClientCount = counts.get(ch.SystemKind === "home" ? 0 : ch.ChannelID) || 0;
     }
 
     // (302) expandMyBranch un-collapses my channel and its ancestors: a move into
     // a branch the user collapsed earlier would otherwise hide the channel they
     // are actually in.
     function expandMyBranch() {
-        let id = state.myChannelID;
+        let id = state.myChannelID || state.channels.find(ch => ch.SystemKind === "home")?.ChannelID;
         let guard = 0;
         while (id && guard++ < 1000) {
             state.collapsedChannels.delete(id);
@@ -97,7 +97,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         // (163) the manual sort index decides sibling order; sort is stable, so
         // equal indices keep the order the snapshot delivered them in.
         for (const list of byParent.values()) {
-            list.sort((a, b) => (a.OrderIndex || 0) - (b.OrderIndex || 0));
+            list.sort((a, b) => Number(b.SystemKind === "home") - Number(a.SystemKind === "home") || (a.OrderIndex || 0) - (b.OrderIndex || 0));
         }
         // (319) live tree filter: matching channels/users stay; a channel stays
         // when it or a descendant or one of its users matches.
@@ -106,7 +106,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             const keep = new Set();
             const matchCh = (ch) => {
                 let ok = ch.Name.toLowerCase().includes(q) ||
-                    state.clients.some((c) => c.channel_id === ch.ChannelID &&
+                    state.clients.some((c) => c.channel_id === (ch.SystemKind === "home" ? 0 : ch.ChannelID) &&
                         (c.nickname || c.unique_id || "").toLowerCase().includes(q));
                 for (const child of byParent.get(ch.ChannelID) || []) ok = matchCh(child) || ok;
                 if (ok) keep.add(ch.ChannelID);
@@ -174,14 +174,16 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         node.className = "channel-node";
         node.style.setProperty("--depth", depth);
         const el = document.createElement("div");
-        el.className = "channel" + (ch.ChannelID === state.myChannelID ? " mine" : "");
+        const isHome = ch.SystemKind === "home";
+        el.className = "channel" + ((isHome ? state.myChannelID === 0 : ch.ChannelID === state.myChannelID) ? " mine" : "");
         el.dataset.chid = ch.ChannelID;
         el.tabIndex = 0; // (298) keyboard navigation
         el.setAttribute("role", "treeitem"); // (343)
-        const restricted = ch.Access?.restricted === true;
-        const cannotJoin = ch.Access?.can_connect === false;
+        const restricted = !isHome && ch.Access?.restricted === true;
+        const cannotJoin = !isHome && ch.Access?.can_connect === false;
         const isEcho = echoInfo?.channelID > 0 && echoInfo.channelID === ch.ChannelID && scopeIsCurrent(echoInfo.scope, readEchoScope);
         const accessLabels = [];
+        if (isHome) accessLabels.push(t("runtime.homeHint"));
         if (isEcho) accessLabels.push(t("echo.channelHint"));
         if (restricted) accessLabels.push(t("channel.access.private"));
         if (ch.HasPassword) accessLabels.push(t("channel.access.password"));
@@ -189,7 +191,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         el.classList.toggle("access-denied", cannotJoin);
         el.setAttribute("aria-label", t("runtime.channelName", { name: ch.Name }) + (accessLabels.length ? ", " + accessLabels.join(", ") : ""));
         el.title = accessLabels.join(" · ") || t("channel.access.open");
-        el.innerHTML = `<span class="ch-disclosure" aria-hidden="true">${icon("chevron")}</span><span class="ch-icon">${icon(isEcho ? "echo" : "speaker")}</span><span class="ch-name"></span>`;
+        el.innerHTML = `<span class="ch-disclosure" aria-hidden="true">${icon("chevron")}</span><span class="ch-icon">${icon(isHome ? "home" : isEcho ? "echo" : "speaker")}</span><span class="ch-name"></span>`;
         el.querySelector(".ch-name").textContent = ch.Name;
         // (387) muted channel icon.
         if (window.__noxaNotify?.channelOverride?.(ch.ChannelID)?.muted) {
@@ -234,9 +236,9 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             // Channel chat navigation is immediate, even when joining the same
             // voice channel emits no new membership event.
             window.__noxa.closeDirectMessages?.();
-            void chatUI.openChannelTab(ch.ChannelID);
+            if (!isHome) void chatUI.openChannelTab(ch.ChannelID);
             try {
-                const err = await window.go.main.App.JoinChannelForTab(tabID, ch.ChannelID);
+                const err = await window.go.main.App.JoinChannelForTab(tabID, isHome ? 0 : ch.ChannelID);
                 if (err && generation === state.serverGeneration) toast(joinFailure(err), "warn", "alert", { bypassDND: true });
             } catch (err) {
                 if (generation === state.serverGeneration) toast(joinFailure(err), "warn", "alert", { bypassDND: true });
@@ -245,9 +247,9 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         // (163) drag a channel onto another to take that channel's slot among its
         // siblings. The header is separate from its member/child branch, so a
         // member drag can never be relabelled as a channel drag.
-        el.draggable = true;
+        el.draggable = !ch.SystemKind;
         el.addEventListener("dragstart", (e) => {
-            if (e.target !== el) return;
+            if (e.target !== el || ch.SystemKind) return;
             e.dataTransfer.setData("text/noxa-chid", String(ch.ChannelID));
             e.dataTransfer.setData("text/noxa-tab", tabID);
             e.dataTransfer.setData("text/noxa-generation", String(generation));
@@ -281,7 +283,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             if (!target) return;
             try {
                 const err = target.client_id === state.myClientID
-                    ? await window.go.main.App.JoinChannelForTab(tabID, ch.ChannelID)
+                    ? await window.go.main.App.JoinChannelForTab(tabID, isHome ? 0 : ch.ChannelID)
                     : await window.go.main.App.MoveClientForTab(tabID, target.client_id, ch.ChannelID);
                 if (err && generation === state.serverGeneration) toast(t("runtime.moveFailed", { error: String(err) }), "warn");
             } catch (err) {
@@ -295,12 +297,12 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         // windowed mode every channel off my branch counts as collapsed unless
         // the user explicitly expanded it (double-click).
         let collapsed = state.collapsedChannels.has(ch.ChannelID);
-        if (window.__noxaPolish?.virtualizeEnabled?.()) {
+        if (!isHome && window.__noxaPolish?.virtualizeEnabled?.()) {
             collapsed = state.collapsedChannels.has(ch.ChannelID) ||
                 (!window.__noxaPolish.myBranchIDs().has(ch.ChannelID) &&
                     !state.expandedVirtual.has(ch.ChannelID));
         }
-        const expandable = state.clients.some((c) => c.channel_id === ch.ChannelID) ||
+        const expandable = state.clients.some((c) => c.channel_id === (ch.SystemKind === "home" ? 0 : ch.ChannelID)) ||
             (byParent.get(ch.ChannelID) || []).length > 0;
         if (expandable) el.setAttribute("aria-expanded", String(!collapsed));
         el.querySelector(".ch-disclosure").onclick = (event) => {
@@ -308,7 +310,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             if (expandable) setChannelExpanded(ch.ChannelID, collapsed);
         };
         if (!collapsed) {
-            const members = channelMembers(ch.ChannelID);
+            const members = channelMembers(isHome ? 0 : ch.ChannelID);
             if (members.length > 0) {
                 const list = document.createElement("div");
                 list.className = "channel-members";
@@ -338,7 +340,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
     async function reorderChannel(draggedID, target, tabID, generation) {
         if (draggedID === target.ChannelID) return;
         const dragged = state.channels.find((c) => c.ChannelID === draggedID);
-        if (!dragged) return;
+        if (!dragged || dragged.SystemKind || target.SystemKind) return;
         const reparent = (dragged.ParentID || 0) !== (target.ParentID || 0);
         const draggedPos = state.channels.findIndex((c) => c.ChannelID === draggedID);
         const targetPos = state.channels.findIndex((c) => c.ChannelID === target.ChannelID);

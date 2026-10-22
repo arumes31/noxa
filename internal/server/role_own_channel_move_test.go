@@ -100,3 +100,34 @@ func TestRoleSnapshotRetainsOwnMoveCauseAcrossQueuedStructuralEvents(t *testing.
 		t.Fatal("stale destination retained move cause")
 	}
 }
+
+func TestModeratorCanReturnMemberToHomeWithoutVoicePermission(t *testing.T) {
+	backend := serverRoleFixture()
+	backend.policy.Channels = append(backend.policy.Channels, authorization.ChannelPolicy{ChannelID: 2, SystemKind: "home"})
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority })
+	defer env.stop()
+	env.state.AddChannel(testChannel(1))
+	home := testChannel(2)
+	home.SystemKind = "home"
+	env.state.AddChannel(home)
+	conn, id := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = conn.Close() }()
+	if err = env.srv.moveClient(t.Context(), id, 1, id); err != nil {
+		t.Fatal(err)
+	}
+	evaluator, err := authorization.NewRoleEvaluator(backend.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = env.srv.moveRoleMember(t.Context(), evaluator, 2, "user-uid", "", netproto.MoveClient{ClientID: id, ChannelID: 2}); err != nil {
+		t.Fatal(err)
+	}
+	member, _ := env.state.GetClient(id)
+	if member.ChannelID != 0 || len(env.state.ChannelMembers(1)) != 0 {
+		t.Fatal("moderated member still in voice")
+	}
+}
