@@ -1,3 +1,4 @@
+import { maintainRelay } from "./relay-renewal.js";
 import { t } from "./i18n.js";
 import { captureConstraints, createRemoteAudioSource, makeLimiter, personalVolumeGain, getUserVolume, isUserMuted, getUserShareVolume, isUserShareMuted, renderMicStatus, VAD_RELEASE_MS } from "./audio.js";
 import { watchMicrophone, watchAudioOutput } from "./microphone-recovery.js";
@@ -40,6 +41,7 @@ function action(key, callback) {
     return button;
 }
 function closePeer(peer) {
+    peer.stopRelay?.();
     clearTimeout(peer.candidateTimer); clearTimeout(peer.connectTimer);
     peer.pc.onicecandidate = null; peer.pc.close();
     peer.audio.srcObject = null; peer.audio.remove();
@@ -404,6 +406,20 @@ function ensurePeer(owner, uid) {
     const peer = { pc, audio, started: false, chain: Promise.resolve(), localCandidates: [], remoteCandidates: [], localCandidateCount: 0, remoteCandidateCount: 0, descriptionSent: false, candidateTimer: null };
     peer.closeMedia = () => owner.media.closePeer(peer);
     owner.peers.set(uid, peer);
+    peer.stopRelay = maintainRelay(pc, {
+        app: app(), tabID: owner.tabID,
+        current: () => acceptedPeer(owner, uid) && owner.peers.get(uid) === peer,
+        restart: () => {
+            const task = peer.chain.catch(() => {}).then(async () => {
+                if (!acceptedPeer(owner, uid) || owner.peers.get(uid) !== peer || pc.signalingState !== "stable") return;
+                peer.localCandidateCount = 0; peer.localCandidates = []; peer.descriptionSent = false;
+                await pc.setLocalDescription(await pc.createOffer({ iceRestart: true }));
+                await sendDescription(owner, uid, pc);
+            });
+            peer.chain = task.catch(() => {});
+            return task;
+        },
+    });
     peer.connectTimer = setTimeout(() => {
         if (acceptedPeer(owner, uid) && owner.peers.get(uid) === peer && pc.connectionState !== "connected") failCall(owner, t("call.connecting"));
     }, 30000);
@@ -531,7 +547,12 @@ export async function privateCallSignal(signal) {
                 return;
             }
             if (description.type === "offer") {
-                if (owner.uid < signal.from || peer.pc.signalingState !== "stable") return;
+                if (peer.pc.signalingState !== "stable") {
+                    if (owner.uid < signal.from) return;
+                    await peer.pc.setLocalDescription({ type: "rollback" });
+                }
+                peer.remoteCandidateCount = 0; peer.localCandidateCount = 0;
+                peer.localCandidates = []; peer.descriptionSent = false;
                 await peer.pc.setRemoteDescription({ type: "offer", sdp: description.sdp });
                 answerCallMedia(peer);
                 // Reserve bidirectional microphone transport even if initial

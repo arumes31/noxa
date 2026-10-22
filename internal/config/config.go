@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"runtime"
@@ -221,6 +222,17 @@ type RecordingConfig struct {
 // TURN is only needed for clients behind restrictive NATs; when Secret is
 // empty no TURN entries are delivered to clients.
 type TURNConfig struct {
+	// Managed runs Pion in the control-server process. It excludes REST secrets.
+	Managed          bool     `mapstructure:"managed"`
+	ListenAddr       string   `mapstructure:"listen_addr"`
+	PublicIP         string   `mapstructure:"public_ip"`
+	RelayMinPort     uint16   `mapstructure:"relay_min_port"`
+	RelayMaxPort     uint16   `mapstructure:"relay_max_port"`
+	AllowedPeers     []string `mapstructure:"allowed_peers"`
+	AllowPublicPeers bool     `mapstructure:"allow_public_peers"`
+	MaxAllocations   int      `mapstructure:"max_allocations"`
+	BytesPerSecond   int      `mapstructure:"bytes_per_second"`
+
 	// Secret is the coturn static auth secret (use-auth-secret). Empty
 	// disables TURN credential minting.
 	Secret string `mapstructure:"secret"`
@@ -329,10 +341,19 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("chat_link_whitelist", "")
 
 	// TURN defaults: disabled (no secret) until coturn is deployed.
+	v.SetDefault("turn.managed", false)
+	v.SetDefault("turn.listen_addr", "0.0.0.0:12340")
+	v.SetDefault("turn.public_ip", "")
+	v.SetDefault("turn.relay_min_port", 12342)
+	v.SetDefault("turn.relay_max_port", 12597)
+	v.SetDefault("turn.allowed_peers", []string{})
+	v.SetDefault("turn.allow_public_peers", false)
+	v.SetDefault("turn.max_allocations", 256)
+	v.SetDefault("turn.bytes_per_second", 8388608)
 	v.SetDefault("turn.secret", "")
 	v.SetDefault("turn.realm", "noxa")
 	v.SetDefault("turn.uris", []string{})
-	v.SetDefault("turn.credentials_ttl", 24*time.Hour)
+	v.SetDefault("turn.credentials_ttl", time.Hour)
 
 	// Database pool defaults -------------------------------------------------
 	v.SetDefault("db_max_open_conns", 25)
@@ -624,6 +645,33 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("db_conn_max_lifetime %s must not be negative", c.DBConnMaxLifetime))
 	}
 
+	if c.TURN.Managed {
+		if c.TURN.CredentialsTTL != time.Hour {
+			errs = append(errs, errors.New("managed TURN credentials_ttl must be 1h"))
+		}
+		for _, uri := range c.TURN.URIs {
+			if strings.HasPrefix(uri, "turns:") {
+				errs = append(errs, errors.New("managed TURN currently supports turn: UDP/TCP, not turns: TLS"))
+			}
+		}
+		if !c.TLSEnabled || c.TURN.Secret != "" || len(c.TURN.URIs) == 0 || c.TURN.Realm == "" {
+			errs = append(errs, errors.New("managed TURN requires TLS control, realm and URIs, and excludes REST secrets"))
+		}
+		if ip := net.ParseIP(c.TURN.PublicIP); ip == nil || ip.To4() == nil || ip.IsUnspecified() {
+			errs = append(errs, errors.New("managed TURN requires a valid IPv4 public_ip"))
+		}
+		if err := validateAddress("turn.listen_addr", c.TURN.ListenAddr); err != nil {
+			errs = append(errs, err)
+		}
+		if c.TURN.RelayMinPort == 0 || c.TURN.RelayMinPort > c.TURN.RelayMaxPort || c.TURN.RelayMaxPort == 65535 || c.TURN.MaxAllocations < 1 || c.TURN.MaxAllocations > 100000 || c.TURN.BytesPerSecond < 65536 || c.TURN.BytesPerSecond > 1<<30 {
+			errs = append(errs, errors.New("invalid managed TURN limits"))
+		}
+		for _, address := range c.TURN.AllowedPeers {
+			if ap, err := netip.ParseAddrPort(address); err != nil || !ap.Addr().Is4() || ap.Port() == 0 {
+				errs = append(errs, errors.New("turn.allowed_peers requires exact IPv4:port endpoints"))
+			}
+		}
+	}
 	if c.TURN.CredentialsTTL <= 0 || c.TURN.CredentialsTTL > maxTURNCredentialsTTL {
 		errs = append(errs, fmt.Errorf(
 			"turn.credentials_ttl %s must be positive and no greater than %s",

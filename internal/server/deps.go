@@ -21,6 +21,7 @@ import (
 	"noxa/internal/recorder"
 	"noxa/internal/state"
 	"noxa/internal/store"
+	"noxa/internal/turn"
 	"noxa/internal/webrtc"
 )
 
@@ -236,6 +237,7 @@ type ScopeKeyStore interface {
 // "unavailable" error instead of panicking, which keeps the server usable in
 // tests and during partial startups.
 type Deps struct {
+	Relay          *turn.Manager
 	Auth           AuthBackend
 	State          *state.Manager
 	Channels       ChannelBackend

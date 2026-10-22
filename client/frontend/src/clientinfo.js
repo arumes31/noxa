@@ -1,3 +1,4 @@
+import { attachRelayActions } from "./relay-actions.js";
 import { originalAvatarSource } from "./avatar-playback.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 // clientinfo.js — right-click context menu on channel-tree users and the
@@ -220,6 +221,7 @@ function openContextMenu(x, y, client, trigger) {
     const copyDivider = document.createElement("div"); copyDivider.className = "ctx-divider";
     menuEl.append(copyDivider, menuEl.querySelector('[data-act="copy"]'));
     const menu = menuEl;
+    attachRelayActions(menu, client, tabID, () => menuEl === menu && V().state.activeTabID === tabID);
     mountContextMenu(menu, { x, y, trigger, resolveTrigger: replacementTrigger(trigger), onClose: () => { audioControls.dispose(); if (menuEl === menu) menuEl = null; } });
 }
 

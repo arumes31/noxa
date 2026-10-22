@@ -729,7 +729,12 @@ func run() (retErr error) {
 
 	// Start the TCP control listener, wired to the auth, state, channels,
 	// broadcast, roles, and voice backends.
+	var relayManager *turn.Manager
+	if cfg.TURN.Managed {
+		relayManager = turn.NewManager(cfg.TURN.Realm, cfg.TURN.MaxAllocations, cfg.TURN.BytesPerSecond)
+	}
 	tcpServer = server.New(cfg, logger, &server.Deps{
+		Relay:              relayManager,
 		Auth:               authSvc,
 		State:              stateManager,
 		Channels:           channelMgr,
@@ -793,6 +798,14 @@ func run() (retErr error) {
 		return fmt.Errorf("reconciling roles-v1 authorization before serving: %w", err)
 	}
 
+	if relayManager != nil {
+		closeRelay, err := turn.Listen(ctx, managedTURNConfig(cfg), relayManager)
+		if err != nil {
+			return fmt.Errorf("starting managed TURN: %w", err)
+		}
+		defer func() { _ = closeRelay() }()
+		go tcpServer.MaintainRelayAuthorization(ctx)
+	}
 	// ServerQuery accepts explicitly enabled roles-v1 integration accounts.
 	qBackend := &queryBackend{tcp: tcpServer}
 	queryServer := query.New(cfg.QueryAddr, logger, qBackend)
@@ -914,7 +927,7 @@ func iceServersProvider(cfg *config.Config, logger *zap.Logger) func(string) []n
 	if !turnEnabled && len(stun) == 0 {
 		return nil
 	}
-	if cfg.TURN.Secret != "" && !turnEnabled {
+	if !cfg.TURN.Managed && cfg.TURN.Secret != "" && !turnEnabled {
 		logger.Warn("turn.secret set but turn.uris is empty; TURN disabled")
 	}
 	return func(uniqueID string) []netproto.ICEServer {

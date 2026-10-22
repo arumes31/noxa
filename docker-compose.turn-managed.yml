@@ -1,0 +1,9 @@
+# Use with docker-compose.yml; do not enable the legacy coturn profile.
+# Set NOXA_TURN_MANAGED=true, NOXA_TURN_PUBLIC_IP and NOXA_TURN_URIS,
+# and leave TURN_SECRET/TURN_SECRET_FILE empty. Match overridden port ranges.
+services:
+  noxa:
+    ports:
+      - "12340:12340/udp"
+      - "12340:12340/tcp"
+      - "12342-12597:12342-12597/udp"

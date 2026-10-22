@@ -126,6 +126,11 @@ jobs:
       - run: npm run build
       - run: npm run test:build
       - run: npm run test:unit
+      - name: Verify TURN renewal and media continuity over UDP and TCP
+        working-directory: .
+        env:
+          NOXA_TURN_BROWSER: "1"
+        run: go test -count=1 -timeout=2m -run '^TestBrowserRelayContinuity$' -v ./internal/turn
       - name: Validate deterministic video workload and measurement counters
         working-directory: .
         run: node --test internal/webrtc/testdata/browser_desktop_workload.test.mjs internal/webrtc/testdata/browser_fanout_metrics.test.mjs internal/webrtc/testdata/browser_source_timing.test.mjs

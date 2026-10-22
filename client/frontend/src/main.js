@@ -1,3 +1,4 @@
+import { maintainRelay } from "./relay-renewal.js";
 import { manageAvatarPlayback } from "./avatar-playback.js";
 import { closeContextMenu } from "./context-menu.js";
 import { createConnectionOverlay } from "./connection-overlay.js";
@@ -2317,6 +2318,12 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     if (state.pc && state.pc !== pc) resetICERestart(state.pc);
     state.pc = pc;
     state.voiceTabID = tabID;
+    maintainRelay(pc, {
+        app: window.go.main.App, tabID,
+        current: () => current() && state.pc === pc,
+        restart: () => renegotiate(pc, state.serverGeneration, { iceRestart: true }, () => current() && state.pc === pc),
+        onFailure: () => { if (current() && state.pc === pc) scheduleICERestart(pc); },
+    });
     syncTrayVoice(); // joined: the tray leaves the gray "not in a channel" state
     // A queued event can run between the read helper returning and this
     // continuation installing the peer. Reconcile it after startup's offer.
