@@ -115,6 +115,7 @@ type Client struct {
 	authSigningKey   string // bound to the successful authentication attempt
 	deviceID         string // linked device of this session, if registered
 	webTransport     bool   // connected through the mobile web app
+	passkey          *passkeyCeremony
 	dmKeyRecord      string // signed directory record; never used for scope-key sealing
 
 	wmu contextMutex // serializes frame writes to Conn

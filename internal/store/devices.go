@@ -229,10 +229,18 @@ func (s *Store) RenameDevice(ctx context.Context, principal, deviceID, name stri
 	return d, nil
 }
 
+// revokingDevices wraps a revoking UPDATE ... RETURNING * so the same
+// statement deletes the revoked devices' passkeys and returns their rows.
+func revokingDevices(update string) string {
+	return `WITH revoked AS (` + update + `),
+		dropped AS (DELETE FROM webauthn_credentials w USING revoked WHERE w.device_id = revoked.device_id)
+		SELECT ` + deviceColumns + ` FROM revoked ORDER BY created_at, id`
+}
+
 // RevokeDevice revokes one active device of the principal.
 func (s *Store) RevokeDevice(ctx context.Context, principal, deviceID, reason string) (Device, error) {
-	d, err := scanDevice(s.db.QueryRowContext(ctx, `UPDATE user_devices SET revoked_at=now(), revoked_reason=$3
-		WHERE principal=$1 AND device_id=$2 AND revoked_at IS NULL RETURNING `+deviceColumns,
+	d, err := scanDevice(s.db.QueryRowContext(ctx, revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason=$3
+		WHERE principal=$1 AND device_id=$2 AND revoked_at IS NULL RETURNING *`),
 		principal, deviceID, reason))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrDeviceNotFound
@@ -246,8 +254,8 @@ func (s *Store) RevokeDevice(ctx context.Context, principal, deviceID, reason st
 // ResetDevices revokes every active device of the principal except keep
 // (may be empty) and returns the revoked devices.
 func (s *Store) ResetDevices(ctx context.Context, principal, keep, reason string) ([]Device, error) {
-	rows, err := s.db.QueryContext(ctx, `UPDATE user_devices SET revoked_at=now(), revoked_reason=$3
-		WHERE principal=$1 AND device_id<>$2 AND revoked_at IS NULL RETURNING `+deviceColumns,
+	rows, err := s.db.QueryContext(ctx, revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason=$3
+		WHERE principal=$1 AND device_id<>$2 AND revoked_at IS NULL RETURNING *`),
 		principal, keep, reason)
 	if err != nil {
 		return nil, fmt.Errorf("resetting devices: %w", err)
@@ -284,8 +292,8 @@ func (s *Store) ExpireIdleDevices(ctx context.Context, warnBefore, revokeBefore 
 		}
 		return out, rows.Err()
 	}
-	revoked, err = collect(`UPDATE user_devices SET revoked_at=now(), revoked_reason='idle'
-		WHERE revoked_at IS NULL AND NOT first_device AND last_seen_at < $1 RETURNING `+deviceColumns, revokeBefore)
+	revoked, err = collect(revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason='idle'
+		WHERE revoked_at IS NULL AND NOT first_device AND last_seen_at < $1 RETURNING *`), revokeBefore)
 	if err != nil {
 		return nil, nil, fmt.Errorf("revoking idle devices: %w", err)
 	}

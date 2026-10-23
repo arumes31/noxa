@@ -289,6 +289,8 @@ func (s *TCPServer) handleDeviceRequest(ctx context.Context, client *Client, f *
 			return s.handleLinkClaim(ctx, client, r)
 		case netproto.DeviceActionLinkStatus:
 			return s.handleLinkStatus(client, r)
+		case netproto.DeviceActionPasskeyLoginBegin, netproto.DeviceActionPasskeyLoginFinish:
+			return s.handlePasskeyRequest(ctx, client, r)
 		}
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotAuthenticated, "not authenticated")
 	}
@@ -297,6 +299,10 @@ func (s *TCPServer) handleDeviceRequest(ctx context.Context, client *Client, f *
 	}
 	principal := client.uniqueID()
 	switch r.Action {
+	case netproto.DeviceActionPasskeyRegisterBegin, netproto.DeviceActionPasskeyRegisterFinish, netproto.DeviceActionPasskeyDelete:
+		return s.handlePasskeyRequest(ctx, client, r)
+	case netproto.DeviceActionPasskeyLoginBegin, netproto.DeviceActionPasskeyLoginFinish:
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "already authenticated")
 	case netproto.DeviceActionList:
 		if _, err := s.ensureDesktopDevice(ctx, client); err != nil && !errors.Is(err, store.ErrDeviceNotFound) && !errors.Is(err, store.ErrDeviceLimit) {
 			return s.deviceFailure(ctx, client, err)
@@ -309,6 +315,13 @@ func (s *TCPServer) handleDeviceRequest(ctx context.Context, client *Client, f *
 		current := client.currentDeviceID()
 		for _, d := range devices {
 			out.Devices = append(out.Devices, deviceInfo(d, current))
+		}
+		if keys, ok := s.passkeyStore(); ok {
+			rows, err := keys.Passkeys(ctx, principal)
+			if err != nil {
+				return s.deviceFailure(ctx, client, err)
+			}
+			out.Passkeys = passkeyInfos(rows)
 		}
 		return s.writeMessage(client, netproto.MsgDeviceResult, out)
 	case netproto.DeviceActionRename:

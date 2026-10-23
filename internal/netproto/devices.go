@@ -3,6 +3,7 @@ package netproto
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/json"
 	"encoding/hex"
 	"strings"
 )
@@ -24,7 +25,18 @@ const (
 	DeviceActionLinkDecide = "link_decide"
 	DeviceActionLinkClaim  = "link_claim"
 	DeviceActionLinkStatus = "link_status"
+
+	// Passkeys. Registration needs a signed-in linked device; login runs
+	// before authentication and links the calling device to the account.
+	DeviceActionPasskeyRegisterBegin  = "passkey_register_begin"
+	DeviceActionPasskeyRegisterFinish = "passkey_register_finish"
+	DeviceActionPasskeyLoginBegin     = "passkey_login_begin"
+	DeviceActionPasskeyLoginFinish    = "passkey_login_finish"
+	DeviceActionPasskeyDelete         = "passkey_delete"
 )
+
+// MaxWebAuthnPayload bounds WebAuthn options and responses in device frames.
+const MaxWebAuthnPayload = 16 << 10
 
 // Link states reported by link_status and link events.
 const (
@@ -64,16 +76,30 @@ type DeviceRequest struct {
 	Ed25519PublicKey string `json:"ed25519_public_key,omitempty"`
 	X25519PublicKey  string `json:"x25519_public_key,omitempty"`
 	Platform         string `json:"platform,omitempty"`
+
+	// Passkeys: the browser's WebAuthn response, and the passkey to delete
+	// (base64url credential ID).
+	WebAuthn  json.RawMessage `json:"webauthn,omitempty"`
+	PasskeyID string          `json:"passkey_id,omitempty"`
 }
 
 // Valid checks the action-specific shape; handlers check authorization.
 func (r DeviceRequest) Valid() bool {
 	if len(r.Name) > 256 || len(r.Platform) > 128 || len(r.Code) > 16 || len(r.LinkID) > 64 ||
 		len(r.DeviceID) > 64 || len(r.Proof) > 64 || len(r.Signature) > 128 ||
-		len(r.Ed25519PublicKey) > 512 || len(r.X25519PublicKey) > 128 {
+		len(r.Ed25519PublicKey) > 512 || len(r.X25519PublicKey) > 128 ||
+		len(r.WebAuthn) > MaxWebAuthnPayload || len(r.PasskeyID) > 1400 {
 		return false
 	}
 	switch r.Action {
+	case DeviceActionPasskeyRegisterBegin, DeviceActionPasskeyLoginBegin:
+		return len(r.WebAuthn) == 0 && r.DeviceID == "" && r.LinkID == ""
+	case DeviceActionPasskeyRegisterFinish:
+		return len(r.WebAuthn) > 0
+	case DeviceActionPasskeyLoginFinish:
+		return len(r.WebAuthn) > 0 && r.Ed25519PublicKey != "" && r.X25519PublicKey != ""
+	case DeviceActionPasskeyDelete:
+		return r.PasskeyID != ""
 	case DeviceActionList, DeviceActionLinkCreate:
 		return r.DeviceID == "" && r.LinkID == ""
 	case DeviceActionRename:
@@ -110,11 +136,23 @@ type DeviceInfo struct {
 	RevokedAt      int64  `json:"revoked_at,omitempty"`
 }
 
+// PasskeyInfo describes one of the account's passkeys.
+type PasskeyInfo struct {
+	PasskeyID  string `json:"passkey_id"` // base64url credential ID
+	Name       string `json:"name"`
+	DeviceID   string `json:"device_id"` // the device that registered it
+	CreatedAt  int64  `json:"created_at"`
+	LastUsedAt int64  `json:"last_used_at,omitempty"`
+}
+
 // DeviceResult answers a DeviceRequest.
 type DeviceResult struct {
-	Action  string       `json:"action"`
-	Devices []DeviceInfo `json:"devices,omitempty"`
-	Device  *DeviceInfo  `json:"device,omitempty"`
+	Action   string        `json:"action"`
+	Devices  []DeviceInfo  `json:"devices,omitempty"`
+	Device   *DeviceInfo   `json:"device,omitempty"`
+	Passkeys []PasskeyInfo `json:"passkeys,omitempty"`
+	// WebAuthn carries creation or request options for navigator.credentials.
+	WebAuthn json.RawMessage `json:"webauthn,omitempty"`
 
 	// Linking.
 	LinkID    string `json:"link_id,omitempty"`
