@@ -154,6 +154,9 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid credentials"})
 	}
 
+	client.mu.Lock()
+	client.authSigningKey = ""
+	client.mu.Unlock()
 	// Bind the client's identity key so future challenge logins work.
 	if msg.PublicKey != "" {
 		if err := s.deps.Auth.BindPublicKey(ctx, user.ID, msg.PublicKey); err != nil {
@@ -161,6 +164,10 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 				zap.String("client_id", client.ID),
 				zap.Error(err),
 			)
+		} else {
+			client.mu.Lock()
+			client.authSigningKey = msg.PublicKey
+			client.mu.Unlock()
 		}
 	}
 	attempt.Succeed(principalScope)
@@ -217,7 +224,7 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 	}
 	defer attempt.Cancel()
 
-	verified, err := s.deps.Auth.AuthenticateChallenge(ctx, msg.UniqueID, challenge, msg.Signature)
+	verifiedKey, verified, err := s.deps.Auth.AuthenticateIdentityChallenge(ctx, msg.UniqueID, challenge, msg.Signature)
 	if err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
 			attempt.Fail()
@@ -236,6 +243,9 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid credentials"})
 	}
 
+	client.mu.Lock()
+	client.authSigningKey = verifiedKey
+	client.mu.Unlock()
 	attempt.Succeed(principalScope)
 	return s.completeAuth(ctx, client, msg.UniqueID, nickname)
 }
@@ -286,6 +296,10 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid credentials"})
 	}
+
+	client.mu.Lock()
+	client.authSigningKey = msg.PublicKey
+	client.mu.Unlock()
 
 	// Registered user with this identity? Then it is a normal login.
 	if _, err := s.deps.Auth.LookupUser(ctx, uniqueID); err == nil {

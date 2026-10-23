@@ -68,7 +68,7 @@ func TestPeerPubKeyCoalescesConcurrentDirectoryFetch(t *testing.T) {
 		requests <- struct{}{}
 		_ = netproto.WriteFrame(server, mustEncode(netproto.MsgKeyResponse, netproto.KeyResponse{
 			UniqueID:  "peer",
-			PublicKey: base64.StdEncoding.EncodeToString(peer[:]),
+			PublicKey: testPeerRecord(t, "peer", peer),
 		}))
 	}()
 

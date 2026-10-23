@@ -1092,9 +1092,10 @@ type ScreenShare struct {
 	MaxHeight    int  `json:"max_height,omitempty"`
 }
 
-// KeyPublish publishes the client's X25519 public key (base64, 32 bytes) to
-// the server directory. Registered users persist it; guests keep it in
-// server memory for their session.
+// KeyPublish publishes a noxa-dm-key-v1 signed identity record. The signed
+// UID, Ed25519 identity and X25519 key travel intact through directory, DM
+// bindings and call snapshots. Legacy raw keys remain unreadable to clients
+// that require identity verification.
 type KeyPublish struct {
 	PublicKey string `json:"public_key"`
 }

@@ -26,6 +26,7 @@ import (
 	"noxa/internal/channels"
 	"noxa/internal/chatcrypto"
 	"noxa/internal/config"
+	"noxa/internal/e2ee"
 	"noxa/internal/eventbus"
 	"noxa/internal/metrics"
 	"noxa/internal/netproto"
@@ -92,6 +93,14 @@ func (f *fakeAuth) AuthenticateIdentifier(_ context.Context, identifier, passwor
 		return nil, nil
 	}
 	return u, nil
+}
+
+func (f *fakeAuth) AuthenticateIdentityChallenge(ctx context.Context, uid string, challenge, signature []byte) (string, bool, error) {
+	ok, err := f.AuthenticateChallenge(ctx, uid, challenge, signature)
+	if !ok || err != nil {
+		return "", ok, err
+	}
+	return f.pubkeys[uid], true, nil
 }
 
 func (f *fakeAuth) AuthenticateChallenge(_ context.Context, uniqueID string, challenge, signature []byte) (bool, error) {
@@ -2041,6 +2050,22 @@ func TestChallengeAuthHandshake(t *testing.T) {
 		t.Fatalf("auth response = %+v, want OK uniqueID %q nickname keyuser", resp, uid)
 	}
 	readOfType(t, conn, netproto.MsgSnapshot)
+	key, _ := testX25519(t)
+	signer, _ := auth.LoadPrivateKey(privPEM)
+	record, err := e2ee.SignKeyRecord(uid, key, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send(t, conn, netproto.MsgKeyPublish, netproto.KeyPublish{PublicKey: record})
+	// This account cannot read global chat; use a ping fence to detect rejection.
+	send(t, conn, netproto.MsgPing, netproto.Ping{})
+	fence := readChatSendFence(conn, nil)
+	if fence.err != nil || len(fence.errors) != 0 {
+		t.Fatalf("signed publish after challenge: %+v", fence)
+	}
+	if got, _ := env.srv.senderDMKey(mustServerClient(t, env, resp.ClientID)); got != record {
+		t.Fatal("challenge identity not retained")
+	}
 }
 
 // TestChallengeAuthBadSignature verifies that a wrong signature is rejected.

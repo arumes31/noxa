@@ -104,9 +104,10 @@ type connManager struct {
 	id *identity
 
 	// E2EE chat (wave 4b): peer key cache + per-scope channel keys.
-	pubKeys    *pubKeyCache
-	scopeKeys  *scopeKeyStore
-	decryptSem chan struct{}
+	pubKeys           *pubKeyCache
+	scopeKeys         *scopeKeyStore
+	confirmPeerChange func(server, uid, oldFingerprint, newFingerprint string) bool
+	decryptSem        chan struct{}
 
 	// debugFrames tees frame summaries to the "debug_frame" event (327 debug
 	// console) when enabled.
@@ -180,6 +181,7 @@ const (
 func newConnManager(wailsCtx context.Context) *connManager {
 	return &connManager{
 		sink:                wailsSink{ctx: wailsCtx},
+		confirmPeerChange:   nativePeerConfirmation(wailsCtx),
 		pending:             make(map[netproto.MessageType]pendingRequest),
 		requestGates:        make(map[netproto.MessageType]*sync.Mutex),
 		heartbeatInterval:   defaultHeartbeatInterval,
@@ -515,7 +517,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	// Establishment writes happen before the transport becomes externally
 	// installed. If the peer closes after auth but before KeyPublish, Connect
 	// fails cleanly with no disconnected event and no reader/heartbeat loops.
-	if err := m.publishE2EKeyConn(conn); err != nil {
+	if err := m.publishE2EKeyConn(conn, resp.UniqueID); err != nil {
 		_ = conn.Close()
 		return "e2e key publish failed: " + err.Error()
 	}

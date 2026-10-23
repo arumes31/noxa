@@ -62,6 +62,9 @@ func TestDirectMessageBindsAuthenticatedDeviceKeys(t *testing.T) {
 	env.state.SetE2EPublicKey(senderID, b64e(senderKey[:]))
 	env.state.SetE2EPublicKey(receiverID, b64e(receiverKey[:]))
 	env.state.SetE2EPublicKey(otherID, b64e(otherKey[:]))
+	if err := env.auth.SetE2EPublicKey(t.Context(), 2, b64e(receiverKey[:])); err != nil {
+		t.Fatal(err)
+	}
 	send(t, sender, netproto.MsgChatSend, map[string]any{
 		"ack_requested": true, "client_msg_id": "bound-one", "to_unique_id": "user-uid", "enc": true,
 		"text": "ciphertext", "recipient_public_key": b64e(receiverKey[:]), "sender_public_key": b64e(otherKey[:]),

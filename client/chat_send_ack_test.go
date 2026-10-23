@@ -39,7 +39,7 @@ func TestRoleChatSendWaitsForAcceptance(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				cm.pubKeys.put("peer", public)
+				cacheTestPeer(t, cm, "peer", public)
 				target = "peer"
 			}
 			app.tabs = map[string]*tabState{"a": {cm: cm}}
@@ -118,7 +118,7 @@ func TestRoleChatSendAcceptance(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					cm.pubKeys.put("peer", public)
+					cacheTestPeer(t, cm, "peer", public)
 					sendScope, target = "direct", "peer"
 				}
 				app.tabs = map[string]*tabState{"a": {cm: cm}}

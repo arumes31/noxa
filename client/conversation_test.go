@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -40,7 +39,7 @@ func TestConversationSendResolvesColdGroupThroughKeyRateLimit(t *testing.T) {
 				return netproto.MsgError, map[string]any{"code": 2, "message": "key lookup rate limit exceeded — slow down", "origin_type": uint16(netproto.MsgKeyRequest), "retry_after_ms": time.Until(reset).Milliseconds() + 1}, true
 			}
 			used++
-			return netproto.MsgKeyResponse, netproto.KeyResponse{UniqueID: request.UniqueID, PublicKey: base64.StdEncoding.EncodeToString(pub[:])}, true
+			return netproto.MsgKeyResponse, netproto.KeyResponse{UniqueID: request.UniqueID, PublicKey: signedTestRecord(t, request.UniqueID, pub, peer)}, true
 		}
 		var request netproto.ConversationRequest
 		_ = netproto.Decode(frame, &request)

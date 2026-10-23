@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -94,12 +93,12 @@ func TestStaleKeyRetryNeverFallsBack(t *testing.T) {
 	cm.authorizationModel = netproto.AuthorizationModelRolesV1
 	cm.mu.Unlock()
 	cm.scopeKeys.put(0, 5, [32]byte{9})
-	cm.pubKeys.put("peer", oldKey)
+	cacheTestPeer(t, cm, "peer", oldKey)
 	result := app.SendChat("direct", "peer", "secret")
 	if result != errPeerNoE2EKey.Error() || len(sent) != 1 {
 		t.Fatalf("result=%q sends=%d", result, len(sent))
 	}
-	if sent[0].RecipientPublicKey != base64.StdEncoding.EncodeToString(oldKey[:]) || sent[0].KeyID != 0 {
+	if sent[0].RecipientPublicKey != testPeerRecord(t, "peer", oldKey) || sent[0].KeyID != 0 {
 		t.Fatal("first send was not end-to-end")
 	}
 }

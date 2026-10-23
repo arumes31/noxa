@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"testing"
 
@@ -27,8 +26,8 @@ func TestPrivateCallUsesPinnedParticipantDeviceKeys(t *testing.T) {
 				if err != nil {
 					t.Error(err)
 				}
-				own := map[string]any{"unique_id": "me", "client_id": "mine", "state": "accepted", "public_key": base64.StdEncoding.EncodeToString(ownPub[:])}
-				peer := map[string]any{"unique_id": "peer", "client_id": "peer-device", "state": "accepted", "public_key": base64.StdEncoding.EncodeToString(peerPub[:])}
+				own := map[string]any{"unique_id": "me", "client_id": "mine", "state": "accepted", "public_key": signedTestRecord(t, "me", ownPub, cm.id)}
+				peer := map[string]any{"unique_id": "peer", "client_id": "peer-device", "state": "accepted", "public_key": testPeerRecord(t, "peer", peerPub)}
 				call := map[string]any{"id": "call", "caller": "me", "revision": 2, "key_binding": true, "participants": []any{own, peer}}
 				switch mode {
 				case "legacy":
@@ -40,7 +39,7 @@ func TestPrivateCallUsesPinnedParticipantDeviceKeys(t *testing.T) {
 				case "malformed peer":
 					peer["public_key"] = "invalid"
 				case "wrong own":
-					own["public_key"] = base64.StdEncoding.EncodeToString(wrongPub[:])
+					own["public_key"] = signedTestRecord(t, "me", wrongPub, cm.id)
 				case "partial without flag":
 					delete(call, "key_binding")
 					delete(peer, "public_key")
@@ -58,7 +57,7 @@ func TestPrivateCallUsesPinnedParticipantDeviceKeys(t *testing.T) {
 			cm.mu.Lock()
 			cm.uniqueID, cm.clientID = "me", "mine"
 			cm.mu.Unlock()
-			cm.pubKeys.put("peer", peerPub)
+			cacheTestPeer(t, cm, "peer", peerPub)
 			if mode == "bound" {
 				cm.pubKeys.put("peer", wrongPub)
 			}

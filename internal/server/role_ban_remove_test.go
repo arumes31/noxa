@@ -209,3 +209,16 @@ func TestBanRemovalIssuerHierarchy(t *testing.T) {
 		}
 	}
 }
+
+func TestBanRemovalAllowsOnlyStrictlyLowerIssuerRole(t *testing.T) {
+	backend := serverRoleFixture()
+	backend.policy.Roles = append(backend.policy.Roles, authorization.Role{ID: 20, Name: "Moderator", Position: 10}, authorization.Role{ID: 30, Name: "Junior", Position: 5})
+	backend.policy.Members = []authorization.RoleMember{{UserID: 1, RoleIDs: []int64{20}}, {UserID: 3, RoleIDs: []int64{30}}, {UserID: 4, RoleIDs: []int64{20}}}
+	evaluator, err := authorization.NewRoleEvaluator(backend.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !canRemoveIssuedBan(evaluator, 1, 3) || canRemoveIssuedBan(evaluator, 3, 1) || canRemoveIssuedBan(evaluator, 1, 4) {
+		t.Fatal("issuer hierarchy violated")
+	}
+}

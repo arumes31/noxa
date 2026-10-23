@@ -38,8 +38,8 @@ func (fakeAuth) AuthenticateIdentifier(_ context.Context, identifier, password s
 	return &auth.User{ID: 1, UniqueID: identifier, Nickname: "loadtest"}, nil
 }
 
-func (fakeAuth) AuthenticateChallenge(context.Context, string, []byte, []byte) (bool, error) {
-	return false, nil
+func (fakeAuth) AuthenticateIdentityChallenge(context.Context, string, []byte, []byte) (string, bool, error) {
+	return "", false, nil
 }
 
 func (fakeAuth) AuthenticateNickname(context.Context, string, string) (*auth.User, error) {

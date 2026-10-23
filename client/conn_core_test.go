@@ -39,6 +39,9 @@ func (s *recordingSink) count(name string) int {
 func newTestConnManager() *connManager {
 	cm := newConnManager(context.Background())
 	cm.sink = nil
+	cm.confirmPeerChange = nil
+	cm.addr = "test.invalid:9987"
+	cm.id, _ = newIdentity("Test")
 	return cm
 }
 

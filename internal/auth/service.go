@@ -131,23 +131,30 @@ func (a *AuthService) AuthenticatePassword(ctx context.Context, uniqueID, passwo
 // verifies the Ed25519 signature over the challenge. It returns true on success
 // and false (with a nil error) on a signature mismatch. Every call verifies.
 func (a *AuthService) AuthenticateChallenge(ctx context.Context, uniqueID string, challenge, signature []byte) (bool, error) {
+	_, ok, err := a.AuthenticateIdentityChallenge(ctx, uniqueID, challenge, signature)
+	return ok, err
+}
+
+// AuthenticateIdentityChallenge returns the exact identity used for verification,
+// avoiding a second lookup that could race an account key replacement.
+func (a *AuthService) AuthenticateIdentityChallenge(ctx context.Context, uniqueID string, challenge, signature []byte) (string, bool, error) {
 	var pubPEM string
 	const q = `SELECT public_key FROM users WHERE unique_id = $1`
 	err := a.store.DB().QueryRowContext(ctx, q, uniqueID).Scan(&pubPEM)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, ErrUserNotFound
+			return "", false, ErrUserNotFound
 		}
-		return false, fmt.Errorf("querying user public key: %w", err)
+		return "", false, fmt.Errorf("querying user public key: %w", err)
 	}
 	if pubPEM == "" {
-		return false, nil
+		return "", false, nil
 	}
 
 	if err := VerifyChallenge(pubPEM, challenge, signature); err != nil {
-		return false, nil
+		return "", false, nil
 	}
-	return true, nil
+	return pubPEM, true, nil
 }
 
 // User holds the identity fields the server needs after a successful

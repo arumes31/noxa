@@ -982,3 +982,28 @@ The server runs bounded housekeeping at startup and every five minutes:
 - Audit events: 180 days, including daily aggregates. Daily aggregates retain the cutoff calendar day in UTC.
 
 Each pass removes at most 500 rows per database table and 128 recording files, and scans at most 128 recording directory entries. Existing backlogs therefore expire gradually. Housekeeping uses indexed queries, skips locked rows, has a bounded execution context, and runs independently of chat and audio requests. Shutdown cancels and joins the worker before closing storage. These limits apply to the live database and recording directory; independently retained backups are not rewritten.
+
+### Direct-message identity verification
+
+Updated desktop clients require a signed encryption identity for direct messages,
+private-group recipients and private-call device keys. The Ed25519 signature binds
+an account's canonical UID to its X25519 key; signatures travel with directory
+responses, live/offline DM bindings and call snapshots. The server checks signed
+publication against the identity used by that authenticated session. Channel keys
+continue to use the raw X25519 handshake key for server-readable channel chat.
+
+The desktop stores the first verified signing fingerprint per local identity,
+server destination and contact. This is trust on first use: verify fingerprints
+through another trusted channel when establishing an important contact. A later
+signing-identity change blocks the contact, including after restarting the client.
+Sending or calling offers an explicit dialog showing both fingerprints; Cancel
+keeps the block. Rotating an encryption key under the same signing identity does
+not reset trust. A damaged or unwritable trust store fails closed. Retired identities
+cannot silently replace a confirmed identity through delayed message delivery.
+
+Older peers publishing only unsigned encryption keys must update before an updated
+client can exchange private messages or calls with them. Unverifiable historical
+DM bindings are shown as unavailable rather than marked verified. This change does
+not add forward secrecy: current message bodies still use static X25519 and
+XSalsa20-Poly1305. Channel passwords restrict voice entry; chat and files use the
+channel's Permissions policy.

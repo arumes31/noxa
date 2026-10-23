@@ -112,6 +112,8 @@ type Client struct {
 	x25519Key string
 	// Retained only after successful guest proof, for explicit role enrollment.
 	verifiedGuestKey string
+	authSigningKey   string // bound to the successful authentication attempt
+	dmKeyRecord      string // signed directory record; never used for scope-key sealing
 
 	wmu contextMutex // serializes frame writes to Conn
 	// Role-mode member operations lock after acquiring the policy lease, so

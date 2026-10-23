@@ -42,6 +42,9 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed chat_send: "+err.Error())
 	}
+	if msg.ToUniqueID != "" && msg.ToClientID != "" {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "choose a single direct-message destination")
+	}
 	if msg.AckRequested && !validAcknowledgedChat(msg) {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid acknowledged chat destination or reference")
 	}
@@ -124,6 +127,16 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, errServerSealedDM)
 	}
 
+	if msg.ToUniqueID == "" {
+		s.roleMetadataMu.Lock()
+		defer s.roleMetadataMu.Unlock()
+		lease := ctx.Value(roleLeaseKey{}).(roleLease)
+		target, exists := s.clientByID(msg.ToClientID)
+		if !exists || !target.isAuthed() || !s.rolePokeTargetVisible(lease.evaluator, client, msg.ToClientID) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not reachable")
+		}
+	}
+
 	// Direct messages are relayed without moderation.
 	chat := netproto.ChatBroadcast{
 		Direct:       true,
@@ -193,12 +206,34 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 	// the online session before consulting account storage for offline spooling.
 	tc, _ := s.clientByUniqueID(msg.ToUniqueID)
 	if msg.RecipientPublicKey != "" {
+		// Check the same durable record for online and offline accounts.
+		// A matching live device is a delivery optimization, not a key oracle.
+		if s.deps.Auth != nil {
+			stored, err := s.deps.Auth.GetE2EPublicKey(ctx, msg.ToUniqueID)
+			if err != nil && !errors.Is(err, auth.ErrUserNotFound) {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "recipient encryption key unavailable")
+			}
+			if tc == nil || tc.userID() > 0 {
+				key, valid := canonicalDMKey(stored)
+				if !valid || key != msg.RecipientPublicKey {
+					return s.rejectStaleDMKey(client)
+				}
+			}
+		}
 		var online bool
 		tc, online = s.boundDMRecipient(msg.ToUniqueID, "", msg.RecipientPublicKey)
 		if tc == nil && online {
-			return s.rejectStaleDMKey(client)
+			// Registered recipients can receive on their matching device later.
+			// Guests have no durable mailbox.
+			if s.deps.Auth == nil {
+				return s.rejectStaleDMKey(client)
+			}
+			if user, err := s.deps.Auth.LookupUser(ctx, msg.ToUniqueID); err != nil || user == nil {
+				return s.rejectStaleDMKey(client)
+			}
 		}
 	}
+
 	if tc != nil {
 		if err := s.deps.Broadcast.BroadcastToClient(tc.ID, payload); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not reachable")

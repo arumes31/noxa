@@ -35,6 +35,8 @@ import (
 	"golang.org/x/crypto/nacl/box"
 	"golang.org/x/crypto/nacl/secretbox"
 
+	"noxa/internal/auth"
+	"noxa/internal/e2ee"
 	securee2ee "noxa/internal/e2ee"
 	"noxa/internal/netproto"
 	"noxa/internal/safecast"
@@ -165,6 +167,7 @@ type pubKeyFlight struct {
 
 type pubKeyEntry struct {
 	key       [32]byte
+	record    string
 	expiresAt time.Time
 	used      uint64
 }
@@ -216,13 +219,18 @@ func (c *pubKeyCache) forgetKey(uid string, rejected [32]byte) {
 
 // putAt admits a fetch result only if its connection epoch is still current.
 // An old leader completing after reconnect must never repopulate this cache.
-func (c *pubKeyCache) putAt(uid string, key [32]byte, epoch uint64) bool {
+func (c *pubKeyCache) putAt(uid string, key [32]byte, epoch uint64, record ...string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.epoch != epoch {
 		return false
 	}
 	c.putLocked(uid, key)
+	if len(record) > 0 {
+		entry := c.keys[uid]
+		entry.record = record[0]
+		c.keys[uid] = entry
+	}
 	return true
 }
 
@@ -659,7 +667,7 @@ func openFileLimited(blob []byte, key [32]byte, maxBytes int) ([]byte, error) {
 // publishE2EKeyConn publishes the client's X25519 public key during
 // establishment. It deliberately writes the not-yet-installed connection so
 // a failure cannot emit a spurious disconnect or start stale background loops.
-func (m *connManager) publishE2EKeyConn(conn net.Conn) error {
+func (m *connManager) publishE2EKeyConn(conn net.Conn, uid string) error {
 	id, err := m.identity()
 	if err != nil {
 		return err
@@ -668,9 +676,15 @@ func (m *connManager) publishE2EKeyConn(conn net.Conn) error {
 	if err != nil {
 		return err
 	}
-	return m.writeConn(conn, netproto.MsgKeyPublish, netproto.KeyPublish{
-		PublicKey: base64.StdEncoding.EncodeToString(pub[:]),
-	})
+	private, err := auth.LoadPrivateKey(id.PrivateKey)
+	if err != nil {
+		return err
+	}
+	record, err := e2ee.SignKeyRecord(uid, pub, private)
+	if err != nil {
+		return err
+	}
+	return m.writeConn(conn, netproto.MsgKeyPublish, netproto.KeyPublish{PublicKey: record})
 }
 
 // x25519PublicB64 returns the client's X25519 public key for the auth
@@ -803,23 +817,35 @@ const (
 func (m *connManager) lookupPeerPubKey(uniqueID string) ([32]byte, peerKeyLookup) {
 	cachedKey, cached, leader, done, epoch := m.pubKeys.getOrClaimFetch(uniqueID)
 	if cached {
-		return cachedKey, peerKeyFound
+		if m.verifiedCachedPeer(uniqueID, cachedKey) {
+			return cachedKey, peerKeyFound
+		}
+		return m.lookupPeerPubKey(uniqueID)
 	}
 	if !leader {
 		<-done
 		if key, ok := m.pubKeys.get(uniqueID); ok {
-			return key, peerKeyFound
+			if m.verifiedCachedPeer(uniqueID, key) {
+				return key, peerKeyFound
+			}
+			return [32]byte{}, peerKeyFailed
 		}
 		// The leader's outcome is not shared; ask once more on the same
 		// connection generation, so an absent key is still reported as such.
 		cachedKey, cached, leader, done, epoch = m.pubKeys.getOrClaimFetch(uniqueID)
 		if cached {
-			return cachedKey, peerKeyFound
+			if m.verifiedCachedPeer(uniqueID, cachedKey) {
+				return cachedKey, peerKeyFound
+			}
+			return m.lookupPeerPubKey(uniqueID)
 		}
 		if !leader {
 			<-done
 			if key, ok := m.pubKeys.get(uniqueID); ok {
-				return key, peerKeyFound
+				if m.verifiedCachedPeer(uniqueID, key) {
+					return key, peerKeyFound
+				}
+				return [32]byte{}, peerKeyFailed
 			}
 			return [32]byte{}, peerKeyFailed
 		}
@@ -830,6 +856,16 @@ func (m *connManager) lookupPeerPubKey(uniqueID string) ([32]byte, peerKeyLookup
 	m.mu.Lock()
 	conn := m.conn
 	m.mu.Unlock()
+	pinPath, pinServer, err := m.peerPinPath(uniqueID)
+	if err != nil {
+		return [32]byte{}, peerKeyFailed
+	}
+	m.mu.Lock()
+	sameConnection := m.conn == conn
+	m.mu.Unlock()
+	if !sameConnection {
+		return [32]byte{}, peerKeyFailed
+	}
 	deadline := time.Now().Add(10 * time.Second)
 	var f *netproto.Frame
 	for attempt := 0; ; attempt++ {
@@ -867,13 +903,11 @@ func (m *connManager) lookupPeerPubKey(uniqueID string) ([32]byte, peerKeyLookup
 	if resp.PublicKey == "" {
 		return [32]byte{}, peerKeyAbsent
 	}
-	raw, err := base64.StdEncoding.DecodeString(resp.PublicKey)
-	if err != nil || len(raw) != 32 {
+	k, err := m.verifyPeerRecordAt(uniqueID, resp.PublicKey, true, pinPath, pinServer)
+	if err != nil {
 		return [32]byte{}, peerKeyFailed
 	}
-	var k [32]byte
-	copy(k[:], raw)
-	if !m.pubKeys.putAt(uniqueID, k, epoch) {
+	if !m.pubKeys.putAt(uniqueID, k, epoch, resp.PublicKey) {
 		return [32]byte{}, peerKeyFailed
 	}
 	return k, peerKeyFound
@@ -908,8 +942,12 @@ func (m *connManager) encryptChat(scope, target, text string) (netproto.ChatSend
 		if err != nil {
 			return netproto.ChatSend{}, err
 		}
+		record := m.pubKeys.recordFor(uniqueID, peer)
+		if record == "" {
+			return netproto.ChatSend{}, errors.New("encryption identity changed during send; retry")
+		}
 		// (124) client-generated ref for delivery/read receipts.
-		return netproto.ChatSend{ToUniqueID: uniqueID, Text: blob, Enc: true, ClientMsgID: newClientMsgID(), RecipientPublicKey: base64.StdEncoding.EncodeToString(peer[:])}, nil
+		return netproto.ChatSend{ToUniqueID: uniqueID, Text: blob, Enc: true, ClientMsgID: newClientMsgID(), RecipientPublicKey: record}, nil
 
 	case "channel":
 		var channelID int64
@@ -1262,8 +1300,9 @@ func (m *connManager) decryptDMAsync(chat netproto.ChatBroadcast, payload string
 	var peer [32]byte
 	ok := false
 	if chat.SenderPublicKey != "" || chat.RecipientPublicKey != "" {
-		sender, senderOK := parseDMPublicKey(chat.SenderPublicKey)
-		recipient, recipientOK := parseDMPublicKey(chat.RecipientPublicKey)
+		sender, senderErr := m.verifyMessageKey(chat.FromUniqueID, chat.SenderPublicKey, ownUID, pub)
+		recipient, recipientErr := m.verifyMessageKey(chat.ToUniqueID, chat.RecipientPublicKey, ownUID, pub)
+		senderOK, recipientOK := senderErr == nil, recipientErr == nil
 		if senderOK && recipientOK {
 			switch {
 			case chat.FromUniqueID == ownUID && sender == pub:
@@ -1288,13 +1327,8 @@ func (m *connManager) decryptDMAsync(chat netproto.ChatBroadcast, payload string
 }
 
 func parseDMPublicKey(encoded string) ([32]byte, bool) {
-	raw, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil || len(raw) != 32 {
-		return [32]byte{}, false
-	}
-	var key [32]byte
-	copy(key[:], raw)
-	return key, true
+	record, err := e2ee.DecodeKeyRecord(encoded)
+	return record.PublicKey(), err == nil
 }
 
 // rewrapChat re-encodes a (decrypted) chat broadcast into its event
