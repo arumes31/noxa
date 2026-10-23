@@ -947,7 +947,7 @@ func (cm *connManager) downloadFileProgress(id string, channelID int64, folder, 
 	}
 	handedOff = true
 	go guardCrash("ft download", func() {
-		defer func() { _ = dest.Close() }()
+		defer dest.Close()
 		// total comes from the listing row: the wire never carries the size on
 		// the data port, and without it a resumed transfer has no denominator.
 		p := ftProgress{ID: id, Direction: "download", Name: name, Total: total, Status: "active"}
