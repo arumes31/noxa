@@ -546,6 +546,7 @@ func migrateEventSoundSplits(s *Settings) {
 // (modes, enums, hotkey syntax) are validated by SaveSettings and are never
 // silently rewritten.
 func normalizeSettings(s Settings) Settings {
+	s.Theme = "midnight"
 	s.GamingOverlayScale = clampSetting(s.GamingOverlayScale, 75, 200)
 	s.GamingOverlayStyle = normalizeOverlayStyle(s.GamingOverlayStyle)
 	normalizeOverlayColors(&s)
@@ -985,7 +986,16 @@ func (a *App) SaveSettings(s Settings) string {
 	default:
 		return "invalid announcement language"
 	}
-	generation, err := a.updateSettingsChecked(func(current Settings) (Settings, error) { return mergeSettingsEdit(current, s) })
+	generation, err := a.updateSettingsChecked(func(current Settings) (Settings, error) {
+		merged, err := mergeSettingsEdit(current, s)
+		if err != nil {
+			return Settings{}, err
+		}
+		if err := a.validateDownloadFolder(current.DownloadFolder, merged.DownloadFolder); err != nil {
+			return Settings{}, err
+		}
+		return merged, nil
+	})
 	if err != nil {
 		return err.Error()
 	}

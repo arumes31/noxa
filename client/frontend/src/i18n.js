@@ -11,6 +11,7 @@
 //      settings dialog rebuild; static index.html labels are set once at
 //      startup). Every settings page uses the same catalogs.
 
+import { activityEnglish, activityGerman } from "./activity-messages.js";
 import { settingsEnglish, settingsGerman } from "./settings-messages.js";
 import { settingsShellEnglish, settingsShellGerman } from "./settings-shell-messages.js";
 import { overviewEnglish, overviewGerman } from "./server-overview-messages.js";
@@ -74,6 +75,7 @@ const en = {
     ...streamEnglish,
     ...uiPolishEnglish,
     ...auditEnglish,
+    ...activityEnglish,
     ...roleEnglish,
     ...quickWinEnglish,
     ...settingsEnglish,
@@ -186,6 +188,7 @@ const de = {
     ...streamGerman,
     ...uiPolishGerman,
     ...auditGerman,
+    ...activityGerman,
     ...roleGerman,
     ...quickWinGerman,
     ...settingsGerman,

@@ -86,6 +86,7 @@ type UDPServer struct {
 	// Atomic counters. Use atomic.Load/Store to access.
 	packetsReceived    atomic.Uint64
 	packetsDropped     atomic.Uint64
+	malformedLogAt     atomic.Int64
 	packetsProcessed   atomic.Uint64
 	packetsRateLimited atomic.Uint64
 }
@@ -260,10 +261,9 @@ func (s *UDPServer) dispatch(pkt udpPacket) {
 	if err != nil {
 		s.packetsDropped.Add(1)
 		s.metric().IncUDPPacketsDropped()
-		s.logger.Warn("udp malformed packet",
-			zap.String("remote", safeUDPRemote(pkt.remote)),
-			zap.Error(err),
-		)
+		if s.allowMalformedLog(time.Now()) {
+			s.logger.Warn("udp malformed packet", zap.String("remote", safeUDPRemote(pkt.remote)), zap.Error(err))
+		}
 		return
 	}
 
@@ -278,10 +278,9 @@ func (s *UDPServer) dispatch(pkt udpPacket) {
 	default:
 		s.packetsDropped.Add(1)
 		s.metric().IncUDPPacketsDropped()
-		s.logger.Warn("udp unknown message type",
-			zap.String("remote", safeUDPRemote(pkt.remote)),
-			zap.Uint8("msg_type", msgType),
-		)
+		if s.allowMalformedLog(time.Now()) {
+			s.logger.Warn("udp unknown message type", zap.String("remote", safeUDPRemote(pkt.remote)), zap.Uint8("msg_type", msgType))
+		}
 	}
 }
 
@@ -357,3 +356,9 @@ func (s *UDPServer) isClosed(err error) bool {
 
 // SetTrafficCounter must be called before Start.
 func (s *UDPServer) SetTrafficCounter(counter *traffic.Counter) { s.traffic = counter }
+
+// One global warning window also bounds floods rotating spoofed source IPs.
+func (s *UDPServer) allowMalformedLog(now time.Time) bool {
+	previous := s.malformedLogAt.Load()
+	return (previous == 0 || now.UnixNano()-previous >= int64(5*time.Second)) && s.malformedLogAt.CompareAndSwap(previous, now.UnixNano())
+}

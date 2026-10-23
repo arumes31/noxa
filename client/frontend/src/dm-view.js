@@ -734,6 +734,7 @@ function build() {
 // ------------------------------------------------------------------ open / close
 
 export function openDirectMessages(target = null) {
+    window.__noxaActivity?.close();
     if (!ui || !V()?.state.activeTabID) return false;
     ensureScope();
     const center = $("center");

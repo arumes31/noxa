@@ -18,6 +18,20 @@ func (s *TCPServer) handleRoleBanRemove(ctx context.Context, client *Client, f *
 		return s.roleError(ctx, client, authorization.ErrRolesNotConfigured)
 	}
 	err := s.withRoleAccess(ctx, client, 0, authorization.BanMembers, func(ctx context.Context) error {
+		if s.deps.BanAdmin == nil {
+			return authorization.ErrAuthorizationUnavailable
+		}
+		issuer, err := s.deps.BanAdmin.BanIssuer(ctx, request.BanID)
+		if err != nil {
+			return err
+		}
+		if issuer == nil {
+			return nil
+		} // Already absent remains idempotent.
+		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
+		if !canRemoveIssuedBan(e, client.userID(), *issuer) {
+			return authorization.ErrRoleForbidden
+		}
 		return s.removeRoleBan(ctx, client.uniqueID(), request.BanID)
 	})
 	if err != nil {
@@ -47,4 +61,8 @@ func (s *TCPServer) removeRoleBan(ctx context.Context, actor string, banID int64
 	defer cancel()
 	s.audit(auditCtx, actor, "ban_remove", strconv.FormatInt(banID, 10), "")
 	return nil
+}
+
+func canRemoveIssuedBan(e *authorization.RoleEvaluator, actor, issuer int64) bool {
+	return actor > 0 && (actor == e.Policy().OwnerID || actor == issuer || issuer > 0 && e.CanManageMember(actor, issuer))
 }

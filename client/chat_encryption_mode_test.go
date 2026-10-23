@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -105,8 +104,8 @@ func TestEndToEndDirectMessageCarriesLockMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	alpha.pubKeys.put("bravo", bravoPub)
-	bravo.pubKeys.put("alpha", alphaPub)
+	cacheTestPeer(t, alpha, "bravo", bravoPub, bravo.id)
+	cacheTestPeer(t, bravo, "alpha", alphaPub, alpha.id)
 	message, err := alpha.encryptChat("direct", "bravo", "secret")
 	if err != nil || message.KeyID != 0 || message.RecipientPublicKey == "" {
 		t.Fatalf("e2e send = %+v, %v", message, err)
@@ -115,7 +114,7 @@ func TestEndToEndDirectMessageCarriesLockMode(t *testing.T) {
 	bravo.sink = sink
 	payload, err := json.Marshal(map[string]any{"type": "chat", "data": netproto.ChatBroadcast{
 		Direct: true, FromUniqueID: "alpha", ToUniqueID: "bravo", Text: message.Text, Enc: true, E2E: true,
-		SenderPublicKey: base64.StdEncoding.EncodeToString(alphaPub[:]), RecipientPublicKey: message.RecipientPublicKey, EncMode: "server",
+		SenderPublicKey: signedTestRecord(t, "alpha", alphaPub, alpha.id), RecipientPublicKey: message.RecipientPublicKey, EncMode: "server",
 	}})
 	if err != nil {
 		t.Fatal(err)

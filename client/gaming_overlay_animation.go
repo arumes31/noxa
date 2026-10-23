@@ -200,7 +200,7 @@ func (r *overlayRenderer) peek(s GamingOverlaySnapshot, label overlayLabel) erro
 
 // label draws a cached glyph mask with the overlay's text halo.
 func (r *overlayRenderer) label(mask *image.Alpha, origin image.Point, opacity uint8) {
-	shadow := image.NewUniform(color.NRGBA{R: 17, G: 20, B: 23, A: uint8(160 * int(opacity) / 255)})
+	shadow := image.NewUniform(color.NRGBA{R: 17, G: 20, B: 23, A: uint8((160 * int(opacity) / 255) & 255)})
 	for _, offset := range []image.Point{{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {0, 2}} {
 		draw.DrawMask(r.base, mask.Bounds().Add(origin.Add(offset)), shadow, image.Point{}, mask, image.Point{}, draw.Over)
 	}
@@ -331,6 +331,6 @@ func (r *overlayRenderer) animationPixel(x, y int, opacity float64, tint color.N
 	}
 	i := r.frame.PixOffset(x, y)
 	for channel, value := range [4]uint16{uint16(tint.R), uint16(tint.G), uint16(tint.B), 255} {
-		r.frame.Pix[i+channel] = uint8((value*alpha + uint16(r.frame.Pix[i+channel])*(255-alpha)) / 255)
+		r.frame.Pix[i+channel] = uint8(((value*alpha + uint16(r.frame.Pix[i+channel])*(255-alpha)) / 255) & 255)
 	}
 }

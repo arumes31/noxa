@@ -27,7 +27,7 @@ type overlayLabel func(text string, width, height, fontSize int, centered bool) 
 func overlayTint(value string) color.NRGBA {
 	if len(value) == 7 && value[0] == '#' {
 		if rgb, err := strconv.ParseUint(value[1:], 16, 24); err == nil {
-			r, g, b := uint8(rgb>>16), uint8(rgb>>8), uint8(rgb)
+			r, g, b := uint8((rgb>>16)&255), uint8((rgb>>8)&255), uint8(rgb&255)
 			return color.NRGBA{R: r, G: g, B: b, A: 255}
 		}
 	}

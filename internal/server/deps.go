@@ -30,7 +30,7 @@ import (
 type AuthBackend interface {
 	AuthenticatePassword(ctx context.Context, uniqueID, password string) (bool, error)
 	AuthenticateIdentifier(ctx context.Context, identifier, password string) (*auth.User, error)
-	AuthenticateChallenge(ctx context.Context, uniqueID string, challenge, signature []byte) (bool, error)
+	AuthenticateIdentityChallenge(ctx context.Context, uniqueID string, challenge, signature []byte) (string, bool, error)
 	AuthenticateNickname(ctx context.Context, nickname, password string) (*auth.User, error)
 	LookupUser(ctx context.Context, uniqueID string) (*auth.User, error)
 	LookupUserByPublicKey(ctx context.Context, publicKey string) (*auth.User, error)
@@ -172,6 +172,7 @@ type AuditStore interface {
 // BanAdminStore is the subset of the store needed for ban administration
 // (wave 6b ban list dialog). It is satisfied by *store.Store.
 type BanAdminStore interface {
+	BanIssuer(ctx context.Context, id int64) (*int64, error)
 	ListBans(ctx context.Context) ([]store.BanRecord, error)
 	DeleteBan(ctx context.Context, id int64) error
 }

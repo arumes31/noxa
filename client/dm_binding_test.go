@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -18,7 +17,7 @@ func TestDirectMessageRetriesOnlyRejectedStaleDeviceKey(t *testing.T) {
 			app, cm := newPipedApp(t, func(f *netproto.Frame) (netproto.MessageType, any, bool) {
 				if netproto.MessageType(f.Type) == netproto.MsgKeyRequest {
 					lookups++
-					return netproto.MsgKeyResponse, netproto.KeyResponse{UniqueID: "peer", PublicKey: base64.StdEncoding.EncodeToString(newKey[:])}, true
+					return netproto.MsgKeyResponse, netproto.KeyResponse{UniqueID: "peer", PublicKey: testPeerRecord(t, "peer", newKey)}, true
 				}
 				var msg netproto.ChatSend
 				if err := netproto.Decode(f, &msg); err != nil {
@@ -40,7 +39,7 @@ func TestDirectMessageRetriesOnlyRejectedStaleDeviceKey(t *testing.T) {
 			cm.mu.Lock()
 			cm.authorizationModel = netproto.AuthorizationModelRolesV1
 			cm.mu.Unlock()
-			cm.pubKeys.put("peer", oldKey)
+			cacheTestPeer(t, cm, "peer", oldKey)
 			result := app.SendChat("direct", "peer", "freshly sealed retry")
 			wantRetry := outcome == "accepted refresh" || outcome == "repeated stale"
 			wantSends := 1
@@ -59,7 +58,7 @@ func TestDirectMessageRetriesOnlyRejectedStaleDeviceKey(t *testing.T) {
 			if sent[0].ClientMsgID != sent[1].ClientMsgID || sent[0].Text == sent[1].Text {
 				t.Fatal("retry must preserve reference and reseal ciphertext")
 			}
-			if sent[1].RecipientPublicKey != base64.StdEncoding.EncodeToString(newKey[:]) {
+			if sent[1].RecipientPublicKey != testPeerRecord(t, "peer", newKey) {
 				t.Fatal("retry retained stale device binding")
 			}
 			pub, _, err := cm.id.x25519()

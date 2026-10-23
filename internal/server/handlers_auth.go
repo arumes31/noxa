@@ -66,6 +66,11 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "authentication backend unavailable")
 	}
 
+	if msg.Anonymous && msg.Password != "" {
+		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
+		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "anonymous login takes no password"})
+	}
+
 	// Reject banned clients before verifying any password. IP bans apply to
 	// everyone, including guests, while account bans apply to the presented ID.
 	ip := remoteIP(client.Conn)
@@ -93,12 +98,6 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid server password"})
 		}
 		attempt.Succeed(serverPasswordScope)
-	}
-
-	if msg.Anonymous && msg.Password != "" {
-		s.loginLimiter.RecordFailure(accountSourceScope, principalScope)
-		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
-		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "anonymous login takes no password"})
 	}
 
 	// Immediate ephemeral guest login.
@@ -155,6 +154,9 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid credentials"})
 	}
 
+	client.mu.Lock()
+	client.authSigningKey = ""
+	client.mu.Unlock()
 	// Bind the client's identity key so future challenge logins work.
 	if msg.PublicKey != "" {
 		if err := s.deps.Auth.BindPublicKey(ctx, user.ID, msg.PublicKey); err != nil {
@@ -162,6 +164,10 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 				zap.String("client_id", client.ID),
 				zap.Error(err),
 			)
+		} else {
+			client.mu.Lock()
+			client.authSigningKey = msg.PublicKey
+			client.mu.Unlock()
 		}
 	}
 	attempt.Succeed(principalScope)
@@ -202,6 +208,12 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 		return s.handleGuestSignature(ctx, client, msg)
 	}
 
+	challenge, nickname, ok := client.takeChallenge(msg.UniqueID)
+	if !ok {
+		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
+		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "no pending challenge"})
+	}
+
 	ip := remoteIP(client.Conn)
 	sourceScope := auth.LoginFailureScope("tcp:"+ip, "")
 	principalScope := auth.LoginFailureScope("", msg.UniqueID)
@@ -212,14 +224,7 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 	}
 	defer attempt.Cancel()
 
-	challenge, nickname, ok := client.takeChallenge(msg.UniqueID)
-	if !ok {
-		attempt.Fail()
-		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
-		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "no pending challenge"})
-	}
-
-	verified, err := s.deps.Auth.AuthenticateChallenge(ctx, msg.UniqueID, challenge, msg.Signature)
+	verifiedKey, verified, err := s.deps.Auth.AuthenticateIdentityChallenge(ctx, msg.UniqueID, challenge, msg.Signature)
 	if err != nil {
 		if errors.Is(err, auth.ErrUserNotFound) {
 			attempt.Fail()
@@ -238,6 +243,9 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid credentials"})
 	}
 
+	client.mu.Lock()
+	client.authSigningKey = verifiedKey
+	client.mu.Unlock()
 	attempt.Succeed(principalScope)
 	return s.completeAuth(ctx, client, msg.UniqueID, nickname)
 }
@@ -246,6 +254,12 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 // key and authenticates the client as a registered user (if the derived
 // unique ID has a users row) or as a guest with the key-derived unique ID.
 func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, msg netproto.AuthSignature) error {
+	challenge, nickname, ok := client.takeChallenge("")
+	if !ok {
+		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
+		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "no pending challenge"})
+	}
+
 	ip := remoteIP(client.Conn)
 	sourceScope := auth.LoginFailureScope("tcp:"+ip, "")
 	principalScope := auth.LoginFailureScope("", msg.PublicKey)
@@ -277,17 +291,15 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	}
 	defer attempt.Cancel()
 
-	challenge, nickname, ok := client.takeChallenge("")
-	if !ok {
-		attempt.Fail()
-		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
-		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "no pending challenge"})
-	}
 	if err := auth.VerifyChallenge(msg.PublicKey, challenge, msg.Signature); err != nil {
 		attempt.Fail()
 		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid credentials"})
 	}
+
+	client.mu.Lock()
+	client.authSigningKey = msg.PublicKey
+	client.mu.Unlock()
 
 	// Registered user with this identity? Then it is a normal login.
 	if _, err := s.deps.Auth.LookupUser(ctx, uniqueID); err == nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/lib/pq"
 
 	"noxa/internal/authorization"
+	"noxa/internal/netproto"
 )
 
 // RoleChannelCreate is a prepared resource record, separate from the policy
@@ -60,7 +61,7 @@ func (s *Store) EditRoleChannel(ctx context.Context, actorID, channelID, revisio
 }
 
 func (r RoleChannelCreate) valid() bool {
-	return strings.TrimSpace(r.Name) != "" && len(r.Name) <= 255 && validChannelText(r.Name) &&
+	return strings.TrimSpace(r.Name) != "" && len(r.Name) <= 255 && netproto.ValidIdentifierText(r.Name) &&
 		r.ChannelType >= 0 && r.ChannelType <= 2 && r.MaxClients >= 0 && r.MaxClients <= 2_147_483_647 &&
 		r.OpusBitrate >= 0 && r.OpusBitrate <= 510_000 && r.OrderIndex >= -2_147_483_648 && r.OrderIndex <= 2_147_483_647 &&
 		r.SlowModeSeconds >= 0 && r.SlowModeSeconds <= 2_147_483_647 && validChannelText(r.Topic) && validChannelText(r.Description) &&

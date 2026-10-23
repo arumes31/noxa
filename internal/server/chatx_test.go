@@ -1284,6 +1284,7 @@ func TestAnnouncementSealed(t *testing.T) {
 // must stay off, or the server-info reply reopens the plaintext path the rest
 // of 91-135 closes.
 func TestServerInfoMOTDPlaintextIsOptIn(t *testing.T) {
+	t.Setenv("NOXA_DEV_MODE", "true")
 	const motd = "public welcome text"
 
 	if cfg, err := config.Load(); err != nil {

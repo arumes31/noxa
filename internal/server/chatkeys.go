@@ -72,12 +72,13 @@ func (e *chatKeyError) Error() string { return e.msg }
 // archival generations. Its mutex guards this scope's DB I/O, so two scopes
 // never contend and one slow scope cannot stall the rest.
 type scopeEntry struct {
-	mu     sync.Mutex
-	loaded bool
-	curID  uint32
-	curKey [32]byte
-	old    map[uint32][32]byte
-	oldLRU []uint32
+	mu      sync.Mutex
+	loaded  bool
+	deleted bool
+	curID   uint32
+	curKey  [32]byte
+	old     map[uint32][32]byte
+	oldLRU  []uint32
 }
 
 // chatKeyManager generates, persists and rotates per-scope chat keys.
@@ -138,6 +139,9 @@ func (m *chatKeyManager) entry(scope int64) *scopeEntry {
 // loadLocked populates the entry's current generation from the store. It must
 // be called with e.mu held. A scope with no generation loads with curID 0.
 func (m *chatKeyManager) loadLocked(ctx context.Context, e *scopeEntry, scope int64) error {
+	if e.deleted {
+		return ErrNoScopeKey
+	}
 	if e.loaded {
 		return nil
 	}
@@ -164,6 +168,9 @@ func (m *chatKeyManager) loadLocked(ctx context.Context, e *scopeEntry, scope in
 // new random key under it. It must be called with e.mu held.
 func (m *chatKeyManager) mintLocked(ctx context.Context, e *scopeEntry, scope int64) (uint32, [32]byte, error) {
 	var zero [32]byte
+	if e.deleted {
+		return 0, zero, ErrNoScopeKey
+	}
 	if !m.configured() {
 		return 0, zero, errChatKeysUnconfigured
 	}
@@ -417,4 +424,21 @@ func (m *chatKeyManager) seal(ctx context.Context, scope int64, plain string) (_
 	}
 	sealed := secretbox.Seal(nil, []byte(plain), &nonce, &key)
 	return id, base64.StdEncoding.EncodeToString(append(nonce[:], sealed...)), nil
+}
+
+// forgetDeletedScope invalidates retained entry pointers as well as future lookups.
+// Channel IDs are never reused. The global scope is not a deletable channel.
+func (m *chatKeyManager) forgetDeletedScope(scope int64) {
+	if m == nil || scope <= 0 {
+		return
+	}
+	e := m.entry(scope)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.deleted = true
+	e.curID = 0
+	clear(e.curKey[:])
+	clear(e.old)
+	e.oldLRU = nil
+	e.loaded = true
 }

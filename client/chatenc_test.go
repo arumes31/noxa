@@ -59,6 +59,8 @@ func newPipedApp(t *testing.T, handle frameHandler) (*App, *connManager) {
 	cli, srv := net.Pipe()
 	cm := newConnManager(context.Background())
 	cm.sink = &eventRecorder{}
+	cm.addr = "test.invalid:9987"
+	cm.confirmPeerChange = nil
 	cm.id = mustTempIdentity(t)
 	cm.mu.Lock()
 	cm.conn = cli

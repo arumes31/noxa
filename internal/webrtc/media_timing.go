@@ -79,20 +79,22 @@ const (
 
 // ntpDuration converts a signed difference of 64-bit NTP timestamps.
 func ntpDuration(a, b uint64) time.Duration {
-	diff := int64(a - b)
+	diff := int64(a - b) // #nosec G115 -- signed interpretation of modular NTP timestamp difference (including wrap).
 	seconds := diff >> 32
-	fraction := uint64(diff) & 0xffffffff
+	fraction := uint64(diff & 0xffffffff)
 	return time.Duration(seconds)*time.Second + time.Duration((fraction*uint64(time.Second))>>32)
 }
 
 // ntpAdd adds a signed duration to a 64-bit NTP timestamp.
 func ntpAdd(ntp uint64, d time.Duration) uint64 {
 	negative := d < 0
+	// Compute the unsigned magnitude without overflowing for MinInt64.
+	magnitude := uint64(d & 0x7fffffffffffffff)
 	if negative {
-		d = -d
+		magnitude = uint64(-(d + 1)) + 1 // #nosec G115 -- d is negative, so -(d+1) is in [0, MaxInt64].
 	}
-	seconds := uint64(d / time.Second)
-	fraction := (uint64(d%time.Second) << 32) / uint64(time.Second)
+	seconds := magnitude / uint64(time.Second)
+	fraction := ((magnitude % uint64(time.Second)) << 32) / uint64(time.Second)
 	delta := seconds<<32 + fraction
 	if negative {
 		return ntp - delta
@@ -135,12 +137,12 @@ type sourceTimingMapping struct {
 
 // captureTime returns the publisher NTP time of an RTP timestamp.
 func (m sourceTimingMapping) captureTime(ts uint32) uint64 {
-	return ntpAdd(m.ntp, rtpDuration(int32(ts-m.rtp), m.clockRate))
+	return ntpAdd(m.ntp, rtpDuration(int32(ts-m.rtp), m.clockRate)) // #nosec G115 -- RTP serial-number arithmetic deliberately interprets wrap as signed displacement.
 }
 
 // timestampAt returns the source RTP timestamp of a publisher NTP time.
 func (m sourceTimingMapping) timestampAt(ntp uint64) uint32 {
-	return m.rtp + uint32(rtpTicks(ntpDuration(ntp, m.ntp), m.clockRate))
+	return m.rtp + uint32(rtpTicks(ntpDuration(ntp, m.ntp), m.clockRate)&0xffffffff)
 }
 
 type sourceTimingEntry struct {
@@ -205,7 +207,7 @@ func (t *sourceTimingTable) observe(publisher string, owner any, report *rtcp.Se
 	// A report whose RTP time advanced while its NTP time did not is a
 	// publisher clock step, not reordering: accept it, or the mapping would
 	// go stale and reports would stop for good.
-	if entry.known && int64(report.NTPTime-entry.mapping.ntp) <= 0 && int32(report.RTPTime-entry.mapping.rtp) <= 0 {
+	if entry.known && int64(report.NTPTime-entry.mapping.ntp) <= 0 && int32(report.RTPTime-entry.mapping.rtp) <= 0 { // #nosec G115 -- compare modular NTP/RTP serial numbers across wrap, not absolute magnitudes.
 		return false
 	}
 	entry.mapping = sourceTimingMapping{ntp: report.NTPTime, rtp: report.RTPTime, clockRate: clockRate, receivedAt: now}
@@ -268,7 +270,7 @@ func (t *sourceTimingTable) outputMappingsEqual(publisher string, ssrcA, offsetA
 	// Compare the outbound timestamp each mapping assigns to one instant.
 	ta := a.rtp + offsetA
 	tb := b.timestampAt(a.ntp) + offsetB
-	diff := rtpDuration(int32(ta-tb), a.clockRate)
+	diff := rtpDuration(int32(ta-tb), a.clockRate) // #nosec G115 -- signed modular RTP displacement is intentional.
 	return diff <= timingPreserveTolerance && diff >= -timingPreserveTolerance
 }
 
@@ -349,7 +351,7 @@ func (e *egressTiming) observeSent(header *rtp.Header, payloadSize int, ticket *
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.packets++
-	e.octets += uint32(payloadSize)
+	e.octets += uint32(payloadSize) // #nosec G115 -- nonnegative RTP payload length; RFC 3550 octet counter intentionally wraps modulo 2^32.
 	e.lastSent = now
 	e.lastRTP = header.Timestamp
 	e.delivery, e.guard, e.router, e.revision = ticket.delivery, ticket.guard, ticket.router, ticket.videoRevision
@@ -400,7 +402,7 @@ func (e *egressTiming) commitReport(report *rtcp.SenderReport, generation uint64
 	}
 	e.lastNTP = report.NTPTime
 	e.reported = true
-	e.reports[e.nextReport] = sentSenderReport{lsr: uint32(report.NTPTime >> 16), at: now}
+	e.reports[e.nextReport] = sentSenderReport{lsr: uint32((report.NTPTime >> 16) & 0xffffffff), at: now}
 	e.nextReport = (e.nextReport + 1) % sentReportHistory
 	return true
 }
@@ -516,7 +518,7 @@ func (s *mediaEgressStream) senderReport(clockRate uint32, now time.Time) (*rtcp
 	report := &rtcp.SenderReport{
 		SSRC:        snapshot.ssrc,
 		NTPTime:     ntpAdd(mapping.ntp, elapsed),
-		RTPTime:     mapping.rtp + snapshot.offset + uint32(rtpTicks(elapsed, clockRate)),
+		RTPTime:     mapping.rtp + snapshot.offset + uint32(rtpTicks(elapsed, clockRate)&0xffffffff),
 		PacketCount: snapshot.packets,
 		OctetCount:  snapshot.octets,
 	}
@@ -537,7 +539,7 @@ func serverClockReport(ssrc, lastRTP uint32, lastSent time.Time, clockRate, pack
 	return &rtcp.SenderReport{
 		SSRC:        ssrc,
 		NTPTime:     serverNTP(now),
-		RTPTime:     lastRTP + uint32(rtpTicks(now.Sub(lastSent), clockRate)),
+		RTPTime:     lastRTP + uint32(rtpTicks(now.Sub(lastSent), clockRate)&0xffffffff),
 		PacketCount: packets,
 		OctetCount:  octets,
 	}
@@ -559,7 +561,7 @@ func (l *localSendStats) observe(header *rtp.Header, payloadSize int, now time.T
 	l.seen = true
 	l.lastRTP, l.lastSent = header.Timestamp, now
 	l.packets++
-	l.octets += uint32(payloadSize)
+	l.octets += uint32(payloadSize) // #nosec G115 -- nonnegative RTP payload length; RFC 3550 octet counter intentionally wraps modulo 2^32.
 	l.mu.Unlock()
 }
 

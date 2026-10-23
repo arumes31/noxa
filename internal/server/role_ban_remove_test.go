@@ -183,13 +183,42 @@ func TestRoleBanRemovalAcknowledgesCommitAfterRequestCancellation(t *testing.T) 
 	}
 }
 
-func TestRoleBanRemovalRequiresConfiguredAuthority(t *testing.T) {
-	env := startTestEnv(t, nil)
+func TestRoleBanRemovalRequiresConfiguredStore(t *testing.T) {
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.BanAdmin = nil })
 	defer env.stop()
 	client, _ := dialAuthed(t, env.addr, "admin-uid")
 	defer func() { _ = client.Close() }()
 	send(t, client, netproto.MsgRoleBanRemove, netproto.BanRemove{BanID: 17})
 	if got := readError(t, client); got.Code != errCodeUnavailable {
 		t.Fatal(got)
+	}
+}
+
+func TestBanRemovalIssuerHierarchy(t *testing.T) {
+	backend := serverRoleFixture()
+	e, err := authorization.NewRoleEvaluator(backend.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		actor, issuer int64
+		want          bool
+	}{{1, 1, true}, {1, 2, false}, {1, 0, false}, {2, 1, true}, {2, 0, true}, {1, 3, false}} {
+		if got := canRemoveIssuedBan(e, tt.actor, tt.issuer); got != tt.want {
+			t.Fatalf("actor %d issuer %d: %v", tt.actor, tt.issuer, got)
+		}
+	}
+}
+
+func TestBanRemovalAllowsOnlyStrictlyLowerIssuerRole(t *testing.T) {
+	backend := serverRoleFixture()
+	backend.policy.Roles = append(backend.policy.Roles, authorization.Role{ID: 20, Name: "Moderator", Position: 10}, authorization.Role{ID: 30, Name: "Junior", Position: 5})
+	backend.policy.Members = []authorization.RoleMember{{UserID: 1, RoleIDs: []int64{20}}, {UserID: 3, RoleIDs: []int64{30}}, {UserID: 4, RoleIDs: []int64{20}}}
+	evaluator, err := authorization.NewRoleEvaluator(backend.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !canRemoveIssuedBan(evaluator, 1, 3) || canRemoveIssuedBan(evaluator, 3, 1) || canRemoveIssuedBan(evaluator, 1, 4) {
+		t.Fatal("issuer hierarchy violated")
 	}
 }

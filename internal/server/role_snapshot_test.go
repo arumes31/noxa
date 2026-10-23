@@ -215,3 +215,27 @@ func TestRoleSnapshotCountsVisibleMembersAndGuestsWithoutAccountIDs(t *testing.T
 		}
 	}
 }
+
+func TestRoleSnapshotAuditAccessFollowsCapabilityAndRevocation(t *testing.T) {
+	sm := state.New(testLogger())
+	policy := serverRoleFixture().policy
+	policy.Roles = append(policy.Roles, authorization.Role{ID: 80, Name: "Auditor", Position: 1, Permissions: []authorization.Capability{authorization.ViewAuditLog}})
+	policy.Members = []authorization.RoleMember{{UserID: 3, RoleIDs: []int64{80}}}
+	evaluator, err := authorization.NewRoleEvaluator(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for actor, want := range map[int64]bool{0: false, 1: false, 2: true, 3: true} {
+		if got := buildRoleSnapshot(sm, evaluator, actor, "viewer").CanViewAuditLog; got != want {
+			t.Errorf("actor %d audit access = %v, want %v", actor, got, want)
+		}
+	}
+	policy.Members = nil
+	evaluator, err = authorization.NewRoleEvaluator(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if buildRoleSnapshot(sm, evaluator, 3, "viewer").CanViewAuditLog {
+		t.Fatal("revoked auditor kept access")
+	}
+}

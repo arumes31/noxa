@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"noxa/internal/netproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -259,7 +260,7 @@ func safeAttachmentFilename(defaultName string) string {
 		}
 		return r
 	}, name)
-	if name == "" || name == "." || name == ".." {
+	if !netproto.ValidFileLeaf(name) {
 		return "attachment"
 	}
 	return name
@@ -268,7 +269,7 @@ func safeAttachmentFilename(defaultName string) string {
 func chatAttachmentDestination(dest string) (string, error) {
 	dest = filepath.Clean(dest)
 	base := filepath.Base(dest)
-	if dest == "." || base == "." || base == string(filepath.Separator) {
+	if dest == "." || !netproto.ValidFileLeaf(base) {
 		return "", errors.New("invalid attachment destination")
 	}
 	info, err := os.Stat(filepath.Dir(dest))

@@ -64,7 +64,7 @@ func TestE2EEDiagnostics(t *testing.T) {
 	cm := newConnManager(context.Background())
 	cm.id = mustTempIdentity(t)
 	peerPub, _ := genPair(t)
-	cm.pubKeys.put("peer", peerPub)
+	cacheTestPeer(t, cm, "peer", peerPub)
 	cm.scopeKeys.put(7, 1, [32]byte{1})
 	cm.scopeKeys.putGen(7, 2, [32]byte{2})
 	cm.scopeKeys.markRefused(7, []uint32{3, 4})
@@ -309,7 +309,7 @@ func TestEncryptChatScopes(t *testing.T) {
 		t.Fatalf("identity x25519: %v", err)
 	}
 	peerPub, peerPriv := genPair(t)
-	cm.pubKeys.put("peer", peerPub)
+	cacheTestPeer(t, cm, "peer", peerPub)
 	channelKey := [32]byte{7}
 	globalKey := [32]byte{9}
 	cm.scopeKeys.put(42, 3, channelKey)

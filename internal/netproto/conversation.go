@@ -30,6 +30,7 @@ type ConversationTypingEvent struct {
 }
 
 type ConversationReadEvent struct {
+	ClientID       string `json:"client_id,omitempty"`
 	ConversationID string `json:"conversation_id"`
 	UniqueID       string `json:"unique_id"`
 	MessageID      int64  `json:"message_id"`

@@ -62,6 +62,8 @@ type Client struct {
 
 	mu                 sync.RWMutex
 	lastOwnChannelMove *broadcast.OwnChannelMove // recipient-only cause, protected by mu
+	authRequests       int
+	requestBudget      sessionRequestBudget
 	authed             bool
 	revoked            bool   // role-mode removal closes protected work before socket cleanup
 	disconnectCleaned  bool   // membership/media cleanup is idempotent
@@ -110,6 +112,8 @@ type Client struct {
 	x25519Key string
 	// Retained only after successful guest proof, for explicit role enrollment.
 	verifiedGuestKey string
+	authSigningKey   string // bound to the successful authentication attempt
+	dmKeyRecord      string // signed directory record; never used for scope-key sealing
 
 	wmu contextMutex // serializes frame writes to Conn
 	// Role-mode member operations lock after acquiring the policy lease, so
@@ -323,6 +327,9 @@ type TCPServer struct {
 	privateCalls          map[string]netproto.CallSession
 	privateCallByClient   map[string]string
 	privateCallDirty      map[string]bool
+	recordingNotices      sync.Map // channel ID -> *recordingNotice; protected by roleRecordingMu
+	recordingNoticeWG     sync.WaitGroup
+	recordingNoticeStop   chan struct{}
 	roleRecordingOwners   sync.Map   // channel ID -> initiating registered user ID
 	roleRevokedRecordings sync.Map   // channel IDs awaiting cleanup; tap delivery is denied
 	roleRecordingMu       sync.Mutex // serialize recording start/stop and ownership publication
@@ -349,6 +356,8 @@ type TCPServer struct {
 	lifecycleState   tcpLifecycleState
 	listener         net.Listener
 	acceptedConns    map[net.Conn]struct{}
+	preauth          map[net.Conn]string
+	preauthByIP      map[string]int
 	connWG           sync.WaitGroup
 	listen           func(context.Context, string, string) (net.Listener, error)
 	prepareTLS       func() (tls.Certificate, string, error)
@@ -401,7 +410,8 @@ type TCPServer struct {
 	beforeHandle           func()
 	afterAccept            func()
 
-	loginLimiter *auth.LoginFailureLimiter
+	loginLimiter           *auth.LoginFailureLimiter
+	channelPasswordLimiter *auth.LoginFailureLimiter
 
 	mu      sync.RWMutex
 	clients map[string]*Client
@@ -453,6 +463,8 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 		logger:        logger,
 		deps:          deps,
 		acceptedConns: make(map[net.Conn]struct{}),
+		preauth:       make(map[net.Conn]string),
+		preauthByIP:   make(map[string]int),
 		listen: func(ctx context.Context, network, address string) (net.Listener, error) {
 			return (&net.ListenConfig{}).Listen(ctx, network, address)
 		},
@@ -478,6 +490,7 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 		chatSlow:               newSlowTracker(),
 		typingRate:             newTypingTracker(),
 		loginLimiter:           loginLimiter,
+		channelPasswordLimiter: auth.NewLoginFailureLimiter(auth.LoginFailureLimiterConfig{MaxConcurrentKDF: 2}),
 
 		chatFilters: &chatFilterCache{},
 	}
@@ -646,6 +659,14 @@ func (s *TCPServer) Start(ctx context.Context) error {
 			_ = conn.Close()
 			continue
 		}
+		ip := remoteIP(conn)
+		if len(s.preauth) >= maxPreauthConnections || s.preauthByIP[ip] >= maxPreauthPerIP {
+			s.lifecycleMu.Unlock()
+			_ = conn.Close()
+			continue
+		}
+		s.preauth[conn] = ip
+		s.preauthByIP[ip]++
 		s.acceptedConns[conn] = struct{}{}
 		s.connWG.Add(1)
 		s.lifecycleMu.Unlock()
@@ -767,6 +788,19 @@ func (s *TCPServer) beginShutdown() {
 			<-acceptDone
 		}
 		s.connWG.Wait()
+		// No handler can start another capture after this point. Drain lifecycle
+		// audits before returning and allowing the database to close.
+		if s.deps != nil && s.deps.Recorder != nil {
+			if closer, ok := s.deps.Recorder.(interface{ Close() error }); ok {
+				shutdownErr = joinTCPShutdownError(shutdownErr, closer.Close())
+			}
+		}
+		s.roleRecordingMu.Lock()
+		if s.recordingNoticeStop != nil {
+			close(s.recordingNoticeStop)
+		}
+		s.roleRecordingMu.Unlock()
+		s.recordingNoticeWG.Wait()
 		s.completeShutdown(shutdownErr)
 	}()
 }
@@ -845,6 +879,7 @@ func (s *TCPServer) shutdownTimeout() time.Duration {
 // fixed, non-payload panic metadata and retire lifecycle bookkeeping.
 func (s *TCPServer) serveConn(ctx context.Context, conn net.Conn) {
 	defer s.connWG.Done()
+	defer s.releasePreauth(conn)
 	defer func() {
 		s.lifecycleMu.Lock()
 		delete(s.acceptedConns, conn)
@@ -903,13 +938,6 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		s.onDisconnect(client)
 	}()
 
-	// (217) max-clients enforcement: config max_clients, tightened by the
-	// serveredit override. 0 = unlimited.
-	if max := s.EffectiveMaxClients(authCtx); max > 0 && s.clientCount() > max {
-		_ = s.sendGlobalError(client, errCodeUnavailable, "server is full")
-		return
-	}
-
 	s.logger.Info("client connected",
 		zap.String("client_id", client.ID),
 		zap.String("remote", conn.RemoteAddr().String()),
@@ -940,7 +968,11 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		default:
 		}
 
-		frame, err := netproto.ReadFrame(conn)
+		limit := uint32(netproto.MaxFrameSize)
+		if !client.isAuthed() {
+			limit = preauthFrameLimit
+		}
+		frame, err := netproto.ReadFrameLimit(conn, limit)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				s.logger.Info("client disconnected",
@@ -978,6 +1010,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 			if err := conn.SetDeadline(time.Time{}); err != nil {
 				return
 			}
+			s.releasePreauth(conn)
 			cancelAuth()
 			authDeadline = time.Time{}
 		}
@@ -990,9 +1023,21 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Frame) error {
 	mt := netproto.MessageType(f.Type)
 	ctx = context.WithValue(ctx, requestOriginContextKey{}, mt)
+	if !client.isAuthed() && (mt == netproto.MsgAuthenticate || mt == netproto.MsgAuthSignature) {
+		client.mu.Lock()
+		client.authRequests++
+		exhausted := client.authRequests > 16
+		client.mu.Unlock()
+		if exhausted {
+			return errors.New("authentication request budget exhausted")
+		}
+	}
 
 	if !client.isAuthed() && mt != netproto.MsgAuthenticate && mt != netproto.MsgAuthSignature && mt != netproto.MsgPing {
 		return s.sendErrorFor(client, mt, errCodeNotAuthenticated, "not authenticated")
+	}
+	if client.isAuthed() && !client.requestBudget.allow(mt, time.Now()) {
+		return s.sendErrorFor(client, mt, errCodeMalformed, "request rate limit exceeded; retry shortly")
 	}
 	if client.rulesBlocked() && !allowedWhileRulesPending[mt] {
 		return s.sendErrorFor(client, mt, errCodePermissionDenied, "accept the server rules before continuing")

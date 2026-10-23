@@ -3,7 +3,7 @@ import { accessImpactEnglish, accessImpactGerman } from "./access-impact-message
 
 export const roleEnglish = {
     "roles.assignMenu": "Assign roles…",
-    "roles.channel.passwordAction": "Channel password",
+    "roles.channel.passwordAction": "Voice channel password",
     "roles.channel.newPassword": "New password",
     "roles.channel.passwordKeep": "Keep current password",
     "roles.channel.passwordSet": "Set a new password",
@@ -153,7 +153,7 @@ export const roleEnglish = {
 
 export const roleGerman = {
     "roles.assignMenu": "Rollen zuweisen…",
-    "roles.channel.passwordAction": "Kanalpasswort",
+    "roles.channel.passwordAction": "Sprachkanal-Passwort",
     "roles.channel.newPassword": "Neues Passwort",
     "roles.channel.passwordKeep": "Aktuelles Passwort behalten",
     "roles.channel.passwordSet": "Neues Passwort festlegen",

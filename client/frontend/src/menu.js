@@ -579,10 +579,9 @@ export function initMenu() {
     const tools = buildMenu(t("menu.tools"), [
         ...permissionItems,
         divider(),
-        menuAction(t("menu.auditLog"), () => {
-            if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
-            window.__noxaPerms.openAuditViewer();
-        }),
+        ...(V().state.canViewAuditLog ? [menuAction(t("menu.auditLog"), () => {
+            if (V().state.canViewAuditLog) window.__noxaActivity?.open("audit");
+        })] : []),
         menuAction(t("menu.bans"), () => {
             if (!V().state.myClientID) return V().toast(t("menu.notConnected"), "warn");
             window.__noxaPerms.openBanList();
@@ -641,11 +640,6 @@ export function initMenu() {
             disabled: true,
             tooltip: t("menu.opacityUnsupported"),
         }),
-        divider(),
-        menuAction(t("menu.themeArctic"), () => setTheme("arctic")),
-        menuAction(t("menu.themeDark"), () => setTheme("dark")),
-        menuAction(t("menu.themeLight"), () => setTheme("light")),
-        menuAction(t("menu.themeContrast"), () => setTheme("hc")),
     ]);
 
     const help = buildMenu(t("menu.help"), [
@@ -675,6 +669,7 @@ export function initMenu() {
         });
     }
     if (!documentClickBound) {
+        window.addEventListener("noxa-audit-access-changed", initMenu);
         document.addEventListener("click", () => closeMenus());
         document.addEventListener("focusin", (event) => {
             if (openMenu && !openMenu.contains(event.target)) closeMenus();
@@ -683,15 +678,3 @@ export function initMenu() {
     }
 }
 
-// setTheme switches the UI theme (294/295) and persists it.
-async function setTheme(theme) {
-    const s = Object.assign({}, V().state.settings || {}, { theme });
-    const err = await window.go.main.App.SaveSettings(s);
-    if (err) {
-        V().toast(t("menu.saveFailed", { error: err }), "warn");
-        return;
-    }
-    // (282) same as saveSettings: the merged blob is the authoritative cache.
-    V().state.settings = await window.go.main.App.GetSettings();
-    V().applyAppearance();
-}

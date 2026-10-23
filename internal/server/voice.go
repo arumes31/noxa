@@ -329,11 +329,12 @@ func (s *TCPServer) recordingControlAllowed(ctx context.Context, client *Client,
 			if errors.Is(err, channels.ErrChannelNotFound) {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "channel not found")
 			}
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "recording start failed: "+err.Error())
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "recording start failed")
 		}
 		if session == nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "recording start failed: empty session")
 		}
+		s.startRecordingNotice(msg.ChannelID, client.uniqueID(), session.Done())
 		s.roleRecordingOwners.Store(msg.ChannelID, client.userID())
 		s.roleRevokedRecordings.Delete(msg.ChannelID)
 		s.logger.Info("recording started",
@@ -343,8 +344,12 @@ func (s *TCPServer) recordingControlAllowed(ctx context.Context, client *Client,
 		)
 	case "stop":
 		if err := s.deps.Recorder.Stop(msg.ChannelID); err != nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "recording stop failed: "+err.Error())
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "recording stop failed")
 		}
+		if notice, ok := s.recordingNotices.Load(msg.ChannelID); ok {
+			notice.(*recordingNotice).stopActor = client.uniqueID()
+		}
+		s.finishRecordingNotice(msg.ChannelID, nil)
 		s.roleRecordingOwners.Delete(msg.ChannelID)
 		s.roleRevokedRecordings.Delete(msg.ChannelID)
 		s.logger.Info("recording stopped",

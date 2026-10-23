@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"noxa/internal/e2ee"
 	"noxa/internal/netproto"
 )
 
@@ -238,14 +239,13 @@ func (m *connManager) privateCallPeerKey(callID, target string, ownPub [32]byte)
 		return [32]byte{}, errors.New("invalid call device key binding")
 	}
 	for _, participant := range call.Participants {
-		if _, valid := parseDMPublicKey(participant.PublicKey); !valid || participant.ClientID == "" {
+		if _, err := e2ee.ParseKeyRecord(participant.PublicKey, participant.UniqueID); err != nil || participant.ClientID == "" {
 			return [32]byte{}, errors.New("invalid call participant encryption key")
 		}
 	}
-	localKey, _ := parseDMPublicKey(me.PublicKey)
-	if localKey != ownPub {
+	localKey, ownErr := m.verifyMessageKey(uid, me.PublicKey, uid, ownPub)
+	if ownErr != nil || localKey != ownPub {
 		return [32]byte{}, errors.New("call belongs to another encryption device")
 	}
-	key, _ := parseDMPublicKey(peer.PublicKey)
-	return key, nil
+	return m.verifyPeerRecord(target, peer.PublicKey, true)
 }

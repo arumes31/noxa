@@ -25,7 +25,7 @@ type DisplayNameSaved struct {
 
 // NormalizeDisplayName validates a public name before it reaches session state.
 func NormalizeDisplayName(name string) (string, error) {
-	if !utf8.ValidString(name) || strings.ContainsFunc(name, unicode.IsControl) {
+	if !utf8.ValidString(name) || strings.ContainsFunc(name, func(r rune) bool { return unicode.IsControl(r) || DeceptiveNameRune(r) }) {
 		return "", errors.New("display name must not contain control characters")
 	}
 	name = strings.TrimSpace(name)

@@ -78,9 +78,23 @@ func (a *AuthService) ValidateIntegration(ctx context.Context, p IntegrationPrin
 		// Historical bans are text, not inet. Parse without casting in SQL so
 		// malformed history cannot break login, and equivalent IPv6/mapped
 		// IPv4 spellings still match the canonical transport peer.
-		if address, err := netip.ParseAddr(value); err == nil && address.Unmap().String() == p.remoteIP {
+		if sameBanIP(value, p.remoteIP) {
 			return ErrIntegrationDenied
 		}
 	}
 	return nil
+}
+
+// sameBanIP preserves historical text matching while making equivalent numeric
+// address representations identical across all authentication transports.
+func sameBanIP(stored, peer string) bool {
+	if stored == "" || peer == "" {
+		return false
+	}
+	a, aErr := netip.ParseAddr(stored)
+	b, bErr := netip.ParseAddr(peer)
+	if aErr != nil || bErr != nil {
+		return stored == peer
+	}
+	return a.Unmap() == b.Unmap()
 }

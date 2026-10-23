@@ -1681,47 +1681,6 @@ body.compact #voice-bar { justify-content: center; padding: 12px; }
 /* settings: user CSS textarea */
 .user-css { width: 100%; font-family: var(--font-mono); font-size: 0.7857rem; }
 
-/* ---------------------------------------------------------------- themes */
-/* (294) light theme. */
-:root[data-theme="light"] {
-    --bg: #f2f4f7;
-    --bg-raised: #ffffff;
-    --bg-panel: #e9edf2;
-    --bg-hover: #dde3ea;
-    --border: rgba(20, 40, 60, 0.14);
-    --border-accent: rgba(10, 160, 110, 0.25);
-    --text: #18222e;
-    --text-dim: #4c5c6e;
-    --text-faint: #7d8c9c;
-    --accent: #0aa06e;
-    --accent-dim: rgba(10, 160, 110, 0.14);
-    --warn: #b07d1e;
-    --danger: #c9403a;
-    --shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
-}
-
-/* (295) high-contrast theme. */
-:root[data-theme="hc"] {
-    --bg: #000000;
-    --bg-raised: #000000;
-    --bg-panel: #0a0a0a;
-    --bg-hover: #1a1a1a;
-    --border: rgba(255, 255, 255, 0.55);
-    --border-accent: rgba(0, 255, 170, 0.8);
-    --text: #ffffff;
-    --text-dim: #e8e8e8;
-    --text-faint: #b8b8b8;
-    --accent: #00ffaa;
-    --accent-dim: rgba(0, 255, 170, 0.25);
-    --warn: #ffd23e;
-    --danger: #ff5a4e;
-    --shadow: 0 0 0 2px #ffffff;
-}
-:root[data-theme="hc"] .channel, :root[data-theme="hc"] .client,
-:root[data-theme="hc"] .dlg, :root[data-theme="hc"] .srv-tab {
-    border-width: 2px;
-}
-
 /* ------------------------------------------------------------- wave 8b */
 /* Tree polish, presence, contacts, hover cards, debug console, stats. */
 

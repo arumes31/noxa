@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -14,6 +15,7 @@ import (
 
 	"noxa/internal/auth"
 	"noxa/internal/authorization"
+	"noxa/internal/e2ee"
 	"noxa/internal/netproto"
 )
 
@@ -32,6 +34,19 @@ func (s *TCPServer) publishSessionKey(ctx context.Context, client *Client, f *ne
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed key_publish: "+err.Error())
 	}
+	published := msg.PublicKey
+	signed := ""
+	if record, err := e2ee.ParseKeyRecord(published, client.uniqueID()); err == nil {
+		client.mu.Lock()
+		signer := client.authSigningKey
+		client.mu.Unlock()
+		authenticated, err := auth.LoadPublicKey(signer)
+		if err != nil || !bytes.Equal(authenticated, record.SigningKey) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "encryption identity does not match authenticated identity")
+		}
+		signed = published
+		msg.PublicKey = base64.StdEncoding.EncodeToString(record.EncryptionKey)
+	}
 	raw, err := base64.StdEncoding.DecodeString(msg.PublicKey)
 	if err != nil || len(raw) != 32 {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid public key (want 32-byte base64 X25519)")
@@ -40,15 +55,17 @@ func (s *TCPServer) publishSessionKey(ctx context.Context, client *Client, f *ne
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "state backend unavailable")
 	}
 
-	s.deps.State.SetE2EPublicKey(client.ID, msg.PublicKey)
+	// Publish the durable directory entry before exposing the session copy.
+	// A failed write must not make lookup results depend on online presence.
 	if client.userID() != 0 && s.deps.Auth != nil {
-		if err := s.deps.Auth.SetE2EPublicKey(ctx, client.userID(), msg.PublicKey); err != nil {
-			s.logger.Warn("persisting e2e public key failed",
-				zap.String("client_id", client.ID),
-				zap.Error(err),
-			)
+		if err := s.deps.Auth.SetE2EPublicKey(ctx, client.userID(), published); err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encryption directory unavailable")
 		}
 	}
+	client.mu.Lock()
+	client.dmKeyRecord = signed
+	client.mu.Unlock()
+	s.deps.State.SetE2EPublicKey(client.ID, msg.PublicKey)
 
 	// Publishing one's public key does not require access to global chat.
 	// Automatic scope delivery is optional; denied scopes send no key, while
@@ -99,24 +116,26 @@ func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *net
 		}
 	}
 
+	// Registered account keys resolve from durable storage even while online.
+	// Selecting a live device first would reveal invisible presence on rotation.
 	var pub string
-	if s.deps != nil && s.deps.State != nil {
-		if sc, ok := s.deps.State.GetClientByUniqueID(msg.UniqueID); ok {
-			pub = sc.E2EPublicKey
-		}
-	}
-	if pub == "" && s.deps != nil && s.deps.Auth != nil {
-		if key, err := s.deps.Auth.GetE2EPublicKey(ctx, msg.UniqueID); err == nil {
+	if s.deps != nil && s.deps.Auth != nil {
+		key, err := s.deps.Auth.GetE2EPublicKey(ctx, msg.UniqueID)
+		switch {
+		case err == nil:
 			pub = key
-		} else if ctx.Err() != nil {
+		case ctx.Err() != nil:
 			return ctx.Err()
-		} else if !errors.Is(err, auth.ErrUserNotFound) {
-			s.logger.Debug("e2e key lookup failed",
-				zap.String("unique_id", msg.UniqueID),
-				zap.Error(err),
-			)
+		case !errors.Is(err, auth.ErrUserNotFound):
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encryption directory unavailable")
 		}
 	}
+	if pub == "" && s.deps != nil && s.deps.State != nil {
+		if session, found := s.clientByUniqueID(msg.UniqueID); found && session.userID() == 0 {
+			pub, _ = s.senderDMKey(session)
+		}
+	}
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}

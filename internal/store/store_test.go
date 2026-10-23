@@ -1035,6 +1035,7 @@ func TestMigrationIgnoresShadowSchemaIndex(t *testing.T) {
 func TestMigrationWidensKEKID(t *testing.T) {
 	s := testScratchStore(t)
 	applyPreLedgerMigrations(t, s, "024")
+	seedChatChannels(t, s, 9001, 9002, 9003)
 	if _, err := s.DB().ExecContext(t.Context(), `CREATE TABLE schema_migrations (
 		filename TEXT PRIMARY KEY,
 		applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

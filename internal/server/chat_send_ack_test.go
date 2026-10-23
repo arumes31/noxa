@@ -308,7 +308,11 @@ func TestChatSendLiveDirectAcknowledgement(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := readChatSendFence(sender, nil)
-			if got.err != nil || len(got.errors) != 0 || len(got.accepted) != 1 || !got.accepted[0].Matches(msg) || got.accepted[0].Disposition != netproto.ChatRelayed {
+			wantDisposition := netproto.ChatRelayed
+			if destination == "unique" {
+				wantDisposition = netproto.ChatQueued
+			}
+			if got.err != nil || len(got.errors) != 0 || len(got.accepted) != 1 || !got.accepted[0].Matches(msg) || got.accepted[0].Disposition != wantDisposition {
 				t.Fatalf("acceptance: %+v", got)
 			}
 			if len(got.echoes) != 1 || got.echoes[0].ClientMsgID != msg.ClientMsgID || got.echoes[0].ToUniqueID != "admin-uid" || got.echoes[0].Text != msg.Text || !got.echoes[0].E2E {

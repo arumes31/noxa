@@ -599,6 +599,16 @@ func (s *Store) CountPlaintextBodies(ctx context.Context) (int64, error) {
 // validated once the backfill has finished. Each VALIDATE is a full table
 // scan under an ACCESS EXCLUSIVE lock.
 func (s *Store) ValidateChatNoPlaintext(ctx context.Context) error {
+	var ready bool
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) = 2 AND bool_and(convalidated)
+        FROM pg_catalog.pg_constraint WHERE conrelid = 'public.chat_messages'::regclass
+        AND conname IN ('chat_messages_no_plaintext', 'chat_messages_sealed')`).Scan(&ready)
+	if err != nil {
+		return err
+	}
+	if ready {
+		return nil
+	}
 	for _, name := range []string{"chat_messages_no_plaintext", "chat_messages_sealed"} {
 		if _, err := s.db.ExecContext(ctx, `ALTER TABLE chat_messages VALIDATE CONSTRAINT `+name); err != nil {
 			return fmt.Errorf("validating %s: %w", name, err)

@@ -952,3 +952,12 @@ func (m *Manager) Stats() Stats {
 	}
 	return s
 }
+
+// SetChannelRecording changes only runtime capture state.
+func (m *Manager) SetChannelRecording(channelID int64, active bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ch := m.channels[channelID]; ch != nil {
+		ch.Recording = active
+	}
+}

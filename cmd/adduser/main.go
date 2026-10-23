@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	adduser -nickname <name> -password <pw> [-bot] [-integration] [-db <dsn>] [-migration-timeout 5m]
+//	adduser -nickname <name> -password-stdin [-bot] [-integration] [-db <dsn>] [-migration-timeout 5m]
 //
 // The database DSN comes from -db, then NOXA_DATABASE_URL. Migrations are
 // applied (idempotent). The database process lease requires the server to be
@@ -17,8 +17,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,7 +36,7 @@ func main() {
 
 func runMain() int {
 	nickname := flag.String("nickname", "", "user nickname (required)")
-	password := flag.String("password", "", "user password (required)")
+	passwordStdin := flag.Bool("password-stdin", false, "read one password line from standard input (required)")
 	bot := flag.Bool("bot", false, "mark an account as a bot (identity only; grants no permissions)")
 	integration := flag.Bool("integration", false, "allow role-mode integration login (grants no permissions)")
 	dsn := flag.String("db", "", "database DSN (default: NOXA_DATABASE_URL; required when unset)")
@@ -42,14 +44,19 @@ func runMain() int {
 		"maximum time to wait for the migration lock and apply migrations")
 	flag.Parse()
 
-	if *nickname == "" || *password == "" {
-		fmt.Fprintln(os.Stderr, "adduser: -nickname and -password are required")
+	if *nickname == "" || !*passwordStdin {
+		fmt.Fprintln(os.Stderr, "adduser: -nickname and -password-stdin are required")
 		return 1
 	}
 
+	password, err := readPassword(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "adduser: %v\n", err)
+		return 1
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, *nickname, *password, *bot, *integration, *dsn, *migrationTimeout); err != nil {
+	if err := run(ctx, *nickname, password, *bot, *integration, *dsn, *migrationTimeout); err != nil {
 		if errors.Is(err, auth.ErrUserExists) {
 			fmt.Printf("user %q already exists (no changes made)\n", *nickname)
 			return 0
@@ -148,4 +155,18 @@ func databaseDSN(explicit string) (string, error) {
 		return fromEnv, nil
 	}
 	return "", errors.New("database DSN is required: set -db or NOXA_DATABASE_URL")
+}
+
+// readPassword never includes input in errors. Permit exactly one optional
+// terminal newline; spaces are password data, not formatting.
+func readPassword(input io.Reader) (string, error) {
+	raw, err := io.ReadAll(io.LimitReader(input, auth.MaxPasswordBytes+3))
+	if err != nil {
+		return "", errors.New("reading password from stdin failed")
+	}
+	value := strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
+	if value == "" || len(value) > auth.MaxPasswordBytes || strings.ContainsAny(value, "\r\n") {
+		return "", errors.New("password must be one non-empty line within the supported length")
+	}
+	return value, nil
 }

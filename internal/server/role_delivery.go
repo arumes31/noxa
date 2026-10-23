@@ -26,16 +26,31 @@ func (s *TCPServer) writeRoleBroadcast(client *Client, payload []byte) error {
 func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Client, payload []byte) error {
 	err := s.withRoleSession(ctx, client, func(ctx context.Context) error {
 		var event struct {
-			Type string `json:"type"`
+			Type string          `json:"type"`
+			Data json.RawMessage `json:"data"`
 		}
 		if err := json.Unmarshal(payload, &event); err != nil {
 			return err
+		}
+		presenceType := event.Type
+		if event.Type == roleChannelDelivery {
+			var wrapper roleChannelEvent
+			if err := json.Unmarshal(event.Data, &wrapper); err != nil {
+				return err
+			}
+			var inner struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(wrapper.Payload, &inner); err != nil {
+				return err
+			}
+			presenceType = inner.Type
 		}
 		if event.Type == eventPrivateCallSignal {
 			s.privateCallsMu.Lock()
 			defer s.privateCallsMu.Unlock()
 		}
-		if roleSnapshotEvent(event.Type) || event.Type == eventSpeakingChanged || event.Type == eventWhisper || event.Type == eventAvatarChanged || event.Type == eventPoke || event.Type == eventPrioritySpeakerChanged || event.Type == eventScreenshareChanged || event.Type == eventStreamWatchStarted || event.Type == eventStreamUploadChanged || event.Type == eventPosition {
+		if isPresenceSignal(presenceType) || roleSnapshotEvent(event.Type) || event.Type == eventSpeakingChanged || event.Type == eventWhisper || event.Type == eventAvatarChanged || event.Type == eventPoke || event.Type == eventPrioritySpeakerChanged || event.Type == eventScreenshareChanged || event.Type == eventStreamWatchStarted || event.Type == eventStreamUploadChanged || event.Type == eventPosition {
 			// A queued activity write must finish before moderation can
 			// acknowledge a mute/deafen, or recheck after that change. Avatar
 			// notifications likewise must not outlive the member's visibility.
@@ -118,6 +133,9 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		}
 		if err := json.Unmarshal(payload, &scoped); err != nil {
 			return nil, err
+		}
+		if scoped.Type == eventTyping && !s.presenceSignalVisible(client, e, scoped.Data) {
+			return nil, nil
 		}
 		if scoped.Type == "discussion_changed" && !e.Evaluate(client.userID(), event.ChannelID, authorization.ReadHistory).Allowed {
 			return nil, nil
@@ -250,11 +268,14 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		// fetching either requires a current database membership lease.
 	case eventConversationTyping, eventConversationRead:
 		deliverable, err := s.conversationActivityDeliverable(client.uniqueID(), envelope.Data)
-		if err != nil || !deliverable {
+		if err != nil || !deliverable || !s.presenceSignalVisible(client, e, envelope.Data) {
 			return nil, err
 		}
-	case eventTyping, eventDMDelivered, eventDMRead,
-		eventEmojiAdded, eventEmojiRemoved, eventEmojiRenamed, eventServerBannerChanged:
+	case eventTyping, eventDMDelivered, eventDMRead:
+		if !s.presenceSignalVisible(client, e, envelope.Data) {
+			return nil, nil
+		}
+	case eventEmojiAdded, eventEmojiRemoved, eventEmojiRenamed, eventServerBannerChanged:
 		// Direct or server-wide events. Channel typing uses the guarded envelope.
 	default:
 		// Retired permission/group events and new event types need an explicit
@@ -285,4 +306,33 @@ func recipientChatPayload(chat netproto.ChatBroadcast, uniqueID string) ([]byte,
 		}
 	}
 	return eventEnvelope(eventChat, chat)
+}
+
+func isPresenceSignal(kind string) bool {
+	switch kind {
+	case eventTyping, eventDMDelivered, eventDMRead, eventConversationTyping, eventConversationRead:
+		return true
+	}
+	return false
+}
+func (s *TCPServer) presenceSignalVisible(viewer *Client, e *authorization.RoleEvaluator, data []byte) bool {
+	var signal struct {
+		ClientID     string `json:"client_id"`
+		FromUniqueID string `json:"from_unique_id"`
+		UniqueID     string `json:"unique_id"`
+	}
+	if json.Unmarshal(data, &signal) != nil {
+		return false
+	}
+	id := signal.ClientID
+	if id == "" {
+		uid := signal.FromUniqueID
+		if uid == "" {
+			uid = signal.UniqueID
+		}
+		if sender, ok := s.clientByUniqueID(uid); ok {
+			id = sender.ID
+		}
+	}
+	return id != "" && s.rolePokeTargetVisible(e, viewer, id)
 }

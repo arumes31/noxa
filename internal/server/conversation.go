@@ -80,7 +80,7 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 		case "mark_read":
 			shared := false
 			if request.ShareRead {
-				shared, err = s.shareConversationRead(ctx, backend, client.UniqueID, request.ID, request.ReadMessageID)
+				shared, err = s.shareConversationRead(ctx, backend, client, request.ID, request.ReadMessageID)
 			}
 			if !shared {
 				err = backend.MarkConversationRead(ctx, client.UniqueID, request.ID, request.ReadMessageID)

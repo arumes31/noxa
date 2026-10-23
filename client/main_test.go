@@ -23,7 +23,14 @@ func TestMain(m *testing.M) {
 	if updateHandoffTestMain != nil && updateHandoffTestMain() {
 		return
 	}
-	os.Exit(m.Run())
+	root, err := os.MkdirTemp("", "noxa-dm-trust-tests-")
+	if err != nil {
+		panic(err)
+	}
+	dmTrustRootOverride = root
+	code := m.Run()
+	_ = os.RemoveAll(root)
+	os.Exit(code)
 }
 
 func TestConfigureStandardLogger(t *testing.T) {

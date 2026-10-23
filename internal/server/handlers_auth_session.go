@@ -125,6 +125,12 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 				return err
 			}
 		}
+		// Metadata serialization makes capacity check and publication atomic.
+		// Idle sockets are deliberately excluded from the configured user limit.
+		if max := s.EffectiveMaxClients(ctx); max > 0 && s.authenticatedClientCount() >= max {
+			rejection = "server is full"
+			return authorization.ErrRoleForbidden
+		}
 		if id.customName {
 			id.nickname = s.dedupeNickname(id.nickname)
 		}

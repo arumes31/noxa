@@ -14,7 +14,9 @@ import (
 func TestMediaEgressLoopbackSockets(t *testing.T) {
 	for _, name := range []string{"automatic", "shared", "loopback"} {
 		t.Run(name, func(t *testing.T) {
-			network := NetworkConfig{}
+			// This fixture intentionally connects over this machine's LAN/VPN
+			// interfaces; production now requires those destinations explicitly.
+			network := NetworkConfig{AllowedRemoteCIDRs: []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"}}
 			switch name {
 			case "shared":
 				network.UDPAddr = "0.0.0.0:0"

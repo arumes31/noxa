@@ -69,6 +69,20 @@ func (s *Store) ManageWebhook(ctx context.Context, r netproto.WebhookRequest, cr
 	return out, tx.Commit()
 }
 
+// AuthenticateWebhook does not acquire a row lock. Delivery revalidates the
+// token under its transaction to preserve post/revoke serialization.
+func (s *Store) AuthenticateWebhook(ctx context.Context, id int64, hash []byte) (bool, error) {
+	var stored []byte
+	err := s.db.QueryRowContext(ctx, `SELECT token_hash FROM incoming_webhooks WHERE id=$1`, id).Scan(&stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return subtle.ConstantTimeCompare(stored, hash) == 1, nil
+}
+
 // DeliverWebhook serializes post/revoke and rate consumption on the capability
 // row. The caller already holds current policy and admission locks. Only the
 // encrypted result of authorize is inserted, in the same transaction.
@@ -82,7 +96,7 @@ func (s *Store) DeliverWebhook(ctx context.Context, id int64, hash []byte, autho
 	var storedHash []byte
 	var reset time.Time
 	var count int
-	err = tx.QueryRowContext(ctx, `SELECT h.id,h.channel_id,h.creator_id,u.unique_id,h.name,h.token_hash,h.rate_reset,h.rate_count FROM incoming_webhooks h JOIN users u ON u.id=h.creator_id WHERE h.id=$1 FOR UPDATE OF h`, id).Scan(&hook.ID, &hook.ChannelID, &hook.CreatorID, &hook.CreatorUID, &hook.Name, &storedHash, &reset, &count)
+	err = tx.QueryRowContext(ctx, `SELECT h.id,h.channel_id,h.creator_id,u.unique_id,h.name,h.token_hash,h.rate_reset,h.rate_count FROM incoming_webhooks h JOIN users u ON u.id=h.creator_id WHERE h.id=$1 AND h.token_hash=$2 FOR UPDATE OF h`, id, hash).Scan(&hook.ID, &hook.ChannelID, &hook.CreatorID, &hook.CreatorUID, &hook.Name, &storedHash, &reset, &count)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && subtle.ConstantTimeCompare(storedHash, hash) != 1) {
 		return hook, 0, "", 0, ErrWebhookDenied
 	}

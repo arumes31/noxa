@@ -24,7 +24,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("NOXA_METRICS_ALLOW_REMOTE", "true")
 	t.Setenv("NOXA_PPROF_ENABLED", "true")
 	t.Setenv("NOXA_SHUTDOWN_TIMEOUT", "45s")
-	t.Setenv("NOXA_DATABASE_URL", "postgres://user:pass@db:5432/x?sslmode=require")
+	t.Setenv("NOXA_DATABASE_URL", "postgres://user:pass@db:5432/x?sslmode=verify-full")
 	t.Setenv("NOXA_REDIS_ADDR", "redis:6379")
 	t.Setenv("NOXA_REDIS_PASSWORD", "secret")
 	t.Setenv("NOXA_MAX_CLIENTS", "512")
@@ -68,7 +68,7 @@ func TestLoadFromEnv(t *testing.T) {
 		{"MetricsAllowRemote", cfg.MetricsAllowRemote, true},
 		{"PprofEnabled", cfg.PprofEnabled, true},
 		{"ShutdownTimeout", cfg.ShutdownTimeout, 45 * time.Second},
-		{"DatabaseURL", cfg.DatabaseURL, "postgres://user:pass@db:5432/x?sslmode=require"},
+		{"DatabaseURL", cfg.DatabaseURL, "postgres://user:pass@db:5432/x?sslmode=verify-full"},
 		{"RedisAddr", cfg.RedisAddr, "redis:6379"},
 		{"RedisPassword", cfg.RedisPassword, "secret"},
 		{"MaxClients", cfg.MaxClients, 512},
@@ -107,6 +107,12 @@ func TestLoadDefaults(t *testing.T) {
 		}
 	}
 
+	// Development must be explicitly selected; an omitted mode rejects the
+	// insecure built-in database credentials before the server starts.
+	if _, err := Load(); err == nil {
+		t.Fatal("implicit production startup accepted development credentials")
+	}
+	t.Setenv("NOXA_DEV_MODE", "true")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -217,7 +223,7 @@ max_clients: 256
 dev_mode: false
 server_password: "yaml-server-password"
 log_level: "error"
-database_url: "postgres://app:secret@db:5432/noxa?sslmode=require"
+database_url: "postgres://app:secret@db:5432/noxa?sslmode=verify-full"
 webrtc:
   enable_av1: true
   ice_servers:
@@ -438,7 +444,7 @@ func TestValidateRejectsUnsafeValues(t *testing.T) {
 			name: "production default database credentials",
 			mutate: func(c *Config) {
 				c.DevMode = false
-				c.DatabaseURL = "postgres://noxa:noxa@db:5432/noxa?sslmode=require"
+				c.DatabaseURL = "postgres://noxa:noxa@db:5432/noxa?sslmode=verify-full"
 			},
 			wantErr: "default noxa:noxa credentials",
 		},
@@ -493,8 +499,9 @@ func TestValidateProductionDatabaseTLSModes(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			cfg := cloneConfig(base)
 			cfg.DatabaseURL = "postgres://app:secret@db:5432/noxa?sslmode=" + mode
-			if err := cfg.Validate(); err != nil {
-				t.Fatalf("Validate() error = %v", err)
+			err := cfg.Validate()
+			if (err == nil) != (mode == "verify-full") {
+				t.Fatalf("mode %s: unexpected result %v", mode, err)
 			}
 		})
 	}
@@ -579,7 +586,7 @@ func TestWarningsCoverProductionCredentialsAndRemoteExposure(t *testing.T) {
 func TestValidateProductionRequiresServerPasswordOrAnonymousOptIn(t *testing.T) {
 	cfg := loadDefaultConfig(t)
 	cfg.DevMode = false
-	cfg.DatabaseURL = "postgres://app:secret@db:5432/noxa?sslmode=require"
+	cfg.DatabaseURL = "postgres://app:secret@db:5432/noxa?sslmode=verify-full"
 	cfg.ServerPassword = ""
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "allow_anonymous") {
 		t.Fatalf("Validate() = %v, want allow_anonymous error", err)
@@ -603,7 +610,7 @@ func TestValidateProductionRequiresServerPasswordOrAnonymousOptIn(t *testing.T) 
 func TestValidateProductionRequiresRemoteRedisPassword(t *testing.T) {
 	cfg := loadDefaultConfig(t)
 	cfg.DevMode = false
-	cfg.DatabaseURL = "postgres://app:secret@db:5432/noxa?sslmode=require"
+	cfg.DatabaseURL = "postgres://app:secret@db:5432/noxa?sslmode=verify-full"
 	cfg.ServerPassword = "server-password"
 	cfg.RedisAddr = "redis:6379"
 	cfg.RedisPassword = ""
@@ -667,7 +674,7 @@ func TestSummary(t *testing.T) {
 		TCPAddr:         DefaultTCPAddr,
 		UDPAddr:         DefaultUDPAddr,
 		GRPCAddr:        DefaultGRPCAddr,
-		DatabaseURL:     "postgres://db-user:db-password@db:5432/noxa?sslmode=require&token=db-token",
+		DatabaseURL:     "postgres://db-user:db-password@db:5432/noxa?sslmode=verify-full&token=db-token",
 		RedisAddr:       "redis://redis-user:redis-password@redis:6379/0?secret=redis-token",
 		RedisPassword:   "separate-redis-password",
 		MaxClients:      1024,
@@ -681,7 +688,7 @@ func TestSummary(t *testing.T) {
 	if s == "" {
 		t.Error("Summary() returned empty string")
 	}
-	if !strings.Contains(s, `name="noxa"`) || !strings.Contains(s, "db=\"postgres://db:5432/noxa?sslmode=require\"") {
+	if !strings.Contains(s, `name="noxa"`) || !strings.Contains(s, "db=\"postgres://db:5432/noxa?sslmode=verify-full\"") {
 		t.Errorf("Summary() = %q, want safe identifying fields", s)
 	}
 	if !strings.Contains(s, "shutdown_timeout=30s") {
@@ -722,6 +729,8 @@ func loadDefaultConfig(t *testing.T) *Config {
 			}
 		}
 	}
+	// This fixture deliberately exercises the development defaults.
+	t.Setenv("NOXA_DEV_MODE", "true")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -746,4 +755,29 @@ func indexOf(s string, b byte) int {
 		}
 	}
 	return -1
+}
+
+func TestProductionIsDefaultWithValidConfiguration(t *testing.T) {
+	t.Setenv("NOXA_DEV_MODE", "")
+	v := newConfigViper()
+	v.Set("database_url", "postgres://application:strong-password@localhost:5432/noxa?sslmode=verify-full")
+	v.Set("server_password", "strong-server-password")
+	cfg, err := decodeConfig(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DevMode {
+		t.Fatal("development mode implicitly enabled")
+	}
+}
+
+func TestProductionDatabaseRejectsAmbiguousTLSOptions(t *testing.T) {
+	for _, query := range []string{"sslmode=verify-full&sslmode=disable", "sslmode=verify-full&sslmode=verify-full", "sslmode=verify-full&password=override", "sslmode=verify-full&host=other", "sslmode=verify-full&bad=%xx", "sslmode=VERIFY-FULL", "sslmode=verify-ca", "sslmode=require"} {
+		if err := validateProductionDatabaseURL("postgres://app:secret@db/noxa?" + query); err == nil {
+			t.Fatalf("accepted ambiguous database options: %s", query)
+		}
+	}
+	if err := validateProductionDatabaseURL("postgres://app:secret@db/noxa?sslmode=verify-full&sslrootcert=%2Fcerts%2Fca.pem"); err != nil {
+		t.Fatal(err)
+	}
 }

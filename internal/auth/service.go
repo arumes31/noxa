@@ -131,23 +131,30 @@ func (a *AuthService) AuthenticatePassword(ctx context.Context, uniqueID, passwo
 // verifies the Ed25519 signature over the challenge. It returns true on success
 // and false (with a nil error) on a signature mismatch. Every call verifies.
 func (a *AuthService) AuthenticateChallenge(ctx context.Context, uniqueID string, challenge, signature []byte) (bool, error) {
+	_, ok, err := a.AuthenticateIdentityChallenge(ctx, uniqueID, challenge, signature)
+	return ok, err
+}
+
+// AuthenticateIdentityChallenge returns the exact identity used for verification,
+// avoiding a second lookup that could race an account key replacement.
+func (a *AuthService) AuthenticateIdentityChallenge(ctx context.Context, uniqueID string, challenge, signature []byte) (string, bool, error) {
 	var pubPEM string
 	const q = `SELECT public_key FROM users WHERE unique_id = $1`
 	err := a.store.DB().QueryRowContext(ctx, q, uniqueID).Scan(&pubPEM)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, ErrUserNotFound
+			return "", false, ErrUserNotFound
 		}
-		return false, fmt.Errorf("querying user public key: %w", err)
+		return "", false, fmt.Errorf("querying user public key: %w", err)
 	}
 	if pubPEM == "" {
-		return false, nil
+		return "", false, nil
 	}
 
 	if err := VerifyChallenge(pubPEM, challenge, signature); err != nil {
-		return false, nil
+		return "", false, nil
 	}
-	return true, nil
+	return pubPEM, true, nil
 }
 
 // User holds the identity fields the server needs after a successful
@@ -194,23 +201,29 @@ func (a *AuthService) LookupActiveBan(ctx context.Context, uniqueID, ip string) 
 	const q = `SELECT id, ban_type, value, COALESCE(reason, ''), expires_at
 	          FROM bans
 	          WHERE channel_id IS NULL
-	            AND ((ban_type = 1 AND value = $1) OR (ban_type = 0 AND value = $2))
+	            AND ((ban_type = 1 AND value = $1) OR ban_type = 0)
 	            AND (expires_at IS NULL OR expires_at > NOW())
-	          ORDER BY id LIMIT 1`
-	var b Ban
-	var expires sql.NullTime
-	err := a.store.DB().QueryRowContext(ctx, q, uniqueID, ip).
-		Scan(&b.ID, &b.Type, &b.Value, &b.Reason, &expires)
+	          ORDER BY id`
+	rows, err := a.store.DB().QueryContext(ctx, q, uniqueID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("querying active ban: %w", err)
 	}
-	if expires.Valid {
-		b.ExpiresAt = expires.Time
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var b Ban
+		var expires sql.NullTime
+		if err := rows.Scan(&b.ID, &b.Type, &b.Value, &b.Reason, &expires); err != nil {
+			return nil, err
+		}
+		if b.Type == 0 && !sameBanIP(b.Value, ip) {
+			continue
+		}
+		if expires.Valid {
+			b.ExpiresAt = expires.Time
+		}
+		return &b, nil
 	}
-	return &b, nil
+	return nil, rows.Err()
 }
 
 // AuthenticateNickname looks up a user by nickname and verifies the supplied

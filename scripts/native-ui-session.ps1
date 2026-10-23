@@ -276,7 +276,7 @@ try {
         $env:NOXA_CHAT_MASTER_KEY = $null
         foreach ($account in @('ALICE', 'BOB', 'ADMIN')) {
             $accountPassword = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(24)).ToLowerInvariant()
-            $provisionOutput = (& (Join-Path $runRoot 'tools/adduser.exe') -nickname "native-$($account.ToLowerInvariant())" -password $accountPassword 2>&1 | Out-String)
+            $provisionOutput = ($accountPassword | & (Join-Path $runRoot 'tools/adduser.exe') -nickname "native-$($account.ToLowerInvariant())" -password-stdin 2>&1 | Out-String)
             if ($LASTEXITCODE -ne 0 -or $provisionOutput -notmatch 'unique_id: (\S+)') { throw "Could not provision $account; credential-bearing output suppressed." }
             $credentials[$account] = @{ uid = $Matches[1]; password = $accountPassword }
         }

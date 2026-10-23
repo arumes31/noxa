@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
+	"strconv"
+	"time"
 )
 
 type channelInviteStore interface {
@@ -23,7 +25,7 @@ func (s *TCPServer) handleChannelInvite(ctx context.Context, client *Client, fra
 		if r.Action == "resolve" {
 			capability = authorization.Connect
 		}
-		if r.Action == "revoke" {
+		if r.Action == "revoke" || r.Action == "regenerate" {
 			capability = authorization.ManageChannelAccess
 		}
 		if !s.roleAllowed(ctx, client, r.ChannelID, capability) {
@@ -51,6 +53,11 @@ func (s *TCPServer) handleChannelInvite(ctx context.Context, client *Client, fra
 		}
 		if r.Action == "regenerate" {
 			out.Token = token
+		}
+		if r.Action == "regenerate" || r.Action == "revoke" {
+			auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			s.auditInChannels(auditCtx, client.uniqueID(), "channel_invite_"+r.Action, strconv.FormatInt(r.ChannelID, 10), "", r.ChannelID)
 		}
 		return s.writeCommittedReply(client, netproto.MsgChannelInviteResult, out)
 	})

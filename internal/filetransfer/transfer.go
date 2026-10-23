@@ -32,9 +32,9 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 			s.logger.Debug("closing file transfer connection", zap.Error(err))
 		}
 	}()
-	_ = conn.SetDeadline(time.Now().Add(connTimeout))
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 
-	f, err := netproto.ReadFrame(conn)
+	f, err := netproto.ReadFrameLimit(conn, 4096)
 	if err != nil {
 		return
 	}
@@ -54,6 +54,8 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 		return
 	}
 	defer s.deactivateTransfer(active)
+	s.releasePreauth(conn)
+	_ = conn.SetDeadline(time.Now().Add(connTimeout))
 
 	if tr.Direction == "upload" {
 		err = s.receiveUpload(ctx, conn, tr)

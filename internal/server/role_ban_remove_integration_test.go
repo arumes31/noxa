@@ -14,9 +14,12 @@ import (
 
 func TestRoleBanRemovalPostgresAcknowledgementAndRevocation(t *testing.T) {
 	db := integrationManagementStore(t)
+	if _, err := db.DB().ExecContext(t.Context(), `INSERT INTO users(id,unique_id,nickname) VALUES(1,'admin-uid','admin')`); err != nil {
+		t.Fatal(err)
+	}
 	var first, second int64
 	for i, dest := range []*int64{&first, &second} {
-		if err := db.DB().QueryRowContext(t.Context(), "INSERT INTO bans (ban_type,value) VALUES (1,$1) RETURNING id", "banned-"+strconv.Itoa(i)).Scan(dest); err != nil {
+		if err := db.DB().QueryRowContext(t.Context(), "INSERT INTO bans (ban_type,value,banned_by) VALUES (1,$1,1) RETURNING id", "banned-"+strconv.Itoa(i)).Scan(dest); err != nil {
 			t.Fatal(err)
 		}
 	}

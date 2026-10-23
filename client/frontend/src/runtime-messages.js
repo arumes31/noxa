@@ -1,4 +1,5 @@
 export const runtimeEnglish = {
+ "runtime.recordingActive": "Server recording active",
  "relay.revokeSession": "Revoke relay access for this session",
  "relay.revokeAll": "Revoke relay access for all user sessions",
  "relay.revokeHelp": "Stops relayed traffic until reconnect. Direct connections are unaffected.",
@@ -174,6 +175,7 @@ export const runtimeEnglish = {
     "runtime.previousCrash": "previous crash detected; export logs via Help → Export logs"
 };
 export const runtimeGerman = {
+ "runtime.recordingActive": "Server-Aufzeichnung aktiv",
  "relay.revokeSession": "Relay-Zugriff dieser Sitzung widerrufen",
  "relay.revokeAll": "Relay-Zugriff aller Sitzungen des Nutzers widerrufen",
  "relay.revokeHelp": "Stoppt Relay-Verkehr bis zur erneuten Anmeldung. Direkte Verbindungen bleiben bestehen.",

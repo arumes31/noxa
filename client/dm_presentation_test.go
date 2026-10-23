@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"testing"
 	"time"
@@ -24,11 +23,11 @@ func TestDirectMessageDeviceKeyBinding(t *testing.T) {
 		sender, recipient string
 		verified          bool
 	}{
-		{"recipient ignores another sender device in UID cache", bob, base64.StdEncoding.EncodeToString(alicePub[:]), base64.StdEncoding.EncodeToString(bobPub[:]), true},
-		{"sender echo ignores rotated recipient directory key", alice, base64.StdEncoding.EncodeToString(alicePub[:]), base64.StdEncoding.EncodeToString(bobPub[:]), true},
-		{"malformed sender binding cannot fall back", bob, "invalid", base64.StdEncoding.EncodeToString(bobPub[:]), false},
-		{"partial binding cannot fall back", bob, "", base64.StdEncoding.EncodeToString(bobPub[:]), false},
-		{"different recipient device cannot consume binding", bob, base64.StdEncoding.EncodeToString(alicePub[:]), base64.StdEncoding.EncodeToString(otherDevice[:]), false},
+		{"recipient ignores another sender device in UID cache", bob, signedTestRecord(t, "alice-account", alicePub, alice.id), signedTestRecord(t, "bob-account", bobPub, bob.id), true},
+		{"sender echo ignores rotated recipient directory key", alice, signedTestRecord(t, "alice-account", alicePub, alice.id), signedTestRecord(t, "bob-account", bobPub, bob.id), true},
+		{"malformed sender binding cannot fall back", bob, "invalid", signedTestRecord(t, "bob-account", bobPub, bob.id), false},
+		{"partial binding cannot fall back", bob, "", signedTestRecord(t, "bob-account", bobPub, bob.id), false},
+		{"different recipient device cannot consume binding", bob, signedTestRecord(t, "alice-account", alicePub, alice.id), signedTestRecord(t, "bob-account", otherDevice, bob.id), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			alice.pubKeys.put("bob-account", otherDevice)
@@ -93,8 +92,8 @@ func TestDecryptedDMRetainsScopeAndUsesRecipientForOwnEcho(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	alpha.pubKeys.put("bravo", bravoPub)
-	bravo.pubKeys.put("alpha", alphaPub)
+	cacheTestPeer(t, alpha, "bravo", bravoPub, bravo.id)
+	cacheTestPeer(t, bravo, "alpha", alphaPub, alpha.id)
 	message, err := alpha.encryptChat("direct", "bravo", "private Grüße 🌿")
 	if err != nil {
 		t.Fatal(err)

@@ -5,8 +5,8 @@ import { test, expect } from "./fixtures.js";
 // are fakes. Fullscreen is entered through the app's own buttons (a user
 // gesture), exactly like in the client.
 test.beforeEach(async ({ page }) => {
-    await page.route("**/fullscreen-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en" data-theme="arctic"><head>
-        <link rel="stylesheet" href="/src/style.css"><link rel="stylesheet" href="/src/streams.css"><link rel="stylesheet" href="/src/workspace.css"><link rel="stylesheet" href="/src/arctic-night.css">
+    await page.route("**/fullscreen-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en" data-theme="midnight"><head>
+        <link rel="stylesheet" href="/src/style.css"><link rel="stylesheet" href="/src/streams.css"><link rel="stylesheet" href="/src/workspace.css"><link rel="stylesheet" href="/src/midnight.css">
         <link rel="stylesheet" href="/src/arctic-stage.css"><link rel="stylesheet" href="/src/speaking-avatar.css"><link rel="stylesheet" href="/src/arctic-fullscreen.css">
         <style>body{margin:0;height:100vh}#center{height:100vh;display:flex;flex-direction:column}</style></head>
         <body><main id="center"><section id="chat-pane"><div id="video-grid" class="hidden"></div><div id="chat-wrap"><div id="chat-log"></div></div><div id="chat-input-row"><input id="chat-text" aria-label="Message"></div></section>

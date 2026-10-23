@@ -132,7 +132,7 @@ func openTest(t *testing.T, key [32]byte, blob string) string {
 
 // testChatScope returns a channel id no real channel uses, so a test never
 // collides with dev data or another test.
-func testChatScope() int64 { return time.Now().UnixNano() }
+func testChatScope(t *testing.T, s *Store) int64 { return testScope(t, s) }
 
 // TestChatMessageRowsHoldNoPlaintext is the at-rest guarantee: after every
 // write path (store, edit, delete) the plaintext column is empty and the row
@@ -141,7 +141,7 @@ func TestChatMessageRowsHoldNoPlaintext(t *testing.T) {
 	s := testDBStore(t)
 	ctx := context.Background()
 	canary := "canary-7f3a-" + fmt.Sprint(time.Now().UnixNano())
-	scope := testChatScope()
+	scope := testChatScope(t, s)
 	key := testScopeKey(11)
 	t.Cleanup(func() {
 		_, _ = s.DB().ExecContext(ctx, `DELETE FROM chat_messages WHERE channel_id = $1`, scope)
@@ -221,6 +221,7 @@ func TestEditRejectedOnLegacyPlaintextRow(t *testing.T) {
 	s := testScratchStore(t)
 	ctx := context.Background()
 	applyPreLedgerMigrations(t, s, "012")
+	seedChatChannels(t, s, 42)
 
 	var id int64
 	if err := s.DB().QueryRowContext(ctx,
@@ -255,7 +256,7 @@ func TestEditRejectedOnLegacyPlaintextRow(t *testing.T) {
 func TestPlaintextWriteRejectedByConstraint(t *testing.T) {
 	s := testDBStore(t)
 	ctx := context.Background()
-	scope := testChatScope()
+	scope := testChatScope(t, s)
 	key := testScopeKey(31)
 	t.Cleanup(func() {
 		_, _ = s.DB().ExecContext(ctx, `DELETE FROM chat_messages WHERE channel_id = $1`, scope)
@@ -308,6 +309,7 @@ func TestEmptyBodyRowSurvivesMigration(t *testing.T) {
 	s := testScratchStore(t)
 	ctx := context.Background()
 	applyPreLedgerMigrations(t, s, "012")
+	seedChatChannels(t, s, 7)
 
 	seed := func(body string, deleted bool) int64 {
 		t.Helper()
@@ -449,6 +451,7 @@ func TestLegacyBackfillHelpersSealAndBlank(t *testing.T) {
 	s := testScratchStore(t)
 	ctx := context.Background()
 	applyPreLedgerMigrations(t, s, "012")
+	seedChatChannels(t, s, 1, 2, 3)
 
 	want := map[int64]string{}
 	for i, body := range []string{"first canary-7f3a", "second", "", "third with unicode: schoen 🔒"} {
@@ -531,6 +534,7 @@ func TestLegacyBackfillHelpersPurgeMode(t *testing.T) {
 	s := testScratchStore(t)
 	ctx := context.Background()
 	applyPreLedgerMigrations(t, s, "012")
+	seedChatChannels(t, s, 5)
 
 	for _, body := range []string{"one", "two", ""} {
 		if _, err := s.DB().ExecContext(ctx,
@@ -567,5 +571,14 @@ func TestLegacyBackfillHelpersPurgeMode(t *testing.T) {
 	}
 	if page, err := s.LegacyPlaintextPage(ctx, 0, 500); err != nil || len(page) != 0 {
 		t.Fatalf("purge left %d rows for the backfill (err %v), want none", len(page), err)
+	}
+}
+
+func seedChatChannels(t *testing.T, s *Store, ids ...int64) {
+	t.Helper()
+	for _, id := range ids {
+		if _, err := s.DB().ExecContext(t.Context(), `INSERT INTO channels(id,name,channel_type) VALUES($1,'chat fixture',2) ON CONFLICT(id) DO NOTHING`, id); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"math"
 	"strings"
 	"testing"
-	"time"
 
 	"noxa/internal/safecast"
 )
@@ -19,12 +18,11 @@ import (
 // dev data or each other.
 func testScope(t *testing.T, s *Store) int64 {
 	t.Helper()
-	scope := time.Now().UnixNano()
-	t.Cleanup(func() {
-		ctx := context.Background()
-		_, _ = s.DB().ExecContext(ctx, `DELETE FROM chat_scope_keys WHERE scope_id = $1`, scope)
-		_, _ = s.DB().ExecContext(ctx, `DELETE FROM chat_scope_seq WHERE scope_id = $1`, scope)
-	})
+	var scope int64
+	if err := s.DB().QueryRowContext(context.Background(), `INSERT INTO channels(name,channel_type) VALUES('key-test',2) RETURNING id`).Scan(&scope); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = s.DB().ExecContext(context.Background(), `DELETE FROM channels WHERE id=$1`, scope) })
 	return scope
 }
 

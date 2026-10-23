@@ -61,9 +61,10 @@ func New(logger *zap.Logger, iceServers []string, enableAV1 bool) (*Engine, erro
 // NetworkConfig enables a shared IPv4 UDP listener and advertised NAT addresses.
 // Empty values preserve automatic ICE candidate gathering.
 type NetworkConfig struct {
-	Traffic     *traffic.Counter
-	UDPAddr     string
-	ExternalIPs []string
+	Traffic            *traffic.Counter
+	UDPAddr            string
+	ExternalIPs        []string
+	AllowedRemoteCIDRs []string
 }
 
 // NewWithNetwork constructs an engine with explicit container port forwarding.
@@ -111,7 +112,13 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 		return nil, err
 	}
 
+	remotePolicy, err := remoteICEPolicy(network.AllowedRemoteCIDRs, includeLoopback)
+	if err != nil {
+		return nil, err
+	}
 	settingEngine := webrtc.SettingEngine{}
+	settingEngine.SetRemoteIPFilter(remotePolicy)
+	settingEngine.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	// An explicit loopback listener otherwise has no gatherable host address.
 	settingEngine.SetIncludeLoopbackCandidate(includeLoopback)
 	networkStack, err := stdnet.NewNet()

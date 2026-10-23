@@ -415,3 +415,22 @@ func TestAuthenticatePasswordVerifiesEveryCall(t *testing.T) {
 		t.Fatal("correct password rejected on second attempt")
 	}
 }
+
+func TestLookupActiveBanEquivalentIPs(t *testing.T) {
+	svc, s := testAuthServiceWithStore(t)
+	for _, tc := range []struct{ stored, peer string }{
+		{"::ffff:192.0.2.78", "192.0.2.78"},
+		{"2001:0db8:0000:0000:0000:0000:0000:0078", "2001:db8::78"},
+		{"192.0.2.79", "::ffff:192.0.2.79"},
+	} {
+		insertBan(t, s, 0, "not-an-ip", "legacy invalid row", nil)
+		insertBan(t, s, 0, tc.stored, "equivalent", nil)
+		ban, err := svc.LookupActiveBan(t.Context(), "unrelated", tc.peer)
+		if err != nil || ban == nil || ban.Value != tc.stored {
+			t.Fatalf("%s: ban=%+v err=%v", tc.peer, ban, err)
+		}
+	}
+	if sameBanIP("", "") || sameBanIP("bad", "192.0.2.78") || sameBanIP("fe80::1%a", "fe80::1%b") {
+		t.Fatal("unrelated address matched")
+	}
+}

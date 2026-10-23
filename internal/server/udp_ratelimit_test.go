@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -74,5 +75,37 @@ func TestIPRateLimiterDisabled(t *testing.T) {
 	}
 	if l := newIPRateLimiter(-5, 0); l != nil {
 		t.Fatal("newIPRateLimiter(-5) returned non-nil limiter")
+	}
+}
+
+func TestIPRateLimiterOverflowIsBoundedAndRecovers(t *testing.T) {
+	l := newIPRateLimiter(10, 20)
+	defer l.close()
+	now := time.Now()
+	for i := range maxIPRateBuckets {
+		if !l.allow(strconv.Itoa(i), now) {
+			t.Fatal("initial allocation denied")
+		}
+	}
+	for i := range 20 {
+		if !l.allow("overflow-"+strconv.Itoa(i), now) {
+			t.Fatal("fresh source denied despite overflow budget")
+		}
+	}
+	if l.allow("exhausted", now) {
+		t.Fatal("overflow burst unbounded")
+	}
+	if l.bucketCount() != maxIPRateBuckets {
+		t.Fatal("bucket map exceeded cap")
+	}
+	if !l.allow("new-legitimate-source", now.Add(time.Second)) {
+		t.Fatal("overflow failed to recover")
+	}
+	if !l.allow("0", now) {
+		t.Fatal("overflow consumed existing source budget")
+	}
+	l.sweep(now.Add(bucketIdleTTL + 2*time.Second))
+	if !l.allow("new", now.Add(bucketIdleTTL+2*time.Second)) || l.bucketCount() != 1 {
+		t.Fatal("eviction did not recover per-source buckets")
 	}
 }

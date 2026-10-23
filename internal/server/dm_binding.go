@@ -3,10 +3,14 @@ package server
 import (
 	"encoding/base64"
 
+	"noxa/internal/e2ee"
 	"noxa/internal/netproto"
 )
 
 func canonicalDMKey(encoded string) (string, bool) {
+	if _, err := e2ee.DecodeKeyRecord(encoded); err == nil {
+		return encoded, true
+	}
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil || len(raw) != 32 {
 		return "", false
@@ -21,6 +25,12 @@ func (s *TCPServer) senderDMKey(client *Client) (string, bool) {
 	current, ok := s.deps.State.GetClient(client.ID)
 	if !ok || current.UniqueID != client.uniqueID() {
 		return "", false
+	}
+	client.mu.Lock()
+	record := client.dmKeyRecord
+	client.mu.Unlock()
+	if record != "" {
+		return record, true
 	}
 	return canonicalDMKey(current.E2EPublicKey)
 }

@@ -203,7 +203,7 @@ func TestConversationReadReceiptsAreSharedOnlyOnRequest(t *testing.T) {
 	defer env.stop()
 	owner, _ := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = owner.Close() }()
-	member, _ := dialAuthed(t, env.addr, "admin-uid")
+	member, memberID := dialAuthed(t, env.addr, "admin-uid")
 	defer func() { _ = member.Close() }()
 	invited, _ := dialAuthed(t, env.addr, "third-uid")
 	defer func() { _ = invited.Close() }()
@@ -219,7 +219,7 @@ func TestConversationReadReceiptsAreSharedOnlyOnRequest(t *testing.T) {
 	if err := json.Unmarshal(readEventOfType(t, owner, eventConversationRead), &event); err != nil {
 		t.Fatal(err)
 	}
-	if event != (netproto.ConversationReadEvent{ConversationID: activityGroupID, UniqueID: "admin-uid", MessageID: 9}) {
+	if event != (netproto.ConversationReadEvent{ClientID: memberID, ConversationID: activityGroupID, UniqueID: "admin-uid", MessageID: 9}) {
 		t.Fatalf("read event=%+v", event)
 	}
 	expectNoEvent(t, invited, eventConversationRead)
@@ -311,5 +311,27 @@ func TestConversationActivityQueuedBeforeRemovalIsNotDelivered(t *testing.T) {
 	}
 	if ok, _ := srv.conversationActivityDeliverable("admin-uid", []byte(`{}`)); ok {
 		t.Fatal("an activity event without a group was delivered")
+	}
+}
+
+func TestInvisibleConversationReadRemainsPrivate(t *testing.T) {
+	var store *receiptTestStore
+	env, _ := activityTestEnv(t, false, func(srv *TCPServer) {
+		store = &receiptTestStore{privateCallTestStore: srv.deps.Chat.(*privateCallTestStore)}
+		srv.deps.Chat = store
+	})
+	defer env.stop()
+	owner, _ := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = owner.Close() }()
+	member, memberID := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = member.Close() }()
+	env.state.SetStatus(memberID, "invisible", "")
+	send(t, member, netproto.MsgConversationRequest, netproto.ConversationRequest{Action: "mark_read", ID: activityGroupID, ReadMessageID: 9, ShareRead: true})
+	readOfType(t, member, netproto.MsgConversationResult)
+	expectNoEvent(t, owner, eventConversationRead)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.shared) != 0 || !slices.Equal(store.marked, []string{"admin-uid"}) {
+		t.Fatalf("private=%v shared=%v", store.marked, store.shared)
 	}
 }

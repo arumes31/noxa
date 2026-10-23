@@ -10,10 +10,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"hash"
 	"io"
-	"io/fs"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -701,7 +700,16 @@ func (a *App) PickUploadPaths() []string {
 	if err != nil || paths == nil {
 		return []string{}
 	}
-	return paths
+	selected := make([]string, 0, len(paths))
+	for _, path := range paths {
+		canonical, err := a.grantNativePath("upload", path)
+		if err != nil {
+			log.Printf("upload selection rejected: %v", err)
+			continue
+		}
+		selected = append(selected, canonical)
+	}
+	return selected
 }
 
 // UploadPathProgress uploads a local file into a channel folder, streaming it
@@ -713,7 +721,11 @@ func (a *App) UploadPathProgress(id string, channelID int64, folder, path string
 	if err != nil {
 		return err.Error()
 	}
-	return cm.uploadPathProgress(id, channelID, folder, path)
+	src, err := a.openUploadSelection(path)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.uploadPathProgress(id, channelID, folder, src)
 }
 
 // UploadPathProgressForTab binds picker uploads before inspecting local data.
@@ -722,11 +734,22 @@ func (a *App) UploadPathProgressForTab(tabID, id string, channelID int64, folder
 	if err != nil {
 		return err.Error()
 	}
-	return cm.uploadPathProgress(id, channelID, folder, path)
+	src, err := a.openUploadSelection(path)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.uploadPathProgress(id, channelID, folder, src)
 }
 
-func (cm *connManager) uploadPathProgress(id string, channelID int64, folder, path string) string {
-	st, err := os.Stat(path)
+func (cm *connManager) uploadPathProgress(id string, channelID int64, folder string, src *os.File) string {
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			_ = src.Close()
+		}
+	}()
+	path := src.Name()
+	st, err := src.Stat()
 	if err != nil {
 		return "cannot read " + filepath.Base(path) + ": " + err.Error()
 	}
@@ -748,9 +771,11 @@ func (cm *connManager) uploadPathProgress(id string, channelID int64, folder, pa
 	if err != nil {
 		return err.Error()
 	}
+	handedOff = true
 	go guardCrash("ft upload path", func() {
+		defer func() { _ = src.Close() }()
 		p := ftProgress{ID: id, Direction: "upload", Name: name, Total: st.Size(), Status: "active"}
-		err := cm.ftUploadFile(id, ep, init.Token, init.TransferID, path, &p)
+		err := cm.ftUploadFile(id, ep, init.Token, init.TransferID, src, &p)
 		if err != nil {
 			p.Status = "error"
 			if errors.Is(err, errTransferCanceled) {
@@ -768,15 +793,7 @@ func (cm *connManager) uploadPathProgress(id string, channelID int64, folder, pa
 
 // ftUploadFile streams a file off disk to the data port, hashing as it goes so
 // nothing larger than one chunk is ever held in memory.
-func (m *connManager) ftUploadFile(id string, ep ftEndpoint, token, transferID, path string, p *ftProgress) error {
-	// #nosec G304 -- path is an explicit native-picker selection and is
-	// intentionally opened for upload.
-	src, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = src.Close() }()
-
+func (m *connManager) ftUploadFile(id string, ep ftEndpoint, token, transferID string, src *os.File, p *ftProgress) error {
 	conn, err := transferDial(ep)
 	if err != nil {
 		return err
@@ -834,9 +851,19 @@ func isClosedConn(err error) bool {
 // PickSavePath opens the native save dialog and returns the chosen path
 // ("" = cancelled) for downloads.
 func (a *App) PickSavePath(defaultName string) string {
+	if !netproto.ValidFileLeaf(defaultName) {
+		defaultName = "download"
+	}
 	path, err := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
 		DefaultFilename: defaultName,
 	})
+	if err != nil {
+		return ""
+	}
+	if path == "" {
+		return ""
+	}
+	path, err = a.grantNativePath("download", path)
 	if err != nil {
 		return ""
 	}
@@ -851,13 +878,17 @@ func (a *App) DownloadPath(name string) string {
 	a.settingsMu.Lock()
 	dir := a.settings.DownloadFolder
 	a.settingsMu.Unlock()
-	if dir == "" {
+	if dir == "" || !netproto.ValidFileLeaf(name) {
 		return ""
 	}
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return ""
 	}
-	return filepath.Join(dir, filepath.Base(name))
+	path := filepath.Join(dir, name)
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	return path
 }
 
 // partSuffix marks the incomplete download sitting next to its destination.
@@ -873,7 +904,11 @@ func (a *App) DownloadFileProgress(id string, channelID int64, folder, name, des
 	if err != nil {
 		return err.Error()
 	}
-	return cm.downloadFileProgress(id, channelID, folder, name, destPath, total)
+	dest, err := a.openDownloadSelection(destPath)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.downloadFileProgress(id, channelID, folder, name, destPath, total, dest)
 }
 
 // DownloadFileProgressForTab binds downloads and retries to their source server.
@@ -882,10 +917,20 @@ func (a *App) DownloadFileProgressForTab(tabID, id string, channelID int64, fold
 	if err != nil {
 		return err.Error()
 	}
-	return cm.downloadFileProgress(id, channelID, folder, name, destPath, total)
+	dest, err := a.openDownloadSelection(destPath)
+	if err != nil {
+		return err.Error()
+	}
+	return cm.downloadFileProgress(id, channelID, folder, name, destPath, total, dest)
 }
 
-func (cm *connManager) downloadFileProgress(id string, channelID int64, folder, name, destPath string, total int64) string {
+func (cm *connManager) downloadFileProgress(id string, channelID int64, folder, name, destPath string, total int64, dest *downloadDestination) string {
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			dest.Close()
+		}
+	}()
 	f, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
 		netproto.FileTransferInit{ChannelID: channelID, Direction: "download", Folder: folder, Name: name},
 		10*time.Second)
@@ -900,11 +945,13 @@ func (cm *connManager) downloadFileProgress(id string, channelID int64, folder, 
 	if err != nil {
 		return err.Error()
 	}
+	handedOff = true
 	go guardCrash("ft download", func() {
+		defer dest.Close()
 		// total comes from the listing row: the wire never carries the size on
 		// the data port, and without it a resumed transfer has no denominator.
 		p := ftProgress{ID: id, Direction: "download", Name: name, Total: total, Status: "active"}
-		err := cm.ftDownloadProgress(id, ep, init.Token, init.TransferID, destPath, &p)
+		err := cm.ftDownloadApproved(id, ep, init.Token, init.TransferID, destPath, &p, dest)
 		if err != nil {
 			p.Status = "error"
 			if errors.Is(err, errTransferCanceled) {
@@ -926,14 +973,27 @@ func (cm *connManager) downloadFileProgress(id string, channelID int64, folder, 
 // bytes (259). The server's digest covers the whole file, so the prefix we
 // keep has to go through the same hash or a resumed transfer could never
 // verify.
-func resumeState(destPath string) (*os.File, int64, hash.Hash, error) {
-	partPath := destPath + partSuffix
+func resumeInRoot(dest *downloadDestination) (*os.File, int64, hash.Hash, error) {
+	part := dest.leaf + partSuffix
 	h := sha256.New()
-	// #nosec G304 -- destPath is a user-selected or configured download target;
-	// its sibling partial file is intentional.
-	f, err := os.OpenFile(partPath, os.O_RDWR|os.O_CREATE, 0o600)
+	before, statErr := dest.root.Lstat(part)
+	flags := os.O_RDWR
+	switch {
+	case errors.Is(statErr, os.ErrNotExist):
+		flags |= os.O_CREATE | os.O_EXCL
+	case statErr != nil:
+		return nil, 0, nil, statErr
+	case !before.Mode().IsRegular():
+		return nil, 0, nil, errors.New("invalid partial download")
+	}
+	f, err := dest.root.OpenFile(part, flags, 0o600)
 	if err != nil {
 		return nil, 0, nil, err
+	}
+	opened, err := f.Stat()
+	if err != nil || !opened.Mode().IsRegular() || before != nil && !os.SameFile(before, opened) {
+		_ = f.Close()
+		return nil, 0, nil, errors.New("partial download changed")
 	}
 	have, err := io.Copy(h, f)
 	if err != nil {
@@ -947,14 +1007,14 @@ func resumeState(destPath string) (*os.File, int64, hash.Hash, error) {
 // writes to destPath+partSuffix and only renames on a verified digest, so an
 // interrupted attempt leaves a resumable remnant instead of a truncated file
 // that looks complete.
-func (m *connManager) ftDownloadProgress(id string, ep ftEndpoint, token, transferID, destPath string, p *ftProgress) error {
+func (m *connManager) ftDownloadApproved(id string, ep ftEndpoint, token, transferID, destPath string, p *ftProgress, dest *downloadDestination) error {
 	release, err := reserveDownloadDestination(destPath)
 	if err != nil {
 		return err
 	}
 	defer release()
-	partPath := destPath + partSuffix
-	out, have, h, err := resumeState(destPath)
+	partPath := dest.leaf + partSuffix
+	out, have, h, err := resumeInRoot(dest)
 	if err != nil {
 		return err
 	}
@@ -1004,7 +1064,7 @@ func (m *connManager) ftDownloadProgress(id string, ep ftEndpoint, token, transf
 			// new bytes also invalidates the resumed request (for example,
 			// an offset beyond a replacement file). Preserve partials on
 			// transport interruptions so ordinary retries still resume.
-			_ = os.Remove(partPath)
+			_ = dest.root.Remove(partPath)
 		}
 		if isClosedConn(err) {
 			return errTransferCanceled
@@ -1014,21 +1074,7 @@ func (m *connManager) ftDownloadProgress(id string, ep ftEndpoint, token, transf
 	if closeErr != nil {
 		return closeErr
 	}
-	return finalizeDownloadedPart(partPath, destPath)
-}
-
-// finalizeDownloadedPart replaces the selected destination only after the
-// partial file has been closed and its digest verified. Windows cannot rename
-// over an existing file, so remove it explicitly and surface every failure
-// except an already-absent destination.
-func finalizeDownloadedPart(partPath, destPath string) error {
-	if err := os.Remove(destPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("replace existing download: %w", err)
-	}
-	if err := os.Rename(partPath, destPath); err != nil {
-		return fmt.Errorf("finalize download: %w", err)
-	}
-	return nil
+	return dest.finalize()
 }
 
 // VerifyFile re-downloads a file and compares its SHA-256 against the

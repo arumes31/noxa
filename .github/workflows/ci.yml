@@ -159,6 +159,9 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: client/frontend/package-lock.json
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - run: npm ci
       - run: bash "$GITHUB_WORKSPACE/scripts/ci-apt-setup.sh"
       - run: npx playwright install --with-deps chromium
@@ -360,6 +363,14 @@ jobs:
           path: |
             ${{ runner.temp }}/root-unit.out
             ${{ runner.temp }}/client-unit.out
+
+      - name: verify encrypted backup image and restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -f Dockerfile.backup -t noxa-backup:ci .
+          BACKUP_IMAGE=noxa-backup:ci sh scripts/test-backup-image.sh
+          docker run --rm --tmpfs /tmp:rw,exec --entrypoint sh -v "$PWD:/repo:ro" noxa-backup:ci /repo/scripts/test-encrypted-backup.sh
 
       - name: verify database backup and restore
         shell: bash

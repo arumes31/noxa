@@ -6,6 +6,7 @@ import (
 )
 
 func TestEchoEnvironmentDisablesYAMLDefault(t *testing.T) {
+	t.Setenv("NOXA_DEV_MODE", "true")
 	t.Chdir(t.TempDir())
 	if err := os.WriteFile("config.yaml", []byte("echo_channel_enabled: true\necho_channel_name: Custom Echo\n"), 0600); err != nil {
 		t.Fatal(err)
