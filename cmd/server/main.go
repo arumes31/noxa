@@ -879,6 +879,9 @@ func run() (retErr error) {
 		if err != nil {
 			return fmt.Errorf("creating web listener: %w", err)
 		}
+		if cfg.DevMode {
+			webServer.AllowLoopbackOrigins()
+		}
 	}
 
 	// Routes and listener objects are complete before any socket is opened.

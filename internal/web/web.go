@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"noxa/internal/config"
 	"noxa/internal/health"
 	"noxa/internal/netproto"
+	"noxa/internal/version"
 )
 
 // ProtocolVersion is the web app protocol this server speaks. A bundle with
@@ -57,6 +59,9 @@ type Info struct {
 	PublicURL       string `json:"public_url"`
 	RPID            string `json:"rp_id"`
 	ProtocolVersion int    `json:"protocol_version"`
+	// Version is the server build; the bundle reports it as its client
+	// version because the server always serves its own matching app.
+	Version string `json:"version"`
 }
 
 // Server is the mobile web listener.
@@ -72,6 +77,31 @@ type Server struct {
 	admission  *admission
 	baseCtx    context.Context
 	cancelBase context.CancelFunc
+	// devLoopback also accepts http(s) loopback origins on /ws, so the app
+	// can be developed and tested without a certificate. Never in production.
+	devLoopback bool
+}
+
+// AllowLoopbackOrigins accepts http(s)://localhost, 127.0.0.1 and [::1]
+// origins on any port. Call it only for dev_mode servers.
+func (s *Server) AllowLoopbackOrigins() { s.devLoopback = true }
+
+func (s *Server) originAllowed(origin string) bool {
+	if _, ok := s.origins[origin]; ok {
+		return true
+	}
+	if !s.devLoopback {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Path != "" {
+		return false
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 // New builds the listener. It does not open sockets until Start.
@@ -197,11 +227,12 @@ func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 		PublicURL:       origin,
 		RPID:            s.cfg.RPID(),
 		ProtocolVersion: ProtocolVersion,
+		Version:         version.Short(),
 	})
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.origins[r.Header.Get("Origin")]; !ok {
+	if !s.originAllowed(r.Header.Get("Origin")) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}

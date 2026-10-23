@@ -220,3 +220,22 @@ func TestInfoAndAppRoutes(t *testing.T) {
 		t.Fatalf("missing asset = %d, want 404", code)
 	}
 }
+
+func TestLoopbackOriginsOnlyInDevMode(t *testing.T) {
+	srv, err := New(testConfig(t), "noXa", &echoControl{}, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.originAllowed("http://127.0.0.1:5174") {
+		t.Fatal("loopback origin accepted outside dev mode")
+	}
+	srv.AllowLoopbackOrigins()
+	for origin, want := range map[string]bool{
+		"http://127.0.0.1:5174": true, "http://localhost": true, "https://[::1]:8443": true,
+		"http://192.168.1.2": false, "http://localhost.evil.example": false, "null": false,
+	} {
+		if got := srv.originAllowed(origin); got != want {
+			t.Errorf("originAllowed(%q) = %v, want %v", origin, got, want)
+		}
+	}
+}
