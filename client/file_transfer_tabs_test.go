@@ -49,6 +49,11 @@ func TestTransferInitializationRejectsNativeTabSwitch(t *testing.T) {
 			}
 			app, _ := newPipedApp(t, backend(&writesA))
 			other, _ := newPipedApp(t, backend(&writesB))
+			for _, kind := range []string{"upload", "download"} {
+				if _, err := app.grantNativePath(kind, path); err != nil {
+					t.Fatal(err)
+				}
+			}
 			app.activeID = "a"
 			app.tabs = map[string]*tabState{"a": {cm: app.cmLoad()}, "b": {cm: other.cmLoad()}}
 			if err := tt.call(app, "a"); !strings.Contains(err, "fixture denial") {

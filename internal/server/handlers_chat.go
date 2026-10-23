@@ -207,7 +207,7 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 			return err
 		}
 		s.metricsSink().IncChatMessage("direct")
-		return s.acknowledgeChat(client, msg, netproto.ChatRelayed, 0)
+		return s.acknowledgeChat(client, msg, netproto.ChatQueued, 0)
 	}
 
 	if s.deps.Auth == nil {
@@ -259,12 +259,10 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 		zap.String("client_id", client.ID),
 		zap.String("to_unique_id", msg.ToUniqueID),
 	)
-	if msg.AckRequested {
-		// Give the sender the same own-message echo after durable offline
-		// acceptance as after live relay. This does not claim recipient delivery.
-		if err := s.echoAcceptedDirect(client, msg, payload); err != nil {
-			return err
-		}
+	// Echo accepted legacy and acknowledged messages identically, irrespective
+	// of recipient presence. This is acceptance, not a delivery receipt.
+	if err := s.echoAcceptedDirect(client, msg, payload); err != nil {
+		return err
 	}
 	return s.acknowledgeChat(client, msg, netproto.ChatQueued, 0)
 }

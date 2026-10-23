@@ -181,7 +181,16 @@ func (s *TCPServer) relayConversationTyping(ctx context.Context, client *Client,
 // advance is relayed: a repeated or older position changes nothing members
 // could see, so it must not fan out (the relay count per member is bounded by
 // the number of messages, not by the mark_read rate).
-func (s *TCPServer) shareConversationRead(ctx context.Context, backend conversationStore, uid, id string, messageID int64) (bool, error) {
+func (s *TCPServer) shareConversationRead(ctx context.Context, backend conversationStore, client *Client, id string, messageID int64) (bool, error) {
+	s.roleMetadataMu.Lock()
+	defer s.roleMetadataMu.Unlock()
+	uid := client.uniqueID()
+	if s.deps.State == nil {
+		return false, nil
+	}
+	if member, ok := s.deps.State.GetClient(client.ID); !ok || member.Status == "invisible" {
+		return false, nil
+	}
 	receipts, ok := backend.(conversationReceiptStore)
 	if !ok {
 		return false, nil
@@ -191,6 +200,6 @@ func (s *TCPServer) shareConversationRead(ctx context.Context, backend conversat
 		return true, err
 	}
 	return true, s.relayToMembers(audience, eventConversationRead, netproto.ConversationReadEvent{
-		ConversationID: id, UniqueID: uid, MessageID: seen,
+		ConversationID: id, UniqueID: uid, ClientID: client.ID, MessageID: seen,
 	})
 }

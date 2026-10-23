@@ -9,6 +9,8 @@ package channels
 
 import (
 	"fmt"
+	"noxa/internal/netproto"
+	"strings"
 
 	"noxa/internal/safecast"
 )
@@ -123,7 +125,7 @@ type ChannelUpdate struct {
 // if any are found. It does not verify the parent channel's existence (that is
 // done by the manager, which has access to the database).
 func (s ChannelSpec) Validate() error {
-	if s.Name == "" {
+	if strings.TrimSpace(s.Name) == "" || len(s.Name) > 255 || !netproto.ValidIdentifierText(s.Name) {
 		return fmt.Errorf("channel name must not be empty")
 	}
 	if !s.Type.Valid() {

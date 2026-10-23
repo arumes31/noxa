@@ -16,6 +16,15 @@ func (s *TCPServer) reconcileRoleChat(ctx context.Context, before, after *author
 	if s.deps == nil || s.deps.State == nil || s.chatKeys == nil || !s.chatKeys.configured() {
 		return authorization.ErrAuthorizationUnavailable
 	}
+	present := make(map[int64]bool)
+	for _, channel := range after.Policy().Channels {
+		present[channel.ChannelID] = true
+	}
+	for _, channel := range before.Policy().Channels {
+		if !present[channel.ChannelID] {
+			s.chatKeys.forgetDeletedScope(channel.ChannelID)
+		}
+	}
 	for _, member := range s.deps.State.ListClients() {
 		client, ok := s.clientByID(member.ClientID)
 		if !ok {

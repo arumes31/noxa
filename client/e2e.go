@@ -103,7 +103,7 @@ func (a *App) E2EEDiagnostics(peerUniqueID string) (E2EEDiagnostics, error) {
 	if m == nil {
 		return E2EEDiagnostics{}, errors.New("not connected")
 	}
-	d := E2EEDiagnostics{Cipher: "X25519 + XSalsa20-Poly1305; Double Ratchet/X3DH capable", PeerUniqueID: peerUniqueID}
+	d := E2EEDiagnostics{Cipher: "X25519 + XSalsa20-Poly1305 (static keys; no forward secrecy)", PeerUniqueID: peerUniqueID}
 	m.pubKeys.mu.Lock()
 	d.CachedPeers = len(m.pubKeys.keys)
 	m.pubKeys.mu.Unlock()

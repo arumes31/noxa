@@ -5,6 +5,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -49,4 +51,18 @@ func (s *Store) DeleteBan(ctx context.Context, id int64) error {
 		return fmt.Errorf("deleting ban: %w", err)
 	}
 	return nil
+}
+
+// BanIssuer uses the durable issuer account, even when its session is offline.
+// A nil result is an already-absent ban; zero denotes a legacy unknown issuer.
+func (s *Store) BanIssuer(ctx context.Context, id int64) (*int64, error) {
+	var issuer int64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(banned_by,0) FROM bans WHERE id=$1`, id).Scan(&issuer)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &issuer, nil
 }

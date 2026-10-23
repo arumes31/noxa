@@ -70,6 +70,13 @@ func (a *App) PickDownloadFolder() string {
 		log.Printf("directory dialog: %v", err)
 		return ""
 	}
+	if dir == "" {
+		return ""
+	}
+	dir, err = a.grantNativePath("folder", dir)
+	if err != nil {
+		return ""
+	}
 	return dir
 }
 

@@ -42,6 +42,7 @@ const windowOpacityStartupAttempts = 50
 
 // App is the Wails application.
 type App struct {
+	fileGrants          fileGrantStore
 	displayCapturePower displayCapturePower
 	connectionBenchmark connectionBenchmarkOperation
 	loginCredentials    loginCredentialState

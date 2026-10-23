@@ -63,6 +63,7 @@ type Client struct {
 	mu                 sync.RWMutex
 	lastOwnChannelMove *broadcast.OwnChannelMove // recipient-only cause, protected by mu
 	authRequests       int
+	requestBudget      sessionRequestBudget
 	authed             bool
 	revoked            bool   // role-mode removal closes protected work before socket cleanup
 	disconnectCleaned  bool   // membership/media cleanup is idempotent
@@ -1016,6 +1017,9 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 
 	if !client.isAuthed() && mt != netproto.MsgAuthenticate && mt != netproto.MsgAuthSignature && mt != netproto.MsgPing {
 		return s.sendErrorFor(client, mt, errCodeNotAuthenticated, "not authenticated")
+	}
+	if client.isAuthed() && !client.requestBudget.allow(mt, time.Now()) {
+		return s.sendErrorFor(client, mt, errCodeMalformed, "request rate limit exceeded; retry shortly")
 	}
 	if client.rulesBlocked() && !allowedWhileRulesPending[mt] {
 		return s.sendErrorFor(client, mt, errCodePermissionDenied, "accept the server rules before continuing")

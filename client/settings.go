@@ -985,7 +985,16 @@ func (a *App) SaveSettings(s Settings) string {
 	default:
 		return "invalid announcement language"
 	}
-	generation, err := a.updateSettingsChecked(func(current Settings) (Settings, error) { return mergeSettingsEdit(current, s) })
+	generation, err := a.updateSettingsChecked(func(current Settings) (Settings, error) {
+		merged, err := mergeSettingsEdit(current, s)
+		if err != nil {
+			return Settings{}, err
+		}
+		if err := a.validateDownloadFolder(current.DownloadFolder, merged.DownloadFolder); err != nil {
+			return Settings{}, err
+		}
+		return merged, nil
+	})
 	if err != nil {
 		return err.Error()
 	}

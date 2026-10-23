@@ -66,8 +66,9 @@ func (f *fakeGroups) auditActions() []string {
 
 // fakeBanAdmin implements BanAdminStore in memory.
 type fakeBanAdmin struct {
-	mu   sync.Mutex
-	bans []store.BanRecord
+	mu      sync.Mutex
+	bans    []store.BanRecord
+	issuers map[int64]int64
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -134,4 +135,16 @@ func containsAction(actions []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func (f *fakeBanAdmin) BanIssuer(_ context.Context, id int64) (*int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, b := range f.bans {
+		if b.ID == id {
+			issuer := f.issuers[id]
+			return &issuer, nil
+		}
+	}
+	return nil, nil
 }

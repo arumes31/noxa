@@ -1,3 +1,4 @@
+import { privateCallRTCConfiguration } from "./private-call-privacy.js";
 import { maintainRelay } from "./relay-renewal.js";
 import { t } from "./i18n.js";
 import { captureConstraints, createRemoteAudioSource, makeLimiter, personalVolumeGain, getUserVolume, isUserMuted, getUserShareVolume, isUserShareMuted, renderMicStatus, VAD_RELEASE_MS } from "./audio.js";
@@ -399,7 +400,7 @@ function syncAudio(owner) {
 
 function ensurePeer(owner, uid) {
     if (owner.peers.has(uid)) return owner.peers.get(uid);
-    const pc = new RTCPeerConnection({ iceServers: owner.ice || [] });
+    const pc = new RTCPeerConnection(privateCallRTCConfiguration(owner.ice));
     const audio = node("audio"); audio.autoplay = true;
     // Keep playback separate from the panel, which rerenders as call state changes.
     audio.hidden = true; document.body.append(audio);

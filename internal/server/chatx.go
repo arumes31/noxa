@@ -981,6 +981,11 @@ func (s *TCPServer) chatDeleteAllowed(ctx context.Context, client *Client, msg n
 	if err := s.deps.Chat.DeleteChatMessage(ctx, msg.MessageID); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "message deletion failed")
 	}
+	if stored.FromUniqueID != client.UniqueID {
+		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		s.auditInChannels(auditCtx, client.uniqueID(), "message_delete", strconv.FormatInt(msg.MessageID, 10), "", stored.ChannelID)
+	}
 	s.broadcastScope(ctx, stored.ChannelID, eventChatDeleted, map[string]any{
 		"message_id": msg.MessageID,
 		"channel_id": stored.ChannelID,
@@ -1279,6 +1284,7 @@ func (s *TCPServer) relaySessionReceipt(ctx context.Context, client *Client, toU
 	}
 	payload, err := eventEnvelope(eventType, map[string]any{
 		"from_unique_id": client.UniqueID,
+		"client_id":      client.ID,
 		"client_msg_id":  clientMsgID,
 	})
 	if err != nil {

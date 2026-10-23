@@ -7,6 +7,8 @@ import (
 	"errors"
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -45,7 +47,8 @@ func TestChannelInviteRotationAndPermissionEnforcement(t *testing.T) {
 		t.Fatal(err)
 	}
 	invites := &memoryChannelInvites{fakeChat: newFakeChat()}
-	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority; d.Chat = invites })
+	audit := newFakeGroups()
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority; d.Chat = invites; d.Groups = audit })
 	defer env.stop()
 	owner, _ := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = owner.Close() }()
@@ -114,4 +117,15 @@ func TestChannelInviteRotationAndPermissionEnforcement(t *testing.T) {
 	readOfType(t, owner, netproto.MsgChannelInviteResult)
 	send(t, other, netproto.MsgChannelInviteRequest, netproto.ChannelInviteRequest{Action: "resolve", ChannelID: 1, Token: second})
 	readError(t, other)
+	actions := audit.auditActions()
+	want := []string{"channel_invite_regenerate", "channel_invite_regenerate", "channel_invite_regenerate", "channel_invite_revoke"}
+	if !reflect.DeepEqual(actions, want) {
+		t.Fatalf("invitation audits: %v", actions)
+	}
+	for _, row := range audit.audit {
+		if strings.Contains(row.Detail, first) || strings.Contains(row.Detail, second) || len(row.ChannelIDs) != 1 || row.ChannelIDs[0] != 1 {
+			t.Fatalf("invalid audit scope or token exposure: %+v", row)
+		}
+	}
+
 }

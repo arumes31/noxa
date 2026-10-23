@@ -12436,3 +12436,29 @@ test("server information shows live server-wide quality and retained traffic win
     await expect(overview.getByText(/metrics require a supporting server/)).toBeVisible();
     await expect(overview.locator('[data-overview-stat="latency"]')).toBeHidden();
 });
+
+test("desktop CSP blocks injected script and event handlers while the app works", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        window.__scriptInjection = false;
+        const script = document.createElement("script");
+        script.textContent = "window.__scriptInjection=true";
+        document.body.append(script);
+        const button = document.createElement("button");
+        button.setAttribute("onclick", "window.__scriptInjection=true");
+        document.body.append(button); button.click();
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        script.remove(); button.remove();
+        return { injected: window.__scriptInjection, appLoaded: !!window.__noxa };
+    });
+    expect(result).toEqual({ injected: false, appLoaded: true });
+});
+
+test("CSP retains supported HTTP image previews", async ({ page }) => {
+    await page.route("http://media.example.invalid/pixel.svg", route => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" />' }));
+    expect(await page.evaluate(() => new Promise(resolve => {
+        const image = document.createElement("img");
+        image.onload = () => resolve(true); image.onerror = () => resolve(false);
+        image.src = "http://media.example.invalid/pixel.svg";
+        document.body.append(image);
+    }))).toBe(true);
+});

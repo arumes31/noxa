@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"noxa/internal/netproto"
 	"noxa/internal/traffic"
 	"os"
 	"path/filepath"
@@ -968,7 +969,7 @@ func randomHex(n int) (string, error) {
 // sanitizeName validates a file name for on-disk storage: it must be a bare
 // base name — no separators, no parent traversal, no absolute paths.
 func sanitizeName(name string) (string, error) {
-	if name == "" || name == "." || name == ".." {
+	if !netproto.ValidFileLeaf(name) {
 		return "", fmt.Errorf("%w: %q", ErrInvalidName, name)
 	}
 	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {

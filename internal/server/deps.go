@@ -172,6 +172,7 @@ type AuditStore interface {
 // BanAdminStore is the subset of the store needed for ban administration
 // (wave 6b ban list dialog). It is satisfied by *store.Store.
 type BanAdminStore interface {
+	BanIssuer(ctx context.Context, id int64) (*int64, error)
 	ListBans(ctx context.Context) ([]store.BanRecord, error)
 	DeleteBan(ctx context.Context, id int64) error
 }
