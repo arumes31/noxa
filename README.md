@@ -651,6 +651,77 @@ fingerprint. Later changes fail closed. For a planned rotation:
    expected fingerprint. If verification fails, abort and restore the previous
    certificate and key; do not delete `known_servers.json` to bypass the check.
 
+<a id="mobile"></a>
+
+### Mobile web app
+
+The server can serve an installable web app for phones. It needs a domain name
+with a publicly trusted certificate: browsers cannot pin the control
+certificate, and passkeys bind to the domain.
+
+| Key | Default | Purpose |
+| :--- | :--- | :--- |
+| `web.enabled` | `false` | Start the web listener |
+| `web.addr` | `:12342` | Listener address (put HTTPS in front of it) |
+| `web.public_url` | — | `https://` origin phones open; its host is the passkey relying party |
+| `web.cert_file` / `web.key_file` | — | Native TLS with your own certificate |
+| `web.acme` / `web.acme_email` / `web.acme_cache_dir` | `false` / — / `./data/acme` | Native TLS through Let's Encrypt (TLS-ALPN on :443) |
+| `web.trusted_proxies` | `[]` | Exact proxy CIDRs allowed to send `X-Forwarded-For`/`-Proto` |
+| `web.allowed_origins` | `[]` | Extra HTTPS origins accepted on `/ws` |
+| `web.max_devices_per_account` | `10` | Linked devices per account, including the first desktop |
+| `web.ws_connections_per_ip` / `web.ws_attempts_per_minute` | `8` / `30` | WebSocket admission per client IP |
+
+Exactly one TLS mode is required: certificate files, ACME, or a TLS-terminating
+proxy listed in `trusted_proxies`.
+
+**Docker Compose with Caddy.** Point a DNS name at the host, then:
+
+```bash
+NOXA_WEB_DOMAIN=chat.example NOXA_WEB_ENABLED=true \
+NOXA_WEB_PUBLIC_URL=https://chat.example \
+docker compose --profile mobile up -d
+```
+
+**Other proxies.** The proxy must pass WebSocket upgrades on `/ws`, overwrite
+`X-Forwarded-Proto` and `X-Forwarded-For`, and allow long-lived connections.
+Its address must be the only entry in `web.trusted_proxies`.
+
+```nginx
+location / {
+    proxy_pass http://noxa:12342;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_read_timeout 1h;
+}
+```
+
+```yaml
+# Traefik (Docker labels on the noxa service)
+- traefik.http.routers.noxa-web.rule=Host(`chat.example`)
+- traefik.http.routers.noxa-web.tls.certresolver=letsencrypt
+- traefik.http.services.noxa-web.loadbalancer.server.port=12342
+```
+
+**Linking a phone.** In the desktop client choose **Connections → Other login
+for this server**. Scan the QR code with the phone camera, or open the server
+address on the phone and type the hidden code. Both screens show the same
+two-digit code; compare it, then approve on the desktop. The phone can then save
+a passkey, which lets a new phone sign in without the desktop. Administrators
+list, sign out and reset devices with `devicelist`, `devicerevoke` and
+`devicereset` (ServerQuery) or `ListDevices`, `RevokeDevice` and
+`ResetDevices` (gRPC). Devices unused for 180 days are signed out after a
+warning at 166 days; an account's first desktop never expires.
+
+**What the phone stores.** The device's Ed25519 and X25519 keys live in the
+browser's IndexedDB, encrypted with a non-extractable WebCrypto key. Signing out
+or revocation deletes them. The server keeps each device's public keys, name,
+creation and last-use times, and the passkey's public key and sign counter; it
+never receives private keys. Channel messages are encrypted with
+server-managed keys, as on the desktop.
+
 ---
 
 <a id="serverquery"></a>

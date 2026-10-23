@@ -13,6 +13,17 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
+# Mobile web app stage: builds mobile/ into /out/web/app (served under /app/)
+# -----------------------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM node:24.12.0-alpine3.22@sha256:4f4a059445c5a6ef2b9d169d9afde176301263178141fc05ba657dab1c84f9a7 AS mobile
+
+WORKDIR /src/mobile
+COPY mobile/package.json mobile/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+COPY mobile/ ./
+RUN npx vite build --outDir /out/web/app
+
+# -----------------------------------------------------------------------------
 # Builder stage
 # -----------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd AS builder
@@ -95,6 +106,8 @@ RUN mkdir -p /data/files /data/recordings \
 # Copy the compiled binary from the builder stage.
 COPY --from=builder --chown=10001:10001 /out/noxa /out/noxa
 COPY --from=builder --chown=10001:10001 /out/adduser /out/role-setup /out/migrate /out/e2e /out/
+# The mobile web app; web.app_dir defaults to ./web/app relative to /.
+COPY --from=mobile --chown=10001:10001 /out/web/app /web/app
 COPY --chmod=0555 --chown=10001:10001 scripts/secret-env.sh /usr/local/lib/noxa/secret-env.sh
 COPY --chmod=0555 --chown=10001:10001 scripts/noxa-entrypoint.sh /usr/local/bin/noxa-entrypoint.sh
 
@@ -109,7 +122,8 @@ USER 10001:10001
 #   12337/tcp  - health/readiness HTTP endpoint (/healthz, /readyz)
 #   12338/tcp  - gRPC signaling/control (loopback-only by default)
 #   12339/tcp  - ServerQuery over SSH (disabled by default)
-EXPOSE 12333/tcp 12334/udp 12335/tcp 12336/tcp 12337/tcp 12338/tcp 12339/tcp
+#   12342/tcp  - mobile web app and WebSocket control (web.enabled; behind HTTPS)
+EXPOSE 12333/tcp 12334/udp 12335/tcp 12336/tcp 12337/tcp 12338/tcp 12339/tcp 12342/tcp
 
 # Liveness probe against the health endpoint. The HTTPS retry covers
 # health_tls_enabled: the self-signed control certificate cannot be verified

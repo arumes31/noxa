@@ -12,6 +12,9 @@
 # Server and backup images only use the root Go module and runtime scripts.
 client/
 website/
+mobile/node_modules/
+mobile/test-results/
+web/
 docs/
 tools/
 
