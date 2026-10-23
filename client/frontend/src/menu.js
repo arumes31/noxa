@@ -3,6 +3,7 @@ import { isActivationKey, wrappedIndex } from "./a11y.js";
 import { closeDialog, mountDialog } from "./modal.js";
 import { copyToClipboard } from "./clipboard.js";
 import { openDisplayNameDialog } from "./display-name-ui.js";
+import { openDeviceLinkDialog } from "./device-link-ui.js";
 
 const V = () => window.__noxa;
 
@@ -528,6 +529,7 @@ export function initMenu() {
         menuAction(t("menu.connect"), () => V().showLogin()),
         menuAction(t("menu.disconnect"), () => V().disconnect()),
         menuAction(t("menu.serverInfo"), () => window.__noxaMeta.openServerInfo()),
+        menuAction(t("menu.otherLogin"), openDeviceLinkDialog),
         divider(), ...bookmarkItems, bookmarkList,
         menuAction(t("menu.manageBookmarks"), manageBookmarks),
         divider(), menuAction(t("menu.quit"), () => window.go.main.App.Quit()),

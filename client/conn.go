@@ -77,6 +77,9 @@ type connManager struct {
 	addr                         string // control address (tab info)
 	clientID                     string
 	uniqueID                     string
+	deviceID                     string // linked device of this session (devices_v1)
+	supportsDevices              bool
+	deviceLinks                  map[string]deviceLinkKeys // links created by this session
 	nickname                     string
 	displayName                  string // requested public name; separate from the account login
 	isGuest                      bool
@@ -528,6 +531,9 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.addr = addr
 	m.clientID = resp.ClientID
 	m.uniqueID = resp.UniqueID
+	m.deviceID = resp.DeviceID
+	m.supportsDevices = slices.Contains(resp.Capabilities, netproto.CapabilityDevices)
+	m.deviceLinks = nil
 	m.nickname = resp.Nickname
 	m.displayName = authMsg.Nickname
 	m.authorizationModel = resp.AuthorizationModel
@@ -1120,6 +1126,8 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		// advance the send key, and a waiter in awaitScopeText wakes on the
 		// install.
 		m.handleChatKeyBundle(f)
+	case netproto.MsgDeviceEvent:
+		m.handleDeviceEvent(f)
 	case netproto.MsgSubscriptionState:
 		// (312) always the authoritative full set, so it is cached and
 		// replayed verbatim on a tab switch like the other state frames.

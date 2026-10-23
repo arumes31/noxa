@@ -33,6 +33,7 @@ import "./conversations.css";
 import { conversationChanged, conversationRead, conversationTyping } from "./conversations.js";
 import { initDirectMessages } from "./dm-view.js";
 import "./private-calls.css";
+import "./device-link.css";
 import { privateCallChanged, privateCallSignal, stopPrivateCall, applyPrivateCallAudioSettings } from "./private-calls.js";
 import { createTabReconnects, reconnectDelay } from "./tab-reconnect.js";
 import { refreshPolls } from "./polls.js";
