@@ -669,6 +669,7 @@ export function initMenu() {
         });
     }
     if (!documentClickBound) {
+        window.addEventListener("noxa-audit-access-changed", initMenu);
         document.addEventListener("click", () => closeMenus());
         document.addEventListener("focusin", (event) => {
             if (openMenu && !openMenu.contains(event.target)) closeMenus();
@@ -677,4 +678,3 @@ export function initMenu() {
     }
 }
 
-// setTheme switches the UI theme (294/295) and persists it.

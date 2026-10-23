@@ -12598,6 +12598,20 @@ test.describe("compact Activity workspace", () => {
         await expect(page.getByText("Private audit detail")).toHaveCount(0);
         await expect(page.getByRole("tab", { name: "Activity", exact: true })).toHaveAttribute("aria-selected", "true");
     });
+    test("audit menu disappears immediately when access is revoked", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.canViewAuditLog = true;
+            window.dispatchEvent(new Event("noxa-audit-access-changed"));
+        });
+        await page.getByRole("menuitem", { name: "Tools", exact: true }).click();
+        await expect(page.getByRole("menuitem", { name: /Audit/ })).toBeVisible();
+        await page.evaluate(() => {
+            window.__noxa.state.canViewAuditLog = false;
+            window.dispatchEvent(new Event("noxa-audit-access-changed"));
+        });
+        await page.getByRole("menuitem", { name: "Tools", exact: true }).click();
+        await expect(page.getByRole("menuitem", { name: /Audit/ })).toHaveCount(0);
+    });
     test("audit empty state and selected details clear on revocation", async ({ page }) => {
         await page.evaluate(() => { window.__noxa.state.canViewAuditLog = true; window.__activityAuditEntries = []; window.__noxaActivity.open("audit"); });
         await expect(page.locator("#activity-panel [role=status]")).toContainText("No matching records");

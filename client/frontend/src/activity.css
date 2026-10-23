@@ -55,7 +55,7 @@
 .activity-friend[data-status="streaming"] .activity-avatar { border-color: #a88df4; }
 .activity-friend[data-status="online"] .activity-avatar { border-color: #59bca5; }
 .activity-friend[data-status="offline"] .activity-avatar-initial { background: var(--avatar-color); color: #071014; }
-.activity-avatar > img { filter: grayscale(1); opacity: .65; }
+.activity-friend[data-status="offline"] .activity-avatar > img { filter: grayscale(1); opacity: .65; }
 .activity-friend[data-status="inVoice"] small { color: var(--accent); }
 .activity-presence { position: absolute; bottom: -2px; right: -2px; width: 17px; height: 17px; border-radius: 50%; border: 3px solid var(--bg); background: var(--text-faint); }
 [data-status="online"] .activity-presence { background: #18d39b; }

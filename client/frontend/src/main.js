@@ -1259,7 +1259,6 @@ window.runtime.EventsOn("snapshot", (json) => {
     state.canSetInvisible = snap.can_set_invisible === true;
     state.canViewAuditLog = snap.can_view_audit_log === true;
     window.dispatchEvent(new Event("noxa-audit-access-changed"));
-    initMenu();
     state.supportsVoiceQueue = snap.supports_voice_queue === true;
     state.ownAuthority = ["owner", "administrator", "member", "guest"].includes(snap.own_authority) ? snap.own_authority : "";
     state.channels = [];
