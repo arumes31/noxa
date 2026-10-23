@@ -30,7 +30,7 @@ func TestMalformedAuthenticationCannotPoisonLoginBudget(t *testing.T) {
 		_ = conn.Close()
 	}
 	conn := dialRetry(t, env.addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	// Negotiate publicly, then send mismatched/no-challenge signatures. Neither
 	// may penalize the named victim or the source's credential budget.
 	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "seed"})
@@ -59,9 +59,9 @@ func TestIdleConnectionsDoNotConsumeAuthenticatedCapacity(t *testing.T) {
 	env := startTestEnvFull(t, nil, func(c *config.Config) { c.MaxClients = 1 })
 	defer env.stop()
 	idle := dialRetry(t, env.addr)
-	defer idle.Close()
+	defer func() { _ = idle.Close() }()
 	conn := dialRetry(t, env.addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "admin-uid", Password: "pw"})
 	var response netproto.AuthResponse
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &response); err != nil {
@@ -83,7 +83,7 @@ func TestPreauthOversizedHeaderIsRejectedWithoutBody(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
 	conn := dialRetry(t, env.addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	var header [4]byte
 	binary.BigEndian.PutUint32(header[:], preauthFrameLimit+1)
 	if _, err := conn.Write(header[:]); err != nil {

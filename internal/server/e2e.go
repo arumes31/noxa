@@ -121,11 +121,12 @@ func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *net
 	var pub string
 	if s.deps != nil && s.deps.Auth != nil {
 		key, err := s.deps.Auth.GetE2EPublicKey(ctx, msg.UniqueID)
-		if err == nil {
+		switch {
+		case err == nil:
 			pub = key
-		} else if ctx.Err() != nil {
+		case ctx.Err() != nil:
 			return ctx.Err()
-		} else if !errors.Is(err, auth.ErrUserNotFound) {
+		case !errors.Is(err, auth.ErrUserNotFound):
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encryption directory unavailable")
 		}
 	}

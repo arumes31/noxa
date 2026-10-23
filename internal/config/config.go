@@ -257,6 +257,8 @@ type WebRTCConfig struct {
 	UDPAddr string `mapstructure:"udp_addr"`
 	// ExternalIPs are IPv4 addresses forwarding UDPAddr to this server.
 	ExternalIPs []string `mapstructure:"external_ips"`
+	// AllowedRemoteCIDRs permits intentional LAN/VPN ICE destinations.
+	AllowedRemoteCIDRs []string `mapstructure:"allowed_remote_cidrs"`
 	// ICEServers is the list of STUN/TURN server URLs used when creating peer
 	// connections. If empty, the engine falls back to
 	// "stun:stun.l.google.com:19302".
@@ -375,6 +377,7 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("webrtc.enable_av1", false)
 	v.SetDefault("webrtc.udp_addr", "")
 	v.SetDefault("webrtc.external_ips", []string{})
+	v.SetDefault("webrtc.allowed_remote_cidrs", []string{})
 
 	// UDP rate limiting defaults ----------------------------------------------
 	v.SetDefault("udp_rate_limit_pps", 200)
@@ -742,6 +745,11 @@ func (c *Config) Validate() error {
 	if len(c.WebRTC.ExternalIPs) > 0 && c.WebRTC.UDPAddr == "" {
 		errs = append(errs, errors.New("webrtc.external_ips requires webrtc.udp_addr"))
 	}
+	for _, raw := range c.WebRTC.AllowedRemoteCIDRs {
+		if prefix, err := netip.ParsePrefix(raw); err != nil || prefix.Addr().Is4In6() {
+			errs = append(errs, fmt.Errorf("webrtc.allowed_remote_cidrs contains invalid CIDR %q", raw))
+		}
+	}
 	for _, address := range c.WebRTC.ExternalIPs {
 		if ip := net.ParseIP(address); ip == nil || ip.To4() == nil {
 			errs = append(errs, fmt.Errorf("webrtc.external_ips contains invalid IPv4 address %q", address))
@@ -894,16 +902,23 @@ func validateProductionDatabaseURL(raw string) error {
 		}
 	}
 
-	sslMode := strings.ToLower(strings.TrimSpace(parsed.Query().Get("sslmode")))
-	switch sslMode {
-	case "require", "verify-ca", "verify-full":
-		return nil
-	default:
-		return fmt.Errorf(
-			"database_url sslmode %q must be require, verify-ca, or verify-full when dev_mode=false",
-			sslMode,
-		)
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return errors.New("database_url query is malformed")
 	}
+	for key, values := range query {
+		if len(values) != 1 {
+			return errors.New("database_url must not contain repeated query parameters")
+		}
+		switch key {
+		case "host", "port", "user", "password", "dbname":
+			return errors.New("database_url connection identity must be in the URL authority/path, not query overrides")
+		}
+	}
+	if query.Get("sslmode") != "verify-full" {
+		return errors.New("database_url sslmode must be verify-full when dev_mode=false")
+	}
+	return nil
 }
 
 func validateICEURL(name, raw string, turnOnly bool) error {

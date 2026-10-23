@@ -37,7 +37,6 @@ import (
 
 	"noxa/internal/auth"
 	"noxa/internal/e2ee"
-	securee2ee "noxa/internal/e2ee"
 	"noxa/internal/netproto"
 	"noxa/internal/safecast"
 )
@@ -546,7 +545,7 @@ var attachmentGCMHeader = []byte("VCXGCM1\n")
 const attachmentChunkSize = 64 * 1024
 
 var (
-	attachmentChunkCiphertextOverhead = securee2ee.FileChunkCiphertextOverhead()
+	attachmentChunkCiphertextOverhead = e2ee.FileChunkCiphertextOverhead()
 	attachmentChunkMaxCiphertextBytes = attachmentChunkSize + attachmentChunkCiphertextOverhead
 	attachmentChunkLengthBytes        = binary.Size(uint32(0))
 )
@@ -575,7 +574,7 @@ func sealFile(data []byte, key [32]byte) ([]byte, error) {
 		if end > len(data) {
 			end = len(data)
 		}
-		blob, err := securee2ee.EncryptFileChunk(key[:], "attachment", index, data[offset:end])
+		blob, err := e2ee.EncryptFileChunk(key[:], "attachment", index, data[offset:end])
 		if err != nil {
 			return nil, err
 		}
@@ -636,7 +635,7 @@ func openFileLimited(blob []byte, key [32]byte, maxBytes int) ([]byte, error) {
 			if _, err := reader.Read(chunk); err != nil {
 				return nil, errors.New("invalid attachment chunk")
 			}
-			plain, err := securee2ee.DecryptFileChunk(key[:], "attachment", index, chunk)
+			plain, err := e2ee.DecryptFileChunk(key[:], "attachment", index, chunk)
 			if err != nil {
 				return nil, errors.New("attachment decryption failed (wrong key or tampered)")
 			}

@@ -773,7 +773,7 @@ func (cm *connManager) uploadPathProgress(id string, channelID int64, folder str
 	}
 	handedOff = true
 	go guardCrash("ft upload path", func() {
-		defer src.Close()
+		defer func() { _ = src.Close() }()
 		p := ftProgress{ID: id, Direction: "upload", Name: name, Total: st.Size(), Status: "active"}
 		err := cm.ftUploadFile(id, ep, init.Token, init.TransferID, src, &p)
 		if err != nil {
@@ -947,7 +947,7 @@ func (cm *connManager) downloadFileProgress(id string, channelID int64, folder, 
 	}
 	handedOff = true
 	go guardCrash("ft download", func() {
-		defer dest.Close()
+		defer func() { _ = dest.Close() }()
 		// total comes from the listing row: the wire never carries the size on
 		// the data port, and without it a resumed transfer has no denominator.
 		p := ftProgress{ID: id, Direction: "download", Name: name, Total: total, Status: "active"}
@@ -978,11 +978,12 @@ func resumeInRoot(dest *downloadDestination) (*os.File, int64, hash.Hash, error)
 	h := sha256.New()
 	before, statErr := dest.root.Lstat(part)
 	flags := os.O_RDWR
-	if errors.Is(statErr, os.ErrNotExist) {
+	switch {
+	case errors.Is(statErr, os.ErrNotExist):
 		flags |= os.O_CREATE | os.O_EXCL
-	} else if statErr != nil {
+	case statErr != nil:
 		return nil, 0, nil, statErr
-	} else if !before.Mode().IsRegular() {
+	case !before.Mode().IsRegular():
 		return nil, 0, nil, errors.New("invalid partial download")
 	}
 	f, err := dest.root.OpenFile(part, flags, 0o600)

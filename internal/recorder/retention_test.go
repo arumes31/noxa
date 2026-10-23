@@ -50,7 +50,7 @@ func assertRecordingFiles(t *testing.T, dir string, files []string, want bool) {
 func TestRecordingRetentionBoundariesAndAbandonedSet(t *testing.T) {
 	dir := privateTempDir(t)
 	c := NewChannelRecorder(testConfig(dir), testLogger())
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	now := time.Now().UTC().Truncate(time.Second)
 	_, old := retainedCapture(t, dir, 1, now.Add(-31*24*time.Hour), 2)
 	_, boundary := retainedCapture(t, dir, 2, now.Add(-30*24*time.Hour), 1)
@@ -88,7 +88,7 @@ func TestRecordingRetentionBoundariesAndAbandonedSet(t *testing.T) {
 func TestRecordingRetentionPreservesActiveCaptureAndThenExpires(t *testing.T) {
 	dir := privateTempDir(t)
 	c := NewChannelRecorder(testConfig(dir), testLogger())
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	c.processes.Exec = autoRecordingProcess
 	session, err := c.Start(t.Context(), 1, &fakeTapRouter{})
 	if err != nil {
@@ -110,7 +110,7 @@ func TestRecordingRetentionPreservesActiveCaptureAndThenExpires(t *testing.T) {
 func TestRecordingRetentionBoundsDeletionAndResumes(t *testing.T) {
 	dir := privateTempDir(t)
 	c := NewChannelRecorder(testConfig(dir), testLogger())
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	now := time.Now().UTC()
 	name, files := retainedCapture(t, dir, 1, now.Add(-31*24*time.Hour), maxPruneFiles+2)
 	if err := c.PruneExpiredRecordings(t.Context(), now); err != nil {
@@ -136,7 +136,7 @@ func TestRecordingRetentionRejectsUnsafeManifest(t *testing.T) {
 		t.Run(leaf, func(t *testing.T) {
 			dir := privateTempDir(t)
 			c := NewChannelRecorder(testConfig(dir), testLogger())
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 			now := time.Now().UTC()
 			old := now.Add(-31 * 24 * time.Hour)
 			name, files := retainedCapture(t, dir, 1, old, 1)
@@ -191,7 +191,7 @@ func TestRecordingRetentionRejectsSymlinkLeaves(t *testing.T) {
 			dir := privateTempDir(t)
 			outside := privateTempDir(t)
 			c := NewChannelRecorder(testConfig(dir), testLogger())
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 			now := time.Now().UTC()
 			old := now.Add(-31 * 24 * time.Hour)
 			name, files := retainedCapture(t, dir, 1, old, 1)
@@ -225,7 +225,7 @@ func TestRecordingRetentionRejectsSymlinkLeaves(t *testing.T) {
 func TestRecordingRetentionCursorAndRootReplacement(t *testing.T) {
 	dir := privateTempDir(t)
 	c := NewChannelRecorder(testConfig(dir), testLogger())
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	now := time.Now().UTC()
 	for i := range 256 {
 		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("unrelated-%03d", i)), []byte("keep"), 0600); err != nil {
@@ -265,7 +265,7 @@ func TestRecordingRetentionCursorAndRootReplacement(t *testing.T) {
 func TestRecordingRetentionPreservesStartupReservation(t *testing.T) {
 	dir := privateTempDir(t)
 	c := NewChannelRecorder(testConfig(dir), testLogger())
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	now := time.Now().UTC()
 	_, files := retainedCapture(t, dir, 1, now.Add(-31*24*time.Hour), 1)
 	c.processes.starting[7] = &startReservation{}

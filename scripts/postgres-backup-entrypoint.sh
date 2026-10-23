@@ -27,8 +27,8 @@ if [ -n "${BACKUP_EXTERNAL_DATABASE:-}" ]; then
 	PGUSER=$BACKUP_PGUSER
 	PGDATABASE=$BACKUP_PGDATABASE
 	PGSSLMODE=$BACKUP_PGSSLMODE
-	case "$PGSSLMODE" in require | verify-ca | verify-full) ;; *)
-		echo 'postgres-backup: external BACKUP_PGSSLMODE must require TLS verification' >&2
+	case "$PGSSLMODE" in verify-full) ;; *)
+		echo 'postgres-backup: external BACKUP_PGSSLMODE must be verify-full' >&2
 		exit 1
 	;; esac
 	for ssl_file in BACKUP_PGSSLROOTCERT BACKUP_PGSSLCERT BACKUP_PGSSLKEY; do
@@ -137,11 +137,11 @@ export PGPASSFILE=$pgpass_file
 unset POSTGRES_PASSWORD POSTGRES_PASSWORD_FILE
 
 if [ "$(id -u)" -eq 0 ] && command -v gosu >/dev/null 2>&1; then
-	chown postgres:postgres "$pgpass_dir" "$pgpass_file" "$backup_dir"
+	chown 10001:10001 "$pgpass_dir" "$pgpass_file" "$backup_dir"
 	if [ -n "${PGSSLKEY:-}" ]; then
-		chown postgres:postgres "$PGSSLKEY"
+		chown 10001:10001 "$PGSSLKEY"
 	fi
-	exec gosu postgres "$@"
+	exec gosu 10001:10001 "$@"
 fi
 
 exec "$@"

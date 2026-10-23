@@ -15,7 +15,7 @@ func TestSignedDirectoryRecordRequiresAuthenticatedSigner(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn := dialRetry(t, env.addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: public, AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
 	var response netproto.AuthResponse
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &response); err != nil || !response.OK {
@@ -69,9 +69,9 @@ func TestLegacyDMRejectsAmbiguousDestinationBeforePresenceLookup(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
 	sender, _ := dialAuthed(t, env.addr, "admin-uid")
-	defer sender.Close()
+	defer func() { _ = sender.Close() }()
 	receiver, id := dialAuthed(t, env.addr, "user-uid")
-	defer receiver.Close()
+	defer func() { _ = receiver.Close() }()
 	for _, target := range []string{id, "missing-client"} {
 		send(t, sender, netproto.MsgChatSend, netproto.ChatSend{ToUniqueID: "user-uid", ToClientID: target, Enc: true, Text: "ciphertext"})
 		if failure := readError(t, sender); failure.Code != errCodeMalformed || failure.RecipientKeyStale {

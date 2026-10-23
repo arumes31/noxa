@@ -16,7 +16,7 @@ func TestNativeFileGrants(t *testing.T) {
 	}
 	a := &App{}
 	if f, err := a.openUploadSelection(path); err == nil {
-		f.Close()
+		_ = f.Close()
 		t.Fatal("unselected upload accepted")
 	}
 	if d, err := a.openDownloadSelection(path); err == nil {
@@ -39,7 +39,7 @@ func TestNativeFileGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 	a.fileGrants.mu.Lock()
 	for k, g := range a.fileGrants.entries {
 		g.expires = time.Now().Add(-time.Second)
@@ -47,7 +47,7 @@ func TestNativeFileGrants(t *testing.T) {
 	}
 	a.fileGrants.mu.Unlock()
 	if f, err := a.openUploadSelection(path); err == nil {
-		f.Close()
+		_ = f.Close()
 		t.Fatal("expired grant accepted")
 	}
 }
@@ -98,7 +98,7 @@ func TestNativeGrantsRejectReplacedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f, err := a.openUploadSelection(path); err == nil {
-		f.Close()
+		_ = f.Close()
 		t.Fatal("substituted upload accepted")
 	}
 }
@@ -118,7 +118,7 @@ func TestPartialDownloadRejectsSymlink(t *testing.T) {
 	}
 	defer d.Close()
 	if f, _, _, err := resumeInRoot(d); err == nil {
-		f.Close()
+		_ = f.Close()
 		t.Fatal("symlink partial accepted")
 	}
 }

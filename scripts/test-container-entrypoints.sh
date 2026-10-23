@@ -186,6 +186,11 @@ while :; do
 done
 EOF
 chmod +x "$tmpdir/fakebin/pg_dump"
+mkdir -p "$tmpdir/backup-keys"
+printf 'test' > "$tmpdir/backup-keys/pii.key"
+printf 'test' > "$tmpdir/backup-keys/chat_master.key"
+printf 'unused: stopped before encryption' > "$tmpdir/backup-recipients"
+BACKUP_KEYS_DIR="$tmpdir/backup-keys" BACKUP_AGE_RECIPIENTS_FILE="$tmpdir/backup-recipients" BACKUP_STAGING_DIR=/dev/shm \
 BACKUP_DELAY_SECONDS=0 BACKUP_COMMAND="$repo_root/scripts/postgres-backup.sh" \
 	BACKUP_DIR="$tmpdir/active-backup" PGHOST=postgres PGPORT=5432 PGUSER=noxa PGDATABASE=noxa \
 	BACKUP_WORK_READY_MARKER="$tmpdir/backup-ready" BACKUP_WORK_TERM_MARKER="$tmpdir/backup-term" \

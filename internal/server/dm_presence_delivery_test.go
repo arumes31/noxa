@@ -11,9 +11,9 @@ func TestQueuedDMPresenceSignalsRespectInvisibility(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
 	actorConn, actorID := dialAuthed(t, env.addr, "user-uid")
-	defer actorConn.Close()
+	defer func() { _ = actorConn.Close() }()
 	viewerConn, viewerID := dialAuthed(t, env.addr, "admin-uid")
-	defer viewerConn.Close()
+	defer func() { _ = viewerConn.Close() }()
 	viewer, _ := env.srv.clientByID(viewerID)
 	e, err := authorization.NewRoleEvaluator(backend.policy)
 	if err != nil {

@@ -145,7 +145,7 @@ func (a *App) openUploadSelection(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	leaf := filepath.Base(canonical)
 	before, err := root.Lstat(leaf)
 	if err != nil || !before.Mode().IsRegular() || !os.SameFile(before, grant.file) {
@@ -181,7 +181,7 @@ func (a *App) validateDownloadFolder(current, incoming string) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	info, err := root.Stat(".")
 	if err != nil || !info.IsDir() || !os.SameFile(info, grant.file) {
 		return errNativeFileSelection
@@ -270,7 +270,7 @@ func (d *downloadDestination) finalize() error {
 		if err != nil {
 			return err
 		}
-		defer src.Close()
+		defer func() { _ = src.Close() }()
 		out, err := d.root.OpenFile(d.leaf, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if err != nil {
 			return err

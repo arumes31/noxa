@@ -361,6 +361,14 @@ jobs:
             ${{ runner.temp }}/root-unit.out
             ${{ runner.temp }}/client-unit.out
 
+      - name: verify encrypted backup image and restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -f Dockerfile.backup -t noxa-backup:ci .
+          BACKUP_IMAGE=noxa-backup:ci sh scripts/test-backup-image.sh
+          docker run --rm --entrypoint sh -v "$PWD:/repo:ro" noxa-backup:ci /repo/scripts/test-encrypted-backup.sh
+
       - name: verify database backup and restore
         shell: bash
         env:

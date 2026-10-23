@@ -79,7 +79,7 @@ func readDMPin(path string) (dmIdentityPin, error) {
 	if err != nil {
 		return pin, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(f, 16385))
 	if err != nil || len(raw) > 16384 {
 		return pin, errors.New("cannot read contact trust store")

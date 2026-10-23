@@ -93,8 +93,8 @@ services:
         read_only: true
         bind: { create_host_path: false }
       - type: bind
-        source: ${POSTGRES_PASSWORD_FILE:-./docker/empty-secret}
-        target: /run/secrets/postgres_password
+        source: ${NOXA_RUNTIME_DB_PASSWORD_FILE:-./docker/empty-secret}
+        target: /run/secrets/runtime_db_password
         read_only: true
         bind: { create_host_path: false }
       - type: bind
@@ -129,12 +129,13 @@ services:
       NOXA_DATABASE_URL_FILE: ${NOXA_COMPOSE_DATABASE_URL_FILE:+/run/secrets/noxa_database_url}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
-      POSTGRES_USER: ${POSTGRES_USER:-noxa}
+      POSTGRES_USER: noxa_runtime
       POSTGRES_DB: ${POSTGRES_DB:-noxa}
       POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-disable}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
-      POSTGRES_PASSWORD_FILE: ${POSTGRES_PASSWORD_FILE:+/run/secrets/postgres_password}
+      POSTGRES_PASSWORD: ${NOXA_RUNTIME_DB_PASSWORD:-}
+      POSTGRES_PASSWORD_FILE: ${NOXA_RUNTIME_DB_PASSWORD_FILE:+/run/secrets/runtime_db_password}
       NOXA_PII_KEY_FILE: "/data/keys/pii.key"
+      NOXA_WEBRTC_ALLOWED_REMOTE_CIDRS: ${NOXA_WEBRTC_ALLOWED_REMOTE_CIDRS:-}
 
       # --- Redis (points at the redis service) ---
       NOXA_REDIS_ADDR: "redis:6379"
@@ -192,6 +193,42 @@ services:
   # ---------------------------------------------------------------------------
   # postgres — primary relational database
   # ---------------------------------------------------------------------------
+  # Offline tools have the owner credential; the serving container never does.
+  noxa-operator:
+    image: ${NOXA_IMAGE:-noxa:dev}
+    profiles: ["tools"]
+    command: ["/out/migrate"]
+    restart: "no"
+    networks: [noxa-net]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      NOXA_DEV_MODE: "true" # offline tool only; opens no application listeners
+      NOXA_DATABASE_URL: ${NOXA_MIGRATION_DATABASE_URL:-}
+      NOXA_DATABASE_URL_FILE: ${NOXA_MIGRATION_DATABASE_URL_FILE:+/run/secrets/migration_database_url}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-noxa}
+      POSTGRES_DB: ${POSTGRES_DB:-noxa}
+      POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-disable}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_PASSWORD_FILE: ${POSTGRES_PASSWORD_FILE:+/run/secrets/postgres_password}
+      NOXA_CHAT_MASTER_KEY_FILE: /data/keys/chat_master.key
+    volumes:
+      - noxadata:/data
+      - type: bind
+        source: ${POSTGRES_PASSWORD_FILE:-./docker/empty-secret}
+        target: /run/secrets/postgres_password
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${NOXA_MIGRATION_DATABASE_URL_FILE:-./docker/empty-secret}
+        target: /run/secrets/migration_database_url
+        read_only: true
+        bind: { create_host_path: false }
+
   postgres:
     image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 # 16.14-alpine3.24
     container_name: noxa-postgres
@@ -237,11 +274,11 @@ services:
     environment:
       PGHOST: postgres
       PGPORT: "5432"
-      PGUSER: ${POSTGRES_USER:-noxa}
+      PGUSER: noxa_backup
       PGDATABASE: ${POSTGRES_DB:-noxa}
       PGSSLMODE: ${POSTGRES_SSLMODE:-disable}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
-      POSTGRES_PASSWORD_FILE: ${POSTGRES_PASSWORD_FILE:+/run/secrets/postgres_password}
+      POSTGRES_PASSWORD: ${BACKUP_POSTGRES_PASSWORD:-}
+      POSTGRES_PASSWORD_FILE: ${BACKUP_POSTGRES_PASSWORD_FILE:+/run/secrets/backup_postgres_password}
       # A complete external application URL selects this fail-closed path:
       # every BACKUP_PG* setting and backup password source becomes required.
       BACKUP_EXTERNAL_DATABASE: "${NOXA_COMPOSE_DATABASE_URL:+1}${NOXA_COMPOSE_DATABASE_URL_FILE:+1}"
@@ -255,15 +292,19 @@ services:
       BACKUP_PGSSLROOTCERT: ${BACKUP_PGSSLROOTCERT_FILE:+/run/secrets/backup_pgsslrootcert}
       BACKUP_PGSSLCERT: ${BACKUP_PGSSLCERT_FILE:+/run/secrets/backup_pgsslcert}
       BACKUP_PGSSLKEY: ${BACKUP_PGSSLKEY_FILE:+/run/secrets/backup_pgsslkey}
+      BACKUP_AGE_RECIPIENTS_FILE: /run/secrets/backup-recipients
+      BACKUP_KEYS_DIR: /data/keys
       BACKUP_DIR: /backups/postgres
       BACKUP_RETENTION_DAYS: 7
       BACKUP_REMOTE: ${BACKUP_REMOTE:-}
       RCLONE_CONFIG: ${RCLONE_CONFIG_FILE:+/run/secrets/rclone.conf}
+    tmpfs: [/tmp]
     volumes:
       - pgbackups:/backups
+      - noxadata:/data:ro
       - type: bind
-        source: ${POSTGRES_PASSWORD_FILE:-./docker/empty-secret}
-        target: /run/secrets/postgres_password
+        source: ${BACKUP_AGE_RECIPIENTS_FILE:-./docker/empty-secret}
+        target: /run/secrets/backup-recipients
         read_only: true
         bind: { create_host_path: false }
       - type: bind
@@ -445,7 +486,7 @@ services:
       - noxa-net
       - noxa-turn-net
     ports:
-      - "12365:8474"
+      - "127.0.0.1:12365:8474"
       - "12366:12366"
 
 # ---------------------------------------------------------------------------

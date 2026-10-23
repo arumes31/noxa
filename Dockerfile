@@ -62,6 +62,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -ldflags="-s -w -buildid= ${NOXA_LDFLAGS} \
       -X=noxa/internal/version.UpdateRepo=${NOXA_UPDATE_REPO}" \
     -o /out/noxa ./cmd/server && \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/adduser ./cmd/adduser && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/role-setup ./cmd/role-setup && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags="-s -w" -o /out/e2e ./cmd/e2e
@@ -93,7 +94,7 @@ RUN mkdir -p /data/files /data/recordings \
 
 # Copy the compiled binary from the builder stage.
 COPY --from=builder --chown=10001:10001 /out/noxa /out/noxa
-COPY --from=builder --chown=10001:10001 /out/adduser /out/role-setup /out/e2e /out/
+COPY --from=builder --chown=10001:10001 /out/adduser /out/role-setup /out/migrate /out/e2e /out/
 COPY --chmod=0555 --chown=10001:10001 scripts/secret-env.sh /usr/local/lib/noxa/secret-env.sh
 COPY --chmod=0555 --chown=10001:10001 scripts/noxa-entrypoint.sh /usr/local/bin/noxa-entrypoint.sh
 

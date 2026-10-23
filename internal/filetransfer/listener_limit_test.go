@@ -134,7 +134,7 @@ func TestPreauthSourceCapAndOversizedHeaderRelease(t *testing.T) {
 	}()
 	dial := func() net.Conn {
 		t.Helper()
-		c, err := net.DialTimeout("tcp", addr, time.Second)
+		c, err := (&net.Dialer{Timeout: time.Second}).DialContext(t.Context(), "tcp", addr)
 		if err != nil {
 			t.Fatal(err)
 		}

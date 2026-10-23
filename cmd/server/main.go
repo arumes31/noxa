@@ -358,13 +358,13 @@ func run() (retErr error) {
 	}()
 
 	migrationCtx, cancelMigration := context.WithTimeout(ctx, 5*time.Minute)
-	err = dbStore.EnsureFreshInstall(migrationCtx)
-	if err == nil {
-		err = dbStore.MigrateContext(migrationCtx)
+	err = dbStore.CheckSchema(migrationCtx)
+	if err == nil && !cfg.DevMode {
+		err = dbStore.CheckRuntimePrivileges(migrationCtx)
 	}
 	cancelMigration()
 	if err != nil {
-		return fmt.Errorf("running migrations: %w", err)
+		return fmt.Errorf("checking database readiness: %w", err)
 	}
 	piiCipher, err := store.LoadOrCreatePIICipher(cfg.PIIKeyFile)
 	if err != nil {
@@ -513,6 +513,7 @@ func run() (retErr error) {
 	engine, err := webrtc.NewWithVideoBounds(logger, cfg.WebRTC.ICEServers, cfg.WebRTC.EnableAV1, webrtc.NetworkConfig{
 		Traffic: trafficCounter,
 		UDPAddr: cfg.WebRTC.UDPAddr, ExternalIPs: cfg.WebRTC.ExternalIPs,
+		AllowedRemoteCIDRs: cfg.WebRTC.AllowedRemoteCIDRs,
 	}, videoBounds)
 	if err != nil {
 		return fmt.Errorf("initializing webrtc engine: %w", err)

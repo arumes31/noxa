@@ -192,8 +192,7 @@ The desktop updater verifies the signed manifest using its embedded trusted keys
    The sample uses development credentials and publishes ports on all host
    interfaces. Restrict it with host bindings/firewall rules during setup. Before exposing a
    deployment, set `NOXA_DEV_MODE=false`, replace the sample PostgreSQL
-   credential, and set `POSTGRES_SSLMODE` to `require`, `verify-ca`, or
-   `verify-full` (or supply `NOXA_COMPOSE_DATABASE_URL` with that sslmode).
+   credential, and set `POSTGRES_SSLMODE` to `verify-full` (or supply `NOXA_COMPOSE_DATABASE_URL` with that sslmode).
    Each Compose secret also supports an `_FILE` counterpart; configure exactly
    one non-empty source. Set an `_FILE` value to a readable host path; Compose
    mounts it read-only at `/run/secrets/...`. Prefer a path outside the
@@ -305,15 +304,16 @@ while running the offline setup commands:
 
 ```bash
 docker compose stop noxa
+docker compose --profile tools run --rm --no-deps noxa-operator /out/migrate
 read -r -s -p 'Choose an owner account password: ' OWNER_PASSWORD; printf '\n'
-docker compose run --rm --no-deps noxa /out/adduser \
-  -nickname owner -password "$OWNER_PASSWORD"
+printf '%s\n' "$OWNER_PASSWORD" | docker compose --profile tools run -T --rm --no-deps noxa-operator /out/adduser \
+  -nickname owner -password-stdin
 unset OWNER_PASSWORD
 ```
 
 Store the password securely and copy the exact `unique_id` printed by `adduser`.
-The password prompt avoids saving the literal password in shell history, but the
-current CLI passes it as a process argument; run this on a trusted operator host.
+The password is passed through standard input, so it is absent from command-line
+arguments and shell history.
 `adduser` initializes the fresh schema and creates an account; it does not grant
 administrative rights by itself. If it reports that the account already exists,
 it has not changed that account's password.
@@ -321,11 +321,18 @@ it has not changed that account's password.
 Replace the placeholder below with that exact ID, not the nickname:
 
 ```bash
-docker compose run --rm --no-deps noxa /out/role-setup \
+docker compose --profile tools run --rm --no-deps noxa-operator /out/role-setup \
   -owner-uid '<unique_id from adduser>' \
   -activate -confirm ACTIVATE-ROLES-V1 \
   -chat-master-key-file /data/keys/chat_master.key \
   -query-timeout 30s
+```
+
+Before starting, complete [Runtime database privilege separation](#runtime-database-privilege-separation)
+to provision `noxa_runtime` and `noxa_backup`, and configure their distinct password
+files in `.env`. This is also required for the development Compose stack.
+
+```bash
 docker compose up -d noxa
 docker compose logs --tail=50 noxa
 docker compose exec noxa wget -qO- http://127.0.0.1:12337/readyz
@@ -1007,3 +1014,84 @@ DM bindings are shown as unavailable rather than marked verified. This change do
 not add forward secrecy: current message bodies still use static X25519 and
 XSalsa20-Poly1305. Channel passwords restrict voice entry; chat and files use the
 channel's Permissions policy.
+
+
+### Runtime database privilege separation
+
+Production (`dev_mode=false`) checks the complete migration ledger and its
+checksums before opening listeners. It never applies migrations at startup and
+refuses superuser, database/schema owner, privileged role membership, schema
+creation, temporary-table creation, or writable migration-ledger permissions.
+Development mode also requires offline migrations; it only relaxes the runtime
+privilege check for local tooling.
+
+Stop the server and take a verified backup before an upgrade. Run `/out/migrate`
+from the `noxa-operator` tools profile with the offline owner's credentials.
+`NOXA_MIGRATION_DATABASE_URL_FILE` supplies a separate owner URL for external
+PostgreSQL. The serving container receives only `NOXA_COMPOSE_DATABASE_URL_FILE`
+(the runtime URL) or the dedicated `NOXA_RUNTIME_DB_PASSWORD_FILE` secret for
+`noxa_runtime`; it does not mount the owner's password.
+
+After the initial migration, provision the dedicated runtime and read-only
+backup roles as the database owner. The SQL script also sets default grants
+for future tables/sequences created by that owner, protects the schema ledger,
+and removes inherited role memberships. Run it against this application's
+dedicated database only. Passwords must be distinct and at least 24 characters:
+
+```bash
+read -r -s -p 'Runtime database password: ' NOXA_RUNTIME_PASSWORD; printf '\n'
+read -r -s -p 'Backup database password: ' NOXA_BACKUP_PASSWORD; printf '\n'
+export NOXA_RUNTIME_PASSWORD NOXA_BACKUP_PASSWORD
+docker compose exec -T -e NOXA_RUNTIME_PASSWORD -e NOXA_BACKUP_PASSWORD postgres \
+  psql -U "${POSTGRES_USER:-noxa}" -d "${POSTGRES_DB:-noxa}" \
+  < scripts/provision-database-roles.sql
+unset NOXA_RUNTIME_PASSWORD NOXA_BACKUP_PASSWORD
+```
+
+Store the runtime password in `NOXA_RUNTIME_DB_PASSWORD_FILE` (or use a complete
+runtime URL), and the backup password in `BACKUP_POSTGRES_PASSWORD_FILE` with
+`BACKUP_PGUSER=noxa_backup`. Keep the owner credential exclusively in the
+operator tools and PostgreSQL service. For external PostgreSQL, run the same
+SQL using the owner connection and `sslmode=verify-full`. Re-run provisioning
+after migrations that intentionally replace protected tables. The script
+updates credentials for the named dedicated service roles; do not use them
+for other databases.
+
+
+### Encrypted database backups
+
+The backup profile publishes only `.tar.gz.age` files. Set
+`BACKUP_AGE_RECIPIENTS_FILE` to a public age recipient file (an SSH public key is
+also supported); keep the corresponding private identity off the server.
+Each encrypted bundle contains `database.dump`, `keys/pii.key`, the complete
+`keys/chat_master.key` ring, and a format manifest. The backup container reads
+`noxadata` read-only as UID 10001, matching the application's private key files.
+For a custom deployment, mount the actual configured keys; an environment-only
+key override must also be supplied to this protected backup source.
+
+Plaintext staging requires tmpfs and is removed on success or failure. Allow
+RAM for both the compressed dump and archive; Compose supplies `/tmp` as tmpfs.
+If encryption fails, a key changes during the dump, or a required key is missing,
+no archive is published or uploaded. Seven-day local retention applies to the
+new encrypted archives. Existing plaintext backups require a separate verified
+conversion; uploaded objects and unrelated host backups are not rewritten by
+this script. Uploaded files and recordings need the separate full data-volume
+backup as well.
+
+Restore on a trusted machine using `age -d -i <private-identity> -o bundle.tar.gz
+<archive.tar.gz.age>`, extract into a private directory, and restore
+`database.dump` with `pg_restore --exit-on-error --no-owner`. Restore both key
+files to the configured application paths with owner-only access before
+starting the matching server version. The CI image test performs this complete
+round trip and compares both key files and relational fixture data.
+
+### Remote ICE address policy
+
+The SFU rejects remote loopback, private and shared-address-space candidates by
+ default, across SDP, trickle ICE and peer-reflexive discovery. mDNS resolution
+is disabled. For intentional LAN/VPN clients, set `webrtc.allowed_remote_cidrs`
+(or `NOXA_WEBRTC_ALLOWED_REMOTE_CIDRS`) to the specific client subnets. An
+explicit loopback-only UDP listener permits loopback for local testing.
+Link-local/metadata, multicast and unspecified addresses remain blocked even
+with an allowlist. Public server-reflexive and TURN relay candidates continue
+to work; operator-configured STUN/TURN discovery servers are unaffected.

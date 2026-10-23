@@ -10,6 +10,9 @@ COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
 # The PostgreSQL Alpine image removes the temporary CA dependency used to build
 # gosu; retain rclone's CA bundle without installing packages at runtime.
 COPY --from=rclone /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN apk add --no-cache age \
+    && addgroup -S -g 10001 noxa-backup \
+    && adduser -S -G noxa-backup -u 10001 noxa-backup
 COPY scripts/secret-env.sh /usr/local/lib/noxa/secret-env.sh
 COPY scripts/postgres-backup.sh /usr/local/bin/postgres-backup.sh
 COPY scripts/postgres-backup-entrypoint.sh /usr/local/bin/postgres-backup-entrypoint.sh
