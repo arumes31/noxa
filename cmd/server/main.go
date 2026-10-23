@@ -45,6 +45,7 @@ import (
 	"noxa/internal/tlscert"
 	"noxa/internal/turn"
 	"noxa/internal/version"
+	"noxa/internal/web"
 	"noxa/internal/webrtc"
 )
 
@@ -868,10 +869,20 @@ func run() (retErr error) {
 		sshQuery = query.NewSSH(cfg.QuerySSHAddr, cfg.QuerySSHHostKey, queryServer)
 	}
 
+	// The mobile web app reaches the same control dispatcher over WebSocket.
+	var webServer *web.Server
+	if cfg.Web.Enabled {
+		webServer, err = web.New(cfg.Web, cfg.ServerName, tcpServer, logger)
+		if err != nil {
+			return fmt.Errorf("creating web listener: %w", err)
+		}
+	}
+
 	// Routes and listener objects are complete before any socket is opened.
 	// The spare slot ensures every reporter can finish after one exit triggers
-	// shutdown (eight services at most, including optional SSH and lease failure).
-	serviceExits := make(chan serviceExit, 9)
+	// shutdown (nine services at most, including optional SSH, web and lease
+	// failure).
+	serviceExits := make(chan serviceExit, 10)
 	if err := lease.Check(ctx); err != nil {
 		return fmt.Errorf("checking role process lease before listening: %w", err)
 	}
@@ -889,6 +900,9 @@ func run() (retErr error) {
 	}
 	startService(serviceExits, "file-transfer server", func() error { return ftServer.Start(ctx) })
 	startService(serviceExits, "UDP media server", func() error { return udpServer.Start(ctx) })
+	if webServer != nil {
+		startService(serviceExits, "web listener", webServer.Start)
+	}
 	servingReady.Store(true)
 	logger.Info("noxa server running, waiting for shutdown signal")
 	var runErr error
@@ -909,6 +923,9 @@ func run() (retErr error) {
 	}()
 	if err := healthServer.Shutdown(shutdownCtx); err != nil {
 		runErr = joinShutdownError(runErr, "health HTTP server", err)
+	}
+	if webServer != nil {
+		runErr = joinShutdownError(runErr, "web listener", webServer.Shutdown(shutdownCtx))
 	}
 
 	runErr = joinShutdownError(runErr, "TCP control server", tcpServer.Shutdown(shutdownCtx))
