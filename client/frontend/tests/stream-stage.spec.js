@@ -3,8 +3,8 @@ import { test, expect } from "./fixtures.js";
 // Design 45 stream stage: the real stream session, video grid and stage with
 // canvas receivers. Only the native bridge and the peer connection are fakes.
 test.beforeEach(async ({ page }) => {
-    await page.route("**/stage-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en" data-theme="arctic"><head>
-        <link rel="stylesheet" href="/src/style.css"><link rel="stylesheet" href="/src/streams.css"><link rel="stylesheet" href="/src/workspace.css"><link rel="stylesheet" href="/src/arctic-night.css">
+    await page.route("**/stage-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en" data-theme="midnight"><head>
+        <link rel="stylesheet" href="/src/style.css"><link rel="stylesheet" href="/src/streams.css"><link rel="stylesheet" href="/src/workspace.css"><link rel="stylesheet" href="/src/midnight.css">
         <style>body{margin:0;height:100vh}#center{height:100vh;display:flex;flex-direction:column}</style></head>
         <body><main id="center"><section id="chat-pane"><div id="video-grid" class="hidden"></div><div id="chat-wrap"><div id="chat-log"></div></div><div id="chat-input-row"><input id="chat-text" aria-label="Message"></div></section></main></body></html>` }));
     await page.setViewportSize({ width: 1400, height: 900 });

@@ -24,6 +24,7 @@ func buildRoleSnapshotContext(ctx context.Context, sm *state.Manager, evaluator 
 	snapshot := broadcast.BuildSnapshot(sm, showStats, uniqueID)
 	authority := evaluator.Evaluate(actorID, 0, authorization.Administrator)
 	snapshot.CanSetInvisible = authority.Allowed
+	snapshot.CanViewAuditLog = evaluator.Evaluate(actorID, 0, authorization.ViewAuditLog).Allowed
 	switch {
 	case authority.Reason == "owner", authority.Reason == "administrator":
 		snapshot.OwnAuthority = authority.Reason

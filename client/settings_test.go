@@ -963,3 +963,13 @@ func TestStartupUpdateInstallDefaultsAndOptOut(t *testing.T) {
 		t.Fatal("explicit install opt-out must persist")
 	}
 }
+
+func TestNormalizeSettingsUsesOnlyMidnight(t *testing.T) {
+	for _, theme := range []string{"", "midnight", "arctic", "dark", "light", "hc", "unknown"} {
+		s := DefaultSettings()
+		s.Theme = theme
+		if got := normalizeSettings(s).Theme; got != "midnight" {
+			t.Errorf("theme %q normalized to %q", theme, got)
+		}
+	}
+}

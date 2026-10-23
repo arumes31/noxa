@@ -1,0 +1,110 @@
+/* Compact workspace surfaces use the same OLED tokens as chat. */
+#center.activity-open > :not(.activity-workspace) { display: none !important; }
+.activity-workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; flex: 1; background: var(--bg); }
+.activity-workspace [hidden] { display: none !important; }
+.activity-workspace button, .activity-workspace input, .activity-workspace select { font: inherit; }
+.activity-workspace button { cursor: pointer; }
+.activity-workspace button:disabled { cursor: default; }
+.activity-workspace :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.activity-header { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 12px; border-bottom: 1px solid var(--border); }
+.activity-header h2 { margin: 0; font-size: 1.14rem; }
+.activity-tabs { display: flex; gap: 4px; min-width: 0; }
+.activity-tab, .activity-close { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 0 10px; color: var(--text-dim); background: transparent; border: 0; border-bottom: 2px solid transparent; font-size: .86rem !important; }
+.activity-tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.activity-workspace .ui-icon { width: 16px; height: 16px; vertical-align: middle; }
+.activity-close { margin-left: auto; min-width: 28px; padding: 0; }
+.activity-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.activity-filters { display: flex; flex-wrap: wrap; gap: 4px; }
+.activity-button { min-height: 28px; padding: 3px 9px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-raised); color: var(--text-dim); font-size: .86rem !important; }
+.activity-button:hover, .activity-button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.activity-search { min-width: 80px; width: 145px; max-width: 100%; min-height: 28px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-raised); color: var(--text); padding: 4px 8px; font-size: .86rem !important; }
+.activity-toolbar > .activity-search { margin-left: auto; }
+.activity-link { border: 0; background: transparent; color: var(--accent); padding: 4px; font-size: .8rem !important; text-align: left; }
+.activity-layout { display: grid; grid-template-columns: minmax(0, 1fr) clamp(190px, 25%, 260px); min-height: 0; flex: 1; }
+.activity-panel { min-width: 0; min-height: 0; display: flex; }
+.activity-content { flex: 1; min-width: 0; overflow: auto; padding: 10px; }
+.activity-notifications { min-width: 0; overflow: auto; border-left: 1px solid var(--border); padding: 8px; }
+.activity-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
+.activity-workspace h3 { margin: 0 0 8px; font-size: .96rem; }
+.activity-section-heading h3 { margin: 0; }
+.activity-notifications .activity-section-heading { align-items: flex-start; flex-wrap: wrap; }
+.activity-day { padding: 5px 8px; margin: 8px 0 0; background: var(--bg-raised); font-size: .8rem; color: var(--text-dim); }
+.activity-empty { color: var(--text-faint); font-size: .86rem; line-height: 1.5; margin: 8px 0; }
+.activity-friends { padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--border); }
+.activity-friends-strip { display: flex; gap: 12px; overflow-x: auto; padding: 3px; }
+.activity-friend { display: flex; flex: 0 0 66px; flex-direction: column; align-items: center; gap: 4px; width: 66px; border: 0; padding: 0; background: transparent; color: var(--text); }
+.activity-friend strong { font-weight: 500; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .86rem; }
+.activity-friend small { font-size: .75rem; color: var(--text-faint); }
+.activity-avatar { display: inline-flex; flex: 0 0 auto; position: relative; justify-content: center; align-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--bg-hover); color: var(--text); }
+.activity-avatar > img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.activity-friend .activity-avatar { width: 44px; height: 44px; border: 2px solid var(--border); }
+.activity-friend[data-status="inVoice"] .activity-avatar, .activity-friend[data-status="streaming"] .activity-avatar { border-color: var(--accent); }
+.activity-friend[data-status="offline"] .activity-avatar { filter: grayscale(1); opacity: .65; }
+.activity-presence { position: absolute; bottom: -1px; right: -1px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--bg); background: var(--text-faint); }
+[data-status="online"] .activity-presence, [data-status="inVoice"] .activity-presence { background: #5ee3a1; }
+[data-status="away"] .activity-presence { background: var(--warn); }
+[data-status="streaming"] .activity-presence { background: #fa536c; }
+.activity-add-friend { font-size: .75rem !important; color: var(--text-dim); }
+.activity-add-friend > span { width: 44px; min-height: 44px; display: grid; place-items: center; border: 1px dashed var(--border); border-radius: 50%; }
+.activity-feed { display: flex; flex-direction: column; gap: 7px; }
+.activity-message { border: 1px solid var(--border); border-radius: 4px; padding: 9px; background: var(--bg-raised); min-width: 0; }
+.activity-message.mentioned { border-left: 3px solid var(--accent); }
+.activity-message header { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.activity-message header strong { font-size: .9rem; overflow-wrap: anywhere; }
+.activity-time { color: var(--text-faint); font-size: .75rem; white-space: nowrap; }
+.activity-message header time { margin-left: auto; }
+.activity-message-body { overflow-wrap: anywhere; font-size: .9rem; }
+.activity-message-body img, .activity-message-body video { max-width: 100%; }
+.activity-message footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 5px; }
+.activity-context { font-size: .8rem; color: var(--text-faint); overflow-wrap: anywhere; }
+.activity-media-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 8px; align-items: start; }
+.activity-media-grid .activity-message-body > button { max-width: 100%; width: 100%; }
+.activity-notification { display: flex; align-items: flex-start; gap: 8px; padding: 10px 2px; width: 100%; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--text-dim); text-align: left; }
+.activity-notification.unread { box-shadow: inset 2px 0 var(--accent); padding-left: 7px; }
+.activity-notification:hover:not(:disabled) { background: var(--bg-hover); }
+.activity-notification-body { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 0; }
+.activity-notification-text { font-size: .86rem; overflow-wrap: anywhere; }
+.activity-platform { position: absolute; right: -7px; bottom: -4px; font-size: 8px; padding: 1px 3px; color: white; border-radius: 2px; background: #171e23; }
+.activity-platform.youtube { background: #bc1829; } .activity-platform.twitch { background: #7544c9; } .activity-platform.whatnot { background: #e7d440; color: #111; }
+.activity-thumbnail { width: 52px; height: 34px; flex: none; object-fit: cover; border-radius: 3px; order: 3; }
+.activity-call { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px; margin: 6px 0; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-raised); }
+.activity-call-icon { color: var(--accent); } .activity-call.missed .activity-call-icon { color: #fa536c; }
+.activity-call-info { display: flex; flex: 1; min-width: 100px; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.activity-call-info span { font-size: .86rem; color: var(--text-dim); }
+.activity-rooms { margin-top: 16px; }
+.activity-room { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.activity-room .activity-avatar { width: 24px; height: 24px; }
+.activity-room small { color: var(--text-faint); }
+.activity-room .activity-link { margin-left: auto; }
+.activity-audit-controls { display: flex; gap: 8px; margin-bottom: 8px; }
+.activity-audit-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(160px, 1fr); gap: 10px; align-items: start; }
+.activity-audit-table-wrap { overflow-x: auto; }
+.activity-audit-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+.activity-audit-table th, .activity-audit-table td { padding: 8px 5px; border-bottom: 1px solid var(--border); text-align: left; overflow-wrap: anywhere; }
+.activity-audit-table .selected { background: var(--accent-dim); }
+.activity-audit-inspector { min-width: 0; padding: 10px; border: 1px solid var(--border); background: var(--bg-raised); font-size: .86rem; overflow-wrap: anywhere; }
+.activity-audit-inspector table { width: 100%; table-layout: fixed; }
+.activity-audit-inspector th, .activity-audit-inspector td { padding: 5px; text-align: left; vertical-align: top; }
+@media (max-width: 1100px) { .activity-audit-layout { grid-template-columns: minmax(0, 1fr); } .activity-header { gap: 5px; padding: 0 8px; } .activity-tab { padding: 0 7px; } }
+@media (max-width: 800px) { .activity-layout { grid-template-columns: minmax(0, 1fr); overflow-y: auto; } .activity-content, .activity-notifications { overflow: visible; } .activity-panel { display: block; } .activity-notifications { border-left: 0; border-top: 1px solid var(--border); } .activity-header { flex-wrap: wrap; } .activity-header h2 { font-size: 1rem; } .activity-tab { gap: 4px; } }
+
+/* The Activity feed follows the reference's flat rows; Media retains cards. */
+.activity-header h2 { display: flex; align-items: center; gap: 7px; }
+.activity-title-icon { color: var(--accent); }
+.activity-mentions { margin-bottom: 18px; }
+.activity-feed { gap: 0; }
+.activity-feed-row { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; padding: 10px 2px; position: relative; min-height: 92px; }
+.activity-feed-row.mentioned { border-left: 0; }
+.activity-feed-row header { margin-bottom: 0; }
+.activity-feed-row header .activity-avatar { width: 38px; height: 38px; }
+.activity-feed-row header time { margin-left: 0; }
+.activity-feed-row .activity-message-body { margin-left: 46px; padding-right: 80px; }
+.activity-feed-row footer { margin-left: 46px; }
+.activity-feed-row .activity-thumbnail { position: absolute; right: 5px; bottom: 44px; width: 66px; height: 38px; }
+.activity-feed-row .role-chip { font-size: .7rem; }
+.activity-notification-body strong { font-size: .86rem; }
+.activity-notifications .activity-section-heading { padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.activity-notifications .activity-section-heading .activity-link { border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
+
+#center.activity-open { display: flex !important; flex-direction: column; }
+.activity-feed > .activity-call { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; padding: 12px 2px; margin: 0; }

@@ -5850,12 +5850,12 @@ test("B3 alpha details work with the keyboard and notifications stay readable @a
         await page.screenshot({ path: testInfo.outputPath(`workspace-${width}.png`) });
         if (width === 640) await page.locator("#workspace-sidebar-toggle").click();
         await page.locator("#notif-bell").click();
-        const message = page.locator(".nc-text");
+        const message = page.locator(".activity-notifications .activity-notification-text");
         await expect(message).toHaveText("insufficient permission: b_channel_modify");
         expect(await message.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
         await auditAccessibility(page, `notifications ${width}`);
         await page.screenshot({ path: testInfo.outputPath(`notifications-${width}.png`) });
-        await page.getByRole("button", { name: "Close notifications", exact: true }).click();
+        await page.locator(".activity-close").click();
     }
 });
 
@@ -10554,10 +10554,10 @@ test("an edited recipient cannot send to the previous selection or an ambiguous 
     await expect(page.locator("#toasts")).toContainText("Choose a recipient");
 });
 
-test("uses the B3 console composition without losing responsive navigation", async ({ page }) => {
+test("legacy themes migrate to Midnight without losing responsive navigation", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.evaluate(() => {
-        // B3 is the classic dark composition; Arctic Night is now the default.
+        // A saved classic theme migrates to the sole Midnight palette.
         window.__noxa.state.settings.theme = "dark";
         window.__noxa.applyAppearance();
         window.__noxa.showWorkspace(false);
@@ -10586,7 +10586,8 @@ test("uses the B3 console composition without losing responsive navigation", asy
         railDirection: getComputedStyle(document.getElementById("server-tabs")).flexDirection,
         texture: getComputedStyle(document.getElementById("center"), "::before").backgroundImage,
     }));
-    expect(desktop.accent).toBe("#4ad8ed");
+    expect(desktop.accent).toBe("#34d9ef");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "midnight");
     expect(desktop.appColumns).toBe("1280px");
     expect(desktop.railDirection).toBe("row");
     expect(desktop.texture).toBe("none");
@@ -12435,4 +12436,113 @@ test("server information shows live server-wide quality and retained traffic win
     await page.clock.runFor(2000);
     await expect(overview.getByText(/metrics require a supporting server/)).toBeVisible();
     await expect(overview.locator('[data-overview-stat="latency"]')).toBeHidden();
+});
+
+
+test.describe("compact Activity workspace", () => {
+    test.beforeEach(async ({ page }) => {
+        await page.setViewportSize({ width: 1280, height: 850 });
+        await page.evaluate(() => {
+            const v = window.__noxa;
+            Object.assign(v.state, { activeTabID: "activity-a", myClientID: "self", myUniqueID: "self", myChannelID: 1, lastConnect: { addr: "wowcraft.pw" },
+                canViewAuditLog: false,
+                channels: [{ ChannelID: 1, Name: "Lobby", SystemKind: "home" }, { ChannelID: 2, Name: "Public1" }],
+                clients: [{ client_id: "self", unique_id: "self", nickname: "Daniel", channel_id: 1 }, { client_id: "bene", unique_id: "bene", nickname: "Bene", channel_id: 2, sharing: true }],
+            });
+            v.state.settings.contacts = [{ unique_id: "bene", label: "Bene" }, { unique_id: "offline", label: "Lina" }];
+            v.state.settings.link_previews = false;
+            v.state.settings.dnd_enabled = true;
+            v.showWorkspace(false); v.setDetailsOpen(false); v.renderTree();
+            window.__noxaChat.onSubscriptions({ channel_ids: [2] });
+            window.__noxaChat.addChat({ id: 9901, channel_id: 2, from_unique_id: "bene", from: "Bene", enc_verified: true, enc_mode: "server", text: "Check this https://www.youtube.com/watch?v=dQw4w9WgXcQ" });
+            window.__noxaChat.addChat({ id: 9902, channel_id: 2, from_unique_id: "bene", from: "Bene", enc_verified: true, enc_mode: "server", text: "https://www.twitch.tv/bene" });
+            window.__noxaChat.addChat({ id: 9903, channel_id: 2, from_unique_id: "bene", from: "Bene", enc_verified: true, enc_mode: "server", text: "https://www.whatnot.com/user/bene" });
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "AuditLogForTab") return async () => {
+                    window.__activityAuditCalls = (window.__activityAuditCalls || 0) + 1;
+                    if (window.__activityAuditGate) await window.__activityAuditGate;
+                    return { entries: window.__activityAuditEntries ?? [{ id: 9, created_at: Date.now()/1000, actor: "Owner", action: "roles.role_update", target: "Members", detail: "Private audit detail" }] };
+                };
+                if (key === "PrivateCallForTab") return async () => ({ history: [{ id: "call-1", caller: "bene", created_at: Date.now()/1000, ended_at: Date.now()/1000, participants: [{ unique_id: "self", state: "missed" }, { unique_id: "bene", state: "left" }] }] });
+                return target[key];
+            } });
+        });
+    });
+    test("compact header, friends, filters, sidebar and keyboard tabs", async ({ page }, testInfo) => {
+        await page.locator("#notif-bell").click();
+        const root = page.locator("#activity-workspace");
+        await expect(root.getByRole("tab", { name: "Audit", exact: true })).toBeHidden();
+        await expect(root.locator('.activity-friend[data-status="streaming"]')).toContainText("Bene");
+        await expect(root.locator('.activity-friend[data-status="offline"]')).toContainText("Lina");
+        expect(await root.locator(".activity-header").evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(48);
+        await expect(root.getByRole("complementary", { name: "Notifications" })).toBeVisible();
+        await root.getByRole("tab", { name: "Activity", exact: true }).focus();
+        await page.keyboard.press("ArrowRight");
+        await expect(root.getByRole("tab", { name: "Media", exact: true })).toBeFocused();
+        await root.getByRole("button", { name: "Twitch", exact: true }).click();
+        await expect(root.locator(".activity-message")).toHaveCount(1);
+        await expect(root.locator(".activity-message")).toContainText("twitch.tv");
+        await root.getByRole("button", { name: "Whatnot", exact: true }).click();
+        await expect(root.locator(".activity-message")).toHaveCount(1);
+        await root.getByRole("tab", { name: "Activity", exact: true }).click();
+        await page.screenshot({ path: testInfo.outputPath("activity-desktop.png") });
+        await page.setViewportSize({ width: 760, height: 800 });
+        expect(await root.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+        await page.keyboard.press("Escape");
+        await expect(root).toHaveCount(0);
+        await expect(page.locator("#notif-bell")).toBeFocused();
+    });
+    test("audit stays hidden without access and revocation discards an outstanding reply", async ({ page }) => {
+        await page.evaluate(() => window.__noxaActivity.open("audit"));
+        await expect(page.locator("#activity-workspace")).toHaveCount(0);
+        expect(await page.evaluate(() => window.__activityAuditCalls || 0)).toBe(0);
+        await page.evaluate(() => {
+            window.__noxa.state.canViewAuditLog = true;
+            window.__activityAuditGate = new Promise(resolve => { window.__releaseActivityAudit = resolve; });
+            window.__noxaActivity.open("audit");
+        });
+        await expect(page.getByRole("tab", { name: "Audit", exact: true })).toBeVisible();
+        await page.evaluate(() => {
+            window.__noxa.state.canViewAuditLog = false;
+            window.dispatchEvent(new Event("noxa-audit-access-changed"));
+            window.__releaseActivityAudit();
+        });
+        await expect(page.getByRole("tab", { name: "Audit", exact: true })).toBeHidden();
+        await expect(page.getByText("Private audit detail")).toHaveCount(0);
+        await expect(page.getByRole("tab", { name: "Activity", exact: true })).toHaveAttribute("aria-selected", "true");
+    });
+    test("audit empty state and selected details clear on revocation", async ({ page }) => {
+        await page.evaluate(() => { window.__noxa.state.canViewAuditLog = true; window.__activityAuditEntries = []; window.__noxaActivity.open("audit"); });
+        await expect(page.locator("#activity-workspace [role=status]")).toContainText("No matching records");
+        await page.evaluate(() => { delete window.__activityAuditEntries; window.__noxaActivity.open("audit"); });
+        await page.locator(".activity-audit-table button").click();
+        await expect(page.locator(".activity-audit-inspector")).toContainText("Private audit detail");
+        await page.evaluate(() => { window.__noxa.state.canViewAuditLog = false; window.dispatchEvent(new Event("noxa-audit-access-changed")); });
+        await expect(page.locator(".activity-audit-inspector")).toHaveCount(0);
+    });
+    test("Activity fills the center from Messages and returns to chat", async ({ page }) => {
+        await page.locator("#direct-messages").click();
+        await page.locator("#notif-bell").click();
+        const workspace = page.locator("#activity-workspace");
+        expect(await workspace.evaluate(el => el.getBoundingClientRect().width > 600)).toBe(true);
+        await page.locator('.activity-friend[data-status="streaming"]').click();
+        await expect(workspace).toHaveCount(0);
+    });
+    test("calls use actual history and a server reset clears all activity", async ({ page }) => {
+        await page.evaluate(() => window.__noxaActivity.open("calls"));
+        await expect(page.locator(".activity-call")).toContainText("Missed call");
+        await expect(page.getByRole("button", { name: "Call back", exact: true })).toBeVisible();
+        await page.evaluate(() => { for (const cb of window.__events.tab_reset || []) cb("other"); });
+        await expect(page.locator("#activity-workspace")).toHaveCount(0);
+        await expect(page.getByText("Missed call", { exact: true })).toHaveCount(0);
+    });
+    test("deleted messages and revoked channel access disappear from media", async ({ page }) => {
+        await page.evaluate(() => window.__noxaActivity.open("media"));
+        await expect(page.locator(".activity-message")).toHaveCount(3);
+        await page.evaluate(() => { for (const cb of window.__events.event || []) cb({ type: "chat_deleted", data: { message_id: 9902 } }); });
+        await expect(page.locator(".activity-message")).toHaveCount(2);
+        await page.evaluate(() => { for (const cb of window.__events.subscriptions || []) cb({ channel_ids: [] }); });
+        await expect(page.locator(".activity-message")).toHaveCount(0);
+    });
 });

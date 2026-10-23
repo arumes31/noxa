@@ -7,7 +7,7 @@ import "./roles.css";
 let openOverlay = null;
 
 export function openAuditLog() {
-    if (openOverlay?.isConnected) return;
+    if (!window.__noxa.state.canViewAuditLog || openOverlay?.isConnected) return;
     const tabID = window.__noxa.state.activeTabID;
     const overlay = roleElement("div", "dlg-overlay");
     openOverlay = overlay;
@@ -24,7 +24,9 @@ export function openAuditLog() {
     const error = roleElement("p", "role-error");
     error.setAttribute("role", "alert");
     const model = { entries: [], capabilities: [], oldest: 0, busy: false, done: false };
-    const current = () => isCurrentServerDialog(overlay);
+    const revoke = () => { if (!window.__noxa.state.canViewAuditLog) closeDialog(overlay); };
+    window.addEventListener("noxa-audit-access-changed", revoke);
+    const current = () => window.__noxa.state.canViewAuditLog && isCurrentServerDialog(overlay);
     const render = () => {
         list.replaceChildren();
         const search = filter.value.toLocaleLowerCase();
@@ -99,6 +101,6 @@ export function openAuditLog() {
     footer.append(status, older);
     dialog.append(header, label, error, list, footer);
     overlay.append(dialog);
-    mountServerDialog(overlay);
+    mountServerDialog(overlay, { onClose: () => window.removeEventListener("noxa-audit-access-changed", revoke) });
     load();
 }

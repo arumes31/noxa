@@ -6,6 +6,8 @@ import { escapeHTML as escapeTranslation } from "./markdown.js";
 // virtualization (349).
 import { isActivationKey } from "./a11y.js";
 import { closeDialog, mountDialog, mountServerDialog } from "./modal.js";
+import { parseRuntimeObject } from "./runtime-json.js";
+import { initActivityWorkspace } from "./activity-ui.js";
 import { icon } from "./icons.js";
 
 import { t } from "./i18n.js";
@@ -254,16 +256,27 @@ const navigateNotification = createNotificationNavigator({
 
 // recordNotification appends to the bell history (session-persisted, 50).
 export function recordNotification(kind, text, ctx = {}) {
-    notifHistory.unshift({ kind, text, at: Date.now(), destination: captureNotificationDestination(kind, ctx, V().state) });
+    const state = V().state;
+    notifHistory.unshift({ kind, text, at: Date.now(), tabID: ctx.tabID || state.activeTabID, identityUID: ctx.identityUID || state.myUniqueID, uid: ctx.uid || "", destination: captureNotificationDestination(kind, ctx, state) });
     if (notifHistory.length > 50) notifHistory.pop();
     for (const render of notifViews) render();
     updateBellBadge();
 }
 
+function visibleNotifications() {
+    const state = V().state;
+    return notifHistory.filter(n => {
+        if (n.tabID !== state.activeTabID || n.identityUID !== state.myUniqueID) return false;
+        const reference = n.destination?.reference;
+        return !reference || !["channel", "thread"].includes(reference.kind) || reference.channel_id === 0
+            || state.channels.some(c => c.ChannelID === reference.channel_id);
+    });
+}
+
 function updateBellBadge() {
     const badge = document.getElementById("notif-badge");
     if (!badge) return;
-    const n = notifHistory.filter((x) => !x.read).length;
+    const n = visibleNotifications().filter(x => !x.read).length;
     badge.textContent = n > 0 ? (n > 9 ? "9+" : n) : "";
     badge.classList.toggle("hidden", n === 0);
     document.getElementById("notif-bell")?.setAttribute(
@@ -433,7 +446,26 @@ function injectFakeTree(n) {
 export function initPolishUI() {
     initResizablePanes();
     initA11y();
-    document.getElementById("notif-bell").onclick = openNotifCenter;
+    const notifications = {
+        entries: visibleNotifications,
+        subscribe: render => { notifViews.add(render); return () => notifViews.delete(render); },
+        markRead: () => { for (const n of notifications.entries()) n.read = true; updateBellBadge(); for (const render of notifViews) render(); },
+        open: async n => { n.read = true; updateBellBadge(); if (n.destination) await navigateNotification(n.destination); },
+    };
+    window.runtime.EventsOn("event", json => {
+        const event = parseRuntimeObject(json);
+        if (event?.type !== "chat_deleted") return;
+        const state = V().state;
+        for (let i = notifHistory.length - 1; i >= 0; i--) {
+            const n = notifHistory[i], ref = n.destination?.reference;
+            if (n.tabID === state.activeTabID && n.identityUID === state.myUniqueID && ref?.kind === "channel" && ref.message_id === Number(event.data?.message_id)) notifHistory.splice(i, 1);
+        }
+        updateBellBadge();
+        for (const render of notifViews) render();
+    });
+    for (const event of ["snapshot", "tab_reset", "tab_identity", "disconnected"]) window.runtime.EventsOn(event, () => queueMicrotask(updateBellBadge));
+    initActivityWorkspace(notifications);
+    document.getElementById("notif-bell").onclick = () => window.__noxaActivity.open();
     window.__noxaPolish = { toggleChatPopout, toggleZen, openNotifCenter, announce, recordNotification, dndActive, virtualizeEnabled, myBranchIDs };
     window.__noxaFakeTree = injectFakeTree;
 }

@@ -21,7 +21,7 @@ func TestSettingsEditPreservesUnrelatedChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := a.GetSettings()
-	if len(got.BlockedUsers) != 1 || got.BlockedUsers[0] != "alice" || got.UserVolumes["alice"] != 50 || got.Theme != "light" {
+	if len(got.BlockedUsers) != 1 || got.BlockedUsers[0] != "alice" || got.UserVolumes["alice"] != 50 || got.Theme != "midnight" {
 		t.Fatalf("stale dialog overwrote unrelated changes: blocks=%v volumes=%v theme=%q", got.BlockedUsers, got.UserVolumes, got.Theme)
 	}
 	raw, err := os.ReadFile(a.settingsPath)

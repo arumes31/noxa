@@ -391,8 +391,9 @@ function pageGeneral() {
 
 function pageAppearance() {
     const s = settings();
-    const themeSel = selectOf([["midnight", t("midnight.defaultTheme")], ["arctic", "Arctic Night"], ["dark", t("settings.dark.default")], ["light", t("settings.light")], ["hc", t("settings.high.contrast")]],
-        s.theme || "midnight", v => { s.theme = v; });
+    s.theme = "midnight";
+    const themeSel = document.createElement("span");
+    themeSel.textContent = "OLED Midnight";
     const accent = document.createElement("input");
     accent.type = "color";
     accent.value = s.accent_color || "#2ee6a8";

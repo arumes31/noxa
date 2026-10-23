@@ -2,7 +2,7 @@ import { expect, test } from "./fixtures.js";
 
 test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
-        window.__noxa = { state: { serverGeneration: 1 } };
+        window.__noxa = { state: { serverGeneration: 1, canViewAuditLog: true } };
         window.__auditCalls = [];
         window.__auditResponse = { capabilities: [{ key: "speak", en: "Speak", de: "Sprechen" }], entries: [
             { id: 8, created_at: 1789900000, restricted: true },

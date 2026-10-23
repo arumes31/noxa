@@ -272,6 +272,8 @@ function onTabReset(tabID) {
     state.lastWhispererUID = "";
     state.myStatus = "";
     state.canSetInvisible = false;
+    state.canViewAuditLog = false;
+    window.dispatchEvent(new Event("noxa-audit-access-changed"));
     state.ownAuthority = "";
     window.__noxaNotify?.resetBuddyWatch(); // (383) buddy alerts re-arm per connect
     window.__noxaNotify?.resetServerRules?.(); // (216) gate belongs to one server tab
