@@ -12541,7 +12541,7 @@ test.describe("compact Activity workspace", () => {
         await expect(root.getByRole("tab", { name: "Audit", exact: true })).toBeHidden();
         await expect(root.locator('.activity-friend[data-status="streaming"]')).toContainText("Bene");
         await expect(root.locator('.activity-friend[data-status="offline"]')).toContainText("Lina");
-        expect(await root.locator(".activity-header").evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(60);
+        expect(await root.locator(".activity-header").evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(42);
         await expect(root.getByRole("complementary", { name: "Notifications" })).toBeVisible();
         const proportions = await root.evaluate(el => {
             const panel = el.querySelector(".activity-panel").getBoundingClientRect();
@@ -12551,7 +12551,7 @@ test.describe("compact Activity workspace", () => {
         });
         expect(proportions.sidebarRatio).toBeGreaterThan(.36);
         expect(proportions.sidebarRatio).toBeLessThan(.40);
-        expect(proportions.avatar).toBe(68);
+        expect(proportions.avatar).toBe(48);
         await root.locator(".activity-search-tools summary").click();
         await root.getByRole("searchbox", { name: "Search activity" }).fill("whatnot");
         await expect(root.locator(".activity-feed-row")).toHaveCount(1);
@@ -12578,6 +12578,34 @@ test.describe("compact Activity workspace", () => {
         await page.keyboard.press("Escape");
         await expect(root).toHaveCount(0);
         await expect(page.locator("#notif-bell")).toBeFocused();
+    });
+    test("long feeds stay above notifications at compact widths and enlarged text", async ({ page }, testInfo) => {
+        await page.evaluate(() => {
+            for (let i = 0; i < 24; i++) window.__noxaChat.addChat({ id: 9910 + i, channel_id: 2, from_unique_id: "bene", from: "Bene", enc_verified: true, enc_mode: "server", text: `Message ${i}: https://www.whatnot.com/de-DE/live/7061c09b-9c96-4937-b133-837ba199dc5e` });
+        });
+        await page.locator("#notif-bell").click();
+        const root = page.locator("#activity-workspace");
+        for (const width of [1024, 760]) {
+            await page.setViewportSize({ width, height: 768 });
+            for (const fontSize of ["14px", "18px"]) {
+                await page.evaluate(size => { document.documentElement.style.fontSize = size; }, fontSize);
+                const geometry = await root.evaluate(el => {
+                    const panel = el.querySelector(".activity-panel").getBoundingClientRect();
+                    const sidebar = el.querySelector(".activity-notifications").getBoundingClientRect();
+                    const last = [...el.querySelectorAll(".activity-feed-row")].at(-1).getBoundingClientRect();
+                    return { contained: last.bottom <= panel.bottom, stacked: sidebar.top >= panel.bottom, fits: el.scrollWidth <= el.clientWidth, scrollable: el.querySelector(".activity-layout").scrollHeight > el.querySelector(".activity-layout").clientHeight };
+                });
+                expect(geometry).toEqual({ contained: true, stacked: true, fits: true, scrollable: true });
+            }
+        }
+        await page.setViewportSize({ width: 1024, height: 768 });
+        await page.evaluate(() => { document.documentElement.style.fontSize = "14px"; });
+        expect(await root.locator(".activity-header").evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(42);
+        expect(await root.locator(".activity-toolbar").evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(44);
+        await page.screenshot({ path: testInfo.outputPath("activity-compact-1024.png") });
+        await root.locator(".activity-notifications").scrollIntoViewIfNeeded();
+        await expect(root.locator(".activity-notifications")).toBeInViewport();
+        await page.screenshot({ path: testInfo.outputPath("activity-notifications-no-overlap.png") });
     });
     test("audit stays hidden without access and revocation discards an outstanding reply", async ({ page }) => {
         await page.evaluate(() => window.__noxaActivity.open("audit"));

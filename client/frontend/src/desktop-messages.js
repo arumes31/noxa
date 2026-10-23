@@ -1,4 +1,11 @@
 export const desktopEnglish = {
+    "desktop.contacts.search": "Search members by name",
+    "desktop.contacts.searchHint": "Choose a visible member of this server to add as a friend.",
+    "desktop.contacts.members": "Server members",
+    "desktop.contacts.noMembers": "No matching members available.",
+    "desktop.contacts.addMember": "Add {name}",
+    "desktop.contacts.unavailable": "This member is no longer available.",
+    "desktop.contacts.refine": "Type more of the name to narrow the results.",
     "desktop.unavailable": " (unavailable)",
     "desktop.click.to.zoom": " — click to zoom",
     "desktop.upload": "+ upload",
@@ -277,6 +284,13 @@ export const desktopEnglish = {
     "desktop.camera.unavailable": "camera unavailable: "
 };
 export const desktopGerman = {
+    "desktop.contacts.search": "Mitglieder nach Namen suchen",
+    "desktop.contacts.searchHint": "Wähle ein sichtbares Mitglied dieses Servers als Freund aus.",
+    "desktop.contacts.members": "Servermitglieder",
+    "desktop.contacts.noMembers": "Keine passenden Mitglieder verfügbar.",
+    "desktop.contacts.addMember": "{name} hinzufügen",
+    "desktop.contacts.unavailable": "Dieses Mitglied ist nicht mehr verfügbar.",
+    "desktop.contacts.refine": "Gib mehr vom Namen ein, um die Treffer einzugrenzen.",
     "desktop.unavailable": " (nicht verfügbar)",
     "desktop.click.to.zoom": " — zum Vergrößern anklicken",
     "desktop.upload": "+ hochladen",
