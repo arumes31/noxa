@@ -22,11 +22,12 @@ type fileGrant struct {
 	parent   os.FileInfo
 	file     os.FileInfo
 	expires  time.Time
-	selected time.Time
+	selected uint64
 }
 type fileGrantStore struct {
-	mu      sync.Mutex
-	entries map[string]fileGrant
+	mu       sync.Mutex
+	entries  map[string]fileGrant
+	sequence uint64
 }
 
 func fileGrantKey(kind, path string) string {
@@ -97,9 +98,9 @@ func (a *App) grantNativePath(kind, path string) (string, error) {
 		// Grants are capabilities retained for retries, not a permanent quota.
 		// Active transfers already own their opened file/root handles.
 		oldestKey := ""
-		var oldest time.Time
+		var oldest uint64
 		for candidate, grant := range a.fileGrants.entries {
-			if oldestKey == "" || grant.selected.Before(oldest) {
+			if oldestKey == "" || grant.selected < oldest {
 				oldestKey, oldest = candidate, grant.selected
 			}
 		}
@@ -111,7 +112,10 @@ func (a *App) grantNativePath(kind, path string) (string, error) {
 	if kind == "download" {
 		expiry = time.Time{}
 	}
-	a.fileGrants.entries[key] = fileGrant{path: path, parent: parent, file: info, expires: expiry, selected: now}
+	// Clock resolution must not decide which capability is evicted: Windows
+	// can report identical timestamps for several consecutive selections.
+	a.fileGrants.sequence++
+	a.fileGrants.entries[key] = fileGrant{path: path, parent: parent, file: info, expires: expiry, selected: a.fileGrants.sequence}
 	return path, nil
 }
 func (a *App) nativeGrant(kind, path string) (fileGrant, bool) {

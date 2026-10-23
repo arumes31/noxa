@@ -193,3 +193,31 @@ func TestNativeSelectionsEvictOldGrantsWithoutExhaustingSession(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNativeSelectionRefreshPreservesRecentlyReselectedGrant(t *testing.T) {
+	a := &App{}
+	dir := t.TempDir()
+	paths := make([]string, maxFileGrants)
+	for i := range paths {
+		var err error
+		paths[i], err = a.grantNativePath("download", filepath.Join(dir, fmt.Sprintf("file-%d", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := a.grantNativePath("download", paths[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.grantNativePath("download", filepath.Join(dir, "next")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := a.nativeGrant("download", paths[0]); !ok {
+		t.Fatal("reselected grant evicted")
+	}
+	if _, ok := a.nativeGrant("download", paths[1]); ok {
+		t.Fatal("oldest unrefreshed grant retained")
+	}
+	if len(a.fileGrants.entries) != maxFileGrants {
+		t.Fatal("unbounded grants")
+	}
+}
