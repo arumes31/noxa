@@ -38,3 +38,11 @@ func (s *TCPServer) ServeExternalConn(ctx context.Context, conn net.Conn) error 
 	s.serveConn(ctx, conn)
 	return nil
 }
+
+// webTransportConn marks connections from the mobile web app; such sessions
+// can only use devices linked from another device.
+type webTransportConn interface {
+	WebTransport() bool
+}
+
+func (c *Client) isWebTransport() bool { return c.webTransport }

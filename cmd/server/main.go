@@ -767,6 +767,7 @@ func run() (retErr error) {
 		relayManager = turn.NewManager(cfg.TURN.Realm, cfg.TURN.MaxAllocations, cfg.TURN.BytesPerSecond)
 	}
 	tcpServer = server.New(cfg, logger, &server.Deps{
+		Devices:            dbStore,
 		Relay:              relayManager,
 		Traffic:            trafficCounter,
 		TrafficHistory:     trafficHistory,

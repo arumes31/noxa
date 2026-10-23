@@ -113,6 +113,8 @@ type Client struct {
 	// Retained only after successful guest proof, for explicit role enrollment.
 	verifiedGuestKey string
 	authSigningKey   string // bound to the successful authentication attempt
+	deviceID         string // linked device of this session, if registered
+	webTransport     bool   // connected through the mobile web app
 	dmKeyRecord      string // signed directory record; never used for scope-key sealing
 
 	wmu contextMutex // serializes frame writes to Conn
@@ -356,6 +358,7 @@ type TCPServer struct {
 	lifecycleState   tcpLifecycleState
 	listener         net.Listener
 	acceptedConns    map[net.Conn]struct{}
+	links            *deviceLinks
 	preauth          map[net.Conn]string
 	preauthByIP      map[string]int
 	connWG           sync.WaitGroup
@@ -463,6 +466,7 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 		logger:        logger,
 		deps:          deps,
 		acceptedConns: make(map[net.Conn]struct{}),
+		links:         newDeviceLinks(),
 		preauth:       make(map[net.Conn]string),
 		preauthByIP:   make(map[string]int),
 		listen: func(ctx context.Context, network, address string) (net.Listener, error) {
@@ -920,10 +924,12 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 	authCtx, cancelAuth := context.WithDeadline(ctx, authDeadline)
 	defer cancelAuth()
 
+	_, web := conn.(webTransportConn)
 	client := &Client{
-		ID:         newClientID(),
-		Conn:       conn,
-		lastActive: time.Now(),
+		ID:           newClientID(),
+		Conn:         conn,
+		lastActive:   time.Now(),
+		webTransport: web,
 	}
 	s.register(client)
 	defer func() {
@@ -1023,7 +1029,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Frame) error {
 	mt := netproto.MessageType(f.Type)
 	ctx = context.WithValue(ctx, requestOriginContextKey{}, mt)
-	if !client.isAuthed() && (mt == netproto.MsgAuthenticate || mt == netproto.MsgAuthSignature) {
+	if !client.isAuthed() && (mt == netproto.MsgAuthenticate || mt == netproto.MsgAuthSignature || mt == netproto.MsgDeviceRequest) {
 		client.mu.Lock()
 		client.authRequests++
 		exhausted := client.authRequests > 16
@@ -1033,7 +1039,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		}
 	}
 
-	if !client.isAuthed() && mt != netproto.MsgAuthenticate && mt != netproto.MsgAuthSignature && mt != netproto.MsgPing {
+	if !client.isAuthed() && mt != netproto.MsgAuthenticate && mt != netproto.MsgAuthSignature && mt != netproto.MsgPing &&
+		mt != netproto.MsgDeviceRequest {
 		return s.sendErrorFor(client, mt, errCodeNotAuthenticated, "not authenticated")
 	}
 	if client.isAuthed() && !client.requestBudget.allow(mt, time.Now()) {
@@ -1047,6 +1054,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handleRelay(ctx, client, f)
 	case netproto.MsgChannelInviteRequest:
 		return s.handleChannelInvite(ctx, client, f)
+	case netproto.MsgDeviceRequest:
+		return s.handleDeviceRequest(ctx, client, f)
 	case netproto.MsgRoleChannelQuery:
 		return s.handleRoleChannelQuery(ctx, client, f)
 	case netproto.MsgRoleChannelChange:

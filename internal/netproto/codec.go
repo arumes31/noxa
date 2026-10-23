@@ -142,6 +142,12 @@ func (m MessageType) String() string {
 		return "VoiceQueueRequest"
 	case MsgVoiceQueueResult:
 		return "VoiceQueueResult"
+	case MsgDeviceRequest:
+		return "DeviceRequest"
+	case MsgDeviceResult:
+		return "DeviceResult"
+	case MsgDeviceEvent:
+		return "DeviceEvent"
 	case MsgChannelInviteRequest:
 		return "ChannelInviteRequest"
 	case MsgChannelInviteResult:
@@ -497,6 +503,8 @@ type AuthResponse struct {
 
 	OK       bool   `json:"ok"`
 	ClientID string `json:"client_id,omitempty"`
+	// DeviceID names the linked device this session signed in with.
+	DeviceID string `json:"device_id,omitempty"`
 	UniqueID string `json:"unique_id,omitempty"`
 	Nickname string `json:"nickname,omitempty"`
 	Reason   string `json:"reason,omitempty"`

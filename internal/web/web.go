@@ -326,6 +326,9 @@ type wsConn struct {
 
 func (c *wsConn) RemoteAddr() net.Addr { return c.remote }
 
+// WebTransport marks the session as a mobile web app connection.
+func (c *wsConn) WebTransport() bool { return true }
+
 // admission bounds WebSocket attempts per minute and open sessions per IP.
 type admission struct {
 	mu        sync.Mutex

@@ -114,6 +114,13 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		if rejection != "" {
 			return authorization.ErrRoleForbidden
 		}
+		rejection, err = s.sessionDeviceRejection(ctx, client)
+		if err != nil {
+			return err
+		}
+		if rejection != "" {
+			return authorization.ErrRoleForbidden
+		}
 		// A role manager may have enrolled this proven identity while its
 		// handshake waited for the policy gate. Join with the committed member
 		// ID instead of publishing a second session with guest permissions.
@@ -183,6 +190,10 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 	}
 	if s.deps.Relay != nil {
 		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityManagedRelay)
+	}
+	if s.deps.Devices != nil {
+		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityDevices)
+		resp.DeviceID = s.attachSessionDevice(ctx, client, id.uniqueID)
 	}
 	if s.deps.ICEServers != nil {
 		resp.ICEServers = s.deps.ICEServers(id.uniqueID)
