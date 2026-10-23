@@ -47,7 +47,7 @@ func inspectAvatarImage(raw []byte) (assetImageFormat, error) {
 			for _, f := range frames {
 				body := make([]byte, 30+len(f.data))
 				copy(body, "RIFF")
-				binary.LittleEndian.PutUint32(body[4:8], uint32(len(body)-8))
+				binary.LittleEndian.PutUint32(body[4:8], uint32(len(body)-8)) // #nosec G115 -- frame data is a slice of the avatar input bounded to 256 KiB above.
 				copy(body[8:], "WEBPVP8X")
 				binary.LittleEndian.PutUint32(body[16:20], 10)
 				if f.alpha {
@@ -173,19 +173,23 @@ type avatarWebPFrame struct {
 	alpha         bool
 }
 
-func uint24(b []byte) int   { return int(b[0]) | int(b[1])<<8 | int(b[2])<<16 }
-func put24(b []byte, n int) { b[0] = byte(n); b[1] = byte(n >> 8); b[2] = byte(n >> 16) }
+func uint24(b []byte) int { return int(b[0]) | int(b[1])<<8 | int(b[2])<<16 }
+func put24(b []byte, n int) {
+	b[0] = byte(n & 255)
+	b[1] = byte((n >> 8) & 255)
+	b[2] = byte((n >> 16) & 255)
+}
 func webPChunk(raw []byte, pos int) (string, []byte, int, error) {
-	if pos > len(raw)-8 {
+	if pos < 0 || pos > len(raw)-8 {
 		return "", nil, 0, errors.New("truncated WebP chunk")
 	}
 	n := uint64(binary.LittleEndian.Uint32(raw[pos+4:]))
-	end := uint64(pos) + 8 + n
+	end := uint64(pos) + 8 + n // #nosec G115 -- negative positions were rejected above.
 	next := end + n%2
-	if next > uint64(len(raw)) || (n%2 != 0 && raw[int(end)] != 0) {
+	if next > uint64(len(raw)) || (n%2 != 0 && raw[int(end)] != 0) { // #nosec G115 -- short-circuit proves end < next <= len(raw) before converting/indexing.
 		return "", nil, 0, errors.New("invalid WebP chunk length/padding")
 	}
-	return string(raw[pos : pos+4]), raw[pos+8 : int(end)], int(next), nil
+	return string(raw[pos : pos+4]), raw[pos+8 : int(end)], int(next), nil // #nosec G115 -- end <= next <= len(raw), which fits int.
 }
 
 // WebP RIFF/ANMF layout: https://developers.google.com/speed/webp/docs/riff_container

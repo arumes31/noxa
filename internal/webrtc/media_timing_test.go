@@ -27,6 +27,17 @@ func TestNTPArithmeticRoundTrips(t *testing.T) {
 	}
 }
 
+// NTP additions wrap modulo 2^64, including the duration's minimum value.
+func TestNTPAddMinimumDuration(t *testing.T) {
+	const min = time.Duration(-1 << 63)
+	const base = uint64(0xee7d5acecf557fff)
+	// Split at a whole second to avoid introducing fractional rounding twice.
+	want := ntpAdd(ntpAdd(base, min+time.Second), -time.Second)
+	if got := ntpAdd(base, min); got != want {
+		t.Fatalf("minimum duration: got %x, want %x", got, want)
+	}
+}
+
 type timingOwner struct{ name string }
 
 func TestSourceTimingOnlyCurrentOwnerDefinesMapping(t *testing.T) {

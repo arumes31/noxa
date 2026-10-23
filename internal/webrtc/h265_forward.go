@@ -290,7 +290,7 @@ func (v *videoContinuity) beginH265Frame(packets []*rtp.Packet, keyframe bool) b
 			// Every packet is contiguous and owned by the same validated unit.
 			// Close the intentional sequence gap without advancing media time or
 			// treating discarded source packets as successful decoder input.
-			v.sequenceOffset -= uint16(len(packets))
+			v.sequenceOffset -= uint16(len(packets) & 0xffff)
 			return false
 		}
 	} else if kind <= 5 || kind >= 16 {

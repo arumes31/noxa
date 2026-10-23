@@ -1,9 +1,10 @@
-import { expect, test } from "./fixtures.js";
+import { expect } from "./fixtures.js";
+import { test } from "./call-relay-fixture.js";
 
 test.use({ launchOptions: { args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"] }, permissions: ["microphone", "camera"] });
 
 for (const signalingMode of ["normal", "gathering", "candidates-first", "group-media", "capture-recovery", "relay-renewal", "group-renewal"]) {
-test(`real peer call captures only after acceptance and tears down without joining a channel${signalingMode === "normal" ? "" : ` (${signalingMode})`}`, async ({ newIsolatedPage }) => {
+test(`real peer call captures only after acceptance and tears down without joining a channel${signalingMode === "normal" ? "" : ` (${signalingMode})`}`, async ({ newIsolatedPage, callRelay }) => {
     test.setTimeout(60000);
     const pages = new Map();
     const heldDescriptions = new Map();
@@ -14,6 +15,7 @@ test(`real peer call captures only after acceptance and tears down without joini
     const notify = () => { for (const page of pages.values()) void page.evaluate(id => window.__callsModule.privateCallChanged({ id }), call.id).catch(() => {}); };
     for (const uid of participantIDs) {
         const page = await newIsolatedPage({ permissions: ["microphone", "camera"] }); pages.set(uid, page);
+        await page.addInitScript(servers => { window.__callIceServers = servers; }, callRelay);
         await page.route("**/__call_test__", route => route.fulfill({ contentType: "text/html", body: '<!doctype html><title>Call test</title><link rel="stylesheet" href="/src/private-calls.css">' }));
         await page.exposeFunction("requestCall", async request => {
             if (request.action === "start") call = { id: "call-1", caller: uid, revision: ++revision, created_at: Math.floor(Date.now()/1000), ring_until: Math.floor(Date.now()/1000)+30, ended_at: 0, participants: participantIDs.map(id => ({ unique_id: id, client_id: id, state: id === uid ? "accepted" : "ringing" })) };
@@ -55,7 +57,7 @@ test(`real peer call captures only after acceptance and tears down without joini
             const OriginalPeer = window.RTCPeerConnection;
             window.RTCPeerConnection = class extends OriginalPeer {
                 constructor(...args) {
-                    super(...args); window.__peers.push(this);
+                    super(...args); if (this.getConfiguration().iceTransportPolicy !== "relay") throw new Error("Private call must use relay-only ICE"); window.__peers.push(this);
                     this.addEventListener("icecandidate", event => { if (event.candidate) window.__hostCandidates++; });
                     if (signalingMode === "gathering") Object.defineProperty(this, "iceGatheringState", { get: () => "gathering" });
                 }
@@ -63,7 +65,7 @@ test(`real peer call captures only after acceptance and tears down without joini
             window.__noxa = { state: { activeTabID: "server-a", serverGeneration: 1, myUniqueID: "local-device-key", myClientID: uid, myChannelID: 0, muted: false, deafened: false, settings: { activation_mode: "continuous", blocked_users: [] }, clients: participantIDs.map(id => ({ client_id: id, unique_id: id, nickname: id[0].toUpperCase() + id.slice(1) })) }, toast: message => window.__warnings.push(message), resetVoiceSession() {} };
             window.go = { main: { App: {
                 PrivateCallForTab: (_tab, request) => window.requestCall(request),
-                GetICEServersForTab: async () => [],
+                GetICEServersForTab: async () => window.__callIceServers,
                 SendPrivateCallDescriptionForTab: (_tab, id, target, type, sdp) => window.relayDescription(id, target, type, sdp),
                 OpenPrivateCallDescriptionForTab: async (_tab, signal) => signal.description,
                 StopPrivateCallForTab: () => window.stopCall(),
@@ -93,6 +95,11 @@ test(`real peer call captures only after acceptance and tears down without joini
         }
         for (const page of pages.values()) {
             await expect.poll(() => page.evaluate(() => window.__peers.map(peer => peer.connectionState)), { timeout: 15000 }).toEqual(participantIDs.slice(1).map(() => "connected"));
+            expect(await page.evaluate(async () => {
+                const stats = await window.__peers[0].getStats();
+                const candidates = [...stats.values()].filter(report => report.type === "local-candidate");
+                return candidates.length > 0 && candidates.every(candidate => candidate.candidateType === "relay");
+            })).toBe(true);
             expect(await page.evaluate(() => window.__captures)).toBe(1);
             expect(await page.evaluate(() => window.__channelMoves)).toBe(0);
             if (signalingMode !== "normal") {
@@ -450,7 +457,7 @@ async function mountCallRaceFixture(page) {
         MediaStreamTrack.prototype.clone = function () { const clone = cloneTrack.call(this); window.__allTracks.push(clone); return clone; };
         window.__OriginalPeer = window.RTCPeerConnection;
         window.RTCPeerConnection = class extends window.__OriginalPeer {
-            constructor(...args) { super(...args); window.__peers.push(this); }
+            constructor(...args) { super(...args); if (this.getConfiguration().iceTransportPolicy !== "relay") throw new Error("Private call must use relay-only ICE"); window.__peers.push(this); }
         };
         window.__makeCall = (id = "call-old", revision = 1, bothAccepted = false) => ({
             id, caller: "bob", revision, created_at: Math.floor(Date.now() / 1000), ring_until: Math.floor(Date.now() / 1000) + 30, ended_at: 0,
@@ -467,7 +474,7 @@ async function mountCallRaceFixture(page) {
                 if (request.action === "get" && window.__holdGets) return new Promise(resolve => window.__pendingGets.push({ resolve, response }));
                 return response;
             },
-            GetICEServersForTab: async () => { if (window.__failICE) throw new Error("ICE configuration unavailable"); return []; },
+            GetICEServersForTab: async () => { if (window.__failICE) throw new Error("ICE configuration unavailable"); return window.__callIceServers; },
             OpenPrivateCallDescriptionForTab: async (_tab, signal) => signal.description,
             SendPrivateCallDescriptionForTab: async (_tab, id, target, type, sdp) => {
                 window.__answers.push({ id, target, type, sdp });
@@ -788,7 +795,7 @@ test("member removed during ICE lookup is not recreated by stale call continuati
     });
     await expect(page.locator(".private-call-panel")).not.toContainText("Charlie");
     await page.evaluate(async () => {
-        window.__releaseICE([]);
+        window.__releaseICE(window.__callIceServers);
         await Promise.all([window.__startingGroup, window.__membershipRefresh]);
     });
     // Alice is still accepted, so exactly one real peer should exist. Charlie

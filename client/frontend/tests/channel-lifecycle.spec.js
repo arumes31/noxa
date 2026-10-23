@@ -132,7 +132,7 @@ for (const preset of presetContract.presets) test(`${preset.key} creation previe
 
 for (const action of ["keep", "set", "remove"]) test(`channel edit ${action} password is explicit`, async ({ page }) => {
     await page.getByText("Edit dialog", { exact: true }).click();
-    await page.getByRole("combobox", { name: "Channel password", exact: true }).selectOption(action);
+    await page.getByRole("combobox", { name: "Voice channel password", exact: true }).selectOption(action);
     if (action === "set") {
         await page.getByRole("button", { name: "Save changes", exact: true }).click();
         expect(await page.evaluate(() => window.__channelCalls)).toEqual([]);
@@ -180,7 +180,7 @@ test("native tab activation cannot redirect a channel edit before frontend reset
 test("creation preview contains only policy and invalidates on role or lifetime changes", async ({ page }) => {
     await page.getByText("Create dialog", { exact: true }).click();
     await page.getByLabel("Channel name", { exact: true }).fill("Staff");
-    await page.getByLabel("Password (empty = none)", { exact: true }).fill("secret");
+    await page.getByLabel("Voice password (chat and files use Permissions)", { exact: true }).fill("secret");
     await page.getByRole("combobox", { name: "Channel access", exact: true }).selectOption("private");
     const preview = page.getByRole("button", { name: "Preview role changes", exact: true });
     const save = page.getByRole("button", { name: "Create", exact: true });
@@ -361,7 +361,7 @@ test("invalid numeric settings are shown before any request", async ({ page }) =
 
 for (const [label, invalid, valid] of [
     ["Channel name", "é".repeat(128), "é".repeat(127)],
-    ["Password (empty = none)", "é".repeat(2049), "é".repeat(2048)],
+    ["Voice password (chat and files use Permissions)", "é".repeat(2049), "é".repeat(2048)],
 ]) test(`Unicode byte limit for ${label} can be corrected without refreshing`, async ({ page }) => {
     await page.getByText("Create dialog", { exact: true }).click();
     await page.getByLabel("Channel name", { exact: true }).fill("Team");

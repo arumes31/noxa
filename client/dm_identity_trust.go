@@ -72,7 +72,7 @@ func (m *connManager) peerPinPath(uid string) (string, string, error) {
 }
 func readDMPin(path string) (dmIdentityPin, error) {
 	var pin dmIdentityPin
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- internal peerPinPath uses a fixed identity directory and SHA-256 hex filename, never a peer path.
 	if errors.Is(err, os.ErrNotExist) {
 		return pin, nil
 	}

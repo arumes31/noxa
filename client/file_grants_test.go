@@ -175,10 +175,11 @@ func TestNativeSelectionsEvictOldGrantsWithoutExhaustingSession(t *testing.T) {
 	}
 	for i := 0; i < maxFileGrants; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("file-%d", i))
-		if _, err := a.grantNativePath("download", path); err != nil {
+		selected, err := a.grantNativePath("download", path)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := a.nativeGrant("download", path); !ok {
+		if _, ok := a.nativeGrant("download", selected); !ok {
 			t.Fatal("new selection missing")
 		}
 	}

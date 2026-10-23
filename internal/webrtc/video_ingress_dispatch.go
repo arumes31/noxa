@@ -105,7 +105,7 @@ func (d *videoIngressDispatch) cancel() {
 	d.cancelled.Store(true)
 	d.mu.Lock()
 	d.closed = true
-	d.cancelledPackets += uint64(d.count)
+	d.cancelledPackets += uint64(max(0, d.count))
 	d.queue = nil
 	d.head, d.count, d.bytes = 0, 0, 0
 	d.mu.Unlock()
@@ -197,6 +197,6 @@ func (d *videoIngressDispatch) snapshot(now time.Time) *netproto.VideoDispatchDi
 }
 func (d *videoIngressDispatch) discardRecovery(n int) {
 	d.mu.Lock()
-	d.recoveryDrops += uint64(n)
+	d.recoveryDrops += uint64(max(0, n))
 	d.mu.Unlock()
 }
