@@ -1,4 +1,9 @@
 export const quickWinEnglish = {
+    "window.controls": "Window controls",
+    "window.minimise": "Minimise",
+    "window.maximise": "Maximise",
+    "window.restore": "Restore",
+    "window.close": "Close window",
     "voice.mediaDimensions": "Server video limit: {width} × {height}. Capture is reduced automatically.",
     "voice.mediaBitrate": "Camera and screen share use a combined server budget of {bitrate} kbit/s.",
     "voice.mediaDimensionsFailed": "This capture cannot meet the server's video size limit. Choose a smaller source or lower camera resolution.",
@@ -251,6 +256,11 @@ export const quickWinEnglish = {
 };
 
 export const quickWinGerman = {
+    "window.controls": "Fenstersteuerung",
+    "window.minimise": "Minimieren",
+    "window.maximise": "Maximieren",
+    "window.restore": "Wiederherstellen",
+    "window.close": "Fenster schließen",
     "voice.mediaDimensions": "Video-Limit des Servers: {width} × {height}. Die Aufnahme wird automatisch verkleinert.",
     "voice.mediaBitrate": "Kamera und Bildschirmfreigabe teilen sich ein Server-Budget von {bitrate} kbit/s.",
     "voice.mediaDimensionsFailed": "Diese Aufnahme kann das Video-Größenlimit des Servers nicht einhalten. Wähle eine kleinere Quelle oder eine niedrigere Kameraauflösung.",

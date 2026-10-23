@@ -1,3 +1,4 @@
+import { initWindowControls } from "./window-controls.js";
 import { setStatusIcon } from "./icons.js";
 import { maintainRelay } from "./relay-renewal.js";
 import { manageAvatarPlayback } from "./avatar-playback.js";
@@ -3337,6 +3338,7 @@ window.__noxa = {
     },
 };
 
+void initWindowControls();
 initModalSystem();
 initSounds();
 initClosingAudio();

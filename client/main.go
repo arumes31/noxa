@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -60,9 +61,10 @@ func runApp() {
 // runWails owns the native application loop on the calling OS thread.
 func runWails(app *App) {
 	err := wails.Run(&options.App{
-		Title:  "noXa",
-		Width:  1024,
-		Height: 768,
+		Title:     "noXa",
+		Width:     1024,
+		Height:    768,
+		Frameless: runtime.GOOS == "windows",
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
