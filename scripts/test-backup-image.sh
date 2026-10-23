@@ -70,7 +70,9 @@ docker run --rm --entrypoint sh -v "$data:/data" -v "$identities:/identities" "$
 docker run -d --name "$pg" --network "$network" --tmpfs /var/lib/postgresql/data \
  -e POSTGRES_PASSWORD=owner-fixture --entrypoint docker-entrypoint.sh "$image" postgres >/dev/null
 attempt=0
-until docker exec "$pg" pg_isready -U postgres >/dev/null 2>&1; do
+# The image starts a temporary socket-only server during initdb. Wait for
+# the final TCP listener so the fixture cannot race the temporary shutdown.
+until docker exec "$pg" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; do
  attempt=$((attempt + 1)); [ "$attempt" -lt 60 ] || exit 1; sleep 1
 done
 docker exec -i "$pg" psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'

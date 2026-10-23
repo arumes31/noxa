@@ -83,6 +83,7 @@ type TreeSnapshot struct {
 	// OwnAuthority describes the recipient's authority, independently of cosmetic roles.
 	OwnAuthority string `json:"own_authority,omitempty"`
 	// CanSetInvisible is recipient-specific role authority, never a legacy admin flag.
+	CanViewAuditLog bool           `json:"can_view_audit_log,omitempty"`
 	CanSetInvisible bool           `json:"can_set_invisible,omitempty"`
 	RootChannels    []*ChannelNode `json:"root_channels"`
 	// UnassignedClients includes authenticated users who have not joined a

@@ -139,6 +139,7 @@ const state = {
     treeFilter: "",               // (319) live tree filter
     multiSelect: new Set(),       // (306) ctrl/shift-selected client IDs
     myStatus: "",                 // (307) own presence status
+    canViewAuditLog: false,
     canSetInvisible: false,       // recipient-specific role eligibility
     ownAuthority: "",            // server-reported owner/administrator/member/guest
     micState: "unknown", // ok | none | denied
@@ -276,9 +277,9 @@ function applyAppearance() {
     syncMuteButton($("voice-mute"), state.muted);
     renderVoiceStatus();
     initMenu();
-    // (294/295) theme sets the full variable palette via [data-theme].
-    // Arctic Night is the default look; "dark" keeps the classic palette.
-    root.dataset.theme = s.theme || "midnight";
+    // OLED Midnight is the sole built-in theme, including legacy preferences.
+    s.theme = "midnight";
+    root.dataset.theme = "midnight";
     // (344) reduce motion: toggle + media query both gate animations.
     root.dataset.reduceMotion = s.reduce_motion ? "1" : "";
     // (296) custom accent overrides the theme's accent.
@@ -1130,6 +1131,8 @@ window.runtime.EventsOn("disconnected", () => {
     state.isGuest = true;
     state.myStatus = "";
     state.canSetInvisible = false;
+    state.canViewAuditLog = false;
+    window.dispatchEvent(new Event("noxa-audit-access-changed"));
     state.ownAuthority = "";
     setDetailsOpen(false);
     $("conn-pill").textContent = t("runtime.offline");
@@ -1254,6 +1257,9 @@ window.runtime.EventsOn("snapshot", (json) => {
     if (!snap) return;
     const previousPresence = captureChannelPresence(state);
     state.canSetInvisible = snap.can_set_invisible === true;
+    state.canViewAuditLog = snap.can_view_audit_log === true;
+    window.dispatchEvent(new Event("noxa-audit-access-changed"));
+    initMenu();
     state.supportsVoiceQueue = snap.supports_voice_queue === true;
     state.ownAuthority = ["owner", "administrator", "member", "guest"].includes(snap.own_authority) ? snap.own_authority : "";
     state.channels = [];
@@ -1762,7 +1768,12 @@ window.runtime.EventsOn("event", (json) => {
             // the camera-off detector (61) must not mistake a still desktop
             // for a switched-off camera.
             const sharer = state.clients.find((c) => c.client_id === d.client_id);
-            if (sharer) sharer.sharing = !!d.active;
+            if (sharer) {
+                if (d.active && !sharer.sharing && !actionSoundsSuppressed()) {
+                    window.__noxaPolish?.recordNotification("stream_started", t("runtime.shareStarted", { name: clientName(d.client_id) }), { uid: sharer.unique_id, channelID: sharer.channel_id });
+                }
+                sharer.sharing = !!d.active;
+            }
             videoRefreshNames();
             sysMsg(t(d.active ? "runtime.shareStarted" : "runtime.shareStopped", { name: clientName(d.client_id) }));
             break;

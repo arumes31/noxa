@@ -313,12 +313,6 @@
     .stage-info-actions { gap: 6px; }
 }
 
-/* ------------------------------------------------- arctic polish + motion */
-:root[data-theme="arctic"] #chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .stage-tile-tools,
-:root[data-theme="arctic"] #chat-pane .stream-stage[data-stage="multi"] .vtile:not(:fullscreen) .stage-tag {
-    -webkit-backdrop-filter: blur(var(--arc-blur)) saturate(1.4); backdrop-filter: blur(var(--arc-blur)) saturate(1.4);
-}
-:root[data-theme="arctic"] .stage-primary { box-shadow: 0 0 22px -6px color-mix(in srgb, var(--accent) 70%, transparent); }
 @media (prefers-reduced-motion: no-preference) {
     :root:not([data-reduce-motion="1"]) #chat-pane .stream-stage .vtile:not(:fullscreen) :is(.stage-tile-tools, .vtile-quality-button, .vtile-diagnostics summary, .stream-live-controls .stream-watch, .vtile-fullscreen) {
         transition: opacity .2s ease;

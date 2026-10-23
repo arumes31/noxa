@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { formatStreamStats, QUICK_SWITCH_SETTINGS, serverInitial, textChannels } from "../src/shell-model.js";
 import { shellEnglish, shellGerman } from "../src/shell-messages.js";
 
-const css = (await readFile(new URL("../src/arctic-shell.css", import.meta.url), "utf8")).replace(/\/\*[\s\S]*?\*\//g, "");
+const css = (await readFile(new URL("../src/app-shell.css", import.meta.url), "utf8")).replace(/\/\*[\s\S]*?\*\//g, "");
 const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
 
 describe("app shell model", () => {
@@ -74,8 +74,8 @@ describe("app shell model", () => {
 });
 
 describe("app shell markup and styles", () => {
-    it("links the shell stylesheet after the theme", () => {
-        assert.ok(html.indexOf("/src/arctic-shell.css") > html.indexOf("/src/arctic-night.css"));
+    it("links shell structure before the sole theme", () => {
+        assert.ok(html.indexOf("/src/app-shell.css") < html.indexOf("/src/midnight.css"));
     });
 
     it("keeps the ping, the search and the voice controls reachable with names", () => {

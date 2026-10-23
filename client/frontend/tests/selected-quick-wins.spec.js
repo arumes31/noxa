@@ -226,6 +226,7 @@ test("selected wins: effective PTT binding, failures and whisper preview", async
 test("selected wins: snooze duration, expiry, failure and DND independence", async ({ page }) => {
     await page.clock.install();
     await page.locator("#notif-bell").click();
+    await page.locator(".activity-snooze summary").click();
     await page.getByRole("button", { name: "Snooze for 30 minutes", exact: true }).click();
     await expect(page.locator(".notification-snooze [role=status]")).toContainText("Notifications snoozed until");
     const halfHour = await page.evaluate(() => window.__saved.notification_snooze_until - Date.now());

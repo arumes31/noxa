@@ -1566,6 +1566,7 @@ function directRecipientID() {
 }
 
 export function openPM(uid, nick) {
+    window.__noxaActivity?.close();
     if (!uid) return;
     // A new user action can recover failed acquisition. Pending descendants
     // retain their old owner and are never transparently retried.
@@ -1671,6 +1672,7 @@ export async function setChannelSubscription(channelID, subscribe) {
 }
 
 export async function openChannelTab(channelID) {
+    window.__noxaActivity?.close();
     if (V().state.channels.some(ch => ch.ChannelID === channelID && ch.SystemKind === "home")) return;
     const id = Number(channelID);
     if (!id) return;
@@ -2527,7 +2529,7 @@ export function addChat(d) {
             announcementEvent = event;
             announcementContext = context;
         }
-        window.__noxaNotify?.notify(event, text, { ...context, announce: false,
+        window.__noxaNotify?.notify(event, text, { ...context, uid: m.fromUID, announce: false,
             reference: { kind: "channel", channel_id: chID, message_id: m.id || 0 } });
     }
     const channelMuted = !!window.__noxaNotify?.channelOverride?.(chID)?.muted;
@@ -4994,4 +4996,30 @@ function showMessageReferenceContext(name, messages, target, continueConversatio
     }
     box.append(close); overlay.append(box); mountServerDialog(overlay);
     list.querySelector(".message-reference-flash")?.scrollIntoView({ block: "center" });
+}
+
+// The activity workspace uses only already-loaded, currently accessible chats.
+// No bulk history fetch and no second persistent copy of private message bodies.
+export function activityMessages() {
+    const state = V().state;
+    if (!state.myClientID || !state.myUniqueID) return [];
+    const entries = [];
+    for (const [key, value] of store) {
+        const dm = key.startsWith("dm:"), id = key.slice(3);
+        if (!dm && Number(id) !== 0 && (!subscribed(Number(id)) || !state.channels.some(c => c.ChannelID === Number(id)))) continue;
+        if (dm && !pmTabs.has(id)) continue;
+        for (const message of value.msgs) {
+            if (message.deleted || !message.encVerified || !message.fromUID || !message.text) continue;
+            const reference = dm
+                ? { kind: "dm", peer_id: id, client_message_id: message.clientMsgID || "", local_seq: message.localSeq || 0 }
+                : { kind: "channel", channel_id: Number(id), message_id: message.id };
+            entries.push({ key: `${key}:${message.id || message.clientMsgID || message.localSeq}`, reference,
+                name: dm ? pmTabs.get(id).nick : (state.channels.find(c => c.ChannelID === Number(id))?.Name || "Global"), message });
+        }
+    }
+    return entries.sort((a, b) => b.message.ts - a.message.ts).slice(0, 150);
+}
+
+export function renderActivityMessage(container, entry) {
+    renderBody(container, { ...entry.message, isDM: entry.reference.kind === "dm" });
 }
