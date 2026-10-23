@@ -240,25 +240,28 @@ type ScopeKeyStore interface {
 // tests and during partial startups.
 type Deps struct {
 	// Devices stores linked devices; nil disables device management.
-	Devices        DeviceStore
-	Relay          *turn.Manager
-	Traffic        *traffic.Counter
-	TrafficHistory *traffic.Recorder
-	Auth           AuthBackend
-	State          *state.Manager
-	Channels       ChannelBackend
-	Broadcast      *broadcast.Broadcaster
-	Bans           BanStore
-	Spool          SpoolStore
-	PreKeys        PreKeyStore
-	Voice          VoiceBackend
-	Recorder       RecordingBackend
-	FileTransfer   FileTransferBackend
-	Complaints     ComplaintBackend
-	CustomMetadata CustomMetadataStore
-	Chat           ChatStore
-	Groups         AuditStore
-	Roles          RoleStore
+	Devices DeviceStore
+	// PublishIntegrationEvent feeds the integration event bus directly, for
+	// events that are never broadcast to clients (device changes).
+	PublishIntegrationEvent func(eventType string, data []byte)
+	Relay                   *turn.Manager
+	Traffic                 *traffic.Counter
+	TrafficHistory          *traffic.Recorder
+	Auth                    AuthBackend
+	State                   *state.Manager
+	Channels                ChannelBackend
+	Broadcast               *broadcast.Broadcaster
+	Bans                    BanStore
+	Spool                   SpoolStore
+	PreKeys                 PreKeyStore
+	Voice                   VoiceBackend
+	Recorder                RecordingBackend
+	FileTransfer            FileTransferBackend
+	Complaints              ComplaintBackend
+	CustomMetadata          CustomMetadataStore
+	Chat                    ChatStore
+	Groups                  AuditStore
+	Roles                   RoleStore
 	// Authority is installed only for the roles-v1 runtime after cutover. It
 	// serializes live policy changes with protected effects and revocation.
 	Authority *authorization.Authority

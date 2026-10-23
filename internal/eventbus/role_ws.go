@@ -42,9 +42,9 @@ func HandlerWithRoleBackend(bus *Bus, backend RoleBackend, logger *zap.Logger, l
 	})
 }
 
-func roleWSTypes(types []string) (speaking bool, err error) {
+func roleWSTypes(types []string) (speaking, devices bool, err error) {
 	if len(types) == 0 {
-		return true, nil
+		return true, false, nil
 	}
 	snapshot := false
 	for _, kind := range types {
@@ -53,15 +53,21 @@ func roleWSTypes(types []string) (speaking bool, err error) {
 			snapshot = true
 		case "speaking_changed":
 			speaking = true
+		case DeviceChangedType:
+			devices = true
 		default:
-			return false, errInvalidEventFilter
+			return false, false, errInvalidEventFilter
 		}
 	}
 	if !snapshot {
-		return false, errInvalidEventFilter
+		return false, false, errInvalidEventFilter
 	}
-	return speaking, nil
+	return speaking, devices, nil
 }
+
+// DeviceChangedType is the bus type of linked-device changes. Subscribers
+// must request it explicitly; projections admit administrators only.
+const DeviceChangedType = "device_changed"
 
 // Capture the owned socket so cancellation can interrupt websocket's write
 // mutex. Conn.Close alone first writes a close frame and can wait on that mutex.
@@ -89,7 +95,7 @@ func (w *roleWSResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return conn, rw, err
 }
 
-func serveRoleStream(ctx context.Context, bus *Bus, conn *websocket.Conn, raw net.Conn, backend RoleBackend, principal auth.IntegrationPrincipal, speaking bool, lifetime time.Duration) {
+func serveRoleStream(ctx context.Context, bus *Bus, conn *websocket.Conn, raw net.Conn, backend RoleBackend, principal auth.IntegrationPrincipal, speaking, devices bool, lifetime time.Duration) {
 	if raw == nil {
 		return
 	}
@@ -125,6 +131,9 @@ func serveRoleStream(ctx context.Context, bus *Bus, conn *websocket.Conn, raw ne
 	types := []string{"user_joined", "user_left", "user_moved", "channel_created", "channel_deleted", "channel_updated", "status_changed", "member_voice_changed", "kicked"}
 	if speaking {
 		types = append(types, "speaking_changed")
+	}
+	if devices {
+		types = append(types, DeviceChangedType)
 	}
 	sub := bus.Subscribe("role-ws:"+principal.UniqueID(), types, 0)
 	if sub == nil {

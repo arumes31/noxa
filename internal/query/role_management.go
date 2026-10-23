@@ -34,6 +34,7 @@ const roleHelpText = "authorization_model=roles-v1\n" +
 	"memberdisconnect data=<escaped_JSON_with_client_id_and_current_channel_id>\n" +
 	"memberkick data=<escaped_JSON_with_client_id>\nmemberban data=<escaped_JSON_with_client_id_and_duration_seconds>\n" +
 	"banquery data=<escaped_JSON_with_optional_before_id_and_limit>\n" +
+	"devicelist uid=<unique_id>\ndevicerevoke uid=<unique_id> did=<device_id>\ndevicereset uid=<unique_id> [keep=<device_id>]\n" +
 	"auditquery data=<escaped_JSON_with_optional_before_id_and_limit>\n" +
 	"complaintquery data=<escaped_JSON_with_optional_after_id_and_limit>\ncomplaintclear data=<escaped_JSON_with_target_unique_id>\n" +
 	"serverinfo\nclientinfo clid=<client_id>\nserverconfig\n" +
@@ -76,6 +77,9 @@ func (s *Server) executeRoleCommand(ctx context.Context, sess *session, backend 
 	}
 	if cmd.name == "banquery" {
 		return s.executeRoleBanQuery(ctx, sess, backend, cmd)
+	}
+	if cmd.name == "devicelist" || cmd.name == "devicerevoke" || cmd.name == "devicereset" {
+		return s.executeRoleDevices(ctx, sess, backend, cmd)
 	}
 	if cmd.name == "memberkick" || cmd.name == "memberban" {
 		return s.executeRoleMemberRemoval(ctx, sess, backend, cmd)

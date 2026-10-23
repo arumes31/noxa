@@ -102,7 +102,7 @@ func newWSHandler(bus *Bus, logger *zap.Logger, cfg wsHandlerConfig) http.Handle
 			http.Error(w, "roles-v1 requires role_snapshot, optionally speaking_changed", http.StatusBadRequest)
 			return
 		}
-		wantSpeaking, err := roleWSTypes(types)
+		wantSpeaking, wantDevices, err := roleWSTypes(types)
 		if err != nil {
 			http.Error(w, "roles-v1 requires role_snapshot, optionally speaking_changed", http.StatusBadRequest)
 			return
@@ -184,7 +184,7 @@ func newWSHandler(bus *Bus, logger *zap.Logger, cfg wsHandlerConfig) http.Handle
 						logger.Debug("closing event stream websocket failed", zap.Error(err))
 					}
 				}()
-				serveRoleStream(r.Context(), bus, conn, transport.conn, cfg.roleBackend, principal, wantSpeaking, cfg.streamLifetime)
+				serveRoleStream(r.Context(), bus, conn, transport.conn, cfg.roleBackend, principal, wantSpeaking, wantDevices, cfg.streamLifetime)
 			},
 		}
 		wsServer.Header = w.Header().Clone()

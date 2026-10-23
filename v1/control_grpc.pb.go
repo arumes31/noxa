@@ -43,6 +43,9 @@ const (
 	Control_ListCustomMetadata_FullMethodName    = "/voicx.v1.Control/ListCustomMetadata"
 	Control_ChangeCustomMetadata_FullMethodName  = "/voicx.v1.Control/ChangeCustomMetadata"
 	Control_ListBans_FullMethodName              = "/voicx.v1.Control/ListBans"
+	Control_ListDevices_FullMethodName           = "/voicx.v1.Control/ListDevices"
+	Control_RevokeDevice_FullMethodName          = "/voicx.v1.Control/RevokeDevice"
+	Control_ResetDevices_FullMethodName          = "/voicx.v1.Control/ResetDevices"
 	Control_GetRoleState_FullMethodName          = "/voicx.v1.Control/GetRoleState"
 	Control_ListRoleMembers_FullMethodName       = "/voicx.v1.Control/ListRoleMembers"
 	Control_CheckAccess_FullMethodName           = "/voicx.v1.Control/CheckAccess"
@@ -113,6 +116,13 @@ type ControlClient interface {
 	ChangeCustomMetadata(ctx context.Context, in *ChangeCustomMetadataRequest, opts ...grpc.CallOption) (*ChangeCustomMetadataResponse, error)
 	// ListBans includes expired records for recovery after unconfirmed writes.
 	ListBans(ctx context.Context, in *ListBansRequest, opts ...grpc.CallOption) (*ListBansResponse, error)
+	// Linked devices of one account; every device RPC requires Administrator.
+	// Results never contain device keys.
+	ListDevices(ctx context.Context, in *ListDevicesRequest, opts ...grpc.CallOption) (*DevicesResponse, error)
+	// Revoking signs the device out immediately.
+	RevokeDevice(ctx context.Context, in *RevokeDeviceRequest, opts ...grpc.CallOption) (*DevicesResponse, error)
+	// Reset revokes every device of the account except keep_device_id.
+	ResetDevices(ctx context.Context, in *ResetDevicesRequest, opts ...grpc.CallOption) (*DevicesResponse, error)
 	// Management reads share the native scoped projection and hierarchy rules.
 	GetRoleState(ctx context.Context, in *GetRoleStateRequest, opts ...grpc.CallOption) (*GetRoleStateResponse, error)
 	ListRoleMembers(ctx context.Context, in *ListRoleMembersRequest, opts ...grpc.CallOption) (*ListRoleMembersResponse, error)
@@ -385,6 +395,36 @@ func (c *controlClient) ListBans(ctx context.Context, in *ListBansRequest, opts 
 	return out, nil
 }
 
+func (c *controlClient) ListDevices(ctx context.Context, in *ListDevicesRequest, opts ...grpc.CallOption) (*DevicesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DevicesResponse)
+	err := c.cc.Invoke(ctx, Control_ListDevices_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) RevokeDevice(ctx context.Context, in *RevokeDeviceRequest, opts ...grpc.CallOption) (*DevicesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DevicesResponse)
+	err := c.cc.Invoke(ctx, Control_RevokeDevice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ResetDevices(ctx context.Context, in *ResetDevicesRequest, opts ...grpc.CallOption) (*DevicesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DevicesResponse)
+	err := c.cc.Invoke(ctx, Control_ResetDevices_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) GetRoleState(ctx context.Context, in *GetRoleStateRequest, opts ...grpc.CallOption) (*GetRoleStateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetRoleStateResponse)
@@ -570,6 +610,13 @@ type ControlServer interface {
 	ChangeCustomMetadata(context.Context, *ChangeCustomMetadataRequest) (*ChangeCustomMetadataResponse, error)
 	// ListBans includes expired records for recovery after unconfirmed writes.
 	ListBans(context.Context, *ListBansRequest) (*ListBansResponse, error)
+	// Linked devices of one account; every device RPC requires Administrator.
+	// Results never contain device keys.
+	ListDevices(context.Context, *ListDevicesRequest) (*DevicesResponse, error)
+	// Revoking signs the device out immediately.
+	RevokeDevice(context.Context, *RevokeDeviceRequest) (*DevicesResponse, error)
+	// Reset revokes every device of the account except keep_device_id.
+	ResetDevices(context.Context, *ResetDevicesRequest) (*DevicesResponse, error)
 	// Management reads share the native scoped projection and hierarchy rules.
 	GetRoleState(context.Context, *GetRoleStateRequest) (*GetRoleStateResponse, error)
 	ListRoleMembers(context.Context, *ListRoleMembersRequest) (*ListRoleMembersResponse, error)
@@ -670,6 +717,15 @@ func (UnimplementedControlServer) ChangeCustomMetadata(context.Context, *ChangeC
 }
 func (UnimplementedControlServer) ListBans(context.Context, *ListBansRequest) (*ListBansResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListBans not implemented")
+}
+func (UnimplementedControlServer) ListDevices(context.Context, *ListDevicesRequest) (*DevicesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListDevices not implemented")
+}
+func (UnimplementedControlServer) RevokeDevice(context.Context, *RevokeDeviceRequest) (*DevicesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevokeDevice not implemented")
+}
+func (UnimplementedControlServer) ResetDevices(context.Context, *ResetDevicesRequest) (*DevicesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResetDevices not implemented")
 }
 func (UnimplementedControlServer) GetRoleState(context.Context, *GetRoleStateRequest) (*GetRoleStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRoleState not implemented")
@@ -1163,6 +1219,60 @@ func _Control_ListBans_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_ListDevices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListDevicesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListDevices(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListDevices_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListDevices(ctx, req.(*ListDevicesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_RevokeDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeDeviceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).RevokeDevice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_RevokeDevice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).RevokeDevice(ctx, req.(*RevokeDeviceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ResetDevices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResetDevicesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ResetDevices(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ResetDevices_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ResetDevices(ctx, req.(*ResetDevicesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_GetRoleState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetRoleStateRequest)
 	if err := dec(in); err != nil {
@@ -1499,6 +1609,18 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListBans",
 			Handler:    _Control_ListBans_Handler,
+		},
+		{
+			MethodName: "ListDevices",
+			Handler:    _Control_ListDevices_Handler,
+		},
+		{
+			MethodName: "RevokeDevice",
+			Handler:    _Control_RevokeDevice_Handler,
+		},
+		{
+			MethodName: "ResetDevices",
+			Handler:    _Control_ResetDevices_Handler,
 		},
 		{
 			MethodName: "GetRoleState",

@@ -77,6 +77,15 @@ func (s *DeliveryState) Send(ctx context.Context, projection broadcast.Integrati
 			return ErrResponseTooLarge
 		}
 		message = &noxav1.Event{Type: noxav1.EventType_EVENT_TYPE_USER_SPEAKING, Payload: &noxav1.Event_UserSpeaking{UserSpeaking: &noxav1.UserSpeakingEvent{ChannelId: strconv.FormatInt(activity.ChannelID, 10), UserId: activity.ClientID, Speaking: activity.Speaking}}}
+	case projection.Device != nil:
+		d := projection.Device
+		message = &noxav1.Event{Type: noxav1.EventType_EVENT_TYPE_DEVICE_CHANGED, Payload: &noxav1.Event_DeviceChanged{DeviceChanged: &noxav1.DeviceChangedEvent{
+			Action: d.Action, UniqueId: d.UniqueID, Reason: d.Reason,
+			Device: &noxav1.DeviceRecord{
+				DeviceId: d.DeviceID, Kind: d.Kind, Name: d.Name, Fingerprint: d.Fingerprint, FirstDevice: d.FirstDevice,
+				ApprovedBy: d.ApprovedBy, CreatedAt: d.CreatedAt, LastSeenAt: d.LastSeenAt, RevokedAt: d.RevokedAt,
+			},
+		}}}
 	default:
 		return nil
 	}
@@ -90,7 +99,7 @@ func (s *DeliveryState) Send(ctx context.Context, projection broadcast.Integrati
 	s.sequence++
 	if isSnapshot {
 		s.topology, s.known, s.activity = digest, true, activity
-	} else {
+	} else if projection.Speaking != nil {
 		id := sha256.Sum256([]byte(projection.Speaking.ClientID))
 		if projection.Speaking.Speaking {
 			s.activity[id] = true

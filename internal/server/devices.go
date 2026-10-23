@@ -7,6 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"noxa/internal/auth"
+	"noxa/internal/eventbus"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
 )
@@ -389,6 +391,7 @@ func (s *TCPServer) afterDevicesRevoked(ctx context.Context, principal string, r
 		ids[d.DeviceID] = struct{}{}
 		info := deviceInfo(d, "")
 		s.notifyDevices(principal, netproto.DeviceEvent{Event: netproto.DeviceEventRevoked, Device: &info, Reason: reason})
+		s.publishDeviceChange("revoked", principal, reason, info)
 	}
 	for _, c := range s.sessionsOf(principal) {
 		if _, hit := ids[c.currentDeviceID()]; hit {
@@ -414,6 +417,28 @@ func (s *TCPServer) sessionsOf(principal string) []*Client {
 		}
 	}
 	return out
+}
+
+// deviceChange is the integration bus payload of a device change.
+type deviceChange struct {
+	Action   string              `json:"action"`
+	UniqueID string              `json:"unique_id"`
+	Reason   string              `json:"reason,omitempty"`
+	Device   netproto.DeviceInfo `json:"device"`
+}
+
+// publishDeviceChange reports a device change to integrations. The
+// projection admits administrators only and drops the encryption key.
+func (s *TCPServer) publishDeviceChange(action, principal, reason string, info netproto.DeviceInfo) {
+	if s.deps == nil || s.deps.PublishIntegrationEvent == nil {
+		return
+	}
+	info.X25519Public, info.Current = "", false
+	data, err := json.Marshal(deviceChange{Action: action, UniqueID: principal, Reason: reason, Device: info})
+	if err != nil {
+		return
+	}
+	s.deps.PublishIntegrationEvent(eventbus.DeviceChangedType, data)
 }
 
 func (s *TCPServer) notifyDevices(principal string, event netproto.DeviceEvent) {
@@ -657,6 +682,7 @@ func (s *TCPServer) handleLinkDecide(ctx context.Context, client *Client, r netp
 
 	info := deviceInfo(d, "")
 	s.notifyDevices(claim.principal, netproto.DeviceEvent{Event: netproto.DeviceEventLinked, Device: &info})
+	s.publishDeviceChange("linked", claim.principal, "", info)
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	s.audit(auditCtx, client.uniqueID(), "device_link_approve", claim.principal,

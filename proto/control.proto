@@ -58,6 +58,13 @@ service Control {
   rpc ChangeCustomMetadata(ChangeCustomMetadataRequest) returns (ChangeCustomMetadataResponse);
   // ListBans includes expired records for recovery after unconfirmed writes.
   rpc ListBans(ListBansRequest) returns (ListBansResponse);
+  // Linked devices of one account; every device RPC requires Administrator.
+  // Results never contain device keys.
+  rpc ListDevices(ListDevicesRequest) returns (DevicesResponse);
+  // Revoking signs the device out immediately.
+  rpc RevokeDevice(RevokeDeviceRequest) returns (DevicesResponse);
+  // Reset revokes every device of the account except keep_device_id.
+  rpc ResetDevices(ResetDevicesRequest) returns (DevicesResponse);
   // Management reads share the native scoped projection and hierarchy rules.
   rpc GetRoleState(GetRoleStateRequest) returns (GetRoleStateResponse);
   rpc ListRoleMembers(ListRoleMembersRequest) returns (ListRoleMembersResponse);
@@ -530,6 +537,46 @@ message ListBansResponse {
   repeated BanRecord bans = 1;
   // Zero at the end; otherwise pass this value as the next before_id.
   int64 next_before_id = 2;
+}
+
+message ListDevicesRequest {
+  string unique_id = 1;
+}
+
+message RevokeDeviceRequest {
+  string unique_id = 1;
+  string device_id = 2;
+}
+
+message ResetDevicesRequest {
+  string unique_id = 1;
+  // Optional device left active, e.g. the account's own desktop.
+  string keep_device_id = 2;
+}
+
+message DeviceRecord {
+  string device_id = 1;
+  // "desktop" or "web".
+  string kind = 2;
+  string name = 3;
+  // First 16 hex characters of SHA-256 over the identity key, grouped by 4.
+  string fingerprint = 4;
+  bool first_device = 5;
+  // Device ID of the approving device; empty for the first device.
+  string approved_by = 6;
+  // Unix seconds.
+  int64 created_at = 7;
+  int64 last_seen_at = 8;
+  // Zero while active.
+  int64 revoked_at = 9;
+}
+
+message DevicesResponse {
+  string unique_id = 1;
+  // Active devices after the request.
+  repeated DeviceRecord devices = 2;
+  // Devices revoked by this request.
+  repeated DeviceRecord revoked = 3;
 }
 
 message MoveMemberRequest {

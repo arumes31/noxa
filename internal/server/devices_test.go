@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"noxa/internal/auth"
+	"noxa/internal/authorization"
+	"noxa/internal/broadcast"
 	"noxa/internal/config"
+	"noxa/internal/eventbus"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
 )
@@ -435,5 +438,110 @@ func TestNormalizeAndFormatLinkCode(t *testing.T) {
 	code, err := randomLinkCode()
 	if err != nil || len(code) != linkCodeLength || strings.ContainsAny(code, "01ILO") {
 		t.Fatalf("randomLinkCode = %q, %v", code, err)
+	}
+}
+
+type fakeExpiringDevices struct {
+	*fakeDevices
+	warned, revoked []store.Device
+}
+
+func (f *fakeExpiringDevices) ExpireIdleDevices(context.Context, time.Time, time.Time) ([]store.Device, []store.Device, error) {
+	return f.warned, f.revoked, nil
+}
+
+func TestIdleDeviceSweepWarnsAndSignsOut(t *testing.T) {
+	devices := &fakeDevices{}
+	expiring := &fakeExpiringDevices{fakeDevices: devices}
+	env := startTestEnvDeps(t, nil, func(cfg *config.Config) {
+		cfg.Web = config.WebConfig{Enabled: true, PublicURL: "https://chat.example"}
+	}, func(deps *Deps) { deps.Devices = expiring })
+	defer env.stop()
+
+	desktopKeys, phone := newLinkTestKeys(t), newLinkTestKeys(t)
+	desktop := desktopLogin(t, env.addr, desktopKeys)
+	defer func() { _ = desktop.Close() }()
+	deviceCall(t, desktop, netproto.DeviceRequest{Action: netproto.DeviceActionList})
+	phoneDevice, err := devices.AddDevice(t.Context(), store.NewDevice{Principal: "user-uid", Kind: store.DeviceKindWeb, Name: "Phone", Ed25519Public: phone.public, X25519Public: phone.x25519}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phoneConn, resp := keyLogin(t, env.addr, phone)
+	defer func() { _ = phoneConn.Close() }()
+	if !resp.OK || resp.DeviceID != phoneDevice.DeviceID {
+		t.Fatalf("phone login = %+v", resp)
+	}
+
+	expiring.warned = []store.Device{phoneDevice}
+	env.srv.expireIdleDevices(t.Context(), time.Now())
+	var warning netproto.DeviceEvent
+	if err := netproto.Decode(readOfType(t, desktop, netproto.MsgDeviceEvent), &warning); err != nil {
+		t.Fatal(err)
+	}
+	if warning.Event != netproto.DeviceEventExpiryWarning || warning.Device.DeviceID != phoneDevice.DeviceID || warning.ExpiresAt == 0 {
+		t.Fatalf("expiry warning = %+v", warning)
+	}
+
+	revoked, err := devices.RevokeDevice(t.Context(), "user-uid", phoneDevice.DeviceID, store.DeviceRevokedIdle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiring.warned, expiring.revoked = nil, []store.Device{revoked}
+	env.srv.expireIdleDevices(t.Context(), time.Now())
+	var event netproto.DeviceEvent
+	if err := netproto.Decode(readOfType(t, desktop, netproto.MsgDeviceEvent), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Event != netproto.DeviceEventRevoked || event.Reason != store.DeviceRevokedIdle {
+		t.Fatalf("revocation event = %+v", event)
+	}
+	_ = phoneConn.SetReadDeadline(time.Now().Add(waitDeadline))
+	for {
+		if _, err := netproto.ReadFrame(phoneConn); err != nil {
+			break
+		}
+	}
+}
+
+func TestDeviceChangeProjectionIsAdministratorOnly(t *testing.T) {
+	var published []eventbus.Event
+	env := startTestEnvDeps(t, nil, func(cfg *config.Config) {
+		cfg.Web = config.WebConfig{Enabled: true, PublicURL: "https://chat.example"}
+	}, func(deps *Deps) {
+		deps.Devices = &fakeDevices{}
+		deps.PublishIntegrationEvent = func(eventType string, data []byte) {
+			published = append(published, eventbus.Event{Type: eventType, Data: data})
+		}
+	})
+	defer env.stop()
+
+	device, err := env.deps.Devices.AddDevice(t.Context(), store.NewDevice{Principal: "user-uid", Kind: store.DeviceKindWeb, Name: "Phone", Ed25519Public: newLinkTestKeys(t).public, X25519Public: "secret-x25519"}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.srv.revokeDevice(t.Context(), "user-uid", device.DeviceID, store.DeviceRevokedByUser, "user-uid"); err != nil {
+		t.Fatal(err)
+	}
+	if len(published) != 1 || published[0].Type != eventbus.DeviceChangedType || strings.Contains(string(published[0].Data), "secret-x25519") {
+		t.Fatalf("published = %+v", published)
+	}
+
+	project := func(viewer int64) broadcast.IntegrationEvent {
+		var out broadcast.IntegrationEvent
+		err := env.deps.Authority.WithPolicy(t.Context(), func(e *authorization.RoleEvaluator) error {
+			var err error
+			out, err = env.srv.projectIntegrationEvent(t.Context(), e, viewer, "viewer", published[0])
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if got := project(1); got.Device == nil || got.Device.DeviceID != device.DeviceID || got.Device.Action != "revoked" || got.Device.Reason != store.DeviceRevokedByUser {
+		t.Fatalf("owner projection = %+v", got.Device)
+	}
+	if got := project(2); got.Device != nil {
+		t.Fatalf("member saw device change: %+v", got.Device)
 	}
 }

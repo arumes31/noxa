@@ -767,34 +767,35 @@ func run() (retErr error) {
 		relayManager = turn.NewManager(cfg.TURN.Realm, cfg.TURN.MaxAllocations, cfg.TURN.BytesPerSecond)
 	}
 	tcpServer = server.New(cfg, logger, &server.Deps{
-		Devices:            dbStore,
-		Relay:              relayManager,
-		Traffic:            trafficCounter,
-		TrafficHistory:     trafficHistory,
-		Auth:               authSvc,
-		State:              stateManager,
-		Channels:           channelMgr,
-		Broadcast:          broadcaster,
-		Authority:          roleAuthority,
-		Bans:               dbStore,
-		Spool:              dbStore,
-		PreKeys:            dbStore,
-		Voice:              voice,
-		Recorder:           rec,
-		FileTransfer:       ftServer,
-		Complaints:         dbStore,
-		CustomMetadata:     dbStore,
-		Chat:               dbStore,
-		Groups:             dbStore,
-		Roles:              dbStore,
-		BanAdmin:           dbStore,
-		Metrics:            m,
-		LoginLimiter:       loginLimiter,
-		Rules:              rulesSvc,
-		ScopeKeys:          dbStore,
-		ChatKEK:            chatKEK,
-		ServerPasswordHash: serverPasswordHash,
-		ICEServers:         iceServersProvider(cfg, logger),
+		Devices:                 dbStore,
+		PublishIntegrationEvent: events.Publish,
+		Relay:                   relayManager,
+		Traffic:                 trafficCounter,
+		TrafficHistory:          trafficHistory,
+		Auth:                    authSvc,
+		State:                   stateManager,
+		Channels:                channelMgr,
+		Broadcast:               broadcaster,
+		Authority:               roleAuthority,
+		Bans:                    dbStore,
+		Spool:                   dbStore,
+		PreKeys:                 dbStore,
+		Voice:                   voice,
+		Recorder:                rec,
+		FileTransfer:            ftServer,
+		Complaints:              dbStore,
+		CustomMetadata:          dbStore,
+		Chat:                    dbStore,
+		Groups:                  dbStore,
+		Roles:                   dbStore,
+		BanAdmin:                dbStore,
+		Metrics:                 m,
+		LoginLimiter:            loginLimiter,
+		Rules:                   rulesSvc,
+		ScopeKeys:               dbStore,
+		ChatKEK:                 chatKEK,
+		ServerPasswordHash:      serverPasswordHash,
+		ICEServers:              iceServersProvider(cfg, logger),
 	})
 	channelMgr.EnableRoleMode(roleAuthority)
 	healthServer.HandleLocalGET("/debug/voice", tcpServer.VoiceDiagnosticsHandler())
@@ -844,6 +845,7 @@ func run() (retErr error) {
 		defer func() { _ = closeRelay() }()
 		go tcpServer.MaintainRelayAuthorization(ctx)
 	}
+	go tcpServer.MaintainDeviceExpiry(ctx)
 	// ServerQuery accepts explicitly enabled roles-v1 integration accounts.
 	qBackend := &queryBackend{tcp: tcpServer}
 	queryServer := query.New(cfg.QueryAddr, logger, qBackend)

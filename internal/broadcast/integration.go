@@ -6,6 +6,23 @@ package broadcast
 type IntegrationEvent struct {
 	Snapshot *TreeSnapshot
 	Speaking *IntegrationSpeaking
+	Device   *IntegrationDevice
+}
+
+// IntegrationDevice is a linked-device change visible to administrators.
+type IntegrationDevice struct {
+	Action      string
+	UniqueID    string
+	Reason      string
+	DeviceID    string
+	Kind        string
+	Name        string
+	Fingerprint string
+	FirstDevice bool
+	ApprovedBy  string
+	CreatedAt   int64
+	LastSeenAt  int64
+	RevokedAt   int64
 }
 
 type IntegrationSpeaking struct {

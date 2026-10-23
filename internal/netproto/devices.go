@@ -188,3 +188,38 @@ func LinkProof(linkKey, transcript []byte) []byte {
 
 // CapabilityDevices advertises device management and device linking.
 const CapabilityDevices = "devices_v1"
+
+// IntegrationDeviceRequest is the ServerQuery and gRPC form of device
+// administration for one account.
+type IntegrationDeviceRequest struct {
+	Action   string `json:"action"` // list, revoke, reset
+	UniqueID string `json:"unique_id"`
+	DeviceID string `json:"device_id,omitempty"`
+	// Keep is the device a reset leaves active; empty revokes every device.
+	Keep string `json:"keep,omitempty"`
+}
+
+// Valid checks the request shape.
+func (r IntegrationDeviceRequest) Valid() bool {
+	if r.UniqueID == "" || len(r.UniqueID) > 256 || len(r.DeviceID) > 64 || len(r.Keep) > 64 {
+		return false
+	}
+	switch r.Action {
+	case "list":
+		return r.DeviceID == "" && r.Keep == ""
+	case "revoke":
+		return r.DeviceID != "" && r.Keep == ""
+	case "reset":
+		return r.DeviceID == ""
+	}
+	return false
+}
+
+// IntegrationDeviceResult lists the account's devices after the action and
+// the devices it revoked.
+type IntegrationDeviceResult struct {
+	Action   string       `json:"action"`
+	UniqueID string       `json:"unique_id"`
+	Devices  []DeviceInfo `json:"devices"`
+	Revoked  []DeviceInfo `json:"revoked,omitempty"`
+}
