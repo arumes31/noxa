@@ -1,0 +1,41 @@
+/* The Windows client owns its caption; other platforms keep OS decorations. */
+.native-window #topbar,
+.native-window #topbar .topbar-brand,
+.native-window #server-tabs,
+#window-caption { --wails-draggable: drag; user-select: none; }
+.native-window #topbar > :not(.topbar-brand):not(#server-tabs),
+.native-window #server-tabs > *,
+#window-controls { --wails-draggable: no-drag; }
+
+#window-controls { display: flex; flex: none; align-self: stretch; align-items: stretch; margin-left: 4px; }
+#window-controls button {
+    display: grid; place-items: center; flex: none; width: 42px; min-height: 32px;
+    margin: 0; padding: 0; border: 0; border-radius: 0;
+    background: transparent; color: var(--text-dim); cursor: default;
+}
+#window-controls button:hover { background: var(--bg-hover); color: var(--text); }
+#window-controls button:active { background: var(--border); }
+#window-controls button[data-window-action="close"]:hover,
+#window-controls button[data-window-action="close"]:active { background: #c42b1c; color: #fff; }
+#window-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+#window-controls svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1; }
+html.native-window[data-theme] .topbar-tools { max-width: none; padding-right: 0; }
+html.native-window[data-theme] #topbar { padding-right: 0; }
+
+/* Keep a drag area and the same controls reachable before connection and in
+   compact mode, where the workspace header itself is hidden. */
+#window-caption {
+    position: fixed; inset: 0 0 auto; z-index: 10000; height: 36px;
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--bg-raised); color: var(--text-dim); font-size: .8rem;
+}
+#window-caption[hidden] { display: none; }
+#window-caption > span { margin-left: 12px; }
+.native-window[data-window-caption="fallback"] #login-overlay { padding-top: 52px; }
+.native-window body.compact #app { padding-top: 36px; box-sizing: border-box; }
+@media (max-width: 900px) {
+    html.native-window[data-theme] #topbar #menubar { min-width: 0; flex-shrink: 1; overflow-x: auto; }
+    html.native-window[data-theme] #topbar #server-tabs { min-width: 40px; }
+    html.native-window[data-theme] #topbar .srv-tab-label { max-width: 110px; }
+    #window-controls button { width: 36px; }
+}

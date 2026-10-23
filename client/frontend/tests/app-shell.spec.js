@@ -254,3 +254,92 @@ test('linked text chats follow the voice hierarchy even when it is collapsed', a
     await expect(page.locator('#channel-tree .channel[data-chid="7"]')).toHaveCount(0);
     await expect(page.locator('#text-channels .voice-linked .ch-name')).toHaveText(expected);
 });
+
+async function enableWindowCaption(page, platform = 'windows') {
+    await page.evaluate(async platform => {
+        window.__windowCalls = [];
+        window.__maximised = false;
+        Object.assign(window.runtime, {
+            Environment: async () => ({ platform }),
+            WindowIsMaximised: async () => window.__maximised,
+            WindowMinimise: () => window.__windowCalls.push('minimise'),
+            WindowToggleMaximise: () => { window.__maximised = !window.__maximised; window.__windowCalls.push('toggle'); },
+            Quit: () => window.__windowCalls.push('close'),
+        });
+        const { initWindowControls } = await import('/src/window-controls.js');
+        await initWindowControls();
+    }, platform);
+}
+
+test('Windows caption sits beside activity and uses native window actions', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await enableWindowCaption(page);
+    const controls = page.getByRole('group', { name: 'Window controls' });
+    await expect(controls).toBeVisible();
+    const bell = await page.locator('#notif-bell').boundingBox();
+    const box = await controls.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(bell.x + bell.width);
+    expect(box.x + box.width).toBeLessThanOrEqual(1024);
+    expect(Math.abs((box.y + box.height / 2) - (bell.y + bell.height / 2))).toBeLessThan(4);
+    await controls.getByRole('button', { name: 'Minimise', exact: true }).click();
+    await controls.getByRole('button', { name: 'Maximise', exact: true }).click();
+    await controls.getByRole('button', { name: 'Restore', exact: true }).click();
+    await controls.getByRole('button', { name: 'Close window', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    expect(await page.evaluate(() => window.__windowCalls)).toEqual(['minimise', 'toggle', 'toggle', 'close']);
+    expect(await page.evaluate(() => window.__calls.some(([method]) => method === 'Quit'))).toBe(false);
+});
+
+test('Windows drag areas exclude tabs and buttons and track external maximise changes', async ({ page }) => {
+    await enableWindowCaption(page);
+    const dragStyle = locator => locator.evaluate(el => getComputedStyle(el).getPropertyValue('--wails-draggable').trim());
+    expect(await dragStyle(page.locator('.topbar-brand'))).toBe('drag');
+    expect(await dragStyle(page.locator('#window-controls button').first())).toBe('no-drag');
+    expect(await dragStyle(page.locator('#notif-bell'))).toBe('no-drag');
+    expect(await dragStyle(page.locator('#menubar .menu-item').first())).toBe('no-drag');
+    await page.locator('.topbar-brand').dblclick();
+    await expect(page.getByRole('button', { name: 'Restore', exact: true })).toBeVisible();
+    await page.evaluate(() => { window.__maximised = false; window.dispatchEvent(new Event('resize')); });
+    await expect(page.getByRole('button', { name: 'Maximise', exact: true })).toBeVisible();
+    await page.evaluate(() => {
+        window.__noxa.state.settings.language = 'de';
+        window.__noxa.applyAppearance();
+    });
+    await expect(page.getByRole('button', { name: 'Fenster schließen' })).toBeVisible();
+});
+
+test('Windows controls remain reachable in login and compact mode', async ({ page }) => {
+    await enableWindowCaption(page);
+    await page.evaluate(() => { document.getElementById('app').classList.add('hidden'); document.getElementById('login-overlay').classList.remove('hidden'); });
+    await expect(page.locator('#window-caption #window-controls')).toBeVisible();
+    await expect(page.locator('#window-caption')).toHaveCSS('--wails-draggable', 'drag');
+    await page.evaluate(() => { window.__noxa.showWorkspace(false); document.body.classList.add('compact'); });
+    await expect(page.locator('#window-caption #window-controls')).toBeVisible();
+    await page.evaluate(() => document.body.classList.remove('compact'));
+    await expect(page.locator('#topbar #window-controls')).toBeVisible();
+    await expect(page.locator('#window-caption')).toBeHidden();
+    await enableWindowCaption(page);
+    await expect(page.locator('#window-controls')).toHaveCount(1);
+});
+
+test('other platforms retain their own native window decorations', async ({ page }) => {
+    await enableWindowCaption(page, 'darwin');
+    await expect(page.locator('#window-controls')).toHaveCount(0);
+    await expect(page.locator('html')).not.toHaveClass(/native-window/);
+});
+
+test('Windows caption fits narrow windows and every workspace theme', async ({ page }) => {
+    await enableWindowCaption(page);
+    for (const theme of ['midnight', 'arctic', 'dark', 'light', 'contrast']) {
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+        for (const width of [1024, 720, 560]) {
+            await page.setViewportSize({ width, height: 768 });
+            const controls = page.locator('#window-controls');
+            await expect(controls).toBeVisible();
+            const box = await controls.boundingBox();
+            expect(box.x, `${theme} at ${width}`).toBeGreaterThanOrEqual(0);
+            expect(box.x + box.width, `${theme} at ${width}`).toBeLessThanOrEqual(width);
+            await expect(page.locator('#window-controls button').last()).toBeInViewport();
+        }
+    }
+});
