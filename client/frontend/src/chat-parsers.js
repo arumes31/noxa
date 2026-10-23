@@ -38,13 +38,24 @@ function emojiURL(cache, name) {
 // turn the renderer into an arbitrary-URL or markup injection sink.
 export function transformCustomEmoji(html, emojis, cache) {
     let output = typeof html === "string" ? html : "";
-    if (!Array.isArray(emojis)) return output;
+    if (!Array.isArray(emojis) || emojis.length === 0) return output;
+    if (output.indexOf(":") === -1) return output;
+
+    const foundEmojis = [];
     for (const entry of emojis) {
         const name = typeof entry === "string" ? entry : entry?.name;
         if (typeof name !== "string" || name === "") continue;
+        const token = `:${name}:`;
+        if (output.includes(token)) {
+            foundEmojis.push({name, token});
+        }
+    }
+
+    if (foundEmojis.length === 0) return output;
+
+    for (const {name, token} of foundEmojis) {
         const url = emojiURL(cache, name);
         if (!isSafeImageDataURL(url)) continue;
-        const token = `:${name}:`;
         const image = `<img class="md-emoji" src="${escapeHTML(url)}" alt=":${escapeHTML(name)}:">`;
         const parts = output.split(/(<[^>]*>)/g);
         let literalDepth = 0;
@@ -57,7 +68,9 @@ export function transformCustomEmoji(html, emojis, cache) {
                     else if (!/\/\s*>$/.test(part)) literalDepth++;
                 }
             } else if (literalDepth === 0) {
-                parts[index] = part.split(token).join(image);
+                if (parts[index].includes(token)) {
+                    parts[index] = part.split(token).join(image);
+                }
             }
         }
         output = parts.join("");
