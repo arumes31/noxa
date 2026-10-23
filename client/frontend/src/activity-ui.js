@@ -111,9 +111,11 @@ export function initActivityWorkspace(notifications) {
     };
     function renderSidebar() {
         const scroll = sidebar.scrollTop;
+        const focused = sidebar.contains(document.activeElement) ? document.activeElement.dataset.activityKey : "";
         sidebar.replaceChildren();
         const heading = el("header", "activity-section-heading");
-        heading.append(el("h3", "", t("activity.notifications")), button(t("activity.markRead"), notifications.markRead, "activity-link"));
+        const markRead = button(t("activity.markRead"), notifications.markRead, "activity-link"); markRead.dataset.activityKey = "mark-read";
+        heading.append(el("h3", "", t("activity.notifications")), markRead);
         sidebar.append(heading);
         const entries = notifications.entries();
         for (const group of ["today", "yesterday", "earlier"]) {
@@ -124,6 +126,7 @@ export function initActivityWorkspace(notifications) {
         }
         if (!entries.length) sidebar.append(el("p", "activity-empty", t("activity.empty")));
         sidebar.scrollTop = scroll;
+        if (focused) [...sidebar.querySelectorAll("[data-activity-key]")].find(n => n.dataset.activityKey === focused)?.focus({ preventScroll: true });
     }
     function renderFriends() {
         const section = el("section", "activity-friends");
@@ -136,7 +139,7 @@ export function initActivityWorkspace(notifications) {
             const room = state().channels.find(c => c.ChannelID === peer?.channel_id);
             const status = !peer ? "offline" : peer.sharing ? "streaming" : peer.status === "away" ? "away" : room && room.SystemKind !== "home" ? "inVoice" : "online";
             const tile = button("", () => { close(); openPM(friend.unique_id, name); }, "activity-friend");
-            tile.dataset.status = status;
+            tile.dataset.status = status; tile.dataset.activityKey = `friend:${friend.unique_id}`;
             const face = avatar(friend.unique_id, name); face.append(el("span", "activity-presence"));
             tile.append(face, el("strong", "", name), el("small", "", t(`activity.${status}`)));
             strip.append(tile);
@@ -310,13 +313,20 @@ export function initActivityWorkspace(notifications) {
     function refresh() {
         if (!root) return;
         if (!current(openedScope)) { close(); return; }
-        const audit = nav.querySelector('[data-tab="audit"]'); audit.hidden = !state().canViewAuditLog;
-        if (currentTab === "audit" && !state().canViewAuditLog) select("activity");
+        const audit = nav.querySelector('[data-tab="audit"]'), auditFocused = document.activeElement === audit;
+        audit.hidden = !state().canViewAuditLog;
+        if (currentTab === "audit" && !state().canViewAuditLog) {
+            select("activity");
+            if (auditFocused) nav.querySelector('[aria-selected="true"]')?.focus();
+        }
         renderSidebar();
         if (["activity", "media"].includes(currentTab)) {
             const scroll = content.scrollTop, focusedKey = document.activeElement?.closest("[data-activity-key]")?.dataset.activityKey;
             renderFeed(); content.scrollTop = scroll;
-            if (focusedKey) [...content.querySelectorAll("[data-activity-key]")].find(n => n.dataset.activityKey === focusedKey)?.querySelector("button")?.focus({ preventScroll: true });
+            if (focusedKey) {
+                const item = [...content.querySelectorAll("[data-activity-key]")].find(n => n.dataset.activityKey === focusedKey);
+                (item?.matches("button") ? item : item?.querySelector("button"))?.focus({ preventScroll: true });
+            }
         }
     }
     function queueRefresh() {

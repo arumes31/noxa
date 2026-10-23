@@ -113,4 +113,3 @@ body.compact .topbar-tools { display: none; }
 /* quick switcher (the chat module's Ctrl+K dialog) */
 .qs-help { margin: 0; padding: 6px 10px 2px; font-size: .7857rem; color: var(--text-faint); }
 .qs-row[aria-selected="true"] { background: var(--bg-hover); color: var(--text); }
-
