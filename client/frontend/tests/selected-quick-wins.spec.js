@@ -85,10 +85,11 @@ test("contact and note failures preserve committed state and allow retry", async
     await expect(page.getByTitle("notify when online: off", { exact: true })).toBeVisible();
     await page.locator(".ct-del").click();
     await expect(page.locator(".ct-name")).toContainText("Alice");
-    await page.locator(".ct-uid").fill("bob-uid");
+    await page.evaluate(() => { window.__noxa.state.clients.push({ client_id: "bob", unique_id: "bob-uid", nickname: "Bob", channel_id: 2 }); });
+    await page.getByRole("searchbox", { name: "Search members by name" }).fill("bob");
     await page.locator(".ct-add-btn").click();
     await expect(page.locator(".ct-row")).toHaveCount(1);
-    await expect(page.locator(".ct-uid")).toHaveValue("bob-uid");
+    await expect(page.getByRole("searchbox", { name: "Search members by name" })).toHaveValue("bob");
     const noteError = await page.evaluate(async () => {
         try { await window.__noxaSocial.saveUserNote("alice-uid", "changed"); return ""; }
         catch (error) { return String(error); }
@@ -101,6 +102,33 @@ test("contact and note failures preserve committed state and allow retry", async
     await expect(page.locator(".ct-row")).toHaveCount(2);
     await page.evaluate(() => window.__noxaSocial.saveUserNote("alice-uid", "changed"));
     expect(await page.evaluate(() => window.__saved.user_notes["alice-uid"])).toBe("changed");
+});
+
+test("friends are selected by member name, excluding self, duplicates, blocked users and raw IDs", async ({ page }, testInfo) => {
+    await page.evaluate(() => {
+        const state = window.__noxa.state;
+        state.clients.push({ client_id: "alice-device", unique_id: "alice-uid", nickname: "Alice", channel_id: 1 }, { client_id: "blocked", unique_id: "blocked-uid", nickname: "Blocked", channel_id: 2 });
+        state.settings.blocked_users = ["blocked-uid"];
+        window.__saved.blocked_users = ["blocked-uid"];
+        window.__noxaSocial.openContacts();
+    });
+    const search = page.getByRole("searchbox", { name: "Search members by name" });
+    await expect(page.locator(".ct-member")).toHaveCount(1);
+    await expect(page.locator(".ct-member")).toContainText("Alice");
+    await search.fill("alice-uid");
+    await expect(page.locator(".ct-member")).toHaveCount(0);
+    await search.fill("aLI");
+    await expect(page.getByRole("button", { name: "Add Alice", exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("friends-member-search.png") });
+    await search.press("Tab");
+    await expect(page.getByRole("button", { name: "Add Alice", exact: true })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".ct-name")).toContainText("Alice");
+    expect(await page.evaluate(() => window.__saved.contacts)).toEqual([{ unique_id: "alice-uid", label: "Alice" }]);
+    await expect(page.locator(".ct-member")).toHaveCount(0);
+    await search.fill("unknown");
+    await search.press("Enter");
+    expect(await page.evaluate(() => window.__saved.contacts.length)).toBe(1);
 });
 
 test("settings Apply refreshes its edit baseline before the next edit", async ({ page }) => {

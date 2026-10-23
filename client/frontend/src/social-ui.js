@@ -126,7 +126,7 @@ function openContacts() {
                     });
                 } catch (error) { V().toast(String(error), "error"); return; }
                 if (!isCurrentServerDialog(overlay)) return;
-                render();
+                render(); renderSearch();
             };
             row.insertBefore(watch, row.querySelector(".ct-block"));
             const blockBtn = row.querySelector(".ct-block");
@@ -136,7 +136,7 @@ function openContacts() {
                 try { await setUserBlocked(c.unique_id, !blocked); }
                 catch (error) { V().toast(String(error), "error"); return; }
                 if (!isCurrentServerDialog(overlay)) return;
-                render();
+                render(); renderSearch();
             };
             row.querySelector(".ct-del").onclick = async () => {
                 try {
@@ -145,7 +145,7 @@ function openContacts() {
                     });
                 } catch (error) { V().toast(String(error), "error"); return; }
                 if (!isCurrentServerDialog(overlay)) return;
-                render();
+                render(); renderSearch();
             };
             list.appendChild(row);
         }
@@ -153,38 +153,69 @@ function openContacts() {
     overlay.innerHTML = `
         <div class="dlg dlg-wide">
             <h3>${escapeTranslation(t("desktop.contacts"))}</h3>
-            <div class="ct-add">
-                <input class="dlg-input ct-uid" placeholder="${escapeTranslation(t("desktop.unique.id.0d7a37"))}" />
-                <input class="dlg-input ct-label" placeholder="${escapeTranslation(t("desktop.label.optional"))}" />
-                <button class="ct-add-btn">${escapeTranslation(t("desktop.add"))}</button>
-            </div>
+            <input type="search" class="dlg-input ct-search" aria-label="${escapeTranslation(t("desktop.contacts.search"))}" placeholder="${escapeTranslation(t("desktop.contacts.search"))}" autocomplete="off" />
+            <p class="ct-hint">${escapeTranslation(t("desktop.contacts.searchHint"))}</p>
+            <div class="ct-results" aria-label="${escapeTranslation(t("desktop.contacts.members"))}"></div>
             <div class="ct-list"></div>
             <div class="dlg-buttons"><button class="dlg-ok">${escapeTranslation(t("desktop.close"))}</button></div>
         </div>`;
-    overlay.querySelector(".ct-add-btn").onclick = async () => {
-        const s = state.settings || {};
-        const uid = overlay.querySelector(".ct-uid").value.trim();
-        if (!uid) return;
-        if ((s.contacts || []).some((c) => c.unique_id === uid)) {
-            V().toast(t("desktop.contact.already.exists"), "warn");
-            return;
-        }
-        const label = overlay.querySelector(".ct-label").value.trim();
-        try {
-            await updateLocalSettings(current => {
-                if ((current.contacts || []).some(c => c.unique_id === uid)) return;
-                current.contacts = [...(current.contacts || []), { unique_id: uid, label }];
-            });
-        } catch (error) { V().toast(String(error), "error"); return; }
+    const search = overlay.querySelector(".ct-search"), results = overlay.querySelector(".ct-results");
+    let saving = false;
+    // Use only the visible roster: never expose hidden users or require an ID.
+    function members() {
+        const excluded = new Set([state.myUniqueID, ...(state.settings?.contacts || []).map(c => c.unique_id), ...(state.settings?.blocked_users || [])]);
+        return [...new Map(state.clients.filter(c => c.unique_id && c.nickname && c.client_id !== state.myClientID && !excluded.has(c.unique_id)).map(c => [c.unique_id, c])).values()];
+    }
+    function renderSearch() {
         if (!isCurrentServerDialog(overlay)) return;
-        overlay.querySelector(".ct-uid").value = "";
-        overlay.querySelector(".ct-label").value = "";
-        render();
-    };
+        const query = search.value.trim().toLocaleLowerCase();
+        const matches = members().filter(c => c.nickname.toLocaleLowerCase().includes(query)).sort((a, b) => a.nickname.localeCompare(b.nickname));
+        results.replaceChildren();
+        if (!matches.length) {
+            const empty = document.createElement("p"); empty.className = "ct-hint"; empty.setAttribute("role", "status");
+            empty.textContent = t("desktop.contacts.noMembers"); results.append(empty);
+        }
+        for (const member of matches.slice(0, 50)) {
+            const row = document.createElement("div"); row.className = "ct-member";
+            const avatar = document.createElement("span"); avatar.className = "ct-member-avatar";
+            if (!setSafeImage(avatar, state.avatars?.get(member.unique_id), { avatar: true })) avatar.textContent = member.nickname.slice(0, 1).toLocaleUpperCase();
+            const name = document.createElement("span"); name.className = "ct-member-name"; name.textContent = member.nickname;
+            const channel = document.createElement("small"); channel.textContent = state.channels.find(c => c.ChannelID === member.channel_id)?.Name || "";
+            name.append(channel);
+            const add = document.createElement("button"); add.className = "ct-add-btn"; add.textContent = t("desktop.add");
+            add.setAttribute("aria-label", t("desktop.contacts.addMember", { name: member.nickname })); add.disabled = saving;
+            add.onclick = async () => {
+                if (saving || !isCurrentServerDialog(overlay)) return;
+                saving = true; renderSearch();
+                try {
+                    await updateLocalSettings(current => {
+                        const peer = members().find(c => c.unique_id === member.unique_id);
+                        if (!isCurrentServerDialog(overlay) || !peer) throw new Error(t("desktop.contacts.unavailable"));
+                        if ((current.contacts || []).some(c => c.unique_id === peer.unique_id)) return;
+                        current.contacts = [...(current.contacts || []), { unique_id: peer.unique_id, label: peer.nickname }];
+                    });
+                    if (isCurrentServerDialog(overlay)) { render(); search.focus(); }
+                } catch (error) { if (isCurrentServerDialog(overlay)) V().toast(String(error), "error"); }
+                finally { saving = false; renderSearch(); }
+            };
+            row.append(avatar, name, add); results.append(row);
+        }
+        if (matches.length > 50) {
+            const more = document.createElement("p"); more.className = "ct-hint"; more.textContent = t("desktop.contacts.refine"); results.append(more);
+        }
+    }
+    search.oninput = renderSearch;
     overlay.querySelector(".dlg-ok").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    mountServerDialog(overlay);
-    render();
+    const stop = [];
+    mountServerDialog(overlay, { onClose: () => stop.forEach(unsubscribe => unsubscribe?.()) });
+    for (const event of ["snapshot", "settings_update"]) stop.push(window.runtime.EventsOn(event, () => queueMicrotask(renderSearch)));
+    stop.push(window.runtime.EventsOn("event", event => {
+        if (typeof event === "string") { try { event = JSON.parse(event); } catch { return; } }
+        if (["user_joined", "user_left", "user_moved", "user_updated", "client_updated", "client_moved"].includes(event?.type)) queueMicrotask(renderSearch);
+    }));
+    render(); renderSearch();
+
 }
 
 // ---------------------------------------------------------------------------
