@@ -12,6 +12,7 @@ import { xPost } from "./x-previews.js";
 import { videoPortal, portalThumbnail } from "./video-portal-previews.js";
 import { loadPreviewMetadata } from "./preview-metadata.js";
 import { mountActivityAudit } from "./activity-audit.js";
+import { avatarColor } from "./workspace-ui.js";
 import "./activity.css";
 
 const state = () => window.__noxa.state;
@@ -24,7 +25,7 @@ const button = (label, action, cls = "activity-button", glyph = "") => {
     node.append(document.createTextNode(label)); node.onclick = action; return node;
 };
 const scope = () => JSON.stringify([state().activeTabID, state().serverGeneration, state().sessionGeneration, state().myUniqueID]);
-const clock = at => new Date(at).toLocaleTimeString(currentLanguage(), { hour: "2-digit", minute: "2-digit" });
+const clock = at => new Date(at).toLocaleTimeString(currentLanguage(), { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
 function day(at) {
     const now = new Date(), yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
@@ -36,6 +37,7 @@ function avatar(uid, name) {
     const node = el("span", "activity-avatar", (name || "?").slice(0, 1).toLocaleUpperCase());
     const image = createSafeImage(state().avatars?.get(uid), { avatar: true, alt: "" });
     if (image) node.replaceChildren(image);
+    else { node.classList.add("activity-avatar-initial"); node.style.setProperty("--avatar-color", avatarColor(uid || name)); }
     return node;
 }
 
@@ -49,6 +51,27 @@ function media(text) {
         if (portal) return portal;
     }
     return null;
+}
+
+// Fixed local glyphs only; server text never becomes SVG markup.
+function platformIcon(provider) {
+    const paths = {
+        youtube: '<rect x="1" y="4" width="30" height="24" rx="7" fill="#ff0033"/><path d="m13 10 10 6-10 6Z" fill="white"/>',
+        twitch: '<rect width="32" height="32" rx="7" fill="#9146ff"/><path d="M7 5h21v15l-7 7h-6l-4 4v-4H5V9Zm3 3v15h6v4l4-4h4V8Z" fill="white"/><path d="M15 11v7m6-7v7" stroke="white" stroke-width="2"/>',
+        x: '<rect width="32" height="32" rx="5" fill="#050709"/><path d="M7 5h5l14 22h-5ZM25 5 7 27" stroke="white" stroke-width="2" fill="none"/>',
+        whatnot: '<rect width="32" height="32" rx="5" fill="#070909"/><path d="M3 13c0-6 7-7 10-2 3-6 9-6 12-1 7-2 8 5 3 10l-5 5-7-5-5 5-6-6Z" fill="#ffe937"/>',
+    };
+    const node = el("span", `activity-platform ${provider || "generic"}`);
+    node.setAttribute("aria-hidden", "true");
+    node.innerHTML = paths[provider] ? `<svg viewBox="0 0 32 32">${paths[provider]}</svg>` : icon("chat");
+    return node;
+}
+
+function previewText(node, message) {
+    // previewLine redacts attachment secrets; text nodes keep mentions inert.
+    for (const part of previewLine(message).slice(0, 240).split(/(@[^\s@]+)/u)) {
+        node.append(part.startsWith("@") ? el("span", "activity-mention", part) : document.createTextNode(part));
+    }
 }
 
 export function initActivityWorkspace(notifications) {
@@ -98,13 +121,16 @@ export function initActivityWorkspace(notifications) {
             ? e.reference.channel_id === reference.channel_id && e.reference.message_id === reference.message_id
             : e.reference.peer_id === reference.peer_id && !!reference.client_message_id && e.reference.client_message_id === reference.client_message_id));
         const uid = n.uid || entry?.message.fromUID || reference?.peer_id;
-        const name = state().clients.find(c => c.unique_id === uid)?.nickname || "";
-        const face = avatar(uid, name), body = el("span", "activity-notification-body");
-        if (name) body.append(el("strong", "", name));
-        body.append(el("span", "activity-notification-text", n.text), el("time", "activity-time", clock(n.at)));
+        const name = state().clients.find(c => c.unique_id === uid)?.nickname || entry?.message.from || "";
+        const body = el("span", "activity-notification-body"), heading = el("span", "activity-notification-heading");
+        if (name) heading.append(el("strong", "", name));
+        heading.append(el("time", "activity-time", clock(n.at)));
+        body.append(heading, el("span", "activity-notification-text", n.text));
         const preview = media(entry?.message.text || n.text);
+        const face = preview ? platformIcon(preview.provider) : avatar(uid, name);
         if (preview) {
-            face.append(el("span", `activity-platform ${preview.provider}`, preview.label));
+            const context = el("span", "activity-context", `${preview.label} · ${entry?.name || ""}`);
+            body.append(context);
             thumbnail(row, preview);
         }
         row.prepend(face, body); return row;
@@ -114,7 +140,7 @@ export function initActivityWorkspace(notifications) {
         const focused = sidebar.contains(document.activeElement) ? document.activeElement.dataset.activityKey : "";
         sidebar.replaceChildren();
         const heading = el("header", "activity-section-heading");
-        const markRead = button(t("activity.markRead"), notifications.markRead, "activity-link"); markRead.dataset.activityKey = "mark-read";
+        const markRead = button(t("activity.markRead"), notifications.markRead, "activity-button activity-mark-read", "check"); markRead.dataset.activityKey = "mark-read";
         heading.append(el("h3", "", t("activity.notifications")), markRead);
         sidebar.append(heading);
         const entries = notifications.entries();
@@ -130,7 +156,7 @@ export function initActivityWorkspace(notifications) {
     }
     function renderFriends() {
         const section = el("section", "activity-friends");
-        section.append(el("h3", "", t("activity.friends")));
+        section.setAttribute("aria-label", t("activity.friends"));
         const strip = el("div", "activity-friends-strip");
         const blocked = new Set(state().settings?.blocked_users || []);
         for (const friend of (state().settings?.contacts || []).filter(f => !blocked.has(f.unique_id))) {
@@ -140,7 +166,10 @@ export function initActivityWorkspace(notifications) {
             const status = !peer ? "offline" : peer.sharing ? "streaming" : peer.status === "away" ? "away" : room && room.SystemKind !== "home" ? "inVoice" : "online";
             const tile = button("", () => { close(); openPM(friend.unique_id, name); }, "activity-friend");
             tile.dataset.status = status; tile.dataset.activityKey = `friend:${friend.unique_id}`;
-            const face = avatar(friend.unique_id, name); face.append(el("span", "activity-presence"));
+            const face = avatar(friend.unique_id, name), presence = el("span", "activity-presence");
+            if (status === "streaming") presence.textContent = "LIVE";
+            if (status === "inVoice") presence.innerHTML = icon("headphones");
+            face.append(presence);
             tile.append(face, el("strong", "", name), el("small", "", t(`activity.${status}`)));
             strip.append(tile);
         }
@@ -154,18 +183,26 @@ export function initActivityWorkspace(notifications) {
         card.dataset.activityKey = entry.key;
         if (m.mentioned) card.classList.add("mentioned");
         const header = el("header");
-        header.append(avatar(m.fromUID, m.from), el("strong", "", m.from));
+        const face = avatar(m.fromUID, m.from);
+        if (!compact) header.append(face);
+        header.append(el("strong", "", m.from));
         const role = memberRoles(state(), m.fromUID)[0];
         if (role) header.append(roleChip(role));
         header.append(el("time", "activity-time", clock(m.ts)));
         const body = el("div", "activity-message-body");
-        if (compact) body.textContent = previewLine(m).slice(0, 240);
+        if (compact) previewText(body, m);
         else { renderActivityMessage(body, entry); bindSharedLinks(body); }
         const footer = el("footer");
-        footer.append(el("span", "activity-context", `${entry.reference.kind === "dm" ? "@" : "#"} ${entry.name}`),
-            button(t(m.mentioned || entry.reference.kind === "dm" || m.replyToID ? "activity.reply" : "activity.openChat"), () => openReference(entry.reference), "activity-button"));
-        card.append(header, body, footer);
-        if (compact) thumbnail(card, media(m.text));
+        const action = button(t(m.mentioned || entry.reference.kind === "dm" || m.replyToID ? "activity.reply" : "activity.openChat"), () => openReference(entry.reference), "activity-button activity-row-action", "reply");
+        const context = el("span", "activity-context", `${entry.reference.kind === "dm" ? "@" : "#"} ${entry.name}`);
+        if (compact) {
+            const copy = el("div", "activity-row-copy"); copy.append(header, body, context);
+            const actions = el("div", "activity-row-actions"); actions.append(action);
+            if (!m.mentioned) thumbnail(actions, media(m.text));
+            card.append(face, copy, actions);
+        } else {
+            footer.append(context, action); card.append(header, body, footer);
+        }
         return card;
     }
     function renderFeed() {
@@ -235,17 +272,21 @@ export function initActivityWorkspace(notifications) {
         const row = el("article", "activity-call"); row.dataset.activityKey = `call:${call.id}`; row.classList.toggle("missed", missed);
         const symbol = el("span", "activity-call-icon"); symbol.innerHTML = icon(missed ? "phoneOff" : "phone");
         const info = el("div", "activity-call-info"); info.append(el("strong", "", names), el("span", "", t(missed ? "activity.missed" : call.ended_at ? "activity.completed" : "activity.active")));
-        row.append(symbol, avatar(peers[0]?.unique_id, names), info, el("time", "activity-time", clock(call.created_at * 1000)));
+        const heading = el("header", "activity-call-heading");
+        heading.append(el("strong", "", names), el("time", "activity-time", clock(call.created_at * 1000)));
+        info.firstChild.replaceWith(heading);
+        row.append(avatar(peers[0]?.unique_id, names), info);
+        info.append(symbol);
         if (call.conversation_id || peers.length === 1) {
             const again = button(t(missed ? "activity.callBack" : "activity.callAgain"), async () => {
                 if (!current(captured)) return;
                 again.disabled = true;
                 try { await startPrivateCall(call.conversation_id ? "" : peers[0].unique_id, call.conversation_id || ""); }
                 finally { if (again.isConnected) again.disabled = false; }
-            });
+            }, "activity-button activity-row-action", "phone");
             row.append(again);
         }
-        if (peers.length === 1) row.append(button(t("activity.message"), () => { close(); openPM(peers[0].unique_id, names); }));
+        if (peers.length === 1 && currentTab === "calls") row.append(button(t("activity.message"), () => { close(); openPM(peers[0].unique_id, names); }, "activity-button", "chat"));
         return row;
     }
     function loadCalls(force = false) {
@@ -282,6 +323,7 @@ export function initActivityWorkspace(notifications) {
         if (!root || tab === "audit" && !state().canViewAuditLog) return;
         revision++; stopAudit?.(); stopAudit = null;
         currentTab = tab; filter = "all"; query = ""; search.value = "";
+        root.dataset.view = tab;
         for (const node of nav.querySelectorAll("[role=tab]")) {
             node.setAttribute("aria-selected", String(node.dataset.tab === tab)); node.tabIndex = node.dataset.tab === tab ? 0 : -1;
         }
@@ -298,6 +340,7 @@ export function initActivityWorkspace(notifications) {
             item.setAttribute("aria-pressed", String(key === "all")); filters.append(item);
         }
         filters.hidden = !choices.length; search.hidden = tab === "audit";
+        search.closest("details").hidden = tab === "audit";
         if (tab === "audit") {
             const captured = openedScope;
             stopAudit = mountActivityAudit(content, () => current(captured) && currentTab === "audit" && state().canViewAuditLog);
@@ -361,7 +404,12 @@ export function initActivityWorkspace(notifications) {
         const toolbar = el("div", "activity-toolbar"); filters = el("div", "activity-filters");
         search = el("input", "activity-search"); search.type = "search"; search.placeholder = t("activity.search"); search.setAttribute("aria-label", t("activity.search"));
         search.oninput = () => { query = search.value; if (currentTab === "calls") void renderCalls(); else renderFeed(); };
-        toolbar.append(filters, search, button(t("activity.refresh"), () => { callsLoaded = false; select(currentTab); }, "activity-link"));
+        const searchTools = el("details", "activity-search-tools"), searchToggle = el("summary");
+        searchToggle.innerHTML = icon("search"); searchToggle.setAttribute("aria-label", t("activity.search")); searchToggle.title = t("activity.search");
+        searchTools.append(searchToggle, search);
+        const reload = button("", () => { callsLoaded = false; select(currentTab); }, "activity-link activity-refresh", "refresh");
+        reload.setAttribute("aria-label", t("activity.refresh")); reload.title = t("activity.refresh");
+        toolbar.append(filters, searchTools, reload);
         const layout = el("div", "activity-layout"); panel = el("div", "activity-panel"); panel.id = "activity-panel"; panel.setAttribute("role", "tabpanel");
         content = el("div", "activity-content"); panel.append(content);
         sidebar = el("aside", "activity-notifications"); sidebar.setAttribute("aria-label", t("activity.notifications"));

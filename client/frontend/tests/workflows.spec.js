@@ -12475,8 +12475,28 @@ test.describe("compact Activity workspace", () => {
         await expect(root.getByRole("tab", { name: "Audit", exact: true })).toBeHidden();
         await expect(root.locator('.activity-friend[data-status="streaming"]')).toContainText("Bene");
         await expect(root.locator('.activity-friend[data-status="offline"]')).toContainText("Lina");
-        expect(await root.locator(".activity-header").evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(48);
+        expect(await root.locator(".activity-header").evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(60);
         await expect(root.getByRole("complementary", { name: "Notifications" })).toBeVisible();
+        const proportions = await root.evaluate(el => {
+            const panel = el.querySelector(".activity-panel").getBoundingClientRect();
+            const sidebar = el.querySelector(".activity-notifications").getBoundingClientRect();
+            const avatar = el.querySelector(".activity-friend .activity-avatar").getBoundingClientRect();
+            return { sidebarRatio: sidebar.width / (panel.width + sidebar.width), avatar: avatar.width };
+        });
+        expect(proportions.sidebarRatio).toBeGreaterThan(.36);
+        expect(proportions.sidebarRatio).toBeLessThan(.40);
+        expect(proportions.avatar).toBe(68);
+        await root.locator(".activity-search-tools summary").click();
+        await root.getByRole("searchbox", { name: "Search activity" }).fill("whatnot");
+        await expect(root.locator(".activity-feed-row")).toHaveCount(1);
+        const alignment = await root.locator(".activity-feed-row").evaluate(el => {
+            const copy = el.querySelector(".activity-row-copy").getBoundingClientRect();
+            const action = el.querySelector(".activity-row-action").getBoundingClientRect();
+            return { right: action.left >= copy.right, sameRow: action.top < copy.bottom && action.bottom > copy.top };
+        });
+        expect(alignment).toEqual({ right: true, sameRow: true });
+        await root.getByRole("searchbox", { name: "Search activity" }).fill("");
+        await root.locator(".activity-search-tools summary").click();
         await root.getByRole("tab", { name: "Activity", exact: true }).focus();
         await page.keyboard.press("ArrowRight");
         await expect(root.getByRole("tab", { name: "Media", exact: true })).toBeFocused();
