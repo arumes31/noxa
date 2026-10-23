@@ -2666,7 +2666,7 @@ function renderVoiceStatus() {
         (state.whisperArmed ? " · " + t("polish.whisper", { name: uidName(state.whisperTargetUID) }) : "");
     status.dataset.state = { "voice on": "connected", "voice connecting…": "connecting", "voice unavailable": "unavailable" }[voiceStatusBase] || "off";
     status.dataset.whisper = String(!!state.whisperArmed);
-    setStatusIcon(status, state.whisperArmed ? "whisper" : { connected: "headphones", connecting: "refresh", unavailable: "warning", off: "headphonesOff" }[status.dataset.state], label);
+    setStatusIcon(status, state.whisperArmed ? "whisper" : { connected: "phone", connecting: "refresh", unavailable: "warning", off: "phoneOff" }[status.dataset.state], label);
     status.title = label;
     status.tabIndex = 0;
 }

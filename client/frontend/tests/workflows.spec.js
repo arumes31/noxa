@@ -12193,6 +12193,14 @@ for (const { width, mode, language, fontSize } of [
                 }).map(el => el.id || el.className);
         });
         expect(overflow).toEqual([]);
+        const positions = await page.locator("#voice-bar").evaluate(bar => {
+            const rect = selector => bar.querySelector(selector).getBoundingClientRect();
+            return { summary: rect(".voice-summary").toJSON(), identity: rect("#voice-self").toJSON(),
+                row: rect(".voice-context-row").toJSON(), buttons: rect(".voice-buttons").toJSON() };
+        });
+        expect(positions.summary.top).toBeGreaterThanOrEqual(positions.identity.bottom);
+        expect(positions.summary.bottom).toBeLessThanOrEqual(positions.buttons.top);
+        expect(Math.abs(positions.summary.right - positions.row.right)).toBeLessThanOrEqual(1);
         for (const control of await page.locator(".voice-buttons > .voice-control:visible, #voice-mute, #voice-options > summary").all()) {
             const bounds = await control.boundingBox();
             expect(bounds.width).toBeGreaterThanOrEqual(28);

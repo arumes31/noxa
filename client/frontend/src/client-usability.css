@@ -25,8 +25,10 @@ body.compact #sidebar-resize { display: none; }
 
 #voice-bar #voice-options > summary > .ui-icon { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
 
-/* Server, voice transport and playback health share one compact status row. */
-#voice-bar .voice-info .voice-summary { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-start; gap: 6px; }
+/* Keep connection health beside the context, directly above the controls. */
+#voice-bar .voice-context-row { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; width: 100%; min-width: 0; }
+#voice-bar .voice-context-row #voice-context { flex: 1 1 10ch; min-width: 0; }
+#voice-bar .voice-info .voice-summary { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 6px; margin-left: auto; flex: 0 0 auto; }
 #voice-bar .voice-summary .status-icon { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px; width: 24px; min-width: 24px; height: 24px; min-height: 24px; padding: 0; border: 0; background: transparent; overflow: visible; }
 #voice-bar .voice-summary .status-icon[hidden] { display: none; }
 #voice-bar .status-icon .ui-icon { display: block; width: 16px; height: 16px; flex: none; margin: 0; }

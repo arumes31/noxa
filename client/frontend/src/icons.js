@@ -10,6 +10,8 @@ const paths = {
     mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/>',
     echo: '<rect x="6" y="3" width="5" height="10" rx="2.5"/><path d="M3.5 10.5v1a5 5 0 0 0 10 0v-1M8.5 16.5v4M5.5 20.5h6M16 19.5c7-2.5 7-13-1.5-14.5M17 2.5 14.5 5 17 8"/>',
     micOff: '<path d="m3 3 18 18M9 9v3a3 3 0 0 0 5 2M9 5a3 3 0 0 1 6 0v5M5 10v2a7 7 0 0 0 12 5M19 10v2M12 19v3M8 22h8"/>',
+    phone: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2A19.8 19.8 0 0 1 3.1 5.2 2 2 0 0 1 5.1 3h3a2 2 0 0 1 2 1.7l.5 2.4a2 2 0 0 1-.6 2.1L8.7 10.5a16 16 0 0 0 4.8 4.8l1.3-1.3a2 2 0 0 1 2.1-.6l2.4.5a2 2 0 0 1 2.7 3Z"/>',
+    phoneOff: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2A19.8 19.8 0 0 1 3.1 5.2 2 2 0 0 1 5.1 3h3a2 2 0 0 1 2 1.7l.5 2.4a2 2 0 0 1-.6 2.1L8.7 10.5a16 16 0 0 0 4.8 4.8l1.3-1.3a2 2 0 0 1 2.1-.6l2.4.5a2 2 0 0 1 2.7 3Z"/><path class="icon-off-slash" d="m3 21 18-18"/>',
     headphones: '<path d="M3 14v-3a9 9 0 0 1 18 0v3"/><rect x="3" y="12" width="4" height="9" rx="2"/><rect x="17" y="12" width="4" height="9" rx="2"/>',
     headphonesOff: '<path d="M3 14v-3a9 9 0 0 1 18 0v3"/><rect x="3" y="12" width="4" height="9" rx="2"/><rect x="17" y="12" width="4" height="9" rx="2"/><path class="icon-off-slash" d="m3 21 18-18"/>',
     camera: '<rect x="2" y="5" width="14" height="14" rx="2"/><path d="m16 9 6-4v14l-6-4"/>',
