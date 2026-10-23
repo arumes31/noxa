@@ -36,6 +36,7 @@ import (
 	"noxa/internal/query"
 	"noxa/internal/recorder"
 	"noxa/internal/redisx"
+	"noxa/internal/retention"
 	"noxa/internal/rules"
 	"noxa/internal/safecast"
 	"noxa/internal/server"
@@ -558,6 +559,12 @@ func run() (retErr error) {
 			logger.Warn("recorder shutdown error", zap.Error(err))
 		}
 	}()
+
+	stopRetention := retention.Start(ctx, logger,
+		retention.Task{Name: "delivered DMs and audit", Run: dbStore.PruneExpiredData},
+		retention.Task{Name: "recordings", Run: rec.PruneExpiredRecordings},
+	)
+	defer stopRetention()
 
 	// Initialize the optional Redis client. A startup ping failure is degraded
 	// rather than fatal, but the client is retained so later readiness probes

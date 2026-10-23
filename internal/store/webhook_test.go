@@ -26,6 +26,15 @@ func TestWebhookRevokeSerializesWithInflightPostAndChannelScope(t *testing.T) {
 	if _, err := s.ManageWebhook(t.Context(), netproto.WebhookRequest{Action: "revoke", ChannelID: ch + 999, ID: created.ID}, user, nil); err != nil {
 		t.Fatal(err)
 	}
+	valid, err := s.AuthenticateWebhook(t.Context(), created.ID, hash[:])
+	if err != nil || !valid {
+		t.Fatal("valid preflight rejected", err)
+	}
+	wrong := sha256.Sum256([]byte("invalid"))
+	valid, err = s.AuthenticateWebhook(t.Context(), created.ID, wrong[:])
+	if err != nil || valid {
+		t.Fatal("invalid preflight accepted", err)
+	}
 	entered, release := make(chan struct{}), make(chan struct{})
 	posted, revoked := make(chan error, 1), make(chan error, 1)
 	go func() {
@@ -36,6 +45,22 @@ func TestWebhookRevokeSerializesWithInflightPostAndChannelScope(t *testing.T) {
 	case <-entered:
 	case <-time.After(5 * time.Second):
 		t.Fatal("post never entered")
+	}
+	// Invalid tokens must not wait for the valid delivery's row lock.
+	invalidCtx, invalidCancel := context.WithTimeout(t.Context(), time.Second)
+	defer invalidCancel()
+	valid, err = s.AuthenticateWebhook(invalidCtx, created.ID, wrong[:])
+	if err != nil || valid {
+		close(release)
+		t.Fatal("preflight waited for row lock", err)
+	}
+	_, _, _, _, err = s.DeliverWebhook(invalidCtx, created.ID, wrong[:], func(WebhookIdentity) (string, uint32, error) {
+		t.Error("invalid token reached callback")
+		return "", 0, nil
+	})
+	if !errors.Is(err, ErrWebhookDenied) {
+		close(release)
+		t.Fatal("invalid token waited for row lock", err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()

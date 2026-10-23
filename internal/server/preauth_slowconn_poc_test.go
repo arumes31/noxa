@@ -46,32 +46,21 @@ func TestPreAuthIdleConnectionHold(t *testing.T) {
 				}
 				overflow, overflowDone := open()
 				defer finishPreauthPipe(overflow, overflowDone)
-				frame, err := netproto.ReadFrame(overflow)
-				if err != nil {
-					t.Fatalf("read admission rejection: %v", err)
+				if got := s.clientCount(); got != 3 {
+					t.Fatalf("idle sockets consumed authenticated user capacity: registered=%d", got)
 				}
-				var response netproto.Error
-				if frame.Type != uint16(netproto.MsgError) {
-					t.Fatalf("overflow reply type = %d", frame.Type)
-				}
-				if err := netproto.Decode(frame, &response); err != nil {
-					t.Fatal(err)
-				}
-				if response.Code != errCodeUnavailable || response.Message != "server is full" {
-					t.Fatalf("overflow response = %+v", response)
-				}
-				<-overflowDone
-				if got := s.clientCount(); got != 2 {
-					t.Fatalf("occupied slots = %d, want 2", got)
+				if s.authenticatedClientCount() != 0 {
+					t.Fatal("idle peers counted as users")
 				}
 				time.Sleep(10*time.Second - time.Nanosecond)
 				synctest.Wait()
-				if got := s.clientCount(); got != 2 {
-					t.Fatalf("slots before deadline = %d, want 2", got)
+				if got := s.clientCount(); got != 3 {
+					t.Fatalf("slots before deadline = %d, want 3", got)
 				}
 				time.Sleep(time.Nanosecond)
 				assertPreauthExpired(t, s, firstDone)
 				assertPreauthExpired(t, s, secondDone)
+				assertPreauthExpired(t, s, overflowDone)
 				fresh, freshDone := open()
 				defer finishPreauthPipe(fresh, freshDone)
 				if got := s.clientCount(); got != 1 {

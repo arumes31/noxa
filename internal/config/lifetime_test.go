@@ -27,6 +27,7 @@ func cleanConfigDir(t *testing.T) {
 // channels.DefaultCleanupDelay is; a drift here silently changes how long
 // abandoned temporary channels linger.
 func TestChannelTempLifetimeDefault(t *testing.T) {
+	t.Setenv("NOXA_DEV_MODE", "true")
 	cleanConfigDir(t)
 	cfg, err := Load()
 	if err != nil {
@@ -40,6 +41,7 @@ func TestChannelTempLifetimeDefault(t *testing.T) {
 // TestChannelTempLifetimeFromEnv verifies the knob is actually configurable,
 // including the zero that means "use the default".
 func TestChannelTempLifetimeFromEnv(t *testing.T) {
+	t.Setenv("NOXA_DEV_MODE", "true")
 	for _, tc := range []struct {
 		env  string
 		want int

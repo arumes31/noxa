@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"strconv"
 	"sync"
@@ -168,12 +169,47 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 			return s.acknowledgeJoin(client, requested)
 		})
 	}
+	var passwordHash string
+	approved := false
+	if err := s.roleAction(ctx, client, msg.ChannelID, authorization.Connect, func(ctx context.Context) error {
+		ch, ok := s.deps.State.GetChannel(msg.ChannelID)
+		if !ok {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "channel not found")
+		}
+		if ch.TextOnly {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, state.ErrTextChannel.Error())
+		}
+		if client.rulesBlocked() {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "accept the server rules before joining a channel")
+		}
+		if !s.roleAllowed(ctx, client, msg.ChannelID, authorization.BypassChannelPassword) {
+			passwordHash = ch.PasswordHash
+		}
+		approved = true
+		return nil
+	}); err != nil || !approved {
+		return err
+	}
+	if passwordHash != "" {
+		source := auth.LoginFailureScope("channel:"+remoteIP(client.Conn), "")
+		principal := auth.LoginFailureScope("channel", fmt.Sprintf("%s:%d", client.UniqueID, msg.ChannelID))
+		attempt, allowed := s.channelPasswordLimiter.Reserve(source, principal)
+		if !allowed {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "too many channel password attempts, try again later")
+		}
+		// No policy or metadata lock is held during the expensive KDF.
+		if err := auth.VerifyPassword(msg.Password, passwordHash); err != nil {
+			attempt.Fail()
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "invalid channel password")
+		}
+		attempt.Succeed(principal)
+	}
 	return s.roleAction(ctx, client, msg.ChannelID, authorization.Connect, func(ctx context.Context) error {
-		return s.joinChannelAllowed(ctx, client, msg)
+		return s.joinChannelAllowed(ctx, client, msg, passwordHash)
 	})
 }
 
-func (s *TCPServer) joinChannelAllowed(ctx context.Context, client *Client, msg netproto.JoinChannel) error {
+func (s *TCPServer) joinChannelAllowed(ctx context.Context, client *Client, msg netproto.JoinChannel, verifiedHash string) error {
 	s.roleMetadataMu.Lock()
 	defer s.roleMetadataMu.Unlock()
 	client.lockRoleAction()
@@ -195,10 +231,8 @@ func (s *TCPServer) joinChannelAllowed(ctx context.Context, client *Client, msg 
 	}
 
 	bypassPassword := s.roleAllowed(ctx, client, msg.ChannelID, authorization.BypassChannelPassword)
-	if ch.PasswordHash != "" && !bypassPassword {
-		if err := auth.VerifyPassword(msg.Password, ch.PasswordHash); err != nil {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "invalid channel password")
-		}
+	if ch.PasswordHash != "" && !bypassPassword && ch.PasswordHash != verifiedHash {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "channel password changed, retry joining")
 	}
 
 	if err := s.moveClient(ctx, client.ID, msg.ChannelID, client.ID); err != nil {

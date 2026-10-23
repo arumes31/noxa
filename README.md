@@ -519,7 +519,7 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_SERVER_NAME` / `NOXA_SERVER_PASSWORD` | `noXa` / empty | Displayed server name and admission password; required in production unless `NOXA_ALLOW_ANONYMOUS=true` |
 | `NOXA_ALLOW_ANONYMOUS` | `false` | Acknowledge that an empty server password admits anyone, including anonymous guests, when `NOXA_DEV_MODE=false` |
 | `NOXA_CLIENT_MIN_VERSION` | `0.0.0` | Native client minimum; `0.0.0` permits any version, exactly `9.9.9` requires the running server version or newer, e.g. `0.5.94` requires that release or newer |
-| `NOXA_DEV_MODE` | `true` | Development logging/validation; explicitly set `false` for production |
+| `NOXA_DEV_MODE` | `false` | Production validation by default; the checked-in development profiles explicitly opt in to `true` |
 | `NOXA_TCP_ADDR` | `:12333` | Primary control TCP listener address |
 | `NOXA_UDP_ADDR` | `:12334` | UDP keepalive ping/pong listener address |
 | `NOXA_GRPC_ADDR` | `127.0.0.1:12338` | Plaintext gRPC administration listener; loopback is mandatory |
@@ -972,3 +972,13 @@ Bundled third-party assets retain their own terms. In particular, German spoken
 announcements include CC BY 4.0 attribution; see the
 [speech asset notes](client/frontend/src/assets/speech/README.md) and bundled
 [audio notices](client/frontend/public/noxa-audio-licenses.txt).
+
+### Data retention
+
+The server runs bounded housekeeping at startup and every five minutes:
+
+- Delivered offline DMs: 30 days after delivery. Undelivered messages are retained.
+- Server recordings: 30 days after the recording ends. Active recordings and processes still cleaning up are retained. Recognizable abandoned recording sets use their last manifest write time. Corrupt manifests and unrelated files are preserved for operator inspection.
+- Audit events: 180 days, including daily aggregates. Daily aggregates retain the cutoff calendar day in UTC.
+
+Each pass removes at most 500 rows per database table and 128 recording files, and scans at most 128 recording directory entries. Existing backlogs therefore expire gradually. Housekeeping uses indexed queries, skips locked rows, has a bounded execution context, and runs independently of chat and audio requests. Shutdown cancels and joins the worker before closing storage. These limits apply to the live database and recording directory; independently retained backups are not rewritten.

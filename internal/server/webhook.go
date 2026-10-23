@@ -22,6 +22,7 @@ import (
 )
 
 type webhookStore interface {
+	AuthenticateWebhook(context.Context, int64, []byte) (bool, error)
 	ManageWebhook(context.Context, netproto.WebhookRequest, int64, []byte) (netproto.WebhookResult, error)
 	DeliverWebhook(context.Context, int64, []byte, func(store.WebhookIdentity) (string, uint32, error)) (store.WebhookIdentity, int64, string, uint32, error)
 }
@@ -121,6 +122,15 @@ func (s *TCPServer) IncomingWebhookHandler() http.Handler {
 		var messageID int64
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		defer cancel()
+		valid, authErr := backend.AuthenticateWebhook(ctx, id, hash[:])
+		if authErr != nil {
+			fail(503)
+			return
+		}
+		if !valid {
+			fail(401)
+			return
+		}
 		err = s.withRolePolicy(ctx, func(ctx context.Context) error {
 			s.roleMetadataMu.Lock()
 			defer s.roleMetadataMu.Unlock()

@@ -23,7 +23,7 @@ func (s *TCPServer) handleChannelInvite(ctx context.Context, client *Client, fra
 		if r.Action == "resolve" {
 			capability = authorization.Connect
 		}
-		if r.Action == "revoke" {
+		if r.Action == "revoke" || r.Action == "regenerate" {
 			capability = authorization.ManageChannelAccess
 		}
 		if !s.roleAllowed(ctx, client, r.ChannelID, capability) {

@@ -107,6 +107,12 @@ func TestLoadDefaults(t *testing.T) {
 		}
 	}
 
+	// Development must be explicitly selected; an omitted mode rejects the
+	// insecure built-in database credentials before the server starts.
+	if _, err := Load(); err == nil {
+		t.Fatal("implicit production startup accepted development credentials")
+	}
+	t.Setenv("NOXA_DEV_MODE", "true")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -722,6 +728,8 @@ func loadDefaultConfig(t *testing.T) *Config {
 			}
 		}
 	}
+	// This fixture deliberately exercises the development defaults.
+	t.Setenv("NOXA_DEV_MODE", "true")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -746,4 +754,18 @@ func indexOf(s string, b byte) int {
 		}
 	}
 	return -1
+}
+
+func TestProductionIsDefaultWithValidConfiguration(t *testing.T) {
+	t.Setenv("NOXA_DEV_MODE", "")
+	v := newConfigViper()
+	v.Set("database_url", "postgres://application:strong-password@localhost:5432/noxa?sslmode=verify-full")
+	v.Set("server_password", "strong-server-password")
+	cfg, err := decodeConfig(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DevMode {
+		t.Fatal("development mode implicitly enabled")
+	}
 }

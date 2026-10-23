@@ -937,7 +937,7 @@ func (s *TCPServer) chatEditAllowed(ctx context.Context, client *Client, msg net
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeConflict, "message changed on another client; reload before editing")
 	}
 	if err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "edit failed: "+err.Error())
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "message edit failed")
 	}
 
 	// Uniform wire format: the edit event carries ciphertext like any other
@@ -979,7 +979,7 @@ func (s *TCPServer) handleChatDelete(ctx context.Context, client *Client, f *net
 
 func (s *TCPServer) chatDeleteAllowed(ctx context.Context, client *Client, msg netproto.ChatDelete, stored *store.ChatMessage) error {
 	if err := s.deps.Chat.DeleteChatMessage(ctx, msg.MessageID); err != nil {
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "delete failed: "+err.Error())
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "message deletion failed")
 	}
 	s.broadcastScope(ctx, stored.ChannelID, eventChatDeleted, map[string]any{
 		"message_id": msg.MessageID,

@@ -245,11 +245,13 @@ type Server struct {
 	started     bool
 	closed      bool
 
-	stopOnce  sync.Once
-	stopCh    chan struct{}
-	wg        sync.WaitGroup
-	connSlots chan struct{}
-	accepted  map[net.Conn]struct{}
+	stopOnce    sync.Once
+	stopCh      chan struct{}
+	wg          sync.WaitGroup
+	connSlots   chan struct{}
+	accepted    map[net.Conn]struct{}
+	preauth     map[net.Conn]string
+	preauthByIP map[string]int
 
 	// fileOpsMu serializes ownership checks with file mutations and drains
 	// them before physical channel cleanup. Tombstones are published separately
@@ -282,6 +284,8 @@ func New(cfg Config, st FileStore, logger *zap.Logger) *Server {
 		stopCh:          make(chan struct{}),
 		connSlots:       make(chan struct{}, cfg.MaxConnections),
 		accepted:        make(map[net.Conn]struct{}),
+		preauth:         make(map[net.Conn]string),
+		preauthByIP:     make(map[string]int),
 		transfers:       make(map[string]*transfer),
 		activeTransfers: make(map[string]*activeTransfer),
 		deletedChannels: make(map[int64]*channelCleanup),
@@ -1249,13 +1253,37 @@ func (s *Server) admit(conn net.Conn) bool {
 		return false
 	default:
 	}
+	ip, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+	if err != nil {
+		ip = conn.RemoteAddr().String()
+	}
+	if s.preauthByIP[ip] >= 8 {
+		s.lifecycleMu.Unlock()
+		<-s.connSlots
+		return false
+	}
+	s.preauth[conn] = ip
+	s.preauthByIP[ip]++
 	s.accepted[conn] = struct{}{}
 	s.wg.Add(1)
 	s.lifecycleMu.Unlock()
 	return true
 }
 
+func (s *Server) releasePreauth(conn net.Conn) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if ip, ok := s.preauth[conn]; ok {
+		delete(s.preauth, conn)
+		s.preauthByIP[ip]--
+		if s.preauthByIP[ip] == 0 {
+			delete(s.preauthByIP, ip)
+		}
+	}
+}
+
 func (s *Server) release(conn net.Conn) {
+	s.releasePreauth(conn)
 	s.lifecycleMu.Lock()
 	delete(s.accepted, conn)
 	s.lifecycleMu.Unlock()

@@ -44,6 +44,12 @@ var ErrFrameTooLarge = errors.New("netproto: frame too large")
 // ReadFrame reads a single frame from r. It blocks until a complete frame is
 // available, the connection is closed, or an error occurs.
 func ReadFrame(r io.Reader) (*Frame, error) {
+	return ReadFrameLimit(r, MaxFrameSize)
+}
+
+// ReadFrameLimit rejects oversized declarations before allocating the body.
+// It never raises the protocol-wide maximum.
+func ReadFrameLimit(r io.Reader, limit uint32) (*Frame, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, fmt.Errorf("netproto: reading length prefix: %w", err)
@@ -53,7 +59,7 @@ func ReadFrame(r io.Reader) (*Frame, error) {
 	if length < 2 {
 		return nil, fmt.Errorf("netproto: invalid frame length %d (must be >= 2)", length)
 	}
-	if length > MaxFrameSize {
+	if length > MaxFrameSize || length > limit {
 		return nil, ErrFrameTooLarge
 	}
 

@@ -27,6 +27,8 @@ const captureQueueBytes = 2 * 1024 * 1024
 // its global MaxConcurrent limit applies to processes, not just channels.
 type ChannelRecorder struct {
 	processes *Recorder
+	pruneMu   sync.Mutex
+	pruneScan *recordingPruneScan
 	mu        sync.Mutex
 	sessions  map[int64]*channelCapture
 	closed    bool
@@ -205,6 +207,7 @@ func (c *ChannelRecorder) SessionCount() int {
 	return len(c.sessions)
 }
 func (c *ChannelRecorder) Close() error {
+	c.closePruneScan()
 	c.mu.Lock()
 	c.closed = true
 	sessions := make([]*channelCapture, 0, len(c.sessions))

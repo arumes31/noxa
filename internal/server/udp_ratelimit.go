@@ -1,7 +1,7 @@
 // udp_ratelimit.go implements per-source-IP token-bucket rate limiting for
 // the UDP media listener (DDoS mitigation). The bucket map is bounded by a
-// periodic sweep that evicts idle entries, so a flood of spoofed source IPs
-// cannot exhaust memory.
+// hard cap and periodic eviction. New sources share a bounded overflow
+// bucket when the map is full, rather than being permanently locked out.
 package server
 
 import (
@@ -14,6 +14,7 @@ const sweepInterval = time.Minute
 
 // bucketIdleTTL is how long a bucket may sit unused before eviction.
 const bucketIdleTTL = 2 * time.Minute
+const maxIPRateBuckets = 8192
 
 // ipBucket is one source IP's token bucket.
 type ipBucket struct {
@@ -27,8 +28,9 @@ type ipRateLimiter struct {
 	pps   float64
 	burst float64
 
-	mu      sync.Mutex
-	buckets map[string]*ipBucket
+	mu       sync.Mutex
+	buckets  map[string]*ipBucket
+	overflow ipBucket
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -61,8 +63,15 @@ func (l *ipRateLimiter) allow(ip string, now time.Time) bool {
 
 	b, ok := l.buckets[ip]
 	if !ok {
-		b = &ipBucket{tokens: l.burst, last: now}
-		l.buckets[ip] = b
+		if len(l.buckets) >= maxIPRateBuckets {
+			b = &l.overflow
+			if b.last.IsZero() {
+				b.tokens, b.last = l.burst, now
+			}
+		} else {
+			b = &ipBucket{tokens: l.burst, last: now}
+			l.buckets[ip] = b
+		}
 	}
 	b.seen = now
 	b.tokens += now.Sub(b.last).Seconds() * l.pps

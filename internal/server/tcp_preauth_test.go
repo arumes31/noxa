@@ -195,22 +195,16 @@ func TestTCPPreauthSuccessfulAuthenticationRestoresInactivityPolicy(t *testing.T
 func TestTCPPreauthBackendDeadline(t *testing.T) {
 	for _, tc := range []struct {
 		name              string
-		admission         bool
 		inactivitySeconds int
 		deadline          time.Duration
 	}{
 		{name: "authentication", deadline: 10 * time.Second},
 		{name: "authentication short timeout", inactivitySeconds: 2, deadline: 2 * time.Second},
-		{name: "admission settings", admission: true, deadline: 10 * time.Second},
-		{name: "admission settings short timeout", admission: true, inactivitySeconds: 2, deadline: 2 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				entered := make(chan struct{})
 				deps := &Deps{Auth: &preauthWaitingAuth{AuthBackend: &fakeAuth{}, entered: entered}}
-				if tc.admission {
-					deps.Chat = &preauthWaitingSettings{entered: entered}
-				}
 				s := New(&config.Config{ClientTimeoutSeconds: tc.inactivitySeconds}, zap.NewNop(), deps)
 				server, peer := net.Pipe()
 				ctx, cancel := context.WithCancel(context.Background())
@@ -225,7 +219,7 @@ func TestTCPPreauthBackendDeadline(t *testing.T) {
 					cancel()
 					finishPreauthPipe(peer, done)
 				}()
-				if !tc.admission {
+				{
 					frame, err := netproto.Encode(netproto.MsgAuthenticate, netproto.Authenticate{Username: "user", Password: "pw"})
 					if err != nil {
 						t.Fatal(err)
@@ -310,4 +304,25 @@ func assertPreauthExpired(t *testing.T, s *TCPServer, done <-chan struct{}) {
 	if got := s.clientCount(); got != 0 {
 		t.Errorf("registered connections after authentication deadline = %d, want 0", got)
 	}
+}
+
+func TestTCPIdleConnectionDoesNotQueryAdmissionSettings(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		entered := make(chan struct{})
+		s := New(&config.Config{}, zap.NewNop(), &Deps{Auth: &fakeAuth{}, Chat: &preauthWaitingSettings{entered: entered}})
+		server, peer := net.Pipe()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan struct{})
+		go func() { defer close(done); s.handleConn(ctx, server) }()
+		defer finishPreauthPipe(peer, done)
+		synctest.Wait()
+		select {
+		case <-entered:
+			t.Fatal("idle unauthenticated connection queried database")
+		default:
+		}
+		time.Sleep(10 * time.Second)
+		assertPreauthExpired(t, s, done)
+	})
 }

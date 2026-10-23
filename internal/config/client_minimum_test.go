@@ -9,9 +9,11 @@ import (
 )
 
 func TestClientMinimumConfiguration(t *testing.T) {
+	t.Setenv("NOXA_DEV_MODE", "true")
 	for _, minimum := range []string{"0.0.0", "0.5.94", "9.9.9", "0.5.94-rc.1+build"} {
 		t.Run(minimum, func(t *testing.T) {
 			v := newConfigViper()
+			v.Set("dev_mode", true)
 			v.Set("client_min_version", minimum)
 			cfg, err := decodeConfig(v)
 			if err != nil || cfg.ClientMinVersion != minimum {
@@ -22,19 +24,23 @@ func TestClientMinimumConfiguration(t *testing.T) {
 	for _, minimum := range []string{"", "9.9.9.9", "latest", "0.5", "0.05.94", "0.5.94-01"} {
 		t.Run("invalid/"+minimum, func(t *testing.T) {
 			v := newConfigViper()
+			v.Set("dev_mode", true)
 			v.Set("client_min_version", minimum)
 			if _, err := decodeConfig(v); err == nil || !strings.Contains(err.Error(), "client_min_version") {
 				t.Fatalf("invalid minimum accepted: %v", err)
 			}
 		})
 	}
-	cfg, err := decodeConfig(newConfigViper())
+	defaults := newConfigViper()
+	defaults.Set("dev_mode", true)
+	cfg, err := decodeConfig(defaults)
 	if err != nil || cfg.ClientMinVersion != "0.0.0" {
 		t.Fatalf("default=%+v error=%v", cfg, err)
 	}
 }
 
 func TestClientMinimumEnvironment(t *testing.T) {
+	t.Setenv("NOXA_DEV_MODE", "true")
 	t.Chdir(t.TempDir())
 	t.Setenv("NOXA_CLIENT_MIN_VERSION", "0.5.94")
 	cfg, err := Load()
@@ -48,6 +54,7 @@ func TestClientMinimumEnvironment(t *testing.T) {
 }
 
 func TestClientMinimumEnvironmentOverridesStrictYAML(t *testing.T) {
+	t.Setenv("NOXA_DEV_MODE", "true")
 	t.Chdir(t.TempDir())
 	if err := os.WriteFile("config.yaml", []byte("client_min_version: '0.5.94'\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -64,10 +71,12 @@ func TestClientMinimumEnvironmentOverridesStrictYAML(t *testing.T) {
 }
 
 func TestClientMinimumUnknownServerFailsStartupValidation(t *testing.T) {
+	t.Setenv("NOXA_DEV_MODE", "true")
 	before := version.Version
 	version.Version = "unknown"
 	t.Cleanup(func() { version.Version = before })
 	v := newConfigViper()
+	v.Set("dev_mode", true)
 	v.Set("client_min_version", "9.9.9")
 	if _, err := decodeConfig(v); err == nil || !strings.Contains(err.Error(), "client_min_version") {
 		t.Fatalf("unknown server accepted: %v", err)

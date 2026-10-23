@@ -39,7 +39,7 @@ func (m *memoryChannelInvites) ChannelInvite(_ context.Context, r netproto.Chann
 }
 func TestChannelInviteRotationAndPermissionEnforcement(t *testing.T) {
 	roles := serverRoleFixture()
-	roles.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect}
+	roles.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect, authorization.InviteOthers}
 	authority, err := authorization.NewAuthority(t.Context(), roles, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
 	if err != nil {
 		t.Fatal(err)

@@ -278,7 +278,7 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("server_password", "")
 	v.SetDefault("allow_anonymous", false)
 	v.SetDefault("log_level", "info")
-	v.SetDefault("dev_mode", true)
+	v.SetDefault("dev_mode", false)
 	v.SetDefault("tcp_addr", DefaultTCPAddr)
 	v.SetDefault("udp_addr", DefaultUDPAddr)
 	v.SetDefault("grpc_addr", DefaultGRPCAddr)

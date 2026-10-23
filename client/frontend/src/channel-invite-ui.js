@@ -22,9 +22,10 @@ export function channelInvitePanel({ tabID, channelID, current }) {
     const status = roleElement("p", "role-hint"); status.setAttribute("role", "status");
     const actions = roleElement("div", "access-invite-actions");
     let busy = false, active = false;
-    const update = () => { regenerate.disabled = revoke.disabled = access.disabled = busy; revoke.hidden = !active; copy.disabled = busy || !link.value; };
+    const canManage = () => !!window.__noxa.state.channels.find(c => c.ChannelID === channelID)?.Access?.can_manage_access;
+    const update = () => { regenerate.disabled = revoke.disabled = access.disabled = busy || !canManage(); revoke.hidden = !active; copy.disabled = busy || !link.value; };
     const request = async action => {
-        if (busy || !current()) return;
+        if (busy || !current() || action !== "get" && !canManage()) return;
         busy = true; update();
         try {
             const result = await window.go.main.App.ChannelInviteForTab(tabID, { action, channel_id: channelID, ...(action === "regenerate" ? { access: access.value } : {}) });
@@ -41,6 +42,7 @@ export function channelInvitePanel({ tabID, channelID, current }) {
     const revoke = roleButton(t("midnight.revokeInvite"), () => void request("revoke")); revoke.hidden = true;
     actions.append(regenerate, revoke);
     section.append(title, fields, roleElement("p", "role-hint access-invite-help", t("midnight.inviteHelpShort")), actions, status);
+    update();
     queueMicrotask(() => void request("get"));
     return section;
 }
