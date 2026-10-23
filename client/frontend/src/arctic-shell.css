@@ -282,3 +282,8 @@ body.compact .topbar-tools { display: none; }
     color: var(--danger); background: color-mix(in srgb, var(--danger) 18%, transparent);
 }
 :root[data-theme="arctic"] body:not(.compact) #voice-bar .voice-buttons > #voice-leave-channel.voice-control:disabled { color: var(--text-faint); background: var(--arc-s3); }
+
+.recording-indicator { color: #ff8f9c; font-size: 11px; font-weight: 600; }
+#chat-head-title .recording-indicator { display: inline-block; margin-inline-start: 12px; }
+.voice-recording-notice { padding: 4px 0; }
+.channel-recording-dot { color: #ff8f9c; font-size: 10px; margin-inline-start: 5px; }

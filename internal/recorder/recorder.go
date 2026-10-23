@@ -376,6 +376,10 @@ type TapRouter interface {
 	RemoveTap(tapID string)
 }
 
+// Done closes after capture and subprocess cleanup finish. Nil means the
+// backend does not expose lifecycle completion (legacy test/backends).
+func (s *Session) Done() <-chan struct{} { return s.done }
+
 // Session is one active recording.
 type Session struct {
 	// Exported values are immutable snapshots for callers. Recorder lifecycle

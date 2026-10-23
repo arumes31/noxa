@@ -165,6 +165,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         const cannotJoin = !isHome && ch.Access?.can_connect === false;
         const isEcho = echoInfo?.channelID > 0 && echoInfo.channelID === ch.ChannelID && scopeIsCurrent(echoInfo.scope, readEchoScope);
         const accessLabels = [];
+        if (ch.Recording) accessLabels.push(t("runtime.recordingActive"));
         if (isHome) accessLabels.push(t("runtime.homeHint"));
         if (isEcho) accessLabels.push(t("echo.channelHint"));
         if (restricted) accessLabels.push(t("channel.access.private"));
@@ -175,6 +176,14 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         el.title = accessLabels.join(" · ") || t("channel.access.open");
         el.innerHTML = `<span class="ch-disclosure" aria-hidden="true">${icon("chevron")}</span><span class="ch-icon">${icon(isHome ? "home" : isEcho ? "echo" : "speaker")}</span><span class="ch-name"></span>`;
         el.querySelector(".ch-name").textContent = ch.Name;
+        if (ch.Recording) {
+            const recording = document.createElement("span");
+            recording.className = "channel-recording-dot";
+            recording.textContent = "●";
+            recording.title = t("runtime.recordingActive");
+            recording.setAttribute("aria-label", recording.title);
+            el.append(recording);
+        }
         // (387) muted channel icon.
         if (window.__noxaNotify?.channelOverride?.(ch.ChannelID)?.muted) {
             const mute = document.createElement("span");

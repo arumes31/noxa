@@ -3898,6 +3898,13 @@ function updateHeader() {
         }
     }
     $("chat-head-title").textContent = title;
+    const recordingChannel = filesOpen ? st.myChannelID : ["channel", "chan"].includes(view.kind) ? activeChannelID() : 0;
+    if (st.channels.some(channel => channel.ChannelID === recordingChannel && channel.Recording)) {
+        const badge = document.createElement("span");
+        badge.className = "recording-indicator";
+        badge.textContent = t("runtime.recordingActive");
+        $("chat-head-title").append(badge);
+    }
     $("chat-search-btn").classList.toggle("hidden", filesOpen);
     $("chat-head-actions").querySelector(".channel-actions").hidden = filesOpen;
     const directView = view.kind === "dm" && $("center")?.classList.contains("dm-view-active");

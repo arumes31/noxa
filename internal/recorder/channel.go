@@ -138,7 +138,7 @@ func (c *ChannelRecorder) Start(ctx context.Context, channelID int64, router Tap
 		if err != nil {
 			return nil, err
 		}
-		return &Session{ChannelID: channelID, FilePath: s.filePath, StartedAt: s.started}, nil
+		return &Session{ChannelID: channelID, FilePath: s.filePath, StartedAt: s.started, done: s.done}, nil
 	case <-ctx.Done():
 		cancel()
 		return nil, ctx.Err()

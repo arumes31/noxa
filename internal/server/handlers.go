@@ -49,6 +49,7 @@ type channelEvent struct {
 // channelUpdatedEvent is the payload of channel_updated events, carrying the
 // editable channel fields after a ChannelEdit.
 type channelUpdatedEvent struct {
+	Recording       bool   `json:"recording"`
 	ChannelID       int64  `json:"channel_id"`
 	Topic           string `json:"topic"`
 	MaxClients      int    `json:"max_clients"`

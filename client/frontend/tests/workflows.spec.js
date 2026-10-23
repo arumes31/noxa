@@ -12462,3 +12462,43 @@ test("CSP retains supported HTTP image previews", async ({ page }) => {
         document.body.append(image);
     }))).toBe(true);
 });
+
+
+test("server recording stays visible across chat navigation and clears on completion", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        Object.assign(v.state, { myClientID: "self", myUniqueID: "self", myChannelID: 1,
+            channels: [{ ChannelID: 1, Name: "Recorded room", Recording: true }, { ChannelID: 2, Name: "Other room" }],
+            clients: [{ client_id: "self", unique_id: "self", nickname: "Daniel", channel_id: 1 }] });
+        v.showWorkspace(false); v.renderTree(); window.__noxaChat.onMyChannelChanged();
+    });
+    await expect(page.locator(".voice-recording-notice")).toBeVisible();
+    await expect(page.locator(".voice-recording-notice")).toHaveText("Server recording active");
+    await expect(page.locator("#chat-head-title .recording-indicator")).toBeVisible();
+    await expect(page.locator('.channel[data-chid="1"] .channel-recording-dot')).toBeVisible();
+    await page.evaluate(() => { window.__noxaChat.openChannelTab(2); });
+    await expect(page.locator(".voice-recording-notice")).toBeVisible();
+    await page.evaluate(() => { for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "channel_updated", data: { channel_id: 1, recording: false } })); });
+    await expect(page.locator(".voice-recording-notice")).toBeHidden();
+    await expect(page.locator(".channel-recording-dot")).toHaveCount(0);
+});
+
+
+test("recording notice follows live channel updates and late-join snapshots", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        Object.assign(v.state, { myClientID: "self", myUniqueID: "self", myChannelID: 1,
+            channels: [{ ChannelID: 1, Name: "Room" }], clients: [{ client_id: "self", unique_id: "self", nickname: "Daniel", channel_id: 1 }] });
+        v.showWorkspace(false); v.renderTree();
+        for (const callback of window.__events.event || []) callback(JSON.stringify({ type: "channel_updated", data: { channel_id: 1, recording: true } }));
+    });
+    await expect(page.locator(".voice-recording-notice")).toBeVisible();
+    await page.evaluate(() => {
+        for (const callback of window.__events.snapshot || []) callback(JSON.stringify({ root_channels: [{ ChannelID: 1, Name: "Room", Recording: false, clients: [{ client_id: "self", unique_id: "self", nickname: "Daniel", channel_id: 1 }] }] }));
+    });
+    await expect(page.locator(".voice-recording-notice")).toBeHidden();
+    await page.evaluate(() => {
+        for (const callback of window.__events.snapshot || []) callback(JSON.stringify({ root_channels: [{ ChannelID: 1, Name: "Room", Recording: true, clients: [{ client_id: "self", unique_id: "self", nickname: "Daniel", channel_id: 1 }] }] }));
+    });
+    await expect(page.locator(".voice-recording-notice")).toBeVisible();
+});

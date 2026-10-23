@@ -1384,6 +1384,7 @@ function flattenChannel(node) {
         ParentID: node.ParentID,
         Name: node.Name,
         HasIcon: !!node.HasIcon,
+        Recording: !!node.Recording,
         // (304) lock icon — the field is read under both spellings so a json
         // tag on the server's Channel struct cannot silently drop the lock.
         HasPassword: !!(node.has_password ?? node.HasPassword),
@@ -1583,6 +1584,7 @@ window.runtime.EventsOn("event", (json) => {
         case "channel_updated": {
             const ch = state.channels.find((c) => c.ChannelID === d.channel_id);
             if (ch) {
+                ch.Recording = !!d.recording;
                 ch.Topic = d.topic || "";
                 ch.Description = d.description || "";
                 ch.MaxClients = d.max_clients || 0;

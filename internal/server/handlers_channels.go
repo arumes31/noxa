@@ -123,6 +123,7 @@ func (s *TCPServer) BroadcastChannelUpdated(channelID int64) {
 // channel_updated event.
 func channelUpdatedEventFor(ch *state.Channel) channelUpdatedEvent {
 	return channelUpdatedEvent{
+		Recording:       ch.Recording,
 		ChannelID:       ch.ChannelID,
 		Topic:           ch.Topic,
 		MaxClients:      ch.MaxClients,

@@ -63,8 +63,12 @@ func TestChannelRecordingCapacityFailureIsExplicit(t *testing.T) {
 	cfg.MaxConcurrent = 1
 	c := NewChannelRecorder(cfg, testLogger())
 	c.processes.Exec = autoRecordingProcess
-	if _, err := c.Start(context.Background(), 1, &fakeTapRouter{}); err != nil {
+	session, err := c.Start(context.Background(), 1, &fakeTapRouter{})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if session.Done() == nil {
+		t.Fatal("missing lifecycle completion")
 	}
 	c.mu.Lock()
 	capture := c.sessions[1]
@@ -75,9 +79,9 @@ func TestChannelRecordingCapacityFailureIsExplicit(t *testing.T) {
 		}
 	}
 	select {
-	case <-capture.done:
+	case <-session.Done():
 	case <-time.After(2 * time.Second):
-		t.Fatal("capacity failure did not clean up")
+		t.Fatal("capacity failure did not signal lifecycle completion")
 	}
 	if !errors.Is(capture.result, ErrCapacity) {
 		t.Fatalf("capacity failure hidden: %v", capture.result)

@@ -84,6 +84,7 @@ type Channel struct {
 	// here is renamed for JSON (the one tag present is an exclusion), so
 	// snapshots marshal Go field names and the client reads "HasPassword".
 	HasPassword bool
+	Recording   bool // live server capture; never persisted across restarts
 	// Per-channel Opus audio quality (migration 005). OpusBitrate is the
 	// target bitrate in bits/s; 0 means the server default (32000). A channel
 	// with OpusStereo and OpusBitrate >= 96000 counts as a music channel: the

@@ -327,6 +327,9 @@ type TCPServer struct {
 	privateCalls          map[string]netproto.CallSession
 	privateCallByClient   map[string]string
 	privateCallDirty      map[string]bool
+	recordingNotices      sync.Map // channel ID -> *recordingNotice; protected by roleRecordingMu
+	recordingNoticeWG     sync.WaitGroup
+	recordingNoticeStop   chan struct{}
 	roleRecordingOwners   sync.Map   // channel ID -> initiating registered user ID
 	roleRevokedRecordings sync.Map   // channel IDs awaiting cleanup; tap delivery is denied
 	roleRecordingMu       sync.Mutex // serialize recording start/stop and ownership publication
@@ -785,6 +788,19 @@ func (s *TCPServer) beginShutdown() {
 			<-acceptDone
 		}
 		s.connWG.Wait()
+		// No handler can start another capture after this point. Drain lifecycle
+		// audits before returning and allowing the database to close.
+		if s.deps != nil && s.deps.Recorder != nil {
+			if closer, ok := s.deps.Recorder.(interface{ Close() error }); ok {
+				shutdownErr = joinTCPShutdownError(shutdownErr, closer.Close())
+			}
+		}
+		s.roleRecordingMu.Lock()
+		if s.recordingNoticeStop != nil {
+			close(s.recordingNoticeStop)
+		}
+		s.roleRecordingMu.Unlock()
+		s.recordingNoticeWG.Wait()
 		s.completeShutdown(shutdownErr)
 	}()
 }

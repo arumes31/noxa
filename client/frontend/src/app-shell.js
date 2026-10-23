@@ -156,6 +156,15 @@ export function renderVoiceCard() {
     $("voice-channel-name").textContent = own?.Name || "";
     $("voice-channel-name").title = own ? t("shell.voiceConnectedIn", { channel: own.Name }) : "";
     bar.dataset.inChannel = String(!!own);
+    let recording = bar.querySelector(".voice-recording-notice");
+    if (!recording) {
+        recording = document.createElement("div");
+        recording.className = "voice-recording-notice recording-indicator";
+        recording.setAttribute("role", "status");
+        bar.prepend(recording);
+    }
+    recording.hidden = !own?.Recording;
+    recording.textContent = own?.Recording ? t("runtime.recordingActive") : "";
     const self = $("voice-self");
     const me = state.clients.find((client) => client.client_id === state.myClientID);
     self.hidden = !state.myClientID;
