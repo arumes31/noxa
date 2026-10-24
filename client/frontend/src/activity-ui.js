@@ -272,7 +272,7 @@ export function initActivityWorkspace(notifications) {
         for (const n of notifications.entries().filter(n => (filter === "all" || categories[filter]?.includes(n.kind)) && (!query || n.text.toLocaleLowerCase().includes(query.toLocaleLowerCase())))) {
             // Loaded chat messages already have their own richer row above.
             if (filter === "all" && ["mention", "dm", "channel_message", "keyword"].includes(n.kind) && entries.some(entry => {
-                const reference = n.reference;
+                const reference = n.destination?.reference;
                 return reference && reference.kind === entry.reference.kind && (reference.kind === "channel"
                     ? reference.channel_id === entry.reference.channel_id && reference.message_id === entry.reference.message_id
                     : reference.kind === "group" ? reference.group_id === entry.reference.group_id && reference.message_id === entry.reference.message_id

@@ -12675,6 +12675,7 @@ test.describe("compact Activity workspace", () => {
         await expect(root.locator('.activity-friend[data-status="offline"]')).toContainText("Lina");
         expect(await root.locator(".activity-header").evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(42);
         await expect(root.getByRole("complementary", { name: "Notifications" })).toBeVisible();
+        await expect(root.locator(".activity-feed .activity-notification")).toHaveCount(0);
         const proportions = await root.evaluate(el => {
             const panel = el.querySelector(".activity-panel").getBoundingClientRect();
             const sidebar = el.querySelector(".activity-notifications").getBoundingClientRect();
