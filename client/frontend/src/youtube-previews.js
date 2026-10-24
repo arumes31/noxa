@@ -1,3 +1,4 @@
+import { previewImage } from "./preview-image.js";
 import { t } from "./i18n.js";
 import { loadPreviewMetadata } from "./preview-metadata.js";
 
@@ -16,7 +17,7 @@ export function youtubeVideo(value) {
         }
         if (!/^[\w-]{11}$/.test(id || "")) return null;
         url.protocol = "https:";
-        return { id, url: url.href, thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg` };
+        return { id, url: url.href };
     } catch { return null; }
 }
 
@@ -58,10 +59,12 @@ export function renderYouTubePreviews(container, { enabled, scope, isCurrent }) 
                 card.setAttribute("aria-label", t("midnight.openVideoTitle", { title: title.textContent }));
             }
             if (typeof result.author === "string" && result.author) author.textContent = result.author.slice(0, 120);
+            const thumbnail = previewImage(result.thumbnail);
+            if (thumbnail) { image.hidden = false; image.src = thumbnail; }
         };
-        image.onload = load;
-        image.onerror = () => { image.hidden = true; void load(); };
-        image.src = video.thumbnail;
+        image.hidden = true;
+        image.onerror = () => { image.hidden = true; };
+        queueMicrotask(() => { void load(); });
         card.onclick = () => {
             if (!card.isConnected || !isCurrent()) return;
             Promise.resolve().then(() => window.runtime.BrowserOpenURL(video.url)).catch(() => {
