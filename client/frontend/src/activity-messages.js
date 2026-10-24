@@ -1,4 +1,6 @@
 export const activityEnglish = {
+    "activity.showMore": "Show more", "activity.older": "Load older activity", "activity.retry": "Retry loading",
+    "activity.partial": "Some conversations could not be loaded. Try again.",
     "activity.snooze": "Snooze notifications",
     "activity.reply": "Reply", "activity.yourMentions": "Your mentions",
     "activity.title": "Activity", "activity.media": "Media", "activity.calls": "Calls", "activity.audit": "Audit",
@@ -8,7 +10,7 @@ export const activityEnglish = {
     "activity.streaming": "Streaming", "activity.online": "Online", "activity.away": "Away", "activity.offline": "Offline",
     "activity.notifications": "Notifications", "activity.markRead": "Mark all read", "activity.today": "Today",
     "activity.yesterday": "Yesterday", "activity.earlier": "Earlier", "activity.recent": "Recent activity",
-    "activity.empty": "Nothing here yet.", "activity.mediaHint": "Media from loaded chats on this server appears here.",
+    "activity.empty": "Nothing here yet.", "activity.mediaHint": "Media from conversations you can access on this server appears here.",
     "activity.openChat": "Open chat", "activity.callBack": "Call back", "activity.callAgain": "Call again",
     "activity.message": "Message", "activity.missed": "Missed call", "activity.completed": "Completed call",
     "activity.active": "Active call", "activity.refresh": "Refresh", "activity.loading": "Loading…",
@@ -18,6 +20,8 @@ export const activityEnglish = {
     "activity.selectAudit": "Select a record to inspect its changes.", "activity.noFriends": "Add friends to see their activity.",
 };
 export const activityGerman = {
+    "activity.showMore": "Mehr anzeigen", "activity.older": "Ältere Aktivitäten laden", "activity.retry": "Erneut laden",
+    "activity.partial": "Einige Unterhaltungen konnten nicht geladen werden. Bitte erneut versuchen.",
     "activity.snooze": "Benachrichtigungen pausieren",
     "activity.reply": "Antworten", "activity.yourMentions": "Deine Erwähnungen",
     "activity.title": "Aktivität", "activity.media": "Medien", "activity.calls": "Anrufe", "activity.audit": "Audit",
@@ -27,7 +31,7 @@ export const activityGerman = {
     "activity.streaming": "Streamt", "activity.online": "Online", "activity.away": "Abwesend", "activity.offline": "Offline",
     "activity.notifications": "Benachrichtigungen", "activity.markRead": "Alle als gelesen markieren", "activity.today": "Heute",
     "activity.yesterday": "Gestern", "activity.earlier": "Früher", "activity.recent": "Letzte Aktivitäten",
-    "activity.empty": "Hier ist noch nichts.", "activity.mediaHint": "Hier erscheinen Medien aus geladenen Chats dieses Servers.",
+    "activity.empty": "Hier ist noch nichts.", "activity.mediaHint": "Hier erscheinen Medien aus deinen zugänglichen Unterhaltungen auf diesem Server.",
     "activity.openChat": "Chat öffnen", "activity.callBack": "Zurückrufen", "activity.callAgain": "Erneut anrufen",
     "activity.message": "Nachricht", "activity.missed": "Verpasster Anruf", "activity.completed": "Beendeter Anruf",
     "activity.active": "Aktiver Anruf", "activity.refresh": "Aktualisieren", "activity.loading": "Wird geladen…",

@@ -400,3 +400,56 @@ func TestPrivateGroupRemovalRevokesCallerAndQueuedSignals(t *testing.T) {
 	}
 	assertPrivateCallChannelZero(t, env, callerID, calleeID)
 }
+
+type pagedPrivateCallTestStore struct {
+	*privateCallTestStore
+	readPage func(string, string) ([]netproto.CallSession, error)
+}
+
+func (f *pagedPrivateCallTestStore) PrivateCallHistoryBefore(_ context.Context, uid, before string) ([]netproto.CallSession, error) {
+	return f.readPage(uid, before)
+}
+func TestPrivateCallHistoryCursorRoundTrip(t *testing.T) {
+	const last = "00000000-0000-4000-8000-000000000050"
+	reads := make(chan string, 2)
+	env, _ := privateCallsTestEnv(t, func(s *TCPServer) {
+		s.deps.Chat = &pagedPrivateCallTestStore{privateCallTestStore: s.deps.Chat.(*privateCallTestStore), readPage: func(uid, before string) ([]netproto.CallSession, error) {
+			if uid != "user-uid" {
+				return nil, netproto.ErrCallDenied
+			}
+			reads <- before
+			if before != "" {
+				return []netproto.CallSession{}, nil
+			}
+			rows := make([]netproto.CallSession, 50)
+			for i := range rows {
+				rows[i] = netproto.CallSession{ID: last, Revision: 1, EndedAt: 100, Participants: []netproto.CallParticipant{{UniqueID: uid, State: "missed"}}}
+			}
+			return rows, nil
+		}}
+	})
+	defer env.stop()
+	conn, _ := dialCallAuthed(t, env, "user-uid")
+	defer func() { _ = conn.Close() }()
+	send(t, conn, netproto.MsgCallRequest, netproto.CallRequest{Action: "history", BeforeID: "invalid"})
+	var failure netproto.Error
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgError), &failure); err != nil || failure.Code != errCodeMalformed {
+		t.Fatalf("invalid cursor accepted: %+v %v", failure, err)
+	}
+	for _, before := range []string{"", last} {
+		send(t, conn, netproto.MsgCallRequest, netproto.CallRequest{Action: "history", BeforeID: before})
+		var result netproto.CallResult
+		if err := netproto.Decode(readOfType(t, conn, netproto.MsgCallResult), &result); err != nil {
+			t.Fatal(err)
+		}
+		if got := <-reads; got != before {
+			t.Fatalf("cursor lost: %q", got)
+		}
+		if before == "" && (len(result.History) != 50 || result.NextBeforeID != last) {
+			t.Fatalf("missing next page: %+v", result)
+		}
+		if before != "" && (len(result.History) != 0 || result.NextBeforeID != "") {
+			t.Fatalf("last page repeats: %+v", result)
+		}
+	}
+}

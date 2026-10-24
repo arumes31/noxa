@@ -1866,6 +1866,7 @@ export namespace netproto {
 	    }
 	}
 	export class CallRequest {
+	    before_id?: string;
 	    action: string;
 	    id: string;
 	    target?: string;
@@ -1878,6 +1879,7 @@ export namespace netproto {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.before_id = source["before_id"];
 	        this.action = source["action"];
 	        this.id = source["id"];
 	        this.target = source["target"];
@@ -1932,6 +1934,7 @@ export namespace netproto {
 		}
 	}
 	export class CallResult {
+	    next_before_id?: string;
 	    action: string;
 	    call?: CallSession;
 	    history?: CallSession[];
@@ -1942,6 +1945,7 @@ export namespace netproto {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.next_before_id = source["next_before_id"];
 	        this.action = source["action"];
 	        this.call = this.convertValues(source["call"], CallSession);
 	        this.history = this.convertValues(source["history"], CallSession);

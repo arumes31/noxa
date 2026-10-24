@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -109,5 +110,40 @@ func TestPrivateGroupCallBuilderFailureDoesNotPersist(t *testing.T) {
 	history, err := s.PrivateCallHistory(t.Context(), "owner")
 	if err != nil || len(history) != 0 {
 		t.Fatalf("failed call persisted history: %+v %v", history, err)
+	}
+}
+
+func TestPrivateCallHistoryPagesAllAccessibleRows(t *testing.T) {
+	s, group := conversationTestStore(t)
+	for i := 1; i <= 55; i++ {
+		call := privateGroupCallFixture(group)
+		call.ID = fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
+		call.CreatedAt = 1000 // tied timestamps still paginate without gaps
+		if err := s.SavePrivateCall(t.Context(), call); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := s.PrivateCallHistoryBefore(t.Context(), "owner", "")
+	if err != nil || len(first) != 50 {
+		t.Fatalf("first page: %d %v", len(first), err)
+	}
+	second, err := s.PrivateCallHistoryBefore(t.Context(), "owner", first[49].ID)
+	if err != nil || len(second) != 5 {
+		t.Fatalf("second page: %d %v", len(second), err)
+	}
+	seen := map[string]bool{}
+	for _, call := range append(first, second...) {
+		if seen[call.ID] {
+			t.Fatal("repeated call", call.ID)
+		}
+		seen[call.ID] = true
+	}
+	denied, err := s.PrivateCallHistoryBefore(t.Context(), "outsider", first[49].ID)
+	if err != nil || len(denied) != 0 {
+		t.Fatalf("outsider received call history: %d %v", len(denied), err)
+	}
+	missing, err := s.PrivateCallHistoryBefore(t.Context(), "owner", "ffffffff-ffff-4fff-8fff-ffffffffffff")
+	if err != nil || len(missing) != 0 {
+		t.Fatalf("unknown cursor repeated first page: %d %v", len(missing), err)
 	}
 }

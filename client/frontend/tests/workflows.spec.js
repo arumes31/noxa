@@ -5856,6 +5856,9 @@ test("B3 keeps voice controls outside the Chat and Files panels @a11y", async ({
 
 test("B3 alpha details work with the keyboard and notifications stay readable @a11y", async ({ page }, testInfo) => {
     await showB3Workspace(page);
+    // History discovery now acquires the native DM context. Its account must
+    // match this fixture's UI account, otherwise it correctly invalidates Activity.
+    await page.evaluate(() => { window.__dmStorageIdentity = window.__noxa.state.myUniqueID; });
     await page.locator("#alpha-badge").focus();
     await page.keyboard.press("Enter");
     await expect(page.locator(".alpha-notice")).toBeVisible();
@@ -12543,6 +12546,7 @@ test.describe("compact Activity workspace", () => {
     test.beforeEach(async ({ page }) => {
         await page.setViewportSize({ width: 1280, height: 850 });
         await page.evaluate(() => {
+            window.__dmStorageIdentity = "self";
             const v = window.__noxa;
             Object.assign(v.state, { activeTabID: "activity-a", myClientID: "self", myUniqueID: "self", myChannelID: 1, lastConnect: { addr: "wowcraft.pw" },
                 canViewAuditLog: false,
@@ -12569,6 +12573,103 @@ test.describe("compact Activity workspace", () => {
             } });
         });
     });
+    test("Activity loads unopened channels, closed DMs and accepted groups with older pages", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__activityReads = [];
+            window.__noxa.state.channels.push({ ChannelID: 3, Name: "Unopened channel" }, { ChannelID: 4, Name: "Denied channel" });
+            const base = window.go.main.App;
+            window.go.main.App = new Proxy(base, { get(target, key) {
+                if (key === "DMHistoryPeersForContext") return async () => [{ unique_id: "closed-peer", nickname: "Closed contact" }];
+                if (key === "DMHistoryLoadForContext") return async () => [{ seq: 1, client_msg_id: "closed-dm", from_unique_id: "closed-peer", from_nickname: "Closed contact", body: "Saved DM from a closed tab", sent_at: 1000, enc_verified: true, enc_mode: "e2e" }];
+                if (key === "ChatHistoryForTab") return async (tab, channel, before) => {
+                    window.__activityReads.push({ tab, channel, before });
+                    if (channel === 4) throw new Error("permission denied");
+                    if (channel !== 3) return { messages: [] };
+                    const ids = before ? [2049] : Array.from({ length: 50 }, (_, i) => 2100 - i);
+                    return { messages: ids.map(id => ({ id, from_unique_id: "bene", from_nickname: "Bene", body: id === 2049 ? "Older accessible channel message" : `Unopened history ${id}`, sent_at: id, enc_verified: true, enc_mode: "server" })) };
+                };
+                if (key === "ConversationForTab") return async (tab, command) => {
+                    window.__activityReads.push({ tab, ...command });
+                    if (command.action === "list") return { conversations: [
+                        { id: "accepted", name: "Closed private group", members: [{ unique_id: "self", pending: false }] },
+                        { id: "pending", name: "Unaccepted invite", members: [{ unique_id: "self", pending: true }] },
+                    ] };
+                    return { messages: [{ id: 8, from_unique_id: "bene", body: "Accessible private group history", created_at: 1001, enc_verified: true }] };
+                };
+                return target[key];
+            } });
+        });
+        await page.locator("#notif-bell").click();
+        const root = page.locator("#activity-workspace");
+        await expect(root.getByText("Unopened history 2100", { exact: true })).toBeVisible();
+        await expect(root.getByText("Loading…", { exact: true })).toHaveCount(0);
+        await root.getByRole("button", { name: "Show more", exact: true }).click();
+        await expect(root).toContainText("Saved DM from a closed tab");
+        await expect(root).toContainText("Accessible private group history");
+        expect(await page.evaluate(() => window.__activityReads.some(call => call.id === "pending"))).toBe(false);
+        expect(await page.evaluate(() => window.__activityReads.every(call => !call.action || ["list", "history"].includes(call.action)))).toBe(true);
+        expect(await page.evaluate(() => window.__noxa.state.myChannelID)).toBe(1);
+        await root.getByRole("button", { name: "Load older activity", exact: true }).click();
+        await expect(root).toContainText("Older accessible channel message");
+        expect(await page.evaluate(() => window.__activityReads.some(call => call.channel === 3 && call.before === 2051))).toBe(true);
+        await page.evaluate(() => {
+            window.__noxa.state.channels = window.__noxa.state.channels.filter(channel => channel.ChannelID !== 3);
+            for (const callback of window.__events.subscriptions || []) callback({ channel_ids: [2] });
+        });
+        await expect(root).not.toContainText("Older accessible channel message");
+        await expect(root).not.toContainText("Unopened history");
+    });
+
+    test("Calls can load older participant history beyond the first page", async ({ page }) => {
+        await page.evaluate(() => {
+            const base = window.go.main.App;
+            window.__callHistoryReads = [];
+            window.go.main.App = new Proxy(base, { get(target, key) {
+                if (key === "PrivateCallForTab") return async (_tab, command) => {
+                    window.__callHistoryReads.push(command.before_id || "");
+                    return { history: [{ id: command.before_id ? "older" : "latest", caller: "bene", created_at: command.before_id ? 1000 : 2000, ended_at: 2001,
+                        participants: [{ unique_id: "self", state: "missed" }, { unique_id: "bene", state: "left" }] }], next_before_id: command.before_id ? "" : "latest" };
+                };
+                return target[key];
+            } });
+        });
+        await page.locator("#notif-bell").click();
+        const root = page.locator("#activity-workspace");
+        await root.getByRole("tab", { name: "Calls", exact: true }).click();
+        await expect(root.locator(".activity-call")).toHaveCount(1);
+        await root.getByRole("button", { name: "Load older activity", exact: true }).click();
+        await expect(root.locator(".activity-call")).toHaveCount(2);
+        await expect(root.getByRole("button", { name: "Load older activity", exact: true })).toHaveCount(0);
+        expect(await page.evaluate(() => window.__callHistoryReads)).toEqual(["", "latest"]);
+    });
+
+    test("unsubscribing keeps readable history and a late history response cannot cross servers", async ({ page }) => {
+        await page.evaluate(() => {
+            const base = window.go.main.App;
+            window.go.main.App = new Proxy(base, { get(target, key) {
+                if (key === "ChatHistoryForTab") return async (_tab, channel) => {
+                    if (channel !== 2) return { messages: [] };
+                    if (window.__activityHistoryGate) await window.__activityHistoryGate;
+                    return { messages: [{ id: 8800, from_unique_id: "bene", body: "Readable without subscription", sent_at: 1000, enc_verified: true, enc_mode: "server" }] };
+                };
+                return target[key];
+            } });
+            window.__noxaChat.onSubscriptions({ channel_ids: [] });
+        });
+        await page.locator("#notif-bell").click();
+        await expect(page.locator("#activity-workspace")).toContainText("Readable without subscription");
+        await page.evaluate(() => {
+            window.__activityHistoryGate = new Promise(resolve => { window.__finishActivityHistory = resolve; });
+        });
+        await page.getByRole("button", { name: "Refresh", exact: true }).click();
+        await page.evaluate(() => {
+            for (const callback of window.__events.tab_reset || []) callback("another-server");
+            window.__finishActivityHistory();
+        });
+        await expect(page.locator("#activity-workspace")).toHaveCount(0);
+        await expect(page.getByText("Readable without subscription", { exact: true })).toHaveCount(0);
+    });
+
     test("compact header, friends, filters, sidebar and keyboard tabs", async ({ page }, testInfo) => {
         await page.locator("#notif-bell").click();
         const root = page.locator("#activity-workspace");
@@ -12577,6 +12678,7 @@ test.describe("compact Activity workspace", () => {
         await expect(root.locator('.activity-friend[data-status="offline"]')).toContainText("Lina");
         expect(await root.locator(".activity-header").evaluate(el => el.getBoundingClientRect().height)).toBeLessThanOrEqual(42);
         await expect(root.getByRole("complementary", { name: "Notifications" })).toBeVisible();
+        await expect(root.locator(".activity-feed .activity-notification")).toHaveCount(0);
         const proportions = await root.evaluate(el => {
             const panel = el.querySelector(".activity-panel").getBoundingClientRect();
             const sidebar = el.querySelector(".activity-notifications").getBoundingClientRect();
@@ -12704,7 +12806,7 @@ test.describe("compact Activity workspace", () => {
         await expect(page.locator(".activity-message")).toHaveCount(3);
         await page.evaluate(() => { for (const cb of window.__events.event || []) cb({ type: "chat_deleted", data: { message_id: 9902 } }); });
         await expect(page.locator(".activity-message")).toHaveCount(2);
-        await page.evaluate(() => { for (const cb of window.__events.subscriptions || []) cb({ channel_ids: [] }); });
+        await page.evaluate(() => { window.__noxa.state.channels = window.__noxa.state.channels.filter(channel => channel.ChannelID !== 2); for (const cb of window.__events.subscriptions || []) cb({ channel_ids: [] }); });
         await expect(page.locator(".activity-message")).toHaveCount(0);
     });
 });

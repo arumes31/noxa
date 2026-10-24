@@ -1,3 +1,4 @@
+import { createActivityHistory } from "./activity-history.js";
 import { previewImage } from "./preview-image.js";
 // chat-ui.js — wave-5b rich chat UI: markdown messages (91-93), link preview
 // cards (94), emoji picker + custom server emoji (95/96), reactions (97), file
@@ -5056,6 +5057,10 @@ export function unreadMessageReferences() {
 export async function jumpMessageReference(reference, options = {}) {
     const destinationCurrent = () => !options.isCurrent || options.isCurrent();
     if (!destinationCurrent()) return;
+    if (reference.kind === "group") {
+        await openConversationsAt(reference.group_id, reference.message_id || 0, destinationCurrent);
+        return;
+    }
     if (reference.kind === "dm") {
         if (!reference.client_message_id && !reference.local_seq) { openPM(reference.peer_id, reference.name); return; }
         const owner = getDMOwner();
@@ -5109,28 +5114,95 @@ function showMessageReferenceContext(name, messages, target, continueConversatio
     list.querySelector(".message-reference-flash")?.scrollIntoView({ block: "center" });
 }
 
-// The activity workspace uses only already-loaded, currently accessible chats.
-// No bulk history fetch and no second persistent copy of private message bodies.
+// Loaded live messages supplement authenticated history without opening tabs.
+function activityEntry(kind, id, name, message) {
+    const reference = kind === "dm"
+        ? { kind, peer_id: id, client_message_id: message.clientMsgID || "", local_seq: message.localSeq || 0 }
+        : kind === "group" ? { kind, group_id: id, message_id: message.id }
+        : { kind, channel_id: Number(id), message_id: message.id };
+    return { key: `${kind}:${id}:${message.id || message.clientMsgID || message.localSeq}`, reference, name, message,
+        cursor: kind === "dm" ? message.localSeq : message.id };
+}
+
 export function activityMessages() {
     const state = V().state;
     if (!state.myClientID || !state.myUniqueID) return [];
     const entries = [];
     for (const [key, value] of store) {
         const dm = key.startsWith("dm:"), id = key.slice(3);
-        if (!dm && Number(id) !== 0 && (!subscribed(Number(id)) || !state.channels.some(c => c.ChannelID === Number(id)))) continue;
-        if (dm && !pmTabs.has(id)) continue;
-        for (const message of value.msgs) {
-            if (message.deleted || !message.encVerified || !message.fromUID || !message.text) continue;
-            const reference = dm
-                ? { kind: "dm", peer_id: id, client_message_id: message.clientMsgID || "", local_seq: message.localSeq || 0 }
-                : { kind: "channel", channel_id: Number(id), message_id: message.id };
-            entries.push({ key: `${key}:${message.id || message.clientMsgID || message.localSeq}`, reference,
-                name: dm ? pmTabs.get(id).nick : (state.channels.find(c => c.ChannelID === Number(id))?.Name || "Global"), message });
-        }
+        if (!dm && Number(id) !== 0 && !state.channels.some(c => c.ChannelID === Number(id) && c.SystemKind !== "home")) continue;
+        for (const message of value.msgs) entries.push(activityEntry(dm ? "dm" : "channel", id,
+            dm ? peerName(id) : (state.channels.find(c => c.ChannelID === Number(id))?.Name || "Global"), message));
     }
-    return entries.sort((a, b) => b.message.ts - a.message.ts).slice(0, 150);
+    return entries;
+}
+
+export function activityHistory(current, changed) {
+    const captured = captureScope(readDMHistoryScope), owner = getDMOwner();
+    const valid = () => current() && dmHistoryScopeIsCurrent(captured) && dmOwnerIsCurrent(owner);
+    const request = command => app().ConversationForTab(captured.tabID, command);
+    const denied = error => /permission|denied|not a member|publish an encryption key|not supported/i.test(String(error));
+    return createActivityHistory({ current: valid, changed,
+        async listSources() {
+            const [peers, groups] = await Promise.allSettled([
+                callDMHistory(owner, "DMHistoryPeersForContext"), request({ action: "list" }),
+            ]);
+            if (!valid()) return [];
+            const channels = [{ ChannelID: 0, Name: "Global" }, ...V().state.channels.filter(channel => channel.SystemKind !== "home")];
+            const result = channels.map(channel => ({ key: `channel:${channel.ChannelID}`, kind: "channel", id: channel.ChannelID, name: channel.Name }));
+            for (const peer of peers.status === "fulfilled" ? peers.value || [] : []) result.push({ key: `dm:${peer.unique_id}`, kind: "dm", id: peer.unique_id, name: knownPeerName(peer.unique_id, peer.nickname) });
+            for (const group of groups.status === "fulfilled" ? groups.value?.conversations || [] : []) {
+                if (!group.members?.some(member => member.unique_id === sessionUserID(V().state) && !member.pending)) continue;
+                result.push({ key: `group:${group.id}`, kind: "group", id: group.id, name: group.name });
+            }
+            const failed = [peers, groups].some(result => result.status === "rejected" && !denied(result.reason) && !/private groups unavailable|unsupported/i.test(String(result.reason)));
+            return { sources: [...new Map(result.map(source => [source.key, source])).values()], failed };
+        },
+        async loadPage(source, before) {
+            if (!valid()) throw new Error("Activity owner changed");
+            let rows, messages, size = PAGE;
+            try {
+                if (source.kind === "channel") {
+                    rows = (await app().ChatHistoryForTab(captured.tabID, source.id, before, size))?.messages || [];
+                    messages = rows.map(row => attribute(normalize(row, source.id)));
+                } else if (source.kind === "dm") {
+                    rows = (await callDMHistory(owner, "DMHistoryLoadForContext", source.id) || [])
+                        .filter(row => !before || Number(row.seq) < before).sort((a, b) => b.seq - a.seq).slice(0, size);
+                    messages = rows.map(row => dmMsg(row, source.name));
+                } else {
+                    size = 25;
+                    rows = (await request({ action: "history", id: source.id, before_id: before }))?.messages || [];
+                    messages = rows.map(row => attribute(normalize({ ...row, from: peerName(row.from_unique_id), sent_at: row.created_at,
+                        enc_mode: row.enc_verified ? "e2e" : "" }, null)));
+                }
+            } catch (error) {
+                if (denied(error)) return { entries: [], denied: true };
+                throw error;
+            }
+            const entries = messages.map(message => activityEntry(source.kind, source.id, source.name, message));
+            const ids = entries.map(entry => entry.cursor).filter(id => id > 0);
+            const cursor = ids.length ? Math.min(...ids) : 0;
+            return { entries, cursor, more: rows.length >= size && cursor > 0 && (!before || cursor < before) };
+        },
+    });
 }
 
 export function renderActivityMessage(container, entry) {
-    renderBody(container, { ...entry.message, isDM: entry.reference.kind === "dm" });
+    if (entry.reference.kind !== "group") {
+        renderBody(container, { ...entry.message, isDM: entry.reference.kind === "dm" });
+        return;
+    }
+    const scope = captureScope(readChatServerScope), id = entry.reference.group_id;
+    const current = () => container.isConnected && chatServerIsCurrent(scope);
+    const download = ref => app().DownloadConversationAttachmentForTab(scope.tabID, id, ref.storage, ref.key);
+    const voiceDownload = ref => download(ref).catch(error => {
+        if (!ref.key || !current()) throw error;
+        return app().DownloadChatAttachmentForTab(scope.tabID, 0, ref.storage, ref.key);
+    });
+    if (renderVoiceMessage(container, entry.message.text, { tabID: scope.tabID, channelID: 0, isCurrent: current, download: voiceDownload })) return;
+    renderSharedRichText(container, entry.message.text, {
+        download,
+        previewCurrent: current, saveCurrent: current,
+        save: (ref, name) => app().SaveConversationAttachmentForTab(scope.tabID, id, ref.storage, ref.key, name),
+    });
 }
