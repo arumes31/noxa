@@ -116,13 +116,26 @@ function applyWatch(s, entry) {
     if (entry.slot === "screen" && s.audio.has(entry.publisher_id)) s.audio.get(entry.publisher_id).enabled = entry.watching;
 }
 
+function cancelStoppedDismiss(entry) {
+    clearTimeout(entry.dismissTimer);
+    entry.dismissTimer = null;
+}
+
+function dismissStopped(s, entry) {
+    if (!current(s) || s.streams.get(key(entry)) !== entry || entry.available !== false) return;
+    cancelStoppedDismiss(entry);
+    entry.card.remove();
+    s.streams.delete(key(entry));
+    s.container.hidden = ![...s.streams.values()].some(item => !item.card.hidden);
+    refreshMemberStreams(s);
+    window.dispatchEvent(new Event("noxa-stream-catalog"));
+}
+
 async function toggleWatch(s, entry, retry = false) {
     if (!current(s) || s.streams.get(key(entry)) !== entry || entry.pending) return;
     if (retry && !streamRecovery(entry, s.tracks.get(key(entry))?.track).retry) return;
     if (entry.available === false) {
-        entry.card.remove();
-        s.streams.delete(key(entry));
-        s.container.hidden = ![...s.streams.values()].some(item => !item.card.hidden);
+        dismissStopped(s, entry);
         return;
     }
     const focusButton = retry ? entry.retryButton : entry.watchButton;
@@ -348,7 +361,7 @@ async function poll(s) {
         if (!s.pollAgain) reconcilePublicationUploads(publications, result.streams);
         updateShareViewers(result.streams);
         if (s.watchSession && s.watchSession !== result.session) {
-            for (const entry of s.streams.values()) { entry.watching = false; applyWatch(s, entry); entry.card.remove(); }
+            for (const entry of s.streams.values()) { cancelStoppedDismiss(entry); entry.watching = false; applyWatch(s, entry); entry.card.remove(); }
             s.streams.clear();
         }
         s.watchSession = result.session;
@@ -359,16 +372,21 @@ async function poll(s) {
             entry.watching = false;
             applyWatch(s, entry);
             if (!available.has(id) && wasWatching) {
-                entry.available = false;
+                if (entry.available !== false) {
+                    entry.available = false;
+                    entry.dismissTimer = setTimeout(() => dismissStopped(s, entry), 60_000);
+                }
                 renderEntry(s, entry);
                 continue;
             }
+            cancelStoppedDismiss(entry);
             entry.card.remove();
             s.streams.delete(id);
         }
         for (const [id, stream] of available) {
             let entry = s.streams.get(id);
             if (!entry) { entry = createEntry(s, stream); s.streams.set(id, entry); }
+            cancelStoppedDismiss(entry);
             entry.available = true;
             entry.quality_mode = stream.quality_mode;
             const revision = BigInt(stream.watch_revision);
@@ -451,7 +469,7 @@ export function stopStreamSession() {
     session = null;
     if (s) {
         clearTimeout(s.timer);
-        for (const entry of s.streams.values()) { entry.watching = false; applyWatch(s, entry); }
+        for (const entry of s.streams.values()) { cancelStoppedDismiss(entry); entry.watching = false; applyWatch(s, entry); }
         const gridEl = document.getElementById("video-grid");
         s.media.before(gridEl?.closest?.(".stream-stage") || gridEl || s.grid);
         s.media.remove();
