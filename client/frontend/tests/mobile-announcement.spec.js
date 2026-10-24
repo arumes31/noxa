@@ -56,6 +56,8 @@ test('compact banner opens platform install guide only on demand', async ({ page
     await expect(dialog).toContainText('Install and create shortcut');
     await dialog.getByRole('button',{name:'macOS',exact:true}).click();
     await expect(dialog).toContainText('Add to Dock');
+    await page.setViewportSize({width:650,height:768});
+    await expect(dialog).toHaveCSS('max-height', '686px');
     await dialog.getByRole('button',{name:'Close',exact:true}).scrollIntoViewIfNeeded();
     await expect(dialog.getByRole('button',{name:'Close',exact:true})).toBeInViewport();
     await page.screenshot({path:testInfo.outputPath('mobile-quick-guide.png')});
