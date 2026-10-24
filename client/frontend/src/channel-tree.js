@@ -64,6 +64,8 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         // channels; (177) section headers carry the group icon; (178) nickname
         // colors come from the first applicable group (clientRow).
         for (const h of P().hoistedGroups()) {
+            const visibleMembers = h.members.filter(visibleInChannelTree);
+            if (!visibleMembers.length) continue;
             const sec = document.createElement("div");
             sec.className = "hoist-section";
             const head = document.createElement("div");
@@ -73,7 +75,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             if (h.group.color) head.style.color = h.group.color;
             head.querySelector(".hoist-icon").append(roleIconElement(h.group));
             sec.appendChild(head);
-            for (const c of h.members.filter(visibleInChannelTree)) sec.appendChild(clientRow(c));
+            for (const c of visibleMembers) sec.appendChild(clientRow(c));
             root.appendChild(sec);
         }
         if (!state.channels.some((ch) => !ch.TextOnly)) {
@@ -90,7 +92,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             const keep = new Set();
             const matchCh = (ch) => {
                 let ok = ch.Name.toLowerCase().includes(q) ||
-                    state.clients.some((c) => c.channel_id === (ch.SystemKind === "home" ? 0 : ch.ChannelID) &&
+                    state.clients.some((c) => visibleInChannelTree(c) && c.channel_id === (ch.SystemKind === "home" ? 0 : ch.ChannelID) &&
                         (c.nickname || c.unique_id || "").toLowerCase().includes(q));
                 for (const child of byParent.get(ch.ChannelID) || []) ok = matchCh(child) || ok;
                 if (ok) keep.add(ch.ChannelID);
@@ -295,7 +297,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 (!window.__noxaPolish.myBranchIDs().has(ch.ChannelID) &&
                     !state.expandedVirtual.has(ch.ChannelID));
         }
-        const expandable = state.clients.some((c) => c.channel_id === (ch.SystemKind === "home" ? 0 : ch.ChannelID)) ||
+        const expandable = state.clients.some((c) => visibleInChannelTree(c) && c.channel_id === (ch.SystemKind === "home" ? 0 : ch.ChannelID)) ||
             (byParent.get(ch.ChannelID) || []).length > 0;
         if (expandable) el.setAttribute("aria-expanded", String(!collapsed));
         el.querySelector(".ch-disclosure").onclick = (event) => {
