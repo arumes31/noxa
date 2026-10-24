@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -341,5 +342,38 @@ func TestCredentialTransportTrustsOnlyImmediateConfiguredProxy(t *testing.T) {
 				t.Fatalf("status %d, want %d", w.Code, tc.want)
 			}
 		})
+	}
+}
+
+func TestServerStartAndShutdown(t *testing.T) {
+	srv := New("127.0.0.1:0", nil, nil)
+
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- srv.Start()
+	}()
+
+	// Wait for the server to actually start listening
+	time.Sleep(100 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
+
+	err := <-startErr
+	if err != nil {
+		t.Fatalf("Start returned unexpected error: %v", err)
+	}
+}
+
+func TestServerStartError(t *testing.T) {
+	// An invalid address should cause Start to fail immediately.
+	srv := New("invalid-address-format", nil, nil)
+	err := srv.Start()
+	if err == nil {
+		t.Fatal("Start succeeded with invalid address, expected error")
 	}
 }
