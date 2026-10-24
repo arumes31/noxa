@@ -48,7 +48,7 @@ func TestOnlyPublicHTTPSPreviewTargets(t *testing.T) {
 		}
 	}
 	c := newHTTPClient()
-	req, _ := http.NewRequest(http.MethodGet, "https://127.0.0.1/", nil)
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://127.0.0.1/", nil)
 	if c.CheckRedirect(req, []*http.Request{req}) == nil {
 		t.Fatal("redirect to loopback allowed")
 	}
