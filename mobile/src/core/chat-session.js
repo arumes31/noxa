@@ -1,5 +1,7 @@
 // chat-session.js — signed-in state for the mobile app: the per-viewer tree
-// snapshot, scope keys, channel subscriptions, history and sending.
+// snapshot, scope keys, channel subscriptions, history and sending, plus the
+// message actions (edit, delete, react, pin, polls) and server lookups the
+// screens share.
 //
 // Scope 0 is the global chat. Channel bodies are secretbox-sealed with the
 // scope's current key generation; keys arrive sealed to this device's
@@ -9,10 +11,12 @@ import { fromBase64, openScope, openSealed, sealScope } from "./crypto.js";
 import { ProtocolError } from "./connection.js";
 import { Msg } from "./frame.js";
 
-export const MsgChatAccepted = 154;
-export const MsgChannelJoined = 158;
+export const MsgChatAccepted = Msg.ChatAccepted;
+export const MsgChannelJoined = Msg.ChannelJoined;
 
 const HISTORY_PAGE = 50;
+/** Polls travel inside the sealed body with this prefix (internal/netproto/poll.go). */
+export const POLL_PREFIX = "[noxa-poll:v1]";
 
 export class ChatSession extends EventTarget {
     constructor(conn, identity, auth) {
@@ -25,6 +29,7 @@ export class ChatSession extends EventTarget {
         this.nickname = auth.nickname;
         this.capabilities = new Set(auth.capabilities || []);
         this.iceServers = auth.ice_servers || [];
+        this.mediaLimits = auth.media_limits || null;
         this.snapshot = null;
         this.subscriptions = new Set();
         /** scope -> Map(keyID -> Uint8Array) */
@@ -33,8 +38,16 @@ export class ChatSession extends EventTarget {
         this.current = new Map();
         /** scope -> messages, oldest first */
         this.messages = new Map();
+        /** scope -> {nickname, until} */
         this.typing = new Map();
+        /** scope -> pinned message IDs (loaded with loadPins). */
+        this.pins = new Map();
+        /** The server announcement, decrypted: {text, at} or null. */
+        this.announcement = null;
+        /** The MOTD, decrypted when sealed. */
+        this.motd = auth.motd_enc ? null : auth.motd || "";
         for (const key of auth.chat_keys || []) this.#installKey(key, true);
+        if (auth.motd_enc) this.motd = this.decrypt(0, auth.motd_key_id, auth.motd) ?? "";
         this.#unsubscribe = [
             conn.on(Msg.Snapshot, snapshot => this.#setSnapshot(snapshot)),
             conn.on(Msg.ChannelKey, key => this.#installKey(key, true)),
@@ -45,6 +58,8 @@ export class ChatSession extends EventTarget {
             }),
             conn.on(Msg.Event, event => this.#handleEvent(event)),
             conn.on(Msg.DeviceEvent, event => this.#emit("device", event)),
+            conn.on(Msg.ServerRules, rules => this.#emit("rules", rules)),
+            conn.on(Msg.MediaLimitsChanged, limits => { this.mediaLimits = limits.media_limits || limits; this.#emit("media-limits"); }),
         ];
     }
 
@@ -67,6 +82,12 @@ export class ChatSession extends EventTarget {
         if (!this.keys.has(scope)) this.keys.set(scope, new Map());
         this.keys.get(scope).set(keyID, key);
         if (current && keyID >= (this.current.get(scope) || 0)) this.current.set(scope, keyID);
+        // Bodies that arrived before their key can be opened now.
+        const list = this.messages.get(scope);
+        if (list?.some(m => m.text === null && m.keyID === keyID)) {
+            for (const m of list) if (m.text === null && m.keyID === keyID && m.body) m.text = openScope(m.body, key);
+            this.#emit("messages", { scope });
+        }
         this.#emit("keys", { scope });
     }
 
@@ -78,25 +99,43 @@ export class ChatSession extends EventTarget {
     /** Flattened channel list in tree order: {id, name, depth, textOnly, clients}. */
     channels() {
         const out = [];
-        const walk = (nodes, depth) => {
+        const walk = (nodes, depth, parent) => {
             for (const node of nodes || []) {
                 out.push({
-                    id: node.ChannelID, name: node.Name, depth, textOnly: !!node.TextOnly, topic: node.Topic || "",
-                    clients: node.clients || [], restricted: !!node.access?.restricted,
+                    id: node.ChannelID, name: node.Name, depth, parent, textOnly: !!node.TextOnly, topic: node.Topic || "",
+                    description: node.Description || "", maxClients: node.MaxClients || 0, slowMode: node.SlowModeSeconds || 0,
+                    hasPassword: !!node.HasPassword, lifetime: node.Lifetime || "",
+                    clients: node.clients || [], restricted: !!node.access?.restricted, canConnect: node.access?.can_connect !== false,
+                    canManageAccess: !!node.access?.can_manage_access, canManageVoiceQueue: !!node.access?.can_manage_voice_queue,
                     // The home channel (Lobby) has no chat of its own.
                     chat: node.SystemKind !== "home",
                     home: node.SystemKind === "home",
+                    node,
                 });
-                walk(node.children, depth + 1);
+                walk(node.children, depth + 1, node.ChannelID);
             }
         };
-        walk(this.snapshot?.root_channels, 0);
+        walk(this.snapshot?.root_channels, 0, 0);
         return out;
     }
 
     /** Every visible client, in and outside channels. */
     clients() {
         return [...this.channels().flatMap(c => c.clients), ...(this.snapshot?.unassigned_clients || [])];
+    }
+
+    /** This session's own entry in the tree, if visible. */
+    self() {
+        return this.clients().find(c => c.client_id === this.clientID) || null;
+    }
+
+    /** The recipient's authority: "owner", "administrator", "member" or "". */
+    get authority() {
+        return this.snapshot?.own_authority || "";
+    }
+
+    get isAdmin() {
+        return this.authority === "owner" || this.authority === "administrator";
     }
 
     /** Scopes this device can chat in: global when its key arrived, then channels. */
@@ -109,6 +148,10 @@ export class ChatSession extends EventTarget {
         const key = this.keys.get(scope)?.get(keyID);
         if (!key) return null;
         return openScope(body, key);
+    }
+
+    messageByID(scope, id) {
+        return this.messages.get(scope)?.find(m => m.id === id) || null;
     }
 
     #store(scope, message) {
@@ -145,8 +188,9 @@ export class ChatSession extends EventTarget {
                 const message = {
                     id: data.id, clientMsgID: data.client_msg_id, fromUniqueID: data.from_unique_id, from: data.from,
                     text, keyID: data.key_id, body: data.text, replyTo: data.reply_to_id || 0, sentAt: Date.now() / 1000,
-                    own: data.from_unique_id === this.uniqueID,
+                    version: data.version || 0, own: data.from_unique_id === this.uniqueID,
                     mentioned: (data.mentions || []).includes(this.uniqueID) || (data.role_mentions || []).includes(this.uniqueID),
+                    mentions: data.mentions || [], roleMentions: data.role_mentions || [],
                 };
                 this.#store(scope, message);
                 this.#emit("incoming", { scope, message });
@@ -154,29 +198,77 @@ export class ChatSession extends EventTarget {
             }
             case "chat_edited": {
                 const scope = Number(data.channel_id || 0);
-                const message = this.messages.get(scope)?.find(m => m.id === data.message_id);
-                if (message) this.#store(scope, { ...message, text: this.decrypt(scope, data.key_id, data.body), edited: true });
+                const message = this.messageByID(scope, data.message_id);
+                if (message) this.#store(scope, { ...message, text: this.decrypt(scope, data.key_id, data.body), body: data.body, keyID: data.key_id, edited: true, version: data.version || message.version });
                 return;
             }
             case "chat_deleted": {
                 const scope = Number(data.channel_id || 0);
-                const message = this.messages.get(scope)?.find(m => m.id === data.message_id);
+                const message = this.messageByID(scope, data.message_id);
                 if (message) this.#store(scope, { ...message, text: "", deleted: true });
                 return;
             }
             case "chat_reaction": {
                 const scope = Number(data.channel_id || 0);
-                const message = this.messages.get(scope)?.find(m => m.id === data.message_id);
-                if (message) this.#store(scope, { ...message, reactions: data.reactions || {} });
+                const message = this.messageByID(scope, data.message_id);
+                if (message) {
+                    const mine = new Set(message.myReactions || []);
+                    if (data.by === this.uniqueID && data.emoji) data.added ? mine.add(data.emoji) : mine.delete(data.emoji);
+                    this.#store(scope, { ...message, reactions: data.reactions || {}, myReactions: [...mine] });
+                }
+                return;
+            }
+            case "chat_pinned":
+            case "chat_unpinned": {
+                const scope = Number(data.channel_id || 0);
+                const pinned = type === "chat_pinned";
+                const ids = new Set(this.pins.get(scope) || []);
+                pinned ? ids.add(data.message_id) : ids.delete(data.message_id);
+                this.pins.set(scope, [...ids]);
+                const message = this.messageByID(scope, data.message_id);
+                if (message) this.#store(scope, { ...message, pinned });
+                this.#emit("pins", { scope });
+                return;
+            }
+            case "poll_changed":
+                this.#emit("poll", { scope: Number(data.channel_id || 0), messageID: data.message_id, version: data.version });
+                return;
+            case "announcement": {
+                const text = data.enc ? this.decrypt(0, data.key_id, data.text) : data.text || "";
+                this.announcement = text ? { text, at: Date.now() } : null;
+                this.#emit("announcement", this.announcement);
                 return;
             }
             case "typing": {
-                if (data.unique_id === this.uniqueID || data.direct) return;
+                if (data.unique_id === this.uniqueID) return;
+                if (data.direct) {
+                    this.#emit("typing-direct", { uid: data.unique_id, nickname: data.nickname, until: Date.now() + 5000 });
+                    return;
+                }
                 const scope = Number(data.channel_id || 0);
                 this.typing.set(scope, { nickname: data.nickname, until: Date.now() + 5000 });
                 this.#emit("typing", { scope });
                 return;
             }
+            case "dm_delivered":
+            case "dm_read":
+                this.#emit("receipt", { kind: type === "dm_read" ? "read" : "delivered", from: data.from_unique_id, clientMsgID: data.client_msg_id });
+                return;
+            case "poke":
+                this.#emit("poke", { fromClientID: data.from_client_id, from: data.from_nickname, message: data.message || "", at: Date.now() });
+                return;
+            case "whisper":
+                this.#emit("whisper", data);
+                return;
+            case "kicked":
+                this.#emit("kicked", data);
+                return;
+            case "emoji_added":
+            case "emoji_removed":
+            case "emoji_renamed":
+                this.#emoji = null;
+                this.#emit("emoji");
+                return;
         }
     }
 
@@ -208,6 +300,7 @@ export class ChatSession extends EventTarget {
             if ("muted" in data) client.self_muted = !!data.muted;
             if ("deafened" in data) client.self_deafened = !!data.deafened;
             if ("status" in data) client.status = data.status;
+            if ("status_message" in data || "message" in data) client.status_message = data.status_message ?? data.message ?? "";
             return true;
         }
         if (type === "user_joined" && client) return false;
@@ -229,7 +322,7 @@ export class ChatSession extends EventTarget {
         if (!this.capabilities.has("managed-relay-v1")) return this.iceServers;
         const now = Date.now();
         if (!this.#relay || now >= this.#relay.refreshAt) {
-            const lease = await this.conn.request(193, { action: "refresh" }, 194, { accept: r => r.action === "refresh" });
+            const lease = await this.conn.request(Msg.RelayRequest, { action: "refresh" }, Msg.RelayResponse, { accept: r => r.action === "refresh" });
             const skew = now - (lease.server_time || now);
             this.#relay = { servers: lease.ice_servers || [], refreshAt: (lease.refresh_at || 0) + skew || now + 15 * 60 * 1000 };
             this.#scheduleRelay();
@@ -289,22 +382,49 @@ export class ChatSession extends EventTarget {
         this.subscriptions = new Set(state.channel_ids || []);
     }
 
-    /** Loads one page of older history for a scope. */
-    async loadHistory(scope) {
+    #entryToMessage(scope, entry) {
+        return {
+            id: entry.id, fromUniqueID: entry.from_unique_id, from: entry.from_nickname, keyID: entry.key_id,
+            body: entry.body_enc, text: entry.deleted ? "" : this.decrypt(scope, entry.key_id, entry.body_enc),
+            sentAt: entry.sent_at, edited: !!entry.edited_at, deleted: !!entry.deleted, reactions: entry.reactions || {},
+            replyTo: entry.reply_to_id || 0, version: entry.version || 0, own: entry.from_unique_id === this.uniqueID,
+        };
+    }
+
+    /** Loads one page of older history for a scope. Returns whether more may exist. */
+    async loadHistory(scope, { before } = {}) {
         const list = this.messages.get(scope) || [];
-        const before = list.find(m => m.id)?.id || 0;
-        const page = await this.conn.request(Msg.ChatHistory, { channel_id: scope, before_id: before, limit: HISTORY_PAGE },
+        const beforeID = before ?? (list.find(m => m.id)?.id || 0);
+        const page = await this.conn.request(Msg.ChatHistory, { channel_id: scope, before_id: beforeID, limit: HISTORY_PAGE },
             Msg.ChatHistoryResponse, { accept: r => r.channel_id === scope });
         for (const key of page.keys || []) this.#installKey(key, false);
-        for (const entry of page.messages || []) {
-            this.#store(scope, {
-                id: entry.id, fromUniqueID: entry.from_unique_id, from: entry.from_nickname, keyID: entry.key_id,
-                body: entry.body_enc, text: entry.deleted ? "" : this.decrypt(scope, entry.key_id, entry.body_enc),
-                sentAt: entry.sent_at, edited: !!entry.edited_at, deleted: !!entry.deleted, reactions: entry.reactions || {},
-                replyTo: entry.reply_to_id || 0, own: entry.from_unique_id === this.uniqueID,
-            });
-        }
+        for (const entry of page.messages || []) this.#store(scope, this.#entryToMessage(scope, entry));
         return (page.messages || []).length === HISTORY_PAGE;
+    }
+
+    /**
+     * Loads history until the message with id is present (for jumping to a
+     * reply's original); gives up after maxPages.
+     */
+    async loadUntil(scope, id, maxPages = 10) {
+        for (let i = 0; i < maxPages && !this.messageByID(scope, id); i++) {
+            if (!await this.loadHistory(scope)) break;
+        }
+        return this.messageByID(scope, id);
+    }
+
+    /**
+     * Searches a scope's history for text (case-insensitive), loading up to
+     * maxPages older pages. Returns matching messages, newest first.
+     */
+    async search(scope, query, { maxPages = 6, from = "" } = {}) {
+        const needle = query.trim().toLowerCase();
+        for (let i = 0; i < maxPages; i++) {
+            if (!await this.loadHistory(scope).catch(() => false)) break;
+        }
+        return (this.messages.get(scope) || [])
+            .filter(m => !m.deleted && typeof m.text === "string" && (!needle || m.text.toLowerCase().includes(needle)) && (!from || m.fromUniqueID === from))
+            .reverse();
     }
 
     /**
@@ -312,7 +432,7 @@ export class ChatSession extends EventTarget {
      * scope's current key and waits for the server's acceptance.
      */
     async send(scope, text, { replyTo = 0, clientMsgID = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}) {
-        this.#store(scope, { clientMsgID, fromUniqueID: this.uniqueID, from: this.nickname, text, sentAt, own: true, pending: true, queued: false, replyTo });
+        this.#store(scope, { clientMsgID, fromUniqueID: this.uniqueID, from: this.nickname, text, sentAt, own: true, pending: true, queued: false, failed: false, replyTo });
         const keyID = this.current.get(scope);
         const key = keyID && this.keys.get(scope)?.get(keyID);
         if (!key) {
@@ -322,13 +442,13 @@ export class ChatSession extends EventTarget {
         const request = { ack_requested: true, text: sealScope(text, key), enc: true, key_id: keyID, client_msg_id: clientMsgID, reply_to_id: replyTo || undefined };
         if (scope > 0) request.channel_id = String(scope);
         try {
-            const accepted = await this.conn.request(Msg.ChatSend, request, MsgChatAccepted, { accept: r => r.client_msg_id === clientMsgID });
+            const accepted = await this.conn.request(Msg.ChatSend, request, Msg.ChatAccepted, { accept: r => r.client_msg_id === clientMsgID });
             this.#store(scope, { clientMsgID, id: accepted.message_id, pending: false });
             return accepted;
         } catch (error) {
             // A lost connection leaves the message for the outbox to retry.
             const retryable = !(error instanceof ProtocolError);
-            this.#store(scope, { clientMsgID, failed: !retryable, queued: retryable, pending: false });
+            this.#store(scope, { clientMsgID, failed: !retryable, queued: retryable, pending: false, error: error.message });
             throw Object.assign(error, { retryable });
         }
     }
@@ -338,12 +458,175 @@ export class ChatSession extends EventTarget {
         this.#store(scope, { clientMsgID, fromUniqueID: this.uniqueID, from: this.nickname, text, sentAt, own: true, queued: !expired, failed: expired, pending: false });
     }
 
+    /** Removes a message that never reached the server from the local list. */
+    discardLocal(scope, clientMsgID) {
+        const list = (this.messages.get(scope) || []).filter(m => m.clientMsgID !== clientMsgID || m.id);
+        this.messages.set(scope, list);
+        this.#emit("messages", { scope });
+    }
+
+    /** Sends a poll as a message; definition is {question, options, multiple, closesAt}. */
+    createPoll(scope, { question, options, multiple = false, closesAt }) {
+        const body = POLL_PREFIX + JSON.stringify({ question, options, multiple, closes_at: closesAt });
+        return this.send(scope, body);
+    }
+
     sendTyping(scope) {
         if (this.conn.open) this.conn.send(Msg.Typing, scope > 0 ? { channel_id: scope } : {});
     }
 
+    /** Typing indicator for a direct conversation. */
+    sendTypingDirect(uid) {
+        if (this.conn.open) this.conn.send(Msg.Typing, { to_unique_id: uid });
+    }
+
+    // --- Message actions ----------------------------------------------------------
+
+    #mutation(type, request) {
+        return this.conn.request(type, { ack_requested: true, ...request }, Msg.ChatMutationSaved,
+            { accept: r => r.operation === type && r.message_id === request.message_id });
+    }
+
+    /** Edits an own message in place. */
+    async edit(scope, messageID, text) {
+        const message = this.messageByID(scope, messageID);
+        const keyID = this.current.get(scope);
+        const key = keyID && this.keys.get(scope)?.get(keyID);
+        if (!key) throw new Error("This chat's key has not arrived yet.");
+        await this.#mutation(Msg.ChatEdit, { message_id: messageID, new_text: sealScope(text, key), enc: true, key_id: keyID, expected_version: message?.version || undefined });
+        if (message) this.#store(scope, { ...message, text, edited: true });
+    }
+
+    /** Deletes a message (own, or any with manage_messages). */
+    async remove(scope, messageID) {
+        await this.#mutation(Msg.ChatDelete, { message_id: messageID });
+        const message = this.messageByID(scope, messageID);
+        if (message) this.#store(scope, { ...message, text: "", deleted: true });
+    }
+
+    /** Toggles a reaction. */
+    react(scope, messageID, emoji) {
+        return this.#mutation(Msg.ChatReact, { message_id: messageID, emoji });
+    }
+
+    /** Pins or unpins a channel message. */
+    pin(scope, messageID, pinned = true) {
+        return this.#mutation(Msg.ChatPin, { channel_id: scope, message_id: messageID, pinned });
+    }
+
+    /** Loads a channel's pins, newest first, with their decrypted messages. */
+    async loadPins(scope) {
+        const response = await this.conn.request(Msg.ChatPins, { channel_id: scope }, Msg.ChatPinsResponse, { accept: r => r.channel_id === scope });
+        for (const key of response.keys || []) this.#installKey(key, false);
+        const pins = (response.pins || []).map(pin => ({
+            messageID: pin.message_id, pinnedBy: pin.pinned_by, pinnedAt: pin.pinned_at,
+            message: pin.message ? this.#entryToMessage(scope, pin.message) : this.messageByID(scope, pin.message_id),
+        }));
+        this.pins.set(scope, pins.map(p => p.messageID));
+        for (const pin of pins) {
+            if (pin.message) this.#store(scope, { ...pin.message, pinned: true });
+        }
+        this.#emit("pins", { scope });
+        return pins;
+    }
+
+    /** Poll state; action is "get", "vote" (with choices) or "close". */
+    poll(messageID, action = "get", choices = []) {
+        return this.conn.request(Msg.PollRequest, { message_id: messageID, action, choices }, Msg.PollState,
+            { accept: r => r.message_id === messageID && r.action === action });
+    }
+
+    /** Parses a message body as a poll, or returns null. */
+    static parsePoll(text) {
+        if (typeof text !== "string" || !text.startsWith(POLL_PREFIX)) return null;
+        try {
+            const p = JSON.parse(text.slice(POLL_PREFIX.length));
+            if (!p || typeof p.question !== "string" || !Array.isArray(p.options)) return null;
+            return { question: p.question, options: p.options, multiple: !!p.multiple, closesAt: Number(p.closes_at) || 0 };
+        } catch { return null; }
+    }
+
+    // --- Server lookups ----------------------------------------------------------
+
+    #previews = new Map();
+
+    /** A link preview from the server (provider "web", "youtube", "x", "twitch", ...). */
+    linkPreview(provider, resource) {
+        if (!this.capabilities.has("server_link_previews_v1")) return Promise.reject(new Error("link previews are not available on this server"));
+        const key = `${provider}\u0000${resource}`;
+        if (!this.#previews.has(key)) {
+            const pending = this.conn.request(Msg.LinkPreviewRequest, { provider, resource }, Msg.LinkPreviewResult, { timeout: 15000 })
+                .catch(error => { this.#previews.delete(key); throw error; });
+            this.#previews.set(key, pending);
+        }
+        return this.#previews.get(key);
+    }
+
+    #emoji = null;
+    #emojiImages = new Map();
+
+    /** The server's custom emoji: [{name, file_name}]. Cached until the server reports a change. */
+    async emojiList() {
+        if (!this.#emoji) this.#emoji = this.conn.request(Msg.EmojiList, {}, Msg.EmojiListResponse).then(r => r.emojis || []).catch(error => { this.#emoji = null; throw error; });
+        return this.#emoji;
+    }
+
+    /** A data: URL for one custom emoji. */
+    async emojiImage(name) {
+        if (!this.#emojiImages.has(name)) {
+            const pending = this.conn.request(Msg.EmojiGet, { name }, Msg.EmojiData, { accept: r => r.name === name })
+                .then(data => `data:${data.content_type || "image/png"};base64,${data.data_base64}`)
+                .catch(error => { this.#emojiImages.delete(name); throw error; });
+            this.#emojiImages.set(name, pending);
+        }
+        return this.#emojiImages.get(name);
+    }
+
+    serverInfo() {
+        return this.conn.request(Msg.ServerInfoQuery, {}, Msg.ServerInfoResponse);
+    }
+
+    #avatars = new Map();
+
+    /** A data: URL of a user's avatar, or "" when none. */
+    async avatar(uid) {
+        if (!this.#avatars.has(uid)) {
+            const pending = this.conn.request(Msg.AvatarGet, { unique_id: uid }, Msg.AvatarData, { accept: r => r.unique_id === uid })
+                .then(data => data.data_base64 ? `data:${data.content_type || "image/png"};base64,${data.data_base64}` : "")
+                .catch(() => "");
+            this.#avatars.set(uid, pending);
+        }
+        return this.#avatars.get(uid);
+    }
+
+    forgetAvatar(uid) {
+        this.#avatars.delete(uid);
+    }
+
+    // --- Presence and social -----------------------------------------------------
+
+    /** Sets this session's status ("", online, away, busy, invisible) and message. */
+    async setStatus(status, message = "") {
+        const saved = await this.conn.request(Msg.SetStatus, { ack_requested: true, status, message }, Msg.StatusSaved);
+        const self = this.self();
+        if (self) { self.status = saved.status; self.status_message = saved.message; this.#emit("snapshot", this.snapshot); }
+        return saved;
+    }
+
+    /** Pokes a client with an optional message. */
+    poke(clientID, message = "") {
+        return this.conn.request(Msg.Poke, { ack_requested: true, client_id: clientID, message }, Msg.PokeAccepted, { accept: r => r.client_id === clientID });
+    }
+
+    /** Changes this session's public display name. */
+    async setDisplayName(nickname) {
+        const saved = await this.conn.request(Msg.DisplayNameSet, { nickname }, Msg.DisplayNameSaved);
+        this.nickname = saved.nickname;
+        return saved;
+    }
+
     /** Joins a voice channel (0 leaves). Text-only channels are subscribed instead. */
-    join(channelID) {
-        return this.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: channelID }, MsgChannelJoined);
+    join(channelID, password = "") {
+        return this.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: channelID, password: password || undefined }, Msg.ChannelJoined);
     }
 }
