@@ -40,7 +40,9 @@ export async function linkPhone(page, desktop, webURL, expect) {
     const sas = linkSAS(secret, linkClaimTranscript(event.link_id, event.ed25519_public_key, event.x25519_public_key));
     await expect(page.locator(".sas")).toHaveText(sas);
     await approve(desktop, event);
-    await page.getByRole("button", { name: "Not now" }).click({ timeout: 15000 }).catch(() => {});
+    // Two "Not now" buttons can show: the passkey offer (a dialog) and the install banner.
+    await page.getByRole("dialog").getByRole("button", { name: "Not now" }).click({ timeout: 15000 }).catch(() => {});
+    await page.locator("#install-banner").getByRole("button", { name: "Not now" }).click({ timeout: 2000 }).catch(() => {});
     await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible({ timeout: 15000 });
     return event;
 }
