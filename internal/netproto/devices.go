@@ -88,6 +88,95 @@ type PushPreferences struct {
 	HideDetails bool `json:"hide_details"`
 	// AlwaysNotify skips the delay while the account is active on a desktop.
 	AlwaysNotify bool `json:"always_notify"`
+	// Filters narrow which events push. Nil in a request keeps the stored
+	// filters, so older apps that only toggle the flags above lose nothing.
+	Filters *PushFilters `json:"filters,omitempty"`
+}
+
+// Push filter limits.
+const (
+	MaxPushFilterEntries = 500
+	maxPushFilterTag     = 160
+)
+
+// PushFilters are a phone's notification rules the server applies before
+// pushing; the zero value pushes everything. Times are the phone's local
+// wall clock: local = UTC + UTCOffsetMinutes.
+type PushFilters struct {
+	// MutedChannels never push mentions.
+	MutedChannels []int64 `json:"muted_channels,omitempty"`
+	// MutedTags never push: "dm:<uid>", "conversation:<id>", "poke:<uid>"
+	// (muted conversations and blocked users).
+	MutedTags []string `json:"muted_tags,omitempty"`
+	// MutedKinds never push: "dm", "conversation", "mention", "poke", "call".
+	MutedKinds []string `json:"muted_kinds,omitempty"`
+	// ChatLevel is "" or "all", "mentions" (no group messages) or "dm"
+	// (direct messages, pokes and calls only).
+	ChatLevel string `json:"chat_level,omitempty"`
+	// DNDUntil silences every push until this unix second (DND, snooze).
+	DNDUntil int64 `json:"dnd_until,omitempty"`
+	// QuietFrom and QuietTo ("HH:MM") silence pushes daily; the range may
+	// wrap past midnight. Equal or empty values disable quiet hours.
+	QuietFrom        string `json:"quiet_from,omitempty"`
+	QuietTo          string `json:"quiet_to,omitempty"`
+	UTCOffsetMinutes int    `json:"utc_offset_minutes,omitempty"`
+}
+
+// Valid bounds the filters' size and shape.
+func (f *PushFilters) Valid() bool {
+	if f == nil {
+		return true
+	}
+	if len(f.MutedChannels) > MaxPushFilterEntries || len(f.MutedTags) > MaxPushFilterEntries || len(f.MutedKinds) > 16 {
+		return false
+	}
+	for _, tag := range f.MutedTags {
+		if tag == "" || len(tag) > maxPushFilterTag {
+			return false
+		}
+	}
+	for _, kind := range f.MutedKinds {
+		if kind == "" || len(kind) > 32 {
+			return false
+		}
+	}
+	switch f.ChatLevel {
+	case "", "all", "mentions", "dm":
+	default:
+		return false
+	}
+	if _, ok := ClockMinutes(f.QuietFrom); !ok && f.QuietFrom != "" {
+		return false
+	}
+	if _, ok := ClockMinutes(f.QuietTo); !ok && f.QuietTo != "" {
+		return false
+	}
+	return f.UTCOffsetMinutes >= -14*60 && f.UTCOffsetMinutes <= 14*60 && f.DNDUntil >= 0
+}
+
+// ClockMinutes parses "HH:MM" into minutes after midnight.
+func ClockMinutes(v string) (int, bool) {
+	if len(v) != 5 || v[2] != ':' {
+		return 0, false
+	}
+	h, m := 0, 0
+	for i, c := range v {
+		if i == 2 {
+			continue
+		}
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		if i < 2 {
+			h = h*10 + int(c-'0')
+		} else {
+			m = m*10 + int(c-'0')
+		}
+	}
+	if h > 23 || m > 59 {
+		return 0, false
+	}
+	return h*60 + m, true
 }
 
 // MaxWebAuthnPayload bounds WebAuthn options and responses in device frames.
@@ -174,9 +263,9 @@ func (r DeviceRequest) Valid() bool {
 	case DeviceActionPushConfig, DeviceActionPushUnsubscribe, DeviceActionActivity:
 		return r.Subscription == nil && r.Read == nil
 	case DeviceActionPushSubscribe:
-		return r.Subscription != nil && r.Subscription.Endpoint != ""
+		return r.Subscription != nil && r.Subscription.Endpoint != "" && (r.Preferences == nil || r.Preferences.Filters.Valid())
 	case DeviceActionPushPreferences:
-		return r.Preferences != nil
+		return r.Preferences != nil && r.Preferences.Filters.Valid()
 	case DeviceActionRead:
 		return r.Read != nil && r.Read.Valid()
 	case DeviceActionPasskeyRegisterBegin, DeviceActionPasskeyLoginBegin:

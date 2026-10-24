@@ -18,16 +18,18 @@ type PushSubscription struct {
 	Auth         []byte
 	HideDetails  bool
 	AlwaysNotify bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	Failures     int
+	// Filters is the device's netproto.PushFilters JSON ("{}" when unset).
+	Filters   []byte
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Failures  int
 }
 
-const pushColumns = `device_id, principal, endpoint, p256dh, auth_secret, hide_details, always_notify, created_at, updated_at, failures`
+const pushColumns = `device_id, principal, endpoint, p256dh, auth_secret, hide_details, always_notify, filters, created_at, updated_at, failures`
 
 func scanPush(row rowScanner) (PushSubscription, error) {
 	var p PushSubscription
-	err := row.Scan(&p.DeviceID, &p.Principal, &p.Endpoint, &p.P256dh, &p.Auth, &p.HideDetails, &p.AlwaysNotify, &p.CreatedAt, &p.UpdatedAt, &p.Failures)
+	err := row.Scan(&p.DeviceID, &p.Principal, &p.Endpoint, &p.P256dh, &p.Auth, &p.HideDetails, &p.AlwaysNotify, &p.Filters, &p.CreatedAt, &p.UpdatedAt, &p.Failures)
 	return p, err
 }
 
@@ -67,6 +69,23 @@ func (s *Store) SetPushPreferences(ctx context.Context, principal, deviceID stri
 		WHERE principal=$1 AND device_id=$2`, principal, deviceID, hideDetails, alwaysNotify)
 	if err != nil {
 		return fmt.Errorf("updating push preferences: %w", err)
+	}
+	if n, err := result.RowsAffected(); err != nil || n != 1 {
+		return ErrDeviceNotFound
+	}
+	return nil
+}
+
+// SetPushFilters replaces the push filters (JSON) of a device's
+// subscription.
+func (s *Store) SetPushFilters(ctx context.Context, principal, deviceID string, filters []byte) error {
+	if len(filters) == 0 {
+		filters = []byte("{}")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE push_subscriptions SET filters=$3::jsonb, updated_at=now()
+		WHERE principal=$1 AND device_id=$2`, principal, deviceID, string(filters))
+	if err != nil {
+		return fmt.Errorf("updating push filters: %w", err)
 	}
 	if n, err := result.RowsAffected(); err != nil || n != 1 {
 		return ErrDeviceNotFound
