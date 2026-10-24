@@ -46,6 +46,7 @@ import (
 	"noxa/internal/turn"
 	"noxa/internal/version"
 	"noxa/internal/web"
+	"noxa/internal/webpush"
 	"noxa/internal/webrtc"
 )
 
@@ -766,8 +767,17 @@ func run() (retErr error) {
 	if cfg.TURN.Managed {
 		relayManager = turn.NewManager(cfg.TURN.Realm, cfg.TURN.MaxAllocations, cfg.TURN.BytesPerSecond)
 	}
+	var pushSender server.PushSender
+	if cfg.Web.Enabled && cfg.Web.PushEnabled {
+		vapid, err := webpush.LoadOrCreateVAPID(cfg.Web.PushVAPIDKeyFile, cfg.Web.PushContact())
+		if err != nil {
+			return fmt.Errorf("loading the web push key: %w", err)
+		}
+		pushSender = &webpush.Sender{VAPID: vapid}
+	}
 	tcpServer = server.New(cfg, logger, &server.Deps{
 		Devices:                 dbStore,
+		Push:                    pushSender,
 		PublishIntegrationEvent: events.Publish,
 		Relay:                   relayManager,
 		Traffic:                 trafficCounter,

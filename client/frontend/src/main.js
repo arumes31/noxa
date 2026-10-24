@@ -1195,7 +1195,14 @@ let activityRevision = 0;
 
 // noteActivity resets the idle timer; after auto_away_minutes without input or speech
 // the client sets itself away, restoring on the next activity.
+let inputReportedAt = 0;
+
 function noteActivity() {
+    // Linked phones hold back notifications while this desktop is in use.
+    if (Date.now() - inputReportedAt > 30000) {
+        inputReportedAt = Date.now();
+        try { void window.go?.main?.App?.ReportInputActivity?.()?.catch?.(() => {}); } catch { /* older binding */ }
+    }
     const scope = capturePresenceScope();
     const revision = ++activityRevision;
     restorePresenceOnActivity(scope);

@@ -406,6 +406,7 @@ func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg net
 		s.broadcastChannelScoped(ctx, channelID, payload)
 		s.metricsSink().IncChatMessage("channel")
 	}
+	s.pushMentions(ctx, client, channelID, mentionBody, mentions, roleMentions)
 	return s.acknowledgeChat(client, msg, netproto.ChatStored, messageID)
 }
 
@@ -1264,6 +1265,9 @@ func (s *TCPServer) handleChatRead(ctx context.Context, client *Client, f *netpr
 	var msg netproto.ChatRead
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed chat_read: "+err.Error())
+	}
+	if msg.ToUniqueID != "" {
+		s.syncRead(client, netproto.ReadMarker{Scope: netproto.ReadScopeDM, ID: msg.ToUniqueID})
 	}
 	return s.relayReceipt(ctx, client, msg.ToUniqueID, eventDMRead, msg.ClientMsgID)
 }

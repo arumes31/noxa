@@ -1,6 +1,6 @@
 // main.js — boots the mobile web app: server info, stored device, router.
 import "./styles.css";
-import { app, connect, loadDevice, loadInfo } from "./app.js";
+import { app, connect, loadDevice, loadInfo, markRead } from "./app.js";
 import { parseLinkFragment } from "./core/device.js";
 import { t, lang } from "./i18n.js";
 import { renderConnect, runLink } from "./ui/connect.js";
@@ -19,9 +19,16 @@ function route() {
         return;
     }
     const [, screen = "home", arg] = location.hash.split("/");
+    app.viewing = null;
     switch (screen) {
         case "servers": renderServers(root); break;
-        case "chat": cleanup = renderChat(root, Number(arg) || 0); break;
+        case "chat": {
+            const scope = Number(arg) || 0;
+            app.viewing = scope;
+            markRead(scope);
+            cleanup = renderChat(root, scope);
+            break;
+        }
         case "voice": renderVoice(root); break;
         case "you": renderYou(root); break;
         default: renderHome(root);
@@ -53,7 +60,17 @@ app.addEventListener("session", event => {
         if ((location.hash.split("/")[1] || "home") === "home") route();
     });
 });
+app.addEventListener("unread", () => {
+    const screen = location.hash.split("/")[1] || "home";
+    if (screen === "home" || screen === "servers") route();
+});
 app.addEventListener("online", renderBanner);
+// A tapped notification opens its conversation in the running app.
+navigator.serviceWorker?.addEventListener("message", event => {
+    if (event.data?.type !== "open" || typeof event.data.url !== "string") return;
+    const url = new URL(event.data.url, location.origin);
+    if (url.origin === location.origin && url.pathname.startsWith("/app/")) location.hash = url.hash || "#/home";
+});
 app.addEventListener("signedout", () => {
     toast(t("signin.revoked"), "warn");
     route();

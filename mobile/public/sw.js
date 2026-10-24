@@ -1,7 +1,7 @@
 // sw.js — offline app shell. The shell is cached at install; navigations
 // fall back to the cached index when the server is unreachable. API and
 // WebSocket traffic is never cached.
-const VERSION = "noxa-shell-v1";
+const VERSION = "noxa-shell-v2";
 const SHELL = ["/app/", "/app/manifest.webmanifest", "/app/icons/icon-192.png", "/app/icons/icon-512.png"];
 
 self.addEventListener("install", event => {
@@ -34,4 +34,127 @@ self.addEventListener("fetch", event => {
             return response;
         }));
     }
+});
+
+// --- Notifications ------------------------------------------------------------
+// Pushes carry a kind, a conversation tag and, unless the phone hides
+// details, the sender and channel names. Message text never arrives here.
+const WORDS = {
+    en: {
+        app: "noXa", message: "New message", dm: "sent you a message", group: "wrote in a group",
+        mention: "mentioned you", mentionIn: "mentioned you in #{place}", poke: "poked you",
+        call: "Incoming call", video: "Incoming video call", answer: "Answer",
+    },
+    de: {
+        app: "noXa", message: "Neue Nachricht", dm: "hat dir geschrieben", group: "hat in einer Gruppe geschrieben",
+        mention: "hat dich erwähnt", mentionIn: "hat dich in #{place} erwähnt", poke: "hat dich angestupst",
+        call: "Eingehender Anruf", video: "Eingehender Videoanruf", answer: "Annehmen",
+    },
+};
+
+function words() {
+    return WORDS[(self.navigator.language || "en").slice(0, 2)] || WORDS.en;
+}
+
+/** The in-app route a notification opens. */
+function routeFor(tag) {
+    const [scope, id = ""] = String(tag).split(/:(.*)/s);
+    switch (scope) {
+        case "channel": return `/app/#/chat/${encodeURIComponent(id)}`;
+        case "dm": return `/app/#/dm/${encodeURIComponent(id)}`;
+        case "conversation": return `/app/#/group/${encodeURIComponent(id)}`;
+        case "call": return `/app/#/call/${encodeURIComponent(id)}`;
+        default: return "/app/#/home";
+    }
+}
+
+function describe(push) {
+    const w = words();
+    const from = push.from || "";
+    if (push.kind === "call") {
+        const body = push.video ? w.video : w.call;
+        return { title: from || w.app, body: from ? body : "", call: true };
+    }
+    if (!from) return { title: w.app, body: w.message };
+    switch (push.kind) {
+        case "dm": return { title: from, body: w.dm };
+        case "conversation": return { title: from, body: w.group };
+        case "mention": return { title: from, body: push.place ? w.mentionIn.replace("{place}", push.place) : w.mention };
+        case "poke": return { title: from, body: w.poke };
+        default: return { title: w.app, body: w.message };
+    }
+}
+
+async function updateBadge() {
+    const shown = await self.registration.getNotifications();
+    if (shown.length) await self.navigator.setAppBadge?.(shown.length).catch(() => {});
+    else await self.navigator.clearAppBadge?.().catch(() => {});
+}
+
+async function closeTag(tag) {
+    for (const notification of await self.registration.getNotifications({ tag })) notification.close();
+}
+
+async function onPush(push) {
+    if (push.kind === "clear") {
+        await closeTag(push.tag);
+        await updateBadge();
+        return;
+    }
+    // An open app shows the event itself.
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (push.kind !== "call" && windows.some(client => client.visibilityState === "visible")) return;
+    const text = describe(push);
+    await self.registration.showNotification(text.title, {
+        body: text.body,
+        tag: push.tag,
+        renotify: true,
+        icon: "/app/icons/icon-192.png",
+        badge: "/app/icons/icon-192.png",
+        timestamp: (push.at || Date.now() / 1000) * 1000,
+        requireInteraction: !!text.call,
+        vibrate: text.call ? [400, 200, 400, 200, 400] : [120],
+        actions: text.call ? [{ action: "answer", title: words().answer }] : [],
+        data: { url: routeFor(push.tag), tag: push.tag },
+    });
+    await updateBadge();
+}
+
+self.addEventListener("push", event => {
+    let push;
+    try {
+        push = event.data?.json();
+    } catch {
+        push = null;
+    }
+    if (!push || typeof push.kind !== "string") push = { kind: "message", tag: "noxa" };
+    event.waitUntil(onPush(push));
+});
+
+self.addEventListener("notificationclick", event => {
+    event.notification.close();
+    const url = event.notification.data?.url || "/app/#/home";
+    event.waitUntil((async () => {
+        const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+        const open = windows.find(client => new URL(client.url).pathname.startsWith("/app/"));
+        if (open) {
+            open.postMessage({ type: "open", url });
+            await open.focus();
+        } else {
+            await self.clients.openWindow(url);
+        }
+        await updateBadge();
+    })());
+});
+
+self.addEventListener("notificationclose", event => {
+    event.waitUntil(updateBadge());
+});
+
+// The app re-registers the new subscription with the server when it next
+// connects; here we only make sure a subscription exists.
+self.addEventListener("pushsubscriptionchange", event => {
+    const options = event.oldSubscription?.options;
+    if (!options?.applicationServerKey) return;
+    event.waitUntil(self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: options.applicationServerKey }).catch(() => {}));
 });

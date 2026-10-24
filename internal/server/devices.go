@@ -299,6 +299,9 @@ func (s *TCPServer) handleDeviceRequest(ctx context.Context, client *Client, f *
 	}
 	principal := client.uniqueID()
 	switch r.Action {
+	case netproto.DeviceActionPushConfig, netproto.DeviceActionPushSubscribe, netproto.DeviceActionPushUnsubscribe,
+		netproto.DeviceActionPushPreferences, netproto.DeviceActionActivity, netproto.DeviceActionRead:
+		return s.handlePushRequest(ctx, client, r)
 	case netproto.DeviceActionPasskeyRegisterBegin, netproto.DeviceActionPasskeyRegisterFinish, netproto.DeviceActionPasskeyDelete:
 		return s.handlePasskeyRequest(ctx, client, r)
 	case netproto.DeviceActionPasskeyLoginBegin, netproto.DeviceActionPasskeyLoginFinish:

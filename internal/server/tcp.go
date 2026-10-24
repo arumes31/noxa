@@ -115,6 +115,8 @@ type Client struct {
 	authSigningKey   string // bound to the successful authentication attempt
 	deviceID         string // linked device of this session, if registered
 	webTransport     bool   // connected through the mobile web app
+	inputAt          time.Time // last input a desktop reported (activity)
+	webHidden        bool      // the web app reported it is in the background
 	passkey          *passkeyCeremony
 	dmKeyRecord      string // signed directory record; never used for scope-key sealing
 
@@ -360,6 +362,7 @@ type TCPServer struct {
 	listener         net.Listener
 	acceptedConns    map[net.Conn]struct{}
 	links            *deviceLinks
+	push             *pushState
 	preauth          map[net.Conn]string
 	preauthByIP      map[string]int
 	connWG           sync.WaitGroup
@@ -468,6 +471,7 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 		deps:          deps,
 		acceptedConns: make(map[net.Conn]struct{}),
 		links:         newDeviceLinks(),
+		push:          newPushState(),
 		preauth:       make(map[net.Conn]string),
 		preauthByIP:   make(map[string]int),
 		listen: func(ctx context.Context, network, address string) (net.Listener, error) {

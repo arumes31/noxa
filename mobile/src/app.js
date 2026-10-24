@@ -5,6 +5,7 @@ import { Connection } from "./core/connection.js";
 import { generateIdentity } from "./core/crypto.js";
 import { signIn } from "./core/device.js";
 import { clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
+import { announceRead, closeNotifications, reportVisibility, setBadge, syncPush } from "./core/push.js";
 
 export const app = new EventTarget();
 
@@ -13,6 +14,12 @@ app.identity = null;
 app.meta = {};
 app.session = null;
 app.online = true;
+/** Push availability and this device's preferences, after syncPush. */
+app.push = { available: false, preferences: {} };
+/** scope -> {count, mentions} of unread channel messages. */
+app.unread = new Map();
+/** The chat scope on screen, or null. */
+app.viewing = null;
 
 const RECONNECT_STEPS = [1000, 2000, 5000, 10000, 20000, 30000];
 let reconnectAttempt = 0;
@@ -89,9 +96,49 @@ export async function connect() {
     });
     session.addEventListener("device", event => {
         if (event.detail?.event === "revoked" && event.detail.device?.device_id === session.deviceID) forgetDevice();
+        if (event.detail?.event === "read" && event.detail.read) readElsewhere(event.detail.read);
     });
+    session.addEventListener("incoming", event => {
+        const { scope, message } = event.detail;
+        if (message.own) return;
+        if (app.viewing === scope && document.visibilityState === "visible") {
+            announceRead(session.conn, "channel", scope);
+            return;
+        }
+        const entry = app.unread.get(scope) || { count: 0, mentions: 0 };
+        entry.count++;
+        if (message.mentioned) entry.mentions++;
+        app.unread.set(scope, entry);
+        unreadChanged();
+    });
+    reportVisibility(conn);
+    syncPush(conn).then(state => {
+        app.push = state;
+        emit("push", state);
+    }).catch(() => {});
     emit("session", session);
     return session;
+}
+
+function unreadChanged() {
+    let total = 0;
+    for (const entry of app.unread.values()) total += entry.count;
+    setBadge(total);
+    emit("unread");
+}
+
+/** Marks a channel read here and on the account's other devices. */
+export function markRead(scope) {
+    closeNotifications(`channel:${scope}`);
+    const had = app.unread.delete(scope);
+    if (app.session) announceRead(app.session.conn, "channel", scope);
+    if (had) unreadChanged();
+}
+
+/** Another device of the account read a conversation. */
+function readElsewhere({ scope, id }) {
+    closeNotifications(`${scope}:${id}`);
+    if (scope === "channel" && app.unread.delete(Number(id))) unreadChanged();
 }
 
 function setOnline(online) {
@@ -121,5 +168,10 @@ if (typeof window !== "undefined") {
         }
     };
     window.addEventListener("online", retryNow);
-    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") retryNow(); });
+    document.addEventListener("visibilitychange", () => {
+        if (app.session) reportVisibility(app.session.conn);
+        if (document.visibilityState !== "visible") return;
+        retryNow();
+        if (app.viewing !== null) markRead(app.viewing);
+    });
 }

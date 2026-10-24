@@ -670,6 +670,9 @@ certificate, and passkeys bind to the domain.
 | `web.allowed_origins` | `[]` | Extra HTTPS origins accepted on `/ws` |
 | `web.max_devices_per_account` | `10` | Linked devices per account, including the first desktop |
 | `web.ws_connections_per_ip` / `web.ws_attempts_per_minute` | `8` / `30` | WebSocket admission per client IP |
+| `web.push_enabled` | `true` | Send Web Push notifications to linked phones |
+| `web.push_vapid_key_file` | `./data/keys/vapid.pem` | Push signing key, created on first start; keep it to keep subscriptions |
+| `web.push_subject` | `web.public_url` | `mailto:` or `https:` contact push services see |
 
 Exactly one TLS mode is required: certificate files, ACME, or a TLS-terminating
 proxy listed in `trusted_proxies`.
@@ -714,6 +717,21 @@ list, sign out and reset devices with `devicelist`, `devicerevoke` and
 `devicereset` (ServerQuery) or `ListDevices`, `RevokeDevice` and
 `ResetDevices` (gRPC). Devices unused for 180 days are signed out after a
 warning at 166 days; an account's first desktop never expires.
+
+**Notifications.** In the phone's **Settings → Notifications**, turn on
+notifications for direct messages, mentions, pokes and incoming calls. On
+iPhone this needs iOS 16.4 or later and the app added to the Home Screen.
+The server needs outbound HTTPS to the browsers' push services (Google,
+Mozilla, Apple). Pushes carry only the kind of event and, unless the phone
+turned on **Hide notification details**, the sender's nickname and channel
+name; message text never leaves the server in a push, and direct messages stay
+end-to-end encrypted. While the account's desktop has seen input in the last
+two minutes, pushes for messages wait 60 seconds and are dropped if the
+conversation is read in that time; calls always push at once, and **Always
+notify this phone** turns the delay off. Reading a conversation on any device
+clears its notification on Android and desktop browsers; iPhones clear it when
+the app next opens, because iOS ends subscriptions that receive pushes without
+a visible notification.
 
 **What the phone stores.** The device's Ed25519 and X25519 keys live in the
 browser's IndexedDB, encrypted with a non-extractable WebCrypto key. Signing out

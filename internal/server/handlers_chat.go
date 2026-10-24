@@ -193,6 +193,7 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 			return err
 		}
 		s.metricsSink().IncChatMessage("direct")
+		s.pushDirect(client, chat.ToUniqueID)
 	}
 	return s.acknowledgeChat(client, msg, netproto.ChatRelayed, 0)
 }
@@ -242,6 +243,7 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 			return err
 		}
 		s.metricsSink().IncChatMessage("direct")
+		s.pushDirect(client, msg.ToUniqueID)
 		return s.acknowledgeChat(client, msg, netproto.ChatQueued, 0)
 	}
 
@@ -299,7 +301,17 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 	if err := s.echoAcceptedDirect(client, msg, payload); err != nil {
 		return err
 	}
+	s.pushDirect(client, msg.ToUniqueID)
 	return s.acknowledgeChat(client, msg, netproto.ChatQueued, 0)
+}
+
+// pushDirect notifies the recipient's phones about a direct message. The
+// payload names the sender only; the message stays end-to-end encrypted.
+func (s *TCPServer) pushDirect(client *Client, toUniqueID string) {
+	if toUniqueID == "" || toUniqueID == client.uniqueID() {
+		return
+	}
+	s.pushNotify(toUniqueID, pushNotice{Kind: pushKindDM, Tag: netproto.ReadScopeDM + ":" + client.uniqueID(), From: client.nickname()})
 }
 
 // deliverSpooled sends any spooled offline messages for the user to the

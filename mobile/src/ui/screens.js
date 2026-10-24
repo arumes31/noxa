@@ -2,6 +2,7 @@
 // channels (03), Channel chat (04), Voice (09, pending) and You (14/15).
 import { app, forgetDevice } from "../app.js";
 import { registerPasskey, passkeysSupported } from "../core/device.js";
+import { disablePush, enablePush, needsInstallForPush, pushSupported, setPushPreferences } from "../core/push.js";
 import { Msg } from "../core/frame.js";
 import { t } from "../i18n.js";
 import { avatar, clock, h, sheet, toast } from "./dom.js";
@@ -26,6 +27,14 @@ function header(title, { back, sub } = {}) {
 function scopeName(session, scope) {
     if (scope === 0) return t("channels.global");
     return `# ${session.channels().find(c => c.id === scope)?.name || scope}`;
+}
+
+/** Unread count badge; mentions are highlighted. */
+function unreadBadge(scope) {
+    const entry = app.unread.get(scope);
+    if (!entry?.count) return null;
+    return h("span", { class: entry.mentions ? "badge badge-mention" : "badge", "aria-label": t("home.unread", { count: entry.count }) },
+        entry.mentions ? `@${entry.count}` : String(entry.count));
 }
 
 function lastMessage(session, scope) {
@@ -57,7 +66,7 @@ export function renderHome(root) {
                     h("span", { class: "row-main" },
                         h("span", { class: "row-title" }, scopeName(session, scope).replace(/^# /, "#")),
                         h("span", { class: "row-sub" }, `${last.from}: ${last.text ?? t("chat.locked")}`)),
-                    h("span", { class: "row-meta" }, clock(last.sentAt))))))
+                    unreadBadge(scope) || h("span", { class: "row-meta" }, clock(last.sentAt))))))
                 : h("p", { class: "hint" }, t("home.empty")))),
         nav("home"));
 }
@@ -72,10 +81,11 @@ export function renderServers(root) {
         h("div", { class: "screen-body" },
             h("p", { class: "section-label" }, t("channels.text")),
             h("ul", { class: "list" },
-                session.current.has(0) ? h("li", {}, h("a", { class: "row", href: "#/chat/0" }, h("span", { class: "hash" }, "◎"), h("span", { class: "row-main" }, h("span", { class: "row-title" }, t("channels.global"))))) : null,
+                session.current.has(0) ? h("li", {}, h("a", { class: "row", href: "#/chat/0" }, h("span", { class: "hash" }, "◎"), h("span", { class: "row-main" }, h("span", { class: "row-title" }, t("channels.global"))), unreadBadge(0))) : null,
                 channels.filter(c => c.chat).map(c => h("li", {}, h("a", { class: "row", href: `#/chat/${c.id}`, style: `padding-left:${10 + c.depth * 14}px` },
                     h("span", { class: "hash" }, c.restricted ? "🔒" : "#"),
-                    h("span", { class: "row-main" }, h("span", { class: "row-title" }, c.name), c.topic ? h("span", { class: "row-sub" }, c.topic) : null))))),
+                    h("span", { class: "row-main" }, h("span", { class: "row-title" }, c.name), c.topic ? h("span", { class: "row-sub" }, c.topic) : null),
+                    unreadBadge(c.id))))),
             h("p", { class: "section-label" }, t("channels.voice")),
             h("ul", { class: "list" }, channels.filter(c => !c.textOnly).map(c => h("li", {},
                 h("div", { class: "row", style: `padding-left:${10 + c.depth * 14}px` },
@@ -208,10 +218,62 @@ async function savePasskey() {
     }
 }
 
+/** Settings, then Notifications: permission, Hide details, Always notify. */
+function notificationSettings(session) {
+    const box = h("div", { class: "card" });
+    const toggle = (key, label, hint) => {
+        const input = h("input", { type: "checkbox", role: "switch", checked: !!app.push.preferences?.[key] });
+        input.onchange = async () => {
+            input.disabled = true;
+            try {
+                app.push.preferences = await setPushPreferences(session.conn, { ...app.push.preferences, [key]: input.checked });
+            } catch (error) {
+                input.checked = !input.checked;
+                toast(t("common.error", { error: error.message }), "warn");
+            }
+            input.disabled = false;
+        };
+        return h("label", { class: "toggle" }, h("span", { class: "row-main" }, h("span", { class: "row-title" }, label), h("span", { class: "row-sub" }, hint)), input);
+    };
+    const render = () => {
+        const state = app.push;
+        if (!pushSupported()) {
+            box.replaceChildren(h("p", { class: "hint" }, needsInstallForPush() ? t("connect.install") : t("settings.notifyUnsupported")));
+        } else if (!state.available) {
+            box.replaceChildren(h("p", { class: "hint" }, t("settings.notifyUnavailable")));
+        } else if (Notification.permission === "denied") {
+            box.replaceChildren(h("p", { class: "hint" }, t("settings.notifyBlocked")));
+        } else if (!state.preferences?.subscribed) {
+            box.replaceChildren(
+                h("p", { class: "hint", style: "margin-bottom:12px" }, t("settings.notifyHint")),
+                h("button", { class: "btn btn-primary btn-block", onclick: async event => {
+                    event.currentTarget.disabled = true;
+                    try {
+                        app.push.preferences = await enablePush(session.conn, state);
+                    } catch (error) {
+                        if (error?.name !== "NotAllowedError") toast(t("common.error", { error: error.message }), "warn");
+                    }
+                    render();
+                } }, t("settings.notifyEnable")));
+        } else {
+            box.replaceChildren(
+                toggle("hide_details", t("settings.hideDetails"), t("settings.hideDetailsHint")),
+                toggle("always_notify", t("settings.alwaysNotify"), t("settings.alwaysNotifyHint")),
+                h("button", { class: "btn btn-block", style: "margin-top:8px", onclick: async () => {
+                    try { app.push.preferences = await disablePush(session.conn); } catch (error) { toast(t("common.error", { error: error.message }), "warn"); }
+                    render();
+                } }, t("settings.notifyDisable")));
+        }
+    };
+    render();
+    return { box, render };
+}
+
 export function renderYou(root) {
     const session = app.session;
     const list = h("ul", { class: "list" });
     const passkeys = h("ul", { class: "list" });
+    const notifications = notificationSettings(session);
     const refresh = async () => {
         try {
             const result = await devices(session);
@@ -243,6 +305,8 @@ export function renderYou(root) {
         h("div", { class: "screen-body" },
             h("div", { class: "card row" }, avatar(session.nickname, "md"),
                 h("span", { class: "row-main" }, h("span", { class: "row-title" }, session.nickname), h("span", { class: "row-sub" }, app.info?.server_name || ""))),
+            h("p", { class: "section-label" }, t("settings.notifications")),
+            notifications.box,
             h("p", { class: "section-label" }, t("settings.passkeys")),
             passkeys,
             passkeysSupported() ? h("button", { class: "btn btn-primary btn-block", onclick: async () => { await savePasskey(); refresh(); } }, icon("passkey"), " ", t("settings.savePasskey")) : null,

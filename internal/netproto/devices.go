@@ -33,7 +33,60 @@ const (
 	DeviceActionPasskeyLoginBegin     = "passkey_login_begin"
 	DeviceActionPasskeyLoginFinish    = "passkey_login_finish"
 	DeviceActionPasskeyDelete         = "passkey_delete"
+
+	// Web Push for web devices: the server's VAPID key and this device's
+	// subscription and preferences.
+	DeviceActionPushConfig      = "push_config"
+	DeviceActionPushSubscribe   = "push_subscribe"
+	DeviceActionPushUnsubscribe = "push_unsubscribe"
+	DeviceActionPushPreferences = "push_preferences"
+	// Activity reports input on a desktop (throttled by the client) or the
+	// visibility of a web app; it delays or skips pushes. No reply is sent.
+	DeviceActionActivity = "activity"
+	// Read announces that this device read a conversation, so the account's
+	// other devices clear badges and notifications. No reply is sent.
+	DeviceActionRead = "read"
 )
+
+// Read scopes.
+const (
+	ReadScopeDM           = "dm"           // ID: the peer's unique ID
+	ReadScopeConversation = "conversation" // ID: the group conversation ID
+	ReadScopeChannel      = "channel"      // ID: the channel ID
+)
+
+// ReadMarker names a conversation read up to MessageID (optional).
+type ReadMarker struct {
+	Scope     string `json:"scope"`
+	ID        string `json:"id"`
+	MessageID string `json:"message_id,omitempty"`
+}
+
+// Valid checks the marker shape.
+func (m ReadMarker) Valid() bool {
+	switch m.Scope {
+	case ReadScopeDM, ReadScopeConversation, ReadScopeChannel:
+	default:
+		return false
+	}
+	return m.ID != "" && len(m.ID) <= 128 && len(m.MessageID) <= 128
+}
+
+// PushSubscriptionKeys is a browser PushSubscription (keys base64url).
+type PushSubscriptionKeys struct {
+	Endpoint string `json:"endpoint"`
+	P256dh   string `json:"p256dh"`
+	Auth     string `json:"auth"`
+}
+
+// PushPreferences are a web device's notification settings.
+type PushPreferences struct {
+	Subscribed bool `json:"subscribed"`
+	// HideDetails sends "New message" and "Incoming call" without names.
+	HideDetails bool `json:"hide_details"`
+	// AlwaysNotify skips the delay while the account is active on a desktop.
+	AlwaysNotify bool `json:"always_notify"`
+}
 
 // MaxWebAuthnPayload bounds WebAuthn options and responses in device frames.
 const MaxWebAuthnPayload = 16 << 10
@@ -54,6 +107,7 @@ const (
 	DeviceEventRevoked       = "revoked"
 	DeviceEventRenamed       = "renamed"
 	DeviceEventExpiryWarning = "expiry_warning"
+	DeviceEventRead          = "read"
 )
 
 // DeviceRequest carries one device action. Fields not used by the action
@@ -81,6 +135,12 @@ type DeviceRequest struct {
 	// (base64url credential ID).
 	WebAuthn  json.RawMessage `json:"webauthn,omitempty"`
 	PasskeyID string          `json:"passkey_id,omitempty"`
+
+	// Push and activity.
+	Subscription *PushSubscriptionKeys `json:"subscription,omitempty"`
+	Preferences  *PushPreferences      `json:"preferences,omitempty"`
+	Active       bool                  `json:"active,omitempty"`
+	Read         *ReadMarker           `json:"read,omitempty"`
 }
 
 // Valid checks the action-specific shape; handlers check authorization.
@@ -91,7 +151,18 @@ func (r DeviceRequest) Valid() bool {
 		len(r.WebAuthn) > MaxWebAuthnPayload || len(r.PasskeyID) > 1400 {
 		return false
 	}
+	if r.Subscription != nil && (len(r.Subscription.Endpoint) > 1024 || len(r.Subscription.P256dh) > 128 || len(r.Subscription.Auth) > 64) {
+		return false
+	}
 	switch r.Action {
+	case DeviceActionPushConfig, DeviceActionPushUnsubscribe, DeviceActionActivity:
+		return r.Subscription == nil && r.Read == nil
+	case DeviceActionPushSubscribe:
+		return r.Subscription != nil && r.Subscription.Endpoint != ""
+	case DeviceActionPushPreferences:
+		return r.Preferences != nil
+	case DeviceActionRead:
+		return r.Read != nil && r.Read.Valid()
 	case DeviceActionPasskeyRegisterBegin, DeviceActionPasskeyLoginBegin:
 		return len(r.WebAuthn) == 0 && r.DeviceID == "" && r.LinkID == ""
 	case DeviceActionPasskeyRegisterFinish:
@@ -163,6 +234,11 @@ type DeviceResult struct {
 	State     string `json:"state,omitempty"`
 	// ApproverFingerprint lets the claiming device compare the approver.
 	ApproverFingerprint string `json:"approver_fingerprint,omitempty"`
+
+	// Push: the server's VAPID public key (base64url) and this device's
+	// preferences. An empty key means the server does not send pushes.
+	VAPIDPublicKey string           `json:"vapid_public_key,omitempty"`
+	Preferences    *PushPreferences `json:"preferences,omitempty"`
 }
 
 // DeviceEvent notifies every session of the account about device changes.
@@ -182,6 +258,8 @@ type DeviceEvent struct {
 	Reason string `json:"reason,omitempty"`
 	// ExpiresAt is the revocation time announced by an expiry warning.
 	ExpiresAt int64 `json:"expires_at,omitempty"`
+	// Read: another device of the account read a conversation.
+	Read *ReadMarker `json:"read,omitempty"`
 }
 
 // KeyFingerprint is the comparison fingerprint of an identity key: the first

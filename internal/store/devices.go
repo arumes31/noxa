@@ -230,10 +230,12 @@ func (s *Store) RenameDevice(ctx context.Context, principal, deviceID, name stri
 }
 
 // revokingDevices wraps a revoking UPDATE ... RETURNING * so the same
-// statement deletes the revoked devices' passkeys and returns their rows.
+// statement deletes the revoked devices' passkeys and push subscriptions
+// and returns their rows.
 func revokingDevices(update string) string {
 	return `WITH revoked AS (` + update + `),
-		dropped AS (DELETE FROM webauthn_credentials w USING revoked WHERE w.device_id = revoked.device_id)
+		dropped AS (DELETE FROM webauthn_credentials w USING revoked WHERE w.device_id = revoked.device_id),
+		unsubscribed AS (DELETE FROM push_subscriptions p USING revoked WHERE p.device_id = revoked.device_id)
 		SELECT ` + deviceColumns + ` FROM revoked ORDER BY created_at, id`
 }
 

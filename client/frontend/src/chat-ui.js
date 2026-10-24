@@ -1500,10 +1500,12 @@ function setView(v) {
     if (key.startsWith("ch:")) {
         const chID = Number(key.slice(3));
         if (unread.delete(chID)) V().renderTree();
+        reportRead("channel", chID);
     }
     if (v.kind === "dm") {
         const tab = pmTabs.get(v.uid);
         if (tab) {
+            if (tab.unread) reportRead("dm", v.uid);
             tab.unread = 0;
             tab.unreadAt = undefined;
             tab.offline = false;
@@ -4212,10 +4214,18 @@ export async function onConnect() {
     } catch { /* MOTD is best-effort */ }
 }
 
+// reportRead tells the server this desktop read a conversation, so the
+// account's phones clear its notification. Best effort.
+function reportRead(scope, id) {
+    if (id === undefined || id === null || id === "") return;
+    try { void app().ReportReadForTab?.(V().state.activeTabID || "", scope, String(id), "")?.catch?.(() => {}); } catch { /* older binding */ }
+}
+
 export function onMyChannelChanged() {
     const st = V().state;
     if (view.kind === "channel") invalidateChatViewWork();
     if (unread.delete(st.myChannelID)) V().renderTree();
+    reportRead("channel", st.myChannelID);
     if (view.kind === "chan" && view.id === st.myChannelID) {
         setView({ kind: "channel" });
     } else if (view.kind === "channel") renderView();

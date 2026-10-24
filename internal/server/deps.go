@@ -241,6 +241,8 @@ type ScopeKeyStore interface {
 type Deps struct {
 	// Devices stores linked devices; nil disables device management.
 	Devices DeviceStore
+	// Push sends Web Push messages to web devices; nil disables push.
+	Push PushSender
 	// PublishIntegrationEvent feeds the integration event bus directly, for
 	// events that are never broadcast to clients (device changes).
 	PublishIntegrationEvent func(eventType string, data []byte)

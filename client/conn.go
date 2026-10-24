@@ -79,6 +79,7 @@ type connManager struct {
 	uniqueID                     string
 	deviceID                     string // linked device of this session (devices_v1)
 	supportsDevices              bool
+	activityReportedAt           time.Time // last input report (devices_v1)
 	deviceLinks                  map[string]deviceLinkKeys // links created by this session
 	nickname                     string
 	displayName                  string // requested public name; separate from the account login
@@ -533,6 +534,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.uniqueID = resp.UniqueID
 	m.deviceID = resp.DeviceID
 	m.supportsDevices = slices.Contains(resp.Capabilities, netproto.CapabilityDevices)
+	m.activityReportedAt = time.Time{}
 	m.deviceLinks = nil
 	m.nickname = resp.Nickname
 	m.displayName = authMsg.Nickname

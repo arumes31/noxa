@@ -129,11 +129,14 @@ export class ChatSession extends EventTarget {
                 const scope = Number(data.channel_id || 0);
                 const text = this.decrypt(scope, data.key_id, data.text);
                 if (text === null) this.requestKeys(scope, [data.key_id]);
-                this.#store(scope, {
+                const message = {
                     id: data.id, clientMsgID: data.client_msg_id, fromUniqueID: data.from_unique_id, from: data.from,
                     text, keyID: data.key_id, body: data.text, replyTo: data.reply_to_id || 0, sentAt: Date.now() / 1000,
-                    own: data.from_unique_id === this.uniqueID, mentioned: (data.mentions || []).includes(this.uniqueID),
-                });
+                    own: data.from_unique_id === this.uniqueID,
+                    mentioned: (data.mentions || []).includes(this.uniqueID) || (data.role_mentions || []).includes(this.uniqueID),
+                };
+                this.#store(scope, message);
+                this.#emit("incoming", { scope, message });
                 return;
             }
             case "chat_edited": {

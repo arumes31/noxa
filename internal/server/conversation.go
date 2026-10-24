@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -85,6 +86,9 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 			if !shared {
 				err = backend.MarkConversationRead(ctx, client.UniqueID, request.ID, request.ReadMessageID)
 			}
+			if err == nil {
+				s.syncRead(client, netproto.ReadMarker{Scope: netproto.ReadScopeConversation, ID: request.ID, MessageID: strconv.FormatInt(request.ReadMessageID, 10)})
+			}
 		case "create":
 			var c netproto.Conversation
 			c, err = backend.CreateConversation(ctx, client.UniqueID, request.Name)
@@ -128,15 +132,19 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 				if request.Action == "send" && uid == client.UniqueID {
 					continue
 				}
-				if target, found := s.clientByUniqueID(uid); found {
-					addressed := payload
-					if request.Action == "invite" && uid == request.Target {
-						addressed, err = eventEnvelope(eventConversationChanged, map[string]any{"id": request.ID, "invitation": true})
-						if err != nil {
-							return err
-						}
+				addressed := payload
+				if request.Action == "invite" && uid == request.Target {
+					addressed, err = eventEnvelope(eventConversationChanged, map[string]any{"id": request.ID, "invitation": true})
+					if err != nil {
+						return err
 					}
+				}
+				// Every session of the member: a desktop and phones alike.
+				for _, target := range s.sessionsOf(uid) {
 					_ = s.deps.Broadcast.BroadcastToClient(target.ID, addressed)
+				}
+				if request.Action == "send" {
+					s.pushNotify(uid, pushNotice{Kind: pushKindConversation, Tag: netproto.ReadScopeConversation + ":" + request.ID, From: client.nickname()})
 				}
 			}
 		}

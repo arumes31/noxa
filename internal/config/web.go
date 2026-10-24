@@ -40,6 +40,13 @@ type WebConfig struct {
 	// WebSocket admission per client IP.
 	WSConnectionsPerIP  int `mapstructure:"ws_connections_per_ip"`
 	WSAttemptsPerMinute int `mapstructure:"ws_attempts_per_minute"`
+	// Web Push. Push needs outbound HTTPS to the browsers' push services.
+	PushEnabled bool `mapstructure:"push_enabled"`
+	// PushVAPIDKeyFile holds the server's push signing key, created on start.
+	PushVAPIDKeyFile string `mapstructure:"push_vapid_key_file"`
+	// PushSubject is the contact push services see (mailto: or https:);
+	// empty uses PublicURL.
+	PushSubject string `mapstructure:"push_subject"`
 }
 
 func setWebDefaults(v *viper.Viper) {
@@ -57,6 +64,21 @@ func setWebDefaults(v *viper.Viper) {
 	v.SetDefault("web.max_devices_per_account", DefaultMaxDevicesPerAccount)
 	v.SetDefault("web.ws_connections_per_ip", 8)
 	v.SetDefault("web.ws_attempts_per_minute", 30)
+	v.SetDefault("web.push_enabled", true)
+	v.SetDefault("web.push_vapid_key_file", "./data/keys/vapid.pem")
+	v.SetDefault("web.push_subject", "")
+}
+
+// PushContact returns the VAPID subject: PushSubject or the public origin.
+func (w WebConfig) PushContact() string {
+	if s := strings.TrimSpace(w.PushSubject); s != "" {
+		return s
+	}
+	origin, err := w.PublicOrigin()
+	if err != nil {
+		return ""
+	}
+	return origin
 }
 
 // DefaultMaxDevicesPerAccount applies when max_devices_per_account is unset.
@@ -117,6 +139,14 @@ func (w WebConfig) validate() []error {
 	}
 	if w.WSAttemptsPerMinute < 1 {
 		errs = append(errs, errors.New("web.ws_attempts_per_minute must be positive"))
+	}
+	if w.PushEnabled {
+		if strings.TrimSpace(w.PushVAPIDKeyFile) == "" {
+			errs = append(errs, errors.New("web.push_vapid_key_file must not be empty when web.push_enabled=true"))
+		}
+		if s := strings.TrimSpace(w.PushSubject); s != "" && !strings.HasPrefix(s, "mailto:") && !strings.HasPrefix(s, "https://") {
+			errs = append(errs, errors.New("web.push_subject must be a mailto: or https: URL"))
+		}
 	}
 	return errs
 }

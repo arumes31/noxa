@@ -222,3 +222,62 @@ func deviceLinkQR(url string) (string, error) {
 	code.Scale = 6
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(code.PNG()), nil
 }
+
+// deviceActivityInterval throttles input reports. The server treats a
+// desktop as in use for two minutes after one and holds back phone
+// notifications meanwhile.
+const deviceActivityInterval = time.Minute
+
+// ReportInputActivity tells each connected server that this desktop is in use.
+func (a *App) ReportInputActivity() {
+	now := time.Now()
+	for _, cm := range a.connectedManagers() {
+		cm.reportActivity(now)
+	}
+}
+
+func (a *App) connectedManagers() []*connManager {
+	a.tabsMu.Lock()
+	defer a.tabsMu.Unlock()
+	managers := make([]*connManager, 0, len(a.tabs))
+	for _, tab := range a.tabs {
+		if tab != nil && tab.cm != nil {
+			managers = append(managers, tab.cm)
+		}
+	}
+	return managers
+}
+
+func (m *connManager) reportActivity(now time.Time) {
+	m.mu.Lock()
+	due := m.supportsDevices && m.conn != nil && now.Sub(m.activityReportedAt) >= deviceActivityInterval
+	if due {
+		m.activityReportedAt = now
+	}
+	m.mu.Unlock()
+	if due {
+		_ = m.write(netproto.MsgDeviceRequest, netproto.DeviceRequest{Action: netproto.DeviceActionActivity, Active: true})
+	}
+}
+
+// ReportReadForTab tells the server this desktop read a conversation
+// (scope dm, conversation or channel), so the account's phones clear its
+// badge and notification.
+func (a *App) ReportReadForTab(tabID, scope, id, messageID string) error {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err
+	}
+	marker := netproto.ReadMarker{Scope: scope, ID: id, MessageID: messageID}
+	request := netproto.DeviceRequest{Action: netproto.DeviceActionRead, Read: &marker}
+	if !request.Valid() {
+		return errors.New("invalid read marker")
+	}
+	cm.mu.Lock()
+	supported := cm.supportsDevices
+	cm.mu.Unlock()
+	if !supported {
+		return nil
+	}
+	return cm.write(netproto.MsgDeviceRequest, request)
+}

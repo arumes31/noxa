@@ -224,6 +224,41 @@ func (s *TCPServer) publishPrivateCallLocked(call netproto.CallSession) {
 	if call.EndedAt != 0 && previous.EndedAt == 0 {
 		time.AfterFunc(time.Minute, func() { s.retirePrivateCall(call.ID) })
 	}
+	s.pushCallChangesLocked(previous, call)
+}
+
+// pushCallChangesLocked rings callees' phones and removes the ringing
+// notification once a callee answered, declined or missed the call.
+func (s *TCPServer) pushCallChangesLocked(previous, call netproto.CallSession) {
+	ringing := func(c netproto.CallSession, uid string) bool {
+		if c.EndedAt != 0 {
+			return false
+		}
+		for _, p := range c.Participants {
+			if p.UniqueID == uid {
+				return p.State == "ringing"
+			}
+		}
+		return false
+	}
+	tag := "call:" + call.ID
+	for _, p := range call.Participants {
+		was, is := ringing(previous, p.UniqueID), ringing(call, p.UniqueID)
+		switch {
+		case is && !was:
+			from := ""
+			for _, caller := range call.Participants {
+				if caller.UniqueID == call.Caller {
+					if c, ok := s.clientByID(caller.ClientID); ok {
+						from = c.nickname()
+					}
+				}
+			}
+			s.pushNotify(p.UniqueID, pushNotice{Kind: pushKindCall, Tag: tag, From: from})
+		case was && !is:
+			s.pushClear(p.UniqueID, tag, "")
+		}
+	}
 }
 
 func (s *TCPServer) expirePrivateCall(id string) {
