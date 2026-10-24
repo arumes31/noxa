@@ -63,3 +63,12 @@
     .roles-footer { flex-wrap: wrap; }
     .role-status { flex-basis: 100%; }
 }
+
+.role-select .role-icon { width: 16px; height: 16px; margin-right: 6px; }
+.role-image-editor { display: flex; align-items: flex-start; gap: 12px; margin: 10px 0 16px; }
+.role-image-preview { display: grid; place-items: center; width: 56px; height: 56px; flex: 0 0 56px; border: 1px solid var(--border); border-radius: 8px; }
+.role-image-preview .role-icon { width: 32px; height: 32px; }
+.role-image-controls { flex: 1; min-width: 0; }
+.role-image-controls input { width: 100%; max-width: 100%; min-width: 0; }
+
+.role-image-controls input::file-selector-button { background: var(--bg-hover); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 5px 9px; margin-right: 10px; cursor: pointer; }

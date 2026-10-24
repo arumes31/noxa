@@ -121,6 +121,10 @@ func (f *fakeDevices) RevokeDevice(_ context.Context, principal, id, reason stri
 	return store.Device{}, store.ErrDeviceNotFound
 }
 
+func (f *fakeDevices) SignOutDevice(ctx context.Context, principal, id string) (store.Device, error) {
+	return f.RevokeDevice(ctx, principal, id, store.DeviceRevokedByUser)
+}
+
 func (f *fakeDevices) ResetDevices(_ context.Context, principal, keep, reason string) ([]store.Device, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -589,6 +593,10 @@ func TestFirstDeviceCannotBeRevokedRemotely(t *testing.T) {
 					t.Fatal("actor missing")
 				}
 				client.webTransport.Store(actor.web)
+				signout := deviceCallError(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionSignOut, DeviceID: master.DeviceID})
+				if signout.Code != errCodeMalformed {
+					t.Fatalf("signout accepted a remote target: %+v", signout)
+				}
 				rejected := deviceCallError(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: master.DeviceID})
 				if rejected.Code != errCodePermissionDenied {
 					t.Fatalf("revoke: %+v", rejected)

@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -205,6 +206,12 @@ func (a *virtualAuthenticator) get(t *testing.T, options json.RawMessage) json.R
 }
 
 func TestPasskeyRegisteredOnPhoneSignsInANewPhone(t *testing.T) {
+	for _, signOut := range []bool{false, true} {
+		t.Run(fmt.Sprintf("signOut=%v", signOut), func(t *testing.T) { testPasskeyPhoneLogin(t, signOut) })
+	}
+}
+
+func testPasskeyPhoneLogin(t *testing.T, signOut bool) {
 	devices := &fakeDevices{}
 	keys := &fakePasskeys{fakeDevices: devices}
 	env := startTestEnvDeps(t, nil, func(cfg *config.Config) {
@@ -247,6 +254,19 @@ func TestPasskeyRegisteredOnPhoneSignsInANewPhone(t *testing.T) {
 	stored, err := keys.Passkeys(t.Context(), "user-uid")
 	if err != nil || len(stored) != 1 || string(stored[0].UserHandle) != string(authenticator.userHandle) {
 		t.Fatalf("stored handle differs from the authenticator registration handle: %v", err)
+	}
+
+	if signOut {
+		deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionSignOut})
+		old, err := devices.DeviceByKey(t.Context(), phone.public)
+		if err != nil || old.Active() {
+			t.Fatalf("signed-out key remains active: %v", err)
+		}
+		oldConn, oldAuth := keyLogin(t, env.addr, phone)
+		_ = oldConn.Close()
+		if oldAuth.OK {
+			t.Fatal("signed-out device key still authenticates")
+		}
 	}
 
 	// A new phone with the synced passkey links itself before signing in.

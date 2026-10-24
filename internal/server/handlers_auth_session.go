@@ -135,6 +135,12 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 				return err
 			}
 		}
+		if id.guest && client.isWebTransport() {
+			if allowed, _ := s.WebGuestLoginPolicy(); !allowed {
+				rejection = "guest login is disabled on this server"
+				return authorization.ErrRoleForbidden
+			}
+		}
 		// Metadata serialization makes capacity check and publication atomic.
 		// Idle sockets are deliberately excluded from the configured user limit.
 		if max := s.EffectiveMaxClients(ctx); max > 0 && s.authenticatedClientCount() >= max {

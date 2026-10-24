@@ -1275,6 +1275,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     for (const root of snap.root_channels || []) flattenChannel(root);
     for (const client of snap.unassigned_clients || []) state.clients.push(client);
     for (const client of state.clients) {
+        client.roles = (client.roles || []).map(role => ({ ...role, icon_image: snap.role_icons?.[role.id] || "" }));
         if (isClientMicrophoneMuted(client, state)) {
             client.is_speaking = false;
             videoSpeaking(client.client_id, false);

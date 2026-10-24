@@ -156,11 +156,12 @@ func TestRoleSnapshotCosmeticsFollowVisibilityAndCurrentAssignments(t *testing.T
 	sm.AddChannel(&state.Channel{ChannelID: 2, Name: "hidden"})
 	sm.AddClient(&state.Client{ClientID: "visible", UserID: 4, UniqueID: "member", ChannelID: 1})
 	sm.AddClient(&state.Client{ClientID: "hidden", UserID: 5, UniqueID: "hidden-member", ChannelID: 2})
+	iconImage := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNguPT6PwAFUAK9sj8BLAAAAABJRU5ErkJggg=="
 	p := serverRoleFixture().policy
 	p.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel}
 	p.Roles = append(p.Roles,
-		authorization.Role{ID: 20, Name: "Helper", Position: 1, Color: "#abcdef", Icon: "★", Hoist: true, Permissions: []authorization.Capability{authorization.Speak}},
-		authorization.Role{ID: 30, Name: "Hidden role", Position: 2})
+		authorization.Role{ID: 20, Name: "Helper", Position: 1, Color: "#abcdef", Icon: "★", IconImage: &iconImage, Hoist: true, Permissions: []authorization.Capability{authorization.Speak}},
+		authorization.Role{ID: 30, Name: "Hidden role", Position: 2, IconImage: &iconImage})
 	p.Members = []authorization.RoleMember{{UserID: 4, RoleIDs: []int64{20}}, {UserID: 5, RoleIDs: []int64{30}}}
 	p.Channels = append(p.Channels, authorization.ChannelPolicy{ChannelID: 2, Overrides: []authorization.RoleOverride{{RoleID: 10, Capability: authorization.ViewChannel, Effect: authorization.Deny}}})
 	for _, removed := range []bool{false, true} {
@@ -176,6 +177,9 @@ func TestRoleSnapshotCosmeticsFollowVisibilityAndCurrentAssignments(t *testing.T
 		raw, err := json.Marshal(view)
 		if err != nil || strings.Contains(string(raw), "Hidden role") || strings.Contains(string(raw), "hidden-member") || strings.Contains(string(raw), "user_id") || strings.Contains(string(raw), "permissions") {
 			t.Fatalf("snapshot cosmetics leaked private data: %s, %v", raw, err)
+		}
+		if removed && len(view.RoleIcons) != 0 || !removed && (len(view.RoleIcons) != 1 || view.RoleIcons[20] != iconImage || strings.Count(string(raw), "data:image/png") != 1) {
+			t.Fatal("role images were repeated, leaked, or not refreshed")
 		}
 		roles := view.RootChannels[0].Clients[0].Roles
 		if removed && len(roles) != 0 || !removed && (len(roles) != 1 || roles[0].Name != "Helper" || roles[0].Icon != "★") {

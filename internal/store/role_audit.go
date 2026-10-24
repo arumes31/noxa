@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"fmt"
 	"slices"
 
 	"noxa/internal/authorization"
@@ -16,7 +18,7 @@ func roleAuditDetail(before, after authorization.RolePolicy, change authorizatio
 	case authorization.RoleDelete:
 		detail.Before, detail.After = auditRole(before, change.RoleID), auditRole(after, change.RoleID)
 	case authorization.RolesReorder:
-		detail.Before, detail.After = before.Roles, after.Roles
+		detail.Before, detail.After = auditRoleList(before), auditRoleList(after)
 	case authorization.MemberRolesSet:
 		detail.Before, detail.After = auditMember(before, change.UserID), auditMember(after, change.UserID)
 	case authorization.ChannelAccessSet:
@@ -33,10 +35,32 @@ func roleAuditDetail(before, after authorization.RolePolicy, change authorizatio
 	return detail
 }
 
-func auditRole(policy authorization.RolePolicy, id int64) *authorization.Role {
+type auditedRole struct {
+	authorization.Role
+	IconImageHash string `json:"icon_image_hash,omitempty"`
+}
+
+func compactAuditRole(role authorization.Role) auditedRole {
+	image := authorization.RoleIconImage(role.IconImage)
+	role.IconImage = nil
+	result := auditedRole{Role: role}
+	if image != "" {
+		result.IconImageHash = fmt.Sprintf("%x", sha256.Sum256([]byte(image)))
+	}
+	return result
+}
+func auditRoleList(policy authorization.RolePolicy) []auditedRole {
+	result := make([]auditedRole, 0, len(policy.Roles))
+	for _, role := range policy.Roles {
+		result = append(result, compactAuditRole(role))
+	}
+	return result
+}
+func auditRole(policy authorization.RolePolicy, id int64) *auditedRole {
 	for _, role := range policy.Roles {
 		if role.ID == id {
-			return &role
+			result := compactAuditRole(role)
+			return &result
 		}
 	}
 	return nil

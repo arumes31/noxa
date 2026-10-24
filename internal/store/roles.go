@@ -174,10 +174,14 @@ func readRolePolicy(ctx context.Context, tx *sql.Tx, lock bool) (authorization.R
 		return p, err
 	}
 	roleIndex := map[int64]int{}
-	err = roleRows(ctx, tx, `SELECT id,name,position,color,icon,hoist,mentionable,deletion_protected FROM auth_roles ORDER BY position`, func(rows *sql.Rows) error {
+	err = roleRows(ctx, tx, `SELECT id,name,position,color,icon,hoist,mentionable,deletion_protected,icon_image FROM auth_roles ORDER BY position`, func(rows *sql.Rows) error {
 		var r authorization.Role
-		if err := rows.Scan(&r.ID, &r.Name, &r.Position, &r.Color, &r.Icon, &r.Hoist, &r.Mentionable, &r.DeletionProtected); err != nil {
+		var iconImage string
+		if err := rows.Scan(&r.ID, &r.Name, &r.Position, &r.Color, &r.Icon, &r.Hoist, &r.Mentionable, &r.DeletionProtected, &iconImage); err != nil {
 			return err
+		}
+		if iconImage != "" {
+			r.IconImage = &iconImage
 		}
 		roleIndex[r.ID] = len(p.Roles)
 		p.Roles = append(p.Roles, r)
@@ -277,7 +281,7 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 		if exists && reflect.DeepEqual(old, r) {
 			continue
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO auth_roles(id,name,position,color,icon,hoist,mentionable,deletion_protected) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,position=EXCLUDED.position,color=EXCLUDED.color,icon=EXCLUDED.icon,hoist=EXCLUDED.hoist,mentionable=EXCLUDED.mentionable,deletion_protected=EXCLUDED.deletion_protected`, r.ID, r.Name, r.Position, r.Color, r.Icon, r.Hoist, r.Mentionable, r.DeletionProtected)
+		_, err := tx.ExecContext(ctx, `INSERT INTO auth_roles(id,name,position,color,icon,hoist,mentionable,deletion_protected,icon_image) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,position=EXCLUDED.position,color=EXCLUDED.color,icon=EXCLUDED.icon,hoist=EXCLUDED.hoist,mentionable=EXCLUDED.mentionable,deletion_protected=EXCLUDED.deletion_protected,icon_image=EXCLUDED.icon_image`, r.ID, r.Name, r.Position, r.Color, r.Icon, r.Hoist, r.Mentionable, r.DeletionProtected, authorization.RoleIconImage(r.IconImage))
 		if err != nil {
 			return err
 		}

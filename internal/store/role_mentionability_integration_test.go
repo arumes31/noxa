@@ -16,9 +16,10 @@ func TestRoleMentionabilityPersistenceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	iconImage := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNguPT6PwAFUAK9sj8BLAAAAABJRU5ErkJggg=="
 	p, err = s.ChangeRolePolicy(t.Context(), owner, authorization.RoleChange{
 		Kind: authorization.RoleCreate, ExpectedRevision: p.Revision,
-		Role: authorization.Role{Name: "Raid team", Color: "#12ab34", Icon: "R", Hoist: true, Permissions: []authorization.Capability{authorization.ViewChannel}},
+		Role: authorization.Role{Name: "Raid team", Color: "#12ab34", Icon: "R", IconImage: &iconImage, Hoist: true, Permissions: []authorization.Capability{authorization.ViewChannel}},
 	})
 	if err != nil {
 		t.Fatal(err)

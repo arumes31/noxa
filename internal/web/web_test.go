@@ -289,3 +289,27 @@ func TestFTCarriesFileTransfersWhenConfigured(t *testing.T) {
 		t.Fatalf("file server echo = %q, %v", got, err)
 	}
 }
+
+type guestPolicyControl struct {
+	echoControl
+	allowed, password bool
+}
+
+func (c *guestPolicyControl) WebGuestLoginPolicy() (bool, bool) { return c.allowed, c.password }
+func TestInfoExposesGuestPolicy(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		srv, err := New(testConfig(t), "test", &guestPolicyControl{allowed: enabled, password: true}, zap.NewNop())
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "https://chat.example/api/v1/web/info", nil))
+		var info Info
+		if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+			t.Fatal(err)
+		}
+		if info.GuestLogin != enabled || !info.ServerPasswordRequired {
+			t.Fatalf("wrong flags: %+v", info)
+		}
+	}
+}

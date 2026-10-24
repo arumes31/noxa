@@ -14,6 +14,7 @@ import (
 	"noxa/internal/authorization"
 	"noxa/internal/config"
 	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 // Virtual time and net.Pipe exercise connection deadlines without wall-clock
@@ -323,6 +324,28 @@ func TestTCPIdleConnectionDoesNotQueryAdmissionSettings(t *testing.T) {
 		default:
 		}
 		time.Sleep(10 * time.Second)
+		assertPreauthExpired(t, s, done)
+	})
+}
+
+func TestWebPasskeyHasOneBoundedChooserWindow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, peer, done := startPreauthPipe(t, 2, false)
+		defer finishPreauthPipe(peer, done)
+		s.cfg.Web = config.WebConfig{Enabled: true, PublicURL: passkeyTestOrigin}
+		s.deps.Devices = &fakePasskeys{fakeDevices: &fakeDevices{devices: []store.Device{}}}
+		s.mu.RLock()
+		for _, c := range s.clients {
+			c.webTransport.Store(true)
+		}
+		s.mu.RUnlock()
+		deviceCall(t, peer, netproto.DeviceRequest{Action: netproto.DeviceActionPasskeyLoginBegin})
+		synctest.Wait()
+		time.Sleep(3 * time.Second)
+		// A normal handshake would already be closed; the Android chooser is allowed
+		// to remain open. Issuing a new challenge does not extend the first window.
+		deviceCall(t, peer, netproto.DeviceRequest{Action: netproto.DeviceActionPasskeyLoginBegin})
+		time.Sleep(passkeyCeremonyTTL - 3*time.Second)
 		assertPreauthExpired(t, s, done)
 	})
 }

@@ -46,3 +46,11 @@ type webTransportConn interface {
 }
 
 func (c *Client) isWebTransport() bool { return c.webTransport.Load() }
+
+// WebGuestLoginPolicy exposes only public admission flags to the PWA. The
+// dispatcher still enforces guest permission and the server password at login.
+func (s *TCPServer) WebGuestLoginPolicy() (allowed, passwordRequired bool) {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.cfg.AllowAnonymous, s.deps != nil && s.deps.ServerPasswordHash != ""
+}

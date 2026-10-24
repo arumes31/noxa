@@ -86,6 +86,7 @@ export function renderYou(root) {
     const list = h("ul", { class: "list" });
     const passkeys = h("ul", { class: "list" });
     const notifications = notificationSettings(session);
+    const guest = !!app.meta.guest;
     const refresh = async () => {
         try {
             const result = await devices(session);
@@ -117,20 +118,24 @@ export function renderYou(root) {
         h("div", { class: "screen-body" },
             h("div", { class: "card row" }, avatar(session.nickname, "md"),
                 h("span", { class: "row-main" }, h("span", { class: "row-title" }, session.nickname), h("span", { class: "row-sub" }, app.info?.server_name || ""))),
-            h("p", { class: "section-label" }, t("settings.notifications")),
-            notifications.box,
-            h("p", { class: "section-label" }, t("settings.passkeys")),
+            guest ? h("p", { class: "hint" }, t("connect.guestHint")) : h("p", { class: "section-label" }, t("settings.notifications")),
+            guest ? null : notifications.box,
+            guest ? null : h("p", { class: "section-label" }, t("settings.passkeys")),
             passkeys,
-            passkeysSupported() ? h("button", { class: "btn btn-primary btn-block", onclick: async () => { await savePasskey(); refresh(); } }, icon("passkey"), " ", t("settings.savePasskey")) : null,
-            h("p", { class: "section-label" }, t("settings.devices")),
+            !guest && passkeysSupported() ? h("button", { class: "btn btn-primary btn-block", onclick: async () => { await savePasskey(); refresh(); } }, icon("passkey"), " ", t("settings.savePasskey")) : null,
+            guest ? null : h("p", { class: "section-label" }, t("settings.devices")),
             list,
             h("div", { style: "height:16px" }),
             h("button", { class: "btn btn-danger btn-block", onclick: async () => {
-                const ok = await sheet(t("settings.signOut"), t("settings.signOutConfirm"), [{ label: t("settings.revoke"), value: true, danger: true }, { label: t("link.cancel"), value: false }]);
+                const ok = await sheet(t("settings.signOut"), t(guest ? "settings.guestSignOutConfirm" : "settings.signOutConfirm"), [{ label: t("settings.signOut"), value: true, danger: true }, { label: t("link.cancel"), value: false }]);
                 if (!ok) return;
-                await session.conn.request(Msg.DeviceRequest, { action: "revoke", device_id: session.deviceID }, Msg.DeviceResult).catch(() => {});
-                await forgetDevice();
+                try {
+                    if (!guest) await session.conn.request(Msg.DeviceRequest, { action: "sign_out" }, Msg.DeviceResult, { accept: r => r.action === "sign_out" });
+                    await forgetDevice();
+                } catch (error) {
+                    toast(t("common.error", { error: error.message }), "warn");
+                }
             } }, t("settings.signOut")))),
         nav("you"));
-    refresh();
+    if (!guest) refresh();
 }

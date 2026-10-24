@@ -39,6 +39,14 @@ func buildRoleSnapshotContext(ctx context.Context, sm *state.Manager, evaluator 
 				return err
 			}
 			member.Roles = evaluator.MemberAppearance(member.UserID)
+			for _, role := range member.Roles {
+				if image := evaluator.RoleImage(role.ID); image != "" {
+					if snapshot.RoleIcons == nil {
+						snapshot.RoleIcons = make(map[int64]string)
+					}
+					snapshot.RoleIcons[role.ID] = image
+				}
+			}
 			// Membership and flags are read in a snapshot independently of
 			// movement cleanup. Never publish controls denied in that scope.
 			member.PrioritySpeaker = member.PrioritySpeaker && member.ChannelID > 0 && evaluator.Evaluate(member.UserID, member.ChannelID, authorization.PrioritySpeaker).Allowed

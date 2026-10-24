@@ -807,7 +807,10 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         const client = { client_id: "member", unique_id: "member", roles: [role] };
         const state = { authorizationModel: "roles-v1", clients: [client] };
         replaceGlobal(t, "window", { __noxa: { state } });
-        replaceGlobal(t, "document", { createElement: () => ({ style: {}, textContent: "" }) });
+        replaceGlobal(t, "document", {
+            createElement: () => ({ style: {}, textContent: "", setAttribute() {}, append(...nodes) { this.textContent += nodes.map(n => n.textContent).join(""); } }),
+            createTextNode: text => ({ textContent: text }),
+        });
         const label = {}, chips = { children: [], replaceChildren() { this.children = []; }, append(...items) { this.children.push(...items); } };
         const row = { querySelector: (selector) => selector === ".ci-label" ? label : chips };
         const { renderClientRoles } = await import("../src/clientinfo.js");

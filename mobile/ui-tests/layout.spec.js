@@ -25,3 +25,24 @@ for (const width of [320, 390, 1440]) {
         });
     }
 }
+
+test("mobile server list hides idle phones and counts accounts once", async ({ page }) => {
+    await page.goto("http://127.0.0.1:5175/app/ui-tests/layout.html?view=presence");
+    await expect(page.locator(".screen")).toContainText("2 online");
+    await expect(page.locator(".screen")).not.toContainText("Daniel mobile");
+    await expect(page.locator(".screen")).toContainText("Daniel");
+});
+
+for (const failure of [false, true]) {
+    test(`sign-out preserves passkeys and handles failure=${failure}`, async ({ page }) => {
+        const errors = [];
+        page.on("pageerror", error => errors.push(error.message));
+        await page.goto(`http://127.0.0.1:5175/app/ui-tests/layout.html?view=${failure ? "signout-error" : "signout"}`);
+        await page.getByRole("button", { name: "Sign out of this device", exact: true }).click();
+        await expect(page.getByText("Your saved passkeys remain available.", { exact: false })).toBeVisible();
+        await page.getByRole("button", { name: "Sign out of this device", exact: true }).last().click();
+        await expect(page.locator("html")).toHaveAttribute("data-device-request", JSON.stringify({ action: "sign_out" }));
+        if (failure) await expect(page.getByText("Server unavailable", { exact: false })).toBeVisible();
+        expect(errors).toEqual([]);
+    });
+}

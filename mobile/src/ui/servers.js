@@ -7,9 +7,10 @@ import { dmHref, header, nav, unreadBadge } from "./common.js";
 
 export function renderServers(root) {
     const session = app.session;
-    const channels = session.channels();
+    const channels = session.channels().map(c => ({ ...c, clients: c.home ? c.clients.filter(member => !member.on_mobile) : c.clients }));
+    const online = new Set(session.clients().map(c => c.user_id > 0 ? `user:${c.user_id}` : c.unique_id || c.client_id)).size;
     root.replaceChildren(h("section", { class: "screen" },
-        header(app.info?.server_name || "noXa", { sub: `${session.clients().length} online` }),
+        header(app.info?.server_name || "noXa", { sub: `${online} online` }),
         h("div", { class: "screen-body" },
             h("p", { class: "section-label" }, t("channels.text")),
             h("ul", { class: "list" },
@@ -29,6 +30,6 @@ export function renderServers(root) {
                         class: "row", style: "min-height:36px",
                         href: client.unique_id && client.unique_id !== session.uniqueID ? dmHref(client.unique_id) : null,
                         "aria-label": client.unique_id !== session.uniqueID ? t("dm.messageTo", { name: client.nickname }) : null,
-                    }, avatar(client.nickname, "sm"), h("span", { class: "row-sub" }, client.nickname), client.on_mobile ? h("span", { class: "row-meta", title: t("presence.onMobile") }, "📱") : null)))) : null))))),
+                    }, avatar(client.nickname, "sm"), h("span", { class: "row-sub" }, client.nickname), client.on_mobile ? h("span", { class: "row-meta", title: t("presence.onMobile") }, t("presence.mobileBadge")) : null)))) : null))))),
         nav("servers"));
 }

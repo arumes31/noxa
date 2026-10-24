@@ -2419,3 +2419,7 @@ body.details-collapsed #app-body {
 .server-overview-warning { color: var(--warn); font-size: .8rem; }
 .server-overview [hidden] { display: none; }
 .server-overview summary { cursor: pointer; }
+
+.role-icon { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; flex: 0 0 1em; vertical-align: middle; }
+.role-icon img, .role-icon svg { display: block; width: 100%; height: 100%; object-fit: contain; }
+.role-chip .role-icon { margin-right: .25em; }

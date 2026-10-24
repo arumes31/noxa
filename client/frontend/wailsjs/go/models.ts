@@ -319,6 +319,7 @@ export namespace authorization {
 	    position: number;
 	    color: string;
 	    icon: string;
+	    icon_image?: string;
 	    hoist: boolean;
 	    mentionable: boolean;
 	    deletion_protected: boolean;
@@ -335,6 +336,7 @@ export namespace authorization {
 	        this.position = source["position"];
 	        this.color = source["color"];
 	        this.icon = source["icon"];
+	        this.icon_image = source["icon_image"];
 	        this.hoist = source["hoist"];
 	        this.mentionable = source["mentionable"];
 	        this.deletion_protected = source["deletion_protected"];

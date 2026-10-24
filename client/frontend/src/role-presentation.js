@@ -1,3 +1,5 @@
+import { roleIconElement } from "./role-icons.js";
+
 // Cosmetics come from the current filtered snapshot, never a management query.
 export function memberRoles(state, uid) {
     const roles = state.clients.find((c) => c.unique_id === uid)?.roles;
@@ -22,7 +24,7 @@ export function hoistedRoles(state) {
 export function roleChip(role) {
     const chip = document.createElement("span");
     chip.className = "role-chip group-badge";
-    chip.textContent = [role.icon, role.name].filter(Boolean).join(" ");
+    chip.append(roleIconElement(role), document.createTextNode(` ${role.name}`));
     chip.title = role.name;
     const color = roleColor(role.color);
     if (color) { chip.style.color = color; chip.style.borderColor = color; }

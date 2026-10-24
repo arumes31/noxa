@@ -71,6 +71,26 @@ export function renderConnect(root, { onSignedIn }) {
         scan,
         h("div", { class: "field" }, h("label", { for: "link-code" }, t("connect.code")), code),
         claim);
+    const guestName = h("input", { class: "input", id: "guest-name", autocomplete: "nickname", required: "", maxlength: "32", value: app.meta.guest ? app.meta.nickname || "" : "" });
+    const guestPassword = h("input", { class: "input", id: "guest-password", type: "password", autocomplete: "current-password", required: "" });
+    const guestButton = h("button", { class: "btn btn-block", type: "submit" }, t("connect.guest"));
+    const guestForm = app.info?.guest_login ? h("details", { class: "connect-guest" },
+        h("summary", {}, t("connect.guest")),
+        h("form", { class: "connect-link", onsubmit: async event => {
+            event.preventDefault();
+            guestButton.disabled = true;
+            error.textContent = "";
+            try {
+                await connect({ guest: { nickname: guestName.value.trim(), serverPassword: guestPassword.value } });
+                onSignedIn({ offerPasskey: false });
+            } catch (err) {
+                error.textContent = t("signin.failed", { error: err.message || err });
+            } finally { guestButton.disabled = false; }
+        } },
+        h("p", { class: "hint" }, t("connect.guestHint")),
+        h("div", { class: "field" }, h("label", { for: "guest-name" }, t("connect.nickname")), guestName),
+        app.info.server_password_required ? h("div", { class: "field" }, h("label", { for: "guest-password" }, t("connect.serverPassword")), guestPassword) : null,
+        guestButton)) : null;
     root.replaceChildren(h("main", { class: "connect connect-signin" },
         brand(),
         h("section", { class: "card connect-card", "aria-labelledby": "signin-heading" },
@@ -85,6 +105,7 @@ export function renderConnect(root, { onSignedIn }) {
             h("p", { class: "hint", id: "passkey-hint" }, t(passkeysSupported() ? "connect.passkeyHint" : "connect.noPasskeys")),
             h("div", { class: "connect-divider" }, h("span", {}, t("connect.or"))),
             form,
+            guestForm,
             error),
         isIOS() ? h("p", { class: "hint connect-install" }, t("connect.install")) : null));
     return () => scanners.get(root)?.abort();

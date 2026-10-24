@@ -17,6 +17,7 @@ export const app = new EventTarget();
 app.info = null;
 app.identity = null;
 app.meta = {};
+app.guestPassword = "";
 app.session = null;
 app.online = true;
 /** Push availability and this device's preferences, after syncPush. */
@@ -83,30 +84,50 @@ export async function forgetDevice() {
     await clearIdentity();
     app.identity = null;
     app.meta = {};
+    app.guestPassword = "";
     emit("signedout");
 }
 
 /** Signs in with the stored device key and starts the chat session. */
-export async function connect() {
+export async function connect({ guest = null } = {}) {
     clearTimeout(reconnectTimer);
+    const reuseGuest = !!(guest && app.meta.guest && app.identity);
+    const identity = guest ? (reuseGuest ? app.identity : newIdentity()) : app.identity;
     const conn = await Connection.open();
     let auth;
     try {
-        auth = await signIn(conn, app.identity, { version: app.info?.version || "0.0.0" });
+        auth = await signIn(conn, identity, {
+            version: app.info?.version || "0.0.0",
+            nickname: guest ? guest.nickname : app.meta.guest ? app.meta.nickname : "",
+            serverPassword: guest ? guest.serverPassword : app.guestPassword || "",
+        });
     } catch (error) {
         conn.close();
-        if (/signed out|link it again/i.test(error.message)) {
+        if (!guest && /signed out|link it again/i.test(error.message)) {
             await forgetDevice();
             error.revoked = true;
         }
         throw error;
     }
     app.session?.close();
-    const session = new ChatSession(conn, app.identity, auth);
+    const session = new ChatSession(conn, identity, auth);
     app.session = session;
+    session.addEventListener("snapshot", () => {
+        // Subscribing delivers a channel's chat and keys without joining it.
+        const missing = session.channels().filter(c => c.chat && !session.subscriptions.has(c.id)).map(c => c.id);
+        if (missing.length) session.subscribe(missing).catch(() => {});
+    });
     reconnectAttempt = 0;
     setOnline(true);
-    app.meta = { ...app.meta, deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
+    app.meta = { ...(guest ? { guest: true, linked: false } : app.meta), deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
+    if (guest) {
+        // Authentication has succeeded. Retain incoming channel frames while
+        // replacing local data, and never erase a saved login on a bad password.
+        app.identity = identity;
+        app.guestPassword = guest.serverPassword;
+        if (!reuseGuest) await clearIdentity();
+        await saveIdentity(identity, app.meta);
+    }
     const rejoin = app.voice?.channelID || 0;
     app.voice?.close();
     app.voice = new Voice(session);
@@ -140,11 +161,6 @@ export async function connect() {
         setOnline(false);
         scheduleReconnect();
     });
-    session.addEventListener("snapshot", () => {
-        // Subscribing delivers a channel's chat and keys without joining it.
-        const missing = session.channels().filter(c => c.chat && !session.subscriptions.has(c.id)).map(c => c.id);
-        if (missing.length) session.subscribe(missing).catch(() => {});
-    });
     session.addEventListener("device", event => {
         if (event.detail?.event === "revoked" && event.detail.device?.device_id === session.deviceID) forgetDevice();
         if (event.detail?.event === "read" && event.detail.read) readElsewhere(event.detail.read);
@@ -154,8 +170,8 @@ export async function connect() {
         const { scope, message } = event.detail;
         if (!message.own) noteUnread(`channel:${scope}`, message.mentioned);
     });
-    reportVisibility(conn);
-    syncPush(conn).then(state => {
+    if (!app.meta.guest) reportVisibility(conn);
+    if (!app.meta.guest) syncPush(conn).then(state => {
         app.push = state;
         emit("push", state);
     }).catch(() => {});
@@ -384,7 +400,7 @@ if (typeof window !== "undefined") {
     };
     window.addEventListener("online", retryNow);
     document.addEventListener("visibilitychange", () => {
-        if (app.session) reportVisibility(app.session.conn);
+        if (app.session && !app.meta.guest) reportVisibility(app.session.conn);
         if (document.visibilityState !== "visible") return;
         retryNow();
         if (app.viewing !== null) markRead(app.viewing);

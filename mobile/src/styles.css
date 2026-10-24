@@ -248,3 +248,7 @@ a.row, .icon-btn, .call-bar-main { text-decoration: none; color: inherit; }
 .qr-dialog h2 { margin-top: 0; font-size: 1.15rem; }
 .qr-camera { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 12px; background: #000; }
 .qr-dialog .hint { margin: 12px 0; }
+
+.connect-guest { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+.connect-guest summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.connect-guest[open] summary { margin-bottom: 12px; }
