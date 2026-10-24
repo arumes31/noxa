@@ -11,6 +11,7 @@ import { adminEntry } from "./admin-entry.js";
 import { contactsSection } from "./contacts.js";
 import { notificationBehaviour } from "./notify-settings.js";
 import { profileCard } from "./you-social.js";
+import { voiceSettings } from "./voice-settings.js";
 
 import { backupFlow, renderDeviceList, serversSection } from "./devices.js";
 
@@ -122,6 +123,7 @@ export function renderYou(root) {
             guest ? null : notifications.box,
             h("p", { class: "section-label" }, t("notify.behaviour")),
             notificationBehaviour(),
+            voiceSettings(),
             guest ? null : h("p", { class: "section-label" }, t("settings.passkeys")),
             passkeys,
             !guest && passkeysSupported() ? h("button", { class: "btn btn-primary btn-block", onclick: async () => { await savePasskey(); refresh(); } }, icon("passkey"), " ", t("settings.savePasskey")) : null,

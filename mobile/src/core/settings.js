@@ -36,12 +36,13 @@ export const DEFAULTS = Object.freeze({
     warnMutedTalking: true,
     lowBandwidth: false,
     masterVolume: 1,
-    userVolumes: {}, // unique ID -> 0..3
+    userVolumes: {}, // unique ID -> 0..2 (200 %)
     mutedUsers: [], // unique IDs muted locally
-    shareVolumes: {}, // unique ID -> 0..3 for shared screen audio
+    shareVolumes: {}, // unique ID -> 0..2 for shared screen audio
     receiveQuality: "auto", // auto | high | medium | low
     cameraEffect: "none", // none | blur (full-frame privacy blur)
     blurStrength: 12, // px, 2 .. 30
+    whisperTargets: { uniqueIDs: [], channelIDs: [] },
     // Notifications
     sounds: true,
     soundVolume: 1,

@@ -143,8 +143,10 @@ export async function connect({ guest = null } = {}) {
         await saveIdentity(identity, app.meta);
     }
     const rejoin = app.voice?.channelID || 0;
-    app.voice?.close();
-    app.voice = new Voice(session);
+    const previousVoice = app.voice;
+    previousVoice?.close();
+    // Mute, deafen and the last whisperer carry over to the new session.
+    app.voice = new Voice(session, previousVoice);
     watchVoice(app.voice);
     // A dropped connection ends the call; rejoin the same channel.
     if (rejoin) joinVoice(rejoin).catch(() => {});

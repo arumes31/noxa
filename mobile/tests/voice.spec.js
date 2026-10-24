@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { Msg } from "../src/core/frame.js";
 import { desktopSession } from "./harness.mjs";
 import { linkPhone, openServerToMembers } from "./helpers.mjs";
 
@@ -16,7 +17,14 @@ async function phoneIn(browser, account, channel) {
     page.on("pageerror", error => console.log("pageerror:", error.message));
     const desktop = await desktopSession(server.controlAddr, account, { version: info.version });
     await openServerToMembers(desktop).catch(() => {});
+    // Earlier specs link phones to the same accounts; stay under the device limit.
+    const list = await desktop.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
+    for (const device of (list.devices || []).filter(d => !d.current && !d.first_device)) {
+        await desktop.conn.request(Msg.DeviceRequest, { action: "revoke", device_id: device.device_id }, Msg.DeviceResult).catch(() => {});
+    }
     await linkPhone(page, desktop, server.webURL, expect);
+    // The passkey offer is a modal; the install banner has a "Not now" of its own.
+    await page.getByRole("dialog").getByRole("button", { name: "Not now" }).click({ timeout: 15000 }).catch(() => {});
     await page.getByRole("link", { name: "Voice", exact: true }).click();
     await page.getByRole("button", { name: new RegExp(`^${channel}`) }).click();
     await expect(page.getByText("Voice connected")).toBeVisible({ timeout: 20000 });
@@ -139,4 +147,140 @@ test("a phone watches two cameras on a stage with quality, focus, swap, fullscre
         phone.desktop.conn.close();
         await phone.context.close();
     }
+});
+
+/** Keeps the latest tree snapshot and every event a desktop session received. */
+function trackSnapshots(desktop) {
+    desktop.snapshot = null;
+    desktop.events = [];
+    desktop.conn.on(Msg.Snapshot, snapshot => { desktop.snapshot = snapshot; });
+    desktop.conn.on(Msg.Event, event => desktop.events.push(event));
+}
+
+function findChannel(snapshot, name) {
+    const walk = nodes => {
+        for (const node of nodes || []) {
+            if (node.Name === name) return node;
+            const found = walk(node.children);
+            if (found) return found;
+        }
+        return null;
+    };
+    return walk(snapshot?.root_channels);
+}
+
+function clientIn(snapshot, uid) {
+    const all = [];
+    const walk = nodes => { for (const node of nodes || []) { all.push(...(node.clients || [])); walk(node.children); } };
+    walk(snapshot?.root_channels);
+    return all.find(c => c.unique_id === uid) || null;
+}
+
+const storedSettings = page => page.evaluate(() => JSON.parse(localStorage.getItem("noxa.settings") || "{}"));
+
+test("voice settings, member volume, whisper, hands, push-to-talk delay, mic test and data saver", async ({ browser }) => {
+    test.setTimeout(180000);
+    const owner = await desktopSession(server.controlAddr, server.accounts.owner, { version: info.version });
+    await openServerToMembers(owner);
+    owner.conn.close();
+    const rowan = await desktopSession(server.controlAddr, server.accounts.rowan, { version: info.version });
+    trackSnapshots(rowan);
+    const a = await phoneIn(browser, server.accounts.owner, "Public1");
+    const page = a.page;
+
+    // Rowan's desktop joins the phone's channel.
+    await expect.poll(() => findChannel(rowan.snapshot, "Public1")?.ChannelID || 0, { timeout: 20000 }).toBeGreaterThan(0);
+    const channelID = findChannel(rowan.snapshot, "Public1").ChannelID;
+    await rowan.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: channelID }, 158);
+    await expect(page.locator(".voice-tile")).toHaveCount(2, { timeout: 20000 });
+
+    // Per-member sheet: volume and "mute for me", keyed by unique ID.
+    const rowanName = rowan.auth.nickname;
+    await page.getByRole("button", { name: `Options for ${rowanName}` }).click();
+    const memberSheet = page.getByRole("dialog", { name: rowanName });
+    await memberSheet.getByRole("slider", { name: "Volume" }).fill("150");
+    await memberSheet.getByRole("switch", { name: /Mute for me/ }).check();
+    await memberSheet.getByRole("button", { name: "Close" }).click();
+    await expect(memberSheet).toHaveCount(0);
+    await expect(page.getByLabel("Muted for you")).toBeVisible();
+    const stored = await storedSettings(page);
+    expect(stored.userVolumes[rowan.uniqueID]).toBe(1.5);
+    expect(stored.mutedUsers).toContain(rowan.uniqueID);
+
+    // Whisper to Rowan: the phone's WhisperSet reaches the server and Rowan is told.
+    await page.getByRole("button", { name: "Choose whisper targets" }).click();
+    const targets = page.getByRole("dialog", { name: "Whisper to" });
+    await targets.getByRole("checkbox", { name: new RegExp(rowanName) }).check();
+    await targets.getByRole("button", { name: "Save targets" }).click();
+    await expect(page.getByRole("button", { name: "Whisper targets (1)" })).toBeVisible();
+    const whisper = page.getByRole("button", { name: "Hold to whisper" });
+    await whisper.dispatchEvent("pointerdown");
+    await expect(page.getByText("You are whispering.")).toBeVisible({ timeout: 10000 });
+    await expect.poll(() => rowan.events.some(e => e.type === "whisper" && e.data?.from_unique_id === a.desktop.uniqueID)
+        || rowan.events.some(e => e.type === "speaking_changed" && e.data?.whisper), { timeout: 30000 }).toBe(true);
+    await whisper.dispatchEvent("pointerup");
+    await expect(page.getByText("You are whispering.")).toHaveCount(0);
+
+    // Raise hand: the queue changes for everyone; the owner moderates it.
+    await page.getByRole("button", { name: "Raise hand" }).click();
+    await expect(page.getByRole("button", { name: "Lower hand" }).first()).toBeVisible({ timeout: 10000 });
+    await expect.poll(() => clientIn(rowan.snapshot, a.desktop.uniqueID)?.hand_raised_order || 0, { timeout: 10000 }).toBeGreaterThan(0);
+    const queue = page.getByRole("region", { name: "Speaking queue" });
+    await expect(queue.getByRole("listitem")).toHaveCount(1);
+    await queue.getByRole("button", { name: "Call next" }).click();
+    await expect(queue.getByText("You're up: a moderator called on you.")).toBeVisible({ timeout: 10000 });
+    await queue.getByRole("button", { name: "Clear queue" }).click();
+    await expect(queue).toBeHidden({ timeout: 10000 });
+
+    // Priority speaker is shown on the own tile.
+    await page.getByRole("button", { name: "Priority speaker" }).click();
+    await expect(page.getByRole("button", { name: "Priority speaker" })).toHaveAttribute("aria-pressed", "true", { timeout: 10000 });
+    await expect(page.locator(".voice-tile.priority")).toHaveCount(1);
+
+    // Settings sheet: microphone, processing, push-to-talk with a release delay.
+    await page.getByRole("button", { name: "Voice settings" }).click();
+    const settingsSheet = page.getByRole("dialog", { name: "Voice settings" });
+    await expect(settingsSheet.getByRole("combobox", { name: "Microphone" }).locator("option").first()).toHaveText("Default");
+    await settingsSheet.getByRole("switch", { name: "Echo cancellation" }).uncheck();
+    // Noise suppression learns the fake microphone's steady beep as noise; the meter needs it raw.
+    await settingsSheet.getByRole("switch", { name: "Noise suppression" }).uncheck();
+    await settingsSheet.getByRole("radio", { name: "Push to talk" }).check();
+    await settingsSheet.getByRole("slider", { name: "Release delay" }).fill("800");
+    await settingsSheet.getByRole("button", { name: "Close" }).click();
+    expect(await storedSettings(page)).toMatchObject({ echoCancellation: false, activation: "ptt", pttReleaseMs: 800 });
+    const micState = page.locator(".vc-mic-state");
+    await expect(micState).toHaveText("Microphone off");
+    const talk = page.getByRole("button", { name: "Hold to talk" });
+    await talk.dispatchEvent("pointerdown");
+    await expect(micState).toHaveText("Microphone on");
+    const released = Date.now();
+    await talk.dispatchEvent("pointerup");
+    await expect(micState).toHaveText("Microphone on");
+    await expect(micState).toHaveText("Microphone off", { timeout: 5000 });
+    expect(Date.now() - released).toBeGreaterThanOrEqual(700);
+
+    // Microphone test: live level from the fake microphone, record and play back.
+    await page.getByRole("button", { name: "Test microphone" }).click();
+    const micTest = page.getByRole("dialog", { name: "Test microphone" });
+    await expect(micTest.getByRole("meter", { name: "Microphone level" })).toBeVisible();
+    await expect.poll(async () => Number(await micTest.getByRole("meter").getAttribute("aria-valuenow")), { timeout: 15000 }).toBeGreaterThan(0);
+    await micTest.getByRole("button", { name: /^Record 5 s/ }).click();
+    await expect(micTest.getByText(/Recording for 5 seconds/)).toBeVisible();
+    await expect(micTest.locator("audio.vc-playback")).toHaveCount(1, { timeout: 15000 });
+    await micTest.getByRole("button", { name: "Close" }).click();
+
+    // Data saver: shown in the room and kept across a reload.
+    await page.getByRole("button", { name: "Voice settings" }).click();
+    await settingsSheet.getByRole("switch", { name: /Data saver/ }).check();
+    await settingsSheet.getByRole("button", { name: "Close" }).click();
+    await expect(page.getByText("Data saver is on.")).toBeVisible();
+    await page.reload();
+    await page.getByRole("dialog").getByRole("button", { name: "Not now" }).click({ timeout: 5000 }).catch(() => {});
+    await page.getByRole("link", { name: "You", exact: true }).click();
+    await expect(page.getByRole("switch", { name: /Data saver/ })).toBeChecked();
+    await expect(page.getByRole("switch", { name: "Echo cancellation" })).not.toBeChecked();
+
+    rowan.conn.close();
+    a.desktop.conn.close();
+    await a.context.close();
 });
