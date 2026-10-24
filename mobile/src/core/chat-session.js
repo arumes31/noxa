@@ -379,12 +379,23 @@ export class ChatSession extends EventTarget {
         if (missing.length && this.conn.open) this.conn.send(Msg.ChatKeyRequest, { channel_id: scope, key_ids: missing.slice(0, 64) });
     }
 
-    /** Subscribes to text channels so their chat and keys reach this device. */
+    #subscribing = new Set();
+
+    /**
+     * Subscribes to text channels so their chat and keys reach this device.
+     * Channels with a request in flight are skipped: snapshots arrive in
+     * bursts, and every request costs a token of the server's chat limit.
+     */
     async subscribe(channelIDs, subscribe = true) {
-        const ids = channelIDs.filter(id => id > 0);
+        const ids = channelIDs.filter(id => id > 0 && !this.#subscribing.has(id));
         if (!ids.length) return;
-        const state = await this.conn.request(Msg.ChannelSubscribe, { channel_ids: ids.slice(0, 64), subscribe }, Msg.SubscriptionState);
-        this.subscriptions = new Set(state.channel_ids || []);
+        ids.forEach(id => this.#subscribing.add(id));
+        try {
+            const state = await this.conn.request(Msg.ChannelSubscribe, { channel_ids: ids.slice(0, 64), subscribe }, Msg.SubscriptionState);
+            this.subscriptions = new Set(state.channel_ids || []);
+        } finally {
+            ids.forEach(id => this.#subscribing.delete(id));
+        }
     }
 
     #entryToMessage(scope, entry) {
@@ -451,10 +462,11 @@ export class ChatSession extends EventTarget {
             this.#store(scope, { clientMsgID, id: accepted.message_id, pending: false });
             return accepted;
         } catch (error) {
-            // A lost connection leaves the message for the outbox to retry.
-            const retryable = !(error instanceof ProtocolError);
+            // A lost connection or a rate limit leaves the message for the outbox to retry.
+            const limited = error instanceof ProtocolError && /rate limit/i.test(error.message);
+            const retryable = !(error instanceof ProtocolError) || limited;
             this.#store(scope, { clientMsgID, failed: !retryable, queued: retryable, pending: false, error: error.message });
-            throw Object.assign(error, { retryable });
+            throw Object.assign(error, { retryable, retryAfterMS: limited ? error.retryAfterMS || 3000 : undefined });
         }
     }
 

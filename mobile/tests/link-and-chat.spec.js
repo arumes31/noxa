@@ -68,7 +68,7 @@ test("a phone links by QR, compares the code, signs in and chats with the deskto
     }));
     await composer.press("Enter");
     const received = await fromPhone;
-    expect(received.from.replace(/#Md+$/, "")).toBe(server.accounts.owner.nickname);
+    expect(received.from.replace(/#M\d+$/, "")).toBe(server.accounts.owner.nickname);
 
     await deskChat.send(0, "hi phone, desktop here");
     await expect(page.getByRole("log")).toContainText("hi phone, desktop here");

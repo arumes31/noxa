@@ -70,15 +70,25 @@ export function flush(session, dm) {
                     continue;
                 }
                 try {
-                    if (entry.kind === "channel") {
-                        await session.send(entry.scope, entry.text, { clientMsgID: entry.id, sentAt: entry.sentAt });
-                    } else {
-                        await dm.send(entry.peer, entry.text, entry.nickname || "", { id: entry.id, sentAt: entry.sentAt });
+                    for (let attempt = 0; ; attempt++) {
+                        try {
+                            if (entry.kind === "channel") {
+                                await session.send(entry.scope, entry.text, { clientMsgID: entry.id, sentAt: entry.sentAt });
+                            } else {
+                                await dm.send(entry.peer, entry.text, entry.nickname || "", { id: entry.id, sentAt: entry.sentAt });
+                            }
+                            break;
+                        } catch (error) {
+                            // The server meters sends per user; a short pause clears the limit.
+                            if (!error.retryAfterMS || attempt >= 2 || !session.conn.open) throw error;
+                            await new Promise(resolve => setTimeout(resolve, Math.min(error.retryAfterMS, 10000)));
+                        }
                     }
                     await remove(entry.id);
                     sent++;
                 } catch (error) {
                     if (error.retryable) break;
+                    console.warn(`outbox: ${entry.kind} message ${entry.id} refused: ${error.message}`);
                     await putSealed(Stores.outbox, entry.id, { ...entry, failed: true, error: error.message }).catch(() => {});
                 }
             }

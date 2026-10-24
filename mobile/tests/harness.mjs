@@ -81,6 +81,8 @@ export async function startServer({ databaseURL = process.env.NOXA_E2E_DATABASE_
     const yaml = [
         `server_name: "noXa e2e"`, `client_min_version: "0.0.0"`, `server_password: ""`, `allow_anonymous: true`,
         `log_level: info`, `dev_mode: true`,
+        // Specs send bursts from one account over several sessions; keep the per-user chat meter out of the way.
+        `chat_rate_msgs: 100`, `chat_rate_window_seconds: 3`,
         `tcp_addr: "127.0.0.1:${ports.tcp}"`, `udp_addr: "127.0.0.1:${ports.udp}"`, `grpc_addr: "127.0.0.1:${ports.grpc}"`,
         `health_addr: "127.0.0.1:${ports.health}"`, `query_addr: "127.0.0.1:${ports.query}"`, `file_addr: "127.0.0.1:${ports.file}"`,
         `file_root: "${slash(path.join(dir, "files"))}"`, `tls_enabled: true`, `tls_dir: "${slash(path.join(dir, "tls"))}"`,
@@ -93,7 +95,7 @@ export async function startServer({ databaseURL = process.env.NOXA_E2E_DATABASE_
         `turn:`, `  managed: true`, `  listen_addr: "127.0.0.1:${ports.turn}"`, `  public_ip: "127.0.0.1"`,
         `  relay_min_port: ${relayBase}`, `  relay_max_port: ${relayBase + 200}`, `  realm: "noxa-e2e"`,
         `  uris: ["turn:127.0.0.1:${ports.turn}?transport=udp"]`, `  credentials_ttl: 1h`,
-        `web:`, `  enabled: true`, `  addr: "127.0.0.1:${ports.web}"`, `  public_url: "https://chat.example"`,
+        `web:`, `  enabled: true`, `  addr: "127.0.0.1:${ports.web}"`, `  public_url: "https://chat.example"`, `  max_devices_per_account: 100`,
         `  trusted_proxies: ["127.0.0.0/8"]`, `  app_dir: "${slash(path.join(repoRoot, "web", "app"))}"`,
     ].join("\n");
     writeFileSync(path.join(dir, "config.yaml"), yaml + "\n");
