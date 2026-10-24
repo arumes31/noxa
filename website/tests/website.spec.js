@@ -1,6 +1,6 @@
 import { test as base, expect } from '@playwright/test';
 
-const downloadURL = 'https://noxa-srv.wowcraft.pw/dl/noxa-client-windows-amd64.exe';
+const downloadURL = 'https://noxa.wowcraft.pw/dl/noxa-client-windows-amd64.exe';
 
 // A marketing page needs no third-party runtime requests. Block them so network
 // availability cannot make deterministic browser checks pass or fail.
@@ -95,7 +95,7 @@ test('download, navigation, and metadata destinations are consistent', async ({ 
   for (const link of await downloads.all()) await expect(link).toHaveAttribute('href', downloadURL);
   const launches = page.getByRole('link', { name: 'Launch PWA client' });
   await expect(launches).toHaveCount(2);
-  for (const link of await launches.all()) await expect(link).toHaveAttribute('href', 'https://noxa-srv.wowcraft.pw/app/');
+  for (const link of await launches.all()) await expect(link).toHaveAttribute('href', 'https://noxa.wowcraft.pw/app/');
   for (const link of await page.locator('a[href^="#"]').all()) {
     const id = (await link.getAttribute('href')).slice(1);
     expect(id, 'Fragment links must have a nonempty target').not.toBe('');

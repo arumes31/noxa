@@ -5,8 +5,8 @@
 @import "@fontsource-variable/jetbrains-mono";
 
 :root {
-    --bg: #05090d;
-    --bg-raised: #0a1218;
+    --bg: #03070a;
+    --bg-raised: #070d12;
     --glass: rgba(16, 28, 36, 0.72);
     --glass-strong: rgba(20, 36, 46, 0.9);
     --border: rgba(120, 190, 210, 0.16);
@@ -82,7 +82,8 @@ button { cursor: pointer; }
 .btn-primary { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
 .btn-danger { border-color: rgba(255, 107, 129, .5); color: var(--coral); background: rgba(255, 107, 129, .08); }
 .btn-block { width: 100%; }
-.btn:disabled { opacity: .5; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn svg { width: 20px; height: 20px; flex: 0 0 20px; vertical-align: middle; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-family: var(--font-mono); font-size: .7rem; letter-spacing: .12em; text-transform: uppercase; color: var(--text-faint); }
 .input { min-height: 46px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg-raised); outline: none; }
@@ -97,6 +98,29 @@ button { cursor: pointer; }
 .brand img { width: 72px; height: 72px; }
 .brand h1 { margin: 0; font-size: 1.6rem; letter-spacing: .02em; }
 .brand p { margin: 0; color: var(--text-faint); font-size: .85rem; }
+/* Compact sign-in; keep the pairing/approval screens independent. */
+.connect-signin { max-width: 460px; gap: 20px; padding-top: max(28px, calc(var(--safe-top) + 6dvh)); padding-bottom: calc(24px + var(--safe-bottom)); }
+.connect-signin .brand { margin: 0; gap: 8px; }
+.connect-signin .brand img { width: 52px; height: 52px; }
+.connect-card { padding: 24px; background: #0c141c; border-color: #20313e; border-radius: 18px; }
+.connect-server { display: flex; align-items: center; gap: 12px; padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
+.connect-server-icon { display: grid; place-items: center; width: 40px; height: 40px; flex: 0 0 40px; border-radius: 10px; background: var(--accent-dim); color: var(--accent); }
+.connect-server-icon svg { width: 20px; height: 20px; }
+.connect-server-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.connect-server-text .mono { font-size: .75rem; overflow-wrap: anywhere; }
+.connect-card h2 { font-size: 1.15rem; margin: 0 0 14px; font-weight: 600; }
+.connect-passkey { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px; }
+.connect-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; font-size: .8rem; color: var(--text-faint); }
+.connect-divider::before, .connect-divider::after { content: ""; height: 1px; flex: 1; background: var(--border); }
+.connect-link { display: grid; gap: 14px; }
+.connect-link h2 { margin: 0; font-size: 1rem; }
+.connect-link .input { width: 100%; min-width: 0; font-size: 16px; }
+.connect-card .error:not(:empty) { margin-top: 14px; }
+.connect-install { text-align: center; }
+@media (max-width: 380px) {
+    .connect-signin { padding-inline: 14px; padding-top: calc(20px + var(--safe-top)); }
+    .connect-card { padding: 18px; }
+}
 .sas { font-family: var(--font-mono); font-size: 3rem; font-weight: 700; letter-spacing: .3em; color: var(--accent); text-align: center; margin: 8px 0; }
 .spinner { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

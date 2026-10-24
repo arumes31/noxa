@@ -22,10 +22,10 @@ export function renderConnect(root, { onSignedIn }) {
     const error = h("p", { class: "error", role: "alert" });
     const code = h("input", {
         class: "input code", id: "link-code", inputmode: "text", autocomplete: "one-time-code", autocapitalize: "characters",
-        spellcheck: "false", maxlength: "9", placeholder: t("connect.codePlaceholder"), "aria-describedby": "link-hint",
+        spellcheck: "false", maxlength: "9", required: "", minlength: "8", placeholder: t("connect.codePlaceholder"), "aria-describedby": "link-hint",
     });
     const claim = h("button", { class: "btn btn-primary btn-block", type: "submit" }, t("connect.claim"));
-    const passkey = h("button", { class: "btn btn-block", type: "button" }, icon("passkey"), " ", t("connect.passkey"));
+    const passkey = h("button", { class: "btn btn-primary btn-block connect-passkey", type: "button", "aria-describedby": "passkey-hint" }, icon("passkey"), " ", t("connect.passkey"));
     if (!passkeysSupported()) {
         passkey.disabled = true;
         passkey.title = t("connect.noPasskeys");
@@ -51,24 +51,30 @@ export function renderConnect(root, { onSignedIn }) {
             passkey.disabled = !passkeysSupported();
         }
     };
-    const form = h("form", { class: "card", onsubmit: event => {
+    const form = h("form", { class: "connect-link", onsubmit: event => {
         event.preventDefault();
         if (code.value.trim().length >= 8) runLink(root, { code: code.value }, { onSignedIn });
     } },
-        h("div", { class: "field" }, h("label", { for: "link-code" }, t("connect.code")), code),
+        h("h2", {}, t("connect.link")),
         h("p", { class: "hint", id: "link-hint" }, t("connect.linkHint")),
-        h("div", { style: "height:10px" }),
+        h("div", { class: "field" }, h("label", { for: "link-code" }, t("connect.code")), code),
         claim);
-    root.replaceChildren(h("main", { class: "connect" },
+    root.replaceChildren(h("main", { class: "connect connect-signin" },
         brand(),
-        h("div", { class: "card" },
-            h("div", { class: "field" }, h("label", {}, t("connect.server")), h("div", { class: "row-title" }, app.info?.server_name || location.host),
-                h("div", { class: "row-sub mono" }, location.host))),
-        passkey,
-        h("p", { class: "section-label" }, t("connect.link")),
-        form,
-        error,
-        isIOS() ? h("p", { class: "hint" }, t("connect.install")) : null));
+        h("section", { class: "card connect-card", "aria-labelledby": "signin-heading" },
+            h("div", { class: "connect-server" },
+                h("div", { class: "connect-server-icon" }, icon("servers")),
+                h("div", { class: "connect-server-text" },
+                    h("span", { class: "hint" }, t("connect.server")),
+                    h("strong", {}, app.info?.server_name || location.host),
+                    h("span", { class: "hint mono" }, location.host))),
+            h("h2", { id: "signin-heading" }, t("connect.title")),
+            passkey,
+            h("p", { class: "hint", id: "passkey-hint" }, t(passkeysSupported() ? "connect.passkeyHint" : "connect.noPasskeys")),
+            h("div", { class: "connect-divider" }, h("span", {}, t("connect.or"))),
+            form,
+            error),
+        isIOS() ? h("p", { class: "hint connect-install" }, t("connect.install")) : null));
 }
 
 /** Claims a link and waits for the desktop's decision. */

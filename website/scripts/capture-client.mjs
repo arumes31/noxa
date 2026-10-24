@@ -27,7 +27,7 @@ try {
   await context.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1'
     ? route.continue() : route.abort());
   const page = await context.newPage();
-  await page.clock.setFixedTime(new Date('2026-10-02T18:35:00Z'));
+  await page.clock.setFixedTime(new Date('2026-10-24T18:35:00Z'));
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
@@ -99,10 +99,10 @@ try {
     Object.assign(app.state, { myClientID: 'rowan', myUniqueID: 'fictional-rowan', myNickname: 'Rowan',
       myChannelID: 2, isGuest: false, authorizationModel: 'roles-v1', activeTabID: 'demo-server',
       channels: [
-        { ChannelID: 1, Name: 'Welcome', ParentID: 0 },
-        { ChannelID: 2, Name: 'The lounge', ParentID: 0, Topic: 'A good place to catch up.' },
-        { ChannelID: 3, Name: 'Game night', ParentID: 0 },
-        { ChannelID: 4, Name: 'Quiet corner', ParentID: 0 },
+        { ChannelID: 1, Name: 'Lobby', ParentID: 0, SystemKind: "home", ChatDisabled: true, VoiceDisabled: true },
+        { ChannelID: 2, Name: 'The lounge', ParentID: 1, Topic: 'A good place to catch up.' },
+        { ChannelID: 3, Name: 'Game night', ParentID: 1 },
+        { ChannelID: 4, Name: 'Quiet corner', ParentID: 1 },
         { ChannelID: 5, Name: 'Planning room', ParentID: 0, HasPassword: true },
       ],
       clients: ['Rowan', 'Avery', 'Sage', 'Morgan', 'Quinn'].map((nickname, index) => ({
@@ -121,13 +121,12 @@ try {
       ['Sage', 'That definitely needs an explanation.'],
     ];
     for (const [index, [from, text]] of messages.entries()) window.__noxaChat.addChat({
-      id: index + 1, channel_id: 2, from, from_unique_id: 'fictional-' + from.toLowerCase(),
-      text, sent_at: Date.parse('2026-10-02T18:30:00Z') + index * 60000,
+      id: index + 1, channel_id: 2, enc_verified: true, from, from_unique_id: 'fictional-' + from.toLowerCase(),
+      text, sent_at: Date.parse('2026-10-24T18:30:00Z') + index * 60000,
     });
     await document.fonts.ready;
   });
   await page.locator('#chat-log [data-msg-id="4"]').waitFor();
-  await page.getByRole('button', { name: 'Private groups', exact: true }).click();
   await page.locator('#toasts .toast').waitFor({ state: 'hidden' });
   await page.mouse.move(1270, 790);
   await page.screenshot({ path: path.join(output, 'app-chat.png'), animations: 'disabled' });
@@ -142,7 +141,7 @@ try {
   assert.deepEqual(errors, [], 'Client screenshot runtime errors');
   const manifest = { sourceCommit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
     browser: browser.version(), viewport: '1280x800', scale: 1, locale: 'en-GB', timezone: 'UTC',
-    fixtureTime: '2026-10-02T18:35:00Z',
+    fixtureTime: '2026-10-24T18:35:00Z',
     fixture: 'website/scripts/capture-client.mjs', data: 'Fictional local-only demo data',
     appChat: 'Full actual frontend viewport', appRoles: 'Actual Roles dialog crop',
     generatedAt: new Date().toISOString() };

@@ -3,9 +3,12 @@ const catalogs = {
     en: {
         "app.tagline": "Voice, video and chat for your crew",
         "connect.server": "Server",
+        "connect.title": "Sign in",
+        "connect.passkeyHint": "Already linked before? Use a passkey saved for this server.",
+        "connect.or": "or",
         "connect.passkey": "Sign in with passkey",
         "connect.link": "Link from desktop",
-        "connect.linkHint": "On your desktop: Connections → Other login for this server. Then scan the QR code with this phone's camera, or type the code below.",
+        "connect.linkHint": "Open Connections → Other login for this server on your desktop. Scan its QR code with your phone, or enter the code here.",
         "connect.code": "Code from your desktop",
         "connect.codePlaceholder": "XXXX-XXXX",
         "connect.claim": "Continue",
@@ -176,6 +179,9 @@ const catalogs = {
     de: {
         "app.tagline": "Sprache, Video und Chat für deine Crew",
         "connect.server": "Server",
+        "connect.title": "Anmelden",
+        "connect.passkeyHint": "Schon einmal verknüpft? Nutze einen gespeicherten Passkey für diesen Server.",
+        "connect.or": "oder",
         "connect.passkey": "Mit Passkey anmelden",
         "connect.link": "Vom Desktop verbinden",
         "connect.linkHint": "Am Desktop: Verbindungen → Weitere Anmeldung für diesen Server. Scanne dann den QR-Code mit der Kamera dieses Telefons oder gib den Code unten ein.",
