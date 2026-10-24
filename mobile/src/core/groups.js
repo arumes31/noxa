@@ -51,6 +51,23 @@ export class Groups extends EventTarget {
         return [...this.list.values()];
     }
 
+    async create(name) {
+        const result = await this.#request({ action: "create", name: name.trim() });
+        const group = result.conversations?.[0];
+        if (!group?.id) throw new Error("missing group response");
+        this.list.set(group.id, group);
+        this.#emit("list");
+        return group;
+    }
+
+    async invite(id, target) {
+        const group = await this.get(id);
+        if (!group) throw new Error("group unavailable");
+        if (group.members?.some(member => member.unique_id === target)) return;
+        await this.#request({ action: "invite", id, revision: group.revision, target });
+        await this.get(id);
+    }
+
     async get(id) {
         const result = await this.#request({ action: "get", id });
         const conversation = result.conversations?.[0];

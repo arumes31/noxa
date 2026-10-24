@@ -258,3 +258,5 @@ a.row, .icon-btn, .call-bar-main { text-decoration: none; color: inherit; }
 #install-banner strong { font-size: 13px; }
 #install-banner span { font-size: 11px; color: var(--muted); }
 #install-banner .btn { min-height: 36px; padding: 6px 8px; font-size: 12px; white-space: nowrap; }
+
+.server-join { min-height: 36px; padding-inline: 12px; font-size: .8rem; flex-shrink: 0; }

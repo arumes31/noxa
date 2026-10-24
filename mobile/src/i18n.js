@@ -1,6 +1,12 @@
 // i18n.js — mobile catalog. English and German carry the same keys.
 const catalogs = {
     en: {
+        "voice.joinAction": "Join", "voice.joinNamed": "Join {name}",
+        "home.new": "New message or group", "home.newMessage": "New message", "home.cancel": "Cancel",
+        "group.create": "Create group chat", "group.name": "Group name", "group.open": "Open group",
+        "group.inviteHint": "Select up to 15 members to invite. They can accept or decline.",
+        "group.selected": "{count} / 15 selected", "group.retry": "Retry invitations",
+        "group.partial": "Group created. Some invitations are still pending: {error}",
         "chatNew.title": "New chat",
         "chatNew.search": "Search members by name",
         "chatNew.hint": "Choose a visible server member to start a direct message.",
@@ -201,6 +207,12 @@ const catalogs = {
         "common.error": "Something went wrong: {error}",
     },
     de: {
+        "voice.joinAction": "Beitreten", "voice.joinNamed": "{name} beitreten",
+        "home.new": "Neue Nachricht oder Gruppe", "home.newMessage": "Neue Nachricht", "home.cancel": "Abbrechen",
+        "group.create": "Gruppenchat erstellen", "group.name": "Gruppenname", "group.open": "Gruppe öffnen",
+        "group.inviteHint": "Wähle bis zu 15 Mitglieder zum Einladen. Sie können annehmen oder ablehnen.",
+        "group.selected": "{count} / 15 ausgewählt", "group.retry": "Einladungen erneut versuchen",
+        "group.partial": "Gruppe erstellt. Einige Einladungen sind noch offen: {error}",
         "chatNew.title": "Neuer Chat",
         "chatNew.search": "Mitglieder nach Namen suchen",
         "chatNew.hint": "Wähle ein sichtbares Servermitglied für eine Direktnachricht.",
