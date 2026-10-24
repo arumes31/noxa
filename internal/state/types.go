@@ -51,7 +51,9 @@ type Client struct {
 	E2EPublicKey string `json:"-"`
 	// IsBot records display-only bot identity metadata; the client renders a
 	// bot badge instead of a normal presence entry.
-	IsBot       bool
+	IsBot bool
+	// OnMobile marks a session of the mobile web app.
+	OnMobile    bool
 	ConnectedAt time.Time
 	Conn        net.Conn // nullable for headless clients
 	Metadata    map[string]string

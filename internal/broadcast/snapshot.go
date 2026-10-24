@@ -44,6 +44,8 @@ type ClientInfo struct {
 	StatusMessage string `json:"status_message,omitempty"`
 	// IsBot is display-only account identity metadata in role mode.
 	IsBot bool `json:"is_bot,omitempty"`
+	// OnMobile marks a session of the mobile web app.
+	OnMobile bool `json:"on_mobile,omitempty"`
 }
 
 // ChannelNode represents a single channel in the tree snapshot. It embeds the
@@ -120,6 +122,7 @@ func clientToInfo(c *state.Client) ClientInfo {
 		Status:          c.Status,
 		StatusMessage:   c.StatusMessage,
 		IsBot:           c.IsBot,
+		OnMobile:        c.OnMobile,
 	}
 }
 

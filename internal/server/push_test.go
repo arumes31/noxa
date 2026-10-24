@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -343,6 +344,44 @@ func TestPushDropsGoneSubscriptions(t *testing.T) {
 		subs, _ := p.pushes.PushSubscriptions(t.Context(), "user-uid")
 		return len(subs) == 0
 	})
+}
+
+// webPipe is a connection the server treats as the mobile web transport.
+type webPipe struct{ net.Conn }
+
+func (webPipe) WebTransport() bool { return true }
+
+func TestWebSessionsAreMarkedOnMobile(t *testing.T) {
+	p := startPushTestEnv(t)
+	keys := newLinkTestKeys(t)
+	if _, err := p.pushes.AddDevice(t.Context(), store.NewDevice{Principal: "user-uid", UserID: 2, Kind: store.DeviceKindWeb, Name: "Pixel", Ed25519Public: keys.public, X25519Public: keys.x25519}, 10); err != nil {
+		t.Fatal(err)
+	}
+	phone, serverSide := net.Pipe()
+	t.Cleanup(func() { _ = phone.Close() })
+	go func() { _ = p.env.srv.ServeExternalConn(context.Background(), webPipe{serverSide}) }()
+	resp := keyLoginOn(t, phone, keys)
+	if !resp.OK {
+		t.Fatalf("phone login = %+v", resp)
+	}
+	// net.Pipe is unbuffered: keep reading so the server's writes complete.
+	go func() { _, _ = io.Copy(io.Discard, phone) }()
+	waitFor(t, "phone presence", func() bool {
+		c, ok := p.env.srv.deps.State.GetClient(resp.ClientID)
+		return ok && c.OnMobile
+	})
+
+	desktop := desktopLogin(t, p.env.addr, newLinkTestKeys(t))
+	defer func() { _ = desktop.Close() }()
+	var desktopID string
+	for _, c := range p.env.srv.sessionsOf("user-uid") {
+		if !c.isWebTransport() {
+			desktopID = c.ID
+		}
+	}
+	if c, ok := p.env.srv.deps.State.GetClient(desktopID); !ok || c.OnMobile {
+		t.Fatalf("desktop session marked on mobile: %+v", c)
+	}
 }
 
 func TestSilentPushRevokesOnlyApple(t *testing.T) {

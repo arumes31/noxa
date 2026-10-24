@@ -1443,8 +1443,9 @@ window.runtime.EventsOn("event", (json) => {
                 existing.unique_id = d.unique_id ?? existing.unique_id;
                 existing.nickname = d.nickname ?? existing.nickname;
                 existing.channel_id = joinedChannel;
+                existing.on_mobile = !!d.on_mobile;
             } else {
-                state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, is_speaking: false });
+                state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, is_speaking: false, on_mobile: !!d.on_mobile });
             }
             if (d.client_id !== state.myClientID) {
                 chatUI.sysJoinLeave(d.nickname || d.unique_id || "someone", "joined"); // (130/131)

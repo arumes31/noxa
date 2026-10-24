@@ -35,6 +35,7 @@ type userEvent struct {
 	ChannelID     int64  `json:"channel_id,omitempty"`
 	FromChannelID int64  `json:"from_channel_id,omitempty"`
 	ByClientID    string `json:"by_client_id,omitempty"`
+	OnMobile      bool   `json:"on_mobile,omitempty"`
 }
 
 // channelEvent is the payload of channel_created / channel_deleted events.

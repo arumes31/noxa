@@ -248,6 +248,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 			ClientID: client.ID,
 			UniqueID: id.uniqueID,
 			Nickname: id.nickname,
+			OnMobile: client.isWebTransport(),
 		})
 		return nil
 	})
@@ -261,7 +262,7 @@ func (s *TCPServer) publishAuthenticatedSession(ctx context.Context, client *Cli
 		s.deps.Relay.Register(client.ID, id.uniqueID)
 	}
 	if s.deps.State != nil {
-		s.deps.State.AddClient(&state.Client{ClientID: client.ID, UserID: id.userID, UniqueID: id.uniqueID, Nickname: id.nickname, ConnectedAt: time.Now(), Conn: client.Conn, IsBot: s.ClientIsBot(ctx, client)})
+		s.deps.State.AddClient(&state.Client{ClientID: client.ID, UserID: id.userID, UniqueID: id.uniqueID, Nickname: id.nickname, ConnectedAt: time.Now(), Conn: client.Conn, IsBot: s.ClientIsBot(ctx, client), OnMobile: client.isWebTransport()})
 		if x := client.x25519(); x != "" {
 			s.deps.State.SetE2EPublicKey(client.ID, x)
 		}

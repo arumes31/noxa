@@ -197,6 +197,12 @@ func deviceCallError(t *testing.T, conn net.Conn, req netproto.DeviceRequest) ne
 func keyLogin(t *testing.T, addr string, keys linkTestKeys) (net.Conn, netproto.AuthResponse) {
 	t.Helper()
 	conn := dialRetry(t, addr)
+	return conn, keyLoginOn(t, conn, keys)
+}
+
+// keyLoginOn runs the key-proof sign-in on an open connection.
+func keyLoginOn(t *testing.T, conn net.Conn, keys linkTestKeys) netproto.AuthResponse {
+	t.Helper()
 	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: keys.uniqueID, Anonymous: true, Nickname: "phone"})
 	var challenge netproto.AuthChallenge
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
@@ -211,7 +217,7 @@ func keyLogin(t *testing.T, addr string, keys linkTestKeys) (net.Conn, netproto.
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &resp); err != nil {
 		t.Fatal(err)
 	}
-	return conn, resp
+	return resp
 }
 
 func desktopLogin(t *testing.T, addr string, keys linkTestKeys) net.Conn {
