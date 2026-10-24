@@ -390,11 +390,12 @@ func TestStartAndShutdownTLSReturnsNil(t *testing.T) {
 
 func TestStartReturnsErrorOnListenFailure(t *testing.T) {
 	// First manually listen on a port to guarantee it's in use
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	lc := net.ListenConfig{}
+	l, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	// Now try to start the server on the same port
 	srv := New(l.Addr().String(), nil, nil)
