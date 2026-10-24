@@ -1,5 +1,7 @@
 // Shared 24px outline icons. Names and paths are fixed application assets.
 const paths = {
+    roleAdmin: '<path d="m3 5 4 4 5-6 5 6 4-4-2 14H5zM5 16h14"/>',
+    roleMember: '<circle cx="12" cy="7" r="4"/><path d="M4 21v-3a8 8 0 0 1 16 0v3"/>',
     activity: '<path d="M2 12h5l3-9 4 18 3-9h5"/>',
     server: '<rect x="3" y="3" width="18" height="7" rx="1"/><rect x="3" y="14" width="18" height="7" rx="1"/><path d="M7 6.5h.01M7 17.5h.01M16 6.5h2M16 17.5h2"/>',
     serverOff: '<path d="m3 3 18 18M7 3h14v7h-7M3 7v3h4M3 14h10M3 14v7h14M21 17v4M7 17.5h.01M16 6.5h2"/>',

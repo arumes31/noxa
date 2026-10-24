@@ -276,3 +276,24 @@ test('Lobby shows neutral members, protects its actions and returns silently wit
     await page.evaluate(() => window.__homeSnapshot(7));
     await expect(page.locator('.channel[data-chid="7"] + .channel-members .client[data-clid="self"] .status-icons svg')).toHaveCount(2);
 });
+
+test('idle mobile sessions stay out of Lobby and online counts each identity once', async ({ page }) => {
+    await page.evaluate(() => {
+        window.emitMobilePresence = channel => {
+            const desktop = {client_id:'self',unique_id:'account',nickname:'Daniel',channel_id:7};
+            const phone = {client_id:'phone',unique_id:'account',nickname:'Daniel mobile',channel_id:channel,on_mobile:true};
+            const snapshot = {root_channels:[{ChannelID:1,Name:'Lobby',SystemKind:'home',clients:[]},
+                {ChannelID:7,Name:'Public1',clients:[desktop,...(channel===7?[phone]:[])]}],unassigned_clients:channel===0?[phone]:[]};
+            for (const callback of window.__events.snapshot) callback(JSON.stringify(snapshot));
+        };
+        window.emitMobilePresence(0);
+    });
+    await expect(page.locator('#server-summary')).toHaveText('1 online');
+    await expect(page.locator('#channel-tree')).not.toContainText('Daniel mobile');
+    await page.evaluate(() => window.emitMobilePresence(7));
+    await expect(page.locator('#channel-tree')).toContainText('Daniel mobile');
+    await expect(page.locator('#channel-tree .on-mobile')).toHaveText('Mobile');
+    await expect(page.locator('#server-summary')).toHaveText('1 online');
+    await page.evaluate(() => window.emitMobilePresence(0));
+    await expect(page.locator('#channel-tree')).not.toContainText('Daniel mobile');
+});

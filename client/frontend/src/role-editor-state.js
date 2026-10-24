@@ -2,7 +2,7 @@
 // saved baseline; failed requests and server switches cannot silently save it.
 export function roleDraft(role = {}) {
     return { id: role.id || 0, name: role.name || "", position: role.position || 0,
-        color: role.color || "", icon: role.icon || "", hoist: !!role.hoist, mentionable: !!role.mentionable,
+        color: role.color || "", icon: role.icon || "", icon_image: role.icon_image || "", hoist: !!role.hoist, mentionable: !!role.mentionable,
         deletion_protected: !!role.deletion_protected,
         permissions: [...(role.permissions || [])].sort() };
 }

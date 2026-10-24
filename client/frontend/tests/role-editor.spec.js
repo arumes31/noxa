@@ -50,7 +50,7 @@ test("role editor refreshes after managing member assignments", async ({ page })
     await roles.getByLabel("Role name", { exact: true }).fill("Members renamed");
     await roles.getByRole("button", { name: "Save", exact: true }).click();
     await expect(roles.getByRole("status")).toHaveText("Role saved.");
-    await expect(roles.locator(".role-error")).toBeEmpty();
+    expect((await roles.locator(".role-error").allTextContents()).join("")).toBe("");
     expect(await page.evaluate(() => window.__roleCalls.at(-1))).toMatchObject({
         kind: "role_update", expected_revision: 2, role: { id: 20, name: "Members renamed" },
     });
@@ -220,7 +220,7 @@ test.beforeEach(async ({ page }) => {
             app[name] = () => { throw new Error("unscoped native call"); };
         }
     });
-    await page.route("**/__role_editor_test__", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/src/style.css"><link rel="stylesheet" href="/src/midnight.css"></head><body><button id="launch">Roles</button><button id="channel">Channel access</button><script type="module">
+    await page.route("**/__role_editor_test__", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en" data-theme="midnight"><head><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/src/style.css"><link rel="stylesheet" href="/src/midnight.css"></head><body><button id="launch">Roles</button><button id="channel">Channel access</button><script type="module">
         import { openRolesManager } from '/src/roles-ui.js';
         import { openChannelAccess } from '/src/channel-access-ui.js';
         import { initModalSystem } from '/src/modal.js';
@@ -818,4 +818,68 @@ test("German draft impact fits a compact dialog and supports keyboard review", a
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.locator(".channel-impact").scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("channel-impact-de.png"), animations: "disabled" });
+});
+
+const rolePNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAGAAAABACAYAAADlNHIOAAAAvUlEQVR4nO3OMQEAIAzAsPmXNxuIABk5ypE/M3vuB/FAHQ/U8UAdD9TxQB0P1PFAHQ/U8UAdD9TxQB0P1PFAHQ/U8UAdD9TxQB0P1PFAHQ/U8UAdD9TxQB0P1PFAHQ/U8UAdD9TxQB0P1PFAHQ/U8UAdD9TxQB0P1PFAHQ/U8UAdD9TxQB0P1PFAHQ/U8UAdD9TxQB0P1PFAHQ/U8UAdD9TxQB0P1PFAHQ/U8UAdD9TxQB0P1PFAHQ/U8cC2PW34o9BIGVuZAAAAAElFTkSuQmCC", "base64");
+
+test("role image upload resizes, persists, previews and resets to the default", async ({ page }, testInfo) => {
+    await page.getByRole("button", { name: "Roles", exact: true }).click();
+    await page.getByRole("button", { name: "Member", exact: true }).click();
+    await expect(page.locator(".role-image-preview svg")).toHaveCount(1);
+    await expect(page.locator(".role-image-controls")).toContainText("1 MiB");
+    await page.getByLabel("Upload role icon", { exact: true }).setInputFiles({name:"role.png",mimeType:"image/png",buffer:rolePNG});
+    await expect(page.locator(".role-image-preview img")).toBeVisible();
+    const size = await page.locator(".role-image-preview img").evaluate(async img => { await img.decode(); return [img.naturalWidth,img.naturalHeight]; });
+    expect(size).toEqual([32,32]);
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status")).toHaveText("Role saved.");
+    expect(await page.evaluate(() => window.__roleCalls.at(-1).role.icon_image)).toMatch(/^data:image\/png;base64,/);
+    await page.getByRole("button", { name: "Moderator", exact: true }).click();
+    await page.getByRole("button", { name: "Member", exact: true }).click();
+    await expect(page.locator(".role-image-preview img")).toBeVisible();
+    await page.screenshot({path:testInfo.outputPath("role-icon-upload.png")});
+    await page.getByRole("button", { name: "Restore default icon", exact: true }).click();
+    await expect(page.locator(".role-image-preview svg")).toHaveCount(1);
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status")).toHaveText("Role saved.");
+    expect(await page.evaluate(() => window.__roleCalls.at(-1).role.icon_image)).toBe("");
+});
+
+test("invalid and oversized role images leave the existing draft untouched", async ({ page }) => {
+    await page.getByRole("button", { name: "Roles", exact: true }).click();
+    await page.getByRole("button", { name: "Member", exact: true }).click();
+    const input = page.getByLabel("Upload role icon", { exact: true });
+    const largeDimensions = Buffer.from(rolePNG); largeDimensions.writeUInt32BE(2049,16);
+    for (const buffer of [Buffer.from('<svg onload="alert(1)"></svg>'),Buffer.alloc(1024*1024+1),largeDimensions,rolePNG.subarray(0,35)]) {
+        await input.setInputFiles({name:"invalid.png",mimeType:"image/png",buffer});
+        await expect(page.locator(".role-image-controls [role=alert]")).toContainText("valid PNG");
+        await expect(page.getByRole("button",{name:"Save",exact:true})).toBeDisabled();
+    }
+    await input.setInputFiles({name:"valid.png",mimeType:"image/png",buffer:rolePNG});
+    await expect(page.locator(".role-image-preview img")).toBeVisible();
+});
+
+test("a delayed role image decode cannot change the next selected role", async ({ page }) => {
+    await page.getByRole("button", { name: "Roles", exact: true }).click();
+    await page.getByRole("button", { name: "Member", exact: true }).click();
+    await page.evaluate(() => {
+        const original = window.createImageBitmap;
+        window.createImageBitmap = async (...args) => { await new Promise(resolve => {window.releaseRoleDecode=resolve;}); return original(...args); };
+    });
+    await page.getByLabel("Upload role icon", { exact: true }).setInputFiles({name:"role.png",mimeType:"image/png",buffer:rolePNG});
+    await expect.poll(() => page.evaluate(() => typeof window.releaseRoleDecode)).toBe("function");
+    await page.getByRole("button", { name: "Moderator", exact: true }).click();
+    await page.evaluate(() => window.releaseRoleDecode());
+    await expect(page.getByLabel("Role name", {exact:true})).toHaveValue("Moderator");
+    await expect(page.locator(".role-image-preview img")).toHaveCount(0);
+    await expect(page.getByRole("button",{name:"Save",exact:true})).toBeDisabled();
+});
+
+test("built-in roles have distinct default icons even without saved cosmetics", async ({ page }) => {
+    const defaults = await page.evaluate(async () => {
+        const {roleIconElement} = await import('/src/role-icons.js');
+        return ['Administrator','Moderator','Member'].map(name => roleIconElement({name}).querySelector('svg')?.innerHTML);
+    });
+    expect(defaults.every(Boolean)).toBe(true);
+    expect(new Set(defaults).size).toBe(3);
 });

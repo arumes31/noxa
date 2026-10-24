@@ -1,3 +1,4 @@
+import { roleIconElement, prepareRoleIcon, ROLE_ICON_TOTAL_MAX } from "./role-icons.js";
 import { currentLanguage, t } from "./i18n.js";
 import { roleTemplate } from "./role-editor-state.js";
 
@@ -32,13 +33,12 @@ export function renderRoleList(host, model, select, move) {
     host.replaceChildren();
     for (const role of [...model.snapshot.policy.roles].sort((a, b) => b.position - a.position)) {
         const row = roleElement("div", "role-list-row");
-        const button = roleButton(`${role.icon || ""} ${role.name}`.trim(), () => select(role.id), model.busy);
+        const button = roleButton(role.name, () => select(role.id), model.busy);
         button.className = "role-select";
         button.setAttribute("aria-pressed", String(role.id === model.draft?.id));
-        const dot = roleElement("span", "role-color-dot");
-        if (/^#[a-f\d]{6}$/i.test(role.color || "")) dot.style.backgroundColor = role.color;
-        dot.setAttribute("aria-hidden", "true");
-        button.prepend(dot);
+        const symbol = roleIconElement(role);
+        if (/^#[a-f\d]{6}$/i.test(role.color || "")) symbol.style.color = role.color;
+        button.prepend(symbol);
         row.append(button);
         if (role.id !== model.snapshot.policy.everyone_id && model.snapshot.manageable_role_ids.includes(role.id)) {
             for (const [direction, key, symbol] of [[1, "roles.up", "↑"], [-1, "roles.down", "↓"]]) {
@@ -77,6 +77,7 @@ export function renderRoleForm(host, model, changed) {
             draft.permissions = roleTemplate(select.value, snapshot.grantable_capabilities || []);
             draft.name = select.options[select.selectedIndex].textContent;
             draft.deletion_protected = select.value === "administrator";
+            draft.icon = ""; draft.icon_image = "";
             changed(true);
         };
         label.append(select);
@@ -89,9 +90,11 @@ export function renderRoleForm(host, model, changed) {
     const color = field(cosmetics, t("roles.color"), "text", draft.color, (value) => { draft.color = value; changed(); });
     color.placeholder = "#RRGGBB";
     color.maxLength = 7;
-    const icon = field(cosmetics, t("roles.icon"), "text", draft.icon, (value) => { draft.icon = value; changed(); });
+    const icon = field(cosmetics, t("roles.icon"), "text", draft.icon, (value) => { draft.icon = value; imageEditor.querySelector(".role-image-preview").replaceChildren(roleIconElement(draft)); changed(); });
     icon.maxLength = 16;
-    form.append(cosmetics);
+    icon.placeholder = t("roles.iconFallback");
+    const imageEditor = renderRoleImageEditor(model, form, changed);
+    form.append(cosmetics, imageEditor);
     field(form, t("roles.hoist"), "checkbox", draft.hoist, (value) => { draft.hoist = value; changed(); });
     if (!draft.id || draft.id !== snapshot.policy.everyone_id) field(form, t("roles.mentionable"), "checkbox", draft.mentionable, (value) => { draft.mentionable = value; changed(); });
     if (draft.id !== snapshot.policy.everyone_id) {
@@ -137,4 +140,40 @@ export function renderRoleForm(host, model, changed) {
     renderCapabilities();
     form.append(list);
     host.append(form);
+}
+
+function renderRoleImageEditor(model, form, changed) {
+    const draft = model.draft;
+    const box = roleElement("div", "role-image-editor");
+    const preview = roleElement("div", "role-image-preview");
+    const controls = roleElement("div", "role-image-controls");
+    const label = roleElement("label", "role-field", t("roles.imageUpload"));
+    const upload = roleElement("input", "dlg-input");
+    upload.type = "file"; upload.accept = "image/png,.png";
+    label.append(upload);
+    const error = roleElement("p", "role-error"); error.setAttribute("role", "alert");
+    let sequence = 0;
+    const refresh = () => preview.replaceChildren(roleIconElement(draft));
+    const reset = roleButton(t("roles.imageReset"), () => {
+        sequence++; draft.icon_image = ""; draft.icon = "";
+        error.textContent = ""; changed(true);
+    });
+    upload.onchange = async () => {
+        const file = upload.files[0], request = ++sequence;
+        if (!file || model.busy || form.disabled) return;
+        const current = () => sequence === request && model.draft === draft && form.isConnected && !model.busy && !form.disabled;
+        upload.disabled = true; error.textContent = "";
+        try {
+            const image = await prepareRoleIcon(file);
+            if (!current()) return;
+            const otherBytes = model.snapshot.policy.roles.reduce((sum, role) => sum + (role.id === draft.id ? 0 : (role.icon_image || "").length), 0);
+            if (otherBytes + image.length > ROLE_ICON_TOTAL_MAX) { error.textContent = t("roles.imageTotalError"); return; }
+            draft.icon_image = image; refresh(); changed();
+        } catch { if (current()) error.textContent = t("roles.imageInvalid"); }
+        finally { if (current()) { upload.disabled = false; upload.value = ""; } }
+    };
+    refresh();
+    controls.append(label, roleElement("p", "role-hint", t("roles.imageLimits")), reset, error);
+    box.append(preview, controls);
+    return box;
 }

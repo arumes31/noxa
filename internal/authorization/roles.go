@@ -16,6 +16,7 @@ type Role struct {
 	Position          int          `json:"position"`
 	Color             string       `json:"color"`
 	Icon              string       `json:"icon"`
+	IconImage         *string      `json:"icon_image,omitempty"`
 	Hoist             bool         `json:"hoist"`
 	Mentionable       bool         `json:"mentionable"`
 	DeletionProtected bool         `json:"deletion_protected"`
@@ -87,6 +88,7 @@ func NewRoleEvaluator(p RolePolicy) (*RoleEvaluator, error) {
 	}
 	e := &RoleEvaluator{policy: RolePolicy{Revision: p.Revision, OwnerID: p.OwnerID, EveryoneID: p.EveryoneID}, roles: map[int64]Role{}, members: map[int64][]int64{}, channels: map[int64]ChannelPolicy{}}
 	positions := map[int]bool{}
+	imageBytes := 0
 	for _, r := range p.Roles {
 		if r.ID < 1 || strings.TrimSpace(r.Name) == "" || len(r.Name) > 100 || r.Position < 0 || positions[r.Position] ||
 			!utf8.ValidString(r.Name) || strings.ContainsFunc(r.Name, unicode.IsControl) ||
@@ -94,6 +96,14 @@ func NewRoleEvaluator(p RolePolicy) (*RoleEvaluator, error) {
 			!utf8.ValidString(r.Icon) || utf8.RuneCountInString(r.Icon) > 16 || strings.ContainsFunc(r.Icon, unicode.IsControl) {
 			return nil, fmt.Errorf("invalid role %d", r.ID)
 		}
+		if err := validateRoleIcon(r.IconImage); err != nil {
+			return nil, fmt.Errorf("role %d: %w", r.ID, err)
+		}
+		imageBytes += len(RoleIconImage(r.IconImage))
+		if imageBytes > MaxRoleIconImagesEncoded {
+			return nil, fmt.Errorf("role images exceed server limit")
+		}
+		r.IconImage = cloneRoleIcon(r.IconImage)
 		if _, exists := e.roles[r.ID]; exists {
 			return nil, fmt.Errorf("duplicate role %d", r.ID)
 		}

@@ -25,3 +25,10 @@ for (const width of [320, 390, 1440]) {
         });
     }
 }
+
+test("mobile server list hides idle phones and counts accounts once", async ({ page }) => {
+    await page.goto("http://127.0.0.1:5175/ui-tests/layout.html?view=presence");
+    await expect(page.locator(".screen")).toContainText("2 online");
+    await expect(page.locator(".screen")).not.toContainText("Daniel mobile");
+    await expect(page.locator(".screen")).toContainText("Daniel");
+});

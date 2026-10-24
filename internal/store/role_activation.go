@@ -173,13 +173,13 @@ func cleanPreparedRolePolicy(p authorization.RolePolicy, ownerID int64) bool {
 	}
 	everyone := p.Roles[0]
 	if everyone.ID != p.EveryoneID || everyone.Name != "@everyone" || everyone.Position != 0 ||
-		everyone.Color != "" || everyone.Icon != "" || everyone.Hoist || len(everyone.Permissions) != 0 {
+		everyone.Color != "" || everyone.Icon != "" || authorization.RoleIconImage(everyone.IconImage) != "" || everyone.Hoist || len(everyone.Permissions) != 0 {
 		return false
 	}
 	for index, expected := range authorization.StarterRoles() {
 		actual := p.Roles[index+1]
 		if actual.Name != expected.Name || actual.Position != expected.Position || actual.Color != expected.Color ||
-			actual.Icon != expected.Icon || actual.Hoist != expected.Hoist || !sameCapabilities(actual.Permissions, expected.Permissions) {
+			actual.Icon != expected.Icon || authorization.RoleIconImage(actual.IconImage) != authorization.RoleIconImage(expected.IconImage) || actual.Hoist != expected.Hoist || !sameCapabilities(actual.Permissions, expected.Permissions) {
 			return false
 		}
 	}

@@ -1,3 +1,4 @@
+import { onlineMemberCount } from "./member-presence.js";
 import { renderVoiceQueueControl } from "./voice-queue.js";
 import { initClientUsability } from "./client-usability.js";
 import { icon, labelButton } from "./icons.js";
@@ -67,7 +68,7 @@ export function renderWorkspace() {
     });
     context.title = context.textContent;
     $("mic-meter").setAttribute("aria-label", t("polish.meter"));
-    $("server-summary").textContent = t("workspace.online", { count: state.clients.length });
+    $("server-summary").textContent = t("workspace.online", { count: onlineMemberCount(state.clients) });
     $("channel-member-count").textContent = t("workspace.inVoice", { count: members.length });
     $("channel-member-count").title = ownChannel ? t("workspace.countIn", { count: members.length, channel: ownChannel.Name }) : t("workspace.noVoice");
     $("channel-member-count").setAttribute("aria-label", $("channel-member-count").textContent);

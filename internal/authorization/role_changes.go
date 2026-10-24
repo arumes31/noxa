@@ -95,6 +95,7 @@ func ApplyRoleChange(p RolePolicy, actorID int64, change RoleChange) (RolePolicy
 		if slices.Contains(r.Permissions, Administrator) {
 			r.DeletionProtected = true
 		}
+		r.IconImage = cloneRoleIcon(r.IconImage)
 		r.Position = 1
 		r.Permissions = slices.Clone(r.Permissions)
 		next.Roles = append(next.Roles, r)
@@ -115,6 +116,10 @@ func ApplyRoleChange(p RolePolicy, actorID int64, change RoleChange) (RolePolicy
 		if old.ID == p.EveryoneID && change.Role.Name != "@everyone" {
 			return RolePolicy{}, ErrRoleInvalid
 		}
+		if change.Role.IconImage == nil {
+			change.Role.IconImage = old.IconImage
+		}
+		change.Role.IconImage = cloneRoleIcon(change.Role.IconImage)
 		for i := range next.Roles {
 			if next.Roles[i].ID == old.ID {
 				next.Roles[i] = change.Role
@@ -320,6 +325,7 @@ func cloneRolePolicy(p RolePolicy) RolePolicy {
 	p.Roles = slices.Clone(p.Roles)
 	for i := range p.Roles {
 		p.Roles[i].Permissions = slices.Clone(p.Roles[i].Permissions)
+		p.Roles[i].IconImage = cloneRoleIcon(p.Roles[i].IconImage)
 	}
 	p.Members = slices.Clone(p.Members)
 	for i := range p.Members {

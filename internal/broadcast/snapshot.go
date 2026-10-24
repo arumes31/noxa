@@ -80,8 +80,10 @@ type OwnChannelMove struct {
 // TreeSnapshot is the full nested view of the server's channel tree and the
 // users currently connected.
 type TreeSnapshot struct {
-	SupportsVoiceQueue bool            `json:"supports_voice_queue"`
-	OwnChannelMove     *OwnChannelMove `json:"own_channel_move,omitempty"`
+	// Shared once per snapshot, and only for roles of visible members.
+	RoleIcons          map[int64]string `json:"role_icons,omitempty"`
+	SupportsVoiceQueue bool             `json:"supports_voice_queue"`
+	OwnChannelMove     *OwnChannelMove  `json:"own_channel_move,omitempty"`
 	// OwnAuthority describes the recipient's authority, independently of cosmetic roles.
 	OwnAuthority string `json:"own_authority,omitempty"`
 	// CanSetInvisible is recipient-specific role authority, never a legacy admin flag.

@@ -21,6 +21,11 @@ const session = Object.assign(new EventTarget(), {
         { device_id: "other", name: "Other desktop", kind: "desktop", fingerprint: "aa:dd" },
     ], passkeys: [{ passkey_id: "key", name: "Phone passkey", created_at: 1700000000 }] }) },
 });
+if (view === "presence") {
+    const mobile = { unique_id: "self", client_id: "phone", nickname: "Daniel mobile", on_mobile: true, channel_id: 0 };
+    channels[0].clients = [mobile];
+    session.clients = () => [...clients, mobile];
+}
 app.session = session; app.info = { server_name: "The Common Room" };
 app.dm = Object.assign(new EventTarget(), { ready: Promise.resolve(), conversations: new Map([["peer", { nickname: "Avery", messages }]]), list: () => [{ peer: "peer", nickname: "Avery", messages }], devicesOf: async () => ({ fingerprint: "verified", devices: [{ deviceID: "current" }], trust: "trusted" }) });
 app.groups = Object.assign(new EventTarget(), { list: new Map([["group", { id: "group", name: "Weekend crew", members: [{ unique_id: "self" }, { unique_id: "peer" }] }]]), messages: new Map([["group", messages]]), get: async () => {}, loadNewer: async () => {}, markRead: () => {} });
@@ -29,7 +34,7 @@ app.calls = Object.assign(new EventTarget(), { active: view === "call", incoming
 const root = document.getElementById("app");
 switch (view) {
     case "home": renderHome(root); break;
-    case "servers": renderServers(root); break;
+    case "servers": case "presence": renderServers(root); break;
     case "you": renderYou(root); break;
     case "voice": case "voice-active": renderVoice(root); break;
     case "chat": renderChat(root, 1); break;

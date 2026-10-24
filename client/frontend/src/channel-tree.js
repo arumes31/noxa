@@ -3,6 +3,8 @@ import { joinFailure, unreadLabel } from "./client-usability-model.js";
 import { isUserMuted } from "./audio.js";
 import * as chatUI from "./chat-ui.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
+import { visibleInChannelTree } from "./member-presence.js";
+import { roleIconElement } from "./role-icons.js";
 import { roleChip } from "./role-presentation.js";
 import { setSafeImage } from "./safe-media.js";
 import { t } from "./i18n.js";
@@ -37,7 +39,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
 
     function recomputeClientCounts() {
         const counts = new Map();
-        for (const c of state.clients) counts.set(c.channel_id, (counts.get(c.channel_id) || 0) + 1);
+        for (const c of state.clients.filter(visibleInChannelTree)) counts.set(c.channel_id, (counts.get(c.channel_id) || 0) + 1);
         for (const ch of state.channels) ch.ClientCount = counts.get(ch.SystemKind === "home" ? 0 : ch.ChannelID) || 0;
     }
 
@@ -69,9 +71,9 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             head.innerHTML = `<span class="hoist-icon"></span><span class="hoist-name"></span>`;
             head.querySelector(".hoist-name").textContent = h.group.name;
             if (h.group.color) head.style.color = h.group.color;
-            if (h.group.icon) head.querySelector(".hoist-icon").textContent = h.group.icon;
+            head.querySelector(".hoist-icon").append(roleIconElement(h.group));
             sec.appendChild(head);
-            for (const c of h.members) sec.appendChild(clientRow(c));
+            for (const c of h.members.filter(visibleInChannelTree)) sec.appendChild(clientRow(c));
             root.appendChild(sec);
         }
         if (!state.channels.some((ch) => !ch.TextOnly)) {
@@ -357,7 +359,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
     function channelMembers(channelID) {
         // Snapshots originate from a server map. Tie identical names to identity
         // so speech, mute and presence updates cannot shuffle the visible rows.
-        return state.clients.filter(c => c.channel_id === channelID).sort((a, b) =>
+        return state.clients.filter(c => c.channel_id === channelID && visibleInChannelTree(c)).sort((a, b) =>
             memberNameOrder.compare(a.nickname || a.unique_id || "", b.nickname || b.unique_id || "") ||
             String(a.unique_id || "").localeCompare(String(b.unique_id || "")) ||
             String(a.client_id).localeCompare(String(b.client_id)));
