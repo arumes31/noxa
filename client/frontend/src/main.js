@@ -1,3 +1,4 @@
+import { initMobileAnnouncement } from "./mobile-announcement.js";
 import { initWindowControls } from "./window-controls.js";
 import { setStatusIcon } from "./icons.js";
 import { maintainRelay } from "./relay-renewal.js";
@@ -501,6 +502,7 @@ async function connectFromLogin() {
         $("conn-lock").classList.remove("hidden");
         showWorkspace();
         connected = true;
+        void window.__noxaMobile?.refresh();
         refreshPermissions();
         applyWhisperSettings();
         chatUI.onConnect(); // (133) MOTD + myUniqueID for mentions/own-msgs
@@ -731,6 +733,7 @@ async function completeReconnect(c, generation, tabID, current = () => true) {
     refreshPermissions();
     applyWhisperSettings();
     chatUI.onConnect();
+    void window.__noxaMobile?.refresh();
     window.__noxaFiles?.loadServerIcon?.();
     window.__noxaSocial?.refreshNews?.();
     startQualitySampler();
@@ -3377,6 +3380,7 @@ initVideo();
 initUpdater();
 initPermsUI(); // roles-v1 access and moderation UI
 initFilesUI(); // wave-7 file browser/transfers (registers window.__noxaFiles)
+initMobileAnnouncement();
 initTabs();    // wave-8a server tabs (registers window.__noxaTabs)
 initSocialUI(); // wave-8b presence/contacts/hover (registers window.__noxaSocial)
 initMetaUI();   // wave-8b debug/stats/onboarding (registers window.__noxaMeta)

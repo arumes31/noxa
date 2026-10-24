@@ -36,3 +36,44 @@
 .device-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
 @media (prefers-reduced-motion: reduce) { .device-link-code { transition: none; } }
 .device-link-history { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* Compact post-login announcement and the optional quick-start presentation. */
+#mobile-announcement { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; padding: 8px 12px; margin: 6px 10px; border: 1px solid var(--border); border-left: 2px solid var(--accent); border-radius: 7px; background: var(--panel, var(--bg)); }
+#mobile-announcement[hidden] { display: none; }
+.mobile-announcement-icon { color: var(--accent); display: flex; }
+.mobile-announcement-icon svg { width: 24px; height: 24px; }
+.mobile-announcement-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; font-size: 12px; }
+.mobile-announcement-copy strong { font-size: 13px; }
+.mobile-announcement-copy span { color: var(--text-dim); }
+#mobile-announcement button { flex-shrink: 0; min-height: 28px; padding: 4px 9px; font-size: 12px; }
+#mobile-announcement .mobile-announcement-setup { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+.dlg-overlay.mobile-quick-overlay { justify-content: flex-end; align-items: flex-start; padding: 124px 18px 18px; background: transparent; backdrop-filter: none; }
+.mobile-quick-guide { width: 420px; max-width: calc(100vw - 36px); max-height: calc(100dvh - 142px); overflow-y: auto; font-size: 12px; box-shadow: 0 12px 38px #0009; }
+.mobile-quick-guide h3 { font-size: 16px; margin: 0; }
+.mobile-platforms { display: flex; gap: 6px; }
+.mobile-platforms button { flex: 1; padding: 6px 8px; font-size: 12px; }
+.mobile-platforms button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.mobile-guide-steps { padding-left: 20px; margin: 12px 0; display: grid; gap: 6px; color: var(--text-dim); line-height: 1.45; }
+.mobile-guide-steps li::marker { color: var(--accent); }
+.mobile-install-guide { border-block: 1px solid var(--border); padding: 8px 0; margin-bottom: 10px; }
+.mobile-install-guide summary { color: var(--accent); cursor: pointer; }
+.mobile-install-guide p { line-height: 1.45; margin: 8px 0 0; }
+.mobile-quick-guide .device-link-qr { width: 144px; height: 144px; padding: 6px; border-radius: 6px; }
+.mobile-quick-guide .device-link-pane { gap: 6px; }
+.mobile-quick-guide .device-link-pane > .hint { display: none; }
+.mobile-quick-guide .device-link-code { font-size: 14px; }
+.mobile-quick-guide .device-link-pwa { padding: 8px 0; }
+@media (max-width: 700px) {
+    #mobile-announcement { gap: 6px; padding: 7px; }
+    .mobile-announcement-icon { display: none; }
+    .mobile-announcement-copy span { font-size: 11px; }
+    .dlg-overlay.mobile-quick-overlay { padding-top: 64px; }
+    .mobile-quick-guide { max-height: calc(100dvh - 82px); }
+}
+
+.mobile-quick-guide .mobile-platform-guide { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 12px; }
+.mobile-quick-guide .mobile-platforms, .mobile-quick-guide .mobile-install-guide { grid-column: 1 / -1; }
+.mobile-quick-guide .mobile-guide-steps { margin: 0; align-content: start; gap: 12px; }
+.mobile-quick-guide .device-link-pane:has(.device-link-sas), .mobile-quick-guide .device-link-pane:has(.device-link-history) { grid-column: 1 / -1; }
+.mobile-quick-guide .mobile-platform-guide:has(.device-link-sas) .mobile-guide-steps { display: none; }
+@media (max-width: 450px) { .mobile-quick-guide .mobile-platform-guide { grid-template-columns: minmax(0, 1fr); } }

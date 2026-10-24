@@ -1,6 +1,14 @@
 // i18n.js — mobile catalog. English and German carry the same keys.
 const catalogs = {
     en: {
+        "install.title": "Install noXa",
+        "install.hint": "Open it from your home screen.",
+        "install.action": "Install",
+        "install.how": "How to install",
+        "install.done": "Got it",
+        "install.ios": "In Safari, open Share → Add to Home Screen. Enable Open as Web App if offered, then Add. Open noXa from your home screen. If asked to sign in again, use your passkey or link from desktop.",
+        "install.android": "In Chrome, open ⋮ → Install and create shortcut → Install. Some versions show Add to Home screen → Install. Then open noXa from your home screen.",
+
         "app.tagline": "Voice, video and chat for your crew",
         "settings.firstDevice": "Master device",
         "connect.scan": "Scan QR code",
@@ -188,6 +196,14 @@ const catalogs = {
         "common.error": "Something went wrong: {error}",
     },
     de: {
+        "install.title": "noXa installieren",
+        "install.hint": "Direkt vom Home-Bildschirm öffnen.",
+        "install.action": "Installieren",
+        "install.how": "So geht’s",
+        "install.done": "Verstanden",
+        "install.ios": "In Safari: Teilen → Zum Home-Bildschirm. Falls angeboten, Als Web-App öffnen aktivieren und Hinzufügen wählen. Öffne noXa vom Home-Bildschirm. Falls erneut eine Anmeldung nötig ist, nutze deinen Passkey oder verknüpfe die App über den Desktop.",
+        "install.android": "In Chrome: ⋮ → Installieren und Verknüpfung erstellen → Installieren. Manche Versionen zeigen Zum Startbildschirm hinzufügen → Installieren. Öffne noXa danach vom Startbildschirm.",
+
         "app.tagline": "Sprache, Video und Chat für deine Crew",
         "settings.firstDevice": "Master-Gerät",
         "connect.scan": "QR-Code scannen",

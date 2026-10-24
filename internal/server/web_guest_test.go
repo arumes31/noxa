@@ -1,6 +1,7 @@
 package server
 
 import (
+	"slices"
 	"testing"
 	"testing/synctest"
 
@@ -56,5 +57,21 @@ func TestWebGuestStillRequiresServerPassword(t *testing.T) {
 	}
 	if result.OK || result.Reason != "invalid server password" {
 		t.Fatalf("password bypass: %+v", result)
+	}
+}
+
+func TestWebLoginCapabilityRequiresEnabledWeb(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "disabled", true: "enabled"}[enabled], func(t *testing.T) {
+			env := startTestEnvDeps(t, nil, func(cfg *config.Config) {
+				cfg.Web = config.WebConfig{Enabled: enabled, PublicURL: "https://chat.example"}
+			}, func(deps *Deps) { deps.Devices = &fakeDevices{} })
+			t.Cleanup(env.stop)
+			conn, response := keyLogin(t, env.addr, newLinkTestKeys(t))
+			t.Cleanup(func() { _ = conn.Close() })
+			if !response.OK || slices.Contains(response.Capabilities, netproto.CapabilityWebLogin) != enabled {
+				t.Fatalf("enabled=%v: %+v", enabled, response)
+			}
+		})
 	}
 }

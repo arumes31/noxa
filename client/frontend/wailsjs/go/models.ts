@@ -1305,6 +1305,8 @@ export namespace main {
 		}
 	}
 	export class SessionInfo {
+	    mobile_account_key: string;
+	    mobile_available: boolean;
 	    authorization_model: string;
 	    client_id: string;
 	    nickname: string;
@@ -1319,6 +1321,8 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.authorization_model = source["authorization_model"];
+	        this.mobile_available = source["mobile_available"];
+	        this.mobile_account_key = source["mobile_account_key"];
 	        this.client_id = source["client_id"];
 	        this.nickname = source["nickname"];
 	        this.is_guest = source["is_guest"];
