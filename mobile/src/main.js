@@ -3,35 +3,56 @@ import "./styles.css";
 import { app, connect, loadDevice, loadInfo, markRead } from "./app.js";
 import { parseLinkFragment } from "./core/device.js";
 import { t, lang } from "./i18n.js";
-import { renderConnect, runLink } from "./ui/connect.js";
 import { h, toast } from "./ui/dom.js";
-import { offerPasskey, renderChat, renderHome, renderServers, renderVoice, renderYou } from "./ui/screens.js";
+
+// Each screen is its own chunk, so Connect and Home load without the rest.
+const screens = {
+    connect: () => import("./ui/connect.js"),
+    home: () => import("./ui/home.js"),
+    servers: () => import("./ui/servers.js"),
+    chat: () => import("./ui/chat.js"),
+    voice: () => import("./ui/voice.js"),
+    you: () => import("./ui/you.js"),
+};
 
 document.documentElement.lang = lang();
 const root = document.getElementById("app");
 let cleanup = null;
 
-function route() {
+let routeToken = 0;
+
+async function route() {
     cleanup?.();
     cleanup = null;
+    const token = ++routeToken;
     if (!app.session) {
-        renderConnect(root, { onSignedIn });
+        app.viewing = null;
+        const { renderConnect } = await screens.connect();
+        if (token === routeToken) renderConnect(root, { onSignedIn });
         return;
     }
-    const [, screen = "home", arg] = location.hash.split("/");
+    let [, screen = "home", arg] = location.hash.split("/");
+    if (!screens[screen] || screen === "connect") screen = "home";
     app.viewing = null;
+    if (screen === "chat") {
+        app.viewing = Number(arg) || 0;
+        markRead(app.viewing);
+    }
+    let module;
+    try {
+        module = await screens[screen]();
+    } catch (error) {
+        // A deploy replaced the chunk; reload to the new version.
+        toast(t("common.error", { error: error.message }), "warn");
+        return;
+    }
+    if (token !== routeToken) return;
     switch (screen) {
-        case "servers": renderServers(root); break;
-        case "chat": {
-            const scope = Number(arg) || 0;
-            app.viewing = scope;
-            markRead(scope);
-            cleanup = renderChat(root, scope);
-            break;
-        }
-        case "voice": renderVoice(root); break;
-        case "you": renderYou(root); break;
-        default: renderHome(root);
+        case "servers": module.renderServers(root); break;
+        case "chat": cleanup = module.renderChat(root, app.viewing); break;
+        case "voice": module.renderVoice(root); break;
+        case "you": module.renderYou(root); break;
+        default: module.renderHome(root);
     }
     renderBanner();
 }
@@ -39,7 +60,7 @@ function route() {
 function onSignedIn({ offerPasskey: offer } = {}) {
     if (!location.hash || location.hash === "#/") location.hash = "#/home";
     else route();
-    if (offer) offerPasskey();
+    if (offer) screens.you().then(module => module.offerPasskey());
 }
 
 function renderBanner() {
@@ -106,6 +127,7 @@ async function boot() {
     if (link) {
         // The secret must not linger in history or be re-claimed on reload.
         history.replaceState(null, "", "/app/");
+        const { runLink } = await screens.connect();
         await runLink(root, link, { onSignedIn });
         return;
     }
