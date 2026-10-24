@@ -1,4 +1,3 @@
-
-## 2023-10-23 - [Optimizing custom emoji rendering loop]
-**Learning:** Found a loop in chat-parsers.js iterating over potentially thousands of custom emojis for every chat text operation, performing costly HTML operations regardless of whether the emoji string even appeared in the text.
-**Action:** When a function accepts a global/large array (like custom emojis) and applies a transformation across a string, pre-filter the array using a fast mechanism (like string.includes()) to find matches before applying the transformation logic.
+## 2026-10-24 - [N+1 Query in auth_role_grants insert]
+**Learning:** [When dealing with bulk inserts based on lists in Go structs, `pq.Array` with `UNNEST(::type)` gives an efficient way to execute everything as a single database statement rather than looping.]
+**Action:** [Check loops executing identical INSERT statements over and over inside transactions and replace with `UNNEST(pq.Array(...))` to prevent N+1 queries.]
