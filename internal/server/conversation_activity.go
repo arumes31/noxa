@@ -129,7 +129,8 @@ func (s *TCPServer) relayToMembers(uids []string, eventType string, data any) er
 		return err
 	}
 	for _, uid := range uids {
-		if target, ok := s.clientByUniqueID(uid); ok {
+		// Every session: a member's desktop and phones alike.
+		for _, target := range s.sessionsOf(uid) {
 			_ = s.deps.Broadcast.BroadcastToClient(target.ID, payload)
 		}
 	}

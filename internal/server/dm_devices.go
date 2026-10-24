@@ -198,6 +198,80 @@ func (s *TCPServer) sendDirectCopies(ctx context.Context, client *Client, msg ne
 	return s.acknowledgeChat(client, msg, netproto.ChatQueued, 0)
 }
 
+// conversationMembersStore reads a group's members for device coverage.
+type conversationMembersStore interface {
+	WithConversations(context.Context, string, netproto.ConversationRequest, func(netproto.ConversationResult) error) error
+}
+
+// checkConversationDevices requires a group message to carry an envelope
+// for every confirmed device of every member that cannot open the account
+// envelope, and only for such devices. A phone may send only once its
+// account confirmed it. It answers the client itself and returns errSent.
+func (s *TCPServer) checkConversationDevices(ctx context.Context, client *Client, request netproto.ConversationRequest) error {
+	origin := requestOrigin(ctx)
+	backend, ok := s.deps.Chat.(conversationMembersStore)
+	if !ok || request.Message == nil {
+		return nil
+	}
+	var members []netproto.ConversationMember
+	if err := backend.WithConversations(ctx, client.UniqueID, netproto.ConversationRequest{Action: "get", ID: request.ID}, func(result netproto.ConversationResult) error {
+		if len(result.Conversations) > 0 {
+			members = result.Conversations[0].Members
+		}
+		return nil
+	}); err != nil {
+		return nil // the send reports membership errors itself
+	}
+	if client.isWebTransport() {
+		own, err := s.dmDevices(ctx, client.uniqueID())
+		if err != nil {
+			return s.sendErrorFor(client, origin, errCodeUnavailable, "device directory unavailable")
+		}
+		confirmed := false
+		for _, d := range own {
+			confirmed = confirmed || d.DeviceID == client.currentDeviceID()
+		}
+		if !confirmed {
+			return s.sendErrorFor(client, origin, errCodePermissionDenied, "confirm this device on your desktop before sending group messages")
+		}
+	}
+	needed := map[string]bool{}
+	for _, member := range members {
+		if member.Pending {
+			continue
+		}
+		devices, err := s.dmDevices(ctx, member.UniqueID)
+		if err != nil {
+			return s.sendErrorFor(client, origin, errCodeUnavailable, "device directory unavailable")
+		}
+		for _, d := range devices {
+			if !d.FirstDevice {
+				needed[netproto.DeviceEnvelopeKey(member.UniqueID, d.DeviceID)] = true
+			}
+		}
+	}
+	// The sending device has the plaintext already.
+	delete(needed, netproto.DeviceEnvelopeKey(client.uniqueID(), client.currentDeviceID()))
+	stale := len(request.Message.DeviceEnvelopes) > 0 && len(needed) == 0
+	for key := range needed {
+		if _, ok := request.Message.DeviceEnvelopes[key]; !ok {
+			stale = true
+		}
+	}
+	for key := range request.Message.DeviceEnvelopes {
+		if !needed[key] && key != netproto.DeviceEnvelopeKey(client.uniqueID(), client.currentDeviceID()) {
+			stale = true
+		}
+	}
+	if !stale {
+		return nil
+	}
+	if len(request.Message.DeviceEnvelopes) == 0 {
+		return s.rejectStaleDevices(ctx, client, "this group has members with several devices; update noXa to send to them")
+	}
+	return s.rejectStaleDevices(ctx, client, "group members' devices changed; refresh them before retrying")
+}
+
 // handleEndorse records a trusted device's signature for a passkey-linked
 // device of the same account.
 func (s *TCPServer) handleEndorse(ctx context.Context, client *Client, r netproto.DeviceRequest) error {

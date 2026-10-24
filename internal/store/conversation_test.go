@@ -504,3 +504,39 @@ func TestConversationOwnerDeletesMessagesWithoutResurrection(t *testing.T) {
 		t.Fatalf("orphan message: %d %v", count, err)
 	}
 }
+
+func TestConversationDeviceEnvelopesReachTheirDevice(t *testing.T) {
+	s, c := conversationTestStore(t)
+	c = conversationTestChange(t, s, c, "owner", "invite", "member")
+	c = conversationTestChange(t, s, c, "member", "accept", "")
+	phone, err := s.AddDevice(t.Context(), NewDevice{Principal: "member", Kind: DeviceKindWeb, Name: "Phone", Ed25519Public: "ed-member-phone", X25519Public: "eC1waG9uZQ=="}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := s.AddDevice(t.Context(), NewDevice{Principal: "owner", Kind: DeviceKindDesktop, Name: "Desktop", Ed25519Public: "ed-owner", X25519Public: "b3duZXIta2V5"}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := conversationTestSend(c, 1)
+	device := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 64))
+	request.Message.DeviceEnvelopes = map[string]string{netproto.DeviceEnvelopeKey("member", phone.DeviceID): device}
+	request.DeviceID = sender.DeviceID
+	if _, _, err := s.SendConversation(t.Context(), "owner", request); err != nil {
+		t.Fatal(err)
+	}
+	onPhone := conversationTestRead(t, s, "member", netproto.ConversationRequest{Action: "history", ID: c.ID, DeviceID: phone.DeviceID})
+	if len(onPhone.Messages) != 1 || onPhone.Messages[0].Body != device || !onPhone.Messages[0].DeviceEnvelope ||
+		onPhone.Messages[0].SenderDeviceID != sender.DeviceID || onPhone.Messages[0].SenderDeviceKey != "b3duZXIta2V5" {
+		t.Fatalf("phone history = %+v", onPhone.Messages)
+	}
+	onDesktop := conversationTestRead(t, s, "member", netproto.ConversationRequest{Action: "history", ID: c.ID})
+	if len(onDesktop.Messages) != 1 || onDesktop.Messages[0].Body != request.Message.Envelopes["member"] || onDesktop.Messages[0].DeviceEnvelope {
+		t.Fatalf("account history = %+v", onDesktop.Messages)
+	}
+	// An envelope for a non-member is refused.
+	bad := conversationTestSend(c, 2)
+	bad.Message.DeviceEnvelopes = map[string]string{netproto.DeviceEnvelopeKey("outsider", "dev-x"): device}
+	if _, _, err := s.SendConversation(t.Context(), "owner", bad); !errors.Is(err, netproto.ErrConversationInvalid) {
+		t.Fatalf("outsider device envelope err = %v", err)
+	}
+}
