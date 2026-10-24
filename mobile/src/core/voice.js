@@ -108,8 +108,8 @@ export class Voice extends EventTarget {
     // --- Joining and leaving ------------------------------------------------
 
     /** Joins a voice channel: microphone, peer connection, first offer. */
-    async join(channelID) {
-        const joined = await this.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: channelID }, MsgChannelJoined);
+    async join(channelID, password = "") {
+        const joined = await this.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: channelID, password: password || undefined }, MsgChannelJoined);
         this.channelID = joined.channel_id ?? channelID;
         try {
             if (!this.pc) await this.#start();

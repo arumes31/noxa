@@ -9,6 +9,7 @@ import {
     toBase64, toBase64URL, uniqueIDFromPublicKey, utf8,
 } from "./crypto.js";
 import { Msg } from "./frame.js";
+import { signInError } from "./login-errors.js";
 
 export const LinkState = Object.freeze({ pending: "pending", claimed: "claimed", approved: "approved", denied: "denied", expired: "expired" });
 
@@ -92,7 +93,8 @@ export async function waitForDecision(identity, linkID, { open = () => Connectio
 
 /**
  * Signs in with this device's key. Resolves with the AuthResponse; rejects
- * with the server's reason, e.g. a revoked device.
+ * with the server's reason, e.g. a revoked device, classified in error.kind
+ * (core/login-errors.js).
  */
 export async function signIn(conn, identity, { version, nickname = "", serverPassword = "" } = {}) {
     const uniqueID = uniqueIDFromPublicKey(identity.edPublic);
@@ -101,12 +103,12 @@ export async function signIn(conn, identity, { version, nickname = "", serverPas
         client_version: version, authorization_models: ["roles-v1"], username: uniqueID, anonymous: true,
         nickname, server_password: serverPassword, x25519_public_key: x25519,
     }, [Msg.AuthChallenge, Msg.AuthResponse], { timeout: 10000 });
-    if (!first.challenge) throw new Error(first.reason || "sign-in failed");
+    if (!first.challenge) throw signInError(first.reason);
     const signature = sign(Uint8Array.from(atob(first.challenge), c => c.charCodeAt(0)), identity.edSecret);
     const response = await conn.request(Msg.AuthSignature, {
         unique_id: "", public_key: publicKeyPEM(identity.edPublic), signature: toBase64(signature), x25519_public_key: x25519,
     }, Msg.AuthResponse);
-    if (!response.ok) throw new Error(response.reason || "sign-in failed");
+    if (!response.ok) throw signInError(response.reason);
     return response;
 }
 

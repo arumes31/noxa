@@ -213,7 +213,7 @@ func TestInfoAndAppRoutes(t *testing.T) {
 		t.Fatalf("missing CSP: %q", csp)
 	}
 
-	for _, path := range []string{"/app/", "/app/channels/general", "/link"} {
+	for _, path := range []string{"/app/", "/app/channels/general", "/link", "/invite/42", "/app/invite/42"} {
 		body := get(path).body
 		if !strings.Contains(string(body), "app") {
 			t.Fatalf("%s did not serve index.html: %q", path, body)

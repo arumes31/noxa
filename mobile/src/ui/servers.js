@@ -1,9 +1,10 @@
 // servers.js — Server & channels (03): text and voice tree with members.
-import { app, joinVoice } from "../app.js";
+import { app } from "../app.js";
 import { t } from "../i18n.js";
 import { avatar, h, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { dmHref, header, nav, unreadBadge } from "./common.js";
+import { joinWithPassword, lockBadge, serverMenuButton } from "./server-tools.js";
 
 let joining = false;
 
@@ -16,7 +17,7 @@ export function renderServers(root) {
         const button = event.currentTarget;
         button.disabled = true;
         try {
-            if (!app.voice?.active || app.voice.channelID !== channel.id) await joinVoice(channel.id);
+            if ((!app.voice?.active || app.voice.channelID !== channel.id) && !await joinWithPassword(channel)) return;
             if (app.session === session && location.hash === before) location.hash = "#/voice";
         } catch (error) {
             if (app.session === session) toast(t("voice.joinFailed", { error: error.message }), "warn");
@@ -25,7 +26,7 @@ export function renderServers(root) {
     const channels = session.channels().map(c => ({ ...c, clients: c.home ? c.clients.filter(member => !member.on_mobile) : c.clients }));
     const online = new Set(session.clients().map(c => c.user_id > 0 ? `user:${c.user_id}` : c.unique_id || c.client_id)).size;
     root.replaceChildren(h("section", { class: "screen" },
-        header(app.info?.server_name || "noXa", { sub: `${online} online` }),
+        header(app.info?.server_name || "noXa", { sub: `${online} online`, action: serverMenuButton(session) }),
         h("div", { class: "screen-body" },
             h("p", { class: "section-label" }, t("channels.text")),
             h("ul", { class: "list" },
@@ -33,12 +34,14 @@ export function renderServers(root) {
                 channels.filter(c => c.chat).map(c => h("li", {}, h("a", { class: "row", href: `#/chat/${c.id}`, style: `padding-left:${10 + c.depth * 14}px` },
                     h("span", { class: "hash" }, c.restricted ? "🔒" : "#"),
                     h("span", { class: "row-main" }, h("span", { class: "row-title" }, c.name), c.topic ? h("span", { class: "row-sub" }, c.topic) : null),
+                    lockBadge(c),
                     unreadBadge(`channel:${c.id}`))))),
             h("p", { class: "section-label" }, t("channels.voice")),
             h("ul", { class: "list" }, channels.filter(c => !c.textOnly).map(c => h("li", {},
                 h("div", { class: "row", style: `padding-left:${10 + c.depth * 14}px` },
                     icon(c.home ? "home" : "voice"),
                     h("span", { class: "row-main" }, h("span", { class: "row-title" }, c.name)),
+                    lockBadge(c),
                     c.clients.length ? h("span", { class: "row-meta" }, String(c.clients.length)) : null,
                     c.home ? null : joinButton(c)),
                 c.clients.length ? h("ul", { class: "list", style: "padding-left:44px" }, c.clients.map(client => h("li", {},

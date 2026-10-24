@@ -7,10 +7,7 @@ import { t } from "../i18n.js";
 import { avatar, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { header, nav } from "./common.js";
-
-async function devices(session) {
-    return session.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
-}
+import { backupFlow, renderDeviceList, serversSection } from "./devices.js";
 
 export async function offerPasskey() {
     if (!passkeysSupported() || !app.session) return;
@@ -90,19 +87,13 @@ export function renderYou(root) {
     const guest = !!app.meta.guest;
     const refresh = async () => {
         try {
-            const result = await devices(session);
-            list.replaceChildren(...(result.devices || []).map(device => h("li", { class: "row" },
-                h("span", { class: "row-main" },
-                    h("span", { class: "row-title" }, device.name),
-                    h("span", { class: "row-sub" }, [t(`settings.kind.${device.kind}`), device.current ? t("settings.current") : null, device.first_device ? t("settings.firstDevice") : null].filter(Boolean).join(" · ")),
-                    h("span", { class: "row-sub mono" }, device.fingerprint),
-                    device.expiry_warned_at ? h("span", { class: "row-sub", style: "color:var(--amber)" }, t("settings.expiry", { date: new Date((device.last_seen_at + 180 * 86400) * 1000).toLocaleDateString() })) : null),
-                device.current || device.first_device ? null : h("button", { class: "btn btn-danger", onclick: async () => {
-                    const ok = await sheet(t("settings.revoke"), device.name, [{ label: t("settings.revoke"), value: true, danger: true }, { label: t("link.cancel"), value: false }]);
-                    if (!ok) return;
-                    await session.conn.request(Msg.DeviceRequest, { action: "revoke", device_id: device.device_id }, Msg.DeviceResult).catch(e => toast(e.message, "warn"));
-                    refresh();
-                } }, t("settings.revoke")))));
+            // Rows offer rename, confirm and history copy (ui/devices.js).
+            const result = await renderDeviceList(session, list, { refresh, revokeButton: device => device.current || device.first_device ? null : h("button", { class: "btn btn-danger", onclick: async () => {
+                const ok = await sheet(t("settings.revoke"), device.name, [{ label: t("settings.revoke"), value: true, danger: true }, { label: t("link.cancel"), value: false }]);
+                if (!ok) return;
+                await session.conn.request(Msg.DeviceRequest, { action: "revoke", device_id: device.device_id }, Msg.DeviceResult).catch(e => toast(e.message, "warn"));
+                refresh();
+            } }, t("settings.revoke")) });
             passkeys.replaceChildren(...(result.passkeys || []).map(key => h("li", { class: "row" },
                 icon("passkey"),
                 h("span", { class: "row-main" }, h("span", { class: "row-title" }, key.name), h("span", { class: "row-sub" }, new Date(key.created_at * 1000).toLocaleDateString())),
@@ -126,6 +117,8 @@ export function renderYou(root) {
             !guest && passkeysSupported() ? h("button", { class: "btn btn-primary btn-block", onclick: async () => { await savePasskey(); refresh(); } }, icon("passkey"), " ", t("settings.savePasskey")) : null,
             guest ? null : h("p", { class: "section-label" }, t("settings.devices")),
             list,
+            guest ? null : h("button", { class: "btn btn-block", type: "button", onclick: backupFlow }, t("acct.backup")),
+            serversSection(),
             h("div", { style: "height:16px" }),
             h("button", { class: "btn btn-danger btn-block", onclick: async () => {
                 const ok = await sheet(t("settings.signOut"), t(guest ? "settings.guestSignOutConfirm" : "settings.signOutConfirm"), [{ label: t("settings.signOut"), value: true, danger: true }, { label: t("link.cancel"), value: false }]);

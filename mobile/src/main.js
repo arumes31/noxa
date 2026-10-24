@@ -4,6 +4,7 @@ import { initInstallPrompt, renderInstallPrompt } from "./ui/install-prompt.js";
 import "./styles.css";
 import { app, connect, flushNow, loadDevice, loadInfo, markRead } from "./app.js";
 import { parseLinkFragment } from "./core/device.js";
+import { inviteFromLocation, setPendingInvite } from "./core/invite.js";
 import { t, lang } from "./i18n.js";
 import { h, toast } from "./ui/dom.js";
 
@@ -20,6 +21,7 @@ const screens = {
     group: () => import("./ui/group.js"),
     voice: () => import("./ui/voice.js"),
     you: () => import("./ui/you.js"),
+    "server-info": () => import("./ui/server-tools.js"),
 };
 
 document.documentElement.lang = lang();
@@ -69,6 +71,7 @@ async function route() {
         case "group": cleanup = module.renderGroup(root, arg); break;
         case "voice": cleanup = module.renderVoice(root); break;
         case "you": module.renderYou(root); break;
+        case "server-info": cleanup = module.renderServerInfo(root); break;
         default: module.renderHome(root);
     }
     renderBanner();
@@ -93,6 +96,7 @@ app.addEventListener("session", event => {
     const session = event.detail;
     // After a reconnect the screen must use the new session.
     if (sessions++ > 0) route();
+    import("./ui/account.js").then(account => account.startSession(session));
     for (const type of ["snapshot", "subscriptions"]) {
         session.addEventListener(type, () => {
             const screen = location.hash.split("/")[1] || "home";
@@ -117,6 +121,8 @@ app.addEventListener("unread", () => {
     if (screen === "home" || screen === "servers") route();
 });
 app.addEventListener("online", renderBanner);
+app.addEventListener("disconnected", route);
+app.addEventListener("account", () => { if ((location.hash.split("/")[1] || "home") === "home") route(); });
 // The call bar follows voice state on the other screens.
 // The call bar also follows private calls.
 app.addEventListener("call", () => {
@@ -207,6 +213,12 @@ async function boot() {
     }
     registerServiceWorker();
     if (app.info.protocol_version !== PROTOCOL_VERSION) showUpdateRequired();
+    // An invitation waits for the session; its token must not stay in the URL.
+    const invite = inviteFromLocation();
+    if (invite) {
+        setPendingInvite(invite);
+        history.replaceState(null, "", "/app/");
+    }
     const link = location.pathname === "/link" ? parseLinkFragment(location.hash) : null;
     if (link) {
         // The secret must not linger in history or be re-claimed on reload.
@@ -220,7 +232,7 @@ async function boot() {
         try {
             await connect();
         } catch (error) {
-            if (!error.revoked) toast(t("signin.failed", { error: error.message }), "warn");
+            if (!error.revoked) import("./ui/account.js").then(account => toast(account.signInMessage(error), "warn"));
         }
     }
     route();

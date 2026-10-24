@@ -52,6 +52,9 @@ export const DEFAULTS = Object.freeze({
     autoAwayMinutes: 0,
     autoAwayMessage: "",
     mutedConversations: [], // "dm:<uid>" | "conversation:<id>"
+    // Servers
+    unsubscribedChannels: [], // channel IDs not subscribed automatically
+    motdSeen: "", // hash of the last MOTD dismissed on Home
 });
 
 let cache = null;

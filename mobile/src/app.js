@@ -11,6 +11,8 @@ import { signIn } from "./core/device.js";
 import { clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
 import { enqueue, flush as flushOutbox, showPending, waitingCount } from "./core/outbox.js";
 import { announceRead, closeNotifications, reportVisibility, setBadge, syncPush } from "./core/push.js";
+import { get as setting } from "./core/settings.js";
+import { addServer } from "./core/servers.js";
 
 export const app = new EventTarget();
 
@@ -49,6 +51,8 @@ export async function loadInfo(fetchImpl = fetch) {
     const response = await fetchImpl("/api/v1/web/info", { cache: "no-store" });
     if (!response.ok) throw new Error(`server answered ${response.status}`);
     app.info = await response.json();
+    // The first open of a server puts it on this browser's server list.
+    try { addServer(location.origin, app.info.server_name || ""); } catch { /* not a web origin */ }
     return app.info;
 }
 
@@ -92,6 +96,7 @@ export async function forgetDevice() {
 /** Signs in with the stored device key and starts the chat session. */
 export async function connect({ guest = null } = {}) {
     clearTimeout(reconnectTimer);
+    app.paused = false;
     const reuseGuest = !!(guest && app.meta.guest && app.identity);
     const identity = guest ? (reuseGuest ? app.identity : newIdentity()) : app.identity;
     const conn = await Connection.open();
@@ -114,11 +119,15 @@ export async function connect({ guest = null } = {}) {
     const session = new ChatSession(conn, identity, auth);
     app.session = session;
     previousSession?.close();
-    session.addEventListener("snapshot", () => {
-        // Subscribing delivers a channel's chat and keys without joining it.
-        const missing = session.channels().filter(c => c.chat && !session.subscriptions.has(c.id)).map(c => c.id);
+    // Subscribing delivers a channel's chat and keys without joining it;
+    // channels the user unsubscribed from in Servers stay unsubscribed.
+    const subscribeMissing = () => {
+        if (session.pendingRules) return;
+        const skip = new Set(setting("unsubscribedChannels") || []);
+        const missing = session.channels().filter(c => c.chat && !session.subscriptions.has(c.id) && !skip.has(c.id)).map(c => c.id);
         if (missing.length) session.subscribe(missing).catch(() => {});
-    });
+    };
+    session.addEventListener("snapshot", subscribeMissing);
     reconnectAttempt = 0;
     setOnline(true);
     app.meta = { ...(guest ? { guest: true, linked: false } : app.meta), deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
@@ -169,6 +178,14 @@ export async function connect({ guest = null } = {}) {
         if (event.detail?.event === "read" && event.detail.read) readElsewhere(event.detail.read);
         if (event.detail?.event === "history_ready") dm.importHistory().catch(() => {});
     });
+    // Until the rules are accepted the server refuses chat requests; redo them.
+    session.addEventListener("rules", () => {
+        if (session.pendingRules || app.session !== session) return;
+        subscribeMissing();
+        app.groups?.refresh().catch(() => {});
+        dm.importHistory().catch(() => {});
+        flushOutbox(session, dm).then(outboxChanged).catch(() => {});
+    });
     session.addEventListener("incoming", event => {
         const { scope, message } = event.detail;
         if (!message.own) noteUnread(`channel:${scope}`, message.mentioned);
@@ -203,10 +220,31 @@ export async function flushNow() {
     await outboxChanged();
 }
 
-/** Joins a voice channel and keeps the phone awake while connected. */
-export async function joinVoice(channelID) {
+/** Joins a voice channel (with its password, if any) and keeps the phone awake while connected. */
+export async function joinVoice(channelID, password = "") {
     if (!app.voice) throw new Error("not connected");
-    await app.voice.join(channelID);
+    await app.voice.join(channelID, password);
+}
+
+/**
+ * Leaves the server without forgetting this device, e.g. after declining
+ * the rules. The Connect screen offers to sign in again.
+ */
+export function disconnect() {
+    clearTimeout(reconnectTimer);
+    const session = app.session;
+    app.session = null;
+    app.voice?.close();
+    app.voice = null;
+    app.calls?.close();
+    app.calls = null;
+    app.groups?.close();
+    app.groups = null;
+    app.dm?.close();
+    app.dm = null;
+    app.paused = true;
+    session?.close();
+    emit("disconnected");
 }
 
 export async function leaveVoice() {
@@ -386,7 +424,7 @@ function scheduleReconnect() {
     reconnectAttempt++;
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
-        if (!app.identity) return;
+        if (!app.identity || app.paused) return;
         connect().catch(error => {
             if (!error.revoked) scheduleReconnect();
         });
@@ -396,7 +434,7 @@ function scheduleReconnect() {
 // Reconnect promptly when the phone comes back online or to the foreground.
 if (typeof window !== "undefined") {
     const retryNow = () => {
-        if (!app.identity) return;
+        if (!app.identity || app.paused) return;
         if (!app.online) {
             reconnectAttempt = 0;
             scheduleReconnect();
