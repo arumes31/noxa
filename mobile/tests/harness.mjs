@@ -102,6 +102,8 @@ export async function startServer({ databaseURL = process.env.NOXA_E2E_DATABASE_
         `  relay_min_port: ${relayBase}`, `  relay_max_port: ${relayBase + 200}`, `  realm: "noxa-e2e"`,
         `  uris: ["turn:${turnHost}:${ports.turn}?transport=udp"]`, `  credentials_ttl: 1h`,
         `web:`, `  enabled: true`, `  addr: "127.0.0.1:${ports.web}"`, `  public_url: "https://chat.example"`, `  max_devices_per_account: 100`,
+        // Every spec connects from 127.0.0.1 and some keep pages open; the default of 8 sockets per IP runs out.
+        `  ws_connections_per_ip: 200`, `  ws_attempts_per_minute: 600`,
         `  trusted_proxies: ["127.0.0.0/8"]`, `  app_dir: "${slash(path.join(repoRoot, "web", "app"))}"`,
     ].join("\n");
     writeFileSync(path.join(dir, "config.yaml"), yaml + "\n");

@@ -9,9 +9,6 @@ import { icon } from "./icons.js";
 import { header, nav } from "./common.js";
 import { adminEntry } from "./admin-entry.js";
 
-async function devices(session) {
-    return session.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
-}
 import { backupFlow, renderDeviceList, serversSection } from "./devices.js";
 
 export async function offerPasskey() {
