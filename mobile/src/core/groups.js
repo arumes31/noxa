@@ -9,11 +9,53 @@
 // desktop (client/conversation.go): {conversation_id, epoch, reference,
 // from, to, text}. A device envelope names the sending device; its key
 // must be one of the sender's trusted devices.
+//
+// Activity (conversation_activity_v1): typing goes out as Typing
+// {conversation_id} and comes back as "conversation_typing"; a mark_read
+// with share_read advances the member's shared position, relayed as
+// "conversation_read" and listed as members[].seen_message_id.
 import { ProtocolError } from "./connection.js";
 import { openDM, sealDM } from "./crypto.js";
+import { Msg } from "./frame.js";
 
 const MsgConversationRequest = 170;
 const MsgConversationResult = 171;
+export const ACTIVITY_CAPABILITY = "conversation_activity_v1";
+/** netproto.MaxConversationMembers, invitations included. */
+export const MAX_GROUP_MEMBERS = 16;
+/** A member's typing entry lives a little longer than the server's 2 s throttle. */
+export const GROUP_TYPING_TTL_MS = 4500;
+const TYPING_PING_MS = 3000;
+
+/** Server messages by ID, then messages not yet accepted (local) by time. */
+function byOrder(a, b) {
+    if (a.local !== b.local) return a.local ? 1 : -1;
+    return a.local ? a.created_at - b.created_at : a.id - b.id;
+}
+
+/**
+ * Places every other accepted member's shared read position on the newest
+ * message it covers: Map(messageID -> [uid, ...]). Mirrors the desktop's
+ * group-activity.js: the viewer is never listed, nor a member under their
+ * own message, nor a member without a shared position.
+ */
+export function seenMarkers(messages, members, selfUID) {
+    const ordered = messages.filter(m => !m.local && Number(m.id) > 0).sort((a, b) => a.id - b.id);
+    const markers = new Map();
+    for (const member of members || []) {
+        const seen = Number(member?.seen_message_id) || 0;
+        if (!seen || member.pending || member.unique_id === selfUID) continue;
+        let target = null;
+        for (const message of ordered) {
+            if (message.id > seen) break;
+            target = message;
+        }
+        if (!target || target.from_unique_id === member.unique_id) continue;
+        if (!markers.has(target.id)) markers.set(target.id, []);
+        markers.get(target.id).push(member.unique_id);
+    }
+    return markers;
+}
 
 export class Groups extends EventTarget {
     constructor(session, dm) {
@@ -24,16 +66,24 @@ export class Groups extends EventTarget {
         this.uid = session.uniqueID;
         /** id -> Conversation */
         this.list = new Map();
-        /** id -> messages, oldest first */
+        /** id -> messages, oldest first; local ones (not yet accepted) last */
         this.messages = new Map();
+        /** id -> Map(uid -> {nickname, until}) */
+        this.typing = new Map();
+        /** Whether to send typing and shared read receipts; the app sets it from the settings. */
+        this.shareActivity = () => false;
         this.#onEvent = event => {
             const { type, data } = event.detail;
             if (type === "conversation_changed" && data?.id) this.#changed(data).catch(() => {});
+            else if (type === "conversation_typing" && data?.conversation_id) this.#typing(data);
+            else if (type === "conversation_read" && data?.conversation_id) this.#seen(data);
         };
         session.addEventListener("server-event", this.#onEvent);
     }
 
     #onEvent;
+    #readSent = new Map();
+    #typingSent = new Map();
 
     #emit(type, detail) {
         this.dispatchEvent(new CustomEvent(type, { detail }));
@@ -41,6 +91,10 @@ export class Groups extends EventTarget {
 
     #request(request) {
         return this.conn.request(MsgConversationRequest, request, MsgConversationResult, { accept: r => r.action === request.action });
+    }
+
+    get activityAvailable() {
+        return !!this.session.capabilities?.has(ACTIVITY_CAPABILITY);
     }
 
     /** Refreshes the list of groups this account belongs to. */
@@ -86,6 +140,60 @@ export class Groups extends EventTarget {
         await this.get(id);
     }
 
+    /** One owner-or-member change at the group's current revision (remove, transfer, rename, leave, delete, delete_message). */
+    async #change(id, fields) {
+        await this.#mutate(async () => {
+            const group = await this.get(id);
+            if (!group) throw new Error("group unavailable");
+            return { id, revision: group.revision, ...fields };
+        });
+    }
+
+    /** Removes a member or withdraws an invitation (owner). */
+    async remove(id, target) {
+        await this.#change(id, { action: "remove", target });
+        await this.get(id);
+    }
+
+    /** Hands the group to another accepted member (owner). */
+    async transfer(id, target) {
+        await this.#change(id, { action: "transfer", target });
+        await this.get(id);
+    }
+
+    async rename(id, name) {
+        await this.#change(id, { action: "rename", name: name.trim() });
+        await this.get(id);
+    }
+
+    /** Leaves the group; an owner must hand it over first unless alone. */
+    async leave(id) {
+        await this.#change(id, { action: "leave" });
+        this.#forget(id);
+    }
+
+    /** Deletes the group for everyone (owner). */
+    async deleteGroup(id) {
+        await this.#change(id, { action: "delete" });
+        this.#forget(id);
+    }
+
+    /** Deletes one message for every member (owner). */
+    async deleteMessage(id, messageID) {
+        await this.#change(id, { action: "delete_message", message_id: messageID });
+        const list = this.messages.get(id) || [];
+        const index = list.findIndex(m => m.id === messageID);
+        if (index >= 0) list[index] = { ...list[index], text: "", deleted: true };
+        this.#emit("messages", { id });
+    }
+
+    #forget(id) {
+        this.list.delete(id);
+        this.messages.delete(id);
+        this.typing.delete(id);
+        this.#emit("list");
+    }
+
     async get(id) {
         const result = await this.#request({ action: "get", id });
         const conversation = result.conversations?.[0];
@@ -103,6 +211,37 @@ export class Groups extends EventTarget {
             await this.loadNewer(id).catch(() => {});
             this.#emit("incoming", { id, messageID });
         }
+    }
+
+    // --- Activity --------------------------------------------------------------------
+
+    #typing({ conversation_id: id, unique_id: uid, nickname }) {
+        if (!uid || uid === this.uid) return;
+        if (!this.typing.has(id)) this.typing.set(id, new Map());
+        this.typing.get(id).set(uid, { nickname: nickname || "", until: Date.now() + GROUP_TYPING_TTL_MS });
+        this.#emit("typing", { id });
+    }
+
+    /** Nicknames of the members typing in a group now. */
+    typingNames(id, now = Date.now()) {
+        return [...(this.typing.get(id)?.values() || [])].filter(entry => entry.until > now).map(entry => entry.nickname);
+    }
+
+    #seen({ conversation_id: id, unique_id: uid, message_id: messageID }) {
+        const member = this.list.get(id)?.members?.find(m => m.unique_id === uid && !m.pending);
+        const position = Number(messageID) || 0;
+        if (!member || position <= (Number(member.seen_message_id) || 0)) return;
+        member.seen_message_id = position;
+        this.#emit("seen", { id });
+    }
+
+    /** Announces typing, at most every 3 s, unless activity is private. */
+    sendTyping(id, now = Date.now()) {
+        if (!this.shareActivity() || !this.activityAvailable || !this.conn.open) return false;
+        if (this.#typingSent.has(id) && now - this.#typingSent.get(id) < TYPING_PING_MS) return false;
+        this.#typingSent.set(id, now);
+        this.conn.send(Msg.Typing, { conversation_id: id });
+        return true;
     }
 
     // --- Reading -------------------------------------------------------------------
@@ -140,17 +279,32 @@ export class Groups extends EventTarget {
         return { ...message, text };
     }
 
+    #put(id, list) {
+        // An accepted message replaces its local copy (same own reference).
+        const accepted = new Set(list.filter(m => !m.local && m.from_unique_id === this.uid).map(m => m.reference));
+        this.messages.set(id, list.filter(m => !m.local || !accepted.has(m.reference)).sort(byOrder));
+        this.#emit("messages", { id });
+    }
+
     async #store(id, page) {
         const opened = await Promise.all(page.map(message => this.#open(id, message)));
         const byID = new Map((this.messages.get(id) || []).map(m => [m.id, m]));
-        for (const message of opened) byID.set(message.id, message);
-        this.messages.set(id, [...byID.values()].sort((a, b) => a.id - b.id));
-        this.#emit("messages", { id });
+        const typing = this.typing.get(id);
+        for (const message of opened) {
+            byID.set(message.id, message);
+            // A member whose message arrived is done typing it.
+            if (typing?.delete(message.from_unique_id)) this.#emit("typing", { id });
+        }
+        this.#put(id, [...byID.values()]);
+    }
+
+    #newest(id) {
+        return (this.messages.get(id) || []).filter(m => !m.local).at(-1)?.id || 0;
     }
 
     /** Loads one page of older messages; returns whether more exist. */
     async loadOlder(id) {
-        const oldest = this.messages.get(id)?.[0]?.id || 0;
+        const oldest = (this.messages.get(id) || []).find(m => !m.local)?.id || 0;
         const result = await this.#request({ action: "history", id, before_id: oldest });
         await this.#store(id, result.messages || []);
         return (result.messages || []).length === 25;
@@ -158,9 +312,8 @@ export class Groups extends EventTarget {
 
     /** Loads messages newer than the newest one shown. */
     async loadNewer(id) {
-        const known = this.messages.get(id);
-        if (!known?.length) return this.loadOlder(id);
-        const newest = known.at(-1).id;
+        const newest = this.#newest(id);
+        if (!newest) return this.loadOlder(id);
         let before = 0;
         for (;;) {
             const result = await this.#request({ action: "history", id, before_id: before });
@@ -178,50 +331,80 @@ export class Groups extends EventTarget {
         return action === "accept" ? this.get(id) : this.refresh();
     }
 
+    /**
+     * Marks the newest message read. While activity is shared the read
+     * position is shared too ("Seen by" for the others).
+     */
     markRead(id) {
-        const newest = this.messages.get(id)?.at(-1)?.id;
-        if (!newest) return;
-        this.#request({ action: "mark_read", id, read_message_id: newest }).catch(() => {});
+        const newest = this.#newest(id);
+        if (!newest || this.#readSent.get(id) >= newest) return;
+        this.#readSent.set(id, newest);
+        const share = this.shareActivity() && this.activityAvailable;
+        this.#request({ action: "mark_read", id, read_message_id: newest, ...(share ? { share_read: true } : {}) })
+            .catch(() => this.#readSent.delete(id));
     }
 
     // --- Sending -----------------------------------------------------------------------
 
-    async send(id, text, retried = false) {
-        const conversation = await this.get(id);
-        if (!conversation) throw new Error("group not found");
-        const own = await this.dm.devicesOf(this.uid, { refresh: retried });
-        if (!own.devices.some(d => d.deviceID === this.session.deviceID)) throw Object.assign(new Error("not confirmed"), { code: "unconfirmed" });
-        const reference = this.pendingReference || crypto.randomUUID();
-        this.pendingReference = reference;
-        const envelopes = {};
-        const deviceEnvelopes = {};
-        for (const member of conversation.members.filter(m => !m.pending)) {
-            const entry = member.unique_id === this.uid ? own : await this.dm.devicesOf(member.unique_id, { refresh: retried });
-            const first = entry.devices.find(d => d.first);
-            if (entry.trust !== "ok" || !first) throw Object.assign(new Error("identity unavailable"), { code: "unavailable" });
-            const plain = JSON.stringify({ conversation_id: id, epoch: conversation.epoch, reference, from: this.uid, to: member.unique_id, text });
-            envelopes[member.unique_id] = sealDM(plain, first.x25519, this.session.identity.xSecret);
-            for (const device of entry.devices) {
-                // Including this device lets it reread its own messages later.
-                if (device.first) continue;
-                deviceEnvelopes[`${member.unique_id}/${device.deviceID}`] = sealDM(plain, device.x25519, this.session.identity.xSecret);
-            }
-        }
+    /** Adds or updates an own message that the server has not accepted yet. */
+    #local(id, { reference, text, sentAt, ...state }) {
+        const list = (this.messages.get(id) || []).filter(m => !(m.local && m.reference === reference));
+        if (list.some(m => !m.local && m.reference === reference && m.from_unique_id === this.uid)) return;
+        list.push({ id: `local:${reference}`, local: true, reference, conversation_id: id, from_unique_id: this.uid, text, created_at: sentAt,
+            pending: false, queued: false, failed: false, ...state });
+        this.#put(id, list);
+    }
+
+    /** Shows an own message waiting in the outbox. */
+    showQueued(id, { reference, text, sentAt, expired = false }) {
+        this.#local(id, { reference, text, sentAt, queued: !expired, failed: expired });
+    }
+
+    /** Removes a message that never reached the server. */
+    discardLocal(id, reference) {
+        this.#put(id, (this.messages.get(id) || []).filter(m => !(m.local && m.reference === reference)));
+    }
+
+    /**
+     * Sends text to every accepted member. reference is the client message
+     * ID: the server stores a reference once, so a resend never duplicates.
+     * Lost connections throw with retryable set (for the outbox).
+     */
+    async send(id, text, { reference = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}, retried = false) {
+        this.#local(id, { reference, text, sentAt, pending: true });
         try {
+            const conversation = await this.get(id);
+            if (!conversation) throw Object.assign(new Error("group not found"), { code: "unavailable" });
+            const own = await this.dm.devicesOf(this.uid, { refresh: retried });
+            if (!own.devices.some(d => d.deviceID === this.session.deviceID)) throw Object.assign(new Error("not confirmed"), { code: "unconfirmed" });
+            const envelopes = {};
+            const deviceEnvelopes = {};
+            for (const member of conversation.members.filter(m => !m.pending)) {
+                const entry = member.unique_id === this.uid ? own : await this.dm.devicesOf(member.unique_id, { refresh: retried });
+                const first = entry.devices.find(d => d.first);
+                if (entry.trust !== "ok" || !first) throw Object.assign(new Error("identity unavailable"), { code: "unavailable" });
+                const plain = JSON.stringify({ conversation_id: id, epoch: conversation.epoch, reference, from: this.uid, to: member.unique_id, text });
+                envelopes[member.unique_id] = sealDM(plain, first.x25519, this.session.identity.xSecret);
+                for (const device of entry.devices) {
+                    // Including this device lets it reread its own messages later.
+                    if (device.first) continue;
+                    deviceEnvelopes[`${member.unique_id}/${device.deviceID}`] = sealDM(plain, device.x25519, this.session.identity.xSecret);
+                }
+            }
             const result = await this.#request({ action: "send", id, revision: conversation.revision,
                 message: { epoch: conversation.epoch, reference, envelopes, device_envelopes: deviceEnvelopes } });
-            this.pendingReference = null;
-            const messages = this.messages.get(id) || [];
-            if (!messages.some(m => m.id === result.message_id)) {
-                messages.push({ id: result.message_id, conversation_id: id, epoch: conversation.epoch, from_unique_id: this.uid, reference, text, created_at: Date.now() / 1000 });
-                this.messages.set(id, messages);
-            }
-            this.#emit("messages", { id });
+            const messages = (this.messages.get(id) || []).filter(m => m.id !== result.message_id);
+            messages.push({ id: result.message_id, conversation_id: id, epoch: conversation.epoch, from_unique_id: this.uid, reference, text, created_at: Date.now() / 1000 });
+            this.#put(id, messages);
             return result.message_id;
         } catch (error) {
-            if (!retried && error instanceof ProtocolError && (error.devicesStale || /conflict|revision|epoch/i.test(error.message))) return this.send(id, text, true);
-            this.pendingReference = null;
-            throw error;
+            if (!retried && error instanceof ProtocolError && (error.devicesStale || /conflict|revision|epoch/i.test(error.message))) {
+                return this.send(id, text, { reference, sentAt }, true);
+            }
+            // Lost connections leave the message for the outbox; refusals fail it.
+            const retryable = !(error instanceof ProtocolError) && !error.code;
+            this.#local(id, { reference, text, sentAt, queued: retryable, failed: !retryable });
+            throw Object.assign(error, { retryable });
         }
     }
 

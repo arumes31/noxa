@@ -33,6 +33,7 @@ test('offline DM emitted while updateMeta awaits must reach the receiver', async
   './core/identity-store.js':{clearIdentity:none,loadIdentity:none,saveIdentity:none,updateMeta:async()=>{entered();await blocked}},
   './core/outbox.js':{enqueue:none,flush:async()=>{},showPending:async()=>{},waitingCount:async()=>0},
   './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:async()=>({})},
+  './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{}},
  };
  const context=vm.createContext({EventTarget,CustomEvent,setTimeout,clearTimeout,clearInterval,console});
  const mod=new vm.SourceTextModule(await fs.readFile(new URL('../src/app.js',import.meta.url),'utf8'),{context});
@@ -84,6 +85,7 @@ for (const existingGuest of [false, true]) {
    './core/identity-store.js': {clearIdentity:()=>writes.push("clear"),loadIdentity:none,saveIdentity:()=>writes.push("save"),updateMeta:()=>writes.push("update")},
    './core/outbox.js': {enqueue:none,flush:none,showPending:none,waitingCount:none},
    './core/push.js': {announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:none},
+   './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{}},
   };
   const context=vm.createContext({EventTarget,CustomEvent,setTimeout,clearTimeout,clearInterval,console});
   const mod=new vm.SourceTextModule(await fs.readFile(new URL('../src/app.js',import.meta.url),'utf8'),{context});
@@ -120,6 +122,7 @@ test('guest snapshot received while saving identity subscribes to channels', asy
   './core/identity-store.js':{clearIdentity:none,loadIdentity:none,saveIdentity:async()=>{entered();await blocked},updateMeta:none},
   './core/outbox.js':{enqueue:none,flush:async()=>{},showPending:async()=>{},waitingCount:async()=>0},
   './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:async()=>({})},
+  './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{}},
  };
  const context=vm.createContext({EventTarget,CustomEvent,setTimeout,clearTimeout,clearInterval,console});
  const mod=new vm.SourceTextModule(await fs.readFile(new URL('../src/app.js',import.meta.url),'utf8'),{context});
@@ -143,6 +146,7 @@ test('foreground and restored-page events probe an apparently online session', a
   './core/identity-store.js':{clearIdentity:none,loadIdentity:none,saveIdentity:none,updateMeta:none},
   './core/outbox.js':{enqueue:none,flush:none,showPending:none,waitingCount:none},
   './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:none},
+  './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{}},
  };
  const window=new EventTarget(),document=Object.assign(new EventTarget(),{visibilityState:'hidden'});
  const context=vm.createContext({EventTarget,CustomEvent,setTimeout,clearTimeout,clearInterval,console,window,document});

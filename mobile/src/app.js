@@ -11,6 +11,7 @@ import { signIn } from "./core/device.js";
 import { clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
 import { enqueue, flush as flushOutbox, showPending, waitingCount } from "./core/outbox.js";
 import { announceRead, closeNotifications, reportVisibility, setBadge, syncPush } from "./core/push.js";
+import { activityShared, isMuted, syncMuted, watchCallLog } from "./core/conversation-prefs.js";
 
 export const app = new EventTarget();
 
@@ -139,6 +140,7 @@ export async function connect({ guest = null } = {}) {
     if (rejoin) joinVoice(rejoin).catch(() => {});
     app.dm?.close();
     const dm = new DirectMessages(session, app.meta);
+    dm.shareActivity = activityShared;
     app.dm = dm;
     dm.addEventListener("messages", event => {
         const { peer, message, isNew } = event.detail;
@@ -147,16 +149,19 @@ export async function connect({ guest = null } = {}) {
     });
     app.groups?.close();
     app.groups = new Groups(session, dm);
+    app.groups.shareActivity = activityShared;
     app.groups.addEventListener("incoming", event => noteUnread(`conversation:${event.detail.id}`, false));
     app.groups.addEventListener("list", () => emit("groups"));
     app.groups.refresh().catch(() => {});
     app.calls?.close();
     app.calls = new Calls(session, dm);
     watchCalls(app.calls);
+    watchCallLog(app.calls);
+    syncMuted();
     dm.importHistory().catch(() => {});
     dm.ready.then(async () => {
-        await showPending(session, dm);
-        await flushOutbox(session, dm);
+        await showPending(session, dm, app.groups);
+        await flushOutbox(session, dm, app.groups);
         await outboxChanged();
     }).catch(() => {});
     conn.addEventListener("close", () => {
@@ -193,13 +198,13 @@ async function outboxChanged() {
 export async function queueMessage(target, text, options) {
     await enqueue(target, text, options);
     await outboxChanged();
-    if (app.session?.conn.open && app.dm) flushOutbox(app.session, app.dm).then(outboxChanged).catch(() => {});
+    if (app.session?.conn.open && app.dm) flushOutbox(app.session, app.dm, app.groups).then(outboxChanged).catch(() => {});
 }
 
 /** Sends waiting messages, e.g. when the service worker asks. */
 export async function flushNow() {
     if (!app.session?.conn.open || !app.dm) return;
-    await flushOutbox(app.session, app.dm);
+    await flushOutbox(app.session, app.dm, app.groups);
     await outboxChanged();
 }
 
@@ -341,7 +346,7 @@ export async function startCall(uid, options) {
 
 function unreadChanged() {
     let total = 0;
-    for (const entry of app.unread.values()) total += entry.count;
+    for (const [tag, entry] of app.unread) if (!isMuted(tag)) total += entry.count;
     setBadge(total);
     emit("unread");
 }
@@ -352,6 +357,7 @@ function noteUnread(tag, mention) {
         markRead(tag);
         return;
     }
+    if (isMuted(tag)) return;
     const entry = app.unread.get(tag) || { count: 0, mentions: 0 };
     entry.count++;
     if (mention) entry.mentions++;

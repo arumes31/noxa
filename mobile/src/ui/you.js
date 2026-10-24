@@ -7,6 +7,7 @@ import { t } from "../i18n.js";
 import { avatar, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { header, nav } from "./common.js";
+import { dmPrivacySettings } from "./dm-settings.js";
 
 async function devices(session) {
     return session.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
@@ -121,6 +122,7 @@ export function renderYou(root) {
                 h("span", { class: "row-main" }, h("span", { class: "row-title" }, session.nickname), h("span", { class: "row-sub" }, app.info?.server_name || ""))),
             guest ? h("p", { class: "hint" }, t("connect.guestHint")) : h("p", { class: "section-label" }, t("settings.notifications")),
             guest ? null : notifications.box,
+            guest ? null : dmPrivacySettings(),
             guest ? null : h("p", { class: "section-label" }, t("settings.passkeys")),
             passkeys,
             !guest && passkeysSupported() ? h("button", { class: "btn btn-primary btn-block", onclick: async () => { await savePasskey(); refresh(); } }, icon("passkey"), " ", t("settings.savePasskey")) : null,

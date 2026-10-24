@@ -6,6 +6,9 @@ import { icon } from "./icons.js";
 import { messageBody } from "./attachments.js";
 import { header, scopeName } from "./common.js";
 import { uploadAttachment } from "../core/files.js";
+import { remove as removeQueued } from "../core/outbox.js";
+import { retryProps, sendState } from "./conversation-tools.js";
+import { voiceNoteButton } from "./voice-note.js";
 
 export function renderChat(root, scope) {
     const session = app.session;
@@ -53,7 +56,12 @@ export function renderChat(root, scope) {
         else if (message.text === null || message.text === undefined) body = h("span", { class: "msg-locked" }, t("chat.locked"));
         else body = messageBody(message.text, { conn: session.conn, channelID: scope });
         const reactions = Object.entries(message.reactions || {}).filter(([, n]) => n > 0);
-        return h("div", { class: classes },
+        // Not sent: tapping offers Retry (same client message ID) or Delete.
+        const retry = retryProps(message, {
+            retry: () => { session.showQueued(scope, { clientMsgID: message.clientMsgID, text: message.text, sentAt: message.sentAt }); return queueMessage({ kind: "channel", scope }, message.text, { id: message.clientMsgID, sentAt: message.sentAt }); },
+            discard: async () => { await removeQueued(message.clientMsgID).catch(() => {}); session.discardLocal(scope, message.clientMsgID); },
+        });
+        return h("div", { class: classes, ...retry },
             h("span", { class: "msg-time" }, clock(message.sentAt)),
             avatar(message.from, "sm"),
             h("div", { class: "msg-body" },
@@ -61,8 +69,7 @@ export function renderChat(root, scope) {
                 body,
                 message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
                 reactions.length ? h("span", { class: "reactions" }, reactions.map(([emoji, n]) => h("span", { class: "reaction" }, `${emoji} ${n}`))) : null,
-                message.queued ? h("div", { class: "msg-state" }, t("outbox.waiting")) : null,
-                message.failed ? h("div", { class: "error" }, t("outbox.notSent")) : null));
+                sendState(message)));
     }
 
     function render(stick = true) {
@@ -91,7 +98,16 @@ export function renderChat(root, scope) {
             if (error.retryable) await queueMessage({ kind: "channel", scope }, text, { id, sentAt });
             else toast(t("chat.sendFailed", { error: error.message }), "warn");
         }
-    } }, attachButton, picker, input, sendButton);
+    } }, attachButton, picker, input, voiceNoteButton({
+        upload: file => uploadAttachment(session.conn, scope, file),
+        send: async token => {
+            const id = crypto.randomUUID(), sentAt = Date.now() / 1000;
+            try { await session.send(scope, token, { clientMsgID: id, sentAt }); } catch (error) {
+                if (error.retryable) await queueMessage({ kind: "channel", scope }, token, { id, sentAt });
+                else toast(t("chat.sendFailed", { error: error.message }), "warn");
+            }
+        },
+    }), sendButton);
     input.addEventListener("keydown", event => {
         if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();

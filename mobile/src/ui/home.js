@@ -4,6 +4,14 @@ import { t } from "../i18n.js";
 import { clock, h, sheet } from "./dom.js";
 import { dmHref, header, lastMessage, nav, scopeName, unreadBadge } from "./common.js";
 import { avatar } from "./dom.js";
+import { isMuted } from "../core/conversation-prefs.js";
+import { icon } from "./icons.js";
+import "./conversation-strings.js";
+
+/** A muted conversation shows a muted mark instead of its unread count. */
+function mutedMark() {
+    return h("span", { class: "row-muted", role: "img", "aria-label": t("conv.mutedLabel") }, icon("bellOff"));
+}
 
 export function renderHome(root) {
     const session = app.session;
@@ -25,7 +33,7 @@ export function renderHome(root) {
             h("span", { class: "row-main" },
                 h("span", { class: "row-title" }, name),
                 h("span", { class: "row-sub" }, `${last.self ? t("dm.you") + ": " : ""}${last.body ?? t("chat.locked")}`)),
-            unreadBadge(`dm:${conversation.peer}`) || h("span", { class: "row-meta" }, clock(last.sentAt))) };
+            isMuted(`dm:${conversation.peer}`) ? mutedMark() : unreadBadge(`dm:${conversation.peer}`) || h("span", { class: "row-meta" }, clock(last.sentAt))) };
     });
     const groupRows = [...(app.groups?.list.values() || [])].filter(g => !g.members?.find(m => m.unique_id === session.uniqueID)?.pending).map(group => {
         const tag = `conversation:${group.id}`;
@@ -36,7 +44,7 @@ export function renderHome(root) {
             h("span", { class: "row-main" },
                 h("span", { class: "row-title" }, group.name),
                 h("span", { class: "row-sub" }, last ? (last.text ?? t("group.locked")) : t("group.members", { count: (group.members || []).filter(m => !m.pending).length }))),
-            unread ? h("span", { class: "badge", "aria-label": t("home.unread", { count: unread }) }, String(unread)) : null) };
+            isMuted(tag) ? mutedMark() : unread ? h("span", { class: "badge", "aria-label": t("home.unread", { count: unread }) }, String(unread)) : null) };
     });
     const recent = [...channelRows, ...dmRows, ...groupRows].sort((a, b) => b.at - a.at);
     const invitations = [...(app.groups?.list.values() || [])].filter(g => g.members?.find(m => m.unique_id === session.uniqueID)?.pending);
