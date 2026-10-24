@@ -106,6 +106,16 @@ func (c *Client) setPasskeyCeremony(ceremony *passkeyCeremony) {
 	c.mu.Unlock()
 }
 
+// passkeyLoginDeadline is set only after issuing a discoverable-login challenge.
+func (c *Client) passkeyLoginDeadline() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.passkey == nil || c.passkey.action != netproto.DeviceActionPasskeyLoginFinish {
+		return time.Time{}
+	}
+	return c.passkey.session.Expires
+}
+
 // takePasskeyCeremony returns and clears the pending ceremony of action.
 func (c *Client) takePasskeyCeremony(action string) (webauthn.SessionData, bool) {
 	c.mu.Lock()

@@ -18,7 +18,7 @@ export function roleIconElement(role) {
         const name = String(role.name || "").toLowerCase();
         const asset = { administrator: "roleAdmin", admin: "roleAdmin", moderator: "shield", member: "roleMember", mitglied: "roleMember" }[name];
         if (asset) element.innerHTML = icon(asset);
-        else element.textContent = "•";
+        else element.textContent = "";
     }
     return element;
 }

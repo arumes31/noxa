@@ -233,17 +233,40 @@ func (s *Store) RenameDevice(ctx context.Context, principal, deviceID, name stri
 // statement deletes the revoked devices' passkeys, push subscriptions and
 // pending history copies and returns their rows.
 func revokingDevices(update string) string {
+	return endingDevices(update, true)
+}
+
+func endingDevices(update string, removePasskeys bool) string {
+	drop := ""
+	if removePasskeys {
+		drop = `dropped AS (DELETE FROM webauthn_credentials w USING revoked WHERE w.device_id = revoked.device_id),`
+	}
 	return `WITH revoked AS (` + update + `),
-		dropped AS (DELETE FROM webauthn_credentials w USING revoked WHERE w.device_id = revoked.device_id),
+		` + drop + `
 		unsubscribed AS (DELETE FROM push_subscriptions p USING revoked WHERE p.device_id = revoked.device_id),
 		forgotten AS (DELETE FROM device_history_chunks h USING revoked WHERE h.device_id = revoked.device_id)
 		SELECT ` + deviceColumns + ` FROM revoked ORDER BY created_at, id`
 }
 
-// RevokeDevice revokes one active device of the principal.
+// SignOutDevice invalidates this device key and removes device-bound push/history
+// state, but retains passkeys so the account can sign in again with a fresh key.
+func (s *Store) SignOutDevice(ctx context.Context, principal, deviceID string) (Device, error) {
+	d, err := scanDevice(s.db.QueryRowContext(ctx, endingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason='user'
+		WHERE principal=$1 AND device_id=$2 AND revoked_at IS NULL RETURNING *`, false), principal, deviceID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Device{}, ErrDeviceNotFound
+	}
+	if err != nil {
+		return Device{}, fmt.Errorf("signing out device: %w", err)
+	}
+	return d, nil
+}
+
+// RevokeDevice revokes a device and any passkeys retained by a prior sign-out.
 func (s *Store) RevokeDevice(ctx context.Context, principal, deviceID, reason string) (Device, error) {
 	d, err := scanDevice(s.db.QueryRowContext(ctx, revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason=$3
-		WHERE principal=$1 AND device_id=$2 AND revoked_at IS NULL RETURNING *`),
+		WHERE principal=$1 AND device_id=$2 AND (revoked_at IS NULL OR EXISTS
+			(SELECT 1 FROM webauthn_credentials w WHERE w.device_id=user_devices.device_id)) RETURNING *`),
 		principal, deviceID, reason))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrDeviceNotFound
@@ -258,7 +281,8 @@ func (s *Store) RevokeDevice(ctx context.Context, principal, deviceID, reason st
 // (may be empty) and returns the revoked devices.
 func (s *Store) ResetDevices(ctx context.Context, principal, keep, reason string) ([]Device, error) {
 	rows, err := s.db.QueryContext(ctx, revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason=$3
-		WHERE principal=$1 AND device_id<>$2 AND revoked_at IS NULL RETURNING *`),
+		WHERE principal=$1 AND device_id<>$2 AND (revoked_at IS NULL OR EXISTS
+			(SELECT 1 FROM webauthn_credentials w WHERE w.device_id=user_devices.device_id)) RETURNING *`),
 		principal, keep, reason)
 	if err != nil {
 		return nil, fmt.Errorf("resetting devices: %w", err)

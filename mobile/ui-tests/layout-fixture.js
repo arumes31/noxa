@@ -31,11 +31,21 @@ app.dm = Object.assign(new EventTarget(), { ready: Promise.resolve(), conversati
 app.groups = Object.assign(new EventTarget(), { list: new Map([["group", { id: "group", name: "Weekend crew", members: [{ unique_id: "self" }, { unique_id: "peer" }] }]]), messages: new Map([["group", messages]]), get: async () => {}, loadNewer: async () => {}, markRead: () => {} });
 app.voice = Object.assign(new EventTarget(), { active: view === "voice-active", channelID: 1, speaking: new Set(["peer"]), camera: null, bytes: { sent: 0, received: 0 }, streams: async () => [], outputs: async () => [], watching: new Map(), video: new Map(), setTalking: () => {} });
 app.calls = Object.assign(new EventTarget(), { active: view === "call", incoming: view === "incoming", peers: new Map(), camera: null, uid: "self", usage: async () => ({ sent: 0, received: 0 }), call: { id: "call", caller: "peer", participants: [{ unique_id: "self", state: "accepted" }, { unique_id: "peer", state: "accepted" }] } });
+if (view.startsWith("signout")) {
+    const request = session.conn.request;
+    session.conn.request = async (type, payload) => {
+        if (payload.action === "list") return request();
+        document.documentElement.dataset.deviceRequest = JSON.stringify(payload);
+        if (view === "signout-error") throw new Error("Server unavailable");
+        return { action: payload.action };
+    };
+    for (const object of [session, app.dm, app.groups, app.voice, app.calls]) object.close = () => {};
+}
 const root = document.getElementById("app");
 switch (view) {
     case "home": renderHome(root); break;
     case "servers": case "presence": renderServers(root); break;
-    case "you": renderYou(root); break;
+    case "you": case "signout": case "signout-error": renderYou(root); break;
     case "voice": case "voice-active": renderVoice(root); break;
     case "chat": renderChat(root, 1); break;
     case "dm": renderDM(root, "peer"); break;

@@ -24,7 +24,7 @@ export function hoistedRoles(state) {
 export function roleChip(role) {
     const chip = document.createElement("span");
     chip.className = "role-chip group-badge";
-    chip.append(roleIconElement(role), document.createTextNode(role.name));
+    chip.append(roleIconElement(role), document.createTextNode(` ${role.name}`));
     chip.title = role.name;
     const color = roleColor(role.color);
     if (color) { chip.style.color = color; chip.style.borderColor = color; }

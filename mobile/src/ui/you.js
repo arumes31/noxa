@@ -126,10 +126,14 @@ export function renderYou(root) {
             list,
             h("div", { style: "height:16px" }),
             h("button", { class: "btn btn-danger btn-block", onclick: async () => {
-                const ok = await sheet(t("settings.signOut"), t("settings.signOutConfirm"), [{ label: t("settings.revoke"), value: true, danger: true }, { label: t("link.cancel"), value: false }]);
+                const ok = await sheet(t("settings.signOut"), t("settings.signOutConfirm"), [{ label: t("settings.signOut"), value: true, danger: true }, { label: t("link.cancel"), value: false }]);
                 if (!ok) return;
-                await session.conn.request(Msg.DeviceRequest, { action: "revoke", device_id: session.deviceID }, Msg.DeviceResult).catch(() => {});
-                await forgetDevice();
+                try {
+                    await session.conn.request(Msg.DeviceRequest, { action: "sign_out" }, Msg.DeviceResult, { accept: r => r.action === "sign_out" });
+                    await forgetDevice();
+                } catch (error) {
+                    toast(t("common.error", { error: error.message }), "warn");
+                }
             } }, t("settings.signOut")))),
         nav("you"));
     refresh();

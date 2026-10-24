@@ -32,6 +32,7 @@ type DeviceStore interface {
 	TouchDevice(ctx context.Context, deviceID string, at time.Time) error
 	RenameDevice(ctx context.Context, principal, deviceID, name string) (store.Device, error)
 	RevokeDevice(ctx context.Context, principal, deviceID, reason string) (store.Device, error)
+	SignOutDevice(ctx context.Context, principal, deviceID string) (store.Device, error)
 	ResetDevices(ctx context.Context, principal, keep, reason string) ([]store.Device, error)
 }
 
@@ -342,13 +343,24 @@ func (s *TCPServer) handleDeviceRequest(ctx context.Context, client *Client, f *
 		s.notifyDevices(principal, netproto.DeviceEvent{Event: netproto.DeviceEventRenamed, Device: &info})
 		info.Current = d.DeviceID == client.currentDeviceID()
 		return s.writeMessage(client, netproto.MsgDeviceResult, netproto.DeviceResult{Action: r.Action, Device: &info})
+	case netproto.DeviceActionSignOut:
+		// The target comes only from this authenticated session, never the request.
+		deviceID := client.currentDeviceID()
+		if deviceID == "" {
+			return s.deviceFailure(ctx, client, store.ErrDeviceNotFound)
+		}
+		d, err := s.deps.Devices.SignOutDevice(ctx, principal, deviceID)
+		if err != nil {
+			return s.deviceFailure(ctx, client, err)
+		}
+		// Acknowledge before invalidating and closing every session of this device.
+		err = s.writeMessage(client, netproto.MsgDeviceResult, netproto.DeviceResult{Action: r.Action})
+		s.afterDevicesRevoked(ctx, principal, []store.Device{d}, store.DeviceRevokedByUser, principal)
+		return err
 	case netproto.DeviceActionRevoke:
 		target, err := s.deps.Devices.DeviceByID(ctx, principal, r.DeviceID)
 		if err != nil {
 			return s.deviceFailure(ctx, client, err)
-		}
-		if !target.Active() {
-			return s.deviceFailure(ctx, client, store.ErrDeviceNotFound)
 		}
 		if target.FirstDevice && target.DeviceID != client.currentDeviceID() {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "the first device cannot be signed out from another device")

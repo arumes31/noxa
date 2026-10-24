@@ -927,7 +927,8 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	authCtx, cancelAuth := context.WithDeadline(ctx, authDeadline)
-	defer cancelAuth()
+	defer func() { cancelAuth() }()
+	passkeyWindowGranted := false
 
 	_, web := conn.(webTransportConn)
 	client := &Client{
@@ -1013,6 +1014,23 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 				zap.Error(err),
 			)
 			return
+		}
+		// Android's credential chooser needs user interaction beyond the ordinary
+		// ten-second handshake. Grant one bounded ceremony window; subsequent
+		// challenges and pings cannot renew it or evade admission/request limits.
+		if !authDeadline.IsZero() && !passkeyWindowGranted && client.isWebTransport() && !client.isAuthed() {
+			if deadline := client.passkeyLoginDeadline(); deadline.After(authDeadline) {
+				if authCtx.Err() != nil {
+					return
+				}
+				cancelAuth()
+				authDeadline = deadline
+				authCtx, cancelAuth = context.WithDeadline(ctx, authDeadline)
+				passkeyWindowGranted = true
+				if err := conn.SetDeadline(authDeadline); err != nil {
+					return
+				}
+			}
 		}
 		if !authDeadline.IsZero() && client.isAuthed() {
 			if authCtx.Err() != nil {

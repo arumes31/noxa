@@ -20,6 +20,7 @@ const (
 	DeviceActionList       = "list"
 	DeviceActionRename     = "rename"
 	DeviceActionRevoke     = "revoke"
+	DeviceActionSignOut    = "sign_out"
 	DeviceActionLinkCreate = "link_create"
 	DeviceActionLinkCancel = "link_cancel"
 	DeviceActionLinkDecide = "link_decide"
@@ -185,6 +186,8 @@ func (r DeviceRequest) Valid() bool {
 		return len(r.WebAuthn) > 0 && r.Ed25519PublicKey != "" && r.X25519PublicKey != ""
 	case DeviceActionPasskeyDelete:
 		return r.PasskeyID != ""
+	case DeviceActionSignOut:
+		return r.DeviceID == "" && r.LinkID == ""
 	case DeviceActionList, DeviceActionLinkCreate:
 		return r.DeviceID == "" && r.LinkID == ""
 	case DeviceActionRename:
