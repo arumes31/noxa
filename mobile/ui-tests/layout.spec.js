@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 for (const width of [320, 390, 1440]) {
-    for (const view of ["home", "servers", "you", "voice", "voice-active", "chat", "dm", "group", "incoming", "call"]) {
+    for (const view of ["home", "new-chat", "new-group", "servers", "you", "voice", "voice-active", "chat", "dm", "group", "incoming", "call"]) {
         test(`${view} fits ${width}px`, async ({ page }, testInfo) => {
             const errors = [];
             page.on("pageerror", error => errors.push(error.message));

@@ -23,7 +23,8 @@ export function renderNewGroup(root) {
         members.replaceChildren(...visible.filter(member => member.nickname.toLocaleLowerCase().includes(query)).map(member => {
             const checkbox = h("input", { type: "checkbox", checked: selected.has(member.unique_id), disabled: selected.size >= 15 && !selected.has(member.unique_id), onchange: event => {
                 if (event.target.checked) selected.set(member.unique_id, member.nickname); else selected.delete(member.unique_id);
-                refresh();
+                members.querySelectorAll("input[type=checkbox]").forEach(input => { input.disabled = selected.size >= 15 && !input.checked; });
+                count.textContent = t("group.selected", { count: selected.size });
             } });
             return h("li", {}, h("label", { class: "row" }, checkbox, avatar(member.nickname,"sm"), h("span",{class:"row-title"},member.nickname)));
         }));
@@ -31,7 +32,7 @@ export function renderNewGroup(root) {
     };
     search.addEventListener("input", refresh);
     session.addEventListener("snapshot", refresh);
-    const form = h("form", { class: "screen-body", onsubmit: async event => {
+    const form = h("form", { class: "screen-body group-create", onsubmit: async event => {
         event.preventDefault();
         if (busy || app.session !== session || !name.value.trim()) return;
         refresh();

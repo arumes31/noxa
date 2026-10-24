@@ -5,10 +5,11 @@ import { avatar, h, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { dmHref, header, nav, unreadBadge } from "./common.js";
 
+let joining = false;
+
 export function renderServers(root) {
     const session = app.session;
-    let joining = false;
-    const joinButton = channel => h("button", { class: "btn server-join", type: "button", "aria-label": t("voice.joinNamed", { name: channel.name }), onclick: async event => {
+    const joinButton = channel => h("button", { class: "btn server-join", type: "button", disabled: joining, "aria-label": t("voice.joinNamed", { name: channel.name }), onclick: async event => {
         if (joining || app.session !== session) return;
         joining = true;
         const before = location.hash;
@@ -19,7 +20,7 @@ export function renderServers(root) {
             if (app.session === session && location.hash === before) location.hash = "#/voice";
         } catch (error) {
             if (app.session === session) toast(t("voice.joinFailed", { error: error.message }), "warn");
-        } finally { joining = false; button.disabled = false; }
+        } finally { joining = false; button.disabled = false; root.querySelectorAll(".server-join").forEach(control => { control.disabled = false; }); }
     } }, t("voice.joinAction"));
     const channels = session.channels().map(c => ({ ...c, clients: c.home ? c.clients.filter(member => !member.on_mobile) : c.clients }));
     const online = new Set(session.clients().map(c => c.user_id > 0 ? `user:${c.user_id}` : c.unique_id || c.client_id)).size;
