@@ -892,6 +892,7 @@ func run() (retErr error) {
 		if cfg.DevMode {
 			webServer.AllowLoopbackOrigins()
 		}
+		webServer.SetFileServer(ftServer)
 	}
 
 	// Routes and listener objects are complete before any socket is opened.

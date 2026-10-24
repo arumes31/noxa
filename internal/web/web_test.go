@@ -239,3 +239,47 @@ func TestLoopbackOriginsOnlyInDevMode(t *testing.T) {
 		}
 	}
 }
+
+func TestFTCarriesFileTransfersWhenConfigured(t *testing.T) {
+	cfg := testConfig(t)
+	srv, err := New(cfg, "noXa test", &echoControl{}, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	ftURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ft"
+	dial := func(origin string) (*websocket.Conn, error) {
+		wsCfg, err := websocket.NewConfig(ftURL, origin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wsCfg.Header.Set("X-Forwarded-Proto", "https")
+		return websocket.DialConfig(wsCfg)
+	}
+	// Without a file server the route does not exist.
+	if _, err := dial("https://chat.example"); err == nil {
+		t.Fatal("/ft answered without a file server")
+	}
+
+	files := &echoControl{remote: make(chan string, 1)}
+	srv.SetFileServer(files)
+	if _, err := dial("https://evil.example"); err == nil {
+		t.Fatal("foreign origin was accepted on /ft")
+	}
+	conn, err := dial("https://chat.example")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	conn.PayloadType = websocket.BinaryFrame
+	<-files.remote
+	if _, err := conn.Write([]byte("chunk")); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	got := make([]byte, 5)
+	if _, err := io.ReadFull(conn, got); err != nil || string(got) != "chunk" {
+		t.Fatalf("file server echo = %q, %v", got, err)
+	}
+}

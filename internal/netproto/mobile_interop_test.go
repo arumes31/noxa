@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"flag"
@@ -50,6 +51,9 @@ type mobileInterop struct {
 	ApprovalMessage string `json:"approval_transcript"`
 	ApprovalSig     string `json:"approval_signature"`
 	KeyRecord       string `json:"key_record"`
+	AttachmentKey   string `json:"attachment_key"`
+	AttachmentBlob  string `json:"attachment_blob"`
+	AttachmentPlain string `json:"attachment_plain_sha256"`
 }
 
 func TestMobileInteropFixture(t *testing.T) {
@@ -127,6 +131,26 @@ func TestMobileInteropFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.KeyRecord = record
+
+	// A two-chunk attachment in the desktop's sealed-file format.
+	attachmentKey := sha256.Sum256([]byte("attachment key"))
+	plain := make([]byte, 70000)
+	for i := range plain {
+		plain[i] = byte(i * 7)
+	}
+	blob := []byte("VCXGCM1\n")
+	for offset, index := 0, uint64(0); offset < len(plain); index++ {
+		end := min(offset+64*1024, len(plain))
+		chunk, err := e2ee.EncryptFileChunk(attachmentKey[:], "attachment", index, plain[offset:end])
+		if err != nil {
+			t.Fatal(err)
+		}
+		blob = binary.BigEndian.AppendUint32(blob, uint32(len(chunk)))
+		blob = append(blob, chunk...)
+		offset = end
+	}
+	plainSum := sha256.Sum256(plain)
+	fixture.AttachmentKey, fixture.AttachmentBlob, fixture.AttachmentPlain = b64(attachmentKey[:]), b64(blob), b64(plainSum[:])
 	data, err := json.MarshalIndent(fixture, "", "  ")
 	if err != nil {
 		t.Fatal(err)

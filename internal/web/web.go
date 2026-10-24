@@ -53,6 +53,12 @@ type ControlServer interface {
 	ServeExternalConn(ctx context.Context, conn net.Conn) error
 }
 
+// FileServer runs one file transfer on an accepted connection; transfers
+// are authorized by the single-use token the control protocol issued.
+type FileServer interface {
+	ServeExternalConn(ctx context.Context, conn net.Conn) error
+}
+
 // Info is the public app metadata returned by /api/v1/web/info.
 type Info struct {
 	ServerName      string `json:"server_name"`
@@ -70,6 +76,7 @@ type Server struct {
 	serverName string
 	logger     *zap.Logger
 	control    ControlServer
+	files      FileServer
 	origins    map[string]struct{}
 	proxies    []netip.Prefix
 	mux        *http.ServeMux
@@ -81,6 +88,9 @@ type Server struct {
 	// can be developed and tested without a certificate. Never in production.
 	devLoopback bool
 }
+
+// SetFileServer serves file transfers on /ft. Call it before Start.
+func (s *Server) SetFileServer(files FileServer) { s.files = files }
 
 // AllowLoopbackOrigins accepts http(s)://localhost, 127.0.0.1 and [::1]
 // origins on any port. Call it only for dev_mode servers.
@@ -209,6 +219,7 @@ func (s *Server) tlsConfig() (*tls.Config, error) {
 
 func (s *Server) routes() {
 	s.mux.Handle("GET /ws", http.HandlerFunc(s.handleWS))
+	s.mux.Handle("GET /ft", http.HandlerFunc(s.handleFT))
 	s.mux.Handle("GET /api/v1/web/info", http.HandlerFunc(s.handleInfo))
 	app := s.appHandler()
 	s.mux.Handle("GET /app/", app)
@@ -232,6 +243,20 @@ func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	s.serveWebSocket(w, r, s.control)
+}
+
+// handleFT carries the file-transfer framing (init, chunks, digest) over a
+// WebSocket, so attachments need no extra port.
+func (s *Server) handleFT(w http.ResponseWriter, r *http.Request) {
+	if s.files == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.serveWebSocket(w, r, s.files)
+}
+
+func (s *Server) serveWebSocket(w http.ResponseWriter, r *http.Request, target ControlServer) {
 	if !s.originAllowed(r.Header.Get("Origin")) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
@@ -251,9 +276,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		Handler: func(conn *websocket.Conn) {
 			conn.PayloadType = websocket.BinaryFrame
 			conn.MaxPayloadBytes = netproto.MaxFrameSize + frameHeaderSize
-			err := s.control.ServeExternalConn(r.Context(), &wsConn{Conn: conn, remote: remote})
+			err := target.ServeExternalConn(r.Context(), &wsConn{Conn: conn, remote: remote})
 			if err != nil {
-				s.logger.Debug("web control connection rejected", zap.Error(err))
+				s.logger.Debug("web connection rejected", zap.String("path", r.URL.Path), zap.Error(err))
 			}
 		},
 	}

@@ -4,6 +4,7 @@ import { Trust } from "../core/direct.js";
 import { t } from "../i18n.js";
 import { avatar, clock, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
+import { messageBody } from "./attachments.js";
 import { header } from "./common.js";
 
 export function renderDM(root, peer) {
@@ -21,7 +22,7 @@ export function renderDM(root, peer) {
         const classes = ["msg", message.self ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
         const body = message.body === null || message.body === undefined
             ? h("span", { class: "msg-locked" }, t("chat.locked"))
-            : message.body;
+            : messageBody(message.body, { conn: session.conn, channelID: 0 });
         const from = message.self ? session.nickname : (message.fromNickname || name);
         return h("div", { class: classes },
             h("span", { class: "msg-time" }, clock(message.sentAt)),

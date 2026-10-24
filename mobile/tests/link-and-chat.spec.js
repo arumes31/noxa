@@ -83,7 +83,8 @@ test("a phone links by QR, compares the code, signs in and chats with the deskto
     await page.getByRole("link", { name: "You", exact: true }).click();
     await expect(page.getByText("This device", { exact: false }).first()).toBeVisible();
     const list = await desktop.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
-    const phone = list.devices.find(d => d.kind === "web");
+    // Other tests link phones to the same account; this one is the newest.
+    const phone = list.devices.filter(d => d.kind === "web").sort((a, b) => b.created_at - a.created_at)[0];
     await desktop.conn.request(Msg.DeviceRequest, { action: "revoke", device_id: phone.device_id }, Msg.DeviceResult, { accept: r => r.action === "revoke" });
     await expect(page.getByRole("button", { name: "Sign in with passkey" })).toBeVisible({ timeout: 15000 });
     deskChat.close();

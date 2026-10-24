@@ -3,7 +3,9 @@ import { app, queueMessage } from "../app.js";
 import { t } from "../i18n.js";
 import { avatar, clock, h, toast } from "./dom.js";
 import { icon } from "./icons.js";
+import { messageBody } from "./attachments.js";
 import { header, scopeName } from "./common.js";
+import { uploadAttachment } from "../core/files.js";
 
 export function renderChat(root, scope) {
     const session = app.session;
@@ -12,6 +14,27 @@ export function renderChat(root, scope) {
     const typing = h("div", { class: "typing" });
     const input = h("textarea", { rows: "1", "aria-label": t("chat.placeholder", { channel: name }), placeholder: t("chat.placeholder", { channel: name }), enterkeyhint: "send" });
     const sendButton = h("button", { class: "send", type: "submit", "aria-label": t("chat.send") }, icon("send"));
+    const picker = h("input", { type: "file", hidden: true, "aria-hidden": "true" });
+    const attachButton = h("button", { class: "attach", type: "button", "aria-label": t("file.attach") }, icon("attach"));
+    attachButton.onclick = () => picker.click();
+    picker.onchange = async () => {
+        const file = picker.files?.[0];
+        picker.value = "";
+        if (!file) return;
+        attachButton.disabled = true;
+        attachButton.setAttribute("aria-busy", "true");
+        try {
+            const token = await uploadAttachment(session.conn, scope, file);
+            const caption = input.value.trim();
+            input.value = "";
+            await session.send(scope, caption ? `${caption} ${token}` : token);
+        } catch (error) {
+            toast(t("file.uploadFailed", { error: error.message }), "warn");
+        } finally {
+            attachButton.disabled = false;
+            attachButton.removeAttribute("aria-busy");
+        }
+    };
     let hasOlder = true;
     let lastTyping = 0;
 
@@ -28,7 +51,7 @@ export function renderChat(root, scope) {
         let body;
         if (message.deleted) body = h("span", { class: "msg-deleted" }, t("chat.deleted"));
         else if (message.text === null || message.text === undefined) body = h("span", { class: "msg-locked" }, t("chat.locked"));
-        else body = message.text;
+        else body = messageBody(message.text, { conn: session.conn, channelID: scope });
         const reactions = Object.entries(message.reactions || {}).filter(([, n]) => n > 0);
         return h("div", { class: classes },
             h("span", { class: "msg-time" }, clock(message.sentAt)),
@@ -68,7 +91,7 @@ export function renderChat(root, scope) {
             if (error.retryable) await queueMessage({ kind: "channel", scope }, text, { id, sentAt });
             else toast(t("chat.sendFailed", { error: error.message }), "warn");
         }
-    } }, input, sendButton);
+    } }, attachButton, picker, input, sendButton);
     input.addEventListener("keydown", event => {
         if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
