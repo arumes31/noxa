@@ -54,7 +54,7 @@ function provision(dir, databaseURL) {
     execFileSync(tool("migrate"), [], { env, stdio: "pipe" });
     const accounts = {};
     const run = Date.now().toString(36);
-    for (const name of ["owner", "rowan", "ivy", "kai", "lou", "mia", "noa"]) {
+    for (const name of ["owner", "rowan", "ivy", "kai", "lou", "mia", "noa", "pia", "ray", "sol"]) {
         const password = `pw-${name}-${run}`;
         const nickname = `${name}-${run}`;
         // The owner may also log in to ServerQuery (e.g. to set the server rules).

@@ -7,6 +7,7 @@ import { desktopSession } from "./harness.mjs";
 import { linkPhone, nextDeviceEvent, openServerToMembers, publishKeyRecord, registerDesktop } from "./helpers.mjs";
 
 const server = JSON.parse(process.env.NOXA_E2E_SERVER_STATE || "{}");
+// pia, ray and sol are this spec's own accounts: their devices stay out of other specs.
 const run = Date.now().toString(36);
 let info;
 
@@ -203,7 +204,7 @@ test("joining a password-protected channel asks for its password", async ({ page
 
 test("devices renamed on the phone show on the desktop", async ({ page }) => {
     const errors = trackErrors(page);
-    const desktop = await desktopSession(server.controlAddr, server.accounts.mia, { version: info.version });
+    const desktop = await desktopSession(server.controlAddr, server.accounts.pia, { version: info.version });
     const desktopDevice = await registerDesktop(desktop);
     await linkPhone(page, desktop, server.webURL, expect);
     await page.getByRole("link", { name: "You", exact: true }).click();
@@ -233,7 +234,7 @@ test("devices renamed on the phone show on the desktop", async ({ page }) => {
 test("a phone copies its direct-message history to a newly linked phone", async ({ page, browser }) => {
     test.setTimeout(120000);
     const errors = trackErrors(page);
-    const desktop = await desktopSession(server.controlAddr, server.accounts.ivy, { version: info.version });
+    const desktop = await desktopSession(server.controlAddr, server.accounts.ray, { version: info.version });
     await registerDesktop(desktop);
     await publishKeyRecord(desktop);
     const linked = await linkPhone(page, desktop, server.webURL, expect);
@@ -271,7 +272,7 @@ test("a phone copies its direct-message history to a newly linked phone", async 
 test("a device key backup signs the same device in again", async ({ page, browser }) => {
     test.setTimeout(120000);
     const errors = trackErrors(page);
-    const desktop = await desktopSession(server.controlAddr, server.accounts.kai, { version: info.version });
+    const desktop = await desktopSession(server.controlAddr, server.accounts.sol, { version: info.version });
     await registerDesktop(desktop);
     await linkPhone(page, desktop, server.webURL, expect);
     await page.getByRole("link", { name: "You", exact: true }).click();
