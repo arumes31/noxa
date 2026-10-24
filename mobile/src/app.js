@@ -2,6 +2,7 @@
 // device's identity, the signed-in chat session and reconnection.
 import { ChatSession } from "./core/chat-session.js";
 import { DirectMessages } from "./core/direct.js";
+import { Voice } from "./core/voice.js";
 import { Connection } from "./core/connection.js";
 import { generateIdentity } from "./core/crypto.js";
 import { signIn } from "./core/device.js";
@@ -20,6 +21,8 @@ app.online = true;
 app.push = { available: false, preferences: {} };
 /** Direct messages of the signed-in session. */
 app.dm = null;
+/** Channel voice of the signed-in session. */
+app.voice = null;
 /** Conversation tag ("channel:4", "dm:<uid>") -> {count, mentions} unread. */
 app.unread = new Map();
 /** The conversation tag on screen, or null. */
@@ -61,6 +64,8 @@ export async function rememberLinkedIdentity(identity, meta) {
 }
 
 export async function forgetDevice() {
+    app.voice?.close();
+    app.voice = null;
     app.dm?.close();
     app.dm = null;
     app.session?.close();
@@ -93,6 +98,12 @@ export async function connect() {
     setOnline(true);
     await updateMeta({ deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname });
     app.meta = { ...app.meta, deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
+    const rejoin = app.voice?.channelID || 0;
+    app.voice?.close();
+    app.voice = new Voice(session);
+    watchVoice(app.voice);
+    // A dropped connection ends the call; rejoin the same channel.
+    if (rejoin) joinVoice(rejoin).catch(() => {});
     app.dm?.close();
     const dm = new DirectMessages(session, app.meta);
     app.dm = dm;
@@ -152,6 +163,55 @@ export async function flushNow() {
     if (!app.session?.conn.open || !app.dm) return;
     await flushOutbox(app.session, app.dm);
     await outboxChanged();
+}
+
+/** Joins a voice channel and keeps the phone awake while connected. */
+export async function joinVoice(channelID) {
+    if (!app.voice) throw new Error("not connected");
+    await app.voice.join(channelID);
+}
+
+export async function leaveVoice() {
+    await app.voice?.leave();
+}
+
+let wakeLock = null;
+
+async function holdWakeLock(active) {
+    if (active && !wakeLock && document.visibilityState === "visible") {
+        wakeLock = await navigator.wakeLock?.request("screen").catch(() => null);
+        wakeLock?.addEventListener("release", () => { wakeLock = null; });
+    } else if (!active && wakeLock) {
+        await wakeLock.release().catch(() => {});
+        wakeLock = null;
+    }
+}
+
+/** Media Session controls and the wake lock follow the voice state. */
+function watchVoice(voice) {
+    voice.addEventListener("state", () => {
+        emit("voice", voice);
+        holdWakeLock(voice.active);
+        const media = navigator.mediaSession;
+        if (!media) return;
+        if (!voice.active) {
+            media.metadata = null;
+            for (const action of ["hangup", "togglemicrophone"]) {
+                try { media.setActionHandler(action, null); } catch { /* unsupported */ }
+            }
+            return;
+        }
+        const channel = app.session?.channels().find(c => c.id === voice.channelID);
+        try {
+            media.metadata = new MediaMetadata({ title: channel?.name || "noXa", artist: app.info?.server_name || "noXa" });
+            media.setActionHandler("hangup", () => leaveVoice());
+            media.setActionHandler("togglemicrophone", () => voice.setMuted(!voice.muted));
+            media.setMicrophoneActive?.(!voice.muted);
+        } catch {
+            // Older browsers lack the conferencing actions.
+        }
+    });
+    voice.addEventListener("speaking", () => emit("voice", voice));
 }
 
 function unreadChanged() {
@@ -222,5 +282,6 @@ if (typeof window !== "undefined") {
         if (document.visibilityState !== "visible") return;
         retryNow();
         if (app.viewing !== null) markRead(app.viewing);
+        if (app.voice?.active) holdWakeLock(true);
     });
 }

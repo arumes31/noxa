@@ -54,7 +54,7 @@ async function route() {
         case "servers": module.renderServers(root); break;
         case "chat": cleanup = module.renderChat(root, Number(arg) || 0); break;
         case "dm": cleanup = module.renderDM(root, arg); break;
-        case "voice": module.renderVoice(root); break;
+        case "voice": cleanup = module.renderVoice(root); break;
         case "you": module.renderYou(root); break;
         default: module.renderHome(root);
     }
@@ -97,6 +97,28 @@ app.addEventListener("unread", () => {
     if (screen === "home" || screen === "servers") route();
 });
 app.addEventListener("online", renderBanner);
+// The call bar follows voice state on the other screens.
+let voiceWasActive = false;
+app.addEventListener("voice", () => {
+    const screen = location.hash.split("/")[1] || "home";
+    const active = !!app.voice?.active;
+    const switched = active !== voiceWasActive;
+    voiceWasActive = active;
+    if (screen === "voice") {
+        // Joining or leaving swaps the channel list and the room.
+        if (switched) route();
+        return;
+    }
+    const bar = document.querySelector(".call-bar");
+    if (bar && active && !switched) {
+        // Speaking and mute change often; update the bar in place.
+        import("./ui/common.js").then(({ updateCallBar }) => updateCallBar(bar));
+        return;
+    }
+    const bottom = document.querySelector(".nav")?.closest(".bottom") || document.querySelector(".nav");
+    if (!bottom) return;
+    import("./ui/common.js").then(({ nav }) => bottom.replaceWith(nav(screen)));
+});
 app.addEventListener("outbox", renderBanner);
 // A tapped notification opens its conversation in the running app.
 navigator.serviceWorker?.addEventListener("message", event => {

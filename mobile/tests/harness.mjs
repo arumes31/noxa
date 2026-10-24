@@ -83,6 +83,8 @@ export async function startServer({ databaseURL = process.env.NOXA_E2E_DATABASE_
         `file_root: "${slash(path.join(dir, "files"))}"`, `tls_enabled: true`, `tls_dir: "${slash(path.join(dir, "tls"))}"`,
         `pii_key_file: "${slash(path.join(dir, "keys", "pii.key"))}"`, `query_ssh_host_key: "${slash(path.join(dir, "keys", "ssh.key"))}"`,
         `database_url: "${databaseURL}"`, `redis_enabled: false`,
+        // Voice tests connect browsers on this machine to the SFU.
+        `webrtc:`, `  ice_servers: []`, `  allowed_remote_cidrs: ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]`,
         `web:`, `  enabled: true`, `  addr: "127.0.0.1:${ports.web}"`, `  public_url: "https://chat.example"`,
         `  trusted_proxies: ["127.0.0.0/8"]`, `  app_dir: "${slash(path.join(repoRoot, "web", "app"))}"`,
     ].join("\n");

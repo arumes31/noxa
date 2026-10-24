@@ -9,5 +9,11 @@ export default defineConfig({
     workers: 1,
     reporter: [["line"]],
     globalSetup: "./tests/global-setup.mjs",
-    use: { ...devices["Pixel 7"], trace: "retain-on-failure" },
+    use: {
+        ...devices["Pixel 7"],
+        trace: "retain-on-failure",
+        permissions: ["microphone"],
+        // Fake microphones, and real local addresses so the SFU can be reached.
+        launchOptions: { args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--disable-features=WebRtcHideLocalIpsWithMdns"] },
+    },
 });

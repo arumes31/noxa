@@ -24,6 +24,7 @@ export class ChatSession extends EventTarget {
         this.deviceID = auth.device_id || "";
         this.nickname = auth.nickname;
         this.capabilities = new Set(auth.capabilities || []);
+        this.iceServers = auth.ice_servers || [];
         this.snapshot = null;
         this.subscriptions = new Set();
         /** scope -> Map(keyID -> Uint8Array) */
@@ -121,7 +122,15 @@ export class ChatSession extends EventTarget {
 
     #handleEvent({ type, data }) {
         if (!data) return;
+        this.#emit("server-event", { type, data });
         switch (type) {
+            case "user_joined":
+            case "user_moved":
+            case "user_left":
+            case "audio_state_changed":
+            case "status_changed":
+                if (this.#applyPresence(type, data)) this.#emit("snapshot", this.snapshot);
+                return;
             case "chat": {
                 if (data.direct) {
                     this.#emit("direct", data);
@@ -166,6 +175,46 @@ export class ChatSession extends EventTarget {
                 return;
             }
         }
+    }
+
+    /** Updates the tree for presence events; returns whether it changed. */
+    #applyPresence(type, data) {
+        const snapshot = this.snapshot;
+        if (!snapshot || !data.client_id) return false;
+        const lists = [snapshot.unassigned_clients ||= []];
+        const nodes = new Map();
+        const walk = list => {
+            for (const node of list || []) {
+                nodes.set(node.ChannelID, node);
+                lists.push(node.clients ||= []);
+                walk(node.children);
+            }
+        };
+        walk(snapshot.root_channels);
+        let client = null;
+        for (const list of lists) {
+            const index = list.findIndex(c => c.client_id === data.client_id);
+            if (index >= 0) {
+                client = list[index];
+                if (type === "user_left" || type === "user_moved") list.splice(index, 1);
+            }
+        }
+        if (type === "user_left") return !!client;
+        if (type === "audio_state_changed" || type === "status_changed") {
+            if (!client) return false;
+            if ("muted" in data) client.self_muted = !!data.muted;
+            if ("deafened" in data) client.self_deafened = !!data.deafened;
+            if ("status" in data) client.status = data.status;
+            return true;
+        }
+        if (type === "user_joined" && client) return false;
+        client ||= { client_id: data.client_id, unique_id: data.unique_id, nickname: data.nickname };
+        if (data.nickname) client.nickname = data.nickname;
+        if (data.on_mobile !== undefined) client.on_mobile = !!data.on_mobile;
+        const channelID = data.channel_id || 0;
+        client.channel_id = channelID;
+        (nodes.get(channelID)?.clients || snapshot.unassigned_clients).push(client);
+        return true;
     }
 
     requestKeys(scope, keyIDs) {
