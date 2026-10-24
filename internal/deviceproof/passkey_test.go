@@ -97,7 +97,9 @@ func TestPasskeyProofRequiresPinnedChainAndBoundVerifiedAssertion(t *testing.T) 
 		{"duplicate device", func(f *fixture) {
 			f.proof.Certificate.Chain = append(f.proof.Certificate.Chain, f.proof.Certificate.Chain[0])
 		}, false},
-		{"new encryption key", func(f *fixture) { f.deviceX = base64.StdEncoding.EncodeToString(make([]byte, 32)) }, false},
+		{"new encryption key", func(f *fixture) {
+			f.deviceX = base64.StdEncoding.EncodeToString([]byte("01234567890123456789012345678901"))
+		}, false},
 		{"new signing key", func(f *fixture) { f.deviceEd, _, _ = auth.GenerateIdentityKeyPair() }, false},
 		{"different nonce", func(f *fixture) { f.proof.Nonce[0] ^= 1 }, false},
 		{"different credential", func(f *fixture) { f.proof.Certificate.CredentialID = "b3RoZXI" }, false},

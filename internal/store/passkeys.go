@@ -15,23 +15,24 @@ var ErrPasskeyNotFound = errors.New("passkey not found")
 // Passkey is a stored WebAuthn credential. Credential is the opaque,
 // verified credential record (JSON) the WebAuthn library round-trips.
 type Passkey struct {
-	CredentialID []byte
-	Principal    string
-	UserHandle   []byte
-	DeviceID     string
-	Name         string
-	Credential   []byte
-	CreatedAt    time.Time
-	LastUsedAt   time.Time
+	CredentialID  []byte
+	Principal     string
+	UserHandle    []byte
+	DeviceID      string
+	Name          string
+	Credential    []byte
+	DMCertificate []byte
+	CreatedAt     time.Time
+	LastUsedAt    time.Time
 }
 
 // #nosec G101 -- column names, not a credential.
-const passkeyColumns = `credential_id, principal, user_handle, device_id, name, credential, created_at, last_used_at`
+const passkeyColumns = `credential_id, principal, user_handle, device_id, name, credential, created_at, last_used_at, dm_certificate`
 
 func scanPasskey(row rowScanner) (Passkey, error) {
 	var p Passkey
 	var used sql.NullTime
-	if err := row.Scan(&p.CredentialID, &p.Principal, &p.UserHandle, &p.DeviceID, &p.Name, &p.Credential, &p.CreatedAt, &used); err != nil {
+	if err := row.Scan(&p.CredentialID, &p.Principal, &p.UserHandle, &p.DeviceID, &p.Name, &p.Credential, &p.CreatedAt, &used, &p.DMCertificate); err != nil {
 		return Passkey{}, err
 	}
 	p.LastUsedAt = used.Time
@@ -59,10 +60,10 @@ func (s *Store) PasskeyUserHandle(ctx context.Context, principal string) ([]byte
 // AddPasskey stores a verified credential for an active device.
 func (s *Store) AddPasskey(ctx context.Context, p Passkey) error {
 	result, err := s.db.ExecContext(ctx, `INSERT INTO webauthn_credentials
-		(credential_id, principal, user_handle, device_id, name, credential)
-		SELECT $1, $2, $3, $4, $5, $6 FROM user_devices
+		(credential_id, principal, user_handle, device_id, name, credential, dm_certificate)
+		SELECT $1, $2, $3, $4, $5, $6, $7 FROM user_devices
 		WHERE device_id=$4 AND principal=$2 AND revoked_at IS NULL`,
-		p.CredentialID, p.Principal, p.UserHandle, p.DeviceID, NormalizeDeviceName(p.Name), p.Credential)
+		p.CredentialID, p.Principal, p.UserHandle, p.DeviceID, NormalizeDeviceName(p.Name), p.Credential, p.DMCertificate)
 	if err != nil {
 		return fmt.Errorf("adding passkey: %w", err)
 	}
