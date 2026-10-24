@@ -1,3 +1,4 @@
+import { previewImage } from "./preview-image.js";
 // markdown.js — (91/92/93) XSS-safe mini-markdown renderer for chat.
 // Discipline: user text is HTML-escaped FIRST; every transform below only
 // injects markup built from already-escaped content. Code spans/blocks are
@@ -149,20 +150,28 @@ function imageID(escapedURL) {
     return id;
 }
 
-// loadImagePlaceholder swaps a click-to-load placeholder for the remote image
-// it names. Only http(s) URLs registered while rendering are ever fetched, and
-// no referrer is sent to the image host.
-export function loadImagePlaceholder(button) {
+// A reader's explicit click requests an inert raster image from their server.
+export async function loadImagePlaceholder(button) {
     const src = imageURLs.get(button?.getAttribute?.("data-img") || "") || "";
-    if (!/^https?:\/\//i.test(src)) return null;
-    const img = button.ownerDocument.createElement("img");
-    img.className = "md-img";
-    img.alt = button.getAttribute("data-alt") || "";
-    img.referrerPolicy = "no-referrer";
-    img.decoding = "async";
-    img.src = src;
-    button.replaceWith(img);
-    return img;
+    if (!/^https:\/\//i.test(src)) return null;
+    const state = globalThis.window?.__noxa?.state;
+    const tabID = state?.activeTabID, generation = state?.serverGeneration;
+    if (!tabID || button.disabled) return null;
+    button.disabled = true;
+    try {
+        const result = await window.go.main.App.ImagePreviewForTab(tabID, src);
+        const data = previewImage(result?.thumbnail);
+        if (!data || !button.isConnected || window.__noxa.state.activeTabID !== tabID || window.__noxa.state.serverGeneration !== generation) return null;
+        const img = button.ownerDocument.createElement("img");
+        img.className = "md-img";
+        img.alt = button.getAttribute("data-alt") || "";
+        img.decoding = "async";
+        img.referrerPolicy = "no-referrer";
+        img.src = data;
+        button.replaceWith(img);
+        return img;
+    } catch { return null; }
+    finally { button.disabled = false; }
 }
 
 // bindImagePlaceholders installs one delegated click handler that loads a

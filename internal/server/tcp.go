@@ -31,6 +31,7 @@ import (
 	"noxa/internal/chatcrypto"
 	"noxa/internal/config"
 	"noxa/internal/filetransfer"
+	"noxa/internal/linkpreview"
 	"noxa/internal/metrics"
 	"noxa/internal/netproto"
 	"noxa/internal/state"
@@ -327,6 +328,8 @@ func (c *Client) takeChallenge(uniqueID string) ([]byte, string, bool) {
 
 // TCPServer accepts and serves control-channel connections.
 type TCPServer struct {
+	previewOnce           sync.Once
+	previewService        *linkpreview.Service
 	spoolDelivery         [64]sync.Mutex
 	privateCallsMu        sync.Mutex
 	privateCalls          map[string]netproto.CallSession
@@ -1074,6 +1077,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.sendErrorFor(client, mt, errCodePermissionDenied, "accept the server rules before continuing")
 	}
 	switch mt {
+	case netproto.MsgLinkPreviewRequest:
+		return s.handleLinkPreview(ctx, client, f)
 	case netproto.MsgRelayRequest:
 		return s.handleRelay(ctx, client, f)
 	case netproto.MsgChannelInviteRequest:
