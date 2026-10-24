@@ -296,6 +296,24 @@ func TestRequireSecureCredentials(t *testing.T) {
 	}
 }
 
+func TestHandler(t *testing.T) {
+	srv := New("127.0.0.1:0", nil, nil)
+	handler := srv.Handler()
+
+	if handler == nil {
+		t.Fatal("Handler() returned nil")
+	}
+
+	// Verify the returned handler can process a request using the underlying mux
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", nil)
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("Handler() did not successfully process request, status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
+
 func TestSetTLSCertificateEnablesHTTPS(t *testing.T) {
 	srv := New("127.0.0.1:0", nil, nil)
 	if srv.srv.TLSConfig != nil {
