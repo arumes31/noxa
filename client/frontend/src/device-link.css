@@ -68,7 +68,7 @@
     .mobile-announcement-icon { display: none; }
     .mobile-announcement-copy span { font-size: 11px; }
     .dlg-overlay.mobile-quick-overlay { padding-top: 64px; }
-    .mobile-quick-guide { max-height: calc(100dvh - 82px); }
+    .dlg.dlg-wide.mobile-quick-guide { max-height: calc(100dvh - 82px); }
 }
 
 .mobile-platform-guide { display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: 12px; }
