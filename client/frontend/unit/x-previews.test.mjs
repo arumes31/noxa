@@ -49,3 +49,19 @@ test("a current card retries a shared job skipped for an earlier detached card",
     assert.equal(oldCalls, 0);
     assert.equal(currentCalls, 1);
 });
+
+
+test("transient preview failures expire for every provider", async t => {
+    t.mock.timers.enable({ apis: ["Date"], now: 100000 });
+    for (const provider of ["youtube", "x", "portal:twitch"]) {
+        const scope = { tabID: "failure-expiry", generation: 1 };
+        let calls = 0;
+        const request = () => { calls++; if (calls === 1) throw Error("rate limited"); return { title: "Recovered" }; };
+        assert.equal(await loadPreviewMetadata(provider, "retry", scope, () => true, request), null);
+        assert.equal(await loadPreviewMetadata(provider, "retry", scope, () => true, request), null);
+        assert.equal(calls, 1);
+        t.mock.timers.tick(5001);
+        assert.deepEqual(await loadPreviewMetadata(provider, "retry", scope, () => true, request), { title: "Recovered" });
+        assert.equal(calls, 2);
+    }
+});

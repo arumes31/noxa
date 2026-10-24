@@ -87,6 +87,7 @@ func awaitDrainRequest(t *testing.T, done <-chan requestResult) requestResult {
 
 func TestReadOnlyRequestTimeoutPreservesConnection(t *testing.T) {
 	for _, query := range []struct{ send, reply netproto.MessageType }{
+		{netproto.MsgLinkPreviewRequest, netproto.MsgLinkPreviewResult},
 		{netproto.MsgAvatarGet, netproto.MsgAvatarData},
 		{netproto.MsgClientInfoQuery, netproto.MsgClientInfoResponse},
 	} {

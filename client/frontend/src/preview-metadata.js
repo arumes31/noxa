@@ -26,7 +26,12 @@ export function loadPreviewMetadata(provider, id, scope, isCurrent, request) {
             } });
             drain();
         }).then(result => {
-            if (skipped && metadata.get(key) === pending) metadata.delete(key);
+            if (metadata.get(key) === pending) {
+                if (skipped) { metadata.delete(key); expires.delete(key); }
+                // Transient failures must not poison YouTube/X previews for the
+                // entire connection. Briefly cache failures to avoid hot retries.
+                else if (result == null) expires.set(key, Date.now() + 5000);
+            }
             return skipped ? SKIPPED : result;
         });
         metadata.set(key, pending);
