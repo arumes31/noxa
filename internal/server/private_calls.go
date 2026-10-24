@@ -82,7 +82,17 @@ func (s *TCPServer) handlePrivateCall(ctx context.Context, client *Client, frame
 		defer s.privateCallsMu.Unlock()
 		call, found := s.privateCalls[request.ID]
 		participant, member := call.Participant(client.UniqueID)
-		if !found || !member || participant.ClientID != client.ID {
+		// A callee ringing on several devices is unbound: any of its sessions
+		// may read, accept or decline; the answering session binds.
+		unbound := participant.ClientID == "" && participant.State == "ringing"
+		if !found || !member || (participant.ClientID != client.ID && !unbound) {
+			if found && member && request.Action == "get" {
+				view := projectCall(call, client)
+				return s.writeCommittedReply(client, netproto.MsgCallResult, netproto.CallResult{Action: "get", Call: &view})
+			}
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, netproto.ErrCallDenied.Error())
+		}
+		if unbound && request.Action != "get" && request.Action != "accept" && request.Action != "decline" {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, netproto.ErrCallDenied.Error())
 		}
 		if request.Action == "signal" {
@@ -118,14 +128,66 @@ func (s *TCPServer) handlePrivateCall(ctx context.Context, client *Client, frame
 			if err != nil {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
 			}
+			if unbound && request.Action == "accept" {
+				key, published := s.senderDMKey(client)
+				if !published {
+					return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, errCallKeyUnavailable.Error())
+				}
+				for i := range next.Participants {
+					if next.Participants[i].UniqueID == client.UniqueID {
+						next.Participants[i].ClientID, next.Participants[i].PublicKey = client.ID, key
+						next.Participants[i].DeviceID = client.currentDeviceID()
+					}
+				}
+			}
 			if err := backend.SavePrivateCall(ctx, next); err != nil {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "call change could not be saved")
 			}
 			s.publishPrivateCallLocked(next)
 			call = next
 		}
-		return s.writeCommittedReply(client, netproto.MsgCallResult, netproto.CallResult{Action: request.Action, Call: &call})
+		view := projectCall(call, client)
+		return s.writeCommittedReply(client, netproto.MsgCallResult, netproto.CallResult{Action: request.Action, Call: &view})
 	})
+}
+
+// projectCall shows a session its account's participation: once another
+// device of the account answered, that participant reads as "elsewhere",
+// so this session neither rings nor starts media.
+func projectCall(call netproto.CallSession, client *Client) netproto.CallSession {
+	view := call
+	view.Participants = append([]netproto.CallParticipant(nil), call.Participants...)
+	for i, p := range view.Participants {
+		if p.UniqueID == client.uniqueID() && p.ClientID != "" && p.ClientID != client.ID && (p.State == "accepted" || p.State == "ringing") {
+			view.Participants[i].State = netproto.CallStateElsewhere
+		}
+	}
+	return view
+}
+
+// callTargets lists the sessions a callee can ring on. bindable is the one
+// session to bind at once when it is the account's only way to answer.
+func (s *TCPServer) callTargets(e *authorization.RoleEvaluator, caller *Client, uid string) (sessions []*Client, offline bool) {
+	for _, target := range s.sessionsOf(uid) {
+		if !target.isAuthed() || target.userID() <= 0 || target.rulesBlocked() || s.privateCallByClient[target.ID] != "" ||
+			!s.rolePokeTargetVisible(e, caller, target.ID) || !e.Evaluate(target.userID(), 0, authorization.Connect).Allowed {
+			continue
+		}
+		sessions = append(sessions, target)
+	}
+	return sessions, len(sessions) == 0
+}
+
+// pushReachable reports whether a callee has phones that push can ring.
+func (s *TCPServer) pushReachable(uid string) bool {
+	pushes, ok := s.pushStore()
+	if !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	subs, err := pushes.PushSubscriptions(ctx, uid)
+	return err == nil && len(subs) > 0
 }
 
 func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, request netproto.CallRequest, backend privateCallStore) error {
@@ -157,15 +219,20 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 			if uid == client.UniqueID {
 				continue
 			}
-			target, found := s.clientByUniqueID(uid)
-			if !found || !target.isAuthed() || target.userID() <= 0 || target.rulesBlocked() || s.privateCallByClient[target.ID] != "" || !s.rolePokeTargetVisible(e, client, target.ID) || !e.Evaluate(target.userID(), 0, authorization.Connect).Allowed {
-				continue
+			sessions, offline := s.callTargets(e, client, uid)
+			phones := s.pushReachable(uid)
+			switch {
+			case len(sessions) == 1 && !phones:
+				// The only way to answer: bind now, as before linked devices.
+				target := sessions[0]
+				key, published := s.senderDMKey(target)
+				if !published {
+					return call, errCallKeyUnavailable
+				}
+				call.Participants = append(call.Participants, netproto.CallParticipant{UniqueID: uid, ClientID: target.ID, State: "ringing", PublicKey: key, DeviceID: target.currentDeviceID()})
+			case !offline || phones:
+				call.Participants = append(call.Participants, netproto.CallParticipant{UniqueID: uid, State: "ringing"})
 			}
-			key, published := s.senderDMKey(target)
-			if !published {
-				return call, errCallKeyUnavailable
-			}
-			call.Participants = append(call.Participants, netproto.CallParticipant{UniqueID: uid, ClientID: target.ID, State: "ringing", PublicKey: key})
 		}
 		if len(call.Participants) < 2 {
 			return call, netproto.ErrCallDenied
@@ -207,6 +274,9 @@ func (s *TCPServer) publishPrivateCallLocked(call netproto.CallSession) {
 	previous := s.privateCalls[call.ID]
 	s.privateCalls[call.ID] = call
 	for _, participant := range call.Participants {
+		if participant.ClientID == "" {
+			continue
+		}
 		if call.EndedAt == 0 && (participant.State == "accepted" || participant.State == "ringing") {
 			s.privateCallByClient[participant.ClientID] = call.ID
 		} else if s.privateCallByClient[participant.ClientID] == call.ID {
@@ -216,8 +286,16 @@ func (s *TCPServer) publishPrivateCallLocked(call netproto.CallSession) {
 	if s.deps.Broadcast != nil {
 		payload, err := eventEnvelope(eventPrivateCall, map[string]string{"id": call.ID})
 		if err == nil {
+			// Every session of every participant: devices that did not
+			// answer must stop ringing.
+			sent := map[string]bool{}
 			for _, participant := range call.Participants {
-				_ = s.deps.Broadcast.BroadcastToClient(participant.ClientID, payload)
+				for _, session := range s.sessionsOf(participant.UniqueID) {
+					if !sent[session.ID] {
+						sent[session.ID] = true
+						_ = s.deps.Broadcast.BroadcastToClient(session.ID, payload)
+					}
+				}
 			}
 		}
 	}

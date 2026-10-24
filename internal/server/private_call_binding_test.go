@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net"
 	"strings"
 	"testing"
 
@@ -20,28 +21,38 @@ func TestPrivateCallPinsAuthenticatedParticipantKeys(t *testing.T) {
 	if !call.KeyBinding {
 		t.Fatal("new call omitted explicit key binding")
 	}
-	for _, participant := range call.Participants {
-		client, found := env.state.GetClient(participant.ClientID)
-		if !found || client.UniqueID != participant.UniqueID || participant.PublicKey != client.E2EPublicKey {
-			t.Fatalf("participant key did not come from its pinned session: %+v", participant)
+	me, _ := call.Participant("admin-uid")
+	client, found := env.state.GetClient(me.ClientID)
+	if me.ClientID != callerID || !found || me.PublicKey != client.E2EPublicKey {
+		t.Fatalf("caller key did not come from its session: %+v", me)
+	}
+	// Both sessions of the callee ring; nothing is bound until one answers.
+	ringing, _ := call.Participant("user-uid")
+	if ringing.ClientID != "" || ringing.PublicKey != "" || ringing.State != "ringing" {
+		t.Fatalf("callee bound before answering: %+v", ringing)
+	}
+	for _, session := range []net.Conn{first, second} {
+		if got := privateCallRequest(t, session, netproto.CallRequest{Action: "get", ID: call.ID}); got.ID != call.ID {
+			t.Fatal("a ringing session could not read the call")
 		}
 	}
-	me, _ := call.Participant("admin-uid")
-	if me.ClientID != callerID {
-		t.Fatal("caller session changed")
+	selected, other, selectedID := second, first, secondID
+	accepted := privateCallRequest(t, selected, netproto.CallRequest{Action: "accept", ID: call.ID})
+	peer, _ := accepted.Participant("user-uid")
+	session, _ := env.state.GetClient(selectedID)
+	if peer.ClientID != selectedID || peer.PublicKey != session.E2EPublicKey || peer.State != "accepted" {
+		t.Fatalf("answering session was not bound: %+v", peer)
 	}
-	peer, _ := call.Participant("user-uid")
-	selected, other := first, second
-	if peer.ClientID == secondID {
-		selected, other = second, first
-	} else if peer.ClientID != firstID {
-		t.Fatal("target session was not online")
+	// The other session sees the call answered elsewhere and cannot act.
+	elsewhere, _ := privateCallRequest(t, other, netproto.CallRequest{Action: "get", ID: call.ID}).Participant("user-uid")
+	if elsewhere.State != netproto.CallStateElsewhere {
+		t.Fatalf("other session view = %+v", elsewhere)
 	}
-	send(t, other, netproto.MsgCallRequest, netproto.CallRequest{Action: "get", ID: call.ID})
+	send(t, other, netproto.MsgCallRequest, netproto.CallRequest{Action: "leave", ID: call.ID})
 	if failure := readError(t, other); failure.Code != errCodePermissionDenied {
-		t.Fatalf("same-account different session obtained call: %+v", failure)
+		t.Fatalf("same-account other session acted on the call: %+v", failure)
 	}
-	privateCallRequest(t, selected, netproto.CallRequest{Action: "accept", ID: call.ID})
+	_ = firstID
 	replacement, _ := testX25519(t)
 	send(t, selected, netproto.MsgKeyPublish, netproto.KeyPublish{PublicKey: b64e(replacement[:])})
 	send(t, selected, netproto.MsgPing, netproto.Ping{})
