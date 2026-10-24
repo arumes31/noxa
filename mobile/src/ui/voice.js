@@ -12,7 +12,7 @@ function megabytes(bytes) {
 }
 
 function channelList(root, session) {
-    const channels = session.channels().filter(c => !c.textOnly);
+    const channels = session.channels().filter(c => !c.textOnly && !c.home);
     root.replaceChildren(h("section", { class: "screen" },
         header(t("voice.title")),
         h("div", { class: "screen-body" },

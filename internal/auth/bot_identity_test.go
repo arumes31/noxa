@@ -40,3 +40,23 @@ func TestBotIdentitySurvivesEveryAccountLookup(t *testing.T) {
 		})
 	}
 }
+
+func TestEnrolledIdentityDisplayNameLookup(t *testing.T) {
+	svc, db := testAuthServiceWithStore(t)
+	uid := uniqueNickname("display-label")
+	key := "test-public-key-" + uid
+	_, err := db.DB().ExecContext(t.Context(), "INSERT INTO users(unique_id, public_key, identity_display_name) VALUES($1,$2,$3)", uid, key, "Daniel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.DB().ExecContext(context.Background(), "DELETE FROM users WHERE unique_id=$1", uid) })
+	for _, lookup := range []func() (*User, error){
+		func() (*User, error) { return svc.LookupUser(t.Context(), uid) },
+		func() (*User, error) { return svc.LookupUserByPublicKey(t.Context(), key) },
+	} {
+		user, err := lookup()
+		if err != nil || user.Nickname != "" || user.DisplayName != "Daniel" || user.UniqueID != uid {
+			t.Fatalf("display label lookup: %+v, %v", user, err)
+		}
+	}
+}

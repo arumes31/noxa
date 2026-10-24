@@ -2,6 +2,11 @@
 const catalogs = {
     en: {
         "app.tagline": "Voice, video and chat for your crew",
+        "settings.firstDevice": "Master device",
+        "connect.scan": "Scan QR code",
+        "connect.scanHint": "Point your camera at the QR code in PWA / Mobile login on your desktop.",
+        "connect.scanInvalid": "Use a login QR code for this server.",
+        "connect.scanUnavailable": "Camera unavailable or access denied. Close this scanner and enter the desktop code instead.",
         "connect.server": "Server",
         "connect.title": "Sign in",
         "connect.passkeyHint": "Already linked before? Use a passkey saved for this server.",
@@ -178,6 +183,11 @@ const catalogs = {
     },
     de: {
         "app.tagline": "Sprache, Video und Chat für deine Crew",
+        "settings.firstDevice": "Master-Gerät",
+        "connect.scan": "QR-Code scannen",
+        "connect.scanHint": "Richte die Kamera auf den QR-Code unter PWA- / Mobil-Anmeldung am Desktop.",
+        "connect.scanInvalid": "Verwende einen Anmelde-QR-Code für diesen Server.",
+        "connect.scanUnavailable": "Kamera nicht verfügbar oder Zugriff verweigert. Schließe den Scanner und gib stattdessen den Desktop-Code ein.",
         "connect.server": "Server",
         "connect.title": "Anmelden",
         "connect.passkeyHint": "Schon einmal verknüpft? Nutze einen gespeicherten Passkey für diesen Server.",

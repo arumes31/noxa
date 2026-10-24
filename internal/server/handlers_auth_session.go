@@ -36,7 +36,10 @@ func (s *TCPServer) completeAuth(ctx context.Context, client *Client, uniqueID, 
 // completeAuthForUser finishes authentication for an already-resolved user
 // record. A display name never changes the canonical account identity.
 func (s *TCPServer) completeAuthForUser(ctx context.Context, client *Client, user *auth.User, displayName string) error {
-	nickname := user.Nickname
+	nickname := user.DisplayName
+	if nickname == "" {
+		nickname = user.Nickname
+	}
 	if displayName != "" {
 		nickname = displayName
 	}

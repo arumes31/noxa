@@ -85,6 +85,7 @@ export class ChatSession extends EventTarget {
                     clients: node.clients || [], restricted: !!node.access?.restricted,
                     // The home channel (Lobby) has no chat of its own.
                     chat: node.SystemKind !== "home",
+                    home: node.SystemKind === "home",
                 });
                 walk(node.children, depth + 1);
             }

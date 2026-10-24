@@ -6,6 +6,10 @@ import { claimLink, LinkState, linkWithPasskey, passkeysSupported, waitForDecisi
 import { t } from "../i18n.js";
 import { h, toast } from "./dom.js";
 import { icon } from "./icons.js";
+import { scanPairingQR } from "./qr-scanner.js";
+
+// Route cleanup must follow replacement sign-in screens after cancel/failure.
+const scanners = new WeakMap();
 
 function brand() {
     return h("div", { class: "brand" },
@@ -19,6 +23,13 @@ function isIOS() {
 }
 
 export function renderConnect(root, { onSignedIn }) {
+    scanners.get(root)?.abort();
+    const scanner = new AbortController();
+    scanners.set(root, scanner);
+    const scan = h("button", { class: "btn btn-block", type: "button", onclick: async () => {
+        const link = await scanPairingQR({ signal: scanner.signal });
+        if (link && !scanner.signal.aborted && root.isConnected) runLink(root, link, { onSignedIn });
+    } }, icon("camera"), t("connect.scan"));
     const error = h("p", { class: "error", role: "alert" });
     const code = h("input", {
         class: "input code", id: "link-code", inputmode: "text", autocomplete: "one-time-code", autocapitalize: "characters",
@@ -57,6 +68,7 @@ export function renderConnect(root, { onSignedIn }) {
     } },
         h("h2", {}, t("connect.link")),
         h("p", { class: "hint", id: "link-hint" }, t("connect.linkHint")),
+        scan,
         h("div", { class: "field" }, h("label", { for: "link-code" }, t("connect.code")), code),
         claim);
     root.replaceChildren(h("main", { class: "connect connect-signin" },
@@ -75,10 +87,12 @@ export function renderConnect(root, { onSignedIn }) {
             form,
             error),
         isIOS() ? h("p", { class: "hint connect-install" }, t("connect.install")) : null));
+    return () => scanners.get(root)?.abort();
 }
 
 /** Claims a link and waits for the desktop's decision. */
 export async function runLink(root, link, { onSignedIn }) {
+    scanners.get(root)?.abort();
     const identity = newIdentity();
     const status = h("p", { class: "hint", role: "status" }, t("link.waiting"));
     const abort = new AbortController();

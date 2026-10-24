@@ -9,6 +9,7 @@ import (
 	"noxa/internal/auth"
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 func TestOwnerKeyLoginKeepsDisplayName(t *testing.T) {
@@ -92,5 +93,27 @@ func TestDisplayNameChangeIsPublicAndPreservesIdentity(t *testing.T) {
 		if current.Nickname != "Daniel" {
 			t.Fatalf("rejected edit changed the name: %+v", current)
 		}
+	}
+}
+
+// A linked PWA sends no nickname. Identity enrollment stores a display label,
+// separately from password login identifiers.
+func TestLinkedDeviceUsesEnrolledDisplayName(t *testing.T) {
+	env, devices := startDeviceTestEnv(t)
+	env.auth.users["user-uid"].Nickname = ""
+	env.auth.users["user-uid"].DisplayName = "Daniel"
+	keys := newLinkTestKeys(t)
+	_, err := devices.AddDevice(t.Context(), store.NewDevice{Principal: "user-uid", UserID: 2, Kind: store.DeviceKindWeb, Name: "Phone", Ed25519Public: keys.public, X25519Public: keys.x25519}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, response := dialNamedIdentity(t, env.addr, keys.uniqueID, keys.public, keys.private, "", true)
+	defer func() { _ = conn.Close() }()
+	member, _ := env.state.GetClient(response.ClientID)
+	if !response.OK || response.Nickname != "Daniel" || response.UniqueID != "user-uid" || member.Nickname != "Daniel" || member.UserID != 2 {
+		t.Fatalf("linked device lost the account display name: %+v, %+v", response, member)
+	}
+	if env.auth.users["user-uid"].Nickname != "" {
+		t.Fatal("display name became a login identifier")
 	}
 }

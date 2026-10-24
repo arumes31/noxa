@@ -551,3 +551,94 @@ func TestDeviceChangeProjectionIsAdministratorOnly(t *testing.T) {
 		t.Fatalf("member saw device change: %+v", got.Device)
 	}
 }
+
+func TestFirstDeviceCannotBeRevokedRemotely(t *testing.T) {
+	for _, firstKind := range []string{store.DeviceKindDesktop, store.DeviceKindWeb} {
+		for _, actor := range []struct {
+			name, kind string
+			web        bool
+		}{
+			{"mobile-web", store.DeviceKindWeb, true},
+			{"mobile-key-over-tcp", store.DeviceKindWeb, false},
+			{"desktop", store.DeviceKindDesktop, false},
+		} {
+			t.Run(firstKind+"/"+actor.name, func(t *testing.T) {
+				env, devices := startDeviceTestEnv(t)
+				masterKeys := newLinkTestKeys(t)
+				master, err := devices.AddDevice(t.Context(), store.NewDevice{Principal: "user-uid", UserID: 2, Kind: firstKind, Name: "Master", Ed25519Public: masterKeys.public, X25519Public: masterKeys.x25519}, 10)
+				if err != nil || !master.FirstDevice {
+					t.Fatalf("master: %+v, %v", master, err)
+				}
+				masterConn, masterAuth := keyLogin(t, env.addr, masterKeys)
+				defer func() { _ = masterConn.Close() }()
+				if !masterAuth.OK {
+					t.Fatal(masterAuth.Reason)
+				}
+				actorKeys := newLinkTestKeys(t)
+				_, err = devices.AddDevice(t.Context(), store.NewDevice{Principal: "user-uid", UserID: 2, Kind: actor.kind, Name: "Other device", Ed25519Public: actorKeys.public, X25519Public: actorKeys.x25519}, 10)
+				if err != nil {
+					t.Fatal(err)
+				}
+				conn, auth := keyLogin(t, env.addr, actorKeys)
+				defer func() { _ = conn.Close() }()
+				if !auth.OK {
+					t.Fatal(auth.Reason)
+				}
+				client, ok := env.srv.clientByID(auth.ClientID)
+				if !ok {
+					t.Fatal("actor missing")
+				}
+				client.webTransport.Store(actor.web)
+				rejected := deviceCallError(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: master.DeviceID})
+				if rejected.Code != errCodePermissionDenied {
+					t.Fatalf("revoke: %+v", rejected)
+				}
+				still, err := devices.DeviceByID(t.Context(), "user-uid", master.DeviceID)
+				if err != nil || !still.Active() {
+					t.Fatalf("master revoked: %v", err)
+				}
+				deviceCall(t, masterConn, netproto.DeviceRequest{Action: netproto.DeviceActionList})
+				// Non-first desktops are still manageable from mobile.
+				otherKeys := newLinkTestKeys(t)
+				other, err := devices.AddDevice(t.Context(), store.NewDevice{Principal: "user-uid", UserID: 2, Kind: store.DeviceKindDesktop, Name: "Other desktop", Ed25519Public: otherKeys.public, X25519Public: otherKeys.x25519}, 10)
+				if err != nil {
+					t.Fatal(err)
+				}
+				deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: other.DeviceID})
+				other, err = devices.DeviceByID(t.Context(), "user-uid", other.DeviceID)
+				if err != nil || other.Active() {
+					t.Fatalf("ordinary device not revoked: %v", err)
+				}
+				missing := deviceCallError(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: other.DeviceID})
+				if missing.Code != errCodeNotFound {
+					t.Fatalf("revoked target: %+v", missing)
+				}
+			})
+		}
+	}
+}
+
+func TestFirstDeviceCanSignItselfOut(t *testing.T) {
+	env, devices := startDeviceTestEnv(t)
+	keys := newLinkTestKeys(t)
+	device, err := devices.AddDevice(t.Context(), store.NewDevice{Principal: "user-uid", UserID: 2, Kind: store.DeviceKindWeb, Name: "First browser", Ed25519Public: keys.public, X25519Public: keys.x25519}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, auth := keyLogin(t, env.addr, keys)
+	defer func() { _ = conn.Close() }()
+	if !auth.OK {
+		t.Fatal(auth.Reason)
+	}
+	send(t, conn, netproto.MsgDeviceRequest, netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: device.DeviceID})
+	_ = conn.SetReadDeadline(time.Now().Add(waitDeadline))
+	for {
+		if _, err := netproto.ReadFrame(conn); err != nil {
+			break
+		}
+	}
+	device, err = devices.DeviceByID(t.Context(), "user-uid", device.DeviceID)
+	if err != nil || device.Active() {
+		t.Fatalf("self signout: %+v, %v", device, err)
+	}
+}

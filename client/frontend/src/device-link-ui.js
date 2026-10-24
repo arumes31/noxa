@@ -248,7 +248,7 @@ export function openDeviceLinkDialog() {
                 catch (error) { v.toast(t("devices.failed", { error: error?.message || String(error) }), "warn"); }
                 if (live()) refreshList();
             }));
-            if (!device.current) {
+            if (!device.current && !device.first_device) {
                 actions.append(button(t("devices.revoke"), "danger", async () => {
                     const confirmed = await confirmDialog({
                         title: t("devices.revoke"), message: t("devices.revokeConfirm", { name: device.name }),

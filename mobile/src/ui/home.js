@@ -7,7 +7,7 @@ import { avatar } from "./dom.js";
 
 export function renderHome(root) {
     const session = app.session;
-    const live = session.channels().filter(c => !c.textOnly && c.clients.length);
+    const live = session.channels().filter(c => !c.textOnly && !c.home && c.clients.length);
     const channelRows = session.chatScopes()
         .map(scope => ({ scope, last: lastMessage(session, scope) }))
         .filter(entry => entry.last)

@@ -31,7 +31,7 @@ async function route() {
     if (!app.session) {
         app.viewing = null;
         const { renderConnect } = await screens.connect();
-        if (token === routeToken) renderConnect(root, { onSignedIn });
+        if (token === routeToken) cleanup = renderConnect(root, { onSignedIn });
         return;
     }
     let [, screen = "home", ...rest] = location.hash.split("/");
