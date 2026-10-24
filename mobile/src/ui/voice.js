@@ -8,6 +8,7 @@ import { avatar, h, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { header, nav } from "./common.js";
 import { streamsPanel } from "./streams.js";
+import { membersButton } from "./channel-menu.js";
 
 function megabytes(bytes) {
     return (bytes / 1024 / 1024).toFixed(1);
@@ -86,7 +87,7 @@ export function renderVoice(root) {
         const channel = session.channels().find(c => c.id === voice.channelID);
         const members = channel?.clients || [];
         tiles.replaceChildren(...members.map(member => h("div", { class: `voice-tile${voice.speaking.has(member.client_id) ? " speaking" : ""}` },
-            avatar(member.nickname, "lg"),
+            avatar(member.nickname, "lg", member.unique_id),
             h("span", { class: "tile-name" }, member.client_id === session.clientID ? `${member.nickname} (${t("dm.you")})` : member.nickname),
             member.self_muted || member.server_muted ? h("span", { class: "tile-state", "aria-label": t("voice.muted") }, "🔇") : null)));
         muteButton.textContent = voice.muted ? t("voice.unmute") : t("voice.mute");
@@ -102,7 +103,7 @@ export function renderVoice(root) {
     }
 
     root.replaceChildren(h("section", { class: "screen" },
-        header(session.channels().find(c => c.id === voice.channelID)?.name || t("voice.title"), { sub: t("voice.connected") }),
+        header(session.channels().find(c => c.id === voice.channelID)?.name || t("voice.title"), { sub: t("voice.connected"), action: membersButton(voice.channelID) }),
         h("div", { class: "screen-body" },
             tiles,
             streamsBox,

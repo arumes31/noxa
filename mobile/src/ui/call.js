@@ -38,7 +38,7 @@ export function renderCall(root, id) {
     function incoming(call) {
         const caller = nameOf(call.caller);
         body.replaceChildren(
-            h("div", { class: "call-hero" }, avatar(caller, "xl"), h("h1", {}, caller), h("p", { class: "hint" }, t("call.incoming"))),
+            h("div", { class: "call-hero" }, avatar(caller, "xl", call.caller), h("h1", {}, caller), h("p", { class: "hint" }, t("call.incoming"))),
             h("div", { class: "call-actions" },
                 h("button", { class: "round-btn decline", type: "button", "aria-label": t("call.decline"), onclick: () => calls.decline() }, icon("hangup")),
                 h("button", { class: "round-btn video", type: "button", "aria-label": t("call.acceptVideo"), onclick: () => calls.accept({ video: true }).catch(error => toast(errorText(error), "warn")) }, icon("camera")),
@@ -72,7 +72,7 @@ export function renderCall(root, id) {
                 tile.querySelector(".tile-state").textContent = t(`call.state.${p.state}`);
                 out.push(tile);
             } else {
-                out.push(h("div", { class: "call-tile" }, avatar(name, "lg"),
+                out.push(h("div", { class: "call-tile" }, avatar(name, "lg", p.unique_id),
                     h("span", { class: "tile-name" }, name),
                     h("span", { class: "tile-state" }, t(`call.state.${p.state}`))));
             }

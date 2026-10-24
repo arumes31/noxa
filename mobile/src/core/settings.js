@@ -47,7 +47,7 @@ export const DEFAULTS = Object.freeze({
     soundVolume: 1,
     speech: false,
     matrix: {}, // event -> {sound, toast, push}
-    channelNotify: {}, // channel ID -> "all" | "mentions" | "none"
+    channelNotify: {}, // channel ID -> "all" | "mentions" | "none" | "mute"
     chatLevel: "all", // all | mentions | dm
     dnd: false,
     quietFrom: "",
@@ -62,6 +62,11 @@ export const DEFAULTS = Object.freeze({
     // Servers
     unsubscribedChannels: [], // channel IDs not subscribed automatically
     motdSeen: "", // hash of the last MOTD dismissed on Home
+    presenceStatus: "online", // chosen status, restored after reconnecting
+    presenceMessage: "",
+    // Social
+    contacts: [], // [{uid, name, note}]
+    notes: {}, // unique ID -> private note
 });
 
 let cache = null;

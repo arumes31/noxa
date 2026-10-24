@@ -5,7 +5,7 @@ import { avatar, clock, h, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { messageBody } from "./attachments.js";
 import { header, scopeName } from "./common.js";
-import { channelMenuButton } from "./admin-entry.js";
+import { channelMenuButton } from "./channel-menu.js";
 import { uploadAttachment } from "../core/files.js";
 
 export function renderChat(root, scope) {
@@ -56,7 +56,7 @@ export function renderChat(root, scope) {
         const reactions = Object.entries(message.reactions || {}).filter(([, n]) => n > 0);
         return h("div", { class: classes },
             h("span", { class: "msg-time" }, clock(message.sentAt)),
-            avatar(message.from, "sm"),
+            avatar(message.from, "sm", message.fromUniqueID),
             h("div", { class: "msg-body" },
                 h("span", { class: "msg-from" }, message.from),
                 body,
@@ -113,7 +113,7 @@ export function renderChat(root, scope) {
     session.addEventListener("messages", onMessages);
     session.addEventListener("typing", onTyping);
     root.replaceChildren(h("section", { class: "screen chat" },
-        header(name, { back: "#/servers", action: scope > 0 ? channelMenuButton(session, scope) : null }),
+        header(name, { back: "#/servers", action: channelMenuButton(scope) }),
         log, typing, form));
     render();
     if (!(session.messages.get(scope) || []).length) older.click();

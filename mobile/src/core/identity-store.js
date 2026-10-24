@@ -58,5 +58,6 @@ export async function clearIdentity() {
     } finally {
         db.close();
     }
-    await clearStores(Stores.dm, Stores.pins, Stores.outbox);
+    // Every store but device, which keeps the wrapping key.
+    await clearStores(...Object.values(Stores).filter(name => name !== Stores.device));
 }

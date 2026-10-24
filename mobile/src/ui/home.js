@@ -5,6 +5,19 @@ import { clock, h, sheet } from "./dom.js";
 import { dmHref, header, lastMessage, nav, scopeName, unreadBadge } from "./common.js";
 import { avatar } from "./dom.js";
 import { homeCards } from "./devices.js";
+import { icon } from "./icons.js";
+import { presenceOf } from "../core/presence.js";
+import { isBlocked } from "../core/social.js";
+import { notifier } from "../notifier.js";
+import { dndButton } from "./notify-settings.js";
+import { statusDot } from "./presence-ui.js";
+
+/** The activity center's entry, with its unread count. */
+function activityLink() {
+    const unread = notifier.activity?.unread || 0;
+    return h("a", { class: "icon-btn", href: "#/activity", "aria-label": unread ? `${t("activity.open")} · ${t("home.unread", { count: unread })}` : t("activity.open") },
+        icon("inbox"), unread ? h("span", { class: "badge badge-mention", "aria-hidden": "true" }, unread > 99 ? "99+" : String(unread)) : null);
+}
 
 export function renderHome(root) {
     const session = app.session;
@@ -18,11 +31,13 @@ export function renderHome(root) {
                 h("span", { class: "row-title" }, scopeName(session, scope).replace(/^# /, "#")),
                 h("span", { class: "row-sub" }, `${last.from}: ${last.text ?? t("chat.locked")}`)),
             unreadBadge(`channel:${scope}`) || h("span", { class: "row-meta" }, clock(last.sentAt))) }));
-    const dmRows = (app.dm?.list() || []).map(conversation => {
+    // Blocked users' conversations are hidden, not deleted.
+    const dmRows = (app.dm?.list() || []).filter(conversation => !isBlocked(conversation.peer)).map(conversation => {
         const last = conversation.messages.at(-1);
         const name = conversation.nickname || session.clients().find(c => c.unique_id === conversation.peer)?.nickname || t("dm.someone");
+        const presence = presenceOf(session, conversation.peer);
         return { at: last.sentAt, row: h("a", { class: "row", href: dmHref(conversation.peer) },
-            avatar(name, "md"),
+            h("span", { class: "avatar-wrap" }, avatar(name, "md", conversation.peer), statusDot(presence.online ? presence.status : "offline")),
             h("span", { class: "row-main" },
                 h("span", { class: "row-title" }, name),
                 h("span", { class: "row-sub" }, `${last.self ? t("dm.you") + ": " : ""}${last.body ?? t("chat.locked")}`)),
@@ -42,14 +57,14 @@ export function renderHome(root) {
     const recent = [...channelRows, ...dmRows, ...groupRows].sort((a, b) => b.at - a.at);
     const invitations = [...(app.groups?.list.values() || [])].filter(g => g.members?.find(m => m.unique_id === session.uniqueID)?.pending);
     root.replaceChildren(h("section", { class: "screen" },
-        header(t("home.title"), { action: h("button", { class: "icon-btn", type: "button", "aria-label": t("home.new"), onclick: async () => {
+        header(t("home.title"), { action: h("div", { class: "header-actions" }, activityLink(), dndButton(), h("button", { class: "icon-btn", type: "button", "aria-label": t("home.new"), onclick: async () => {
             const destination = await sheet(t("home.new"), "", [
                 { label: t("home.newMessage"), value: "new-chat", primary: true },
                 { label: t("group.create"), value: "new-group" },
                 { label: t("home.cancel"), value: null },
             ]);
             if (destination && app.session === session) location.hash = `#/${destination}`;
-        } }, "+") }),
+        } }, "+")) }),
         h("div", { class: "screen-body" },
             homeCards(session),
             h("a", { class: "btn btn-primary", href: "#/new-chat" }, t("chatNew.title")),

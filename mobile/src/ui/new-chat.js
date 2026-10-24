@@ -24,7 +24,7 @@ export function renderNewChat(root) {
         const query = search.value.trim().toLocaleLowerCase();
         const matches = visibleMembers(session).filter(member => member.nickname.toLocaleLowerCase().includes(query));
         results.replaceChildren(...matches.map(member => h("li", {}, h("a", { class: "row", href: dmHref(member.unique_id) },
-            avatar(member.nickname, "md"), h("span", { class: "row-title" }, member.nickname)))));
+            avatar(member.nickname, "md", member.unique_id), h("span", { class: "row-title" }, member.nickname)))));
         empty.textContent = t(query ? "chatNew.noMatch" : "chatNew.empty");
         empty.hidden = matches.length > 0;
     };

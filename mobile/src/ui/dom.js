@@ -18,10 +18,49 @@ export function h(tag, props = {}, ...children) {
     return node;
 }
 
-/** Squircle avatar with two-letter initials, as in the Echo board. */
-export function avatar(name, size = "md") {
+/** uid -> data: URL ("" = no picture), filled by the avatar source. */
+const avatarCache = new Map();
+let avatarSource = null;
+
+/** Sets the lookup of avatar pictures: uid -> Promise<data: URL or "">. */
+export function setAvatarSource(source) {
+    avatarSource = source;
+    avatarCache.clear();
+}
+
+function fillAvatar(node, url) {
+    if (!url) return;
+    node.replaceChildren(h("img", { src: url, alt: "", draggable: "false" }));
+    node.classList.add("has-picture");
+}
+
+/**
+ * Squircle avatar with two-letter initials, as in the Echo board. With a
+ * uid the user's picture replaces the initials once it has loaded.
+ */
+export function avatar(name, size = "md", uid = "") {
     const letters = (name || "?").replace(/[^\p{L}\p{N}]/gu, "").slice(0, 2).toUpperCase() || "?";
-    return h("span", { class: `avatar avatar-${size}`, "aria-hidden": "true" }, letters);
+    const node = h("span", { class: `avatar avatar-${size}`, "aria-hidden": "true", dataset: uid ? { uid } : undefined }, letters);
+    if (uid && avatarSource) {
+        if (avatarCache.has(uid)) fillAvatar(node, avatarCache.get(uid));
+        else Promise.resolve(avatarSource(uid)).then(url => {
+            avatarCache.set(uid, url || "");
+            fillAvatar(node, url);
+        }).catch(() => {});
+    }
+    return node;
+}
+
+/** A user changed their picture: reload it in every avatar on screen. */
+export function refreshAvatars(uid) {
+    avatarCache.delete(uid);
+    if (!avatarSource) return;
+    Promise.resolve(avatarSource(uid)).then(url => {
+        avatarCache.set(uid, url || "");
+        for (const node of document.querySelectorAll(`.avatar[data-uid="${CSS.escape(uid)}"]`)) {
+            if (url) fillAvatar(node, url);
+        }
+    }).catch(() => {});
 }
 
 export function toast(message, kind = "info") {

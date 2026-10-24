@@ -13,8 +13,10 @@ import { enqueue, flush as flushOutbox, showPending, waitingCount } from "./core
 import { announceRead, closeNotifications, reportVisibility, setBadge, syncPush } from "./core/push.js";
 import { get as setting } from "./core/settings.js";
 import { addServer } from "./core/servers.js";
+import { notifier } from "./notifier.js";
 
 export const app = new EventTarget();
+notifier.install(app);
 
 app.info = null;
 app.identity = null;
@@ -151,12 +153,12 @@ export async function connect({ guest = null } = {}) {
     app.dm = dm;
     dm.addEventListener("messages", event => {
         const { peer, message, isNew } = event.detail;
-        if (isNew && !message.self && !message.copied) noteUnread(`dm:${peer}`, true);
+        if (isNew && !message.self && !message.copied) noteUnread(`dm:${peer}`, true, { kind: "dm", from: peer, name: message.fromNickname, text: message.body });
         emit("dm", { peer });
     });
     app.groups?.close();
     app.groups = new Groups(session, dm);
-    app.groups.addEventListener("incoming", event => noteUnread(`conversation:${event.detail.id}`, false));
+    app.groups.addEventListener("incoming", event => noteUnread(`conversation:${event.detail.id}`, false, { kind: "group", name: app.groups?.list.get(event.detail.id)?.name }));
     app.groups.addEventListener("list", () => emit("groups"));
     app.groups.refresh().catch(() => {});
     app.calls?.close();
@@ -188,7 +190,7 @@ export async function connect({ guest = null } = {}) {
     });
     session.addEventListener("incoming", event => {
         const { scope, message } = event.detail;
-        if (!message.own) noteUnread(`channel:${scope}`, message.mentioned);
+        if (!message.own) noteUnread(`channel:${scope}`, message.mentioned, { kind: "channel", channelID: scope, from: message.fromUniqueID, name: message.from, text: message.text });
     });
     if (!app.meta.guest) reportVisibility(conn);
     if (!app.meta.guest) syncPush(conn).then(state => {
@@ -384,12 +386,15 @@ function unreadChanged() {
     emit("unread");
 }
 
-/** Counts an incoming message unless its conversation is on screen. */
-function noteUnread(tag, mention) {
-    if (app.viewing === tag && document.visibilityState === "visible") {
+/** Counts an incoming message unless its conversation is on screen; notifier.decide applies the notification settings. */
+function noteUnread(tag, mention, info = {}) {
+    const viewing = app.viewing === tag && document.visibilityState === "visible";
+    const decision = notifier.decide(tag, { ...info, mention, viewing });
+    if (viewing) {
         markRead(tag);
         return;
     }
+    if (!decision.count) return;
     const entry = app.unread.get(tag) || { count: 0, mentions: 0 };
     entry.count++;
     if (mention) entry.mentions++;
@@ -400,6 +405,7 @@ function noteUnread(tag, mention) {
 /** Marks a conversation read here and on the account's other devices. */
 export function markRead(tag) {
     closeNotifications(tag);
+    notifier.read(tag);
     const had = app.unread.delete(tag);
     const split = tag.indexOf(":");
     if (app.session) announceRead(app.session.conn, tag.slice(0, split), tag.slice(split + 1));
@@ -410,6 +416,7 @@ export function markRead(tag) {
 function readElsewhere({ scope, id }) {
     const tag = `${scope}:${id}`;
     closeNotifications(tag);
+    notifier.read(tag);
     if (app.unread.delete(tag)) unreadChanged();
 }
 

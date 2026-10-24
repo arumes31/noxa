@@ -1,0 +1,224 @@
+noXa audio sources and redistribution
+
+Sample-based effects: CC0-1.0. noXa edits of these samples are also dedicated under CC0-1.0.
+https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+Historical poke audition (G05): "Wake up!" rendered locally with Microsoft David Desktop using
+Windows System.Speech, followed by an original synthesized double beep.
+This recording is separate from the CC0 sample libraries listed below.
+Localized English/German poke speech replaces this cue. No Windows voice engine is shipped.
+
+Direct message and channel message cues: original tones synthesized for noXa by
+tools/synthesize-message-cues.py (user-selected auditions D39 and C33). They use no
+sample library and are distributed with the repository under its MIT license.
+
+Source archives and each edit are identified in the repository at:
+client/frontend/src/assets/sounds/provenance.json
+
+Interface Sounds 1.0
+Author: Kenney
+License: CC0-1.0
+https://kenney.nl/assets/interface-sounds
+Archive SHA-256: f2193d072726d6758a5f7871b2dcc54dcce0d5c35c6f0a62f92549b327c81232
+
+Original source license:
+
+
+
+
+	Interface Sounds (1.0)
+
+
+
+	Created/distributed by Kenney (www.kenney.nl)
+
+	Creation date: 11-02-2020
+
+
+
+			------------------------------
+
+
+
+	License: (Creative Commons Zero, CC0)
+
+	http://creativecommons.org/publicdomain/zero/1.0/
+
+
+
+	This content is free to use in personal, educational and commercial projects.
+
+
+	Support us by crediting Kenney or www.kenney.nl (this is not mandatory)
+
+
+
+			------------------------------
+
+
+
+	Donate:   http://support.kenney.nl
+
+	Patreon:  http://patreon.com/kenney/
+
+
+
+	Follow on Twitter for updates:
+
+	http://twitter.com/KenneyNL
+
+UI Audio 1.0
+Author: Kenney
+License: CC0-1.0
+https://kenney.nl/assets/ui-audio
+Archive SHA-256: 946fc23a63d535d693eb31b2eabb80c8c28d6351e2186b344ceb71b2cb1d5eb6
+
+Original source license:
+
+
+
+
+	UI SFX Set
+
+
+
+	by  Kenney Vleugels (Kenney.nl)
+
+
+
+			------------------------------
+
+
+
+	License (Creative Commons Zero, CC0)
+
+	http://creativecommons.org/publicdomain/zero/1.0/
+
+
+
+	You may use these assets in personal and commercial projects.
+
+	Credit (Kenney or www.kenney.nl) would be nice but is not mandatory.
+
+
+
+			------------------------------
+
+
+
+	Donate:   http://support.kenney.nl
+
+	Request:  http://request.kenney.nl
+
+
+
+	Follow on Twitter for updates:
+
+	@KenneyNL
+
+Casino Audio 1.1 — card and packaging foley only
+Author: Kenney
+License: CC0-1.0
+https://kenney.nl/assets/casino-audio
+Archive SHA-256: f36250766ac5bc378c13708ddf12a23a8e54a3251f8d482c7536e51b5dbafa18
+
+Original source license:
+
+
+
+
+	Casino Audio (1.1)
+
+
+
+	by  Kenney Vleugels (Kenney.nl)
+
+
+
+			------------------------------
+
+
+
+	License (Creative Commons Zero, CC0)
+
+	http://creativecommons.org/publicdomain/zero/1.0/
+
+
+
+	You may use these assets in personal and commercial projects.
+
+	Credit (Kenney or www.kenney.nl) would be nice but is not mandatory.
+
+
+
+			------------------------------
+
+
+
+	Donate:   http://support.kenney.nl
+
+	Request:  http://request.kenney.nl
+
+
+
+	Follow on Twitter for updates:
+
+	@KenneyNL
+
+Various Paper Sound Effects
+Author: Luckius
+License: CC0-1.0
+https://opengameart.org/content/various-paper-sound-effects
+Archive SHA-256: aa1889414310c7cfdd8dc291c19d4e4fc21ec987e9238b0d961fb72449c263a4
+
+Speech: complete fixed noXa English and German sentences rendered offline.
+Both languages use the synthetic ST13 voice ("Eisbrecher"), chosen from the
+ST01-ST20 auditions. ST13 is a weighted blend of the Supertonic 3 preset voice
+styles (M5 x 1.25, M1 x -0.25); no recording of a real person and no imitation of
+an identifiable character was used. The earlier EA60/AN06 recordings are retired.
+Supertonic 3 model weights: Supertone Inc., OpenRAIL-M.
+https://huggingface.co/Supertone/supertonic-3
+Supertonic code: MIT License, Copyright (c) 2025 Supertone Inc.
+https://github.com/supertone-inc/supertonic
+INT8 conversion and offline runtime: sherpa-onnx v1.13.8, Apache-2.0,
+Xiaomi Corporation and contributors.
+https://github.com/k2-fsa/sherpa-onnx
+https://www.apache.org/licenses/LICENSE-2.0
+Model archive: sherpa-onnx-supertonic-3-tts-int8-2026-05-11.tar.bz2
+Model archive SHA-256: 82fa96f91c4ef8abaae3a14a3f4153facf88bed821d1f7331cec2700f432c427
+
+Model/tool licenses identify authoring sources; they do not automatically
+establish the license of generated recordings. The model, its voice styles and
+the runtime are not included in the application. The original noXa English/German
+fixed recordings are distributed under the project's MIT license below.
+Changes: generated complete noXa sentences, pronunciation respellings for German
+loanwords, resampling to 24 kHz, silence trimming, DC removal, endpoint fades and
+loudness normalization.
+Voice definition, model hashes, rendering settings and per-clip hashes:
+tools/voices/ST13.json
+client/frontend/src/assets/speech/provenance.json
+client/frontend/src/assets/speech/metrics.json
+
+This notice does not imply endorsement by the authors of these tools.
+
+MIT License
+
+Copyright (c) 2026 arumes31
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -31,7 +31,23 @@ func (f *fakePushes) SavePushSubscription(_ context.Context, p store.PushSubscri
 	if f.subs == nil {
 		f.subs = map[string]store.PushSubscription{}
 	}
+	// Like the store, re-subscribing keeps the device's filters.
+	if p.Filters == nil {
+		p.Filters = f.subs[p.DeviceID].Filters
+	}
 	f.subs[p.DeviceID] = p
+	return nil
+}
+
+func (f *fakePushes) SetPushFilters(_ context.Context, principal, deviceID string, filters []byte) error {
+	f.pmu.Lock()
+	defer f.pmu.Unlock()
+	p, ok := f.subs[deviceID]
+	if !ok || p.Principal != principal {
+		return store.ErrDeviceNotFound
+	}
+	p.Filters = append([]byte(nil), filters...)
+	f.subs[deviceID] = p
 	return nil
 }
 
