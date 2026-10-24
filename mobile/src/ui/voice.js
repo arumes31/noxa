@@ -58,6 +58,12 @@ export function renderVoice(root) {
     const usage = h("p", { class: "hint mono" });
     const muteButton = h("button", { class: "btn", type: "button", onclick: () => voice.setMuted(!voice.muted) });
     const deafenButton = h("button", { class: "btn", type: "button", onclick: () => voice.setDeafened(!voice.deafened) });
+    const cameraButton = h("button", { class: "btn", type: "button", onclick: async () => {
+        cameraButton.disabled = true;
+        try { await (voice.camera ? voice.stopCamera() : voice.startCamera()); } catch (error) { toast(t("voice.cameraFailed", { error: error.message }), "warn"); }
+        cameraButton.disabled = false;
+    } });
+    const selfView = h("video", { class: "self-view", autoplay: true, playsinline: true, muted: true, "aria-label": t("call.selfView"), hidden: true });
     const pttToggle = h("input", { type: "checkbox", role: "switch", checked: voice.pushToTalk, onchange: event => { voice.setPushToTalk(event.target.checked); render(); } });
     const talk = h("button", { class: "talk-button", type: "button" }, t("voice.holdToTalk"));
     for (const [type, value] of [["pointerdown", true], ["pointerup", false], ["pointercancel", false], ["pointerleave", false]]) {
@@ -87,11 +93,20 @@ export function renderVoice(root) {
         output.replaceChildren(h("p", { class: "hint" }, t("voice.outputSystem")));
     }
 
+    let shownStreams = "";
+
     async function renderStreams() {
         let streams = [];
         try { streams = await voice.streams(); } catch { streams = []; }
+        const signature = streams.map(stream => {
+            const key = `${stream.publisher_id}|${stream.slot}`;
+            return `${key}|${stream.generation}|${voice.watching.has(key) && voice.video.has(key)}`;
+        }).join(",");
+        if (signature === shownStreams) return;
+        shownStreams = signature;
         streamsBox.replaceChildren(...streams.map(stream => {
-            const track = voice.video.get(`${stream.publisher_id}|${stream.slot}`);
+            const key = `${stream.publisher_id}|${stream.slot}`;
+            const track = voice.watching.has(key) ? voice.video.get(key) : null;
             if (track) return videoTile(track, voice, stream);
             const publisher = session.clients().find(c => c.client_id === stream.publisher_id)?.nickname || t("dm.someone");
             return h("button", { class: "card row stream-card", type: "button", onclick: () => voice.watch(stream).catch(error => toast(error.message, "warn")) },
@@ -111,6 +126,10 @@ export function renderVoice(root) {
         deafenButton.textContent = voice.deafened ? t("voice.undeafen") : t("voice.deafen");
         deafenButton.setAttribute("aria-pressed", String(voice.deafened));
         talk.hidden = !voice.pushToTalk;
+        cameraButton.textContent = voice.camera ? t("voice.cameraOff") : t("voice.cameraOn");
+        cameraButton.setAttribute("aria-pressed", String(!!voice.camera));
+        if (selfView.srcObject !== voice.camera) selfView.srcObject = voice.camera;
+        selfView.hidden = !voice.camera;
         usage.textContent = t("voice.dataUsed", { sent: megabytes(voice.bytes.sent), received: megabytes(voice.bytes.received) });
     }
 
@@ -119,8 +138,10 @@ export function renderVoice(root) {
         h("div", { class: "screen-body" },
             tiles,
             streamsBox,
+            selfView,
             h("div", { class: "voice-controls" }, muteButton, deafenButton,
                 h("button", { class: "btn btn-danger", type: "button", onclick: () => leaveVoice() }, t("voice.leave"))),
+            cameraButton,
             h("label", { class: "toggle" }, h("span", { class: "row-main" }, h("span", { class: "row-title" }, t("voice.pushToTalk"))), pttToggle),
             talk,
             output,
@@ -136,7 +157,10 @@ export function renderVoice(root) {
     for (const [type, listener] of listeners) voice.addEventListener(type, listener);
     const onSnapshot = () => render();
     session.addEventListener("snapshot", onSnapshot);
+    // New publications show up without an event of their own.
+    const streamTimer = setInterval(renderStreams, 5000);
     return () => {
+        clearInterval(streamTimer);
         for (const [type, listener] of listeners) voice.removeEventListener(type, listener);
         session.removeEventListener("snapshot", onSnapshot);
         voice.setTalking(false);

@@ -58,6 +58,7 @@ export class Voice extends EventTarget {
         this.channelID = 0;
         this.pc = null;
         this.mic = null;
+        this.camera = null;
         this.muted = false;
         this.deafened = false;
         this.pushToTalk = false;
@@ -67,6 +68,8 @@ export class Voice extends EventTarget {
         /** "clientID|slot" -> MediaStreamTrack for watched video. */
         this.video = new Map();
         this.speaking = new Set();
+        /** "clientID|slot" of streams this phone chose to watch. */
+        this.watching = new Set();
         this.sinkId = "";
         this.bytes = { sent: 0, received: 0 };
         this.#chain = Promise.resolve();
@@ -169,6 +172,10 @@ export class Voice extends EventTarget {
         this.pc = null;
         for (const track of this.mic?.getTracks() || []) track.stop();
         this.mic = null;
+        for (const track of this.camera?.getTracks() || []) track.stop();
+        this.camera = null;
+        this.#cameraTransceiver = null;
+        this.#cameraGeneration = "0";
         for (const element of this.audio.values()) {
             element.srcObject = null;
             element.remove();
@@ -192,8 +199,57 @@ export class Voice extends EventTarget {
         for (const transceiver of this.pc.getTransceivers()) {
             const track = transceiver.sender.track;
             if (track?.kind === "audio") out.push({ track_id: track.id, slot: "mic" });
+            else if (track?.kind === "video" && transceiver === this.#cameraTransceiver) out.push({ track_id: track.id, slot: "cam" });
         }
         return out;
+    }
+
+    // --- Camera -------------------------------------------------------------------
+
+    #cameraTransceiver = null;
+    #cameraGeneration = "0";
+
+    /** Publishes the front camera to the channel (VP8, which every viewer decodes). */
+    async startCamera() {
+        if (!this.pc || this.camera) return;
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15 } } });
+        const track = stream.getVideoTracks()[0];
+        this.camera = stream;
+        try {
+            if (this.#cameraTransceiver) {
+                await this.#cameraTransceiver.sender.replaceTrack(track);
+                this.#cameraTransceiver.direction = "sendonly";
+            } else {
+                this.#cameraTransceiver = this.pc.addTransceiver(track, { direction: "sendonly", streams: [stream] });
+            }
+            const vp8 = globalThis.RTCRtpSender?.getCapabilities?.("video")?.codecs.filter(c => /vp8|rtx/i.test(c.mimeType)) || [];
+            if (vp8.length && this.#cameraTransceiver.setCodecPreferences) this.#cameraTransceiver.setCodecPreferences(vp8);
+            await this.#enqueue(() => this.#offer());
+            const result = await this.conn.request(Msg.VideoStreamControl, { action: "publish", slot: "cam", generation: "0", revision: "0", session: "0", active: true, codecs: ["vp8"] },
+                Msg.VideoStreamResult, { accept: r => r.action === "publish" });
+            this.#cameraGeneration = String(result.generation ?? "0");
+        } catch (error) {
+            await this.stopCamera().catch(() => {});
+            throw error;
+        }
+        this.#emit("state");
+    }
+
+    async stopCamera() {
+        const stream = this.camera;
+        this.camera = null;
+        for (const track of stream?.getTracks() || []) track.stop();
+        if (this.#cameraGeneration !== "0" && this.conn.open) {
+            await this.conn.request(Msg.VideoStreamControl, { action: "publish", slot: "cam", generation: this.#cameraGeneration, revision: "0", session: "0", active: false },
+                Msg.VideoStreamResult, { accept: r => r.action === "publish" }).catch(() => {});
+        }
+        this.#cameraGeneration = "0";
+        if (this.#cameraTransceiver && this.pc) {
+            await this.#cameraTransceiver.sender.replaceTrack(null).catch(() => {});
+            this.#cameraTransceiver.direction = "inactive";
+            await this.#enqueue(() => this.#offer()).catch(() => {});
+        }
+        this.#emit("state");
     }
 
     async #offer(options) {
@@ -384,6 +440,10 @@ export class Voice extends EventTarget {
     /** Starts or stops receiving one published stream. */
     async watch(stream, active = true) {
         this.#watchRevision++;
+        const key = `${stream.publisher_id}|${stream.slot}`;
+        if (active) this.watching.add(key);
+        else this.watching.delete(key);
+        this.#emit("tracks");
         return this.conn.request(Msg.VideoStreamControl, {
             action: "watch", publisher_id: stream.publisher_id, slot: stream.slot, generation: String(stream.generation),
             revision: String(this.#watchRevision), session: this.#watchSession, active, codecs: watchCodecs(),

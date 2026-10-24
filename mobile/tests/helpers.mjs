@@ -50,7 +50,7 @@ export async function openServerToMembers(owner) {
     const state = await owner.conn.request(MsgRoleQuery, { channel_id: 0 }, MsgRoleState);
     const policy = state.policy;
     const everyone = policy.roles.find(r => r.id === policy.everyone_id);
-    const wanted = ["view_channel", "read_history", "send_messages", "connect", "speak", "poke_members"];
+    const wanted = ["view_channel", "read_history", "send_messages", "connect", "speak", "poke_members", "share_camera", "upload_files", "download_files"];
     const permissions = [...new Set([...(everyone.permissions || []), ...wanted])];
     if (permissions.length === (everyone.permissions || []).length) return;
     await owner.conn.request(MsgRoleChange, {
