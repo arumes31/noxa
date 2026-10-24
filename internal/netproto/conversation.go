@@ -90,6 +90,9 @@ type ConversationRequest struct {
 	// clients, or receipts disabled in settings) keeps the read private.
 	ShareRead bool              `json:"share_read,omitempty"`
 	Message   *ConversationSend `json:"message,omitempty"`
+	// DeviceID is the session's device, set by the server, never read
+	// from the wire.
+	DeviceID string `json:"-"`
 }
 
 // Each current member receives a separately authenticated, encrypted envelope.
@@ -98,6 +101,26 @@ type ConversationSend struct {
 	Epoch     int64             `json:"epoch"`
 	Reference string            `json:"reference"`
 	Envelopes map[string]string `json:"envelopes"`
+	// DeviceEnvelopes adds one envelope per confirmed device that cannot open
+	// the account-wide one (phones, further desktops), keyed "uid/deviceID".
+	DeviceEnvelopes map[string]string `json:"device_envelopes,omitempty"`
+}
+
+// MaxConversationDeviceEnvelopes bounds device envelopes per message.
+const MaxConversationDeviceEnvelopes = 48
+
+// MaxConversationSenderChain bounds historical device-approval proofs.
+const MaxConversationSenderChain = 64
+
+// DeviceEnvelopeKey is the DeviceEnvelopes key of a member's device.
+func DeviceEnvelopeKey(uid, deviceID string) string { return uid + "/" + deviceID }
+
+func validEnvelope(body string) bool {
+	if len(body) > 24000 {
+		return false
+	}
+	raw, err := base64.StdEncoding.Strict().DecodeString(body)
+	return err == nil && len(raw) >= 40 && len(raw) <= 18000 && base64.StdEncoding.EncodeToString(raw) == body
 }
 
 func (m ConversationSend) Validate(c Conversation, actor string) error {
@@ -118,16 +141,19 @@ func (m ConversationSend) Validate(c Conversation, actor string) error {
 		}
 		count++
 		body, found := m.Envelopes[recipient.UniqueID]
-		if !found || len(body) > 24000 {
-			return ErrConversationInvalid
-		}
-		raw, err := base64.StdEncoding.Strict().DecodeString(body)
-		if err != nil || len(raw) < 40 || len(raw) > 18000 || base64.StdEncoding.EncodeToString(raw) != body {
+		if !found || !validEnvelope(body) {
 			return ErrConversationInvalid
 		}
 	}
-	if count != len(m.Envelopes) {
+	if count != len(m.Envelopes) || len(m.DeviceEnvelopes) > MaxConversationDeviceEnvelopes {
 		return ErrConversationInvalid
+	}
+	for key, body := range m.DeviceEnvelopes {
+		uid, device, found := strings.Cut(key, "/")
+		recipient, member := c.Member(uid)
+		if !found || device == "" || len(device) > 64 || !member || recipient.Pending || !validEnvelope(body) {
+			return ErrConversationInvalid
+		}
 	}
 	return nil
 }
@@ -143,6 +169,16 @@ type ConversationMessage struct {
 	// EncVerified is set only by the receiving native client after it opened
 	// and authenticated the member envelope; it never comes from a server.
 	EncVerified bool `json:"enc_verified,omitempty"`
+	// SenderDeviceID and SenderDeviceKey name the sending device and its
+	// X25519 key when it was a registered device; readers check them
+	// against the sender's trusted devices. DeviceEnvelope marks a body
+	// sealed to the reading device rather than the account key.
+	SenderDeviceID  string `json:"sender_device_id,omitempty"`
+	SenderDeviceKey string `json:"sender_device_key,omitempty"`
+	DeviceEnvelope  bool   `json:"device_envelope,omitempty"`
+	// SenderDeviceChain is historical verification evidence only. It must never
+	// populate a directory used to encrypt new messages or establish calls.
+	SenderDeviceChain []DMDevice `json:"sender_device_chain,omitempty"`
 }
 
 type ConversationResult struct {

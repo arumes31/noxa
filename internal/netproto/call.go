@@ -13,9 +13,18 @@ var ErrCallInvalid = errors.New("invalid call action")
 type CallParticipant struct {
 	UniqueID  string `json:"unique_id"`
 	ClientID  string `json:"client_id"`
-	State     string `json:"state"` // ringing, accepted, declined, missed, left
+	State     string `json:"state"` // ringing, accepted, declined, missed, left, elsewhere
 	PublicKey string `json:"public_key,omitempty"`
+	// DeviceID names the device that answered. A callee with several
+	// devices rings on all of them with an empty ClientID; the answering
+	// session binds ClientID, DeviceID and PublicKey. Peers verify a device
+	// key against the account's trusted device list.
+	DeviceID string `json:"device_id,omitempty"`
 }
+
+// CallStateElsewhere is how a call looks to an account's other sessions
+// once one of its devices answered.
+const CallStateElsewhere = "elsewhere"
 
 type CallSession struct {
 	ID             string            `json:"id"`

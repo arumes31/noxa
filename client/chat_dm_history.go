@@ -49,6 +49,12 @@ type DMEntry struct {
 	// with the server-held key, never treated as verified. A verified
 	// "server" record (the retired fallback) reads back as downgraded.
 	EncMode string `json:"enc_mode,omitempty"`
+	// Edited/EditedAt and Deleted record a later change by the message's own
+	// sender, received as per-device copies (dm_devices_v1). A deleted
+	// record keeps its place in the log with an empty body.
+	Edited   bool  `json:"edited,omitempty"`
+	EditedAt int64 `json:"edited_at,omitempty"`
+	Deleted  bool  `json:"deleted,omitempty"`
 }
 
 // DMPeer summarises one stored conversation, so PM tabs can be restored on
@@ -319,6 +325,12 @@ func (a *App) dmHistoryAppendWith(store dmHistoryStore, peer, nickname string, e
 		}
 	}
 	l.Messages = append(l.Messages, e)
+	// A change that overtook its original (spool order) applies now.
+	for _, change := range a.dmPending.take(store.path(peer), e.ClientMsgID, time.Now()) {
+		if change.From == e.FromUniqueID {
+			applyDMChange(&l.Messages[len(l.Messages)-1], change)
+		}
+	}
 	if err := store.save(l); err != nil {
 		return err.Error()
 	}
@@ -441,6 +453,9 @@ func (s dmHistoryStore) search(peer, query string, maxMessages int) ChatSearchRe
 			}
 			m := l.Messages[i]
 			res.Scanned++
+			if m.Deleted {
+				continue
+			}
 			if q != "" && !strings.Contains(strings.ToLower(m.Body), q) {
 				continue
 			}

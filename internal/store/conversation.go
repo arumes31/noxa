@@ -107,6 +107,9 @@ func (s *Store) ChangeConversation(ctx context.Context, uid string, request netp
 		if _, err := tx.ExecContext(ctx, `DELETE FROM private_conversation_envelopes WHERE message_id=$1`, messageID); err != nil {
 			return nil, false, err
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM private_conversation_device_envelopes WHERE message_id=$1`, messageID); err != nil {
+			return nil, false, err
+		}
 	}
 	if request.Action == "invite" {
 		if err := conversationQuota(ctx, tx, request.Target); err != nil {
@@ -218,13 +221,21 @@ func (s *Store) WithConversations(ctx context.Context, uid string, request netpr
 		if member.Pending {
 			return netproto.ErrConversationDenied
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT m.id,m.epoch,m.from_uid,m.client_reference,e.ciphertext,extract(epoch FROM m.created_at)::bigint FROM private_conversation_messages m JOIN private_conversation_envelopes e ON e.message_id=m.id AND e.recipient_uid=$2 WHERE m.conversation_id=$1 AND m.epoch >= $3 AND ($4::bigint=0 OR m.id<$4) ORDER BY m.id DESC LIMIT 25`, id, uid, member.JoinedEpoch, request.BeforeID)
+		// A device reads its own envelope when the sender sealed one for it.
+		rows, err := tx.QueryContext(ctx, `SELECT m.id,m.epoch,m.from_uid,m.client_reference,COALESCE(d.ciphertext,e.ciphertext),d.ciphertext IS NOT NULL,
+				m.sender_device_id,COALESCE(sd.x25519_public,''),extract(epoch FROM m.created_at)::bigint
+			FROM private_conversation_messages m
+			JOIN private_conversation_envelopes e ON e.message_id=m.id AND e.recipient_uid=$2
+			LEFT JOIN private_conversation_device_envelopes d ON d.message_id=m.id AND d.recipient_uid=$2 AND d.device_id=$5 AND $5<>''
+			LEFT JOIN user_devices sd ON sd.device_id=m.sender_device_id AND m.sender_device_id<>'' AND sd.principal=m.from_uid
+			WHERE m.conversation_id=$1 AND m.epoch >= $3 AND ($4::bigint=0 OR m.id<$4) ORDER BY m.id DESC LIMIT 25`, id, uid, member.JoinedEpoch, request.BeforeID, request.DeviceID)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
 			message := netproto.ConversationMessage{ConversationID: id}
-			if err := rows.Scan(&message.ID, &message.Epoch, &message.FromUniqueID, &message.Reference, &message.Body, &message.CreatedAt); err != nil {
+			if err := rows.Scan(&message.ID, &message.Epoch, &message.FromUniqueID, &message.Reference, &message.Body, &message.DeviceEnvelope,
+				&message.SenderDeviceID, &message.SenderDeviceKey, &message.CreatedAt); err != nil {
 				_ = rows.Close()
 				return err
 			}
@@ -235,6 +246,11 @@ func (s *Store) WithConversations(ctx context.Context, uid string, request netpr
 		if err != nil {
 			return err
 		}
+	}
+	// Use the same transaction: history must not wait for a second pool
+	// connection while retaining its membership lock.
+	if err := attachConversationSenderChains(ctx, tx, &result); err != nil {
+		return err
 	}
 	if err := deliver(result); err != nil {
 		return err
@@ -262,7 +278,7 @@ func (s *Store) SendConversation(ctx context.Context, uid string, request netpro
 		return 0, nil, err
 	}
 	var id int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO private_conversation_messages(conversation_id,epoch,from_uid,client_reference) VALUES($1,$2,$3,$4) ON CONFLICT(conversation_id,from_uid,client_reference) DO NOTHING RETURNING id`, c.ID, c.Epoch, uid, request.Message.Reference).Scan(&id)
+	err = tx.QueryRowContext(ctx, `INSERT INTO private_conversation_messages(conversation_id,epoch,from_uid,client_reference,sender_device_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT(conversation_id,from_uid,client_reference) DO NOTHING RETURNING id`, c.ID, c.Epoch, uid, request.Message.Reference, request.DeviceID).Scan(&id)
 	inserted := err == nil
 	if errors.Is(err, sql.ErrNoRows) {
 		err = tx.QueryRowContext(ctx, `SELECT id FROM private_conversation_messages WHERE conversation_id=$1 AND from_uid=$2 AND client_reference=$3`, c.ID, uid, request.Message.Reference).Scan(&id)
@@ -278,6 +294,14 @@ func (s *Store) SendConversation(ctx context.Context, uid string, request netpro
 		recipients = append(recipients, member.UniqueID)
 		if inserted {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO private_conversation_envelopes(message_id,recipient_uid,ciphertext) VALUES($1,$2,$3)`, id, member.UniqueID, request.Message.Envelopes[member.UniqueID]); err != nil {
+				return 0, nil, err
+			}
+		}
+	}
+	if inserted {
+		for key, body := range request.Message.DeviceEnvelopes {
+			recipient, device, _ := strings.Cut(key, "/")
+			if _, err := tx.ExecContext(ctx, `INSERT INTO private_conversation_device_envelopes(message_id,recipient_uid,device_id,ciphertext) VALUES($1,$2,$3,$4)`, id, recipient, device, body); err != nil {
 				return 0, nil, err
 			}
 		}

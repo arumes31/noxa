@@ -65,3 +65,6 @@ graphify-out/
 
 # Python bytecode from offline authoring tools
 __pycache__/
+
+# Built mobile web app (mobile/ -> web/app)
+/web/

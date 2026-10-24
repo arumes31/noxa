@@ -651,6 +651,119 @@ fingerprint. Later changes fail closed. For a planned rotation:
    expected fingerprint. If verification fails, abort and restore the previous
    certificate and key; do not delete `known_servers.json` to bypass the check.
 
+<a id="mobile"></a>
+
+### Mobile web app
+
+The server can serve an installable web app for phones. It needs a domain name
+with a publicly trusted certificate: browsers cannot pin the control
+certificate, and passkeys bind to the domain.
+
+| Key | Default | Purpose |
+| :--- | :--- | :--- |
+| `web.enabled` | `false` | Start the web listener |
+| `web.addr` | `:12342` | Listener address (put HTTPS in front of it) |
+| `web.public_url` | — | `https://` origin phones open; its host is the passkey relying party |
+| `web.cert_file` / `web.key_file` | — | Native TLS with your own certificate |
+| `web.acme` / `web.acme_email` / `web.acme_cache_dir` | `false` / — / `./data/acme` | Native TLS through Let's Encrypt (TLS-ALPN on :443) |
+| `web.trusted_proxies` | `[]` | Exact proxy CIDRs allowed to send `X-Forwarded-For`/`-Proto` |
+| `web.allowed_origins` | `[]` | Extra HTTPS origins accepted on `/ws` |
+| `web.max_devices_per_account` | `10` | Linked devices per account, including the first desktop |
+| `web.ws_connections_per_ip` / `web.ws_attempts_per_minute` | `8` / `30` | WebSocket admission per client IP |
+| `web.push_enabled` | `true` | Send Web Push notifications to linked phones |
+| `web.push_vapid_key_file` | `./data/keys/vapid.pem` | Push signing key, created on first start; keep it to keep subscriptions |
+| `web.push_subject` | `web.public_url` | `mailto:` or `https:` contact push services see |
+
+Exactly one TLS mode is required: certificate files, ACME, or a TLS-terminating
+proxy listed in `trusted_proxies`.
+
+**Docker Compose with Caddy.** Point a DNS name at the host, then:
+
+```bash
+NOXA_WEB_DOMAIN=chat.example NOXA_WEB_ENABLED=true \
+NOXA_WEB_PUBLIC_URL=https://chat.example \
+docker compose --profile mobile up -d
+```
+
+**Other proxies.** The proxy must pass WebSocket upgrades on `/ws`, overwrite
+`X-Forwarded-Proto` and `X-Forwarded-For`, and allow long-lived connections.
+Its address must be the only entry in `web.trusted_proxies`.
+
+```nginx
+location / {
+    proxy_pass http://noxa:12342;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_read_timeout 1h;
+}
+```
+
+```yaml
+# Traefik (Docker labels on the noxa service)
+- traefik.http.routers.noxa-web.rule=Host(`chat.example`)
+- traefik.http.routers.noxa-web.tls.certresolver=letsencrypt
+- traefik.http.services.noxa-web.loadbalancer.server.port=12342
+```
+
+**Linking a phone.** In the desktop client choose **Connections → Other login
+for this server**. Scan the QR code with the phone camera, or open the server
+address on the phone and type the hidden code. Both screens show the same
+two-digit code; compare it, then approve on the desktop. The phone can then save
+a passkey, which lets a new phone sign in without the desktop. Administrators
+list, sign out and reset devices with `devicelist`, `devicerevoke` and
+`devicereset` (ServerQuery) or `ListDevices`, `RevokeDevice` and
+`ResetDevices` (gRPC). Devices unused for 180 days are signed out after a
+warning at 166 days; an account's first desktop never expires.
+
+**Notifications.** In the phone's **Settings → Notifications**, turn on
+notifications for direct messages, mentions, pokes and incoming calls. On
+iPhone this needs iOS 16.4 or later and the app added to the Home Screen.
+The server needs outbound HTTPS to the browsers' push services (Google,
+Mozilla, Apple). Pushes carry only the kind of event and, unless the phone
+turned on **Hide notification details**, the sender's nickname and channel
+name; message text never leaves the server in a push, and direct messages stay
+end-to-end encrypted. While the account's desktop has seen input in the last
+two minutes, pushes for messages wait 60 seconds and are dropped if the
+conversation is read in that time; calls always push at once, and **Always
+notify this phone** turns the delay off. Reading a conversation on any device
+clears its notification on Android and desktop browsers; iPhones clear it when
+the app next opens, because iOS ends subscriptions that receive pushes without
+a visible notification.
+
+**Direct messages, voice and calls.** Direct messages are sealed once for
+every confirmed device of both people, so they reach the desktop and the
+phone. Contacts verify each device against the identity they pinned: the
+account's first desktop, and devices it approved. A phone that signed in with
+a passkey must be confirmed once on the desktop (Connections → Other login
+for this server → Confirm). When you approve a phone, the desktop can copy
+recent direct-message history to it (90 days by default; up to 10,000
+messages and 50 MB, deleted from the server when the phone has it or after
+24 hours). Desktops older than this release are asked to update before they
+can message someone who has a phone.
+
+Voice channels, watching streams and private calls use WebRTC in the
+browser. Private calls are relay-only, so they need TURN (`turn.managed`);
+on mobile networks that block UDP, offer TURN over TLS on port 443 as well
+(see `docs/managed-turn-tls.md`). A callee's desktop and phones ring
+together; the device that answers takes the call. Attachments travel over
+`/ft` on the web listener, end-to-end encrypted as on the desktop.
+
+Messages written while the phone is offline wait in an encrypted outbox and
+are sent when it reconnects, or by the service worker through Background
+Sync on Android. Unsent messages expire after 14 days.
+
+**What the phone stores.** The device's Ed25519 and X25519 keys live in the
+browser's IndexedDB, encrypted with a non-extractable WebCrypto key. Signing out
+or revocation deletes them. Direct-message history, contacts' pinned
+identities and the outbox are kept in IndexedDB under the same key and are
+deleted on sign-out. The server keeps each device's public keys, name,
+creation and last-use times, and the passkey's public key and sign counter; it
+never receives private keys. Channel messages are encrypted with
+server-managed keys, as on the desktop.
+
 ---
 
 <a id="serverquery"></a>

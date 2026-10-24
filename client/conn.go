@@ -77,6 +77,11 @@ type connManager struct {
 	addr                         string // control address (tab info)
 	clientID                     string
 	uniqueID                     string
+	deviceID                     string // linked device of this session (devices_v1)
+	supportsDevices              bool
+	supportsDMDevices            bool                      // per-device direct messages (dm_devices_v1)
+	activityReportedAt           time.Time                 // last input report (devices_v1)
+	deviceLinks                  map[string]deviceLinkKeys // links created by this session
 	nickname                     string
 	displayName                  string // requested public name; separate from the account login
 	isGuest                      bool
@@ -108,6 +113,12 @@ type connManager struct {
 	scopeKeys         *scopeKeyStore
 	confirmPeerChange func(server, uid, oldFingerprint, newFingerprint string) bool
 	decryptSem        chan struct{}
+	// dmDevices caches verified device lists per account (dm_devices_v1).
+	dmDevices dmDeviceCache
+	// dmChanges persists a received direct-message edit or deletion and
+	// returns the conversation it belongs to; set once by the App for tab
+	// managers, nil otherwise.
+	dmChanges func(m *connManager, peer string, c dmChange) string
 
 	// debugFrames tees frame summaries to the "debug_frame" event (327 debug
 	// console) when enabled.
@@ -514,6 +525,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	if m.pubKeys != nil {
 		m.pubKeys.clear()
 	}
+	m.dmDevices.clear()
 	// Establishment writes happen before the transport becomes externally
 	// installed. If the peer closes after auth but before KeyPublish, Connect
 	// fails cleanly with no disconnected event and no reader/heartbeat loops.
@@ -528,6 +540,11 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.addr = addr
 	m.clientID = resp.ClientID
 	m.uniqueID = resp.UniqueID
+	m.deviceID = resp.DeviceID
+	m.supportsDevices = slices.Contains(resp.Capabilities, netproto.CapabilityDevices)
+	m.supportsDMDevices = m.supportsDevices && slices.Contains(resp.Capabilities, netproto.CapabilityDMDevices)
+	m.activityReportedAt = time.Time{}
+	m.deviceLinks = nil
 	m.nickname = resp.Nickname
 	m.displayName = authMsg.Nickname
 	m.authorizationModel = resp.AuthorizationModel
@@ -574,6 +591,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	})
 	go guardCrash("heartbeat", func() { m.heartbeatLoop(conn) })
 	go guardCrash("relay renewal", func() { m.relayRenewalLoop(conn) })
+	go guardCrash("device registration", func() { m.ensureDeviceRegistered(conn) })
 	return ""
 }
 
@@ -652,6 +670,7 @@ func (m *connManager) finishDetach(conn net.Conn, waiters []chan requestResult, 
 	if m.pubKeys != nil {
 		m.pubKeys.clear()
 	}
+	m.dmDevices.clear()
 	if conn != nil {
 		_ = conn.Close()
 	}
@@ -1120,6 +1139,8 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		// advance the send key, and a waiter in awaitScopeText wakes on the
 		// install.
 		m.handleChatKeyBundle(f)
+	case netproto.MsgDeviceEvent:
+		m.handleDeviceEvent(f)
 	case netproto.MsgSubscriptionState:
 		// (312) always the authoritative full set, so it is cached and
 		// replayed verbatim on a tab switch like the other state frames.

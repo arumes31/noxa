@@ -27,3 +27,10 @@ description = "SHA256 fingerprint of the public update verification key"
 condition = "AND"
 paths = ['^client/testdata/legacy-update-releases\.md$']
 regexes = ['^86e42bdb94a45f704f24405d76abc873415d5ce20b9d417e2e1e41db7abe1e3e$']
+
+# Deterministic cross-language test vectors written by
+# internal/netproto/mobile_interop_test.go (-update-mobile-fixture); every key
+# is derived from fixed test seeds and protects nothing.
+[[rules.allowlists]]
+description = "Generated mobile interop test vectors"
+paths = ['^mobile/unit/fixtures/interop\.json$']

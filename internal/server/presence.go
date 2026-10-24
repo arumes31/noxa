@@ -196,6 +196,9 @@ func (s *TCPServer) sendPoke(ctx context.Context, client, target *Client, msg ne
 	if err := s.deps.Broadcast.BroadcastToClient(target.ID, payload); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target unreachable")
 	}
+	if target.isWebTransport() {
+		s.pushNotify(target.uniqueID(), pushNotice{Kind: pushKindPoke, Tag: "poke:" + client.uniqueID(), From: client.nickname()})
+	}
 	s.logger.Debug("poke relayed",
 		zap.String("from", client.ID),
 		zap.String("to", target.ID),

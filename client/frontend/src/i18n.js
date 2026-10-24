@@ -42,6 +42,7 @@ import { micEnglish, micGerman } from "./mic-messages.js";
 import { cameraEnglish, cameraGerman } from "./camera-messages.js";
 import { callMediaEnglish, callMediaGerman } from "./call-media-messages.js";
 import { discussionEnglish, discussionGerman } from "./forum-messages.js";
+import { deviceLinkEnglish, deviceLinkGerman } from "./device-link-messages.js";
 import { voiceMessageEnglish, voiceMessageGerman } from "./voice-message-messages.js";
 import { overlayEnglish, overlayGerman } from "./gaming-overlay-messages.js";
 import { communicationExtrasEnglish, communicationExtrasGerman } from "./communication-extras-messages.js";
@@ -79,6 +80,7 @@ const en = {
     ...roleEnglish,
     ...quickWinEnglish,
     ...settingsEnglish,
+    ...deviceLinkEnglish,
     ...settingsShellEnglish,
     ...securityEnglish,
     ...interfaceEnglish,
@@ -192,6 +194,7 @@ const de = {
     ...roleGerman,
     ...quickWinGerman,
     ...settingsGerman,
+    ...deviceLinkGerman,
     ...settingsShellGerman,
     ...securityGerman,
     ...interfaceGerman,

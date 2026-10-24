@@ -821,7 +821,144 @@ function renderMsg(m) {
         };
         time.append(save);
     }
+    if (!m.deleted && m.direct && m.self && m.clientMsgID && !m.id && view.kind === "dm") el.appendChild(renderDMActions(m, view.uid));
     return el;
+}
+
+// --- direct-message edit / delete (dm_devices_v1) ------------------------------
+// Own direct messages are changed by per-device copies the Go layer seals; the
+// change comes back as a "dm_changed" event (the sender's echo included), and
+// only that event updates the conversation.
+
+function renderDMActions(m, peer) {
+    const scope = captureScope(readExportScope);
+    const acts = document.createElement("span");
+    acts.className = "msg-actions";
+    const mk = (glyph, title, fn) => {
+        const b = document.createElement("button");
+        b.innerHTML = icon(glyph);
+        b.title = title;
+        b.setAttribute("aria-label", title);
+        b.onclick = (e) => {
+            e.stopPropagation();
+            if (exportScopeIsCurrent(scope)) fn();
+        };
+        acts.appendChild(b);
+    };
+    // Attachments and voice messages carry tokens that an edit would break.
+    if (!encryptionBadge(m).bodyKey && !/\[(file|voice):/.test(m.text || "")) mk("edit", t("chat.action.edit"), () => startDMEdit(m, peer));
+    mk("trash", t("chat.action.delete"), () => deleteDM(m, peer));
+    return acts;
+}
+
+function dmMsgEl(m) {
+    return m.renderKey ? document.querySelector(`#chat-log .msg[data-scroll-key="${CSS.escape(m.renderKey)}"]`) : null;
+}
+
+function refreshDMEl(m) {
+    const log = $("chat-log");
+    const el = dmMsgEl(m);
+    if (!el) return;
+    const anchor = captureScrollAnchor(log);
+    el.replaceWith(renderMsg(m));
+    applySearchFilter();
+    restoreScrollAnchor(log, anchor);
+}
+
+function startDMEdit(m, peer) {
+    const scope = captureScope(readExportScope);
+    const el = dmMsgEl(m);
+    const body = el?.querySelector(".msg-text");
+    if (!body) return;
+    const input = document.createElement("input");
+    input.className = "msg-edit-input";
+    input.value = m.text;
+    body.replaceWith(input);
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    const finish = () => {
+        input.onblur = null;
+        if (exportScopeIsCurrent(scope) && input.isConnected) refreshDMEl(m);
+    };
+    input.onkeydown = async (e) => {
+        e.stopPropagation();
+        if (!exportScopeIsCurrent(scope) || !input.isConnected) return;
+        if (e.key === "Escape") finish();
+        if (e.key !== "Enter") return;
+        const text = input.value.trim();
+        finish(); // the dm_changed echo refreshes the text
+        if (text && text !== m.text) {
+            await runChatMutation(scope, () => app().EditDirectMessageForTab(scope.tabID, peer, m.clientMsgID, text), t("chat.action.edit"));
+        }
+    };
+    input.onblur = finish;
+}
+
+async function deleteDM(m, peer) {
+    const scope = captureScope(readExportScope);
+    const confirmed = await confirmDialog({
+        title: t("chat.deleteTitle"),
+        message: t("chat.dmDeleteMessageHelp"),
+        confirmLabel: t("chat.deleteConfirm"),
+        danger: true,
+        serverScoped: true,
+    });
+    if (!confirmed) return;
+    await runChatMutation(scope, () => app().DeleteDirectMessageForTab(scope.tabID, peer, m.clientMsgID), t("chat.action.delete"));
+}
+
+// Changes whose message is not in memory yet (an offline spool can deliver a
+// change before its original) wait briefly; the Go layer persists them alike.
+const pendingDMChanges = new Map();
+const DM_CHANGE_WAIT_MS = 10 * 60 * 1000;
+
+function applyDMChange(m, d) {
+    if (m.deleted || m.fromUID !== d.from_unique_id) return false;
+    if (d.action === "edit") {
+        m.text = d.body ?? "";
+        m.edited = true;
+        m.encVerified = true;
+        m.enc = true;
+        m.encMode = "e2e";
+        m.localUnverified = false;
+    } else if (d.action === "delete") {
+        m.deleted = true;
+        m.text = "";
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// onDMChanged applies an edit or deletion of a direct message. Only the
+// original's sender may change it; anything else is ignored.
+export function onDMChanged(d) {
+    const peer = d?.peer || "";
+    const ref = d?.ref_client_msg_id || "";
+    if (!peer || !ref || !d.from_unique_id) return;
+    const st = store.get("dm:" + peer);
+    const m = st?.msgs.find((x) => x.clientMsgID === ref && x.fromUID === d.from_unique_id);
+    if (!m) {
+        const now = Date.now();
+        for (const [key, waiting] of pendingDMChanges) if (waiting.at + DM_CHANGE_WAIT_MS < now) pendingDMChanges.delete(key);
+        if (pendingDMChanges.size >= 256) pendingDMChanges.clear();
+        const key = peer + "|" + ref;
+        pendingDMChanges.set(key, { at: now, changes: [...(pendingDMChanges.get(key)?.changes || []), d] });
+        return;
+    }
+    if (!applyDMChange(m, d)) return;
+    if (view.kind === "dm" && view.uid === peer) refreshDMEl(m);
+    window.dispatchEvent(new CustomEvent("noxa-direct-changed"));
+}
+
+function applyPendingDMChanges(peer, m) {
+    if (!m.clientMsgID || !pendingDMChanges.size) return;
+    const key = peer + "|" + m.clientMsgID;
+    const waiting = pendingDMChanges.get(key);
+    if (!waiting) return;
+    pendingDMChanges.delete(key);
+    if (waiting.at + DM_CHANGE_WAIT_MS < Date.now()) return;
+    for (const d of waiting.changes) applyDMChange(m, d);
 }
 
 // renderBody renders markdown text plus [file:<name>] attachment refs (99)
@@ -1500,10 +1637,12 @@ function setView(v) {
     if (key.startsWith("ch:")) {
         const chID = Number(key.slice(3));
         if (unread.delete(chID)) V().renderTree();
+        reportRead("channel", chID);
     }
     if (v.kind === "dm") {
         const tab = pmTabs.get(v.uid);
         if (tab) {
+            if (tab.unread) reportRead("dm", v.uid);
             tab.unread = 0;
             tab.unreadAt = undefined;
             tab.offline = false;
@@ -2036,8 +2175,8 @@ function dmMsg(e, peerNick) {
         fromUID: e.from_unique_id || "",
         text: e.body || "",
         ts: (Number(e.sent_at) || 0) * 1000,
-        edited: false,
-        deleted: false,
+        edited: !!e.edited,
+        deleted: !!e.deleted,
         reactions: null,
         mentions: [],
         e2e: false,
@@ -2653,6 +2792,7 @@ function routeDM(d, m) {
                 reference: { kind: "dm", peer_id: peer, client_message_id: m.clientMsgID || "", local_seq: m.localSeq || 0 } });
     }
     dmRecord(peer, tab.nick, m); // (122) both directions, so a restart replays the thread
+    applyPendingDMChanges(peer, m); // after recording: the Go layer applies its own pending copy
 
     if (m.offline && !m.self) {
         // (123) offline-spooled DM: tab badge + batched toast.
@@ -4212,10 +4352,18 @@ export async function onConnect() {
     } catch { /* MOTD is best-effort */ }
 }
 
+// reportRead tells the server this desktop read a conversation, so the
+// account's phones clear its notification. Best effort.
+function reportRead(scope, id) {
+    if (id === undefined || id === null || id === "") return;
+    try { void app().ReportReadForTab?.(V().state.activeTabID || "", scope, String(id), "")?.catch?.(() => {}); } catch { /* older binding */ }
+}
+
 export function onMyChannelChanged() {
     const st = V().state;
     if (view.kind === "channel") invalidateChatViewWork();
     if (unread.delete(st.myChannelID)) V().renderTree();
+    reportRead("channel", st.myChannelID);
     if (view.kind === "chan" && view.id === st.myChannelID) {
         setView({ kind: "channel" });
     } else if (view.kind === "channel") renderView();

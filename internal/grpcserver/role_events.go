@@ -12,6 +12,7 @@ import (
 
 	"noxa/internal/auth"
 	"noxa/internal/broadcast"
+	"noxa/internal/eventbus"
 	"noxa/internal/integrationevents"
 	"noxa/internal/netproto"
 	"noxa/internal/query"
@@ -60,9 +61,9 @@ func (s *Server) roleStreamAuth(service any, stream grpc.ServerStream, info *grp
 
 var roleStructuralBusTypes = []string{"user_joined", "user_left", "user_moved", "channel_created", "channel_deleted", "channel_updated", "status_changed", "member_voice_changed", "kicked"}
 
-func roleEventTypes(req *noxav1.SubscribeEventsRequest) (snapshot, speaking bool, err error) {
+func roleEventTypes(req *noxav1.SubscribeEventsRequest) (snapshot, speaking, devices bool, err error) {
 	if len(req.GetEventTypes()) == 0 {
-		return true, true, nil
+		return true, true, false, nil
 	}
 	for _, kind := range req.GetEventTypes() {
 		switch kind {
@@ -70,14 +71,16 @@ func roleEventTypes(req *noxav1.SubscribeEventsRequest) (snapshot, speaking bool
 			snapshot = true
 		case noxav1.EventType_EVENT_TYPE_USER_SPEAKING:
 			speaking = true
+		case noxav1.EventType_EVENT_TYPE_DEVICE_CHANGED:
+			devices = true
 		default:
-			return false, false, status.Error(codes.InvalidArgument, "roles-v1 accepts ROLE_SNAPSHOT and USER_SPEAKING; raw structural events are replaced by snapshots")
+			return false, false, false, status.Error(codes.InvalidArgument, "roles-v1 accepts ROLE_SNAPSHOT, USER_SPEAKING and DEVICE_CHANGED; raw structural events are replaced by snapshots")
 		}
 	}
 	if !snapshot {
-		return false, false, status.Error(codes.InvalidArgument, "roles-v1 requires ROLE_SNAPSHOT for current visibility and speaking state")
+		return false, false, false, status.Error(codes.InvalidArgument, "roles-v1 requires ROLE_SNAPSHOT for current visibility and speaking state")
 	}
-	return snapshot, speaking, nil
+	return snapshot, speaking, devices, nil
 }
 
 func (e *eventsService) subscribeRoleEvents(req *noxav1.SubscribeEventsRequest, stream grpc.ServerStreamingServer[noxav1.Event], principal auth.IntegrationPrincipal) error {
@@ -86,7 +89,7 @@ func (e *eventsService) subscribeRoleEvents(req *noxav1.SubscribeEventsRequest, 
 	if !ok || !canRead || e.bus == nil {
 		return status.Error(codes.Unavailable, "role event stream unavailable")
 	}
-	wantSnapshot, wantSpeaking, err := roleEventTypes(req)
+	wantSnapshot, wantSpeaking, wantDevices, err := roleEventTypes(req)
 	if err != nil {
 		return err
 	}
@@ -101,6 +104,9 @@ func (e *eventsService) subscribeRoleEvents(req *noxav1.SubscribeEventsRequest, 
 	}
 	if wantSpeaking {
 		busTypes = append(busTypes, "speaking_changed")
+	}
+	if wantDevices {
+		busTypes = append(busTypes, eventbus.DeviceChangedType)
 	}
 	sub := e.bus.Subscribe("role-grpc:"+principal.UniqueID(), busTypes, 0)
 	if sub == nil {

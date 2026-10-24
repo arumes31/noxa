@@ -61,6 +61,8 @@ services:
       - /tmp
     networks:
       noxa-net: {}
+      # Shared with the HTTPS proxy of the mobile web app (profile "mobile").
+      noxa-web-net: {}
       # Shared with coturn only. The fixed address is the single private peer
       # coturn may relay to (see the coturn service below).
       noxa-turn-net:
@@ -158,6 +160,14 @@ services:
       NOXA_METRICS_ALLOW_REMOTE: ${NOXA_METRICS_ALLOW_REMOTE:-false}
       NOXA_PPROF_ENABLED: ${NOXA_PPROF_ENABLED:-false}
       NOXA_SHUTDOWN_TIMEOUT: ${NOXA_SHUTDOWN_TIMEOUT:-30s}
+
+      # --- Mobile web app (profile "mobile": Caddy terminates HTTPS) ---
+      # NOXA_WEB_PUBLIC_URL is the https:// origin phones open; it must be a
+      # domain name (passkeys bind to it). Only the Caddy address is trusted.
+      NOXA_WEB_ENABLED: ${NOXA_WEB_ENABLED:-false}
+      NOXA_WEB_ADDR: ":12342"
+      NOXA_WEB_PUBLIC_URL: ${NOXA_WEB_PUBLIC_URL:-}
+      NOXA_WEB_TRUSTED_PROXIES: ${WEB_CADDY_IP:-10.213.253.2}/32
       NOXA_QUERY_ADDR: ${NOXA_QUERY_ADDR:-127.0.0.1:12335}
       NOXA_QUERY_ALLOW_REMOTE: ${NOXA_QUERY_ALLOW_REMOTE:-false}
       NOXA_QUERY_SSH_ENABLED: ${NOXA_QUERY_SSH_ENABLED:-false}
@@ -400,6 +410,38 @@ services:
   # media address (LAN-only deployments), allow exactly that address with
   # TURN_ALLOWED_PEER_IP=<ip> (or <ip1>-<ip2>).
   # ---------------------------------------------------------------------------
+  # caddy — HTTPS for the mobile web app (OPTIONAL profile "mobile")
+  # ---------------------------------------------------------------------------
+  # Requires a DNS name for this host. Set NOXA_WEB_DOMAIN (e.g. chat.example)
+  # and NOXA_WEB_ENABLED=true, NOXA_WEB_PUBLIC_URL=https://chat.example, then
+  #   docker compose --profile mobile up -d
+  # Caddy obtains and renews the certificate, forwards WebSockets, and sets
+  # X-Forwarded-For/-Proto, which noxa trusts only from this fixed address.
+  caddy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    container_name: noxa-caddy
+    profiles: [ "mobile" ]
+    restart: unless-stopped
+    depends_on: [noxa]
+    command: [ "caddy", "reverse-proxy", "--from", "${NOXA_WEB_DOMAIN:?set NOXA_WEB_DOMAIN for the mobile profile}", "--to", "noxa:12342" ]
+    networks:
+      noxa-web-net:
+        ipv4_address: ${WEB_CADDY_IP:-10.213.253.2}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddydata:/data
+      - caddyconfig:/config
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+
   coturn:
     image: coturn/coturn:4.17.0-r0@sha256:7df59bcd84800c3978da2dd0d7fb17a8179e77a8bf667f678813120a9f18b094
     container_name: noxa-coturn
@@ -499,6 +541,13 @@ networks:
   # noxa <-> coturn only: relays must not share a network with postgres or
   # redis. Change TURN_NETWORK_SUBNET and TURN_NOXA_IP together if the default
   # range collides with an existing network.
+  # noxa <-> Caddy only (profile "mobile"); WEB_CADDY_IP must lie inside it.
+  noxa-web-net:
+    driver: bridge
+    name: noxa-web-net
+    ipam:
+      config:
+        - subnet: ${WEB_NETWORK_SUBNET:-10.213.253.0/29}
   noxa-turn-net:
     driver: bridge
     name: noxa-turn-net
@@ -518,3 +567,7 @@ volumes:
     name: ${NOXA_REDISDATA_VOLUME:-noxa-redisdata}
   noxadata:
     name: ${NOXA_DATA_VOLUME:-noxa-data}
+  caddydata:
+    name: ${NOXA_CADDY_DATA_VOLUME:-noxa-caddy-data}
+  caddyconfig:
+    name: ${NOXA_CADDY_CONFIG_VOLUME:-noxa-caddy-config}

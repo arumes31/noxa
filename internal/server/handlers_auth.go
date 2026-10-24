@@ -301,6 +301,24 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	client.authSigningKey = msg.PublicKey
 	client.mu.Unlock()
 
+	// A linked device signs in as the account that approved it.
+	if principal, userID, ok, err := s.deviceLoginPrincipal(ctx, msg.PublicKey); errors.Is(err, errDeviceRevoked) {
+		attempt.Fail()
+		s.metricsSink().IncAuthFailure("tcp", "device_revoked")
+		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "this device was signed out; link it again"})
+	} else if err != nil {
+		s.logger.Warn("device lookup failed", zap.String("client_id", client.ID), zap.Error(err))
+		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
+	} else if ok && principal != uniqueID {
+		attempt.Succeed(principalScope)
+		if userID > 0 {
+			return s.completeAuth(ctx, client, principal, nickname)
+		}
+		// Linked guests keep their key-derived principal. The device key
+		// derives a different ID, so it is never used for role enrollment.
+		return s.completeGuestAuth(ctx, client, principal, nickname)
+	}
+
 	// Registered user with this identity? Then it is a normal login.
 	if _, err := s.deps.Auth.LookupUser(ctx, uniqueID); err == nil {
 		attempt.Succeed(principalScope)

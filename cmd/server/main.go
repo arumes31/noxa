@@ -45,6 +45,8 @@ import (
 	"noxa/internal/tlscert"
 	"noxa/internal/turn"
 	"noxa/internal/version"
+	"noxa/internal/web"
+	"noxa/internal/webpush"
 	"noxa/internal/webrtc"
 )
 
@@ -765,34 +767,45 @@ func run() (retErr error) {
 	if cfg.TURN.Managed {
 		relayManager = turn.NewManager(cfg.TURN.Realm, cfg.TURN.MaxAllocations, cfg.TURN.BytesPerSecond)
 	}
+	var pushSender server.PushSender
+	if cfg.Web.Enabled && cfg.Web.PushEnabled {
+		vapid, err := webpush.LoadOrCreateVAPID(cfg.Web.PushVAPIDKeyFile, cfg.Web.PushContact())
+		if err != nil {
+			return fmt.Errorf("loading the web push key: %w", err)
+		}
+		pushSender = &webpush.Sender{VAPID: vapid}
+	}
 	tcpServer = server.New(cfg, logger, &server.Deps{
-		Relay:              relayManager,
-		Traffic:            trafficCounter,
-		TrafficHistory:     trafficHistory,
-		Auth:               authSvc,
-		State:              stateManager,
-		Channels:           channelMgr,
-		Broadcast:          broadcaster,
-		Authority:          roleAuthority,
-		Bans:               dbStore,
-		Spool:              dbStore,
-		PreKeys:            dbStore,
-		Voice:              voice,
-		Recorder:           rec,
-		FileTransfer:       ftServer,
-		Complaints:         dbStore,
-		CustomMetadata:     dbStore,
-		Chat:               dbStore,
-		Groups:             dbStore,
-		Roles:              dbStore,
-		BanAdmin:           dbStore,
-		Metrics:            m,
-		LoginLimiter:       loginLimiter,
-		Rules:              rulesSvc,
-		ScopeKeys:          dbStore,
-		ChatKEK:            chatKEK,
-		ServerPasswordHash: serverPasswordHash,
-		ICEServers:         iceServersProvider(cfg, logger),
+		Devices:                 dbStore,
+		Push:                    pushSender,
+		PublishIntegrationEvent: events.Publish,
+		Relay:                   relayManager,
+		Traffic:                 trafficCounter,
+		TrafficHistory:          trafficHistory,
+		Auth:                    authSvc,
+		State:                   stateManager,
+		Channels:                channelMgr,
+		Broadcast:               broadcaster,
+		Authority:               roleAuthority,
+		Bans:                    dbStore,
+		Spool:                   dbStore,
+		PreKeys:                 dbStore,
+		Voice:                   voice,
+		Recorder:                rec,
+		FileTransfer:            ftServer,
+		Complaints:              dbStore,
+		CustomMetadata:          dbStore,
+		Chat:                    dbStore,
+		Groups:                  dbStore,
+		Roles:                   dbStore,
+		BanAdmin:                dbStore,
+		Metrics:                 m,
+		LoginLimiter:            loginLimiter,
+		Rules:                   rulesSvc,
+		ScopeKeys:               dbStore,
+		ChatKEK:                 chatKEK,
+		ServerPasswordHash:      serverPasswordHash,
+		ICEServers:              iceServersProvider(cfg, logger),
 	})
 	channelMgr.EnableRoleMode(roleAuthority)
 	healthServer.HandleLocalGET("/debug/voice", tcpServer.VoiceDiagnosticsHandler())
@@ -842,6 +855,7 @@ func run() (retErr error) {
 		defer func() { _ = closeRelay() }()
 		go tcpServer.MaintainRelayAuthorization(ctx)
 	}
+	go tcpServer.MaintainDeviceExpiry(ctx)
 	// ServerQuery accepts explicitly enabled roles-v1 integration accounts.
 	qBackend := &queryBackend{tcp: tcpServer}
 	queryServer := query.New(cfg.QueryAddr, logger, qBackend)
@@ -868,10 +882,24 @@ func run() (retErr error) {
 		sshQuery = query.NewSSH(cfg.QuerySSHAddr, cfg.QuerySSHHostKey, queryServer)
 	}
 
+	// The mobile web app reaches the same control dispatcher over WebSocket.
+	var webServer *web.Server
+	if cfg.Web.Enabled {
+		webServer, err = web.New(cfg.Web, cfg.ServerName, tcpServer, logger)
+		if err != nil {
+			return fmt.Errorf("creating web listener: %w", err)
+		}
+		if cfg.DevMode {
+			webServer.AllowLoopbackOrigins()
+		}
+		webServer.SetFileServer(ftServer)
+	}
+
 	// Routes and listener objects are complete before any socket is opened.
 	// The spare slot ensures every reporter can finish after one exit triggers
-	// shutdown (eight services at most, including optional SSH and lease failure).
-	serviceExits := make(chan serviceExit, 9)
+	// shutdown (nine services at most, including optional SSH, web and lease
+	// failure).
+	serviceExits := make(chan serviceExit, 10)
 	if err := lease.Check(ctx); err != nil {
 		return fmt.Errorf("checking role process lease before listening: %w", err)
 	}
@@ -889,6 +917,9 @@ func run() (retErr error) {
 	}
 	startService(serviceExits, "file-transfer server", func() error { return ftServer.Start(ctx) })
 	startService(serviceExits, "UDP media server", func() error { return udpServer.Start(ctx) })
+	if webServer != nil {
+		startService(serviceExits, "web listener", webServer.Start)
+	}
 	servingReady.Store(true)
 	logger.Info("noxa server running, waiting for shutdown signal")
 	var runErr error
@@ -909,6 +940,9 @@ func run() (retErr error) {
 	}()
 	if err := healthServer.Shutdown(shutdownCtx); err != nil {
 		runErr = joinShutdownError(runErr, "health HTTP server", err)
+	}
+	if webServer != nil {
+		runErr = joinShutdownError(runErr, "web listener", webServer.Shutdown(shutdownCtx))
 	}
 
 	runErr = joinShutdownError(runErr, "TCP control server", tcpServer.Shutdown(shutdownCtx))

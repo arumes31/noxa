@@ -381,6 +381,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         row.setAttribute("aria-label", [c.nickname || c.unique_id || t("runtime.user"),
             c.status && presenceLabel(c.status), speakingHere && t("runtime.speaking"),
             c.priority_speaker && t("runtime.priority"),
+            c.on_mobile && t("runtime.onMobile"),
             streamLabel,
             inVoice && c.client_id === state.myClientID && state.muted && t("runtime.muted"),
             c.client_id === state.myClientID && state.deafened && t("runtime.deaf")].filter(Boolean).join(", "));
@@ -446,6 +447,14 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             pr.textContent = " ★";
             pr.title = t("runtime.priority");
             row.appendChild(pr);
+        }
+        // A phone session: shown so others know replies may come slower.
+        if (c.on_mobile) {
+            const phone = document.createElement("span");
+            phone.className = "status-icons on-mobile";
+            phone.textContent = " 📱";
+            phone.title = t("runtime.onMobile");
+            row.appendChild(phone);
         }
         // (307-309) presence status icons; (381) invisible marker (admin view).
         if (c.status === "away" || c.status === "busy" || c.status === "invisible") {

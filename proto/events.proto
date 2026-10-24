@@ -16,8 +16,9 @@ service Events {
 
 message SubscribeEventsRequest {
   // Optional filter of event types to receive; empty means all.
-  // roles-v1 accepts ROLE_SNAPSHOT, optionally with USER_SPEAKING. Snapshots
-  // are required to reconcile membership, visibility and speaking revocation.
+  // roles-v1 accepts ROLE_SNAPSHOT, optionally with USER_SPEAKING and
+  // DEVICE_CHANGED. Snapshots are required to reconcile membership,
+  // visibility and speaking revocation. Device events are never implied.
   repeated EventType event_types = 1;
 }
 
@@ -33,6 +34,8 @@ enum EventType {
   EVENT_TYPE_USER_BANNED = 8;
   // roles-v1 structural updates replace the entire filtered discovery state.
   EVENT_TYPE_ROLE_SNAPSHOT = 9;
+  // Linked-device changes; only for administrators, only when requested.
+  EVENT_TYPE_DEVICE_CHANGED = 10;
 }
 
 // Event is the envelope for all server events. Exactly one payload field is set.
@@ -50,7 +53,19 @@ message Event {
     UserKickedEvent user_kicked = 16;
     UserBannedEvent user_banned = 17;
     RoleSnapshotEvent role_snapshot = 18;
+    DeviceChangedEvent device_changed = 19;
   }
+}
+
+// DeviceChangedEvent reports a linked, revoked or reset device. It never
+// carries key material.
+message DeviceChangedEvent {
+  // "linked", "revoked" or "passkey_added".
+  string action = 1;
+  string unique_id = 2;
+  DeviceRecord device = 3;
+  // Revocations: "user", "admin_reset", "idle" or "integration".
+  string reason = 4;
 }
 
 message UserJoinedEvent {

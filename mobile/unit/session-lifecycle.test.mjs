@@ -1,0 +1,70 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import vm from 'node:vm';
+import { ChatSession } from '../src/core/chat-session.js';
+import { generateIdentity } from '../src/core/crypto.js';
+import { Msg } from '../src/core/frame.js';
+
+class FakeConnection extends EventTarget {
+  open = true;
+  on(type, fn) { const f = e => fn(e.detail); this.addEventListener(String(type), f); return () => this.removeEventListener(String(type), f); }
+  deliver(type, detail) { this.dispatchEvent(new CustomEvent(String(type), {detail})); }
+  close() {}
+}
+
+test('offline DM emitted while updateMeta awaits must reach the receiver', async () => {
+ const conn = new FakeConnection();
+ let release, entered;
+ const blocked = new Promise(r => {release=r});
+ const atUpdate = new Promise(r => {entered=r});
+ const seen = [];
+ class DirectMessages extends EventTarget {
+   constructor(session) { super(); this.ready=Promise.resolve(); session.addEventListener('direct', e=>seen.push(e.detail.client_msg_id)); }
+   async importHistory() {} close() {}
+ }
+ class Empty extends EventTarget { async refresh() {} close() {} }
+ const none=()=>{};
+ const sources = {
+  './core/chat-session.js': {ChatSession},
+  './core/direct.js': {DirectMessages}, './core/calls.js': {Calls:Empty}, './core/groups.js':{Groups:Empty}, './core/voice.js':{Voice:Empty},
+  './core/connection.js':{Connection:{open:async()=>conn}}, './core/crypto.js':{generateIdentity},
+  './core/device.js':{signIn:async()=>({unique_id:'alice',device_id:'phone',client_id:'c1'})},
+  './core/identity-store.js':{clearIdentity:none,loadIdentity:none,saveIdentity:none,updateMeta:async()=>{entered();await blocked}},
+  './core/outbox.js':{enqueue:none,flush:async()=>{},showPending:async()=>{},waitingCount:async()=>0},
+  './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:async()=>({})},
+ };
+ const context=vm.createContext({EventTarget,CustomEvent,setTimeout,clearTimeout,clearInterval,console});
+ const mod=new vm.SourceTextModule(await fs.readFile(new URL('../src/app.js',import.meta.url),'utf8'),{context});
+ await mod.link(spec=>new vm.SyntheticModule(Object.keys(sources[spec]),function(){for(const [k,v] of Object.entries(sources[spec]))this.setExport(k,v)},{context}));
+ await mod.evaluate();
+ const connecting=mod.namespace.connect();
+ await atUpdate;
+ conn.deliver(Msg.Event,{type:'chat',data:{direct:true,offline:true,client_msg_id:'spooled-during-startup'}});
+ release();
+ await connecting;
+ conn.deliver(Msg.Event,{type:'chat',data:{direct:true,client_msg_id:'live-after-startup'}});
+ assert.deepEqual(seen,['spooled-during-startup','live-after-startup']);
+});
+
+test('TURN renewal retries after one transient request failure', async () => {
+ const timers = new Map(); let id=0; let requests=0;
+ const realSet=globalThis.setTimeout,realClear=globalThis.clearTimeout;
+ globalThis.setTimeout=fn=>{timers.set(++id,fn);return id};
+ globalThis.clearTimeout=i=>timers.delete(i);
+ try {
+  const conn=new FakeConnection();
+  conn.request=async()=>{requests++; if(requests===2)throw new Error('temporary unavailable');return {server_time:Date.now(),refresh_at:Date.now()+5000,ice_servers:[]}};
+  const session=new ChatSession(conn,{}, {capabilities:['managed-relay-v1']});
+  await session.relayServers();
+  session.onRelayRenewal(()=>{});
+  const fire=async()=>{const [i,fn]=timers.entries().next().value;timers.delete(i);await fn()};
+  await fire(); // scheduled renewal fails
+  await fire(); // promised 30-second retry
+  assert.equal(requests,3);
+  assert.equal(timers.size,1);
+  session.close();
+  assert.equal(timers.size,0);
+ } finally {globalThis.setTimeout=realSet;globalThis.clearTimeout=realClear}
+});
+

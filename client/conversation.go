@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -146,6 +147,7 @@ func (a *App) ConversationForTab(tabID string, request netproto.ConversationRequ
 	m.mu.Lock()
 	uid := m.uniqueID
 	m.mu.Unlock()
+	senderKeys := map[string]bool{} // trusted sender devices, checked once per page
 	for i := range result.Messages {
 		message := &result.Messages[i]
 		// Verification is local evidence, never accepted from the server.
@@ -153,14 +155,16 @@ func (a *App) ConversationForTab(tabID string, request netproto.ConversationRequ
 		if message.ConversationID != request.ID {
 			return netproto.ConversationResult{}, errors.New("private group history mismatch")
 		}
-		peer := pub
-		if message.FromUniqueID != uid {
-			var found bool
+		peer, found := m.conversationSenderKey(*message, pub, senderKeys)
+		if !found && message.FromUniqueID == uid {
+			peer, found = pub, true
+		}
+		if !found {
 			peer, found = m.peerPubKey(message.FromUniqueID)
-			if !found {
-				message.Body = "[Encryption key unavailable]"
-				continue
-			}
+		}
+		if !found {
+			message.Body = "[Encryption key unavailable]"
+			continue
 		}
 		body, err := openConversation(*message, uid, peer, priv)
 		if err != nil {
@@ -170,6 +174,31 @@ func (a *App) ConversationForTab(tabID string, request netproto.ConversationRequ
 		message.Body, message.EncVerified = body, true
 	}
 	return result, nil
+}
+
+// conversationSenderKey returns the sending device's key when the message
+// names a device that is trusted for its sender (dm_devices_v1): a message
+// sent from a phone is sealed with the phone's key, not the account key. A
+// device that is not trusted keeps the account-key path, which then fails
+// authentication for such a message. seen memoizes the checks of one page.
+func (m *connManager) conversationSenderKey(message netproto.ConversationMessage, ownPub [32]byte, seen map[string]bool) ([32]byte, bool) {
+	if message.SenderDeviceID == "" || message.SenderDeviceKey == "" || message.FromUniqueID == "" {
+		return [32]byte{}, false
+	}
+	key, ok := parseDeviceX25519(message.SenderDeviceKey)
+	if !ok {
+		return [32]byte{}, false
+	}
+	memo := message.FromUniqueID + "/" + message.SenderDeviceID + "/" + message.SenderDeviceKey
+	trusted, checked := seen[memo]
+	if !checked {
+		trusted = m.trustedSenderDevice(message.FromUniqueID, message.SenderDeviceID, key, ownPub)
+		if !trusted {
+			trusted = m.trustedHistoricalConversationSender(message, key)
+		}
+		seen[memo] = trusted
+	}
+	return key, trusted
 }
 
 func openConversation(message netproto.ConversationMessage, uid string, pub, priv [32]byte) (string, error) {
@@ -219,6 +248,7 @@ func (a *App) SendConversationForTab(tabID, groupID, text, reference string) (in
 		return 0, netproto.ErrConversationDenied
 	}
 	message := netproto.ConversationSend{Epoch: c.Epoch, Reference: reference, Envelopes: map[string]string{}}
+	plaintexts := map[string]string{}
 	for _, recipient := range c.Members {
 		if recipient.Pending {
 			continue
@@ -235,13 +265,29 @@ func (a *App) SendConversationForTab(tabID, groupID, text, reference string) (in
 		if err != nil {
 			return 0, err
 		}
+		plaintexts[recipient.UniqueID] = string(plain)
 		sealed, err := sealDM(string(plain), peer, priv)
 		if err != nil {
 			return 0, err
 		}
 		message.Envelopes[recipient.UniqueID] = sealed
 	}
+	devices := m.dmDevicesActive()
+	if devices {
+		if message.DeviceEnvelopes, err = m.conversationDeviceEnvelopes(c, plaintexts, priv, false); err != nil {
+			return 0, err
+		}
+	}
 	result, err = m.conversationRequest(netproto.ConversationRequest{Action: "send", ID: c.ID, Revision: c.Revision, Message: &message})
+	var failure *requestFailure
+	if devices && errors.As(err, &failure) && failure.response.RecipientDevicesStale {
+		// A member linked or removed a device: refresh every list and send
+		// once more under the same reference (the store is idempotent on it).
+		if message.DeviceEnvelopes, err = m.conversationDeviceEnvelopes(c, plaintexts, priv, true); err != nil {
+			return 0, err
+		}
+		result, err = m.conversationRequest(netproto.ConversationRequest{Action: "send", ID: c.ID, Revision: c.Revision, Message: &message})
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -249,4 +295,46 @@ func (a *App) SendConversationForTab(tabID, groupID, text, reference string) (in
 		return 0, errors.New("group message not acknowledged")
 	}
 	return result.MessageID, nil
+}
+
+// conversationDeviceEnvelopes seals each member's plaintext once more for
+// every trusted device of that member that cannot open the account envelope
+// (every device but the account's first), this account's other devices
+// included and this desktop excluded. A member whose device list cannot be
+// verified gets none; the server then refuses the send if it needed some.
+func (m *connManager) conversationDeviceEnvelopes(c netproto.Conversation, plaintexts map[string]string, priv [32]byte, force bool) (map[string]string, error) {
+	m.mu.Lock()
+	ownUID, selfDevice := m.uniqueID, m.deviceID
+	m.mu.Unlock()
+	out := map[string]string{}
+	for _, member := range c.Members {
+		plain, ok := plaintexts[member.UniqueID]
+		if member.Pending || !ok {
+			continue
+		}
+		devices, err := m.dmDeviceList(member.UniqueID, force)
+		if errors.Is(err, errDMDevicesUnverified) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("could not verify the devices of %s; try again: %w", member.UniqueID, err)
+		}
+		for _, d := range devices {
+			if d.First || d.DeviceID == "" || (member.UniqueID == ownUID && d.DeviceID == selfDevice) {
+				continue
+			}
+			if len(out) >= netproto.MaxConversationDeviceEnvelopes {
+				return nil, errors.New("this group's members have too many devices to reach")
+			}
+			sealed, err := sealDM(plain, d.X25519, priv)
+			if err != nil {
+				return nil, err
+			}
+			out[netproto.DeviceEnvelopeKey(member.UniqueID, d.DeviceID)] = sealed
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }

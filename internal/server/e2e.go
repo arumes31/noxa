@@ -57,7 +57,9 @@ func (s *TCPServer) publishSessionKey(ctx context.Context, client *Client, f *ne
 
 	// Publish the durable directory entry before exposing the session copy.
 	// A failed write must not make lookup results depend on online presence.
-	if client.userID() != 0 && s.deps.Auth != nil {
+	// Linked phones publish for their session only: the account's directory
+	// key stays the first device's, and phones receive per-device copies.
+	if client.userID() != 0 && s.deps.Auth != nil && !client.isWebTransport() {
 		if err := s.deps.Auth.SetE2EPublicKey(ctx, client.userID(), published); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encryption directory unavailable")
 		}
@@ -136,12 +138,20 @@ func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *net
 		}
 	}
 
+	var devices []netproto.DMDevice
+	if msg.Devices {
+		var err error
+		if devices, err = s.dmDevices(ctx, msg.UniqueID); err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encryption directory unavailable")
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return s.writeMessage(client, netproto.MsgKeyResponse, netproto.KeyResponse{
 		UniqueID:  msg.UniqueID,
 		PublicKey: pub,
+		Devices:   devices,
 	})
 }
 
