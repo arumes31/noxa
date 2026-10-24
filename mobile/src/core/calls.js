@@ -175,7 +175,31 @@ export class Calls extends EventTarget {
         }
     }
 
+    #stopRenewal = null;
+
+    /** New TURN credentials: update every peer; offerers restart ICE. */
+    #renew(servers) {
+        let rtc;
+        try { rtc = callRTCConfiguration(servers); } catch { return; }
+        this.rtc = rtc;
+        for (const [uid, peer] of this.peers) {
+            try { peer.pc.setConfiguration(rtc); } catch { continue; }
+            if (this.uid >= uid) continue;
+            peer.chain = peer.chain.then(async () => {
+                if (peer.pc.signalingState !== "stable") return;
+                peer.localCount = 0;
+                peer.remoteCount = 0;
+                peer.local = [];
+                peer.sent = false;
+                await peer.pc.setLocalDescription(await peer.pc.createOffer({ iceRestart: true }));
+                await this.#sendDescription(uid, peer);
+            }).catch(error => this.#emit("error", error));
+        }
+    }
+
     #end() {
+        this.#stopRenewal?.();
+        this.#stopRenewal = null;
         this.rtc = null;
         for (const peer of this.peers.values()) this.#closePeer(peer);
         this.peers.clear();
@@ -208,6 +232,7 @@ export class Calls extends EventTarget {
     async #ensurePeer(uid) {
         if (this.peers.has(uid)) return this.peers.get(uid);
         this.rtc ||= callRTCConfiguration(await this.session.relayServers());
+        this.#stopRenewal ||= this.session.onRelayRenewal(servers => this.#renew(servers));
         const pc = new RTCPeerConnection(this.rtc);
         const peer = { pc, started: false, chain: Promise.resolve(), local: [], remote: [], localCount: 0, remoteCount: 0, sent: false, timer: 0, audio: null, video: null, channel: null };
         this.peers.set(uid, peer);

@@ -253,6 +253,56 @@ function watchCalls(calls) {
     });
 }
 
+// --- Call-back reminders ---------------------------------------------------------
+
+const REMINDERS_KEY = "noxa.callReminders";
+export const REMIND_AFTER = 10 * 60 * 1000;
+
+/** Pending "call back" reminders: [{uid, name, at}]. Per browser only. */
+export function reminders() {
+    try { return JSON.parse(localStorage.getItem(REMINDERS_KEY) || "[]"); } catch { return []; }
+}
+
+function saveReminders(list) {
+    try { localStorage.setItem(REMINDERS_KEY, JSON.stringify(list)); } catch { /* private window */ }
+    emit("reminders");
+}
+
+let reminderTimer = 0;
+
+/** Schedules the next due reminder; due ones notify and stay on Home. */
+function scheduleReminders() {
+    clearTimeout(reminderTimer);
+    const pending = reminders().filter(r => !r.shown);
+    if (!pending.length) return;
+    const next = Math.min(...pending.map(r => r.at));
+    reminderTimer = setTimeout(async () => {
+        const now = Date.now();
+        const list = reminders();
+        for (const reminder of list.filter(r => !r.shown && r.at <= now)) {
+            reminder.shown = true;
+            navigator.vibrate?.([200, 100, 200]);
+            const registration = await navigator.serviceWorker?.getRegistration("/app/").catch(() => null);
+            await registration?.showNotification(reminder.name, { body: reminder.body, tag: `remind:${reminder.uid}`, data: { url: `/app/#/dm/${encodeURIComponent(reminder.uid)}` } }).catch(() => {});
+        }
+        saveReminders(list);
+        scheduleReminders();
+    }, Math.max(1000, next - Date.now()));
+}
+
+/** Declines a call and reminds to call back later. */
+export function remindLater(uid, name, body) {
+    saveReminders([...reminders().filter(r => r.uid !== uid), { uid, name, body, at: Date.now() + REMIND_AFTER }]);
+    scheduleReminders();
+}
+
+export function dismissReminder(uid) {
+    saveReminders(reminders().filter(r => r.uid !== uid));
+    scheduleReminders();
+}
+
+if (typeof window !== "undefined") scheduleReminders();
+
 /** Calls everyone in a private group. */
 export async function startGroupCall(conversationID) {
     if (!app.calls) throw new Error("not connected");

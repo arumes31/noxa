@@ -1,7 +1,7 @@
 // call.js — Incoming call (10) and private call (11, 12): accept with or
 // without video, decline, "Can't talk, text me", mute, camera, hang up,
 // call tiles and data used.
-import { app } from "../app.js";
+import { app, remindLater } from "../app.js";
 import { t } from "../i18n.js";
 import { avatar, h, toast } from "./dom.js";
 import { icon } from "./icons.js";
@@ -35,10 +35,16 @@ export function renderCall(root, id) {
                 h("button", { class: "round-btn decline", type: "button", "aria-label": t("call.decline"), onclick: () => calls.decline() }, icon("hangup")),
                 h("button", { class: "round-btn video", type: "button", "aria-label": t("call.acceptVideo"), onclick: () => calls.accept({ video: true }).catch(error => toast(errorText(error), "warn")) }, icon("camera")),
                 h("button", { class: "round-btn accept", type: "button", "aria-label": t("call.accept"), onclick: () => calls.accept().catch(error => toast(errorText(error), "warn")) }, icon("phone"))),
-            h("button", { class: "btn btn-block", type: "button", onclick: async () => {
-                await calls.decline();
-                app.dm?.send(call.caller, t("call.cantTalkMessage"), caller).catch(() => {});
-            } }, t("call.cantTalk")));
+            h("div", { class: "voice-controls", style: "grid-template-columns:1fr 1fr" },
+                h("button", { class: "btn", type: "button", onclick: async () => {
+                    await calls.decline();
+                    app.dm?.send(call.caller, t("call.cantTalkMessage"), caller).catch(() => {});
+                } }, t("call.cantTalk")),
+                h("button", { class: "btn", type: "button", onclick: async () => {
+                    await calls.decline();
+                    remindLater(call.caller, caller, t("call.remindBody"));
+                    toast(t("call.reminderSet"));
+                } }, t("call.remind"))));
     }
 
     function active(call) {

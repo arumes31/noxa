@@ -1,5 +1,5 @@
 // home.js — Home (02): live voice rooms and recent conversations.
-import { app } from "../app.js";
+import { app, dismissReminder, reminders, startCall } from "../app.js";
 import { t } from "../i18n.js";
 import { clock, h } from "./dom.js";
 import { dmHref, header, lastMessage, nav, scopeName, unreadBadge } from "./common.js";
@@ -53,6 +53,11 @@ export function renderHome(root) {
                 h("div", { class: "voice-controls", style: "grid-template-columns:1fr 1fr" },
                     h("button", { class: "btn btn-primary", type: "button", onclick: () => app.groups.answer(group.id, "accept").catch(() => {}) }, t("group.accept")),
                     h("button", { class: "btn", type: "button", onclick: () => app.groups.answer(group.id, "decline").catch(() => {}) }, t("call.decline"))))),
+            reminders().filter(r => r.shown).map(reminder => h("div", { class: "card", role: "group", "aria-label": t("call.callBack", { name: reminder.name }) },
+                h("p", { class: "row-title" }, t("call.callBack", { name: reminder.name })),
+                h("div", { class: "voice-controls", style: "grid-template-columns:1fr 1fr" },
+                    h("button", { class: "btn btn-primary", type: "button", onclick: () => { dismissReminder(reminder.uid); startCall(reminder.uid).catch(() => {}); } }, t("call.callNow")),
+                    h("button", { class: "btn", type: "button", onclick: () => dismissReminder(reminder.uid) }, t("call.dismiss"))))),
             h("p", { class: "section-label" }, t("home.recent")),
             recent.length ? h("ul", { class: "list" }, recent.map(entry => h("li", {}, entry.row)))
                 : h("p", { class: "hint" }, t("home.empty")))),

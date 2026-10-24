@@ -229,11 +229,43 @@ export class ChatSession extends EventTarget {
             const lease = await this.conn.request(193, { action: "refresh" }, 194, { accept: r => r.action === "refresh" });
             const skew = now - (lease.server_time || now);
             this.#relay = { servers: lease.ice_servers || [], refreshAt: (lease.refresh_at || 0) + skew || now + 15 * 60 * 1000 };
+            this.#scheduleRelay();
         }
         return [...this.iceServers.filter(server => !server.username), ...this.#relay.servers];
     }
 
     #relay = null;
+    #relayListeners = new Set();
+    #relayTimer = 0;
+
+    /**
+     * Calls listener with fresh ICE servers whenever the relay lease is
+     * renewed, so long calls keep working past the credentials' lifetime.
+     * Returns a function that stops listening.
+     */
+    onRelayRenewal(listener) {
+        this.#relayListeners.add(listener);
+        this.#scheduleRelay();
+        return () => {
+            this.#relayListeners.delete(listener);
+            if (!this.#relayListeners.size) clearTimeout(this.#relayTimer);
+        };
+    }
+
+    #scheduleRelay() {
+        clearTimeout(this.#relayTimer);
+        if (!this.#relay || !this.#relayListeners.size) return;
+        this.#relayTimer = setTimeout(async () => {
+            if (!this.conn.open) return;
+            this.#relay = null;
+            try {
+                const servers = await this.relayServers();
+                for (const listener of this.#relayListeners) listener(servers);
+            } catch {
+                setTimeout(() => this.#scheduleRelay(), 30000);
+            }
+        }, Math.max(5000, this.#relay.refreshAt - Date.now()));
+    }
 
     requestKeys(scope, keyIDs) {
         const missing = keyIDs.filter(id => id && !this.keys.get(scope)?.has(id));

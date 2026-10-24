@@ -94,6 +94,9 @@ app.addEventListener("session", event => {
         if ((location.hash.split("/")[1] || "home") === "home") route();
     });
 });
+app.addEventListener("reminders", () => {
+    if ((location.hash.split("/")[1] || "home") === "home") route();
+});
 app.addEventListener("groups", () => {
     if ((location.hash.split("/")[1] || "home") === "home") route();
 });

@@ -48,6 +48,29 @@ test("a phone calls another phone, which answers, and they hang up", async ({ br
 
     await kai.page.getByRole("button", { name: "Hang up" }).click();
     await expect(lou.page.getByText("Call ended")).toBeVisible({ timeout: 20000 });
+
+    // A second call: Lou asks to be reminded instead of answering.
+    await kai.page.goto(`${server.webURL}/app/#/dm/${encodeURIComponent(lou.desktop.uniqueID)}`);
+    await kai.page.getByRole("button", { name: /^Call / }).click();
+    await expect(lou.page.getByText("Incoming call")).toBeVisible({ timeout: 20000 });
+    await lou.page.getByRole("button", { name: "Remind me" }).click();
+    await expect(kai.page.getByText("Call ended")).toBeVisible({ timeout: 20000 });
+    await expect.poll(() => lou.page.evaluate(() => JSON.parse(localStorage.getItem("noxa.callReminders") || "[]").length)).toBe(1);
+    const reminder = await lou.page.evaluate(() => JSON.parse(localStorage.getItem("noxa.callReminders"))[0]);
+    expect(reminder.uid).toBe(kai.desktop.uniqueID);
+    expect(reminder.at - Date.now()).toBeGreaterThan(9 * 60 * 1000);
+    // Pretend ten minutes passed.
+    await lou.page.evaluate(() => {
+        const list = JSON.parse(localStorage.getItem("noxa.callReminders"));
+        list[0].at = Date.now() - 1000;
+        localStorage.setItem("noxa.callReminders", JSON.stringify(list));
+    });
+    await lou.page.goto(`${server.webURL}/app/#/home`);
+    await lou.page.reload();
+    await expect(lou.page.getByRole("group", { name: /^Call back / })).toBeVisible({ timeout: 15000 });
+    await lou.page.getByRole("button", { name: "Dismiss" }).click();
+    await expect(lou.page.getByRole("group", { name: /^Call back / })).toHaveCount(0);
+
     for (const phone of [kai, lou]) {
         phone.desktop.conn.close();
         await phone.context.close();

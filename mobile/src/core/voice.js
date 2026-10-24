@@ -122,6 +122,12 @@ export class Voice extends EventTarget {
         }
         const iceServers = await this.session.relayServers().catch(() => this.session.iceServers);
         const pc = new RTCPeerConnection({ iceServers });
+        // Renewed TURN credentials keep a long session's relay alive.
+        this.#stopRenewal = this.session.onRelayRenewal(servers => {
+            if (this.pc !== pc) return;
+            try { pc.setConfiguration({ iceServers: servers }); } catch { return; }
+            this.#enqueue(() => this.#offer({ iceRestart: true })).catch(() => {});
+        });
         this.pc = pc;
         pc.onicecandidate = event => {
             if (!event.candidate || !this.conn.open) return;
@@ -153,7 +159,11 @@ export class Voice extends EventTarget {
         this.#emit("state");
     }
 
+    #stopRenewal = null;
+
     #teardown() {
+        this.#stopRenewal?.();
+        this.#stopRenewal = null;
         clearInterval(this.#statsTimer);
         this.pc?.close();
         this.pc = null;
@@ -186,10 +196,10 @@ export class Voice extends EventTarget {
         return out;
     }
 
-    async #offer() {
+    async #offer(options) {
         const pc = this.pc;
         if (!pc) return;
-        const offer = await pc.createOffer();
+        const offer = await pc.createOffer(options);
         await pc.setLocalDescription(offer);
         try {
             const answer = await this.conn.request(Msg.WebRTCOffer, { sdp: pc.localDescription.sdp, tracks: this.#trackSlots() }, Msg.WebRTCAnswer);
