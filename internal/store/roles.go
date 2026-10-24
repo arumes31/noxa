@@ -315,8 +315,8 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_member_roles WHERE user_id=$1`, m.UserID); err != nil {
 			return err
 		}
-		for _, id := range m.RoleIDs {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO auth_member_roles(user_id,role_id) VALUES($1,$2)`, m.UserID, id); err != nil {
+		if len(m.RoleIDs) > 0 {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO auth_member_roles(user_id,role_id) SELECT $1, unnest($2::bigint[])`, m.UserID, pq.Array(m.RoleIDs)); err != nil {
 				return err
 			}
 		}
