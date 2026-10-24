@@ -32,8 +32,8 @@ const (
 	DeviceActionPasskeyRegisterFinish = "passkey_register_finish"
 	DeviceActionPasskeyLoginBegin     = "passkey_login_begin"
 	// #nosec G101 -- protocol action names, not credentials.
-	DeviceActionPasskeyLoginFinish    = "passkey_login_finish"
-	DeviceActionPasskeyDelete         = "passkey_delete"
+	DeviceActionPasskeyLoginFinish = "passkey_login_finish"
+	DeviceActionPasskeyDelete      = "passkey_delete"
 
 	// Web Push for web devices: the server's VAPID key and this device's
 	// subscription and preferences.
