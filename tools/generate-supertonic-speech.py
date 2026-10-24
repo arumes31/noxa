@@ -216,6 +216,9 @@ def publish(args):
     for key, clip in manifest['clips'].items():
         if reviewed[key]['sha256'] != clip['sha256'] or reviewed[key]['reviewStatus'] not in ACCEPTED_REVIEWS:
             raise SystemExit(f'{key} is not accepted; re-render it with --events and review again')
+        if reviewed[key]['reviewStatus'] == 'accepted-user-listening-review' and not str(reviewed[key].get('note') or '').strip():
+            raise SystemExit(f'{key} needs a note documenting the listening approval')
+    for key in manifest['clips']:
         shutil.copyfile(out / 'clips' / f'{key}.wav', ASSETS / f'{key}.wav')
     (ASSETS / 'metrics.json').write_text(json.dumps(manifest['clips'], ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     (ASSETS / 'st13-content-review.json').write_text(json.dumps(reviewed, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
