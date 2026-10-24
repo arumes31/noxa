@@ -1226,7 +1226,9 @@ func (s *TCPServer) relaySessionTyping(ctx context.Context, client *Client, f *n
 		if err != nil {
 			return err
 		}
-		if tc, ok := s.clientByUniqueID(msg.ToUniqueID); ok {
+		// Every session of the recipient: a desktop and its linked phones
+		// each show the indicator in their own copy of the conversation.
+		for _, tc := range s.sessionsOf(msg.ToUniqueID) {
 			_ = s.deps.Broadcast.BroadcastToClient(tc.ID, payload)
 		}
 	case msg.ChannelID != 0:
@@ -1294,7 +1296,9 @@ func (s *TCPServer) relaySessionReceipt(ctx context.Context, client *Client, toU
 	if err != nil {
 		return err
 	}
-	if tc, ok := s.clientByUniqueID(toUniqueID); ok {
+	// Every session of the sender: the message may have been written on a
+	// phone while the account's desktop is also online.
+	for _, tc := range s.sessionsOf(toUniqueID) {
 		_ = s.deps.Broadcast.BroadcastToClient(tc.ID, payload)
 	}
 	return nil // offline sender: receipt is dropped (documented)
