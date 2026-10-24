@@ -176,6 +176,8 @@ Both languages use the synthetic ST13 voice ("Eisbrecher"), chosen from the
 ST01-ST20 auditions. ST13 is a weighted blend of the Supertonic 3 preset voice
 styles (M5 x 1.25, M1 x -0.25); no recording of a real person and no imitation of
 an identifiable character was used. The earlier EA60/AN06 recordings are retired.
+The two German closing messages use the unblended Supertonic 3 preset voices F5
+(daytime) and F1 (night), chosen by the user from closing-message auditions.
 Supertonic 3 model weights: Supertone Inc., OpenRAIL-M.
 https://huggingface.co/Supertone/supertonic-3
 Supertonic code: MIT License, Copyright (c) 2025 Supertone Inc.
@@ -195,7 +197,7 @@ Changes: generated complete noXa sentences, pronunciation respellings for German
 loanwords, resampling to 24 kHz, silence trimming, DC removal, endpoint fades and
 loudness normalization.
 Voice definition, model hashes, rendering settings and per-clip hashes:
-tools/voices/ST13.json
+tools/voices/ST13.json, tools/voices/F5.json, tools/voices/F1.json
 client/frontend/src/assets/speech/provenance.json
 client/frontend/src/assets/speech/metrics.json
 

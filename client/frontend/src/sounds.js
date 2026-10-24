@@ -3,7 +3,7 @@ import { SoundEngine } from "./sound-engine.js";
 import { SOUND_DEFINITIONS, SOUND_URLS } from "./sound-catalog.js";
 import { SPOKEN_ACTIONS, EFFECT_EVENTS as SOUND_EVENTS } from "./notification-audio.js";
 import { SPEECH_ASSETS } from "./speech-catalog.js";
-import { SpeechQueue, SPEECH_EVENTS, speechLanguage } from "./speech-queue.js";
+import { SpeechQueue, SPEECH_EVENTS, SPEECH_VARIANTS, speechLanguage } from "./speech-queue.js";
 export { SPEECH_EVENTS, speechEventEnabled } from "./speech-queue.js";
 export { EFFECT_EVENTS as SOUND_EVENTS, EFFECT_GROUPS as SOUND_EVENT_GROUPS } from "./notification-audio.js";
 
@@ -13,8 +13,9 @@ const urls = Object.fromEntries(SOUND_EVENTS.map(id => [id, SOUND_URLS[id]]));
 for (const [language, clips] of Object.entries(SPEECH_ASSETS)) {
     for (const [event, clip] of Object.entries(clips)) {
         const id = "speech_" + language + "_" + event;
-        definitions[id] = { duration: clip.duration, priority: SPEECH_EVENTS[event].priority, cooldown: 0, category: "Speech",
-            application: SPEECH_EVENTS[event].category === "application" };
+        const policy = SPEECH_EVENTS[event] || SPEECH_EVENTS[SPEECH_VARIANTS[event]];
+        definitions[id] = { duration: clip.duration, priority: policy.priority, cooldown: 0, category: "Speech",
+            application: policy.category === "application" };
         urls[id] = clip.url;
     }
 }
@@ -39,9 +40,15 @@ export function playAlert(event, options) {
     return speechQueue.enqueue(event, options);
 }
 export function clearSpeech(category) { speechQueue.clear(category); }
-export async function playClosingAnnouncement() {
+// From 20:00 until 04:59 a language with a night recording says good night.
+export function closingClip(language, date = new Date()) {
+    const night = date.getHours() >= 20 || date.getHours() < 5;
+    return night && SPEECH_ASSETS[language]?.client_closing_night ? "client_closing_night" : "client_closing";
+}
+export async function playClosingAnnouncement({ now = new Date() } = {}) {
     const settings = V()?.state.settings;
-    const id = "speech_" + speechLanguage(settings, navigator.language) + "_client_closing";
+    const language = speechLanguage(settings, navigator.language);
+    const id = "speech_" + language + "_" + closingClip(language, now);
     if (!speechQueue.allowed("client_closing", settings, false)
         || !soundEngine.allowed(id, { settings, volume: settings?.speech_volume ?? 100 })) return;
     stopPreviews();

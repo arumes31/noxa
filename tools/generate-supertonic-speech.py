@@ -2,7 +2,8 @@
 
 Never run by noXa or its build. ST13 "Eisbrecher" is a synthetic voice: a
 weighted blend of Supertonic 3 preset styles (tools/voices/ST13.json), rendered
-with the sherpa-onnx CLI. Both languages use the same voice.
+with the sherpa-onnx CLI. Both languages use it, except clips that
+provenance.json assigns another voice under authoring.<language>.clip_voices.
 
   python tools/generate-supertonic-speech.py render --model-dir DIR --tts BIN --out .cache/noxa-st13-speech
   python tools/generate-supertonic-speech.py review --out .cache/noxa-st13-speech --asr BIN --whisper-dir DIR
@@ -33,6 +34,9 @@ VOICE = json.loads((ROOT / 'tools/voices/ST13.json').read_text(encoding='utf-8')
 PROVENANCE = json.loads((ASSETS / 'provenance.json').read_text(encoding='utf-8'))
 LINES = json.loads((ROOT / 'tools/speech-lines.json').read_text(encoding='utf-8'))
 TARGET_RATE = 24000
+# A clip passes the Whisper content check, or the user approved it by listening
+# when Whisper only mishears a name (recorded with a note in the review file).
+ACCEPTED_REVIEWS = {'accepted-automatic-content-review', 'accepted-user-listening-review'}
 
 spec = importlib.util.spec_from_file_location('generate_speech', ROOT / 'tools/generate-speech.py')
 generate_speech = importlib.util.module_from_spec(spec)
@@ -55,8 +59,17 @@ def verify_model(model_dir):
             raise SystemExit(f'Model file {name} does not match the pinned hash: {actual}')
 
 
-def blended_style(model_dir):
-    """The ST13 style: weighted sum of the preset style vectors in voice.bin."""
+def clip_voice(language, event):
+    """ST13 unless provenance assigns this clip a user-selected voice."""
+    chosen = PROVENANCE['authoring'][language].get('clip_voices', {}).get(event)
+    if not chosen:
+        return VOICE
+    return json.loads((ROOT / chosen['definition']).read_text(encoding='utf-8'))
+
+
+def blended_style(model_dir, voice=None):
+    """A voice style: weighted sum of the preset style vectors in voice.bin."""
+    voice = voice or VOICE
     import numpy as np
     data = (model_dir / 'voice.bin').read_bytes()
     ttl_dims = np.frombuffer(data[:24], np.int64)
@@ -64,8 +77,8 @@ def blended_style(model_dir):
     ttl_size, dp_size = int(np.prod(ttl_dims)), int(np.prod(dp_dims))
     ttl = np.frombuffer(data[48:48 + ttl_size * 4], np.float32).reshape(ttl_dims)
     dp = np.frombuffer(data[48 + ttl_size * 4:48 + (ttl_size + dp_size) * 4], np.float32).reshape(dp_dims)
-    order = VOICE['model']['preset_order']
-    weights = {order.index(name): weight for name, weight in VOICE['blend'].items()}
+    order = voice['model']['preset_order']
+    weights = {order.index(name): weight for name, weight in voice['blend'].items()}
     style_ttl = sum(ttl[index] * weight for index, weight in weights.items()).astype(np.float32)
     style_dp = sum(dp[index] * weight for index, weight in weights.items()).astype(np.float32)
     blob = (np.array([1, ttl_dims[1], ttl_dims[2]], np.int64).tobytes() +
@@ -102,14 +115,18 @@ def render(args):
     verify_model(model_dir)
     out = Path(args.out)
     (out / 'raw').mkdir(parents=True, exist_ok=True)
-    style = out / 'ST13-style.bin'
-    style.write_bytes(blended_style(model_dir))
     settings = VOICE['synthesis']
-    manifest = {'voice': VOICE['id'], 'styleSha256': sha256(style), 'clips': {}}
+    styles = {}
+    manifest = {'voice': VOICE['id'], 'clips': {}}
     for language in args.languages:
         for event, text in LINES[language].items():
             if args.events and event not in args.events:
                 continue
+            voice = clip_voice(language, event)
+            style = out / f'{voice["id"]}-style.bin'
+            if voice['id'] not in styles:
+                style.write_bytes(blended_style(model_dir, voice))
+                styles[voice['id']] = sha256(style)
             spoken = render_text(language, text)
             raw = out / 'raw' / language / f'{event}.wav'
             raw.parent.mkdir(parents=True, exist_ok=True)
@@ -131,8 +148,8 @@ def render(args):
             generate_speech.write_recording(clip, pcm, TARGET_RATE)
             manifest['clips'][f'{language}/{event}'] = {
                 'title': f'noXa — {event}', 'text': text, **metric, 'sha256': sha256(clip),
-                'voice': VOICE['id'], 'renderText': spoken, 'rawSha256': sha256(raw), 'rawSampleRate': rate,
-                'styleSha256': manifest['styleSha256'], 'modelSha256': VOICE['model']['archive_sha256']}
+                'voice': voice['id'], 'renderText': spoken, 'rawSha256': sha256(raw), 'rawSampleRate': rate,
+                'styleSha256': styles[voice['id']], 'modelSha256': VOICE['model']['archive_sha256']}
             print(f'{language}/{event}: {metric["duration"]:.2f} s')
     previous = out / 'manifest.json'
     if previous.exists():
@@ -197,8 +214,11 @@ def publish(args):
     if set(manifest['clips']) != expected or set(reviewed) != expected:
         raise SystemExit('Render and review every event in both languages before publishing')
     for key, clip in manifest['clips'].items():
-        if reviewed[key]['sha256'] != clip['sha256'] or reviewed[key]['reviewStatus'] != 'accepted-automatic-content-review':
+        if reviewed[key]['sha256'] != clip['sha256'] or reviewed[key]['reviewStatus'] not in ACCEPTED_REVIEWS:
             raise SystemExit(f'{key} is not accepted; re-render it with --events and review again')
+        if reviewed[key]['reviewStatus'] == 'accepted-user-listening-review' and not str(reviewed[key].get('note') or '').strip():
+            raise SystemExit(f'{key} needs a note documenting the listening approval')
+    for key in manifest['clips']:
         shutil.copyfile(out / 'clips' / f'{key}.wav', ASSETS / f'{key}.wav')
     (ASSETS / 'metrics.json').write_text(json.dumps(manifest['clips'], ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     (ASSETS / 'st13-content-review.json').write_text(json.dumps(reviewed, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
