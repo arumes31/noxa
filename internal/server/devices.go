@@ -151,16 +151,18 @@ func FormatLinkCode(code string) string {
 
 func deviceInfo(d store.Device, currentDeviceID string) netproto.DeviceInfo {
 	info := netproto.DeviceInfo{
-		DeviceID:     d.DeviceID,
-		Kind:         d.Kind,
-		Name:         d.Name,
-		Fingerprint:  netproto.KeyFingerprint(d.Ed25519Public),
-		X25519Public: d.X25519Public,
-		FirstDevice:  d.FirstDevice,
-		ApprovedBy:   d.ApprovedBy,
-		Current:      d.DeviceID == currentDeviceID,
-		CreatedAt:    d.CreatedAt.Unix(),
-		LastSeenAt:   d.LastSeenAt.Unix(),
+		DeviceID:      d.DeviceID,
+		Kind:          d.Kind,
+		Name:          d.Name,
+		Fingerprint:   netproto.KeyFingerprint(d.Ed25519Public),
+		X25519Public:  d.X25519Public,
+		FirstDevice:   d.FirstDevice,
+		Ed25519Public: d.Ed25519Public,
+		Confirmed:     d.FirstDevice || len(d.ApprovalSignature) > 0,
+		ApprovedBy:    d.ApprovedBy,
+		Current:       d.DeviceID == currentDeviceID,
+		CreatedAt:     d.CreatedAt.Unix(),
+		LastSeenAt:    d.LastSeenAt.Unix(),
 	}
 	if !d.ExpiryWarnedAt.IsZero() {
 		info.ExpiryWarnedAt = d.ExpiryWarnedAt.Unix()
@@ -453,7 +455,7 @@ func (s *TCPServer) publishDeviceChange(action, principal, reason string, info n
 	if s.deps == nil || s.deps.PublishIntegrationEvent == nil {
 		return
 	}
-	info.X25519Public, info.Current = "", false
+	info.X25519Public, info.Ed25519Public, info.Current = "", "", false
 	data, err := json.Marshal(deviceChange{Action: action, UniqueID: principal, Reason: reason, Device: info})
 	if err != nil {
 		return

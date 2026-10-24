@@ -3,8 +3,8 @@ package netproto
 import (
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 )
 
@@ -212,11 +212,15 @@ func (r DeviceRequest) Valid() bool {
 
 // DeviceInfo describes one linked device.
 type DeviceInfo struct {
-	DeviceID       string `json:"device_id"`
-	Kind           string `json:"kind"`
-	Name           string `json:"name"`
-	Fingerprint    string `json:"fingerprint"`
-	X25519Public   string `json:"x25519_public_key,omitempty"`
+	DeviceID     string `json:"device_id"`
+	Kind         string `json:"kind"`
+	Name         string `json:"name"`
+	Fingerprint  string `json:"fingerprint"`
+	X25519Public string `json:"x25519_public_key,omitempty"`
+	// Ed25519Public lets a trusted device sign an endorsement; Confirmed
+	// marks the first device and devices with an approval signature.
+	Ed25519Public  string `json:"ed25519_public_key,omitempty"`
+	Confirmed      bool   `json:"confirmed,omitempty"`
 	FirstDevice    bool   `json:"first_device,omitempty"`
 	ApprovedBy     string `json:"approved_by,omitempty"`
 	Current        bool   `json:"current,omitempty"`

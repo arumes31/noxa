@@ -31,3 +31,4 @@
 .device-row-warning { font-size: .7857rem; color: var(--warn, #f5b041); }
 .device-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
 @media (prefers-reduced-motion: reduce) { .device-link-code { transition: none; } }
+.device-link-history { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

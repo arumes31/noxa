@@ -70,6 +70,15 @@ func (m *connManager) handleDeviceEvent(f *netproto.Frame) {
 	if err := netproto.Decode(f, &event); err != nil {
 		return
 	}
+	switch event.Event {
+	case netproto.DeviceEventLinked, netproto.DeviceEventRevoked, netproto.DeviceEventEndorsed:
+		// The account's own device list changed: re-verify it before the
+		// next direct message.
+		m.mu.Lock()
+		ownUID := m.uniqueID
+		m.mu.Unlock()
+		m.forgetDMDevices(ownUID)
+	}
 	view := deviceEventView{DeviceEvent: event}
 	if event.Event == netproto.DeviceEventLinkClaimed {
 		m.mu.Lock()
@@ -89,8 +98,17 @@ func (m *connManager) handleDeviceEvent(f *netproto.Frame) {
 	m.emit("device_event", view)
 }
 
+// DeviceView is a device as the "Other login for this server" dialog lists
+// it. NeedsConfirm marks a device that is not confirmed for direct messages
+// (a phone that signed in with a passkey, another desktop install); this
+// desktop can confirm it.
+type DeviceView struct {
+	netproto.DeviceInfo
+	NeedsConfirm bool `json:"needs_confirm,omitempty"`
+}
+
 // DevicesForTab lists the account's active linked devices.
-func (a *App) DevicesForTab(tabID string) ([]netproto.DeviceInfo, error) {
+func (a *App) DevicesForTab(tabID string) ([]DeviceView, error) {
 	cm, err := a.requireTabCM(tabID)
 	if err != nil {
 		return nil, err
@@ -99,16 +117,101 @@ func (a *App) DevicesForTab(tabID string) ([]netproto.DeviceInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	cm.rememberCurrentDevice(nil, result.Devices)
+	views := make([]DeviceView, 0, len(result.Devices))
+	for _, d := range result.Devices {
+		views = append(views, DeviceView{DeviceInfo: d})
+	}
+	cm.markUnconfirmedDevices(views)
+	return views, nil
+}
+
+// markUnconfirmedDevices flags devices missing from the account's verified
+// direct-message devices, when this desktop is itself trusted and could
+// confirm them. The verified list (not approved_by) decides: a passkey login
+// names the registering device in approved_by but carries no signature.
+func (m *connManager) markUnconfirmedDevices(views []DeviceView) {
+	if !m.dmDevicesActive() {
+		return
+	}
+	m.mu.Lock()
+	ownUID, selfDevice := m.uniqueID, m.deviceID
+	m.mu.Unlock()
+	trusted, err := m.dmDeviceList(ownUID, true)
+	if err != nil {
+		return
+	}
+	known := make(map[string]bool, len(trusted))
+	for _, d := range trusted {
+		known[d.DeviceID] = true
+	}
+	if !known[selfDevice] {
+		return
+	}
+	for i := range views {
+		d := views[i].DeviceInfo
+		views[i].NeedsConfirm = !d.FirstDevice && !d.Current && d.DeviceID != selfDevice && d.RevokedAt == 0 && !known[d.DeviceID]
+	}
+}
+
+// ConfirmDeviceForTab endorses an unconfirmed device of this account: this
+// trusted desktop signs the device's keys (DeviceApprovalTranscript), so
+// contacts accept it for direct messages.
+func (a *App) ConfirmDeviceForTab(tabID, deviceID string) (netproto.DeviceInfo, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.DeviceInfo{}, err
+	}
 	cm.mu.Lock()
-	if cm.deviceID == "" {
-		for _, d := range result.Devices {
-			if d.Current {
-				cm.deviceID = d.DeviceID
-			}
+	principal, selfDevice := cm.uniqueID, cm.deviceID
+	cm.mu.Unlock()
+	if selfDevice == "" {
+		return netproto.DeviceInfo{}, errors.New("this desktop is not registered as a device yet")
+	}
+	if deviceID == "" || deviceID == selfDevice {
+		return netproto.DeviceInfo{}, errors.New("choose another device to confirm")
+	}
+	result, err := cm.deviceRequest(netproto.DeviceRequest{Action: netproto.DeviceActionList})
+	if err != nil {
+		return netproto.DeviceInfo{}, err
+	}
+	var target *netproto.DeviceInfo
+	for i := range result.Devices {
+		if result.Devices[i].DeviceID == deviceID {
+			target = &result.Devices[i]
 		}
 	}
-	cm.mu.Unlock()
-	return result.Devices, nil
+	if target == nil || target.FirstDevice || target.RevokedAt != 0 {
+		return netproto.DeviceInfo{}, errors.New("this device can no longer be confirmed")
+	}
+	signingKey := target.Ed25519Public
+	if signingKey == "" {
+		return netproto.DeviceInfo{}, errors.New("this server does not share the device's signing key; update the server to confirm devices")
+	}
+	if netproto.KeyFingerprint(signingKey) != target.Fingerprint {
+		return netproto.DeviceInfo{}, errors.New("the device's key does not match its fingerprint")
+	}
+	if _, ok := parseDeviceX25519(target.X25519Public); !ok {
+		return netproto.DeviceInfo{}, errors.New("the device has no valid encryption key")
+	}
+	id, err := cm.identity()
+	if err != nil {
+		return netproto.DeviceInfo{}, err
+	}
+	transcript := netproto.DeviceApprovalTranscript(principal, selfDevice, signingKey, target.X25519Public)
+	signature, err := auth.SignChallenge(id.PrivateKey, transcript)
+	if err != nil {
+		return netproto.DeviceInfo{}, err
+	}
+	endorsed, err := cm.deviceRequest(netproto.DeviceRequest{Action: netproto.DeviceActionEndorse, DeviceID: deviceID, Signature: signature})
+	cm.forgetDMDevices(principal)
+	if err != nil {
+		return netproto.DeviceInfo{}, err
+	}
+	if endorsed.Device == nil {
+		return netproto.DeviceInfo{}, errors.New("invalid device response")
+	}
+	return *endorsed.Device, nil
 }
 
 // RenameDeviceForTab renames one of the account's devices.
@@ -208,6 +311,9 @@ func (a *App) DecideDeviceLinkForTab(tabID, linkID string, approve bool, ed25519
 	cm.mu.Lock()
 	delete(cm.deviceLinks, linkID)
 	cm.mu.Unlock()
+	if approve {
+		cm.forgetDMDevices(principal)
+	}
 	return result, err
 }
 

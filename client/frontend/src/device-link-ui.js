@@ -21,6 +21,17 @@ function button(label, className, onClick) {
     return node;
 }
 
+// watchHistoryCopy announces the outcome of a background history copy. It
+// outlives the dialog, which may be closed while the copy uploads.
+function watchHistoryCopy(deviceID) {
+    const stop = window.runtime.EventsOn("device_history", event => {
+        if (!event || event.device_id !== deviceID || event.state === "progress") return;
+        if (typeof stop === "function") stop();
+        if (event.state === "done") window.__noxa.toast(t("devices.historyDone", { messages: event.messages }));
+        else window.__noxa.toast(t("devices.historyFailed", { error: event.error || "" }), "warn");
+    });
+}
+
 export function openDeviceLinkDialog() {
     const v = window.__noxa;
     if (!v.state.myClientID) return v.toast(t("menu.notConnected"), "warn");
@@ -95,6 +106,23 @@ export function openDeviceLinkDialog() {
         sas.setAttribute("aria-label", t("devices.compare"));
         const compare = el("p", "hint", t("devices.compare"));
         const fingerprint = el("p", "device-link-fingerprint", t("devices.fingerprint", { fingerprint: event.fingerprint }));
+        // History copy: re-encrypt recent direct messages to the new device.
+        const history = el("div", "device-link-history");
+        const copyLabel = el("label", "dlg-check");
+        const copy = el("input");
+        copy.type = "checkbox";
+        copy.checked = true;
+        copyLabel.append(copy, document.createTextNode(" " + t("devices.copyHistory")));
+        const range = el("select", "dlg-input device-link-history-range");
+        range.setAttribute("aria-label", t("devices.historyRange"));
+        for (const [value, key] of [["7", "7"], ["30", "30"], ["90", "90"], ["-1", "all"]]) {
+            const option = el("option", "", t(`devices.historyRange.${key}`));
+            option.value = value;
+            range.append(option);
+        }
+        range.value = "90";
+        copy.onchange = () => { range.disabled = !copy.checked; };
+        history.append(copyLabel, el("span", "dlg-label", t("devices.historyRange")), range);
         const actions = el("div", "dlg-buttons");
         const decide = async approve => {
             if (decided) return;
@@ -104,9 +132,17 @@ export function openDeviceLinkDialog() {
                 const result = await app().DecideDeviceLinkForTab(tabID, event.link_id, approve, event.ed25519_public_key, event.x25519_public_key);
                 if (!live()) return;
                 link = null;
-                const text = result.state === "approved"
+                const approved = result.state === "approved";
+                const text = approved
                     ? t("devices.approved", { name: result.device?.name || platform })
                     : t("devices.denied");
+                if (approved && copy.checked && result.device?.device_id) {
+                    const name = result.device.name || platform;
+                    watchHistoryCopy(result.device.device_id);
+                    app().CopyHistoryToDeviceForTab(tabID, result.device.device_id, Number(range.value))
+                        .then(() => v.toast(t("devices.historyCopying", { name })))
+                        .catch(error => v.toast(t("devices.historyFailed", { error: error?.message || String(error) }), "warn"));
+                }
                 linkPane.replaceChildren(el("p", "device-link-status", text), button(t("devices.newCode"), "", createLink));
                 refreshList();
             } catch (error) {
@@ -114,7 +150,7 @@ export function openDeviceLinkDialog() {
             }
         };
         actions.append(button(t("devices.deny"), "dlg-cancel", () => decide(false)), button(t("devices.approve"), "dlg-ok", () => decide(true)));
-        linkPane.replaceChildren(question, compare, sas, fingerprint, actions);
+        linkPane.replaceChildren(question, compare, sas, fingerprint, history, actions);
         actions.querySelector(".dlg-ok").focus();
     };
 
@@ -165,6 +201,16 @@ export function openDeviceLinkDialog() {
                 info.append(el("span", "device-row-warning", t("devices.expiryWarning", { date })));
             }
             const actions = el("div", "device-row-actions");
+            if (device.needs_confirm) {
+                info.append(el("span", "device-row-warning", t("devices.unconfirmed")));
+                actions.append(button(t("devices.confirm"), "dlg-ok", async () => {
+                    try {
+                        await app().ConfirmDeviceForTab(tabID, device.device_id);
+                        v.toast(t("devices.confirmed", { name: device.name }));
+                    } catch (error) { v.toast(t("devices.failed", { error: error?.message || String(error) }), "warn"); }
+                    if (live()) refreshList();
+                }));
+            }
             actions.append(button(t("devices.rename"), "", async () => {
                 const next = await promptDialog({ title: t("devices.rename"), label: t("devices.renamePrompt"), value: device.name, serverScoped: true });
                 if (!next || !next.trim() || !live()) return;
