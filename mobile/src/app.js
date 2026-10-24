@@ -112,6 +112,11 @@ export async function connect({ guest = null } = {}) {
     app.session?.close();
     const session = new ChatSession(conn, identity, auth);
     app.session = session;
+    session.addEventListener("snapshot", () => {
+        // Subscribing delivers a channel's chat and keys without joining it.
+        const missing = session.channels().filter(c => c.chat && !session.subscriptions.has(c.id)).map(c => c.id);
+        if (missing.length) session.subscribe(missing).catch(() => {});
+    });
     reconnectAttempt = 0;
     setOnline(true);
     app.meta = { ...(guest ? { guest: true, linked: false } : app.meta), deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
@@ -155,11 +160,6 @@ export async function connect({ guest = null } = {}) {
         if (app.session !== session) return;
         setOnline(false);
         scheduleReconnect();
-    });
-    session.addEventListener("snapshot", () => {
-        // Subscribing delivers a channel's chat and keys without joining it.
-        const missing = session.channels().filter(c => c.chat && !session.subscriptions.has(c.id)).map(c => c.id);
-        if (missing.length) session.subscribe(missing).catch(() => {});
     });
     session.addEventListener("device", event => {
         if (event.detail?.event === "revoked" && event.detail.device?.device_id === session.deviceID) forgetDevice();

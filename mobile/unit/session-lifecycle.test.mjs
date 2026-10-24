@@ -98,3 +98,37 @@ for (const existingGuest of [false, true]) {
   assert.deepEqual(writes,[]);
  });
 }
+
+test('guest snapshot received while saving identity subscribes to channels', async () => {
+ const conn = new FakeConnection();
+ conn.request=async(type,body)=>{seen.push(...body.channel_ids);return {channel_ids:body.channel_ids}};
+ let release, entered;
+ const blocked = new Promise(r => {release=r});
+ const atUpdate = new Promise(r => {entered=r});
+ const seen = [];
+ class DirectMessages extends EventTarget {
+   constructor(session) { super(); this.ready=Promise.resolve();  }
+   async importHistory() {} close() {}
+ }
+ class Empty extends EventTarget { async refresh() {} close() {} }
+ const none=()=>{};
+ const sources = {
+  './core/chat-session.js': {ChatSession},
+  './core/direct.js': {DirectMessages}, './core/calls.js': {Calls:Empty}, './core/groups.js':{Groups:Empty}, './core/voice.js':{Voice:Empty},
+  './core/connection.js':{Connection:{open:async()=>conn}}, './core/crypto.js':{generateIdentity},
+  './core/device.js':{signIn:async()=>({unique_id:'alice',device_id:'phone',client_id:'c1'})},
+  './core/identity-store.js':{clearIdentity:none,loadIdentity:none,saveIdentity:async()=>{entered();await blocked},updateMeta:none},
+  './core/outbox.js':{enqueue:none,flush:async()=>{},showPending:async()=>{},waitingCount:async()=>0},
+  './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:async()=>({})},
+ };
+ const context=vm.createContext({EventTarget,CustomEvent,setTimeout,clearTimeout,clearInterval,console});
+ const mod=new vm.SourceTextModule(await fs.readFile(new URL('../src/app.js',import.meta.url),'utf8'),{context});
+ await mod.link(spec=>new vm.SyntheticModule(Object.keys(sources[spec]),function(){for(const [k,v] of Object.entries(sources[spec]))this.setExport(k,v)},{context}));
+ await mod.evaluate();
+ const connecting=mod.namespace.connect({guest:{nickname:'Guest',serverPassword:''}});
+ await atUpdate;
+ conn.deliver(Msg.Snapshot,{root_channels:[{ChannelID:1,Name:'Lobby',SystemKind:'home'},{ChannelID:2,Name:'Public1'}]});
+ release();
+ await connecting;
+ assert.deepEqual(seen,[2]);
+});
