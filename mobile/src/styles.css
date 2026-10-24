@@ -252,3 +252,9 @@ a.row, .icon-btn, .call-bar-main { text-decoration: none; color: inherit; }
 .connect-guest { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
 .connect-guest summary { cursor: pointer; color: var(--accent); font-weight: 600; }
 .connect-guest[open] summary { margin-bottom: 12px; }
+
+#install-banner { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--surface, #0b151b); }
+#install-banner > div { display: grid; gap: 2px; flex: 1; min-width: 0; }
+#install-banner strong { font-size: 13px; }
+#install-banner span { font-size: 11px; color: var(--muted); }
+#install-banner .btn { min-height: 36px; padding: 6px 8px; font-size: 12px; white-space: nowrap; }

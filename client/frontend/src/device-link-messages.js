@@ -1,6 +1,26 @@
 // "PWA / Mobile login" (device linking) and the device list.
 // Keep both catalogs and placeholder names in sync.
 export const deviceLinkEnglish = {
+    "mobileAnnouncement.title": "noXa Mobile is here",
+    "mobileAnnouncement.subtitle": "Your chats and voice, on iPhone, Android and Mac.",
+    "mobileAnnouncement.setup": "Set up",
+    "mobileAnnouncement.later": "Not now",
+    "mobileGuide.title": "Connect your device",
+    "mobileGuide.platform": "Your device",
+    "mobileGuide.iphone": "iPhone / iPad",
+    "mobileGuide.android": "Android",
+    "mobileGuide.mac": "macOS",
+    "mobileGuide.iphone.login": "Scan the QR with Camera and open it in Safari, or enter the desktop code in the PWA.",
+    "mobileGuide.android.login": "Scan the QR with your camera or the PWA scanner, or enter the desktop code.",
+    "mobileGuide.mac.login": "Open the PWA on your Mac and enter the code from this desktop.",
+    "mobileGuide.compare": "Compare the number on both devices, then approve on this desktop.",
+    "mobileGuide.passkey": "After signing in, save a passkey under You for your next login.",
+    "mobileGuide.install": "Install as an app",
+    "mobileGuide.iphone.install": "In Safari, choose Share → Add to Home Screen. Enable Open as Web App if offered, then Add.",
+    "mobileGuide.android.install": "In Chrome, open ⋮ → Install and create shortcut → Install. Some versions show Add to Home screen → Install.",
+    "mobileGuide.mac.install": "In Safari on macOS 14 or later, choose File → Add to Dock. In Chrome, use the install icon in the address bar.",
+    "mobileGuide.installNote": "Open the installed app afterwards. If it asks you to sign in again, use your passkey or link it from this desktop.",
+
     "menu.otherLogin": "PWA / Mobile login…",
     "devices.title": "PWA / Mobile login",
     "devices.openPWA": "Open PWA",
@@ -51,6 +71,26 @@ export const deviceLinkEnglish = {
 };
 
 export const deviceLinkGerman = {
+    "mobileAnnouncement.title": "noXa Mobile ist da",
+    "mobileAnnouncement.subtitle": "Deine Chats und Sprachkanäle auf iPhone, Android und Mac.",
+    "mobileAnnouncement.setup": "Einrichten",
+    "mobileAnnouncement.later": "Später",
+    "mobileGuide.title": "Gerät verbinden",
+    "mobileGuide.platform": "Dein Gerät",
+    "mobileGuide.iphone": "iPhone / iPad",
+    "mobileGuide.android": "Android",
+    "mobileGuide.mac": "macOS",
+    "mobileGuide.iphone.login": "Scanne den QR-Code mit der Kamera und öffne ihn in Safari, oder gib den Desktop-Code in der PWA ein.",
+    "mobileGuide.android.login": "Scanne den QR-Code mit der Kamera oder dem PWA-Scanner, oder gib den Desktop-Code ein.",
+    "mobileGuide.mac.login": "Öffne die PWA auf deinem Mac und gib den Code dieses Desktops ein.",
+    "mobileGuide.compare": "Vergleiche die Zahl auf beiden Geräten und bestätige auf diesem Desktop.",
+    "mobileGuide.passkey": "Speichere nach der Anmeldung unter Du einen Passkey für den nächsten Login.",
+    "mobileGuide.install": "Als App installieren",
+    "mobileGuide.iphone.install": "In Safari: Teilen → Zum Home-Bildschirm. Falls angeboten, Als Web-App öffnen aktivieren und Hinzufügen wählen.",
+    "mobileGuide.android.install": "In Chrome: ⋮ → Installieren und Verknüpfung erstellen → Installieren. Manche Versionen zeigen Zum Startbildschirm hinzufügen → Installieren.",
+    "mobileGuide.mac.install": "In Safari ab macOS 14: Ablage → Zum Dock hinzufügen. In Chrome das Installationssymbol in der Adressleiste verwenden.",
+    "mobileGuide.installNote": "Öffne danach die installierte App. Falls sie erneut eine Anmeldung verlangt, nutze deinen Passkey oder verknüpfe sie über diesen Desktop.",
+
     "menu.otherLogin": "PWA- / Mobil-Anmeldung…",
     "devices.title": "PWA- / Mobil-Anmeldung",
     "devices.openPWA": "PWA öffnen",

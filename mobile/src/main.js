@@ -1,3 +1,4 @@
+import { initInstallPrompt, renderInstallPrompt } from "./ui/install-prompt.js";
 // main.js — boots the mobile web app: server info, stored device, router.
 import "./styles.css";
 import { app, connect, flushNow, loadDevice, loadInfo, markRead } from "./app.js";
@@ -20,6 +21,7 @@ const screens = {
 
 document.documentElement.lang = lang();
 const root = document.getElementById("app");
+initInstallPrompt();
 let cleanup = null;
 
 let routeToken = 0;
@@ -73,6 +75,7 @@ function onSignedIn({ offerPasskey: offer } = {}) {
 }
 
 function renderBanner() {
+    renderInstallPrompt(root);
     document.querySelector(".banner")?.remove();
     const waiting = app.outboxWaiting ? ` · ${t("outbox.count", { count: app.outboxWaiting })}` : "";
     if (app.session && !app.online) root.prepend(h("div", { class: "banner", role: "status" }, t("offline.banner") + waiting));

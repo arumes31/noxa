@@ -32,15 +32,16 @@ function watchHistoryCopy(deviceID) {
     });
 }
 
-export function openDeviceLinkDialog() {
+export function openDeviceLinkDialog({ quickGuide = false } = {}) {
     const v = window.__noxa;
     if (!v.state.myClientID) return v.toast(t("menu.notConnected"), "warn");
     const tabID = v.state.activeTabID;
     const overlay = el("div", "dlg-overlay");
     const dialog = el("div", "dlg dlg-wide device-link");
+    if (quickGuide) { overlay.classList.add("mobile-quick-overlay"); dialog.classList.add("mobile-quick-guide"); }
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-labelledby", "device-link-title");
-    const title = el("h3", "", t("devices.title"));
+    const title = el("h3", "", t(quickGuide ? "mobileGuide.title" : "devices.title"));
     title.id = "device-link-title";
     const linkPane = el("section", "device-link-pane");
     const pwaPane = el("div", "device-link-pwa");
@@ -50,7 +51,30 @@ export function openDeviceLinkDialog() {
     const close = button(t("common.close"), "dlg-cancel", () => closeDialog(overlay));
     const footer = el("div", "dlg-buttons");
     footer.append(close);
-    dialog.append(title, linkPane, pwaPane, listTitle, list, footer);
+    const guide = el("section", "mobile-platform-guide");
+    if (quickGuide) {
+        const platforms = el("div", "mobile-platforms");
+        platforms.setAttribute("role", "group");
+        platforms.setAttribute("aria-label", t("mobileGuide.platform"));
+        const steps = el("ol", "mobile-guide-steps");
+        const install = el("details", "mobile-install-guide");
+        const instruction = el("p");
+        install.append(el("summary", "", t("mobileGuide.install")), instruction, el("p", "hint", t("mobileGuide.installNote")));
+        const buttons = new Map();
+        const select = platform => {
+            for (const [name, node] of buttons) node.setAttribute("aria-pressed", String(name === platform));
+            steps.replaceChildren(...[t(`mobileGuide.${platform}.login`), t("mobileGuide.compare"), t("mobileGuide.passkey")].map(text => el("li", "", text)));
+            instruction.textContent = t(`mobileGuide.${platform}.install`);
+        };
+        for (const platform of ["iphone", "android", "mac"]) {
+            const node = button(t(`mobileGuide.${platform}`), "", () => select(platform));
+            buttons.set(platform, node);
+            platforms.append(node);
+        }
+        select("iphone");
+        guide.append(platforms, linkPane, steps, install);
+        dialog.append(title, guide, pwaPane, footer);
+    } else dialog.append(title, linkPane, pwaPane, listTitle, list, footer);
     overlay.append(dialog);
 
     let link = null;
@@ -174,6 +198,7 @@ export function openDeviceLinkDialog() {
                 }
                 linkPane.replaceChildren(el("p", "device-link-status", text), button(t("devices.newCode"), "", createLink));
                 refreshList();
+                if (approved) void window.__noxaMobile?.refresh();
             } catch (error) {
                 if (live()) showError(error);
             }

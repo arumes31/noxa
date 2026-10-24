@@ -337,6 +337,9 @@ func LinkProof(linkKey, transcript []byte) []byte {
 // CapabilityDevices advertises device management and device linking.
 const CapabilityDevices = "devices_v1"
 
+// CapabilityWebLogin advertises an enabled browser/PWA linking endpoint.
+const CapabilityWebLogin = "web_login_v1"
+
 // IntegrationDeviceRequest is the ServerQuery and gRPC form of device
 // administration for one account.
 type IntegrationDeviceRequest struct {
