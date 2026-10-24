@@ -1,6 +1,9 @@
 package health
 
 import (
+	"net"
+	"time"
+
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -341,5 +344,62 @@ func TestCredentialTransportTrustsOnlyImmediateConfiguredProxy(t *testing.T) {
 				t.Fatalf("status %d, want %d", w.Code, tc.want)
 			}
 		})
+	}
+}
+
+func TestStartAndShutdownReturnsNil(t *testing.T) {
+	srv := New("127.0.0.1:0", nil, nil)
+	errc := make(chan error, 1)
+	go func() {
+		errc <- srv.Start()
+	}()
+
+	// Wait briefly to let the server start. We can't guarantee it's listening, but it's enough for Shutdown to work.
+	time.Sleep(10 * time.Millisecond)
+
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() returned error: %v", err)
+	}
+
+	err := <-errc
+	if err != nil {
+		t.Fatalf("Start() returned error after Shutdown: %v", err)
+	}
+}
+
+func TestStartAndShutdownTLSReturnsNil(t *testing.T) {
+	srv := New("127.0.0.1:0", nil, nil)
+	srv.SetTLSCertificate(tls.Certificate{})
+	errc := make(chan error, 1)
+	go func() {
+		errc <- srv.Start()
+	}()
+
+	// Wait briefly to let the server start.
+	time.Sleep(10 * time.Millisecond)
+
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() returned error: %v", err)
+	}
+
+	err := <-errc
+	if err != nil {
+		t.Fatalf("Start() returned error after Shutdown: %v", err)
+	}
+}
+
+func TestStartReturnsErrorOnListenFailure(t *testing.T) {
+	// First manually listen on a port to guarantee it's in use
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer l.Close()
+
+	// Now try to start the server on the same port
+	srv := New(l.Addr().String(), nil, nil)
+	err = srv.Start()
+	if err == nil {
+		t.Fatal("expected Start() to return error due to address in use")
 	}
 }
