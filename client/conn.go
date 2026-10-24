@@ -80,6 +80,7 @@ type connManager struct {
 	deviceID                     string // linked device of this session (devices_v1)
 	supportsDevices              bool
 	supportsWebLogin             bool
+	supportsLinkPreview          bool
 	supportsDMDevices            bool                      // per-device direct messages (dm_devices_v1)
 	activityReportedAt           time.Time                 // last input report (devices_v1)
 	deviceLinks                  map[string]deviceLinkKeys // links created by this session
@@ -544,6 +545,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.deviceID = resp.DeviceID
 	m.supportsDevices = slices.Contains(resp.Capabilities, netproto.CapabilityDevices)
 	m.supportsWebLogin = slices.Contains(resp.Capabilities, netproto.CapabilityWebLogin)
+	m.supportsLinkPreview = slices.Contains(resp.Capabilities, netproto.CapabilityLinkPreview)
 	m.supportsDMDevices = m.supportsDevices && slices.Contains(resp.Capabilities, netproto.CapabilityDMDevices)
 	m.activityReportedAt = time.Time{}
 	m.deviceLinks = nil
@@ -593,7 +595,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	})
 	go guardCrash("heartbeat", func() { m.heartbeatLoop(conn) })
 	go guardCrash("relay renewal", func() { m.relayRenewalLoop(conn) })
-	go guardCrash("device registration", func() { m.ensureDeviceRegistered(conn) })
+	go guardCrash("device registration", func() { m.ensureDeviceRegistered(conn); m.approvePasskeyDevices(conn) })
 	return ""
 }
 
@@ -941,7 +943,7 @@ func (m *connManager) requestOn(expected net.Conn, send, reply netproto.MessageT
 // Keep this explicit: queries such as pre-key retrieval can consume state.
 func canDrainRequest(send netproto.MessageType) bool {
 	switch send {
-	case netproto.MsgRelayRequest, netproto.MsgAvatarGet, netproto.MsgClientInfoQuery, netproto.MsgServerInfoQuery,
+	case netproto.MsgLinkPreviewRequest, netproto.MsgRelayRequest, netproto.MsgAvatarGet, netproto.MsgClientInfoQuery, netproto.MsgServerInfoQuery,
 		netproto.MsgServerIconGet, netproto.MsgServerBannerGet, netproto.MsgChannelIconGet,
 		netproto.MsgEmojiGet:
 		return true

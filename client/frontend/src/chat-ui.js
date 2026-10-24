@@ -1,3 +1,4 @@
+import { previewImage } from "./preview-image.js";
 // chat-ui.js — wave-5b rich chat UI: markdown messages (91-93), link preview
 // cards (94), emoji picker + custom server emoji (95/96), reactions (97), file
 // paste/drop/upload + inline rendering (98-100), edit/delete (101/102),
@@ -664,9 +665,14 @@ async function emojiURL(name) {
 // next render (messages render often enough that this is acceptable).
 function applyCustomEmoji(html) {
     if (customDirty) ensureCustomEmoji();
+    if (typeof html !== "string" || html.indexOf(":") === -1) return html;
+
+    // Load image bytes only for emoji tokens present in this message.
     for (const e of customEmoji) {
-        const url = emojiURLs.get(e.name);
-        if (url === undefined) emojiURL(e.name);
+        if (html.includes(`:${e.name}:`)) {
+            const url = emojiURLs.get(e.name);
+            if (url === undefined) emojiURL(e.name);
+        }
     }
     return transformCustomEmoji(html, customEmoji, emojiURLs);
 }
@@ -3521,10 +3527,7 @@ function toggleEmojiPanel(target = null) {
 // ---------------------------------------------------------------------------
 // Link preview cards (94)
 // ---------------------------------------------------------------------------
-// LIMITATION: the card tries fetch(url) to scrape the <title>, but CORS
-// blocks almost every cross-origin page in the webview, so in practice this
-// nearly always falls back to a domain-only card. No external preview
-// services are used (privacy).
+// Metadata and raster thumbnails are fetched by the connected server only.
 
 const linkCards = new Map(); // url -> {title: string | null}
 let linkCardEl = null;
@@ -3551,55 +3554,15 @@ function closeLinkCard() {
     }
 }
 
-// metaContent pulls one <meta> value. It accepts the attributes in either
-// order, because plenty of pages emit content= before property=.
-function metaContent(html, key) {
-    const attr = key.startsWith("og:") ? "property" : "name";
-    const re = new RegExp(
-        `<meta[^>]+(?:${attr}=["']${key}["'][^>]*content=["']([^"']*)["']` +
-        `|content=["']([^"']*)["'][^>]*${attr}=["']${key}["'])`, "i");
-    const m = html.match(re);
-    const v = (m?.[1] ?? m?.[2] ?? "").trim();
-    return v || null;
-}
-
 async function linkPreview(url, controller) {
     if (linkCards.has(url)) return linkCards.get(url);
     let card = { title: null, desc: null, image: null };
-    if (!/^https?:\/\//i.test(url)) {
-        linkCards.set(url, card);
-        return card;
-    }
-    const timer = setTimeout(() => controller.abort(), 5000);
+    const owner = captureScope(readExportScope);
     try {
-        const resp = await fetch(url, { signal: controller.signal });
-        let html = "";
-        if (resp.body) {
-            const reader = resp.body.getReader();
-            const decoder = new TextDecoder();
-            let loaded = 0;
-            const maxBytes = 256 * 1024;
-            while (loaded < maxBytes) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                loaded += value.byteLength;
-                html += decoder.decode(value, { stream: true });
-            }
-            reader.cancel().catch(() => {});
-        } else {
-            html = (await resp.text()).slice(0, 256 * 1024);
-        }
-        card.title = metaContent(html, "og:title") ||
-            html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim() || null;
-        card.desc = metaContent(html, "og:description") || metaContent(html, "description");
-        const img = metaContent(html, "og:image");
-        if (img && /^https:\/\//i.test(img)) card.image = img;
-        if (card.title) card.title = card.title.slice(0, 120);
-        if (card.desc) card.desc = card.desc.slice(0, 200);
-    } catch { /* CORS/timeout — domain-only card */ }
-    finally { clearTimeout(timer); }
-    // A cancelled request must not repopulate a cleared server cache.
-    if (!controller.signal.aborted) linkCards.set(url, card);
+        const data = await window.go.main.App.LinkPreviewForTab(owner.tabID, url);
+        if (data) card = { title: data.title, desc: data.description, image: previewImage(data.thumbnail) };
+    } catch { /* unavailable: domain-only card, never a direct HTTP fallback */ }
+    if (!controller.signal.aborted && exportScopeIsCurrent(owner)) linkCards.set(url, card);
     return card;
 }
 

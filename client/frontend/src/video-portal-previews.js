@@ -1,3 +1,4 @@
+import { previewImage } from "./preview-image.js";
 import { t } from "./i18n.js";
 import { loadPreviewMetadata } from "./preview-metadata.js";
 
@@ -43,16 +44,8 @@ export function videoPortal(value) {
     return null;
 }
 
-export function portalThumbnail(provider, value) {
-    try {
-        if (typeof value !== "string" || value.length > 2048) return null;
-        const u = new URL(value), host = u.hostname.toLowerCase();
-        if (u.protocol !== "https:" || u.username || u.password || u.port) return null;
-        const allowed = provider === "whatnot" ? ["images.whatnot.com", "assets.whatnot.com", "www.whatnot.com"].includes(host) : provider === "twitch" ? host === "static-cdn.jtvnw.net" || /^clips-media-assets[0-9]?\.twitch\.tv$/.test(host)
-            : provider === "vimeo" ? ["i.vimeocdn.com", "secure-b.vimeocdn.com"].includes(host)
-                : provider === "dailymotion" && /^s[0-9]?\.dmcdn\.net$/.test(host);
-        return allowed ? u.href : null;
-    } catch { return null; }
+export function portalThumbnail(_provider, value) {
+    return previewImage(value);
 }
 
 export function renderVideoPortalPreviews(container, { enabled, scope, isCurrent }) {

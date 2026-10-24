@@ -3,12 +3,14 @@ package main
 import (
 	"encoding/base64"
 	"errors"
+	"net"
 	"strings"
 	"time"
 
 	"rsc.io/qr"
 
 	"noxa/internal/auth"
+	"noxa/internal/deviceproof"
 	"noxa/internal/netproto"
 )
 
@@ -94,6 +96,12 @@ func (m *connManager) handleDeviceEvent(f *netproto.Frame) {
 		transcript := netproto.LinkClaimTranscript(event.LinkID, event.Ed25519PublicKey, event.X25519PublicKey)
 		view.SAS = netproto.LinkSAS(linkKey, transcript)
 		view.Fingerprint = netproto.KeyFingerprint(event.Ed25519PublicKey)
+	}
+	if event.Event == netproto.DeviceEventLinked && event.Device != nil && len(event.Device.PasskeyProof) > 0 {
+		m.mu.Lock()
+		conn := m.conn
+		m.mu.Unlock()
+		go guardCrash("passkey device approval", func() { m.approvePasskeyDevices(conn) })
 	}
 	m.emit("device_event", view)
 }
@@ -386,4 +394,69 @@ func (a *App) ReportReadForTab(tabID, scope, id, messageID string) error {
 		return nil
 	}
 	return cm.write(netproto.MsgDeviceRequest, request)
+}
+
+// approvePasskeyDevices issues normal device endorsements only after checking a
+// key-bound WebAuthn assertion against a delegation signed by a trusted device.
+// Every request stays on the captured connection; reconnects cannot cross accounts.
+func (m *connManager) approvePasskeyDevices(conn net.Conn) {
+	m.mu.Lock()
+	due := m.conn == conn && conn != nil && m.supportsDMDevices && !m.isGuest
+	principal, self := m.uniqueID, m.deviceID
+	m.mu.Unlock()
+	if !due || self == "" {
+		return
+	}
+	id, err := m.identity()
+	if err != nil {
+		return
+	}
+	pinned, err := auth.LoadPublicKey(id.PublicKey)
+	if err != nil {
+		return
+	}
+	encryption, _, err := id.x25519()
+	if err != nil {
+		return
+	}
+	directory, err := m.requestDeviceDirectory(conn, principal)
+	if err != nil {
+		return
+	}
+	trusted, err := verifyDMDevices(principal, pinned, encryption, directory.Devices)
+	if err != nil {
+		return
+	}
+	known := map[string]bool{}
+	for _, d := range trusted {
+		known[d.DeviceID] = true
+	}
+	if !known[self] {
+		return
+	}
+	frame, err := m.requestOn(conn, netproto.MsgDeviceRequest, netproto.MsgDeviceResult, netproto.DeviceRequest{Action: netproto.DeviceActionList}, 10*time.Second)
+	if err != nil {
+		return
+	}
+	var list netproto.DeviceResult
+	if netproto.Decode(frame, &list) != nil || list.Action != netproto.DeviceActionList {
+		return
+	}
+	for _, target := range list.Devices {
+		if target.Kind != "web" || target.DeviceID == self || known[target.DeviceID] || target.FirstDevice || target.RevokedAt != 0 || len(target.PasskeyProof) == 0 {
+			continue
+		}
+		if deviceproof.Verify(principal, pinned, target.Ed25519Public, target.X25519Public, target.PasskeyProof) != nil {
+			continue
+		}
+		signature, err := auth.SignChallenge(id.PrivateKey, netproto.DeviceApprovalTranscript(principal, self, target.Ed25519Public, target.X25519Public))
+		if err != nil {
+			continue
+		}
+		_, err = m.requestOn(conn, netproto.MsgDeviceRequest, netproto.MsgDeviceResult, netproto.DeviceRequest{Action: netproto.DeviceActionEndorse, DeviceID: target.DeviceID, Signature: signature}, 10*time.Second)
+		if err != nil {
+			return
+		}
+		m.forgetDMDevices(principal)
+	}
 }

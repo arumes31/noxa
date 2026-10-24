@@ -1,3 +1,5 @@
+import { installViewport } from "../src/ui/viewport.js";
+installViewport();
 import "../src/styles.css";
 import { app } from "../src/app.js";
 import { renderNewGroup } from "../src/ui/new-group.js";

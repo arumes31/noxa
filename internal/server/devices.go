@@ -153,6 +153,7 @@ func FormatLinkCode(code string) string {
 func deviceInfo(d store.Device, currentDeviceID string) netproto.DeviceInfo {
 	info := netproto.DeviceInfo{
 		DeviceID:      d.DeviceID,
+		PasskeyProof:  d.PasskeyProof,
 		Kind:          d.Kind,
 		Name:          d.Name,
 		Fingerprint:   netproto.KeyFingerprint(d.Ed25519Public),

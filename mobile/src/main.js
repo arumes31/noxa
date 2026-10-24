@@ -1,3 +1,4 @@
+import { installViewport } from "./ui/viewport.js";
 import { initInstallPrompt, renderInstallPrompt } from "./ui/install-prompt.js";
 // main.js — boots the mobile web app: server info, stored device, router.
 import "./styles.css";
@@ -23,6 +24,7 @@ const screens = {
 
 document.documentElement.lang = lang();
 const root = document.getElementById("app");
+installViewport();
 initInstallPrompt();
 let cleanup = null;
 

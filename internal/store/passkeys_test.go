@@ -26,7 +26,7 @@ func TestPasskeysFollowTheirDevice(t *testing.T) {
 		t.Fatalf("new handle = %x, %v", handle, err)
 	}
 	id := []byte(principal + "-credential")
-	if err := s.AddPasskey(ctx, Passkey{CredentialID: id, Principal: principal, UserHandle: handle, DeviceID: phone.DeviceID, Name: "iPhone", Credential: []byte(`{"id":"x"}`)}); err != nil {
+	if err := s.AddPasskey(ctx, Passkey{CredentialID: id, Principal: principal, UserHandle: handle, DeviceID: phone.DeviceID, Name: "iPhone", Credential: []byte(`{"id":"x"}`), DMCertificate: []byte(`{"signed":"delegation"}`)}); err != nil {
 		t.Fatal(err)
 	}
 	again, err := s.PasskeyUserHandle(ctx, principal)
@@ -44,7 +44,7 @@ func TestPasskeysFollowTheirDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	listed, err := s.Passkeys(ctx, principal)
-	if err != nil || len(listed) != 1 || listed[0].LastUsedAt.IsZero() || string(listed[0].Credential) != `{"id": "y"}` {
+	if err != nil || len(listed) != 1 || listed[0].LastUsedAt.IsZero() || string(listed[0].Credential) != `{"id": "y"}` || string(listed[0].DMCertificate) != `{"signed":"delegation"}` {
 		t.Fatalf("passkeys = %+v, %v", listed, err)
 	}
 

@@ -183,3 +183,17 @@ func TestNormalizeDeviceName(t *testing.T) {
 		t.Fatalf("long name length = %d", len([]rune(long)))
 	}
 }
+
+func TestDevicePasskeyProofRoundTrip(t *testing.T) {
+	s := pollTestStore(t)
+	input := newTestDevice(fmt.Sprintf("proof-%d", time.Now().UnixNano()), 0)
+	input.PasskeyProof = []byte(`{"proof":"signed assertion"}`)
+	d, err := s.AddDevice(t.Context(), input, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.DeviceByKey(t.Context(), input.Ed25519Public)
+	if err != nil || string(got.PasskeyProof) != string(input.PasskeyProof) || d.DeviceID != got.DeviceID {
+		t.Fatalf("proof round trip: %+v, %v", got, err)
+	}
+}

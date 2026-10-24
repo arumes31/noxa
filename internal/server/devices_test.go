@@ -46,7 +46,7 @@ func (f *fakeDevices) AddDevice(_ context.Context, d store.NewDevice, limit int)
 	device := store.Device{
 		DeviceID: "dev-" + string(rune('a'+f.next)), Principal: d.Principal, UserID: d.UserID, Kind: d.Kind,
 		Name: store.NormalizeDeviceName(d.Name), Ed25519Public: d.Ed25519Public, X25519Public: d.X25519Public,
-		FirstDevice: active == 0, ApprovedBy: d.ApprovedBy, ApprovalSignature: d.ApprovalSignature,
+		FirstDevice: active == 0, ApprovedBy: d.ApprovedBy, ApprovalSignature: d.ApprovalSignature, PasskeyProof: d.PasskeyProof,
 		CreatedAt: now, LastSeenAt: now,
 	}
 	f.devices = append(f.devices, device)

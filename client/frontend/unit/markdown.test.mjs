@@ -112,25 +112,27 @@ function fakePlaceholder(attributes) {
 }
 
 describe("image placeholders", () => {
-    it("loads only http(s) images, without a referrer, when asked", () => {
+    it("loads image bytes through the server without contacting the remote URL", async () => {
+        globalThis.window = { __noxa: { state: { activeTabID: "tab", serverGeneration: 1 } }, go: { main: { App: { ImagePreviewForTab: async (tab, url) => { assert.equal(tab, "tab"); assert.match(url, /^https:/); return { thumbnail: "data:image/jpeg;base64,/9j/2Q==" }; } } } } };
         const id = renderMarkdown("![diagram](https://example.test/a.png?x=1&y=2)").match(/data-img="(\d+)"/)[1];
         const { button, created } = fakePlaceholder({ "data-img": id, "data-alt": "diagram" });
-        const img = loadImagePlaceholder(button);
+        button.isConnected = true;
+        const img = await loadImagePlaceholder(button);
         assert.equal(created.length, 1);
         assert.equal(button.replaced, img);
         assert.equal(img.tag, "img");
         assert.equal(img.className, "md-img");
-        assert.equal(img.src, "https://example.test/a.png?x=1&y=2");
+        assert.equal(img.src, "data:image/jpeg;base64,/9j/2Q==");
         assert.equal(img.alt, "diagram");
         assert.equal(img.referrerPolicy, "no-referrer");
 
         const unsafe = fakePlaceholder({ "data-src": "javascript:alert(1)", "data-img": "999999" });
-        assert.equal(loadImagePlaceholder(unsafe.button), null);
+        assert.equal(await loadImagePlaceholder(unsafe.button), null);
         assert.equal(unsafe.created.length, 0);
-        assert.equal(loadImagePlaceholder(null), null);
+        assert.equal(await loadImagePlaceholder(null), null);
     });
 
-    it("binds one delegated click handler per root", () => {
+    it("binds one delegated click handler per root", async () => {
         const listeners = [];
         const root = { addEventListener: (type, fn, capture) => listeners.push({ type, fn, capture }) };
         bindImagePlaceholders(root);
@@ -150,9 +152,12 @@ describe("image placeholders", () => {
         });
         click(null);
         assert.equal(prevented, 0);
+        button.isConnected = true;
         click(button);
+        await new Promise(resolve => setImmediate(resolve));
         assert.equal(prevented, 1);
         assert.equal(stopped, 1);
-        assert.equal(button.replaced.src, "https://example.test/b.png");
+        assert.equal(button.replaced.src, "data:image/jpeg;base64,/9j/2Q==");
+        delete globalThis.window;
     });
 });
