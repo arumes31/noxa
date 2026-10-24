@@ -20,16 +20,20 @@ export function renderDM(root, peer) {
 
     function line(message) {
         const classes = ["msg", message.self ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
-        const body = message.body === null || message.body === undefined
-            ? h("span", { class: "msg-locked" }, t("chat.locked"))
-            : messageBody(message.body, { conn: session.conn, channelID: 0 });
+        const body = message.deleted ? h("span", { class: "msg-deleted" }, t("chat.deleted"))
+            : message.body === null || message.body === undefined
+                ? h("span", { class: "msg-locked" }, t("chat.locked"))
+                : messageBody(message.body, { conn: session.conn, channelID: 0 });
         const from = message.self ? session.nickname : (message.fromNickname || name);
-        return h("div", { class: classes },
+        const changeable = message.self && !message.deleted && !message.pending && !message.queued && !message.failed;
+        return h("div", { class: classes, tabindex: changeable ? "0" : null, role: changeable ? "button" : null,
+            "aria-label": changeable ? t("dm.messageActions") : null, onclick: changeable ? () => messageActions(message) : null },
             h("span", { class: "msg-time" }, clock(message.sentAt)),
             avatar(from, "sm"),
             h("div", { class: "msg-body" },
                 h("span", { class: "msg-from" }, from),
                 body,
+                message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
                 message.queued ? h("div", { class: "msg-state" }, t("outbox.waiting")) : null,
                 message.failed ? h("div", { class: "error" }, t("outbox.notSent")) : null));
     }
@@ -69,12 +73,44 @@ export function renderDM(root, peer) {
         }
     }
 
+    // Editing reuses the composer; Cancel returns it to sending.
+    let editing = null;
+    const editBar = h("div", { class: "edit-bar", hidden: true }, h("span", {}, t("dm.editing")),
+        h("button", { class: "btn", type: "button", onclick: () => stopEditing() }, t("link.cancel")));
+    function stopEditing() {
+        editing = null;
+        editBar.hidden = true;
+        input.value = "";
+    }
+    async function messageActions(message) {
+        const choice = await sheet(t("dm.messageActions"), null, [
+            { label: t("dm.edit"), value: "edit", primary: true },
+            { label: t("dm.delete"), value: "delete", danger: true },
+            { label: t("link.cancel"), value: null },
+        ]);
+        if (choice === "edit") {
+            editing = message.id;
+            editBar.hidden = false;
+            input.value = message.body || "";
+            input.focus();
+        } else if (choice === "delete") {
+            const sure = await sheet(t("dm.deleteTitle"), t("dm.deleteBody"), [{ label: t("dm.delete"), value: true, danger: true }, { label: t("link.cancel"), value: false }]);
+            if (sure) await dm.deleteMessage(peer, message.id).catch(error => toast(t("chat.sendFailed", { error: error.message }), "warn"));
+        }
+    }
+
     const form = h("form", { class: "composer", onsubmit: async event => {
         event.preventDefault();
         const text = input.value.trim();
         if (!text) return;
         input.value = "";
         input.style.height = "";
+        if (editing) {
+            const ref = editing;
+            stopEditing();
+            await dm.editMessage(peer, ref, text).catch(error => toast(t("chat.sendFailed", { error: error.message }), "warn"));
+            return;
+        }
         const id = crypto.randomUUID();
         const sentAt = Date.now() / 1000;
         try {
@@ -110,7 +146,7 @@ export function renderDM(root, peer) {
     dm.addEventListener("history", onHistory);
     root.replaceChildren(h("section", { class: "screen chat" },
         header(name, { back: "#/home", action: h("button", { class: "icon-btn", type: "button", "aria-label": t("call.start", { name }), onclick: () => startCall(peer).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone")) }),
-        banner, notice, progress, log, form));
+        banner, notice, progress, log, editBar, form));
     dm.ready.then(render);
     checkTrust();
     return () => {

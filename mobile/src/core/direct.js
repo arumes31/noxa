@@ -112,6 +112,11 @@ export class DirectMessages extends EventTarget {
         } else {
             conversation.messages.push(message);
             conversation.messages.sort((a, b) => a.sentAt - b.sentAt);
+            const waiting = (conversation.pendingChanges || []).filter(change => change.ref === message.id);
+            if (waiting.length) {
+                conversation.pendingChanges = conversation.pendingChanges.filter(change => change.ref !== message.id);
+                queueMicrotask(() => waiting.forEach(change => this.#applyChange(peer, change)));
+            }
             if (conversation.messages.length > MAX_MESSAGES) conversation.messages.splice(0, conversation.messages.length - MAX_MESSAGES);
         }
         // Own messages are written at once; incoming bursts are batched.
@@ -215,10 +220,31 @@ export class DirectMessages extends EventTarget {
         const text = sender ? openDM(data.text, sender.x25519, this.identity.xSecret) : null;
         const own = from === this.ownUID;
         const nickname = own ? "" : data.from;
+        if (data.dm_action) {
+            if (text !== null) this.#applyChange(peer, { action: data.dm_action, ref: data.ref_client_msg_id, from, text });
+            return;
+        }
         this.#add(peer, nickname, {
             id: data.client_msg_id || crypto.randomUUID(), from, fromNickname: data.from, self: own,
             body: text, verified: !!text, sentAt: Date.now() / 1000, offline: !!data.offline,
         });
+    }
+
+    /**
+     * Applies an edit or deletion from the original's sender. A change that
+     * arrives before its message (spool order) waits on the conversation.
+     */
+    #applyChange(peer, change) {
+        const conversation = this.conversation(peer);
+        const message = conversation.messages.find(m => m.id === change.ref);
+        if (!message) {
+            conversation.pendingChanges = [...(conversation.pendingChanges || []), change].slice(-50);
+            this.#save(peer);
+            return;
+        }
+        if (message.from !== change.from) return;
+        if (change.action === "delete") this.#add(peer, "", { ...message, body: "", deleted: true, edited: false });
+        else if (change.action === "edit" && !message.deleted) this.#add(peer, "", { ...message, body: change.text, edited: true });
     }
 
     async #senderDevice(uid, data, refresh = false) {
@@ -251,7 +277,27 @@ export class DirectMessages extends EventTarget {
         this.#add(peer, "", { id, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, queued: !expired, failed: expired });
     }
 
-    async #sendCopies(peer, text, id, retried) {
+    /** Edits one of this account's messages on every device. */
+    async editMessage(peer, ref, text) {
+        const message = this.#ownMessage(peer, ref);
+        await this.#sendCopies(peer, text, crypto.randomUUID(), false, { dm_action: "edit", ref_client_msg_id: ref });
+        this.#add(peer, "", { ...message, body: text, edited: true });
+    }
+
+    /** Deletes one of this account's messages on every device. */
+    async deleteMessage(peer, ref) {
+        const message = this.#ownMessage(peer, ref);
+        await this.#sendCopies(peer, "", crypto.randomUUID(), false, { dm_action: "delete", ref_client_msg_id: ref });
+        this.#add(peer, "", { ...message, body: "", deleted: true, edited: false });
+    }
+
+    #ownMessage(peer, ref) {
+        const message = this.conversations.get(peer)?.messages.find(m => m.id === ref);
+        if (!message || !message.self || message.deleted || message.queued || message.pending) throw new Error("only your sent messages can be changed");
+        return message;
+    }
+
+    async #sendCopies(peer, text, id, retried, change = {}) {
         const [recipient, own] = await Promise.all([this.devicesOf(peer, { refresh: retried }), this.devicesOf(this.ownUID, { refresh: retried })]);
         if (recipient.trust === Trust.changed) throw Object.assign(new Error("identity changed"), { code: "identity_changed" });
         if (!recipient.devices.length) throw Object.assign(new Error("no devices"), { code: "unavailable" });
@@ -260,10 +306,10 @@ export class DirectMessages extends EventTarget {
         for (const device of [...own.devices, ...recipient.devices]) targets.set(device.deviceID, device);
         const copies = [...targets.values()].map(device => ({ device_id: device.deviceID, text: sealDM(text, device.x25519, this.identity.xSecret) }));
         try {
-            await this.conn.request(Msg.ChatSend, { to_unique_id: peer, enc: true, ack_requested: true, client_msg_id: id, copies },
+            await this.conn.request(Msg.ChatSend, { to_unique_id: peer, enc: true, ack_requested: true, client_msg_id: id, copies, ...change },
                 MsgChatAccepted, { accept: r => r.client_msg_id === id });
         } catch (error) {
-            if (!retried && error instanceof ProtocolError && error.devicesStale) return this.#sendCopies(peer, text, id, true);
+            if (!retried && error instanceof ProtocolError && error.devicesStale) return this.#sendCopies(peer, text, id, true, change);
             throw error;
         }
     }

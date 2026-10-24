@@ -82,10 +82,31 @@ test("a direct message reaches the desktop and the phone, and the phone replies"
     expect(openDM(synced.text, phoneKey, rowan.identity.xSecret)).toBe("hey Ivy, from my phone");
     await expect(page.locator(".msg.own").last()).not.toHaveClass(/pending|failed/);
 
+    // The phone edits its reply; Ivy receives the edit for that message.
+    const edited = nextDirect(ivy, data => data.dm_action === "edit");
+    await page.locator(".msg.own").last().click();
+    await page.getByRole("button", { name: "Edit" }).click();
+    await composer.fill("hey Ivy, from my phone (edited)");
+    await composer.press("Enter");
+    const edit = await edited;
+    expect(edit.ref_client_msg_id).toBe(reply.client_msg_id);
+    expect(openDM(edit.text, phoneKey, ivy.identity.xSecret)).toBe("hey Ivy, from my phone (edited)");
+    await expect(page.getByRole("log")).toContainText("(edited)");
+
+    // Ivy deletes her message for everyone; the phone shows it as deleted.
+    const deviceList = (await directory(ivy, rowan.uniqueID)).devices;
+    const deletion = [...deviceList, { device_id: ivyDevice, x25519_public_key: btoa(String.fromCharCode(...ivy.identity.xPublic)) }]
+        .map(d => ({ device_id: d.device_id, text: sealDM("", fromBase64(d.x25519_public_key), ivy.identity.xSecret) }));
+    await ivy.conn.request(Msg.ChatSend, { to_unique_id: rowan.uniqueID, enc: true, ack_requested: true, client_msg_id: "ivy-del-1",
+        dm_action: "delete", ref_client_msg_id: "ivy-1", copies: deletion }, 154, { accept: r => r.client_msg_id === "ivy-del-1" });
+    await expect(page.getByRole("log")).toContainText("Message deleted");
+    await expect(page.getByRole("log")).not.toContainText("hi Rowan, it's Ivy");
+
     // History survives a reload (encrypted in IndexedDB).
     await page.waitForTimeout(500);
     await page.reload();
-    await expect(page.getByRole("log")).toContainText("hey Ivy, from my phone", { timeout: 15000 });
+    await expect(page.getByRole("log")).toContainText("hey Ivy, from my phone (edited)", { timeout: 15000 });
+    await expect(page.getByRole("log")).toContainText("Message deleted");
 
     rowan.conn.close();
     ivy.conn.close();

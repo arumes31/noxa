@@ -179,6 +179,8 @@ button { cursor: pointer; }
 .round-btn.video { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
 .round-btn.decline { background: var(--coral); border-color: var(--coral); color: #fff; }
 .call-usage { text-align: center; }
+.edit-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; font-size: .8rem; color: var(--accent); border-top: 1px solid var(--border); }
+.edit-bar[hidden] { display: none; }
 .composer { display: flex; gap: 8px; align-items: flex-end; padding: 8px 12px calc(10px + var(--safe-bottom)); background: var(--bg); border-top: 1px solid var(--border); }
 .composer textarea { flex: 1; min-height: 44px; max-height: 140px; resize: none; padding: 11px 14px; border-radius: 22px; border: 1px solid var(--border); background: var(--bg-raised); outline: none; }
 .composer textarea:focus { border-color: var(--border-strong); }
