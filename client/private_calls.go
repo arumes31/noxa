@@ -244,7 +244,7 @@ func (m *connManager) privateCallPeerKey(callID, target string, ownPub [32]byte)
 		}
 		_, recordErr := e2ee.ParseKeyRecord(participant.PublicKey, participant.UniqueID)
 		_, deviceKey := parseDeviceX25519(participant.PublicKey)
-		if participant.ClientID == "" || (recordErr != nil && !(participant.DeviceID != "" && deviceKey)) {
+		if participant.ClientID == "" || (recordErr != nil && (participant.DeviceID == "" || !deviceKey)) {
 			return [32]byte{}, errors.New("invalid call participant encryption key")
 		}
 	}

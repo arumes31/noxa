@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/netip"
@@ -331,7 +332,8 @@ func (s *Server) appHandler() http.Handler {
 			s.serveIndex(w, r)
 			return
 		}
-		info, err := os.Stat(filepath.Join(s.cfg.AppDir, filepath.FromSlash(rel)))
+		// os.DirFS rejects paths that are not fs.ValidPath, so rel stays under AppDir.
+		info, err := fs.Stat(os.DirFS(s.cfg.AppDir), rel)
 		if err != nil || info.IsDir() {
 			if path.Ext(rel) == "" {
 				s.serveIndex(w, r)

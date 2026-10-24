@@ -15,8 +15,8 @@ import (
 
 	"golang.org/x/crypto/nacl/box"
 
-	"noxa/internal/e2ee"
 	"golang.org/x/crypto/nacl/secretbox"
+	"noxa/internal/e2ee"
 )
 
 var updateMobileFixture = flag.Bool("update-mobile-fixture", false, "rewrite mobile/unit/fixtures/interop.json")

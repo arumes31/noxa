@@ -33,6 +33,9 @@ import (
 // recordSize is the RFC 8188 record size; one record carries the payload.
 const recordSize = 4096
 
+// p256PublicLen is the length of an uncompressed P-256 public key (keyid).
+const p256PublicLen = 65
+
 // MaxPayload is the largest plaintext that fits one record after padding
 // delimiter and AEAD tag (push services accept 4096-byte bodies).
 const MaxPayload = recordSize - 86 - 16 - 1
@@ -92,6 +95,9 @@ func encrypt(sub Subscription, plaintext []byte, random io.Reader) ([]byte, erro
 		return nil, err
 	}
 	asPublicBytes := asPrivate.PublicKey().Bytes()
+	if len(asPublicBytes) != p256PublicLen {
+		return nil, errors.New("webpush: unexpected P-256 public key length")
+	}
 	keyInfo := append(append([]byte("WebPush: info\x00"), sub.P256dh...), asPublicBytes...)
 	ikm, err := hkdf.Key(sha256.New, shared, sub.Auth, string(keyInfo), 32)
 	if err != nil {
@@ -118,7 +124,7 @@ func encrypt(sub Subscription, plaintext []byte, random io.Reader) ([]byte, erro
 	header := make([]byte, 0, 86)
 	header = append(header, salt...)
 	header = binary.BigEndian.AppendUint32(header, recordSize)
-	header = append(header, byte(len(asPublicBytes)))
+	header = append(header, p256PublicLen)
 	header = append(header, asPublicBytes...)
 	return gcm.Seal(header, nonce, record, nil), nil
 }
@@ -144,6 +150,7 @@ func LoadOrCreateVAPID(path, subject string) (*VAPID, error) {
 	if strings.TrimSpace(subject) == "" {
 		return nil, errors.New("webpush: a VAPID subject (mailto: or https:) is required")
 	}
+	// #nosec G304 -- path is the administrator-configured web.push_vapid_key_file.
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		key, genErr := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -275,7 +282,7 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, msg Message) error 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	switch {
 	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:

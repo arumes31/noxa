@@ -112,9 +112,9 @@ type Client struct {
 	x25519Key string
 	// Retained only after successful guest proof, for explicit role enrollment.
 	verifiedGuestKey string
-	authSigningKey   string // bound to the successful authentication attempt
-	deviceID         string // linked device of this session, if registered
-	webTransport     bool   // connected through the mobile web app
+	authSigningKey   string    // bound to the successful authentication attempt
+	deviceID         string    // linked device of this session, if registered
+	webTransport     bool      // connected through the mobile web app
 	inputAt          time.Time // last input a desktop reported (activity)
 	webHidden        bool      // the web app reported it is in the background
 	passkey          *passkeyCeremony

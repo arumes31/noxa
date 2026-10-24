@@ -60,11 +60,11 @@ service Control {
   rpc ListBans(ListBansRequest) returns (ListBansResponse);
   // Linked devices of one account; every device RPC requires Administrator.
   // Results never contain device keys.
-  rpc ListDevices(ListDevicesRequest) returns (DevicesResponse);
+  rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse);
   // Revoking signs the device out immediately.
-  rpc RevokeDevice(RevokeDeviceRequest) returns (DevicesResponse);
+  rpc RevokeDevice(RevokeDeviceRequest) returns (RevokeDeviceResponse);
   // Reset revokes every device of the account except keep_device_id.
-  rpc ResetDevices(ResetDevicesRequest) returns (DevicesResponse);
+  rpc ResetDevices(ResetDevicesRequest) returns (ResetDevicesResponse);
   // Management reads share the native scoped projection and hierarchy rules.
   rpc GetRoleState(GetRoleStateRequest) returns (GetRoleStateResponse);
   rpc ListRoleMembers(ListRoleMembersRequest) returns (ListRoleMembersResponse);
@@ -571,7 +571,21 @@ message DeviceRecord {
   int64 revoked_at = 9;
 }
 
-message DevicesResponse {
+message ListDevicesResponse {
+  string unique_id = 1;
+  // Active devices of the account.
+  repeated DeviceRecord devices = 2;
+}
+
+message RevokeDeviceResponse {
+  string unique_id = 1;
+  // Active devices after the request.
+  repeated DeviceRecord devices = 2;
+  // Devices revoked by this request.
+  repeated DeviceRecord revoked = 3;
+}
+
+message ResetDevicesResponse {
   string unique_id = 1;
   // Active devices after the request.
   repeated DeviceRecord devices = 2;

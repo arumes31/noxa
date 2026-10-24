@@ -4518,31 +4518,29 @@ func (x *DeviceRecord) GetRevokedAt() int64 {
 	return 0
 }
 
-type DevicesResponse struct {
+type ListDevicesResponse struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	UniqueId string                 `protobuf:"bytes,1,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
-	// Active devices after the request.
-	Devices []*DeviceRecord `protobuf:"bytes,2,rep,name=devices,proto3" json:"devices,omitempty"`
-	// Devices revoked by this request.
-	Revoked       []*DeviceRecord `protobuf:"bytes,3,rep,name=revoked,proto3" json:"revoked,omitempty"`
+	// Active devices of the account.
+	Devices       []*DeviceRecord `protobuf:"bytes,2,rep,name=devices,proto3" json:"devices,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DevicesResponse) Reset() {
-	*x = DevicesResponse{}
+func (x *ListDevicesResponse) Reset() {
+	*x = ListDevicesResponse{}
 	mi := &file_control_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DevicesResponse) String() string {
+func (x *ListDevicesResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DevicesResponse) ProtoMessage() {}
+func (*ListDevicesResponse) ProtoMessage() {}
 
-func (x *DevicesResponse) ProtoReflect() protoreflect.Message {
+func (x *ListDevicesResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_control_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -4554,26 +4552,143 @@ func (x *DevicesResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DevicesResponse.ProtoReflect.Descriptor instead.
-func (*DevicesResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListDevicesResponse.ProtoReflect.Descriptor instead.
+func (*ListDevicesResponse) Descriptor() ([]byte, []int) {
 	return file_control_proto_rawDescGZIP(), []int{64}
 }
 
-func (x *DevicesResponse) GetUniqueId() string {
+func (x *ListDevicesResponse) GetUniqueId() string {
 	if x != nil {
 		return x.UniqueId
 	}
 	return ""
 }
 
-func (x *DevicesResponse) GetDevices() []*DeviceRecord {
+func (x *ListDevicesResponse) GetDevices() []*DeviceRecord {
 	if x != nil {
 		return x.Devices
 	}
 	return nil
 }
 
-func (x *DevicesResponse) GetRevoked() []*DeviceRecord {
+type RevokeDeviceResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	UniqueId string                 `protobuf:"bytes,1,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	// Active devices after the request.
+	Devices []*DeviceRecord `protobuf:"bytes,2,rep,name=devices,proto3" json:"devices,omitempty"`
+	// Devices revoked by this request.
+	Revoked       []*DeviceRecord `protobuf:"bytes,3,rep,name=revoked,proto3" json:"revoked,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevokeDeviceResponse) Reset() {
+	*x = RevokeDeviceResponse{}
+	mi := &file_control_proto_msgTypes[65]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeDeviceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeDeviceResponse) ProtoMessage() {}
+
+func (x *RevokeDeviceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[65]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeDeviceResponse.ProtoReflect.Descriptor instead.
+func (*RevokeDeviceResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *RevokeDeviceResponse) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *RevokeDeviceResponse) GetDevices() []*DeviceRecord {
+	if x != nil {
+		return x.Devices
+	}
+	return nil
+}
+
+func (x *RevokeDeviceResponse) GetRevoked() []*DeviceRecord {
+	if x != nil {
+		return x.Revoked
+	}
+	return nil
+}
+
+type ResetDevicesResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	UniqueId string                 `protobuf:"bytes,1,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	// Active devices after the request.
+	Devices []*DeviceRecord `protobuf:"bytes,2,rep,name=devices,proto3" json:"devices,omitempty"`
+	// Devices revoked by this request.
+	Revoked       []*DeviceRecord `protobuf:"bytes,3,rep,name=revoked,proto3" json:"revoked,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResetDevicesResponse) Reset() {
+	*x = ResetDevicesResponse{}
+	mi := &file_control_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResetDevicesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResetDevicesResponse) ProtoMessage() {}
+
+func (x *ResetDevicesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResetDevicesResponse.ProtoReflect.Descriptor instead.
+func (*ResetDevicesResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *ResetDevicesResponse) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *ResetDevicesResponse) GetDevices() []*DeviceRecord {
+	if x != nil {
+		return x.Devices
+	}
+	return nil
+}
+
+func (x *ResetDevicesResponse) GetRevoked() []*DeviceRecord {
 	if x != nil {
 		return x.Revoked
 	}
@@ -4591,7 +4706,7 @@ type MoveMemberRequest struct {
 
 func (x *MoveMemberRequest) Reset() {
 	*x = MoveMemberRequest{}
-	mi := &file_control_proto_msgTypes[65]
+	mi := &file_control_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4603,7 +4718,7 @@ func (x *MoveMemberRequest) String() string {
 func (*MoveMemberRequest) ProtoMessage() {}
 
 func (x *MoveMemberRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[65]
+	mi := &file_control_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4616,7 +4731,7 @@ func (x *MoveMemberRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveMemberRequest.ProtoReflect.Descriptor instead.
 func (*MoveMemberRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{65}
+	return file_control_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *MoveMemberRequest) GetClientId() string {
@@ -4643,7 +4758,7 @@ type KickMemberRequest struct {
 
 func (x *KickMemberRequest) Reset() {
 	*x = KickMemberRequest{}
-	mi := &file_control_proto_msgTypes[66]
+	mi := &file_control_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4655,7 +4770,7 @@ func (x *KickMemberRequest) String() string {
 func (*KickMemberRequest) ProtoMessage() {}
 
 func (x *KickMemberRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[66]
+	mi := &file_control_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4668,7 +4783,7 @@ func (x *KickMemberRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KickMemberRequest.ProtoReflect.Descriptor instead.
 func (*KickMemberRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{66}
+	return file_control_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *KickMemberRequest) GetClientId() string {
@@ -4696,7 +4811,7 @@ type KickMemberResponse struct {
 
 func (x *KickMemberResponse) Reset() {
 	*x = KickMemberResponse{}
-	mi := &file_control_proto_msgTypes[67]
+	mi := &file_control_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4708,7 +4823,7 @@ func (x *KickMemberResponse) String() string {
 func (*KickMemberResponse) ProtoMessage() {}
 
 func (x *KickMemberResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[67]
+	mi := &file_control_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4721,7 +4836,7 @@ func (x *KickMemberResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KickMemberResponse.ProtoReflect.Descriptor instead.
 func (*KickMemberResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{67}
+	return file_control_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *KickMemberResponse) GetClientId() string {
@@ -4750,7 +4865,7 @@ type BanMemberRequest struct {
 
 func (x *BanMemberRequest) Reset() {
 	*x = BanMemberRequest{}
-	mi := &file_control_proto_msgTypes[68]
+	mi := &file_control_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4762,7 +4877,7 @@ func (x *BanMemberRequest) String() string {
 func (*BanMemberRequest) ProtoMessage() {}
 
 func (x *BanMemberRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[68]
+	mi := &file_control_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4775,7 +4890,7 @@ func (x *BanMemberRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BanMemberRequest.ProtoReflect.Descriptor instead.
 func (*BanMemberRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{68}
+	return file_control_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *BanMemberRequest) GetClientId() string {
@@ -4812,7 +4927,7 @@ type BanMemberResponse struct {
 
 func (x *BanMemberResponse) Reset() {
 	*x = BanMemberResponse{}
-	mi := &file_control_proto_msgTypes[69]
+	mi := &file_control_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4824,7 +4939,7 @@ func (x *BanMemberResponse) String() string {
 func (*BanMemberResponse) ProtoMessage() {}
 
 func (x *BanMemberResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[69]
+	mi := &file_control_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4837,7 +4952,7 @@ func (x *BanMemberResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BanMemberResponse.ProtoReflect.Descriptor instead.
 func (*BanMemberResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{69}
+	return file_control_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *BanMemberResponse) GetUniqueId() string {
@@ -4880,7 +4995,7 @@ type DisconnectMemberRequest struct {
 
 func (x *DisconnectMemberRequest) Reset() {
 	*x = DisconnectMemberRequest{}
-	mi := &file_control_proto_msgTypes[70]
+	mi := &file_control_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4892,7 +5007,7 @@ func (x *DisconnectMemberRequest) String() string {
 func (*DisconnectMemberRequest) ProtoMessage() {}
 
 func (x *DisconnectMemberRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[70]
+	mi := &file_control_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4905,7 +5020,7 @@ func (x *DisconnectMemberRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DisconnectMemberRequest.ProtoReflect.Descriptor instead.
 func (*DisconnectMemberRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{70}
+	return file_control_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *DisconnectMemberRequest) GetClientId() string {
@@ -4940,7 +5055,7 @@ type DisconnectMemberResponse struct {
 
 func (x *DisconnectMemberResponse) Reset() {
 	*x = DisconnectMemberResponse{}
-	mi := &file_control_proto_msgTypes[71]
+	mi := &file_control_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4952,7 +5067,7 @@ func (x *DisconnectMemberResponse) String() string {
 func (*DisconnectMemberResponse) ProtoMessage() {}
 
 func (x *DisconnectMemberResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[71]
+	mi := &file_control_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4965,7 +5080,7 @@ func (x *DisconnectMemberResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DisconnectMemberResponse.ProtoReflect.Descriptor instead.
 func (*DisconnectMemberResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{71}
+	return file_control_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *DisconnectMemberResponse) GetClientId() string {
@@ -4992,7 +5107,7 @@ type MoveMemberResponse struct {
 
 func (x *MoveMemberResponse) Reset() {
 	*x = MoveMemberResponse{}
-	mi := &file_control_proto_msgTypes[72]
+	mi := &file_control_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5004,7 +5119,7 @@ func (x *MoveMemberResponse) String() string {
 func (*MoveMemberResponse) ProtoMessage() {}
 
 func (x *MoveMemberResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[72]
+	mi := &file_control_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5017,7 +5132,7 @@ func (x *MoveMemberResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveMemberResponse.ProtoReflect.Descriptor instead.
 func (*MoveMemberResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{72}
+	return file_control_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *MoveMemberResponse) GetClientId() string {
@@ -5051,7 +5166,7 @@ type RoleDefinition struct {
 
 func (x *RoleDefinition) Reset() {
 	*x = RoleDefinition{}
-	mi := &file_control_proto_msgTypes[73]
+	mi := &file_control_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5063,7 +5178,7 @@ func (x *RoleDefinition) String() string {
 func (*RoleDefinition) ProtoMessage() {}
 
 func (x *RoleDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[73]
+	mi := &file_control_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5076,7 +5191,7 @@ func (x *RoleDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RoleDefinition.ProtoReflect.Descriptor instead.
 func (*RoleDefinition) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{73}
+	return file_control_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *RoleDefinition) GetId() int64 {
@@ -5149,7 +5264,7 @@ type ChannelRoleOverride struct {
 
 func (x *ChannelRoleOverride) Reset() {
 	*x = ChannelRoleOverride{}
-	mi := &file_control_proto_msgTypes[74]
+	mi := &file_control_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5161,7 +5276,7 @@ func (x *ChannelRoleOverride) String() string {
 func (*ChannelRoleOverride) ProtoMessage() {}
 
 func (x *ChannelRoleOverride) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[74]
+	mi := &file_control_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5174,7 +5289,7 @@ func (x *ChannelRoleOverride) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelRoleOverride.ProtoReflect.Descriptor instead.
 func (*ChannelRoleOverride) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{74}
+	return file_control_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *ChannelRoleOverride) GetRoleId() int64 {
@@ -5217,7 +5332,7 @@ type ChannelRoleAccess struct {
 
 func (x *ChannelRoleAccess) Reset() {
 	*x = ChannelRoleAccess{}
-	mi := &file_control_proto_msgTypes[75]
+	mi := &file_control_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5229,7 +5344,7 @@ func (x *ChannelRoleAccess) String() string {
 func (*ChannelRoleAccess) ProtoMessage() {}
 
 func (x *ChannelRoleAccess) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[75]
+	mi := &file_control_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5242,7 +5357,7 @@ func (x *ChannelRoleAccess) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelRoleAccess.ProtoReflect.Descriptor instead.
 func (*ChannelRoleAccess) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{75}
+	return file_control_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *ChannelRoleAccess) GetChannelId() int64 {
@@ -5291,7 +5406,7 @@ type ChangeRolesRequest struct {
 
 func (x *ChangeRolesRequest) Reset() {
 	*x = ChangeRolesRequest{}
-	mi := &file_control_proto_msgTypes[76]
+	mi := &file_control_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5303,7 +5418,7 @@ func (x *ChangeRolesRequest) String() string {
 func (*ChangeRolesRequest) ProtoMessage() {}
 
 func (x *ChangeRolesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[76]
+	mi := &file_control_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5316,7 +5431,7 @@ func (x *ChangeRolesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChangeRolesRequest.ProtoReflect.Descriptor instead.
 func (*ChangeRolesRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{76}
+	return file_control_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *ChangeRolesRequest) GetKind() string {
@@ -5380,7 +5495,7 @@ type ChangeRolesResponse struct {
 
 func (x *ChangeRolesResponse) Reset() {
 	*x = ChangeRolesResponse{}
-	mi := &file_control_proto_msgTypes[77]
+	mi := &file_control_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5392,7 +5507,7 @@ func (x *ChangeRolesResponse) String() string {
 func (*ChangeRolesResponse) ProtoMessage() {}
 
 func (x *ChangeRolesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[77]
+	mi := &file_control_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5405,7 +5520,7 @@ func (x *ChangeRolesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChangeRolesResponse.ProtoReflect.Descriptor instead.
 func (*ChangeRolesResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{77}
+	return file_control_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *ChangeRolesResponse) GetRevision() int64 {
@@ -5447,7 +5562,7 @@ type RoleChannelSettings struct {
 
 func (x *RoleChannelSettings) Reset() {
 	*x = RoleChannelSettings{}
-	mi := &file_control_proto_msgTypes[78]
+	mi := &file_control_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5459,7 +5574,7 @@ func (x *RoleChannelSettings) String() string {
 func (*RoleChannelSettings) ProtoMessage() {}
 
 func (x *RoleChannelSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[78]
+	mi := &file_control_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5472,7 +5587,7 @@ func (x *RoleChannelSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RoleChannelSettings.ProtoReflect.Descriptor instead.
 func (*RoleChannelSettings) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{78}
+	return file_control_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *RoleChannelSettings) GetName() string {
@@ -5555,7 +5670,7 @@ type RoleChannelCreationAccess struct {
 
 func (x *RoleChannelCreationAccess) Reset() {
 	*x = RoleChannelCreationAccess{}
-	mi := &file_control_proto_msgTypes[79]
+	mi := &file_control_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5567,7 +5682,7 @@ func (x *RoleChannelCreationAccess) String() string {
 func (*RoleChannelCreationAccess) ProtoMessage() {}
 
 func (x *RoleChannelCreationAccess) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[79]
+	mi := &file_control_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5580,7 +5695,7 @@ func (x *RoleChannelCreationAccess) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RoleChannelCreationAccess.ProtoReflect.Descriptor instead.
 func (*RoleChannelCreationAccess) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{79}
+	return file_control_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *RoleChannelCreationAccess) GetSynced() bool {
@@ -5622,7 +5737,7 @@ type ChangeChannelRequest struct {
 
 func (x *ChangeChannelRequest) Reset() {
 	*x = ChangeChannelRequest{}
-	mi := &file_control_proto_msgTypes[80]
+	mi := &file_control_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5634,7 +5749,7 @@ func (x *ChangeChannelRequest) String() string {
 func (*ChangeChannelRequest) ProtoMessage() {}
 
 func (x *ChangeChannelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[80]
+	mi := &file_control_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5647,7 +5762,7 @@ func (x *ChangeChannelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChangeChannelRequest.ProtoReflect.Descriptor instead.
 func (*ChangeChannelRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{80}
+	return file_control_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *ChangeChannelRequest) GetKind() string {
@@ -5732,7 +5847,7 @@ type ChangeChannelResponse struct {
 
 func (x *ChangeChannelResponse) Reset() {
 	*x = ChangeChannelResponse{}
-	mi := &file_control_proto_msgTypes[81]
+	mi := &file_control_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5744,7 +5859,7 @@ func (x *ChangeChannelResponse) String() string {
 func (*ChangeChannelResponse) ProtoMessage() {}
 
 func (x *ChangeChannelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[81]
+	mi := &file_control_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5757,7 +5872,7 @@ func (x *ChangeChannelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChangeChannelResponse.ProtoReflect.Descriptor instead.
 func (*ChangeChannelResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{81}
+	return file_control_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *ChangeChannelResponse) GetRevision() int64 {
@@ -5795,7 +5910,7 @@ type SetMemberVoiceRequest struct {
 
 func (x *SetMemberVoiceRequest) Reset() {
 	*x = SetMemberVoiceRequest{}
-	mi := &file_control_proto_msgTypes[82]
+	mi := &file_control_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5807,7 +5922,7 @@ func (x *SetMemberVoiceRequest) String() string {
 func (*SetMemberVoiceRequest) ProtoMessage() {}
 
 func (x *SetMemberVoiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[82]
+	mi := &file_control_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5820,7 +5935,7 @@ func (x *SetMemberVoiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetMemberVoiceRequest.ProtoReflect.Descriptor instead.
 func (*SetMemberVoiceRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{82}
+	return file_control_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *SetMemberVoiceRequest) GetClientId() string {
@@ -5865,7 +5980,7 @@ type SetMemberVoiceResponse struct {
 
 func (x *SetMemberVoiceResponse) Reset() {
 	*x = SetMemberVoiceResponse{}
-	mi := &file_control_proto_msgTypes[83]
+	mi := &file_control_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5877,7 +5992,7 @@ func (x *SetMemberVoiceResponse) String() string {
 func (*SetMemberVoiceResponse) ProtoMessage() {}
 
 func (x *SetMemberVoiceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[83]
+	mi := &file_control_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5890,7 +6005,7 @@ func (x *SetMemberVoiceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetMemberVoiceResponse.ProtoReflect.Descriptor instead.
 func (*SetMemberVoiceResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{83}
+	return file_control_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *SetMemberVoiceResponse) GetRevision() int64 {
@@ -5941,7 +6056,7 @@ type StartFileTransferRequest struct {
 
 func (x *StartFileTransferRequest) Reset() {
 	*x = StartFileTransferRequest{}
-	mi := &file_control_proto_msgTypes[84]
+	mi := &file_control_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5953,7 +6068,7 @@ func (x *StartFileTransferRequest) String() string {
 func (*StartFileTransferRequest) ProtoMessage() {}
 
 func (x *StartFileTransferRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[84]
+	mi := &file_control_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5966,7 +6081,7 @@ func (x *StartFileTransferRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartFileTransferRequest.ProtoReflect.Descriptor instead.
 func (*StartFileTransferRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{84}
+	return file_control_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *StartFileTransferRequest) GetChannelId() string {
@@ -6017,7 +6132,7 @@ type StartFileTransferResponse struct {
 
 func (x *StartFileTransferResponse) Reset() {
 	*x = StartFileTransferResponse{}
-	mi := &file_control_proto_msgTypes[85]
+	mi := &file_control_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6029,7 +6144,7 @@ func (x *StartFileTransferResponse) String() string {
 func (*StartFileTransferResponse) ProtoMessage() {}
 
 func (x *StartFileTransferResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[85]
+	mi := &file_control_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6042,7 +6157,7 @@ func (x *StartFileTransferResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartFileTransferResponse.ProtoReflect.Descriptor instead.
 func (*StartFileTransferResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{85}
+	return file_control_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *StartFileTransferResponse) GetSuccess() bool {
@@ -6082,7 +6197,7 @@ type GetFileTransferStatusRequest struct {
 
 func (x *GetFileTransferStatusRequest) Reset() {
 	*x = GetFileTransferStatusRequest{}
-	mi := &file_control_proto_msgTypes[86]
+	mi := &file_control_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6094,7 +6209,7 @@ func (x *GetFileTransferStatusRequest) String() string {
 func (*GetFileTransferStatusRequest) ProtoMessage() {}
 
 func (x *GetFileTransferStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[86]
+	mi := &file_control_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6107,7 +6222,7 @@ func (x *GetFileTransferStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFileTransferStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetFileTransferStatusRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{86}
+	return file_control_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *GetFileTransferStatusRequest) GetTransferId() string {
@@ -6130,7 +6245,7 @@ type GetFileTransferStatusResponse struct {
 
 func (x *GetFileTransferStatusResponse) Reset() {
 	*x = GetFileTransferStatusResponse{}
-	mi := &file_control_proto_msgTypes[87]
+	mi := &file_control_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6142,7 +6257,7 @@ func (x *GetFileTransferStatusResponse) String() string {
 func (*GetFileTransferStatusResponse) ProtoMessage() {}
 
 func (x *GetFileTransferStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[87]
+	mi := &file_control_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6155,7 +6270,7 @@ func (x *GetFileTransferStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFileTransferStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetFileTransferStatusResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{87}
+	return file_control_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *GetFileTransferStatusResponse) GetTransferId() string {
@@ -6203,7 +6318,7 @@ type CancelFileTransferRequest struct {
 
 func (x *CancelFileTransferRequest) Reset() {
 	*x = CancelFileTransferRequest{}
-	mi := &file_control_proto_msgTypes[88]
+	mi := &file_control_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6215,7 +6330,7 @@ func (x *CancelFileTransferRequest) String() string {
 func (*CancelFileTransferRequest) ProtoMessage() {}
 
 func (x *CancelFileTransferRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[88]
+	mi := &file_control_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6228,7 +6343,7 @@ func (x *CancelFileTransferRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelFileTransferRequest.ProtoReflect.Descriptor instead.
 func (*CancelFileTransferRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{88}
+	return file_control_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *CancelFileTransferRequest) GetTransferId() string {
@@ -6255,7 +6370,7 @@ type CancelFileTransferResponse struct {
 
 func (x *CancelFileTransferResponse) Reset() {
 	*x = CancelFileTransferResponse{}
-	mi := &file_control_proto_msgTypes[89]
+	mi := &file_control_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6267,7 +6382,7 @@ func (x *CancelFileTransferResponse) String() string {
 func (*CancelFileTransferResponse) ProtoMessage() {}
 
 func (x *CancelFileTransferResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[89]
+	mi := &file_control_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6280,7 +6395,7 @@ func (x *CancelFileTransferResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelFileTransferResponse.ProtoReflect.Descriptor instead.
 func (*CancelFileTransferResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{89}
+	return file_control_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *CancelFileTransferResponse) GetSuccess() bool {
@@ -6313,7 +6428,7 @@ type CreateChannelRequest struct {
 
 func (x *CreateChannelRequest) Reset() {
 	*x = CreateChannelRequest{}
-	mi := &file_control_proto_msgTypes[90]
+	mi := &file_control_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6325,7 +6440,7 @@ func (x *CreateChannelRequest) String() string {
 func (*CreateChannelRequest) ProtoMessage() {}
 
 func (x *CreateChannelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[90]
+	mi := &file_control_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6338,7 +6453,7 @@ func (x *CreateChannelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateChannelRequest.ProtoReflect.Descriptor instead.
 func (*CreateChannelRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{90}
+	return file_control_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *CreateChannelRequest) GetName() string {
@@ -6390,7 +6505,7 @@ type CreateChannelResponse struct {
 
 func (x *CreateChannelResponse) Reset() {
 	*x = CreateChannelResponse{}
-	mi := &file_control_proto_msgTypes[91]
+	mi := &file_control_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6402,7 +6517,7 @@ func (x *CreateChannelResponse) String() string {
 func (*CreateChannelResponse) ProtoMessage() {}
 
 func (x *CreateChannelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[91]
+	mi := &file_control_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6415,7 +6530,7 @@ func (x *CreateChannelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateChannelResponse.ProtoReflect.Descriptor instead.
 func (*CreateChannelResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{91}
+	return file_control_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *CreateChannelResponse) GetSuccess() bool {
@@ -6452,7 +6567,7 @@ type DeleteChannelRequest struct {
 
 func (x *DeleteChannelRequest) Reset() {
 	*x = DeleteChannelRequest{}
-	mi := &file_control_proto_msgTypes[92]
+	mi := &file_control_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6464,7 +6579,7 @@ func (x *DeleteChannelRequest) String() string {
 func (*DeleteChannelRequest) ProtoMessage() {}
 
 func (x *DeleteChannelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[92]
+	mi := &file_control_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6477,7 +6592,7 @@ func (x *DeleteChannelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteChannelRequest.ProtoReflect.Descriptor instead.
 func (*DeleteChannelRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{92}
+	return file_control_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *DeleteChannelRequest) GetChannelId() string {
@@ -6507,7 +6622,7 @@ type DeleteChannelResponse struct {
 
 func (x *DeleteChannelResponse) Reset() {
 	*x = DeleteChannelResponse{}
-	mi := &file_control_proto_msgTypes[93]
+	mi := &file_control_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6519,7 +6634,7 @@ func (x *DeleteChannelResponse) String() string {
 func (*DeleteChannelResponse) ProtoMessage() {}
 
 func (x *DeleteChannelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[93]
+	mi := &file_control_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6532,7 +6647,7 @@ func (x *DeleteChannelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteChannelResponse.ProtoReflect.Descriptor instead.
 func (*DeleteChannelResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{93}
+	return file_control_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *DeleteChannelResponse) GetSuccess() bool {
@@ -6562,7 +6677,7 @@ type QueryPermissionsRequest struct {
 
 func (x *QueryPermissionsRequest) Reset() {
 	*x = QueryPermissionsRequest{}
-	mi := &file_control_proto_msgTypes[94]
+	mi := &file_control_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6574,7 +6689,7 @@ func (x *QueryPermissionsRequest) String() string {
 func (*QueryPermissionsRequest) ProtoMessage() {}
 
 func (x *QueryPermissionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[94]
+	mi := &file_control_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6587,7 +6702,7 @@ func (x *QueryPermissionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryPermissionsRequest.ProtoReflect.Descriptor instead.
 func (*QueryPermissionsRequest) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{94}
+	return file_control_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *QueryPermissionsRequest) GetChannelId() string {
@@ -6618,7 +6733,7 @@ type QueryPermissionsResponse struct {
 
 func (x *QueryPermissionsResponse) Reset() {
 	*x = QueryPermissionsResponse{}
-	mi := &file_control_proto_msgTypes[95]
+	mi := &file_control_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6630,7 +6745,7 @@ func (x *QueryPermissionsResponse) String() string {
 func (*QueryPermissionsResponse) ProtoMessage() {}
 
 func (x *QueryPermissionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[95]
+	mi := &file_control_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6643,7 +6758,7 @@ func (x *QueryPermissionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryPermissionsResponse.ProtoReflect.Descriptor instead.
 func (*QueryPermissionsResponse) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{95}
+	return file_control_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *QueryPermissionsResponse) GetGranted() []Permission {
@@ -7029,8 +7144,15 @@ const file_control_proto_rawDesc = "" +
 	"\flast_seen_at\x18\b \x01(\x03R\n" +
 	"lastSeenAt\x12\x1d\n" +
 	"\n" +
-	"revoked_at\x18\t \x01(\x03R\trevokedAt\"\x92\x01\n" +
-	"\x0fDevicesResponse\x12\x1b\n" +
+	"revoked_at\x18\t \x01(\x03R\trevokedAt\"d\n" +
+	"\x13ListDevicesResponse\x12\x1b\n" +
+	"\tunique_id\x18\x01 \x01(\tR\buniqueId\x120\n" +
+	"\adevices\x18\x02 \x03(\v2\x16.voicx.v1.DeviceRecordR\adevices\"\x97\x01\n" +
+	"\x14RevokeDeviceResponse\x12\x1b\n" +
+	"\tunique_id\x18\x01 \x01(\tR\buniqueId\x120\n" +
+	"\adevices\x18\x02 \x03(\v2\x16.voicx.v1.DeviceRecordR\adevices\x120\n" +
+	"\arevoked\x18\x03 \x03(\v2\x16.voicx.v1.DeviceRecordR\arevoked\"\x97\x01\n" +
+	"\x14ResetDevicesResponse\x12\x1b\n" +
 	"\tunique_id\x18\x01 \x01(\tR\buniqueId\x120\n" +
 	"\adevices\x18\x02 \x03(\v2\x16.voicx.v1.DeviceRecordR\adevices\x120\n" +
 	"\arevoked\x18\x03 \x03(\v2\x16.voicx.v1.DeviceRecordR\arevoked\"O\n" +
@@ -7244,7 +7366,7 @@ const file_control_proto_rawDesc = "" +
 	"\x19PERMISSION_CREATE_CHANNEL\x10\b\x12\x1d\n" +
 	"\x19PERMISSION_DELETE_CHANNEL\x10\t\x12\x1c\n" +
 	"\x18PERMISSION_TRANSFER_FILE\x10\n" +
-	"\x1a\x02\x18\x012\xa8\x1a\n" +
+	"\x1a\x02\x18\x012\xb6\x1a\n" +
 	"\aControl\x12^\n" +
 	"\x10QueryPermissions\x12!.voicx.v1.QueryPermissionsRequest\x1a\".voicx.v1.QueryPermissionsResponse\"\x03\x88\x02\x01\x12U\n" +
 	"\rDeleteChannel\x12\x1e.voicx.v1.DeleteChannelRequest\x1a\x1f.voicx.v1.DeleteChannelResponse\"\x03\x88\x02\x01\x12U\n" +
@@ -7271,10 +7393,10 @@ const file_control_proto_rawDesc = "" +
 	"\rSetServerText\x12\x1e.voicx.v1.SetServerTextRequest\x1a\x1f.voicx.v1.SetServerTextResponse\x12_\n" +
 	"\x12ListCustomMetadata\x12#.voicx.v1.ListCustomMetadataRequest\x1a$.voicx.v1.ListCustomMetadataResponse\x12e\n" +
 	"\x14ChangeCustomMetadata\x12%.voicx.v1.ChangeCustomMetadataRequest\x1a&.voicx.v1.ChangeCustomMetadataResponse\x12A\n" +
-	"\bListBans\x12\x19.voicx.v1.ListBansRequest\x1a\x1a.voicx.v1.ListBansResponse\x12F\n" +
-	"\vListDevices\x12\x1c.voicx.v1.ListDevicesRequest\x1a\x19.voicx.v1.DevicesResponse\x12H\n" +
-	"\fRevokeDevice\x12\x1d.voicx.v1.RevokeDeviceRequest\x1a\x19.voicx.v1.DevicesResponse\x12H\n" +
-	"\fResetDevices\x12\x1d.voicx.v1.ResetDevicesRequest\x1a\x19.voicx.v1.DevicesResponse\x12M\n" +
+	"\bListBans\x12\x19.voicx.v1.ListBansRequest\x1a\x1a.voicx.v1.ListBansResponse\x12J\n" +
+	"\vListDevices\x12\x1c.voicx.v1.ListDevicesRequest\x1a\x1d.voicx.v1.ListDevicesResponse\x12M\n" +
+	"\fRevokeDevice\x12\x1d.voicx.v1.RevokeDeviceRequest\x1a\x1e.voicx.v1.RevokeDeviceResponse\x12M\n" +
+	"\fResetDevices\x12\x1d.voicx.v1.ResetDevicesRequest\x1a\x1e.voicx.v1.ResetDevicesResponse\x12M\n" +
 	"\fGetRoleState\x12\x1d.voicx.v1.GetRoleStateRequest\x1a\x1e.voicx.v1.GetRoleStateResponse\x12V\n" +
 	"\x0fListRoleMembers\x12 .voicx.v1.ListRoleMembersRequest\x1a!.voicx.v1.ListRoleMembersResponse\x12J\n" +
 	"\vCheckAccess\x12\x1c.voicx.v1.CheckAccessRequest\x1a\x1d.voicx.v1.CheckAccessResponse\x12\\\n" +
@@ -7302,7 +7424,7 @@ func file_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 99)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 101)
 var file_control_proto_goTypes = []any{
 	(BanPersistence)(0),                   // 0: voicx.v1.BanPersistence
 	(FileTransferDirection)(0),            // 1: voicx.v1.FileTransferDirection
@@ -7372,163 +7494,168 @@ var file_control_proto_goTypes = []any{
 	(*RevokeDeviceRequest)(nil),           // 65: voicx.v1.RevokeDeviceRequest
 	(*ResetDevicesRequest)(nil),           // 66: voicx.v1.ResetDevicesRequest
 	(*DeviceRecord)(nil),                  // 67: voicx.v1.DeviceRecord
-	(*DevicesResponse)(nil),               // 68: voicx.v1.DevicesResponse
-	(*MoveMemberRequest)(nil),             // 69: voicx.v1.MoveMemberRequest
-	(*KickMemberRequest)(nil),             // 70: voicx.v1.KickMemberRequest
-	(*KickMemberResponse)(nil),            // 71: voicx.v1.KickMemberResponse
-	(*BanMemberRequest)(nil),              // 72: voicx.v1.BanMemberRequest
-	(*BanMemberResponse)(nil),             // 73: voicx.v1.BanMemberResponse
-	(*DisconnectMemberRequest)(nil),       // 74: voicx.v1.DisconnectMemberRequest
-	(*DisconnectMemberResponse)(nil),      // 75: voicx.v1.DisconnectMemberResponse
-	(*MoveMemberResponse)(nil),            // 76: voicx.v1.MoveMemberResponse
-	(*RoleDefinition)(nil),                // 77: voicx.v1.RoleDefinition
-	(*ChannelRoleOverride)(nil),           // 78: voicx.v1.ChannelRoleOverride
-	(*ChannelRoleAccess)(nil),             // 79: voicx.v1.ChannelRoleAccess
-	(*ChangeRolesRequest)(nil),            // 80: voicx.v1.ChangeRolesRequest
-	(*ChangeRolesResponse)(nil),           // 81: voicx.v1.ChangeRolesResponse
-	(*RoleChannelSettings)(nil),           // 82: voicx.v1.RoleChannelSettings
-	(*RoleChannelCreationAccess)(nil),     // 83: voicx.v1.RoleChannelCreationAccess
-	(*ChangeChannelRequest)(nil),          // 84: voicx.v1.ChangeChannelRequest
-	(*ChangeChannelResponse)(nil),         // 85: voicx.v1.ChangeChannelResponse
-	(*SetMemberVoiceRequest)(nil),         // 86: voicx.v1.SetMemberVoiceRequest
-	(*SetMemberVoiceResponse)(nil),        // 87: voicx.v1.SetMemberVoiceResponse
-	(*StartFileTransferRequest)(nil),      // 88: voicx.v1.StartFileTransferRequest
-	(*StartFileTransferResponse)(nil),     // 89: voicx.v1.StartFileTransferResponse
-	(*GetFileTransferStatusRequest)(nil),  // 90: voicx.v1.GetFileTransferStatusRequest
-	(*GetFileTransferStatusResponse)(nil), // 91: voicx.v1.GetFileTransferStatusResponse
-	(*CancelFileTransferRequest)(nil),     // 92: voicx.v1.CancelFileTransferRequest
-	(*CancelFileTransferResponse)(nil),    // 93: voicx.v1.CancelFileTransferResponse
-	(*CreateChannelRequest)(nil),          // 94: voicx.v1.CreateChannelRequest
-	(*CreateChannelResponse)(nil),         // 95: voicx.v1.CreateChannelResponse
-	(*DeleteChannelRequest)(nil),          // 96: voicx.v1.DeleteChannelRequest
-	(*DeleteChannelResponse)(nil),         // 97: voicx.v1.DeleteChannelResponse
-	(*QueryPermissionsRequest)(nil),       // 98: voicx.v1.QueryPermissionsRequest
-	(*QueryPermissionsResponse)(nil),      // 99: voicx.v1.QueryPermissionsResponse
-	nil,                                   // 100: voicx.v1.AuthenticateRequest.MetadataEntry
-	nil,                                   // 101: voicx.v1.Channel.MetadataEntry
-	nil,                                   // 102: voicx.v1.CreateChannelRequest.MetadataEntry
+	(*ListDevicesResponse)(nil),           // 68: voicx.v1.ListDevicesResponse
+	(*RevokeDeviceResponse)(nil),          // 69: voicx.v1.RevokeDeviceResponse
+	(*ResetDevicesResponse)(nil),          // 70: voicx.v1.ResetDevicesResponse
+	(*MoveMemberRequest)(nil),             // 71: voicx.v1.MoveMemberRequest
+	(*KickMemberRequest)(nil),             // 72: voicx.v1.KickMemberRequest
+	(*KickMemberResponse)(nil),            // 73: voicx.v1.KickMemberResponse
+	(*BanMemberRequest)(nil),              // 74: voicx.v1.BanMemberRequest
+	(*BanMemberResponse)(nil),             // 75: voicx.v1.BanMemberResponse
+	(*DisconnectMemberRequest)(nil),       // 76: voicx.v1.DisconnectMemberRequest
+	(*DisconnectMemberResponse)(nil),      // 77: voicx.v1.DisconnectMemberResponse
+	(*MoveMemberResponse)(nil),            // 78: voicx.v1.MoveMemberResponse
+	(*RoleDefinition)(nil),                // 79: voicx.v1.RoleDefinition
+	(*ChannelRoleOverride)(nil),           // 80: voicx.v1.ChannelRoleOverride
+	(*ChannelRoleAccess)(nil),             // 81: voicx.v1.ChannelRoleAccess
+	(*ChangeRolesRequest)(nil),            // 82: voicx.v1.ChangeRolesRequest
+	(*ChangeRolesResponse)(nil),           // 83: voicx.v1.ChangeRolesResponse
+	(*RoleChannelSettings)(nil),           // 84: voicx.v1.RoleChannelSettings
+	(*RoleChannelCreationAccess)(nil),     // 85: voicx.v1.RoleChannelCreationAccess
+	(*ChangeChannelRequest)(nil),          // 86: voicx.v1.ChangeChannelRequest
+	(*ChangeChannelResponse)(nil),         // 87: voicx.v1.ChangeChannelResponse
+	(*SetMemberVoiceRequest)(nil),         // 88: voicx.v1.SetMemberVoiceRequest
+	(*SetMemberVoiceResponse)(nil),        // 89: voicx.v1.SetMemberVoiceResponse
+	(*StartFileTransferRequest)(nil),      // 90: voicx.v1.StartFileTransferRequest
+	(*StartFileTransferResponse)(nil),     // 91: voicx.v1.StartFileTransferResponse
+	(*GetFileTransferStatusRequest)(nil),  // 92: voicx.v1.GetFileTransferStatusRequest
+	(*GetFileTransferStatusResponse)(nil), // 93: voicx.v1.GetFileTransferStatusResponse
+	(*CancelFileTransferRequest)(nil),     // 94: voicx.v1.CancelFileTransferRequest
+	(*CancelFileTransferResponse)(nil),    // 95: voicx.v1.CancelFileTransferResponse
+	(*CreateChannelRequest)(nil),          // 96: voicx.v1.CreateChannelRequest
+	(*CreateChannelResponse)(nil),         // 97: voicx.v1.CreateChannelResponse
+	(*DeleteChannelRequest)(nil),          // 98: voicx.v1.DeleteChannelRequest
+	(*DeleteChannelResponse)(nil),         // 99: voicx.v1.DeleteChannelResponse
+	(*QueryPermissionsRequest)(nil),       // 100: voicx.v1.QueryPermissionsRequest
+	(*QueryPermissionsResponse)(nil),      // 101: voicx.v1.QueryPermissionsResponse
+	nil,                                   // 102: voicx.v1.AuthenticateRequest.MetadataEntry
+	nil,                                   // 103: voicx.v1.Channel.MetadataEntry
+	nil,                                   // 104: voicx.v1.CreateChannelRequest.MetadataEntry
 }
 var file_control_proto_depIdxs = []int32{
 	6,   // 0: voicx.v1.ListCustomMetadataResponse.entries:type_name -> voicx.v1.CustomMetadataEntry
-	100, // 1: voicx.v1.AuthenticateRequest.metadata:type_name -> voicx.v1.AuthenticateRequest.MetadataEntry
-	101, // 2: voicx.v1.Channel.metadata:type_name -> voicx.v1.Channel.MetadataEntry
+	102, // 1: voicx.v1.AuthenticateRequest.metadata:type_name -> voicx.v1.AuthenticateRequest.MetadataEntry
+	103, // 2: voicx.v1.Channel.metadata:type_name -> voicx.v1.Channel.MetadataEntry
 	13,  // 3: voicx.v1.ListChannelsResponse.channels:type_name -> voicx.v1.Channel
 	18,  // 4: voicx.v1.ListComplaintsResponse.entries:type_name -> voicx.v1.ComplaintRecord
 	23,  // 5: voicx.v1.ListAuditLogResponse.entries:type_name -> voicx.v1.AuditLogRecord
 	33,  // 6: voicx.v1.ListAuditLogResponse.capabilities:type_name -> voicx.v1.CapabilityDescriptor
 	26,  // 7: voicx.v1.ListClientsResponse.clients:type_name -> voicx.v1.VisibleClient
-	77,  // 8: voicx.v1.RolePolicySnapshot.roles:type_name -> voicx.v1.RoleDefinition
+	79,  // 8: voicx.v1.RolePolicySnapshot.roles:type_name -> voicx.v1.RoleDefinition
 	31,  // 9: voicx.v1.RolePolicySnapshot.members:type_name -> voicx.v1.RoleAssignment
-	79,  // 10: voicx.v1.RolePolicySnapshot.channels:type_name -> voicx.v1.ChannelRoleAccess
-	78,  // 11: voicx.v1.GetRoleStateResponse.effective_overrides:type_name -> voicx.v1.ChannelRoleOverride
-	78,  // 12: voicx.v1.GetRoleStateResponse.parent_overrides:type_name -> voicx.v1.ChannelRoleOverride
+	81,  // 10: voicx.v1.RolePolicySnapshot.channels:type_name -> voicx.v1.ChannelRoleAccess
+	80,  // 11: voicx.v1.GetRoleStateResponse.effective_overrides:type_name -> voicx.v1.ChannelRoleOverride
+	80,  // 12: voicx.v1.GetRoleStateResponse.parent_overrides:type_name -> voicx.v1.ChannelRoleOverride
 	32,  // 13: voicx.v1.GetRoleStateResponse.policy:type_name -> voicx.v1.RolePolicySnapshot
 	33,  // 14: voicx.v1.GetRoleStateResponse.capabilities:type_name -> voicx.v1.CapabilityDescriptor
 	36,  // 15: voicx.v1.ListRoleMembersResponse.entries:type_name -> voicx.v1.RoleMemberIdentity
 	39,  // 16: voicx.v1.CheckAccessResponse.decision:type_name -> voicx.v1.RoleAccessDecision
-	82,  // 17: voicx.v1.GetChannelOptionsResponse.settings:type_name -> voicx.v1.RoleChannelSettings
+	84,  // 17: voicx.v1.GetChannelOptionsResponse.settings:type_name -> voicx.v1.RoleChannelSettings
 	42,  // 18: voicx.v1.GetChannelOptionsResponse.roles:type_name -> voicx.v1.ChannelManagementOption
 	42,  // 19: voicx.v1.GetChannelOptionsResponse.destinations:type_name -> voicx.v1.ChannelManagementOption
 	62,  // 20: voicx.v1.ListBansResponse.bans:type_name -> voicx.v1.BanRecord
-	67,  // 21: voicx.v1.DevicesResponse.devices:type_name -> voicx.v1.DeviceRecord
-	67,  // 22: voicx.v1.DevicesResponse.revoked:type_name -> voicx.v1.DeviceRecord
-	0,   // 23: voicx.v1.BanMemberResponse.persistence:type_name -> voicx.v1.BanPersistence
-	78,  // 24: voicx.v1.ChannelRoleAccess.overrides:type_name -> voicx.v1.ChannelRoleOverride
-	77,  // 25: voicx.v1.ChangeRolesRequest.role:type_name -> voicx.v1.RoleDefinition
-	79,  // 26: voicx.v1.ChangeRolesRequest.channel:type_name -> voicx.v1.ChannelRoleAccess
-	78,  // 27: voicx.v1.RoleChannelCreationAccess.overrides:type_name -> voicx.v1.ChannelRoleOverride
-	83,  // 28: voicx.v1.ChangeChannelRequest.access:type_name -> voicx.v1.RoleChannelCreationAccess
-	82,  // 29: voicx.v1.ChangeChannelRequest.settings:type_name -> voicx.v1.RoleChannelSettings
-	1,   // 30: voicx.v1.StartFileTransferRequest.direction:type_name -> voicx.v1.FileTransferDirection
-	2,   // 31: voicx.v1.GetFileTransferStatusResponse.status:type_name -> voicx.v1.FileTransferStatus
-	102, // 32: voicx.v1.CreateChannelRequest.metadata:type_name -> voicx.v1.CreateChannelRequest.MetadataEntry
-	3,   // 33: voicx.v1.QueryPermissionsResponse.granted:type_name -> voicx.v1.Permission
-	3,   // 34: voicx.v1.QueryPermissionsResponse.denied:type_name -> voicx.v1.Permission
-	98,  // 35: voicx.v1.Control.QueryPermissions:input_type -> voicx.v1.QueryPermissionsRequest
-	96,  // 36: voicx.v1.Control.DeleteChannel:input_type -> voicx.v1.DeleteChannelRequest
-	94,  // 37: voicx.v1.Control.CreateChannel:input_type -> voicx.v1.CreateChannelRequest
-	11,  // 38: voicx.v1.Control.Authenticate:input_type -> voicx.v1.AuthenticateRequest
-	14,  // 39: voicx.v1.Control.ListChannels:input_type -> voicx.v1.ListChannelsRequest
-	80,  // 40: voicx.v1.Control.ChangeRoles:input_type -> voicx.v1.ChangeRolesRequest
-	84,  // 41: voicx.v1.Control.ChangeChannel:input_type -> voicx.v1.ChangeChannelRequest
-	86,  // 42: voicx.v1.Control.SetMemberVoice:input_type -> voicx.v1.SetMemberVoiceRequest
-	69,  // 43: voicx.v1.Control.MoveMember:input_type -> voicx.v1.MoveMemberRequest
-	74,  // 44: voicx.v1.Control.DisconnectMember:input_type -> voicx.v1.DisconnectMemberRequest
-	70,  // 45: voicx.v1.Control.KickMember:input_type -> voicx.v1.KickMemberRequest
-	72,  // 46: voicx.v1.Control.BanMember:input_type -> voicx.v1.BanMemberRequest
-	16,  // 47: voicx.v1.Control.GetServerInfo:input_type -> voicx.v1.GetServerInfoRequest
-	45,  // 48: voicx.v1.Control.GetClientInfo:input_type -> voicx.v1.GetClientInfoRequest
-	47,  // 49: voicx.v1.Control.GetServerConfig:input_type -> voicx.v1.GetServerConfigRequest
-	48,  // 50: voicx.v1.Control.GetMediaLimits:input_type -> voicx.v1.GetMediaLimitsRequest
-	49,  // 51: voicx.v1.Control.SetMediaLimits:input_type -> voicx.v1.SetMediaLimitsRequest
-	58,  // 52: voicx.v1.Control.SetServerConfig:input_type -> voicx.v1.SetServerConfigRequest
-	52,  // 53: voicx.v1.Control.GetChatFilters:input_type -> voicx.v1.GetChatFiltersRequest
-	56,  // 54: voicx.v1.Control.SetChatFilters:input_type -> voicx.v1.SetChatFiltersRequest
-	54,  // 55: voicx.v1.Control.SetServerText:input_type -> voicx.v1.SetServerTextRequest
-	5,   // 56: voicx.v1.Control.ListCustomMetadata:input_type -> voicx.v1.ListCustomMetadataRequest
-	8,   // 57: voicx.v1.Control.ChangeCustomMetadata:input_type -> voicx.v1.ChangeCustomMetadataRequest
-	61,  // 58: voicx.v1.Control.ListBans:input_type -> voicx.v1.ListBansRequest
-	64,  // 59: voicx.v1.Control.ListDevices:input_type -> voicx.v1.ListDevicesRequest
-	65,  // 60: voicx.v1.Control.RevokeDevice:input_type -> voicx.v1.RevokeDeviceRequest
-	66,  // 61: voicx.v1.Control.ResetDevices:input_type -> voicx.v1.ResetDevicesRequest
-	30,  // 62: voicx.v1.Control.GetRoleState:input_type -> voicx.v1.GetRoleStateRequest
-	35,  // 63: voicx.v1.Control.ListRoleMembers:input_type -> voicx.v1.ListRoleMembersRequest
-	38,  // 64: voicx.v1.Control.CheckAccess:input_type -> voicx.v1.CheckAccessRequest
-	41,  // 65: voicx.v1.Control.GetChannelOptions:input_type -> voicx.v1.GetChannelOptionsRequest
-	25,  // 66: voicx.v1.Control.ListClients:input_type -> voicx.v1.ListClientsRequest
-	28,  // 67: voicx.v1.Control.GetChannelInfo:input_type -> voicx.v1.GetChannelInfoRequest
-	22,  // 68: voicx.v1.Control.ListAuditLog:input_type -> voicx.v1.ListAuditLogRequest
-	17,  // 69: voicx.v1.Control.ListComplaints:input_type -> voicx.v1.ListComplaintsRequest
-	20,  // 70: voicx.v1.Control.ClearComplaints:input_type -> voicx.v1.ClearComplaintsRequest
-	4,   // 71: voicx.v1.Control.GetServerRules:input_type -> voicx.v1.GetServerRulesRequest
-	88,  // 72: voicx.v1.Control.StartFileTransfer:input_type -> voicx.v1.StartFileTransferRequest
-	90,  // 73: voicx.v1.Control.GetFileTransferStatus:input_type -> voicx.v1.GetFileTransferStatusRequest
-	92,  // 74: voicx.v1.Control.CancelFileTransfer:input_type -> voicx.v1.CancelFileTransferRequest
-	99,  // 75: voicx.v1.Control.QueryPermissions:output_type -> voicx.v1.QueryPermissionsResponse
-	97,  // 76: voicx.v1.Control.DeleteChannel:output_type -> voicx.v1.DeleteChannelResponse
-	95,  // 77: voicx.v1.Control.CreateChannel:output_type -> voicx.v1.CreateChannelResponse
-	12,  // 78: voicx.v1.Control.Authenticate:output_type -> voicx.v1.AuthenticateResponse
-	15,  // 79: voicx.v1.Control.ListChannels:output_type -> voicx.v1.ListChannelsResponse
-	81,  // 80: voicx.v1.Control.ChangeRoles:output_type -> voicx.v1.ChangeRolesResponse
-	85,  // 81: voicx.v1.Control.ChangeChannel:output_type -> voicx.v1.ChangeChannelResponse
-	87,  // 82: voicx.v1.Control.SetMemberVoice:output_type -> voicx.v1.SetMemberVoiceResponse
-	76,  // 83: voicx.v1.Control.MoveMember:output_type -> voicx.v1.MoveMemberResponse
-	75,  // 84: voicx.v1.Control.DisconnectMember:output_type -> voicx.v1.DisconnectMemberResponse
-	71,  // 85: voicx.v1.Control.KickMember:output_type -> voicx.v1.KickMemberResponse
-	73,  // 86: voicx.v1.Control.BanMember:output_type -> voicx.v1.BanMemberResponse
-	44,  // 87: voicx.v1.Control.GetServerInfo:output_type -> voicx.v1.GetServerInfoResponse
-	46,  // 88: voicx.v1.Control.GetClientInfo:output_type -> voicx.v1.GetClientInfoResponse
-	60,  // 89: voicx.v1.Control.GetServerConfig:output_type -> voicx.v1.GetServerConfigResponse
-	50,  // 90: voicx.v1.Control.GetMediaLimits:output_type -> voicx.v1.GetMediaLimitsResponse
-	51,  // 91: voicx.v1.Control.SetMediaLimits:output_type -> voicx.v1.SetMediaLimitsResponse
-	59,  // 92: voicx.v1.Control.SetServerConfig:output_type -> voicx.v1.SetServerConfigResponse
-	53,  // 93: voicx.v1.Control.GetChatFilters:output_type -> voicx.v1.GetChatFiltersResponse
-	57,  // 94: voicx.v1.Control.SetChatFilters:output_type -> voicx.v1.SetChatFiltersResponse
-	55,  // 95: voicx.v1.Control.SetServerText:output_type -> voicx.v1.SetServerTextResponse
-	7,   // 96: voicx.v1.Control.ListCustomMetadata:output_type -> voicx.v1.ListCustomMetadataResponse
-	9,   // 97: voicx.v1.Control.ChangeCustomMetadata:output_type -> voicx.v1.ChangeCustomMetadataResponse
-	63,  // 98: voicx.v1.Control.ListBans:output_type -> voicx.v1.ListBansResponse
-	68,  // 99: voicx.v1.Control.ListDevices:output_type -> voicx.v1.DevicesResponse
-	68,  // 100: voicx.v1.Control.RevokeDevice:output_type -> voicx.v1.DevicesResponse
-	68,  // 101: voicx.v1.Control.ResetDevices:output_type -> voicx.v1.DevicesResponse
-	34,  // 102: voicx.v1.Control.GetRoleState:output_type -> voicx.v1.GetRoleStateResponse
-	37,  // 103: voicx.v1.Control.ListRoleMembers:output_type -> voicx.v1.ListRoleMembersResponse
-	40,  // 104: voicx.v1.Control.CheckAccess:output_type -> voicx.v1.CheckAccessResponse
-	43,  // 105: voicx.v1.Control.GetChannelOptions:output_type -> voicx.v1.GetChannelOptionsResponse
-	27,  // 106: voicx.v1.Control.ListClients:output_type -> voicx.v1.ListClientsResponse
-	29,  // 107: voicx.v1.Control.GetChannelInfo:output_type -> voicx.v1.GetChannelInfoResponse
-	24,  // 108: voicx.v1.Control.ListAuditLog:output_type -> voicx.v1.ListAuditLogResponse
-	19,  // 109: voicx.v1.Control.ListComplaints:output_type -> voicx.v1.ListComplaintsResponse
-	21,  // 110: voicx.v1.Control.ClearComplaints:output_type -> voicx.v1.ClearComplaintsResponse
-	10,  // 111: voicx.v1.Control.GetServerRules:output_type -> voicx.v1.GetServerRulesResponse
-	89,  // 112: voicx.v1.Control.StartFileTransfer:output_type -> voicx.v1.StartFileTransferResponse
-	91,  // 113: voicx.v1.Control.GetFileTransferStatus:output_type -> voicx.v1.GetFileTransferStatusResponse
-	93,  // 114: voicx.v1.Control.CancelFileTransfer:output_type -> voicx.v1.CancelFileTransferResponse
-	75,  // [75:115] is the sub-list for method output_type
-	35,  // [35:75] is the sub-list for method input_type
-	35,  // [35:35] is the sub-list for extension type_name
-	35,  // [35:35] is the sub-list for extension extendee
-	0,   // [0:35] is the sub-list for field type_name
+	67,  // 21: voicx.v1.ListDevicesResponse.devices:type_name -> voicx.v1.DeviceRecord
+	67,  // 22: voicx.v1.RevokeDeviceResponse.devices:type_name -> voicx.v1.DeviceRecord
+	67,  // 23: voicx.v1.RevokeDeviceResponse.revoked:type_name -> voicx.v1.DeviceRecord
+	67,  // 24: voicx.v1.ResetDevicesResponse.devices:type_name -> voicx.v1.DeviceRecord
+	67,  // 25: voicx.v1.ResetDevicesResponse.revoked:type_name -> voicx.v1.DeviceRecord
+	0,   // 26: voicx.v1.BanMemberResponse.persistence:type_name -> voicx.v1.BanPersistence
+	80,  // 27: voicx.v1.ChannelRoleAccess.overrides:type_name -> voicx.v1.ChannelRoleOverride
+	79,  // 28: voicx.v1.ChangeRolesRequest.role:type_name -> voicx.v1.RoleDefinition
+	81,  // 29: voicx.v1.ChangeRolesRequest.channel:type_name -> voicx.v1.ChannelRoleAccess
+	80,  // 30: voicx.v1.RoleChannelCreationAccess.overrides:type_name -> voicx.v1.ChannelRoleOverride
+	85,  // 31: voicx.v1.ChangeChannelRequest.access:type_name -> voicx.v1.RoleChannelCreationAccess
+	84,  // 32: voicx.v1.ChangeChannelRequest.settings:type_name -> voicx.v1.RoleChannelSettings
+	1,   // 33: voicx.v1.StartFileTransferRequest.direction:type_name -> voicx.v1.FileTransferDirection
+	2,   // 34: voicx.v1.GetFileTransferStatusResponse.status:type_name -> voicx.v1.FileTransferStatus
+	104, // 35: voicx.v1.CreateChannelRequest.metadata:type_name -> voicx.v1.CreateChannelRequest.MetadataEntry
+	3,   // 36: voicx.v1.QueryPermissionsResponse.granted:type_name -> voicx.v1.Permission
+	3,   // 37: voicx.v1.QueryPermissionsResponse.denied:type_name -> voicx.v1.Permission
+	100, // 38: voicx.v1.Control.QueryPermissions:input_type -> voicx.v1.QueryPermissionsRequest
+	98,  // 39: voicx.v1.Control.DeleteChannel:input_type -> voicx.v1.DeleteChannelRequest
+	96,  // 40: voicx.v1.Control.CreateChannel:input_type -> voicx.v1.CreateChannelRequest
+	11,  // 41: voicx.v1.Control.Authenticate:input_type -> voicx.v1.AuthenticateRequest
+	14,  // 42: voicx.v1.Control.ListChannels:input_type -> voicx.v1.ListChannelsRequest
+	82,  // 43: voicx.v1.Control.ChangeRoles:input_type -> voicx.v1.ChangeRolesRequest
+	86,  // 44: voicx.v1.Control.ChangeChannel:input_type -> voicx.v1.ChangeChannelRequest
+	88,  // 45: voicx.v1.Control.SetMemberVoice:input_type -> voicx.v1.SetMemberVoiceRequest
+	71,  // 46: voicx.v1.Control.MoveMember:input_type -> voicx.v1.MoveMemberRequest
+	76,  // 47: voicx.v1.Control.DisconnectMember:input_type -> voicx.v1.DisconnectMemberRequest
+	72,  // 48: voicx.v1.Control.KickMember:input_type -> voicx.v1.KickMemberRequest
+	74,  // 49: voicx.v1.Control.BanMember:input_type -> voicx.v1.BanMemberRequest
+	16,  // 50: voicx.v1.Control.GetServerInfo:input_type -> voicx.v1.GetServerInfoRequest
+	45,  // 51: voicx.v1.Control.GetClientInfo:input_type -> voicx.v1.GetClientInfoRequest
+	47,  // 52: voicx.v1.Control.GetServerConfig:input_type -> voicx.v1.GetServerConfigRequest
+	48,  // 53: voicx.v1.Control.GetMediaLimits:input_type -> voicx.v1.GetMediaLimitsRequest
+	49,  // 54: voicx.v1.Control.SetMediaLimits:input_type -> voicx.v1.SetMediaLimitsRequest
+	58,  // 55: voicx.v1.Control.SetServerConfig:input_type -> voicx.v1.SetServerConfigRequest
+	52,  // 56: voicx.v1.Control.GetChatFilters:input_type -> voicx.v1.GetChatFiltersRequest
+	56,  // 57: voicx.v1.Control.SetChatFilters:input_type -> voicx.v1.SetChatFiltersRequest
+	54,  // 58: voicx.v1.Control.SetServerText:input_type -> voicx.v1.SetServerTextRequest
+	5,   // 59: voicx.v1.Control.ListCustomMetadata:input_type -> voicx.v1.ListCustomMetadataRequest
+	8,   // 60: voicx.v1.Control.ChangeCustomMetadata:input_type -> voicx.v1.ChangeCustomMetadataRequest
+	61,  // 61: voicx.v1.Control.ListBans:input_type -> voicx.v1.ListBansRequest
+	64,  // 62: voicx.v1.Control.ListDevices:input_type -> voicx.v1.ListDevicesRequest
+	65,  // 63: voicx.v1.Control.RevokeDevice:input_type -> voicx.v1.RevokeDeviceRequest
+	66,  // 64: voicx.v1.Control.ResetDevices:input_type -> voicx.v1.ResetDevicesRequest
+	30,  // 65: voicx.v1.Control.GetRoleState:input_type -> voicx.v1.GetRoleStateRequest
+	35,  // 66: voicx.v1.Control.ListRoleMembers:input_type -> voicx.v1.ListRoleMembersRequest
+	38,  // 67: voicx.v1.Control.CheckAccess:input_type -> voicx.v1.CheckAccessRequest
+	41,  // 68: voicx.v1.Control.GetChannelOptions:input_type -> voicx.v1.GetChannelOptionsRequest
+	25,  // 69: voicx.v1.Control.ListClients:input_type -> voicx.v1.ListClientsRequest
+	28,  // 70: voicx.v1.Control.GetChannelInfo:input_type -> voicx.v1.GetChannelInfoRequest
+	22,  // 71: voicx.v1.Control.ListAuditLog:input_type -> voicx.v1.ListAuditLogRequest
+	17,  // 72: voicx.v1.Control.ListComplaints:input_type -> voicx.v1.ListComplaintsRequest
+	20,  // 73: voicx.v1.Control.ClearComplaints:input_type -> voicx.v1.ClearComplaintsRequest
+	4,   // 74: voicx.v1.Control.GetServerRules:input_type -> voicx.v1.GetServerRulesRequest
+	90,  // 75: voicx.v1.Control.StartFileTransfer:input_type -> voicx.v1.StartFileTransferRequest
+	92,  // 76: voicx.v1.Control.GetFileTransferStatus:input_type -> voicx.v1.GetFileTransferStatusRequest
+	94,  // 77: voicx.v1.Control.CancelFileTransfer:input_type -> voicx.v1.CancelFileTransferRequest
+	101, // 78: voicx.v1.Control.QueryPermissions:output_type -> voicx.v1.QueryPermissionsResponse
+	99,  // 79: voicx.v1.Control.DeleteChannel:output_type -> voicx.v1.DeleteChannelResponse
+	97,  // 80: voicx.v1.Control.CreateChannel:output_type -> voicx.v1.CreateChannelResponse
+	12,  // 81: voicx.v1.Control.Authenticate:output_type -> voicx.v1.AuthenticateResponse
+	15,  // 82: voicx.v1.Control.ListChannels:output_type -> voicx.v1.ListChannelsResponse
+	83,  // 83: voicx.v1.Control.ChangeRoles:output_type -> voicx.v1.ChangeRolesResponse
+	87,  // 84: voicx.v1.Control.ChangeChannel:output_type -> voicx.v1.ChangeChannelResponse
+	89,  // 85: voicx.v1.Control.SetMemberVoice:output_type -> voicx.v1.SetMemberVoiceResponse
+	78,  // 86: voicx.v1.Control.MoveMember:output_type -> voicx.v1.MoveMemberResponse
+	77,  // 87: voicx.v1.Control.DisconnectMember:output_type -> voicx.v1.DisconnectMemberResponse
+	73,  // 88: voicx.v1.Control.KickMember:output_type -> voicx.v1.KickMemberResponse
+	75,  // 89: voicx.v1.Control.BanMember:output_type -> voicx.v1.BanMemberResponse
+	44,  // 90: voicx.v1.Control.GetServerInfo:output_type -> voicx.v1.GetServerInfoResponse
+	46,  // 91: voicx.v1.Control.GetClientInfo:output_type -> voicx.v1.GetClientInfoResponse
+	60,  // 92: voicx.v1.Control.GetServerConfig:output_type -> voicx.v1.GetServerConfigResponse
+	50,  // 93: voicx.v1.Control.GetMediaLimits:output_type -> voicx.v1.GetMediaLimitsResponse
+	51,  // 94: voicx.v1.Control.SetMediaLimits:output_type -> voicx.v1.SetMediaLimitsResponse
+	59,  // 95: voicx.v1.Control.SetServerConfig:output_type -> voicx.v1.SetServerConfigResponse
+	53,  // 96: voicx.v1.Control.GetChatFilters:output_type -> voicx.v1.GetChatFiltersResponse
+	57,  // 97: voicx.v1.Control.SetChatFilters:output_type -> voicx.v1.SetChatFiltersResponse
+	55,  // 98: voicx.v1.Control.SetServerText:output_type -> voicx.v1.SetServerTextResponse
+	7,   // 99: voicx.v1.Control.ListCustomMetadata:output_type -> voicx.v1.ListCustomMetadataResponse
+	9,   // 100: voicx.v1.Control.ChangeCustomMetadata:output_type -> voicx.v1.ChangeCustomMetadataResponse
+	63,  // 101: voicx.v1.Control.ListBans:output_type -> voicx.v1.ListBansResponse
+	68,  // 102: voicx.v1.Control.ListDevices:output_type -> voicx.v1.ListDevicesResponse
+	69,  // 103: voicx.v1.Control.RevokeDevice:output_type -> voicx.v1.RevokeDeviceResponse
+	70,  // 104: voicx.v1.Control.ResetDevices:output_type -> voicx.v1.ResetDevicesResponse
+	34,  // 105: voicx.v1.Control.GetRoleState:output_type -> voicx.v1.GetRoleStateResponse
+	37,  // 106: voicx.v1.Control.ListRoleMembers:output_type -> voicx.v1.ListRoleMembersResponse
+	40,  // 107: voicx.v1.Control.CheckAccess:output_type -> voicx.v1.CheckAccessResponse
+	43,  // 108: voicx.v1.Control.GetChannelOptions:output_type -> voicx.v1.GetChannelOptionsResponse
+	27,  // 109: voicx.v1.Control.ListClients:output_type -> voicx.v1.ListClientsResponse
+	29,  // 110: voicx.v1.Control.GetChannelInfo:output_type -> voicx.v1.GetChannelInfoResponse
+	24,  // 111: voicx.v1.Control.ListAuditLog:output_type -> voicx.v1.ListAuditLogResponse
+	19,  // 112: voicx.v1.Control.ListComplaints:output_type -> voicx.v1.ListComplaintsResponse
+	21,  // 113: voicx.v1.Control.ClearComplaints:output_type -> voicx.v1.ClearComplaintsResponse
+	10,  // 114: voicx.v1.Control.GetServerRules:output_type -> voicx.v1.GetServerRulesResponse
+	91,  // 115: voicx.v1.Control.StartFileTransfer:output_type -> voicx.v1.StartFileTransferResponse
+	93,  // 116: voicx.v1.Control.GetFileTransferStatus:output_type -> voicx.v1.GetFileTransferStatusResponse
+	95,  // 117: voicx.v1.Control.CancelFileTransfer:output_type -> voicx.v1.CancelFileTransferResponse
+	78,  // [78:118] is the sub-list for method output_type
+	38,  // [38:78] is the sub-list for method input_type
+	38,  // [38:38] is the sub-list for extension type_name
+	38,  // [38:38] is the sub-list for extension extendee
+	0,   // [0:38] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -7539,15 +7666,15 @@ func file_control_proto_init() {
 	file_control_proto_msgTypes[4].OneofWrappers = []any{}
 	file_control_proto_msgTypes[50].OneofWrappers = []any{}
 	file_control_proto_msgTypes[52].OneofWrappers = []any{}
-	file_control_proto_msgTypes[80].OneofWrappers = []any{}
 	file_control_proto_msgTypes[82].OneofWrappers = []any{}
+	file_control_proto_msgTypes[84].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   99,
+			NumMessages:   101,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

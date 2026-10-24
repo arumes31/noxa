@@ -31,6 +31,7 @@ const (
 	DeviceActionPasskeyRegisterBegin  = "passkey_register_begin"
 	DeviceActionPasskeyRegisterFinish = "passkey_register_finish"
 	DeviceActionPasskeyLoginBegin     = "passkey_login_begin"
+	// #nosec G101 -- protocol action names, not credentials.
 	DeviceActionPasskeyLoginFinish    = "passkey_login_finish"
 	DeviceActionPasskeyDelete         = "passkey_delete"
 

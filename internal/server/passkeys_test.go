@@ -123,8 +123,8 @@ func (a *virtualAuthenticator) authData(attested bool) []byte {
 		out = append(out, make([]byte, 16)...)
 		out = binary.BigEndian.AppendUint16(out, uint16(len(a.id)))
 		out = append(out, a.id...)
-		cose, _ := cbor.Marshal(map[int]any{1: 2, 3: -7, -1: 1,
-			-2: a.key.PublicKey.X.FillBytes(make([]byte, 32)), -3: a.key.PublicKey.Y.FillBytes(make([]byte, 32))})
+		point, _ := a.key.PublicKey.Bytes() // 0x04 || X || Y
+		cose, _ := cbor.Marshal(map[int]any{1: 2, 3: -7, -1: 1, -2: point[1:33], -3: point[33:65]})
 		out = append(out, cose...)
 	}
 	return out

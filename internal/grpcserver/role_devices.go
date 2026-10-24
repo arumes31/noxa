@@ -5,6 +5,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"noxa/internal/auth"
 	"noxa/internal/netproto"
@@ -12,37 +13,47 @@ import (
 	noxav1 "noxa/v1"
 )
 
-func (c *controlService) ListDevices(ctx context.Context, req *noxav1.ListDevicesRequest) (*noxav1.DevicesResponse, error) {
-	return c.deviceRequest(ctx, netproto.IntegrationDeviceRequest{Action: "list", UniqueID: req.GetUniqueId()})
+func (c *controlService) ListDevices(ctx context.Context, req *noxav1.ListDevicesRequest) (*noxav1.ListDevicesResponse, error) {
+	return deviceRequest(ctx, c, netproto.IntegrationDeviceRequest{Action: "list", UniqueID: req.GetUniqueId()},
+		func(uid string, devices, _ []*noxav1.DeviceRecord) *noxav1.ListDevicesResponse {
+			return &noxav1.ListDevicesResponse{UniqueId: uid, Devices: devices}
+		})
 }
 
-func (c *controlService) RevokeDevice(ctx context.Context, req *noxav1.RevokeDeviceRequest) (*noxav1.DevicesResponse, error) {
-	return c.deviceRequest(ctx, netproto.IntegrationDeviceRequest{Action: "revoke", UniqueID: req.GetUniqueId(), DeviceID: req.GetDeviceId()})
+func (c *controlService) RevokeDevice(ctx context.Context, req *noxav1.RevokeDeviceRequest) (*noxav1.RevokeDeviceResponse, error) {
+	return deviceRequest(ctx, c, netproto.IntegrationDeviceRequest{Action: "revoke", UniqueID: req.GetUniqueId(), DeviceID: req.GetDeviceId()},
+		func(uid string, devices, revoked []*noxav1.DeviceRecord) *noxav1.RevokeDeviceResponse {
+			return &noxav1.RevokeDeviceResponse{UniqueId: uid, Devices: devices, Revoked: revoked}
+		})
 }
 
-func (c *controlService) ResetDevices(ctx context.Context, req *noxav1.ResetDevicesRequest) (*noxav1.DevicesResponse, error) {
-	return c.deviceRequest(ctx, netproto.IntegrationDeviceRequest{Action: "reset", UniqueID: req.GetUniqueId(), Keep: req.GetKeepDeviceId()})
+func (c *controlService) ResetDevices(ctx context.Context, req *noxav1.ResetDevicesRequest) (*noxav1.ResetDevicesResponse, error) {
+	return deviceRequest(ctx, c, netproto.IntegrationDeviceRequest{Action: "reset", UniqueID: req.GetUniqueId(), Keep: req.GetKeepDeviceId()},
+		func(uid string, devices, revoked []*noxav1.DeviceRecord) *noxav1.ResetDevicesResponse {
+			return &noxav1.ResetDevicesResponse{UniqueId: uid, Devices: devices, Revoked: revoked}
+		})
 }
 
-func (c *controlService) deviceRequest(ctx context.Context, request netproto.IntegrationDeviceRequest) (*noxav1.DevicesResponse, error) {
+func deviceRequest[T proto.Message](ctx context.Context, c *controlService, request netproto.IntegrationDeviceRequest, build func(uid string, devices, revoked []*noxav1.DeviceRecord) T) (T, error) {
+	var zero T
 	p, authenticated := ctx.Value(integrationPrincipalKey{}).(auth.IntegrationPrincipal)
 	b, supported := c.backend.(query.RoleDeviceBackend)
 	if !authenticated || !supported {
-		return nil, status.Error(codes.FailedPrecondition, "role integration required")
+		return zero, status.Error(codes.FailedPrecondition, "role integration required")
 	}
 	if !request.Valid() {
-		return nil, status.Error(codes.InvalidArgument, "unique_id is required; revoke also requires device_id")
+		return zero, status.Error(codes.InvalidArgument, "unique_id is required; revoke also requires device_id")
 	}
-	return protectedUnaryRead(ctx, c.logger, func(ctx context.Context, deliver func(*noxav1.DevicesResponse) error) error {
+	return protectedUnaryRead(ctx, c.logger, func(ctx context.Context, deliver func(T) error) error {
 		return b.WithIntegrationDevices(ctx, p, request, func(_ context.Context, result netproto.IntegrationDeviceResult) error {
-			out := &noxav1.DevicesResponse{UniqueId: result.UniqueID}
+			var devices, revoked []*noxav1.DeviceRecord
 			for _, d := range result.Devices {
-				out.Devices = append(out.Devices, deviceRecord(d))
+				devices = append(devices, deviceRecord(d))
 			}
 			for _, d := range result.Revoked {
-				out.Revoked = append(out.Revoked, deviceRecord(d))
+				revoked = append(revoked, deviceRecord(d))
 			}
-			return deliver(out)
+			return deliver(build(result.UniqueID, devices, revoked))
 		})
 	})
 }

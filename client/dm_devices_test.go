@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -205,7 +206,7 @@ func TestBuildDMCopiesSealsForEveryDevice(t *testing.T) {
 // deviceCopyManager is a manager registered as device "self" of account "me".
 func deviceCopyManager(t *testing.T) (*connManager, [32]byte, [32]byte) {
 	t.Helper()
-	cm := newConnManager(nil)
+	cm := newConnManager(context.TODO())
 	cm.sink = &eventRecorder{}
 	cm.addr = "test.invalid:9987"
 	cm.confirmPeerChange = nil

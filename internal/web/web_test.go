@@ -117,7 +117,7 @@ func TestWSRejectsForeignOrigin(t *testing.T) {
 
 func TestWSRequiresHTTPSFromProxy(t *testing.T) {
 	ts := newTestServer(t, testConfig(t), &echoControl{})
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/web/info", nil)
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/web/info", nil)
 	req.Header.Set("X-Forwarded-For", "203.0.113.7")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -170,7 +170,7 @@ func TestClientIPIgnoresForwardedFromUntrustedPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ws", nil)
 	req.RemoteAddr = "192.0.2.10:5555"
 	req.Header.Set("X-Forwarded-For", "203.0.113.7")
 	if got := srv.clientIP(req); got.String() != "192.0.2.10" {
@@ -185,38 +185,44 @@ func TestClientIPIgnoresForwardedFromUntrustedPeer(t *testing.T) {
 
 func TestInfoAndAppRoutes(t *testing.T) {
 	ts := newTestServer(t, testConfig(t), &echoControl{})
-	get := func(path string) *http.Response {
-		req, _ := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+	type reply struct {
+		code   int
+		header http.Header
+		body   []byte
+	}
+	get := func(path string) reply {
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+path, nil)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = resp.Body.Close() })
-		return resp
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		return reply{resp.StatusCode, resp.Header, body}
 	}
 
 	var info Info
 	resp := get("/api/v1/web/info")
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+	if err := json.Unmarshal(resp.body, &info); err != nil {
 		t.Fatal(err)
 	}
 	if info.RPID != "chat.example" || info.ProtocolVersion != ProtocolVersion || info.PublicURL != "https://chat.example" {
 		t.Fatalf("info = %+v", info)
 	}
-	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
+	if csp := resp.header.Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
 		t.Fatalf("missing CSP: %q", csp)
 	}
 
 	for _, path := range []string{"/app/", "/app/channels/general", "/link"} {
-		body, _ := io.ReadAll(get(path).Body)
+		body := get(path).body
 		if !strings.Contains(string(body), "app") {
 			t.Fatalf("%s did not serve index.html: %q", path, body)
 		}
 	}
-	if cc := get("/app/assets/main-abc.js").Header.Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+	if cc := get("/app/assets/main-abc.js").header.Get("Cache-Control"); !strings.Contains(cc, "immutable") {
 		t.Fatalf("hashed asset Cache-Control = %q", cc)
 	}
-	if code := get("/app/missing.js").StatusCode; code != http.StatusNotFound {
+	if code := get("/app/missing.js").code; code != http.StatusNotFound {
 		t.Fatalf("missing asset = %d, want 404", code)
 	}
 }

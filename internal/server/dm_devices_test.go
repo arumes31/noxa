@@ -22,12 +22,12 @@ type fakeDeviceMessages struct {
 }
 
 func (f *fakeDeviceMessages) EndorseDevice(_ context.Context, principal, deviceID, approverID string, signature []byte) (store.Device, error) {
-	f.fakeDevices.mu.Lock()
-	defer f.fakeDevices.mu.Unlock()
-	for i, d := range f.fakeDevices.devices {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, d := range f.devices {
 		if d.Principal == principal && d.DeviceID == deviceID && d.Active() && !d.FirstDevice && len(d.ApprovalSignature) == 0 {
-			f.fakeDevices.devices[i].ApprovedBy, f.fakeDevices.devices[i].ApprovalSignature = approverID, signature
-			return f.fakeDevices.devices[i], nil
+			f.devices[i].ApprovedBy, f.devices[i].ApprovalSignature = approverID, signature
+			return f.devices[i], nil
 		}
 	}
 	return store.Device{}, store.ErrDeviceNotFound
@@ -78,7 +78,9 @@ func (f *fakeDeviceMessages) AckHistoryChunks(_ context.Context, _ string, devic
 	return nil
 }
 
-func (f *fakeDeviceMessages) ExpireHistoryChunks(context.Context, time.Time) (int64, error) { return 0, nil }
+func (f *fakeDeviceMessages) ExpireHistoryChunks(context.Context, time.Time) (int64, error) {
+	return 0, nil
+}
 
 type dmTestEnv struct {
 	env     *testEnv

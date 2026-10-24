@@ -118,11 +118,11 @@ type ControlClient interface {
 	ListBans(ctx context.Context, in *ListBansRequest, opts ...grpc.CallOption) (*ListBansResponse, error)
 	// Linked devices of one account; every device RPC requires Administrator.
 	// Results never contain device keys.
-	ListDevices(ctx context.Context, in *ListDevicesRequest, opts ...grpc.CallOption) (*DevicesResponse, error)
+	ListDevices(ctx context.Context, in *ListDevicesRequest, opts ...grpc.CallOption) (*ListDevicesResponse, error)
 	// Revoking signs the device out immediately.
-	RevokeDevice(ctx context.Context, in *RevokeDeviceRequest, opts ...grpc.CallOption) (*DevicesResponse, error)
+	RevokeDevice(ctx context.Context, in *RevokeDeviceRequest, opts ...grpc.CallOption) (*RevokeDeviceResponse, error)
 	// Reset revokes every device of the account except keep_device_id.
-	ResetDevices(ctx context.Context, in *ResetDevicesRequest, opts ...grpc.CallOption) (*DevicesResponse, error)
+	ResetDevices(ctx context.Context, in *ResetDevicesRequest, opts ...grpc.CallOption) (*ResetDevicesResponse, error)
 	// Management reads share the native scoped projection and hierarchy rules.
 	GetRoleState(ctx context.Context, in *GetRoleStateRequest, opts ...grpc.CallOption) (*GetRoleStateResponse, error)
 	ListRoleMembers(ctx context.Context, in *ListRoleMembersRequest, opts ...grpc.CallOption) (*ListRoleMembersResponse, error)
@@ -395,9 +395,9 @@ func (c *controlClient) ListBans(ctx context.Context, in *ListBansRequest, opts 
 	return out, nil
 }
 
-func (c *controlClient) ListDevices(ctx context.Context, in *ListDevicesRequest, opts ...grpc.CallOption) (*DevicesResponse, error) {
+func (c *controlClient) ListDevices(ctx context.Context, in *ListDevicesRequest, opts ...grpc.CallOption) (*ListDevicesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DevicesResponse)
+	out := new(ListDevicesResponse)
 	err := c.cc.Invoke(ctx, Control_ListDevices_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -405,9 +405,9 @@ func (c *controlClient) ListDevices(ctx context.Context, in *ListDevicesRequest,
 	return out, nil
 }
 
-func (c *controlClient) RevokeDevice(ctx context.Context, in *RevokeDeviceRequest, opts ...grpc.CallOption) (*DevicesResponse, error) {
+func (c *controlClient) RevokeDevice(ctx context.Context, in *RevokeDeviceRequest, opts ...grpc.CallOption) (*RevokeDeviceResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DevicesResponse)
+	out := new(RevokeDeviceResponse)
 	err := c.cc.Invoke(ctx, Control_RevokeDevice_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -415,9 +415,9 @@ func (c *controlClient) RevokeDevice(ctx context.Context, in *RevokeDeviceReques
 	return out, nil
 }
 
-func (c *controlClient) ResetDevices(ctx context.Context, in *ResetDevicesRequest, opts ...grpc.CallOption) (*DevicesResponse, error) {
+func (c *controlClient) ResetDevices(ctx context.Context, in *ResetDevicesRequest, opts ...grpc.CallOption) (*ResetDevicesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DevicesResponse)
+	out := new(ResetDevicesResponse)
 	err := c.cc.Invoke(ctx, Control_ResetDevices_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -612,11 +612,11 @@ type ControlServer interface {
 	ListBans(context.Context, *ListBansRequest) (*ListBansResponse, error)
 	// Linked devices of one account; every device RPC requires Administrator.
 	// Results never contain device keys.
-	ListDevices(context.Context, *ListDevicesRequest) (*DevicesResponse, error)
+	ListDevices(context.Context, *ListDevicesRequest) (*ListDevicesResponse, error)
 	// Revoking signs the device out immediately.
-	RevokeDevice(context.Context, *RevokeDeviceRequest) (*DevicesResponse, error)
+	RevokeDevice(context.Context, *RevokeDeviceRequest) (*RevokeDeviceResponse, error)
 	// Reset revokes every device of the account except keep_device_id.
-	ResetDevices(context.Context, *ResetDevicesRequest) (*DevicesResponse, error)
+	ResetDevices(context.Context, *ResetDevicesRequest) (*ResetDevicesResponse, error)
 	// Management reads share the native scoped projection and hierarchy rules.
 	GetRoleState(context.Context, *GetRoleStateRequest) (*GetRoleStateResponse, error)
 	ListRoleMembers(context.Context, *ListRoleMembersRequest) (*ListRoleMembersResponse, error)
@@ -718,13 +718,13 @@ func (UnimplementedControlServer) ChangeCustomMetadata(context.Context, *ChangeC
 func (UnimplementedControlServer) ListBans(context.Context, *ListBansRequest) (*ListBansResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListBans not implemented")
 }
-func (UnimplementedControlServer) ListDevices(context.Context, *ListDevicesRequest) (*DevicesResponse, error) {
+func (UnimplementedControlServer) ListDevices(context.Context, *ListDevicesRequest) (*ListDevicesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListDevices not implemented")
 }
-func (UnimplementedControlServer) RevokeDevice(context.Context, *RevokeDeviceRequest) (*DevicesResponse, error) {
+func (UnimplementedControlServer) RevokeDevice(context.Context, *RevokeDeviceRequest) (*RevokeDeviceResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RevokeDevice not implemented")
 }
-func (UnimplementedControlServer) ResetDevices(context.Context, *ResetDevicesRequest) (*DevicesResponse, error) {
+func (UnimplementedControlServer) ResetDevices(context.Context, *ResetDevicesRequest) (*ResetDevicesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResetDevices not implemented")
 }
 func (UnimplementedControlServer) GetRoleState(context.Context, *GetRoleStateRequest) (*GetRoleStateResponse, error) {

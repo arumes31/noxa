@@ -377,14 +377,15 @@ func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID i
 	device := client.currentDeviceID()
 	ids := make([]int64, 0, len(msgs))
 	for _, m := range msgs {
-		if m.RecipientDeviceID != "" {
+		switch {
+		case m.RecipientDeviceID != "":
 			// A per-device copy opens only on its device.
 			if m.RecipientDeviceID != device {
 				continue
 			}
-		} else if client.isWebTransport() {
+		case client.isWebTransport():
 			continue // account-wide copies are sealed to the desktop's key
-		} else if m.SenderPublicKey != "" || m.RecipientPublicKey != "" {
+		case m.SenderPublicKey != "" || m.RecipientPublicKey != "":
 			_, senderValid := canonicalDMKey(m.SenderPublicKey)
 			recipient, recipientValid := canonicalDMKey(m.RecipientPublicKey)
 			if !senderValid || !recipientValid || recipient != deviceKey {
