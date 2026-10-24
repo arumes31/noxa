@@ -57,7 +57,9 @@ function provision(dir, databaseURL) {
     for (const name of ["owner", "rowan", "ivy", "kai", "lou", "mia", "noa"]) {
         const password = `pw-${name}-${run}`;
         const nickname = `${name}-${run}`;
-        const out = execFileSync(tool("adduser"), ["-nickname", nickname, "-password-stdin"], { env, input: `${password}\n` }).toString();
+        // The owner may also log in to ServerQuery (e.g. to set the server rules).
+        const flags = name === "owner" ? ["-integration"] : [];
+        const out = execFileSync(tool("adduser"), ["-nickname", nickname, "-password-stdin", ...flags], { env, input: `${password}\n` }).toString();
         accounts[name] = { uid: /unique_id: (\S+)/.exec(out)[1], password, nickname };
     }
     execFileSync(tool("role-setup"), ["-owner-uid", accounts.owner.uid, "-activate", "-confirm", "ACTIVATE-ROLES-V1",
@@ -119,6 +121,8 @@ export async function startServer({ databaseURL = process.env.NOXA_E2E_DATABASE_
         webURL,
         accounts,
         controlAddr: { host: "127.0.0.1", port: ports.tcp },
+        // ServerQuery (plain TCP on loopback) sets operator texts such as the rules.
+        queryAddr: { host: "127.0.0.1", port: ports.query },
         log: () => log,
         stop: () => new Promise(resolve => {
             if (child.exitCode !== null) return resolve();

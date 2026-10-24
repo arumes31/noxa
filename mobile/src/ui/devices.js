@@ -135,7 +135,7 @@ export async function renderDeviceList(session, list, { revokeButton, refresh })
 export async function addServerFlow() {
     const values = await formSheet({
         title: t("acct.addServer"), submit: t("acct.addServer"),
-        fields: [{ name: "address", label: t("acct.serverAddress"), type: "url", autocomplete: "url", value: "https://" }],
+        fields: [{ name: "address", label: t("acct.serverAddress"), inputmode: "url", autocomplete: "url", placeholder: "chat.example" }],
         validate: values => normalizeServer(values.address) ? "" : t("acct.serverInvalid"),
     });
     if (!values) return null;

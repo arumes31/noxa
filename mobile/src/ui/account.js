@@ -36,7 +36,7 @@ export function formSheet({ title, body = "", fields = [], submit, danger = fals
                 return input;
             }
             input = h("input", {
-                class: "input", id: inputID, type: field.type || "text", value: field.value ?? "", autocomplete: field.autocomplete || "off",
+                class: "input", id: inputID, type: field.type || "text", inputmode: field.inputmode, placeholder: field.placeholder, value: field.value ?? "", autocomplete: field.autocomplete || "off",
                 accept: field.accept, required: field.required === false ? null : "", spellcheck: "false", autocapitalize: "off",
                 maxlength: field.maxlength, "aria-describedby": field.hint ? `${inputID}-hint` : null,
             });
@@ -246,7 +246,7 @@ export async function redeemPendingInvite(session) {
 export async function pasteInvite(session) {
     const values = await formSheet({
         title: t("acct.invitePaste"), submit: t("acct.join"),
-        fields: [{ name: "link", label: t("acct.inviteLabel"), type: "url", autocomplete: "off" }],
+        fields: [{ name: "link", label: t("acct.inviteLabel"), inputmode: "url", autocomplete: "off" }],
         validate: values => parseInviteLink(values.link) ? "" : t("acct.inviteBad"),
     });
     if (!values) return;
