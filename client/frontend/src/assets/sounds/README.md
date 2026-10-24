@@ -1,12 +1,18 @@
 # noXa sound pack
 
-Hybrid Professional Console + Modern Desktop. 33 finished mono PCM WAVs, 48 kHz/16 bit. Most effects are edited from licensed source files; the poke uses the user-selected G05 recording. No old effect is retained as a fallback.
+Hybrid Professional Console + Modern Desktop. 33 finished mono PCM WAVs, 48 kHz/16 bit. Most effects are edited from licensed source files; the poke uses the user-selected G05 recording, and the direct and channel message cues are original synthesized tones. No old effect is retained as a fallback.
 
 The poke retains Microsoft David Desktop saying “Wake up!” from the user-selected G05 recording. On 2026-10-04 the trailing double beep was removed to honor the speech-only notification policy. The first 600 ms ends in silence after the complete spoken phrase, before either beep begins. Its original uniform gain and 0.112 peak remain unchanged. It remains one static poke recording, controlled by the existing poke/effects settings in every UI language.
 
 Actions with dedicated English/German announcements no longer load or play their legacy click effects in the application. The historical source assets remain in this authoring inventory; `notification-audio.js` selects the active effects. Disabling or failing to load speech never restores a click fallback. Test All plays every announcement and every remaining effect once.
 
 The pack combines dry button/switch contacts, paper handling and short friction textures. Controls, movement, messages and alerts have different source combinations. The user's follow-up explicitly excludes metallic, drum-like and instrumental sounds. All Robin Lamb/VCSL/VSCO instrument samples, the lighter recording, glass and plucked elements were removed from every recipe and finished file. Do not infer recording techniques for the Kenney interface sources.
+
+## Message cues
+
+On 2026-10-24 the user found the sample-based message contacts too quiet and unobtrusive and asked for cues closer to Discord's. From 80 auditions they chose C33 for channel messages (a double bubble pop, 700 then 980 Hz) and D39 for direct messages (three notes down then up: E6, C6, G6). These are original tones, not copies of Discord's sounds. `tools/synthesize-message-cues.py` renders both deterministically from harmonic sine partials with fast attacks and short decays, with no inharmonic (metallic) partials, long rings or low thumps. Like the poke, they are `recording` entries that `master-sounds.py` preserves byte-for-byte and verifies by SHA-256. They are peak-normalized to the same 0.112 ceiling as the other alerts; their sustained tone makes them about 15 dB louder in RMS than the clicks they replace.
+
+A focused window plays the channel-message cue at most once every five minutes; in the background every channel message plays it (`notifications.js`).
 
 ## Sources and redistribution
 

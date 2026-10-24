@@ -8,6 +8,10 @@ Windows System.Speech, followed by an original synthesized double beep.
 This recording is separate from the CC0 sample libraries listed below.
 Localized English/German poke speech replaces this cue. No Windows voice engine is shipped.
 
+Direct message and channel message cues: original tones synthesized for noXa by
+tools/synthesize-message-cues.py (user-selected auditions D39 and C33). They use no
+sample library and are distributed with the repository under its MIT license.
+
 Source archives and each edit are identified in the repository at:
 client/frontend/src/assets/sounds/provenance.json
 

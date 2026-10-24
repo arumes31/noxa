@@ -117,7 +117,8 @@ test("all 33 events have unique replacement PCM assets with safe endpoints and l
     const hashes = new Set();
     for (const id of SOUND_EVENTS) {
         const def = SOUND_DEFINITIONS[id];
-        assert.ok(def.duration >= .02 && def.duration <= (id === "poke" ? 1.1 : .3));
+        const maxDuration = { poke: 1.1, dm: .45 }[id] ?? .3;
+        assert.ok(def.duration >= .02 && def.duration <= maxDuration, `${id} duration`);
         const wav = readFileSync(new URL(`${id}.wav`, directory));
         assert.equal(createHash("sha256").update(wav).digest("hex"), metrics[id].sha256, `${id} shipped hash`);
         assert.equal(metrics[id].duration, def.duration);
@@ -128,12 +129,21 @@ test("all 33 events have unique replacement PCM assets with safe endpoints and l
             assert.equal(def.duration, 0.6);
             assert.equal(recording.edits[0].sequence, "Speech only; trailing double beep removed");
         }
+        if (id === "dm" || id === "channel_message") {
+            // The user-selected tonal cues (auditions D39 and C33) are preserved recordings.
+            const recording = recipes.events.find(event => event.id === id).recording;
+            assert.equal(recording.sha256, metrics[id].sha256, `regeneration preserves the selected ${id} cue`);
+            assert.equal(recording.edits[0].file, id === "dm" ? "D39.wav" : "C33.wav");
+        }
         assert.ok(provenance.edits[id].length > 0, `${id} source provenance`);
         for (const edit of provenance.edits[id]) {
             if (id === "poke") {
                 assert.equal(edit.source, "poke_g05");
                 assert.equal(provenance.sources[edit.source].voice, "Microsoft David Desktop");
                 assert.equal(edit.transcript, "Wake up!");
+            } else if (id === "dm" || id === "channel_message") {
+                assert.equal(edit.source, "message_cues");
+                assert.equal(provenance.sources[edit.source].engine, "tools/synthesize-message-cues.py");
             } else {
                 assert.equal(provenance.sources[edit.source].license, "CC0-1.0");
             }
