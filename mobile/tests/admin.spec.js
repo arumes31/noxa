@@ -81,6 +81,11 @@ test.beforeAll(async ({ browser }) => {
 
 test.afterAll(async () => {
     await context?.close();
+    // Free the owner's device slot for the other specs.
+    const list = await owner.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" }).catch(() => ({ devices: [] }));
+    for (const device of list.devices.filter(d => d.kind === "web" && !d.current)) {
+        await owner.conn.request(Msg.DeviceRequest, { action: "revoke", device_id: device.device_id }, Msg.DeviceResult).catch(() => {});
+    }
     owner?.conn.close();
 });
 
@@ -257,4 +262,50 @@ test("the audit log lists the actions and opens their details", async () => {
     await log.getByRole("button").first().click();
     await expect(dialog()).toContainText("ban_remove");
     await dialog().getByRole("button", { name: "Close" }).click();
+});
+
+test("a complaint filed from the member sheet is reviewed and cleared", async () => {
+    const ivy = await joinVoiceRoom(await member("ivy"));
+    await openMemberSheet(server.accounts.ivy.nickname);
+    await dialog().getByRole("button", { name: "Report member…" }).click();
+    await dialog().getByLabel("What happened?").fill("rude in voice");
+    await dialog().getByRole("button", { name: "Report member", exact: true }).click();
+    await expect(page.getByText("Thanks — the moderators can see your report.")).toBeVisible();
+    await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+
+    await go("#/admin/complaints");
+    const card = page.locator(".admin-cards > .card").filter({ hasText: "rude in voice" });
+    await expect(card).toContainText(server.accounts.ivy.nickname);
+    await card.getByRole("button", { name: /Clear all/ }).click();
+    await dialog().getByRole("button", { name: "Clear" }).click();
+    await expect(page.getByText("No complaints.")).toBeVisible();
+    ivy.conn.close();
+});
+
+test("chat filters, server settings and a channel icon are saved", async () => {
+    await go("#/admin/filters");
+    await page.getByLabel("Blocked words").fill("forbiddenword\nanother");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByText("Saved", { exact: true }).first()).toBeVisible();
+    const filters = await owner.conn.request(Msg.ChatFilterGet, {}, Msg.ChatFilterResponse);
+    expect(filters.word_filter).toBe("forbiddenword,another");
+    await owner.conn.request(Msg.ChatFilterSet, { word_filter: "" }, Msg.ChatFilterResponse);
+
+    const original = await owner.conn.request(Msg.ServerConfigQuery, {}, Msg.ServerConfigResponse);
+    await go("#/admin/server");
+    const runtime = page.getByRole("form", { name: "Runtime settings" });
+    await runtime.getByLabel(/Idle timeout/).fill("120");
+    await runtime.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText("Server settings saved")).toBeVisible();
+    expect((await owner.conn.request(Msg.ServerConfigQuery, {}, Msg.ServerConfigResponse)).client_timeout_seconds).toBe(120);
+    const { media_limits_management: _, ...restore } = original;
+    await owner.conn.request(Msg.ServerConfigSet, restore, Msg.ServerConfigResponse);
+
+    await go(`#/admin/channel/${hall.id}`);
+    await page.getByRole("button", { name: "Channel icon" }).click();
+    const chooser = page.waitForEvent("filechooser");
+    await dialog().getByRole("button", { name: "Upload image" }).click();
+    await (await chooser).setFiles({ name: "icon.png", mimeType: "image/png", buffer: PNG });
+    await expect(page.getByText("Channel icon saved")).toBeVisible();
+    await expect(page.locator(".admin-icon-preview")).toBeVisible();
 });
