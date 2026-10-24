@@ -91,6 +91,11 @@ export class ChatSession extends EventTarget {
         this.#emit("keys", { scope });
     }
 
+    /** Installs a sealed key a page carried (archival unless current is set). */
+    installKey(key, current = false) {
+        this.#installKey(key, current);
+    }
+
     #setSnapshot(snapshot) {
         this.snapshot = snapshot;
         this.#emit("snapshot", snapshot);
