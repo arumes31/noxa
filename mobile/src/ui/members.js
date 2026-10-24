@@ -43,10 +43,10 @@ export function renderMembers(root, channelID = 0) {
         const total = new Set(session.clients().map(c => c.unique_id || c.client_id)).size;
         list.replaceChildren(
             h("p", { class: "hint", role: "status" }, t("members.online", { count: total })),
-            groups.length ? groups.map(group => h("section", { class: "member-group", "aria-label": group.name },
+            ...(groups.length ? groups.map(group => h("section", { class: "member-group", "aria-label": group.name },
                 h("p", { class: "section-label" }, group.id === channelID && channelID ? t("members.here", { channel: group.name }) : group.name, ` · ${group.clients.length}`),
                 h("ul", { class: "list" }, group.clients.map(client => memberRow(client, session)))))
-                : h("p", { class: "hint" }, t("members.none")));
+                : [h("p", { class: "hint" }, t("members.none"))]));
     };
     root.replaceChildren(h("section", { class: "screen" },
         header(t("members.title"), { back: channelID ? `#/chat/${channelID}` : "#/servers", sub: channelName ? `#${channelName}` : "" }),

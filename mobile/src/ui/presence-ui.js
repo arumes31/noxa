@@ -68,8 +68,10 @@ export function statusSheet() {
 /** Changes the public display name. */
 export async function nameSheet() {
     const session = app.session;
-    const name = await promptText(t("profile.changeName"), { value: session.nickname, maxLength: 32, confirm: t("social.save"), cancel: t("home.cancel") });
-    if (name === null || !name.trim() || name.trim() === session.nickname) return;
+    // The server marks phone sessions with a "#M<n>" suffix; it is not part of the name.
+    const current = session.nickname.replace(/#M\d+$/, "");
+    const name = await promptText(t("profile.changeName"), { value: current, maxLength: 32, confirm: t("social.save"), cancel: t("home.cancel") });
+    if (name === null || !name.trim() || name.trim() === current) return;
     try {
         await session.setDisplayName(name.trim());
         const self = session.self();

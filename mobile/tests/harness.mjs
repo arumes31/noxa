@@ -54,7 +54,9 @@ function provision(dir, databaseURL) {
     execFileSync(tool("migrate"), [], { env, stdio: "pipe" });
     const accounts = {};
     const run = Date.now().toString(36);
-    for (const name of ["owner", "rowan", "ivy", "kai", "lou", "mia", "noa"]) {
+    // pia..vic are used by presence-notify.spec.js only, so its phones and
+    // first devices do not collide with the other specs' device limits.
+    for (const name of ["owner", "rowan", "ivy", "kai", "lou", "mia", "noa", "pia", "quinn", "remy", "sol", "tess", "uma", "vic"]) {
         const password = `pw-${name}-${run}`;
         const nickname = `${name}-${run}`;
         const out = execFileSync(tool("adduser"), ["-nickname", nickname, "-password-stdin"], { env, input: `${password}\n` }).toString();

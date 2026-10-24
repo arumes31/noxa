@@ -32,7 +32,7 @@ export function presenceOf(session, uid) {
  * server; current() is the status the user chose.
  */
 export class AutoAway {
-    constructor({ minutes, message = () => "", current, apply, now = () => Date.now(), setTimer = setTimeout, clearTimer = clearTimeout }) {
+    constructor({ minutes, message = () => "", current, apply, now = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = id => clearTimeout(id) }) {
         Object.assign(this, { minutes, message, current, apply, now, setTimer, clearTimer });
         this.last = now();
         this.away = false;

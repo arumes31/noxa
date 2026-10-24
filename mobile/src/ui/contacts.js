@@ -45,7 +45,7 @@ export function contactsSection() {
                     const name = session?.clients().find(c => c.unique_id === uid)?.nickname || contacts().find(c => c.uid === uid)?.name || uid;
                     return h("li", { class: "row" }, h("span", { class: "row-main" }, h("span", { class: "row-title" }, name)),
                         h("button", { class: "btn", type: "button", onclick: () => { setBlocked(uid, false); render(); } }, t("profile.unblock")));
-                }))) : null);
+                }))) : "");
     };
     render();
     const stop = settings.onChange(({ changed }) => { if (changed.includes("contacts") || changed.includes("blockedUsers")) { if (box.isConnected) render(); else stop(); } });
