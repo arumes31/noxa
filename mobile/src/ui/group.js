@@ -40,7 +40,7 @@ export function renderGroup(root, id) {
         const from = nameOf(message.from_unique_id);
         return h("div", { class: `msg${own ? " own" : ""}` },
             h("span", { class: "msg-time" }, clock(message.created_at)),
-            avatar(from, "sm"),
+            avatar(from, "sm", message.from_unique_id),
             h("div", { class: "msg-body" }, h("span", { class: "msg-from" }, from), body));
     }
 

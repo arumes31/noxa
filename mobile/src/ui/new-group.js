@@ -27,7 +27,7 @@ export function renderNewGroup(root) {
                 members.querySelectorAll("input[type=checkbox]").forEach(input => { input.disabled = selected.size >= 15 && !input.checked; });
                 count.textContent = t("group.selected", { count: selected.size });
             } });
-            return h("li", {}, h("label", { class: "row" }, checkbox, avatar(member.nickname,"sm"), h("span",{class:"row-title"},member.nickname)));
+            return h("li", {}, h("label", { class: "row" }, checkbox, avatar(member.nickname,"sm",member.unique_id), h("span",{class:"row-title"},member.nickname)));
         }));
         count.textContent = t("group.selected", { count: selected.size });
     };

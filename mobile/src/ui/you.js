@@ -4,9 +4,12 @@ import { registerPasskey, passkeysSupported } from "../core/device.js";
 import { Msg } from "../core/frame.js";
 import { disablePush, enablePush, needsInstallForPush, pushSupported, setPushPreferences } from "../core/push.js";
 import { t } from "../i18n.js";
-import { avatar, h, sheet, toast } from "./dom.js";
+import { h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { header, nav } from "./common.js";
+import { contactsSection } from "./contacts.js";
+import { notificationBehaviour } from "./notify-settings.js";
+import { profileCard } from "./you-social.js";
 
 async function devices(session) {
     return session.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
@@ -88,6 +91,7 @@ export function renderYou(root) {
     const passkeys = h("ul", { class: "list" });
     const notifications = notificationSettings(session);
     const guest = !!app.meta.guest;
+    const profile = profileCard(session);
     const refresh = async () => {
         try {
             const result = await devices(session);
@@ -117,10 +121,13 @@ export function renderYou(root) {
     root.replaceChildren(h("section", { class: "screen" },
         header(t("settings.title")),
         h("div", { class: "screen-body" },
-            h("div", { class: "card row" }, avatar(session.nickname, "md"),
-                h("span", { class: "row-main" }, h("span", { class: "row-title" }, session.nickname), h("span", { class: "row-sub" }, app.info?.server_name || ""))),
+            profile.card,
+            h("p", { class: "section-label" }, t("contacts.title")),
+            contactsSection(),
             guest ? h("p", { class: "hint" }, t("connect.guestHint")) : h("p", { class: "section-label" }, t("settings.notifications")),
             guest ? null : notifications.box,
+            h("p", { class: "section-label" }, t("notify.behaviour")),
+            notificationBehaviour(),
             guest ? null : h("p", { class: "section-label" }, t("settings.passkeys")),
             passkeys,
             !guest && passkeysSupported() ? h("button", { class: "btn btn-primary btn-block", onclick: async () => { await savePasskey(); refresh(); } }, icon("passkey"), " ", t("settings.savePasskey")) : null,
@@ -139,4 +146,5 @@ export function renderYou(root) {
             } }, t("settings.signOut")))),
         nav("you"));
     if (!guest) refresh();
+    return profile.stop;
 }

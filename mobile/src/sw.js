@@ -6,7 +6,8 @@ import { Connection } from "./core/connection.js";
 import { signIn } from "./core/device.js";
 import { DirectMessages } from "./core/direct.js";
 import { loadIdentity } from "./core/identity-store.js";
-import { SYNC_TAG, flush, pending } from "./core/outbox.js";
+import { SYNC_TAG, enqueue, flush, pending } from "./core/outbox.js";
+import { announceRead } from "./core/push.js";
 
 const VERSION = "noxa-shell-v3";
 const SHELL = ["/app/", "/app/manifest.webmanifest", "/app/icons/icon-192.png", "/app/icons/icon-512.png"];
@@ -51,11 +52,13 @@ const WORDS = {
         app: "noXa", message: "New message", dm: "sent you a message", group: "wrote in a group",
         mention: "mentioned you", mentionIn: "mentioned you in #{place}", poke: "poked you",
         call: "Incoming call", video: "Incoming video call", answer: "Answer",
+        reply: "Reply", replyPlaceholder: "Write a reply", markRead: "Mark as read",
     },
     de: {
         app: "noXa", message: "Neue Nachricht", dm: "hat dir geschrieben", group: "hat in einer Gruppe geschrieben",
         mention: "hat dich erwähnt", mentionIn: "hat dich in #{place} erwähnt", poke: "hat dich angestupst",
         call: "Eingehender Anruf", video: "Eingehender Videoanruf", answer: "Annehmen",
+        reply: "Antworten", replyPlaceholder: "Antwort schreiben", markRead: "Als gelesen markieren",
     },
 };
 
@@ -121,7 +124,7 @@ async function onPush(push) {
         timestamp: (push.at || Date.now() / 1000) * 1000,
         requireInteraction: !!text.call,
         vibrate: text.call ? [400, 200, 400, 200, 400] : [120],
-        actions: text.call ? [{ action: "answer", title: words().answer }] : [],
+        actions: text.call ? [{ action: "answer", title: words().answer }] : messageActions(push),
         data: { url: routeFor(push.tag), tag: push.tag },
     });
     await updateBadge();
@@ -138,8 +141,58 @@ self.addEventListener("push", event => {
     event.waitUntil(onPush(push));
 });
 
+/**
+ * Android shows "Reply" (inline text where the browser supports it) and
+ * "Mark as read" on message notifications. iOS shows no actions.
+ */
+function messageActions(push) {
+    if (/iPhone|iPad|iPod|Macintosh/.test(self.navigator.userAgent || "")) return [];
+    const [scope] = String(push.tag || "").split(":");
+    const w = words();
+    const actions = [];
+    if (scope === "dm" || scope === "channel") actions.push({ action: "reply", title: w.reply, type: "text", placeholder: w.replyPlaceholder });
+    if (scope === "dm" || scope === "channel" || scope === "conversation") actions.push({ action: "read", title: w.markRead });
+    return actions;
+}
+
+/** The outbox target of a conversation tag, or null when replies go elsewhere. */
+function replyTarget(tag) {
+    const [scope, id = ""] = String(tag).split(/:(.*)/s);
+    if (scope === "dm" && id) return { kind: "dm", peer: id, nickname: "" };
+    if (scope === "channel" && /^\d+$/.test(id)) return { kind: "channel", scope: Number(id) };
+    return null;
+}
+
+/**
+ * Reply or mark read from the notification: an open app does it itself;
+ * otherwise the worker signs in briefly like the outbox flush.
+ */
+async function notificationAction(action, tag, reply) {
+    const [scope, id = ""] = String(tag).split(/:(.*)/s);
+    const target = action === "reply" ? replyTarget(tag) : null;
+    if (target && reply) await enqueue(target, reply.slice(0, 4000));
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (windows.length) {
+        for (const client of windows) client.postMessage({ type: "notification-action", action, tag, flush: !!(target && reply) });
+    } else {
+        await signedIn(async session => {
+            announceRead(session.conn, scope, id);
+            return !!(target && reply);
+        });
+    }
+    await closeTag(tag);
+    await updateBadge();
+}
+
 self.addEventListener("notificationclick", event => {
     event.notification.close();
+    const tag = event.notification.data?.tag || "";
+    const typed = typeof event.reply === "string" ? event.reply.trim() : "";
+    // A reply without inline text (unsupported browser) opens the conversation.
+    if (event.action === "read" || (event.action === "reply" && typed)) {
+        event.waitUntil(notificationAction(event.action, tag, typed).catch(() => {}));
+        return;
+    }
     const url = event.notification.data?.url || "/app/#/home";
     event.waitUntil((async () => {
         const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
@@ -182,14 +235,11 @@ async function waitForKeys(session, scopes, timeout = 8000) {
     });
 }
 
-async function syncOutbox() {
-    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    if (windows.length) {
-        for (const client of windows) client.postMessage({ type: "flush-outbox" });
-        return;
-    }
-    const waiting = (await pending()).filter(entry => !entry.expired && !entry.failed);
-    if (!waiting.length) return;
+/**
+ * Signs in with the device key for a moment. work(session) runs first and
+ * returns whether the outbox should be sent in the same connection.
+ */
+async function signedIn(work = async () => true) {
     const stored = await loadIdentity();
     if (!stored?.meta?.linked) return;
     const info = await (await fetch("/api/v1/web/info", { cache: "no-store" })).json();
@@ -199,16 +249,34 @@ async function syncOutbox() {
         const session = new ChatSession(conn, stored.identity, auth);
         // Offline DMs are replayed immediately after authentication.
         const dm = new DirectMessages(session, stored.meta);
-        const scopes = [...new Set(waiting.filter(entry => entry.kind === "channel").map(entry => entry.scope))];
-        const channels = scopes.filter(scope => scope > 0);
-        if (channels.length) await session.subscribe(channels).catch(() => {});
-        await waitForKeys(session, scopes);
-        await dm.ready;
-        await flush(session, dm);
-        dm.close();
+        try {
+            if (!await work(session)) return;
+            const waiting = (await pending()).filter(entry => !entry.expired && !entry.failed);
+            const scopes = [...new Set(waiting.filter(entry => entry.kind === "channel").map(entry => entry.scope))];
+            const channels = scopes.filter(scope => scope > 0);
+            if (channels.length) await session.subscribe(channels).catch(() => {});
+            await waitForKeys(session, scopes);
+            await dm.ready;
+            await flush(session, dm);
+        } finally {
+            dm.close();
+        }
     } finally {
+        // The read marker and sends are written before the socket closes.
+        await new Promise(resolve => setTimeout(resolve, 150));
         conn.close();
     }
+}
+
+async function syncOutbox() {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (windows.length) {
+        for (const client of windows) client.postMessage({ type: "flush-outbox" });
+        return;
+    }
+    const waiting = (await pending()).filter(entry => !entry.expired && !entry.failed);
+    if (!waiting.length) return;
+    await signedIn();
     const left = (await pending()).filter(entry => !entry.expired && !entry.failed);
     if (left.length) throw new Error(`${left.length} messages still waiting`);
 }

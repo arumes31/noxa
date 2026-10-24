@@ -6,6 +6,7 @@ import { avatar, clock, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { messageBody } from "./attachments.js";
 import { header } from "./common.js";
+import { presenceSub } from "./presence-ui.js";
 
 export function renderDM(root, peer) {
     const session = app.session;
@@ -29,7 +30,7 @@ export function renderDM(root, peer) {
         return h("div", { class: classes, tabindex: changeable ? "0" : null, role: changeable ? "button" : null,
             "aria-label": changeable ? t("dm.messageActions") : null, onclick: changeable ? () => messageActions(message) : null },
             h("span", { class: "msg-time" }, clock(message.sentAt)),
-            avatar(from, "sm"),
+            avatar(from, "sm", message.self ? session.uniqueID : peer),
             h("div", { class: "msg-body" },
                 h("span", { class: "msg-from" }, from),
                 body,
@@ -145,7 +146,7 @@ export function renderDM(root, peer) {
     dm.addEventListener("messages", onMessages);
     dm.addEventListener("history", onHistory);
     root.replaceChildren(h("section", { class: "screen chat" },
-        header(name, { back: "#/home", action: h("button", { class: "icon-btn", type: "button", "aria-label": t("call.start", { name }), onclick: () => startCall(peer).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone")) }),
+        header(name, { back: "#/home", sub: presenceSub(peer), action: h("button", { class: "icon-btn", type: "button", "aria-label": t("call.start", { name }), onclick: () => startCall(peer).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone")) }),
         banner, notice, progress, log, editBar, form));
     dm.ready.then(render);
     checkTrust();

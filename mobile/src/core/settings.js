@@ -40,7 +40,7 @@ export const DEFAULTS = Object.freeze({
     soundVolume: 1,
     speech: false,
     matrix: {}, // event -> {sound, toast, push}
-    channelNotify: {}, // channel ID -> "all" | "mentions" | "none"
+    channelNotify: {}, // channel ID -> "all" | "mentions" | "none" | "mute"
     chatLevel: "all", // all | mentions | dm
     dnd: false,
     quietFrom: "",
@@ -52,6 +52,11 @@ export const DEFAULTS = Object.freeze({
     autoAwayMinutes: 0,
     autoAwayMessage: "",
     mutedConversations: [], // "dm:<uid>" | "conversation:<id>"
+    presenceStatus: "online", // chosen status, restored after reconnecting
+    presenceMessage: "",
+    // Social
+    contacts: [], // [{uid, name, note}]
+    notes: {}, // unique ID -> private note
 });
 
 let cache = null;

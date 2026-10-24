@@ -20,6 +20,8 @@ const screens = {
     group: () => import("./ui/group.js"),
     voice: () => import("./ui/voice.js"),
     you: () => import("./ui/you.js"),
+    members: () => import("./ui/members.js"),
+    activity: () => import("./ui/activity.js"),
 };
 
 document.documentElement.lang = lang();
@@ -68,7 +70,9 @@ async function route() {
         case "call": cleanup = module.renderCall(root, arg); break;
         case "group": cleanup = module.renderGroup(root, arg); break;
         case "voice": cleanup = module.renderVoice(root); break;
-        case "you": module.renderYou(root); break;
+        case "you": cleanup = module.renderYou(root); break;
+        case "members": cleanup = module.renderMembers(root, Number(arg) || 0); break;
+        case "activity": cleanup = module.renderActivity(root); break;
         default: module.renderHome(root);
     }
     renderBanner();
@@ -151,6 +155,12 @@ app.addEventListener("outbox", renderBanner);
 navigator.serviceWorker?.addEventListener("message", event => {
     if (event.data?.type === "flush-outbox") {
         flushNow().catch(() => {});
+        return;
+    }
+    // "Reply" or "Mark as read" on a notification while the app is open.
+    if (event.data?.type === "notification-action" && typeof event.data.tag === "string") {
+        if (event.data.tag.includes(":")) markRead(event.data.tag);
+        if (event.data.flush) flushNow().catch(() => {});
         return;
     }
     if (event.data?.type !== "open" || typeof event.data.url !== "string") return;
