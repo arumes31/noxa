@@ -26,12 +26,17 @@ export function scopeName(session, scope) {
     return `# ${session.channels().find(c => c.id === scope)?.name || scope}`;
 }
 
-/** Unread count badge; mentions are highlighted. */
-export function unreadBadge(scope) {
-    const entry = app.unread.get(scope);
+/** Unread count badge of a conversation tag; mentions are highlighted. */
+export function unreadBadge(tag) {
+    const entry = app.unread.get(tag);
     if (!entry?.count) return null;
     return h("span", { class: entry.mentions ? "badge badge-mention" : "badge", "aria-label": t("home.unread", { count: entry.count }) },
         entry.mentions ? `@${entry.count}` : String(entry.count));
+}
+
+/** The route of a direct conversation. */
+export function dmHref(uid) {
+    return `#/dm/${encodeURIComponent(uid)}`;
 }
 
 export function lastMessage(session, scope) {

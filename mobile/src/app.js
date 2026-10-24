@@ -1,6 +1,7 @@
 // app.js — application state shared by the screens: server info, this
 // device's identity, the signed-in chat session and reconnection.
 import { ChatSession } from "./core/chat-session.js";
+import { DirectMessages } from "./core/direct.js";
 import { Connection } from "./core/connection.js";
 import { generateIdentity } from "./core/crypto.js";
 import { signIn } from "./core/device.js";
@@ -16,9 +17,11 @@ app.session = null;
 app.online = true;
 /** Push availability and this device's preferences, after syncPush. */
 app.push = { available: false, preferences: {} };
-/** scope -> {count, mentions} of unread channel messages. */
+/** Direct messages of the signed-in session. */
+app.dm = null;
+/** Conversation tag ("channel:4", "dm:<uid>") -> {count, mentions} unread. */
 app.unread = new Map();
-/** The chat scope on screen, or null. */
+/** The conversation tag on screen, or null. */
 app.viewing = null;
 
 const RECONNECT_STEPS = [1000, 2000, 5000, 10000, 20000, 30000];
@@ -55,6 +58,8 @@ export async function rememberLinkedIdentity(identity, meta) {
 }
 
 export async function forgetDevice() {
+    app.dm?.close();
+    app.dm = null;
     app.session?.close();
     app.session = null;
     await clearIdentity();
@@ -84,6 +89,16 @@ export async function connect() {
     reconnectAttempt = 0;
     setOnline(true);
     await updateMeta({ deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname });
+    app.meta = { ...app.meta, deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
+    app.dm?.close();
+    const dm = new DirectMessages(session, app.meta);
+    app.dm = dm;
+    dm.addEventListener("messages", event => {
+        const { peer, message, isNew } = event.detail;
+        if (isNew && !message.self && !message.copied) noteUnread(`dm:${peer}`, true);
+        emit("dm", { peer });
+    });
+    dm.importHistory().catch(() => {});
     conn.addEventListener("close", () => {
         if (app.session !== session) return;
         setOnline(false);
@@ -97,19 +112,11 @@ export async function connect() {
     session.addEventListener("device", event => {
         if (event.detail?.event === "revoked" && event.detail.device?.device_id === session.deviceID) forgetDevice();
         if (event.detail?.event === "read" && event.detail.read) readElsewhere(event.detail.read);
+        if (event.detail?.event === "history_ready") dm.importHistory().catch(() => {});
     });
     session.addEventListener("incoming", event => {
         const { scope, message } = event.detail;
-        if (message.own) return;
-        if (app.viewing === scope && document.visibilityState === "visible") {
-            announceRead(session.conn, "channel", scope);
-            return;
-        }
-        const entry = app.unread.get(scope) || { count: 0, mentions: 0 };
-        entry.count++;
-        if (message.mentioned) entry.mentions++;
-        app.unread.set(scope, entry);
-        unreadChanged();
+        if (!message.own) noteUnread(`channel:${scope}`, message.mentioned);
     });
     reportVisibility(conn);
     syncPush(conn).then(state => {
@@ -127,18 +134,33 @@ function unreadChanged() {
     emit("unread");
 }
 
-/** Marks a channel read here and on the account's other devices. */
-export function markRead(scope) {
-    closeNotifications(`channel:${scope}`);
-    const had = app.unread.delete(scope);
-    if (app.session) announceRead(app.session.conn, "channel", scope);
+/** Counts an incoming message unless its conversation is on screen. */
+function noteUnread(tag, mention) {
+    if (app.viewing === tag && document.visibilityState === "visible") {
+        markRead(tag);
+        return;
+    }
+    const entry = app.unread.get(tag) || { count: 0, mentions: 0 };
+    entry.count++;
+    if (mention) entry.mentions++;
+    app.unread.set(tag, entry);
+    unreadChanged();
+}
+
+/** Marks a conversation read here and on the account's other devices. */
+export function markRead(tag) {
+    closeNotifications(tag);
+    const had = app.unread.delete(tag);
+    const split = tag.indexOf(":");
+    if (app.session) announceRead(app.session.conn, tag.slice(0, split), tag.slice(split + 1));
     if (had) unreadChanged();
 }
 
 /** Another device of the account read a conversation. */
 function readElsewhere({ scope, id }) {
-    closeNotifications(`${scope}:${id}`);
-    if (scope === "channel" && app.unread.delete(Number(id))) unreadChanged();
+    const tag = `${scope}:${id}`;
+    closeNotifications(tag);
+    if (app.unread.delete(tag)) unreadChanged();
 }
 
 function setOnline(online) {

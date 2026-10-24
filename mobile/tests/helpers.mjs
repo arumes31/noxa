@@ -57,3 +57,19 @@ export async function openServerToMembers(owner) {
         kind: "role_update", expected_revision: policy.revision, role: { ...everyone, permissions },
     }, MsgRoleChangeResult);
 }
+
+/** Signs and publishes a noxa-dm-key-v1 record like the desktop client. */
+export async function publishKeyRecord(desktop) {
+    const { toBase64: b64, utf8: bytes, sign: signBytes } = await import("../src/core/crypto.js");
+    const payload = `{"UID":${JSON.stringify(desktop.uniqueID)},"SigningKey":"${b64(desktop.identity.edPublic)}","EncryptionKey":"${b64(desktop.identity.xPublic)}"}`;
+    const signature = signBytes(new Uint8Array([...bytes("noxa/dm-identity/v1\0"), ...bytes(payload)]), desktop.identity.edSecret);
+    const record = JSON.stringify({ uid: desktop.uniqueID, signing_key: b64(desktop.identity.edPublic), encryption_key: b64(desktop.identity.xPublic), signature: b64(signature) });
+    desktop.conn.send(Msg.KeyPublish, { public_key: "noxa-dm-key-v1:" + b64(bytes(record)) });
+}
+
+/** Registers the desktop session as its account's first device. */
+export async function registerDesktop(desktop) {
+    const list = await desktop.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
+    desktop.deviceID = list.devices.find(d => d.current)?.device_id;
+    return desktop.deviceID;
+}

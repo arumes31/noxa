@@ -11,6 +11,7 @@ const screens = {
     home: () => import("./ui/home.js"),
     servers: () => import("./ui/servers.js"),
     chat: () => import("./ui/chat.js"),
+    dm: () => import("./ui/dm.js"),
     voice: () => import("./ui/voice.js"),
     you: () => import("./ui/you.js"),
 };
@@ -31,13 +32,15 @@ async function route() {
         if (token === routeToken) renderConnect(root, { onSignedIn });
         return;
     }
-    let [, screen = "home", arg] = location.hash.split("/");
+    let [, screen = "home", ...rest] = location.hash.split("/");
+    let arg = "";
+    try { arg = decodeURIComponent(rest.join("/")); } catch { arg = ""; }
     if (!screens[screen] || screen === "connect") screen = "home";
+    if (screen === "dm" && !arg) screen = "home";
     app.viewing = null;
-    if (screen === "chat") {
-        app.viewing = Number(arg) || 0;
-        markRead(app.viewing);
-    }
+    if (screen === "chat") app.viewing = `channel:${Number(arg) || 0}`;
+    if (screen === "dm") app.viewing = `dm:${arg}`;
+    if (app.viewing) markRead(app.viewing);
     let module;
     try {
         module = await screens[screen]();
@@ -49,7 +52,8 @@ async function route() {
     if (token !== routeToken) return;
     switch (screen) {
         case "servers": module.renderServers(root); break;
-        case "chat": cleanup = module.renderChat(root, app.viewing); break;
+        case "chat": cleanup = module.renderChat(root, Number(arg) || 0); break;
+        case "dm": cleanup = module.renderDM(root, arg); break;
         case "voice": module.renderVoice(root); break;
         case "you": module.renderYou(root); break;
         default: module.renderHome(root);
@@ -80,6 +84,9 @@ app.addEventListener("session", event => {
     session.addEventListener("messages", () => {
         if ((location.hash.split("/")[1] || "home") === "home") route();
     });
+});
+app.addEventListener("dm", () => {
+    if ((location.hash.split("/")[1] || "home") === "home") route();
 });
 app.addEventListener("unread", () => {
     const screen = location.hash.split("/")[1] || "home";

@@ -8,6 +8,7 @@ export class ProtocolError extends Error {
         super(error?.message || "request failed");
         this.code = error?.code;
         this.retryAfterMS = error?.retry_after_ms;
+        this.devicesStale = !!error?.recipient_devices_stale;
     }
 }
 

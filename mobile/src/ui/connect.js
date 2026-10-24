@@ -97,7 +97,7 @@ export async function runLink(root, link, { onSignedIn }) {
         const state = await waitForDecision(identity, claim.linkID, { signal: abort.signal });
         if (state === LinkState.denied) return fail(t("link.denied"));
         if (state !== LinkState.approved) return fail(t("link.expired"));
-        await rememberLinkedIdentity(identity, { via: "link" });
+        await rememberLinkedIdentity(identity, { via: "link", approverFingerprint: claim.approverFingerprint });
         await connect();
         history.replaceState(null, "", "/app/#/home");
         onSignedIn({ offerPasskey: true });

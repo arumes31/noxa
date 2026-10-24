@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/nacl/box"
+
+	"noxa/internal/e2ee"
 	"golang.org/x/crypto/nacl/secretbox"
 )
 
@@ -46,6 +48,8 @@ type mobileInterop struct {
 	ApprovalPrinc   string `json:"approval_principal"`
 	ApprovalDevice  string `json:"approval_device"`
 	ApprovalMessage string `json:"approval_transcript"`
+	ApprovalSig     string `json:"approval_signature"`
+	KeyRecord       string `json:"key_record"`
 }
 
 func TestMobileInteropFixture(t *testing.T) {
@@ -116,7 +120,13 @@ func TestMobileInteropFixture(t *testing.T) {
 		PeerX25519: b64(peerPub[:]), PeerX25519Priv: b64(peerPriv[:]), DMText: "hi from the desktop", DMBlobFromPeer: b64(dmBlob),
 		ApprovalPrinc: "user-uid", ApprovalDevice: "dev-desktop",
 		ApprovalMessage: string(DeviceApprovalTranscript("user-uid", "dev-desktop", pemText, xPubB64)),
+		ApprovalSig:     b64(ed25519.Sign(priv, DeviceApprovalTranscript("user-uid", "dev-desktop", pemText, xPubB64))),
 	}
+	record, err := e2ee.SignKeyRecord(uniqueID, *xPub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.KeyRecord = record
 	data, err := json.MarshalIndent(fixture, "", "  ")
 	if err != nil {
 		t.Fatal(err)
