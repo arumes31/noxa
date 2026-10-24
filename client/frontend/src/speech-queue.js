@@ -37,6 +37,10 @@ export const SPEECH_EVENTS = {
     test: { priority: 4, category: "test" },
 };
 
+// Language-specific alternatives of an event. They share its policy and
+// settings switch and are absent from languages without a recording.
+export const SPEECH_VARIANTS = { client_closing_night: "client_closing" };
+
 export function speechLanguage(settings, systemLanguage = "en") {
     if (["en", "de"].includes(settings?.speech_language)) return settings.speech_language;
     const language = settings?.language;

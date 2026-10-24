@@ -1,6 +1,6 @@
 # Fixed noXa spoken announcements
 
-These 34 English and 34 German WAVs are rendered during development. The shipped
+These 34 English and 35 German WAVs are rendered during development. The shipped
 client only plays bundled recordings. No model, TTS engine, dynamic text or
 network TTS is packaged. Canonical text: tools/speech-lines.json.
 
@@ -16,6 +16,24 @@ pace. ST13 is a weighted blend of the Supertonic 3 preset styles, defined in
 tools/voices/ST13.json (M5 × 1.25, M1 × −0.25, speed 0.97, 8 flow steps). No
 actor recording or identifiable character imitation was used. The earlier EA60
 (English) and AN06 (German) recordings are retired.
+
+### German closing messages
+
+The German client has two closing messages, chosen by the user on 2026-10-24
+from 40 daytime and 40 night auditions in ten voices:
+
+| Clip | Shown | Text | Voice |
+| --- | --- | --- | --- |
+| `client_closing` | 05:00–19:59 | noXa verabschiedet sich. Bis gleich. | F5 (audition T07) |
+| `client_closing_night` | 20:00–04:59 | Gute Nacht, schlaf gut und träum süß. | F1 (audition N30) |
+
+F5 and F1 are unblended Supertonic 3 presets (tools/voices/F5.json, F1.json)
+with the same model, runtime and settings as ST13. provenance.json assigns them
+under `authoring.de.clip_voices`, so `render` reuses them. The night clip is a
+variant of `client_closing` (`SPEECH_VARIANTS` in speech-queue.js): it shares
+its priority and settings switch, and English keeps one closing line. Whisper
+hears "Nocksa" in the F5 clip as "Nuxer", so that clip is recorded as
+`accepted-user-listening-review`: the user chose this exact recording by ear.
 
 - Model: [Supertonic 3](https://huggingface.co/Supertone/supertonic-3), INT8
   conversion from the sherpa-onnx `tts-models` release, OpenRAIL-M weights.
@@ -65,7 +83,7 @@ respellings and masters each clip with the shared contract in
 generate-speech.py. review transcribes every clip with Whisper and accepts it
 only when the transcript matches the intended text within one letter (spacing
 and punctuation may differ; the edit count is recorded). Re-render rejected clips with `render --events ...` and review again;
-publish refuses unless all 68 clips are accepted. Synthesis is not
+publish refuses unless all 69 clips are accepted, either by the content check or, for a misheard name only, by a recorded listening approval. Synthesis is not
 bit-reproducible, so the shipped hashes identify the accepted recordings.
 st13-content-review.json binds each accepted check to its WAV hash. ASR checks
 completeness, not listening comfort, timbre or accent.

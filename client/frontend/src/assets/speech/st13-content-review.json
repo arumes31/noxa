@@ -456,15 +456,27 @@
     "reviewStatus": "accepted-automatic-content-review"
   },
   "de/client_closing": {
-    "sha256": "1ad1b87ce09680f98a1880ec9f54d2d8b5542202bc73ba7ae0a447fc1442efbd",
-    "expected": "Wird geschlossen. Auf Wiedersehen.",
-    "renderText": "Wird geschlossen. Auf Wiedersehen.",
+    "sha256": "295ee84defd8765d256c44ccf7a1a59030a54fc412aca5e997c55e534023989b",
+    "expected": "noXa verabschiedet sich. Bis gleich.",
+    "renderText": "Nocksa verabschiedet sich. Bis gleich.",
     "language": "de",
-    "automatic_transcript": "wird geschlossen auf Wiedersehen.",
-    "duration": 1.978,
+    "automatic_transcript": "Nuxer verabschiedet sich bis gleich.",
+    "duration": 2.186,
+    "asr": "Whisper small (sherpa-onnx int8)",
+    "note": "Whisper hears the product name (rendered Nocksa) as \"Nuxer\"; every other word matches. The user selected this exact recording after listening on 2026-10-24.",
+    "letterEdits": 3,
+    "reviewStatus": "accepted-user-listening-review"
+  },
+  "de/client_closing_night": {
+    "sha256": "67c76762f917d662571805b9052fa99ec43312c4a6170fdb50fef42b0ca8731f",
+    "expected": "Gute Nacht, schlaf gut und träum süß.",
+    "renderText": "Gute Nacht, schlaf gut und träum süß.",
+    "language": "de",
+    "automatic_transcript": "Gute Nacht, schlaf gut und träume süß.",
+    "duration": 2.336,
     "asr": "Whisper small (sherpa-onnx int8)",
     "note": "Automatic content review; not a human listening or timbre assessment.",
-    "letterEdits": 0,
+    "letterEdits": 1,
     "reviewStatus": "accepted-automatic-content-review"
   },
   "de/banned": {

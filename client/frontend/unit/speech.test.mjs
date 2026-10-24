@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { SpeechQueue, SPEECH_EVENTS, speechLanguage } from "../src/speech-queue.js";
+import { SpeechQueue, SPEECH_EVENTS, SPEECH_VARIANTS, speechLanguage } from "../src/speech-queue.js";
 import { SPEECH_ASSETS } from "../src/speech-catalog.js";
 import { SOUND_DEFINITIONS } from "../src/sound-catalog.js";
 import { SPOKEN_ACTIONS, EFFECT_EVENTS } from "../src/notification-audio.js";
@@ -56,9 +56,10 @@ test("each fixed speech event has valid English/German PCM and no orphaned clips
     const metrics = JSON.parse(readFileSync(new URL("../src/assets/speech/metrics.json", import.meta.url)));
     const transcripts = JSON.parse(readFileSync(new URL("../../../tools/speech-lines.json", import.meta.url)));
     for (const language of ["en", "de"]) {
-        assert.deepEqual(Object.keys(SPEECH_ASSETS[language]).sort(), Object.keys(SPEECH_EVENTS).sort());
+        const variants = Object.keys(SPEECH_VARIANTS).filter(event => Object.hasOwn(transcripts[language], event));
+        assert.deepEqual(Object.keys(SPEECH_ASSETS[language]).sort(), [...Object.keys(SPEECH_EVENTS), ...variants].sort());
         const directory = new URL("../src/assets/speech/"+language+"/",import.meta.url);
-        assert.equal(readdirSync(directory).filter(f=>f.endsWith(".wav")).length, Object.keys(SPEECH_EVENTS).length);
+        assert.equal(readdirSync(directory).filter(f=>f.endsWith(".wav")).length, Object.keys(SPEECH_EVENTS).length + variants.length);
         for (const [event, clip] of Object.entries(SPEECH_ASSETS[language])) {
             const wav = readFileSync(new URL(event+".wav", directory));
             assert.equal(wav.toString("ascii",0,4),"RIFF"); assert.equal(wav.readUInt16LE(22),1);
@@ -119,7 +120,7 @@ test("German announcements use ST13 with the listened-to respellings and keep Ch
     assert.match(notice, /MIT License/);
 });
 
-test("every announcement in both languages is a reviewed ST13 recording of its respelled text", () => {
+test("every announcement in both languages is a reviewed recording of its respelled text in its voice", () => {
     const provenance = JSON.parse(readFileSync(new URL("../src/assets/speech/provenance.json", import.meta.url)));
     const metrics = JSON.parse(readFileSync(new URL("../src/assets/speech/metrics.json", import.meta.url)));
     const review = JSON.parse(readFileSync(new URL("../src/assets/speech/st13-content-review.json", import.meta.url)));
@@ -129,14 +130,35 @@ test("every announcement in both languages is a reviewed ST13 recording of its r
     for (const key of keys) {
         const [language, event] = key.split("/");
         const clip = SPEECH_ASSETS[language][event], metric = metrics[key];
-        assert.equal(metric.voice, "ST13", key);
+        const chosen = provenance.authoring[language].clip_voices?.[event];
+        assert.equal(metric.voice, chosen?.voice ?? "ST13", key);
+        if (chosen) assert.equal(JSON.parse(readFileSync(new URL("../../../" + chosen.definition, import.meta.url))).id, chosen.voice, key);
         assert.equal(metric.modelSha256, provenance.providers[language].sha256, key);
         assert.equal(metric.sampleRate, 24000, key);
         assert.equal(metric.renderText, renderText(clip.transcript, provenance.pronunciation_aliases[language]), key);
         assert.equal(review[key].sha256, metric.sha256, key);
         assert.equal(review[key].expected, clip.transcript, key);
-        assert.equal(review[key].reviewStatus, "accepted-automatic-content-review", key);
+        // A listening approval is reserved for clips where Whisper only mishears a name.
+        assert.ok(["accepted-automatic-content-review", "accepted-user-listening-review"].includes(review[key].reviewStatus), key);
+        if (review[key].reviewStatus === "accepted-user-listening-review") assert.match(review[key].note, /selected this exact recording after listening/, key);
     }
+    assert.deepEqual(Object.keys(provenance.authoring.de.clip_voices), ["client_closing", "client_closing_night"]);
+    assert.equal(metrics["de/client_closing"].voice, "F5");
+    assert.equal(metrics["de/client_closing_night"].voice, "F1");
+    assert.equal(provenance.authoring.en.clip_voices, undefined);
+});
+
+test("German closing says good night from 20:00 until 04:59; English keeps one closing line", async () => {
+    const { closingClip } = await import("../src/sounds.js");
+    const at = (hour, minute = 0) => new Date(2026, 9, 24, hour, minute);
+    assert.equal(SPEECH_ASSETS.de.client_closing.transcript, "noXa verabschiedet sich. Bis gleich.");
+    assert.equal(SPEECH_ASSETS.de.client_closing_night.transcript, "Gute Nacht, schlaf gut und träum süß.");
+    for (const [hour, minute, clip] of [[5, 0, "client_closing"], [12, 0, "client_closing"], [19, 59, "client_closing"],
+        [20, 0, "client_closing_night"], [23, 30, "client_closing_night"], [0, 0, "client_closing_night"], [4, 59, "client_closing_night"]]) {
+        assert.equal(closingClip("de", at(hour, minute)), clip, `de ${hour}:${minute}`);
+        assert.equal(closingClip("en", at(hour, minute)), "client_closing", `en ${hour}:${minute}`);
+    }
+    assert.equal(SPEECH_ASSETS.en.client_closing_night, undefined);
 });
 
 test("preview never interrupts a live critical announcement", () => {
