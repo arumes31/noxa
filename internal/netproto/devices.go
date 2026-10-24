@@ -108,6 +108,7 @@ const (
 	DeviceEventRenamed       = "renamed"
 	DeviceEventExpiryWarning = "expiry_warning"
 	DeviceEventRead          = "read"
+	DeviceEventEndorsed      = "endorsed"
 )
 
 // DeviceRequest carries one device action. Fields not used by the action
@@ -141,6 +142,11 @@ type DeviceRequest struct {
 	Preferences  *PushPreferences      `json:"preferences,omitempty"`
 	Active       bool                  `json:"active,omitempty"`
 	Read         *ReadMarker           `json:"read,omitempty"`
+
+	// History copy: the chunk to store, or the first sequence number to
+	// fetch or the last one to acknowledge.
+	History *HistoryChunk `json:"history,omitempty"`
+	Seq     int           `json:"seq,omitempty"`
 }
 
 // Valid checks the action-specific shape; handlers check authorization.
@@ -149,6 +155,13 @@ func (r DeviceRequest) Valid() bool {
 		len(r.DeviceID) > 64 || len(r.Proof) > 64 || len(r.Signature) > 128 ||
 		len(r.Ed25519PublicKey) > 512 || len(r.X25519PublicKey) > 128 ||
 		len(r.WebAuthn) > MaxWebAuthnPayload || len(r.PasskeyID) > 1400 {
+		return false
+	}
+	if r.History != nil && (len(r.History.Data) == 0 || len(r.History.Data) > MaxHistoryChunk ||
+		r.History.Seq < 0 || r.History.Total < 1 || r.History.Total > MaxHistoryChunks || r.History.Seq >= r.History.Total) {
+		return false
+	}
+	if r.Seq < 0 || r.Seq > MaxHistoryChunks {
 		return false
 	}
 	if r.Subscription != nil && (len(r.Subscription.Endpoint) > 1024 || len(r.Subscription.P256dh) > 128 || len(r.Subscription.Auth) > 64) {
@@ -177,6 +190,12 @@ func (r DeviceRequest) Valid() bool {
 		return r.DeviceID != "" && strings.TrimSpace(r.Name) != ""
 	case DeviceActionRevoke:
 		return r.DeviceID != ""
+	case DeviceActionEndorse:
+		return r.DeviceID != "" && len(r.Signature) > 0
+	case DeviceActionHistoryPut:
+		return r.DeviceID != "" && r.History != nil
+	case DeviceActionHistoryGet, DeviceActionHistoryAck:
+		return r.History == nil && r.DeviceID == ""
 	case DeviceActionLinkCancel:
 		return r.LinkID != ""
 	case DeviceActionLinkDecide:
@@ -239,6 +258,9 @@ type DeviceResult struct {
 	// preferences. An empty key means the server does not send pushes.
 	VAPIDPublicKey string           `json:"vapid_public_key,omitempty"`
 	Preferences    *PushPreferences `json:"preferences,omitempty"`
+
+	// History copy chunks (history_get).
+	History []HistoryChunk `json:"history,omitempty"`
 }
 
 // DeviceEvent notifies every session of the account about device changes.
@@ -260,6 +282,8 @@ type DeviceEvent struct {
 	ExpiresAt int64 `json:"expires_at,omitempty"`
 	// Read: another device of the account read a conversation.
 	Read *ReadMarker `json:"read,omitempty"`
+	// History copy: the chunks waiting for this device.
+	HistoryTotal int `json:"history_total,omitempty"`
 }
 
 // KeyFingerprint is the comparison fingerprint of an identity key: the first

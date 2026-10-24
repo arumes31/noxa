@@ -192,7 +192,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityManagedRelay)
 	}
 	if s.deps.Devices != nil {
-		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityDevices)
+		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityDevices, netproto.CapabilityDMDevices)
 		resp.DeviceID = s.attachSessionDevice(ctx, client, id.uniqueID)
 	}
 	if s.deps.ICEServers != nil {

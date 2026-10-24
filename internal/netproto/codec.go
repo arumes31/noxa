@@ -592,6 +592,9 @@ type ChatSend struct {
 	// RecipientPublicKey binds a direct message to the device key used to seal
 	// it. Empty keeps the legacy UID-only routing contract.
 	RecipientPublicKey string `json:"recipient_public_key,omitempty"`
+	// Copies carries a direct message sealed once per device (dm_devices_v1);
+	// Text and RecipientPublicKey are then empty.
+	Copies []DMCopy `json:"copies,omitempty"`
 }
 
 // ChatBroadcast is a chat message the server fans out to interested clients.
@@ -632,6 +635,12 @@ type ChatBroadcast struct {
 	// the recipient binding. They never replace local ciphertext verification.
 	SenderPublicKey    string `json:"sender_public_key,omitempty"`
 	RecipientPublicKey string `json:"recipient_public_key,omitempty"`
+	// Per-device direct messages: the sending device and its X25519 key, and
+	// the device this copy was sealed for. Receivers check the sending
+	// device against the sender's trusted device list.
+	SenderDeviceID    string `json:"sender_device_id,omitempty"`
+	SenderDeviceKey   string `json:"sender_device_key,omitempty"`
+	RecipientDeviceID string `json:"recipient_device_id,omitempty"`
 }
 
 // Error carries a server-side error to the client.
@@ -648,6 +657,9 @@ type Error struct {
 	// RecipientKeyStale rejects a direct send before relay or durable acceptance.
 	// Only this explicit rejection permits one fresh-key encryption retry.
 	RecipientKeyStale bool `json:"recipient_key_stale,omitempty"`
+	// RecipientDevicesStale rejects per-device copies that miss or name
+	// unknown devices; the sender refreshes the device list and retries.
+	RecipientDevicesStale bool `json:"recipient_devices_stale,omitempty"`
 }
 
 // Ping is a liveness probe. Payload is ignored.
@@ -1111,6 +1123,8 @@ type KeyPublish struct {
 // KeyRequest requests a user's X25519 public key by unique ID.
 type KeyRequest struct {
 	UniqueID string `json:"unique_id"`
+	// Devices asks for the account's device list (dm_devices_v1).
+	Devices bool `json:"devices,omitempty"`
 }
 
 // KeyResponse is the server's reply to KeyRequest. PublicKey is empty when
@@ -1118,6 +1132,9 @@ type KeyRequest struct {
 type KeyResponse struct {
 	UniqueID  string `json:"unique_id"`
 	PublicKey string `json:"public_key,omitempty"`
+	// Devices lists the account's active devices that can receive direct
+	// messages, when requested. Empty for accounts without linked devices.
+	Devices []DMDevice `json:"devices,omitempty"`
 }
 
 // ChannelKey delivers a scope chat key to a member, sealed with nacl/box

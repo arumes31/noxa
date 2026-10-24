@@ -32,6 +32,7 @@ func (s *TCPServer) MaintainDeviceExpiry(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		s.expireIdleDevices(ctx, time.Now())
+		s.expireHistoryCopies(ctx, time.Now())
 		select {
 		case <-ctx.Done():
 			return

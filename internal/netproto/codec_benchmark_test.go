@@ -1,6 +1,7 @@
 package netproto
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -72,7 +73,7 @@ func BenchmarkDecodeChatSendJSON(b *testing.B) {
 			if err != nil {
 				b.Fatalf("Decode: %v", err)
 			}
-			if decoded != message {
+			if !reflect.DeepEqual(decoded, message) {
 				b.Fatal("Decode returned a different message")
 			}
 		})

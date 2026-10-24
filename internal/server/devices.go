@@ -299,6 +299,10 @@ func (s *TCPServer) handleDeviceRequest(ctx context.Context, client *Client, f *
 	}
 	principal := client.uniqueID()
 	switch r.Action {
+	case netproto.DeviceActionEndorse:
+		return s.handleEndorse(ctx, client, r)
+	case netproto.DeviceActionHistoryPut, netproto.DeviceActionHistoryGet, netproto.DeviceActionHistoryAck:
+		return s.handleHistory(ctx, client, r)
 	case netproto.DeviceActionPushConfig, netproto.DeviceActionPushSubscribe, netproto.DeviceActionPushUnsubscribe,
 		netproto.DeviceActionPushPreferences, netproto.DeviceActionActivity, netproto.DeviceActionRead:
 		return s.handlePushRequest(ctx, client, r)

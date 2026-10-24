@@ -126,6 +126,9 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 	if msg.KeyID != 0 {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, errServerSealedDM)
 	}
+	if len(msg.Copies) > 0 {
+		return s.sendDirectCopies(ctx, client, msg)
+	}
 
 	if msg.ToUniqueID == "" {
 		s.roleMetadataMu.Lock()
@@ -134,6 +137,9 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 		target, exists := s.clientByID(msg.ToClientID)
 		if !exists || !target.isAuthed() || !s.rolePokeTargetVisible(lease.evaluator, client, msg.ToClientID) {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "target client not reachable")
+		}
+		if target.isWebTransport() {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, errDMUpdateRequired)
 		}
 	}
 
@@ -203,9 +209,19 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 // echoed to the sender); otherwise it is spooled into offline_messages for
 // delivery at their next login.
 func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, msg netproto.ChatSend, payload []byte, binding ...store.DMKeyBinding) error {
+	// A single account-wide copy cannot reach the recipient's phones.
+	if perDevice, err := s.requiresDeviceCopies(ctx, msg.ToUniqueID); err != nil {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "device directory unavailable")
+	} else if perDevice {
+		return s.rejectStaleDevices(ctx, client, errDMUpdateRequired)
+	}
 	// Guests have authenticated live identities but no account row. Resolve
 	// the online session before consulting account storage for offline spooling.
 	tc, _ := s.clientByUniqueID(msg.ToUniqueID)
+	if tc != nil && tc.isWebTransport() {
+		// Phones only take per-device copies; spool for the account instead.
+		tc = nil
+	}
 	if msg.RecipientPublicKey != "" {
 		// Check the same durable record for online and offline accounts.
 		// A matching live device is a delivery optimization, not a key oracle.
@@ -305,6 +321,14 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 	return s.acknowledgeChat(client, msg, netproto.ChatQueued, 0)
 }
 
+// deviceCopyKey is the sending device's key of a per-device copy.
+func deviceCopyKey(m store.SpooledMessage) string {
+	if m.RecipientDeviceID == "" {
+		return ""
+	}
+	return m.SenderPublicKey
+}
+
 // pushDirect notifies the recipient's phones about a direct message. The
 // payload names the sender only; the message stays end-to-end encrypted.
 func (s *TCPServer) pushDirect(client *Client, toUniqueID string) {
@@ -338,9 +362,17 @@ func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID i
 		return
 	}
 
+	device := client.currentDeviceID()
 	ids := make([]int64, 0, len(msgs))
 	for _, m := range msgs {
-		if m.SenderPublicKey != "" || m.RecipientPublicKey != "" {
+		if m.RecipientDeviceID != "" {
+			// A per-device copy opens only on its device.
+			if m.RecipientDeviceID != device {
+				continue
+			}
+		} else if client.isWebTransport() {
+			continue // account-wide copies are sealed to the desktop's key
+		} else if m.SenderPublicKey != "" || m.RecipientPublicKey != "" {
 			_, senderValid := canonicalDMKey(m.SenderPublicKey)
 			recipient, recipientValid := canonicalDMKey(m.RecipientPublicKey)
 			if !senderValid || !recipientValid || recipient != deviceKey {
@@ -363,6 +395,9 @@ func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID i
 			SenderPublicKey:    m.SenderPublicKey,
 			RecipientPublicKey: m.RecipientPublicKey,
 			ClientMsgID:        m.ClientMsgID,
+			SenderDeviceID:     m.SenderDeviceID,
+			SenderDeviceKey:    deviceCopyKey(m),
+			RecipientDeviceID:  m.RecipientDeviceID,
 		})
 		if err != nil {
 			continue
