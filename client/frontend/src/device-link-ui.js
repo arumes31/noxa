@@ -52,12 +52,13 @@ export function openDeviceLinkDialog({ quickGuide = false } = {}) {
     const footer = el("div", "dlg-buttons");
     footer.append(close);
     const guide = el("section", "mobile-platform-guide");
-    if (quickGuide) {
+    {
         const platforms = el("div", "mobile-platforms");
         platforms.setAttribute("role", "group");
         platforms.setAttribute("aria-label", t("mobileGuide.platform"));
         const steps = el("ol", "mobile-guide-steps");
         const install = el("details", "mobile-install-guide");
+        install.open = !quickGuide;
         const instruction = el("p");
         install.append(el("summary", "", t("mobileGuide.install")), instruction, el("p", "hint", t("mobileGuide.installNote")));
         const buttons = new Map();
@@ -66,15 +67,17 @@ export function openDeviceLinkDialog({ quickGuide = false } = {}) {
             steps.replaceChildren(...[t(`mobileGuide.${platform}.login`), t("mobileGuide.compare"), t("mobileGuide.passkey")].map(text => el("li", "", text)));
             instruction.textContent = t(`mobileGuide.${platform}.install`);
         };
-        for (const platform of ["iphone", "android", "mac"]) {
+        for (const platform of ["iphone", "android", "mac", "desktop"]) {
             const node = button(t(`mobileGuide.${platform}`), "", () => select(platform));
             buttons.set(platform, node);
             platforms.append(node);
         }
         select("iphone");
         guide.append(platforms, linkPane, steps, install);
-        dialog.append(title, guide, pwaPane, footer);
-    } else dialog.append(title, linkPane, pwaPane, listTitle, list, footer);
+        dialog.append(title, guide, pwaPane);
+        if (!quickGuide) dialog.append(listTitle, list);
+        dialog.append(footer);
+    }
     overlay.append(dialog);
 
     let link = null;
