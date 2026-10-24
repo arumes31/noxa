@@ -92,3 +92,23 @@ test('claims for another link are ignored', async ({ page }) => {
     await expect(dialog.getByText('Waiting for your phone…')).toBeVisible();
     await expect(dialog.locator('.device-link-sas')).toHaveCount(0);
 });
+
+
+test('normal mobile login includes platform setup and expanded installation help', async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.evaluate(async () => (await import('/src/device-link-ui.js')).openDeviceLinkDialog());
+    const dialog = page.getByRole('dialog', { name: 'PWA / Mobile login' });
+    await expect(dialog.locator('.mobile-install-guide')).toHaveAttribute('open', '');
+    for (const [name, instruction] of [['iPhone / iPad', 'Add to Home Screen'], ['Android', 'Install and create shortcut'], ['macOS', 'Add to Dock'], ['Windows / Linux', 'install app icon']]) {
+        await dialog.getByRole('button', { name, exact: true }).click();
+        await expect(dialog.locator('.mobile-install-guide')).toContainText(instruction);
+        await expect(dialog.locator('.mobile-guide-steps')).toContainText('Compare the number');
+        await expect(dialog.locator('.mobile-guide-steps')).toContainText('save a passkey');
+    }
+    await dialog.getByRole('button', { name: 'Android', exact: true }).click();
+    await dialog.getByRole('heading', { name: 'PWA / Mobile login' }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath('mobile-setup-guide.png') });
+    await dialog.getByRole('button', { name: 'Close', exact: true }).scrollIntoViewIfNeeded();
+    await expect(dialog.getByRole('button', { name: 'Close', exact: true })).toBeInViewport();
+    expect(await page.locator(".device-link").evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+});
