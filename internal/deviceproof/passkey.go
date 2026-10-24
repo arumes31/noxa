@@ -3,11 +3,7 @@ package deviceproof
 
 import (
 	"bytes"
-	"crypto"
-	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/elliptic"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -156,17 +152,18 @@ func Verify(principal string, pinned ed25519.PublicKey, edPublic, xPublic string
 	}
 	clientHash := sha256.Sum256(clientData)
 	signed := append(append([]byte{}, authData...), clientHash[:]...)
-	digest := sha256.Sum256(signed)
-	valid := false
-	switch pub := key.(type) {
-	case *ecdsa.PublicKey:
-		valid = pub.Curve == elliptic.P256() && ecdsa.VerifyASN1(pub, digest[:], signature)
-	case *rsa.PublicKey:
-		valid = pub.N.BitLen() >= 2048 && pub.N.BitLen() <= 4096 && rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], signature) == nil
-	case ed25519.PublicKey:
-		valid = ed25519.Verify(pub, signed, signature)
+	algorithms := map[int64]x509.SignatureAlgorithm{
+		-7: x509.ECDSAWithSHA256, -35: x509.ECDSAWithSHA384, -36: x509.ECDSAWithSHA512,
+		-257: x509.SHA256WithRSA, -258: x509.SHA384WithRSA, -259: x509.SHA512WithRSA,
+		-37: x509.SHA256WithRSAPSS, -38: x509.SHA384WithRSAPSS, -39: x509.SHA512WithRSAPSS,
+		-8: x509.PureEd25519,
 	}
-	if !valid {
+	algorithm, ok := algorithms[c.Algorithm]
+	if !ok {
+		return ErrProof
+	}
+	verifier := x509.Certificate{PublicKey: key}
+	if verifier.CheckSignature(algorithm, signed, signature) != nil {
 		return ErrProof
 	}
 	return nil

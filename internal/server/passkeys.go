@@ -423,6 +423,24 @@ func (s *TCPServer) validatePasskeyCertificate(ctx context.Context, principal, d
 	for _, origin := range rp.Config.RPOrigins {
 		originOK = originOK || origin == cert.Origin
 	}
+	parsedKey, err := webauthncose.ParsePublicKey(credential.PublicKey)
+	if err != nil {
+		return nil, deviceproof.ErrProof
+	}
+	var algorithm int64
+	switch key := parsedKey.(type) {
+	case webauthncose.EC2PublicKeyData:
+		algorithm = key.Algorithm
+	case webauthncose.RSAPublicKeyData:
+		algorithm = key.Algorithm
+	case webauthncose.OKPPublicKeyData:
+		algorithm = key.Algorithm
+	default:
+		return nil, deviceproof.ErrProof
+	}
+	if cert.Algorithm != algorithm {
+		return nil, deviceproof.ErrProof
+	}
 	block, _ := pem.Decode([]byte(webauthncose.DisplayPublicKey(credential.PublicKey)))
 	if !originOK || block == nil || !bytes.Equal(block.Bytes, cert.PublicKey) {
 		return nil, deviceproof.ErrProof

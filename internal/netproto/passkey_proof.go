@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
@@ -14,6 +15,7 @@ type PasskeyCertificate struct {
 	Principal    string     `json:"principal"`
 	Issuer       string     `json:"issuer"`
 	CredentialID string     `json:"credential_id"`
+	Algorithm    int64      `json:"algorithm"`
 	PublicKey    []byte     `json:"public_key"` // DER SubjectPublicKeyInfo
 	RPID         string     `json:"rp_id"`
 	Origin       string     `json:"origin"`
@@ -24,7 +26,7 @@ type PasskeyCertificate struct {
 const MaxPasskeyProof = 32 << 10
 
 func (c PasskeyCertificate) Transcript() []byte {
-	return []byte(strings.Join([]string{"noxa-passkey-delegation-v1", c.Principal, c.Issuer, c.CredentialID, base64.StdEncoding.EncodeToString(c.PublicKey), c.RPID, c.Origin}, "\n"))
+	return []byte(strings.Join([]string{"noxa-passkey-delegation-v1", c.Principal, c.Issuer, c.CredentialID, base64.StdEncoding.EncodeToString(c.PublicKey), c.RPID, c.Origin, strconv.FormatInt(c.Algorithm, 10)}, "\n"))
 }
 
 // PasskeyLoginProof binds a user-verified assertion to both new device keys.

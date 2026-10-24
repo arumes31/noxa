@@ -169,9 +169,10 @@ export async function registerPasskey(conn, name, credentials = globalThis.navig
     let dmCertificate;
     const template = begin.dm_certificate;
     const spki = credential.response?.getPublicKey?.();
-    if (session?.identity && template && spki && template.principal === session.uniqueID && template.issuer === session.deviceID && template.rp_id === publicKey.rp.id) {
-        dmCertificate = { ...template, origin: location.origin, credential_id: b64u(credential.rawId), public_key: toBase64(new Uint8Array(spki)) };
-        const transcript = ["noxa-passkey-delegation-v1", dmCertificate.principal, dmCertificate.issuer, dmCertificate.credential_id, dmCertificate.public_key, dmCertificate.rp_id, dmCertificate.origin].join("\n");
+    const algorithm = credential.response?.getPublicKeyAlgorithm?.();
+    if (session?.identity && template && spki && [-7,-35,-36,-257,-258,-259,-37,-38,-39,-8].includes(algorithm) && template.principal === session.uniqueID && template.issuer === session.deviceID && template.rp_id === publicKey.rp.id) {
+        dmCertificate = { ...template, algorithm, origin: location.origin, credential_id: b64u(credential.rawId), public_key: toBase64(new Uint8Array(spki)) };
+        const transcript = ["noxa-passkey-delegation-v1", dmCertificate.principal, dmCertificate.issuer, dmCertificate.credential_id, dmCertificate.public_key, dmCertificate.rp_id, dmCertificate.origin, String(algorithm)].join("\n");
         dmCertificate.signature = toBase64(sign(utf8(transcript), session.identity.edSecret));
     }
     const finish = await conn.request(Msg.DeviceRequest, { action: "passkey_register_finish", name, webauthn: credentialJSON(credential), ...(dmCertificate ? { dm_certificate: dmCertificate } : {}) },

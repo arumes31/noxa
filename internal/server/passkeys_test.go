@@ -276,6 +276,7 @@ func testPasskeyPhoneLogin(t *testing.T, signOut, delegate bool) {
 			t.Fatal("missing delegation template")
 		}
 		cert := *begin.DMCertificate
+		cert.Algorithm = -7
 		cert.Origin = passkeyTestOrigin
 		cert.CredentialID = b64url(authenticator.id)
 		cert.PublicKey, err = x509.MarshalPKIXPublicKey(&key.PublicKey)

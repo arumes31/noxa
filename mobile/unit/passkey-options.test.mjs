@@ -47,10 +47,10 @@ test("registration signs the verified credential key and account with the linked
    dm_certificate:{principal:"account",issuer:"phone",rp_id:"example.test",chain:[]},
   } : {passkeys:[]};
  }};
- const credentials = {create:async()=>({rawId:new Uint8Array([1,2]),response:{getPublicKey:()=>new Uint8Array([3,4])},toJSON:()=>({type:"public-key"})})};
+ const credentials = {create:async()=>({rawId:new Uint8Array([1,2]),response:{getPublicKey:()=>new Uint8Array([3,4]), getPublicKeyAlgorithm:()=>-7},toJSON:()=>({type:"public-key"})})};
  await registerPasskey(conn,"test",credentials,session);
  const cert = requests[1].dm_certificate;
  assert.equal(cert.credential_id, "AQI");
- const transcript = ["noxa-passkey-delegation-v1","account","phone","AQI","AwQ=","example.test","https://example.test"].join("\n");
+ const transcript = ["noxa-passkey-delegation-v1","account","phone","AQI","AwQ=","example.test","https://example.test","-7"].join("\n");
  assert.equal(nacl.sign.detached.verify(utf8(transcript),fromBase64(cert.signature),identity.edPublic),true);
 });

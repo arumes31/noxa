@@ -69,7 +69,7 @@ func TestPasskeyAutoApprovalRequiresLocallyVerifiedProof(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cert := netproto.PasskeyCertificate{Principal: "account", Issuer: "self", CredentialID: "Y3JlZA", PublicKey: spki, RPID: "example.test", Origin: "https://example.test", Chain: []netproto.DMDevice{first}}
+			cert := netproto.PasskeyCertificate{Algorithm: -8, Principal: "account", Issuer: "self", CredentialID: "Y3JlZA", PublicKey: spki, RPID: "example.test", Origin: "https://example.test", Chain: []netproto.DMDevice{first}}
 			cert.Signature, err = auth.SignChallenge(id.PrivateKey, cert.Transcript())
 			if err != nil {
 				t.Fatal(err)
