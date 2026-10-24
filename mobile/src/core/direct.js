@@ -175,12 +175,23 @@ export class DirectMessages extends EventTarget {
             } else {
                 if (!pinned) await putSealed(Stores.pins, uid, { signingKey: signingB64, at: Date.now() }).catch(() => {});
                 entry.trust = Trust.ok;
+                entry.signingKey = signingKey;
                 entry.devices = trustedDevices(uid, devices, signingKey);
             }
             entry.fingerprint = keyFingerprint(`-----BEGIN PUBLIC KEY-----\n${signingB64}\n-----END PUBLIC KEY-----\n`);
         }
         this.directory.set(uid, entry);
         return entry;
+    }
+
+    /** Verifies a historical group sender without trusting it for new traffic. */
+    async historicalSenderKey(uid, deviceID, encoded, chain) {
+        if (!Array.isArray(chain) || !chain.length || chain.length > 64) return null;
+        const entry = await this.devicesOf(uid);
+        if (entry.trust !== Trust.ok || !entry.signingKey) return null;
+        const device = trustedDevices(uid, chain, entry.signingKey)
+            .find(d => d.deviceID === deviceID && d.x25519B64 === encoded);
+        return device?.x25519 || null;
     }
 
     /**

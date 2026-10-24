@@ -252,7 +252,7 @@ func (s *TCPServer) checkConversationDevices(ctx context.Context, client *Client
 	}
 	// The sending device has the plaintext already.
 	delete(needed, netproto.DeviceEnvelopeKey(client.uniqueID(), client.currentDeviceID()))
-	stale := len(request.Message.DeviceEnvelopes) > 0 && len(needed) == 0
+	stale := false
 	for key := range needed {
 		if _, ok := request.Message.DeviceEnvelopes[key]; !ok {
 			stale = true

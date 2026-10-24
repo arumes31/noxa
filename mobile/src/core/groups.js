@@ -81,7 +81,9 @@ export class Groups extends EventTarget {
                 const fresh = await this.dm.devicesOf(message.from_unique_id, { refresh: true }).catch(() => null);
                 device = fresh?.devices.find(d => d.deviceID === message.sender_device_id && d.x25519B64 === message.sender_device_key);
             }
-            return device?.x25519 || null;
+            if (device) return device.x25519;
+            return this.dm.historicalSenderKey(message.from_unique_id, message.sender_device_id,
+                message.sender_device_key, message.sender_device_chain).catch(() => null);
         }
         // An older desktop sealed with the account key: the first device's.
         return entry.devices.find(d => d.first)?.x25519 || null;

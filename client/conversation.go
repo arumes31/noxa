@@ -193,6 +193,9 @@ func (m *connManager) conversationSenderKey(message netproto.ConversationMessage
 	trusted, checked := seen[memo]
 	if !checked {
 		trusted = m.trustedSenderDevice(message.FromUniqueID, message.SenderDeviceID, key, ownPub)
+		if !trusted {
+			trusted = m.trustedHistoricalConversationSender(message, key)
+		}
 		seen[memo] = trusted
 	}
 	return key, trusted

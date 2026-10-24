@@ -197,11 +197,12 @@ async function syncOutbox() {
     try {
         const auth = await signIn(conn, stored.identity, { version: info.version || "0.0.0" });
         const session = new ChatSession(conn, stored.identity, auth);
+        // Offline DMs are replayed immediately after authentication.
+        const dm = new DirectMessages(session, stored.meta);
         const scopes = [...new Set(waiting.filter(entry => entry.kind === "channel").map(entry => entry.scope))];
         const channels = scopes.filter(scope => scope > 0);
         if (channels.length) await session.subscribe(channels).catch(() => {});
         await waitForKeys(session, scopes);
-        const dm = new DirectMessages(session, stored.meta);
         await dm.ready;
         await flush(session, dm);
         dm.close();

@@ -106,7 +106,6 @@ export async function connect() {
     app.session = session;
     reconnectAttempt = 0;
     setOnline(true);
-    await updateMeta({ deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname });
     app.meta = { ...app.meta, deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
     const rejoin = app.voice?.channelID || 0;
     app.voice?.close();
@@ -161,6 +160,8 @@ export async function connect() {
         emit("push", state);
     }).catch(() => {});
     emit("session", session);
+    // Register every incoming handler before IndexedDB can yield to replayed DMs.
+    await updateMeta({ deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname });
     return session;
 }
 

@@ -109,6 +109,9 @@ type ConversationSend struct {
 // MaxConversationDeviceEnvelopes bounds device envelopes per message.
 const MaxConversationDeviceEnvelopes = 48
 
+// MaxConversationSenderChain bounds historical device-approval proofs.
+const MaxConversationSenderChain = 64
+
 // DeviceEnvelopeKey is the DeviceEnvelopes key of a member's device.
 func DeviceEnvelopeKey(uid, deviceID string) string { return uid + "/" + deviceID }
 
@@ -173,6 +176,9 @@ type ConversationMessage struct {
 	SenderDeviceID  string `json:"sender_device_id,omitempty"`
 	SenderDeviceKey string `json:"sender_device_key,omitempty"`
 	DeviceEnvelope  bool   `json:"device_envelope,omitempty"`
+	// SenderDeviceChain is historical verification evidence only. It must never
+	// populate a directory used to encrypt new messages or establish calls.
+	SenderDeviceChain []DMDevice `json:"sender_device_chain,omitempty"`
 }
 
 type ConversationResult struct {

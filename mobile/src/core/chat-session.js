@@ -51,6 +51,8 @@ export class ChatSession extends EventTarget {
     #unsubscribe = [];
 
     close() {
+        clearTimeout(this.#relayTimer);
+        this.#relayListeners.clear();
         this.#unsubscribe.forEach(stop => stop());
         this.conn.close();
     }
@@ -255,16 +257,22 @@ export class ChatSession extends EventTarget {
     #scheduleRelay() {
         clearTimeout(this.#relayTimer);
         if (!this.#relay || !this.#relayListeners.size) return;
-        this.#relayTimer = setTimeout(async () => {
-            if (!this.conn.open) return;
-            this.#relay = null;
-            try {
-                const servers = await this.relayServers();
-                for (const listener of this.#relayListeners) listener(servers);
-            } catch {
-                setTimeout(() => this.#scheduleRelay(), 30000);
+        this.#relayTimer = setTimeout(() => this.#renewRelay(), Math.max(5000, this.#relay.refreshAt - Date.now()));
+    }
+
+    async #renewRelay() {
+        if (!this.conn.open || !this.#relayListeners.size) return;
+        this.#relay = null;
+        try {
+            const servers = await this.relayServers();
+            for (const listener of this.#relayListeners) listener(servers);
+        } catch {
+            // A failed refresh has no lease to schedule from. Retry the request
+            // itself, and keep the timer cancellable when the session closes.
+            if (this.conn.open && this.#relayListeners.size) {
+                this.#relayTimer = setTimeout(() => this.#renewRelay(), 30000);
             }
-        }, Math.max(5000, this.#relay.refreshAt - Date.now()));
+        }
     }
 
     requestKeys(scope, keyIDs) {
