@@ -1,0 +1,99 @@
+/* video.css — stream stage, fullscreen overlay, call media and the call
+   waiting banner (streams.js, call.js, call-waiting.js). */
+
+.video-btn { color: var(--text); background: var(--glass); border: 1px solid var(--border); }
+.video-btn[hidden] { display: none; }
+
+/* Your camera and the list of streams to watch */
+.camera-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.camera-row[hidden] { display: none; }
+.camera-row .btn, .stage-toolbar .btn, .stage-settings { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.stream-list { display: flex; flex-direction: column; gap: 8px; }
+.stream-list:empty { display: none; }
+
+/* Stage */
+.stage-toolbar { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.stage-toolbar[hidden] { display: none; }
+.stage { position: relative; border-radius: 16px; background: #000; overflow: hidden; }
+.stage[hidden] { display: none; }
+.stage-tiles { display: grid; gap: 4px; grid-template-columns: 1fr; }
+.stage[data-layout="grid"] .stage-tiles:has(> :nth-child(2)) { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.stage-tile { border-radius: 12px; aspect-ratio: 16 / 9; min-width: 0; }
+.stage-tile .stream-video { touch-action: manipulation; }
+.stage[data-layout="focus"] .stage-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.stage[data-layout="focus"] .stage-tile.focused { grid-column: 1 / -1; }
+.stage[data-layout="focus"] .stage-tile:not(.focused) .tile-bar .quality-select,
+.stage[data-layout="focus"] .stage-tile:not(.focused) .tile-label { display: none; }
+.tile-bar { position: absolute; left: 6px; right: 6px; top: 6px; display: flex; gap: 6px; align-items: center; pointer-events: none; }
+.tile-bar > * { pointer-events: auto; }
+.tile-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8rem; padding: 4px 8px; border-radius: 10px; background: rgba(0, 0, 0, .55); pointer-events: none; }
+.quality-select { min-height: 34px; height: 34px; padding: 0 8px; font-size: .8rem; width: auto; background: rgba(0, 0, 0, .55); }
+.tile-bar .stream-close { position: static; min-height: 34px; padding: 0 10px; }
+.tile-bar .video-btn { width: 34px; height: 34px; }
+.stage-tile[data-quality]::after { content: attr(data-quality); position: absolute; right: 8px; bottom: 6px; font-family: var(--font-mono); font-size: .65rem; text-transform: uppercase; color: var(--text-faint); }
+
+/* Phones on their side: the stage uses the whole width. */
+@media (orientation: landscape) and (max-height: 600px) {
+    .stage { margin-inline: calc(-1 * var(--gutter, 16px)); border-radius: 0; }
+    .stage[data-layout="focus"] .stage-tiles { grid-template-columns: 1fr 160px; }
+    .stage[data-layout="focus"] .stage-tile.focused { grid-column: 1; grid-row: 1 / span 4; }
+}
+
+/* Fullscreen: overlay controls, tap to hide */
+.stage-hud { display: none; }
+.stage-rotate { display: none; }
+.stage.is-fullscreen, .stage:fullscreen { border-radius: 0; display: flex; align-items: center; justify-content: center; width: 100vw; height: 100vh; }
+.stage.is-fullscreen .stage-tiles { width: 100%; height: 100%; align-content: center; }
+.stage.is-fullscreen .stage-tile { aspect-ratio: auto; }
+.stage.is-fullscreen[data-layout="focus"] .stage-tile.focused, .stage.is-fullscreen .stage-tiles > :only-child { height: 100%; }
+.stage.is-fullscreen .tile-bar { display: none; }
+.stage.is-fullscreen .stage-hud {
+    display: flex; position: absolute; left: 0; right: 0; top: 0; gap: 8px; align-items: center;
+    padding: calc(8px + var(--safe-top)) 12px 8px; background: linear-gradient(rgba(0, 0, 0, .7), transparent);
+}
+.stage.is-fullscreen.hud-hidden .stage-hud { display: none; }
+.stage-hud-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-hud-btn { min-height: 40px; padding: 0 12px; }
+.stage-hud-btn[hidden] { display: none; }
+.stage.is-fullscreen .stage-rotate:not([hidden]) {
+    display: block; position: absolute; bottom: calc(16px + var(--safe-bottom)); left: 16px; right: 16px; margin: 0;
+    text-align: center; padding: 8px 12px; border-radius: 12px; background: rgba(0, 0, 0, .65); font-size: .85rem;
+}
+
+/* Sheets */
+.video-sheet-body { display: flex; flex-direction: column; gap: 12px; }
+.video-sheet-body input[type="range"] { width: 100%; min-height: 44px; accent-color: var(--accent); }
+.video-diag { margin: 0; display: grid; gap: 8px; }
+.video-diag-row { display: grid; grid-template-columns: minmax(0, 9em) minmax(0, 1fr); gap: 8px; }
+.video-diag dt { color: var(--text-faint); font-size: .85rem; }
+.video-diag dd { margin: 0; overflow-wrap: anywhere; font-size: .85rem; }
+
+/* Private calls */
+.call-tile.screen-tile { grid-column: 1 / -1; min-height: 0; aspect-ratio: 16 / 9; background: #000; }
+.call-tile.screen-tile video { object-fit: contain; }
+.call-tile.screen-tile video.fill { object-fit: cover; }
+.call-tile .tile-tools { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; z-index: 1; }
+.call-tile .tile-tools .video-btn { width: 40px; height: 40px; }
+.call-tile:fullscreen { border-radius: 0; border: 0; }
+.call-actions.call-extra { flex-wrap: wrap; }
+.call-actions.call-extra .round-btn { width: 52px; height: 52px; }
+.call-actions.call-extra .round-btn svg { width: 22px; height: 22px; }
+.self-view[data-facing="user"] { transform: scaleX(-1); }
+
+/* Call waiting */
+.call-waiting {
+    position: fixed; z-index: 45; left: 12px; right: 12px; top: calc(8px + var(--safe-top)); max-width: 520px; margin-inline: auto;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center;
+    padding: 10px 12px; border-radius: 16px; background: var(--glass-strong); border: 1px solid var(--border-strong);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+}
+.call-waiting-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-waiting .btn { min-height: 44px; padding: 0 12px; }
+@media (max-width: 380px) {
+    .call-waiting { grid-template-columns: 1fr 1fr; }
+    .call-waiting-text { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: no-preference) {
+    .call-waiting { animation: call-waiting-in .2s ease-out; }
+    @keyframes call-waiting-in { from { transform: translateY(-12px); opacity: 0; } }
+}

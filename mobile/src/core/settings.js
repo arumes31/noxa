@@ -35,6 +35,8 @@ export const DEFAULTS = Object.freeze({
     mutedUsers: [], // unique IDs muted locally
     shareVolumes: {}, // unique ID -> 0..3 for shared screen audio
     receiveQuality: "auto", // auto | high | medium | low
+    cameraEffect: "none", // none | blur (full-frame privacy blur)
+    blurStrength: 12, // px, 2 .. 30
     // Notifications
     sounds: true,
     soundVolume: 1,

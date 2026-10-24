@@ -6,6 +6,7 @@ import { t } from "../i18n.js";
 import { avatar, h, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { header, nav } from "./common.js";
+import { streamsPanel } from "./streams.js";
 
 function megabytes(bytes) {
     return (bytes / 1024 / 1024).toFixed(1);
@@ -32,20 +33,6 @@ function channelList(root, session) {
         nav("voice")));
 }
 
-function videoTile(track, voice, stream) {
-    const element = h("video", { class: "stream-video", autoplay: true, playsinline: true, muted: true, "aria-label": t("voice.stream") });
-    element.srcObject = new MediaStream([track]);
-    // Double tap switches between showing the whole picture and filling the tile.
-    let lastTap = 0;
-    element.addEventListener("pointerup", () => {
-        const now = Date.now();
-        if (now - lastTap < 300) element.classList.toggle("fill");
-        lastTap = now;
-    });
-    return h("div", { class: "stream-tile" }, element,
-        h("button", { class: "btn stream-close", type: "button", onclick: () => voice.watch(stream, false).catch(() => {}) }, t("voice.stopWatching")));
-}
-
 export function renderVoice(root) {
     const session = app.session;
     const voice = app.voice;
@@ -54,7 +41,7 @@ export function renderVoice(root) {
         return () => {};
     }
     const tiles = h("div", { class: "voice-tiles" });
-    const streamsBox = h("div", { class: "streams" });
+    const streamsBox = streamsPanel(voice, session);
     const usage = h("p", { class: "hint mono" });
     const muteButton = h("button", { class: "btn", type: "button", onclick: () => voice.setMuted(!voice.muted) });
     const deafenButton = h("button", { class: "btn", type: "button", onclick: () => voice.setDeafened(!voice.deafened) });
@@ -93,27 +80,6 @@ export function renderVoice(root) {
         output.replaceChildren(h("p", { class: "hint" }, t("voice.outputSystem")));
     }
 
-    let shownStreams = "";
-
-    async function renderStreams() {
-        let streams = [];
-        try { streams = await voice.streams(); } catch { streams = []; }
-        const signature = streams.map(stream => {
-            const key = `${stream.publisher_id}|${stream.slot}`;
-            return `${key}|${stream.generation}|${voice.watching.has(key) && voice.video.has(key)}`;
-        }).join(",");
-        if (signature === shownStreams) return;
-        shownStreams = signature;
-        streamsBox.replaceChildren(...streams.map(stream => {
-            const key = `${stream.publisher_id}|${stream.slot}`;
-            const track = voice.watching.has(key) ? voice.video.get(key) : null;
-            if (track) return videoTile(track, voice, stream);
-            const publisher = session.clients().find(c => c.client_id === stream.publisher_id)?.nickname || t("dm.someone");
-            return h("button", { class: "card row stream-card", type: "button", onclick: () => voice.watch(stream).catch(error => toast(error.message, "warn")) },
-                icon("screen"), h("span", { class: "row-main" }, h("span", { class: "row-title" }, t(stream.slot === "screen" ? "voice.watchScreen" : "voice.watchCamera", { name: publisher }))));
-        }));
-    }
-
     function render() {
         const channel = session.channels().find(c => c.id === voice.channelID);
         const members = channel?.clients || [];
@@ -150,17 +116,14 @@ export function renderVoice(root) {
         nav("voice")));
     render();
     renderOutputs();
-    renderStreams();
     const onChange = () => render();
-    const onTracks = () => { render(); renderStreams(); };
+    const onTracks = () => render();
     const listeners = [["state", onChange], ["speaking", onChange], ["stats", onChange], ["tracks", onTracks]];
     for (const [type, listener] of listeners) voice.addEventListener(type, listener);
     const onSnapshot = () => render();
     session.addEventListener("snapshot", onSnapshot);
-    // New publications show up without an event of their own.
-    const streamTimer = setInterval(renderStreams, 5000);
     return () => {
-        clearInterval(streamTimer);
+        streamsBox.dispose();
         for (const [type, listener] of listeners) voice.removeEventListener(type, listener);
         session.removeEventListener("snapshot", onSnapshot);
         voice.setTalking(false);

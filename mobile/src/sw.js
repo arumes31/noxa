@@ -7,6 +7,7 @@ import { signIn } from "./core/device.js";
 import { DirectMessages } from "./core/direct.js";
 import { loadIdentity } from "./core/identity-store.js";
 import { SYNC_TAG, flush, pending } from "./core/outbox.js";
+import { Msg } from "./core/frame.js";
 
 const VERSION = "noxa-shell-v3";
 const SHELL = ["/app/", "/app/manifest.webmanifest", "/app/icons/icon-192.png", "/app/icons/icon-512.png"];
@@ -50,12 +51,12 @@ const WORDS = {
     en: {
         app: "noXa", message: "New message", dm: "sent you a message", group: "wrote in a group",
         mention: "mentioned you", mentionIn: "mentioned you in #{place}", poke: "poked you",
-        call: "Incoming call", video: "Incoming video call", answer: "Answer",
+        call: "Incoming call", video: "Incoming video call", answer: "Answer", decline: "Decline",
     },
     de: {
         app: "noXa", message: "Neue Nachricht", dm: "hat dir geschrieben", group: "hat in einer Gruppe geschrieben",
         mention: "hat dich erwähnt", mentionIn: "hat dich in #{place} erwähnt", poke: "hat dich angestupst",
-        call: "Eingehender Anruf", video: "Eingehender Videoanruf", answer: "Annehmen",
+        call: "Eingehender Anruf", video: "Eingehender Videoanruf", answer: "Annehmen", decline: "Ablehnen",
     },
 };
 
@@ -121,7 +122,8 @@ async function onPush(push) {
         timestamp: (push.at || Date.now() / 1000) * 1000,
         requireInteraction: !!text.call,
         vibrate: text.call ? [400, 200, 400, 200, 400] : [120],
-        actions: text.call ? [{ action: "answer", title: words().answer }] : [],
+        // iOS shows no actions; Android gets Answer and Decline.
+        actions: text.call ? [{ action: "answer", title: words().answer }, { action: "decline", title: words().decline }] : [],
         data: { url: routeFor(push.tag), tag: push.tag },
     });
     await updateBadge();
@@ -138,21 +140,48 @@ self.addEventListener("push", event => {
     event.waitUntil(onPush(push));
 });
 
+/** The call ID of a "call:<id>" notification tag. */
+function callID(tag) {
+    const match = /^call:(.+)$/s.exec(String(tag || ""));
+    return match ? match[1] : "";
+}
+
 self.addEventListener("notificationclick", event => {
     event.notification.close();
     const url = event.notification.data?.url || "/app/#/home";
+    const call = callID(event.notification.data?.tag);
     event.waitUntil((async () => {
         const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
         const open = windows.find(client => new URL(client.url).pathname.startsWith("/app/"));
-        if (open) {
+        if (call && event.action === "decline") {
+            // Declining never opens the app.
+            if (open) open.postMessage({ type: "call-action", action: "decline", id: call });
+            else await declineCall(call).catch(() => {});
+        } else if (open) {
             open.postMessage({ type: "open", url });
+            if (call && event.action === "answer") open.postMessage({ type: "call-action", action: "answer", id: call });
             await open.focus();
         } else {
-            await self.clients.openWindow(url);
+            // A fresh window accepts once the call rings on its session.
+            await self.clients.openWindow(call && event.action === "answer" ? `/app/?answer=${encodeURIComponent(call)}${new URL(url, self.location.origin).hash}` : url);
         }
         await updateBadge();
     })());
 });
+
+/** Declines a call through a short-lived session, like the outbox flush. */
+async function declineCall(id) {
+    const stored = await loadIdentity();
+    if (!stored?.meta?.linked) return;
+    const info = await (await fetch("/api/v1/web/info", { cache: "no-store" })).json();
+    const conn = await Connection.open();
+    try {
+        await signIn(conn, stored.identity, { version: info.version || "0.0.0" });
+        await conn.request(Msg.CallRequest, { action: "decline", id }, Msg.CallResult, { accept: r => r.action === "decline" });
+    } finally {
+        conn.close();
+    }
+}
 
 self.addEventListener("notificationclose", event => {
     event.waitUntil(updateBadge());

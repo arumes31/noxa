@@ -11,6 +11,8 @@
 // (client/frontend/src/media-track-id.js). Speaking state comes from the
 // server's speaking_changed events.
 import { Msg } from "./frame.js";
+import { get as setting } from "./settings.js";
+import { CameraSource, capSender, preferReceiveCodecs, watchCodecNames, wireQuality } from "./video.js";
 
 const MsgChannelJoined = 158;
 const STATS_INTERVAL = 2000;
@@ -43,11 +45,11 @@ export function msidByMid(sdp = "") {
     return out;
 }
 
-/** Codecs this browser can receive for watched streams (vp8 always). */
+/** Codecs this browser can receive for watched streams, as the SFU names them (vp8 always). */
 export function watchCodecs() {
-    const codecs = globalThis.RTCRtpReceiver?.getCapabilities?.("video")?.codecs || [];
-    const h264 = codecs.some(c => /h264/i.test(c.mimeType) && /profile-level-id=4200/i.test(c.sdpFmtpLine || "") && /packetization-mode=1/.test(c.sdpFmtpLine || ""));
-    return h264 ? ["h264", "vp8"] : ["vp8"];
+    let codecs = [];
+    try { codecs = globalThis.RTCRtpReceiver?.getCapabilities?.("video")?.codecs || []; } catch { codecs = []; }
+    return watchCodecNames(codecs);
 }
 
 export class Voice extends EventTarget {
@@ -180,7 +182,12 @@ export class Voice extends EventTarget {
         for (const track of this.mic?.getTracks() || []) track.stop();
         this.mic = null;
         for (const track of this.camera?.getTracks() || []) track.stop();
+        this.#cameraSource?.stop();
+        this.#cameraSource = null;
         this.camera = null;
+        this.watched.clear();
+        this.#applied.clear();
+        this.confirmed.clear();
         this.#cameraTransceiver = null;
         this.#cameraGeneration = "0";
         for (const element of this.audio.values()) {
@@ -216,11 +223,20 @@ export class Voice extends EventTarget {
     #cameraTransceiver = null;
     #cameraGeneration = "0";
 
-    /** Publishes the front camera to the channel (VP8, which every viewer decodes). */
+    #cameraSource = null;
+    /** "user" (front) or "environment" (back) for the published camera. */
+    facingMode = "user";
+
+    /** Publishes the camera to the channel (VP8, which every viewer decodes). */
     async startCamera() {
         if (!this.pc || this.camera) return;
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15 } } });
+        const source = new CameraSource({ facingMode: this.facingMode, effect: setting("cameraEffect"), blurStrength: setting("blurStrength"), limits: this.session.mediaLimits });
+        const stream = await source.start();
         const track = stream.getVideoTracks()[0];
+        this.#cameraSource = source;
+        // Flip or a changed effect yields a new track: swap it in place,
+        // the publication and the SDP stay the same.
+        source.addEventListener("track", () => this.#cameraTrackChanged());
         this.camera = stream;
         try {
             if (this.#cameraTransceiver) {
@@ -232,6 +248,7 @@ export class Voice extends EventTarget {
             const vp8 = globalThis.RTCRtpSender?.getCapabilities?.("video")?.codecs.filter(c => /vp8|rtx/i.test(c.mimeType)) || [];
             if (vp8.length && this.#cameraTransceiver.setCodecPreferences) this.#cameraTransceiver.setCodecPreferences(vp8);
             await this.#enqueue(() => this.#offer());
+            await capSender(this.#cameraTransceiver.sender, this.session.mediaLimits);
             const result = await this.conn.request(Msg.VideoStreamControl, { action: "publish", slot: "cam", generation: "0", revision: "0", session: "0", active: true, codecs: ["vp8"] },
                 Msg.VideoStreamResult, { accept: r => r.action === "publish" });
             this.#cameraGeneration = String(result.generation ?? "0");
@@ -242,10 +259,42 @@ export class Voice extends EventTarget {
         this.#emit("state");
     }
 
+    /** Switches the published camera between front and back. */
+    async flipCamera() {
+        if (!this.#cameraSource) {
+            this.facingMode = this.facingMode === "user" ? "environment" : "user";
+            this.#emit("state");
+            return this.facingMode;
+        }
+        try {
+            this.facingMode = await this.#cameraSource.flip();
+        } finally {
+            await this.#cameraTrackChanged();
+        }
+        return this.facingMode;
+    }
+
+    /** Applies a changed camera effect to the running camera. */
+    async setCameraEffect(effect, blurStrength) {
+        this.#cameraSource?.setEffect(effect, blurStrength);
+        await this.#cameraTrackChanged();
+    }
+
+    async #cameraTrackChanged() {
+        const source = this.#cameraSource;
+        if (!source) return;
+        this.camera = source.stream;
+        const sender = this.#cameraTransceiver?.sender;
+        if (sender && sender.track !== source.track) await sender.replaceTrack(source.track).catch(() => {});
+        this.#emit("state");
+    }
+
     async stopCamera() {
         const stream = this.camera;
         this.camera = null;
         for (const track of stream?.getTracks() || []) track.stop();
+        this.#cameraSource?.stop();
+        this.#cameraSource = null;
         if (this.#cameraGeneration !== "0" && this.conn.open) {
             await this.conn.request(Msg.VideoStreamControl, { action: "publish", slot: "cam", generation: this.#cameraGeneration, revision: "0", session: "0", active: false },
                 Msg.VideoStreamResult, { accept: r => r.action === "publish" }).catch(() => {});
@@ -284,6 +333,7 @@ export class Voice extends EventTarget {
         if (!pc) return;
         await pc.setRemoteDescription({ type: "offer", sdp });
         await this.#flushCandidates();
+        preferReceiveCodecs(pc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         if (this.conn.open) this.conn.send(Msg.WebRTCAnswer, { sdp: pc.localDescription.sdp });
@@ -448,12 +498,82 @@ export class Voice extends EventTarget {
     async watch(stream, active = true) {
         this.#watchRevision++;
         const key = `${stream.publisher_id}|${stream.slot}`;
-        if (active) this.watching.add(key);
-        else this.watching.delete(key);
+        if (active) {
+            this.watching.add(key);
+            this.watched.set(key, stream);
+        } else {
+            this.watching.delete(key);
+            this.watched.delete(key);
+            this.#applied.delete(key);
+        }
         this.#emit("tracks");
-        return this.conn.request(Msg.VideoStreamControl, {
+        const result = await this.conn.request(Msg.VideoStreamControl, {
             action: "watch", publisher_id: stream.publisher_id, slot: stream.slot, generation: String(stream.generation),
             revision: String(this.#watchRevision), session: this.#watchSession, active, codecs: watchCodecs(),
         }, Msg.VideoStreamResult, { accept: r => r.action === "watch" });
+        if (result?.session && result.session !== "0") this.#watchSession = String(result.session);
+        if (active) await this.applyQualities().catch(() => {});
+        return result;
+    }
+
+    // --- Receive quality ------------------------------------------------------------
+
+    /** Watched publications by "clientID|slot" (generation for scoped requests). */
+    watched = new Map();
+    /** Per-stream preference: "auto" | "high" | "medium" | "low". */
+    quality = new Map();
+    /** The watched stream with focus on the stage, for "auto". */
+    focusKey = null;
+    /** Last layer the server confirmed per stream ("default", "high", "mid", "low"). */
+    confirmed = new Map();
+    #applied = new Map();
+
+    /** Whether this server takes a receive layer per watched stream. */
+    get streamQualitySupported() {
+        return !!this.session.capabilities?.has("stream_video_quality_v1");
+    }
+
+    /** The layer the phone wants for one watched stream right now. */
+    wantedQuality(key) {
+        const stream = this.watched.get(key);
+        return wireQuality(this.quality.get(key) || setting("receiveQuality"), {
+            lowBandwidth: !!setting("lowBandwidth"), focused: key === this.focusKey, slot: stream?.slot, watched: this.watched.size,
+        });
+    }
+
+    /** Sets a stream's preference ("auto" follows the global default) and applies it. */
+    async setStreamQuality(key, preference) {
+        if (preference && preference !== "auto") this.quality.set(key, preference);
+        else this.quality.delete(key);
+        this.#applied.delete(key);
+        await this.applyQualities();
+    }
+
+    /**
+     * Sends Msg.VideoQuality for every watched stream whose wanted layer
+     * changed. Scoped by publication and watch session, so a reconnect or
+     * a re-publication can never apply it to another stream.
+     */
+    async applyQualities() {
+        if (!this.streamQualitySupported || this.#watchSession === "0") return;
+        for (const [key, stream] of this.watched) {
+            if (!this.video.has(key) && !this.watching.has(key)) continue;
+            const quality = this.wantedQuality(key);
+            if (this.#applied.get(key) === quality) continue;
+            this.#applied.set(key, quality);
+            try {
+                await this.conn.request(Msg.VideoQuality, {
+                    quality, ack_requested: true, publisher_id: stream.publisher_id, slot: stream.slot,
+                    generation: String(stream.generation), session: this.#watchSession,
+                }, Msg.MediaControlSaved, { accept: r => r.operation === Msg.VideoQuality && r.publisher_id === stream.publisher_id && r.slot === stream.slot });
+                this.confirmed.set(key, quality);
+            } catch (error) {
+                this.#applied.delete(key);
+                this.confirmed.delete(key);
+                this.#emit("quality", { key, error });
+                throw error;
+            }
+            this.#emit("quality", { key, quality });
+        }
     }
 }
