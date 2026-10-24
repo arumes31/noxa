@@ -44,6 +44,13 @@
       "engine": "Windows System.Speech",
       "license": "Generated Windows speech output; not part of the CC0 sample libraries",
       "description": "Locally rendered Wake up! plus an original synthesized double beep; selected by the user on 2026-10-02."
+    },
+    "message_cues": {
+      "title": "User-selected tonal message cues (auditions C33 and D39)",
+      "type": "generated-recording",
+      "engine": "tools/synthesize-message-cues.py",
+      "license": "Original synthesized sound authored for noXa; distributed with the repository under its MIT license",
+      "description": "Harmonic sine partials with fast attacks and short decays, selected by the user on 2026-10-24 from 80 Discord-style auditions."
     }
   },
   "edits": {
@@ -423,36 +430,22 @@
     ],
     "dm": [
       {
-        "source": "cards",
-        "file": "Audio/card-place-3.ogg",
-        "lengthMs": 180,
-        "weight": 1,
-        "atMs": 0,
-        "lowpassHz": 0,
-        "sourceFileSha256": "1d988631a6e5201ed1bb0d728f2e43a3ec79401258426858793598044ac95841",
-        "trimStartMs": 295.51020408163265
-      },
-      {
-        "source": "ui",
-        "file": "Audio/click1.ogg",
-        "lengthMs": 50,
-        "weight": 0.3,
-        "atMs": 0,
-        "lowpassHz": 0,
-        "sourceFileSha256": "59175ac17cd49a68dd736285738441287636112a84a6f7ce0d89921bda5a5360",
-        "trimStartMs": 0.5668934240362812
+        "source": "message_cues",
+        "file": "D39.wav",
+        "sourceFileSha256": "fd8c9598a2d001f1417309c18e6f3538ee9c9cdcb3ab1837ca870c57fdcbf0f8",
+        "sequence": "Harmonic tones E6 and C6 (80 ms each, 70 ms apart), then G6 for 240 ms",
+        "lengthMs": 400,
+        "processing": "Rendered by tools/synthesize-message-cues.py; peak normalized to 0.112"
       }
     ],
     "channel_message": [
       {
-        "source": "ui",
-        "file": "Audio/click1.ogg",
-        "lengthMs": 70,
-        "weight": 1,
-        "atMs": 0,
-        "lowpassHz": 0,
-        "sourceFileSha256": "59175ac17cd49a68dd736285738441287636112a84a6f7ce0d89921bda5a5360",
-        "trimStartMs": 0.5668934240362812
+        "source": "message_cues",
+        "file": "C33.wav",
+        "sourceFileSha256": "8f85d974e9126da8c7016dbff846a451c9ca3418195ceec39eb8d6eaac4f80f9",
+        "sequence": "Two sine pops falling quickly onto 700 Hz and, 60 ms later, 980 Hz",
+        "lengthMs": 170,
+        "processing": "Rendered by tools/synthesize-message-cues.py; peak normalized to 0.112"
       }
     ],
     "whisper": [

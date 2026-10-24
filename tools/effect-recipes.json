@@ -44,6 +44,13 @@
       "engine": "Windows System.Speech",
       "license": "Generated Windows speech output; not part of the CC0 sample libraries",
       "description": "Locally rendered Wake up! plus an original synthesized double beep; selected by the user on 2026-10-02."
+    },
+    "message_cues": {
+      "title": "User-selected tonal message cues (auditions C33 and D39)",
+      "type": "generated-recording",
+      "engine": "tools/synthesize-message-cues.py",
+      "license": "Original synthesized sound authored for noXa; distributed with the repository under its MIT license",
+      "description": "Harmonic sine partials with fast attacks and short decays, selected by the user on 2026-10-24 from 80 Discord-style auditions."
     }
   },
   "events": [
@@ -645,55 +652,55 @@
       "id": "dm",
       "label": "Direct message",
       "category": "Notifications",
-      "character": "Broad paper landing with a small dry leading click",
-      "duration": 0.2,
+      "character": "Three notes down then up: E6, C6, G6",
+      "duration": 0.4,
       "priority": 1,
       "gain": 1,
       "cooldown": 100,
       "concurrency": "replace same event within session; priority admission",
-      "rmsDB": -35,
-      "peakCeiling": 0.1,
-      "parts": [
-        {
-          "source": "cards",
-          "file": "Audio/card-place-3.ogg",
-          "lengthMs": 180,
-          "weight": 1,
-          "atMs": 0,
-          "lowpassHz": 0
-        },
-        {
-          "source": "ui",
-          "file": "Audio/click1.ogg",
-          "lengthMs": 50,
-          "weight": 0.3,
-          "atMs": 0,
-          "lowpassHz": 0
-        }
-      ]
+      "rmsDB": -29.828460323336156,
+      "peakCeiling": 0.112,
+      "recording": {
+        "path": "client/frontend/src/assets/sounds/dm.wav",
+        "sha256": "fd8c9598a2d001f1417309c18e6f3538ee9c9cdcb3ab1837ca870c57fdcbf0f8",
+        "edits": [
+          {
+            "source": "message_cues",
+            "file": "D39.wav",
+            "sourceFileSha256": "fd8c9598a2d001f1417309c18e6f3538ee9c9cdcb3ab1837ca870c57fdcbf0f8",
+            "sequence": "Harmonic tones E6 and C6 (80 ms each, 70 ms apart), then G6 for 240 ms",
+            "lengthMs": 400,
+            "processing": "Rendered by tools/synthesize-message-cues.py; peak normalized to 0.112"
+          }
+        ]
+      }
     },
     {
       "id": "channel_message",
       "label": "Channel message",
       "category": "Notifications",
-      "character": "Tiny clean dry button contact",
-      "duration": 0.08,
+      "character": "Double bubble pop, 700 then 980 Hz",
+      "duration": 0.17,
       "priority": 0,
       "gain": 1,
       "cooldown": 250,
       "concurrency": "replace same event within session; priority admission",
-      "rmsDB": -43,
-      "peakCeiling": 0.05,
-      "parts": [
-        {
-          "source": "ui",
-          "file": "Audio/click1.ogg",
-          "lengthMs": 70,
-          "weight": 1,
-          "atMs": 0,
-          "lowpassHz": 0
-        }
-      ]
+      "rmsDB": -30.255648425204168,
+      "peakCeiling": 0.112,
+      "recording": {
+        "path": "client/frontend/src/assets/sounds/channel_message.wav",
+        "sha256": "8f85d974e9126da8c7016dbff846a451c9ca3418195ceec39eb8d6eaac4f80f9",
+        "edits": [
+          {
+            "source": "message_cues",
+            "file": "C33.wav",
+            "sourceFileSha256": "8f85d974e9126da8c7016dbff846a451c9ca3418195ceec39eb8d6eaac4f80f9",
+            "sequence": "Two sine pops falling quickly onto 700 Hz and, 60 ms later, 980 Hz",
+            "lengthMs": 170,
+            "processing": "Rendered by tools/synthesize-message-cues.py; peak normalized to 0.112"
+          }
+        ]
+      }
     },
     {
       "id": "whisper",

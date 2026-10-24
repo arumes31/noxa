@@ -199,21 +199,21 @@
   },
   "dm": {
     "title": "noXa \u2014 Direct message",
-    "duration": 0.2,
-    "peak": 0.100006103515625,
-    "dc": -1.7801920572916667e-07,
-    "rmsDB": -44.52799122968072,
-    "targetRmsDB": -35,
-    "sha256": "51809976ebc0b9a87008e23d005a60973f5443f095b1ad0b6ca77b31b6863acc"
+    "duration": 0.4,
+    "peak": 0.11199951171875,
+    "dc": -9.377797444661458e-08,
+    "rmsDB": -29.828460323336156,
+    "targetRmsDB": -29.828460323336156,
+    "sha256": "fd8c9598a2d001f1417309c18e6f3538ee9c9cdcb3ab1837ca870c57fdcbf0f8"
   },
   "channel_message": {
     "title": "noXa \u2014 Channel message",
-    "duration": 0.08,
-    "peak": 0.04998779296875,
-    "dc": -1.2715657552083333e-07,
-    "rmsDB": -45.96577505286043,
-    "targetRmsDB": -43,
-    "sha256": "a4b99546770944d1be73068222cd524eaa656903d9399a80e1c278903de37969"
+    "duration": 0.17,
+    "peak": 0.11199951171875,
+    "dc": 7.47979856004902e-09,
+    "rmsDB": -30.255648425204168,
+    "targetRmsDB": -30.255648425204168,
+    "sha256": "8f85d974e9126da8c7016dbff846a451c9ca3418195ceec39eb8d6eaac4f80f9"
   },
   "whisper": {
     "title": "noXa \u2014 Voice whisper",

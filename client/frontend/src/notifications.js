@@ -117,6 +117,11 @@ export function notify(event, text, ctx = {}) {
     if (row.native && !document.hasFocus()) App().Notify("noXa " + event, text.slice(0, 200));
 }
 
+// Ordinary channel messages ring for every message while noXa is in the
+// background; a focused window rings at most once per quiet period.
+const CHANNEL_MESSAGE_QUIET_MS = 5 * 60 * 1000;
+let channelMessageSoundAt = -Infinity;
+
 // Precise action cues share the notification matrix's policy.
 function playEventSound(event, soundEvent = event, speechEvent) {
     if (window.__noxaPolish?.dndActive?.()) return;
@@ -126,7 +131,11 @@ function playEventSound(event, soundEvent = event, speechEvent) {
     if (V().state.replayingTabID || settings?.event_sounds?.[event] === false) return;
     speechEvent ||= { user_join: "user_join", user_leave: "user_leave", user_move_in: "user_join", user_move_out: "user_leave" }[soundEvent];
     if (speechEvent) playAlert(speechEvent, { effect: soundEvent });
-    else playEvent(soundEvent);
+    else if (soundEvent === "channel_message") {
+        const now = Date.now();
+        if (document.hasFocus() && now - channelMessageSoundAt < CHANNEL_MESSAGE_QUIET_MS) return;
+        if (playEvent(soundEvent)) channelMessageSoundAt = now;
+    } else playEvent(soundEvent);
 }
 
 // ---------------------------------------------------------------------------

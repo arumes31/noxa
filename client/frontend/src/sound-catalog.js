@@ -223,8 +223,8 @@ export const SOUND_DEFINITIONS = {
     "dm": {
         "label": "Direct message",
         "category": "Notifications",
-        "character": "Broad paper landing with a small dry leading click",
-        "duration": 0.2,
+        "character": "Three notes down then up: E6, C6, G6",
+        "duration": 0.4,
         "priority": 1,
         "gain": 1,
         "cooldown": 100,
@@ -233,8 +233,8 @@ export const SOUND_DEFINITIONS = {
     "channel_message": {
         "label": "Channel message",
         "category": "Notifications",
-        "character": "Tiny clean dry button contact",
-        "duration": 0.08,
+        "character": "Double bubble pop, 700 then 980 Hz",
+        "duration": 0.17,
         "priority": 0,
         "gain": 1,
         "cooldown": 250,
