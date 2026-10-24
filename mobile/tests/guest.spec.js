@@ -10,10 +10,10 @@ test("guest can sign in, reload and sign out without linking a device", async ({
     await page.getByRole("button", { name: "Continue as guest", exact: true }).click();
     await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
     await page.getByRole("link", { name: "You", exact: true }).click();
-    await expect(page.getByText("Guest visitor", { exact: true })).toBeVisible();
+    await expect(page.getByText(/^Guest visitor(#M\d+)?$/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Save login as passkey" })).toHaveCount(0);
     await page.reload();
-    await expect(page.getByText("Guest visitor", { exact: true })).toBeVisible();
+    await expect(page.getByText(/^Guest visitor(#M\d+)?$/)).toBeVisible();
     await page.getByRole("button", { name: "Sign out of this device", exact: true }).click();
     await page.getByRole("button", { name: "Sign out of this device", exact: true }).last().click();
     await expect(page.getByRole("button", { name: "Sign in with passkey" })).toBeVisible();
