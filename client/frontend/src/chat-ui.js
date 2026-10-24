@@ -663,8 +663,8 @@ async function emojiURL(name) {
 // without a cached URL triggers a background load; the emoji shows up on the
 // next render (messages render often enough that this is acceptable).
 function applyCustomEmoji(html) {
-    if (typeof html !== "string" || html.indexOf(":") === -1) return html;
     if (customDirty) ensureCustomEmoji();
+    if (typeof html !== "string" || html.indexOf(":") === -1) return html;
 
     // Performance: Only trigger cache loading for emojis that are actually in the text
     for (const e of customEmoji) {
