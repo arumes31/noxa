@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/lib/pq"
 
@@ -343,15 +344,42 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_channel_member_overrides WHERE channel_id=$1`, ch.ChannelID); err != nil {
 			return err
 		}
+		var roleOverrideArgs []any
+		var memberOverrideArgs []any
+
 		for _, o := range ch.Overrides {
 			if o.RoleID != 0 {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO auth_channel_role_overrides(channel_id,role_id,capability,effect) VALUES($1,$2,$3,$4)`, ch.ChannelID, o.RoleID, o.Capability, o.Effect); err != nil {
-					return err
-				}
+				roleOverrideArgs = append(roleOverrideArgs, ch.ChannelID, o.RoleID, o.Capability, o.Effect)
 			} else {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO auth_channel_member_overrides(channel_id,user_id,capability,effect) VALUES($1,$2,$3,$4)`, ch.ChannelID, o.UserID, o.Capability, o.Effect); err != nil {
-					return err
+				memberOverrideArgs = append(memberOverrideArgs, ch.ChannelID, o.UserID, o.Capability, o.Effect)
+			}
+		}
+
+		if len(roleOverrideArgs) > 0 {
+			var sb strings.Builder
+			sb.WriteString("INSERT INTO auth_channel_role_overrides(channel_id,role_id,capability,effect) VALUES")
+			for i := 0; i < len(roleOverrideArgs)/4; i++ {
+				if i > 0 {
+					sb.WriteString(",")
 				}
+				sb.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d)", i*4+1, i*4+2, i*4+3, i*4+4))
+			}
+			if _, err := tx.ExecContext(ctx, sb.String(), roleOverrideArgs...); err != nil {
+				return err
+			}
+		}
+
+		if len(memberOverrideArgs) > 0 {
+			var sb strings.Builder
+			sb.WriteString("INSERT INTO auth_channel_member_overrides(channel_id,user_id,capability,effect) VALUES")
+			for i := 0; i < len(memberOverrideArgs)/4; i++ {
+				if i > 0 {
+					sb.WriteString(",")
+				}
+				sb.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d)", i*4+1, i*4+2, i*4+3, i*4+4))
+			}
+			if _, err := tx.ExecContext(ctx, sb.String(), memberOverrideArgs...); err != nil {
+				return err
 			}
 		}
 	}
