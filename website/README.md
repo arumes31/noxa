@@ -4,7 +4,8 @@ A static product and Windows-download page based on the supplied Signature
 design (concept 25). The public site is intended for
 <https://arumes31.github.io/noxa/> and the root of
 <https://noxa-srv.wowcraft.pw/>. Both publish the same static files. The latter
-origin also serves the Windows release at `/dl/noxa-client-windows-amd64.exe`
+origin redirects `/dl/noxa-client-windows-amd64.exe` to the latest Windows
+release on GitHub
 and launches the mobile PWA at `/app/`, all through HTTPS port 443.
 
 ## Files and local preview
@@ -94,8 +95,9 @@ https://noxa-srv.wowcraft.pw/dl/noxa-client-windows-amd64.exe
 
 The release marked **Latest** must contain an asset named exactly
 `noxa-client-windows-amd64.exe`. This is the Windows x64 client, not the server.
-Deployment copies the validated release asset to the download path and verifies
-its SHA-256 digest against GitHub release metadata. Existing authenticated
+The reverse proxy returns a temporary redirect to
+`https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe`.
+The executable stays on GitHub; no server-side copy is maintained. Existing authenticated
 file transfers under `/dl/` keep their capability checks; the public Windows
 installer is an exact route exception.
 
