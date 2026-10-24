@@ -883,3 +883,21 @@ test("built-in roles have distinct default icons even without saved cosmetics", 
     expect(defaults.every(Boolean)).toBe(true);
     expect(new Set(defaults).size).toBe(3);
 });
+
+test("save waits for the selected role image to finish decoding", async ({ page }) => {
+    await page.getByRole("button", { name: "Roles", exact: true }).click();
+    await page.getByRole("button", { name: "Member", exact: true }).click();
+    await page.getByLabel("Role name", {exact:true}).fill("Member with image");
+    await page.evaluate(() => {
+        const original = window.createImageBitmap;
+        window.createImageBitmap = async (...args) => { await new Promise(resolve => {window.releaseRoleDecode=resolve;}); return original(...args); };
+    });
+    await page.getByLabel("Upload role icon", { exact: true }).setInputFiles({name:"role.png",mimeType:"image/png",buffer:rolePNG});
+    await expect.poll(() => page.evaluate(() => typeof window.releaseRoleDecode)).toBe("function");
+    await expect(page.getByRole("button",{name:"Save",exact:true})).toBeDisabled();
+    await page.evaluate(() => window.releaseRoleDecode());
+    await expect(page.locator(".role-image-preview img")).toBeVisible();
+    await page.getByRole("button",{name:"Save",exact:true}).click();
+    await expect(page.getByRole("status")).toHaveText("Role saved.");
+    expect(await page.evaluate(() => window.__roleCalls.at(-1).role.icon_image)).toMatch(/^data:image\/png;base64,/);
+});

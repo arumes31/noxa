@@ -155,14 +155,15 @@ function renderRoleImageEditor(model, form, changed) {
     let sequence = 0;
     const refresh = () => preview.replaceChildren(roleIconElement(draft));
     const reset = roleButton(t("roles.imageReset"), () => {
-        sequence++; draft.icon_image = ""; draft.icon = "";
+        sequence++; model.imagePending = null; draft.icon_image = ""; draft.icon = "";
         error.textContent = ""; changed(true);
     });
     upload.onchange = async () => {
         const file = upload.files[0], request = ++sequence;
         if (!file || model.busy || form.disabled) return;
         const current = () => sequence === request && model.draft === draft && form.isConnected && !model.busy && !form.disabled;
-        upload.disabled = true; error.textContent = "";
+        const pending = { draft }; model.imagePending = pending;
+        upload.disabled = true; error.textContent = ""; changed();
         try {
             const image = await prepareRoleIcon(file);
             if (!current()) return;
@@ -170,7 +171,10 @@ function renderRoleImageEditor(model, form, changed) {
             if (otherBytes + image.length > ROLE_ICON_TOTAL_MAX) { error.textContent = t("roles.imageTotalError"); return; }
             draft.icon_image = image; refresh(); changed();
         } catch { if (current()) error.textContent = t("roles.imageInvalid"); }
-        finally { if (current()) { upload.disabled = false; upload.value = ""; } }
+        finally {
+            if (model.imagePending === pending) model.imagePending = null;
+            if (current()) { upload.disabled = false; upload.value = ""; changed(); }
+        }
     };
     refresh();
     controls.append(label, roleElement("p", "role-hint", t("roles.imageLimits")), reset, error);
