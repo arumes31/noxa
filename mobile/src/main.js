@@ -21,6 +21,8 @@ const screens = {
     group: () => import("./ui/group.js"),
     voice: () => import("./ui/voice.js"),
     you: () => import("./ui/you.js"),
+    admin: () => import("./ui/admin.js"),
+    invite: () => import("./ui/invite.js"),
 };
 
 document.documentElement.lang = lang();
@@ -73,6 +75,8 @@ async function route() {
         case "group": cleanup = module.renderGroup(root, arg); break;
         case "voice": cleanup = module.renderVoice(root); break;
         case "you": module.renderYou(root); break;
+        case "admin": cleanup = module.renderAdmin(root, arg) || null; break;
+        case "invite": module.renderInvite(root, arg); break;
         default: module.renderHome(root);
     }
     afterRoute(screen, arg);
