@@ -943,7 +943,7 @@ func (m *connManager) requestOn(expected net.Conn, send, reply netproto.MessageT
 // Keep this explicit: queries such as pre-key retrieval can consume state.
 func canDrainRequest(send netproto.MessageType) bool {
 	switch send {
-	case netproto.MsgRelayRequest, netproto.MsgAvatarGet, netproto.MsgClientInfoQuery, netproto.MsgServerInfoQuery,
+	case netproto.MsgLinkPreviewRequest, netproto.MsgRelayRequest, netproto.MsgAvatarGet, netproto.MsgClientInfoQuery, netproto.MsgServerInfoQuery,
 		netproto.MsgServerIconGet, netproto.MsgServerBannerGet, netproto.MsgChannelIconGet,
 		netproto.MsgEmojiGet:
 		return true
