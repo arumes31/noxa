@@ -120,7 +120,8 @@ export class Voice extends EventTarget {
             this.mic = null;
             this.#emit("mic-error", error);
         }
-        const pc = new RTCPeerConnection({ iceServers: this.session.iceServers });
+        const iceServers = await this.session.relayServers().catch(() => this.session.iceServers);
+        const pc = new RTCPeerConnection({ iceServers });
         this.pc = pc;
         pc.onicecandidate = event => {
             if (!event.candidate || !this.conn.open) return;

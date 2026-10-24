@@ -217,6 +217,24 @@ export class ChatSession extends EventTarget {
         return true;
     }
 
+    /**
+     * ICE servers with current TURN credentials. Servers with managed TURN
+     * lease them per session (193 RelayRequest); the lease is renewed when
+     * its refresh time passes.
+     */
+    async relayServers() {
+        if (!this.capabilities.has("managed-relay-v1")) return this.iceServers;
+        const now = Date.now();
+        if (!this.#relay || now >= this.#relay.refreshAt) {
+            const lease = await this.conn.request(193, { action: "refresh" }, 194, { accept: r => r.action === "refresh" });
+            const skew = now - (lease.server_time || now);
+            this.#relay = { servers: lease.ice_servers || [], refreshAt: (lease.refresh_at || 0) + skew || now + 15 * 60 * 1000 };
+        }
+        return [...this.iceServers.filter(server => !server.username), ...this.#relay.servers];
+    }
+
+    #relay = null;
+
     requestKeys(scope, keyIDs) {
         const missing = keyIDs.filter(id => id && !this.keys.get(scope)?.has(id));
         if (missing.length && this.conn.open) this.conn.send(Msg.ChatKeyRequest, { channel_id: scope, key_ids: missing.slice(0, 64) });

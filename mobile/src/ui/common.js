@@ -5,10 +5,22 @@ import { t } from "../i18n.js";
 import { h } from "./dom.js";
 import { icon } from "./icons.js";
 
+/** During a private call, a bar above the navigation returns to it. */
+function privateCallBar() {
+    const calls = app.calls;
+    if (!calls?.active || calls.incoming) return null;
+    const others = calls.call.participants.filter(p => p.unique_id !== calls.uid).map(p => app.session?.clients().find(c => c.unique_id === p.unique_id)?.nickname || t("dm.someone"));
+    return h("div", { class: "call-bar", role: "region", "aria-label": t("call.title") },
+        h("a", { class: "call-bar-main", href: `#/call/${calls.call.id}` },
+            h("span", { class: "speaking-dot on", "aria-hidden": "true" }),
+            h("span", { class: "row-main" }, h("span", { class: "row-title" }, others.join(", ")), h("span", { class: "row-sub" }, t("call.active")))),
+        h("button", { class: "icon-btn danger", type: "button", "aria-label": t("call.hangUp"), onclick: () => calls.hangUp() }, icon("hangup")));
+}
+
 /** While in voice, a bar above the navigation returns to the call. */
 function callBar(active) {
     const voice = app.voice;
-    if (!voice?.active || active === "voice") return null;
+    if (!voice?.active || active === "voice") return privateCallBar();
     const channel = app.session?.channels().find(c => c.id === voice.channelID);
     const bar = h("div", { class: "call-bar", role: "region", "aria-label": t("voice.callBar") },
         h("a", { class: "call-bar-main", href: "#/voice" },
@@ -42,11 +54,11 @@ export function nav(active) {
     return bar ? h("div", { class: "bottom" }, bar, navigation) : navigation;
 }
 
-export function header(title, { back, sub } = {}) {
+export function header(title, { back, sub, action } = {}) {
     return h("header", { class: "screen-header" },
         back ? h("a", { class: "icon-btn", href: back, "aria-label": t("common.back") }, icon("back")) : h("span"),
         h("h1", {}, title, sub ? h("span", { class: "sub" }, sub) : null),
-        h("span"));
+        action || h("span"));
 }
 
 export function scopeName(session, scope) {

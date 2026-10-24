@@ -2,6 +2,7 @@
 // device's identity, the signed-in chat session and reconnection.
 import { ChatSession } from "./core/chat-session.js";
 import { DirectMessages } from "./core/direct.js";
+import { Calls } from "./core/calls.js";
 import { Voice } from "./core/voice.js";
 import { Connection } from "./core/connection.js";
 import { generateIdentity } from "./core/crypto.js";
@@ -23,6 +24,8 @@ app.push = { available: false, preferences: {} };
 app.dm = null;
 /** Channel voice of the signed-in session. */
 app.voice = null;
+/** Private calls of the signed-in session. */
+app.calls = null;
 /** Conversation tag ("channel:4", "dm:<uid>") -> {count, mentions} unread. */
 app.unread = new Map();
 /** The conversation tag on screen, or null. */
@@ -64,6 +67,8 @@ export async function rememberLinkedIdentity(identity, meta) {
 }
 
 export async function forgetDevice() {
+    app.calls?.close();
+    app.calls = null;
     app.voice?.close();
     app.voice = null;
     app.dm?.close();
@@ -112,6 +117,9 @@ export async function connect() {
         if (isNew && !message.self && !message.copied) noteUnread(`dm:${peer}`, true);
         emit("dm", { peer });
     });
+    app.calls?.close();
+    app.calls = new Calls(session, dm);
+    watchCalls(app.calls);
     dm.importHistory().catch(() => {});
     dm.ready.then(async () => {
         await showPending(session, dm);
@@ -212,6 +220,35 @@ function watchVoice(voice) {
         }
     });
     voice.addEventListener("speaking", () => emit("voice", voice));
+}
+
+let ringTimer = 0;
+
+/** An incoming call opens the call screen and vibrates until answered. */
+function watchCalls(calls) {
+    calls.addEventListener("state", () => {
+        emit("call", calls);
+        clearInterval(ringTimer);
+        if (calls.incoming) {
+            if (!location.hash.startsWith(`#/call/${calls.call.id}`)) location.hash = `#/call/${calls.call.id}`;
+            navigator.vibrate?.([400, 200, 400]);
+            ringTimer = setInterval(() => navigator.vibrate?.([400, 200, 400]), 2000);
+        }
+        holdWakeLock(calls.active || !!app.voice?.active);
+    });
+    calls.addEventListener("ended", () => {
+        clearInterval(ringTimer);
+        navigator.vibrate?.(0);
+        emit("call", calls);
+    });
+}
+
+/** Starts a private call and opens the call screen. */
+export async function startCall(uid, options) {
+    if (!app.calls) throw new Error("not connected");
+    if (app.voice?.active) await leaveVoice();
+    const call = await app.calls.start(uid, options);
+    location.hash = `#/call/${call.id}`;
 }
 
 function unreadChanged() {

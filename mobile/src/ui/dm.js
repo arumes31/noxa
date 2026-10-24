@@ -1,5 +1,5 @@
 // dm.js — Direct message (05): end-to-end encrypted conversation.
-import { app, queueMessage } from "../app.js";
+import { app, queueMessage, startCall } from "../app.js";
 import { Trust } from "../core/direct.js";
 import { t } from "../i18n.js";
 import { avatar, clock, h, sheet, toast } from "./dom.js";
@@ -109,7 +109,7 @@ export function renderDM(root, peer) {
     dm.addEventListener("messages", onMessages);
     dm.addEventListener("history", onHistory);
     root.replaceChildren(h("section", { class: "screen chat" },
-        header(name, { back: "#/home" }),
+        header(name, { back: "#/home", action: h("button", { class: "icon-btn", type: "button", "aria-label": t("call.start", { name }), onclick: () => startCall(peer).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone")) }),
         banner, notice, progress, log, form));
     dm.ready.then(render);
     checkTrust();

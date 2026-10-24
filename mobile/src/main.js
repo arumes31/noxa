@@ -12,6 +12,7 @@ const screens = {
     servers: () => import("./ui/servers.js"),
     chat: () => import("./ui/chat.js"),
     dm: () => import("./ui/dm.js"),
+    call: () => import("./ui/call.js"),
     voice: () => import("./ui/voice.js"),
     you: () => import("./ui/you.js"),
 };
@@ -36,7 +37,7 @@ async function route() {
     let arg = "";
     try { arg = decodeURIComponent(rest.join("/")); } catch { arg = ""; }
     if (!screens[screen] || screen === "connect") screen = "home";
-    if (screen === "dm" && !arg) screen = "home";
+    if ((screen === "dm" || screen === "call") && !arg) screen = "home";
     app.viewing = null;
     if (screen === "chat") app.viewing = `channel:${Number(arg) || 0}`;
     if (screen === "dm") app.viewing = `dm:${arg}`;
@@ -54,6 +55,7 @@ async function route() {
         case "servers": module.renderServers(root); break;
         case "chat": cleanup = module.renderChat(root, Number(arg) || 0); break;
         case "dm": cleanup = module.renderDM(root, arg); break;
+        case "call": cleanup = module.renderCall(root, arg); break;
         case "voice": cleanup = module.renderVoice(root); break;
         case "you": module.renderYou(root); break;
         default: module.renderHome(root);
@@ -98,6 +100,13 @@ app.addEventListener("unread", () => {
 });
 app.addEventListener("online", renderBanner);
 // The call bar follows voice state on the other screens.
+// The call bar also follows private calls.
+app.addEventListener("call", () => {
+    const screen = location.hash.split("/")[1] || "home";
+    if (screen === "call") return;
+    const bottom = document.querySelector(".nav")?.closest(".bottom") || document.querySelector(".nav");
+    if (bottom) import("./ui/common.js").then(({ nav }) => bottom.replaceWith(nav(screen)));
+});
 let voiceWasActive = false;
 app.addEventListener("voice", () => {
     const screen = location.hash.split("/")[1] || "home";

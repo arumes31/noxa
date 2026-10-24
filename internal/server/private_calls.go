@@ -213,7 +213,7 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 	}
 	build := func(uids []string) (netproto.CallSession, error) {
 		now := time.Now().Unix()
-		call := netproto.CallSession{ID: uuid.NewString(), ConversationID: request.ConversationID, Caller: client.UniqueID, CreatedAt: now, RingUntil: now + 30, Revision: 1, KeyBinding: true, Participants: []netproto.CallParticipant{{UniqueID: client.UniqueID, ClientID: client.ID, State: "accepted", PublicKey: callerKey}}}
+		call := netproto.CallSession{ID: uuid.NewString(), ConversationID: request.ConversationID, Caller: client.UniqueID, CreatedAt: now, RingUntil: now + 30, Revision: 1, KeyBinding: true, Participants: []netproto.CallParticipant{{UniqueID: client.UniqueID, ClientID: client.ID, State: "accepted", PublicKey: callerKey, DeviceID: client.currentDeviceID()}}}
 		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
 		for _, uid := range uids {
 			if uid == client.UniqueID {

@@ -167,6 +167,28 @@ export class DirectMessages extends EventTarget {
         return entry;
     }
 
+    /**
+     * The X25519 key a contact's call participant may use: a key its trusted
+     * device bound (deviceID), or its signed key record under the pinned
+     * identity. Returns raw bytes or null.
+     */
+    async callKey(uid, encoded, deviceID) {
+        for (const refresh of [false, true]) {
+            const entry = await this.devicesOf(uid, { refresh }).catch(() => null);
+            if (!entry || entry.trust !== Trust.ok) return null;
+            if (deviceID) {
+                const device = entry.devices.find(d => d.deviceID === deviceID && d.x25519B64 === encoded);
+                if (device) return device.x25519;
+                continue;
+            }
+            const record = parseKeyRecord(encoded, uid);
+            const pinned = await this.#pin(uid);
+            if (record && pinned?.signingKey === toBase64(record.signingKey)) return record.encryptionKey;
+            if (record && uid === this.ownUID && entry.devices.some(d => d.x25519B64 === toBase64(record.encryptionKey))) return record.encryptionKey;
+        }
+        return null;
+    }
+
     /** Accepts a contact's new identity after the user compared it. */
     async trustNewIdentity(uid) {
         await putSealed(Stores.pins, uid, null).catch(() => {});

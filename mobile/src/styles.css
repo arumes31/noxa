@@ -159,6 +159,26 @@ button { cursor: pointer; }
 .stream-video { width: 100%; height: 100%; object-fit: contain; display: block; }
 .stream-video.fill { object-fit: cover; }
 .stream-close { position: absolute; right: 8px; top: 8px; min-height: 34px; padding: 0 12px; }
+.call-screen { justify-content: center; padding: calc(var(--safe-top) + 24px) 20px calc(var(--safe-bottom) + 28px); }
+.call-body { display: flex; flex-direction: column; gap: 20px; align-items: stretch; max-width: 480px; width: 100%; margin: 0 auto; }
+.call-hero { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+.call-hero h1 { margin: 0; font-size: 1.4rem; }
+.avatar-xl { width: 112px; height: 112px; font-size: 2rem; }
+.call-status { text-align: center; color: var(--text-dim); margin: 0; }
+.call-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.call-tile { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 180px; border-radius: 20px; border: 1px solid var(--border); background: var(--glass); overflow: hidden; }
+.call-tile video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.call-tile .tile-name, .call-tile .tile-state { position: relative; }
+.tile-state { font-size: .72rem; color: var(--text-faint); font-family: var(--font-mono); }
+.self-view { width: 112px; height: 150px; object-fit: cover; border-radius: 14px; align-self: flex-end; border: 1px solid var(--border); }
+.call-actions { display: flex; justify-content: center; gap: 22px; }
+.round-btn { width: 64px; height: 64px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg-raised); display: grid; place-items: center; color: var(--text); }
+.round-btn svg { width: 26px; height: 26px; }
+.round-btn.on { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.round-btn.accept { background: #1f9d55; border-color: #1f9d55; color: #fff; }
+.round-btn.video { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.round-btn.decline { background: var(--coral); border-color: var(--coral); color: #fff; }
+.call-usage { text-align: center; }
 .composer { display: flex; gap: 8px; align-items: flex-end; padding: 8px 12px calc(10px + var(--safe-bottom)); background: var(--bg); border-top: 1px solid var(--border); }
 .composer textarea { flex: 1; min-height: 44px; max-height: 140px; resize: none; padding: 11px 14px; border-radius: 22px; border: 1px solid var(--border); background: var(--bg-raised); outline: none; }
 .composer textarea:focus { border-color: var(--border-strong); }

@@ -54,7 +54,7 @@ function provision(dir, databaseURL) {
     execFileSync(tool("migrate"), [], { env, stdio: "pipe" });
     const accounts = {};
     const run = Date.now().toString(36);
-    for (const name of ["owner", "rowan", "ivy"]) {
+    for (const name of ["owner", "rowan", "ivy", "kai", "lou"]) {
         const password = `pw-${name}-${run}`;
         const nickname = `${name}-${run}`;
         const out = execFileSync(tool("adduser"), ["-nickname", nickname, "-password-stdin"], { env, input: `${password}\n` }).toString();
@@ -75,6 +75,9 @@ export async function startServer({ databaseURL = process.env.NOXA_E2E_DATABASE_
     const ports = {};
     for (const name of ["tcp", "grpc", "health", "query", "file", "web"]) ports[name] = await freePort();
     ports.udp = await freeUDPPort();
+    ports.sfu = await freeUDPPort();
+    ports.turn = await freeUDPPort();
+    const relayBase = 41000 + Math.floor(Math.random() * 2000);
     const yaml = [
         `server_name: "noXa e2e"`, `client_min_version: "0.0.0"`, `server_password: ""`, `allow_anonymous: true`,
         `log_level: info`, `dev_mode: true`,
@@ -84,7 +87,12 @@ export async function startServer({ databaseURL = process.env.NOXA_E2E_DATABASE_
         `pii_key_file: "${slash(path.join(dir, "keys", "pii.key"))}"`, `query_ssh_host_key: "${slash(path.join(dir, "keys", "ssh.key"))}"`,
         `database_url: "${databaseURL}"`, `redis_enabled: false`,
         // Voice tests connect browsers on this machine to the SFU.
-        `webrtc:`, `  ice_servers: []`, `  allowed_remote_cidrs: ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]`,
+        `webrtc:`, `  ice_servers: []`, `  udp_addr: "127.0.0.1:${ports.sfu}"`,
+        `  allowed_remote_cidrs: ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]`,
+        // Private calls are relay-only; a loopback TURN relays them.
+        `turn:`, `  managed: true`, `  listen_addr: "127.0.0.1:${ports.turn}"`, `  public_ip: "127.0.0.1"`,
+        `  relay_min_port: ${relayBase}`, `  relay_max_port: ${relayBase + 200}`, `  realm: "noxa-e2e"`,
+        `  uris: ["turn:127.0.0.1:${ports.turn}?transport=udp"]`, `  credentials_ttl: 1h`,
         `web:`, `  enabled: true`, `  addr: "127.0.0.1:${ports.web}"`, `  public_url: "https://chat.example"`,
         `  trusted_proxies: ["127.0.0.0/8"]`, `  app_dir: "${slash(path.join(repoRoot, "web", "app"))}"`,
     ].join("\n");
