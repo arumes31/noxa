@@ -73,3 +73,70 @@ test("two phones join a voice channel and hear each other", async ({ browser }) 
         await phone.context.close();
     }
 });
+
+test("a phone watches two cameras on a stage with quality, focus, swap, fullscreen and PiP", async ({ browser }) => {
+    test.setTimeout(200000);
+    const owner = await desktopSession(server.controlAddr, server.accounts.owner, { version: info.version });
+    await openServerToMembers(owner);
+    owner.conn.close();
+    const a = await phoneIn(browser, server.accounts.ivy, "Public1");
+    const b = await phoneIn(browser, server.accounts.mia, "Public1");
+    const c = await phoneIn(browser, server.accounts.noa, "Public1");
+    await expect(c.page.locator(".voice-tile")).toHaveCount(3, { timeout: 20000 });
+
+    // Two publishers; the front camera flips to the back one and back.
+    for (const phone of [a, b]) {
+        await phone.page.getByRole("button", { name: "Turn camera on" }).click();
+        await expect(phone.page.getByRole("button", { name: "Turn camera off" })).toBeVisible({ timeout: 20000 });
+    }
+    const flip = a.page.getByRole("button", { name: "Switch camera" });
+    await expect(flip).toHaveAttribute("data-facing", "user");
+    await flip.click();
+    await expect(flip).toHaveAttribute("data-facing", "environment");
+    await expect(flip).toHaveAttribute("aria-pressed", "true");
+
+    // The watcher picks both cameras; both play on the stage.
+    for (let i = 0; i < 2; i++) {
+        const watch = c.page.getByRole("button", { name: /^Watch .*camera/ }).first();
+        await expect(watch).toBeVisible({ timeout: 30000 });
+        await watch.click();
+    }
+    const tiles = c.page.locator(".stage-tile");
+    await expect(tiles).toHaveCount(2, { timeout: 30000 });
+    await expect.poll(() => c.page.evaluate(() => [...document.querySelectorAll(".stage-tile video")]
+        .filter(video => video.srcObject?.getVideoTracks()[0]?.readyState === "live" && video.videoWidth > 0).length), { timeout: 30000 }).toBe(2);
+
+    // Receive quality: the server confirms the scoped low layer.
+    const firstKey = await tiles.first().getAttribute("data-key");
+    await tiles.first().getByRole("combobox", { name: /^Quality for/ }).selectOption("low");
+    await expect(c.page.locator(`.stage-tile[data-key="${firstKey}"]`)).toHaveAttribute("data-quality", "low", { timeout: 10000 });
+
+    // Tap focuses a tile; the other becomes small and can swap in.
+    const stage = c.page.getByRole("region", { name: "Streams" });
+    await tiles.first().locator("video").click();
+    await expect(stage).toHaveAttribute("data-layout", "focus");
+    await expect(c.page.locator(".stage-tile.focused")).toHaveAttribute("data-key", firstKey);
+    await c.page.locator(".stage-tile:not(.focused)").getByRole("button", { name: "Swap with the large picture" }).click();
+    await expect(c.page.locator(".stage-tile.focused")).not.toHaveAttribute("data-key", firstKey);
+    await c.page.getByRole("button", { name: /^Layout:/ }).click();
+    await expect(stage).toHaveAttribute("data-layout", "grid");
+
+    // Fullscreen with an overlay; PiP where the browser supports it.
+    await c.page.getByRole("button", { name: "Fullscreen", exact: true }).click();
+    await expect.poll(() => c.page.evaluate(() => document.fullscreenElement?.classList.contains("stage") || false)).toBe(true);
+    await expect(c.page.getByRole("button", { name: "Exit fullscreen" })).toBeVisible();
+    await c.page.getByRole("button", { name: "Exit fullscreen" }).click();
+    await expect.poll(() => c.page.evaluate(() => !!document.fullscreenElement)).toBe(false);
+    const pip = await c.page.evaluate(() => !!document.pictureInPictureEnabled);
+    await expect(c.page.getByRole("button", { name: "Picture in picture" })).toHaveCount(pip ? 1 : 0);
+
+    // Diagnostics list the codecs this phone decodes.
+    await c.page.getByRole("button", { name: "Video settings" }).click();
+    await c.page.getByRole("button", { name: "Video diagnostics" }).click();
+    await expect(c.page.getByRole("dialog", { name: "Video diagnostics" })).toContainText("VP8");
+
+    for (const phone of [a, b, c]) {
+        phone.desktop.conn.close();
+        await phone.context.close();
+    }
+});

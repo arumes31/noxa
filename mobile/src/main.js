@@ -7,6 +7,7 @@ import { parseLinkFragment } from "./core/device.js";
 import { t, lang } from "./i18n.js";
 import { h, toast } from "./ui/dom.js";
 import { afterRoute, onWideChange, screenRoot } from "./ui/layout.js";
+import "./ui/call-waiting.js";
 
 // Each screen is its own chunk, so Connect and Home load without the rest.
 const screens = {
