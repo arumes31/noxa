@@ -160,13 +160,22 @@ export function passkeysSupported() {
 }
 
 /** Saves a passkey for the signed-in account on this linked device. */
-export async function registerPasskey(conn, name, credentials = globalThis.navigator.credentials) {
+export async function registerPasskey(conn, name, credentials = globalThis.navigator.credentials, session = null) {
     const begin = await conn.request(Msg.DeviceRequest, { action: "passkey_register_begin" }, Msg.DeviceResult, { accept: r => r.action === "passkey_register_begin" });
     const publicKey = creationOptions(begin.webauthn);
     // Use only extensions negotiated by the server. An unsolicited PRF output
     // makes strict WebAuthn registration fail (notably with iCloud passkeys).
     const credential = await credentials.create({ publicKey });
-    const finish = await conn.request(Msg.DeviceRequest, { action: "passkey_register_finish", name, webauthn: credentialJSON(credential) },
+    let dmCertificate;
+    const template = begin.dm_certificate;
+    const spki = credential.response?.getPublicKey?.();
+    const algorithm = credential.response?.getPublicKeyAlgorithm?.();
+    if (session?.identity && template && spki && [-7,-35,-36,-257,-258,-259,-37,-38,-39,-8].includes(algorithm) && template.principal === session.uniqueID && template.issuer === session.deviceID && template.rp_id === publicKey.rp.id) {
+        dmCertificate = { ...template, algorithm, origin: location.origin, credential_id: b64u(credential.rawId), public_key: toBase64(new Uint8Array(spki)) };
+        const transcript = ["noxa-passkey-delegation-v1", dmCertificate.principal, dmCertificate.issuer, dmCertificate.credential_id, dmCertificate.public_key, dmCertificate.rp_id, dmCertificate.origin, String(algorithm)].join("\n");
+        dmCertificate.signature = toBase64(sign(utf8(transcript), session.identity.edSecret));
+    }
+    const finish = await conn.request(Msg.DeviceRequest, { action: "passkey_register_finish", name, webauthn: credentialJSON(credential), ...(dmCertificate ? { dm_certificate: dmCertificate } : {}) },
         Msg.DeviceResult, { accept: r => r.action === "passkey_register_finish" });
     return finish.passkeys || [];
 }
@@ -176,9 +185,9 @@ export async function registerPasskey(conn, name, credentials = globalThis.navig
  * device's keys to its account, then the device signs in with its own key.
  */
 export async function linkWithPasskey(conn, identity, credentials = globalThis.navigator.credentials) {
-    const begin = await conn.request(Msg.DeviceRequest, { action: "passkey_login_begin" }, Msg.DeviceResult, { accept: r => r.action === "passkey_login_begin" });
-    const assertion = await credentials.get({ publicKey: requestOptions(begin.webauthn) });
     const { pem, x25519 } = devicePublicKeys(identity);
+    const begin = await conn.request(Msg.DeviceRequest, { action: "passkey_login_begin", ed25519_public_key: pem, x25519_public_key: x25519 }, Msg.DeviceResult, { accept: r => r.action === "passkey_login_begin" });
+    const assertion = await credentials.get({ publicKey: requestOptions(begin.webauthn) });
     return conn.request(Msg.DeviceRequest, {
         action: "passkey_login_finish", webauthn: credentialJSON(assertion), ed25519_public_key: pem, x25519_public_key: x25519, platform: platformName(),
     }, Msg.DeviceResult, { accept: r => r.action === "passkey_login_finish" });

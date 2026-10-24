@@ -1,21 +1,26 @@
 // passkeys.go runs WebAuthn ceremonies over the control connection. A linked
 // device registers a passkey for the account; a new phone with a synced
-// passkey signs in by linking itself, and must still be approved by another
-// device before it receives direct-message keys.
+// passkey signs in by linking itself. A signed delegation lets a trusted
+// desktop automatically verify and endorse its direct-message keys.
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/protocol/webauthncose"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"go.uber.org/zap"
 
 	"noxa/internal/auth"
+	"noxa/internal/deviceproof"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
 )
@@ -35,8 +40,11 @@ type PasskeyStore interface {
 
 // passkeyCeremony is the pending WebAuthn session of one connection.
 type passkeyCeremony struct {
-	action  string
-	session webauthn.SessionData
+	action   string
+	session  webauthn.SessionData
+	nonce    []byte
+	edPublic string
+	xPublic  string
 }
 
 // passkeyUser adapts an account to the WebAuthn library.
@@ -117,15 +125,15 @@ func (c *Client) passkeyLoginDeadline() time.Time {
 }
 
 // takePasskeyCeremony returns and clears the pending ceremony of action.
-func (c *Client) takePasskeyCeremony(action string) (webauthn.SessionData, bool) {
+func (c *Client) takePasskeyCeremony(action string) (*passkeyCeremony, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ceremony := c.passkey
 	c.passkey = nil
 	if ceremony == nil || ceremony.action != action {
-		return webauthn.SessionData{}, false
+		return nil, false
 	}
-	return ceremony.session, true
+	return ceremony, true
 }
 
 func (s *TCPServer) handlePasskeyRequest(ctx context.Context, client *Client, r netproto.DeviceRequest) error {
@@ -139,11 +147,27 @@ func (s *TCPServer) handlePasskeyRequest(ctx context.Context, client *Client, r 
 	}
 	switch r.Action {
 	case netproto.DeviceActionPasskeyLoginBegin:
-		assertion, session, err := rp.BeginDiscoverableLogin(webauthn.WithUserVerification(protocol.VerificationRequired))
+		options := []webauthn.LoginOption{webauthn.WithUserVerification(protocol.VerificationRequired)}
+		var nonce []byte
+		if r.Ed25519PublicKey != "" || r.X25519PublicKey != "" {
+			if _, err := auth.LoadPublicKey(r.Ed25519PublicKey); err != nil {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid device key")
+			}
+			x, err := base64.StdEncoding.DecodeString(r.X25519PublicKey)
+			if err != nil || len(x) != 32 || bytes.Equal(x, make([]byte, 32)) {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid encryption key")
+			}
+			nonce = make([]byte, 32)
+			if _, err := rand.Read(nonce); err != nil {
+				return s.deviceFailure(ctx, client, err)
+			}
+			options = append(options, webauthn.WithChallenge(netproto.PasskeyDeviceChallenge(nonce, r.Ed25519PublicKey, r.X25519PublicKey)))
+		}
+		assertion, session, err := rp.BeginDiscoverableLogin(options...)
 		if err != nil {
 			return s.deviceFailure(ctx, client, err)
 		}
-		client.setPasskeyCeremony(&passkeyCeremony{action: netproto.DeviceActionPasskeyLoginFinish, session: *session})
+		client.setPasskeyCeremony(&passkeyCeremony{action: netproto.DeviceActionPasskeyLoginFinish, session: *session, nonce: nonce, edPublic: r.Ed25519PublicKey, xPublic: r.X25519PublicKey})
 		return s.writePasskeyOptions(client, r.Action, assertion)
 	case netproto.DeviceActionPasskeyLoginFinish:
 		return s.finishPasskeyLogin(ctx, client, rp, keys, r)
@@ -174,12 +198,25 @@ func (s *TCPServer) handlePasskeyRequest(ctx context.Context, client *Client, r 
 			return s.deviceFailure(ctx, client, err)
 		}
 		client.setPasskeyCeremony(&passkeyCeremony{action: netproto.DeviceActionPasskeyRegisterFinish, session: *session})
-		return s.writePasskeyOptions(client, r.Action, creation)
+		data, err := json.Marshal(creation)
+		if err != nil {
+			return err
+		}
+		chain, _ := s.dmDevices(ctx, principal)
+		var certificate *netproto.PasskeyCertificate
+		for _, d := range chain {
+			if d.DeviceID == deviceID {
+				certificate = &netproto.PasskeyCertificate{Principal: principal, Issuer: deviceID, RPID: s.cfg.Web.RPID(), Chain: chain}
+				break
+			}
+		}
+		return s.writeMessage(client, netproto.MsgDeviceResult, netproto.DeviceResult{Action: r.Action, WebAuthn: data, DMCertificate: certificate})
 	case netproto.DeviceActionPasskeyRegisterFinish:
-		session, ok := client.takePasskeyCeremony(r.Action)
+		ceremony, ok := client.takePasskeyCeremony(r.Action)
 		if !ok || deviceID == "" {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "start saving the passkey again")
 		}
+		session := ceremony.session
 		parsed, err := protocol.ParseCredentialCreationResponseBytes(r.WebAuthn)
 		if err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid passkey response")
@@ -200,6 +237,10 @@ func (s *TCPServer) handlePasskeyRequest(ctx context.Context, client *Client, r 
 			s.logger.Info("passkey registration rejected", zap.String("client_id", client.ID), zap.Error(err))
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "the passkey could not be verified")
 		}
+		certificate, err := s.validatePasskeyCertificate(ctx, principal, deviceID, r.DMCertificate, credential, rp)
+		if err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "invalid passkey device authorization")
+		}
 		record, err := json.Marshal(credential)
 		if err != nil {
 			return err
@@ -210,7 +251,7 @@ func (s *TCPServer) handlePasskeyRequest(ctx context.Context, client *Client, r 
 		}
 		if err := keys.AddPasskey(ctx, store.Passkey{
 			CredentialID: credential.ID, Principal: principal, UserHandle: user.handle,
-			DeviceID: deviceID, Name: name, Credential: record,
+			DeviceID: deviceID, Name: name, Credential: record, DMCertificate: certificate,
 		}); err != nil {
 			return s.deviceFailure(ctx, client, err)
 		}
@@ -270,12 +311,16 @@ func (s *TCPServer) writePasskeyList(ctx context.Context, client *Client, keys P
 
 // finishPasskeyLogin verifies a discoverable assertion and links the calling
 // device's keys to the passkey's account. The device then signs in with its
-// own key like any linked device. It carries no approval signature, so
-// direct-message keys still wait for approval from another device.
+// own key like any linked device. Its key-bound proof lets a trusted desktop
+// issue the normal approval signature without another user prompt.
 func (s *TCPServer) finishPasskeyLogin(ctx context.Context, client *Client, rp *webauthn.WebAuthn, keys PasskeyStore, r netproto.DeviceRequest) error {
-	session, ok := client.takePasskeyCeremony(r.Action)
+	ceremony, ok := client.takePasskeyCeremony(r.Action)
 	if !ok {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "start the passkey sign-in again")
+	}
+	session := ceremony.session
+	if len(ceremony.nonce) != 0 && (r.Ed25519PublicKey != ceremony.edPublic || r.X25519PublicKey != ceremony.xPublic) {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "device keys changed during passkey sign-in")
 	}
 	if _, err := auth.LoadPublicKey(r.Ed25519PublicKey); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid device key")
@@ -324,10 +369,20 @@ func (s *TCPServer) finishPasskeyLogin(ctx context.Context, client *Client, rp *
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, reason)
 	}
 	var registeringDevice string
+	var loginProof []byte
 	rows, _ := keys.PasskeysByHandle(ctx, account.handle)
 	for _, row := range rows {
 		if string(row.CredentialID) == string(credential.ID) {
 			registeringDevice = row.DeviceID
+			if len(ceremony.nonce) != 0 && len(row.DMCertificate) != 0 {
+				var cert netproto.PasskeyCertificate
+				if json.Unmarshal(row.DMCertificate, &cert) == nil {
+					loginProof, _ = json.Marshal(netproto.PasskeyLoginProof{Certificate: cert, Nonce: ceremony.nonce, Assertion: r.WebAuthn})
+					if len(loginProof) > netproto.MaxPasskeyProof {
+						loginProof = nil
+					}
+				}
+			}
 		}
 	}
 	var userID int64
@@ -340,7 +395,7 @@ func (s *TCPServer) finishPasskeyLogin(ctx context.Context, client *Client, rp *
 	}
 	d, err := s.deps.Devices.AddDevice(ctx, store.NewDevice{
 		Principal: account.principal, UserID: userID, Kind: store.DeviceKindWeb, Name: name,
-		Ed25519Public: r.Ed25519PublicKey, X25519Public: r.X25519PublicKey, ApprovedBy: registeringDevice,
+		Ed25519Public: r.Ed25519PublicKey, X25519Public: r.X25519PublicKey, ApprovedBy: registeringDevice, PasskeyProof: loginProof,
 	}, s.cfg.Web.DeviceLimit())
 	if err != nil {
 		return s.deviceFailure(ctx, client, err)
@@ -352,4 +407,68 @@ func (s *TCPServer) finishPasskeyLogin(ctx context.Context, client *Client, rp *
 	defer cancel()
 	s.audit(auditCtx, account.principal, "passkey_login", account.principal, "device="+d.DeviceID+" passkey_device="+registeringDevice)
 	return s.writeMessage(client, netproto.MsgDeviceResult, netproto.DeviceResult{Action: r.Action, State: netproto.LinkStateApproved, Device: &info})
+}
+
+// Check the delegation against the authenticated registering device and the
+// credential verified by WebAuthn. Clients independently check the same chain.
+func (s *TCPServer) validatePasskeyCertificate(ctx context.Context, principal, deviceID string, raw []byte, credential *webauthn.Credential, rp *webauthn.WebAuthn) ([]byte, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var cert netproto.PasskeyCertificate
+	if len(raw) > netproto.MaxPasskeyProof || json.Unmarshal(raw, &cert) != nil || cert.Principal != principal || cert.Issuer != deviceID || cert.RPID != rp.Config.RPID || cert.CredentialID != base64.RawURLEncoding.EncodeToString(credential.ID) {
+		return nil, deviceproof.ErrProof
+	}
+	originOK := false
+	for _, origin := range rp.Config.RPOrigins {
+		originOK = originOK || origin == cert.Origin
+	}
+	parsedKey, err := webauthncose.ParsePublicKey(credential.PublicKey)
+	if err != nil {
+		return nil, deviceproof.ErrProof
+	}
+	var algorithm int64
+	switch key := parsedKey.(type) {
+	case webauthncose.EC2PublicKeyData:
+		algorithm = key.Algorithm
+	case webauthncose.RSAPublicKeyData:
+		algorithm = key.Algorithm
+	case webauthncose.OKPPublicKeyData:
+		algorithm = key.Algorithm
+	default:
+		return nil, deviceproof.ErrProof
+	}
+	if cert.Algorithm != algorithm {
+		return nil, deviceproof.ErrProof
+	}
+	block, _ := pem.Decode([]byte(webauthncose.DisplayPublicKey(credential.PublicKey)))
+	if !originOK || block == nil || !bytes.Equal(block.Bytes, cert.PublicKey) {
+		return nil, deviceproof.ErrProof
+	}
+	devices, err := s.deps.Devices.ListDevices(ctx, principal, false)
+	if err != nil {
+		return nil, err
+	}
+	var root, issuer *store.Device
+	for i := range devices {
+		if devices[i].FirstDevice {
+			root = &devices[i]
+		}
+		if devices[i].DeviceID == deviceID {
+			issuer = &devices[i]
+		}
+	}
+	if root == nil || issuer == nil || (!issuer.FirstDevice && len(issuer.ApprovalSignature) == 0) {
+		return nil, deviceproof.ErrProof
+	}
+	pinned, err := auth.LoadPublicKey(root.Ed25519Public)
+	if err != nil {
+		return nil, err
+	}
+	signing, err := deviceproof.CertificateIssuer(cert, principal, pinned)
+	expected, keyErr := auth.LoadPublicKey(issuer.Ed25519Public)
+	if err != nil || keyErr != nil || !bytes.Equal(signing, expected) {
+		return nil, deviceproof.ErrProof
+	}
+	return json.Marshal(cert)
 }

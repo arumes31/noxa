@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -16,7 +17,9 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 
+	"noxa/internal/auth"
 	"noxa/internal/config"
+	"noxa/internal/deviceproof"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
 )
@@ -207,11 +210,17 @@ func (a *virtualAuthenticator) get(t *testing.T, options json.RawMessage) json.R
 
 func TestPasskeyRegisteredOnPhoneSignsInANewPhone(t *testing.T) {
 	for _, signOut := range []bool{false, true} {
-		t.Run(fmt.Sprintf("signOut=%v", signOut), func(t *testing.T) { testPasskeyPhoneLogin(t, signOut) })
+		t.Run(fmt.Sprintf("signOut=%v", signOut), func(t *testing.T) { testPasskeyPhoneLogin(t, signOut, false) })
 	}
 }
 
-func testPasskeyPhoneLogin(t *testing.T, signOut bool) {
+func TestPasskeyDelegationSurvivesRegisteringPhoneSignout(t *testing.T) {
+	for _, signOut := range []bool{false, true} {
+		t.Run(fmt.Sprintf("signOut=%v", signOut), func(t *testing.T) { testPasskeyPhoneLogin(t, signOut, true) })
+	}
+}
+
+func testPasskeyPhoneLogin(t *testing.T, signOut, delegate bool) {
 	devices := &fakeDevices{}
 	keys := &fakePasskeys{fakeDevices: devices}
 	env := startTestEnvDeps(t, nil, func(cfg *config.Config) {
@@ -223,7 +232,22 @@ func testPasskeyPhoneLogin(t *testing.T, signOut bool) {
 	// An already linked phone signs in. Registration requires the web
 	// transport, which the test marks on the server-side session.
 	phone := newLinkTestKeys(t)
-	if _, err := devices.AddDevice(t.Context(), store.NewDevice{Principal: "user-uid", UserID: 2, Kind: store.DeviceKindWeb, Name: "Old phone", Ed25519Public: phone.public, X25519Public: phone.x25519}, 10); err != nil {
+	root := phone
+	var approver string
+	var approval []byte
+	if delegate {
+		root = newLinkTestKeys(t)
+		desktop, err := devices.AddDevice(t.Context(), store.NewDevice{Principal: "user-uid", UserID: 2, Kind: store.DeviceKindDesktop, Ed25519Public: root.public, X25519Public: root.x25519}, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		approver = desktop.DeviceID
+		approval, err = auth.SignChallenge(root.private, netproto.DeviceApprovalTranscript("user-uid", approver, phone.public, phone.x25519))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := devices.AddDevice(t.Context(), store.NewDevice{ApprovedBy: approver, ApprovalSignature: approval, Principal: "user-uid", UserID: 2, Kind: store.DeviceKindWeb, Name: "Old phone", Ed25519Public: phone.public, X25519Public: phone.x25519}, 10); err != nil {
 		t.Fatal(err)
 	}
 	conn, resp := keyLogin(t, env.addr, phone)
@@ -246,7 +270,26 @@ func testPasskeyPhoneLogin(t *testing.T, signOut bool) {
 	if !strings.Contains(string(begin.WebAuthn), `"residentKey":"required"`) {
 		t.Fatalf("creation options = %s", begin.WebAuthn)
 	}
-	finish := deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionPasskeyRegisterFinish, Name: "iCloud Keychain", WebAuthn: authenticator.create(t, begin.WebAuthn)})
+	var certificate []byte
+	if delegate {
+		if begin.DMCertificate == nil {
+			t.Fatal("missing delegation template")
+		}
+		cert := *begin.DMCertificate
+		cert.Algorithm = -7
+		cert.Origin = passkeyTestOrigin
+		cert.CredentialID = b64url(authenticator.id)
+		cert.PublicKey, err = x509.MarshalPKIXPublicKey(&key.PublicKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert.Signature, err = auth.SignChallenge(phone.private, cert.Transcript())
+		if err != nil {
+			t.Fatal(err)
+		}
+		certificate, _ = json.Marshal(cert)
+	}
+	finish := deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionPasskeyRegisterFinish, Name: "iCloud Keychain", WebAuthn: authenticator.create(t, begin.WebAuthn), DMCertificate: certificate})
 	if len(finish.Passkeys) != 1 || finish.Passkeys[0].Name != "iCloud Keychain" || finish.Passkeys[0].PasskeyID != b64url(authenticator.id) {
 		t.Fatalf("passkeys after registration = %+v", finish.Passkeys)
 	}
@@ -273,7 +316,12 @@ func testPasskeyPhoneLogin(t *testing.T, signOut bool) {
 	newPhone := newLinkTestKeys(t)
 	fresh := dialRetry(t, env.addr)
 	defer func() { _ = fresh.Close() }()
-	loginBegin := deviceCall(t, fresh, netproto.DeviceRequest{Action: netproto.DeviceActionPasskeyLoginBegin})
+	beginRequest := netproto.DeviceRequest{Action: netproto.DeviceActionPasskeyLoginBegin}
+	if delegate {
+		newPhone.x25519 = base64.StdEncoding.EncodeToString([]byte("01234567890123456789012345678901"))
+		beginRequest.Ed25519PublicKey, beginRequest.X25519PublicKey = newPhone.public, newPhone.x25519
+	}
+	loginBegin := deviceCall(t, fresh, beginRequest)
 	loginFinish := deviceCall(t, fresh, netproto.DeviceRequest{
 		Action: netproto.DeviceActionPasskeyLoginFinish, WebAuthn: authenticator.get(t, loginBegin.WebAuthn),
 		Ed25519PublicKey: newPhone.public, X25519PublicKey: newPhone.x25519, Platform: "Pixel · Chrome",
@@ -291,6 +339,18 @@ func testPasskeyPhoneLogin(t *testing.T, signOut bool) {
 		t.Fatalf("passkey-linked device = %+v, %v", linked, err)
 	}
 
+	if delegate {
+		pinned, _ := auth.LoadPublicKey(root.public)
+		if err := deviceproof.Verify("user-uid", pinned, newPhone.public, newPhone.x25519, linked.PasskeyProof); err != nil {
+			t.Fatalf("stored proof invalid: %v", err)
+		}
+		if err := deviceproof.Verify("user-uid", pinned, newLinkTestKeys(t).public, newPhone.x25519, linked.PasskeyProof); err == nil {
+			t.Fatal("proof authorized a substituted device")
+		}
+	} else if len(linked.PasskeyProof) != 0 {
+		t.Fatal("legacy passkey acquired an unsigned authorization")
+	}
+
 	// A replayed assertion is rejected: the ceremony is single use.
 	e := deviceCallError(t, fresh, netproto.DeviceRequest{
 		Action: netproto.DeviceActionPasskeyLoginFinish, WebAuthn: authenticator.get(t, loginBegin.WebAuthn),
@@ -298,6 +358,13 @@ func testPasskeyPhoneLogin(t *testing.T, signOut bool) {
 	})
 	if !strings.Contains(e.Message, "start the passkey sign-in again") {
 		t.Fatalf("replayed assertion = %+v", e)
+	}
+	if delegate {
+		bound := deviceCall(t, fresh, beginRequest)
+		rejected := deviceCallError(t, fresh, netproto.DeviceRequest{Action: netproto.DeviceActionPasskeyLoginFinish, WebAuthn: authenticator.get(t, bound.WebAuthn), Ed25519PublicKey: newLinkTestKeys(t).public, X25519PublicKey: newPhone.x25519})
+		if !strings.Contains(rejected.Message, "device keys changed") {
+			t.Fatalf("substituted device accepted: %+v", rejected)
+		}
 	}
 }
 

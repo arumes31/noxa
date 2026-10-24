@@ -49,6 +49,7 @@ type Device struct {
 	FirstDevice       bool
 	ApprovedBy        string
 	ApprovalSignature []byte
+	PasskeyProof      []byte
 	CreatedAt         time.Time
 	LastSeenAt        time.Time
 	ExpiryWarnedAt    time.Time
@@ -69,11 +70,12 @@ type NewDevice struct {
 	X25519Public      string
 	ApprovedBy        string
 	ApprovalSignature []byte
+	PasskeyProof      []byte
 }
 
 const deviceColumns = `device_id, principal, COALESCE(user_id, 0), kind, name, ed25519_public,
 	x25519_public, first_device, approved_by, approval_signature, created_at, last_seen_at,
-	expiry_warned_at, revoked_at, revoked_reason`
+	expiry_warned_at, revoked_at, revoked_reason, passkey_proof`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -82,7 +84,7 @@ func scanDevice(row rowScanner) (Device, error) {
 	var warned, revoked sql.NullTime
 	err := row.Scan(&d.DeviceID, &d.Principal, &d.UserID, &d.Kind, &d.Name, &d.Ed25519Public,
 		&d.X25519Public, &d.FirstDevice, &d.ApprovedBy, &d.ApprovalSignature, &d.CreatedAt,
-		&d.LastSeenAt, &warned, &revoked, &d.RevokedReason)
+		&d.LastSeenAt, &warned, &revoked, &d.RevokedReason, &d.PasskeyProof)
 	if err != nil {
 		return Device{}, err
 	}
@@ -143,11 +145,11 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 		userID = d.UserID
 	}
 	row := tx.QueryRowContext(ctx, `INSERT INTO user_devices
-		(device_id, principal, user_id, kind, name, ed25519_public, x25519_public, first_device, approved_by, approval_signature)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		(device_id, principal, user_id, kind, name, ed25519_public, x25519_public, first_device, approved_by, approval_signature, passkey_proof)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING `+deviceColumns,
 		uuid.NewString(), d.Principal, userID, d.Kind, NormalizeDeviceName(d.Name), d.Ed25519Public,
-		d.X25519Public, active == 0, d.ApprovedBy, d.ApprovalSignature)
+		d.X25519Public, active == 0, d.ApprovedBy, d.ApprovalSignature, d.PasskeyProof)
 	device, err := scanDevice(row)
 	if err != nil {
 		return Device{}, fmt.Errorf("adding device: %w", err)

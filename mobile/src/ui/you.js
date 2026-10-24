@@ -23,7 +23,8 @@ export async function offerPasskey() {
 
 async function savePasskey() {
     try {
-        await registerPasskey(app.session.conn, navigator.platform || "Passkey");
+        const session = app.session;
+        await registerPasskey(session.conn, navigator.platform || "Passkey", navigator.credentials, session);
         toast(t("settings.passkeySaved"));
     } catch (error) {
         if (error?.name !== "NotAllowedError") toast(t("common.error", { error: error.message }), "warn");
