@@ -299,3 +299,35 @@ func TestPhonesDoNotReplaceTheAccountKey(t *testing.T) {
 		t.Fatalf("phone replaced the account key: %q -> %q", before, after)
 	}
 }
+
+func TestDirectMessageEditsTravelLikeMessages(t *testing.T) {
+	e := startDMTestEnv(t)
+	userDesktopKeys, adminKeys := newLinkTestKeys(t), newLinkTestKeys(t)
+	userDesktop, userDesktopID := e.desktopAs(t, "user-uid", userDesktopKeys)
+	admin, _ := e.desktopAs(t, "admin-uid", adminKeys)
+	phoneKeys, phoneID := e.approvedPhone(t, "user-uid", 2, userDesktopID, userDesktopKeys)
+
+	// A change without a reference, or on a single account-wide copy, is refused.
+	send(t, admin, netproto.MsgChatSend, netproto.ChatSend{ToUniqueID: "user-uid", Enc: true, ClientMsgID: "bad-1", DMAction: netproto.DMActionEdit,
+		Copies: []netproto.DMCopy{{DeviceID: userDesktopID, Text: "eA=="}, {DeviceID: phoneID, Text: "eA=="}}})
+	if got := sendError(t, admin); got.Code != errCodeMalformed {
+		t.Fatalf("edit without reference = %+v", got)
+	}
+
+	send(t, admin, netproto.MsgChatSend, netproto.ChatSend{ToUniqueID: "user-uid", Enc: true, AckRequested: true, ClientMsgID: "edit-1",
+		DMAction: netproto.DMActionEdit, RefClientMsgID: "dm-1",
+		Copies: []netproto.DMCopy{{DeviceID: userDesktopID, Text: "bmV3"}, {DeviceID: phoneID, Text: "bmV3LXBob25l"}}})
+	live := chatEvent(t, userDesktop)
+	if live.DMAction != netproto.DMActionEdit || live.RefClientMsgID != "dm-1" || live.ClientMsgID != "edit-1" {
+		t.Fatalf("live edit = %+v", live)
+	}
+	phone, resp := keyLogin(t, e.env.addr, phoneKeys)
+	defer func() { _ = phone.Close() }()
+	if !resp.OK {
+		t.Fatalf("phone login = %+v", resp)
+	}
+	spooled := chatEvent(t, phone)
+	if spooled.DMAction != netproto.DMActionEdit || spooled.RefClientMsgID != "dm-1" || spooled.Text != "bmV3LXBob25l" {
+		t.Fatalf("spooled edit = %+v", spooled)
+	}
+}

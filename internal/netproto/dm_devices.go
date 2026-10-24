@@ -41,6 +41,27 @@ type DMCopy struct {
 	Text     string `json:"text"`
 }
 
+// Direct-message edits and deletions are per-device copies too, so they
+// reach every device like the original, including offline ones through the
+// spool. DMAction names the change and RefClientMsgID the original
+// message; for an edit the sealed text is the new body, for a deletion it
+// is empty. Receivers apply a change only from the original's sender.
+const (
+	DMActionEdit   = "edit"
+	DMActionDelete = "delete"
+)
+
+// ValidDMAction checks a direct-message change.
+func ValidDMAction(action, ref string) bool {
+	switch action {
+	case "":
+		return ref == ""
+	case DMActionEdit, DMActionDelete:
+		return ref != "" && len(ref) <= 128
+	}
+	return false
+}
+
 // DeviceActionEndorse lets a trusted device sign a device that was linked
 // with a passkey, so the account's contacts accept it for direct messages.
 // DeviceID names the device; Signature is over DeviceApprovalTranscript.

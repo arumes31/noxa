@@ -595,6 +595,10 @@ type ChatSend struct {
 	// Copies carries a direct message sealed once per device (dm_devices_v1);
 	// Text and RecipientPublicKey are then empty.
 	Copies []DMCopy `json:"copies,omitempty"`
+	// DMAction and RefClientMsgID edit or delete an earlier direct message
+	// (copies only).
+	DMAction       string `json:"dm_action,omitempty"`
+	RefClientMsgID string `json:"ref_client_msg_id,omitempty"`
 }
 
 // ChatBroadcast is a chat message the server fans out to interested clients.
@@ -641,6 +645,10 @@ type ChatBroadcast struct {
 	SenderDeviceID    string `json:"sender_device_id,omitempty"`
 	SenderDeviceKey   string `json:"sender_device_key,omitempty"`
 	RecipientDeviceID string `json:"recipient_device_id,omitempty"`
+	// DMAction and RefClientMsgID mark an edit or deletion of an earlier
+	// direct message.
+	DMAction       string `json:"dm_action,omitempty"`
+	RefClientMsgID string `json:"ref_client_msg_id,omitempty"`
 }
 
 // Error carries a server-side error to the client.

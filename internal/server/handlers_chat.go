@@ -129,6 +129,9 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 	if len(msg.Copies) > 0 {
 		return s.sendDirectCopies(ctx, client, msg)
 	}
+	if msg.DMAction != "" || msg.RefClientMsgID != "" {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "direct-message edits need per-device copies")
+	}
 
 	if msg.ToUniqueID == "" {
 		s.roleMetadataMu.Lock()
@@ -398,6 +401,8 @@ func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID i
 			SenderDeviceID:     m.SenderDeviceID,
 			SenderDeviceKey:    deviceCopyKey(m),
 			RecipientDeviceID:  m.RecipientDeviceID,
+			DMAction:           m.DMAction,
+			RefClientMsgID:     m.RefClientMsgID,
 		})
 		if err != nil {
 			continue

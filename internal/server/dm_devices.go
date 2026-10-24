@@ -91,7 +91,8 @@ func (s *TCPServer) rejectStaleDevices(ctx context.Context, client *Client, mess
 // copy goes to its device's live sessions or is spooled for that device.
 func (s *TCPServer) sendDirectCopies(ctx context.Context, client *Client, msg netproto.ChatSend) error {
 	origin := requestOrigin(ctx)
-	if msg.ToUniqueID == "" || msg.ToClientID != "" || msg.Text != "" || msg.RecipientPublicKey != "" || len(msg.Copies) > netproto.MaxDMCopies {
+	if msg.ToUniqueID == "" || msg.ToClientID != "" || msg.Text != "" || msg.RecipientPublicKey != "" || len(msg.Copies) > netproto.MaxDMCopies ||
+		!netproto.ValidDMAction(msg.DMAction, msg.RefClientMsgID) {
 		return s.sendErrorFor(client, origin, errCodeMalformed, "invalid direct-message copies")
 	}
 	senderDevice := client.currentDeviceID()
@@ -157,6 +158,7 @@ func (s *TCPServer) sendDirectCopies(ctx context.Context, client *Client, msg ne
 			Direct: true, ToUniqueID: msg.ToUniqueID, FromClientID: client.ID, FromUniqueID: principal, From: client.nickname(),
 			Text: c.Text, Enc: true, E2E: true, ClientMsgID: msg.ClientMsgID,
 			SenderDeviceID: senderDevice, SenderDeviceKey: sender.device.X25519Public, RecipientDeviceID: c.DeviceID,
+			DMAction: msg.DMAction, RefClientMsgID: msg.RefClientMsgID,
 		})
 		if err != nil {
 			return err
@@ -183,13 +185,16 @@ func (s *TCPServer) sendDirectCopies(ctx context.Context, client *Client, msg ne
 		if err := s.deps.Spool.SpoolMessage(ctx, client.userID(), toUserID, principal, c.Text, store.DMKeyBinding{
 			SenderPublicKey: sender.device.X25519Public, RecipientPublicKey: t.device.X25519Public, ClientMsgID: msg.ClientMsgID,
 			SenderDeviceID: senderDevice, RecipientDeviceID: c.DeviceID,
+			DMAction: msg.DMAction, RefClientMsgID: msg.RefClientMsgID,
 		}); err != nil {
 			s.logger.Warn("spooling device copy failed", zap.String("client_id", client.ID), zap.Error(err))
 			return s.sendErrorFor(client, origin, errCodeUnavailable, "spooling message failed")
 		}
 	}
 	s.metricsSink().IncChatMessage("direct")
-	s.pushDirect(client, msg.ToUniqueID)
+	if msg.DMAction == "" {
+		s.pushDirect(client, msg.ToUniqueID)
+	}
 	return s.acknowledgeChat(client, msg, netproto.ChatQueued, 0)
 }
 
