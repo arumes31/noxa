@@ -1,4 +1,4 @@
-package main
+package linkpreview
 
 import (
 	"encoding/json"

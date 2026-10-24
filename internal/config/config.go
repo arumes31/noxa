@@ -197,6 +197,9 @@ type Config struct {
 	UDPRateBurst    int `mapstructure:"udp_rate_burst"`
 
 	Recording RecordingConfig `mapstructure:"recording"`
+
+	// Web configures the mobile web app listener (see web.go).
+	Web WebConfig `mapstructure:"web"`
 }
 
 // RecordingConfig holds configuration for server-side stream recording via
@@ -392,6 +395,8 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("recording.audio_args", []string{"-c:a", "copy"})
 	v.SetDefault("recording.max_concurrent", 4)
 	v.SetDefault("recording.windows_acl_ready", false)
+
+	setWebDefaults(v)
 
 	return v
 }
@@ -792,6 +797,7 @@ func (c *Config) Validate() error {
 	if c.UDPRateLimitPPS > 0 && c.UDPRateBurst <= 0 {
 		errs = append(errs, errors.New("udp_rate_burst must be positive when udp_rate_limit_pps is enabled"))
 	}
+	errs = append(errs, c.Web.validate()...)
 
 	return errors.Join(errs...)
 }

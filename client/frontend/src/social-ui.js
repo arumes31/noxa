@@ -239,6 +239,12 @@ function showHoverCard(x, y, html, avatarURL = null) {
     document.body.appendChild(hoverCard);
 }
 
+// onlyOnMobile reports a user whose every visible session is a phone.
+function onlyOnMobile(uniqueID) {
+    const sessions = V().state.clients.filter((x) => uniqueID && x.unique_id === uniqueID);
+    return sessions.length > 0 && sessions.every((x) => x.on_mobile);
+}
+
 function hideHoverCard() {
     if (hoverTimer) {
         clearTimeout(hoverTimer);
@@ -274,6 +280,7 @@ function initHoverCards() {
                     <div class="hc-line mono">${esc((c.unique_id || "").slice(0, 20))}…</div>
                     ${g ? `<div class="hc-line">${esc(t("runtime.groupValue", { name: g.name }))}</div>` : ""}
                     ${c.status ? `<div class="hc-line">${esc(t("runtime.statusValue", { status: presenceLabel(c.status) }))}${c.status_message ? " — " + esc(c.status_message) : ""}</div>` : ""}
+                    ${onlyOnMobile(c.unique_id) ? `<div class="hc-line">📱 ${esc(t("runtime.onMobile"))}</div>` : ""}
                     <div class="hc-line">${esc(t("runtime.channelValue", { name: V().state.channels.find((x) => x.ChannelID === c.channel_id)?.Name || t("runtime.none") }))}</div>`, av);
             }, 500);
         } else if (chRow) {

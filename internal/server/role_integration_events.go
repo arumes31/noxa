@@ -22,7 +22,7 @@ func (s *TCPServer) WithIntegrationEvent(ctx context.Context, principal auth.Int
 		if err != nil {
 			return err
 		}
-		if result.Snapshot == nil && result.Speaking == nil {
+		if result.Snapshot == nil && result.Speaking == nil && result.Device == nil {
 			return ctx.Err()
 		}
 		return deliver(ctx, result)
@@ -62,6 +62,21 @@ func (s *TCPServer) projectIntegrationEvent(ctx context.Context, e *authorizatio
 			return result, nil
 		}
 		result.Speaking = &broadcast.IntegrationSpeaking{ClientID: member.ClientID, ChannelID: member.ChannelID, Speaking: member.IsSpeaking}
+	case eventbus.DeviceChangedType:
+		// Device changes are account security events for administrators.
+		if !e.Evaluate(viewerID, 0, authorization.Administrator).Allowed {
+			return result, nil
+		}
+		var change deviceChange
+		if err := json.Unmarshal(event.Data, &change); err != nil || change.UniqueID == "" || change.Device.DeviceID == "" {
+			return result, authorization.ErrRoleInvalid
+		}
+		d := change.Device
+		result.Device = &broadcast.IntegrationDevice{
+			Action: change.Action, UniqueID: change.UniqueID, Reason: change.Reason,
+			DeviceID: d.DeviceID, Kind: d.Kind, Name: d.Name, Fingerprint: d.Fingerprint, FirstDevice: d.FirstDevice,
+			ApprovedBy: d.ApprovedBy, CreatedAt: d.CreatedAt, LastSeenAt: d.LastSeenAt, RevokedAt: d.RevokedAt,
+		}
 	default:
 		// New bus types require an explicit disclosure policy. In particular,
 		// session-addressed chat/typing/whisper/poke are never a public feed.

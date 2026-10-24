@@ -74,6 +74,10 @@ func (q *queryBackend) WithIntegrationBans(ctx context.Context, principal auth.I
 	return q.tcp.WithIntegrationBans(ctx, principal, request, deliver)
 }
 
+func (q *queryBackend) WithIntegrationDevices(ctx context.Context, principal auth.IntegrationPrincipal, request netproto.IntegrationDeviceRequest, deliver func(context.Context, netproto.IntegrationDeviceResult) error) error {
+	return q.tcp.WithIntegrationDevices(ctx, principal, request, deliver)
+}
+
 func (q *queryBackend) WithIntegrationAudit(ctx context.Context, principal auth.IntegrationPrincipal, request netproto.AuditLog, deliver func(context.Context, netproto.AuditLogResponse) error) error {
 	return q.tcp.WithIntegrationAudit(ctx, principal, request, deliver)
 }

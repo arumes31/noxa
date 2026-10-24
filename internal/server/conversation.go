@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,9 +43,16 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 	if request.MessageID < 0 || (request.Action == "delete_message") != (request.MessageID > 0) || request.BeforeID < 0 || request.ReadMessageID < 0 || (request.Action == "mark_read" && request.ReadMessageID == 0) || (request.Action == "send") != (request.Message != nil) {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid conversation request")
 	}
+	request.DeviceID = ""
 	return s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
 		if !client.isAuthed() || client.userID() <= 0 || client.rulesBlocked() {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "sign in and accept the rules to use private groups")
+		}
+		request.DeviceID = client.currentDeviceID()
+		if request.Action == "send" {
+			if err := s.checkConversationDevices(ctx, client, request); err != nil {
+				return err
+			}
 		}
 		backend, ok := s.deps.Chat.(conversationStore)
 		if !ok {
@@ -53,8 +61,13 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 		if request.Action == "mark_read" && s.conversationReadRate != nil && !s.conversationReadRate.allow(client.UniqueID, time.Now()) {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "group read rate limit exceeded")
 		}
-		if !read && request.Action != "mark_read" && s.chatRate != nil && !s.chatRate.allowLimit(client.UniqueID, time.Now(), s.chatActionLimit(ctx, client)) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "group rate limit exceeded")
+		if !read && request.Action != "mark_read" && s.chatRate != nil {
+			if allowed, retry := s.chatRate.allowWithRetry(client.UniqueID, time.Now(), s.chatActionLimit(ctx, client)); !allowed {
+				return s.writeMessage(client, netproto.MsgError, netproto.Error{
+					Code: errCodeMalformed, Message: "group rate limit exceeded",
+					OriginType: uint16(requestOrigin(ctx)), RetryAfterMS: retry.Milliseconds() + 1,
+				})
+			}
 		}
 		calls := s.conversationCallSnapshot()
 		deliveryStarted := false
@@ -84,6 +97,9 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 			}
 			if !shared {
 				err = backend.MarkConversationRead(ctx, client.UniqueID, request.ID, request.ReadMessageID)
+			}
+			if err == nil {
+				s.syncRead(client, netproto.ReadMarker{Scope: netproto.ReadScopeConversation, ID: request.ID, MessageID: strconv.FormatInt(request.ReadMessageID, 10)})
 			}
 		case "create":
 			var c netproto.Conversation
@@ -128,15 +144,19 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 				if request.Action == "send" && uid == client.UniqueID {
 					continue
 				}
-				if target, found := s.clientByUniqueID(uid); found {
-					addressed := payload
-					if request.Action == "invite" && uid == request.Target {
-						addressed, err = eventEnvelope(eventConversationChanged, map[string]any{"id": request.ID, "invitation": true})
-						if err != nil {
-							return err
-						}
+				addressed := payload
+				if request.Action == "invite" && uid == request.Target {
+					addressed, err = eventEnvelope(eventConversationChanged, map[string]any{"id": request.ID, "invitation": true})
+					if err != nil {
+						return err
 					}
+				}
+				// Every session of the member: a desktop and phones alike.
+				for _, target := range s.sessionsOf(uid) {
 					_ = s.deps.Broadcast.BroadcastToClient(target.ID, addressed)
+				}
+				if request.Action == "send" {
+					s.pushNotify(uid, pushNotice{Kind: pushKindConversation, Tag: netproto.ReadScopeConversation + ":" + request.ID, From: client.nickname()})
 				}
 			}
 		}

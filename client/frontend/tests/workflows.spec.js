@@ -3,8 +3,8 @@ import { expect, test, chooseShareOption } from "./fixtures.js";
 test.describe("Midnight workspace concepts", () => {
     test.beforeEach(async ({ page }) => {
         await page.setViewportSize({ width: 1440, height: 1000 });
-        await page.route("https://i.ytimg.com/**", route => route.fulfill({ contentType: "image/svg+xml", body: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"480\" height=\"270\" viewBox=\"0 0 480 270\"><rect width=\"480\" height=\"270\" fill=\"#294859\"/><circle cx=\"380\" cy=\"65\" r=\"27\" fill=\"#edcf9b\"/><path d=\"M0 210L90 85L168 172L266 45L390 186L480 90V270H0Z\" fill=\"#a0b6bd\"/><path d=\"M205 124L266 45L326 113L278 95L251 111L233 91Z\" fill=\"#e0e9e7\"/><path d=\"M0 229L120 153L240 230L345 155L480 240V270H0Z\" fill=\"#103f47\"/><path d=\"M0 255L480 243V270H0Z\" fill=\"#397489\"/></svg>" }));
         await page.evaluate(() => {
+            window.__previewJPEG = document.createElement("canvas").toDataURL("image/jpeg");
             const v = window.__noxa;
             Object.assign(v.state, { activeTabID: "midnight", myClientID: "self", myUniqueID: "self", myChannelID: 1, lastConnect: { addr: "wowcraft.pw:9987" }, authorizationModel: "roles-v1", ownAuthority: "owner",
                 channels: [{ ChannelID: 1, Name: "Private1", Topic: "Private room for the crew", Access: { can_manage_access: true, member_count: 3, guest_count: 0 } }, { ChannelID: 2, Name: "Lobby" }, { ChannelID: 3, Name: "general", TextOnly: true }],
@@ -16,7 +16,7 @@ test.describe("Midnight workspace concepts", () => {
             v.startQualitySampler();
             const app = window.go.main.App;
             window.go.main.App = new Proxy(app, { get(target, key) {
-                if (key === "YouTubePreviewForTab") return async () => ({ title: "A weekend in the mountains", author: "Bene" });
+                if (key === "YouTubePreviewForTab") return async () => ({ title: "A weekend in the mountains", author: "Bene", thumbnail: window.__previewJPEG });
                 if (key === "ChatHistoryForTab") return async () => ({ messages: [] });
                 return target[key];
             } });
@@ -208,11 +208,10 @@ test.describe("Midnight workspace concepts", () => {
     });
 
     test("video portals show safe thumbnails and open canonical browser links", async ({ page }, testInfo) => {
-        for (const host of ["static-cdn.jtvnw.net", "i.vimeocdn.com", "s2.dmcdn.net", "images.whatnot.com"]) await page.route("https://" + host + "/**", route => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="270"><rect width="480" height="270" fill="#294859"/><path d="M0 270L160 60L280 210L380 100L480 270Z" fill="#70b7f5"/></svg>' }));
+        const external = []; page.on("request", request => { if (new URL(request.url()).protocol === "https:") external.push(request.url()); });
         await page.evaluate(() => {
             window.__portalCalls = [];
-            const thumbs = { twitch: "https://static-cdn.jtvnw.net/clip.jpg", vimeo: "https://i.vimeocdn.com/video/demo.jpg", dailymotion: "https://s2.dmcdn.net/v/demo/x720", whatnot: "https://images.whatnot.com/show.jpg" };
-            const preview = async (tab, provider, id) => { window.__portalCalls.push({ tab, provider, id }); return { title: provider + " preview", author: "Creator", thumbnail: thumbs[provider] }; };
+            const preview = async (tab, provider, id) => { window.__portalCalls.push({ tab, provider, id }); return { title: provider + " preview", author: "Creator", thumbnail: window.__previewJPEG }; };
             window.go.main.App = new Proxy(window.go.main.App, { get(target, key) { return key === "VideoPortalPreviewForTab" ? preview : target[key]; } });
             window.__noxaChat.addChat({ id: 7100, enc_verified: true, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "https://clips.twitch.tv/PublicClip_123 https://www.twitch.tv/creator/clip/PublicClip_123 https://vimeo.com/22439234 https://dai.ly/x84sh87" });
             window.__noxaChat.addChat({ id: 7101, enc_verified: true, channel_id: 1, from_unique_id: "joshi", from: "Joshibär", text: "https://www.whatnot.com/s/Zz64h7wC" });
@@ -224,6 +223,7 @@ test.describe("Midnight workspace concepts", () => {
         await expect(cards.locator("script, iframe")).toHaveCount(0);
         await expect(cards.first()).toHaveAccessibleName(/Twitch twitch preview Creator/);
         expect(await page.evaluate(() => window.__portalCalls.length)).toBe(4);
+        expect(external).toEqual([]);
         await cards.last().click();
         await expect.poll(() => page.evaluate(() => window.__browserURLs)).toContain("https://www.whatnot.com/s/Zz64h7wC");
         await page.screenshot({ path: testInfo.outputPath("video-portal-previews.png") });
@@ -12226,14 +12226,14 @@ test.describe("link hover lifecycle", () => {
     test.beforeEach(async ({ page }) => {
         await showB3Workspace(page);
         await page.evaluate(() => {
-            const originalFetch = window.fetch;
             window.__linkRequests = [];
-            window.fetch = (url, options) => {
-                if (!String(url).startsWith("https://hover.example/")) return originalFetch(url, options);
-                return new Promise(resolve => window.__linkRequests.push({ url, signal: options.signal,
-                    resolve: title => resolve(new Response(`<title>${title}</title>`)),
+            const app = window.go.main.App;
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (key === "LinkPreviewForTab") return (_tab, url) => new Promise(resolve => window.__linkRequests.push({ url,
+                    resolve: title => resolve({ title }),
                 }));
-            };
+                return target[key];
+            } });
             window.__noxaChat.onMyChannelChanged();
             window.__noxaChat.addChat({ id: 99001, channel_id: 2, from: "Alex", from_unique_id: "uid-alex",
                 text: "https://hover.example/first https://hover.example/second", enc_verified: true, enc_mode: "server" });
@@ -12256,7 +12256,6 @@ test.describe("link hover lifecycle", () => {
         await page.locator("#chat-head-title").hover();
         await page.evaluate(() => window.__linkRequests[0].resolve("Late preview"));
         await expect(page.locator(".link-card")).toHaveCount(0);
-        expect(await page.evaluate(() => window.__linkRequests[0].signal.aborted)).toBe(true);
     });
 
     for (const surface of ["channel", "shared"]) test(`${surface} out-of-order previews leave only the currently hovered card`, async ({ page }) => {
@@ -12299,7 +12298,6 @@ test.describe("link hover lifecycle", () => {
                 if (change === "channel") window.__noxaChat.onMyChannelChanged();
             }, change);
             if (phase === "pending") {
-                await expect.poll(() => page.evaluate(() => window.__linkRequests[0].signal.aborted)).toBe(true);
                 await page.evaluate(() => window.__linkRequests[0].resolve("Cancelled preview"));
             }
             await expect(page.locator(".link-card")).toHaveCount(0);
@@ -12455,12 +12453,26 @@ test("desktop CSP blocks injected script and event handlers while the app works"
     expect(result).toEqual({ injected: false, appLoaded: true });
 });
 
-test("CSP retains supported HTTP image previews", async ({ page }) => {
-    await page.route("http://media.example.invalid/pixel.svg", route => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" />' }));
+test("CSP blocks external preview images and allows server-supplied data", async ({ page }) => {
+    let directRequests = 0;
+    await page.route(/https?:\/\/media\.example\.invalid\//, route => { directRequests++; return route.abort(); });
+    for (const scheme of ["http", "https"]) {
+        expect(await page.evaluate(url => new Promise(resolve => {
+            const image = document.createElement("img");
+            image.onload = () => { image.remove(); resolve(true); };
+            image.onerror = () => { image.remove(); resolve(false); };
+            image.src = url;
+            document.body.append(image);
+        }), `${scheme}://media.example.invalid/pixel.jpg`)).toBe(false);
+    }
+    expect(directRequests).toBe(0);
     expect(await page.evaluate(() => new Promise(resolve => {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 1;
         const image = document.createElement("img");
-        image.onload = () => resolve(true); image.onerror = () => resolve(false);
-        image.src = "http://media.example.invalid/pixel.svg";
+        image.onload = () => { image.remove(); resolve(true); };
+        image.onerror = () => { image.remove(); resolve(false); };
+        image.src = canvas.toDataURL("image/jpeg");
         document.body.append(image);
     }))).toBe(true);
 });

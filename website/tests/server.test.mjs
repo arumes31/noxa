@@ -54,7 +54,7 @@ test('Pages artifact contains only public website assets', async () => {
         assert.ok(allowedDirectories.has(name), `Unexpected public directory: ${name}`);
         await check(path);
       } else {
-        assert.ok(name === '.nojekyll' || extensions.has(extname(name)), `Unexpected public file: ${name}`);
+        assert.ok(name === '.nojekyll' || (directory === join(root, 'assets', 'fonts') && name === 'OFL.txt') || extensions.has(extname(name)), `Unexpected public file: ${name}`);
         found.push(name);
       }
     }

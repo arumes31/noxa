@@ -112,3 +112,18 @@ func TestSessionInfoSnapshotIsCoherent(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionInfoMobileAvailability(t *testing.T) {
+	conn, peer := net.Pipe()
+	t.Cleanup(func() { _ = conn.Close(); _ = peer.Close() })
+	m := &connManager{conn: conn, supportsDevices: true, supportsWebLogin: true}
+	app := &App{activeID: "a", tabs: map[string]*tabState{"a": {cm: m}}}
+	app.cmStore(m)
+	for _, tc := range []struct{ web, guest, want bool }{{true, false, true}, {false, false, false}, {true, true, false}} {
+		m.supportsWebLogin, m.isGuest = tc.web, tc.guest
+		info, err := app.SessionInfoForTab("a")
+		if err != nil || info.MobileAvailable != tc.want {
+			t.Fatalf("availability=%v, err=%v; want %v", info.MobileAvailable, err, tc.want)
+		}
+	}
+}

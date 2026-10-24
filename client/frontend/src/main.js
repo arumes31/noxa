@@ -1,3 +1,4 @@
+import { initMobileAnnouncement } from "./mobile-announcement.js";
 import { initWindowControls } from "./window-controls.js";
 import { setStatusIcon } from "./icons.js";
 import { maintainRelay } from "./relay-renewal.js";
@@ -33,6 +34,7 @@ import "./conversations.css";
 import { conversationChanged, conversationRead, conversationTyping } from "./conversations.js";
 import { initDirectMessages } from "./dm-view.js";
 import "./private-calls.css";
+import "./device-link.css";
 import { privateCallChanged, privateCallSignal, stopPrivateCall, applyPrivateCallAudioSettings } from "./private-calls.js";
 import { createTabReconnects, reconnectDelay } from "./tab-reconnect.js";
 import { refreshPolls } from "./polls.js";
@@ -500,6 +502,7 @@ async function connectFromLogin() {
         $("conn-lock").classList.remove("hidden");
         showWorkspace();
         connected = true;
+        void window.__noxaMobile?.refresh();
         refreshPermissions();
         applyWhisperSettings();
         chatUI.onConnect(); // (133) MOTD + myUniqueID for mentions/own-msgs
@@ -730,6 +733,7 @@ async function completeReconnect(c, generation, tabID, current = () => true) {
     refreshPermissions();
     applyWhisperSettings();
     chatUI.onConnect();
+    void window.__noxaMobile?.refresh();
     window.__noxaFiles?.loadServerIcon?.();
     window.__noxaSocial?.refreshNews?.();
     startQualitySampler();
@@ -1194,7 +1198,14 @@ let activityRevision = 0;
 
 // noteActivity resets the idle timer; after auto_away_minutes without input or speech
 // the client sets itself away, restoring on the next activity.
+let inputReportedAt = 0;
+
 function noteActivity() {
+    // Linked phones hold back notifications while this desktop is in use.
+    if (Date.now() - inputReportedAt > 30000) {
+        inputReportedAt = Date.now();
+        try { void window.go?.main?.App?.ReportInputActivity?.()?.catch?.(() => {}); } catch { /* older binding */ }
+    }
     const scope = capturePresenceScope();
     const revision = ++activityRevision;
     restorePresenceOnActivity(scope);
@@ -1267,6 +1278,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     for (const root of snap.root_channels || []) flattenChannel(root);
     for (const client of snap.unassigned_clients || []) state.clients.push(client);
     for (const client of state.clients) {
+        client.roles = (client.roles || []).map(role => ({ ...role, icon_image: snap.role_icons?.[role.id] || "" }));
         if (isClientMicrophoneMuted(client, state)) {
             client.is_speaking = false;
             videoSpeaking(client.client_id, false);
@@ -1435,8 +1447,9 @@ window.runtime.EventsOn("event", (json) => {
                 existing.unique_id = d.unique_id ?? existing.unique_id;
                 existing.nickname = d.nickname ?? existing.nickname;
                 existing.channel_id = joinedChannel;
+                existing.on_mobile = !!d.on_mobile;
             } else {
-                state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, is_speaking: false });
+                state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, is_speaking: false, on_mobile: !!d.on_mobile });
             }
             if (d.client_id !== state.myClientID) {
                 chatUI.sysJoinLeave(d.nickname || d.unique_id || "someone", "joined"); // (130/131)
@@ -1668,6 +1681,10 @@ window.runtime.EventsOn("event", (json) => {
             return;
         case "chat_deleted":
             chatUI.onChatDeleted(d);
+            return;
+        // An edit or deletion of a direct message (never a new message).
+        case "dm_changed":
+            chatUI.onDMChanged(d);
             return;
         case "chat_pinned":
             chatUI.onChatPinned(d, true);
@@ -3363,6 +3380,7 @@ initVideo();
 initUpdater();
 initPermsUI(); // roles-v1 access and moderation UI
 initFilesUI(); // wave-7 file browser/transfers (registers window.__noxaFiles)
+initMobileAnnouncement();
 initTabs();    // wave-8a server tabs (registers window.__noxaTabs)
 initSocialUI(); // wave-8b presence/contacts/hover (registers window.__noxaSocial)
 initMetaUI();   // wave-8b debug/stats/onboarding (registers window.__noxaMeta)

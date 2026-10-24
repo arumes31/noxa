@@ -239,7 +239,12 @@ func (m *connManager) privateCallPeerKey(callID, target string, ownPub [32]byte)
 		return [32]byte{}, errors.New("invalid call device key binding")
 	}
 	for _, participant := range call.Participants {
-		if _, err := e2ee.ParseKeyRecord(participant.PublicKey, participant.UniqueID); err != nil || participant.ClientID == "" {
+		if participant.State != "accepted" {
+			continue // a callee ringing on several devices binds on answer
+		}
+		_, recordErr := e2ee.ParseKeyRecord(participant.PublicKey, participant.UniqueID)
+		_, deviceKey := parseDeviceX25519(participant.PublicKey)
+		if participant.ClientID == "" || (recordErr != nil && (participant.DeviceID == "" || !deviceKey)) {
 			return [32]byte{}, errors.New("invalid call participant encryption key")
 		}
 	}
@@ -247,5 +252,29 @@ func (m *connManager) privateCallPeerKey(callID, target string, ownPub [32]byte)
 	if ownErr != nil || localKey != ownPub {
 		return [32]byte{}, errors.New("call belongs to another encryption device")
 	}
+	if _, err := e2ee.ParseKeyRecord(peer.PublicKey, target); err != nil && peer.DeviceID != "" {
+		return m.verifyCallDeviceKey(target, peer.DeviceID, peer.PublicKey)
+	}
 	return m.verifyPeerRecord(target, peer.PublicKey, true)
+}
+
+// verifyCallDeviceKey accepts a device-bound call key (a phone answered)
+// only when the device is in the peer's trusted device list.
+func (m *connManager) verifyCallDeviceKey(uid, deviceID, encoded string) ([32]byte, error) {
+	key, ok := parseDeviceX25519(encoded)
+	if !ok {
+		return [32]byte{}, errors.New("invalid call participant encryption key")
+	}
+	for _, force := range []bool{false, true} {
+		devices, err := m.dmDeviceList(uid, force)
+		if err != nil {
+			return [32]byte{}, err
+		}
+		for _, d := range devices {
+			if d.DeviceID == deviceID && d.X25519 == key {
+				return key, nil
+			}
+		}
+	}
+	return [32]byte{}, errors.New("the answering device is not confirmed for this contact")
 }

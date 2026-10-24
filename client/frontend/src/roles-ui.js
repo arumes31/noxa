@@ -74,7 +74,7 @@ export function openRolesManager() {
         model.dirty = false;
     };
     const commit = async (change) => {
-        if (!current() || model.busy || model.needsRefresh) return;
+        if (!current() || model.busy || model.needsRefresh || model.imagePending?.draft === model.draft) return;
         model.busy = true;
         error.textContent = "";
         render();
@@ -118,7 +118,7 @@ export function openRolesManager() {
         commit({ kind: "role_delete", role_id: id });
     });
     const updateButtons = () => {
-        save.disabled = model.busy || !model.dirty || !model.draft?.name.trim() || model.needsRefresh;
+        save.disabled = model.imagePending?.draft === model.draft || model.busy || !model.dirty || !model.draft?.name.trim() || model.needsRefresh;
         discard.disabled = model.busy || !model.dirty;
         create.disabled = model.busy || !model.snapshot || model.needsRefresh;
         refreshButton.disabled = model.busy;

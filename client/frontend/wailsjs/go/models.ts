@@ -319,6 +319,7 @@ export namespace authorization {
 	    position: number;
 	    color: string;
 	    icon: string;
+	    icon_image?: string;
 	    hoist: boolean;
 	    mentionable: boolean;
 	    deletion_protected: boolean;
@@ -335,6 +336,7 @@ export namespace authorization {
 	        this.position = source["position"];
 	        this.color = source["color"];
 	        this.icon = source["icon"];
+	        this.icon_image = source["icon_image"];
 	        this.hoist = source["hoist"];
 	        this.mentionable = source["mentionable"];
 	        this.deletion_protected = source["deletion_protected"];
@@ -1303,6 +1305,8 @@ export namespace main {
 		}
 	}
 	export class SessionInfo {
+	    mobile_account_key: string;
+	    mobile_available: boolean;
 	    authorization_model: string;
 	    client_id: string;
 	    nickname: string;
@@ -1317,6 +1321,8 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.authorization_model = source["authorization_model"];
+	        this.mobile_available = source["mobile_available"];
+	        this.mobile_account_key = source["mobile_account_key"];
 	        this.client_id = source["client_id"];
 	        this.nickname = source["nickname"];
 	        this.is_guest = source["is_guest"];

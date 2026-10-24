@@ -127,6 +127,9 @@ type App struct {
 	// dmMu serialises the local DM logs — every append rewrites a whole
 	// file, so two concurrent DMs with one peer would otherwise lose one (122).
 	dmMu sync.Mutex
+	// dmPending holds direct-message edits and deletions whose original has
+	// not reached the local log yet (guarded by dmMu, see dm_changes.go).
+	dmPending dmPendingChanges
 
 	// identityMu serializes identity-store reads and mutations. Identity files
 	// are account credentials, so interleaving a switch/regeneration/delete

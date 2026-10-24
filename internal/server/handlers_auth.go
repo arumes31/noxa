@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -301,6 +303,24 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	client.authSigningKey = msg.PublicKey
 	client.mu.Unlock()
 
+	// A linked device signs in as the account that approved it.
+	if principal, userID, ok, err := s.deviceLoginPrincipal(ctx, msg.PublicKey); errors.Is(err, errDeviceRevoked) {
+		attempt.Fail()
+		s.metricsSink().IncAuthFailure("tcp", "device_revoked")
+		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "this device was signed out; link it again"})
+	} else if err != nil {
+		s.logger.Warn("device lookup failed", zap.String("client_id", client.ID), zap.Error(err))
+		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
+	} else if ok && principal != uniqueID {
+		attempt.Succeed(principalScope)
+		if userID > 0 {
+			return s.completeAuth(ctx, client, principal, nickname)
+		}
+		// Linked guests keep their key-derived principal. The device key
+		// derives a different ID, so it is never used for role enrollment.
+		return s.completeGuestAuth(ctx, client, principal, nickname)
+	}
+
 	// Registered user with this identity? Then it is a normal login.
 	if _, err := s.deps.Auth.LookupUser(ctx, uniqueID); err == nil {
 		attempt.Succeed(principalScope)
@@ -360,25 +380,37 @@ func (s *TCPServer) banRejectReason(ctx context.Context, client *Client, uniqueI
 	return reason, nil
 }
 
-// dedupeNickname appends #2, #3, ... when the nickname is already taken by
-// an online client.
-func (s *TCPServer) dedupeNickname(nickname string) string {
+// dedupeNickname gives web sessions their own #M1, #M2 namespace. The caller
+// holds roleMetadataMu so allocation and publication are atomic.
+func (s *TCPServer) dedupeNickname(nickname string, mobile bool, exclude string) string {
+	// #M<number> is a server-assigned session suffix, not part of the base name.
+	if mobile {
+		if at := strings.LastIndex(nickname, "#M"); at > 0 {
+			if n, err := strconv.Atoi(nickname[at+2:]); err == nil && n > 0 {
+				nickname = nickname[:at]
+			}
+		}
+	}
 	taken := make(map[string]bool)
 	s.mu.RLock()
 	for _, c := range s.clients {
 		c.mu.RLock()
-		if c.authed {
+		if c.authed && c.ID != exclude {
 			taken[c.Username] = true
 		}
 		c.mu.RUnlock()
 	}
 	s.mu.RUnlock()
 
-	if !taken[nickname] {
+	if !mobile && !taken[nickname] {
 		return nickname
 	}
-	for i := 2; ; i++ {
-		suffix := fmt.Sprintf("#%d", i)
+	start, format := 2, "#%d"
+	if mobile {
+		start, format = 1, "#M%d"
+	}
+	for i := start; ; i++ {
+		suffix := fmt.Sprintf(format, i)
 		base := []rune(nickname)
 		if limit := netproto.MaxDisplayNameLength - len(suffix); len(base) > limit {
 			base = base[:limit]

@@ -52,6 +52,7 @@ func (s *Server) roleUnaryAuth(ctx context.Context, req any, info *grpc.UnarySer
 		identifier, password = request.GetUsername(), request.GetPassword()
 	case noxav1.Control_ListChannels_FullMethodName, noxav1.Control_ChangeRoles_FullMethodName, noxav1.Control_ChangeChannel_FullMethodName, noxav1.Control_SetMemberVoice_FullMethodName, noxav1.Control_MoveMember_FullMethodName, noxav1.Control_DisconnectMember_FullMethodName, noxav1.Control_KickMember_FullMethodName, noxav1.Control_BanMember_FullMethodName,
 		noxav1.Control_GetServerInfo_FullMethodName, noxav1.Control_GetClientInfo_FullMethodName, noxav1.Control_GetServerConfig_FullMethodName, noxav1.Control_GetMediaLimits_FullMethodName, noxav1.Control_SetMediaLimits_FullMethodName, noxav1.Control_ListBans_FullMethodName,
+		noxav1.Control_ListDevices_FullMethodName, noxav1.Control_RevokeDevice_FullMethodName, noxav1.Control_ResetDevices_FullMethodName,
 		noxav1.Control_GetRoleState_FullMethodName, noxav1.Control_ListRoleMembers_FullMethodName, noxav1.Control_CheckAccess_FullMethodName, noxav1.Control_GetChannelOptions_FullMethodName,
 		noxav1.Control_ListClients_FullMethodName, noxav1.Control_GetChannelInfo_FullMethodName, noxav1.Control_ListAuditLog_FullMethodName,
 		noxav1.Control_ListComplaints_FullMethodName, noxav1.Control_ClearComplaints_FullMethodName, noxav1.Control_GetServerRules_FullMethodName, noxav1.Control_SetServerConfig_FullMethodName,

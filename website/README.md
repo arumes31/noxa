@@ -1,9 +1,12 @@
 # noXa product website
 
 A static product and Windows-download page based on the supplied Signature
-design (concept 25). The public site is intended for
-<https://arumes31.github.io/noxa/>. GitHub Pages hosts the website; client
-downloads remain on GitHub Releases, and noXa servers run separately.
+design (concept 25), updated to the client’s OLED Midnight palette. The public site is intended for
+<https://arumes31.github.io/noxa/> and the root of
+<https://noxa.wowcraft.pw/>. Both publish the same static files. The latter
+origin redirects `/dl/noxa-client-windows-amd64.exe` to the latest Windows
+release on GitHub
+and launches the mobile PWA at `/app/`, all through HTTPS port 443.
 
 ## Files and local preview
 
@@ -55,7 +58,7 @@ outside the published directory.
 
 `public/assets/screenshots/app-chat.png` and `app-roles.png` are captures of
 the actual noXa frontend at application commit
-`c2697e44a45172f9055063b90f00bac234657029`. They use fictional local demo
+`324da2863988e509ab58ff626d17267acb5e073c`. They use fictional local demo
 messages, members, channels, roles, and the reserved `community.example`
 hostname. The page identifies the images as demo data. They are browser
 captures with native API fixtures, not a connection to a production server
@@ -87,11 +90,17 @@ Update the application commit recorded above when replacing these captures.
 Every Windows download points to:
 
 ```text
-https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe
+https://noxa.wowcraft.pw/dl/noxa-client-windows-amd64.exe
 ```
 
 The release marked **Latest** must contain an asset named exactly
 `noxa-client-windows-amd64.exe`. This is the Windows x64 client, not the server.
+The reverse proxy returns a temporary redirect to
+`https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe`.
+The executable stays on GitHub; no server-side copy is maintained. Existing authenticated
+file transfers under `/dl/` keep their capability checks; the public Windows
+installer is an exact route exception.
+
 Changing the release asset name requires updating the page and its download
 tests together. No release version is embedded in the page, and download links
 do not require browser-side API calls or JavaScript.

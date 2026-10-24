@@ -630,3 +630,43 @@ test("four simultaneous cues at maximum gain retain headroom in real WebAudio", 
     expect(result[2]).toBeLessThanOrEqual(.921);
     expect(result[2]).toBeCloseTo(result[1] * 2, 4);
 });
+
+test("channel messages ring in the background and at most every five minutes while focused", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const state = { activeTabID: "chat", settings: { play_sounds: true, sound_volume: 100, effects_enabled: true,
+            notify_matrix: { channel_message: { toast: false, sound: true, flash: false, native: false },
+                dm: { toast: false, sound: true, flash: false, native: false } },
+            event_sounds: {}, channel_notify: {} } };
+        window.__noxa = { state, toast() {}, announceLive() {} };
+        window.__noxaPolish = { dndActive: () => false, recordNotification() {} };
+        let focused = true, clock = 1_000_000;
+        Object.defineProperty(document, "hasFocus", { configurable: true, value: () => focused });
+        Date.now = () => clock;
+        const { soundEngine } = await import("/src/sounds.js");
+        const { notify } = await import("/src/notifications.js");
+        await soundEngine.preload(); await soundEngine.resume();
+        const played = [], play = soundEngine.play.bind(soundEngine);
+        soundEngine.play = (id, options) => { const ok = play(id, options); if (ok) played.push(id); return ok; };
+        const rang = [];
+        const send = async (label, minutes, inFocus = true) => {
+            clock += minutes * 60_000; focused = inFocus;
+            state.activeTabID = "chat:" + label; // fresh scope: no engine cooldown
+            const before = played.length;
+            notify("channel_message", label, { channelID: 7 });
+            await new Promise(resolve => setTimeout(resolve, 30));
+            if (played.length > before) rang.push(label);
+        };
+        await send("first", 0);
+        await send("focused +1m", 1);
+        await send("focused +4.9m", 3.9);
+        await send("background", .05, false);
+        await send("background again", .05, false);
+        await send("focused after background", 1);
+        await send("focused +5m", 5.1);
+        notify("dm", "hello", {});
+        await soundEngine.dispose();
+        return { rang, dm: played.includes("dm") };
+    });
+    expect(result.rang).toEqual(["first", "background", "background again", "focused +5m"]);
+    expect(result.dm).toBe(true);
+});

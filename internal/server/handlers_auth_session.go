@@ -36,7 +36,10 @@ func (s *TCPServer) completeAuth(ctx context.Context, client *Client, uniqueID, 
 // completeAuthForUser finishes authentication for an already-resolved user
 // record. A display name never changes the canonical account identity.
 func (s *TCPServer) completeAuthForUser(ctx context.Context, client *Client, user *auth.User, displayName string) error {
-	nickname := user.Nickname
+	nickname := user.DisplayName
+	if nickname == "" {
+		nickname = user.Nickname
+	}
 	if displayName != "" {
 		nickname = displayName
 	}
@@ -114,6 +117,13 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		if rejection != "" {
 			return authorization.ErrRoleForbidden
 		}
+		rejection, err = s.sessionDeviceRejection(ctx, client)
+		if err != nil {
+			return err
+		}
+		if rejection != "" {
+			return authorization.ErrRoleForbidden
+		}
 		// A role manager may have enrolled this proven identity while its
 		// handshake waited for the policy gate. Join with the committed member
 		// ID instead of publishing a second session with guest permissions.
@@ -125,14 +135,20 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 				return err
 			}
 		}
+		if id.guest && client.isWebTransport() {
+			if allowed, _ := s.WebGuestLoginPolicy(); !allowed {
+				rejection = "guest login is disabled on this server"
+				return authorization.ErrRoleForbidden
+			}
+		}
 		// Metadata serialization makes capacity check and publication atomic.
 		// Idle sockets are deliberately excluded from the configured user limit.
 		if max := s.EffectiveMaxClients(ctx); max > 0 && s.authenticatedClientCount() >= max {
 			rejection = "server is full"
 			return authorization.ErrRoleForbidden
 		}
-		if id.customName {
-			id.nickname = s.dedupeNickname(id.nickname)
+		if id.customName || client.isWebTransport() {
+			id.nickname = s.dedupeNickname(id.nickname, client.isWebTransport(), "")
 		}
 		client.setIdentity(id.uniqueID, id.nickname, id.userID, id.bot)
 		s.publishAuthenticatedSession(ctx, client, id)
@@ -179,10 +195,17 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		UniqueID:           id.uniqueID,
 		Nickname:           id.nickname,
 		TLSFingerprint:     s.tlsFingerprint,
-		Capabilities:       []string{netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity},
+		Capabilities:       []string{netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity},
 	}
 	if s.deps.Relay != nil {
 		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityManagedRelay)
+	}
+	if s.deps.Devices != nil {
+		if s.cfg.Web.Enabled {
+			resp.Capabilities = append(resp.Capabilities, netproto.CapabilityWebLogin)
+		}
+		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityDevices, netproto.CapabilityDMDevices)
+		resp.DeviceID = s.attachSessionDevice(ctx, client, id.uniqueID)
 	}
 	if s.deps.ICEServers != nil {
 		resp.ICEServers = s.deps.ICEServers(id.uniqueID)
@@ -237,6 +260,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 			ClientID: client.ID,
 			UniqueID: id.uniqueID,
 			Nickname: id.nickname,
+			OnMobile: client.isWebTransport(),
 		})
 		return nil
 	})
@@ -250,7 +274,7 @@ func (s *TCPServer) publishAuthenticatedSession(ctx context.Context, client *Cli
 		s.deps.Relay.Register(client.ID, id.uniqueID)
 	}
 	if s.deps.State != nil {
-		s.deps.State.AddClient(&state.Client{ClientID: client.ID, UserID: id.userID, UniqueID: id.uniqueID, Nickname: id.nickname, ConnectedAt: time.Now(), Conn: client.Conn, IsBot: s.ClientIsBot(ctx, client)})
+		s.deps.State.AddClient(&state.Client{ClientID: client.ID, UserID: id.userID, UniqueID: id.uniqueID, Nickname: id.nickname, ConnectedAt: time.Now(), Conn: client.Conn, IsBot: s.ClientIsBot(ctx, client), OnMobile: client.isWebTransport()})
 		if x := client.x25519(); x != "" {
 			s.deps.State.SetE2EPublicKey(client.ID, x)
 		}

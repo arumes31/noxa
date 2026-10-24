@@ -609,6 +609,14 @@ type SpooledMessage struct {
 	SenderPublicKey    string
 	RecipientPublicKey string
 	ClientMsgID        string
+	// Per-device copies (dm_devices_v1); empty for account-wide rows.
+	SenderDeviceID    string
+	RecipientDeviceID string
+	// DMAction and RefClientMsgID mark an edit or deletion.
+	DMAction       string
+	RefClientMsgID string
+	// PeerUniqueID is the account a direct message was addressed to.
+	PeerUniqueID string
 }
 
 // DMKeyBinding identifies the device keys used for an encrypted direct message.
@@ -617,6 +625,14 @@ type DMKeyBinding struct {
 	SenderPublicKey    string
 	RecipientPublicKey string
 	ClientMsgID        string
+	// SenderDeviceID and RecipientDeviceID route a per-device copy.
+	SenderDeviceID    string
+	RecipientDeviceID string
+	// DMAction and RefClientMsgID mark an edit or deletion.
+	DMAction       string
+	RefClientMsgID string
+	// PeerUniqueID is the account the message was addressed to.
+	PeerUniqueID string
 }
 
 // SpoolMessage stores an offline message for later delivery. For E2EE direct
@@ -632,10 +648,12 @@ func (s *Store) SpoolMessage(ctx context.Context, fromUserID, toUserID int64, fr
 		binding = bindings[0]
 	}
 	const q = `INSERT INTO offline_messages
-	          (from_user_id, to_user_id, from_unique_id, message, sender_public_key, recipient_public_key, client_msg_id)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7)`
+	          (from_user_id, to_user_id, from_unique_id, message, sender_public_key, recipient_public_key, client_msg_id,
+	           from_device_id, to_device_id, dm_action, ref_client_msg_id, peer_unique_id)
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
 	if _, err := s.db.ExecContext(ctx, q, fromUserID, toUserID, fromUniqueID, message,
-		binding.SenderPublicKey, binding.RecipientPublicKey, binding.ClientMsgID); err != nil {
+		binding.SenderPublicKey, binding.RecipientPublicKey, binding.ClientMsgID,
+		binding.SenderDeviceID, binding.RecipientDeviceID, binding.DMAction, binding.RefClientMsgID, binding.PeerUniqueID); err != nil {
 		return fmt.Errorf("spooling offline message: %w", err)
 	}
 	return nil
@@ -645,7 +663,8 @@ func (s *Store) SpoolMessage(ctx context.Context, fromUserID, toUserID int64, fr
 // first.
 func (s *Store) PendingMessages(ctx context.Context, toUserID int64) ([]SpooledMessage, error) {
 	const q = `SELECT om.id, om.from_user_id, om.from_unique_id, COALESCE(u.nickname, ''), om.message, om.sent_at,
-	                 om.sender_public_key, om.recipient_public_key, om.client_msg_id
+	                 om.sender_public_key, om.recipient_public_key, om.client_msg_id, om.from_device_id, om.to_device_id,
+	                 om.dm_action, om.ref_client_msg_id, om.peer_unique_id
 	          FROM offline_messages om
 	          LEFT JOIN users u ON u.id = om.from_user_id
 	          WHERE om.to_user_id = $1 AND om.delivered_at IS NULL
@@ -660,7 +679,8 @@ func (s *Store) PendingMessages(ctx context.Context, toUserID int64) ([]SpooledM
 	for rows.Next() {
 		var m SpooledMessage
 		if err := rows.Scan(&m.ID, &m.FromUserID, &m.FromUniqueID, &m.FromName, &m.Message, &m.SentAt,
-			&m.SenderPublicKey, &m.RecipientPublicKey, &m.ClientMsgID); err != nil {
+			&m.SenderPublicKey, &m.RecipientPublicKey, &m.ClientMsgID, &m.SenderDeviceID, &m.RecipientDeviceID,
+			&m.DMAction, &m.RefClientMsgID, &m.PeerUniqueID); err != nil {
 			return nil, fmt.Errorf("scanning offline message: %w", err)
 		}
 		out = append(out, m)

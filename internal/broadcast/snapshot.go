@@ -20,6 +20,8 @@ import (
 // omits the net.Conn field so snapshots can be safely marshaled and sent over
 // the wire.
 type ClientInfo struct {
+	IsGuest bool `json:"is_guest"` // includes key-derived guests; never infer from unique_id
+
 	UserID      int64                          `json:"-"`
 	Roles       []authorization.RoleAppearance `json:"roles,omitempty"`
 	ClientID    string                         `json:"client_id"`
@@ -44,6 +46,8 @@ type ClientInfo struct {
 	StatusMessage string `json:"status_message,omitempty"`
 	// IsBot is display-only account identity metadata in role mode.
 	IsBot bool `json:"is_bot,omitempty"`
+	// OnMobile marks a session of the mobile web app.
+	OnMobile bool `json:"on_mobile,omitempty"`
 }
 
 // ChannelNode represents a single channel in the tree snapshot. It embeds the
@@ -78,8 +82,10 @@ type OwnChannelMove struct {
 // TreeSnapshot is the full nested view of the server's channel tree and the
 // users currently connected.
 type TreeSnapshot struct {
-	SupportsVoiceQueue bool            `json:"supports_voice_queue"`
-	OwnChannelMove     *OwnChannelMove `json:"own_channel_move,omitempty"`
+	// Shared once per snapshot, and only for roles of visible members.
+	RoleIcons          map[int64]string `json:"role_icons,omitempty"`
+	SupportsVoiceQueue bool             `json:"supports_voice_queue"`
+	OwnChannelMove     *OwnChannelMove  `json:"own_channel_move,omitempty"`
 	// OwnAuthority describes the recipient's authority, independently of cosmetic roles.
 	OwnAuthority string `json:"own_authority,omitempty"`
 	// CanSetInvisible is recipient-specific role authority, never a legacy admin flag.
@@ -103,6 +109,7 @@ func clientToInfo(c *state.Client) ClientInfo {
 	return ClientInfo{
 		ClientID:        c.ClientID,
 		UserID:          c.UserID,
+		IsGuest:         c.UserID == 0,
 		UniqueID:        c.UniqueID,
 		Nickname:        c.Nickname,
 		ChannelID:       c.ChannelID,
@@ -120,6 +127,7 @@ func clientToInfo(c *state.Client) ClientInfo {
 		Status:          c.Status,
 		StatusMessage:   c.StatusMessage,
 		IsBot:           c.IsBot,
+		OnMobile:        c.OnMobile,
 	}
 }
 

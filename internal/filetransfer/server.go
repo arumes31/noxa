@@ -1223,6 +1223,23 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 }
 
+// ErrConnectionRejected reports a closed server or full connection slots.
+var ErrConnectionRejected = errors.New("file transfer connection rejected")
+
+// ServeExternalConn runs one transfer on a connection accepted by another
+// listener, such as a WebSocket from the mobile web app. The same slots,
+// pre-auth limits and token checks apply as on the TCP port. It blocks until
+// the transfer ends and always closes conn.
+func (s *Server) ServeExternalConn(ctx context.Context, conn net.Conn) error {
+	if !s.admit(conn) {
+		_ = conn.Close()
+		return ErrConnectionRejected
+	}
+	defer s.release(conn)
+	s.serve(ctx, conn)
+	return nil
+}
+
 // admit reserves one bounded connection slot and registers conn before its
 // worker starts. Close can therefore close every blocking accepted connection
 // without racing an admission that would escape its snapshot.

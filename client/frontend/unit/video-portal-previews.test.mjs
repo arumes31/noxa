@@ -15,7 +15,8 @@ test("Whatnot show, share, profile and home links are supported", () => {
 test("portal parser rejects unrelated hosts, credentials, invalid IDs and non-video pages", () => {
  for (const url of ["https://twitch.tv.evil.test/twitch","https://user@www.twitch.tv/twitch","https://twitch.tv:8443/twitch","https://twitch.tv/directory","https://vimeo.com/0","https://vimeo.com/login","https://dai.ly/x84sh87%2Fprivate","https://www.whatnot.com/api/private","https://www.whatnot.com/live/not-a-uuid","https://whatnot.com.evil.test/s/Zz64h7wC","javascript:alert(1)",null]) assert.equal(videoPortal(url),null,String(url));
 });
-test("only official provider image CDNs are accepted", () => {
- for (const [provider,url] of [["twitch","https://static-cdn.jtvnw.net/image.jpg"],["vimeo","https://i.vimeocdn.com/video/image.jpg"],["dailymotion","https://s2.dmcdn.net/image.jpg"],["whatnot","https://images.whatnot.com/image.jpg"]]) assert.equal(portalThumbnail(provider,url),url);
- for (const url of ["http://images.whatnot.com/image.jpg","https://images.whatnot.com.evil.test/image.jpg","https://user@images.whatnot.com/image.jpg","https://images.whatnot.com:8443/image.jpg","https://127.0.0.1/image.jpg"]) assert.equal(portalThumbnail("whatnot",url),null);
+test("only server-transcoded preview bytes are accepted, never CDN URLs or executable formats", () => {
+ const jpeg="data:image/jpeg;base64,/9j/2Q==";
+ assert.equal(portalThumbnail("youtube",jpeg),jpeg);
+ for(const value of ["https://i.ytimg.com/image.jpg","https://images.whatnot.com/image.jpg","data:image/svg+xml,<svg/>","data:text/html;base64,AAAA","javascript:alert(1)",jpeg+"<", "data:image/jpeg;base64,"+"A".repeat(280001)]) assert.equal(portalThumbnail("whatnot",value),null);
 });

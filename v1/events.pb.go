@@ -35,21 +35,24 @@ const (
 	EventType_EVENT_TYPE_USER_BANNED     EventType = 8
 	// roles-v1 structural updates replace the entire filtered discovery state.
 	EventType_EVENT_TYPE_ROLE_SNAPSHOT EventType = 9
+	// Linked-device changes; only for administrators, only when requested.
+	EventType_EVENT_TYPE_DEVICE_CHANGED EventType = 10
 )
 
 // Enum value maps for EventType.
 var (
 	EventType_name = map[int32]string{
-		0: "EVENT_TYPE_UNSPECIFIED",
-		1: "EVENT_TYPE_USER_JOINED",
-		2: "EVENT_TYPE_USER_LEFT",
-		3: "EVENT_TYPE_USER_SPEAKING",
-		4: "EVENT_TYPE_CHANNEL_CREATED",
-		5: "EVENT_TYPE_CHANNEL_DELETED",
-		6: "EVENT_TYPE_USER_MOVED",
-		7: "EVENT_TYPE_USER_KICKED",
-		8: "EVENT_TYPE_USER_BANNED",
-		9: "EVENT_TYPE_ROLE_SNAPSHOT",
+		0:  "EVENT_TYPE_UNSPECIFIED",
+		1:  "EVENT_TYPE_USER_JOINED",
+		2:  "EVENT_TYPE_USER_LEFT",
+		3:  "EVENT_TYPE_USER_SPEAKING",
+		4:  "EVENT_TYPE_CHANNEL_CREATED",
+		5:  "EVENT_TYPE_CHANNEL_DELETED",
+		6:  "EVENT_TYPE_USER_MOVED",
+		7:  "EVENT_TYPE_USER_KICKED",
+		8:  "EVENT_TYPE_USER_BANNED",
+		9:  "EVENT_TYPE_ROLE_SNAPSHOT",
+		10: "EVENT_TYPE_DEVICE_CHANGED",
 	}
 	EventType_value = map[string]int32{
 		"EVENT_TYPE_UNSPECIFIED":     0,
@@ -62,6 +65,7 @@ var (
 		"EVENT_TYPE_USER_KICKED":     7,
 		"EVENT_TYPE_USER_BANNED":     8,
 		"EVENT_TYPE_ROLE_SNAPSHOT":   9,
+		"EVENT_TYPE_DEVICE_CHANGED":  10,
 	}
 )
 
@@ -95,8 +99,9 @@ func (EventType) EnumDescriptor() ([]byte, []int) {
 type SubscribeEventsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Optional filter of event types to receive; empty means all.
-	// roles-v1 accepts ROLE_SNAPSHOT, optionally with USER_SPEAKING. Snapshots
-	// are required to reconcile membership, visibility and speaking revocation.
+	// roles-v1 accepts ROLE_SNAPSHOT, optionally with USER_SPEAKING and
+	// DEVICE_CHANGED. Snapshots are required to reconcile membership,
+	// visibility and speaking revocation. Device events are never implied.
 	EventTypes    []EventType `protobuf:"varint,1,rep,packed,name=event_types,json=eventTypes,proto3,enum=voicx.v1.EventType" json:"event_types,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -156,6 +161,7 @@ type Event struct {
 	//	*Event_UserKicked
 	//	*Event_UserBanned
 	//	*Event_RoleSnapshot
+	//	*Event_DeviceChanged
 	Payload       isEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -300,6 +306,15 @@ func (x *Event) GetRoleSnapshot() *RoleSnapshotEvent {
 	return nil
 }
 
+func (x *Event) GetDeviceChanged() *DeviceChangedEvent {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_DeviceChanged); ok {
+			return x.DeviceChanged
+		}
+	}
+	return nil
+}
+
 type isEvent_Payload interface {
 	isEvent_Payload()
 }
@@ -340,6 +355,10 @@ type Event_RoleSnapshot struct {
 	RoleSnapshot *RoleSnapshotEvent `protobuf:"bytes,18,opt,name=role_snapshot,json=roleSnapshot,proto3,oneof"`
 }
 
+type Event_DeviceChanged struct {
+	DeviceChanged *DeviceChangedEvent `protobuf:"bytes,19,opt,name=device_changed,json=deviceChanged,proto3,oneof"`
+}
+
 func (*Event_UserJoined) isEvent_Payload() {}
 
 func (*Event_UserLeft) isEvent_Payload() {}
@@ -358,6 +377,80 @@ func (*Event_UserBanned) isEvent_Payload() {}
 
 func (*Event_RoleSnapshot) isEvent_Payload() {}
 
+func (*Event_DeviceChanged) isEvent_Payload() {}
+
+// DeviceChangedEvent reports a linked, revoked or reset device. It never
+// carries key material.
+type DeviceChangedEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// "linked", "revoked" or "passkey_added".
+	Action   string        `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"`
+	UniqueId string        `protobuf:"bytes,2,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	Device   *DeviceRecord `protobuf:"bytes,3,opt,name=device,proto3" json:"device,omitempty"`
+	// Revocations: "user", "admin_reset", "idle" or "integration".
+	Reason        string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceChangedEvent) Reset() {
+	*x = DeviceChangedEvent{}
+	mi := &file_events_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceChangedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceChangedEvent) ProtoMessage() {}
+
+func (x *DeviceChangedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_events_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceChangedEvent.ProtoReflect.Descriptor instead.
+func (*DeviceChangedEvent) Descriptor() ([]byte, []int) {
+	return file_events_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *DeviceChangedEvent) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *DeviceChangedEvent) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *DeviceChangedEvent) GetDevice() *DeviceRecord {
+	if x != nil {
+		return x.Device
+	}
+	return nil
+}
+
+func (x *DeviceChangedEvent) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 type UserJoinedEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ChannelId     string                 `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
@@ -369,7 +462,7 @@ type UserJoinedEvent struct {
 
 func (x *UserJoinedEvent) Reset() {
 	*x = UserJoinedEvent{}
-	mi := &file_events_proto_msgTypes[2]
+	mi := &file_events_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -381,7 +474,7 @@ func (x *UserJoinedEvent) String() string {
 func (*UserJoinedEvent) ProtoMessage() {}
 
 func (x *UserJoinedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_events_proto_msgTypes[2]
+	mi := &file_events_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -394,7 +487,7 @@ func (x *UserJoinedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserJoinedEvent.ProtoReflect.Descriptor instead.
 func (*UserJoinedEvent) Descriptor() ([]byte, []int) {
-	return file_events_proto_rawDescGZIP(), []int{2}
+	return file_events_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *UserJoinedEvent) GetChannelId() string {
@@ -429,7 +522,7 @@ type UserLeftEvent struct {
 
 func (x *UserLeftEvent) Reset() {
 	*x = UserLeftEvent{}
-	mi := &file_events_proto_msgTypes[3]
+	mi := &file_events_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -441,7 +534,7 @@ func (x *UserLeftEvent) String() string {
 func (*UserLeftEvent) ProtoMessage() {}
 
 func (x *UserLeftEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_events_proto_msgTypes[3]
+	mi := &file_events_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -454,7 +547,7 @@ func (x *UserLeftEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserLeftEvent.ProtoReflect.Descriptor instead.
 func (*UserLeftEvent) Descriptor() ([]byte, []int) {
-	return file_events_proto_rawDescGZIP(), []int{3}
+	return file_events_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *UserLeftEvent) GetChannelId() string {
@@ -489,7 +582,7 @@ type UserSpeakingEvent struct {
 
 func (x *UserSpeakingEvent) Reset() {
 	*x = UserSpeakingEvent{}
-	mi := &file_events_proto_msgTypes[4]
+	mi := &file_events_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -501,7 +594,7 @@ func (x *UserSpeakingEvent) String() string {
 func (*UserSpeakingEvent) ProtoMessage() {}
 
 func (x *UserSpeakingEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_events_proto_msgTypes[4]
+	mi := &file_events_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -514,7 +607,7 @@ func (x *UserSpeakingEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserSpeakingEvent.ProtoReflect.Descriptor instead.
 func (*UserSpeakingEvent) Descriptor() ([]byte, []int) {
-	return file_events_proto_rawDescGZIP(), []int{4}
+	return file_events_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *UserSpeakingEvent) GetChannelId() string {
@@ -550,7 +643,7 @@ type ChannelCreatedEvent struct {
 
 func (x *ChannelCreatedEvent) Reset() {
 	*x = ChannelCreatedEvent{}
-	mi := &file_events_proto_msgTypes[5]
+	mi := &file_events_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -562,7 +655,7 @@ func (x *ChannelCreatedEvent) String() string {
 func (*ChannelCreatedEvent) ProtoMessage() {}
 
 func (x *ChannelCreatedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_events_proto_msgTypes[5]
+	mi := &file_events_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -575,7 +668,7 @@ func (x *ChannelCreatedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelCreatedEvent.ProtoReflect.Descriptor instead.
 func (*ChannelCreatedEvent) Descriptor() ([]byte, []int) {
-	return file_events_proto_rawDescGZIP(), []int{5}
+	return file_events_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ChannelCreatedEvent) GetChannelId() string {
@@ -616,7 +709,7 @@ type ChannelDeletedEvent struct {
 
 func (x *ChannelDeletedEvent) Reset() {
 	*x = ChannelDeletedEvent{}
-	mi := &file_events_proto_msgTypes[6]
+	mi := &file_events_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -628,7 +721,7 @@ func (x *ChannelDeletedEvent) String() string {
 func (*ChannelDeletedEvent) ProtoMessage() {}
 
 func (x *ChannelDeletedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_events_proto_msgTypes[6]
+	mi := &file_events_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -641,7 +734,7 @@ func (x *ChannelDeletedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelDeletedEvent.ProtoReflect.Descriptor instead.
 func (*ChannelDeletedEvent) Descriptor() ([]byte, []int) {
-	return file_events_proto_rawDescGZIP(), []int{6}
+	return file_events_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ChannelDeletedEvent) GetChannelId() string {
@@ -670,7 +763,7 @@ type UserMovedEvent struct {
 
 func (x *UserMovedEvent) Reset() {
 	*x = UserMovedEvent{}
-	mi := &file_events_proto_msgTypes[7]
+	mi := &file_events_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -682,7 +775,7 @@ func (x *UserMovedEvent) String() string {
 func (*UserMovedEvent) ProtoMessage() {}
 
 func (x *UserMovedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_events_proto_msgTypes[7]
+	mi := &file_events_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -695,7 +788,7 @@ func (x *UserMovedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserMovedEvent.ProtoReflect.Descriptor instead.
 func (*UserMovedEvent) Descriptor() ([]byte, []int) {
-	return file_events_proto_rawDescGZIP(), []int{7}
+	return file_events_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *UserMovedEvent) GetUserId() string {
@@ -738,7 +831,7 @@ type RoleSnapshotEvent struct {
 
 func (x *RoleSnapshotEvent) Reset() {
 	*x = RoleSnapshotEvent{}
-	mi := &file_events_proto_msgTypes[8]
+	mi := &file_events_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -750,7 +843,7 @@ func (x *RoleSnapshotEvent) String() string {
 func (*RoleSnapshotEvent) ProtoMessage() {}
 
 func (x *RoleSnapshotEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_events_proto_msgTypes[8]
+	mi := &file_events_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -763,7 +856,7 @@ func (x *RoleSnapshotEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RoleSnapshotEvent.ProtoReflect.Descriptor instead.
 func (*RoleSnapshotEvent) Descriptor() ([]byte, []int) {
-	return file_events_proto_rawDescGZIP(), []int{8}
+	return file_events_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RoleSnapshotEvent) GetChannels() []*GetChannelInfoResponse {
@@ -799,7 +892,7 @@ type UserKickedEvent struct {
 
 func (x *UserKickedEvent) Reset() {
 	*x = UserKickedEvent{}
-	mi := &file_events_proto_msgTypes[9]
+	mi := &file_events_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -811,7 +904,7 @@ func (x *UserKickedEvent) String() string {
 func (*UserKickedEvent) ProtoMessage() {}
 
 func (x *UserKickedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_events_proto_msgTypes[9]
+	mi := &file_events_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -824,7 +917,7 @@ func (x *UserKickedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserKickedEvent.ProtoReflect.Descriptor instead.
 func (*UserKickedEvent) Descriptor() ([]byte, []int) {
-	return file_events_proto_rawDescGZIP(), []int{9}
+	return file_events_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *UserKickedEvent) GetChannelId() string {
@@ -868,7 +961,7 @@ type UserBannedEvent struct {
 
 func (x *UserBannedEvent) Reset() {
 	*x = UserBannedEvent{}
-	mi := &file_events_proto_msgTypes[10]
+	mi := &file_events_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -880,7 +973,7 @@ func (x *UserBannedEvent) String() string {
 func (*UserBannedEvent) ProtoMessage() {}
 
 func (x *UserBannedEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_events_proto_msgTypes[10]
+	mi := &file_events_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -893,7 +986,7 @@ func (x *UserBannedEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserBannedEvent.ProtoReflect.Descriptor instead.
 func (*UserBannedEvent) Descriptor() ([]byte, []int) {
-	return file_events_proto_rawDescGZIP(), []int{10}
+	return file_events_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *UserBannedEvent) GetUserId() string {
@@ -938,7 +1031,7 @@ const file_events_proto_rawDesc = "" +
 	"\fevents.proto\x12\bvoicx.v1\x1a\rcontrol.proto\"N\n" +
 	"\x16SubscribeEventsRequest\x124\n" +
 	"\vevent_types\x18\x01 \x03(\x0e2\x13.voicx.v1.EventTypeR\n" +
-	"eventTypes\"\xb2\x05\n" +
+	"eventTypes\"\xf9\x05\n" +
 	"\x05Event\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x13.voicx.v1.EventTypeR\x04type\x12\x1c\n" +
@@ -956,8 +1049,14 @@ const file_events_proto_rawDesc = "" +
 	"userKicked\x12<\n" +
 	"\vuser_banned\x18\x11 \x01(\v2\x19.voicx.v1.UserBannedEventH\x00R\n" +
 	"userBanned\x12B\n" +
-	"\rrole_snapshot\x18\x12 \x01(\v2\x1b.voicx.v1.RoleSnapshotEventH\x00R\froleSnapshotB\t\n" +
-	"\apayload\"l\n" +
+	"\rrole_snapshot\x18\x12 \x01(\v2\x1b.voicx.v1.RoleSnapshotEventH\x00R\froleSnapshot\x12E\n" +
+	"\x0edevice_changed\x18\x13 \x01(\v2\x1c.voicx.v1.DeviceChangedEventH\x00R\rdeviceChangedB\t\n" +
+	"\apayload\"\x91\x01\n" +
+	"\x12DeviceChangedEvent\x12\x16\n" +
+	"\x06action\x18\x01 \x01(\tR\x06action\x12\x1b\n" +
+	"\tunique_id\x18\x02 \x01(\tR\buniqueId\x12.\n" +
+	"\x06device\x18\x03 \x01(\v2\x16.voicx.v1.DeviceRecordR\x06device\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"l\n" +
 	"\x0fUserJoinedEvent\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x17\n" +
@@ -1006,7 +1105,7 @@ const file_events_proto_rawDesc = "" +
 	"\n" +
 	"expires_at\x18\x04 \x01(\x03R\texpiresAt\x12\x1d\n" +
 	"\n" +
-	"channel_id\x18\x05 \x01(\tR\tchannelId*\xac\x02\n" +
+	"channel_id\x18\x05 \x01(\tR\tchannelId*\xcb\x02\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16EVENT_TYPE_USER_JOINED\x10\x01\x12\x18\n" +
@@ -1017,7 +1116,9 @@ const file_events_proto_rawDesc = "" +
 	"\x15EVENT_TYPE_USER_MOVED\x10\x06\x12\x1a\n" +
 	"\x16EVENT_TYPE_USER_KICKED\x10\a\x12\x1a\n" +
 	"\x16EVENT_TYPE_USER_BANNED\x10\b\x12\x1c\n" +
-	"\x18EVENT_TYPE_ROLE_SNAPSHOT\x10\t2J\n" +
+	"\x18EVENT_TYPE_ROLE_SNAPSHOT\x10\t\x12\x1d\n" +
+	"\x19EVENT_TYPE_DEVICE_CHANGED\x10\n" +
+	"2J\n" +
 	"\x06Events\x12@\n" +
 	"\tSubscribe\x12 .voicx.v1.SubscribeEventsRequest\x1a\x0f.voicx.v1.Event0\x01B\x12Z\x10voicx/v1;voicxv1b\x06proto3"
 
@@ -1034,44 +1135,48 @@ func file_events_proto_rawDescGZIP() []byte {
 }
 
 var file_events_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_events_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_events_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_events_proto_goTypes = []any{
 	(EventType)(0),                 // 0: voicx.v1.EventType
 	(*SubscribeEventsRequest)(nil), // 1: voicx.v1.SubscribeEventsRequest
 	(*Event)(nil),                  // 2: voicx.v1.Event
-	(*UserJoinedEvent)(nil),        // 3: voicx.v1.UserJoinedEvent
-	(*UserLeftEvent)(nil),          // 4: voicx.v1.UserLeftEvent
-	(*UserSpeakingEvent)(nil),      // 5: voicx.v1.UserSpeakingEvent
-	(*ChannelCreatedEvent)(nil),    // 6: voicx.v1.ChannelCreatedEvent
-	(*ChannelDeletedEvent)(nil),    // 7: voicx.v1.ChannelDeletedEvent
-	(*UserMovedEvent)(nil),         // 8: voicx.v1.UserMovedEvent
-	(*RoleSnapshotEvent)(nil),      // 9: voicx.v1.RoleSnapshotEvent
-	(*UserKickedEvent)(nil),        // 10: voicx.v1.UserKickedEvent
-	(*UserBannedEvent)(nil),        // 11: voicx.v1.UserBannedEvent
-	(*GetChannelInfoResponse)(nil), // 12: voicx.v1.GetChannelInfoResponse
-	(*VisibleClient)(nil),          // 13: voicx.v1.VisibleClient
+	(*DeviceChangedEvent)(nil),     // 3: voicx.v1.DeviceChangedEvent
+	(*UserJoinedEvent)(nil),        // 4: voicx.v1.UserJoinedEvent
+	(*UserLeftEvent)(nil),          // 5: voicx.v1.UserLeftEvent
+	(*UserSpeakingEvent)(nil),      // 6: voicx.v1.UserSpeakingEvent
+	(*ChannelCreatedEvent)(nil),    // 7: voicx.v1.ChannelCreatedEvent
+	(*ChannelDeletedEvent)(nil),    // 8: voicx.v1.ChannelDeletedEvent
+	(*UserMovedEvent)(nil),         // 9: voicx.v1.UserMovedEvent
+	(*RoleSnapshotEvent)(nil),      // 10: voicx.v1.RoleSnapshotEvent
+	(*UserKickedEvent)(nil),        // 11: voicx.v1.UserKickedEvent
+	(*UserBannedEvent)(nil),        // 12: voicx.v1.UserBannedEvent
+	(*DeviceRecord)(nil),           // 13: voicx.v1.DeviceRecord
+	(*GetChannelInfoResponse)(nil), // 14: voicx.v1.GetChannelInfoResponse
+	(*VisibleClient)(nil),          // 15: voicx.v1.VisibleClient
 }
 var file_events_proto_depIdxs = []int32{
 	0,  // 0: voicx.v1.SubscribeEventsRequest.event_types:type_name -> voicx.v1.EventType
 	0,  // 1: voicx.v1.Event.type:type_name -> voicx.v1.EventType
-	3,  // 2: voicx.v1.Event.user_joined:type_name -> voicx.v1.UserJoinedEvent
-	4,  // 3: voicx.v1.Event.user_left:type_name -> voicx.v1.UserLeftEvent
-	5,  // 4: voicx.v1.Event.user_speaking:type_name -> voicx.v1.UserSpeakingEvent
-	6,  // 5: voicx.v1.Event.channel_created:type_name -> voicx.v1.ChannelCreatedEvent
-	7,  // 6: voicx.v1.Event.channel_deleted:type_name -> voicx.v1.ChannelDeletedEvent
-	8,  // 7: voicx.v1.Event.user_moved:type_name -> voicx.v1.UserMovedEvent
-	10, // 8: voicx.v1.Event.user_kicked:type_name -> voicx.v1.UserKickedEvent
-	11, // 9: voicx.v1.Event.user_banned:type_name -> voicx.v1.UserBannedEvent
-	9,  // 10: voicx.v1.Event.role_snapshot:type_name -> voicx.v1.RoleSnapshotEvent
-	12, // 11: voicx.v1.RoleSnapshotEvent.channels:type_name -> voicx.v1.GetChannelInfoResponse
-	13, // 12: voicx.v1.RoleSnapshotEvent.clients:type_name -> voicx.v1.VisibleClient
-	1,  // 13: voicx.v1.Events.Subscribe:input_type -> voicx.v1.SubscribeEventsRequest
-	2,  // 14: voicx.v1.Events.Subscribe:output_type -> voicx.v1.Event
-	14, // [14:15] is the sub-list for method output_type
-	13, // [13:14] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	4,  // 2: voicx.v1.Event.user_joined:type_name -> voicx.v1.UserJoinedEvent
+	5,  // 3: voicx.v1.Event.user_left:type_name -> voicx.v1.UserLeftEvent
+	6,  // 4: voicx.v1.Event.user_speaking:type_name -> voicx.v1.UserSpeakingEvent
+	7,  // 5: voicx.v1.Event.channel_created:type_name -> voicx.v1.ChannelCreatedEvent
+	8,  // 6: voicx.v1.Event.channel_deleted:type_name -> voicx.v1.ChannelDeletedEvent
+	9,  // 7: voicx.v1.Event.user_moved:type_name -> voicx.v1.UserMovedEvent
+	11, // 8: voicx.v1.Event.user_kicked:type_name -> voicx.v1.UserKickedEvent
+	12, // 9: voicx.v1.Event.user_banned:type_name -> voicx.v1.UserBannedEvent
+	10, // 10: voicx.v1.Event.role_snapshot:type_name -> voicx.v1.RoleSnapshotEvent
+	3,  // 11: voicx.v1.Event.device_changed:type_name -> voicx.v1.DeviceChangedEvent
+	13, // 12: voicx.v1.DeviceChangedEvent.device:type_name -> voicx.v1.DeviceRecord
+	14, // 13: voicx.v1.RoleSnapshotEvent.channels:type_name -> voicx.v1.GetChannelInfoResponse
+	15, // 14: voicx.v1.RoleSnapshotEvent.clients:type_name -> voicx.v1.VisibleClient
+	1,  // 15: voicx.v1.Events.Subscribe:input_type -> voicx.v1.SubscribeEventsRequest
+	2,  // 16: voicx.v1.Events.Subscribe:output_type -> voicx.v1.Event
+	16, // [16:17] is the sub-list for method output_type
+	15, // [15:16] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_events_proto_init() }
@@ -1090,6 +1195,7 @@ func file_events_proto_init() {
 		(*Event_UserKicked)(nil),
 		(*Event_UserBanned)(nil),
 		(*Event_RoleSnapshot)(nil),
+		(*Event_DeviceChanged)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1097,7 +1203,7 @@ func file_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_events_proto_rawDesc), len(file_events_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

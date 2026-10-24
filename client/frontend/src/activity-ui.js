@@ -1,3 +1,4 @@
+import { previewImage } from "./preview-image.js";
 import { mountSnoozeControls } from "./notification-snooze.js";
 import { currentLanguage, t } from "./i18n.js";
 import { parseRuntimeObject } from "./runtime-json.js";
@@ -98,14 +99,18 @@ export function initActivityWorkspace(notifications) {
         const captured = openedScope;
         const valid = () => row.isConnected && current(captured) && state().settings?.link_previews !== false;
         const attach = url => {
-            if (!url || !valid()) return;
+            if (!previewImage(url) || !valid()) return;
             const image = el("img", "activity-thumbnail"); image.alt = ""; image.loading = "lazy"; image.referrerPolicy = "no-referrer";
             image.onerror = () => image.remove(); image.src = url; row.append(image);
         };
         queueMicrotask(() => {
             if (!valid()) return;
-            if (preview.thumbnail) attach(preview.thumbnail);
-            else if (!["youtube", "x"].includes(preview.provider)) {
+            if (preview.provider === "youtube") {
+                const owner = { tabID: state().activeTabID, generation: state().serverGeneration };
+                void loadPreviewMetadata("youtube", preview.id, owner, valid,
+                    () => window.go.main.App.YouTubePreviewForTab(owner.tabID, preview.id))
+                    .then(result => attach(result?.thumbnail));
+            } else if (preview.provider !== "x") {
                 const owner = { tabID: state().activeTabID, generation: state().serverGeneration };
                 void loadPreviewMetadata(`portal:${preview.provider}`, preview.id, owner, valid,
                     () => window.go.main.App.VideoPortalPreviewForTab(owner.tabID, preview.provider, preview.id))

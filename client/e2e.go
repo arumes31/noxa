@@ -937,6 +937,21 @@ func (m *connManager) encryptChat(scope, target, text string) (netproto.ChatSend
 		if lookup != peerKeyFound {
 			return netproto.ChatSend{}, fmt.Errorf("could not fetch the end-to-end key for %s; try again", uniqueID)
 		}
+		if m.dmDevicesActive() {
+			// dm_devices_v1: one copy per trusted device of both accounts.
+			// A recipient without listed devices keeps the single copy below.
+			pub, _, err := id.x25519()
+			if err != nil {
+				return netproto.ChatSend{}, err
+			}
+			send, ok, err := m.encryptDirectCopies(uniqueID, text, pub, priv)
+			if err != nil {
+				return netproto.ChatSend{}, fmt.Errorf("could not verify the devices of %s; try again: %w", uniqueID, err)
+			}
+			if ok {
+				return send, nil
+			}
+		}
 		blob, err := sealDM(text, peer, priv)
 		if err != nil {
 			return netproto.ChatSend{}, err
@@ -1026,6 +1041,7 @@ func presentChat(chat *netproto.ChatBroadcast) {
 	chat.KeyID = 0
 	chat.SenderPublicKey = ""
 	chat.RecipientPublicKey = ""
+	chat.SenderDeviceKey = ""
 }
 
 // decryptChatEvent unseals a live chat broadcast.
@@ -1036,6 +1052,17 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 	}
 	// Verification is local evidence, never a claim accepted from the wire.
 	chat.EncVerified, chat.EncMode = false, ""
+	if chat.DMAction != "" || chat.RefClientMsgID != "" {
+		// A direct-message edit or deletion only exists as a sealed
+		// per-device copy; anything else is dropped, never shown as a message.
+		if !chat.Enc || chat.RecipientDeviceID == "" || chat.KeyID != 0 || chat.DMAction == "" ||
+			!netproto.ValidDMAction(chat.DMAction, chat.RefClientMsgID) {
+			return ""
+		}
+		chat.Direct = true
+		_ = m.startDecrypt("decryptDM", func() { m.decryptDMAsync(chat, payload) })
+		return ""
+	}
 	if !chat.Enc {
 		// Plaintext chat is never displayed: every body must be end-to-end
 		// or client→server→client encrypted. The refusal keeps the scope so
@@ -1285,6 +1312,23 @@ func (m *connManager) decryptDMAsync(chat netproto.ChatBroadcast, payload string
 	}
 	pub, priv, err := id.x25519()
 	if err != nil {
+		return
+	}
+	if chat.RecipientDeviceID != "" && chat.DMAction != "" {
+		// An edit or deletion of an earlier message: applied, never shown.
+		if plain, ok := m.openDeviceCopy(chat, pub, priv); ok {
+			m.receiveDMChange(chat, plain)
+		}
+		return
+	}
+	if chat.RecipientDeviceID != "" {
+		// dm_devices_v1: sealed to this device by the sending device.
+		chat.Text = m.decryptDeviceCopy(chat, pub, priv)
+		if openedChatText(chat.Text) {
+			chat.EncVerified, chat.EncMode = true, "e2e"
+		}
+		presentChat(&chat)
+		m.emit("event", rewrapChat("chat", chat, payload))
 		return
 	}
 	m.mu.Lock()

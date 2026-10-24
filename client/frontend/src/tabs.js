@@ -298,6 +298,7 @@ function onTabReset(tabID) {
         V().refreshPermissions();
         if (session.connected && state.myClientID) {
             initConversations();
+            void window.__noxaMobile?.refresh();
             connectionPill.textContent = state.lastConnect?.addr || translate("desktop.connected.12a7bd");
             connectionPill.classList.add("up");
             connectionPill.title = "";

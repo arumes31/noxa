@@ -2,6 +2,8 @@ package main
 
 // SessionInfo is one connection's UI identity and transport status.
 type SessionInfo struct {
+	MobileAccountKey   string `json:"mobile_account_key"`
+	MobileAvailable    bool   `json:"mobile_available"`
 	ManagedRelay       bool   `json:"managed_relay"`
 	AuthorizationModel string `json:"authorization_model"`
 	ClientID           string `json:"client_id"`
@@ -23,7 +25,13 @@ func (a *App) SessionInfoForTab(tabID string) (SessionInfo, error) {
 	if m.conn == nil {
 		return SessionInfo{IsGuest: true, Security: "offline"}, nil
 	}
+	var mobileAccountKey string
+	if m.supportsDevices && m.supportsWebLogin && !m.isGuest {
+		mobileAccountKey = m.addr + "|" + m.uniqueID
+	}
 	return SessionInfo{
+		MobileAccountKey:   mobileAccountKey,
+		MobileAvailable:    m.supportsDevices && m.supportsWebLogin && !m.isGuest,
 		AuthorizationModel: m.authorizationModel,
 		ManagedRelay:       m.managedRelay,
 		ClientID:           m.clientID, Nickname: m.nickname, IsGuest: m.isGuest,

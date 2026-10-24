@@ -282,7 +282,7 @@ func TestCodecRoundTrip(t *testing.T) {
 		in := ChatSend{ToClientID: "c-9", ToUniqueID: "uid-9", Text: "hi"}
 		var out ChatSend
 		roundTrip(t, MsgChatSend, in, &out)
-		if out != in {
+		if !reflect.DeepEqual(out, in) {
 			t.Errorf("got %+v, want %+v", out, in)
 		}
 	})
