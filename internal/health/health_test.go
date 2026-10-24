@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -341,5 +342,25 @@ func TestCredentialTransportTrustsOnlyImmediateConfiguredProxy(t *testing.T) {
 				t.Fatalf("status %d, want %d", w.Code, tc.want)
 			}
 		})
+	}
+}
+
+func TestServerStartAndShutdown(t *testing.T) {
+	srv := New("127.0.0.1:0", zap.NewNop(), nil)
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- srv.Start()
+	}()
+
+	// Wait briefly to give the server a chance to actually start
+	time.Sleep(50 * time.Millisecond)
+
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown returned error: %v", err)
+	}
+
+	if err := <-errc; err != nil {
+		t.Fatalf("Start returned error: %v", err)
 	}
 }
