@@ -7,6 +7,7 @@ import { visibleMembers } from "./new-chat.js";
 export function renderNewGroup(root) {
     const session = app.session, groups = app.groups;
     const selected = new Map();
+    const abort = new AbortController();
     let created = null, busy = false;
     const name = h("input", { class: "input", required: true, maxlength: "80", "aria-label": t("group.name"), placeholder: t("group.name") });
     const search = h("input", { class: "input", type: "search", "aria-label": t("chatNew.search"), placeholder: t("chatNew.search") });
@@ -40,11 +41,11 @@ export function renderNewGroup(root) {
         members.querySelectorAll("input").forEach(input => { input.disabled = true; });
         error.textContent = "";
         try {
-            if (!created) created = await groups.create(name.value);
+            if (!created) created = await groups.create(name.value, { signal: abort.signal });
             open.href = `#/group/${encodeURIComponent(created.id)}`; open.hidden = false;
             for (const uid of selected.keys()) {
                 if (app.session !== session || !root.contains(form)) return;
-                await groups.invite(created.id, uid);
+                await groups.invite(created.id, uid, { signal: abort.signal });
                 selected.delete(uid);
             }
             if (app.session === session && root.contains(form)) location.hash = open.getAttribute("href");
@@ -57,5 +58,5 @@ export function renderNewGroup(root) {
     } }, name, h("p", { class:"hint" }, t("group.inviteHint")), search, count, members, error, submit, open);
     root.replaceChildren(h("section", {class:"screen"}, header(t("group.create"), {back:"#/home"}), form), nav("home"));
     refresh();
-    return () => session.removeEventListener("snapshot", refresh);
+    return () => { abort.abort(); session.removeEventListener("snapshot", refresh); };
 }

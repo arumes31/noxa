@@ -41,3 +41,16 @@ func TestConversationReadPositionsHaveIndependentRateLimit(t *testing.T) {
 		t.Fatal("reading messages consumed the user's chat budget")
 	}
 }
+
+func TestConversationMutationRateIncludesRetryDelay(t *testing.T) {
+	env, _ := privateCallsTestEnv(t, func(srv *TCPServer) { srv.chatRate = newChatRateLimiter(1, time.Hour) })
+	defer env.stop()
+	client, _ := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = client.Close() }()
+	env.srv.chatRate.allow("user-uid", time.Now())
+	send(t, client, netproto.MsgConversationRequest, netproto.ConversationRequest{Action: "create", Name: "test"})
+	result := readError(t, client)
+	if result.Message != "group rate limit exceeded" || result.RetryAfterMS <= 0 || result.RetryAfterMS > time.Hour.Milliseconds()+1 {
+		t.Fatalf("missing bounded retry delay: %+v", result)
+	}
+}

@@ -111,7 +111,14 @@ export class Voice extends EventTarget {
     async join(channelID) {
         const joined = await this.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: channelID }, MsgChannelJoined);
         this.channelID = joined.channel_id ?? channelID;
-        if (!this.pc) await this.#start();
+        try {
+            if (!this.pc) await this.#start();
+        } catch (error) {
+            // The channel ack preceded media setup. Roll it back and release
+            // tracks/timers so another Join really starts a fresh connection.
+            await this.leave();
+            throw error;
+        }
         this.#emit("state");
         return this.channelID;
     }
