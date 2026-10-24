@@ -4,6 +4,7 @@ import { t } from "../i18n.js";
 import { clock, h, sheet } from "./dom.js";
 import { dmHref, header, lastMessage, nav, scopeName, unreadBadge } from "./common.js";
 import { avatar } from "./dom.js";
+import { announcementBanner } from "./announcement.js";
 
 export function renderHome(root) {
     const session = app.session;
@@ -50,6 +51,7 @@ export function renderHome(root) {
             if (destination && app.session === session) location.hash = `#/${destination}`;
         } }, "+") }),
         h("div", { class: "screen-body" },
+            announcementBanner(session),
             h("a", { class: "btn btn-primary", href: "#/new-chat" }, t("chatNew.title")),
             live.map(channel => h("a", { class: "card row", href: "#/voice", style: "border-color:var(--border-strong)" },
                 h("div", { class: "row-main" },

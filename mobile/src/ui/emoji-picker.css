@@ -1,0 +1,12 @@
+/* emoji-picker.css — the emoji sheet (ui/emoji-picker.js). */
+.emoji-sheet { max-height: 75dvh; gap: 8px; }
+.emoji-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.emoji-head .btn { min-height: 40px; }
+.emoji-search { width: 100%; min-height: 44px; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); font-size: 16px; }
+.emoji-search:focus { border-color: var(--border-strong); outline: none; }
+.emoji-group-title { margin: 8px 2px 4px; font-family: var(--font-mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--text-faint); font-weight: 500; }
+.emoji-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 2px; }
+.emoji-cell { width: 100%; height: 44px; display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; font-size: 1.5rem; line-height: 1; padding: 0; }
+.emoji-cell:active, .emoji-cell:hover { background: var(--accent-dim); }
+.emoji-cell img { width: 28px; height: 28px; object-fit: contain; }
+.emoji-results[hidden], .emoji-groups[hidden], .emoji-group[hidden] { display: none; }

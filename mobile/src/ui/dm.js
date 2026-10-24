@@ -1,11 +1,17 @@
 // dm.js — Direct message (05): end-to-end encrypted conversation.
+// Bodies render as rich text; attachments upload to the server-wide scope
+// (as the desktop does for direct messages).
 import { app, queueMessage, startCall } from "../app.js";
 import { Trust } from "../core/direct.js";
+import { uploadAttachment } from "../core/files.js";
 import { t } from "../i18n.js";
-import { avatar, clock, h, sheet, toast } from "./dom.js";
+import { avatar, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
-import { messageBody } from "./attachments.js";
+import { richBody, watchCustomEmoji } from "./rich-text.js";
 import { header } from "./common.js";
+import { announcementBanner } from "./announcement.js";
+import { attachControls, emojiButton } from "./composer-extras.js";
+import { aboutEncryption, encryptionBadge, headerActions, lineCache, menuButton, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 
 export function renderDM(root, peer) {
     const session = app.session;
@@ -17,31 +23,43 @@ export function renderDM(root, peer) {
     const notice = h("div");
     const input = h("textarea", { rows: "1", "aria-label": t("dm.placeholder", { name }), placeholder: t("dm.placeholder", { name }), enterkeyhint: "send" });
     const sendButton = h("button", { class: "send", type: "submit", "aria-label": t("chat.send") }, icon("send"));
+    const { button: attachButton, picker } = attachControls(async file => {
+        try {
+            const token = await uploadAttachment(session.conn, 0, file);
+            const caption = input.value.trim();
+            input.value = "";
+            await dm.send(peer, caption ? `${caption} ${token}` : token, name);
+        } catch (error) {
+            toast(t("file.uploadFailed", { error: error.code ? t(`dm.error.${error.code}`) : error.message }), "warn");
+            if (error.code) checkTrust();
+        }
+    });
 
-    function line(message) {
+    const line = lineCache(message => {
         const classes = ["msg", message.self ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
         const body = message.deleted ? h("span", { class: "msg-deleted" }, t("chat.deleted"))
             : message.body === null || message.body === undefined
                 ? h("span", { class: "msg-locked" }, t("chat.locked"))
-                : messageBody(message.body, { conn: session.conn, channelID: 0 });
+                : richBody(message.body, { session, conn: session.conn, channelID: 0 });
         const from = message.self ? session.nickname : (message.fromNickname || name);
         const changeable = message.self && !message.deleted && !message.pending && !message.queued && !message.failed;
-        return h("div", { class: classes, tabindex: changeable ? "0" : null, role: changeable ? "button" : null,
-            "aria-label": changeable ? t("dm.messageActions") : null, onclick: changeable ? () => messageActions(message) : null },
-            h("span", { class: "msg-time" }, clock(message.sentAt)),
+        return h("div", { class: classes, dataset: { id: String(message.id ?? "") }, tabindex: changeable ? "0" : null, role: changeable ? "button" : null,
+            "aria-label": changeable ? t("dm.messageActions") : null, onclick: changeable ? event => { if (!event.target.closest("a, button, img, video")) messageActions(message); } : null },
+            timeNode(message.sentAt),
             avatar(from, "sm"),
             h("div", { class: "msg-body" },
                 h("span", { class: "msg-from" }, from),
+                message.deleted ? null : encryptionBadge("e2e"),
                 body,
                 message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
                 message.queued ? h("div", { class: "msg-state" }, t("outbox.waiting")) : null,
                 message.failed ? h("div", { class: "error" }, t("outbox.notSent")) : null));
-    }
+    });
 
     function render() {
         const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
         const messages = dm.conversations.get(peer)?.messages || [];
-        log.replaceChildren(...(messages.length ? messages.map(line) : [h("p", { class: "hint", style: "text-align:center;margin:24px 0" }, t("dm.empty"))]));
+        log.replaceChildren(...(messages.length ? withDays(messages, m => m.sentAt, line) : [h("p", { class: "hint", style: "text-align:center;margin:24px 0" }, t("dm.empty"))]));
         if (atBottom || messages.at(-1)?.self) log.scrollTop = log.scrollHeight;
     }
 
@@ -67,7 +85,7 @@ export function renderDM(root, peer) {
                 setNotice("");
                 blocked = false;
             }
-            input.disabled = sendButton.disabled = blocked;
+            input.disabled = sendButton.disabled = attachButton.disabled = blocked;
         } catch (error) {
             setNotice(t("common.error", { error: error.message }));
         }
@@ -123,7 +141,7 @@ export function renderDM(root, peer) {
             toast(t("chat.sendFailed", { error: error.code ? t(`dm.error.${error.code}`) : error.message }), "warn");
             checkTrust();
         }
-    } }, input, sendButton);
+    } }, attachButton, emojiButton(input, session), picker, input, sendButton);
     input.addEventListener("keydown", event => {
         if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
@@ -135,6 +153,18 @@ export function renderDM(root, peer) {
         input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
     });
 
+    const exportLoad = async () => ({
+        messages: (dm.conversations.get(peer)?.messages || []).filter(m => !m.pending && !m.queued && !m.failed).map(m => ({
+            id: m.id, from: m.self ? session.nickname : (m.fromNickname || name), fromUniqueID: m.from, sentAt: m.sentAt,
+            text: m.deleted ? "" : m.body, deleted: !!m.deleted, edited: !!m.edited, encryption: "e2e",
+        })),
+        complete: true,
+    });
+    const menu = menuButton([
+        { label: t("rich.aboutEncryption"), run: aboutEncryption },
+        { label: t("rich.exportHistory"), run: () => import("./export.js").then(({ openExport }) => openExport({ title: name, kind: "dm", load: exportLoad })) },
+    ]);
+
     const progress = h("div", { class: "history-progress", role: "status" });
     const onMessages = event => { if (event.detail.peer === peer) render(); };
     const onHistory = event => {
@@ -144,13 +174,17 @@ export function renderDM(root, peer) {
     };
     dm.addEventListener("messages", onMessages);
     dm.addEventListener("history", onHistory);
+    const rerender = () => { line.clear(); render(); };
+    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log)];
+    const call = h("button", { class: "icon-btn", type: "button", "aria-label": t("call.start", { name }), onclick: () => startCall(peer).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone"));
     root.replaceChildren(h("section", { class: "screen chat" },
-        header(name, { back: "#/home", action: h("button", { class: "icon-btn", type: "button", "aria-label": t("call.start", { name }), onclick: () => startCall(peer).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone")) }),
-        banner, notice, progress, log, editBar, form));
+        header(name, { back: "#/home", action: headerActions(call, menu) }),
+        banner, announcementBanner(session), notice, progress, log, editBar, form));
     dm.ready.then(render);
     checkTrust();
     return () => {
         dm.removeEventListener("messages", onMessages);
         dm.removeEventListener("history", onHistory);
+        stops.forEach(stop => stop());
     };
 }

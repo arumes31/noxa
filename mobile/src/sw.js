@@ -7,6 +7,7 @@ import { signIn } from "./core/device.js";
 import { DirectMessages } from "./core/direct.js";
 import { loadIdentity } from "./core/identity-store.js";
 import { SYNC_TAG, flush, pending } from "./core/outbox.js";
+import { putShare, shareText } from "./core/share-store.js";
 
 const VERSION = "noxa-shell-v3";
 const SHELL = ["/app/", "/app/manifest.webmanifest", "/app/icons/icon-192.png", "/app/icons/icon-512.png"];
@@ -24,9 +25,28 @@ self.addEventListener("message", event => {
     if (event.data === "activate-update") self.skipWaiting();
 });
 
+// Web Share Target (manifest share_target): Android posts the shared text
+// and files here. They are kept in IndexedDB and the app opens #/share to
+// pick a conversation. The server answers the same POST with a redirect too,
+// for the case that this worker is not installed yet (then nothing is kept).
+async function receiveShare(request) {
+    try {
+        const form = await request.formData();
+        const files = form.getAll("files").filter(file => typeof file === "object" && file.size > 0);
+        await putShare({ text: shareText({ title: form.get("title"), text: form.get("text"), url: form.get("url") }), files });
+    } catch {
+        // The share screen reports that nothing arrived.
+    }
+    return Response.redirect("/app/#/share", 303);
+}
+
 self.addEventListener("fetch", event => {
     const request = event.request;
     const url = new URL(request.url);
+    if (request.method === "POST" && url.origin === self.location.origin && url.pathname === "/app/share") {
+        event.respondWith(receiveShare(request));
+        return;
+    }
     if (request.method !== "GET" || url.origin !== self.location.origin || !url.pathname.startsWith("/app/")) return;
     if (request.mode === "navigate") {
         event.respondWith(fetch(request).catch(() => caches.match("/app/")));

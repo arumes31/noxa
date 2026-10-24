@@ -20,6 +20,7 @@ const screens = {
     group: () => import("./ui/group.js"),
     voice: () => import("./ui/voice.js"),
     you: () => import("./ui/you.js"),
+    share: () => import("./ui/share.js"),
 };
 
 document.documentElement.lang = lang();
@@ -69,6 +70,7 @@ async function route() {
         case "group": cleanup = module.renderGroup(root, arg); break;
         case "voice": cleanup = module.renderVoice(root); break;
         case "you": module.renderYou(root); break;
+        case "share": cleanup = module.renderShare(root); break;
         default: module.renderHome(root);
     }
     renderBanner();

@@ -16,6 +16,13 @@ const paths = {
     camera: "M3 7h12v10H3zM15 10l6-3v10l-6-3",
     lock: "M6 11h12v10H6zM8.5 11V7.5a3.5 3.5 0 0 1 7 0V11",
     link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
+    // Rich chat (emoji picker, header menu, lightbox, channel encryption badge).
+    emoji: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01",
+    more: "M12 5h.01M12 12h.01M12 19h.01",
+    close: "M6 6l12 12M18 6L6 18",
+    share: "M12 15V3M8 7l4-4 4 4M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7",
+    download: "M12 3v12M8 11l4 4 4-4M5 21h14",
+    shield: "M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z",
 };
 
 export function icon(name) {
