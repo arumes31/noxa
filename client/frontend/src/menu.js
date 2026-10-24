@@ -529,6 +529,7 @@ export function initMenu() {
         menuAction(t("menu.connect"), () => V().showLogin()),
         menuAction(t("menu.disconnect"), () => V().disconnect()),
         menuAction(t("menu.serverInfo"), () => window.__noxaMeta.openServerInfo()),
+        divider(),
         menuAction(t("menu.otherLogin"), openDeviceLinkDialog),
         divider(), ...bookmarkItems, bookmarkList,
         menuAction(t("menu.manageBookmarks"), manageBookmarks),

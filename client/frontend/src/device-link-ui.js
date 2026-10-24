@@ -1,4 +1,4 @@
-// device-link-ui.js — "Other login for this server": link a phone with a QR
+// device-link-ui.js — "PWA / Mobile login": link a phone with a QR
 // code or hidden code, compare the two-digit code, approve, and manage the
 // account's linked devices.
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
@@ -43,12 +43,14 @@ export function openDeviceLinkDialog() {
     const title = el("h3", "", t("devices.title"));
     title.id = "device-link-title";
     const linkPane = el("section", "device-link-pane");
+    const pwaPane = el("div", "device-link-pwa");
+    pwaPane.hidden = true;
     const listTitle = el("h4", "device-list-title", t("devices.listTitle"));
     const list = el("ul", "device-list");
     const close = button(t("common.close"), "dlg-cancel", () => closeDialog(overlay));
     const footer = el("div", "dlg-buttons");
     footer.append(close);
-    dialog.append(title, linkPane, listTitle, list, footer);
+    dialog.append(title, linkPane, pwaPane, listTitle, list, footer);
     overlay.append(dialog);
 
     let link = null;
@@ -56,6 +58,33 @@ export function openDeviceLinkDialog() {
     let decided = false;
     const stopTimer = () => { if (countdown) clearInterval(countdown); countdown = 0; };
     const live = () => isCurrentServerDialog(overlay);
+
+    const renderPWA = url => {
+        pwaPane.replaceChildren();
+        pwaPane.hidden = true;
+        let target;
+        try {
+            target = new URL(url);
+            const local = ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname);
+            if (target.username || target.password || (target.protocol !== "https:" && !(local && target.protocol === "http:"))) return;
+            // Only the public app address belongs in this link, never the
+            // short-lived pairing secret in the QR URL's fragment.
+            target = new URL("/app/", target.origin);
+        } catch { return; }
+        const open = el("a", "device-link-pwa-open", t("devices.openPWA"));
+        open.href = target.href;
+        open.target = "_blank";
+        open.rel = "noopener noreferrer";
+        open.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!live()) return;
+            void Promise.resolve().then(() => window.runtime.BrowserOpenURL(target.href))
+                .catch(error => { if (live()) v.toast(t("devices.failed", { error: error?.message || String(error) }), "warn"); });
+        };
+        pwaPane.append(open, el("span", "device-link-pwa-url", target.href));
+        pwaPane.hidden = false;
+    };
 
     const showError = error => {
         linkPane.replaceChildren(el("p", "dlg-error", t("devices.failed", { error: error?.message || String(error) })));
@@ -161,6 +190,7 @@ export function openDeviceLinkDialog() {
             const created = await app().CreateDeviceLinkForTab(tabID);
             if (!live()) return;
             link = created;
+            renderPWA(created.url);
             renderLink();
         } catch (error) {
             if (!live()) return;
@@ -218,7 +248,7 @@ export function openDeviceLinkDialog() {
                 catch (error) { v.toast(t("devices.failed", { error: error?.message || String(error) }), "warn"); }
                 if (live()) refreshList();
             }));
-            if (!device.current) {
+            if (!device.current && !device.first_device) {
                 actions.append(button(t("devices.revoke"), "danger", async () => {
                     const confirmed = await confirmDialog({
                         title: t("devices.revoke"), message: t("devices.revokeConfirm", { name: device.name }),

@@ -31,7 +31,7 @@ async function route() {
     if (!app.session) {
         app.viewing = null;
         const { renderConnect } = await screens.connect();
-        if (token === routeToken) renderConnect(root, { onSignedIn });
+        if (token === routeToken) cleanup = renderConnect(root, { onSignedIn });
         return;
     }
     let [, screen = "home", ...rest] = location.hash.split("/");
@@ -87,7 +87,7 @@ app.addEventListener("session", event => {
     for (const type of ["snapshot", "subscriptions"]) {
         session.addEventListener(type, () => {
             const screen = location.hash.split("/")[1] || "home";
-            if (screen === "home" || screen === "servers") route();
+            if (screen === "home" || screen === "servers" || (screen === "voice" && !app.voice?.active)) route();
         });
     }
     session.addEventListener("messages", () => {

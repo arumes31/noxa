@@ -92,10 +92,10 @@ export function renderYou(root) {
             list.replaceChildren(...(result.devices || []).map(device => h("li", { class: "row" },
                 h("span", { class: "row-main" },
                     h("span", { class: "row-title" }, device.name),
-                    h("span", { class: "row-sub" }, [t(`settings.kind.${device.kind}`), device.current ? t("settings.current") : null].filter(Boolean).join(" · ")),
+                    h("span", { class: "row-sub" }, [t(`settings.kind.${device.kind}`), device.current ? t("settings.current") : null, device.first_device ? t("settings.firstDevice") : null].filter(Boolean).join(" · ")),
                     h("span", { class: "row-sub mono" }, device.fingerprint),
                     device.expiry_warned_at ? h("span", { class: "row-sub", style: "color:var(--amber)" }, t("settings.expiry", { date: new Date((device.last_seen_at + 180 * 86400) * 1000).toLocaleDateString() })) : null),
-                device.current ? null : h("button", { class: "btn btn-danger", onclick: async () => {
+                device.current || device.first_device ? null : h("button", { class: "btn btn-danger", onclick: async () => {
                     const ok = await sheet(t("settings.revoke"), device.name, [{ label: t("settings.revoke"), value: true, danger: true }, { label: t("link.cancel"), value: false }]);
                     if (!ok) return;
                     await session.conn.request(Msg.DeviceRequest, { action: "revoke", device_id: device.device_id }, Msg.DeviceResult).catch(e => toast(e.message, "warn"));

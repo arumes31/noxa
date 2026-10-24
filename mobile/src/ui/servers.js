@@ -21,7 +21,7 @@ export function renderServers(root) {
             h("p", { class: "section-label" }, t("channels.voice")),
             h("ul", { class: "list" }, channels.filter(c => !c.textOnly).map(c => h("li", {},
                 h("div", { class: "row", style: `padding-left:${10 + c.depth * 14}px` },
-                    icon("voice"),
+                    icon(c.home ? "home" : "voice"),
                     h("span", { class: "row-main" }, h("span", { class: "row-title" }, c.name)),
                     c.clients.length ? h("span", { class: "row-meta" }, String(c.clients.length)) : null),
                 c.clients.length ? h("ul", { class: "list", style: "padding-left:44px" }, c.clients.map(client => h("li", {},

@@ -343,6 +343,16 @@ func (s *TCPServer) handleDeviceRequest(ctx context.Context, client *Client, f *
 		info.Current = d.DeviceID == client.currentDeviceID()
 		return s.writeMessage(client, netproto.MsgDeviceResult, netproto.DeviceResult{Action: r.Action, Device: &info})
 	case netproto.DeviceActionRevoke:
+		target, err := s.deps.Devices.DeviceByID(ctx, principal, r.DeviceID)
+		if err != nil {
+			return s.deviceFailure(ctx, client, err)
+		}
+		if !target.Active() {
+			return s.deviceFailure(ctx, client, store.ErrDeviceNotFound)
+		}
+		if target.FirstDevice && target.DeviceID != client.currentDeviceID() {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "the first device cannot be signed out from another device")
+		}
 		d, err := s.revokeDevice(ctx, principal, r.DeviceID, store.DeviceRevokedByUser, principal)
 		if err != nil {
 			return s.deviceFailure(ctx, client, err)

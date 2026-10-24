@@ -8,12 +8,14 @@
     "build": "vite build && vite build -c vite.sw.config.js",
     "test:unit": "node --experimental-vm-modules --test unit/*.test.mjs",
     "test:e2e": "playwright test",
-    "test": "npm run test:unit && npm run test:e2e"
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:ui": "playwright test --config playwright.ui.config.js"
   },
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "5.3.0",
     "@fontsource-variable/outfit": "5.3.0",
     "@noble/hashes": "2.4.0",
+    "jsqr": "1.4.0",
     "tweetnacl": "1.0.3"
   },
   "devDependencies": {

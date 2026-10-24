@@ -22,21 +22,26 @@ func TestConversationSendResolvesColdGroupThroughKeyRateLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Exercise the default five-key allowance with a shorter window. The
-	// server advertises its remaining delay; the client must honor that delay.
+	// Every fifth successful lookup causes one rate-limit response. Reset only
+	// after the advertised delay, rather than on a wall-clock window that may
+	// expire while a slow CI runner is signing the fixture records.
 	const window = 100 * time.Millisecond
-	var reset time.Time
+	var retryAt time.Time
 	used, limited, sent := 0, 0, 0
 	app, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
 		if netproto.MessageType(frame.Type) == netproto.MsgKeyRequest {
 			var request netproto.KeyRequest
 			_ = netproto.Decode(frame, &request)
-			if !time.Now().Before(reset) {
-				used, reset = 0, time.Now().Add(window)
+			if !retryAt.IsZero() {
+				if time.Now().Before(retryAt) {
+					t.Error("retried before the advertised key delay")
+				}
+				used, retryAt = 0, time.Time{}
 			}
 			if used == 5 {
 				limited++
-				return netproto.MsgError, map[string]any{"code": 2, "message": "key lookup rate limit exceeded — slow down", "origin_type": uint16(netproto.MsgKeyRequest), "retry_after_ms": time.Until(reset).Milliseconds() + 1}, true
+				retryAt = time.Now().Add(window)
+				return netproto.MsgError, map[string]any{"code": 2, "message": "key lookup rate limit exceeded — slow down", "origin_type": uint16(netproto.MsgKeyRequest), "retry_after_ms": window.Milliseconds()}, true
 			}
 			used++
 			return netproto.MsgKeyResponse, netproto.KeyResponse{UniqueID: request.UniqueID, PublicKey: signedTestRecord(t, request.UniqueID, pub, peer)}, true

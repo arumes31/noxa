@@ -35,8 +35,10 @@ func (f *fakePasskeys) PasskeyUserHandle(_ context.Context, principal string) ([
 			return row.UserHandle, nil
 		}
 	}
-	handle := sha256.Sum256([]byte(principal))
-	return handle[:], nil
+	// Match the database: an initial handle is random until AddPasskey persists it.
+	handle := make([]byte, 32)
+	_, err := rand.Read(handle)
+	return handle, err
 }
 
 func (f *fakePasskeys) AddPasskey(ctx context.Context, p store.Passkey) error {
@@ -240,6 +242,11 @@ func TestPasskeyRegisteredOnPhoneSignsInANewPhone(t *testing.T) {
 	finish := deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionPasskeyRegisterFinish, Name: "iCloud Keychain", WebAuthn: authenticator.create(t, begin.WebAuthn)})
 	if len(finish.Passkeys) != 1 || finish.Passkeys[0].Name != "iCloud Keychain" || finish.Passkeys[0].PasskeyID != b64url(authenticator.id) {
 		t.Fatalf("passkeys after registration = %+v", finish.Passkeys)
+	}
+
+	stored, err := keys.Passkeys(t.Context(), "user-uid")
+	if err != nil || len(stored) != 1 || string(stored[0].UserHandle) != string(authenticator.userHandle) {
+		t.Fatalf("stored handle differs from the authenticator registration handle: %v", err)
 	}
 
 	// A new phone with the synced passkey links itself before signing in.

@@ -1,8 +1,9 @@
-// "Other login for this server" (device linking) and the device list.
+// "PWA / Mobile login" (device linking) and the device list.
 // Keep both catalogs and placeholder names in sync.
 export const deviceLinkEnglish = {
-    "menu.otherLogin": "Other login for this server…",
-    "devices.title": "Other login for this server",
+    "menu.otherLogin": "PWA / Mobile login…",
+    "devices.title": "PWA / Mobile login",
+    "devices.openPWA": "Open PWA",
     "devices.intro": "Scan this code with your phone's camera, or open the address on your phone and type the hidden code.",
     "devices.qrAlt": "QR code that links your phone to this account",
     "devices.showCode": "Show code",
@@ -50,8 +51,9 @@ export const deviceLinkEnglish = {
 };
 
 export const deviceLinkGerman = {
-    "menu.otherLogin": "Weitere Anmeldung für diesen Server…",
-    "devices.title": "Weitere Anmeldung für diesen Server",
+    "menu.otherLogin": "PWA- / Mobil-Anmeldung…",
+    "devices.title": "PWA- / Mobil-Anmeldung",
+    "devices.openPWA": "PWA öffnen",
     "devices.intro": "Scanne diesen Code mit der Kamera deines Telefons oder öffne die Adresse auf dem Telefon und gib den verborgenen Code ein.",
     "devices.qrAlt": "QR-Code, der dein Telefon mit diesem Konto verbindet",
     "devices.showCode": "Code anzeigen",

@@ -1,7 +1,11 @@
-/* "Other login for this server" dialog and the linked-device list. */
+/* "PWA / Mobile login" dialog and the linked-device list. */
 .device-link { width: 440px; }
 .device-link-pane { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
 .device-link-pane .hint { margin: 0; }
+.device-link-pwa { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 10px 0; border-block: 1px solid var(--border); }
+.device-link-pwa[hidden] { display: none; }
+.device-link-pwa-open { color: var(--accent); font-weight: 600; }
+.device-link-pwa-url { color: var(--text-dim); font-size: .8571rem; overflow-wrap: anywhere; }
 .device-link-qr {
     width: 216px; height: 216px; padding: 10px; border-radius: 12px;
     background: #fff; image-rendering: pixelated;

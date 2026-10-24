@@ -160,19 +160,20 @@ func (a *AuthService) AuthenticateIdentityChallenge(ctx context.Context, uniqueI
 // User holds the identity fields the server needs after a successful
 // authentication.
 type User struct {
-	ID       int64
-	UniqueID string
-	Nickname string
-	IsBot    bool // identity metadata; never grants authority or bypasses limits
+	ID          int64
+	UniqueID    string
+	Nickname    string
+	DisplayName string // display label for an enrolled identity; never a login identifier
+	IsBot       bool   // identity metadata; never grants authority or bypasses limits
 }
 
 // LookupUser returns the user row for the given unique ID. It returns
 // ErrUserNotFound when no such user exists.
 func (a *AuthService) LookupUser(ctx context.Context, uniqueID string) (*User, error) {
 	var u User
-	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot FROM users WHERE unique_id = $1`
+	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot, COALESCE(identity_display_name, '') FROM users WHERE unique_id = $1`
 	err := a.store.DB().QueryRowContext(ctx, q, uniqueID).
-		Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsBot)
+		Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsBot, &u.DisplayName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrUserNotFound
@@ -319,7 +320,7 @@ func (a *AuthService) passwordVerifier() func(password, encodedHash string) erro
 // A key held by more than one account is refused rather than resolved to
 // whichever row the database returns first.
 func (a *AuthService) LookupUserByPublicKey(ctx context.Context, publicKey string) (*User, error) {
-	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot FROM users WHERE public_key = $1 LIMIT 2`
+	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot, COALESCE(identity_display_name, '') FROM users WHERE public_key = $1 LIMIT 2`
 	rows, err := a.store.DB().QueryContext(ctx, q, publicKey)
 	if err != nil {
 		return nil, fmt.Errorf("querying user by public key: %w", err)
@@ -328,7 +329,7 @@ func (a *AuthService) LookupUserByPublicKey(ctx context.Context, publicKey strin
 	var found []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsBot); err != nil {
+		if err := rows.Scan(&u.ID, &u.UniqueID, &u.Nickname, &u.IsBot, &u.DisplayName); err != nil {
 			return nil, fmt.Errorf("scanning user by public key: %w", err)
 		}
 		found = append(found, u)

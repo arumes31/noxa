@@ -120,6 +120,8 @@ jobs:
       - run: npm ci
       - run: npm run test:unit
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:ui
 
   frontend-checks:
     runs-on: ubuntu-latest

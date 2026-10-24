@@ -4,7 +4,7 @@ test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
         window.__events = {};
         window.__calls = [];
-        window.runtime = { EventsOn: (name, fn) => { (window.__events[name] ||= []).push(fn); return () => {}; }, EventsEmit() {}, WindowIsFullscreen: async () => false };
+        window.runtime = { EventsOn: (name, fn) => { (window.__events[name] ||= []).push(fn); return () => {}; }, EventsEmit() {}, WindowIsFullscreen: async () => false, BrowserOpenURL: url => window.__calls.push(['BrowserOpenURL', url]) };
         window.__devices = [
             { device_id: 'dev-desktop', kind: 'desktop', name: 'Desktop', fingerprint: 'aaaa bbbb cccc dddd', current: true, first_device: true, created_at: 1, last_seen_at: Math.floor(Date.now() / 1000) },
         ];
@@ -12,7 +12,7 @@ test.beforeEach(async ({ page }) => {
             window.__calls.push([method, ...args]);
             if (method === 'GetSettings') return { language: 'en', onboarding_done: true, alpha_dismissed: 'test', effects_enabled: false,
                 play_sounds: false, bookmarks: [], chat_max_lines: 200 };
-            if (method === 'CreateDeviceLinkForTab') return { link_id: 'link-1', url: 'https://chat.example/link#id=link-1&k=x', code: 'K7QM-4XPA',
+            if (method === 'CreateDeviceLinkForTab') return { link_id: 'link-1', url: window.__linkURL || 'https://chat.example/link#id=link-1&k=x', code: 'K7QM-4XPA',
                 expires_at: Math.floor(Date.now() / 1000) + 120, qr: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' };
             if (method === 'DevicesForTab') return window.__devices;
             if (method === 'DecideDeviceLinkForTab') {
@@ -29,13 +29,26 @@ test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await page.waitForFunction(() => !!window.__noxa?.state);
     await page.evaluate(() => Object.assign(window.__noxa.state, { activeTabID: 'tab-1', myClientID: 'self', myNickname: 'Rowan' }));
+    await page.evaluate(() => {
+        document.getElementById('login-overlay').classList.add('hidden');
+        document.getElementById('login-overlay').setAttribute('aria-hidden', 'true');
+        document.getElementById('app').classList.remove('hidden');
+        document.getElementById('app').setAttribute('aria-hidden', 'false');
+    });
 });
 
-test('other login shows a QR code with a hidden code and approves after comparison', async ({ page }) => {
-    await page.evaluate(async () => (await import('/src/device-link-ui.js')).openDeviceLinkDialog());
+test('PWA / Mobile login shows a QR code with a hidden code and approves after comparison', async ({ page }) => {
+    await page.locator('#menubar > .menu-item').filter({ hasText: /^Connections/ }).click();
+    await page.getByRole('menuitem', { name: 'PWA / Mobile login…', exact: true }).click();
 
-    const dialog = page.getByRole('dialog', { name: 'Other login for this server' });
+    const dialog = page.getByRole('dialog', { name: 'PWA / Mobile login' });
     await expect(dialog.getByRole('img', { name: 'QR code that links your phone to this account' })).toBeVisible();
+    const pwa = dialog.getByRole('link', { name: 'Open PWA', exact: true });
+    await expect(pwa).toHaveAttribute('href', 'https://chat.example/app/');
+    await expect(dialog.getByText('https://chat.example/app/', { exact: true })).toBeVisible();
+    await pwa.click();
+    expect(await page.evaluate(() => window.__calls.filter(call => call[0] === 'BrowserOpenURL'))).toEqual([['BrowserOpenURL', 'https://chat.example/app/']]);
+    await expect(pwa).toBeVisible();
     const code = dialog.locator('.device-link-code');
     await expect(code).toHaveText('K7QM-4XPA');
     await expect(code).toHaveAttribute('data-hidden', 'true');
@@ -59,9 +72,19 @@ test('other login shows a QR code with a hidden code and approves after comparis
     expect(decide).toEqual(['DecideDeviceLinkForTab', 'tab-1', 'link-1', true, 'phone-key', 'phone-x']);
 });
 
+test('PWA link does not open an unsafe server-supplied URL', async ({ page }) => {
+    await page.evaluate(async () => {
+        window.__linkURL = 'javascript:alert(1)';
+        (await import('/src/device-link-ui.js')).openDeviceLinkDialog();
+    });
+    const dialog = page.getByRole('dialog', { name: 'PWA / Mobile login' });
+    await expect(dialog.locator('.device-link-code')).toHaveText('K7QM-4XPA');
+    await expect(dialog.getByRole('link', { name: 'Open PWA' })).toHaveCount(0);
+});
+
 test('claims for another link are ignored', async ({ page }) => {
     await page.evaluate(async () => (await import('/src/device-link-ui.js')).openDeviceLinkDialog());
-    const dialog = page.getByRole('dialog', { name: 'Other login for this server' });
+    const dialog = page.getByRole('dialog', { name: 'PWA / Mobile login' });
     await expect(dialog.locator('.device-link-code')).toHaveText('K7QM-4XPA');
     await page.evaluate(() => {
         for (const fn of window.__events.device_event) fn({ event: 'link_claimed', link_id: 'other', platform: 'Attacker', sas: '12' });
