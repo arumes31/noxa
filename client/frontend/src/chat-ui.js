@@ -667,7 +667,7 @@ function applyCustomEmoji(html) {
     if (customDirty) ensureCustomEmoji();
     if (typeof html !== "string" || html.indexOf(":") === -1) return html;
 
-    // Performance: Only trigger cache loading for emojis that are actually in the text
+    // Load image bytes only for emoji tokens present in this message.
     for (const e of customEmoji) {
         if (html.includes(`:${e.name}:`)) {
             const url = emojiURLs.get(e.name);

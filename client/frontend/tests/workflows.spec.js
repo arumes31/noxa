@@ -3032,6 +3032,28 @@ test.describe("tab-bound custom emoji", () => {
         });
     });
 
+    test("message rendering fetches only referenced emoji and reuses cached images", async ({ page }) => {
+        await page.evaluate(() => { window.__emoji.names = ["guild_wave", "unused_custom"]; });
+        const message = async (id, text) => page.evaluate(({ id, text }) => {
+            const v = window.__noxa;
+            v.state.myChannelID = 42;
+            v.state.channels = [{ ChannelID: 42, Name: "Chat" }];
+            for (const callback of window.__events.event || []) callback(JSON.stringify({
+                type: "chat", data: { id, channel_id: 42, from: "Bob", from_unique_id: "peer", text, enc_verified: true, enc_mode: "server" },
+            }));
+        }, { id, text });
+        await message(1, "Plain message");
+        await expect.poll(() => page.evaluate(() => window.__emoji.completed.includes("EmojiList"))).toBe(true);
+        await message(2, "Time: 12:30 and :unknown:");
+        await expect(page.locator('.msg[data-msg-id="2"]')).toContainText("Time: 12:30 and :unknown:");
+        expect(await page.evaluate(() => window.__emoji.calls.filter(c => c.name === "EmojiGet"))).toEqual([]);
+        await message(3, "Hello :guild_wave: :guild_wave:");
+        await expect.poll(() => page.evaluate(() => window.__emoji.completed.filter(n => n === "EmojiGet").length)).toBe(1);
+        await message(4, "Cached :guild_wave:");
+        await expect(page.locator('.msg[data-msg-id="4"] img.md-emoji')).toHaveAttribute("alt", ":guild_wave:");
+        expect(await page.evaluate(() => window.__emoji.calls.filter(c => c.name === "EmojiGet").map(c => c.args[0]))).toEqual(["guild_wave"]);
+    });
+
     const openManager = async page => {
         await page.locator("#tab-files").click();
         await page.locator(".fb-emoji").click();
