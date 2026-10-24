@@ -1,5 +1,5 @@
 // chat.js — Channel chat (04): history, live messages, typing, sending.
-import { app } from "../app.js";
+import { app, queueMessage } from "../app.js";
 import { t } from "../i18n.js";
 import { avatar, clock, h, toast } from "./dom.js";
 import { icon } from "./icons.js";
@@ -24,7 +24,7 @@ export function renderChat(root, scope) {
     };
 
     function line(message) {
-        const classes = ["msg", message.own ? "own" : "", message.mentioned ? "mention" : "", message.pending ? "pending" : "", message.failed ? "failed" : ""].join(" ");
+        const classes = ["msg", message.own ? "own" : "", message.mentioned ? "mention" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
         let body;
         if (message.deleted) body = h("span", { class: "msg-deleted" }, t("chat.deleted"));
         else if (message.text === null || message.text === undefined) body = h("span", { class: "msg-locked" }, t("chat.locked"));
@@ -38,7 +38,8 @@ export function renderChat(root, scope) {
                 body,
                 message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
                 reactions.length ? h("span", { class: "reactions" }, reactions.map(([emoji, n]) => h("span", { class: "reaction" }, `${emoji} ${n}`))) : null,
-                message.failed ? h("div", { class: "error" }, t("chat.failed")) : null));
+                message.queued ? h("div", { class: "msg-state" }, t("outbox.waiting")) : null,
+                message.failed ? h("div", { class: "error" }, t("outbox.notSent")) : null));
     }
 
     function render(stick = true) {
@@ -59,7 +60,14 @@ export function renderChat(root, scope) {
         if (!text) return;
         input.value = "";
         input.style.height = "";
-        try { await session.send(scope, text); } catch (error) { toast(t("chat.sendFailed", { error: error.message }), "warn"); }
+        const id = crypto.randomUUID();
+        const sentAt = Date.now() / 1000;
+        try {
+            await session.send(scope, text, { clientMsgID: id, sentAt });
+        } catch (error) {
+            if (error.retryable) await queueMessage({ kind: "channel", scope }, text, { id, sentAt });
+            else toast(t("chat.sendFailed", { error: error.message }), "warn");
+        }
     } }, input, sendButton);
     input.addEventListener("keydown", event => {
         if (event.key === "Enter" && !event.shiftKey) {

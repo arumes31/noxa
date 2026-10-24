@@ -1,5 +1,5 @@
 // dm.js — Direct message (05): end-to-end encrypted conversation.
-import { app } from "../app.js";
+import { app, queueMessage } from "../app.js";
 import { Trust } from "../core/direct.js";
 import { t } from "../i18n.js";
 import { avatar, clock, h, sheet, toast } from "./dom.js";
@@ -18,7 +18,7 @@ export function renderDM(root, peer) {
     const sendButton = h("button", { class: "send", type: "submit", "aria-label": t("chat.send") }, icon("send"));
 
     function line(message) {
-        const classes = ["msg", message.self ? "own" : "", message.pending ? "pending" : "", message.failed ? "failed" : ""].join(" ");
+        const classes = ["msg", message.self ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
         const body = message.body === null || message.body === undefined
             ? h("span", { class: "msg-locked" }, t("chat.locked"))
             : message.body;
@@ -29,7 +29,8 @@ export function renderDM(root, peer) {
             h("div", { class: "msg-body" },
                 h("span", { class: "msg-from" }, from),
                 body,
-                message.failed ? h("div", { class: "error" }, t("chat.failed")) : null));
+                message.queued ? h("div", { class: "msg-state" }, t("outbox.waiting")) : null,
+                message.failed ? h("div", { class: "error" }, t("outbox.notSent")) : null));
     }
 
     function render() {
@@ -73,9 +74,15 @@ export function renderDM(root, peer) {
         if (!text) return;
         input.value = "";
         input.style.height = "";
+        const id = crypto.randomUUID();
+        const sentAt = Date.now() / 1000;
         try {
-            await dm.send(peer, text, name);
+            await dm.send(peer, text, name, { id, sentAt });
         } catch (error) {
+            if (error.retryable) {
+                await queueMessage({ kind: "dm", peer, nickname: name }, text, { id, sentAt });
+                return;
+            }
             toast(t("chat.sendFailed", { error: error.code ? t(`dm.error.${error.code}`) : error.message }), "warn");
             checkTrust();
         }

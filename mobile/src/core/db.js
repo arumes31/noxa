@@ -2,10 +2,10 @@
 // encrypted with a non-extractable AES-GCM key kept in the same database,
 // so page script can use but never export it.
 const DB_NAME = "noxa";
-const VERSION = 2;
+const VERSION = 3;
 
-/** Object stores: device identity, direct-message history, identity pins. */
-export const Stores = Object.freeze({ device: "device", dm: "dm", pins: "pins" });
+/** Object stores: device identity, direct-message history, identity pins, unsent messages. */
+export const Stores = Object.freeze({ device: "device", dm: "dm", pins: "pins", outbox: "outbox" });
 
 export function openDB(indexedDBImpl = globalThis.indexedDB) {
     return new Promise((resolve, reject) => {
@@ -86,4 +86,8 @@ export function clearStores(...names) {
     return withDB(async db => {
         for (const name of names) await run(db, name, "readwrite", store => store.clear());
     });
+}
+
+export function deleteKey(storeName, key) {
+    return withDB(db => run(db, storeName, "readwrite", store => store.delete(key)));
 }

@@ -21,7 +21,7 @@ WORKDIR /src/mobile
 COPY mobile/package.json mobile/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY mobile/ ./
-RUN npx vite build --outDir /out/web/app
+RUN npx vite build --outDir /out/web/app && npx vite build -c vite.sw.config.js --outDir /out/web/app
 
 # -----------------------------------------------------------------------------
 # Builder stage

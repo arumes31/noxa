@@ -6,6 +6,7 @@ import { Connection } from "./core/connection.js";
 import { generateIdentity } from "./core/crypto.js";
 import { signIn } from "./core/device.js";
 import { clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
+import { enqueue, flush as flushOutbox, showPending, waitingCount } from "./core/outbox.js";
 import { announceRead, closeNotifications, reportVisibility, setBadge, syncPush } from "./core/push.js";
 
 export const app = new EventTarget();
@@ -23,6 +24,8 @@ app.dm = null;
 app.unread = new Map();
 /** The conversation tag on screen, or null. */
 app.viewing = null;
+/** Messages waiting in the outbox. */
+app.outboxWaiting = 0;
 
 const RECONNECT_STEPS = [1000, 2000, 5000, 10000, 20000, 30000];
 let reconnectAttempt = 0;
@@ -99,6 +102,11 @@ export async function connect() {
         emit("dm", { peer });
     });
     dm.importHistory().catch(() => {});
+    dm.ready.then(async () => {
+        await showPending(session, dm);
+        await flushOutbox(session, dm);
+        await outboxChanged();
+    }).catch(() => {});
     conn.addEventListener("close", () => {
         if (app.session !== session) return;
         setOnline(false);
@@ -125,6 +133,25 @@ export async function connect() {
     }).catch(() => {});
     emit("session", session);
     return session;
+}
+
+async function outboxChanged() {
+    app.outboxWaiting = await waitingCount().catch(() => 0);
+    emit("outbox", app.outboxWaiting);
+}
+
+/** Keeps a message that could not be sent for the outbox. */
+export async function queueMessage(target, text, options) {
+    await enqueue(target, text, options);
+    await outboxChanged();
+    if (app.session?.conn.open && app.dm) flushOutbox(app.session, app.dm).then(outboxChanged).catch(() => {});
+}
+
+/** Sends waiting messages, e.g. when the service worker asks. */
+export async function flushNow() {
+    if (!app.session?.conn.open || !app.dm) return;
+    await flushOutbox(app.session, app.dm);
+    await outboxChanged();
 }
 
 function unreadChanged() {

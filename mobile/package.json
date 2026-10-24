@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && vite build -c vite.sw.config.js",
     "test:unit": "node --test unit/*.test.mjs",
     "test:e2e": "playwright test",
     "test": "npm run test:unit && npm run test:e2e"

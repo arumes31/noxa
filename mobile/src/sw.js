@@ -1,7 +1,14 @@
 // sw.js — offline app shell. The shell is cached at install; navigations
 // fall back to the cached index when the server is unreachable. API and
 // WebSocket traffic is never cached.
-const VERSION = "noxa-shell-v2";
+import { ChatSession } from "./core/chat-session.js";
+import { Connection } from "./core/connection.js";
+import { signIn } from "./core/device.js";
+import { DirectMessages } from "./core/direct.js";
+import { loadIdentity } from "./core/identity-store.js";
+import { SYNC_TAG, flush, pending } from "./core/outbox.js";
+
+const VERSION = "noxa-shell-v3";
 const SHELL = ["/app/", "/app/manifest.webmanifest", "/app/icons/icon-192.png", "/app/icons/icon-512.png"];
 
 self.addEventListener("install", event => {
@@ -157,4 +164,54 @@ self.addEventListener("pushsubscriptionchange", event => {
     const options = event.oldSubscription?.options;
     if (!options?.applicationServerKey) return;
     event.waitUntil(self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: options.applicationServerKey }).catch(() => {}));
+});
+
+
+// --- Background Sync: send the outbox while the app is closed ---------------
+// Android fires this when connectivity returns. An open app flushes itself;
+// otherwise the worker signs in with the device key, sends the waiting
+// messages and disconnects. A failure makes the browser retry later.
+
+async function waitForKeys(session, scopes, timeout = 8000) {
+    const missing = () => scopes.filter(scope => !session.current.has(scope));
+    if (!missing().length) return;
+    await new Promise(resolve => {
+        const done = () => { if (!missing().length) { session.removeEventListener("keys", done); clearTimeout(timer); resolve(); } };
+        const timer = setTimeout(() => { session.removeEventListener("keys", done); resolve(); }, timeout);
+        session.addEventListener("keys", done);
+    });
+}
+
+async function syncOutbox() {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (windows.length) {
+        for (const client of windows) client.postMessage({ type: "flush-outbox" });
+        return;
+    }
+    const waiting = (await pending()).filter(entry => !entry.expired && !entry.failed);
+    if (!waiting.length) return;
+    const stored = await loadIdentity();
+    if (!stored?.meta?.linked) return;
+    const info = await (await fetch("/api/v1/web/info", { cache: "no-store" })).json();
+    const conn = await Connection.open();
+    try {
+        const auth = await signIn(conn, stored.identity, { version: info.version || "0.0.0" });
+        const session = new ChatSession(conn, stored.identity, auth);
+        const scopes = [...new Set(waiting.filter(entry => entry.kind === "channel").map(entry => entry.scope))];
+        const channels = scopes.filter(scope => scope > 0);
+        if (channels.length) await session.subscribe(channels).catch(() => {});
+        await waitForKeys(session, scopes);
+        const dm = new DirectMessages(session, stored.meta);
+        await dm.ready;
+        await flush(session, dm);
+        dm.close();
+    } finally {
+        conn.close();
+    }
+    const left = (await pending()).filter(entry => !entry.expired && !entry.failed);
+    if (left.length) throw new Error(`${left.length} messages still waiting`);
+}
+
+self.addEventListener("sync", event => {
+    if (event.tag === SYNC_TAG) event.waitUntil(syncOutbox());
 });

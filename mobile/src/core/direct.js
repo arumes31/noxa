@@ -207,18 +207,26 @@ export class DirectMessages extends EventTarget {
     // --- Sending ----------------------------------------------------------------
 
     /** Sends text to peer, sealed for every trusted device. */
-    async send(peer, text, nickname = "") {
+    async send(peer, text, nickname = "", { id = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}) {
         await this.ready;
-        const id = crypto.randomUUID();
-        const message = { id, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt: Date.now() / 1000, pending: true };
+        const message = { id, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, pending: true, queued: false };
         this.#add(peer, nickname, message);
         try {
             await this.#sendCopies(peer, text, id, false);
             this.#add(peer, nickname, { ...message, pending: false });
         } catch (error) {
-            this.#add(peer, nickname, { ...message, pending: false, failed: true });
-            throw error;
+            // Lost connections leave the message for the outbox; refusals fail it.
+            const retryable = !(error instanceof ProtocolError) && !error.code;
+            this.#add(peer, nickname, { ...message, pending: false, failed: !retryable, queued: retryable });
+            throw Object.assign(error, { retryable });
         }
+    }
+
+    /** Shows an own message waiting in the outbox. */
+    showQueued(peer, { id, text, sentAt, expired = false }) {
+        const existing = this.conversations.get(peer)?.messages.find(m => m.id === id);
+        if (existing && !existing.queued && !existing.failed) return;
+        this.#add(peer, "", { id, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, queued: !expired, failed: expired });
     }
 
     async #sendCopies(peer, text, id, retried) {

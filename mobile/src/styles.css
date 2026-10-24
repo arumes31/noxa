@@ -122,6 +122,8 @@ button { cursor: pointer; }
 .msg.mention { background: rgba(245, 176, 65, .08); border-radius: 8px; }
 .msg.pending .msg-body { opacity: .6; }
 .msg.failed .msg-body { color: var(--coral); }
+.msg.queued .msg-body { opacity: .7; }
+.msg-state { font-size: .7rem; color: var(--amber); font-family: var(--font-mono); margin-top: 2px; }
 .msg-locked, .msg-deleted { color: var(--text-faint); font-style: italic; }
 .msg-edited { color: var(--text-faint); font-size: .72rem; margin-left: 4px; }
 .reactions { display: inline-flex; gap: 4px; margin-left: 6px; }

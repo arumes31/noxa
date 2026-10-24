@@ -6,6 +6,7 @@
 // X25519 key in the AuthResponse (global), MsgChannelKey pushes (join,
 // subscribe, rotation) and history pages (archival generations).
 import { fromBase64, openScope, openSealed, sealScope } from "./crypto.js";
+import { ProtocolError } from "./connection.js";
 import { Msg } from "./frame.js";
 
 export const MsgChatAccepted = 154;
@@ -202,12 +203,14 @@ export class ChatSession extends EventTarget {
      * Sends a channel (scope > 0) or global (scope 0) message with the
      * scope's current key and waits for the server's acceptance.
      */
-    async send(scope, text, { replyTo = 0 } = {}) {
+    async send(scope, text, { replyTo = 0, clientMsgID = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}) {
+        this.#store(scope, { clientMsgID, fromUniqueID: this.uniqueID, from: this.nickname, text, sentAt, own: true, pending: true, queued: false, replyTo });
         const keyID = this.current.get(scope);
         const key = keyID && this.keys.get(scope)?.get(keyID);
-        if (!key) throw new Error("This chat's key has not arrived yet. Try again in a moment.");
-        const clientMsgID = crypto.randomUUID();
-        this.#store(scope, { clientMsgID, fromUniqueID: this.uniqueID, from: this.nickname, text, sentAt: Date.now() / 1000, own: true, pending: true, replyTo });
+        if (!key) {
+            this.#store(scope, { clientMsgID, pending: false, queued: true });
+            throw Object.assign(new Error("This chat's key has not arrived yet."), { retryable: true });
+        }
         const request = { ack_requested: true, text: sealScope(text, key), enc: true, key_id: keyID, client_msg_id: clientMsgID, reply_to_id: replyTo || undefined };
         if (scope > 0) request.channel_id = String(scope);
         try {
@@ -215,9 +218,16 @@ export class ChatSession extends EventTarget {
             this.#store(scope, { clientMsgID, id: accepted.message_id, pending: false });
             return accepted;
         } catch (error) {
-            this.#store(scope, { clientMsgID, failed: true, pending: false });
-            throw error;
+            // A lost connection leaves the message for the outbox to retry.
+            const retryable = !(error instanceof ProtocolError);
+            this.#store(scope, { clientMsgID, failed: !retryable, queued: retryable, pending: false });
+            throw Object.assign(error, { retryable });
         }
+    }
+
+    /** Shows an own message waiting in the outbox. */
+    showQueued(scope, { clientMsgID, text, sentAt, expired = false }) {
+        this.#store(scope, { clientMsgID, fromUniqueID: this.uniqueID, from: this.nickname, text, sentAt, own: true, queued: !expired, failed: expired, pending: false });
     }
 
     sendTyping(scope) {

@@ -1,6 +1,6 @@
 // main.js — boots the mobile web app: server info, stored device, router.
 import "./styles.css";
-import { app, connect, loadDevice, loadInfo, markRead } from "./app.js";
+import { app, connect, flushNow, loadDevice, loadInfo, markRead } from "./app.js";
 import { parseLinkFragment } from "./core/device.js";
 import { t, lang } from "./i18n.js";
 import { h, toast } from "./ui/dom.js";
@@ -69,12 +69,16 @@ function onSignedIn({ offerPasskey: offer } = {}) {
 
 function renderBanner() {
     document.querySelector(".banner")?.remove();
-    if (app.session && !app.online) root.prepend(h("div", { class: "banner", role: "status" }, t("offline.banner")));
+    const waiting = app.outboxWaiting ? ` · ${t("outbox.count", { count: app.outboxWaiting })}` : "";
+    if (app.session && !app.online) root.prepend(h("div", { class: "banner", role: "status" }, t("offline.banner") + waiting));
 }
 
 // Re-render screens that list live state when the session changes.
+let sessions = 0;
 app.addEventListener("session", event => {
     const session = event.detail;
+    // After a reconnect the screen must use the new session.
+    if (sessions++ > 0) route();
     for (const type of ["snapshot", "subscriptions"]) {
         session.addEventListener(type, () => {
             const screen = location.hash.split("/")[1] || "home";
@@ -93,8 +97,13 @@ app.addEventListener("unread", () => {
     if (screen === "home" || screen === "servers") route();
 });
 app.addEventListener("online", renderBanner);
+app.addEventListener("outbox", renderBanner);
 // A tapped notification opens its conversation in the running app.
 navigator.serviceWorker?.addEventListener("message", event => {
+    if (event.data?.type === "flush-outbox") {
+        flushNow().catch(() => {});
+        return;
+    }
     if (event.data?.type !== "open" || typeof event.data.url !== "string") return;
     const url = new URL(event.data.url, location.origin);
     if (url.origin === location.origin && url.pathname.startsWith("/app/")) location.hash = url.hash || "#/home";
