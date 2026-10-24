@@ -12453,12 +12453,26 @@ test("desktop CSP blocks injected script and event handlers while the app works"
     expect(result).toEqual({ injected: false, appLoaded: true });
 });
 
-test("CSP retains supported HTTP image previews", async ({ page }) => {
-    await page.route("http://media.example.invalid/pixel.svg", route => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" />' }));
+test("CSP blocks external preview images and allows server-supplied data", async ({ page }) => {
+    let directRequests = 0;
+    await page.route(/https?:\/\/media\.example\.invalid\//, route => { directRequests++; return route.abort(); });
+    for (const scheme of ["http", "https"]) {
+        expect(await page.evaluate(url => new Promise(resolve => {
+            const image = document.createElement("img");
+            image.onload = () => { image.remove(); resolve(true); };
+            image.onerror = () => { image.remove(); resolve(false); };
+            image.src = url;
+            document.body.append(image);
+        }), `${scheme}://media.example.invalid/pixel.jpg`)).toBe(false);
+    }
+    expect(directRequests).toBe(0);
     expect(await page.evaluate(() => new Promise(resolve => {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 1;
         const image = document.createElement("img");
-        image.onload = () => resolve(true); image.onerror = () => resolve(false);
-        image.src = "http://media.example.invalid/pixel.svg";
+        image.onload = () => { image.remove(); resolve(true); };
+        image.onerror = () => { image.remove(); resolve(false); };
+        image.src = canvas.toDataURL("image/jpeg");
         document.body.append(image);
     }))).toBe(true);
 });
