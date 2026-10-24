@@ -70,14 +70,7 @@ export async function rememberLinkedIdentity(identity, meta) {
     app.meta = { ...meta, linked: true };
 }
 
-export async function rememberGuestIdentity(identity, nickname, serverPassword = "") {
-    await saveIdentity(identity, { guest: true, linked: false, nickname });
-    app.identity = identity;
-    app.meta = { guest: true, linked: false, nickname };
-    app.guestPassword = serverPassword;
-}
-
-export async function forgetDevice({ silent = false } = {}) {
+export async function forgetDevice() {
     app.groups?.close();
     app.groups = null;
     app.calls?.close();
@@ -92,30 +85,44 @@ export async function forgetDevice({ silent = false } = {}) {
     app.identity = null;
     app.meta = {};
     app.guestPassword = "";
-    if (!silent) emit("signedout");
+    emit("signedout");
 }
 
 /** Signs in with the stored device key and starts the chat session. */
-export async function connect() {
+export async function connect({ guest = null } = {}) {
     clearTimeout(reconnectTimer);
+    const reuseGuest = !!(guest && app.meta.guest && app.identity);
+    const identity = guest ? (reuseGuest ? app.identity : newIdentity()) : app.identity;
     const conn = await Connection.open();
     let auth;
     try {
-        auth = await signIn(conn, app.identity, { version: app.info?.version || "0.0.0", nickname: app.meta.guest ? app.meta.nickname : "", serverPassword: app.guestPassword || "" });
+        auth = await signIn(conn, identity, {
+            version: app.info?.version || "0.0.0",
+            nickname: guest ? guest.nickname : app.meta.guest ? app.meta.nickname : "",
+            serverPassword: guest ? guest.serverPassword : app.guestPassword || "",
+        });
     } catch (error) {
         conn.close();
-        if (/signed out|link it again/i.test(error.message)) {
+        if (!guest && /signed out|link it again/i.test(error.message)) {
             await forgetDevice();
             error.revoked = true;
         }
         throw error;
     }
     app.session?.close();
-    const session = new ChatSession(conn, app.identity, auth);
+    const session = new ChatSession(conn, identity, auth);
     app.session = session;
     reconnectAttempt = 0;
     setOnline(true);
-    app.meta = { ...app.meta, deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
+    app.meta = { ...(guest ? { guest: true, linked: false } : app.meta), deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
+    if (guest) {
+        // Authentication has succeeded. Retain incoming channel frames while
+        // replacing local data, and never erase a saved login on a bad password.
+        app.identity = identity;
+        app.guestPassword = guest.serverPassword;
+        if (!reuseGuest) await clearIdentity();
+        await saveIdentity(identity, app.meta);
+    }
     const rejoin = app.voice?.channelID || 0;
     app.voice?.close();
     app.voice = new Voice(session);

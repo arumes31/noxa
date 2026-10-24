@@ -1,6 +1,6 @@
 // connect.js — screen 01: sign in with a passkey, or link from the desktop
 // by QR link (#id=…&k=…) or hidden code, then compare the two-digit code.
-import { app, connect, newIdentity, rememberLinkedIdentity, rememberGuestIdentity, forgetDevice } from "../app.js";
+import { app, connect, newIdentity, rememberLinkedIdentity } from "../app.js";
 import { Connection } from "../core/connection.js";
 import { claimLink, LinkState, linkWithPasskey, passkeysSupported, waitForDecision } from "../core/device.js";
 import { t } from "../i18n.js";
@@ -81,12 +81,9 @@ export function renderConnect(root, { onSignedIn }) {
             guestButton.disabled = true;
             error.textContent = "";
             try {
-                await forgetDevice({ silent: true });
-                await rememberGuestIdentity(newIdentity(), guestName.value.trim(), guestPassword.value);
-                await connect();
+                await connect({ guest: { nickname: guestName.value.trim(), serverPassword: guestPassword.value } });
                 onSignedIn({ offerPasskey: false });
             } catch (err) {
-                await forgetDevice({ silent: true });
                 error.textContent = t("signin.failed", { error: err.message || err });
             } finally { guestButton.disabled = false; }
         } },

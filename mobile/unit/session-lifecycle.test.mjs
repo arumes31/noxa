@@ -68,3 +68,33 @@ test('TURN renewal retries after one transient request failure', async () => {
  } finally {globalThis.setTimeout=realSet;globalThis.clearTimeout=realClear}
 });
 
+
+for (const existingGuest of [false, true]) {
+ test(`failed guest login preserves saved identity (guest=${existingGuest})`, async () => {
+  const savedIdentity = { id: "saved" }, freshIdentity = { id: "fresh" };
+  const savedMeta = existingGuest ? { guest: true, nickname: "Existing guest" } : { linked: true, deviceID: "linked-phone" };
+  const writes = [];
+  let attempted;
+  const none = () => {};
+  const sources = {
+   './core/chat-session.js': {ChatSession},
+   './core/direct.js': {DirectMessages: class {}}, './core/calls.js': {Calls:class {}}, './core/groups.js': {Groups:class {}}, './core/voice.js': {Voice:class {}},
+   './core/connection.js': {Connection:{open:async()=>({close:none})}}, './core/crypto.js': {generateIdentity:()=>freshIdentity},
+   './core/device.js': {signIn:async(conn,identity)=>{attempted=identity;throw new Error("invalid server password")}},
+   './core/identity-store.js': {clearIdentity:()=>writes.push("clear"),loadIdentity:none,saveIdentity:()=>writes.push("save"),updateMeta:()=>writes.push("update")},
+   './core/outbox.js': {enqueue:none,flush:none,showPending:none,waitingCount:none},
+   './core/push.js': {announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:none},
+  };
+  const context=vm.createContext({EventTarget,CustomEvent,setTimeout,clearTimeout,clearInterval,console});
+  const mod=new vm.SourceTextModule(await fs.readFile(new URL('../src/app.js',import.meta.url),'utf8'),{context});
+  await mod.link(spec=>new vm.SyntheticModule(Object.keys(sources[spec]),function(){for(const [k,v] of Object.entries(sources[spec]))this.setExport(k,v)},{context}));
+  await mod.evaluate();
+  mod.namespace.app.identity=savedIdentity;
+  mod.namespace.app.meta=savedMeta;
+  await assert.rejects(mod.namespace.connect({guest:{nickname:"Guest",serverPassword:"wrong"}}), /invalid server password/);
+  assert.equal(mod.namespace.app.identity,savedIdentity);
+  assert.equal(mod.namespace.app.meta,savedMeta);
+  assert.equal(attempted,existingGuest?savedIdentity:freshIdentity);
+  assert.deepEqual(writes,[]);
+ });
+}

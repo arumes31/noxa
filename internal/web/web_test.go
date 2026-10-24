@@ -303,7 +303,7 @@ func TestInfoExposesGuestPolicy(t *testing.T) {
 			t.Fatal(err)
 		}
 		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://chat.example/api/v1/web/info", nil))
+		srv.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "https://chat.example/api/v1/web/info", nil))
 		var info Info
 		if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
 			t.Fatal(err)
