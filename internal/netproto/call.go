@@ -39,6 +39,7 @@ type CallSession struct {
 }
 
 type CallRequest struct {
+	BeforeID       string `json:"before_id,omitempty"`
 	Action         string `json:"action"`
 	ID             string `json:"id"`
 	Target         string `json:"target,omitempty"`
@@ -47,9 +48,10 @@ type CallRequest struct {
 }
 
 type CallResult struct {
-	Action  string        `json:"action"`
-	Call    *CallSession  `json:"call,omitempty"`
-	History []CallSession `json:"history,omitempty"`
+	NextBeforeID string        `json:"next_before_id,omitempty"`
+	Action       string        `json:"action"`
+	Call         *CallSession  `json:"call,omitempty"`
+	History      []CallSession `json:"history,omitempty"`
 }
 
 type CallSignal struct {

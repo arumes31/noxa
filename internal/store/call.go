@@ -54,7 +54,15 @@ func (s *Store) StartPrivateGroupCall(ctx context.Context, uid, groupID string, 
 }
 
 func (s *Store) PrivateCallHistory(ctx context.Context, uid string) ([]netproto.CallSession, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT state FROM private_call_history WHERE participant_uids @> ARRAY[$1]::text[] ORDER BY created_at DESC,call_id DESC LIMIT 50`, uid)
+	return s.PrivateCallHistoryBefore(ctx, uid, "")
+}
+
+// Both the cursor and returned rows must belong to this participant.
+func (s *Store) PrivateCallHistoryBefore(ctx context.Context, uid, beforeID string) ([]netproto.CallSession, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT state FROM private_call_history WHERE participant_uids @> ARRAY[$1]::text[]
+        AND ($2 = '' OR (created_at, call_id) < (SELECT created_at, call_id FROM private_call_history
+            WHERE call_id = NULLIF($2, '')::uuid AND participant_uids @> ARRAY[$1]::text[]))
+        ORDER BY created_at DESC,call_id DESC LIMIT 50`, uid, beforeID)
 	if err != nil {
 		return nil, err
 	}

@@ -44,7 +44,24 @@ func (s *TCPServer) handlePrivateCall(ctx context.Context, client *Client, frame
 		if request.Action == "history" {
 			s.privateCallsMu.Lock()
 			defer s.privateCallsMu.Unlock()
-			history, err := backend.PrivateCallHistory(ctx, client.UniqueID)
+			var history []netproto.CallSession
+			var err error
+			next := ""
+			if paged, ok := backend.(interface {
+				PrivateCallHistoryBefore(context.Context, string, string) ([]netproto.CallSession, error)
+			}); ok {
+				if request.BeforeID != "" {
+					if _, parseErr := uuid.Parse(request.BeforeID); parseErr != nil {
+						return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid call history cursor")
+					}
+				}
+				history, err = paged.PrivateCallHistoryBefore(ctx, client.UniqueID, request.BeforeID)
+				if len(history) == 50 {
+					next = history[len(history)-1].ID
+				}
+			} else {
+				history, err = backend.PrivateCallHistory(ctx, client.UniqueID)
+			}
 			if err != nil {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "call history unavailable")
 			}
@@ -70,7 +87,7 @@ func (s *TCPServer) handlePrivateCall(ctx context.Context, client *Client, frame
 					}
 				}
 			}
-			return s.writeCommittedReply(client, netproto.MsgCallResult, netproto.CallResult{Action: "history", History: history})
+			return s.writeCommittedReply(client, netproto.MsgCallResult, netproto.CallResult{Action: "history", History: history, NextBeforeID: next})
 		}
 		if request.Action == "start" {
 			if s.chatRate != nil && !s.chatRate.allowLimit("call:"+client.UniqueID, time.Now(), 4) {

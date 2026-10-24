@@ -7,7 +7,7 @@ import { createSafeImage } from "./safe-media.js";
 import { previewLine } from "./dm-model.js";
 import { memberRoles, roleChip } from "./role-presentation.js";
 import { sessionUserID } from "./session-identity.js";
-import { activityMessages, bindSharedLinks, jumpMessageReference, openPM, renderActivityMessage } from "./chat-ui.js";
+import { activityHistory, activityMessages, bindSharedLinks, jumpMessageReference, openPM, renderActivityMessage } from "./chat-ui.js";
 import { startPrivateCall } from "./private-calls.js";
 import { youtubeVideo } from "./youtube-previews.js";
 import { xPost } from "./x-previews.js";
@@ -79,10 +79,12 @@ function previewText(node, message) {
 export function initActivityWorkspace(notifications) {
     let root = null, panel, content, sidebar, nav, filters, search, currentTab = "activity", filter = "all", query = "";
     let openedScope = "", revision = 0, stopAudit = null, stopSnooze = null, refreshQueued = false;
-    let calls = [], callsLoaded = false, callsRequest = null, callsRevision = 0;
+    let history = null, historyTimer = null, pageSize = 50;
+    let calls = [], callsNext = "", callsLoaded = false, callsRequest = null, callsRevision = 0;
     const current = captured => !!root?.isConnected && captured === openedScope && captured === scope();
     const close = () => {
-        revision++; callsRevision++; calls = []; callsLoaded = false; callsRequest = null;
+        revision++; callsRevision++; calls = []; callsNext = ""; callsLoaded = false; callsRequest = null;
+        history?.dispose(); history = null; clearInterval(historyTimer); historyTimer = null; pageSize = 50;
         stopAudit?.(); stopAudit = null;
         stopSnooze?.(); stopSnooze = null;
         root?.remove(); root = null;
@@ -220,7 +222,27 @@ export function initActivityWorkspace(notifications) {
     function renderFeed() {
         content.replaceChildren();
         if (currentTab === "activity") content.append(renderFriends());
-        const entries = activityMessages();
+        const merged = new Map((history?.entries() || []).map(entry => [entry.key, entry]));
+        for (const entry of activityMessages()) {
+            const previous = merged.get(entry.key);
+            if (!previous || entry.message.deleted || (entry.message.version || 1) >= (previous.message.version || 1)) merged.set(entry.key, entry);
+        }
+        const blocked = new Set(state().settings?.blocked_users || []);
+        const entries = [...merged.values()].filter(entry => !entry.message.deleted && entry.message.encVerified && entry.message.fromUID && entry.message.text && !blocked.has(entry.message.fromUID)
+            && (entry.reference.kind !== "channel" || !entry.reference.channel_id || state().channels.some(channel => channel.ChannelID === entry.reference.channel_id && channel.SystemKind !== "home")))
+            .sort((a, b) => b.message.ts - a.message.ts);
+        const paging = count => {
+            const status = history?.status();
+            if (status?.loading) content.append(el("p", "activity-empty", t("activity.loading")));
+            if (status?.failed) content.append(el("p", "activity-empty", t("activity.partial")));
+            if (count > pageSize || status?.more || status?.failed) {
+                const more = button(t(count > pageSize ? "activity.showMore" : status?.failed ? "activity.retry" : "activity.older"), async () => {
+                    if (count > pageSize) { pageSize += 50; renderFeed(); }
+                    else { pageSize += 50; await (status?.failed ? history?.refresh() : history?.older()); }
+                });
+                more.disabled = !!status?.loading; content.append(more);
+            }
+        };
         const visible = entries.filter(entry => {
             const m = entry.message;
             if (query && !`${m.from} ${m.text} ${entry.name}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())) return false;
@@ -231,25 +253,31 @@ export function initActivityWorkspace(notifications) {
         if (currentTab === "media") {
             content.append(el("p", "activity-empty", t("activity.mediaHint")));
             const grid = el("section", "activity-media-grid"); grid.setAttribute("aria-label", t("activity.media"));
-            for (const entry of visible.slice(0, 48)) grid.append(messageRow(entry));
+            for (const entry of visible.slice(0, pageSize)) grid.append(messageRow(entry));
             if (!grid.childElementCount) grid.append(el("p", "activity-empty", t("activity.empty")));
-            content.append(grid); return;
+            content.append(grid); paging(visible.length); return;
         }
         if (["all", "mentions"].includes(filter)) {
             const mentions = el("section", "activity-mentions");
             mentions.append(el("h3", "activity-section-heading", t("activity.yourMentions")));
-            for (const entry of visible.filter(e => e.message.mentioned).slice(0, 10)) mentions.append(messageRow(entry, true));
+            for (const entry of visible.filter(e => e.message.mentioned).slice(0, pageSize)) mentions.append(messageRow(entry, true));
             if (mentions.childElementCount === 1) mentions.append(el("p", "activity-empty", t("activity.empty")));
             content.append(mentions);
         }
-        if (filter === "mentions") return;
+        if (filter === "mentions") { paging(visible.length); return; }
         content.append(el("h3", "activity-section-heading", t("activity.recent")));
         const list = el("section", "activity-feed"); list.setAttribute("aria-label", t("activity.recent"));
-        const rows = visible.filter(e => !e.message.mentioned || filter !== "all").slice(0, 50).map(entry => ({ at: entry.message.ts, node: messageRow(entry, true) }));
+        const rows = visible.filter(e => !e.message.mentioned || filter !== "all").slice(0, pageSize).map(entry => ({ at: entry.message.ts, node: messageRow(entry, true) }));
         const categories = { joins: ["join_leave", "buddy_online"], streams: ["stream", "stream_started"], invitations: ["invite", "invitation", "poke"] };
         for (const n of notifications.entries().filter(n => (filter === "all" || categories[filter]?.includes(n.kind)) && (!query || n.text.toLocaleLowerCase().includes(query.toLocaleLowerCase())))) {
             // Loaded chat messages already have their own richer row above.
-            if (filter === "all" && ["mention", "dm", "channel_message", "keyword"].includes(n.kind)) continue;
+            if (filter === "all" && ["mention", "dm", "channel_message", "keyword"].includes(n.kind) && entries.some(entry => {
+                const reference = n.reference;
+                return reference && reference.kind === entry.reference.kind && (reference.kind === "channel"
+                    ? reference.channel_id === entry.reference.channel_id && reference.message_id === entry.reference.message_id
+                    : reference.kind === "group" ? reference.group_id === entry.reference.group_id && reference.message_id === entry.reference.message_id
+                    : reference.peer_id === entry.reference.peer_id && !!reference.client_message_id && reference.client_message_id === entry.reference.client_message_id);
+            })) continue;
             rows.push({ at: n.at, node: notifyRow(n) });
         }
         if (["all", "invitations"].includes(filter)) {
@@ -261,13 +289,14 @@ export function initActivityWorkspace(notifications) {
         for (const row of rows.sort((a, b) => b.at - a.at)) list.append(row.node);
         if (!list.childElementCount) list.append(el("p", "activity-empty", t("activity.empty")));
         content.append(list);
+        paging(visible.length);
         if (filter === "all") renderRooms();
     }
     function renderRooms() {
         const rooms = state().channels.filter(c => c.SystemKind !== "home" && !c.TextOnly && state().clients.some(p => p.channel_id === c.ChannelID));
         if (!rooms.length) return;
         const section = el("section", "activity-rooms"); section.append(el("h3", "", t("activity.liveRooms")));
-        for (const room of rooms.slice(0, 8)) {
+        for (const room of rooms) {
             const peers = state().clients.filter(p => p.channel_id === room.ChannelID);
             const row = el("div", "activity-room");
             row.append(el("strong", "", room.Name), el("small", "", t("activity.voiceCount", { count: peers.length })));
@@ -301,14 +330,15 @@ export function initActivityWorkspace(notifications) {
         if (peers.length === 1 && currentTab === "calls") row.append(button(t("activity.message"), () => { close(); openPM(peers[0].unique_id, names); }, "activity-button", "chat"));
         return row;
     }
-    function loadCalls(force = false) {
+    function loadCalls(force = false, older = false) {
         if (callsRequest) return callsRequest;
-        if (callsLoaded && !force) return Promise.resolve();
+        if (callsLoaded && !force && !older) return Promise.resolve();
         const captured = openedScope, token = ++callsRevision, tabID = state().activeTabID;
-        callsRequest = Promise.resolve().then(() => window.go.main.App.PrivateCallForTab(tabID, { action: "history" })).then(result => {
+        callsRequest = Promise.resolve().then(() => window.go.main.App.PrivateCallForTab(tabID, { action: "history", before_id: older ? callsNext : "" })).then(result => {
             if (!current(captured) || token !== callsRevision) return;
             const me = sessionUserID(state());
-            calls = (result.history || []).filter(call => call.participants?.some(p => p.unique_id === me)).sort((a, b) => b.created_at - a.created_at).slice(0, 100);
+            callsNext = result.next_before_id || "";
+            calls = [...new Map([...(older ? calls : []), ...(result.history || [])].map(call => [call.id, call])).values()].filter(call => call.participants?.some(p => p.unique_id === me)).sort((a, b) => b.created_at - a.created_at);
             callsLoaded = true;
         }).finally(() => { if (token === callsRevision) callsRequest = null; });
         return callsRequest;
@@ -329,12 +359,17 @@ export function initActivityWorkspace(notifications) {
                 content.append(row);
             }
             if (!content.childElementCount) content.append(el("p", "activity-empty", t("activity.empty")));
+            if (callsNext) content.append(button(t("activity.older"), async event => {
+                event.currentTarget.disabled = true;
+                try { await loadCalls(false, true); if (current(captured) && currentTab === "calls") void renderCalls(); }
+                catch { if (current(captured)) content.append(el("p", "activity-empty", t("activity.failed"))); }
+            }));
         } catch { if (current(captured) && token === revision) content.replaceChildren(el("p", "activity-empty", t("activity.failed"))); }
     }
     function select(tab) {
         if (!root || tab === "audit" && !state().canViewAuditLog) return;
         revision++; stopAudit?.(); stopAudit = null;
-        currentTab = tab; filter = "all"; query = ""; search.value = "";
+        currentTab = tab; filter = "all"; query = ""; search.value = ""; pageSize = 50;
         root.dataset.view = tab;
         for (const node of nav.querySelectorAll("[role=tab]")) {
             node.setAttribute("aria-selected", String(node.dataset.tab === tab)); node.tabIndex = node.dataset.tab === tab ? 0 : -1;
@@ -345,7 +380,7 @@ export function initActivityWorkspace(notifications) {
         for (const key of choices) {
             const label = ["youtube", "twitch", "x", "whatnot", "vimeo", "dailymotion"].includes(key) ? { youtube: "YouTube", twitch: "Twitch", x: "X", whatnot: "Whatnot", vimeo: "Vimeo", dailymotion: "Dailymotion" }[key] : t(`activity.${key}`);
             const item = button(label, () => {
-                filter = key;
+                filter = key; pageSize = 50;
                 for (const b of filters.children) b.setAttribute("aria-pressed", String(b === item));
                 renderFeed();
             });
@@ -415,11 +450,11 @@ export function initActivityWorkspace(notifications) {
         header.append(heading, nav, exit);
         const toolbar = el("div", "activity-toolbar"); filters = el("div", "activity-filters");
         search = el("input", "activity-search"); search.type = "search"; search.placeholder = t("activity.search"); search.setAttribute("aria-label", t("activity.search"));
-        search.oninput = () => { query = search.value; if (currentTab === "calls") void renderCalls(); else renderFeed(); };
+        search.oninput = () => { query = search.value; pageSize = 50; if (currentTab === "calls") void renderCalls(); else renderFeed(); };
         const searchTools = el("details", "activity-search-tools"), searchToggle = el("summary");
         searchToggle.innerHTML = icon("search"); searchToggle.setAttribute("aria-label", t("activity.search")); searchToggle.title = t("activity.search");
         searchTools.append(searchToggle, search);
-        const reload = button("", () => { callsLoaded = false; select(currentTab); }, "activity-link activity-refresh", "refresh");
+        const reload = button("", () => { callsLoaded = false; void history?.refresh(); select(currentTab); }, "activity-link activity-refresh", "refresh");
         reload.setAttribute("aria-label", t("activity.refresh")); reload.title = t("activity.refresh");
         toolbar.append(filters, searchTools, reload);
         const layout = el("div", "activity-layout"); panel = el("div", "activity-panel"); panel.id = "activity-panel"; panel.setAttribute("role", "tabpanel");
@@ -427,15 +462,27 @@ export function initActivityWorkspace(notifications) {
         sidebar = el("aside", "activity-notifications"); sidebar.setAttribute("aria-label", t("activity.notifications"));
         layout.append(panel, sidebar); root.append(header, toolbar, layout); center.append(root); center.classList.add("activity-open");
         document.getElementById("notif-bell")?.setAttribute("aria-expanded", "true");
+        const captured = openedScope;
+        history = activityHistory(() => current(captured), queueRefresh);
         select(tab); renderSidebar(); nav.querySelector('[aria-selected="true"]')?.focus();
+        void history.refresh();
+        historyTimer = setInterval(() => { if (current(captured)) void history?.refresh(); }, 30_000);
     }
     notifications.subscribe(queueRefresh);
     window.addEventListener("noxa-audit-access-changed", refresh);
     window.addEventListener("noxa-language-changed", () => { if (root) { const tab = currentTab; close(); open(tab); } });
     for (const event of ["tab_reset", "disconnected", "dm_history_identity_changed", "tab_identity"]) window.runtime.EventsOn(event, close);
-    for (const event of ["snapshot", "subscriptions", "settings_update", "avatar"]) window.runtime.EventsOn(event, queueRefresh);
+    for (const event of ["snapshot", "subscriptions"]) window.runtime.EventsOn(event, () => {
+        if (!root) return;
+        history?.invalidate(); void history?.refresh(); queueRefresh();
+    });
+    for (const event of ["settings_update", "avatar"]) window.runtime.EventsOn(event, queueRefresh);
     window.runtime.EventsOn("event", json => {
         const event = parseRuntimeObject(json);
+        if (["conversation_changed", "chat_deleted", "chat_edited", "dm_changed"].includes(event?.type) && root) {
+            history?.invalidate();
+            void history?.refresh();
+        }
         if (event?.type === "private_call" && root) {
             callsLoaded = false;
             const captured = openedScope;
