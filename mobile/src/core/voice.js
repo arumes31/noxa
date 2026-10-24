@@ -10,10 +10,24 @@
 // microphone, "<clientID>|<slot>" for cam, screen and screenaudio
 // (client/frontend/src/media-track-id.js). Speaking state comes from the
 // server's speaking_changed events.
+//
+// The microphone follows the voice settings (core/settings.js): device and
+// processing constraints, activation mode (continuous, voice activation,
+// push-to-talk with a release delay) and the data saver. Received audio is
+// mixed per member through Web Audio (core/voice-audio.js).
 import { Msg } from "./frame.js";
+import * as settings from "./settings.js";
+import { LevelMeter, Mixer, installAudioUnlock } from "./voice-audio.js";
+import { MutedTalkingWarning, PushToTalkLatch, VoiceGate, parseKeyKind, playbackGain } from "./voice-gate.js";
 
 const MsgChannelJoined = 158;
 const STATS_INTERVAL = 2000;
+const LEVEL_INTERVAL = 50;
+/** Outgoing bitrate caps of the data saver (bits/s). */
+export const LOW_AUDIO_BITRATE = 24000;
+export const LOW_VIDEO_BITRATE = 150000;
+const MIC_SETTINGS = ["microphoneID", "echoCancellation", "noiseSuppression", "autoGainControl"];
+const VOLUME_SETTINGS = ["masterVolume", "userVolumes", "mutedUsers", "shareVolumes"];
 
 /** Publisher and slot of a remote track id. */
 export function parseTrackID(id) {
@@ -50,8 +64,26 @@ export function watchCodecs() {
     return h264 ? ["h264", "vp8"] : ["vp8"];
 }
 
+/** getUserMedia constraints for the microphone settings. */
+export function micConstraints(s = settings.all(), { exactDevice = true } = {}) {
+    const audio = { echoCancellation: s.echoCancellation !== false, noiseSuppression: s.noiseSuppression !== false, autoGainControl: s.autoGainControl !== false };
+    if (exactDevice && s.microphoneID) audio.deviceId = { exact: s.microphoneID };
+    return { audio };
+}
+
+/** Opens the chosen microphone; a vanished device falls back to the default. */
+export async function openMicrophone(s = settings.all()) {
+    try {
+        return await navigator.mediaDevices.getUserMedia(micConstraints(s));
+    } catch (error) {
+        if (!s.microphoneID || !/Overconstrained|NotFound/.test(error?.name || "")) throw error;
+        return navigator.mediaDevices.getUserMedia(micConstraints(s, { exactDevice: false }));
+    }
+}
+
 export class Voice extends EventTarget {
-    constructor(session) {
+    /** previous: the Voice of a dropped connection; mute, deafen and the last whisperer carry over. */
+    constructor(session, previous = null) {
         super();
         this.session = session;
         this.conn = session.conn;
@@ -59,10 +91,19 @@ export class Voice extends EventTarget {
         this.pc = null;
         this.mic = null;
         this.camera = null;
-        this.muted = false;
-        this.deafened = false;
-        this.pushToTalk = false;
+        this.muted = !!previous?.muted;
+        this.deafened = !!previous?.deafened;
         this.talking = false;
+        /** Outgoing audio goes to the whisper targets while true. */
+        this.whispering = false;
+        /** Client IDs whispering to this phone right now. */
+        this.whisperers = new Set();
+        /** {uniqueID, clientID, nickname} of the last member who whispered here. */
+        this.lastWhisperer = previous?.lastWhisperer || null;
+        /** Current microphone level (RMS 0..1) while in a call. */
+        this.level = 0;
+        /** {channel, previous} while the network echo test runs. */
+        this.echo = null;
         /** clientID -> <audio> for microphones and shared audio. */
         this.audio = new Map();
         /** "clientID|slot" -> MediaStreamTrack for watched video. */
@@ -72,6 +113,12 @@ export class Voice extends EventTarget {
         this.watching = new Set();
         this.sinkId = "";
         this.bytes = { sent: 0, received: 0 };
+        this.mixer = new Mixer();
+        this.#latch = new PushToTalkLatch({ releaseMs: settings.get("pttReleaseMs"), onChange: active => {
+            this.talking = active;
+            this.#applyMic();
+        } });
+        this.#gate = new VoiceGate({ threshold: settings.get("voiceThreshold") });
         this.#chain = Promise.resolve();
         this.#pendingCandidates = [];
         this.#stop = [
@@ -80,15 +127,35 @@ export class Voice extends EventTarget {
         ];
         this.#onServerEvent = event => this.#serverEvent(event.detail);
         session.addEventListener("server-event", this.#onServerEvent);
+        this.#onWhisper = event => this.#whisper(event.detail);
+        session.addEventListener("whisper", this.#onWhisper);
+        this.#onSnapshot = () => this.#snapshot();
+        session.addEventListener("snapshot", this.#onSnapshot);
+        this.#stopSettings = settings.onChange(({ changed }) => this.#settingsChanged(changed));
+        installAudioUnlock();
     }
 
     #chain;
     #pendingCandidates;
     #stop;
     #onServerEvent;
+    #onWhisper;
+    #onSnapshot;
+    #stopSettings;
     #statsTimer = 0;
     #watchRevision = 0;
     #watchSession = "0";
+    #latch;
+    #gate;
+    #meter = null;
+    #meterTrack = null;
+    #levelTimer = 0;
+    #mutedWarning = new MutedTalkingWarning();
+    #micTransceiver = null;
+    #wasCalled = false;
+    #whisperSeq = 0;
+    /** "clientID|slot" -> the stream description being watched. */
+    #watched = new Map();
 
     #emit(type, detail) {
         this.dispatchEvent(new CustomEvent(type, { detail }));
@@ -96,6 +163,25 @@ export class Voice extends EventTarget {
 
     get active() {
         return this.channelID !== 0;
+    }
+
+    /** Activation mode from the settings: continuous | voice | ptt. */
+    get activation() {
+        return settings.get("activation");
+    }
+
+    get pushToTalk() {
+        return this.activation === "ptt";
+    }
+
+    /** Data saver: capped outgoing bitrate and low receive quality (also read by the video screens). */
+    get lowBandwidth() {
+        return !!settings.get("lowBandwidth");
+    }
+
+    /** Whether the voice-activation gate is open right now. */
+    get gateOpen() {
+        return this.#gate.open;
     }
 
     /** Serializes negotiations; a failure never blocks the next one. */
@@ -111,6 +197,7 @@ export class Voice extends EventTarget {
     async join(channelID) {
         const joined = await this.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: channelID }, MsgChannelJoined);
         this.channelID = joined.channel_id ?? channelID;
+        if (this.echo && this.channelID !== this.echo.channel) this.echo = null;
         try {
             if (!this.pc) await this.#start();
         } catch (error) {
@@ -119,13 +206,15 @@ export class Voice extends EventTarget {
             await this.leave();
             throw error;
         }
+        // Mute and deafen survive a reconnect; tell the new session.
+        if (this.muted || this.deafened) this.#announce();
         this.#emit("state");
         return this.channelID;
     }
 
     async #start() {
         try {
-            this.mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+            this.mic = await openMicrophone();
         } catch (error) {
             this.mic = null;
             this.#emit("mic-error", error);
@@ -148,12 +237,14 @@ export class Voice extends EventTarget {
         const track = this.mic?.getAudioTracks()[0];
         if (track) {
             track.enabled = this.#micOpen();
-            pc.addTransceiver(track, { direction: "sendrecv", sendEncodings: [{ priority: "high", networkPriority: "high" }] });
+            this.#micTransceiver = pc.addTransceiver(track, { direction: "sendrecv", sendEncodings: [{ priority: "high", networkPriority: "high" }] });
         } else {
-            pc.addTransceiver("audio", { direction: "recvonly" });
+            this.#micTransceiver = pc.addTransceiver("audio", { direction: "recvonly" });
         }
+        this.#startMeter();
         this.#statsTimer = setInterval(() => this.#collectStats(), STATS_INTERVAL);
         await this.#enqueue(() => this.#offer());
+        this.#applyBitrate();
     }
 
     /** Leaves voice: channel 0, then tears the connection down. */
@@ -172,6 +263,14 @@ export class Voice extends EventTarget {
     #stopRenewal = null;
 
     #teardown() {
+        this.#stopMeter();
+        this.#latch.cancel();
+        this.#gate.reset();
+        this.whispering = false;
+        this.whisperers.clear();
+        this.echo = null;
+        this.#micTransceiver = null;
+        this.#watched.clear();
         this.#stopRenewal?.();
         this.#stopRenewal = null;
         clearInterval(this.#statsTimer);
@@ -183,7 +282,8 @@ export class Voice extends EventTarget {
         this.camera = null;
         this.#cameraTransceiver = null;
         this.#cameraGeneration = "0";
-        for (const element of this.audio.values()) {
+        for (const [key, element] of this.audio) {
+            this.mixer.detach(key);
             element.srcObject = null;
             element.remove();
         }
@@ -196,17 +296,138 @@ export class Voice extends EventTarget {
     close() {
         this.#teardown();
         this.#stop.forEach(stop => stop());
+        this.#stopSettings();
+        this.mixer.close();
         this.session.removeEventListener("server-event", this.#onServerEvent);
+        this.session.removeEventListener("whisper", this.#onWhisper);
+        this.session.removeEventListener("snapshot", this.#onSnapshot);
+    }
+
+    // --- Microphone level, gate and settings ----------------------------------
+
+    /** Samples a private clone of the microphone, which stays enabled while muted. */
+    #startMeter() {
+        this.#stopMeter();
+        const track = this.mic?.getAudioTracks?.()[0];
+        if (!track) return;
+        try {
+            this.#meterTrack = track.clone();
+            this.#meterTrack.enabled = true;
+            this.#meter = new LevelMeter(new MediaStream([this.#meterTrack]));
+        } catch {
+            this.#meterTrack?.stop();
+            this.#meterTrack = null;
+            this.#meter = null;
+            return;
+        }
+        this.#levelTimer = setInterval(() => this.#tick(), LEVEL_INTERVAL);
+    }
+
+    #stopMeter() {
+        clearInterval(this.#levelTimer);
+        this.#levelTimer = 0;
+        this.#meter?.close();
+        this.#meter = null;
+        this.#meterTrack?.stop();
+        this.#meterTrack = null;
+        this.level = 0;
+    }
+
+    #tick() {
+        const level = this.#meter?.level() ?? 0;
+        this.level = level;
+        const now = performance.now();
+        const threshold = settings.get("voiceThreshold");
+        this.#gate.threshold = threshold;
+        if (this.#gate.update(level, now) && this.activation === "voice") this.#applyMic(true);
+        if (settings.get("warnMutedTalking") && !this.deafened && this.#mutedWarning.check({ muted: this.muted, level, threshold: Math.max(threshold, 0.01), now })) {
+            this.#emit("muted-talking");
+        }
+    }
+
+    /** A private stream of the call's microphone for meters and test recordings, or null. */
+    monitorStream() {
+        const track = this.mic?.getAudioTracks?.()[0];
+        if (!track) return null;
+        const clone = track.clone();
+        clone.enabled = true;
+        return new MediaStream([clone]);
+    }
+
+    /** Takes the microphone again with new settings and swaps it into the call. */
+    async #reacquire() {
+        if (!this.pc || !this.#micTransceiver) return;
+        const stream = await openMicrophone();
+        const track = stream.getAudioTracks()[0];
+        if (!this.pc || !track) {
+            stream.getTracks().forEach(t => t.stop());
+            return;
+        }
+        track.enabled = this.#micOpen();
+        const old = this.mic;
+        const transceiver = this.#micTransceiver;
+        await transceiver.sender.replaceTrack(track);
+        this.mic = stream;
+        old?.getTracks().forEach(t => t.stop());
+        if (transceiver.direction !== "sendrecv") {
+            transceiver.direction = "sendrecv";
+            await this.#enqueue(() => this.#offer());
+        }
+        this.#startMeter();
+        await this.#applyBitrate();
+        this.#emit("state");
+    }
+
+    #settingsChanged(changed) {
+        const has = name => changed.includes(name);
+        if (has("pttReleaseMs")) this.#latch.releaseMs = settings.get("pttReleaseMs");
+        if (has("activation")) {
+            this.#latch.cancel();
+            this.#gate.reset();
+            this.#applyMic();
+        }
+        if (VOLUME_SETTINGS.some(has)) this.#applyVolumes();
+        if (has("lowBandwidth") || has("receiveQuality")) {
+            this.#applyBitrate();
+            for (const stream of this.#watched.values()) this.#requestQuality(stream);
+        }
+        if (this.active && MIC_SETTINGS.some(has)) this.#reacquire().catch(error => this.#emit("mic-error", error));
+    }
+
+    /** Caps the outgoing bitrate when the data saver is on. */
+    async #applyBitrate() {
+        const low = this.lowBandwidth;
+        for (const [transceiver, cap] of [[this.#micTransceiver, LOW_AUDIO_BITRATE], [this.#cameraTransceiver, LOW_VIDEO_BITRATE]]) {
+            const sender = transceiver?.sender;
+            if (!sender?.track || !sender.getParameters) continue;
+            try {
+                const parameters = sender.getParameters();
+                if (!parameters.encodings?.length) continue;
+                if (low) parameters.encodings[0].maxBitrate = cap;
+                else delete parameters.encodings[0].maxBitrate;
+                await sender.setParameters(parameters);
+            } catch {
+                // Not negotiated yet; the next change applies it.
+            }
+        }
+    }
+
+    /** The outgoing microphone's current bitrate cap (bits/s), or 0. */
+    sendBitrateCap() {
+        try { return this.#micTransceiver?.sender.getParameters().encodings?.[0]?.maxBitrate || 0; } catch { return 0; }
     }
 
     // --- Negotiation ----------------------------------------------------------
 
     #trackSlots() {
         const out = [];
+        // A replaced microphone keeps the MSID it was negotiated with.
+        const ids = msidByMid(this.pc.localDescription?.sdp || "");
         for (const transceiver of this.pc.getTransceivers()) {
             const track = transceiver.sender.track;
-            if (track?.kind === "audio") out.push({ track_id: track.id, slot: "mic" });
-            else if (track?.kind === "video" && transceiver === this.#cameraTransceiver) out.push({ track_id: track.id, slot: "cam" });
+            const id = ids.get(transceiver.mid) || track?.id;
+            if (track?.kind === "audio") out.push({ track_id: id, slot: "mic" });
+            else if (track?.kind === "video" && transceiver === this.#cameraTransceiver) out.push({ track_id: id, slot: "cam" });
         }
         return out;
     }
@@ -235,6 +456,7 @@ export class Voice extends EventTarget {
             const result = await this.conn.request(Msg.VideoStreamControl, { action: "publish", slot: "cam", generation: "0", revision: "0", session: "0", active: true, codecs: ["vp8"] },
                 Msg.VideoStreamResult, { accept: r => r.action === "publish" });
             this.#cameraGeneration = String(result.generation ?? "0");
+            this.#applyBitrate();
         } catch (error) {
             await this.stopCamera().catch(() => {});
             throw error;
@@ -322,6 +544,7 @@ export class Voice extends EventTarget {
         }
         for (const [key, element] of this.audio) {
             if (!audio.has(key) || element.srcObject?.getTracks()[0] !== audio.get(key)) {
+                this.mixer.detach(key);
                 element.srcObject = null;
                 element.remove();
                 this.audio.delete(key);
@@ -331,11 +554,11 @@ export class Voice extends EventTarget {
             if (this.audio.has(key)) continue;
             const element = document.createElement("audio");
             element.autoplay = true;
-            element.muted = this.deafened;
             element.srcObject = new MediaStream([track]);
             if (this.sinkId && element.setSinkId) element.setSinkId(this.sinkId).catch(() => {});
             element.dataset.publisher = key;
             document.body.append(element);
+            this.mixer.attach(key, element, this.gainFor(key));
             element.play().catch(() => {});
             this.audio.set(key, element);
         }
@@ -347,13 +570,27 @@ export class Voice extends EventTarget {
 
     #micOpen() {
         if (this.muted || this.deafened) return false;
-        return this.pushToTalk ? this.talking : true;
+        if (this.whispering) return true;
+        const mode = this.activation;
+        if (mode === "ptt") return this.talking;
+        // Without Web Audio there is no level to gate on; stay open.
+        if (mode === "voice") return this.#meter ? this.#gate.open : true;
+        return true;
     }
 
-    #applyMic() {
-        const track = this.mic?.getAudioTracks()[0];
-        if (track) track.enabled = this.#micOpen();
-        this.#emit("state");
+    /** Whether the microphone is sending right now. */
+    get transmitting() {
+        return !!this.mic && this.#micOpen();
+    }
+
+    /** quiet: the gate toggles often, so only a real change is announced, as "transmit". */
+    #applyMic(quiet = false) {
+        const track = this.mic?.getAudioTracks?.()[0];
+        const open = this.#micOpen();
+        const changed = !!track && track.enabled !== open;
+        if (track) track.enabled = open;
+        if (!quiet) this.#emit("state");
+        else if (changed) this.#emit("transmit");
     }
 
     #announce() {
@@ -368,21 +605,42 @@ export class Voice extends EventTarget {
 
     setDeafened(deafened) {
         this.deafened = deafened;
-        for (const element of this.audio.values()) element.muted = deafened;
+        this.#applyVolumes();
         this.#applyMic();
         this.#announce();
     }
 
+    /** Switches between push-to-talk and continuous transmission. */
     setPushToTalk(enabled) {
-        this.pushToTalk = enabled;
-        this.talking = false;
-        this.#applyMic();
+        if (enabled === this.pushToTalk) return;
+        settings.set({ activation: enabled ? "ptt" : "continuous" });
     }
 
-    /** Push-to-talk: open the microphone while held. */
+    /** Push-to-talk: open the microphone while held, close after the release delay. */
     setTalking(talking) {
-        this.talking = talking;
-        this.#applyMic();
+        if (talking) this.#latch.press();
+        else this.#latch.release();
+    }
+
+    // --- Per-member playback ---------------------------------------------------
+
+    #client(clientID) {
+        return this.session.clients?.().find(c => c.client_id === clientID) || null;
+    }
+
+    /** Playback gain of a received track key ("clientID" or "clientID|slot"). */
+    gainFor(key) {
+        const { clientID, kind } = parseKeyKind(key);
+        const client = this.#client(clientID);
+        const channel = this.session.channels?.().find(c => c.id === this.channelID);
+        // Others are lowered while a priority speaker (not this phone) talks.
+        const ducked = kind === "mic" && !!channel?.clients.some(c => c.priority_speaker && c.client_id !== clientID
+            && c.client_id !== this.session.clientID && this.speaking.has(c.client_id));
+        return playbackGain({ uid: client?.unique_id || "", kind, settings: settings.all(), deafened: this.deafened, ducked });
+    }
+
+    #applyVolumes() {
+        for (const key of this.audio.keys()) this.mixer.setGain(key, this.gainFor(key));
     }
 
     // --- Audio output ------------------------------------------------------------
@@ -400,6 +658,7 @@ export class Voice extends EventTarget {
     async setOutput(deviceId) {
         this.sinkId = deviceId;
         await Promise.all([...this.audio.values()].map(element => element.setSinkId?.(deviceId).catch(() => {})));
+        await this.mixer.setSink(deviceId);
         this.#emit("state");
     }
 
@@ -414,10 +673,28 @@ export class Voice extends EventTarget {
     // --- Server events and statistics ---------------------------------------
 
     #serverEvent({ type, data }) {
-        if (type !== "speaking_changed" || !data?.client_id) return;
+        if (!data?.client_id) return;
+        if (type === "priority_speaker_changed") {
+            // No snapshot follows this event; update the tree in place.
+            const client = this.#client(data.client_id);
+            if (client) client.priority_speaker = !!data.active;
+            this.#applyVolumes();
+            this.#emit("state");
+            return;
+        }
+        if (type !== "speaking_changed") return;
         if (data.speaking) this.speaking.add(data.client_id);
         else this.speaking.delete(data.client_id);
+        this.#applyVolumes();
         this.#emit("speaking", data);
+    }
+
+    #snapshot() {
+        // Track keys map to members only once the tree knows them.
+        this.#applyVolumes();
+        const called = !!this.session.self?.()?.hand_called;
+        if (called && !this.#wasCalled && this.active) this.#emit("called");
+        this.#wasCalled = called;
     }
 
     async #collectStats() {
@@ -435,6 +712,103 @@ export class Voice extends EventTarget {
         this.#emit("stats", this.bytes);
     }
 
+    // --- Whisper ------------------------------------------------------------------
+
+    #whisper(data) {
+        if (!data?.from_client_id) return;
+        if (data.speaking) {
+            this.whisperers.add(data.from_client_id);
+            this.lastWhisperer = { clientID: data.from_client_id, uniqueID: data.from_unique_id || "", nickname: data.from_nickname || "" };
+        } else {
+            this.whisperers.delete(data.from_client_id);
+        }
+        this.#emit("whisper", data);
+    }
+
+    /** Saved whisper targets: {uniqueIDs, channelIDs}. */
+    get whisperTargets() {
+        const targets = settings.get("whisperTargets") || {};
+        return { uniqueIDs: targets.uniqueIDs || [], channelIDs: targets.channelIDs || [] };
+    }
+
+    setWhisperTargets(targets) {
+        settings.set({ whisperTargets: { uniqueIDs: [...new Set(targets.uniqueIDs || [])], channelIDs: [...new Set(targets.channelIDs || [])] } });
+    }
+
+    #whisperRequest(active, targets) {
+        return this.conn.request(Msg.WhisperSet, { ack_requested: true, active, unique_ids: targets.uniqueIDs, channel_ids: targets.channelIDs },
+            Msg.MediaControlSaved, { accept: r => r.operation === Msg.WhisperSet });
+    }
+
+    /** Whispers to targets (default: the saved ones) until stopWhisper. */
+    async startWhisper(targets = this.whisperTargets) {
+        if (!this.active) return;
+        const seq = ++this.#whisperSeq;
+        await this.#whisperRequest(true, targets);
+        // Released before the server confirmed: undo the activation.
+        if (seq !== this.#whisperSeq) {
+            await this.#whisperRequest(false, { uniqueIDs: [], channelIDs: [] }).catch(() => {});
+            return;
+        }
+        this.whispering = true;
+        this.#applyMic();
+    }
+
+    async stopWhisper() {
+        this.#whisperSeq++;
+        const was = this.whispering;
+        this.whispering = false;
+        this.#applyMic();
+        if (was && this.conn.open && this.active) await this.#whisperRequest(false, { uniqueIDs: [], channelIDs: [] }).catch(() => {});
+    }
+
+    /** Whispers back to whoever whispered here last. */
+    replyWhisper() {
+        if (!this.lastWhisperer?.uniqueID) return Promise.resolve();
+        return this.startWhisper({ uniqueIDs: [this.lastWhisperer.uniqueID], channelIDs: [] });
+    }
+
+    // --- Priority speaker and speaking queue ---------------------------------------
+
+    get prioritySpeaker() {
+        return !!this.session.self?.()?.priority_speaker;
+    }
+
+    async setPrioritySpeaker(active) {
+        await this.conn.request(Msg.PrioritySpeaker, { active, ack_requested: true }, Msg.MediaControlSaved, { accept: r => r.operation === Msg.PrioritySpeaker });
+        const self = this.session.self?.();
+        if (self) self.priority_speaker = active;
+        this.#emit("state");
+    }
+
+    /** raise | lower | next | clear on the current channel's hand queue. */
+    queue(action, clientID = "") {
+        return this.conn.request(Msg.VoiceQueueRequest, { action, channel_id: this.channelID, client_id: clientID }, Msg.VoiceQueueResult, { accept: r => r.action === action });
+    }
+
+    // --- Network echo test ------------------------------------------------------------
+
+    /** Joins the server's loopback channel; false when the server has none. */
+    async startEchoTest() {
+        const info = await this.session.serverInfo();
+        const channel = Number(info?.echo_channel_id || 0);
+        if (!channel) return false;
+        const previous = this.channelID;
+        await this.join(channel);
+        this.echo = { channel, previous };
+        this.#emit("state");
+        return true;
+    }
+
+    /** Returns to the channel before the echo test, or leaves voice. */
+    async endEchoTest() {
+        const echo = this.echo;
+        this.echo = null;
+        if (!echo) return;
+        if (echo.previous) await this.join(echo.previous);
+        else await this.leave();
+    }
+
     // --- Watching streams ---------------------------------------------------------
 
     /** Streams published in the channel: [{publisher_id, slot, generation, codec}]. */
@@ -448,12 +822,34 @@ export class Voice extends EventTarget {
     async watch(stream, active = true) {
         this.#watchRevision++;
         const key = `${stream.publisher_id}|${stream.slot}`;
-        if (active) this.watching.add(key);
-        else this.watching.delete(key);
+        if (active) {
+            this.watching.add(key);
+            this.#watched.set(key, stream);
+        } else {
+            this.watching.delete(key);
+            this.#watched.delete(key);
+        }
         this.#emit("tracks");
-        return this.conn.request(Msg.VideoStreamControl, {
+        const result = await this.conn.request(Msg.VideoStreamControl, {
             action: "watch", publisher_id: stream.publisher_id, slot: stream.slot, generation: String(stream.generation),
             revision: String(this.#watchRevision), session: this.#watchSession, active, codecs: watchCodecs(),
         }, Msg.VideoStreamResult, { accept: r => r.action === "watch" });
+        if (active && this.lowBandwidth) this.#requestQuality(stream);
+        return result;
+    }
+
+    /** The receive layer for watched streams: low with the data saver. */
+    receiveLayer() {
+        if (this.lowBandwidth) return "low";
+        return { high: "high", medium: "mid", low: "low" }[settings.get("receiveQuality")] || "high";
+    }
+
+    #requestQuality(stream) {
+        if (!this.conn.open || !this.active) return;
+        const quality = this.receiveLayer();
+        const body = this.session.capabilities?.has("stream_video_quality_v1")
+            ? { quality, ack_requested: true, publisher_id: stream.publisher_id, slot: stream.slot, generation: String(stream.generation), session: this.#watchSession }
+            : { quality, ack_requested: true };
+        this.conn.request(Msg.VideoQuality, body, Msg.MediaControlSaved, { accept: r => r.operation === Msg.VideoQuality }).catch(() => {});
     }
 }

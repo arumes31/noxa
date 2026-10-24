@@ -4,6 +4,7 @@ import { app } from "../app.js";
 import { t } from "../i18n.js";
 import { h } from "./dom.js";
 import { icon } from "./icons.js";
+import "./voice-alerts.js";
 
 /** During a private call, a bar above the navigation returns to it. */
 function privateCallBar() {
