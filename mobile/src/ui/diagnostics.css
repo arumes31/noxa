@@ -1,0 +1,23 @@
+/* diagnostics.css — the Diagnostics screen and the ping badge. */
+.ping-badge { display: inline-flex; align-items: center; justify-self: end; gap: 5px; min-height: 44px; padding: 0 6px; border-radius: 12px; color: var(--text-dim); text-decoration: none; font-family: var(--font-mono); font-size: .72rem; white-space: nowrap; }
+.ping-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; }
+.ping-badge[data-quality="good"] .ping-dot { background: #4ade80; }
+.ping-badge[data-quality="fair"] .ping-dot { background: var(--amber); }
+.ping-badge[data-quality="poor"] .ping-dot { background: var(--coral); }
+.screen-header:has(.ping-badge) { grid-template-columns: 72px 1fr 72px; }
+.diag-facts { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; margin: 0; font-size: .9rem; }
+.diag-facts dt { color: var(--text-faint); min-width: 0; }
+.diag-facts dd { margin: 0; text-align: right; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.diag-facts dd .ping-badge { min-height: 0; padding: 0; }
+.diag-card { display: flex; flex-direction: column; gap: 12px; }
+.diag-done { margin: 0; color: var(--accent); font-weight: 600; }
+.diag-chart { display: grid; grid-template-columns: 90px 1fr; align-items: center; gap: 8px; margin-top: 10px; }
+.diag-spark { width: 100%; height: 32px; }
+.diag-spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.diag-stream + .diag-stream { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.diag-stream .row-title { margin: 0 0 6px; }
+.diag-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.diag-actions .btn { flex: 1 1 140px; }
+.server-text-row { display: flex; align-items: center; gap: 2px; }
+.server-text-row > .row { flex: 1; min-width: 0; }
+@media (min-width: 720px) { .diag-screen .screen-body > * { max-width: 680px; margin-inline: auto; } }

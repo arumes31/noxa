@@ -7,6 +7,7 @@ import { messageBody } from "./attachments.js";
 import { header, scopeName } from "./common.js";
 import { channelMenuButton } from "./channel-menu.js";
 import { uploadAttachment } from "../core/files.js";
+import { filesButton } from "./files-link.js";
 
 export function renderChat(root, scope) {
     const session = app.session;
@@ -113,7 +114,7 @@ export function renderChat(root, scope) {
     session.addEventListener("messages", onMessages);
     session.addEventListener("typing", onTyping);
     root.replaceChildren(h("section", { class: "screen chat" },
-        header(name, { back: "#/servers", action: channelMenuButton(scope) }),
+        header(name, { back: "#/servers", action: h("span", { class: "header-actions" }, filesButton(scope, name), channelMenuButton(scope)) }),
         log, typing, form));
     render();
     if (!(session.messages.get(scope) || []).length) older.click();

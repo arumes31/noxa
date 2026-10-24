@@ -2,6 +2,9 @@ import { installViewport } from "./ui/viewport.js";
 import { initInstallPrompt, renderInstallPrompt } from "./ui/install-prompt.js";
 // main.js — boots the mobile web app: server info, stored device, router.
 import "./styles.css";
+import "./themes.css";
+import { installLogger } from "./core/log.js";
+import "./ui/appearance.js";
 import { app, connect, flushNow, loadDevice, loadInfo, markRead } from "./app.js";
 import { parseLinkFragment } from "./core/device.js";
 import { inviteFromLocation, setPendingInvite } from "./core/invite.js";
@@ -28,8 +31,11 @@ const screens = {
     "server-info": () => import("./ui/server-tools.js"),
     members: () => import("./ui/members.js"),
     activity: () => import("./ui/activity.js"),
+    files: () => import("./ui/files.js"),
+    diagnostics: () => import("./ui/diagnostics.js"),
 };
 
+installLogger();
 document.documentElement.lang = lang();
 const appRoot = document.getElementById("app");
 // Screens render here: #app on phones, the wide shell's centre on tablets.
@@ -85,6 +91,8 @@ async function route() {
         case "you": cleanup = module.renderYou(root); break;
         case "members": cleanup = module.renderMembers(root, Number(arg) || 0); break;
         case "activity": cleanup = module.renderActivity(root); break;
+        case "files": cleanup = module.renderFiles(root, Number(arg) || 0); break;
+        case "diagnostics": cleanup = module.renderDiagnostics(root); break;
         default: module.renderHome(root);
     }
     afterRoute(screen, arg);

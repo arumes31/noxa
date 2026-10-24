@@ -1,4 +1,5 @@
-// you.js — You (14/15): profile, notifications, passkeys and devices.
+// you.js — You (14/15): profile, the searchable Settings sections (see
+// settings-registry.js), passkeys and devices.
 import { app, forgetDevice } from "../app.js";
 import { registerPasskey, passkeysSupported } from "../core/device.js";
 import { Msg } from "../core/frame.js";
@@ -12,6 +13,8 @@ import { contactsSection } from "./contacts.js";
 import { notificationBehaviour } from "./notify-settings.js";
 import { profileCard } from "./you-social.js";
 import { voiceSettings } from "./voice-settings.js";
+import { filterSettings, registerSettings } from "./settings-registry.js";
+import "./settings-sections.js";
 
 import { backupFlow, renderDeviceList, serversSection } from "./devices.js";
 
@@ -85,11 +88,59 @@ function notificationSettings(session) {
     return { box, render };
 }
 
+// Push notifications are the first row of the Notifications section; the
+// notification workstream adds its own rows next to it.
+registerSettings("notifications", [{
+    key: "push", label: t("settings.notifications"), keywords: "push alerts benachrichtigungen",
+    render: () => app.meta.guest ? h("p", { class: "hint" }, t("connect.guestHint")) : notificationSettings(app.session).box,
+}, {
+    // Do not disturb, quiet hours, the per-event matrix and sounds (ui/notify-settings.js).
+    key: "behaviour", label: t("notify.behaviour"), keywords: "dnd quiet hours sounds matrix ruhezeiten töne nicht stören",
+    render: () => h("div", {}, h("p", { class: "section-label" }, t("notify.behaviour")), notificationBehaviour()),
+}], { title: t("settings.section.notifications") });
+
+// Microphone, activation, volumes and the data saver (ui/voice-settings.js).
+registerSettings("voice", [{
+    key: "voice", label: t("vc.settingsTitle"), keywords: "microphone mikrofon push to talk echo noise volume data saver datensparmodus",
+    render: () => voiceSettings(),
+}], { title: t("settings.section.voice") });
+
+// Sections the user opened stay open while the app runs.
+const openSections = new Set(["appearance", "notifications"]);
+let searchQuery = "";
+
+/** The searchable, registered settings sections. */
+function settingsArea() {
+    const container = h("div", { class: "settings-list" });
+    const search = h("input", { class: "input settings-search", type: "search", value: searchQuery, placeholder: t("settings.search"), "aria-label": t("settings.search"), autocomplete: "off" });
+    const draw = () => {
+        const sections = filterSettings(searchQuery);
+        if (!sections.length) {
+            container.replaceChildren(h("p", { class: "hint settings-empty", role: "status" }, t("settings.noMatch", { query: searchQuery.trim() })));
+            return;
+        }
+        container.replaceChildren(...sections.map(section => {
+            const details = h("details", { class: "card settings-section", "data-section": section.id, open: !!searchQuery.trim() || openSections.has(section.id) },
+                h("summary", {}, section.title || t(`settings.section.${section.id}`)),
+                h("div", { class: "settings-rows" }, section.rows.map(row => {
+                    try { return row.render(); } catch (error) { return h("p", { class: "error" }, t("common.error", { error: error.message })); }
+                })));
+            details.addEventListener("toggle", () => {
+                if (searchQuery.trim()) return;
+                if (details.open) openSections.add(section.id); else openSections.delete(section.id);
+            });
+            return details;
+        }));
+    };
+    search.oninput = () => { searchQuery = search.value; draw(); };
+    draw();
+    return h("div", { class: "settings-area" }, search, container);
+}
+
 export function renderYou(root) {
     const session = app.session;
     const list = h("ul", { class: "list" });
     const passkeys = h("ul", { class: "list" });
-    const notifications = notificationSettings(session);
     const guest = !!app.meta.guest;
     const profile = profileCard(session);
     const refresh = async () => {
@@ -119,11 +170,9 @@ export function renderYou(root) {
             guest ? null : adminEntry(session),
             h("p", { class: "section-label" }, t("contacts.title")),
             contactsSection(),
-            guest ? h("p", { class: "hint" }, t("connect.guestHint")) : h("p", { class: "section-label" }, t("settings.notifications")),
-            guest ? null : notifications.box,
-            h("p", { class: "section-label" }, t("notify.behaviour")),
-            notificationBehaviour(),
-            voiceSettings(),
+            settingsArea(),
+            h("p", { class: "section-label" }, t("settings.section.account")),
+            guest ? h("p", { class: "hint" }, t("connect.guestHint")) : null,
             guest ? null : h("p", { class: "section-label" }, t("settings.passkeys")),
             passkeys,
             !guest && passkeysSupported() ? h("button", { class: "btn btn-primary btn-block", onclick: async () => { await savePasskey(); refresh(); } }, icon("passkey"), " ", t("settings.savePasskey")) : null,

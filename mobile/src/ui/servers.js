@@ -21,6 +21,8 @@ function watchButton(channel) {
         "aria-label": count ? `${t("watch.action", { channel: channel.name })} · ${t("watch.active", { count })}` : t("watch.action", { channel: channel.name }),
         onclick: () => channelWatchSheet(channel) }, icon("bell"));
 }
+import { filesButton } from "./files-link.js";
+import { pingBadge } from "./ping-badge.js";
 
 let joining = false;
 
@@ -42,17 +44,17 @@ export function renderServers(root) {
     const channels = session.channels().map(c => ({ ...c, clients: c.home ? c.clients.filter(member => !member.on_mobile) : c.clients }));
     const online = new Set(session.clients().map(c => c.user_id > 0 ? `user:${c.user_id}` : c.unique_id || c.client_id)).size;
     root.replaceChildren(h("section", { class: "screen" },
-        header(app.info?.server_name || "noXa", { sub: `${online} online`, action: h("span", { class: "header-actions" },
+        header(app.info?.server_name || "noXa", { sub: `${online} online`, action: h("span", { class: "header-actions" }, pingBadge(),
             h("a", { class: "icon-btn", href: "#/members/0", "aria-label": t("members.title") }, icon("users")), serverMenuButton(session)) }),
         h("div", { class: "screen-body" },
             h("p", { class: "section-label" }, t("channels.text")),
             h("ul", { class: "list" },
-                session.current.has(0) ? h("li", {}, h("a", { class: "row", href: "#/chat/0" }, h("span", { class: "hash" }, "◎"), h("span", { class: "row-main" }, h("span", { class: "row-title" }, t("channels.global"))), unreadBadge("channel:0"))) : null,
-                channels.filter(c => c.chat).map(c => h("li", {}, h("a", { class: "row", href: `#/chat/${c.id}`, style: `padding-left:${10 + c.depth * 14}px` },
+                session.current.has(0) ? h("li", { class: "server-text-row" }, h("a", { class: "row", href: "#/chat/0" }, h("span", { class: "hash" }, "◎"), h("span", { class: "row-main" }, h("span", { class: "row-title" }, t("channels.global"))), unreadBadge("channel:0")), filesButton(0, t("channels.global"))) : null,
+                channels.filter(c => c.chat).map(c => h("li", { class: "server-text-row" }, h("a", { class: "row", href: `#/chat/${c.id}`, style: `padding-left:${10 + c.depth * 14}px` },
                     h("span", { class: "hash" }, c.restricted ? "🔒" : "#"),
                     h("span", { class: "row-main" }, h("span", { class: "row-title" }, c.name), c.topic ? h("span", { class: "row-sub" }, c.topic) : null),
                     lockBadge(c),
-                    unreadBadge(`channel:${c.id}`))))),
+                    unreadBadge(`channel:${c.id}`)), filesButton(c.id, c.name)))),
             h("p", { class: "section-label" }, t("channels.voice")),
             h("ul", { class: "list" }, channels.filter(c => !c.textOnly).map(c => h("li", {},
                 h("div", { class: "row", style: `padding-left:${10 + c.depth * 14}px` },

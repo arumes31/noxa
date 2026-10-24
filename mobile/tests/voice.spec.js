@@ -277,6 +277,8 @@ test("voice settings, member volume, whisper, hands, push-to-talk delay, mic tes
     await page.reload();
     await page.getByRole("dialog").getByRole("button", { name: "Not now" }).click({ timeout: 5000 }).catch(() => {});
     await page.getByRole("link", { name: "You", exact: true }).click();
+    // Voice settings live in the You screen's collapsible "Voice" section.
+    await page.locator('details[data-section="voice"] > summary').click();
     await expect(page.getByRole("switch", { name: /Data saver/ })).toBeChecked();
     await expect(page.getByRole("switch", { name: "Echo cancellation" })).not.toBeChecked();
 

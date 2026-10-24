@@ -171,6 +171,7 @@ function openTransferSocket(url) {
         socket.onerror = () => reject(new Error("could not reach the file server"));
         socket.onopen = () => resolve({
             send: bytes => socket.send(bytes),
+            buffered: () => socket.bufferedAmount,
             next: () => new Promise((res, rej) => { waiters.push({ resolve: res, reject: rej }); deliver(); }),
             close: () => socket.close(),
         });
@@ -217,20 +218,85 @@ export async function uploadBlob(conn, location, storage, blob, url = transferUR
     }
 }
 
-/** Downloads a file's bytes and checks the server's digest. */
-export async function downloadBlob(conn, location, storage, maxBytes, url = transferURL()) {
-    const init = await initTransfer(conn, { ...where(location), direction: "download", name: storage });
+function aborted() {
+    const error = new Error("transfer canceled");
+    error.name = "AbortError";
+    return error;
+}
+
+/** Closes the socket when the signal aborts; returns the detach function. */
+function watchAbort(signal, socket) {
+    if (!signal) return () => {};
+    const onAbort = () => socket.close();
+    signal.addEventListener("abort", onAbort, { once: true });
+    return () => signal.removeEventListener("abort", onAbort);
+}
+
+const SEND_CHUNK = 32 * 1024;
+const READ_SLICE = 1024 * 1024;
+const MAX_BUFFERED = 1024 * 1024;
+
+/**
+ * Uploads a File or Blob as-is (a channel file, not a sealed attachment)
+ * under name. Reads it in slices and hashes as it goes, so large files never
+ * sit in memory whole. onProgress(sentBytes, total); signal cancels.
+ */
+export async function uploadStream(conn, location, name, file, { onProgress, signal, url = transferURL() } = {}) {
+    if (signal?.aborted) throw aborted();
+    const init = await initTransfer(conn, { ...where(location), direction: "upload", name, size: file.size });
+    if (signal?.aborted) throw aborted();
     const socket = await openTransferSocket(url);
+    const detach = watchAbort(signal, socket);
+    try {
+        socket.send(encodeJSON(Frame.init, { token: init.token, transfer_id: init.transfer_id }));
+        const hash = sha256.create();
+        let queued = 0;
+        const report = () => onProgress?.(Math.max(0, queued - socket.buffered()), file.size);
+        for (let offset = 0; offset < file.size; offset += READ_SLICE) {
+            const slice = new Uint8Array(await file.slice(offset, offset + READ_SLICE).arrayBuffer());
+            if (signal?.aborted) throw aborted();
+            hash.update(slice);
+            for (let at = 0; at < slice.length; at += SEND_CHUNK) {
+                socket.send(encodeRaw(Frame.chunk, slice.subarray(at, at + SEND_CHUNK)));
+                queued += Math.min(SEND_CHUNK, slice.length - at);
+            }
+            // Let the socket drain so progress reflects the network, not memory.
+            while (socket.buffered() > MAX_BUFFERED) {
+                if (signal?.aborted) throw aborted();
+                report();
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            report();
+        }
+        socket.send(encodeJSON(Frame.digest, { sha256: hex(hash.digest()) }));
+        const reply = await socket.next().catch(error => { throw signal?.aborted ? aborted() : error; });
+        if (reply.type !== Frame.status) throw new Error("unexpected file server reply");
+        const status = JSON.parse(new TextDecoder().decode(reply.payload));
+        if (!status.ok) throw new Error(status.error || "upload failed");
+        onProgress?.(file.size, file.size);
+    } finally {
+        detach();
+        socket.close();
+    }
+}
+
+/** Downloads a file's bytes and checks the server's digest. onProgress(bytes); signal cancels. */
+export async function downloadBlob(conn, location, storage, maxBytes, url = transferURL(), { onProgress, signal } = {}) {
+    const init = await initTransfer(conn, { ...where(location), direction: "download", name: storage });
+    if (signal?.aborted) throw aborted();
+    const socket = await openTransferSocket(url);
+    const detach = watchAbort(signal, socket);
     try {
         socket.send(encodeJSON(Frame.init, { token: init.token, transfer_id: init.transfer_id }));
         const parts = [];
         let total = 0;
         for (;;) {
-            const frame = await socket.next();
+            const frame = await socket.next().catch(error => { throw signal?.aborted ? aborted() : error; });
             if (frame.type === Frame.chunk) {
                 total += frame.payload.length;
                 if (total > maxBytes) throw new Error("attachment exceeds the size limit");
                 parts.push(frame.payload);
+                onProgress?.(total);
             } else if (frame.type === Frame.digest) {
                 const blob = concat(...parts);
                 const { sha256: expected } = JSON.parse(new TextDecoder().decode(frame.payload));
@@ -241,6 +307,7 @@ export async function downloadBlob(conn, location, storage, maxBytes, url = tran
             }
         }
     } finally {
+        detach();
         socket.close();
     }
 }

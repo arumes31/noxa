@@ -89,7 +89,11 @@ export class Connection extends EventTarget {
         this.#socket?.close();
     }
 
+    /** Date.now() of the last bytes received, for Diagnostics. */
+    lastReceivedAt = 0;
+
     #receive(data) {
+        this.lastReceivedAt = Date.now();
         let frames;
         this.bytesIn += data?.byteLength || 0;
         try {
