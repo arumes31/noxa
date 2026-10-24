@@ -3,6 +3,7 @@
 import { ChatSession } from "./core/chat-session.js";
 import { DirectMessages } from "./core/direct.js";
 import { Calls } from "./core/calls.js";
+import { Groups } from "./core/groups.js";
 import { Voice } from "./core/voice.js";
 import { Connection } from "./core/connection.js";
 import { generateIdentity } from "./core/crypto.js";
@@ -26,6 +27,8 @@ app.dm = null;
 app.voice = null;
 /** Private calls of the signed-in session. */
 app.calls = null;
+/** Private groups of the signed-in session. */
+app.groups = null;
 /** Conversation tag ("channel:4", "dm:<uid>") -> {count, mentions} unread. */
 app.unread = new Map();
 /** The conversation tag on screen, or null. */
@@ -67,6 +70,8 @@ export async function rememberLinkedIdentity(identity, meta) {
 }
 
 export async function forgetDevice() {
+    app.groups?.close();
+    app.groups = null;
     app.calls?.close();
     app.calls = null;
     app.voice?.close();
@@ -117,6 +122,11 @@ export async function connect() {
         if (isNew && !message.self && !message.copied) noteUnread(`dm:${peer}`, true);
         emit("dm", { peer });
     });
+    app.groups?.close();
+    app.groups = new Groups(session, dm);
+    app.groups.addEventListener("incoming", event => noteUnread(`conversation:${event.detail.id}`, false));
+    app.groups.addEventListener("list", () => emit("groups"));
+    app.groups.refresh().catch(() => {});
     app.calls?.close();
     app.calls = new Calls(session, dm);
     watchCalls(app.calls);
@@ -241,6 +251,14 @@ function watchCalls(calls) {
         navigator.vibrate?.(0);
         emit("call", calls);
     });
+}
+
+/** Calls everyone in a private group. */
+export async function startGroupCall(conversationID) {
+    if (!app.calls) throw new Error("not connected");
+    if (app.voice?.active) await leaveVoice();
+    const call = await app.calls.startGroup(conversationID);
+    location.hash = `#/call/${call.id}`;
 }
 
 /** Starts a private call and opens the call screen. */

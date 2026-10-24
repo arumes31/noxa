@@ -182,6 +182,11 @@ function transferURL() {
     return `${protocol === "https:" ? "wss:" : "ws:"}//${host}/ft`;
 }
 
+/** A channel ID, or {channelID, folder} for a private group's folder. */
+function where(location) {
+    return typeof location === "object" ? { channel_id: location.channelID || 0, folder: location.folder || "" } : { channel_id: location };
+}
+
 async function initTransfer(conn, request) {
     return conn.request(MsgFileTransferInit, request, MsgFileTransferInitResponse);
 }
@@ -196,8 +201,8 @@ function statusError(frame) {
 }
 
 /** Uploads a sealed blob into a channel (0 = server chat) under storage. */
-export async function uploadBlob(conn, channelID, storage, blob, url = transferURL()) {
-    const init = await initTransfer(conn, { channel_id: channelID, direction: "upload", name: storage, size: blob.length });
+export async function uploadBlob(conn, location, storage, blob, url = transferURL()) {
+    const init = await initTransfer(conn, { ...where(location), direction: "upload", name: storage, size: blob.length });
     const socket = await openTransferSocket(url);
     try {
         socket.send(encodeJSON(Frame.init, { token: init.token, transfer_id: init.transfer_id }));
@@ -213,8 +218,8 @@ export async function uploadBlob(conn, channelID, storage, blob, url = transferU
 }
 
 /** Downloads a file's bytes and checks the server's digest. */
-export async function downloadBlob(conn, channelID, storage, maxBytes, url = transferURL()) {
-    const init = await initTransfer(conn, { channel_id: channelID, direction: "download", name: storage });
+export async function downloadBlob(conn, location, storage, maxBytes, url = transferURL()) {
+    const init = await initTransfer(conn, { ...where(location), direction: "download", name: storage });
     const socket = await openTransferSocket(url);
     try {
         socket.send(encodeJSON(Frame.init, { token: init.token, transfer_id: init.transfer_id }));

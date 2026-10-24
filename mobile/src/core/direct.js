@@ -143,6 +143,17 @@ export class DirectMessages extends EventTarget {
     async devicesOf(uid, { refresh = false } = {}) {
         const cached = this.directory.get(uid);
         if (cached && !refresh && Date.now() - cached.at < DIRECTORY_TTL) return cached;
+        // Concurrent lookups share one request; the server rate-limits them.
+        const inflight = this.#lookups.get(uid);
+        if (inflight) return inflight;
+        const lookup = this.#lookup(uid).finally(() => this.#lookups.delete(uid));
+        this.#lookups.set(uid, lookup);
+        return lookup;
+    }
+
+    #lookups = new Map();
+
+    async #lookup(uid) {
         const response = await this.conn.request(Msg.KeyRequest, { unique_id: uid, devices: true }, Msg.KeyResponse,
             { accept: r => r.unique_id === uid });
         const record = parseKeyRecord(response.public_key, uid);

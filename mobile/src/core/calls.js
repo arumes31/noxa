@@ -90,6 +90,15 @@ export class Calls extends EventTarget {
         return result.call;
     }
 
+    /** Calls everyone in a private group. */
+    async startGroup(conversationID, { video = false } = {}) {
+        this.rtc = callRTCConfiguration(await this.session.relayServers());
+        this.wantVideo = video;
+        const result = await this.#request({ action: "start", conversation_id: conversationID });
+        await this.#apply(result.call);
+        return result.call;
+    }
+
     async accept({ video = false } = {}) {
         this.rtc = callRTCConfiguration(await this.session.relayServers());
         this.wantVideo = video;
