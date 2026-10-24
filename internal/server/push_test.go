@@ -170,7 +170,7 @@ func (p pushTestEnv) phoneSession(t *testing.T, name string) (net.Conn, *Client)
 	if !ok {
 		t.Fatal("phone session not found")
 	}
-	session.webTransport = true
+	session.webTransport.Store(true)
 	return conn, session
 }
 

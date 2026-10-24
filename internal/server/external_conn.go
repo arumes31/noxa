@@ -45,4 +45,4 @@ type webTransportConn interface {
 	WebTransport() bool
 }
 
-func (c *Client) isWebTransport() bool { return c.webTransport }
+func (c *Client) isWebTransport() bool { return c.webTransport.Load() }

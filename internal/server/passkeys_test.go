@@ -226,7 +226,7 @@ func TestPasskeyRegisteredOnPhoneSignsInANewPhone(t *testing.T) {
 	if !ok {
 		t.Fatal("phone session not found")
 	}
-	session.webTransport = true
+	session.webTransport.Store(true)
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

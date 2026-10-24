@@ -372,7 +372,7 @@ func (s *TCPServer) handlePushRequest(ctx context.Context, client *Client, r net
 	switch r.Action {
 	case netproto.DeviceActionActivity:
 		client.mu.Lock()
-		if client.webTransport {
+		if client.isWebTransport() {
 			client.webHidden = !r.Active
 		} else if r.Active {
 			client.inputAt = time.Now()

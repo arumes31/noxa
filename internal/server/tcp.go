@@ -112,11 +112,11 @@ type Client struct {
 	x25519Key string
 	// Retained only after successful guest proof, for explicit role enrollment.
 	verifiedGuestKey string
-	authSigningKey   string    // bound to the successful authentication attempt
-	deviceID         string    // linked device of this session, if registered
-	webTransport     bool      // connected through the mobile web app
-	inputAt          time.Time // last input a desktop reported (activity)
-	webHidden        bool      // the web app reported it is in the background
+	authSigningKey   string      // bound to the successful authentication attempt
+	deviceID         string      // linked device of this session, if registered
+	webTransport     atomic.Bool // connected through the mobile web app
+	inputAt          time.Time   // last input a desktop reported (activity)
+	webHidden        bool        // the web app reported it is in the background
 	passkey          *passkeyCeremony
 	dmKeyRecord      string // signed directory record; never used for scope-key sealing
 
@@ -931,11 +931,11 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 
 	_, web := conn.(webTransportConn)
 	client := &Client{
-		ID:           newClientID(),
-		Conn:         conn,
-		lastActive:   time.Now(),
-		webTransport: web,
+		ID:         newClientID(),
+		Conn:       conn,
+		lastActive: time.Now(),
 	}
+	client.webTransport.Store(web)
 	s.register(client)
 	defer func() {
 		if s.deps != nil && s.deps.Authority != nil {
