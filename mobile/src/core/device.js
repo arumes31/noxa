@@ -94,15 +94,14 @@ export async function waitForDecision(identity, linkID, { open = () => Connectio
  * Signs in with this device's key. Resolves with the AuthResponse; rejects
  * with the server's reason, e.g. a revoked device.
  */
-export async function signIn(conn, identity, { version, nickname = "" } = {}) {
+export async function signIn(conn, identity, { version, nickname = "", serverPassword = "" } = {}) {
     const uniqueID = uniqueIDFromPublicKey(identity.edPublic);
     const x25519 = toBase64(identity.xPublic);
     const first = await conn.request(Msg.Authenticate, {
         client_version: version, authorization_models: ["roles-v1"], username: uniqueID, anonymous: true,
-        nickname, x25519_public_key: x25519,
-    }, Msg.AuthChallenge, { timeout: 10000 }).catch(async error => {
-        throw error;
-    });
+        nickname, server_password: serverPassword, x25519_public_key: x25519,
+    }, [Msg.AuthChallenge, Msg.AuthResponse], { timeout: 10000 });
+    if (!first.challenge) throw new Error(first.reason || "sign-in failed");
     const signature = sign(Uint8Array.from(atob(first.challenge), c => c.charCodeAt(0)), identity.edSecret);
     const response = await conn.request(Msg.AuthSignature, {
         unique_id: "", public_key: publicKeyPEM(identity.edPublic), signature: toBase64(signature), x25519_public_key: x25519,

@@ -37,3 +37,18 @@ test("unsupported passkeys explain how to continue", async ({ page }) => {
     await expect(page.getByText("This browser cannot use passkeys.", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Code from your desktop")).toBeEnabled();
 });
+
+test("guest login is hidden unless the server advertises it", async ({ page }) => {
+    await page.goto("/app/");
+    await expect(page.locator("summary").filter({ hasText: "Continue as guest" })).toHaveCount(0);
+});
+
+test("enabled guest login asks for a name and an advertised server password", async ({ page }) => {
+    await page.route("**/api/v1/web/info", route => route.fulfill({ json: { server_name: "Guest server", protocol_version: 1, guest_login: true, server_password_required: true } }));
+    await page.goto("/app/");
+    await page.locator("summary").filter({ hasText: "Continue as guest" }).click();
+    await expect(page.getByLabel("Display name", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Server password", { exact: true })).toHaveAttribute("type", "password");
+    await page.getByRole("button", { name: "Continue as guest", exact: true }).click();
+    await expect(page.getByLabel("Display name", { exact: true })).toBeFocused();
+});

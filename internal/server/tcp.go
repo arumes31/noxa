@@ -927,7 +927,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	authCtx, cancelAuth := context.WithDeadline(ctx, authDeadline)
-	defer func() { cancelAuth() }()
+	defer cancelAuth()
 	passkeyWindowGranted := false
 
 	_, web := conn.(webTransportConn)
@@ -1026,6 +1026,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 				cancelAuth()
 				authDeadline = deadline
 				authCtx, cancelAuth = context.WithDeadline(ctx, authDeadline)
+				defer cancelAuth()
 				passkeyWindowGranted = true
 				if err := conn.SetDeadline(authDeadline); err != nil {
 					return

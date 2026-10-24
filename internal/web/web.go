@@ -68,7 +68,9 @@ type Info struct {
 	ProtocolVersion int    `json:"protocol_version"`
 	// Version is the server build; the bundle reports it as its client
 	// version because the server always serves its own matching app.
-	Version string `json:"version"`
+	Version                string `json:"version"`
+	GuestLogin             bool   `json:"guest_login"`
+	ServerPasswordRequired bool   `json:"server_password_required"`
 }
 
 // Server is the mobile web listener.
@@ -231,6 +233,10 @@ func (s *Server) routes() {
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
+	var guests, password bool
+	if policy, ok := s.control.(interface{ WebGuestLoginPolicy() (bool, bool) }); ok {
+		guests, password = policy.WebGuestLoginPolicy()
+	}
 	origin, _ := s.cfg.PublicOrigin()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -240,6 +246,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 		RPID:            s.cfg.RPID(),
 		ProtocolVersion: ProtocolVersion,
 		Version:         version.Short(),
+		GuestLogin:      guests, ServerPasswordRequired: password,
 	})
 }
 

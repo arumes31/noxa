@@ -207,7 +207,7 @@ async function boot() {
         return;
     }
     await loadDevice();
-    if (app.identity && app.meta.linked) {
+    if (app.identity && (app.meta.linked || (app.meta.guest && app.info.guest_login && !app.info.server_password_required))) {
         try {
             await connect();
         } catch (error) {

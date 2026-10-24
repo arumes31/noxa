@@ -17,6 +17,7 @@ export const app = new EventTarget();
 app.info = null;
 app.identity = null;
 app.meta = {};
+app.guestPassword = "";
 app.session = null;
 app.online = true;
 /** Push availability and this device's preferences, after syncPush. */
@@ -69,7 +70,14 @@ export async function rememberLinkedIdentity(identity, meta) {
     app.meta = { ...meta, linked: true };
 }
 
-export async function forgetDevice() {
+export async function rememberGuestIdentity(identity, nickname, serverPassword = "") {
+    await saveIdentity(identity, { guest: true, linked: false, nickname });
+    app.identity = identity;
+    app.meta = { guest: true, linked: false, nickname };
+    app.guestPassword = serverPassword;
+}
+
+export async function forgetDevice({ silent = false } = {}) {
     app.groups?.close();
     app.groups = null;
     app.calls?.close();
@@ -83,7 +91,8 @@ export async function forgetDevice() {
     await clearIdentity();
     app.identity = null;
     app.meta = {};
-    emit("signedout");
+    app.guestPassword = "";
+    if (!silent) emit("signedout");
 }
 
 /** Signs in with the stored device key and starts the chat session. */
@@ -92,7 +101,7 @@ export async function connect() {
     const conn = await Connection.open();
     let auth;
     try {
-        auth = await signIn(conn, app.identity, { version: app.info?.version || "0.0.0" });
+        auth = await signIn(conn, app.identity, { version: app.info?.version || "0.0.0", nickname: app.meta.guest ? app.meta.nickname : "", serverPassword: app.guestPassword || "" });
     } catch (error) {
         conn.close();
         if (/signed out|link it again/i.test(error.message)) {
@@ -154,8 +163,8 @@ export async function connect() {
         const { scope, message } = event.detail;
         if (!message.own) noteUnread(`channel:${scope}`, message.mentioned);
     });
-    reportVisibility(conn);
-    syncPush(conn).then(state => {
+    if (!app.meta.guest) reportVisibility(conn);
+    if (!app.meta.guest) syncPush(conn).then(state => {
         app.push = state;
         emit("push", state);
     }).catch(() => {});
@@ -384,7 +393,7 @@ if (typeof window !== "undefined") {
     };
     window.addEventListener("online", retryNow);
     document.addEventListener("visibilitychange", () => {
-        if (app.session) reportVisibility(app.session.conn);
+        if (app.session && !app.meta.guest) reportVisibility(app.session.conn);
         if (document.visibilityState !== "visible") return;
         retryNow();
         if (app.viewing !== null) markRead(app.viewing);

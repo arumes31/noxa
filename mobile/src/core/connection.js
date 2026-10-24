@@ -99,7 +99,7 @@ export class Connection extends EventTarget {
                 return;
             }
         }
-        const index = this.#pending.findIndex(p => p.replyType === type && p.accept(payload));
+        const index = this.#pending.findIndex(p => (Array.isArray(p.replyType) ? p.replyType.includes(type) : p.replyType === type) && p.accept(payload));
         if (index >= 0) {
             const [pending] = this.#pending.splice(index, 1);
             clearTimeout(pending.timer);
