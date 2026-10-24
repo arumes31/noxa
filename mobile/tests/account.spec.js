@@ -31,7 +31,7 @@ async function createChannel(owner, name, password = "") {
     const state = await owner.conn.request(Msg.RoleChannelQuery, { kind: "channel_create", channel_id: 0 }, Msg.RoleChannelState);
     const result = await owner.conn.request(Msg.RoleChannelChange, {
         kind: "channel_create", expected_revision: state.revision, parent_id: 0, channel_type: 2,
-        settings: { name, opus_bitrate: 64000, opus_fec: true }, ...(password ? { password, set_password: true } : {}),
+        settings: { name, opus_bitrate: 64000, opus_fec: true }, ...(password ? { password } : {}),
     }, Msg.RoleChannelResult);
     return result.channel_id;
 }
@@ -189,7 +189,7 @@ test("joining a password-protected channel asks for its password", async ({ page
     let dialog = page.getByRole("dialog", { name: "Channel password" });
     await dialog.getByLabel("Password").fill("wrong");
     await dialog.getByRole("button", { name: "Join" }).click();
-    await expect(page.getByText(/Could not join|join/i).last()).toBeVisible();
+    await expect(page.locator(".toast", { hasText: /^Could not join:/ })).toBeVisible();
     await expect(page).not.toHaveURL(/#\/voice$/);
 
     await row.getByRole("button", { name: `Join ${name}` }).click();

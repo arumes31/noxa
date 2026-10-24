@@ -718,6 +718,29 @@ list, sign out and reset devices with `devicelist`, `devicerevoke` and
 `ResetDevices` (gRPC). Devices unused for 180 days are signed out after a
 warning at 166 days; an account's first desktop never expires.
 
+**Several servers.** Each server serves its own copy of the app at
+`https://<server>/app/`, so one installed app (home screen icon) belongs to one
+server, with its own sign-in, keys and notifications. **You → Servers** (or the
+⋯ menu in the Servers tab) is a per-browser bookmark list: the first open of a
+server adds it, **Add server** saves another address, and choosing one opens
+that server's app. Another server's name appears once it has been opened there,
+because the app's content security policy only allows connections to its own
+server.
+
+**Invitations, rules and backups.** Channel invitations from the desktop
+(`noxa://<host>/invite/<channel>#<token>`) open in the app as
+`https://<server>/app/invite/<channel>#<token>` or `/invite/<channel>#<token>`;
+a `noxa://` link can be pasted in the Servers tab's ⋯ menu. Someone not yet
+signed in joins after signing in or continuing as guest. When the server has
+rules, the phone shows them and stays out of channels and chat until they are
+accepted. **You → Back up this device's keys** saves the phone's keys in a file
+encrypted with a passphrase (AES-256-GCM with a PBKDF2-SHA256 key, 600,000
+iterations; format in `mobile/src/core/backup.js`); **Restore from backup** on
+the sign-in screen signs the same device in again as long as it has not been
+signed out. A confirmed phone can confirm another device of the account for
+direct messages, copy its direct-message history to it and rename devices
+(**You → Devices**).
+
 **Notifications.** In the phone's **Settings → Notifications**, turn on
 notifications for direct messages, mentions, pokes and incoming calls. On
 iPhone this needs iOS 16.4 or later and the app added to the Home Screen.
