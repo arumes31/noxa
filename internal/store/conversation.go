@@ -227,7 +227,7 @@ func (s *Store) WithConversations(ctx context.Context, uid string, request netpr
 			FROM private_conversation_messages m
 			JOIN private_conversation_envelopes e ON e.message_id=m.id AND e.recipient_uid=$2
 			LEFT JOIN private_conversation_device_envelopes d ON d.message_id=m.id AND d.recipient_uid=$2 AND d.device_id=$5 AND $5<>''
-			LEFT JOIN user_devices sd ON sd.device_id=m.sender_device_id AND m.sender_device_id<>''
+			LEFT JOIN user_devices sd ON sd.device_id=m.sender_device_id AND m.sender_device_id<>'' AND sd.principal=m.from_uid AND sd.revoked_at IS NULL
 			WHERE m.conversation_id=$1 AND m.epoch >= $3 AND ($4::bigint=0 OR m.id<$4) ORDER BY m.id DESC LIMIT 25`, id, uid, member.JoinedEpoch, request.BeforeID, request.DeviceID)
 		if err != nil {
 			return err

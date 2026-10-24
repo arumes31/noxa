@@ -810,6 +810,7 @@ func (f *fakeSpool) SpoolMessage(_ context.Context, fromUserID, toUserID int64, 
 		last.RecipientDeviceID = bindings[0].RecipientDeviceID
 		last.DMAction = bindings[0].DMAction
 		last.RefClientMsgID = bindings[0].RefClientMsgID
+		last.PeerUniqueID = bindings[0].PeerUniqueID
 	}
 	return nil
 }

@@ -185,7 +185,7 @@ func (s *TCPServer) sendDirectCopies(ctx context.Context, client *Client, msg ne
 		if err := s.deps.Spool.SpoolMessage(ctx, client.userID(), toUserID, principal, c.Text, store.DMKeyBinding{
 			SenderPublicKey: sender.device.X25519Public, RecipientPublicKey: t.device.X25519Public, ClientMsgID: msg.ClientMsgID,
 			SenderDeviceID: senderDevice, RecipientDeviceID: c.DeviceID,
-			DMAction: msg.DMAction, RefClientMsgID: msg.RefClientMsgID,
+			DMAction: msg.DMAction, RefClientMsgID: msg.RefClientMsgID, PeerUniqueID: msg.ToUniqueID,
 		}); err != nil {
 			s.logger.Warn("spooling device copy failed", zap.String("client_id", client.ID), zap.Error(err))
 			return s.sendErrorFor(client, origin, errCodeUnavailable, "spooling message failed")

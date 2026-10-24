@@ -324,6 +324,15 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 	return s.acknowledgeChat(client, msg, netproto.ChatQueued, 0)
 }
 
+// spoolPeer is the account a spooled message was addressed to: the
+// recipient, or the contact when the sender's own device sent it.
+func spoolPeer(m store.SpooledMessage, recipient string) string {
+	if m.PeerUniqueID != "" {
+		return m.PeerUniqueID
+	}
+	return recipient
+}
+
 // deviceCopyKey is the sending device's key of a per-device copy.
 func deviceCopyKey(m store.SpooledMessage) string {
 	if m.RecipientDeviceID == "" {
@@ -389,7 +398,7 @@ func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID i
 			FromClientID:       strconv.FormatInt(m.FromUserID, 10),
 			FromUniqueID:       m.FromUniqueID,
 			From:               m.FromName,
-			ToUniqueID:         client.uniqueID(),
+			ToUniqueID:         spoolPeer(m, client.uniqueID()),
 			Text:               m.Message,
 			Direct:             true,
 			Offline:            true,

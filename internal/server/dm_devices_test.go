@@ -331,3 +331,26 @@ func TestDirectMessageEditsTravelLikeMessages(t *testing.T) {
 		t.Fatalf("spooled edit = %+v", spooled)
 	}
 }
+
+func TestOwnDeviceCopiesKeepTheirContact(t *testing.T) {
+	e := startDMTestEnv(t)
+	userDesktopKeys := newLinkTestKeys(t)
+	userDesktop, userDesktopID := e.desktopAs(t, "user-uid", userDesktopKeys)
+	admin, adminDeviceID := e.desktopAs(t, "admin-uid", newLinkTestKeys(t))
+	defer func() { _ = admin.Close() }()
+	phoneKeys, phoneID := e.approvedPhone(t, "user-uid", 2, userDesktopID, userDesktopKeys)
+
+	// The desktop writes to admin; its offline phone gets a copy too.
+	send(t, userDesktop, netproto.MsgChatSend, netproto.ChatSend{ToUniqueID: "admin-uid", Enc: true, AckRequested: true, ClientMsgID: "own-1",
+		Copies: []netproto.DMCopy{{DeviceID: adminDeviceID, Text: "YWRtaW4="}, {DeviceID: phoneID, Text: "cGhvbmU="}}})
+	readOfType(t, userDesktop, netproto.MsgChatAccepted)
+	phone, resp := keyLogin(t, e.env.addr, phoneKeys)
+	defer func() { _ = phone.Close() }()
+	if !resp.OK {
+		t.Fatalf("phone login = %+v", resp)
+	}
+	spooled := chatEvent(t, phone)
+	if spooled.FromUniqueID != "user-uid" || spooled.ToUniqueID != "admin-uid" || spooled.Text != "cGhvbmU=" {
+		t.Fatalf("own copy from the spool = %+v", spooled)
+	}
+}
