@@ -163,8 +163,8 @@ export function passkeysSupported() {
 export async function registerPasskey(conn, name, credentials = globalThis.navigator.credentials) {
     const begin = await conn.request(Msg.DeviceRequest, { action: "passkey_register_begin" }, Msg.DeviceResult, { accept: r => r.action === "passkey_register_begin" });
     const publicKey = creationOptions(begin.webauthn);
-    // PRF lets a later sign-in unlock this device's stored keys.
-    publicKey.extensions = { ...(publicKey.extensions || {}), prf: {} };
+    // Use only extensions negotiated by the server. An unsolicited PRF output
+    // makes strict WebAuthn registration fail (notably with iCloud passkeys).
     const credential = await credentials.create({ publicKey });
     const finish = await conn.request(Msg.DeviceRequest, { action: "passkey_register_finish", name, webauthn: credentialJSON(credential) },
         Msg.DeviceResult, { accept: r => r.action === "passkey_register_finish" });
