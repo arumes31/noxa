@@ -53,7 +53,9 @@ test("a phone links by QR, compares the code, signs in and chats with the deskto
     expect(decided.state).toBe("approved");
 
     // Signed in: the passkey offer appears first.
-    await page.getByRole("button", { name: "Not now" }).click({ timeout: 15000 }).catch(() => {});
+    // Two "Not now" buttons can show: the passkey offer (a dialog) and the install banner.
+    await page.getByRole("dialog").getByRole("button", { name: "Not now" }).click({ timeout: 15000 }).catch(() => {});
+    await page.locator("#install-banner").getByRole("button", { name: "Not now" }).click({ timeout: 2000 }).catch(() => {});
     await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible({ timeout: 15000 });
 
     await page.getByRole("link", { name: "Servers", exact: true }).click();
@@ -66,7 +68,7 @@ test("a phone links by QR, compares the code, signs in and chats with the deskto
     }));
     await composer.press("Enter");
     const received = await fromPhone;
-    expect(received.from).toBe(server.accounts.owner.nickname);
+    expect(received.from.replace(/#Md+$/, "")).toBe(server.accounts.owner.nickname);
 
     await deskChat.send(0, "hi phone, desktop here");
     await expect(page.getByRole("log")).toContainText("hi phone, desktop here");
