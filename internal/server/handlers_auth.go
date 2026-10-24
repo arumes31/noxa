@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -378,25 +380,37 @@ func (s *TCPServer) banRejectReason(ctx context.Context, client *Client, uniqueI
 	return reason, nil
 }
 
-// dedupeNickname appends #2, #3, ... when the nickname is already taken by
-// an online client.
-func (s *TCPServer) dedupeNickname(nickname string) string {
+// dedupeNickname gives web sessions their own #M1, #M2 namespace. The caller
+// holds roleMetadataMu so allocation and publication are atomic.
+func (s *TCPServer) dedupeNickname(nickname string, mobile bool, exclude string) string {
+	// #M<number> is a server-assigned session suffix, not part of the base name.
+	if mobile {
+		if at := strings.LastIndex(nickname, "#M"); at > 0 {
+			if n, err := strconv.Atoi(nickname[at+2:]); err == nil && n > 0 {
+				nickname = nickname[:at]
+			}
+		}
+	}
 	taken := make(map[string]bool)
 	s.mu.RLock()
 	for _, c := range s.clients {
 		c.mu.RLock()
-		if c.authed {
+		if c.authed && c.ID != exclude {
 			taken[c.Username] = true
 		}
 		c.mu.RUnlock()
 	}
 	s.mu.RUnlock()
 
-	if !taken[nickname] {
+	if !mobile && !taken[nickname] {
 		return nickname
 	}
-	for i := 2; ; i++ {
-		suffix := fmt.Sprintf("#%d", i)
+	start, format := 2, "#%d"
+	if mobile {
+		start, format = 1, "#M%d"
+	}
+	for i := start; ; i++ {
+		suffix := fmt.Sprintf(format, i)
 		base := []rune(nickname)
 		if limit := netproto.MaxDisplayNameLength - len(suffix); len(base) > limit {
 			base = base[:limit]

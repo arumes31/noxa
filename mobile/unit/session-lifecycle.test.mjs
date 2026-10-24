@@ -132,3 +132,27 @@ test('guest snapshot received while saving identity subscribes to channels', asy
  await connecting;
  assert.deepEqual(seen,[2]);
 });
+
+
+test('foreground and restored-page events probe an apparently online session', async () => {
+ const none=()=>{};
+ const sources={
+  './core/chat-session.js':{ChatSession},'./core/direct.js':{DirectMessages:class{}},
+  './core/calls.js':{Calls:class{}},'./core/groups.js':{Groups:class{}},'./core/voice.js':{Voice:class{}},
+  './core/connection.js':{Connection:class{}},'./core/crypto.js':{generateIdentity},'./core/device.js':{signIn:none},
+  './core/identity-store.js':{clearIdentity:none,loadIdentity:none,saveIdentity:none,updateMeta:none},
+  './core/outbox.js':{enqueue:none,flush:none,showPending:none,waitingCount:none},
+  './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:none},
+ };
+ const window=new EventTarget(),document=Object.assign(new EventTarget(),{visibilityState:'hidden'});
+ const context=vm.createContext({EventTarget,CustomEvent,setTimeout,clearTimeout,clearInterval,console,window,document});
+ const mod=new vm.SourceTextModule(await fs.readFile(new URL('../src/app.js',import.meta.url),'utf8'),{context});
+ await mod.link(spec=>new vm.SyntheticModule(Object.keys(sources[spec]),function(){for(const [k,v] of Object.entries(sources[spec]))this.setExport(k,v)},{context}));
+ await mod.evaluate();
+ let probes=0;
+ mod.namespace.app.identity={};mod.namespace.app.session={conn:{probe:async()=>{probes++}}};
+ document.dispatchEvent(new Event('visibilitychange'));assert.equal(probes,0);
+ document.visibilityState='visible';document.dispatchEvent(new Event('visibilitychange'));assert.equal(probes,1);
+ window.dispatchEvent(Object.assign(new Event('pageshow'),{persisted:true}));assert.equal(probes,2);
+ window.dispatchEvent(new Event('online'));assert.equal(probes,3);
+});

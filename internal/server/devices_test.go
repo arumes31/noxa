@@ -207,7 +207,12 @@ func keyLogin(t *testing.T, addr string, keys linkTestKeys) (net.Conn, netproto.
 // keyLoginOn runs the key-proof sign-in on an open connection.
 func keyLoginOn(t *testing.T, conn net.Conn, keys linkTestKeys) netproto.AuthResponse {
 	t.Helper()
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: keys.uniqueID, Anonymous: true, Nickname: "phone"})
+	return namedKeyLoginOn(t, conn, keys, "phone")
+}
+
+func namedKeyLoginOn(t *testing.T, conn net.Conn, keys linkTestKeys, nickname string) netproto.AuthResponse {
+	t.Helper()
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: keys.uniqueID, Anonymous: true, Nickname: nickname})
 	var challenge netproto.AuthChallenge
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
 		t.Fatal(err)

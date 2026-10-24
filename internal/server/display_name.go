@@ -26,6 +26,9 @@ func (s *TCPServer) handleDisplayNameSet(ctx context.Context, client *Client, f 
 		// Nicknames are not a guardRoleMedia input: keep the packet fence open.
 		client.roleActionMu.Lock()
 		defer client.roleActionMu.Unlock()
+		if client.isWebTransport() {
+			name = s.dedupeNickname(name, true, client.ID)
+		}
 		for _, member := range s.deps.State.ListClients() {
 			if member.ClientID != client.ID && member.Nickname == name {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "display name is already in use")

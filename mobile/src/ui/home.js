@@ -43,6 +43,7 @@ export function renderHome(root) {
     root.replaceChildren(h("section", { class: "screen" },
         header(t("home.title")),
         h("div", { class: "screen-body" },
+            h("a", { class: "btn btn-primary", href: "#/new-chat" }, t("chatNew.title")),
             live.map(channel => h("a", { class: "card row", href: "#/voice", style: "border-color:var(--border-strong)" },
                 h("div", { class: "row-main" },
                     h("span", { class: "row-title" }, t("home.live", { channel: channel.name })),
