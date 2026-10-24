@@ -1678,6 +1678,10 @@ window.runtime.EventsOn("event", (json) => {
         case "chat_deleted":
             chatUI.onChatDeleted(d);
             return;
+        // An edit or deletion of a direct message (never a new message).
+        case "dm_changed":
+            chatUI.onDMChanged(d);
+            return;
         case "chat_pinned":
             chatUI.onChatPinned(d, true);
             return;

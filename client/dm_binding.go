@@ -61,7 +61,14 @@ func (m *connManager) retryStaleDevices(conn net.Conn, msg netproto.ChatSend, pl
 		return err
 	}
 	m.forgetDMDevices(msg.ToUniqueID, ownUID)
-	retry, encryptErr := m.encryptChat("direct", msg.ToUniqueID, plaintext)
+	var retry netproto.ChatSend
+	var encryptErr error
+	if msg.DMAction != "" {
+		// An edit or deletion stays per-device: no single-copy fallback.
+		retry, encryptErr = m.encryptDirectChange(msg.ToUniqueID, msg.RefClientMsgID, msg.DMAction, plaintext)
+	} else {
+		retry, encryptErr = m.encryptChat("direct", msg.ToUniqueID, plaintext)
+	}
 	if encryptErr != nil {
 		return encryptFailure(encryptErr)
 	}

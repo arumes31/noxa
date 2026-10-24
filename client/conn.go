@@ -115,6 +115,10 @@ type connManager struct {
 	decryptSem        chan struct{}
 	// dmDevices caches verified device lists per account (dm_devices_v1).
 	dmDevices dmDeviceCache
+	// dmChanges persists a received direct-message edit or deletion and
+	// returns the conversation it belongs to; set once by the App for tab
+	// managers, nil otherwise.
+	dmChanges func(m *connManager, peer string, c dmChange) string
 
 	// debugFrames tees frame summaries to the "debug_frame" event (327 debug
 	// console) when enabled.

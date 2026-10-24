@@ -36,6 +36,9 @@ type dmTrustedDevice struct {
 	DeviceID string
 	Kind     string
 	X25519   [32]byte
+	// First marks the account's first device, which opens what is sealed to
+	// the account key (private groups need no device envelope for it).
+	First bool
 }
 
 type dmDeviceListEntry struct {
@@ -131,7 +134,7 @@ func verifyDMDevices(principal string, signing ed25519.PublicKey, encryption [32
 		// The first device's encryption key is the account record's; a
 		// directory that disagrees cannot vouch for anything else.
 		log.Printf("dm devices: first device of %s lists another encryption key; using the signed record only", principal)
-		return []dmTrustedDevice{{DeviceID: first.DeviceID, Kind: first.Kind, X25519: encryption}}, nil
+		return []dmTrustedDevice{{DeviceID: first.DeviceID, Kind: first.Kind, X25519: encryption, First: true}}, nil
 	}
 
 	const (
@@ -169,7 +172,7 @@ func verifyDMDevices(principal string, signing ed25519.PublicKey, encryption [32
 		}
 		return ok
 	}
-	out := []dmTrustedDevice{{DeviceID: first.DeviceID, Kind: first.Kind, X25519: encryption}}
+	out := []dmTrustedDevice{{DeviceID: first.DeviceID, Kind: first.Kind, X25519: encryption, First: true}}
 	for _, d := range devices {
 		if d.DeviceID == "" || d.DeviceID == first.DeviceID || !resolve(d.DeviceID) {
 			continue
@@ -390,21 +393,31 @@ func (m *connManager) trustedSenderDevice(uid, deviceID string, key, ownPub [32]
 // of this account's other devices (FromUniqueID is this account) is a
 // message the user sent elsewhere and is shown as outgoing to ToUniqueID.
 func (m *connManager) decryptDeviceCopy(chat netproto.ChatBroadcast, pub, priv [32]byte) string {
+	plain, ok := m.openDeviceCopy(chat, pub, priv)
+	if !ok {
+		return missingKeyText
+	}
+	return plain
+}
+
+// openDeviceCopy is decryptDeviceCopy reporting failure separately, for
+// edits and deletions, which are dropped rather than shown as a placeholder.
+func (m *connManager) openDeviceCopy(chat netproto.ChatBroadcast, pub, priv [32]byte) (string, bool) {
 	m.mu.Lock()
 	selfDevice := m.deviceID
 	m.mu.Unlock()
 	if selfDevice == "" || chat.RecipientDeviceID != selfDevice || chat.FromUniqueID == "" || chat.SenderDeviceID == "" {
-		return missingKeyText
+		return "", false
 	}
 	senderKey, ok := parseDeviceX25519(chat.SenderDeviceKey)
 	if !ok || !m.trustedSenderDevice(chat.FromUniqueID, chat.SenderDeviceID, senderKey, pub) {
-		return missingKeyText
+		return "", false
 	}
 	plain, err := openDM(chat.Text, senderKey, priv)
 	if err != nil {
-		return missingKeyText
+		return "", false
 	}
-	return plain
+	return plain, true
 }
 
 // ensureDeviceRegistered lists the account's devices once after connecting,

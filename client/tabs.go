@@ -362,6 +362,7 @@ func (a *App) newTabManager(id string, identity *identity) *connManager {
 	cm.id = identity
 	cm.tabID = id
 	cm.sink = tabSink{app: a, tabID: id, owner: cm}
+	cm.dmChanges = a.recordDMChange
 	cm.allowPlaintext = allowPlaintext
 	if a.knownServers != nil {
 		cm.knownServers = a.knownServers
