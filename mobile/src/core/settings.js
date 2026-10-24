@@ -10,6 +10,11 @@ export const DEFAULTS = Object.freeze({
     accent: "", // "" keeps the theme's accent
     fontScale: 1, // 0.9 .. 1.3
     compact: false,
+    // Wide layout (tablets, desktop browsers)
+    chatTabs: { order: [], pinned: [] }, // open conversation tabs, see core/chat-tabs.js
+    sidebarWidth: 0, // px; 0 is the default width
+    detailsWidth: 0,
+    detailsOpen: true,
     reduceMotion: false, // in addition to the phone's own setting
     // Chat display
     timestamps: "absolute", // absolute | relative | off

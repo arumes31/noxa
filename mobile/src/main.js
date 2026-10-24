@@ -6,6 +6,7 @@ import { app, connect, flushNow, loadDevice, loadInfo, markRead } from "./app.js
 import { parseLinkFragment } from "./core/device.js";
 import { t, lang } from "./i18n.js";
 import { h, toast } from "./ui/dom.js";
+import { afterRoute, onWideChange, screenRoot } from "./ui/layout.js";
 
 // Each screen is its own chunk, so Connect and Home load without the rest.
 const screens = {
@@ -23,7 +24,9 @@ const screens = {
 };
 
 document.documentElement.lang = lang();
-const root = document.getElementById("app");
+const appRoot = document.getElementById("app");
+// Screens render here: #app on phones, the wide shell's centre on tablets.
+let root = appRoot;
 installViewport();
 initInstallPrompt();
 let cleanup = null;
@@ -34,6 +37,7 @@ async function route() {
     cleanup?.();
     cleanup = null;
     const token = ++routeToken;
+    root = screenRoot(appRoot, !!app.session);
     if (!app.session) {
         app.viewing = null;
         const { renderConnect } = await screens.connect();
@@ -71,6 +75,7 @@ async function route() {
         case "you": module.renderYou(root); break;
         default: module.renderHome(root);
     }
+    afterRoute(screen, arg);
     renderBanner();
 }
 
@@ -162,6 +167,7 @@ app.addEventListener("signedout", () => {
     route();
 });
 window.addEventListener("hashchange", route);
+onWideChange(() => route());
 
 async function registerServiceWorker() {
     if (!("serviceWorker" in navigator) || location.protocol !== "https:") return;
