@@ -26,6 +26,8 @@ export function showGroupManage(id, { onGone } = {}) {
     const body = h("div", { class: "group-manage" });
     let inviting = false;
     let busy = false;
+    let draftName = null; // survives re-renders while the owner types
+    let shown = -1; // the revision on screen
     const view = panel(groups.list.get(id)?.name || t("group.title"), body, { label: t("groupManage.title") });
 
     const run = async work => {
@@ -92,17 +94,19 @@ export function showGroupManage(id, { onGone } = {}) {
             view.close();
             return;
         }
+        shown = group.revision;
         const owner = group.owner === session.uniqueID;
         const members = [...(group.members || [])].sort((a, b) => (b.unique_id === group.owner) - (a.unique_id === group.owner) || a.pending - b.pending || memberName(a.unique_id).localeCompare(memberName(b.unique_id)));
         const others = members.filter(m => m.unique_id !== session.uniqueID);
         const nodes = [];
         if (owner) {
-            const nameInput = h("input", { class: "input", value: group.name, maxlength: "80", "aria-label": t("group.name") });
+            const nameInput = h("input", { class: "input", value: draftName ?? group.name, maxlength: "80", "aria-label": t("group.name"),
+                oninput: event => { draftName = event.target.value; } });
             nodes.push(h("form", { class: "rename-form", onsubmit: event => {
                 event.preventDefault();
                 const next = nameInput.value.trim();
                 if (!next || next === group.name) return;
-                run(async () => { await groups.rename(id, next); view.node.querySelector(".sheet-title").textContent = next; toast(t("groupManage.renamed")); });
+                run(async () => { await groups.rename(id, next); draftName = null; view.node.querySelector(".sheet-title").textContent = next; toast(t("groupManage.renamed")); });
             } }, nameInput, h("button", { class: "btn", type: "submit" }, t("groupManage.rename"))));
         }
         nodes.push(h("p", { class: "section-label" }, t("groupManage.members", { count: members.filter(m => !m.pending).length })),
@@ -130,7 +134,8 @@ export function showGroupManage(id, { onGone } = {}) {
         body.replaceChildren(...nodes);
     }
 
-    const onList = () => { if (!busy && !inviting) render(); };
+    // Re-render only when the group changed, not on every list refresh.
+    const onList = () => { if (!busy && !inviting && groups.list.get(id)?.revision !== shown) render(); };
     groups.addEventListener("list", onList);
     view.closed.then(() => groups.removeEventListener("list", onList));
     render();

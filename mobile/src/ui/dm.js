@@ -124,7 +124,7 @@ export function renderDM(root, peer) {
         const verified = contact.trust === Trust.ok && contact.verified;
         banner.replaceChildren(icon(verified ? "shield" : "lock"), " ",
             contact.fingerprint ? t("dm.encryptedWith", { fingerprint: contact.fingerprint }) : t("dm.encrypted"),
-            verified ? h("span", { class: "verified-badge" }, t("safety.verified")) : null);
+            ...(verified ? [h("span", { class: "verified-badge" }, t("safety.verified"))] : []));
         banner.classList.toggle("verified", verified);
     }
 
@@ -271,7 +271,7 @@ export function renderDM(root, peer) {
             { label: t("dmTools.export"), value: "export" },
             { label: t("dmTools.delete"), value: "delete", danger: true },
         ]);
-        if (choice === "safety") showSafetyNumber(peer, name, checkTrust).catch(error => toast(t("common.error", { error: error.message }), "warn"));
+        if (choice === "safety") showSafetyNumber(peer, name, () => dm.devicesOf(peer).then(paintBanner)).catch(error => toast(t("common.error", { error: error.message }), "warn"));
         else if (choice === "search") toggleSearch(true);
         else if (choice === "calls") showCalls(peer, name);
         else if (choice === "mute") { setMuted(tag, !muted); paintTitle(); toast(t(muted ? "conv.unmuted" : "conv.muted", { name })); }

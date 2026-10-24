@@ -59,7 +59,7 @@ export function voiceNotePlayer(blobPromise, name, meta = {}) {
         time.textContent = audio && (current > 0 || !audio.paused) ? `${formatDuration(current * 1000)} / ${formatDuration(known * 1000)}` : formatDuration(known * 1000);
         const playing = audio && !audio.paused;
         play.replaceChildren(icon(playing ? "pause" : "play"));
-        play.setAttribute("aria-label", t(playing ? "voice.pause" : "voice.play"));
+        play.setAttribute("aria-label", t(playing ? "vnote.pause" : "vnote.play"));
         node.classList.toggle("playing", !!playing);
     };
 
@@ -149,7 +149,7 @@ export function voiceNoteButton(composerCtx) {
 
 function openRecorder(composerCtx) {
     const status = h("p", { class: "hint", role: "status" }, t("vnote.permission"));
-    const elapsed = h("output", { class: "voice-elapsed", "aria-live": "off", "aria-label": t("vnote.elapsed") }, `0:00 / ${formatDuration(VOICE_MAX_MS)}`);
+    const elapsed = h("output", { class: "voice-elapsed", role: "timer", "aria-live": "off", "aria-label": t("vnote.elapsed") }, `0:00 / ${formatDuration(VOICE_MAX_MS)}`);
     const level = h("span");
     const meter = h("div", { class: "voice-meter", role: "meter", "aria-label": t("vnote.level"), "aria-valuemin": "-60", "aria-valuemax": "0", "aria-valuenow": "-60" }, level);
     const live = h("div", { class: "voice-live", hidden: true }, h("span", { class: "voice-dot", "aria-hidden": "true" }), elapsed, meter);
