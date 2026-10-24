@@ -5856,6 +5856,9 @@ test("B3 keeps voice controls outside the Chat and Files panels @a11y", async ({
 
 test("B3 alpha details work with the keyboard and notifications stay readable @a11y", async ({ page }, testInfo) => {
     await showB3Workspace(page);
+    // History discovery now acquires the native DM context. Its account must
+    // match this fixture's UI account, otherwise it correctly invalidates Activity.
+    await page.evaluate(() => { window.__dmStorageIdentity = window.__noxa.state.myUniqueID; });
     await page.locator("#alpha-badge").focus();
     await page.keyboard.press("Enter");
     await expect(page.locator(".alpha-notice")).toBeVisible();
