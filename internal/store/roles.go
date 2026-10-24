@@ -362,7 +362,7 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 				if i > 0 {
 					sb.WriteString(",")
 				}
-				sb.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d)", i*4+1, i*4+2, i*4+3, i*4+4))
+				fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d)", i*4+1, i*4+2, i*4+3, i*4+4)
 			}
 			if _, err := tx.ExecContext(ctx, sb.String(), roleOverrideArgs...); err != nil {
 				return err
@@ -376,7 +376,7 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 				if i > 0 {
 					sb.WriteString(",")
 				}
-				sb.WriteString(fmt.Sprintf("($%d,$%d,$%d,$%d)", i*4+1, i*4+2, i*4+3, i*4+4))
+				fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d)", i*4+1, i*4+2, i*4+3, i*4+4)
 			}
 			if _, err := tx.ExecContext(ctx, sb.String(), memberOverrideArgs...); err != nil {
 				return err
