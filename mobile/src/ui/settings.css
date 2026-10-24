@@ -1,0 +1,30 @@
+/* settings.css — the Settings area on the You screen. */
+.settings-search { width: 100%; margin: 4px 0 4px; }
+.settings-section { padding: 0; overflow: hidden; }
+.settings-section + .settings-section { margin-top: 10px; }
+.settings-section > summary {
+    list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    min-height: 52px; padding: 0 14px; font-weight: 600; cursor: pointer;
+}
+.settings-section > summary::-webkit-details-marker { display: none; }
+.settings-section > summary::after { content: ""; width: 8px; height: 8px; border-right: 2px solid var(--text-faint); border-bottom: 2px solid var(--text-faint); transform: rotate(45deg); transition: transform .15s; flex-shrink: 0; }
+.settings-section[open] > summary::after { transform: rotate(-135deg); }
+.settings-section > summary .row-meta { margin-left: auto; }
+.settings-rows { display: flex; flex-direction: column; gap: 4px; padding: 0 14px 12px; }
+.settings-rows > * + * { border-top: 1px solid var(--border); }
+.settings-field { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 6px 0; flex-wrap: wrap; }
+.settings-field > .row-main { min-width: 140px; }
+.settings-wrap { white-space: normal; }
+.settings-select { flex: 0 1 190px; min-width: 0; max-width: 100%; }
+.settings-block { display: flex; flex-direction: column; gap: 10px; padding: 10px 0; }
+.settings-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.settings-range { width: 100%; min-height: 44px; accent-color: var(--accent); }
+.settings-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-swatch { width: 44px; height: 44px; border-radius: 50%; border: 2px solid var(--border); background: var(--swatch, transparent); padding: 0; }
+.settings-swatch-default { background: conic-gradient(var(--accent) 0 50%, var(--bg-raised) 0); }
+.settings-swatch[aria-pressed="true"] { border-color: var(--text); box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--text); }
+.settings-hex { width: 100%; font-family: var(--font-mono); }
+.settings-empty { padding: 12px 4px; }
+@media (min-width: 720px) {
+    .settings-area { max-width: 680px; margin-inline: auto; }
+}

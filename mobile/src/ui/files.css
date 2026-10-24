@@ -1,0 +1,31 @@
+/* files.css — the channel file browser. */
+.files-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; margin-bottom: 6px; color: var(--text-faint); font-family: var(--font-mono); font-size: .8rem; }
+.files-crumb { min-height: 44px; padding: 0 6px; border: 0; background: transparent; color: var(--accent); border-radius: 8px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-crumb[aria-current] { color: var(--text); font-weight: 600; }
+.files-quota { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.files-quota-bar { height: 6px; border-radius: 3px; background: var(--bg-raised); border: 1px solid var(--border); overflow: hidden; }
+.files-quota-bar > span { display: block; height: 100%; background: var(--accent); }
+.files-quota-bar.hot > span { background: var(--coral); }
+.files-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.files-toolbar .btn { flex: 1 1 auto; }
+.files-controls { display: grid; grid-template-columns: 1fr auto 46px; gap: 8px; margin-bottom: 8px; }
+.files-controls .input { width: 100%; }
+.files-sort { max-width: 120px; }
+.files-direction { padding: 0; }
+.files-status:empty { display: none; }
+.files-status { margin: 4px 4px 8px; }
+.files-list .row { color: inherit; }
+.files-list .row-sub { white-space: normal; }
+.files-empty { padding: 16px 4px; }
+.files-sheet-body { display: flex; flex-direction: column; gap: 12px; }
+.files-sheet-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.files-sheet-row .btn { flex: 1 1 auto; }
+.files-sha { display: block; padding: 10px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); overflow-wrap: anywhere; font-size: .8rem; user-select: all; }
+.files-verify { margin: 0; min-height: 1.2em; }
+.files-verify.ok { color: var(--accent); }
+.files-verify.bad { color: var(--coral); }
+.files-action-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.files-versions .row { flex-wrap: wrap; }
+@media (min-width: 720px) {
+    .files-screen .screen-body > * { max-width: 760px; margin-inline: auto; }
+}

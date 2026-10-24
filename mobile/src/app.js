@@ -36,6 +36,8 @@ app.unread = new Map();
 app.viewing = null;
 /** Messages waiting in the outbox. */
 app.outboxWaiting = 0;
+/** Reconnect attempts since the page loaded (Diagnostics). */
+app.reconnects = 0;
 
 const RECONNECT_STEPS = [1000, 2000, 5000, 10000, 20000, 30000];
 let reconnectAttempt = 0;
@@ -384,6 +386,7 @@ function setOnline(online) {
 function scheduleReconnect() {
     const delay = RECONNECT_STEPS[Math.min(reconnectAttempt, RECONNECT_STEPS.length - 1)];
     reconnectAttempt++;
+    app.reconnects++;
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
         if (!app.identity) return;

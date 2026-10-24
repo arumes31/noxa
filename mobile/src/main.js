@@ -2,6 +2,9 @@ import { installViewport } from "./ui/viewport.js";
 import { initInstallPrompt, renderInstallPrompt } from "./ui/install-prompt.js";
 // main.js — boots the mobile web app: server info, stored device, router.
 import "./styles.css";
+import "./themes.css";
+import { installLogger } from "./core/log.js";
+import "./ui/appearance.js";
 import { app, connect, flushNow, loadDevice, loadInfo, markRead } from "./app.js";
 import { parseLinkFragment } from "./core/device.js";
 import { t, lang } from "./i18n.js";
@@ -20,8 +23,11 @@ const screens = {
     group: () => import("./ui/group.js"),
     voice: () => import("./ui/voice.js"),
     you: () => import("./ui/you.js"),
+    files: () => import("./ui/files.js"),
+    diagnostics: () => import("./ui/diagnostics.js"),
 };
 
+installLogger();
 document.documentElement.lang = lang();
 const root = document.getElementById("app");
 installViewport();
@@ -69,6 +75,8 @@ async function route() {
         case "group": cleanup = module.renderGroup(root, arg); break;
         case "voice": cleanup = module.renderVoice(root); break;
         case "you": module.renderYou(root); break;
+        case "files": cleanup = module.renderFiles(root, Number(arg) || 0); break;
+        case "diagnostics": cleanup = module.renderDiagnostics(root); break;
         default: module.renderHome(root);
     }
     renderBanner();

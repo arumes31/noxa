@@ -1,0 +1,99 @@
+/* themes.css — colour sets for html[data-theme]. Midnight is the :root
+   palette in styles.css; the others override its variables. A custom accent
+   is written inline on <html> by ui/appearance.js and wins over these. */
+
+html[data-theme="arctic"] {
+    --bg: #0b1622;
+    --bg-raised: #112131;
+    --glass: rgba(26, 46, 66, 0.74);
+    --glass-strong: rgba(30, 54, 76, 0.92);
+    --border: rgba(150, 200, 235, 0.2);
+    --border-strong: rgba(125, 211, 252, 0.5);
+    --text: #f1f7fc;
+    --text-dim: #c3d3e2;
+    --text-faint: #93a8bb;
+    --accent: #7dd3fc;
+    --accent-dim: rgba(125, 211, 252, 0.16);
+}
+
+html[data-theme="light"] {
+    --bg: #f4f7fa;
+    --bg-raised: #ffffff;
+    --glass: rgba(255, 255, 255, 0.86);
+    --glass-strong: rgba(255, 255, 255, 0.96);
+    --border: rgba(20, 50, 70, 0.14);
+    --border-strong: rgba(0, 129, 153, 0.5);
+    --text: #0f1b24;
+    --text-dim: #344856;
+    --text-faint: #5a6d7b;
+    --accent: #007a91;
+    --accent-dim: rgba(0, 122, 145, 0.1);
+    --coral: #c8283f;
+    --amber: #a86400;
+    color-scheme: light;
+}
+
+html[data-theme="contrast"] {
+    --bg: #000000;
+    --bg-raised: #000000;
+    --glass: #000000;
+    --glass-strong: #000000;
+    --border: #ffffff;
+    --border-strong: #ffff00;
+    --text: #ffffff;
+    --text-dim: #ffffff;
+    --text-faint: #e6e6e6;
+    --accent: #ffff00;
+    --accent-dim: rgba(255, 255, 0, 0.2);
+    --coral: #ff8095;
+    --amber: #ffd060;
+}
+html[data-theme="contrast"] .card, html[data-theme="contrast"] .nav { backdrop-filter: none; -webkit-backdrop-filter: none; }
+html[data-theme="contrast"] :focus-visible { outline-width: 3px; }
+
+/* System follows the phone: midnight in the dark, the light set otherwise. */
+@media (prefers-color-scheme: light) {
+    html[data-theme="system"] {
+        --bg: #f4f7fa;
+        --bg-raised: #ffffff;
+        --glass: rgba(255, 255, 255, 0.86);
+        --glass-strong: rgba(255, 255, 255, 0.96);
+        --border: rgba(20, 50, 70, 0.14);
+        --border-strong: rgba(0, 129, 153, 0.5);
+        --text: #0f1b24;
+        --text-dim: #344856;
+        --text-faint: #5a6d7b;
+        --accent: #007a91;
+        --accent-dim: rgba(0, 122, 145, 0.1);
+        --coral: #c8283f;
+        --amber: #a86400;
+        color-scheme: light;
+    }
+}
+
+/* Surfaces styles.css paints with fixed dark colours. */
+html[data-theme="light"] .avatar, html[data-theme="light"] .connect-card { background: var(--bg-raised); border-color: var(--border); }
+html[data-theme="light"] .sheet-overlay { background: rgba(15, 27, 36, .35); }
+@media (prefers-color-scheme: light) {
+    html[data-theme="system"] .avatar, html[data-theme="system"] .connect-card { background: var(--bg-raised); border-color: var(--border); }
+    html[data-theme="system"] .sheet-overlay { background: rgba(15, 27, 36, .35); }
+}
+
+/* Font size: rem-based sizes follow the root; body text is pinned in px in
+   styles.css, so it is set here too. */
+html, body { font-size: calc(15px * var(--font-scale, 1)); }
+
+/* Compact mode: tighter rows and message lines. */
+html[data-compact] .row { min-height: 44px; padding-block: 4px; gap: 10px; }
+html[data-compact] .msg { line-height: 1.3; gap: 4px; }
+html[data-compact] .chat-log { gap: 4px; }
+html[data-compact] .card { padding: 10px; }
+html[data-compact] .section-label { margin: 12px 4px 6px; }
+
+/* Reduce motion, in addition to the phone's own setting. */
+html[data-reduce-motion] *, html[data-reduce-motion] *::before, html[data-reduce-motion] *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+}

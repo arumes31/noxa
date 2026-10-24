@@ -1,4 +1,5 @@
-// you.js — You (14/15): profile, notifications, passkeys and devices.
+// you.js — You (14/15): profile, the searchable Settings sections (see
+// settings-registry.js), passkeys and devices.
 import { app, forgetDevice } from "../app.js";
 import { registerPasskey, passkeysSupported } from "../core/device.js";
 import { Msg } from "../core/frame.js";
@@ -7,6 +8,8 @@ import { t } from "../i18n.js";
 import { avatar, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { header, nav } from "./common.js";
+import { filterSettings, registerSettings } from "./settings-registry.js";
+import "./settings-sections.js";
 
 async function devices(session) {
     return session.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
@@ -82,11 +85,49 @@ function notificationSettings(session) {
     return { box, render };
 }
 
+// Push notifications are the first row of the Notifications section; the
+// notification workstream adds its own rows next to it.
+registerSettings("notifications", [{
+    key: "push", label: t("settings.notifications"), keywords: "push alerts benachrichtigungen",
+    render: () => app.meta.guest ? h("p", { class: "hint" }, t("connect.guestHint")) : notificationSettings(app.session).box,
+}], { title: t("settings.section.notifications") });
+
+// Sections the user opened stay open while the app runs.
+const openSections = new Set(["appearance"]);
+let searchQuery = "";
+
+/** The searchable, registered settings sections. */
+function settingsArea() {
+    const container = h("div", { class: "settings-list" });
+    const search = h("input", { class: "input settings-search", type: "search", value: searchQuery, placeholder: t("settings.search"), "aria-label": t("settings.search"), autocomplete: "off" });
+    const draw = () => {
+        const sections = filterSettings(searchQuery);
+        if (!sections.length) {
+            container.replaceChildren(h("p", { class: "hint settings-empty", role: "status" }, t("settings.noMatch", { query: searchQuery.trim() })));
+            return;
+        }
+        container.replaceChildren(...sections.map(section => {
+            const details = h("details", { class: "card settings-section", "data-section": section.id, open: !!searchQuery.trim() || openSections.has(section.id) },
+                h("summary", {}, section.title || t(`settings.section.${section.id}`)),
+                h("div", { class: "settings-rows" }, section.rows.map(row => {
+                    try { return row.render(); } catch (error) { return h("p", { class: "error" }, t("common.error", { error: error.message })); }
+                })));
+            details.addEventListener("toggle", () => {
+                if (searchQuery.trim()) return;
+                if (details.open) openSections.add(section.id); else openSections.delete(section.id);
+            });
+            return details;
+        }));
+    };
+    search.oninput = () => { searchQuery = search.value; draw(); };
+    draw();
+    return h("div", { class: "settings-area" }, search, container);
+}
+
 export function renderYou(root) {
     const session = app.session;
     const list = h("ul", { class: "list" });
     const passkeys = h("ul", { class: "list" });
-    const notifications = notificationSettings(session);
     const guest = !!app.meta.guest;
     const refresh = async () => {
         try {
@@ -119,8 +160,9 @@ export function renderYou(root) {
         h("div", { class: "screen-body" },
             h("div", { class: "card row" }, avatar(session.nickname, "md"),
                 h("span", { class: "row-main" }, h("span", { class: "row-title" }, session.nickname), h("span", { class: "row-sub" }, app.info?.server_name || ""))),
-            guest ? h("p", { class: "hint" }, t("connect.guestHint")) : h("p", { class: "section-label" }, t("settings.notifications")),
-            guest ? null : notifications.box,
+            settingsArea(),
+            h("p", { class: "section-label" }, t("settings.section.account")),
+            guest ? h("p", { class: "hint" }, t("connect.guestHint")) : null,
             guest ? null : h("p", { class: "section-label" }, t("settings.passkeys")),
             passkeys,
             !guest && passkeysSupported() ? h("button", { class: "btn btn-primary btn-block", onclick: async () => { await savePasskey(); refresh(); } }, icon("passkey"), " ", t("settings.savePasskey")) : null,
