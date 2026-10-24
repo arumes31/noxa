@@ -174,7 +174,14 @@ func (s *TCPServer) handlePasskeyRequest(ctx context.Context, client *Client, r 
 		if err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid passkey response")
 		}
-		user, err := s.passkeyAccount(ctx, keys, principal, client.nickname())
+		rows, err := keys.Passkeys(ctx, principal)
+		if err != nil {
+			return s.deviceFailure(ctx, client, err)
+		}
+		// The first handle is not persisted until this ceremony succeeds.
+		// Reuse the handle issued at begin; asking the store again would
+		// generate another random handle and invalidate the first passkey.
+		user, err := passkeyUserFor(principal, client.nickname(), session.UserID, rows)
 		if err != nil {
 			return s.deviceFailure(ctx, client, err)
 		}

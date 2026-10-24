@@ -19,7 +19,7 @@ type deviceLinkKeys struct {
 	code   string
 }
 
-// DeviceLinkView is a created link as the "Other login for this server"
+// DeviceLinkView is a created link as the "PWA / Mobile login"
 // dialog shows it. The secret stays in the Go process apart from the URL.
 type DeviceLinkView struct {
 	LinkID    string `json:"link_id"`
@@ -98,7 +98,7 @@ func (m *connManager) handleDeviceEvent(f *netproto.Frame) {
 	m.emit("device_event", view)
 }
 
-// DeviceView is a device as the "Other login for this server" dialog lists
+// DeviceView is a device as the "PWA / Mobile login" dialog lists
 // it. NeedsConfirm marks a device that is not confirmed for direct messages
 // (a phone that signed in with a passkey, another desktop install); this
 // desktop can confirm it.
@@ -240,7 +240,7 @@ func (a *App) RevokeDeviceForTab(tabID, deviceID string) error {
 	return err
 }
 
-// CreateDeviceLinkForTab starts "Other login for this server".
+// CreateDeviceLinkForTab starts "PWA / Mobile login".
 func (a *App) CreateDeviceLinkForTab(tabID string) (DeviceLinkView, error) {
 	cm, err := a.requireTabCM(tabID)
 	if err != nil {

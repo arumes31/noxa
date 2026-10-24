@@ -85,7 +85,7 @@ func (m *connManager) retryStaleDevices(conn net.Conn, msg netproto.ChatSend, pl
 
 // errDeviceUnconfirmed explains why a direct message to a contact with
 // several devices cannot be sent from an unconfirmed desktop.
-var errDeviceUnconfirmed = errors.New("this desktop is not confirmed for direct messages yet; confirm it under \"Other login for this server\" on your first noXa device")
+var errDeviceUnconfirmed = errors.New("this desktop is not confirmed for direct messages yet; confirm it under \"PWA / Mobile login\" on your first noXa device")
 
 // selfDeviceTrusted reports whether this desktop is a verified device of its
 // own account, i.e. may send per-device copies.
