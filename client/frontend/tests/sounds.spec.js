@@ -142,9 +142,12 @@ test("real AudioContext startup can resume from a later activated caller without
     }
 });
 
-for (const language of ["en", "de"]) {
-    test(`native close waits for the ${language} goodbye recording to finish`, async ({ page }) => {
-        const result = await page.evaluate(async language => {
+// German says good night from 20:00 until 04:59; English keeps one closing line.
+for (const [language, hour, clip] of [["en", 12, "client_closing"], ["de", 12, "client_closing"],
+    ["en", 22, "client_closing"], ["de", 22, "client_closing_night"]]) {
+    test(`native close waits for the ${language} goodbye recording at ${hour}:00 to finish`, async ({ page }) => {
+        await page.clock.setFixedTime(new Date(2026, 9, 24, hour, 0));
+        const result = await page.evaluate(async ({ language, clip }) => {
             window.__noxa = { state: { replayingTabID: "connecting-server", settings: { play_sounds: true, spoken_messages: true, speech_language: language, speech_volume: 75 } } };
             window.__noxaPolish = { dndActive: () => false };
             const { soundEngine, clearSpeech } = await import("/src/sounds.js");
@@ -176,10 +179,10 @@ for (const language of ["en", "de"]) {
             const active = soundEngine.active.size;
             await soundEngine.dispose();
             return { ready, played, completions, immediateCompletions, endedAtClose, elapsed, active,
-                duration: SPEECH_ASSETS[language].client_closing.duration };
-        }, language);
+                duration: SPEECH_ASSETS[language][clip].duration };
+        }, { language, clip });
         expect(result.ready).toBe(true);
-        expect(result.played).toEqual([`speech_${language}_client_closing`]);
+        expect(result.played).toEqual([`speech_${language}_${clip}`]);
         expect(result.immediateCompletions).toBe(0);
         expect(result.completions).toBe(1);
         expect(result.endedAtClose).toBe(true);
