@@ -733,9 +733,33 @@ clears its notification on Android and desktop browsers; iPhones clear it when
 the app next opens, because iOS ends subscriptions that receive pushes without
 a visible notification.
 
+**Direct messages, voice and calls.** Direct messages are sealed once for
+every confirmed device of both people, so they reach the desktop and the
+phone. Contacts verify each device against the identity they pinned: the
+account's first desktop, and devices it approved. A phone that signed in with
+a passkey must be confirmed once on the desktop (Connections → Other login
+for this server → Confirm). When you approve a phone, the desktop can copy
+recent direct-message history to it (90 days by default; up to 10,000
+messages and 50 MB, deleted from the server when the phone has it or after
+24 hours). Desktops older than this release are asked to update before they
+can message someone who has a phone.
+
+Voice channels, watching streams and private calls use WebRTC in the
+browser. Private calls are relay-only, so they need TURN (`turn.managed`);
+on mobile networks that block UDP, offer TURN over TLS on port 443 as well
+(see `docs/managed-turn-tls.md`). A callee's desktop and phones ring
+together; the device that answers takes the call. Attachments travel over
+`/ft` on the web listener, end-to-end encrypted as on the desktop.
+
+Messages written while the phone is offline wait in an encrypted outbox and
+are sent when it reconnects, or by the service worker through Background
+Sync on Android. Unsent messages expire after 14 days.
+
 **What the phone stores.** The device's Ed25519 and X25519 keys live in the
 browser's IndexedDB, encrypted with a non-extractable WebCrypto key. Signing out
-or revocation deletes them. The server keeps each device's public keys, name,
+or revocation deletes them. Direct-message history, contacts' pinned
+identities and the outbox are kept in IndexedDB under the same key and are
+deleted on sign-out. The server keeps each device's public keys, name,
 creation and last-use times, and the passkey's public key and sign counter; it
 never receives private keys. Channel messages are encrypted with
 server-managed keys, as on the desktop.

@@ -33,7 +33,16 @@ test("a direct message reaches the desktop and the phone, and the phone replies"
     const rowan = await desktopSession(server.controlAddr, server.accounts.rowan, { version: info.version });
     const rowanDevice = await registerDesktop(rowan);
     await publishKeyRecord(rowan);
-    await linkPhone(page, rowan, server.webURL, expect);
+    const linked = await linkPhone(page, rowan, server.webURL, expect);
+
+    // Rowan's desktop copies an older conversation to the new phone.
+    const list = await rowan.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
+    const phoneDevice = list.devices.find(d => d.kind === "web" && d.fingerprint && d.x25519_public_key === linked.x25519_public_key);
+    const history = [{ peer: "uid-sam", peer_nickname: "Sam", from: "uid-sam", from_nickname: "Sam", body: "an old message from Sam", sent_at: 1700000000, client_msg_id: "old-1" }];
+    const sealed = fromBase64(sealDM(JSON.stringify(history), fromBase64(phoneDevice.x25519_public_key), rowan.identity.xSecret));
+    await rowan.conn.request(Msg.DeviceRequest, { action: "history_put", device_id: phoneDevice.device_id, history: { seq: 0, total: 1, data: btoa(String.fromCharCode(...sealed)) } },
+        Msg.DeviceResult, { accept: r => r.action === "history_put" });
+    await expect(page.getByRole("link", { name: /Sam/ })).toContainText("an old message from Sam", { timeout: 15000 });
 
     // Ivy, on her desktop, writes to Rowan: one copy per device.
     const ivy = await desktopSession(server.controlAddr, server.accounts.ivy, { version: info.version });
