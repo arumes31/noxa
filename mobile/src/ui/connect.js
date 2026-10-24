@@ -7,6 +7,7 @@ import { t } from "../i18n.js";
 import { h, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { scanPairingQR } from "./qr-scanner.js";
+import { connectExtras, restoreSection, signInMessage } from "./account.js";
 
 // Route cleanup must follow replacement sign-in screens after cancel/failure.
 const scanners = new WeakMap();
@@ -57,7 +58,7 @@ export function renderConnect(root, { onSignedIn }) {
             await connect();
             onSignedIn({ offerPasskey: false });
         } catch (err) {
-            if (err?.name !== "NotAllowedError") error.textContent = t("signin.failed", { error: err.message || err });
+            if (err?.name !== "NotAllowedError") error.textContent = signInMessage(err);
         } finally {
             passkey.disabled = !passkeysSupported();
         }
@@ -84,7 +85,7 @@ export function renderConnect(root, { onSignedIn }) {
                 await connect({ guest: { nickname: guestName.value.trim(), serverPassword: guestPassword.value } });
                 onSignedIn({ offerPasskey: false });
             } catch (err) {
-                error.textContent = t("signin.failed", { error: err.message || err });
+                error.textContent = signInMessage(err);
             } finally { guestButton.disabled = false; }
         } },
         h("p", { class: "hint" }, t("connect.guestHint")),
@@ -101,11 +102,13 @@ export function renderConnect(root, { onSignedIn }) {
                     h("strong", {}, app.info?.server_name || location.host),
                     h("span", { class: "hint mono" }, location.host))),
             h("h2", { id: "signin-heading" }, t("connect.title")),
+            connectExtras({ onSignedIn, error }),
             passkey,
             h("p", { class: "hint", id: "passkey-hint" }, t(passkeysSupported() ? "connect.passkeyHint" : "connect.noPasskeys")),
             h("div", { class: "connect-divider" }, h("span", {}, t("connect.or"))),
             form,
             guestForm,
+            restoreSection({ onSignedIn, error }),
             error),
         isIOS() ? h("p", { class: "hint connect-install" }, t("connect.install")) : null));
     return () => scanners.get(root)?.abort();
@@ -144,7 +147,7 @@ export async function runLink(root, link, { onSignedIn }) {
         onSignedIn({ offerPasskey: true });
     } catch (error) {
         conn?.close();
-        if (error?.name !== "AbortError") fail(t("signin.failed", { error: error.message || error }));
+        if (error?.name !== "AbortError") fail(signInMessage(error));
     }
 
     function fail(message) {

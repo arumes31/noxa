@@ -4,6 +4,6 @@ import { startServer } from "./harness.mjs";
 
 export default async function globalSetup() {
     const server = await startServer();
-    process.env.NOXA_E2E_SERVER_STATE = JSON.stringify({ webURL: server.webURL, accounts: server.accounts, controlAddr: server.controlAddr });
+    process.env.NOXA_E2E_SERVER_STATE = JSON.stringify({ webURL: server.webURL, accounts: server.accounts, controlAddr: server.controlAddr, queryAddr: server.queryAddr });
     return async () => server.stop();
 }

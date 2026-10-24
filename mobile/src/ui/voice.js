@@ -1,6 +1,7 @@
 // voice.js — Voice room (09): join a channel, speaking tiles, mute,
 // deafen, push-to-talk, audio output, data used and watching streams.
-import { app, joinVoice, leaveVoice } from "../app.js";
+import { app, leaveVoice } from "../app.js";
+import { joinWithPassword, lockBadge } from "./server-tools.js";
 import { Voice } from "../core/voice.js";
 import { t } from "../i18n.js";
 import { avatar, h, toast } from "./dom.js";
@@ -22,13 +23,14 @@ function channelList(root, session) {
                 h("button", { class: "row", type: "button", style: `padding-left:${10 + c.depth * 14}px`, onclick: async event => {
                     const button = event.currentTarget;
                     button.disabled = true;
-                    try { await joinVoice(c.id); } catch (error) { toast(t("voice.joinFailed", { error: error.message }), "warn"); }
+                    try { await joinWithPassword(c); } catch (error) { toast(t("voice.joinFailed", { error: error.message }), "warn"); }
                     button.disabled = false;
                 } },
                     icon("voice"),
                     h("span", { class: "row-main" },
                         h("span", { class: "row-title" }, c.name),
                         c.clients.length ? h("span", { class: "row-sub" }, c.clients.map(m => m.nickname).join(", ")) : null),
+                    lockBadge(c),
                     c.clients.length ? h("span", { class: "row-meta" }, String(c.clients.length)) : null))))),
         nav("voice")));
 }

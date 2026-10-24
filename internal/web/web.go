@@ -229,6 +229,9 @@ func (s *Server) routes() {
 	// Device links keep their secret in the URL fragment, which browsers
 	// never send; the app reads it after load.
 	s.mux.Handle("GET /link", http.HandlerFunc(s.serveIndex))
+	// Channel invitations keep their token in the fragment too; the app
+	// also answers /app/invite/<channel> through its index fallback.
+	s.mux.Handle("GET /invite/{channel}", http.HandlerFunc(s.serveIndex))
 	s.mux.Handle("GET /{$}", http.RedirectHandler("/app/", http.StatusFound))
 }
 

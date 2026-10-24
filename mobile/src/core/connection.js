@@ -18,6 +18,9 @@ export class Connection extends EventTarget {
     #pending = [];
     #closed = false;
     #probe = null;
+    /** Control bytes received and sent on this connection (server info). */
+    bytesIn = 0;
+    bytesOut = 0;
 
     /** Opens ws(s)://<host>/ws for the page's own origin unless url is given. */
     static async open(url = defaultURL(), WebSocketImpl = globalThis.WebSocket) {
@@ -44,7 +47,9 @@ export class Connection extends EventTarget {
 
     send(type, message) {
         if (!this.open) throw new Error("not connected");
-        this.#socket.send(encodeFrame(type, message));
+        const frame = encodeFrame(type, message);
+        this.bytesOut += frame.length;
+        this.#socket.send(frame);
     }
 
     /**
@@ -86,6 +91,7 @@ export class Connection extends EventTarget {
 
     #receive(data) {
         let frames;
+        this.bytesIn += data?.byteLength || 0;
         try {
             frames = this.#reader.push(new Uint8Array(data));
         } catch (error) {

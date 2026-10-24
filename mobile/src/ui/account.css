@@ -1,0 +1,41 @@
+/* account.css — account, server and device screens (ui/account.js,
+   ui/devices.js, ui/server-tools.js). */
+.acct-form { display: flex; flex-direction: column; gap: 12px; }
+.acct-choices { display: flex; flex-direction: column; gap: 4px; }
+.acct-choice { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); }
+.acct-choice input { width: 18px; height: 18px; accent-color: var(--accent); }
+.acct-file { padding: 10px 14px; }
+.acct-again { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
+.acct-invite-note { margin: 0; color: var(--text-dim); font-size: .9rem; border-color: var(--border-strong); }
+.acct-restore { margin-top: 12px; }
+
+.acct-rules-overlay { z-index: 45; }
+.acct-rules-text { max-height: 45dvh; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); line-height: 1.5; font-size: .92rem; }
+.acct-rules-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.acct-row-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 10px 10px; }
+.acct-row-actions .btn { min-height: 44px; padding: 0 12px; font-size: .85rem; }
+.acct-device { border-bottom: 1px solid var(--border); }
+.acct-device:last-child { border-bottom: 0; }
+.acct-warning { color: var(--amber); }
+.acct-progress { font-size: .8rem; color: var(--text-dim); padding: 0 10px 8px; }
+
+.acct-server-current { color: var(--accent); }
+.acct-lock { color: var(--amber); display: inline-flex; }
+
+.acct-info { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 8px 14px; margin: 0; }
+.acct-info dt { color: var(--text-faint); font-size: .85rem; }
+.acct-info dd { margin: 0; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: .85rem; }
+.acct-motd { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; line-height: 1.5; }
+
+.acct-news { display: flex; flex-direction: column; gap: 8px; border-color: var(--border-strong); }
+.acct-news-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.acct-news-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 10em; overflow: hidden; color: var(--text-dim); }
+.acct-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.acct-card-actions .btn { flex: 1 1 auto; }
+.acct-header-actions { display: flex; }
+
+@media (min-width: 700px) {
+    .acct-info { grid-template-columns: 180px 1fr; }
+}
+.screen-body > .acct-news { margin-bottom: 12px; }

@@ -44,6 +44,8 @@ export class ChatSession extends EventTarget {
         this.pins = new Map();
         /** The server announcement, decrypted: {text, at} or null. */
         this.announcement = null;
+        /** Server rules awaiting acceptance ({text, hash}) or null. */
+        this.pendingRules = null;
         /** The MOTD, decrypted when sealed. */
         this.motd = auth.motd_enc ? null : auth.motd || "";
         for (const key of auth.chat_keys || []) this.#installKey(key, true);
@@ -58,7 +60,7 @@ export class ChatSession extends EventTarget {
             }),
             conn.on(Msg.Event, event => this.#handleEvent(event)),
             conn.on(Msg.DeviceEvent, event => this.#emit("device", event)),
-            conn.on(Msg.ServerRules, rules => this.#emit("rules", rules)),
+            conn.on(Msg.ServerRules, rules => this.#setRules(rules)),
             conn.on(Msg.MediaLimitsChanged, limits => { this.mediaLimits = limits.media_limits || limits; this.#emit("media-limits"); }),
         ];
     }
@@ -601,6 +603,33 @@ export class ChatSession extends EventTarget {
 
     serverInfo() {
         return this.conn.request(Msg.ServerInfoQuery, {}, Msg.ServerInfoResponse);
+    }
+
+    /** Round-trip time of one Ping in milliseconds. */
+    async ping() {
+        const started = performance.now();
+        await this.conn.request(Msg.Ping, {}, Msg.Pong, { timeout: 5000 });
+        return performance.now() - started;
+    }
+
+    // --- Server rules ------------------------------------------------------------
+
+    // The server keeps a session out of channels and chat until it accepts
+    // the rules (internal/server/handlers_rules.go). A ServerRules frame with
+    // a hash asks; an empty one confirms the acceptance.
+    #setRules(rules) {
+        this.pendingRules = rules?.hash ? { text: rules.text || "", hash: rules.hash } : null;
+        this.#emit("rules", this.pendingRules);
+    }
+
+    /**
+     * Accepts the rules shown, by hash. A stale hash is refused and the
+     * server sends the current text, which re-emits "rules".
+     */
+    async acceptRules(hash) {
+        const reply = await this.conn.request(Msg.ServerRulesAccept, { hash }, Msg.ServerRules);
+        this.#setRules(reply);
+        return !this.pendingRules;
     }
 
     #avatars = new Map();
