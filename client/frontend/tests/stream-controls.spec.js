@@ -568,6 +568,44 @@ test("confirmed publication stop replaces waiting with a dismissible stopped not
     expect(await page.evaluate(() => !!window.__noxa.state.pc)).toBe(true);
 });
 
+test("stopped notices disappear after one minute without disconnecting voice", async ({ page }) => {
+    const card = await waitForMissingStream(page);
+    await page.evaluate(() => { window.__streams.streams = []; });
+    await page.clock.runFor(3_000);
+    await expect(card.locator(".stream-status")).toHaveText("Stream stopped");
+    await page.clock.runFor(55_000);
+    await expect(card).toBeVisible();
+    await page.clock.runFor(5_000);
+    await expect(card).toHaveCount(0);
+    await expect(page.locator("#stream-catalog")).toBeHidden();
+    expect(await page.evaluate(() => !!window.__noxa.state.pc)).toBe(true);
+});
+
+for (const restart of ["same generation", "new generation", "new session"]) {
+    test(`stopped notice timer cannot dismiss a restarted stream (${restart})`, async ({ page }) => {
+        const card = await waitForMissingStream(page);
+        await page.evaluate(() => { window.__streams.streams = []; });
+        await page.clock.runFor(3_000);
+        await expect(card.locator(".stream-status")).toHaveText("Stream stopped");
+        await page.clock.runFor(30_000);
+        await page.evaluate(restart => {
+            const s = window.__streams;
+            s.streams = [{ publisher_id: "alice", slot: "screen", generation: restart === "new generation" ? "99" : "1", preview_at: 0, watch_revision: "0" }];
+            if (restart === "new session") s.start();
+        }, restart);
+        await page.clock.runFor(3_000);
+        await expect(card.getByRole("button", { name: "Watch", exact: true })).toBeVisible();
+        await card.getByRole("button", { name: "Watch", exact: true }).click();
+        await page.evaluate(() => { window.__streams.streams = []; });
+        await page.clock.runFor(3_000);
+        await expect(card.locator(".stream-status")).toHaveText("Stream stopped");
+        await page.clock.runFor(30_000);
+        await expect(card).toBeVisible();
+        await page.clock.runFor(30_000);
+        await expect(card).toHaveCount(0);
+    });
+}
+
 test("decoded static screens and intentional low bandwidth pauses do not offer recovery", async ({ page }) => {
     await page.locator('[data-publisher="alice"] .stream-watch').click();
     const tile = page.locator('.vtile[data-clid="alice"]');
