@@ -7,6 +7,7 @@ import { t } from "../i18n.js";
 import { avatar, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { header, nav } from "./common.js";
+import { adminEntry } from "./admin-entry.js";
 
 async function devices(session) {
     return session.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
@@ -119,6 +120,7 @@ export function renderYou(root) {
         h("div", { class: "screen-body" },
             h("div", { class: "card row" }, avatar(session.nickname, "md"),
                 h("span", { class: "row-main" }, h("span", { class: "row-title" }, session.nickname), h("span", { class: "row-sub" }, app.info?.server_name || ""))),
+            guest ? null : adminEntry(session),
             guest ? h("p", { class: "hint" }, t("connect.guestHint")) : h("p", { class: "section-label" }, t("settings.notifications")),
             guest ? null : notifications.box,
             guest ? null : h("p", { class: "section-label" }, t("settings.passkeys")),

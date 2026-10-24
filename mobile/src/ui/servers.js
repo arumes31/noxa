@@ -4,6 +4,8 @@ import { t } from "../i18n.js";
 import { avatar, h, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { dmHref, header, nav, unreadBadge } from "./common.js";
+import { memberMenuButton } from "./moderation.js";
+import { addChannelButton } from "./admin-entry.js";
 
 let joining = false;
 
@@ -41,11 +43,16 @@ export function renderServers(root) {
                     h("span", { class: "row-main" }, h("span", { class: "row-title" }, c.name)),
                     c.clients.length ? h("span", { class: "row-meta" }, String(c.clients.length)) : null,
                     c.home ? null : joinButton(c)),
-                c.clients.length ? h("ul", { class: "list", style: "padding-left:44px" }, c.clients.map(client => h("li", {},
+                c.clients.length ? h("ul", { class: "list", style: "padding-left:44px" }, c.clients.map(client => memberRow(client,
                     h(client.unique_id && client.unique_id !== session.uniqueID ? "a" : "div", {
                         class: "row", style: "min-height:36px",
                         href: client.unique_id && client.unique_id !== session.uniqueID ? dmHref(client.unique_id) : null,
                         "aria-label": client.unique_id !== session.uniqueID ? t("dm.messageTo", { name: client.nickname }) : null,
-                    }, avatar(client.nickname, "sm"), h("span", { class: "row-sub" }, client.nickname), client.on_mobile ? h("span", { class: "row-meta", title: t("presence.onMobile") }, t("presence.mobileBadge")) : null)))) : null))))),
+                    }, avatar(client.nickname, "sm"), h("span", { class: "row-sub" }, client.nickname), client.on_mobile ? h("span", { class: "row-meta", title: t("presence.onMobile") }, t("presence.mobileBadge")) : null)))) : null))),
+            addChannelButton(session))),
         nav("servers"));
+    // Other members get a ⋯ menu (also on long-press) with moderation and reporting.
+    function memberRow(client, row) {
+        return h("li", { class: "member-row" }, row, client.client_id !== session.clientID ? memberMenuButton(client, row) : null);
+    }
 }

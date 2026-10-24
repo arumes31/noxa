@@ -161,3 +161,12 @@ export async function desktopSession(controlAddr, account, { version = "0.0.0" }
 
 export { sign, publicKeyPEM, uniqueIDFromPublicKey };
 
+
+/** Signs a guest in over the TLS control port with a fresh key, like an unregistered desktop. */
+export async function guestSession(controlAddr, { version = "0.0.0", nickname = "Guest" } = {}) {
+    const { signIn } = await import("../src/core/device.js");
+    const identity = generateIdentity();
+    const conn = await Connection.open("unused", function Adapter() { return new TLSSocketAdapter(controlAddr); });
+    const auth = await signIn(conn, identity, { version, nickname });
+    return { conn, identity, auth, uniqueID: auth.unique_id };
+}
