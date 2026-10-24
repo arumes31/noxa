@@ -17,6 +17,7 @@ export class Connection extends EventTarget {
     #reader = new FrameReader();
     #pending = [];
     #closed = false;
+    #probe = null;
 
     /** Opens ws(s)://<host>/ws for the page's own origin unless url is given. */
     static async open(url = defaultURL(), WebSocketImpl = globalThis.WebSocket) {
@@ -68,10 +69,19 @@ export class Connection extends EventTarget {
         });
     }
 
+    /** Check a possibly stale socket after the browser resumes from suspension. */
+    probe() {
+        if (!this.#probe) {
+            this.#probe = this.request(Msg.Ping, {}, Msg.Pong, { timeout: 5000 })
+                .catch(error => { this.close(); throw error; })
+                .finally(() => { this.#probe = null; });
+        }
+        return this.#probe;
+    }
+
     close() {
-        this.#closed = true;
-        this.#socket?.close();
         this.#shutdown(new Error("connection closed"));
+        this.#socket?.close();
     }
 
     #receive(data) {

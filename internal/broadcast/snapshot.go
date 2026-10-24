@@ -20,6 +20,8 @@ import (
 // omits the net.Conn field so snapshots can be safely marshaled and sent over
 // the wire.
 type ClientInfo struct {
+	IsGuest bool `json:"is_guest"` // includes key-derived guests; never infer from unique_id
+
 	UserID      int64                          `json:"-"`
 	Roles       []authorization.RoleAppearance `json:"roles,omitempty"`
 	ClientID    string                         `json:"client_id"`
@@ -107,6 +109,7 @@ func clientToInfo(c *state.Client) ClientInfo {
 	return ClientInfo{
 		ClientID:        c.ClientID,
 		UserID:          c.UserID,
+		IsGuest:         c.UserID == 0,
 		UniqueID:        c.UniqueID,
 		Nickname:        c.Nickname,
 		ChannelID:       c.ChannelID,

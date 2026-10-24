@@ -147,8 +147,8 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 			rejection = "server is full"
 			return authorization.ErrRoleForbidden
 		}
-		if id.customName {
-			id.nickname = s.dedupeNickname(id.nickname)
+		if id.customName || client.isWebTransport() {
+			id.nickname = s.dedupeNickname(id.nickname, client.isWebTransport(), "")
 		}
 		client.setIdentity(id.uniqueID, id.nickname, id.userID, id.bot)
 		s.publishAuthenticatedSession(ctx, client, id)

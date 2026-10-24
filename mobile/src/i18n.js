@@ -1,6 +1,11 @@
 // i18n.js — mobile catalog. English and German carry the same keys.
 const catalogs = {
     en: {
+        "chatNew.title": "New chat",
+        "chatNew.search": "Search members by name",
+        "chatNew.hint": "Choose a visible server member to start a direct message.",
+        "chatNew.noMatch": "No members found.",
+        "chatNew.empty": "No other members are currently visible. You can also open an existing conversation from Home.",
         "install.title": "Install noXa",
         "install.hint": "Open it from your home screen.",
         "install.action": "Install",
@@ -196,6 +201,11 @@ const catalogs = {
         "common.error": "Something went wrong: {error}",
     },
     de: {
+        "chatNew.title": "Neuer Chat",
+        "chatNew.search": "Mitglieder nach Namen suchen",
+        "chatNew.hint": "Wähle ein sichtbares Servermitglied für eine Direktnachricht.",
+        "chatNew.noMatch": "Keine Mitglieder gefunden.",
+        "chatNew.empty": "Zurzeit sind keine anderen Mitglieder sichtbar. Bestehende Chats findest du auf Start.",
         "install.title": "noXa installieren",
         "install.hint": "Direkt vom Home-Bildschirm öffnen.",
         "install.action": "Installieren",

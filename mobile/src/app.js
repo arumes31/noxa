@@ -79,8 +79,9 @@ export async function forgetDevice() {
     app.voice = null;
     app.dm?.close();
     app.dm = null;
-    app.session?.close();
+    const previousSession = app.session;
     app.session = null;
+    previousSession?.close();
     await clearIdentity();
     app.identity = null;
     app.meta = {};
@@ -98,7 +99,7 @@ export async function connect({ guest = null } = {}) {
     try {
         auth = await signIn(conn, identity, {
             version: app.info?.version || "0.0.0",
-            nickname: guest ? guest.nickname : app.meta.guest ? app.meta.nickname : "",
+            nickname: guest ? guest.nickname : app.meta.guest ? (app.meta.guestNickname || app.meta.nickname) : "",
             serverPassword: guest ? guest.serverPassword : app.guestPassword || "",
         });
     } catch (error) {
@@ -109,9 +110,10 @@ export async function connect({ guest = null } = {}) {
         }
         throw error;
     }
-    app.session?.close();
+    const previousSession = app.session;
     const session = new ChatSession(conn, identity, auth);
     app.session = session;
+    previousSession?.close();
     session.addEventListener("snapshot", () => {
         // Subscribing delivers a channel's chat and keys without joining it.
         const missing = session.channels().filter(c => c.chat && !session.subscriptions.has(c.id)).map(c => c.id);
@@ -125,6 +127,7 @@ export async function connect({ guest = null } = {}) {
         // replacing local data, and never erase a saved login on a bad password.
         app.identity = identity;
         app.guestPassword = guest.serverPassword;
+        app.meta.guestNickname = guest.nickname;
         if (!reuseGuest) await clearIdentity();
         await saveIdentity(identity, app.meta);
     }
@@ -393,12 +396,18 @@ function scheduleReconnect() {
 // Reconnect promptly when the phone comes back online or to the foreground.
 if (typeof window !== "undefined") {
     const retryNow = () => {
-        if (app.identity && !app.online) {
+        if (!app.identity) return;
+        if (!app.online) {
             reconnectAttempt = 0;
             scheduleReconnect();
+        } else {
+            // A suspended WebSocket may still report OPEN. A failed probe closes
+            // it and lets the regular close handler reconnect this session.
+            app.session?.conn.probe().catch(() => {});
         }
     };
     window.addEventListener("online", retryNow);
+    window.addEventListener("pageshow", event => { if (event.persisted) retryNow(); });
     document.addEventListener("visibilitychange", () => {
         if (app.session && !app.meta.guest) reportVisibility(app.session.conn);
         if (document.visibilityState !== "visible") return;
