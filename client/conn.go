@@ -595,7 +595,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	})
 	go guardCrash("heartbeat", func() { m.heartbeatLoop(conn) })
 	go guardCrash("relay renewal", func() { m.relayRenewalLoop(conn) })
-	go guardCrash("device registration", func() { m.ensureDeviceRegistered(conn) })
+	go guardCrash("device registration", func() { m.ensureDeviceRegistered(conn); m.approvePasskeyDevices(conn) })
 	return ""
 }
 

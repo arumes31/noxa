@@ -136,8 +136,9 @@ type DeviceRequest struct {
 
 	// Passkeys: the browser's WebAuthn response, and the passkey to delete
 	// (base64url credential ID).
-	WebAuthn  json.RawMessage `json:"webauthn,omitempty"`
-	PasskeyID string          `json:"passkey_id,omitempty"`
+	DMCertificate json.RawMessage `json:"dm_certificate,omitempty"`
+	WebAuthn      json.RawMessage `json:"webauthn,omitempty"`
+	PasskeyID     string          `json:"passkey_id,omitempty"`
 
 	// Push and activity.
 	Subscription *PushSubscriptionKeys `json:"subscription,omitempty"`
@@ -156,7 +157,7 @@ func (r DeviceRequest) Valid() bool {
 	if len(r.Name) > 256 || len(r.Platform) > 128 || len(r.Code) > 16 || len(r.LinkID) > 64 ||
 		len(r.DeviceID) > 64 || len(r.Proof) > 64 || len(r.Signature) > 128 ||
 		len(r.Ed25519PublicKey) > 512 || len(r.X25519PublicKey) > 128 ||
-		len(r.WebAuthn) > MaxWebAuthnPayload || len(r.PasskeyID) > 1400 {
+		len(r.DMCertificate) > MaxPasskeyProof || len(r.WebAuthn) > MaxWebAuthnPayload || len(r.PasskeyID) > 1400 {
 		return false
 	}
 	if r.History != nil && (len(r.History.Data) == 0 || len(r.History.Data) > MaxHistoryChunk ||
@@ -216,11 +217,12 @@ func (r DeviceRequest) Valid() bool {
 
 // DeviceInfo describes one linked device.
 type DeviceInfo struct {
-	DeviceID     string `json:"device_id"`
-	Kind         string `json:"kind"`
-	Name         string `json:"name"`
-	Fingerprint  string `json:"fingerprint"`
-	X25519Public string `json:"x25519_public_key,omitempty"`
+	PasskeyProof json.RawMessage `json:"passkey_proof,omitempty"`
+	DeviceID     string          `json:"device_id"`
+	Kind         string          `json:"kind"`
+	Name         string          `json:"name"`
+	Fingerprint  string          `json:"fingerprint"`
+	X25519Public string          `json:"x25519_public_key,omitempty"`
 	// Ed25519Public lets a trusted device sign an endorsement; Confirmed
 	// marks the first device and devices with an approval signature.
 	Ed25519Public  string `json:"ed25519_public_key,omitempty"`
@@ -245,10 +247,11 @@ type PasskeyInfo struct {
 
 // DeviceResult answers a DeviceRequest.
 type DeviceResult struct {
-	Action   string        `json:"action"`
-	Devices  []DeviceInfo  `json:"devices,omitempty"`
-	Device   *DeviceInfo   `json:"device,omitempty"`
-	Passkeys []PasskeyInfo `json:"passkeys,omitempty"`
+	DMCertificate *PasskeyCertificate `json:"dm_certificate,omitempty"`
+	Action        string              `json:"action"`
+	Devices       []DeviceInfo        `json:"devices,omitempty"`
+	Device        *DeviceInfo         `json:"device,omitempty"`
+	Passkeys      []PasskeyInfo       `json:"passkeys,omitempty"`
 	// WebAuthn carries creation or request options for navigator.credentials.
 	WebAuthn json.RawMessage `json:"webauthn,omitempty"`
 
