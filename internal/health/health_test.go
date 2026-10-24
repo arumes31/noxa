@@ -16,6 +16,37 @@ import (
 )
 
 // TestHealthz verifies the liveness endpoint always returns 200.
+func TestNew(t *testing.T) {
+	addr := "127.0.0.1:8080"
+
+	t.Run("with nil logger", func(t *testing.T) {
+		srv := New(addr, nil, nil)
+		if srv == nil {
+			t.Fatal("expected Server, got nil")
+		}
+		if srv.logger == nil {
+			t.Error("expected fallback logger, got nil")
+		}
+		if srv.mux == nil {
+			t.Error("expected mux to be initialized")
+		}
+		if srv.srv == nil {
+			t.Error("expected srv to be initialized")
+		}
+		if srv.srv.Addr != addr {
+			t.Errorf("expected srv.Addr %q, got %q", addr, srv.srv.Addr)
+		}
+	})
+
+	t.Run("with provided logger", func(t *testing.T) {
+		logger := zap.NewNop()
+		srv := New(addr, logger, nil)
+		if srv.logger != logger {
+			t.Error("expected provided logger to be used")
+		}
+	})
+}
+
 func TestHealthz(t *testing.T) {
 	srv := New("127.0.0.1:0", nil, nil)
 	rec := httptest.NewRecorder()
