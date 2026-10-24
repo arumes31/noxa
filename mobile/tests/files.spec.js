@@ -8,6 +8,14 @@ import { uploadStream } from "../src/core/files.js";
 import { Msg } from "../src/core/frame.js";
 import { desktopSession } from "./harness.mjs";
 import { linkPhone } from "./helpers.mjs";
+import { releaseDevices } from "./device-cleanup.mjs";
+
+// The desktop session of the running test; released after it, pass or fail.
+let desktop = null;
+test.afterEach(async () => {
+    if (desktop) await releaseDevices(desktop);
+    desktop = null;
+});
 
 const server = JSON.parse(process.env.NOXA_E2E_SERVER_STATE || "{}");
 let info;
@@ -52,7 +60,7 @@ async function downloaded(download) {
 test("the phone browses, uploads, checks, renames, moves and deletes channel files", async ({ page }) => {
     test.setTimeout(120000);
     page.on("pageerror", error => console.log("pageerror:", error.message));
-    const desktop = await desktopSession(server.controlAddr, server.accounts.owner, { version: info.version });
+    desktop = await desktopSession(server.controlAddr, server.accounts.owner, { version: info.version });
     const deskChat = new ChatSession(desktop.conn, desktop.identity, desktop.auth);
     await new Promise(resolve => deskChat.snapshot ? resolve() : deskChat.addEventListener("snapshot", resolve, { once: true }));
     const chats = deskChat.channels().filter(c => c.chat);
@@ -68,7 +76,7 @@ test("the phone browses, uploads, checks, renames, moves and deletes channel fil
     await linkPhone(page, desktop, server.webURL, expect);
     await declinePasskey(page);
     await page.getByRole("link", { name: "Servers", exact: true }).click();
-    await page.getByRole("link", { name: `Files of ${channel.name}` }).click();
+    await page.locator(`[data-files-link="${channel.id}"]`).click();
     await expect(page.getByRole("heading", { name: /Files/ })).toBeVisible();
     const notes = page.getByRole("button", { name: "Actions for notes.txt", exact: true });
     await expect(notes).toBeVisible();
@@ -164,7 +172,7 @@ test("the phone browses, uploads, checks, renames, moves and deletes channel fil
 
     // The chat header opens the same browser.
     await page.goto(`${server.webURL}/app/#/chat/${channel.id}`);
-    await page.getByRole("link", { name: `Files of # ${channel.name}` }).click();
+    await page.locator(".screen-header").getByRole("link", { name: "Files", exact: true }).click();
     await expect(notes).toBeVisible();
     deskChat.close();
 });

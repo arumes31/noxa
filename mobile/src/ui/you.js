@@ -93,7 +93,7 @@ registerSettings("notifications", [{
 }], { title: t("settings.section.notifications") });
 
 // Sections the user opened stay open while the app runs.
-const openSections = new Set(["appearance"]);
+const openSections = new Set(["appearance", "notifications"]);
 let searchQuery = "";
 
 /** The searchable, registered settings sections. */

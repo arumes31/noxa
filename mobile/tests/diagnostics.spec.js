@@ -4,6 +4,14 @@ import { expect, test } from "@playwright/test";
 
 import { desktopSession } from "./harness.mjs";
 import { linkPhone } from "./helpers.mjs";
+import { releaseDevices } from "./device-cleanup.mjs";
+
+// The desktop session of the running test; released after it, pass or fail.
+let desktop = null;
+test.afterEach(async () => {
+    if (desktop) await releaseDevices(desktop);
+    desktop = null;
+});
 
 const server = JSON.parse(process.env.NOXA_E2E_SERVER_STATE || "{}");
 let info;
@@ -20,7 +28,7 @@ test.beforeAll(async () => {
 test("diagnostics shows live ping, runs the connection test and exports logs", async ({ page }) => {
     test.setTimeout(90000);
     page.on("pageerror", error => console.log("pageerror:", error.message));
-    const desktop = await desktopSession(server.controlAddr, server.accounts.owner, { version: info.version });
+    desktop = await desktopSession(server.controlAddr, server.accounts.kai, { version: info.version });
     await linkPhone(page, desktop, server.webURL, expect);
     await declinePasskey(page);
     await page.evaluate(() => console.warn("diagnostics e2e marker"));
@@ -49,5 +57,4 @@ test("diagnostics shows live ping, runs the connection test and exports logs", a
     expect(text).toContain("noXa diagnostics");
     expect(text).toContain("[log]");
     expect(text).toContain("diagnostics e2e marker");
-    desktop.conn.close();
 });

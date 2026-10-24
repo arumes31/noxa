@@ -2,6 +2,14 @@ import { expect, test } from "@playwright/test";
 
 import { desktopSession } from "./harness.mjs";
 import { linkPhone } from "./helpers.mjs";
+import { releaseDevices } from "./device-cleanup.mjs";
+
+// The desktop session of the running test; released after it, pass or fail.
+let desktop = null;
+test.afterEach(async () => {
+    if (desktop) await releaseDevices(desktop);
+    desktop = null;
+});
 
 const server = JSON.parse(process.env.NOXA_E2E_SERVER_STATE || "{}");
 let info;
@@ -16,7 +24,7 @@ test.beforeAll(async () => {
 });
 
 async function openSettings(page) {
-    const desktop = await desktopSession(server.controlAddr, server.accounts.owner, { version: info.version });
+    desktop = await desktopSession(server.controlAddr, server.accounts.lou, { version: info.version });
     await linkPhone(page, desktop, server.webURL, expect);
     await declinePasskey(page);
     await page.getByRole("link", { name: "You", exact: true }).click();
@@ -28,7 +36,7 @@ const rootFontSize = page => page.evaluate(() => parseFloat(getComputedStyle(doc
 
 test("theme, accent and text size apply at once and survive a reload", async ({ page }) => {
     page.on("pageerror", error => console.log("pageerror:", error.message));
-    const desktop = await openSettings(page);
+    await openSettings(page);
     const html = page.locator("html");
     await expect(html).toHaveAttribute("data-theme", "midnight");
 
@@ -58,11 +66,10 @@ test("theme, accent and text size apply at once and survive a reload", async ({ 
     await page.getByRole("link", { name: "You", exact: true }).click();
     await page.getByRole("button", { name: "Theme default" }).click();
     expect(await page.evaluate(() => document.documentElement.style.getPropertyValue("--accent"))).toBe("");
-    desktop.conn.close();
 });
 
 test("the search box filters setting rows across sections", async ({ page }) => {
-    const desktop = await openSettings(page);
+    await openSettings(page);
     const search = page.getByRole("searchbox", { name: "Search settings" });
     await search.fill("text size");
     await expect(page.locator(".settings-section")).toHaveCount(1);
@@ -80,16 +87,14 @@ test("the search box filters setting rows across sections", async ({ page }) => 
     await expect(page.getByText(info.version, { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Check for updates" }).click();
     await expect(page.getByText("noXa is up to date.")).toBeVisible();
-    desktop.conn.close();
 });
 
 test("switching the language reloads the app in German", async ({ page }) => {
-    const desktop = await openSettings(page);
+    await openSettings(page);
     await page.locator(".settings-section", { hasText: "Language" }).locator("summary").click();
     await page.getByLabel("Interface language").selectOption("de");
     await page.getByRole("button", { name: "Jetzt neu laden" }).click();
     await expect(page.getByRole("heading", { name: "Einstellungen" })).toBeVisible({ timeout: 15000 });
     await expect(page.locator("html")).toHaveAttribute("lang", "de");
     await expect(page.getByRole("searchbox", { name: "Einstellungen durchsuchen" })).toBeVisible();
-    desktop.conn.close();
 });
