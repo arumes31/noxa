@@ -131,6 +131,24 @@ async function registerServiceWorker() {
     }
 }
 
+// The control protocol this build speaks (internal/web.ProtocolVersion).
+const PROTOCOL_VERSION = 1;
+
+/**
+ * A cached older app met a newer server. Reloading fetches the matching
+ * bundle; the button waits for the user so a call is never cut off.
+ */
+function showUpdateRequired() {
+    const bar = h("div", { class: "banner banner-update", role: "alert" }, t("update.required"), " ",
+        h("button", { class: "btn", onclick: async () => {
+            const registration = await navigator.serviceWorker?.getRegistration("/app/");
+            registration?.waiting?.postMessage("activate-update");
+            await registration?.update().catch(() => {});
+            location.reload();
+        } }, t("update.reload")));
+    document.body.prepend(bar);
+}
+
 async function boot() {
     try {
         await loadInfo();
@@ -139,6 +157,7 @@ async function boot() {
         return;
     }
     registerServiceWorker();
+    if (app.info.protocol_version !== PROTOCOL_VERSION) showUpdateRequired();
     const link = location.pathname === "/link" ? parseLinkFragment(location.hash) : null;
     if (link) {
         // The secret must not linger in history or be re-claimed on reload.
