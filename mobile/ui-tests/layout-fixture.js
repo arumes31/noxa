@@ -27,6 +27,15 @@ app.groups = Object.assign(new EventTarget(), { list: new Map([["group", { id: "
 app.voice = Object.assign(new EventTarget(), { active: view === "voice-active", channelID: 1, speaking: new Set(["peer"]), camera: null, bytes: { sent: 0, received: 0 }, streams: async () => [], outputs: async () => [], watching: new Map(), video: new Map(), setTalking: () => {} });
 app.calls = Object.assign(new EventTarget(), { active: view === "call", incoming: view === "incoming", peers: new Map(), camera: null, uid: "self", usage: async () => ({ sent: 0, received: 0 }), call: { id: "call", caller: "peer", participants: [{ unique_id: "self", state: "accepted" }, { unique_id: "peer", state: "accepted" }] } });
 const root = document.getElementById("app");
-({ home: renderHome, servers: renderServers, you: renderYou, voice: renderVoice, "voice-active": renderVoice,
-chat: r => renderChat(r, 1), dm: r => renderDM(r, "peer"), group: r => renderGroup(r, "group"), incoming: r => renderCall(r, "call"), call: r => renderCall(r, "call") })[view](root);
+switch (view) {
+    case "home": renderHome(root); break;
+    case "servers": renderServers(root); break;
+    case "you": renderYou(root); break;
+    case "voice": case "voice-active": renderVoice(root); break;
+    case "chat": renderChat(root, 1); break;
+    case "dm": renderDM(root, "peer"); break;
+    case "group": renderGroup(root, "group"); break;
+    case "incoming": case "call": renderCall(root, "call"); break;
+    default: throw new Error("Unknown fixture view");
+}
 document.documentElement.dataset.ready = "true";

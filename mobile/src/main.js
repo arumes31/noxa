@@ -87,7 +87,7 @@ app.addEventListener("session", event => {
     for (const type of ["snapshot", "subscriptions"]) {
         session.addEventListener(type, () => {
             const screen = location.hash.split("/")[1] || "home";
-            if (screen === "home" || screen === "servers") route();
+            if (screen === "home" || screen === "servers" || (screen === "voice" && !app.voice?.active)) route();
         });
     }
     session.addEventListener("messages", () => {
