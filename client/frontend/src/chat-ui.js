@@ -664,9 +664,14 @@ async function emojiURL(name) {
 // next render (messages render often enough that this is acceptable).
 function applyCustomEmoji(html) {
     if (customDirty) ensureCustomEmoji();
+    if (typeof html !== "string" || html.indexOf(":") === -1) return html;
+
+    // Performance: Only trigger cache loading for emojis that are actually in the text
     for (const e of customEmoji) {
-        const url = emojiURLs.get(e.name);
-        if (url === undefined) emojiURL(e.name);
+        if (html.includes(`:${e.name}:`)) {
+            const url = emojiURLs.get(e.name);
+            if (url === undefined) emojiURL(e.name);
+        }
     }
     return transformCustomEmoji(html, customEmoji, emojiURLs);
 }
