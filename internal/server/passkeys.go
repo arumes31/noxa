@@ -1,7 +1,7 @@
 // passkeys.go runs WebAuthn ceremonies over the control connection. A linked
 // device registers a passkey for the account; a new phone with a synced
-// passkey signs in by linking itself, and must still be approved by another
-// device before it receives direct-message keys.
+// passkey signs in by linking itself. A signed delegation lets a trusted
+// desktop automatically verify and endorse its direct-message keys.
 package server
 
 import (
@@ -311,8 +311,8 @@ func (s *TCPServer) writePasskeyList(ctx context.Context, client *Client, keys P
 
 // finishPasskeyLogin verifies a discoverable assertion and links the calling
 // device's keys to the passkey's account. The device then signs in with its
-// own key like any linked device. It carries no approval signature, so
-// direct-message keys still wait for approval from another device.
+// own key like any linked device. Its key-bound proof lets a trusted desktop
+// issue the normal approval signature without another user prompt.
 func (s *TCPServer) finishPasskeyLogin(ctx context.Context, client *Client, rp *webauthn.WebAuthn, keys PasskeyStore, r netproto.DeviceRequest) error {
 	ceremony, ok := client.takePasskeyCeremony(r.Action)
 	if !ok {

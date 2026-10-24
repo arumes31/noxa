@@ -358,6 +358,13 @@ func testPasskeyPhoneLogin(t *testing.T, signOut, delegate bool) {
 	if !strings.Contains(e.Message, "start the passkey sign-in again") {
 		t.Fatalf("replayed assertion = %+v", e)
 	}
+	if delegate {
+		bound := deviceCall(t, fresh, beginRequest)
+		rejected := deviceCallError(t, fresh, netproto.DeviceRequest{Action: netproto.DeviceActionPasskeyLoginFinish, WebAuthn: authenticator.get(t, bound.WebAuthn), Ed25519PublicKey: newLinkTestKeys(t).public, X25519PublicKey: newPhone.x25519})
+		if !strings.Contains(rejected.Message, "device keys changed") {
+			t.Fatalf("substituted device accepted: %+v", rejected)
+		}
+	}
 }
 
 func TestPasskeyRegistrationNeedsALinkedWebDevice(t *testing.T) {
