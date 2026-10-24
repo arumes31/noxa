@@ -451,8 +451,8 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         // A phone session: shown so others know replies may come slower.
         if (c.on_mobile) {
             const phone = document.createElement("span");
-            phone.className = "status-icons on-mobile";
-            phone.textContent = " 📱";
+            phone.className = "role-chip group-badge on-mobile";
+            phone.textContent = t("runtime.mobileBadge");
             phone.title = t("runtime.onMobile");
             row.appendChild(phone);
         }
