@@ -51,6 +51,41 @@ export class Groups extends EventTarget {
         return [...this.list.values()];
     }
 
+    async #mutate(buildRequest, signal) {
+        for (let attempt = 0; ; attempt++) {
+            signal?.throwIfAborted();
+            const request = await buildRequest();
+            signal?.throwIfAborted();
+            if (!request) return;
+            try { return await this.#request(request); }
+            catch (error) {
+                // Only an explicit pre-mutation rate rejection is safe to retry.
+                if (!(error instanceof ProtocolError) || error.message !== "group rate limit exceeded" ||
+                    !Number.isFinite(error.retryAfterMS) || error.retryAfterMS <= 0 || error.retryAfterMS > 30000 || attempt >= 3) throw error;
+                await waitForGroupRetry(error.retryAfterMS, signal);
+            }
+        }
+    }
+
+    async create(name, { signal } = {}) {
+        const result = await this.#mutate(() => ({ action: "create", name: name.trim() }), signal);
+        const group = result.conversations?.[0];
+        if (!group?.id) throw new Error("missing group response");
+        this.list.set(group.id, group);
+        this.#emit("list");
+        return group;
+    }
+
+    async invite(id, target, { signal } = {}) {
+        await this.#mutate(async () => {
+            const group = await this.get(id);
+            if (!group) throw new Error("group unavailable");
+            if (group.members?.some(member => member.unique_id === target)) return null;
+            return { action: "invite", id, revision: group.revision, target };
+        }, signal);
+        await this.get(id);
+    }
+
     async get(id) {
         const result = await this.#request({ action: "get", id });
         const conversation = result.conversations?.[0];
@@ -193,4 +228,14 @@ export class Groups extends EventTarget {
     close() {
         this.session.removeEventListener("server-event", this.#onEvent);
     }
+}
+
+function waitForGroupRetry(ms, signal) {
+    return new Promise((resolve,reject) => {
+        const finish = () => { signal?.removeEventListener("abort", abort); resolve(); };
+        const timer = setTimeout(finish, ms);
+        const abort = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(signal.reason); };
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) abort();
+    });
 }

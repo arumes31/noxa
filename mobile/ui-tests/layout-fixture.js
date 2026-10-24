@@ -1,5 +1,7 @@
 import "../src/styles.css";
 import { app } from "../src/app.js";
+import { renderNewGroup } from "../src/ui/new-group.js";
+import { renderNewChat } from "../src/ui/new-chat.js";
 import { renderHome } from "../src/ui/home.js";
 import { renderServers } from "../src/ui/servers.js";
 import { renderVoice } from "../src/ui/voice.js";
@@ -44,6 +46,8 @@ if (view.startsWith("signout")) {
 const root = document.getElementById("app");
 switch (view) {
     case "home": renderHome(root); break;
+    case "new-group": renderNewGroup(root); break;
+    case "new-chat": renderNewChat(root); break;
     case "servers": case "presence": renderServers(root); break;
     case "you": case "signout": case "signout-error": renderYou(root); break;
     case "voice": case "voice-active": renderVoice(root); break;

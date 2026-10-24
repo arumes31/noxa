@@ -61,8 +61,13 @@ func (s *TCPServer) handleConversation(ctx context.Context, client *Client, fram
 		if request.Action == "mark_read" && s.conversationReadRate != nil && !s.conversationReadRate.allow(client.UniqueID, time.Now()) {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "group read rate limit exceeded")
 		}
-		if !read && request.Action != "mark_read" && s.chatRate != nil && !s.chatRate.allowLimit(client.UniqueID, time.Now(), s.chatActionLimit(ctx, client)) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "group rate limit exceeded")
+		if !read && request.Action != "mark_read" && s.chatRate != nil {
+			if allowed, retry := s.chatRate.allowWithRetry(client.UniqueID, time.Now(), s.chatActionLimit(ctx, client)); !allowed {
+				return s.writeMessage(client, netproto.MsgError, netproto.Error{
+					Code: errCodeMalformed, Message: "group rate limit exceeded",
+					OriginType: uint16(requestOrigin(ctx)), RetryAfterMS: retry.Milliseconds() + 1,
+				})
+			}
 		}
 		calls := s.conversationCallSnapshot()
 		deliveryStarted := false

@@ -11,6 +11,7 @@ const screens = {
     connect: () => import("./ui/connect.js"),
     home: () => import("./ui/home.js"),
     "new-chat": () => import("./ui/new-chat.js"),
+    "new-group": () => import("./ui/new-group.js"),
     servers: () => import("./ui/servers.js"),
     chat: () => import("./ui/chat.js"),
     dm: () => import("./ui/dm.js"),
@@ -57,6 +58,7 @@ async function route() {
     }
     if (token !== routeToken) return;
     switch (screen) {
+        case "new-group": cleanup = module.renderNewGroup(root); break;
         case "new-chat": cleanup = module.renderNewChat(root); break;
         case "servers": module.renderServers(root); break;
         case "chat": cleanup = module.renderChat(root, Number(arg) || 0); break;
