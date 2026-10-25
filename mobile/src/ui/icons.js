@@ -39,6 +39,10 @@ const paths = {
     // Message actions (pins, replies).
     pin: "M9 4h6l-1 5 4 4H6l4-4zM12 13v8",
     reply: "M10 8L4 13l6 5M4 13h10a6 6 0 0 1 6 6",
+    // Chat tools (search, inbox, saved messages, threads).
+    search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
+    bookmark: "M6 3h12v18l-6-4-6 4z",
+    threads: "M4 5h16v10H9l-5 4zM8 9h8M8 12h5",
 };
 
 export function icon(name) {

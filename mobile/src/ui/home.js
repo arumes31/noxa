@@ -15,6 +15,7 @@ import { statusDot } from "./presence-ui.js";
 import { isMuted } from "../core/conversation-prefs.js";
 import "./conversation-strings.js";
 import { announcementBanner } from "./announcement.js";
+import { toolLinks } from "./tool-links.js";
 
 /** The activity center's entry, with its unread count. */
 function activityLink() {
@@ -66,7 +67,7 @@ export function renderHome(root) {
     const recent = [...channelRows, ...dmRows, ...groupRows].sort((a, b) => b.at - a.at);
     const invitations = [...(app.groups?.list.values() || [])].filter(g => g.members?.find(m => m.unique_id === session.uniqueID)?.pending);
     root.replaceChildren(h("section", { class: "screen" },
-        header(t("home.title"), { action: h("div", { class: "header-actions" }, activityLink(), dndButton(), h("button", { class: "icon-btn", type: "button", "aria-label": t("home.new"), onclick: async () => {
+        header(t("home.title"), { action: toolLinks(activityLink(), dndButton(), h("button", { class: "icon-btn", type: "button", "aria-label": t("home.new"), onclick: async () => {
             const destination = await sheet(t("home.new"), "", [
                 { label: t("home.newMessage"), value: "new-chat", primary: true },
                 { label: t("group.create"), value: "new-group" },

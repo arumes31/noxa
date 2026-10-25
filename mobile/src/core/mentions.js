@@ -19,6 +19,23 @@ export function mentionAt(value, caret = value.length) {
     return { start: caret - m[2].length - 1, query: m[2] };
 }
 
+/**
+ * Splits text at "<@&roleID>" role mention tokens: [{type: "text", text} |
+ * {type: "role", id}]. The chat renders the role's name (@Name) instead of
+ * the raw token.
+ */
+export function splitRoleMentions(text) {
+    const out = [];
+    let last = 0;
+    for (const m of String(text).matchAll(/<@&(\d{1,18})>/g)) {
+        if (m.index > last) out.push({ type: "text", text: text.slice(last, m.index) });
+        out.push({ type: "role", id: Number(m[1]) });
+        last = m.index + m[0].length;
+    }
+    if (last < text.length || !out.length) out.push({ type: "text", text: text.slice(last) });
+    return out;
+}
+
 /** Roles that appear on visible clients (the snapshot's role chips): [{id, name, color}]. */
 export function visibleRoles(clients) {
     const roles = new Map();

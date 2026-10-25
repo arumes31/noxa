@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { insertMention, isMention, keywordHit, mentionAt, mentionChoices, parseKeywords, tabComplete, visibleRoles } from "../src/core/mentions.js";
+import { insertMention, isMention, keywordHit, mentionAt, mentionChoices, parseKeywords, splitRoleMentions, tabComplete, visibleRoles } from "../src/core/mentions.js";
 import { DelayedSends } from "../src/core/undo-send.js";
 import { mergeSystemLines, presenceLines } from "../src/core/join-leave.js";
 
@@ -144,4 +144,13 @@ test("system lines merge by time and long runs fold", () => {
     assert.equal(run[1].group.length, 4);
     assert.equal(run[3].key, "k5");
     assert.equal(mergeSystemLines(messages, [sys(11, 1), sys(12, 2), sys(13, 3)]).length, 5, "three in a row stay separate");
+});
+
+test("role mention tokens split out of text for @RoleName rendering", () => {
+    assert.deepEqual(splitRoleMentions("hi <@&12> and <@&3>!"), [
+        { type: "text", text: "hi " }, { type: "role", id: 12 }, { type: "text", text: " and " }, { type: "role", id: 3 }, { type: "text", text: "!" },
+    ]);
+    assert.deepEqual(splitRoleMentions("<@&7>"), [{ type: "role", id: 7 }]);
+    assert.deepEqual(splitRoleMentions("no <@&x> token"), [{ type: "text", text: "no <@&x> token" }]);
+    assert.deepEqual(splitRoleMentions(""), [{ type: "text", text: "" }]);
 });

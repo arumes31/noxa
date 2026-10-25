@@ -217,7 +217,7 @@ test("shared content waits on the share screen and goes to the picked chat", asy
     // What the service worker stores for a POST to /app/share (core/share-store.js).
     await page.evaluate(async ({ text }) => {
         const db = await new Promise((resolve, reject) => {
-            const request = indexedDB.open("noxa") /* the app's current version (core/db.js) */;
+            const request = indexedDB.open("noxa"); // the current version, whatever stores the app added
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
         });

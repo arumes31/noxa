@@ -21,6 +21,8 @@ import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
 import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage, shareText } from "./chat-actions.js";
 import { aboutEncryption, encryptionBadge, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
+import { dmEntry } from "../core/search.js";
+import { chatSearch } from "./chat-search.js";
 
 export function renderDM(root, peer) {
     const session = app.session;
@@ -49,19 +51,6 @@ export function renderDM(root, peer) {
         }
     });
     let calls = [];
-    let query = "";
-
-    // --- Search within this conversation ---------------------------------------
-    const searchInput = h("input", { class: "input", type: "search", "aria-label": t("dmTools.searchLabel", { name }), placeholder: t("dmTools.searchPlaceholder") });
-    const searchBar = h("div", { class: "conv-search", hidden: true }, searchInput,
-        h("button", { class: "btn", type: "button", onclick: () => toggleSearch(false) }, t("conv.close")));
-    searchInput.addEventListener("input", () => { query = searchInput.value.trim().toLocaleLowerCase(); render(); });
-    function toggleSearch(on) {
-        searchBar.hidden = !on;
-        if (on) searchInput.focus();
-        else { searchInput.value = ""; query = ""; render(); }
-    }
-
     // --- Messages ------------------------------------------------------------------
     function retryActions(message) {
         return {
@@ -109,18 +98,11 @@ export function renderDM(root, peer) {
     function render() {
         const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
         const messages = dm.conversations.get(peer)?.messages || [];
-        let entries;
-        if (query) {
-            entries = messages.filter(m => !m.deleted && typeof m.body === "string" && m.body.toLocaleLowerCase().includes(query)).map(m => line(m));
-            if (!entries.length) entries = [h("p", { class: "hint conv-empty" }, t("dmTools.noMatches"))];
-        } else {
-            // Missed calls appear in the conversation at their time.
-            const missed = calls.filter(r => r.direction === "in" && r.outcome === "missed").map(r => ({ at: r.startedAt / 1000, node: () => callLine(r) }));
-            const items = [...messages.map(m => ({ at: m.sentAt, node: () => line(m) })), ...missed].sort((a, b) => a.at - b.at);
-            entries = items.length ? withDays(items, item => item.at, item => item.node()) : [h("p", { class: "hint conv-empty" }, t("dm.empty"))];
-        }
-        log.replaceChildren(...entries);
-        if (!query && (atBottom || messages.at(-1)?.self)) log.scrollTop = log.scrollHeight;
+        // Missed calls appear in the conversation at their time.
+        const missed = calls.filter(r => r.direction === "in" && r.outcome === "missed").map(r => ({ at: r.startedAt / 1000, node: () => callLine(r) }));
+        const items = [...messages.map(m => ({ at: m.sentAt, node: () => line(m) })), ...missed].sort((a, b) => a.at - b.at);
+        log.replaceChildren(...(items.length ? withDays(items, item => item.at, item => item.node()) : [h("p", { class: "hint conv-empty" }, t("dm.empty"))]));
+        if (atBottom || messages.at(-1)?.self) log.scrollTop = log.scrollHeight;
         readNow();
     }
 
@@ -281,7 +263,6 @@ export function renderDM(root, peer) {
         const muted = isMuted(tag);
         const choice = await menu(name, [
             { label: t("safety.title"), value: "safety" },
-            { label: t("dmTools.search"), value: "search" },
             { label: t("calls.title"), value: "calls" },
             { label: t(muted ? "conv.unmute" : "conv.mute"), value: "mute" },
             { label: t("rich.exportHistory"), value: "export" },
@@ -289,7 +270,6 @@ export function renderDM(root, peer) {
             { label: t("dmTools.delete"), value: "delete", danger: true },
         ]);
         if (choice === "safety") showSafetyNumber(peer, name, () => dm.devicesOf(peer).then(paintBanner)).catch(error => toast(t("common.error", { error: error.message }), "warn"));
-        else if (choice === "search") toggleSearch(true);
         else if (choice === "calls") showCalls(peer, name);
         else if (choice === "mute") { setMuted(tag, !muted); paintTitle(); toast(t(muted ? "conv.unmuted" : "conv.muted", { name })); }
         else if (choice === "export") import("./export.js").then(({ openExport }) => openExport({ title: name, kind: "dm", load: exportLoad }));
@@ -304,6 +284,13 @@ export function renderDM(root, peer) {
     }
     paintTitle();
 
+    // Direct messages all live on the phone: nothing older to load.
+    const search = chatSearch({
+        tag: `dm:${peer}`, log,
+        entries: () => (dm.conversations.get(peer)?.messages || []).filter(m => !m.pending && !m.queued && !m.failed)
+            .map(m => dmEntry(peer, m, { selfName: session.nickname, selfUID: session.uniqueID, peerName: nickname() })),
+        loadOlder: async () => false,
+    });
     const progress = h("div", { class: "history-progress", role: "status" });
     const onMessages = event => { if (event.detail.peer === peer) render(); };
     const onHistory = event => {
@@ -331,9 +318,10 @@ export function renderDM(root, peer) {
     callLog.addEventListener("change", onCalls);
     document.addEventListener("visibilitychange", onVisible);
     const rerender = () => { line.clear(); render(); };
-    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log)];
+    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log), search.stop];
+    top.querySelector(".header-actions").prepend(search.button);
     root.replaceChildren(h("section", { class: "screen chat" },
-        top, banner, announcementBanner(session), notice, deviceNotice, searchBar, progress, log, typing, editBar, form));
+        top, banner, announcementBanner(session), notice, deviceNotice, search.bar, progress, log, typing, editBar, form));
     dm.ready.then(render);
     callsWith(peer).then(list => { calls = list; render(); }).catch(() => {});
     checkTrust();

@@ -15,8 +15,11 @@ const SOURCES = [
     { value: "file", accept: null, capture: null },
 ];
 
-/** The action sheet of attachment sources; calls choose(source) inside the tap. */
-export function attachSheet(choose) {
+/**
+ * The action sheet of attachment sources; calls choose(source) inside the
+ * tap. extras are further entries {label, run} (e.g. "Create poll").
+ */
+export function attachSheet(choose, extras = []) {
     const opener = document.activeElement;
     const close = () => {
         overlay.remove();
@@ -28,6 +31,7 @@ export function attachSheet(choose) {
             h("h2", { class: "sheet-title" }, t("file.attach")),
             h("div", { class: "sheet-actions attach-actions" },
                 SOURCES.map(source => h("button", { class: "btn", type: "button", onclick: () => { close(); choose(source); } }, t(`rich.attach.${source.value}`))),
+                extras.map(extra => h("button", { class: "btn", type: "button", onclick: () => { close(); extra.run(); } }, extra.label)),
                 h("button", { class: "btn", type: "button", onclick: () => { close(); opener?.focus?.(); } }, t("link.cancel")))));
     document.addEventListener("keydown", onKey);
     document.body.append(overlay);
@@ -36,16 +40,16 @@ export function attachSheet(choose) {
 
 /**
  * The attach button and its file input. onFile(file) runs for a picked file
- * while the button shows busy.
+ * while the button shows busy; extras add entries to the sheet.
  */
-export function attachControls(onFile) {
+export function attachControls(onFile, { extras = [] } = {}) {
     const picker = h("input", { type: "file", hidden: true, "aria-hidden": "true", tabindex: "-1" });
     const button = h("button", { class: "attach", type: "button", "aria-label": t("file.attach"), "aria-haspopup": "dialog" }, icon("attach"));
     button.onclick = () => attachSheet(source => {
         source.accept ? picker.setAttribute("accept", source.accept) : picker.removeAttribute("accept");
         source.capture ? picker.setAttribute("capture", source.capture) : picker.removeAttribute("capture");
         picker.click();
-    });
+    }, extras);
     picker.onchange = async () => {
         const file = picker.files?.[0];
         picker.value = "";

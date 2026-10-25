@@ -4,6 +4,7 @@
 // Links only ever point at http(s) URLs.
 import { parseFileTokens } from "../core/files.js";
 import { parseMarkdown } from "../core/markdown.js";
+import { splitRoleMentions, visibleRoles } from "../core/mentions.js";
 import { displayURL, previewLink, safeURL, splitFileTokens } from "../core/message-format.js";
 import { t } from "../i18n.js";
 import { attachmentNode } from "./attachments.js";
@@ -90,9 +91,22 @@ export function renderNodes(nodes, context = {}) {
     return nodes.map(node => renderNode(node, context));
 }
 
+/** Text with "<@&id>" role mentions shown as @RoleName in the role's colour (snapshot role chips). */
+function roleMentionText(text, context) {
+    const roles = new Map(visibleRoles(context.session?.clients?.() || []).map(role => [role.id, role]));
+    const out = document.createDocumentFragment();
+    for (const part of splitRoleMentions(text)) {
+        if (part.type === "text") { out.append(part.text); continue; }
+        const role = roles.get(part.id);
+        const color = /^#[0-9a-f]{3,8}$/i.test(role?.color || "") ? role.color : "";
+        out.append(h("span", { class: "md-mention role", dataset: { role: String(part.id) }, style: color ? `color:${color}` : null }, `@${role?.name || t("rich.role")}`));
+    }
+    return out;
+}
+
 function renderNode(node, context) {
     switch (node.type) {
-        case "text": return document.createTextNode(node.text);
+        case "text": return node.text.includes("<@&") ? roleMentionText(node.text, context) : document.createTextNode(node.text);
         case "br": return h("br");
         case "inline-code": return h("code", { class: "md-code" }, node.code);
         case "code": return h("figure", { class: "md-pre" },

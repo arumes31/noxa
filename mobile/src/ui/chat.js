@@ -14,12 +14,16 @@ import { richBody, watchCustomEmoji } from "./rich-text.js";
 import { header, scopeName } from "./common.js";
 import { channelMenuItems } from "./channel-menu.js";
 import { uploadAttachment } from "../core/files.js";
-import { filesButton } from "./files-link.js";
+import "./files-link.js"; // files.openShort
 import { remove as removeQueued } from "../core/outbox.js";
 import { retryProps, sendState } from "./conversation-tools.js";
 import { voiceNoteButton } from "./voice-note.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
+import { channelEntry } from "../core/search.js";
+import { chatSearch } from "./chat-search.js";
+import { threadsButton, watchOpenThread } from "./chat-tools.js";
+import { isPoll, openCreatePoll, pollCard } from "./poll.js";
 import { aboutEncryption, blockedLine, encryptionBadge, headerActions, isBlockedUser, lineCache, menuButton, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 import {
     actionSheet, bindMessageTaps, canShare, composerBar, copyText, excerpt, flash, holdChannelMessage, mentionCompleter, newMessagesPill,
@@ -49,7 +53,7 @@ export function renderChat(root, scope) {
         } catch (error) {
             toast(t("file.uploadFailed", { error: error.message }), "warn");
         }
-    });
+    }, { extras: [{ label: t("poll.create"), run: () => openCreatePoll(session, scope) }] });
     let hasOlder = true;
     let lastTyping = 0;
     const shown = new Set(); // blocked messages the user chose to show
@@ -109,6 +113,7 @@ export function renderChat(root, scope) {
         let body;
         if (message.deleted) body = h("span", { class: "msg-deleted" }, t("chat.deleted"));
         else if (message.text === null || message.text === undefined) body = h("span", { class: "msg-locked" }, t("chat.locked"));
+        else if (isPoll(message.text)) body = pollCard(message, session);
         else body = richBody(message.text, { session, conn: session.conn, channelID: scope });
         // Not sent: tapping offers Retry (same client message ID, same reply) or Delete.
         const retry = retryProps(message, {
@@ -180,6 +185,22 @@ export function renderChat(root, scope) {
         log.replaceChildren(hasOlder ? older : h("span"), ...out);
         if (stick && (atBottom || messages.at(-1)?.own)) log.scrollTop = log.scrollHeight;
     }
+
+    const search = chatSearch({
+        tag: `channel:${scope}`, log,
+        entries: () => (session.messages.get(scope) || []).filter(m => m.id).map(m => channelEntry(scope, m)),
+        loadOlder: async () => {
+            if (hasOlder) hasOlder = await session.loadHistory(scope);
+            render(false);
+            return hasOlder;
+        },
+        ensure: async id => {
+            const found = await session.loadUntil(scope, id, 50);
+            render(false);
+            return !!found;
+        },
+    });
+    const threads = scope > 0 ? threadsButton(session, scope) : null;
 
     function renderTyping() {
         const entry = session.typing.get(scope);
@@ -283,6 +304,7 @@ export function renderChat(root, scope) {
     const showPins = () => pinsSheet(session, scope, { onJump: jumpTo, canUnpin: () => !pinRefused.has(session) });
     const menu = menuButton(() => [
         ...channelItems(),
+        { label: t("files.openShort"), run: () => { location.hash = `#/files/${scope}`; } },
         description ? { label: t("rich.channelInfo"), run: channelInfo } : null,
         { label: t("act.pins"), run: showPins },
         { label: t("rich.aboutEncryption"), run: aboutEncryption },
@@ -372,11 +394,12 @@ export function renderChat(root, scope) {
     session.addEventListener("join-leave", onJoinLeave);
     session.addEventListener("typing", onTyping);
     const stopSettings = settings.onChange(({ changed }) => { if (changed.some(n => n === "keywords" || n === "showJoinLeave")) rerender(); });
-    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log), stopSettings];
+    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log), stopSettings, search.stop, () => threads?.stop(), watchOpenThread(session)];
     root.replaceChildren(h("section", { class: "screen chat" },
-        header(name, { back: "#/servers", action: headerActions(filesButton(scope, name), menu) }),
+        // Search and threads (with its unread badge) stay in the header; the rest is in More options.
+        header(name, { back: "#/servers", action: headerActions(search.button, threads?.button, menu) }),
         topicButton, announcementBanner(session),
-        h("div", { class: "chat-log-wrap" }, log, pill.el),
+        search.bar, h("div", { class: "chat-log-wrap" }, log, pill.el),
         typing, slowMode, mentions.el, bar.el, form));
     render();
     if (unreadFrom !== null && divider.isConnected) divider.scrollIntoView({ block: "start" });

@@ -56,10 +56,11 @@ function provision(dir, databaseURL) {
     const run = Date.now().toString(36);
     // Each spec file has its own members so phones and first devices do not
     // collide with the other specs' device limits: pax..val presence-notify,
-    // dia/quin/dot/tao dm-activity, gus/gil/gwen group-manage, vern/yara voice-notes.
+    // dia/quin/dot/tao dm-activity, gus/gil/gwen group-manage, vern/yara voice-notes,
+    // abe/bea/cid the chat tools specs.
     for (const name of ["owner", "rowan", "ivy", "kai", "lou", "mia", "noa", "vic", "wes", "xan", "pia", "ray", "sol",
         "pax", "quinn", "remy", "sam", "tess", "uma", "val",
-        "dia", "quin", "dot", "tao", "gus", "gil", "gwen", "vern", "yara"]) {
+        "dia", "quin", "dot", "tao", "gus", "gil", "gwen", "vern", "yara", "abe", "bea", "cid"]) {
         const password = `pw-${name}-${run}`;
         const nickname = `${name}-${run}`;
         // The owner may also log in to ServerQuery (e.g. to set the server rules).

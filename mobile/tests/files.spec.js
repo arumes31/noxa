@@ -170,9 +170,10 @@ test("the phone browses, uploads, checks, renames, moves and deletes channel fil
     await expect(page.getByRole("button", { name: "Actions for phone-b.txt", exact: true })).toHaveCount(0);
     expect((await listing(desktop, channel.id)).names).toEqual(["notes.txt", "notes.txt.v1"]);
 
-    // The chat header opens the same browser.
+    // The chat's More options menu opens the same browser.
     await page.goto(`${server.webURL}/app/#/chat/${channel.id}`);
-    await page.locator(".screen-header").getByRole("link", { name: "Files", exact: true }).click();
+    await page.locator(".screen-header").getByRole("button", { name: "More options" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Files", exact: true }).click();
     await expect(notes).toBeVisible();
     deskChat.close();
 });

@@ -17,6 +17,8 @@ import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
 import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage, shareText } from "./chat-actions.js";
 import { aboutEncryption, blockedLine, encryptionBadge, isBlockedUser, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
+import { groupEntry } from "../core/search.js";
+import { chatSearch } from "./chat-search.js";
 
 const EXPORT_PAGES = 20;
 
@@ -178,6 +180,21 @@ export function renderGroup(root, id) {
         if (input.value.trim()) groups.sendTyping(id);
     });
 
+    const search = chatSearch({
+        tag: `conversation:${id}`, log,
+        entries: () => (groups.messages.get(id) || []).map(m => groupEntry(id, m, memberName)),
+        loadOlder: async () => {
+            if (hasOlder) hasOlder = await groups.loadOlder(id);
+            render();
+            return hasOlder;
+        },
+        ensure: async messageID => {
+            const has = () => (groups.messages.get(id) || []).some(m => m.id === messageID);
+            for (let page = 0; page < 50 && !has() && hasOlder; page++) hasOlder = await groups.loadOlder(id);
+            render();
+            return has();
+        },
+    });
     const call = h("button", { class: "icon-btn", type: "button", "aria-label": t("group.call"), onclick: () => startGroupCall(id).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone"));
     // One header menu: the group sheet (members, roles, mute, leave), export and encryption.
     const more = h("button", { class: "icon-btn", type: "button", "aria-label": t("conv.more"), "aria-haspopup": "menu" }, icon("more"));
@@ -191,7 +208,7 @@ export function renderGroup(root, id) {
         else if (choice === "export") import("./export.js").then(({ openExport }) => openExport({ title: conversation()?.name || title, kind: "group", load: exportLoad }));
         else if (choice === "encryption") aboutEncryption();
     };
-    const top = header(title, { back: "#/home", action: h("span", { class: "header-actions" }, call, more) });
+    const top = header(title, { back: "#/home", action: h("span", { class: "header-actions" }, search.button, call, more) });
     function paintTitle() {
         const heading = top.querySelector("h1");
         const name = conversation()?.name;
@@ -202,9 +219,9 @@ export function renderGroup(root, id) {
     root.replaceChildren(h("section", { class: "screen chat" },
         top,
         h("div", { class: "e2e-banner", role: "note" }, icon("lock"), " ", t("dm.encrypted")),
-        announcementBanner(app.session), notice, log, typing, form));
+        announcementBanner(app.session), notice, search.bar, log, typing, form));
     const rerender = () => { line.clear(); render(); };
-    const stops = [watchCustomEmoji(app.session, rerender), watchDisplaySettings(rerender), relativeTicker(log)];
+    const stops = [watchCustomEmoji(app.session, rerender), watchDisplaySettings(rerender), relativeTicker(log), search.stop];
     const onMessages = event => { if (event.detail.id === id) render(); };
     const onList = () => render();
     const onTyping = event => { if (event.detail.id === id) renderTyping(); };
