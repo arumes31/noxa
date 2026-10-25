@@ -255,6 +255,7 @@ export class Calls extends EventTarget {
         }
         this.call = call;
         const me = this.me(call);
+        this.#track(call, me);
         if (call.ended_at || !me || !["ringing", "accepted"].includes(me.state)) {
             this.#emit("state");
             this.#end();
@@ -302,7 +303,40 @@ export class Calls extends EventTarget {
         }
     }
 
+    // --- Call history: one "record" event per finished 1:1 call ---------------
+
+    #tracked = new Map();
+
+    #track(call, me) {
+        const peer = call.participants.find(p => p.unique_id !== this.uid)?.unique_id;
+        if (call.conversation_id || !peer || !me) return;
+        let track = this.#tracked.get(call.id);
+        if (!track) {
+            if (track === null) return; // already recorded
+            track = { id: call.id, peer, direction: call.caller === this.uid ? "out" : "in", startedAt: (call.created_at || Date.now() / 1000) * 1000, connectedAt: 0 };
+            this.#tracked.set(call.id, track);
+        }
+        const accepted = call.participants.filter(p => p.state === "accepted").length;
+        if (me.state === "accepted" && accepted >= 2 && !track.connectedAt) track.connectedAt = Date.now();
+        if (call.ended_at || !["ringing", "accepted"].includes(me.state)) this.#record(call, me);
+    }
+
+    #record(call, me = this.me(call)) {
+        const track = this.#tracked.get(call.id);
+        if (!track) return;
+        this.#tracked.set(call.id, null);
+        if (this.#tracked.size > 50) this.#tracked.delete(this.#tracked.keys().next().value);
+        // Answered on another device of this account: that device keeps the record.
+        if (me?.state === "elsewhere") return;
+        const endedAt = Date.now();
+        const outcome = track.connectedAt ? "completed"
+            : call.participants.some(p => p.state === "declined") ? "declined" : "missed";
+        const { id, peer, direction, startedAt } = track;
+        this.#emit("record", { id, peer, direction, outcome, startedAt, endedAt, duration: track.connectedAt ? Math.max(0, endedAt - track.connectedAt) : 0 });
+    }
+
     #end() {
+        if (this.call && this.#tracked.get(this.call.id)) this.#record(this.call);
         this.#stopRenewal?.();
         this.#stopRenewal = null;
         this.rtc = null;

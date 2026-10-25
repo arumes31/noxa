@@ -3,6 +3,8 @@
 import { fetchAttachment, parseFileTokens } from "../core/files.js";
 import { t } from "../i18n.js";
 import { h, toast } from "./dom.js";
+import { audioMime } from "../core/voice-notes.js";
+import { voiceNotePlayer } from "./voice-note.js";
 
 const IMAGE = /\.(png|jpe?g|gif|webp|avif)$/i;
 const MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif" };
@@ -15,6 +17,9 @@ function formatSize(bytes) {
 }
 
 function chip(ref, { conn, channelID }) {
+    // Voice messages (and other audio) play inline.
+    const mime = audioMime(ref.name);
+    if (mime) return voiceNotePlayer(() => fetchAttachment(conn, channelID, ref).then(plain => new Blob([plain], { type: mime })), ref.name, ref);
     const isImage = IMAGE.test(ref.name);
     const label = h("span", { class: "file-name" }, ref.name);
     const size = h("span", { class: "file-size" }, formatSize(ref.size));

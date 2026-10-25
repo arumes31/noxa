@@ -100,23 +100,57 @@ export function fileToken(storage, master, size, name) {
 
 const TOKEN = /\[file:([^\]]+)\]/g;
 
-/** Finds attachment tokens in a message body: [{token, storage, master, size, name}]. */
+// The optional metadata segment (client/frontend/src/attachment-meta.js):
+// s = plaintext bytes, d = a voice note's duration in ms, w = its waveform,
+// one base64url character (0..63) per bar.
+const META = /^nx1(;[a-z]{1,8}=[A-Za-z0-9_.-]+)*$/;
+const PEAKS = /^[A-Za-z0-9_-]{1,64}$/;
+const PEAK_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const MAX_DURATION = 6 * 60 * 60 * 1000;
+
+/** Reads an nx1 segment: {size, durationMs, peaks} (0 / null when absent). */
+export function parseMeta(segment) {
+    const meta = { size: 0, durationMs: 0, peaks: null };
+    if (typeof segment !== "string" || segment.length > 256 || !META.test(segment)) return null;
+    for (const field of segment.split(";").slice(1)) {
+        const [key, value] = field.split("=");
+        const number = /^\d+$/.test(value) ? Number(value) : 0;
+        if (key === "s" && Number.isSafeInteger(number)) meta.size = number;
+        else if (key === "d" && number > 0 && number <= MAX_DURATION) meta.durationMs = number;
+        else if (key === "w" && PEAKS.test(value)) meta.peaks = [...value].map(c => PEAK_ALPHABET.indexOf(c) / 63);
+    }
+    return meta;
+}
+
+/** Adds a voice note's duration and waveform to an uploaded attachment's token. */
+export function withAttachmentMeta(token, { durationMs = 0, peaks = null } = {}) {
+    const match = /^\[file:([^\]#]*)#([^\]#]*)#([^\]]*)\]$/.exec(String(token ?? ""));
+    if (!match) return token;
+    const cut = match[3].indexOf("#");
+    const current = cut >= 0 ? parseMeta(match[3].slice(0, cut)) : null;
+    const name = current ? match[3].slice(cut + 1) : match[3];
+    let segment = "";
+    if (current?.size) segment += `;s=${current.size}`;
+    const duration = Math.round(durationMs) || current?.durationMs || 0;
+    if (duration > 0 && duration <= MAX_DURATION) segment += `;d=${duration}`;
+    const levels = Array.isArray(peaks) && peaks.length ? peaks : current?.peaks;
+    if (levels?.length) segment += `;w=${levels.slice(0, 64).map(level => PEAK_ALPHABET[Math.round(Math.min(1, Math.max(0, Number(level) || 0)) * 63)]).join("")}`;
+    return `[file:${match[1]}#${match[2]}#${segment ? `nx1${segment}#` : ""}${name}]`;
+}
+
+/** Finds attachment tokens in a message body: [{token, storage, master, size, name, durationMs, peaks}]. */
 export function parseFileTokens(body) {
     const out = [];
     for (const match of String(body || "").matchAll(TOKEN)) {
         const fields = match[1].split("#");
         if (fields.length < 3) continue;
-        let size = 0;
+        let meta = null;
         let name = fields.slice(2).join("#");
-        if (/^nx1(;[a-z]{1,8}=[A-Za-z0-9_.-]+)*$/.test(fields[2] || "") && fields.length >= 4) {
-            const sizeField = fields[2].split(";").find(f => f.startsWith("s="));
-            size = Number(sizeField?.slice(2)) || 0;
-            name = fields.slice(3).join("#");
-        }
+        if (fields.length >= 4 && (meta = parseMeta(fields[2]))) name = fields.slice(3).join("#");
         let master;
         try { master = fromBase64(fields[1]); } catch { continue; }
         if (master.length !== 32) continue;
-        out.push({ token: match[0], storage: fields[0], master, size, name });
+        out.push({ token: match[0], storage: fields[0], master, size: meta?.size || 0, name, durationMs: meta?.durationMs || 0, peaks: meta?.peaks || null });
     }
     return out;
 }

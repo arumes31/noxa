@@ -15,6 +15,7 @@ import { profileCard } from "./you-social.js";
 import { voiceSettings } from "./voice-settings.js";
 import { filterSettings, registerSettings } from "./settings-registry.js";
 import "./settings-sections.js";
+import { dmPrivacySettings } from "./dm-settings.js";
 
 import { backupFlow, renderDeviceList, serversSection } from "./devices.js";
 
@@ -98,6 +99,12 @@ registerSettings("notifications", [{
     key: "behaviour", label: t("notify.behaviour"), keywords: "dnd quiet hours sounds matrix ruhezeiten töne nicht stören",
     render: () => h("div", {}, h("p", { class: "section-label" }, t("notify.behaviour")), notificationBehaviour()),
 }], { title: t("settings.section.notifications") });
+
+// Read receipts and typing indicators (ui/dm-settings.js).
+registerSettings("dm", [{
+    key: "activity", label: t("privacy.activity"), keywords: "privacy read receipts typing lesebestätigung tippen datenschutz",
+    render: () => app.meta.guest ? h("p", { class: "hint" }, t("connect.guestHint")) : dmPrivacySettings(),
+}], { title: t("settings.section.dm") });
 
 // Microphone, activation, volumes and the data saver (ui/voice-settings.js).
 registerSettings("voice", [{

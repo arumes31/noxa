@@ -9,8 +9,10 @@ export const OUTBOX_TTL = 14 * 24 * 3600 * 1000;
 export const SYNC_TAG = "noxa-outbox";
 
 /**
- * Adds a message. target is {kind: "channel", scope} or {kind: "dm", peer,
- * nickname}. Returns the entry.
+ * Adds a message, or replaces the entry with the same ID (a retry). target is
+ * {kind: "channel", scope}, {kind: "dm", peer, nickname} or {kind:
+ * "conversation", conversation} for a private group, where the ID doubles as
+ * the message reference. Returns the entry.
  */
 export async function enqueue(target, text, { id = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}) {
     const entry = { id, ...target, text, sentAt, createdAt: Date.now() };
@@ -55,25 +57,30 @@ export async function requestBackgroundSync() {
 let flushing = null;
 
 /**
- * Sends waiting entries in order through a signed-in session and its direct
- * messages. Stops at the first lost connection; refused entries are kept as
- * failed for the user to see. Returns the number sent.
+ * Sends waiting entries in order through a signed-in session, its direct
+ * messages and its private groups. Stops at the first lost connection;
+ * refused entries are kept as failed for the user to see. Returns the
+ * number sent.
  */
-export function flush(session, dm) {
+export function flush(session, dm, groups = null) {
     if (flushing) return flushing;
     flushing = (async () => {
         let sent = 0;
         try {
             for (const entry of await pending()) {
                 if (entry.expired || entry.failed) {
-                    show(session, dm, entry);
+                    show(session, dm, entry, groups);
                     continue;
                 }
+                // Without groups (an older caller) the entry waits for one.
+                if (entry.kind === "conversation" && !groups) continue;
                 try {
                     for (let attempt = 0; ; attempt++) {
                         try {
                             if (entry.kind === "channel") {
                                 await session.send(entry.scope, entry.text, { clientMsgID: entry.id, sentAt: entry.sentAt });
+                            } else if (entry.kind === "conversation") {
+                                await groups.send(entry.conversation, entry.text, { reference: entry.id, sentAt: entry.sentAt });
                             } else {
                                 await dm.send(entry.peer, entry.text, entry.nickname || "", { id: entry.id, sentAt: entry.sentAt });
                             }
@@ -101,13 +108,14 @@ export function flush(session, dm) {
 }
 
 /** Shows waiting and expired entries in their conversations. */
-export async function showPending(session, dm) {
-    for (const entry of await pending()) show(session, dm, entry);
+export async function showPending(session, dm, groups = null) {
+    for (const entry of await pending()) show(session, dm, entry, groups);
 }
 
-function show(session, dm, entry) {
+export function show(session, dm, entry, groups = null) {
     const state = { text: entry.text, sentAt: entry.sentAt, expired: !!entry.expired || !!entry.failed };
     if (entry.kind === "channel") session.showQueued(entry.scope, { clientMsgID: entry.id, ...state });
+    else if (entry.kind === "conversation") groups?.showQueued(entry.conversation, { reference: entry.id, ...state });
     else dm?.showQueued(entry.peer, { id: entry.id, ...state });
 }
 

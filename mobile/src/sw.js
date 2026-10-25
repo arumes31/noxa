@@ -6,6 +6,8 @@ import { Connection } from "./core/connection.js";
 import { signIn } from "./core/device.js";
 import { DirectMessages } from "./core/direct.js";
 import { loadIdentity } from "./core/identity-store.js";
+import { Groups } from "./core/groups.js";
+import { MUTED_CACHE, MUTED_URL } from "./core/conversation-prefs.js";
 import { SYNC_TAG, enqueue, flush, pending } from "./core/outbox.js";
 import { Msg } from "./core/frame.js";
 import { announceRead } from "./core/push.js";
@@ -18,13 +20,28 @@ self.addEventListener("install", event => {
 });
 
 self.addEventListener("activate", event => {
-    event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k)))));
+    event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== MUTED_CACHE).map(k => caches.delete(k)))));
 });
 
 // The page asks before activating a new version so it never swaps code mid-call.
+// It also sends the muted conversations, kept for the next push.
 self.addEventListener("message", event => {
     if (event.data === "activate-update") self.skipWaiting();
+    if (event.data?.type === "muted" && Array.isArray(event.data.tags)) {
+        const tags = event.data.tags.filter(tag => typeof tag === "string").slice(0, 500);
+        event.waitUntil(caches.open(MUTED_CACHE).then(cache => cache.put(MUTED_URL, new Response(JSON.stringify(tags), { headers: { "content-type": "application/json" } }))));
+    }
 });
+
+async function mutedTags() {
+    try {
+        const response = await (await caches.open(MUTED_CACHE)).match(MUTED_URL);
+        const tags = response ? await response.json() : [];
+        return Array.isArray(tags) ? tags : [];
+    } catch {
+        return [];
+    }
+}
 
 self.addEventListener("fetch", event => {
     const request = event.request;
@@ -115,16 +132,22 @@ async function onPush(push) {
     // An open app shows the event itself.
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     if (push.kind !== "call" && windows.some(client => client.visibilityState === "visible")) return;
+    // A muted conversation stays quiet: nothing while the app is open (in
+    // the background); without it the browser requires a notification, so
+    // it is shown silently.
+    const muted = push.kind !== "call" && (await mutedTags()).includes(push.tag);
+    if (muted && windows.length) return;
     const text = describe(push);
     await self.registration.showNotification(text.title, {
         body: text.body,
         tag: push.tag,
-        renotify: true,
+        renotify: !muted,
+        silent: muted,
         icon: "/app/icons/icon-192.png",
         badge: "/app/icons/icon-192.png",
         timestamp: (push.at || Date.now() / 1000) * 1000,
         requireInteraction: !!text.call,
-        vibrate: text.call ? [400, 200, 400, 200, 400] : [120],
+        vibrate: muted ? [] : text.call ? [400, 200, 400, 200, 400] : [120],
         // iOS shows no actions; Android gets Answer and Decline on calls, Reply and Mark as read on messages.
         actions: text.call ? [{ action: "answer", title: words().answer }, { action: "decline", title: words().decline }] : messageActions(push),
         data: { url: routeFor(push.tag), tag: push.tag },
@@ -158,7 +181,7 @@ function messageActions(push) {
     const [scope] = String(push.tag || "").split(":");
     const w = words();
     const actions = [];
-    if (scope === "dm" || scope === "channel") actions.push({ action: "reply", title: w.reply, type: "text", placeholder: w.replyPlaceholder });
+    if (scope === "dm" || scope === "channel" || scope === "conversation") actions.push({ action: "reply", title: w.reply, type: "text", placeholder: w.replyPlaceholder });
     if (scope === "dm" || scope === "channel" || scope === "conversation") actions.push({ action: "read", title: w.markRead });
     return actions;
 }
@@ -168,6 +191,7 @@ function replyTarget(tag) {
     const [scope, id = ""] = String(tag).split(/:(.*)/s);
     if (scope === "dm" && id) return { kind: "dm", peer: id, nickname: "" };
     if (scope === "channel" && /^\d+$/.test(id)) return { kind: "channel", scope: Number(id) };
+    if (scope === "conversation" && id) return { kind: "conversation", conversation: id };
     return null;
 }
 
@@ -278,6 +302,7 @@ async function signedIn(work = async () => true) {
         const session = new ChatSession(conn, stored.identity, auth);
         // Offline DMs are replayed immediately after authentication.
         const dm = new DirectMessages(session, stored.meta);
+        const groups = new Groups(session, dm);
         try {
             if (!await work(session)) return;
             const waiting = (await pending()).filter(entry => !entry.expired && !entry.failed);
@@ -286,8 +311,9 @@ async function signedIn(work = async () => true) {
             if (channels.length) await session.subscribe(channels).catch(() => {});
             await waitForKeys(session, scopes);
             await dm.ready;
-            await flush(session, dm);
+            await flush(session, dm, groups);
         } finally {
+            groups.close();
             dm.close();
         }
     } finally {

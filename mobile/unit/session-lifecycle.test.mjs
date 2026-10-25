@@ -35,6 +35,7 @@ test('offline DM emitted while updateMeta awaits must reach the receiver', async
   './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:async()=>({})},
   './core/settings.js':{get:()=>[]},'./core/servers.js':{addServer:()=>[]},
   './notifier.js':{notifier:{install(){},decide(){return {count:true}},read(){}}},
+  './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{}},
  };
  const context=vm.createContext({EventTarget,CustomEvent,setTimeout,clearTimeout,clearInterval,console});
  const mod=new vm.SourceTextModule(await fs.readFile(new URL('../src/app.js',import.meta.url),'utf8'),{context});
@@ -88,6 +89,7 @@ for (const existingGuest of [false, true]) {
    './core/push.js': {announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:none},
    './core/settings.js':{get:()=>[]},'./core/servers.js':{addServer:()=>[]},
    './notifier.js': {notifier:{install(){},decide(){return {count:true}},read(){}}},
+   './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{}},
   };
   const context=vm.createContext({EventTarget,CustomEvent,setTimeout,clearTimeout,clearInterval,console});
   const mod=new vm.SourceTextModule(await fs.readFile(new URL('../src/app.js',import.meta.url),'utf8'),{context});
@@ -126,6 +128,7 @@ test('guest snapshot received while saving identity subscribes to channels', asy
   './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:async()=>({})},
   './core/settings.js':{get:()=>[]},'./core/servers.js':{addServer:()=>[]},
   './notifier.js':{notifier:{install(){},decide(){return {count:true}},read(){}}},
+  './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{}},
  };
  const context=vm.createContext({EventTarget,CustomEvent,setTimeout,clearTimeout,clearInterval,console});
  const mod=new vm.SourceTextModule(await fs.readFile(new URL('../src/app.js',import.meta.url),'utf8'),{context});
@@ -151,6 +154,7 @@ test('foreground and restored-page events probe an apparently online session', a
   './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:none},
   './core/settings.js':{get:()=>[]},'./core/servers.js':{addServer:()=>[]},
   './notifier.js':{notifier:{install(){},decide(){return {count:true}},read(){}}},
+  './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{}},
  };
  const window=new EventTarget(),document=Object.assign(new EventTarget(),{visibilityState:'hidden'});
  const context=vm.createContext({EventTarget,CustomEvent,setTimeout,clearTimeout,clearInterval,console,window,document});

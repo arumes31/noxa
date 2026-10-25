@@ -54,10 +54,12 @@ function provision(dir, databaseURL) {
     execFileSync(tool("migrate"), [], { env, stdio: "pipe" });
     const accounts = {};
     const run = Date.now().toString(36);
-    // pax, quinn, remy, sam, tess, uma and val are used by presence-notify.spec.js
-    // only, so its phones and first devices do not collide with the other specs' device limits.
+    // Each spec file has its own members so phones and first devices do not
+    // collide with the other specs' device limits: pax..val presence-notify,
+    // dia/quin/dot/tao dm-activity, gus/gil/gwen group-manage, vern/yara voice-notes.
     for (const name of ["owner", "rowan", "ivy", "kai", "lou", "mia", "noa", "vic", "wes", "xan", "pia", "ray", "sol",
-        "pax", "quinn", "remy", "sam", "tess", "uma", "val"]) {
+        "pax", "quinn", "remy", "sam", "tess", "uma", "val",
+        "dia", "quin", "dot", "tao", "gus", "gil", "gwen", "vern", "yara"]) {
         const password = `pw-${name}-${run}`;
         const nickname = `${name}-${run}`;
         // The owner may also log in to ServerQuery (e.g. to set the server rules).

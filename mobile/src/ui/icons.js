@@ -28,6 +28,9 @@ const paths = {
     sun: "M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
     check: "M5 12.5l4.5 4.5L19 7",
     inbox: "M3 13l3-8h12l3 8v6H3zM3 13h5l1.5 3h5l1.5-3h5",
+    bellOff: "M18 8a6 6 0 0 0-9.3-5M6 8c0 7-3 9-3 9h14M13.7 21a2 2 0 0 1-3.4 0M3 3l18 18",
+    play: "M7 4.5l12 7.5-12 7.5z",
+    pause: "M7 5h3v14H7zM14 5h3v14h-3z",
 };
 
 export function icon(name) {

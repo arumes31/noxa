@@ -4,7 +4,7 @@
 // this account (dm_devices_v1, internal/netproto/dm_devices.go). Copies for
 // this device arrive live or from the server's per-device spool. History
 // is kept in IndexedDB, encrypted with the database key.
-import { Stores, getSealed, keys, putSealed } from "./db.js";
+import { Stores, deleteKey, getSealed, keys, putSealed } from "./db.js";
 import { keyFingerprint, openDM, sealDM, toBase64 } from "./crypto.js";
 import { ed25519FromPEM, parseKeyRecord, trustedDevices } from "./dm-trust.js";
 import { Msg } from "./frame.js";
@@ -13,6 +13,43 @@ import { ProtocolError } from "./connection.js";
 const MsgChatAccepted = 154;
 const MAX_MESSAGES = 5000;
 const DIRECTORY_TTL = 5 * 60 * 1000;
+const TYPING_PING_MS = 3000;
+const TYPING_TTL_MS = 5000;
+
+/** Receipt states of own messages, in order: sent, delivered, read. */
+const RECEIPT_RANK = { sent: 1, delivered: 2, read: 3 };
+
+/**
+ * Applies a delivery or read receipt for message id to a conversation's
+ * messages. A read receipt names the newest message the contact read, so it
+ * covers every own message up to it. States only move forward. Returns
+ * whether anything changed.
+ */
+export function applyReceipt(messages, kind, id) {
+    const target = messages.find(m => m.id === id && m.self);
+    if (!target || !RECEIPT_RANK[kind]) return false;
+    let changed = false;
+    for (const message of messages) {
+        if (!message.self || message.pending || message.queued || message.failed) continue;
+        const covered = message === target || (kind === "read" && message.sentAt <= target.sentAt);
+        if (!covered || (RECEIPT_RANK[message.receipt] || 0) >= RECEIPT_RANK[kind]) continue;
+        message.receipt = kind;
+        changed = true;
+    }
+    return changed;
+}
+
+/** A conversation as plain text for export: one "[time] name: text" line per message. */
+export function exportConversation(conversation, { selfName = "", peerName = "", format = date => date.toISOString() } = {}) {
+    const lines = [];
+    for (const message of conversation?.messages || []) {
+        if (message.queued || message.failed) continue;
+        const name = message.self ? selfName : (message.fromNickname || peerName);
+        const body = message.deleted ? "(deleted)" : message.body ?? "(locked)";
+        lines.push(`[${format(new Date(message.sentAt * 1000))}] ${name}: ${body}${message.edited ? " (edited)" : ""}`);
+    }
+    return lines.join("\n") + (lines.length ? "\n" : "");
+}
 
 /** Trust states of a contact's device list. */
 export const Trust = Object.freeze({
@@ -41,8 +78,21 @@ export class DirectMessages extends EventTarget {
         this.directory = new Map();
         this.ready = this.#load();
         this.#saveTimers = new Map();
+        /** peer -> {nickname, until} while the contact is typing */
+        this.typing = new Map();
+        /** Whether to send typing and receipts; the app sets it from the settings. */
+        this.shareActivity = () => false;
         this.#onDirect = event => { this.#receive(event.detail).catch(() => {}); };
         session.addEventListener("direct", this.#onDirect);
+        this.#onReceipt = event => { this.ready.then(() => this.#receipt(event.detail)).catch(() => {}); };
+        session.addEventListener("receipt", this.#onReceipt);
+        this.#onTyping = event => {
+            const { uid, nickname } = event.detail || {};
+            if (!uid) return;
+            this.typing.set(uid, { nickname, until: Date.now() + TYPING_TTL_MS });
+            this.#emit("typing", { peer: uid });
+        };
+        session.addEventListener("typing-direct", this.#onTyping);
         // Write pending history before the page is frozen or unloaded.
         this.#onHide = () => { if (document.visibilityState === "hidden") this.flush(); };
         globalThis.addEventListener?.("pagehide", this.#onHide);
@@ -53,6 +103,9 @@ export class DirectMessages extends EventTarget {
 
     #saveTimers;
     #onDirect;
+    #onReceipt;
+    #onTyping;
+    #typingSent = new Map();
 
     #emit(type, detail) {
         this.dispatchEvent(new CustomEvent(type, { detail }));
@@ -166,17 +219,27 @@ export class DirectMessages extends EventTarget {
                 signingKey = ed25519FromPEM(first.ed25519_public_key);
             }
         }
-        const entry = { at: Date.now(), trust: Trust.unavailable, devices: [], fingerprint: "" };
+        const entry = { at: Date.now(), trust: Trust.unavailable, devices: [], fingerprint: "", verified: false, newDevices: [] };
         if (signingKey) {
             const pinned = await this.#pin(uid);
             const signingB64 = toBase64(signingKey);
             if (pinned && pinned.signingKey !== signingB64) {
                 entry.trust = Trust.changed;
+                // A changed identity is no longer the one the user verified.
+                if (pinned.verified) await putSealed(Stores.pins, uid, { ...pinned, verified: false }).catch(() => {});
             } else {
-                if (!pinned) await putSealed(Stores.pins, uid, { signingKey: signingB64, at: Date.now() }).catch(() => {});
                 entry.trust = Trust.ok;
                 entry.signingKey = signingKey;
                 entry.devices = trustedDevices(uid, devices, signingKey);
+                const ids = entry.devices.map(d => d.deviceID);
+                if (!pinned || !Array.isArray(pinned.devices)) {
+                    // First contact (or a pin from before device tracking): remember the list.
+                    await putSealed(Stores.pins, uid, { ...pinned, signingKey: signingB64, at: pinned?.at || Date.now(), devices: ids }).catch(() => {});
+                    entry.verified = !!pinned?.verified;
+                } else {
+                    entry.verified = !!pinned.verified;
+                    entry.newDevices = entry.devices.filter(d => !pinned.devices.includes(d.deviceID));
+                }
             }
             entry.fingerprint = keyFingerprint(`-----BEGIN PUBLIC KEY-----\n${signingB64}\n-----END PUBLIC KEY-----\n`);
         }
@@ -216,6 +279,24 @@ export class DirectMessages extends EventTarget {
         return null;
     }
 
+    /** Marks a contact's identity as verified (compared in person) or not. */
+    async setVerified(uid, verified) {
+        const pinned = await this.#pin(uid);
+        if (!pinned?.signingKey) throw new Error("no identity to verify");
+        await putSealed(Stores.pins, uid, { ...pinned, verified: !!verified });
+        const cached = this.directory.get(uid);
+        if (cached && cached.trust === Trust.ok) cached.verified = !!verified;
+    }
+
+    /** Remembers a contact's current devices, so the new-device notice goes away. */
+    async acknowledgeDevices(uid) {
+        const cached = this.directory.get(uid);
+        const pinned = await this.#pin(uid);
+        if (!cached || cached.trust !== Trust.ok || !pinned?.signingKey) return;
+        await putSealed(Stores.pins, uid, { ...pinned, devices: cached.devices.map(d => d.deviceID) });
+        cached.newDevices = [];
+    }
+
     /** Accepts a contact's new identity after the user compared it. */
     async trustNewIdentity(uid) {
         await putSealed(Stores.pins, uid, null).catch(() => {});
@@ -246,10 +327,54 @@ export class DirectMessages extends EventTarget {
             if (text !== null) this.#applyChange(peer, { action: data.dm_action, ref: data.ref_client_msg_id, from, text });
             return;
         }
-        this.#add(peer, nickname, {
+        // A contact whose message arrived is done typing it.
+        if (!own && this.typing.delete(peer)) this.#emit("typing", { peer });
+        const isNew = this.#add(peer, nickname, {
             id: data.client_msg_id || crypto.randomUUID(), from, fromNickname: data.from, self: own,
             body: text, verified: !!text, sentAt: Date.now() / 1000, offline: !!data.offline,
         });
+        if (isNew && !own && data.client_msg_id && this.shareActivity() && this.conn.open) {
+            this.conn.send(Msg.ChatDelivered, { to_unique_id: from, client_msg_id: data.client_msg_id });
+        }
+    }
+
+    /** A contact's delivery or read receipt for one of this account's messages. */
+    #receipt({ kind, from, clientMsgID }) {
+        const conversation = from && this.conversations.get(from);
+        if (!conversation || !clientMsgID) return;
+        if (applyReceipt(conversation.messages, kind, clientMsgID)) {
+            this.#save(from);
+            this.#emit("receipt", { peer: from });
+        }
+    }
+
+    /**
+     * Sends a read receipt for the newest message from peer once it was
+     * shown, unless activity is private. Called by the open conversation.
+     */
+    markRead(peer) {
+        const conversation = this.conversations.get(peer);
+        if (!conversation || !this.shareActivity() || !this.conn.open) return false;
+        const newest = conversation.messages.filter(m => !m.self && !m.copied && m.id && !m.deleted).at(-1);
+        if (!newest || conversation.readReceipt === newest.id) return false;
+        conversation.readReceipt = newest.id;
+        this.#save(peer);
+        this.conn.send(Msg.ChatRead, { to_unique_id: peer, client_msg_id: newest.id });
+        return true;
+    }
+
+    /** Announces typing to peer, at most every 3 s, unless activity is private. */
+    sendTyping(peer, now = Date.now()) {
+        if (!this.shareActivity() || (this.#typingSent.has(peer) && now - this.#typingSent.get(peer) < TYPING_PING_MS)) return false;
+        this.#typingSent.set(peer, now);
+        this.session.sendTypingDirect(peer);
+        return true;
+    }
+
+    /** The contact's nickname while peer is typing ("" when unknown), else null. */
+    typingName(peer, now = Date.now()) {
+        const entry = this.typing.get(peer);
+        return entry && entry.until > now ? entry.nickname || "" : null;
     }
 
     /**
@@ -283,7 +408,9 @@ export class DirectMessages extends EventTarget {
         this.#add(peer, nickname, message);
         try {
             await this.#sendCopies(peer, text, id, false);
-            this.#add(peer, nickname, { ...message, pending: false });
+            const current = this.conversations.get(peer)?.messages.find(m => m.id === id);
+            // A receipt may already have overtaken the acceptance.
+            this.#add(peer, nickname, { ...message, pending: false, receipt: current?.receipt || "sent" });
         } catch (error) {
             // Lost connections leave the message for the outbox; refusals fail it.
             const retryable = !(error instanceof ProtocolError) && !error.code;
@@ -297,6 +424,25 @@ export class DirectMessages extends EventTarget {
         const existing = this.conversations.get(peer)?.messages.find(m => m.id === id);
         if (existing && !existing.queued && !existing.failed) return;
         this.#add(peer, "", { id, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, queued: !expired, failed: expired });
+    }
+
+    /** Removes a message that never reached the server from this device. */
+    discardLocal(peer, id) {
+        const conversation = this.conversations.get(peer);
+        if (!conversation) return;
+        conversation.messages = conversation.messages.filter(m => m.id !== id || !(m.queued || m.failed));
+        this.#write(peer);
+        this.#emit("messages", { peer, message: null, isNew: false });
+    }
+
+    /** Deletes the history with peer on this device only. */
+    async deleteHistory(peer) {
+        clearTimeout(this.#saveTimers.get(peer));
+        this.#saveTimers.delete(peer);
+        this.conversations.delete(peer);
+        await deleteKey(Stores.dm, peer).catch(() => {});
+        this.#emit("messages", { peer, message: null, isNew: false });
+        this.#emit("conversations");
     }
 
     /** Edits one of this account's messages on every device. */
@@ -376,6 +522,8 @@ export class DirectMessages extends EventTarget {
 
     close() {
         this.session.removeEventListener("direct", this.#onDirect);
+        this.session.removeEventListener("receipt", this.#onReceipt);
+        this.session.removeEventListener("typing-direct", this.#onTyping);
         globalThis.removeEventListener?.("pagehide", this.#onHide);
         globalThis.document?.removeEventListener("visibilitychange", this.#onHide);
         this.flush();
