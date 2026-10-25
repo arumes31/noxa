@@ -203,9 +203,11 @@ export class Voice extends EventTarget {
         this.#cancelStart?.();
         this.#cancelStart = null;
         this.#joining = true;
+        let acknowledged = false;
         try {
             const joined = await this.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: channelID, password: password || undefined }, MsgChannelJoined);
             if (generation !== this.#joinGeneration) return false;
+            acknowledged = true;
             this.channelID = joined.channel_id ?? channelID;
             if (this.echo && this.channelID !== this.echo.channel) this.echo = null;
             if (!this.pc && !await this.#start(generation)) return false;
@@ -214,8 +216,9 @@ export class Voice extends EventTarget {
             this.#emit("state");
             return this.channelID;
         } catch (error) {
-            // Never roll back a newer join when an old media request fails.
-            if (generation === this.#joinGeneration) await this.leave();
+            // A rejected switch leaves the existing call untouched. Only roll
+            // back media setup after the server accepted this channel.
+            if (acknowledged && generation === this.#joinGeneration) await this.leave();
             throw error;
         } finally {
             if (generation === this.#joinGeneration) this.#joining = false;

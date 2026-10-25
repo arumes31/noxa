@@ -70,3 +70,21 @@ test("cancelled echo join does not report an active echo test", async () => {
  assert.equal(await voice.startEchoTest(), false);
  assert.equal(voice.echo, null); voice.close();
 });
+
+
+test("rejected channel switch preserves the current call and microphone", async () => {
+ const channels = []; let closed = 0, stopped = 0;
+ const session = Object.assign(new EventTarget(), {conn:{open:true,on:()=>()=>{},request:async(_type, data)=>{
+  channels.push(data.channel_id); throw new Error("wrong password");
+ }}});
+ const voice = new Voice(session);
+ const pc = {close(){closed++;}};
+ const mic = {getTracks:()=>[{stop(){stopped++;}}]};
+ voice.channelID = 1; voice.pc = pc; voice.mic = mic;
+ await assert.rejects(voice.join(2, "incorrect"), /wrong password/);
+ assert.deepEqual(channels, [2]);
+ assert.equal(voice.channelID, 1); assert.equal(voice.active, true);
+ assert.equal(voice.pc, pc); assert.equal(voice.mic, mic);
+ assert.equal(closed, 0); assert.equal(stopped, 0);
+ voice.close();
+});
