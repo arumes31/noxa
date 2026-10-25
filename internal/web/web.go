@@ -226,9 +226,17 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/web/info", http.HandlerFunc(s.handleInfo))
 	app := s.appHandler()
 	s.mux.Handle("GET /app/", app)
+	// Web Share Target: Android posts shared content here. The PWA's
+	// service worker answers it first and keeps the content; without a
+	// worker the post lands here and only the share screen opens. The body
+	// is never read.
+	s.mux.Handle("POST /app/share", http.RedirectHandler("/app/#/share", http.StatusSeeOther))
 	// Device links keep their secret in the URL fragment, which browsers
 	// never send; the app reads it after load.
 	s.mux.Handle("GET /link", http.HandlerFunc(s.serveIndex))
+	// Channel invitations keep their token in the fragment too; the app
+	// also answers /app/invite/<channel> through its index fallback.
+	s.mux.Handle("GET /invite/{channel}", http.HandlerFunc(s.serveIndex))
 	s.mux.Handle("GET /{$}", http.RedirectHandler("/app/", http.StatusFound))
 }
 

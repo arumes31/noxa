@@ -3,6 +3,8 @@
 // the raw secrets are never stored in readable form.
 import { Stores, clearStores, openDB, run, seal, unseal } from "./db.js";
 
+import { clearAccountSettings } from "./settings.js";
+
 const FIELDS = ["edPublic", "edSecret", "xPublic", "xSecret"];
 const SIZES = { edPublic: 32, edSecret: 64, xPublic: 32, xSecret: 32 };
 
@@ -58,5 +60,7 @@ export async function clearIdentity() {
     } finally {
         db.close();
     }
-    await clearStores(Stores.dm, Stores.pins, Stores.outbox);
+    clearAccountSettings();
+    // Every store but device, which keeps the wrapping key.
+    await clearStores(...Object.values(Stores).filter(name => name !== Stores.device));
 }

@@ -5,14 +5,20 @@ import { DirectMessages } from "./core/direct.js";
 import { Calls } from "./core/calls.js";
 import { Groups } from "./core/groups.js";
 import { Voice } from "./core/voice.js";
+import { SavedMessages } from "./core/saved.js";
 import { Connection } from "./core/connection.js";
 import { generateIdentity } from "./core/crypto.js";
 import { signIn } from "./core/device.js";
 import { clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
 import { enqueue, flush as flushOutbox, showPending, waitingCount } from "./core/outbox.js";
 import { announceRead, closeNotifications, reportVisibility, setBadge, syncPush } from "./core/push.js";
+import { get as setting } from "./core/settings.js";
+import { addServer } from "./core/servers.js";
+import { notifier } from "./notifier.js";
+import { activityShared, isMuted, syncMuted, watchCallLog } from "./core/conversation-prefs.js";
 
 export const app = new EventTarget();
+notifier.install(app);
 
 app.info = null;
 app.identity = null;
@@ -36,6 +42,10 @@ app.unread = new Map();
 app.viewing = null;
 /** Messages waiting in the outbox. */
 app.outboxWaiting = 0;
+/** Reconnect attempts since the page loaded (Diagnostics). */
+app.reconnects = 0;
+/** Saved message references, shared by the message menu and the Saved screen. */
+app.saved = typeof indexedDB === "undefined" ? null : new SavedMessages();
 
 const RECONNECT_STEPS = [1000, 2000, 5000, 10000, 20000, 30000];
 let reconnectAttempt = 0;
@@ -49,6 +59,8 @@ export async function loadInfo(fetchImpl = fetch) {
     const response = await fetchImpl("/api/v1/web/info", { cache: "no-store" });
     if (!response.ok) throw new Error(`server answered ${response.status}`);
     app.info = await response.json();
+    // The first open of a server puts it on this browser's server list.
+    try { addServer(location.origin, app.info.server_name || ""); } catch { /* not a web origin */ }
     return app.info;
 }
 
@@ -83,15 +95,20 @@ export async function forgetDevice() {
     app.session = null;
     previousSession?.close();
     await clearIdentity();
+    if (app.saved) app.saved.references = [];
     app.identity = null;
     app.meta = {};
     app.guestPassword = "";
+    app.unread.clear();
+    unreadChanged();
+    app.viewing = null;
     emit("signedout");
 }
 
 /** Signs in with the stored device key and starts the chat session. */
 export async function connect({ guest = null } = {}) {
     clearTimeout(reconnectTimer);
+    app.paused = false;
     const reuseGuest = !!(guest && app.meta.guest && app.identity);
     const identity = guest ? (reuseGuest ? app.identity : newIdentity()) : app.identity;
     const conn = await Connection.open();
@@ -114,11 +131,15 @@ export async function connect({ guest = null } = {}) {
     const session = new ChatSession(conn, identity, auth);
     app.session = session;
     previousSession?.close();
-    session.addEventListener("snapshot", () => {
-        // Subscribing delivers a channel's chat and keys without joining it.
-        const missing = session.channels().filter(c => c.chat && !session.subscriptions.has(c.id)).map(c => c.id);
+    // Subscribing delivers a channel's chat and keys without joining it;
+    // channels the user unsubscribed from in Servers stay unsubscribed.
+    const subscribeMissing = () => {
+        if (session.pendingRules) return;
+        const skip = new Set(setting("unsubscribedChannels") || []);
+        const missing = session.channels().filter(c => c.chat && !session.subscriptions.has(c.id) && !skip.has(c.id)).map(c => c.id);
         if (missing.length) session.subscribe(missing).catch(() => {});
-    });
+    };
+    session.addEventListener("snapshot", subscribeMissing);
     reconnectAttempt = 0;
     setOnline(true);
     app.meta = { ...(guest ? { guest: true, linked: false } : app.meta), deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
@@ -132,31 +153,37 @@ export async function connect({ guest = null } = {}) {
         await saveIdentity(identity, app.meta);
     }
     const rejoin = app.voice?.channelID || 0;
-    app.voice?.close();
-    app.voice = new Voice(session);
+    const previousVoice = app.voice;
+    previousVoice?.close();
+    // Mute, deafen and the last whisperer carry over to the new session.
+    app.voice = new Voice(session, previousVoice);
     watchVoice(app.voice);
     // A dropped connection ends the call; rejoin the same channel.
     if (rejoin) joinVoice(rejoin).catch(() => {});
     app.dm?.close();
     const dm = new DirectMessages(session, app.meta);
+    dm.shareActivity = activityShared;
     app.dm = dm;
     dm.addEventListener("messages", event => {
         const { peer, message, isNew } = event.detail;
-        if (isNew && !message.self && !message.copied) noteUnread(`dm:${peer}`, true);
+        if (isNew && !message.self && !message.copied) noteUnread(`dm:${peer}`, true, { kind: "dm", from: peer, name: message.fromNickname, text: message.body });
         emit("dm", { peer });
     });
     app.groups?.close();
     app.groups = new Groups(session, dm);
-    app.groups.addEventListener("incoming", event => noteUnread(`conversation:${event.detail.id}`, false));
+    app.groups.shareActivity = activityShared;
+    app.groups.addEventListener("incoming", event => noteUnread(`conversation:${event.detail.id}`, false, { kind: "group", name: app.groups?.list.get(event.detail.id)?.name }));
     app.groups.addEventListener("list", () => emit("groups"));
     app.groups.refresh().catch(() => {});
     app.calls?.close();
     app.calls = new Calls(session, dm);
     watchCalls(app.calls);
+    watchCallLog(app.calls);
+    syncMuted();
     dm.importHistory().catch(() => {});
     dm.ready.then(async () => {
-        await showPending(session, dm);
-        await flushOutbox(session, dm);
+        await showPending(session, dm, app.groups);
+        await flushOutbox(session, dm, app.groups);
         await outboxChanged();
     }).catch(() => {});
     conn.addEventListener("close", () => {
@@ -169,9 +196,17 @@ export async function connect({ guest = null } = {}) {
         if (event.detail?.event === "read" && event.detail.read) readElsewhere(event.detail.read);
         if (event.detail?.event === "history_ready") dm.importHistory().catch(() => {});
     });
+    // Until the rules are accepted the server refuses chat requests; redo them.
+    session.addEventListener("rules", () => {
+        if (session.pendingRules || app.session !== session) return;
+        subscribeMissing();
+        app.groups?.refresh().catch(() => {});
+        dm.importHistory().catch(() => {});
+        flushOutbox(session, dm, app.groups).then(outboxChanged).catch(() => {});
+    });
     session.addEventListener("incoming", event => {
         const { scope, message } = event.detail;
-        if (!message.own) noteUnread(`channel:${scope}`, message.mentioned);
+        if (!message.own) noteUnread(`channel:${scope}`, message.mentioned || !!message.keyword, { kind: "channel", channelID: scope, from: message.fromUniqueID, name: message.from, text: message.text });
     });
     if (!app.meta.guest) reportVisibility(conn);
     if (!app.meta.guest) syncPush(conn).then(state => {
@@ -193,20 +228,41 @@ async function outboxChanged() {
 export async function queueMessage(target, text, options) {
     await enqueue(target, text, options);
     await outboxChanged();
-    if (app.session?.conn.open && app.dm) flushOutbox(app.session, app.dm).then(outboxChanged).catch(() => {});
+    if (app.session?.conn.open && app.dm) flushOutbox(app.session, app.dm, app.groups).then(outboxChanged).catch(() => {});
 }
 
 /** Sends waiting messages, e.g. when the service worker asks. */
 export async function flushNow() {
     if (!app.session?.conn.open || !app.dm) return;
-    await flushOutbox(app.session, app.dm);
+    await flushOutbox(app.session, app.dm, app.groups);
     await outboxChanged();
 }
 
-/** Joins a voice channel and keeps the phone awake while connected. */
-export async function joinVoice(channelID) {
+/** Joins a voice channel (with its password, if any) and keeps the phone awake while connected. */
+export async function joinVoice(channelID, password = "") {
     if (!app.voice) throw new Error("not connected");
-    await app.voice.join(channelID);
+    await app.voice.join(channelID, password);
+}
+
+/**
+ * Leaves the server without forgetting this device, e.g. after declining
+ * the rules. The Connect screen offers to sign in again.
+ */
+export function disconnect() {
+    clearTimeout(reconnectTimer);
+    const session = app.session;
+    app.session = null;
+    app.voice?.close();
+    app.voice = null;
+    app.calls?.close();
+    app.calls = null;
+    app.groups?.close();
+    app.groups = null;
+    app.dm?.close();
+    app.dm = null;
+    app.paused = true;
+    session?.close();
+    emit("disconnected");
 }
 
 export async function leaveVoice() {
@@ -341,17 +397,21 @@ export async function startCall(uid, options) {
 
 function unreadChanged() {
     let total = 0;
-    for (const entry of app.unread.values()) total += entry.count;
+    for (const [tag, entry] of app.unread) if (!isMuted(tag)) total += entry.count;
     setBadge(total);
     emit("unread");
 }
 
-/** Counts an incoming message unless its conversation is on screen. */
-function noteUnread(tag, mention) {
-    if (app.viewing === tag && document.visibilityState === "visible") {
+/** Counts an incoming message unless its conversation is on screen; notifier.decide applies the notification settings. */
+function noteUnread(tag, mention, info = {}) {
+    const viewing = app.viewing === tag && document.visibilityState === "visible";
+    const decision = notifier.decide(tag, { ...info, mention, viewing });
+    if (viewing) {
         markRead(tag);
         return;
     }
+    // Muted conversations (conversation-prefs.js) are not counted either.
+    if (!decision.count || isMuted(tag)) return;
     const entry = app.unread.get(tag) || { count: 0, mentions: 0 };
     entry.count++;
     if (mention) entry.mentions++;
@@ -362,6 +422,9 @@ function noteUnread(tag, mention) {
 /** Marks a conversation read here and on the account's other devices. */
 export function markRead(tag) {
     closeNotifications(tag);
+    notifier.read(tag);
+    // The chat screen places its "New messages" divider from this.
+    if (app.unread.has(tag)) app.lastUnread = { tag, ...app.unread.get(tag) };
     const had = app.unread.delete(tag);
     const split = tag.indexOf(":");
     if (app.session) announceRead(app.session.conn, tag.slice(0, split), tag.slice(split + 1));
@@ -372,6 +435,7 @@ export function markRead(tag) {
 function readElsewhere({ scope, id }) {
     const tag = `${scope}:${id}`;
     closeNotifications(tag);
+    notifier.read(tag);
     if (app.unread.delete(tag)) unreadChanged();
 }
 
@@ -384,9 +448,10 @@ function setOnline(online) {
 function scheduleReconnect() {
     const delay = RECONNECT_STEPS[Math.min(reconnectAttempt, RECONNECT_STEPS.length - 1)];
     reconnectAttempt++;
+    app.reconnects++;
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
-        if (!app.identity) return;
+        if (!app.identity || app.paused) return;
         connect().catch(error => {
             if (!error.revoked) scheduleReconnect();
         });
@@ -396,7 +461,7 @@ function scheduleReconnect() {
 // Reconnect promptly when the phone comes back online or to the foreground.
 if (typeof window !== "undefined") {
     const retryNow = () => {
-        if (!app.identity) return;
+        if (!app.identity || app.paused) return;
         if (!app.online) {
             reconnectAttempt = 0;
             scheduleReconnect();

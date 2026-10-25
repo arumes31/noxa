@@ -15,8 +15,10 @@ for (const width of [320, 390, 1440]) {
             }
             if (view === "voice") await expect(page.getByRole("button", { name: "Lobby", exact: true })).toHaveCount(0);
             if (view === "you") {
-                await expect(page.locator("li").filter({ hasText: "Other desktop" }).getByRole("button")).toHaveCount(1);
-                await expect(page.locator("li").filter({ hasText: "Master desktop" }).getByRole("button")).toHaveCount(0);
+                // Every device can be renamed; only other, non-master devices can be signed out.
+                await expect(page.locator("li").filter({ hasText: "Other desktop" }).getByRole("button", { name: "Sign out", exact: true })).toHaveCount(1);
+                await expect(page.locator("li").filter({ hasText: "Master desktop" }).getByRole("button", { name: "Sign out", exact: true })).toHaveCount(0);
+                await expect(page.locator("li").filter({ hasText: "Master desktop" }).getByRole("button", { name: /^Rename/ })).toHaveCount(1);
             }
             expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
             expect(await page.locator("svg").evaluateAll(nodes => nodes.every(n => n.getBoundingClientRect().width <= 26 && n.getBoundingClientRect().height <= 26))).toBe(true);

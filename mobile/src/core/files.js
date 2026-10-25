@@ -100,23 +100,57 @@ export function fileToken(storage, master, size, name) {
 
 const TOKEN = /\[file:([^\]]+)\]/g;
 
-/** Finds attachment tokens in a message body: [{token, storage, master, size, name}]. */
+// The optional metadata segment (client/frontend/src/attachment-meta.js):
+// s = plaintext bytes, d = a voice note's duration in ms, w = its waveform,
+// one base64url character (0..63) per bar.
+const META = /^nx1(;[a-z]{1,8}=[A-Za-z0-9_.-]+)*$/;
+const PEAKS = /^[A-Za-z0-9_-]{1,64}$/;
+const PEAK_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const MAX_DURATION = 6 * 60 * 60 * 1000;
+
+/** Reads an nx1 segment: {size, durationMs, peaks} (0 / null when absent). */
+export function parseMeta(segment) {
+    const meta = { size: 0, durationMs: 0, peaks: null };
+    if (typeof segment !== "string" || segment.length > 256 || !META.test(segment)) return null;
+    for (const field of segment.split(";").slice(1)) {
+        const [key, value] = field.split("=");
+        const number = /^\d+$/.test(value) ? Number(value) : 0;
+        if (key === "s" && Number.isSafeInteger(number)) meta.size = number;
+        else if (key === "d" && number > 0 && number <= MAX_DURATION) meta.durationMs = number;
+        else if (key === "w" && PEAKS.test(value)) meta.peaks = [...value].map(c => PEAK_ALPHABET.indexOf(c) / 63);
+    }
+    return meta;
+}
+
+/** Adds a voice note's duration and waveform to an uploaded attachment's token. */
+export function withAttachmentMeta(token, { durationMs = 0, peaks = null } = {}) {
+    const match = /^\[file:([^\]#]*)#([^\]#]*)#([^\]]*)\]$/.exec(String(token ?? ""));
+    if (!match) return token;
+    const cut = match[3].indexOf("#");
+    const current = cut >= 0 ? parseMeta(match[3].slice(0, cut)) : null;
+    const name = current ? match[3].slice(cut + 1) : match[3];
+    let segment = "";
+    if (current?.size) segment += `;s=${current.size}`;
+    const duration = Math.round(durationMs) || current?.durationMs || 0;
+    if (duration > 0 && duration <= MAX_DURATION) segment += `;d=${duration}`;
+    const levels = Array.isArray(peaks) && peaks.length ? peaks : current?.peaks;
+    if (levels?.length) segment += `;w=${levels.slice(0, 64).map(level => PEAK_ALPHABET[Math.round(Math.min(1, Math.max(0, Number(level) || 0)) * 63)]).join("")}`;
+    return `[file:${match[1]}#${match[2]}#${segment ? `nx1${segment}#` : ""}${name}]`;
+}
+
+/** Finds attachment tokens in a message body: [{token, storage, master, size, name, durationMs, peaks}]. */
 export function parseFileTokens(body) {
     const out = [];
     for (const match of String(body || "").matchAll(TOKEN)) {
         const fields = match[1].split("#");
         if (fields.length < 3) continue;
-        let size = 0;
+        let meta = null;
         let name = fields.slice(2).join("#");
-        if (/^nx1(;[a-z]{1,8}=[A-Za-z0-9_.-]+)*$/.test(fields[2] || "") && fields.length >= 4) {
-            const sizeField = fields[2].split(";").find(f => f.startsWith("s="));
-            size = Number(sizeField?.slice(2)) || 0;
-            name = fields.slice(3).join("#");
-        }
+        if (fields.length >= 4 && (meta = parseMeta(fields[2]))) name = fields.slice(3).join("#");
         let master;
         try { master = fromBase64(fields[1]); } catch { continue; }
         if (master.length !== 32) continue;
-        out.push({ token: match[0], storage: fields[0], master, size, name });
+        out.push({ token: match[0], storage: fields[0], master, size: meta?.size || 0, name, durationMs: meta?.durationMs || 0, peaks: meta?.peaks || null });
     }
     return out;
 }
@@ -171,6 +205,7 @@ function openTransferSocket(url) {
         socket.onerror = () => reject(new Error("could not reach the file server"));
         socket.onopen = () => resolve({
             send: bytes => socket.send(bytes),
+            buffered: () => socket.bufferedAmount,
             next: () => new Promise((res, rej) => { waiters.push({ resolve: res, reject: rej }); deliver(); }),
             close: () => socket.close(),
         });
@@ -217,20 +252,85 @@ export async function uploadBlob(conn, location, storage, blob, url = transferUR
     }
 }
 
-/** Downloads a file's bytes and checks the server's digest. */
-export async function downloadBlob(conn, location, storage, maxBytes, url = transferURL()) {
-    const init = await initTransfer(conn, { ...where(location), direction: "download", name: storage });
+function aborted() {
+    const error = new Error("transfer canceled");
+    error.name = "AbortError";
+    return error;
+}
+
+/** Closes the socket when the signal aborts; returns the detach function. */
+function watchAbort(signal, socket) {
+    if (!signal) return () => {};
+    const onAbort = () => socket.close();
+    signal.addEventListener("abort", onAbort, { once: true });
+    return () => signal.removeEventListener("abort", onAbort);
+}
+
+const SEND_CHUNK = 32 * 1024;
+const READ_SLICE = 1024 * 1024;
+const MAX_BUFFERED = 1024 * 1024;
+
+/**
+ * Uploads a File or Blob as-is (a channel file, not a sealed attachment)
+ * under name. Reads it in slices and hashes as it goes, so large files never
+ * sit in memory whole. onProgress(sentBytes, total); signal cancels.
+ */
+export async function uploadStream(conn, location, name, file, { onProgress, signal, url = transferURL() } = {}) {
+    if (signal?.aborted) throw aborted();
+    const init = await initTransfer(conn, { ...where(location), direction: "upload", name, size: file.size });
+    if (signal?.aborted) throw aborted();
     const socket = await openTransferSocket(url);
+    const detach = watchAbort(signal, socket);
+    try {
+        socket.send(encodeJSON(Frame.init, { token: init.token, transfer_id: init.transfer_id }));
+        const hash = sha256.create();
+        let queued = 0;
+        const report = () => onProgress?.(Math.max(0, queued - socket.buffered()), file.size);
+        for (let offset = 0; offset < file.size; offset += READ_SLICE) {
+            const slice = new Uint8Array(await file.slice(offset, offset + READ_SLICE).arrayBuffer());
+            if (signal?.aborted) throw aborted();
+            hash.update(slice);
+            for (let at = 0; at < slice.length; at += SEND_CHUNK) {
+                socket.send(encodeRaw(Frame.chunk, slice.subarray(at, at + SEND_CHUNK)));
+                queued += Math.min(SEND_CHUNK, slice.length - at);
+            }
+            // Let the socket drain so progress reflects the network, not memory.
+            while (socket.buffered() > MAX_BUFFERED) {
+                if (signal?.aborted) throw aborted();
+                report();
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            report();
+        }
+        socket.send(encodeJSON(Frame.digest, { sha256: hex(hash.digest()) }));
+        const reply = await socket.next().catch(error => { throw signal?.aborted ? aborted() : error; });
+        if (reply.type !== Frame.status) throw new Error("unexpected file server reply");
+        const status = JSON.parse(new TextDecoder().decode(reply.payload));
+        if (!status.ok) throw new Error(status.error || "upload failed");
+        onProgress?.(file.size, file.size);
+    } finally {
+        detach();
+        socket.close();
+    }
+}
+
+/** Downloads a file's bytes and checks the server's digest. onProgress(bytes); signal cancels. */
+export async function downloadBlob(conn, location, storage, maxBytes, url = transferURL(), { onProgress, signal } = {}) {
+    const init = await initTransfer(conn, { ...where(location), direction: "download", name: storage });
+    if (signal?.aborted) throw aborted();
+    const socket = await openTransferSocket(url);
+    const detach = watchAbort(signal, socket);
     try {
         socket.send(encodeJSON(Frame.init, { token: init.token, transfer_id: init.transfer_id }));
         const parts = [];
         let total = 0;
         for (;;) {
-            const frame = await socket.next();
+            const frame = await socket.next().catch(error => { throw signal?.aborted ? aborted() : error; });
             if (frame.type === Frame.chunk) {
                 total += frame.payload.length;
                 if (total > maxBytes) throw new Error("attachment exceeds the size limit");
                 parts.push(frame.payload);
+                onProgress?.(total);
             } else if (frame.type === Frame.digest) {
                 const blob = concat(...parts);
                 const { sha256: expected } = JSON.parse(new TextDecoder().decode(frame.payload));
@@ -241,6 +341,7 @@ export async function downloadBlob(conn, location, storage, maxBytes, url = tran
             }
         }
     } finally {
+        detach();
         socket.close();
     }
 }

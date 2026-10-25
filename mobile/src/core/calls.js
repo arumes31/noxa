@@ -9,6 +9,8 @@
 //   signals  sealDM(JSON {call_id, from, to, type, sdp}) to the peer's
 //            verified call key; candidates go 16 per signal, 64 per peer
 import { openDM, sealDM } from "./crypto.js";
+import { get as setting } from "./settings.js";
+import { CameraSource, callOutcome, callPeer, capSender, classifyCall } from "./video.js";
 
 const MsgCallRequest = 172;
 const MsgCallResult = 173;
@@ -35,13 +37,23 @@ export class Calls extends EventTarget {
         this.peers = new Map();
         this.stream = null;
         this.camera = null;
+        this.screen = null;
         this.muted = false;
+        this.deafened = false;
+        /** "user" or "environment" for the next or current camera. */
+        this.facingMode = "user";
+        /** A second call ringing while this one is in progress. */
+        this.waiting = null;
         this.#onEvent = event => this.#serverEvent(event.detail).catch(error => this.#emit("error", error));
         session.addEventListener("server-event", this.#onEvent);
     }
 
     #onEvent;
     #signals = Promise.resolve();
+    #source = null;
+    #connectedAt = 0;
+    #video = false;
+    #reported = "";
 
     #emit(type, detail) {
         if (type === "error") console.warn("call:", detail?.message || detail);
@@ -122,18 +134,96 @@ export class Calls extends EventTarget {
         else this.#end();
     }
 
+    /** Call waiting: leaves the current call and answers the waiting one. */
+    async acceptWaiting({ video = false } = {}) {
+        const waiting = this.waiting;
+        if (!waiting) return;
+        this.waiting = null;
+        await this.hangUp();
+        this.call = waiting;
+        await this.accept({ video });
+    }
+
+    /** Call waiting: declines the second call and stays in the current one. */
+    async declineWaiting() {
+        const waiting = this.waiting;
+        if (!waiting) return;
+        this.waiting = null;
+        this.#emit("state");
+        await this.#request({ action: "decline", id: waiting.id }).catch(() => null);
+    }
+
     setMuted(muted) {
         this.muted = muted;
-        for (const track of this.stream?.getAudioTracks() || []) track.enabled = !muted;
+        for (const track of this.stream?.getAudioTracks() || []) track.enabled = !muted && !this.deafened;
+        this.#emit("state");
+    }
+
+    /** Silences the other side, and our microphone like channel deafen. */
+    setDeafened(deafened) {
+        this.deafened = deafened;
+        for (const peer of this.peers.values()) if (peer.audio) peer.audio.muted = deafened;
+        for (const track of this.stream?.getAudioTracks() || []) track.enabled = !this.muted && !deafened;
         this.#emit("state");
     }
 
     async setCamera(on) {
         if (on && !this.camera) {
-            this.camera = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } } });
+            const source = new CameraSource({ facingMode: this.facingMode, effect: setting("cameraEffect"), blurStrength: setting("blurStrength"), limits: this.session.mediaLimits });
+            await source.start();
+            source.addEventListener("track", () => this.#cameraChanged());
+            this.#source = source;
+            this.camera = source.stream;
+            this.#video = true;
         } else if (!on && this.camera) {
-            for (const track of this.camera.getTracks()) track.stop();
+            this.#source?.stop();
+            this.#source = null;
             this.camera = null;
+        }
+        for (const [uid, peer] of this.peers) await this.#syncMedia(uid, peer);
+        this.#emit("state");
+    }
+
+    /** Front/back camera; the new track replaces the old one on every peer. */
+    async flipCamera() {
+        if (!this.#source) {
+            this.facingMode = this.facingMode === "user" ? "environment" : "user";
+            this.#emit("state");
+            return this.facingMode;
+        }
+        try {
+            this.facingMode = await this.#source.flip();
+        } finally {
+            await this.#cameraChanged();
+        }
+        return this.facingMode;
+    }
+
+    /** Applies the camera effect setting to a running camera. */
+    async setCameraEffect(effect, blurStrength) {
+        this.#source?.setEffect(effect, blurStrength);
+        await this.#cameraChanged();
+    }
+
+    async #cameraChanged() {
+        if (!this.#source) return;
+        this.camera = this.#source.stream;
+        for (const [uid, peer] of this.peers) await this.#syncMedia(uid, peer).catch(error => this.#emit("error", error));
+        this.#emit("state");
+    }
+
+    static screenShareSupported() {
+        return typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function";
+    }
+
+    /** Shares the screen into the call's screen slot (tablets and desktops). */
+    async setScreen(on) {
+        if (on && !this.screen) {
+            this.screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+            this.screen.getVideoTracks()[0]?.addEventListener("ended", () => this.setScreen(false).catch(() => {}));
+        } else if (!on && this.screen) {
+            for (const track of this.screen.getTracks()) track.stop();
+            this.screen = null;
         }
         for (const [uid, peer] of this.peers) await this.#syncMedia(uid, peer);
         this.#emit("state");
@@ -142,14 +232,30 @@ export class Calls extends EventTarget {
     // --- Call state ------------------------------------------------------------
 
     async #apply(call) {
-        if (this.call && this.call.id !== call.id && this.active) {
-            // Already in a call: a second one is declined by the server's
-            // single-call rule; only follow the current call.
-            if (call.revision && this.me(call)?.state === "ringing") return;
+        // Already in a call: a second one that rings here (the server rings
+        // every free session and phone of the account) waits for a decision.
+        switch (classifyCall(this.active ? this.call : null, call, this.uid, this.waiting)) {
+            case "waiting":
+                if (this.waiting?.id === call.id && call.revision < this.waiting.revision) return;
+                this.waiting = call;
+                this.#emit("state");
+                return;
+            case "waiting-ended":
+                this.waiting = null;
+                this.#emit("state");
+                if (this.active && this.call.id !== call.id) return;
+                break;
+            case "ignore":
+                return;
         }
         if (this.call?.id === call.id && call.revision < this.call.revision) return;
+        if (this.call?.id !== call.id) {
+            this.#connectedAt = 0;
+            this.#video = !!this.wantVideo;
+        }
         this.call = call;
         const me = this.me(call);
+        this.#track(call, me);
         if (call.ended_at || !me || !["ringing", "accepted"].includes(me.state)) {
             this.#emit("state");
             this.#end();
@@ -197,23 +303,77 @@ export class Calls extends EventTarget {
         }
     }
 
+    // --- Call history: one "record" event per finished 1:1 call ---------------
+
+    #tracked = new Map();
+
+    #track(call, me) {
+        const peer = call.participants.find(p => p.unique_id !== this.uid)?.unique_id;
+        if (call.conversation_id || !peer || !me) return;
+        let track = this.#tracked.get(call.id);
+        if (!track) {
+            if (track === null) return; // already recorded
+            track = { id: call.id, peer, direction: call.caller === this.uid ? "out" : "in", startedAt: (call.created_at || Date.now() / 1000) * 1000, connectedAt: 0 };
+            this.#tracked.set(call.id, track);
+        }
+        const accepted = call.participants.filter(p => p.state === "accepted").length;
+        if (me.state === "accepted" && accepted >= 2 && !track.connectedAt) track.connectedAt = Date.now();
+        if (call.ended_at || !["ringing", "accepted"].includes(me.state)) this.#record(call, me);
+    }
+
+    #record(call, me = this.me(call)) {
+        const track = this.#tracked.get(call.id);
+        if (!track) return;
+        this.#tracked.set(call.id, null);
+        if (this.#tracked.size > 50) this.#tracked.delete(this.#tracked.keys().next().value);
+        // Answered on another device of this account: that device keeps the record.
+        if (me?.state === "elsewhere") return;
+        const endedAt = Date.now();
+        const outcome = track.connectedAt ? "completed"
+            : call.participants.some(p => p.state === "declined") ? "declined" : "missed";
+        const { id, peer, direction, startedAt } = track;
+        this.#emit("record", { id, peer, direction, outcome, startedAt, endedAt, duration: track.connectedAt ? Math.max(0, endedAt - track.connectedAt) : 0 });
+    }
+
     #end() {
+        if (this.call && this.#tracked.get(this.call.id)) this.#record(this.call);
         this.#stopRenewal?.();
         this.#stopRenewal = null;
         this.rtc = null;
         for (const peer of this.peers.values()) this.#closePeer(peer);
         this.peers.clear();
-        for (const stream of [this.stream, this.camera]) for (const track of stream?.getTracks() || []) track.stop();
+        this.#source?.stop();
+        this.#source = null;
+        for (const stream of [this.stream, this.camera, this.screen]) for (const track of stream?.getTracks() || []) track.stop();
         this.stream = null;
         this.camera = null;
+        this.screen = null;
+        this.deafened = false;
+        this.#reportEnded();
         this.#emit("ended");
+    }
+
+    /** One "call-ended" per call, for the call history (Stores.calls). */
+    #reportEnded() {
+        const call = this.call;
+        if (!call?.id || this.#reported === call.id) return;
+        this.#reported = call.id;
+        const endedAt = call.ended_at ? call.ended_at * 1000 : Date.now();
+        this.#emit("call-ended", {
+            id: call.id, peer: callPeer(call, this.uid), conversationID: call.conversation_id || "",
+            outcome: callOutcome(call, this.uid, !!this.#connectedAt),
+            startedAt: this.#connectedAt || (call.created_at ? call.created_at * 1000 : endedAt), endedAt,
+            video: this.#video || !!this.wantVideo,
+        });
+        this.#connectedAt = 0;
+        this.#video = false;
     }
 
     async #capture() {
         if (this.stream) return;
         try {
             this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-            for (const track of this.stream.getAudioTracks()) track.enabled = !this.muted;
+            for (const track of this.stream.getAudioTracks()) track.enabled = !this.muted && !this.deafened;
         } catch (error) {
             this.stream = new MediaStream();
             this.#emit("error", error);
@@ -245,7 +405,10 @@ export class Calls extends EventTarget {
             this.#scheduleCandidates(uid, peer);
         };
         pc.onconnectionstatechange = () => {
-            if (pc.connectionState === "connected") clearTimeout(peer.connectTimer);
+            if (pc.connectionState === "connected") {
+                clearTimeout(peer.connectTimer);
+                this.#connectedAt ||= Date.now();
+            }
             this.#emit("state");
         };
         pc.ontrack = event => {
@@ -254,6 +417,7 @@ export class Calls extends EventTarget {
             if (event.track.kind === "audio" && audio.indexOf(event.transceiver) <= 1) {
                 peer.audio ||= Object.assign(document.createElement("audio"), { autoplay: true, hidden: true });
                 if (!peer.audio.isConnected) document.body.append(peer.audio);
+                peer.audio.muted = this.deafened;
                 const stream = peer.audio.srcObject || new MediaStream();
                 stream.addTrack(event.track);
                 peer.audio.srcObject = stream;
@@ -297,12 +461,17 @@ export class Calls extends EventTarget {
     }
 
     #sendMediaState(peer) {
-        if (peer.channel?.readyState === "open") peer.channel.send(JSON.stringify({ camera: !!this.camera, screen: false }));
+        if (peer.channel?.readyState === "open") peer.channel.send(JSON.stringify({ camera: !!this.camera, screen: !!this.screen }));
     }
 
     async #syncMedia(uid, peer) {
         const camera = this.camera?.getVideoTracks()[0] || null;
-        if (peer.senders?.camera && peer.senders.camera.track !== camera) await peer.senders.camera.replaceTrack(camera);
+        if (peer.senders?.camera && peer.senders.camera.track !== camera) {
+            await peer.senders.camera.replaceTrack(camera);
+            if (camera) await capSender(peer.senders.camera, this.session.mediaLimits);
+        }
+        const screen = this.screen?.getVideoTracks()[0] || null;
+        if (peer.senders?.screen && peer.senders.screen.track !== screen) await peer.senders.screen.replaceTrack(screen);
         this.#sendMediaState(peer);
     }
 

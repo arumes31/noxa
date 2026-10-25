@@ -41,6 +41,22 @@ func TestPushSubscriptionsFollowTheirDevice(t *testing.T) {
 	if got, _ := s.PushSubscriptionForDevice(ctx, principal, phone.DeviceID); got.HideDetails || !got.AlwaysNotify {
 		t.Fatalf("preferences = %+v", got)
 	}
+	if got, _ := s.PushSubscriptionForDevice(ctx, principal, phone.DeviceID); string(got.Filters) != "{}" {
+		t.Fatalf("default filters = %q", got.Filters)
+	}
+	if err := s.SetPushFilters(ctx, principal, phone.DeviceID, []byte(`{"chat_level":"dm"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPushFilters(ctx, "someone-else", phone.DeviceID, []byte(`{}`)); !errors.Is(err, ErrDeviceNotFound) {
+		t.Fatalf("filters for another account's device err = %v", err)
+	}
+	// Re-subscribing (browsers rotate endpoints) keeps the filters.
+	if err := s.SavePushSubscription(ctx, sub); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.PushSubscriptionForDevice(ctx, principal, phone.DeviceID); string(got.Filters) != `{"chat_level": "dm"}` {
+		t.Fatalf("filters = %q", got.Filters)
+	}
 
 	// The same browser endpoint reported by another device moves there.
 	moved := sub

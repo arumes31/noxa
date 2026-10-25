@@ -201,7 +201,6 @@ const catalogs = {
         "update.ready": "A new version is ready.",
         "update.required": "This server needs a newer version of the app.",
         "update.reload": "Update",
-        "update.reload": "Update",
         "common.close": "Close",
         "common.back": "Back",
         "common.error": "Something went wrong: {error}",
@@ -407,14 +406,22 @@ const catalogs = {
         "update.ready": "Eine neue Version ist bereit.",
         "update.required": "Dieser Server braucht eine neuere Version der App.",
         "update.reload": "Aktualisieren",
-        "update.reload": "Aktualisieren",
         "common.close": "Schließen",
         "common.back": "Zurück",
         "common.error": "Etwas ist schiefgelaufen: {error}",
     },
 };
 
-const language = (globalThis.navigator?.language || "en").toLowerCase().startsWith("de") ? "de" : "en";
+const SETTING = "noxa.language";
+
+function chosenLanguage() {
+    let stored = "";
+    try { stored = globalThis.localStorage?.getItem(SETTING) || ""; } catch { /* storage blocked */ }
+    if (stored === "en" || stored === "de") return stored;
+    return (globalThis.navigator?.language || "en").toLowerCase().startsWith("de") ? "de" : "en";
+}
+
+let language = chosenLanguage();
 
 export function t(key, params = {}) {
     const text = catalogs[language][key] ?? catalogs.en[key] ?? key;
@@ -423,6 +430,32 @@ export function t(key, params = {}) {
 
 export function lang() {
     return language;
+}
+
+/** Languages the app ships. */
+export const LANGUAGES = ["en", "de"];
+
+/** Chooses the interface language ("" follows the phone). Takes effect on reload. */
+export function setLanguage(code) {
+    try {
+        if (code === "en" || code === "de") globalThis.localStorage?.setItem(SETTING, code);
+        else globalThis.localStorage?.removeItem(SETTING);
+    } catch { /* storage blocked */ }
+    language = chosenLanguage();
+    if (typeof document !== "undefined") document.documentElement.lang = language;
+}
+
+/** The stored language choice, or "" when following the phone. */
+export function languageSetting() {
+    try { return globalThis.localStorage?.getItem(SETTING) || ""; } catch { return ""; }
+}
+
+/**
+ * Screens register their own strings when they load, so a feature's text
+ * lives next to its code. Later registrations override earlier keys.
+ */
+export function addStrings(strings) {
+    for (const code of LANGUAGES) Object.assign(catalogs[code], strings[code] || {});
 }
 
 export { catalogs };

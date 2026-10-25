@@ -708,6 +708,52 @@ location / {
 - traefik.http.services.noxa-web.loadbalancer.server.port=12342
 ```
 
+**What the app does.** The web app covers the desktop client's everyday
+features:
+
+- **Chat:** rich text (markdown, custom emoji, link previews, images in a
+  lightbox, inline video), an emoji picker, replies, reactions, pins,
+  editing and deleting, @mentions (users, roles, @here), keyword highlights,
+  undo send, join/leave lines, a new-messages divider, blocked users' messages
+  folded, channel topics and slow mode, polls, threads and forum channels,
+  search inside a chat and across history, an **Inbox** of unread
+  conversations and mentions, **Saved messages**, chat export (text or
+  passphrase-encrypted), and a camera/photo/file attach sheet.
+- **Direct messages and private groups:** end-to-end encrypted, with
+  attachments, voice messages, typing and read receipts (can be turned off),
+  safety numbers, muting, missed-call lines, and group management (rename,
+  invite, remove, roles, owner, leave, delete).
+- **Voice and calls:** voice channels with push-to-talk or voice activation,
+  microphone settings and test, per-member volume, whispering, priority
+  speaker, raised hands, voice-room chat, a data saver, watching cameras and
+  screens on a stage, and private audio/video calls with camera switching and
+  call waiting.
+- **People:** status and status message, display name and profile picture,
+  profile cards, a member list, contacts, private notes, blocking and pokes.
+- **Notifications:** per-event and per-channel levels, do not disturb, quiet
+  hours, sounds and an **Activity** list of mentions, messages, calls,
+  invitations and pokes. The phone also sends these filters to the server, so
+  muted pushes are not sent at all.
+- **Files:** a per-channel file browser with an upload queue, rename, move,
+  delete and integrity checks.
+- **Settings and diagnostics:** **You** has the profile, contacts and a
+  searchable list of settings (appearance with themes, accent and text size;
+  chat display; notifications; voice; direct messages; language; data and
+  storage; about), then the account (passkeys, devices, key backup,
+  servers). **Diagnostics** shows live ping, runs a connection test and
+  exports logs.
+- **Administration:** owners, administrators and members with the matching
+  permissions get **You → Administration**: roles and their members, bans,
+  channels and their access, server settings, chat filters, webhooks, custom
+  emoji, the audit log and complaints. Moderators can also move, mute, kick
+  and ban members from their profile card or the Servers tab.
+- **Tablets and desktops:** from 900 px wide the app switches to a
+  three-column layout with a sidebar, chat tabs, a details panel, a voice card
+  and a quick switcher (Ctrl/Cmd+K) that also opens Search, Inbox, Saved
+  messages and Activity.
+- **Sharing into the app:** on Android, the app appears in the system share
+  sheet; shared text and files go to a chat you pick.
+
 **Linking a phone.** In the desktop client choose **Connections → Other login
 for this server**. Scan the QR code with the phone camera, or open the server
 address on the phone and type the hidden code. Both screens show the same
@@ -718,7 +764,30 @@ list, sign out and reset devices with `devicelist`, `devicerevoke` and
 `ResetDevices` (gRPC). Devices unused for 180 days are signed out after a
 warning at 166 days; an account's first desktop never expires.
 
-**Notifications.** In the phone's **Settings → Notifications**, turn on
+**Several servers.** Each server serves its own copy of the app at
+`https://<server>/app/`, so one installed app (home screen icon) belongs to one
+server, with its own sign-in, keys and notifications. **You → Servers** (or the
+⋯ menu in the Servers tab) is a per-browser bookmark list: the first open of a
+server adds it, **Add server** saves another address, and choosing one opens
+that server's app. Another server's name appears once it has been opened there,
+because the app's content security policy only allows connections to its own
+server.
+
+**Invitations, rules and backups.** Channel invitations from the desktop
+(`noxa://<host>/invite/<channel>#<token>`) open in the app as
+`https://<server>/app/invite/<channel>#<token>` or `/invite/<channel>#<token>`;
+a `noxa://` link can be pasted in the Servers tab's ⋯ menu. Someone not yet
+signed in joins after signing in or continuing as guest. When the server has
+rules, the phone shows them and stays out of channels and chat until they are
+accepted. **You → Back up this device's keys** saves the phone's keys in a file
+encrypted with a passphrase (AES-256-GCM with a PBKDF2-SHA256 key, 600,000
+iterations; format in `mobile/src/core/backup.js`); **Restore from backup** on
+the sign-in screen signs the same device in again as long as it has not been
+signed out. A confirmed phone can confirm another device of the account for
+direct messages, copy its direct-message history to it and rename devices
+(**You → Devices**).
+
+**Notifications.** In the phone's **You → Notifications**, turn on
 notifications for direct messages, mentions, pokes and incoming calls. On
 iPhone this needs iOS 16.4 or later and the app added to the Home Screen.
 The server needs outbound HTTPS to the browsers' push services (Google,
@@ -758,8 +827,9 @@ Sync on Android. Unsent messages expire after 14 days.
 **What the phone stores.** The device's Ed25519 and X25519 keys live in the
 browser's IndexedDB, encrypted with a non-extractable WebCrypto key. Signing out
 or revocation deletes them. Direct-message history, contacts' pinned
-identities and the outbox are kept in IndexedDB under the same key and are
-deleted on sign-out. The server keeps each device's public keys, name,
+identities, the outbox, saved-message references, the activity list, call
+history and content shared into the app are kept in IndexedDB under the same
+key and are deleted on sign-out. The server keeps each device's public keys, name,
 creation and last-use times, and the passkey's public key and sign counter; it
 never receives private keys. Channel messages are encrypted with
 server-managed keys, as on the desktop.

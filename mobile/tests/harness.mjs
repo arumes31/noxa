@@ -39,6 +39,21 @@ async function freeUDPPort() {
     });
 }
 
+// Managed TURN binds both UDP and TCP. A UDP-only free port may be reserved
+// for TCP by Windows (for example Hyper-V), so check both transports.
+async function freeTurnPort() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+        const port = await freePort();
+        const available = await new Promise(resolve => {
+            const socket = dgram.createSocket("udp4");
+            socket.once("error", () => { socket.close(); resolve(false); });
+            socket.bind(port, "0.0.0.0", () => socket.close(() => resolve(true)));
+        });
+        if (available) return port;
+    }
+    throw new Error("no port available for both TURN transports");
+}
+
 const slash = p => p.replace(/\\/g, "/");
 
 function tool(name) {
@@ -54,10 +69,18 @@ function provision(dir, databaseURL) {
     execFileSync(tool("migrate"), [], { env, stdio: "pipe" });
     const accounts = {};
     const run = Date.now().toString(36);
-    for (const name of ["owner", "rowan", "ivy", "kai", "lou", "mia", "noa"]) {
+    // Each spec file has its own members so phones and first devices do not
+    // collide with the other specs' device limits: pax..val presence-notify,
+    // dia/quin/dot/tao dm-activity, gus/gil/gwen group-manage, vern/yara voice-notes,
+    // abe/bea/cid the chat tools specs.
+    for (const name of ["owner", "rowan", "ivy", "kai", "lou", "mia", "noa", "vic", "wes", "xan", "pia", "ray", "sol",
+        "pax", "quinn", "remy", "sam", "tess", "uma", "val",
+        "dia", "quin", "dot", "tao", "gus", "gil", "gwen", "vern", "yara", "abe", "bea", "cid", "zed", "zoe"]) {
         const password = `pw-${name}-${run}`;
         const nickname = `${name}-${run}`;
-        const out = execFileSync(tool("adduser"), ["-nickname", nickname, "-password-stdin"], { env, input: `${password}\n` }).toString();
+        // The owner may also log in to ServerQuery (e.g. to set the server rules).
+        const flags = name === "owner" ? ["-integration"] : [];
+        const out = execFileSync(tool("adduser"), ["-nickname", nickname, "-password-stdin", ...flags], { env, input: `${password}\n` }).toString();
         accounts[name] = { uid: /unique_id: (\S+)/.exec(out)[1], password, nickname };
     }
     execFileSync(tool("role-setup"), ["-owner-uid", accounts.owner.uid, "-activate", "-confirm", "ACTIVATE-ROLES-V1",
@@ -76,11 +99,17 @@ export async function startServer({ databaseURL = process.env.NOXA_E2E_DATABASE_
     for (const name of ["tcp", "grpc", "health", "query", "file", "web"]) ports[name] = await freePort();
     ports.udp = await freeUDPPort();
     ports.sfu = await freeUDPPort();
-    ports.turn = await freeUDPPort();
+    ports.turn = await freeTurnPort();
+    // Chrome gathers on real interfaces only, so a loopback relay never
+    // answers it: serve TURN on a private LAN address when there is one.
+    const turnHost = process.env.NOXA_E2E_TURN_HOST || Object.values(os.networkInterfaces()).flat()
+        .find(i => i?.family === "IPv4" && !i.internal && /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(i.address))?.address || "127.0.0.1";
     const relayBase = 41000 + Math.floor(Math.random() * 2000);
     const yaml = [
         `server_name: "noXa e2e"`, `client_min_version: "0.0.0"`, `server_password: ""`, `allow_anonymous: true`,
         `log_level: info`, `dev_mode: true`,
+        // Specs send bursts from one account over several sessions; keep the per-user chat meter out of the way.
+        `chat_rate_msgs: 100`, `chat_rate_window_seconds: 3`,
         `tcp_addr: "127.0.0.1:${ports.tcp}"`, `udp_addr: "127.0.0.1:${ports.udp}"`, `grpc_addr: "127.0.0.1:${ports.grpc}"`,
         `health_addr: "127.0.0.1:${ports.health}"`, `query_addr: "127.0.0.1:${ports.query}"`, `file_addr: "127.0.0.1:${ports.file}"`,
         `file_root: "${slash(path.join(dir, "files"))}"`, `tls_enabled: true`, `tls_dir: "${slash(path.join(dir, "tls"))}"`,
@@ -90,10 +119,12 @@ export async function startServer({ databaseURL = process.env.NOXA_E2E_DATABASE_
         `webrtc:`, `  ice_servers: []`, `  udp_addr: "127.0.0.1:${ports.sfu}"`,
         `  allowed_remote_cidrs: ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]`,
         // Private calls are relay-only; a loopback TURN relays them.
-        `turn:`, `  managed: true`, `  listen_addr: "127.0.0.1:${ports.turn}"`, `  public_ip: "127.0.0.1"`,
+        `turn:`, `  managed: true`, `  listen_addr: "${turnHost}:${ports.turn}"`, `  public_ip: "${turnHost}"`,
         `  relay_min_port: ${relayBase}`, `  relay_max_port: ${relayBase + 200}`, `  realm: "noxa-e2e"`,
-        `  uris: ["turn:127.0.0.1:${ports.turn}?transport=udp"]`, `  credentials_ttl: 1h`,
-        `web:`, `  enabled: true`, `  addr: "127.0.0.1:${ports.web}"`, `  public_url: "https://chat.example"`,
+        `  uris: ["turn:${turnHost}:${ports.turn}?transport=udp"]`, `  credentials_ttl: 1h`,
+        `web:`, `  enabled: true`, `  addr: "127.0.0.1:${ports.web}"`, `  public_url: "https://chat.example"`, `  max_devices_per_account: 100`,
+        // Every spec connects from 127.0.0.1 and some keep pages open; the default of 8 sockets per IP runs out.
+        `  ws_connections_per_ip: 200`, `  ws_attempts_per_minute: 600`,
         `  trusted_proxies: ["127.0.0.0/8"]`, `  app_dir: "${slash(path.join(repoRoot, "web", "app"))}"`,
     ].join("\n");
     writeFileSync(path.join(dir, "config.yaml"), yaml + "\n");
@@ -119,6 +150,8 @@ export async function startServer({ databaseURL = process.env.NOXA_E2E_DATABASE_
         webURL,
         accounts,
         controlAddr: { host: "127.0.0.1", port: ports.tcp },
+        // ServerQuery (plain TCP on loopback) sets operator texts such as the rules.
+        queryAddr: { host: "127.0.0.1", port: ports.query },
         log: () => log,
         stop: () => new Promise(resolve => {
             if (child.exitCode !== null) return resolve();
@@ -161,3 +194,12 @@ export async function desktopSession(controlAddr, account, { version = "0.0.0" }
 
 export { sign, publicKeyPEM, uniqueIDFromPublicKey };
 
+
+/** Signs a guest in over the TLS control port with a fresh key, like an unregistered desktop. */
+export async function guestSession(controlAddr, { version = "0.0.0", nickname = "Guest" } = {}) {
+    const { signIn } = await import("../src/core/device.js");
+    const identity = generateIdentity();
+    const conn = await Connection.open("unused", function Adapter() { return new TLSSocketAdapter(controlAddr); });
+    const auth = await signIn(conn, identity, { version, nickname });
+    return { conn, identity, auth, uniqueID: auth.unique_id };
+}

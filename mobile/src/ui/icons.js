@@ -16,6 +16,33 @@ const paths = {
     camera: "M3 7h12v10H3zM15 10l6-3v10l-6-3",
     lock: "M6 11h12v10H6zM8.5 11V7.5a3.5 3.5 0 0 1 7 0V11",
     link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
+    more: "M5 10.8a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 1 0 0-2.4zM12 10.8a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 1 0 0-2.4zM19 10.8a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 1 0 0-2.4z",
+    shield: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z",
+    plus: "M12 5v14M5 12h14",
+    up: "M6 15l6-6 6 6",
+    down: "M6 9l6 6 6-6",
+    chevron: "M9 6l6 6-6 6",
+    users: "M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 20a6.5 6.5 0 0 1 13 0M16 4.3a3.5 3.5 0 0 1 0 6.4M18 14.5a6.5 6.5 0 0 1 3.5 5.5",
+    bell: "M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20a2 2 0 0 0 4 0",
+    moon: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z",
+    sun: "M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
+    check: "M5 12.5l4.5 4.5L19 7",
+    inbox: "M3 13l3-8h12l3 8v6H3zM3 13h5l1.5 3h5l1.5-3h5",
+    bellOff: "M18 8a6 6 0 0 0-9.3-5M6 8c0 7-3 9-3 9h14M13.7 21a2 2 0 0 1-3.4 0M3 3l18 18",
+    play: "M7 4.5l12 7.5-12 7.5z",
+    pause: "M7 5h3v14H7zM14 5h3v14h-3z",
+    // Rich chat (emoji picker, header menu, lightbox, channel encryption badge).
+    emoji: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01",
+    close: "M6 6l12 12M18 6L6 18",
+    share: "M12 15V3M8 7l4-4 4 4M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7",
+    download: "M12 3v12M8 11l4 4 4-4M5 21h14",
+    // Message actions (pins, replies).
+    pin: "M9 4h6l-1 5 4 4H6l4-4zM12 13v8",
+    reply: "M10 8L4 13l6 5M4 13h10a6 6 0 0 1 6 6",
+    // Chat tools (search, inbox, saved messages, threads).
+    search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
+    bookmark: "M6 3h12v18l-6-4-6 4z",
+    threads: "M4 5h16v10H9l-5 4zM8 9h8M8 12h5",
 };
 
 export function icon(name) {

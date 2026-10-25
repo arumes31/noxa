@@ -31,6 +31,7 @@ type PushSender interface {
 type PushStore interface {
 	SavePushSubscription(ctx context.Context, p store.PushSubscription) error
 	SetPushPreferences(ctx context.Context, principal, deviceID string, hideDetails, alwaysNotify bool) error
+	SetPushFilters(ctx context.Context, principal, deviceID string, filters []byte) error
 	PushSubscriptionForDevice(ctx context.Context, principal, deviceID string) (store.PushSubscription, error)
 	PushSubscriptions(ctx context.Context, principal string) ([]store.PushSubscription, error)
 	DeletePushSubscription(ctx context.Context, principal, deviceID string) error
@@ -193,8 +194,9 @@ func (s *TCPServer) pushNotify(principal string, n pushNotice) {
 		}
 		foreground := s.foregroundWebDevices(principal)
 		delay := n.Kind != pushKindCall && s.desktopActive(principal, time.Now())
+		now := time.Now()
 		for _, sub := range subs {
-			if foreground[sub.DeviceID] {
+			if foreground[sub.DeviceID] || pushFiltered(sub.Filters, n, now) {
 				continue
 			}
 			if delay && !sub.AlwaysNotify {
@@ -204,6 +206,64 @@ func (s *TCPServer) pushNotify(principal string, n pushNotice) {
 			s.deliverPush(ctx, sub, n)
 		}
 	}()
+}
+
+// pushFiltered reports whether the device's filters (netproto.PushFilters
+// JSON) suppress the notice at now. Clears always pass so read
+// conversations disappear even while muted.
+func pushFiltered(raw []byte, n pushNotice, now time.Time) bool {
+	if n.Kind == pushKindClear || len(raw) == 0 {
+		return false
+	}
+	var f netproto.PushFilters
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return false
+	}
+	if f.DNDUntil > now.Unix() || inQuietHours(f, now) {
+		return true
+	}
+	for _, kind := range f.MutedKinds {
+		if kind == n.Kind {
+			return true
+		}
+	}
+	for _, tag := range f.MutedTags {
+		if tag == n.Tag {
+			return true
+		}
+	}
+	if n.Kind == pushKindMention {
+		if id, ok := strings.CutPrefix(n.Tag, netproto.ReadScopeChannel+":"); ok {
+			for _, muted := range f.MutedChannels {
+				if strconv.FormatInt(muted, 10) == id {
+					return true
+				}
+			}
+		}
+	}
+	switch f.ChatLevel {
+	case "mentions":
+		return n.Kind == pushKindConversation
+	case "dm":
+		return n.Kind == pushKindConversation || n.Kind == pushKindMention
+	}
+	return false
+}
+
+// inQuietHours reports whether now falls in the filters' daily quiet range
+// on the phone's wall clock.
+func inQuietHours(f netproto.PushFilters, now time.Time) bool {
+	from, ok1 := netproto.ClockMinutes(f.QuietFrom)
+	to, ok2 := netproto.ClockMinutes(f.QuietTo)
+	if !ok1 || !ok2 || from == to {
+		return false
+	}
+	local := now.UTC().Add(time.Duration(f.UTCOffsetMinutes) * time.Minute)
+	minute := local.Hour()*60 + local.Minute()
+	if from < to {
+		return minute >= from && minute < to
+	}
+	return minute >= from || minute < to
 }
 
 // schedulePush delays a push; a later event of the same conversation
@@ -238,6 +298,13 @@ func (s *TCPServer) deliverPush(ctx context.Context, sub store.PushSubscription,
 	if !ok {
 		return
 	}
+	// A notice can wait behind desktop activity or another send. Re-read the
+	// subscription so a later mute, sign-out or privacy change takes effect.
+	current, err := pushes.PushSubscriptionForDevice(ctx, sub.Principal, sub.DeviceID)
+	if err != nil || pushFiltered(current.Filters, n, time.Now()) {
+		return
+	}
+	sub = current
 	payload := pushPayload{Kind: n.Kind, Tag: n.Tag, Video: n.Video, At: time.Now().Unix()}
 	if !sub.HideDetails {
 		payload.From, payload.Place = n.From, n.Place
@@ -404,7 +471,24 @@ func (s *TCPServer) handlePushRequest(ctx context.Context, client *Client, r net
 		if err != nil {
 			return nil, err
 		}
-		return &netproto.PushPreferences{Subscribed: true, HideDetails: sub.HideDetails, AlwaysNotify: sub.AlwaysNotify}, nil
+		out := &netproto.PushPreferences{Subscribed: true, HideDetails: sub.HideDetails, AlwaysNotify: sub.AlwaysNotify, Filters: &netproto.PushFilters{}}
+		if len(sub.Filters) > 0 {
+			_ = json.Unmarshal(sub.Filters, out.Filters)
+		}
+		return out, nil
+	}
+	saveFilters := func() error {
+		if r.Preferences == nil || r.Preferences.Filters == nil {
+			return nil
+		}
+		raw, err := json.Marshal(r.Preferences.Filters)
+		if err != nil {
+			return err
+		}
+		if err := pushes.SetPushFilters(ctx, principal, deviceID, raw); err != nil && !errors.Is(err, store.ErrDeviceNotFound) {
+			return err
+		}
+		return nil
 	}
 	switch r.Action {
 	case netproto.DeviceActionPushSubscribe:
@@ -423,6 +507,9 @@ func (s *TCPServer) handlePushRequest(ctx context.Context, client *Client, r net
 		if err := pushes.SavePushSubscription(ctx, record); err != nil {
 			return s.deviceFailure(ctx, client, err)
 		}
+		if err := saveFilters(); err != nil {
+			return s.deviceFailure(ctx, client, err)
+		}
 	case netproto.DeviceActionPushUnsubscribe:
 		if err := pushes.DeletePushSubscription(ctx, principal, deviceID); err != nil {
 			return s.deviceFailure(ctx, client, err)
@@ -430,6 +517,9 @@ func (s *TCPServer) handlePushRequest(ctx context.Context, client *Client, r net
 	case netproto.DeviceActionPushPreferences:
 		err := pushes.SetPushPreferences(ctx, principal, deviceID, r.Preferences.HideDetails, r.Preferences.AlwaysNotify)
 		if err != nil && !errors.Is(err, store.ErrDeviceNotFound) {
+			return s.deviceFailure(ctx, client, err)
+		}
+		if err := saveFilters(); err != nil {
 			return s.deviceFailure(ctx, client, err)
 		}
 	}

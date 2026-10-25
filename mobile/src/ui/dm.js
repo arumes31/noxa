@@ -1,58 +1,151 @@
-// dm.js — Direct message (05): end-to-end encrypted conversation.
+// dm.js — Direct message (05): end-to-end encrypted conversation with
+// attachments, voice messages, typing, receipts and the header tools.
+// Bodies render as rich text; attachments upload to the server-wide scope
+// (as the desktop does for direct messages).
 import { app, queueMessage, startCall } from "../app.js";
+import { callLog, callsWith } from "../core/call-log.js";
+import { isMuted, setMuted } from "../core/conversation-prefs.js";
 import { Trust } from "../core/direct.js";
+import { uploadAttachment } from "../core/files.js";
+import { remove as removeQueued } from "../core/outbox.js";
 import { t } from "../i18n.js";
 import { avatar, clock, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
-import { messageBody } from "./attachments.js";
+import { richBody, watchCustomEmoji } from "./rich-text.js";
 import { header } from "./common.js";
+import { presenceSub } from "./presence-ui.js";
+import { menu, receiptTicks, retryProps, sendState, typingText } from "./conversation-tools.js";
+import { deleteLocalHistory, showCalls, showSafetyNumber } from "./dm-tools.js";
+import { voiceNoteButton } from "./voice-note.js";
+import { announcementBanner } from "./announcement.js";
+import { attachControls, emojiButton } from "./composer-extras.js";
+import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage, shareText } from "./chat-actions.js";
+import { aboutEncryption, encryptionBadge, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
+import { dmEntry } from "../core/search.js";
+import { chatSearch } from "./chat-search.js";
 
 export function renderDM(root, peer) {
     const session = app.session;
     const dm = app.dm;
+    const tag = `dm:${peer}`;
     const nickname = () => dm.conversations.get(peer)?.nickname || session.clients().find(c => c.unique_id === peer)?.nickname || t("dm.someone");
     const name = nickname();
     const log = h("div", { class: "chat-log", role: "log", "aria-live": "polite", "aria-label": name });
     const banner = h("div", { class: "e2e-banner", role: "note" }, icon("lock"), " ", t("dm.encrypted"));
     const notice = h("div");
+    const deviceNotice = h("div");
+    const typing = h("div", { class: "typing", role: "status" });
     const input = h("textarea", { rows: "1", "aria-label": t("dm.placeholder", { name }), placeholder: t("dm.placeholder", { name }), enterkeyhint: "send" });
     const sendButton = h("button", { class: "send", type: "submit", "aria-label": t("chat.send") }, icon("send"));
+    // The attach sheet (file, photo, camera) of composer-extras.js; DM files live
+    // in the server-wide scope (channel 0), as on the desktop.
+    const { button: attachButton, picker } = attachControls(async file => {
+        try {
+            const token = await uploadAttachment(session.conn, 0, file);
+            const caption = input.value.trim();
+            input.value = "";
+            await sendText(caption ? `${caption} ${token}` : token);
+        } catch (error) {
+            toast(t("file.uploadFailed", { error: error.code ? t(`dm.error.${error.code}`) : error.message }), "warn");
+            if (error.code) checkTrust();
+        }
+    });
+    let calls = [];
+    // --- Messages ------------------------------------------------------------------
+    function retryActions(message) {
+        return {
+            retry: async () => {
+                dm.showQueued(peer, { id: message.id, text: message.body || "", sentAt: message.sentAt });
+                await queueMessage({ kind: "dm", peer, nickname: name }, message.body || "", { id: message.id, sentAt: message.sentAt });
+            },
+            discard: async () => {
+                await removeQueued(message.id).catch(() => {});
+                dm.discardLocal(peer, message.id);
+            },
+        };
+    }
 
-    function line(message) {
+    const line = lineCache(message => {
         const classes = ["msg", message.self ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
         const body = message.deleted ? h("span", { class: "msg-deleted" }, t("chat.deleted"))
             : message.body === null || message.body === undefined
                 ? h("span", { class: "msg-locked" }, t("chat.locked"))
-                : messageBody(message.body, { conn: session.conn, channelID: 0 });
+                : richBody(message.body, { session, conn: session.conn, channelID: 0 });
         const from = message.self ? session.nickname : (message.fromNickname || name);
-        const changeable = message.self && !message.deleted && !message.pending && !message.queued && !message.failed;
-        return h("div", { class: classes, tabindex: changeable ? "0" : null, role: changeable ? "button" : null,
-            "aria-label": changeable ? t("dm.messageActions") : null, onclick: changeable ? () => messageActions(message) : null },
-            h("span", { class: "msg-time" }, clock(message.sentAt)),
-            avatar(from, "sm"),
+        // Not sent: tapping offers Retry or Delete; otherwise the action sheet (bindMessageTaps).
+        const retry = message.failed ? retryProps(message, retryActions(message)) : { tabindex: message.deleted ? null : "0", "aria-haspopup": message.deleted ? null : "dialog" };
+        const el = h("div", { class: classes, dataset: { id: String(message.id ?? "") }, ...retry },
+            timeNode(message.sentAt),
+            avatar(from, "sm", message.self ? session.uniqueID : peer),
             h("div", { class: "msg-body" },
                 h("span", { class: "msg-from" }, from),
+                message.deleted ? null : encryptionBadge("e2e"),
                 body,
                 message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
-                message.queued ? h("div", { class: "msg-state" }, t("outbox.waiting")) : null,
-                message.failed ? h("div", { class: "error" }, t("outbox.notSent")) : null));
+                message.self && !message.deleted ? receiptTicks(message.receipt) : null,
+                sendState(message)));
+        el.noxaMessage = message.deleted || message.failed ? null : message;
+        return el;
+    });
+    bindMessageTaps(log, message => messageActions(message));
+
+    function callLine(record) {
+        return h("div", { class: "msg-system" }, icon("phone"),
+            h("span", {}, t("calls.missedLine", { name, time: clock(record.startedAt / 1000) })),
+            h("button", { class: "btn btn-small", type: "button", onclick: () => startCall(peer).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, t("calls.callBackShort")));
     }
 
     function render() {
         const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
         const messages = dm.conversations.get(peer)?.messages || [];
-        log.replaceChildren(...(messages.length ? messages.map(line) : [h("p", { class: "hint", style: "text-align:center;margin:24px 0" }, t("dm.empty"))]));
+        // Missed calls appear in the conversation at their time.
+        const missed = calls.filter(r => r.direction === "in" && r.outcome === "missed").map(r => ({ at: r.startedAt / 1000, node: () => callLine(r) }));
+        const items = [...messages.map(m => ({ at: m.sentAt, node: () => line(m) })), ...missed].sort((a, b) => a.at - b.at);
+        log.replaceChildren(...(items.length ? withDays(items, item => item.at, item => item.node()) : [h("p", { class: "hint conv-empty" }, t("dm.empty"))]));
         if (atBottom || messages.at(-1)?.self) log.scrollTop = log.scrollHeight;
+        readNow();
+    }
+
+    // Read receipts go out while the conversation is on screen.
+    function readNow() {
+        if (document.visibilityState === "visible" && app.viewing === tag) dm.markRead(peer);
+    }
+
+    function renderTyping() {
+        const typer = dm.typingName(peer);
+        typing.textContent = typer === null ? "" : typingText([typer || name]);
     }
 
     function setNotice(text, action) {
         notice.replaceChildren(text ? h("div", { class: "card notice", role: "status" }, h("p", { class: "hint" }, text), action || null) : "");
     }
 
+    function paintBanner(contact) {
+        const verified = contact.trust === Trust.ok && contact.verified;
+        banner.replaceChildren(icon(verified ? "shield" : "lock"), " ",
+            contact.fingerprint ? t("dm.encryptedWith", { fingerprint: contact.fingerprint }) : t("dm.encrypted"),
+            ...(verified ? [h("span", { class: "verified-badge" }, t("safety.verified"))] : []));
+        banner.classList.toggle("verified", verified);
+    }
+
+    function paintDevices(contact) {
+        if (contact.trust !== Trust.ok || !contact.newDevices?.length) {
+            deviceNotice.replaceChildren();
+            return;
+        }
+        deviceNotice.replaceChildren(h("div", { class: "device-notice", role: "status" },
+            h("span", {}, t("dm.newDevice", { name })),
+            h("button", { class: "btn btn-small", type: "button", onclick: async () => {
+                await dm.acknowledgeDevices(peer).catch(() => {});
+                deviceNotice.replaceChildren();
+            } }, t("call.dismiss"))));
+    }
+
     async function checkTrust() {
         try {
             const [contact, own] = await Promise.all([dm.devicesOf(peer, { refresh: true }), dm.devicesOf(session.uniqueID, { refresh: true })]);
-            banner.replaceChildren(icon("lock"), " ", contact.fingerprint ? t("dm.encryptedWith", { fingerprint: contact.fingerprint }) : t("dm.encrypted"));
+            paintBanner(contact);
+            paintDevices(contact);
             let blocked = true;
             if (contact.trust === Trust.changed) {
                 setNotice(t("dm.identityChanged", { name }), h("button", { class: "btn", onclick: async () => {
@@ -67,7 +160,7 @@ export function renderDM(root, peer) {
                 setNotice("");
                 blocked = false;
             }
-            input.disabled = sendButton.disabled = blocked;
+            input.disabled = sendButton.disabled = attachButton.disabled = blocked;
         } catch (error) {
             setNotice(t("common.error", { error: error.message }));
         }
@@ -83,12 +176,22 @@ export function renderDM(root, peer) {
         input.value = "";
     }
     async function messageActions(message) {
-        const choice = await sheet(t("dm.messageActions"), null, [
-            { label: t("dm.edit"), value: "edit", primary: true },
-            { label: t("dm.delete"), value: "delete", danger: true },
-            { label: t("link.cancel"), value: null },
-        ]);
-        if (choice === "edit") {
+        const changeable = message.self && !message.deleted && !message.pending && !message.queued && !message.failed;
+        const hasText = typeof message.body === "string" && !!message.body;
+        const sent = !message.pending && !message.queued && !message.failed;
+        const actions = [
+            hasText ? { label: t("act.copy"), value: "copy" } : null,
+            hasText && canShare() ? { label: t("act.share"), value: "share" } : null,
+            sent ? { label: t("act.save"), value: "save" } : null,
+            changeable ? { label: t("dm.edit"), value: "edit" } : null,
+            changeable ? { label: t("dm.delete"), value: "delete", danger: true } : null,
+        ].filter(Boolean);
+        if (!actions.length) return;
+        const choice = await actionSheet({ title: t("dm.messageActions"), subtitle: excerpt(message.body, 160), actions });
+        if (choice === "copy") copyText(message.body);
+        else if (choice === "share") shareText(message.body);
+        else if (choice === "save") saveMessage({ kind: "dm", peer, clientMsgID: message.id }).catch(error => toast(t("act.failed", { error: error.message }), "warn"));
+        else if (choice === "edit") {
             editing = message.id;
             editBar.hidden = false;
             input.value = message.body || "";
@@ -98,6 +201,28 @@ export function renderDM(root, peer) {
             if (sure) await dm.deleteMessage(peer, message.id).catch(error => toast(t("chat.sendFailed", { error: error.message }), "warn"));
         }
     }
+
+    /** Sends text; a lost connection keeps it in the outbox with the same ID. */
+    async function sendText(text) {
+        const id = crypto.randomUUID();
+        const sentAt = Date.now() / 1000;
+        try {
+            await dm.send(peer, text, name, { id, sentAt });
+        } catch (error) {
+            if (error.retryable) {
+                await queueMessage({ kind: "dm", peer, nickname: name }, text, { id, sentAt });
+                return;
+            }
+            toast(t("chat.sendFailed", { error: error.code ? t(`dm.error.${error.code}`) : error.message }), "warn");
+            checkTrust();
+        }
+    }
+
+    const voiceButton = voiceNoteButton({
+        upload: file => uploadAttachment(session.conn, 0, file),
+        send: token => sendText(token),
+        disabled: () => input.disabled,
+    });
 
     const form = h("form", { class: "composer", onsubmit: async event => {
         event.preventDefault();
@@ -111,19 +236,8 @@ export function renderDM(root, peer) {
             await dm.editMessage(peer, ref, text).catch(error => toast(t("chat.sendFailed", { error: error.message }), "warn"));
             return;
         }
-        const id = crypto.randomUUID();
-        const sentAt = Date.now() / 1000;
-        try {
-            await dm.send(peer, text, name, { id, sentAt });
-        } catch (error) {
-            if (error.retryable) {
-                await queueMessage({ kind: "dm", peer, nickname: name }, text, { id, sentAt });
-                return;
-            }
-            toast(t("chat.sendFailed", { error: error.code ? t(`dm.error.${error.code}`) : error.message }), "warn");
-            checkTrust();
-        }
-    } }, input, sendButton);
+        await sendText(text);
+    } }, attachButton, emojiButton(input, session), picker, input, voiceButton, sendButton);
     input.addEventListener("keydown", event => {
         if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
@@ -133,8 +247,50 @@ export function renderDM(root, peer) {
     input.addEventListener("input", () => {
         input.style.height = "";
         input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
+        if (input.value.trim() && !editing) dm.sendTyping(peer);
     });
 
+    const exportLoad = async () => ({
+        messages: (dm.conversations.get(peer)?.messages || []).filter(m => !m.pending && !m.queued && !m.failed).map(m => ({
+            id: m.id, from: m.self ? session.nickname : (m.fromNickname || name), fromUniqueID: m.from, sentAt: m.sentAt,
+            text: m.deleted ? "" : m.body, deleted: !!m.deleted, edited: !!m.edited, encryption: "e2e",
+        })),
+        complete: true,
+    });
+    // --- Header menu -------------------------------------------------------------------
+    const more = h("button", { class: "icon-btn", type: "button", "aria-label": t("conv.more"), "aria-haspopup": "menu" }, icon("more"));
+    more.onclick = async () => {
+        const muted = isMuted(tag);
+        const choice = await menu(name, [
+            { label: t("safety.title"), value: "safety" },
+            { label: t("calls.title"), value: "calls" },
+            { label: t(muted ? "conv.unmute" : "conv.mute"), value: "mute" },
+            { label: t("rich.exportHistory"), value: "export" },
+            { label: t("rich.aboutEncryption"), value: "encryption" },
+            { label: t("dmTools.delete"), value: "delete", danger: true },
+        ]);
+        if (choice === "safety") showSafetyNumber(peer, name, () => dm.devicesOf(peer).then(paintBanner)).catch(error => toast(t("common.error", { error: error.message }), "warn"));
+        else if (choice === "calls") showCalls(peer, name);
+        else if (choice === "mute") { setMuted(tag, !muted); paintTitle(); toast(t(muted ? "conv.unmuted" : "conv.muted", { name })); }
+        else if (choice === "export") import("./export.js").then(({ openExport }) => openExport({ title: name, kind: "dm", load: exportLoad }));
+        else if (choice === "encryption") aboutEncryption();
+        else if (choice === "delete" && await deleteLocalHistory(peer, name)) { calls = []; render(); }
+    };
+    const call = h("button", { class: "icon-btn", type: "button", "aria-label": t("call.start", { name }), onclick: () => startCall(peer).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone"));
+    const top = header(name, { back: "#/home", sub: presenceSub(peer), action: h("span", { class: "header-actions" }, call, more) });
+    function paintTitle() {
+        top.querySelector("h1 .muted-mark")?.remove();
+        if (isMuted(tag)) top.querySelector("h1").append(h("span", { class: "muted-mark", role: "img", "aria-label": t("conv.mutedLabel") }, icon("bellOff")));
+    }
+    paintTitle();
+
+    // Direct messages all live on the phone: nothing older to load.
+    const search = chatSearch({
+        tag: `dm:${peer}`, log,
+        entries: () => (dm.conversations.get(peer)?.messages || []).filter(m => !m.pending && !m.queued && !m.failed)
+            .map(m => dmEntry(peer, m, { selfName: session.nickname, selfUID: session.uniqueID, peerName: nickname() })),
+        loadOlder: async () => false,
+    });
     const progress = h("div", { class: "history-progress", role: "status" });
     const onMessages = event => { if (event.detail.peer === peer) render(); };
     const onHistory = event => {
@@ -142,15 +298,41 @@ export function renderDM(root, peer) {
         progress.textContent = done < total ? t("dm.historyCopying", { done, total }) : "";
         render();
     };
+    let typingTimer = 0;
+    const onTyping = event => {
+        if (event.detail.peer !== peer) return;
+        renderTyping();
+        clearTimeout(typingTimer);
+        typingTimer = setTimeout(renderTyping, 5100);
+    };
+    const onCalls = async event => {
+        if (event.detail.peer !== peer) return;
+        calls = await callsWith(peer);
+        render();
+    };
+    const onVisible = () => readNow();
     dm.addEventListener("messages", onMessages);
+    dm.addEventListener("receipt", onMessages);
     dm.addEventListener("history", onHistory);
+    dm.addEventListener("typing", onTyping);
+    callLog.addEventListener("change", onCalls);
+    document.addEventListener("visibilitychange", onVisible);
+    const rerender = () => { line.clear(); render(); };
+    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log), search.stop];
+    top.querySelector(".header-actions").prepend(search.button);
     root.replaceChildren(h("section", { class: "screen chat" },
-        header(name, { back: "#/home", action: h("button", { class: "icon-btn", type: "button", "aria-label": t("call.start", { name }), onclick: () => startCall(peer).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone")) }),
-        banner, notice, progress, log, editBar, form));
+        top, banner, announcementBanner(session), notice, deviceNotice, search.bar, progress, log, typing, editBar, form));
     dm.ready.then(render);
+    callsWith(peer).then(list => { calls = list; render(); }).catch(() => {});
     checkTrust();
     return () => {
+        clearTimeout(typingTimer);
         dm.removeEventListener("messages", onMessages);
+        dm.removeEventListener("receipt", onMessages);
         dm.removeEventListener("history", onHistory);
+        dm.removeEventListener("typing", onTyping);
+        callLog.removeEventListener("change", onCalls);
+        document.removeEventListener("visibilitychange", onVisible);
+        stops.forEach(stop => stop());
     };
 }

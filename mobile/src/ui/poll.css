@@ -1,0 +1,24 @@
+/* Poll card in the chat log and the "Create poll" sheet. */
+.poll-card { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding: 12px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--glass); white-space: normal; max-width: 440px; }
+.poll-question { font-size: 1rem; overflow-wrap: anywhere; }
+.poll-hint, .poll-countdown, .poll-status { margin: 0; font-size: .74rem; color: var(--text-faint); font-family: var(--font-mono); }
+.poll-options { display: flex; flex-direction: column; gap: 6px; }
+.poll-option { position: relative; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg-raised); text-align: left; isolation: isolate; }
+.poll-option::before { content: ""; position: absolute; inset: 0; z-index: -1; width: var(--poll-percent, 0%); background: var(--accent-dim); transition: width .3s ease; }
+.poll-option.chosen { border-color: var(--accent); }
+.poll-option.chosen .poll-option-label::before { content: "✓ "; color: var(--accent); }
+.poll-option:disabled { cursor: default; opacity: 1; }
+.poll-option-label { min-width: 0; overflow-wrap: anywhere; }
+.poll-option-count { flex-shrink: 0; font-family: var(--font-mono); font-size: .74rem; color: var(--text-dim); }
+.poll-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.poll-actions .btn { min-height: 44px; flex: 1 1 120px; }
+.poll-form .field + .field, .poll-form .toggle { margin-top: 4px; }
+.poll-form .field-label { font-family: var(--font-mono); font-size: .7rem; letter-spacing: .12em; text-transform: uppercase; color: var(--text-faint); }
+.poll-form-options { display: flex; flex-direction: column; gap: 6px; }
+.poll-form-option { display: flex; gap: 6px; align-items: center; }
+.poll-form-option .input { flex: 1; }
+.poll-error:empty { display: none; }
+.segmented { display: flex; gap: 6px; }
+.segment { flex: 1; min-height: 44px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg-raised); }
+.segment[aria-checked="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+@media (prefers-reduced-motion: reduce) { .poll-option::before { transition: none; } }

@@ -9,11 +9,27 @@ export function initMobileAnnouncement() {
     banner.hidden = true;
     banner.setAttribute("aria-label", t("mobileAnnouncement.title"));
     document.getElementById("chat-head").after(banner);
+    const shortcut = document.createElement("button");
+    shortcut.id = "mobile-setup-banner";
+    shortcut.type = "button";
+    shortcut.hidden = true;
+    shortcut.setAttribute("aria-haspopup", "dialog");
+    shortcut.innerHTML = `${icon("screen")}<span>noXa Mobile</span>${icon("link")}`;
+    document.getElementById("sidebar").append(shortcut);
+    let shortcutSession = null;
+    shortcut.onclick = () => {
+        const current = state();
+        if (!shortcut.hidden && shortcutSession && !current.isGuest
+            && shortcutSession.tab === current.activeTabID && shortcutSession.client === current.myClientID
+            && shortcutSession.generation === current.serverGeneration && shortcutSession.session === current.sessionGeneration) {
+            openDeviceLinkDialog({ quickGuide: true });
+        }
+    };
     const dismissed = new Set();
     let request = 0;
     let shownKey = "";
     const state = () => window.__noxa.state;
-    function clear() { request++; shownKey = ""; banner.hidden = true; }
+    function clear() { request++; shownKey = ""; banner.hidden = true; shortcut.hidden = true; shortcutSession = null; }
     function render(key) {
         const glyph = document.createElement("span");
         glyph.className = "mobile-announcement-icon";
@@ -28,7 +44,7 @@ export function initMobileAnnouncement() {
         const later = document.createElement("button");
         later.type = "button";
         later.textContent = t("mobileAnnouncement.later");
-        const dismiss = () => { dismissed.add(key); clear(); };
+        const dismiss = () => { dismissed.add(key); shownKey = ""; banner.hidden = true; };
         later.onclick = dismiss;
         const setup = document.createElement("button");
         setup.type = "button";
@@ -50,6 +66,8 @@ export function initMobileAnnouncement() {
     }
     async function refresh() {
         const serial = ++request;
+        shortcut.hidden = true;
+        shortcutSession = null;
         const { activeTabID: tab, serverGeneration: generation, sessionGeneration: session, myClientID: client } = state();
         if (!tab || !client || state().isGuest) { banner.hidden = true; return; }
         const current = () => serial === request && tab === state().activeTabID
@@ -58,6 +76,9 @@ export function initMobileAnnouncement() {
             const info = await window.go.main.App.SessionInfoForTab(tab);
             if (!current()) return;
             if (!info?.connected || info.is_guest || !info.mobile_available) { banner.hidden = true; return; }
+            shortcutSession = { tab, client, generation, session };
+            shortcut.hidden = false;
+            shortcut.title = t("mobileAnnouncement.setup");
             const key = info.mobile_account_key;
             if (!key || dismissed.has(key)) { banner.hidden = true; return; }
             const devices = await window.go.main.App.DevicesForTab(tab);
@@ -67,6 +88,7 @@ export function initMobileAnnouncement() {
                 banner.hidden = true;
                 return;
             }
+            if (dismissed.has(key)) { banner.hidden = true; return; }
             render(key);
         } catch { if (current()) banner.hidden = true; }
     }

@@ -2,10 +2,16 @@ import { installViewport } from "./ui/viewport.js";
 import { initInstallPrompt, renderInstallPrompt } from "./ui/install-prompt.js";
 // main.js — boots the mobile web app: server info, stored device, router.
 import "./styles.css";
+import "./themes.css";
+import { installLogger } from "./core/log.js";
+import "./ui/appearance.js";
 import { app, connect, flushNow, loadDevice, loadInfo, markRead } from "./app.js";
 import { parseLinkFragment } from "./core/device.js";
+import { inviteFromLocation, setPendingInvite } from "./core/invite.js";
 import { t, lang } from "./i18n.js";
 import { h, toast } from "./ui/dom.js";
+import { afterRoute, onWideChange, screenRoot } from "./ui/layout.js";
+import "./ui/call-waiting.js";
 
 // Each screen is its own chunk, so Connect and Home load without the rest.
 const screens = {
@@ -20,10 +26,26 @@ const screens = {
     group: () => import("./ui/group.js"),
     voice: () => import("./ui/voice.js"),
     you: () => import("./ui/you.js"),
+    admin: () => import("./ui/admin.js"),
+    invite: () => import("./ui/invite.js"),
+    "server-info": () => import("./ui/server-tools.js"),
+    members: () => import("./ui/members.js"),
+    activity: () => import("./ui/activity.js"),
+    files: () => import("./ui/files.js"),
+    diagnostics: () => import("./ui/diagnostics.js"),
+    share: () => import("./ui/share.js"),
+    search: () => import("./ui/global-search.js"),
+    inbox: () => import("./ui/inbox.js"),
+    saved: () => import("./ui/saved.js"),
+    threads: () => import("./ui/threads.js"),
+    thread: () => import("./ui/threads.js"),
 };
 
+installLogger();
 document.documentElement.lang = lang();
-const root = document.getElementById("app");
+const appRoot = document.getElementById("app");
+// Screens render here: #app on phones, the wide shell's centre on tablets.
+let root = appRoot;
 installViewport();
 initInstallPrompt();
 let cleanup = null;
@@ -34,6 +56,7 @@ async function route() {
     cleanup?.();
     cleanup = null;
     const token = ++routeToken;
+    root = screenRoot(appRoot, !!app.session);
     if (!app.session) {
         app.viewing = null;
         const { renderConnect } = await screens.connect();
@@ -44,7 +67,7 @@ async function route() {
     let arg = "";
     try { arg = decodeURIComponent(rest.join("/")); } catch { arg = ""; }
     if (!screens[screen] || screen === "connect") screen = "home";
-    if ((screen === "dm" || screen === "call" || screen === "group") && !arg) screen = "home";
+    if ((screen === "dm" || screen === "call" || screen === "group" || screen === "threads" || screen === "thread") && !arg) screen = "home";
     app.viewing = null;
     if (screen === "chat") app.viewing = `channel:${Number(arg) || 0}`;
     if (screen === "dm") app.viewing = `dm:${arg}`;
@@ -68,9 +91,23 @@ async function route() {
         case "call": cleanup = module.renderCall(root, arg); break;
         case "group": cleanup = module.renderGroup(root, arg); break;
         case "voice": cleanup = module.renderVoice(root); break;
-        case "you": module.renderYou(root); break;
+        case "admin": cleanup = module.renderAdmin(root, arg) || null; break;
+        case "invite": module.renderInvite(root, arg); break;
+        case "server-info": cleanup = module.renderServerInfo(root); break;
+        case "you": cleanup = module.renderYou(root); break;
+        case "members": cleanup = module.renderMembers(root, Number(arg) || 0); break;
+        case "activity": cleanup = module.renderActivity(root); break;
+        case "files": cleanup = module.renderFiles(root, Number(arg) || 0); break;
+        case "diagnostics": cleanup = module.renderDiagnostics(root); break;
+        case "share": cleanup = module.renderShare(root); break;
+        case "search": cleanup = module.renderSearch(root); break;
+        case "inbox": cleanup = module.renderInbox(root); break;
+        case "saved": cleanup = module.renderSaved(root); break;
+        case "threads": cleanup = module.renderThreads(root, arg); break;
+        case "thread": cleanup = module.renderThread(root, arg); break;
         default: module.renderHome(root);
     }
+    afterRoute(screen, arg);
     renderBanner();
 }
 
@@ -93,6 +130,7 @@ app.addEventListener("session", event => {
     const session = event.detail;
     // After a reconnect the screen must use the new session.
     if (sessions++ > 0) route();
+    import("./ui/account.js").then(account => account.startSession(session));
     for (const type of ["snapshot", "subscriptions"]) {
         session.addEventListener(type, () => {
             const screen = location.hash.split("/")[1] || "home";
@@ -117,6 +155,8 @@ app.addEventListener("unread", () => {
     if (screen === "home" || screen === "servers") route();
 });
 app.addEventListener("online", renderBanner);
+app.addEventListener("disconnected", route);
+app.addEventListener("account", () => { if ((location.hash.split("/")[1] || "home") === "home") route(); });
 // The call bar follows voice state on the other screens.
 // The call bar also follows private calls.
 app.addEventListener("call", () => {
@@ -153,6 +193,12 @@ navigator.serviceWorker?.addEventListener("message", event => {
         flushNow().catch(() => {});
         return;
     }
+    // "Reply" or "Mark as read" on a notification while the app is open.
+    if (event.data?.type === "notification-action" && typeof event.data.tag === "string") {
+        if (event.data.tag.includes(":")) markRead(event.data.tag);
+        if (event.data.flush) flushNow().catch(() => {});
+        return;
+    }
     if (event.data?.type !== "open" || typeof event.data.url !== "string") return;
     const url = new URL(event.data.url, location.origin);
     if (url.origin === location.origin && url.pathname.startsWith("/app/")) location.hash = url.hash || "#/home";
@@ -162,6 +208,7 @@ app.addEventListener("signedout", () => {
     route();
 });
 window.addEventListener("hashchange", route);
+onWideChange(() => route());
 
 async function registerServiceWorker() {
     if (!("serviceWorker" in navigator) || location.protocol !== "https:") return;
@@ -207,6 +254,12 @@ async function boot() {
     }
     registerServiceWorker();
     if (app.info.protocol_version !== PROTOCOL_VERSION) showUpdateRequired();
+    // An invitation waits for the session; its token must not stay in the URL.
+    const invite = inviteFromLocation();
+    if (invite) {
+        setPendingInvite(invite);
+        history.replaceState(null, "", "/app/");
+    }
     const link = location.pathname === "/link" ? parseLinkFragment(location.hash) : null;
     if (link) {
         // The secret must not linger in history or be re-claimed on reload.
@@ -220,7 +273,7 @@ async function boot() {
         try {
             await connect();
         } catch (error) {
-            if (!error.revoked) toast(t("signin.failed", { error: error.message }), "warn");
+            if (!error.revoked) import("./ui/account.js").then(account => toast(account.signInMessage(error), "warn"));
         }
     }
     route();

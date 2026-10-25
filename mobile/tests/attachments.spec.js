@@ -36,8 +36,8 @@ test("the phone sends an encrypted attachment and opens it again", async ({ page
     expect(ref.size).toBe(PNG.length);
     expect(ref.storage).toMatch(/^[0-9a-f]{32}\.vcx$/);
 
-    // Tapping the chip downloads the ciphertext over /ft and decrypts it.
-    await page.getByRole("button", { name: "Show image logo.png" }).click();
+    // With inline images on (the default) the ciphertext is downloaded over
+    // /ft and decrypted as soon as the image is on screen.
     const image = page.getByRole("img", { name: "logo.png" });
     await expect(image).toBeVisible();
     expect(await image.evaluate(img => img.naturalWidth)).toBe(1);
