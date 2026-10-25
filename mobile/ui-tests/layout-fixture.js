@@ -11,6 +11,8 @@ import { renderChat } from "../src/ui/chat.js";
 import { renderDM } from "../src/ui/dm.js";
 import { renderGroup } from "../src/ui/group.js";
 import { renderCall } from "../src/ui/call.js";
+import { renderFiles } from "../src/ui/files.js";
+import { renderInbox } from "../src/ui/inbox.js";
 import { renderYou } from "../src/ui/you.js";
 const view = new URL(location.href).searchParams.get("view") || "home";
 const clients = [{ unique_id: "self", client_id: "self", nickname: "Daniel" }, { unique_id: "peer", client_id: "peer", nickname: "Avery" }];
@@ -36,6 +38,10 @@ if (view === "presence") {
     channels[0].clients = [mobile];
     session.clients = () => [...clients, mobile];
 }
+if (view === "home-attachments") {
+    messages.at(-1).text = messages.at(-1).body = "[file:0123456789abcdef0123456789abcdef.vcx#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=#nx1;s=42#example.txt]";
+}
+if (view === "home-deleted") messages.at(-1).deleted = true;
 app.session = session; app.info = { server_name: "The Common Room" };
 app.dm = Object.assign(new EventTarget(), { ready: Promise.resolve(), conversations: new Map([["peer", { nickname: "Avery", messages }]]), list: () => [{ peer: "peer", nickname: "Avery", messages }], devicesOf: async () => ({ fingerprint: "verified", devices: [{ deviceID: "current" }], trust: "trusted" }) });
 app.groups = Object.assign(new EventTarget(), { list: new Map([["group", { id: "group", name: "Weekend crew", members: [{ unique_id: "self" }, { unique_id: "peer" }] }]]), messages: new Map([["group", messages]]), get: async () => {}, loadNewer: async () => {}, markRead: () => {} });
@@ -57,7 +63,9 @@ if (view.startsWith("signout")) {
 }
 const root = document.getElementById("app");
 switch (view) {
-    case "home": renderHome(root); break;
+    case "home": case "home-attachments": case "home-deleted": renderHome(root); break;
+    case "files": renderFiles(root, 1); break;
+    case "inbox": renderInbox(root); break;
     case "new-group": renderNewGroup(root); break;
     case "new-chat": renderNewChat(root); break;
     case "servers": case "presence": renderServers(root); break;

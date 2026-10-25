@@ -6,6 +6,7 @@ import { dmHref, header, lastMessage, nav, scopeName, unreadBadge } from "./comm
 import { avatar } from "./dom.js";
 import { homeCards } from "./devices.js";
 import { icon } from "./icons.js";
+import { excerpt } from "../core/search.js";
 import { presenceOf } from "../core/presence.js";
 import { isBlocked } from "../core/social.js";
 import { notifier } from "../notifier.js";
@@ -39,7 +40,7 @@ export function renderHome(root) {
             scope === 0 ? h("span", { class: "hash" }, "◎") : h("span", { class: "hash" }, "#"),
             h("span", { class: "row-main" },
                 h("span", { class: "row-title" }, scopeName(session, scope).replace(/^# /, "#")),
-                h("span", { class: "row-sub" }, `${last.from}: ${last.text ?? t("chat.locked")}`)),
+                h("span", { class: "row-sub" }, `${last.from}: ${last.deleted ? t("chat.deleted") : last.text == null ? t("chat.locked") : excerpt(last.text)}`)),
             unreadBadge(`channel:${scope}`) || h("span", { class: "row-meta" }, clock(last.sentAt))) }));
     // Blocked users' conversations are hidden, not deleted.
     const dmRows = (app.dm?.list() || []).filter(conversation => !isBlocked(conversation.peer)).map(conversation => {
@@ -50,7 +51,7 @@ export function renderHome(root) {
             h("span", { class: "avatar-wrap" }, avatar(name, "md", conversation.peer), statusDot(presence.online ? presence.status : "offline")),
             h("span", { class: "row-main" },
                 h("span", { class: "row-title" }, name),
-                h("span", { class: "row-sub" }, `${last.self ? t("dm.you") + ": " : ""}${last.body ?? t("chat.locked")}`)),
+                h("span", { class: "row-sub" }, `${last.self ? t("dm.you") + ": " : ""}${last.deleted ? t("chat.deleted") : last.body == null ? t("chat.locked") : excerpt(last.body)}`)),
             isMuted(`dm:${conversation.peer}`) ? mutedMark() : unreadBadge(`dm:${conversation.peer}`) || h("span", { class: "row-meta" }, clock(last.sentAt))) };
     });
     const groupRows = [...(app.groups?.list.values() || [])].filter(g => !g.members?.find(m => m.unique_id === session.uniqueID)?.pending).map(group => {
@@ -61,7 +62,7 @@ export function renderHome(root) {
             h("span", { class: "hash" }, "◇"),
             h("span", { class: "row-main" },
                 h("span", { class: "row-title" }, group.name),
-                h("span", { class: "row-sub" }, last ? (last.text ?? t("group.locked")) : t("group.members", { count: (group.members || []).filter(m => !m.pending).length }))),
+                h("span", { class: "row-sub" }, last ? (last.deleted ? t("chat.deleted") : last.text == null ? t("group.locked") : excerpt(last.text)) : t("group.members", { count: (group.members || []).filter(m => !m.pending).length }))),
             isMuted(tag) ? mutedMark() : unread ? h("span", { class: "badge", "aria-label": t("home.unread", { count: unread }) }, String(unread)) : null) };
     });
     const recent = [...channelRows, ...dmRows, ...groupRows].sort((a, b) => b.at - a.at);

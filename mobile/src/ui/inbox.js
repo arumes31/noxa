@@ -6,7 +6,7 @@ import { app, markRead } from "../app.js";
 import { buildInbox } from "../core/inbox.js";
 import { excerpt } from "../core/search.js";
 import { t } from "../i18n.js";
-import { avatar, clock, h } from "./dom.js";
+import { avatar, clock, h, replaceContent } from "./dom.js";
 import { header } from "./common.js";
 import { headerActions } from "./message-view.js";
 import { savedLink } from "./tool-links.js";
@@ -49,7 +49,7 @@ export function renderInbox(root) {
                 h("span", { class: "row-title" }, t("inbox.mentionIn", { from: message.from, conversation: title })),
                 h("span", { class: "row-sub" }, excerpt(message.text, "", 80))),
             h("span", { class: "row-meta" }, clock(message.at)))));
-        body.replaceChildren(
+        replaceContent(body,
             mentionRows.length ? h("p", { class: "section-label" }, t("inbox.mentions")) : null,
             mentionRows.length ? h("ul", { class: "list", "aria-label": t("inbox.mentions") }, mentionRows) : null,
             h("p", { class: "section-label" }, t("inbox.unread")),

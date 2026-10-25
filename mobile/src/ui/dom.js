@@ -18,6 +18,11 @@ export function h(tag, props = {}, ...children) {
     return node;
 }
 
+/** Replace optional UI children without rendering null/undefined as text. */
+export function replaceContent(node, ...children) {
+    node.replaceChildren(...children.flat().filter(child => child !== null && child !== undefined && child !== false));
+}
+
 /** uid -> data: URL ("" = no picture), filled by the avatar source. */
 const avatarCache = new Map();
 let avatarSource = null;

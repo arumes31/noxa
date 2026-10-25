@@ -7,7 +7,7 @@
 import { app } from "../app.js";
 import { adminFor, BAN_DURATIONS, canManageRoles } from "../core/admin.js";
 import { addStrings, t } from "../i18n.js";
-import { h, toast } from "./dom.js";
+import { h, toast, replaceContent } from "./dom.js";
 import { icon } from "./icons.js";
 import { busy, chooseSheet, field, formSheet, input, textSheet } from "./admin-kit.js";
 
@@ -134,7 +134,7 @@ export function moderationActions(client) {
         const channel = session.channels().find(c => c.id === current.channel_id);
         const inVoice = !!channel && !channel.textOnly && current.channel_id > 0;
         const sessions = session.clients().filter(c => c.unique_id === client.unique_id && c.client_id !== session.clientID).length;
-        moderation.replaceChildren(
+        replaceContent(moderation,
             action(t("mod.move"), async () => {
                 const targets = session.channels().filter(c => !c.textOnly && c.id !== current.channel_id);
                 const target = await chooseSheet(t("mod.moveTitle", { name }), targets.map(c => ({ value: c.id, label: c.name, sub: c.clients.length ? String(c.clients.length) : "" })));

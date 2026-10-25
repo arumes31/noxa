@@ -8,7 +8,7 @@
 import { app } from "../app.js";
 import { cancelUpload, clearFinished, dismissUpload, enqueueUpload, onUploadsChanged, retryUpload, setUploadConnection, uploads } from "../core/upload-queue.js";
 import { addStrings, t } from "../i18n.js";
-import { h } from "./dom.js";
+import { h, replaceContent } from "./dom.js";
 import { formatBytes } from "../core/channel-files.js";
 import "./upload-sheet.css";
 
@@ -89,7 +89,7 @@ function render() {
         onclick: () => { expanded = !expanded; render(); } },
         h("span", { class: "row-title" }, t("uploads.title")),
         h("span", { class: "row-meta", role: "status" }, t("uploads.summary", { done, count: list.length })));
-    panel.replaceChildren(toggle,
+    replaceContent(panel, toggle,
         expanded ? h("ul", { class: "list upload-list" }, list.map(itemRow)) : null,
         expanded && done ? h("button", { class: "btn upload-clear", type: "button", onclick: clearFinished }, t("uploads.clear")) : null);
 }

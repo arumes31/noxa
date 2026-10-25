@@ -193,76 +193,119 @@ export class Voice extends EventTarget {
 
     // --- Joining and leaving ------------------------------------------------
 
-    /** Joins a voice channel: microphone, peer connection, first offer. */
+    #joinGeneration = 0;
+    #joining = false;
+    #cancelStart = null;
+
+    /** Joins a voice channel; false means the attempt was cancelled. */
     async join(channelID, password = "") {
-        const joined = await this.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: channelID, password: password || undefined }, MsgChannelJoined);
-        this.channelID = joined.channel_id ?? channelID;
-        if (this.echo && this.channelID !== this.echo.channel) this.echo = null;
+        const generation = ++this.#joinGeneration;
+        this.#cancelStart?.();
+        this.#cancelStart = null;
+        this.#joining = true;
+        let acknowledged = false;
         try {
-            if (!this.pc) await this.#start();
+            const joined = await this.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: channelID, password: password || undefined }, MsgChannelJoined);
+            if (generation !== this.#joinGeneration) return false;
+            acknowledged = true;
+            this.channelID = joined.channel_id ?? channelID;
+            if (this.echo && this.channelID !== this.echo.channel) this.echo = null;
+            if (!this.pc && !await this.#start(generation)) return false;
+            if (generation !== this.#joinGeneration) return false;
+            if (this.muted || this.deafened) this.#announce();
+            this.#emit("state");
+            return this.channelID;
         } catch (error) {
-            // The channel ack preceded media setup. Roll it back and release
-            // tracks/timers so another Join really starts a fresh connection.
-            await this.leave();
+            // A rejected switch leaves the existing call untouched. Only roll
+            // back media setup after the server accepted this channel.
+            if (acknowledged && generation === this.#joinGeneration) await this.leave();
             throw error;
+        } finally {
+            if (generation === this.#joinGeneration) this.#joining = false;
         }
-        // Mute and deafen survive a reconnect; tell the new session.
-        if (this.muted || this.deafened) this.#announce();
-        this.#emit("state");
-        return this.channelID;
     }
 
-    async #start() {
-        try {
-            this.mic = await openMicrophone();
-        } catch (error) {
-            this.mic = null;
-            this.#emit("mic-error", error);
-        }
-        const iceServers = await this.session.relayServers().catch(() => this.session.iceServers);
-        const pc = new RTCPeerConnection({ iceServers });
-        // Renewed TURN credentials keep a long session's relay alive.
-        this.#stopRenewal = this.session.onRelayRenewal(servers => {
-            if (this.pc !== pc) return;
-            try { pc.setConfiguration({ iceServers: servers }); } catch { return; }
-            this.#enqueue(() => this.#offer({ iceRestart: true })).catch(() => {});
-        });
-        this.pc = pc;
-        pc.onicecandidate = event => {
-            if (!event.candidate || !this.conn.open) return;
-            this.conn.send(Msg.ICECandidate, { candidate: event.candidate.candidate, sdp_mid: event.candidate.sdpMid ?? "", sdp_mline_index: event.candidate.sdpMLineIndex ?? 0 });
+    async #start(generation) {
+        let cancel;
+        let mic = null;
+        const stopLocalMic = () => {
+            for (const track of mic?.getTracks() || []) track.stop();
+            mic = null;
         };
-        pc.ontrack = () => this.#reconcile();
-        pc.onconnectionstatechange = () => this.#emit("state");
-        const track = this.mic?.getAudioTracks()[0];
-        if (track) {
-            track.enabled = this.#micOpen();
-            this.#micTransceiver = pc.addTransceiver(track, { direction: "sendrecv", sendEncodings: [{ priority: "high", networkPriority: "high" }] });
-        } else {
-            this.#micTransceiver = pc.addTransceiver("audio", { direction: "recvonly" });
+        const cancelled = new Promise(resolve => { cancel = () => { stopLocalMic(); resolve(null); }; });
+        this.#cancelStart = cancel;
+        try {
+            try {
+                await Promise.race([openMicrophone().then(stream => {
+                    if (generation !== this.#joinGeneration) {
+                        for (const track of stream.getTracks()) track.stop();
+                    } else mic = stream;
+                }), cancelled]);
+            } catch (error) {
+                if (generation === this.#joinGeneration) this.#emit("mic-error", error);
+            }
+            if (generation !== this.#joinGeneration) return false;
+            const iceServers = await Promise.race([
+                this.session.relayServers().catch(() => this.session.iceServers), cancelled,
+            ]);
+            if (generation !== this.#joinGeneration) return false;
+            // Ownership moves to teardown only after all cancellable lookups finish.
+            this.mic = mic;
+            mic = null;
+            const pc = new RTCPeerConnection({ iceServers });
+            // Renewed TURN credentials keep a long session's relay alive.
+            this.#stopRenewal = this.session.onRelayRenewal(servers => {
+                if (this.pc !== pc) return;
+                try { pc.setConfiguration({ iceServers: servers }); } catch { return; }
+                this.#enqueue(() => this.#offer({ iceRestart: true })).catch(() => {});
+            });
+            this.pc = pc;
+            pc.onicecandidate = event => {
+                if (!event.candidate || !this.conn.open) return;
+                this.conn.send(Msg.ICECandidate, { candidate: event.candidate.candidate, sdp_mid: event.candidate.sdpMid ?? "", sdp_mline_index: event.candidate.sdpMLineIndex ?? 0 });
+            };
+            pc.ontrack = () => this.#reconcile();
+            pc.onconnectionstatechange = () => this.#emit("state");
+            const track = this.mic?.getAudioTracks()[0];
+            if (track) {
+                track.enabled = this.#micOpen();
+                this.#micTransceiver = pc.addTransceiver(track, { direction: "sendrecv", sendEncodings: [{ priority: "high", networkPriority: "high" }] });
+            } else {
+                this.#micTransceiver = pc.addTransceiver("audio", { direction: "recvonly" });
+            }
+            this.#startMeter();
+            this.#statsTimer = setInterval(() => this.#collectStats(), STATS_INTERVAL);
+            await this.#enqueue(() => this.#offer());
+            if (generation !== this.#joinGeneration) return false;
+            this.#applyBitrate();
+            return true;
+        } finally {
+            stopLocalMic();
+            if (this.#cancelStart === cancel) this.#cancelStart = null;
         }
-        this.#startMeter();
-        this.#statsTimer = setInterval(() => this.#collectStats(), STATS_INTERVAL);
-        await this.#enqueue(() => this.#offer());
-        this.#applyBitrate();
     }
 
     /** Leaves voice: channel 0, then tears the connection down. */
     async leave() {
-        if (!this.active) return;
+        const wasActive = this.active || this.#joining;
         this.channelID = 0;
+        this.#teardown();
+        this.#emit("state");
+        if (!wasActive) return;
         try {
             if (this.conn.open) await this.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: 0 }, MsgChannelJoined);
         } catch {
             // The connection may already be gone.
         }
-        this.#teardown();
-        this.#emit("state");
     }
 
     #stopRenewal = null;
 
     #teardown() {
+        ++this.#joinGeneration;
+        this.#joining = false;
+        this.#cancelStart?.();
+        this.#cancelStart = null;
         this.#stopMeter();
         this.#latch.cancel();
         this.#gate.reset();
@@ -298,6 +341,7 @@ export class Voice extends EventTarget {
     }
 
     close() {
+        this.channelID = 0;
         this.#teardown();
         this.#stop.forEach(stop => stop());
         this.#stopSettings();
@@ -841,7 +885,7 @@ export class Voice extends EventTarget {
         const channel = Number(info?.echo_channel_id || 0);
         if (!channel) return false;
         const previous = this.channelID;
-        await this.join(channel);
+        if (await this.join(channel) === false) return false;
         this.echo = { channel, previous };
         this.#emit("state");
         return true;

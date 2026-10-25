@@ -1,5 +1,6 @@
 // activity.js — the activity center (#/activity): mentions, direct
 // messages, calls, invitations and pokes, newest first, in tabs.
+import { excerpt } from "../core/search.js";
 import { notifier } from "../notifier.js";
 import { t } from "../i18n.js";
 import { h } from "./dom.js";
@@ -35,7 +36,7 @@ export function renderActivity(root) {
                 h("span", { class: "hash", "aria-hidden": "true" }, GLYPH[entry.kind] || "•"),
                 h("span", { class: "row-main" },
                     h("span", { class: "row-title" }, entry.title),
-                    h("span", { class: "row-sub" }, `${t(`activity.kind.${entry.kind}`)}${entry.body ? ` · ${entry.body}` : ""}`)),
+                    h("span", { class: "row-sub" }, `${t(`activity.kind.${entry.kind}`)}${entry.body ? ` · ${excerpt(entry.body, "", 70)}` : ""}`)),
                 h("span", { class: "row-meta" }, when(entry.at)),
                 entry.read ? null : h("span", { class: "unread-dot", "aria-label": t("activity.unread") }))))
             : [h("li", { class: "hint activity-empty" }, t("activity.empty"))]));

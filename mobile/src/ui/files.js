@@ -6,7 +6,7 @@ import { app } from "../app.js";
 import { breadcrumbs, ChannelFiles, checksum, formatBytes, isSealed, normalizeFolder, quotaPercent, splitPath, subfolders, visibleEntries } from "../core/channel-files.js";
 import { onUploadsChanged } from "../core/upload-queue.js";
 import { addStrings, t } from "../i18n.js";
-import { h, sheet, toast } from "./dom.js";
+import { h, sheet, toast, replaceContent } from "./dom.js";
 import { icon } from "./icons.js";
 import { header, nav, scopeName } from "./common.js";
 import { uploadFiles } from "./upload-sheet.js";
@@ -318,7 +318,7 @@ export function renderFiles(root, channelID) {
             ...breadcrumbs(state.folder).flatMap(part => [h("span", { "aria-hidden": "true" }, "/"),
                 h("button", { type: "button", class: "files-crumb", "aria-current": part.folder === state.folder ? "location" : null, onclick: () => openFolder(part.folder) }, part.label)]));
         const percent = quotaPercent(state.used, state.quota);
-        quota.replaceChildren(
+        replaceContent(quota,
             h("span", { class: "row-meta" }, percent === null ? t("files.noQuota", { used: formatBytes(state.used) }) : t("files.quota", { used: formatBytes(state.used), quota: formatBytes(state.quota) })),
             percent === null ? null : h("div", { class: `files-quota-bar${percent > 90 ? " hot" : ""}`, role: "progressbar", "aria-label": t("files.storage"), "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(percent) },
                 h("span", { style: `width:${percent}%` })));
