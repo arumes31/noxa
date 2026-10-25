@@ -2,10 +2,11 @@
 // encrypted with a non-extractable AES-GCM key kept in the same database,
 // so page script can use but never export it.
 const DB_NAME = "noxa";
-const VERSION = 6;
+// Version 7 adds the share store; onupgradeneeded only runs on a version change.
+const VERSION = 7;
 
-/** Object stores: device identity, direct-message history, identity pins, unsent messages, saved messages, activity center, call history. */
-export const Stores = Object.freeze({ device: "device", dm: "dm", pins: "pins", outbox: "outbox", saved: "saved", activity: "activity", calls: "calls" });
+/** Object stores: device identity, direct-message history, identity pins, unsent messages, saved messages, activity center, call history, content shared into the app. */
+export const Stores = Object.freeze({ device: "device", dm: "dm", pins: "pins", outbox: "outbox", saved: "saved", activity: "activity", calls: "calls", share: "share" });
 
 export function openDB(indexedDBImpl = globalThis.indexedDB) {
     return new Promise((resolve, reject) => {

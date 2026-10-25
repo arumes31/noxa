@@ -6,13 +6,19 @@ import { uploadAttachment } from "../core/files.js";
 import { seenMarkers } from "../core/groups.js";
 import { remove as removeQueued } from "../core/outbox.js";
 import { t } from "../i18n.js";
-import { messageBody } from "./attachments.js";
-import { avatar, clock, h, sheet, toast } from "./dom.js";
+import { avatar, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { header } from "./common.js";
-import { retryProps, sendState, typingText } from "./conversation-tools.js";
+import { menu, retryProps, sendState, typingText } from "./conversation-tools.js";
 import { memberName, showGroupManage } from "./group-manage.js";
 import { voiceNoteButton } from "./voice-note.js";
+import { richBody, watchCustomEmoji } from "./rich-text.js";
+import { announcementBanner } from "./announcement.js";
+import { attachControls, emojiButton } from "./composer-extras.js";
+import { aboutEncryption, blockedLine, encryptionBadge, isBlockedUser, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
+
+const EXPORT_PAGES = 20;
+
 
 export function renderGroup(root, id) {
     const groups = app.groups;
@@ -25,8 +31,17 @@ export function renderGroup(root, id) {
     const typing = h("div", { class: "typing", role: "status" });
     const input = h("textarea", { rows: "1", "aria-label": t("dm.placeholder", { name: title }), placeholder: t("dm.placeholder", { name: title }), enterkeyhint: "send" });
     const sendButton = h("button", { class: "send", type: "submit", "aria-label": t("chat.send") }, icon("send"));
-    const picker = h("input", { type: "file", hidden: true, "aria-hidden": "true" });
-    const attachButton = h("button", { class: "attach", type: "button", "aria-label": t("file.attach"), onclick: () => picker.click() }, icon("attach"));
+    const { button: attachButton, picker } = attachControls(async file => {
+        try {
+            const token = await uploadAttachment(app.session.conn, folder, file);
+            const caption = input.value.trim();
+            input.value = "";
+            await send(caption ? `${caption} ${token}` : token);
+        } catch (error) {
+            toast(t("file.uploadFailed", { error: error.message }), "warn");
+        }
+    });
+    const shown = new Set(); // blocked messages the user chose to show
     let hasOlder = true;
     const older = h("button", { class: "btn", style: "align-self:center;margin:8px 0" }, t("chat.loadOlder"));
     older.onclick = async () => {
@@ -59,32 +74,36 @@ export function renderGroup(root, id) {
         if (sure) await groups.deleteMessage(id, message.id).catch(error => toast(t("common.error", { error: error.message }), "warn"));
     }
 
-    function line(message, seen) {
+    // seen is part of the cache key: "Seen by" changes without the message changing.
+    const line = lineCache((message, seen) => {
         const own = message.from_unique_id === app.session.uniqueID;
+        if (!own && isBlockedUser(message.from_unique_id) && !shown.has(message.id)) {
+            return blockedLine(message, message.created_at, () => { shown.add(message.id); line.forget(message); render(); });
+        }
         const body = message.deleted ? h("span", { class: "msg-deleted" }, t("chat.deleted"))
             : message.text === null || message.text === undefined ? h("span", { class: "msg-locked" }, t("group.locked"))
-                : messageBody(message.text, { conn: app.session.conn, channelID: folder });
+                : richBody(message.text, { session: app.session, conn: app.session.conn, channelID: folder });
         const from = memberName(message.from_unique_id);
         // Only the owner may delete messages in a group (netproto.ChangeConversation).
         const deletable = !message.local && !message.deleted && conversation()?.owner === app.session.uniqueID;
         const props = message.failed ? retryProps(message, retryActions(message))
             : deletable ? { tabindex: "0", role: "button", "aria-label": t("dm.messageActions"), onclick: event => {
-                if (!event.target.closest(".voice-note, .file-chip, a")) messageActions(message);
+                if (!event.target.closest(".voice-note, .file-chip, a, button, img, video")) messageActions(message);
             } } : {};
         const classes = ["msg", own ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
-        return h("div", { class: classes, ...props },
-            h("span", { class: "msg-time" }, clock(message.created_at)),
+        return h("div", { class: classes, dataset: { id: String(message.id ?? "") }, ...props },
+            timeNode(message.created_at),
             avatar(from, "sm", message.from_unique_id),
-            h("div", { class: "msg-body" }, h("span", { class: "msg-from" }, from), body,
+            h("div", { class: "msg-body" }, h("span", { class: "msg-from" }, from), message.deleted ? null : encryptionBadge("e2e"), body,
                 own ? sendState(message) : null,
                 seen?.length ? h("div", { class: "msg-seen" }, t("conv.seenBy", { names: seen.map(memberName).join(", ") })) : null));
-    }
+    });
 
     function render() {
         const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
         const messages = groups.messages.get(id) || [];
         const markers = seenMarkers(messages, conversation()?.members, app.session.uniqueID);
-        log.replaceChildren(hasOlder ? older : h("span"), ...messages.map(m => line(m, markers.get(m.id))));
+        log.replaceChildren(hasOlder ? older : h("span"), ...withDays(messages, m => m.created_at, m => line(m, markers.get(m.id))));
         if (atBottom || messages.at(-1)?.from_unique_id === app.session.uniqueID) log.scrollTop = log.scrollHeight;
         const members = (conversation()?.members || []).filter(m => !m.pending).map(m => memberName(m.unique_id));
         notice.replaceChildren(h("p", { class: "hint group-members" }, members.join(", ")));
@@ -117,24 +136,15 @@ export function renderGroup(root, id) {
         }
     }
 
-    picker.onchange = async () => {
-        const file = picker.files?.[0];
-        picker.value = "";
-        if (!file) return;
-        attachButton.disabled = true;
-        attachButton.setAttribute("aria-busy", "true");
-        try {
-            const token = await uploadAttachment(app.session.conn, folder, file);
-            const caption = input.value.trim();
-            input.value = "";
-            await send(caption ? `${caption} ${token}` : token);
-        } catch (error) {
-            toast(t("file.uploadFailed", { error: error.message }), "warn");
-        } finally {
-            attachButton.disabled = false;
-            attachButton.removeAttribute("aria-busy");
-        }
-    };
+    /** Loads up to EXPORT_PAGES older pages and returns the normalized log. */
+    async function exportLoad() {
+        for (let page = 0; page < EXPORT_PAGES && hasOlder; page++) hasOlder = await groups.loadOlder(id);
+        render();
+        const messages = (groups.messages.get(id) || []).map(m => ({
+            id: m.id, from: memberName(m.from_unique_id), fromUniqueID: m.from_unique_id, sentAt: m.created_at, text: m.text, deleted: !!m.deleted, edited: !!m.edited, encryption: "e2e",
+        }));
+        return { messages, complete: !hasOlder };
+    }
     const voiceButton = voiceNoteButton({ upload: file => uploadAttachment(app.session.conn, folder, file), send: token => send(token) });
     const form = h("form", { class: "composer", onsubmit: async event => {
         event.preventDefault();
@@ -143,7 +153,7 @@ export function renderGroup(root, id) {
         input.value = "";
         input.style.height = "";
         await send(text);
-    } }, attachButton, picker, input, voiceButton, sendButton);
+    } }, attachButton, emojiButton(input, app.session), picker, input, voiceButton, sendButton);
     input.addEventListener("keydown", event => {
         if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
@@ -157,9 +167,19 @@ export function renderGroup(root, id) {
     });
 
     const call = h("button", { class: "icon-btn", type: "button", "aria-label": t("group.call"), onclick: () => startGroupCall(id).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone"));
-    const manage = h("button", { class: "icon-btn", type: "button", "aria-label": t("groupManage.title"), "aria-haspopup": "dialog",
-        onclick: () => showGroupManage(id, { onGone: () => { location.hash = "#/home"; } }) }, icon("more"));
-    const top = header(title, { back: "#/home", action: h("span", { class: "header-actions" }, call, manage) });
+    // One header menu: the group sheet (members, roles, mute, leave), export and encryption.
+    const more = h("button", { class: "icon-btn", type: "button", "aria-label": t("conv.more"), "aria-haspopup": "menu" }, icon("more"));
+    more.onclick = async () => {
+        const choice = await menu(conversation()?.name || title, [
+            { label: t("groupManage.title"), value: "manage" },
+            { label: t("rich.exportHistory"), value: "export" },
+            { label: t("rich.aboutEncryption"), value: "encryption" },
+        ]);
+        if (choice === "manage") showGroupManage(id, { onGone: () => { location.hash = "#/home"; } });
+        else if (choice === "export") import("./export.js").then(({ openExport }) => openExport({ title: conversation()?.name || title, kind: "group", load: exportLoad }));
+        else if (choice === "encryption") aboutEncryption();
+    };
+    const top = header(title, { back: "#/home", action: h("span", { class: "header-actions" }, call, more) });
     function paintTitle() {
         const heading = top.querySelector("h1");
         const name = conversation()?.name;
@@ -170,7 +190,9 @@ export function renderGroup(root, id) {
     root.replaceChildren(h("section", { class: "screen chat" },
         top,
         h("div", { class: "e2e-banner", role: "note" }, icon("lock"), " ", t("dm.encrypted")),
-        notice, log, typing, form));
+        announcementBanner(app.session), notice, log, typing, form));
+    const rerender = () => { line.clear(); render(); };
+    const stops = [watchCustomEmoji(app.session, rerender), watchDisplaySettings(rerender), relativeTicker(log)];
     const onMessages = event => { if (event.detail.id === id) render(); };
     const onList = () => render();
     const onTyping = event => { if (event.detail.id === id) renderTyping(); };
@@ -191,5 +213,6 @@ export function renderGroup(root, id) {
         groups.removeEventListener("seen", onMessages);
         groups.removeEventListener("typing", onTyping);
         document.removeEventListener("visibilitychange", onVisible);
+        stops.forEach(stop => stop());
     };
 }

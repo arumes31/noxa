@@ -33,6 +33,7 @@ const screens = {
     activity: () => import("./ui/activity.js"),
     files: () => import("./ui/files.js"),
     diagnostics: () => import("./ui/diagnostics.js"),
+    share: () => import("./ui/share.js"),
 };
 
 installLogger();
@@ -93,6 +94,7 @@ async function route() {
         case "activity": cleanup = module.renderActivity(root); break;
         case "files": cleanup = module.renderFiles(root, Number(arg) || 0); break;
         case "diagnostics": cleanup = module.renderDiagnostics(root); break;
+        case "share": cleanup = module.renderShare(root); break;
         default: module.renderHome(root);
     }
     afterRoute(screen, arg);

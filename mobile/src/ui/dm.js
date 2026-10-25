@@ -1,5 +1,7 @@
 // dm.js — Direct message (05): end-to-end encrypted conversation with
 // attachments, voice messages, typing, receipts and the header tools.
+// Bodies render as rich text; attachments upload to the server-wide scope
+// (as the desktop does for direct messages).
 import { app, queueMessage, startCall } from "../app.js";
 import { callLog, callsWith } from "../core/call-log.js";
 import { isMuted, setMuted } from "../core/conversation-prefs.js";
@@ -9,12 +11,15 @@ import { remove as removeQueued } from "../core/outbox.js";
 import { t } from "../i18n.js";
 import { avatar, clock, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
-import { messageBody } from "./attachments.js";
+import { richBody, watchCustomEmoji } from "./rich-text.js";
 import { header } from "./common.js";
 import { presenceSub } from "./presence-ui.js";
 import { menu, receiptTicks, retryProps, sendState, typingText } from "./conversation-tools.js";
-import { deleteLocalHistory, exportDM, showCalls, showSafetyNumber } from "./dm-tools.js";
+import { deleteLocalHistory, showCalls, showSafetyNumber } from "./dm-tools.js";
 import { voiceNoteButton } from "./voice-note.js";
+import { announcementBanner } from "./announcement.js";
+import { attachControls, emojiButton } from "./composer-extras.js";
+import { aboutEncryption, encryptionBadge, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 
 export function renderDM(root, peer) {
     const session = app.session;
@@ -29,8 +34,19 @@ export function renderDM(root, peer) {
     const typing = h("div", { class: "typing", role: "status" });
     const input = h("textarea", { rows: "1", "aria-label": t("dm.placeholder", { name }), placeholder: t("dm.placeholder", { name }), enterkeyhint: "send" });
     const sendButton = h("button", { class: "send", type: "submit", "aria-label": t("chat.send") }, icon("send"));
-    const picker = h("input", { type: "file", hidden: true, "aria-hidden": "true" });
-    const attachButton = h("button", { class: "attach", type: "button", "aria-label": t("file.attach"), onclick: () => picker.click() }, icon("attach"));
+    // The attach sheet (file, photo, camera) of composer-extras.js; DM files live
+    // in the server-wide scope (channel 0), as on the desktop.
+    const { button: attachButton, picker } = attachControls(async file => {
+        try {
+            const token = await uploadAttachment(session.conn, 0, file);
+            const caption = input.value.trim();
+            input.value = "";
+            await sendText(caption ? `${caption} ${token}` : token);
+        } catch (error) {
+            toast(t("file.uploadFailed", { error: error.code ? t(`dm.error.${error.code}`) : error.message }), "warn");
+            if (error.code) checkTrust();
+        }
+    });
     let calls = [];
     let query = "";
 
@@ -59,29 +75,30 @@ export function renderDM(root, peer) {
         };
     }
 
-    function line(message) {
+    const line = lineCache(message => {
         const classes = ["msg", message.self ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
         const body = message.deleted ? h("span", { class: "msg-deleted" }, t("chat.deleted"))
             : message.body === null || message.body === undefined
                 ? h("span", { class: "msg-locked" }, t("chat.locked"))
-                : messageBody(message.body, { conn: session.conn, channelID: 0 });
+                : richBody(message.body, { session, conn: session.conn, channelID: 0 });
         const from = message.self ? session.nickname : (message.fromNickname || name);
         const changeable = message.self && !message.deleted && !message.pending && !message.queued && !message.failed;
         const props = message.failed ? retryProps(message, retryActions(message))
             : changeable ? { tabindex: "0", role: "button", "aria-label": t("dm.messageActions"), onclick: event => {
-                // Taps on the voice player or an attachment are not message actions.
-                if (!event.target.closest(".voice-note, .file-chip, a")) messageActions(message);
+                // Taps on the voice player, an attachment, a link or media are not message actions.
+                if (!event.target.closest(".voice-note, .file-chip, a, button, img, video")) messageActions(message);
             } } : {};
-        return h("div", { class: classes, ...props },
-            h("span", { class: "msg-time" }, clock(message.sentAt)),
+        return h("div", { class: classes, dataset: { id: String(message.id ?? "") }, ...props },
+            timeNode(message.sentAt),
             avatar(from, "sm", message.self ? session.uniqueID : peer),
             h("div", { class: "msg-body" },
                 h("span", { class: "msg-from" }, from),
+                message.deleted ? null : encryptionBadge("e2e"),
                 body,
                 message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
                 message.self && !message.deleted ? receiptTicks(message.receipt) : null,
                 sendState(message)));
-    }
+    });
 
     function callLine(record) {
         return h("div", { class: "msg-system" }, icon("phone"),
@@ -94,13 +111,13 @@ export function renderDM(root, peer) {
         const messages = dm.conversations.get(peer)?.messages || [];
         let entries;
         if (query) {
-            entries = messages.filter(m => !m.deleted && typeof m.body === "string" && m.body.toLocaleLowerCase().includes(query)).map(line);
+            entries = messages.filter(m => !m.deleted && typeof m.body === "string" && m.body.toLocaleLowerCase().includes(query)).map(m => line(m));
             if (!entries.length) entries = [h("p", { class: "hint conv-empty" }, t("dmTools.noMatches"))];
         } else {
             // Missed calls appear in the conversation at their time.
             const missed = calls.filter(r => r.direction === "in" && r.outcome === "missed").map(r => ({ at: r.startedAt / 1000, node: () => callLine(r) }));
             const items = [...messages.map(m => ({ at: m.sentAt, node: () => line(m) })), ...missed].sort((a, b) => a.at - b.at);
-            entries = items.length ? items.map(item => item.node()) : [h("p", { class: "hint conv-empty" }, t("dm.empty"))];
+            entries = items.length ? withDays(items, item => item.at, item => item.node()) : [h("p", { class: "hint conv-empty" }, t("dm.empty"))];
         }
         log.replaceChildren(...entries);
         if (!query && (atBottom || messages.at(-1)?.self)) log.scrollTop = log.scrollHeight;
@@ -209,25 +226,6 @@ export function renderDM(root, peer) {
         }
     }
 
-    picker.onchange = async () => {
-        const file = picker.files?.[0];
-        picker.value = "";
-        if (!file) return;
-        attachButton.disabled = true;
-        attachButton.setAttribute("aria-busy", "true");
-        try {
-            // Like the desktop, direct message files live in the server-wide scope (channel 0).
-            const token = await uploadAttachment(session.conn, 0, file);
-            const caption = input.value.trim();
-            input.value = "";
-            await sendText(caption ? `${caption} ${token}` : token);
-        } catch (error) {
-            toast(t("file.uploadFailed", { error: error.message }), "warn");
-        } finally {
-            attachButton.disabled = false;
-            attachButton.removeAttribute("aria-busy");
-        }
-    };
     const voiceButton = voiceNoteButton({
         upload: file => uploadAttachment(session.conn, 0, file),
         send: token => sendText(token),
@@ -247,7 +245,7 @@ export function renderDM(root, peer) {
             return;
         }
         await sendText(text);
-    } }, attachButton, picker, input, voiceButton, sendButton);
+    } }, attachButton, emojiButton(input, session), picker, input, voiceButton, sendButton);
     input.addEventListener("keydown", event => {
         if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
@@ -260,6 +258,13 @@ export function renderDM(root, peer) {
         if (input.value.trim() && !editing) dm.sendTyping(peer);
     });
 
+    const exportLoad = async () => ({
+        messages: (dm.conversations.get(peer)?.messages || []).filter(m => !m.pending && !m.queued && !m.failed).map(m => ({
+            id: m.id, from: m.self ? session.nickname : (m.fromNickname || name), fromUniqueID: m.from, sentAt: m.sentAt,
+            text: m.deleted ? "" : m.body, deleted: !!m.deleted, edited: !!m.edited, encryption: "e2e",
+        })),
+        complete: true,
+    });
     // --- Header menu -------------------------------------------------------------------
     const more = h("button", { class: "icon-btn", type: "button", "aria-label": t("conv.more"), "aria-haspopup": "menu" }, icon("more"));
     more.onclick = async () => {
@@ -269,14 +274,16 @@ export function renderDM(root, peer) {
             { label: t("dmTools.search"), value: "search" },
             { label: t("calls.title"), value: "calls" },
             { label: t(muted ? "conv.unmute" : "conv.mute"), value: "mute" },
-            { label: t("dmTools.export"), value: "export" },
+            { label: t("rich.exportHistory"), value: "export" },
+            { label: t("rich.aboutEncryption"), value: "encryption" },
             { label: t("dmTools.delete"), value: "delete", danger: true },
         ]);
         if (choice === "safety") showSafetyNumber(peer, name, () => dm.devicesOf(peer).then(paintBanner)).catch(error => toast(t("common.error", { error: error.message }), "warn"));
         else if (choice === "search") toggleSearch(true);
         else if (choice === "calls") showCalls(peer, name);
         else if (choice === "mute") { setMuted(tag, !muted); paintTitle(); toast(t(muted ? "conv.unmuted" : "conv.muted", { name })); }
-        else if (choice === "export") exportDM(peer, name);
+        else if (choice === "export") import("./export.js").then(({ openExport }) => openExport({ title: name, kind: "dm", load: exportLoad }));
+        else if (choice === "encryption") aboutEncryption();
         else if (choice === "delete" && await deleteLocalHistory(peer, name)) { calls = []; render(); }
     };
     const call = h("button", { class: "icon-btn", type: "button", "aria-label": t("call.start", { name }), onclick: () => startCall(peer).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone"));
@@ -313,8 +320,10 @@ export function renderDM(root, peer) {
     dm.addEventListener("typing", onTyping);
     callLog.addEventListener("change", onCalls);
     document.addEventListener("visibilitychange", onVisible);
+    const rerender = () => { line.clear(); render(); };
+    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log)];
     root.replaceChildren(h("section", { class: "screen chat" },
-        top, banner, notice, deviceNotice, searchBar, progress, log, typing, editBar, form));
+        top, banner, announcementBanner(session), notice, deviceNotice, searchBar, progress, log, typing, editBar, form));
     dm.ready.then(render);
     callsWith(peer).then(list => { calls = list; render(); }).catch(() => {});
     checkTrust();
@@ -326,5 +335,6 @@ export function renderDM(root, peer) {
         dm.removeEventListener("typing", onTyping);
         callLog.removeEventListener("change", onCalls);
         document.removeEventListener("visibilitychange", onVisible);
+        stops.forEach(stop => stop());
     };
 }

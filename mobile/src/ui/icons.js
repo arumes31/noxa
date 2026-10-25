@@ -31,6 +31,11 @@ const paths = {
     bellOff: "M18 8a6 6 0 0 0-9.3-5M6 8c0 7-3 9-3 9h14M13.7 21a2 2 0 0 1-3.4 0M3 3l18 18",
     play: "M7 4.5l12 7.5-12 7.5z",
     pause: "M7 5h3v14H7zM14 5h3v14h-3z",
+    // Rich chat (emoji picker, header menu, lightbox, channel encryption badge).
+    emoji: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01",
+    close: "M6 6l12 12M18 6L6 18",
+    share: "M12 15V3M8 7l4-4 4 4M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7",
+    download: "M12 3v12M8 11l4 4 4-4M5 21h14",
 };
 
 export function icon(name) {

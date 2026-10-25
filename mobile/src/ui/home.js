@@ -14,6 +14,7 @@ import { statusDot } from "./presence-ui.js";
 
 import { isMuted } from "../core/conversation-prefs.js";
 import "./conversation-strings.js";
+import { announcementBanner } from "./announcement.js";
 
 /** The activity center's entry, with its unread count. */
 function activityLink() {
@@ -75,6 +76,7 @@ export function renderHome(root) {
         } }, "+")) }),
         h("div", { class: "screen-body" },
             homeCards(session),
+            announcementBanner(session),
             h("a", { class: "btn btn-primary", href: "#/new-chat" }, t("chatNew.title")),
             live.map(channel => h("a", { class: "card row", href: "#/voice", style: "border-color:var(--border-strong)" },
                 h("div", { class: "row-main" },

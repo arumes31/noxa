@@ -72,7 +72,8 @@ test("the phone manages a private group: activity, seen by, rename, invite, remo
     expect(history.messages.some(m => m.id === vicMessage)).toBe(false);
 
     // Group settings: roles, rename, invite and withdraw.
-    await page.getByRole("button", { name: "Group settings" }).click();
+    await page.getByRole("button", { name: "Conversation options" }).click();
+    await page.getByRole("menuitem", { name: "Group settings" }).click();
     const sheet = page.getByRole("dialog", { name: "Group settings" });
     await expect(sheet.locator(".member-row", { hasText: "You" })).toContainText("Owner");
     await sheet.getByRole("textbox", { name: "Group name" }).fill("Crew 2");
@@ -100,7 +101,8 @@ test("the phone manages a private group: activity, seen by, rename, invite, remo
 
     // An owner deletes a group for everyone.
     const tempID = await createGroup(page, "Temp");
-    await page.getByRole("button", { name: "Group settings" }).click();
+    await page.getByRole("button", { name: "Conversation options" }).click();
+    await page.getByRole("menuitem", { name: "Group settings" }).click();
     await page.getByRole("dialog", { name: "Group settings" }).getByRole("button", { name: "Delete group" }).click();
     await confirm(page, "Delete this group?", "Delete group");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Home");

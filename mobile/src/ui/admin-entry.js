@@ -1,5 +1,5 @@
 // admin-entry.js — the ways into the Admin area from other screens: the You
-// row, the channel options panel's settings row and the Servers "Add channel"
+// row, the chat menu's channel settings item and the Servers "Add channel"
 // button. Each shows only when the server would accept the user there:
 // owners and administrators at once, others after a probe succeeds.
 import { adminFor, canManageRoles } from "../core/admin.js";
@@ -39,18 +39,8 @@ export function adminEntry(session) {
     return reveal(row, managesChannels || session.snapshot?.can_view_audit_log ? Promise.resolve(true) : canManageRoles(session));
 }
 
-/** The "Channel settings" row of the channel options panel (channel-menu.js). */
-export function channelSettingsRow(session, channelID, onclick) {
-    const channel = session?.channels().find(c => c.id === channelID);
-    if (!channel || channel.home) return null;
-    const row = h("a", { class: "row", href: `#/admin/channel/${channelID}`, onclick },
-        h("span", { class: "hash", "aria-hidden": "true" }, icon("shield")),
-        h("span", { class: "row-main" }, h("span", { class: "row-title" }, t("entry.channel", { name: channel.name }))));
-    return reveal(row, canEditChannel(session, channelID));
-}
-
 /** Whether the server would let this session edit the channel. */
-function canEditChannel(session, channelID) {
+export function canEditChannel(session, channelID) {
     const channel = session.channels().find(c => c.id === channelID);
     return session.isAdmin || channel?.canManageAccess ? Promise.resolve(true)
         : probe(session, `edit:${channelID}`, () => adminFor(session).channelState("channel_edit", channelID));
