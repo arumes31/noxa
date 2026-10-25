@@ -49,7 +49,11 @@ func TestListenerLifecycle(t *testing.T) {
 				t.Fatal("listener did not start")
 			}
 			for _, endpoint := range []string{"/healthz", "/readyz"} {
-				response, err := client.Get(name + "://" + addr + endpoint)
+				request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, name+"://"+addr+endpoint, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				response, err := client.Do(request)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -79,11 +83,12 @@ func TestListenerLifecycle(t *testing.T) {
 }
 
 func TestListenerReportsBindFailure(t *testing.T) {
-	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	var config net.ListenConfig
+	occupied, err := config.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer occupied.Close()
+	defer func() { _ = occupied.Close() }()
 	srv := New(occupied.Addr().String(), nil, nil)
 	done := make(chan error, 1)
 	go func() { done <- srv.Start() }()
