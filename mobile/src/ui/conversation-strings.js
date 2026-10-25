@@ -26,6 +26,8 @@ addStrings({
         "conv.mutedLabel": "Muted",
 
         "vnote.record": "Record a voice message",
+        "vnote.holdHint": "Recording… release to stop, slide left to cancel",
+        "vnote.cancelled": "Recording cancelled",
         "vnote.title": "Voice message",
         "vnote.unsupported": "This browser cannot record voice messages.",
         "vnote.permission": "Waiting for the microphone…",
@@ -142,6 +144,8 @@ addStrings({
         "conv.mutedLabel": "Stummgeschaltet",
 
         "vnote.record": "Sprachnachricht aufnehmen",
+        "vnote.holdHint": "Aufnahme läuft… loslassen zum Beenden, nach links wischen zum Abbrechen",
+        "vnote.cancelled": "Aufnahme abgebrochen",
         "vnote.title": "Sprachnachricht",
         "vnote.unsupported": "Dieser Browser kann keine Sprachnachrichten aufnehmen.",
         "vnote.permission": "Warte auf das Mikrofon…",

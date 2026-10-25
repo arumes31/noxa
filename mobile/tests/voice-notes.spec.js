@@ -62,3 +62,36 @@ test("a voice message is recorded, previewed, sent in the desktop's format and p
     vern.conn.close();
     yara.conn.close();
 });
+
+test("holding the microphone records; sliding left cancels, releasing stops", async ({ page }) => {
+    page.on("pageerror", error => console.log("pageerror:", error.message));
+    await phoneAccount(page, server, server.accounts.zed, info.version, expect);
+    const yara = await contactDesktop(server, server.accounts.zoe, info.version);
+    await page.evaluate(peer => { location.hash = `#/dm/${encodeURIComponent(peer)}`; }, yara.uniqueID);
+    await expect(page.getByRole("textbox", { name: /Message/ })).toBeEnabled({ timeout: 15000 });
+    const mic = page.getByRole("button", { name: "Record a voice message" });
+    const box = await mic.boundingBox();
+    const [x, y] = [box.x + box.width / 2, box.y + box.height / 2];
+
+    // Hold, then slide left: the recording is cancelled without a preview.
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await expect(page.getByText(/release to stop/)).toBeVisible({ timeout: 10000 });
+    await page.mouse.move(x - 60, y, { steps: 4 });
+    await page.mouse.move(x - 130, y, { steps: 4 });
+    await expect(page.getByText("Recording cancelled")).toBeVisible();
+    await page.mouse.up();
+    const recorder = page.getByRole("dialog", { name: "Voice message" });
+    await expect(recorder).toHaveCount(0);
+
+    // Hold and release: the recording stops and the preview offers Send.
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await expect(page.getByText(/release to stop/)).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(1200);
+    await page.mouse.up();
+    await expect(recorder.getByRole("button", { name: "Send", exact: true })).toBeVisible({ timeout: 10000 });
+    await recorder.getByRole("button", { name: "Discard" }).click();
+    await expect(recorder).toHaveCount(0);
+    yara.conn.close();
+});

@@ -50,8 +50,38 @@ function whenVisible(node, load) {
 
 function imageElement(ref, { url, blob }) {
     const open = () => import("./lightbox.js").then(({ openLightbox }) => openLightbox({ url, blob, name: ref.name }));
-    return h("img", { class: "file-image", src: url, alt: ref.name, tabindex: "0", title: t("rich.openImage", { name: ref.name }),
+    const img = h("img", { class: "file-image", src: url, alt: ref.name, tabindex: "0", title: t("rich.openImage", { name: ref.name }),
         onclick: open, onkeydown: event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } } });
+    if (/\.gif$/i.test(ref.name)) pauseWhenHidden(img, url);
+    return img;
+}
+
+let gifObserver = null;
+/**
+ * An animated GIF that scrolls off screen is swapped for a still of its
+ * current frame, so animations out of view stop costing CPU and battery.
+ */
+function pauseWhenHidden(img, url) {
+    if (typeof IntersectionObserver !== "function") return;
+    gifObserver ||= new IntersectionObserver(entries => {
+        for (const { target, isIntersecting } of entries) {
+            if (isIntersecting) {
+                if (target.dataset.paused) { target.src = target.dataset.animated; delete target.dataset.paused; }
+                continue;
+            }
+            if (target.dataset.paused || !target.complete || !target.naturalWidth) continue;
+            try {
+                const canvas = document.createElement("canvas");
+                canvas.width = target.naturalWidth;
+                canvas.height = target.naturalHeight;
+                canvas.getContext("2d").drawImage(target, 0, 0);
+                target.dataset.paused = "1";
+                target.src = canvas.toDataURL("image/png");
+            } catch { /* tainted or detached: keep animating */ }
+        }
+    }, { rootMargin: "100px 0px" });
+    img.dataset.animated = url;
+    gifObserver.observe(img);
 }
 
 function chip(ref, kind) {

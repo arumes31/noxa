@@ -134,20 +134,74 @@ async function summarize(blob, elapsedMs) {
  * recorder: recording starts at once; Stop shows a preview to play, send,
  * record again or discard.
  */
+const HOLD_MS = 350;
+const CANCEL_SLIDE_PX = 80;
+
+/**
+ * The microphone button: a tap opens the recorder; holding it records while
+ * held (release stops, sliding left cancels), like the big messengers.
+ */
 export function voiceNoteButton(composerCtx) {
     const button = h("button", { class: "attach voice-button", type: "button", "aria-label": t("vnote.record") }, icon("mic"));
-    button.onclick = () => {
-        if (composerCtx.disabled?.()) return;
+    const supported = () => {
+        if (composerCtx.disabled?.()) return false;
         if (!globalThis.MediaRecorder || !navigator.mediaDevices?.getUserMedia || !pickVoiceMime()) {
             toast(t("vnote.unsupported"), "warn");
-            return;
+            return false;
         }
-        openRecorder(composerCtx);
+        return true;
+    };
+    let holdTimer = 0, held = null, startX = 0, pointer = -1, heldRecently = false;
+    const endHold = () => {
+        clearTimeout(holdTimer);
+        holdTimer = 0;
+        pointer = -1;
+        if (button.classList.contains("holding")) {
+            button.classList.remove("holding");
+            // The click that follows the release must not reopen the recorder.
+            heldRecently = true;
+            setTimeout(() => { heldRecently = false; }, 400);
+        }
+    };
+    button.addEventListener("pointerdown", event => {
+        if (pointer !== -1 || event.button !== 0) return;
+        pointer = event.pointerId;
+        startX = event.clientX;
+        holdTimer = setTimeout(() => {
+            holdTimer = 0;
+            if (!supported()) return;
+            button.classList.add("holding");
+            try { button.setPointerCapture(event.pointerId); } catch { /* pointer gone */ }
+            held = openRecorder(composerCtx, { hold: true });
+            navigator.vibrate?.(30);
+        }, HOLD_MS);
+    });
+    button.addEventListener("pointermove", event => {
+        if (!held || event.pointerId !== pointer) return;
+        const slid = startX - event.clientX;
+        held.slide(Math.max(0, slid) / CANCEL_SLIDE_PX);
+        if (slid > CANCEL_SLIDE_PX) {
+            held.cancel();
+            held = null;
+            endHold();
+            toast(t("vnote.cancelled"));
+        }
+    });
+    const finish = event => {
+        if (event.pointerId !== pointer) return;
+        if (held) { held.stop(); held = null; }
+        endHold();
+    };
+    button.addEventListener("pointerup", finish);
+    button.addEventListener("pointercancel", finish);
+    button.onclick = () => {
+        if (heldRecently || held) return;
+        if (supported()) openRecorder(composerCtx);
     };
     return button;
 }
 
-function openRecorder(composerCtx) {
+function openRecorder(composerCtx, { hold = false } = {}) {
     const status = h("p", { class: "hint", role: "status" }, t("vnote.permission"));
     const elapsed = h("output", { class: "voice-elapsed", role: "timer", "aria-live": "off", "aria-label": t("vnote.elapsed") }, `0:00 / ${formatDuration(VOICE_MAX_MS)}`);
     const level = h("span");
@@ -181,7 +235,8 @@ function openRecorder(composerCtx) {
         actions.replaceChildren(
             button(t("vnote.stop"), () => recorder?.state !== "inactive" && recorder.stop(), "btn-primary"),
             button(t("vnote.cancel"), () => { result = null; view.close(); }));
-        actions.querySelector(".btn-primary").focus();
+        if (hold) status.textContent = t("vnote.holdHint");
+        else actions.querySelector(".btn-primary").focus();
     };
 
     const showPreview = () => {
@@ -263,7 +318,8 @@ function openRecorder(composerCtx) {
             };
             recorder.start(250);
             started = Date.now();
-            status.textContent = t("vnote.recording");
+            status.textContent = hold ? t("vnote.holdHint") : t("vnote.recording");
+            if (releasedEarly) recorder.stop();
             startMeter();
             timer = setInterval(() => {
                 const ms = Math.min(VOICE_MAX_MS, Date.now() - started);
@@ -278,5 +334,15 @@ function openRecorder(composerCtx) {
             actions.replaceChildren(button(t("vnote.again"), start, "btn-primary"));
         }
     }
+    // A hold released before the microphone answered stops as soon as recording starts.
+    let releasedEarly = false;
     start();
+    return {
+        stop: () => {
+            if (recorder && recorder.state !== "inactive") recorder.stop();
+            else if (!recorder) releasedEarly = true;
+        },
+        cancel: () => { result = null; view.close(); },
+        slide: fraction => { live.style.opacity = String(Math.max(0.3, 1 - fraction)); },
+    };
 }

@@ -181,3 +181,23 @@ test("the phone layout returns below 900 px", async ({ page }) => {
     await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
     rowan.conn.close();
 });
+
+test("the new chat screens fit the wide shell", async ({ page }) => {
+    test.setTimeout(120000);
+    page.on("pageerror", error => console.log("pageerror:", error.message));
+    const owner = await desktopSession(server.controlAddr, server.accounts.owner, { version: info.version });
+    await openServerToMembers(owner);
+    owner.conn.close();
+    const desktop = await desktopSession(server.controlAddr, server.accounts.lou, { version: info.version });
+    await link(page, desktop);
+    const width = page.viewportSize().width;
+    for (const [route, heading] of [["#/search", /Search/], ["#/inbox", /Inbox/], ["#/saved", /Saved/], ["#/threads/2", /Threads|Posts/],
+        ["#/activity", /Activity/], ["#/files/2", /Files/], ["#/members/2", /Members|Online/], ["#/diagnostics", /Diagnostics/], ["#/server-info", /Server/]]) {
+        await page.evaluate(hash => { location.hash = hash; }, route);
+        const centre = page.locator(".shell-screen");
+        await expect(centre.getByRole("heading", { level: 1 }).first()).toHaveText(heading, { timeout: 10000 });
+        // The three panes stay, and nothing pushes the page wider than the tablet.
+        await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    }
+});

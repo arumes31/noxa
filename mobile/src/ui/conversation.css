@@ -72,6 +72,8 @@
 
 /* Voice messages: recorder. */
 .voice-button[aria-busy="true"] { opacity: .5; }
+.voice-button.holding { border-color: var(--coral); color: var(--coral); background: rgba(255, 107, 129, .12); touch-action: none; }
+.voice-button { touch-action: none; -webkit-user-select: none; user-select: none; }
 .voice-recorder { display: flex; flex-direction: column; gap: 12px; }
 .voice-live { display: flex; align-items: center; gap: 10px; }
 .voice-live[hidden] { display: none; }

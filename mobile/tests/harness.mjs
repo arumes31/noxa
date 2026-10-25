@@ -60,7 +60,7 @@ function provision(dir, databaseURL) {
     // abe/bea/cid the chat tools specs.
     for (const name of ["owner", "rowan", "ivy", "kai", "lou", "mia", "noa", "vic", "wes", "xan", "pia", "ray", "sol",
         "pax", "quinn", "remy", "sam", "tess", "uma", "val",
-        "dia", "quin", "dot", "tao", "gus", "gil", "gwen", "vern", "yara", "abe", "bea", "cid"]) {
+        "dia", "quin", "dot", "tao", "gus", "gil", "gwen", "vern", "yara", "abe", "bea", "cid", "zed", "zoe"]) {
         const password = `pw-${name}-${run}`;
         const nickname = `${name}-${run}`;
         // The owner may also log in to ServerQuery (e.g. to set the server rules).
