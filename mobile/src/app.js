@@ -83,6 +83,7 @@ export async function rememberLinkedIdentity(identity, meta) {
 }
 
 export async function forgetDevice() {
+    clearReminders();
     app.groups?.close();
     app.groups = null;
     app.calls?.close();
@@ -336,7 +337,10 @@ export const REMIND_AFTER = 10 * 60 * 1000;
 
 /** Pending "call back" reminders: [{uid, name, at}]. Per browser only. */
 export function reminders() {
-    try { return JSON.parse(localStorage.getItem(REMINDERS_KEY) || "[]"); } catch { return []; }
+    try {
+        const list = JSON.parse(localStorage.getItem(REMINDERS_KEY) || "[]");
+        return Array.isArray(list) ? list.filter(r => r && typeof r.uid === "string" && typeof r.name === "string" && Number.isFinite(r.at)) : [];
+    } catch { return []; }
 }
 
 function saveReminders(list) {
@@ -345,9 +349,19 @@ function saveReminders(list) {
 }
 
 let reminderTimer = 0;
+let reminderGeneration = 0;
+
+function clearReminders() {
+    reminderGeneration++;
+    clearTimeout(reminderTimer);
+    for (const reminder of reminders()) closeNotifications(`remind:${reminder.uid}`);
+    try { localStorage.removeItem(REMINDERS_KEY); } catch { /* private window */ }
+    emit("reminders");
+}
 
 /** Schedules the next due reminder; due ones notify and stay on Home. */
 function scheduleReminders() {
+    const generation = ++reminderGeneration;
     clearTimeout(reminderTimer);
     const pending = reminders().filter(r => !r.shown);
     if (!pending.length) return;
@@ -357,10 +371,16 @@ function scheduleReminders() {
         const list = reminders();
         for (const reminder of list.filter(r => !r.shown && r.at <= now)) {
             reminder.shown = true;
-            navigator.vibrate?.([200, 100, 200]);
             const registration = await navigator.serviceWorker?.getRegistration("/app/").catch(() => null);
+            if (generation !== reminderGeneration) return;
+            navigator.vibrate?.([200, 100, 200]);
             await registration?.showNotification(reminder.name, { body: reminder.body, tag: `remind:${reminder.uid}`, data: { url: `/app/#/dm/${encodeURIComponent(reminder.uid)}` } }).catch(() => {});
+            if (generation !== reminderGeneration) {
+                closeNotifications(`remind:${reminder.uid}`);
+                return;
+            }
         }
+        if (generation !== reminderGeneration) return;
         saveReminders(list);
         scheduleReminders();
     }, Math.max(1000, next - Date.now()));

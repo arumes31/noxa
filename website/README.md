@@ -1,17 +1,15 @@
 # noXa product website
 
-A static product and Windows-download page based on the supplied Signature
-design (concept 25), updated to the client’s OLED Midnight palette. The public site is intended for
-<https://arumes31.github.io/noxa/> and the root of
-<https://noxa.wowcraft.pw/>. Both publish the same static files. The latter
-origin redirects `/dl/noxa-client-windows-amd64.exe` to the latest Windows
-release on GitHub
-and launches the mobile PWA at `/app/`, all through HTTPS port 443.
+A static product and Windows-download page using the client's OLED Midnight
+palette, hosted at <https://noxa.wowcraft.pw/>. The same origin serves the PWA
+at `/app/` and redirects `/dl/noxa-client-windows-amd64.exe` to the latest
+Windows release on GitHub, through HTTPS port 443. The desktop public test
+server address is `wowcraft.pw`.
 
 ## Files and local preview
 
 Only `public/` is deployed. It contains semantic HTML, CSS, a small browser
-script, `.nojekyll`, and local branding/screenshots. There is no application
+script and local branding/screenshots. There is no application
 server, build step, analytics, remote font request, or service worker.
 Tests, tooling, this document, and design references are not published.
 
@@ -58,7 +56,7 @@ outside the published directory.
 
 `public/assets/screenshots/app-chat.png` and `app-roles.png` are captures of
 the actual noXa frontend at application commit
-`324da2863988e509ab58ff626d17267acb5e073c`. They use fictional local demo
+`5442eb2e4275fe2c6c651dcc0cea955fc5dfdd36`. They use fictional local demo
 messages, members, channels, roles, and the reserved `community.example`
 hostname. The page identifies the images as demo data. They are browser
 captures with native API fixtures, not a connection to a production server
@@ -85,6 +83,12 @@ manifest before committing them, then run the website tests and compare
 desktop/mobile previews. The script and fixture data stay outside `public/`.
 Update the application commit recorded above when replacing these captures.
 
+`public/assets/screenshots/pwa-chat.png` captures the actual mobile chat components
+at 390 × 844 with fictional local data. Run `node website/scripts/capture-mobile.mjs`
+after installing `mobile/` dependencies and Chromium to refresh it. Its source
+revision and browser are recorded in `scripts/capture-mobile-manifest.json`.
+External requests and service workers are blocked during both capture workflows.
+
 ## Download contract
 
 Every Windows download points to:
@@ -110,44 +114,18 @@ The page links to [all releases](https://github.com/arumes31/noxa/releases),
 the current [new-server setup guide](https://github.com/arumes31/noxa#new-server-setup).
 “Latest” does not imply stable; the product remains labeled Public alpha.
 
-## GitHub Pages setup and deployment
+## Hosting and validation
 
-One-time repository owner setup:
+GitHub Pages is disabled. The [Website workflow](../.github/workflows/website.yml)
+validates pull requests and website changes; it does not publish a site or
+create deployments. Host `public/` at the root of the public HTTPS origin.
+Keep the `/app/`, `/ws`, API and file-transfer routes directed to the noXa web
+listener, and the exact Windows download route redirected to GitHub Releases.
+The website files are separate from the noXa Docker image.
 
-1. In **Settings → Pages → Build and deployment**, select **GitHub Actions**
-   as the source.
-2. In **Settings → Environments → github-pages**, restrict deployment branches
-   to the selected branch `main` (not pull request refs or arbitrary branches).
-   Keep any required deployment reviewers already configured.
-3. Review the website PR and merge it through the repository's normal process.
-   A website change pushed to `main` runs validation before publishing. To
-   republish the current version, run the **Website** workflow manually with
-   branch `main` selected.
-4. Confirm the **Publish GitHub Pages** job succeeded and open its environment
-   URL. The intended URL is <https://arumes31.github.io/noxa/>; a successful
-   local test or uploaded artifact alone does not confirm a live deployment.
-
-The dedicated [Pages workflow](../.github/workflows/pages.yml) validates every
-pull request. Its **Website validation** job can be selected as a required
-check without path filters leaving unrelated PRs pending. Push runs are
-limited to `website/**` and the Pages workflow on `main`. Manual runs on other
-branches can validate but cannot upload a deployment artifact or publish.
-Publication also checks that `main` is still the default branch; update the
-workflow and environment rules together if the default branch is renamed.
-
-Only a successful validation job on an eligible default-branch run uploads
-`website/public/`. The deployment job consumes that run's Pages artifact and
-is the only job granted `pages: write` and `id-token: write`. It uses the
-`github-pages` environment and serializes production deployments. PR runs
-cannot cancel production deployments. Existing application CI and release
-workflows are separate.
-
-The workflow does not enable Pages itself or add a custom domain. If Pages is
-not configured, complete step 1 and rerun the workflow on `main`. If an
-environment approval is pending, an authorized reviewer must approve that
-specific deployment. Do not loosen branch restrictions to publish a feature
-branch. For rollback, revert the website change through the normal review
-process and let the successful `main` run publish the reverted static files.
+Validate before copying the static files to the host. Keep a copy of the
+previous public directory for rollback; deploy only `public/`, never the
+repository, test fixtures or operator files.
 
 ## Updating the page
 
@@ -158,11 +136,5 @@ and inspect every published image for private messages, production hostnames,
 tokens, and personal information. A new screenshot must document its source,
 application commit, capture method, and refresh procedure.
 
-The page's canonical URL and social metadata deliberately use the production
-project-site URL. If the repository or Pages domain changes, update those
-values and the local-resource/base-path tests together.
-
-The workflow action pins were verified against each official action's release
-and Git tag on 2026-10-02: checkout v7.0.1, setup-node v7.0.0, configure-pages
-v6.0.0, upload-pages-artifact v5.0.0, and deploy-pages v5.0.1. The repository's
-existing GitHub Actions Dependabot configuration covers this workflow.
+The canonical URL and social metadata use <https://noxa.wowcraft.pw/>.
+Update those values and browser tests together if the public domain changes.

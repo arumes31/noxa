@@ -104,8 +104,8 @@ test('download, navigation, and metadata destinations are consistent', async ({ 
   for (const link of await page.locator('a[target="_blank"]').all()) {
     expect((await link.getAttribute('rel') || '').split(/\s+/)).toContain('noopener');
   }
-  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://arumes31.github.io/noxa/');
-  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute('content', /^https:\/\/arumes31\.github\.io\/noxa\//);
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://noxa.wowcraft.pw/');
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute('content', /^https:\/\/noxa\.wowcraft\.pw\//);
   await expect(page).toHaveTitle(/noXa/);
   expect(await page.locator('meta[name="description"]').getAttribute('content')).toBeTruthy();
   const robots = await page.locator('meta[name="robots"]').evaluateAll(nodes => nodes.map(node => node.content));

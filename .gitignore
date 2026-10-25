@@ -68,3 +68,11 @@ __pycache__/
 
 # Built mobile web app (mobile/ -> web/app)
 /web/
+
+# Local reviews, previews, temporary clones and automated work notes
+/output/
+/.tmp/
+/.jules/
+**/node_modules/
+**/test-results/
+**/playwright-report/

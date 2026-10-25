@@ -79,3 +79,7 @@ tasks/
 
 # Local config that should not be baked into the image
 config.yaml
+
+# Review artifacts and automated work notes
+output/
+.jules/

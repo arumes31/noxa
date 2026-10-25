@@ -39,7 +39,7 @@ test('does not expose tooling, unavailable resources, or parent files', async ()
   assert.equal((await fetch(`${origin}/`, { method: 'POST' })).status, 405);
 });
 
-test('Pages artifact contains only public website assets', async () => {
+test('Website artifact contains only public assets', async () => {
   const root = fileURLToPath(new URL('../public/', import.meta.url));
   const extensions = new Set(['.html', '.css', '.js', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.ico', '.woff2']);
   const allowedDirectories = new Set(['assets', 'css', 'js', 'branding', 'screenshots', 'fonts']);
@@ -49,17 +49,16 @@ test('Pages artifact contains only public website assets', async () => {
       const path = join(directory, name);
       const info = await lstat(path);
       assert.equal(info.isSymbolicLink(), false, `Artifact contains symlink: ${name}`);
-      assert.ok(!name.startsWith('.') || (directory === root && name === '.nojekyll'), `Unexpected dotfile: ${name}`);
+      assert.ok(!name.startsWith('.'), `Unexpected dotfile: ${name}`);
       if (info.isDirectory()) {
         assert.ok(allowedDirectories.has(name), `Unexpected public directory: ${name}`);
         await check(path);
       } else {
-        assert.ok(name === '.nojekyll' || (directory === join(root, 'assets', 'fonts') && name === 'OFL.txt') || extensions.has(extname(name)), `Unexpected public file: ${name}`);
+        assert.ok((directory === join(root, 'assets', 'fonts') && name === 'OFL.txt') || extensions.has(extname(name)), `Unexpected public file: ${name}`);
         found.push(name);
       }
     }
   }
   await check(root);
   assert.ok(found.includes('index.html'));
-  assert.ok(found.includes('.nojekyll'));
 });
