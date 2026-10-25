@@ -235,7 +235,9 @@ test("mention completion inserts a name and the member is mentioned", async () =
 async function openChatSettings() {
     await page.goto(`${server.webURL}/app/#/you`);
     const section = page.locator('details[data-section="chat"]');
-    await section.locator("summary").click();
+    // Sections stay open while the app runs, so only a closed one is opened.
+    await expect(section).toBeVisible();
+    if (await section.getAttribute("open") === null) await section.locator("summary").click();
     await expect(section).toHaveAttribute("open", "");
 }
 
