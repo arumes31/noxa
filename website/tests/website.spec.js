@@ -1,6 +1,6 @@
 import { test as base, expect } from '@playwright/test';
 
-const downloadURL = 'https://noxa.wowcraft.pw/dl/noxa-client-windows-amd64.exe';
+const downloadURL = 'https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe';
 
 // A marketing page needs no third-party runtime requests. Block them so network
 // availability cannot make deterministic browser checks pass or fail.
