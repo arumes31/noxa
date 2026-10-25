@@ -6,11 +6,13 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io/fs"
 	"strconv"
 	"time"
 
 	"noxa/internal/authorization"
 	"noxa/internal/channels"
+	"noxa/internal/defaultavatars"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
 )
@@ -75,7 +77,7 @@ func (s *TCPServer) setAvatar(ctx context.Context, client *Client, msg netproto.
 	return s.acknowledgeAsset(client, msg.AckRequested, netproto.MsgAvatarSet, "", "")
 }
 
-// handleAvatarGet returns another user's avatar, if set.
+// handleAvatarGet returns an uploaded avatar or an identity-stable default.
 func (s *TCPServer) handleAvatarGet(ctx context.Context, client *Client, f *netproto.Frame) error {
 	var msg netproto.AvatarGet
 	if err := netproto.Decode(f, &msg); err != nil {
@@ -86,6 +88,12 @@ func (s *TCPServer) handleAvatarGet(ctx context.Context, client *Client, f *netp
 
 func (s *TCPServer) readAvatar(ctx context.Context, client *Client, msg netproto.AvatarGet) error {
 	raw, image, err := s.assets().readAvatar(msg.UniqueID)
+	// The storage layer reports ErrNotExist when no usable upload exists.
+	// Preserve other storage errors; visibility was checked by roleAvatarGet.
+	if errors.Is(err, fs.ErrNotExist) {
+		raw, err = defaultavatars.Get(msg.UniqueID)
+		image.contentType = "image/webp"
+	}
 	if err == nil {
 		return s.writeMessage(client, netproto.MsgAvatarData, netproto.AvatarData{
 			UniqueID:    msg.UniqueID,

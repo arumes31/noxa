@@ -1,0 +1,608 @@
+{
+  "generator": "OpenAI built-in image_gen",
+  "generated": "2026-10-25",
+  "style": "Japanese 2D anime, adult head portraits, historical to futuristic",
+  "optimization": "256x256 WebP, quality 86, Lanczos resize; high-resolution originals retained locally",
+  "portraits": [
+    {
+      "id": "001",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "28e86f8ff4fc793f28428684bbc123adccbcf48d0c5fad6f3595d7f04449f350"
+    },
+    {
+      "id": "002",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "f99911fe390a8ccfe964b37811f6c27f4e4312e1610b97fe6e1c295e3d71d47a"
+    },
+    {
+      "id": "003",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "2416d9245a9a93a6fde43872968f50b9dfb5c5536e2b387ae679c3afbe32a94b"
+    },
+    {
+      "id": "004",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "b7fcea0d672943e0ae9af7a1de0779ccb3b40cd4d8fc2ed5013ea6d3f9633cd0"
+    },
+    {
+      "id": "005",
+      "era": "medieval 1000–1499",
+      "gender": "man",
+      "sha256": "fe1669317425777d8de1ec42592c2c64df779f9dfcc5c437c780c2dc39ea2057"
+    },
+    {
+      "id": "006",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "55be00320532e291fa5b4afce95cb0687bbe73e6c5f043bb2da22505486626e3"
+    },
+    {
+      "id": "007",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "9500bec9adb4b0fdfe44cb79fef0a5385a36e0ee99c99ba9ab62bcbd3c28b0a1"
+    },
+    {
+      "id": "008",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "e97b39cdc258ebb45aa7e81526cbebe902f10d3ac4e22c75c8c5c68f69e9c58e"
+    },
+    {
+      "id": "009",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "b2bb257821078e930002efdc746d65135a6d3352ceb72530d3fbbca7436da795"
+    },
+    {
+      "id": "010",
+      "era": "medieval 1000–1499",
+      "gender": "man",
+      "sha256": "a80e3893796fe275a06d5a1c6d858d6e4aa3bc45d01a13b7caf3ed5a6edaea8f"
+    },
+    {
+      "id": "011",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "eddd294b22a7f3c4af66a6ae23a407b7c21ac90f66b093c0ef173989f5a58d66"
+    },
+    {
+      "id": "012",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "30f2607757fb234f83fdaeef49bc9e6cdeda0307f80256bc942bd6a1c265940d"
+    },
+    {
+      "id": "013",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "889875fc642a3521dcac4ad034eaaf644bd64aa75bbd4147e2839f4925fad218"
+    },
+    {
+      "id": "014",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "6518bca8c4fba572f9c921ab4505479b0e709d322f7d46be466db21c754fd8ac"
+    },
+    {
+      "id": "015",
+      "era": "medieval 1000–1499",
+      "gender": "man",
+      "sha256": "eb9cecdcb5cf1d1250d67683da7d08ad9375e742b117ac292f548e21612cc500"
+    },
+    {
+      "id": "016",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "d9d1340580d7d1a5f8e4a3cacda9d1db642e7ca8cbee92083de006c365c06d92"
+    },
+    {
+      "id": "017",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "441865e4a3e42a9eb8501d905a92997cda7f92df3e73758c57de4259a6df54a0"
+    },
+    {
+      "id": "018",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "54371640e827c6b76e03032bd376be82ed4c47d9a25eb1ac203cb53515b23a3a"
+    },
+    {
+      "id": "019",
+      "era": "medieval 1000–1499",
+      "gender": "woman",
+      "sha256": "bba648ec690d3fa0e7516a5bc67d6a0e454a6aa16b1a3c329c26bf5c326b8800"
+    },
+    {
+      "id": "020",
+      "era": "medieval 1000–1499",
+      "gender": "man",
+      "sha256": "87bc1053a7e70119a32d2e0b5137f1a07f431f56e8f66b182d2fc171cd622b67"
+    },
+    {
+      "id": "021",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "b3045c7cd5d50c88f3339907d783df51e14734ba236748c6d73241bbb0539b25"
+    },
+    {
+      "id": "022",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "e39bd9eca0a0e2155f403663e9fcd267adb632396943badb62ef9dcd5725878f"
+    },
+    {
+      "id": "023",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "cd42bd2afa561e9365b2dd1b1d94ba335794159f002c17b422ad7199058f80d1"
+    },
+    {
+      "id": "024",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "ab512281f1cd9f6c0725853d2d527dfabed004a4f831ba782ecdebe83ee91aba"
+    },
+    {
+      "id": "025",
+      "era": "historical 1500–1799",
+      "gender": "man",
+      "sha256": "9a1a304b4f1bec12146a0efc4791d2e9b48bdf87af41272f4cd38304aa108721"
+    },
+    {
+      "id": "026",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "49d7591978185d045944a1ac07ecaad05fc1eb03c2e0c6a484fc39c3ea768d55"
+    },
+    {
+      "id": "027",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "6d7d917439d12e349a1b9a54a2ebf12523e022c329f1dbd03f90b91c086bd049"
+    },
+    {
+      "id": "028",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "6079c10ca937057e59cc96dce3bd8e3c895b3ba7af6fd001d859c381717bcc6a"
+    },
+    {
+      "id": "029",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "e89bf26f97e385abfe8aef66d88a5e238bccfd61f9eaade324574508992d85cd"
+    },
+    {
+      "id": "030",
+      "era": "historical 1500–1799",
+      "gender": "man",
+      "sha256": "a90c47009c7972c2f4f963e270051223e7553259181d91823641d361086dc61c"
+    },
+    {
+      "id": "031",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "5a0c4a81f76b7f9f50fb5e5333926b28752bd105c199edf79599f2e02e06bba1"
+    },
+    {
+      "id": "032",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "193f7c44f5dcb984eb1e6e55765b6880a69944b0f9dfbec282c373fc286f22ae"
+    },
+    {
+      "id": "033",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "4ef3b761bea59bd3505650b5a57a96e15fb4358407c600a4ba740675af0b92f1"
+    },
+    {
+      "id": "034",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "265f0907128b4b76b743847104194cdc3b29e28b1b384b6d7f45a76121415d0c"
+    },
+    {
+      "id": "035",
+      "era": "historical 1500–1799",
+      "gender": "man",
+      "sha256": "6b83196ab6d5e8db5600be57650c808b4c4c3c2883628c6887169e576bf80d57"
+    },
+    {
+      "id": "036",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "328c62f0fe1da352b2f086302c2330619e62c72f2a69812f8b9900b7d836d45d"
+    },
+    {
+      "id": "037",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "2d13e2a2fdc368ecc00208d476a4d2e5a876ee2589278471907f9719eace8a6c"
+    },
+    {
+      "id": "038",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "1adb3a55ae9e0af0402d44be144c85f55b4d0494675e9e095d1200d3352329c5"
+    },
+    {
+      "id": "039",
+      "era": "historical 1500–1799",
+      "gender": "woman",
+      "sha256": "8b219ef1f823723f6b09bba01e8c739c659dff79b5b76a39e0054c6ecb2d40ed"
+    },
+    {
+      "id": "040",
+      "era": "historical 1500–1799",
+      "gender": "man",
+      "sha256": "7549c38c809e586aabc978150724d3bd726f9ce06086e981b637700f980781b1"
+    },
+    {
+      "id": "041",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "df4ab459a9bd259ed04503ffcea2addfbbaa980f77c45e33d94b80cf1f0e43f0"
+    },
+    {
+      "id": "042",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "a8591175aa1be22faf2731e5876f21f83abc78c09f7e01a2298dc4d0757736b8"
+    },
+    {
+      "id": "043",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "00399b6627a7703d14167b1d82669cdfb5d676180a49f674598a6a71ad9d0a2d"
+    },
+    {
+      "id": "044",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "c7a008c02057c950b5c57efdb15252651f48437c8c3a7d16f53f9a69d3cfd21b"
+    },
+    {
+      "id": "045",
+      "era": "modern history 1800–1999",
+      "gender": "man",
+      "sha256": "eed3bc83db6cdebde9c55985a1e7be980da510e568169d4c2c4f9d2d41e1ebca"
+    },
+    {
+      "id": "046",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "07b800bcaf3aea76b677de0f849be32dadbade70d7833a9b6ae9f921471bde86"
+    },
+    {
+      "id": "047",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "57f63673492ab7df5657b94c999657b28fe3dd305b8933d6df2d22b6d267486b"
+    },
+    {
+      "id": "048",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "7c389509ff5ccb6fa2445a848f225fbb4dd7f7979625e78daf7200064f9e8953"
+    },
+    {
+      "id": "049",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "b79c6fe2c78afab81b496e837baf1b6d5341d573c3335e95ef6aaa7bfe1ea45f"
+    },
+    {
+      "id": "050",
+      "era": "modern history 1800–1999",
+      "gender": "man",
+      "sha256": "c4aec3fcc82af728b3b8911efce756cb08eab7e83c35501c3c5dfd6125c544c5"
+    },
+    {
+      "id": "051",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "c24a67dbd80dde2f341bed68c3b9d4ee017551a55cd347c75b5de93b1cfa029a"
+    },
+    {
+      "id": "052",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "44d0441d2405f22f81f152ef35d48a6d1eb2c9ab5c80b5b07be79e86e6a7f57a"
+    },
+    {
+      "id": "053",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "bfd48e0283f11c3cc919e6064f80a0eb0a3633c294954ea6ed57836ef89edb8b"
+    },
+    {
+      "id": "054",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "ab9c15b238cfef0f4e4acfcabada2a97ef9b5c0ed46214b4f6a0ec40f82960df"
+    },
+    {
+      "id": "055",
+      "era": "modern history 1800–1999",
+      "gender": "man",
+      "sha256": "1f0dd5f194c1f0b3aeb7d61bd4859e2e6df7541fbe5443e28e606b472cc1bdd4"
+    },
+    {
+      "id": "056",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "db38416e4c5d6279dfa73749a83c08f4583e46dceba4a82a6943680e1f30aefd"
+    },
+    {
+      "id": "057",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "1b507897043070d6571a76355db06b7a733e6aae22dd20152e6fae5d578c62c7"
+    },
+    {
+      "id": "058",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "645891eccc7159bf6cbccc9e8a459eba8d3dd627f74f81c4a68b897a267c3816"
+    },
+    {
+      "id": "059",
+      "era": "modern history 1800–1999",
+      "gender": "woman",
+      "sha256": "27a54061ab7aa0f03ec590093bffa15b263ca355cd5ce713679a4dd3f70b2d5e"
+    },
+    {
+      "id": "060",
+      "era": "modern history 1800–1999",
+      "gender": "man",
+      "sha256": "fe8a51f43ab23aff241389d94f42e1c53286bfab12c3ba06c10bcbb9d7e41b01"
+    },
+    {
+      "id": "061",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "b56b9f53f5e6ec34c3d49996f4e220d8949f5315eb69b8148a0c60ba71737223"
+    },
+    {
+      "id": "062",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "75a227e4a9e6089c93ab481aedb8928676856eb962eda007cde857d4fde519b3"
+    },
+    {
+      "id": "063",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "0470ce5b315545cd0a9d303f62d296e55845bfda06951cae70cdbc8119373e0b"
+    },
+    {
+      "id": "064",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "794f07e3a327508c108e0c151871be8733478b73a9d8cbe513d9fab7104c9e80"
+    },
+    {
+      "id": "065",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "man",
+      "sha256": "9b78d26ddc86399a2d95bad22cbeb7fad685de39dd58ec97b3ed7d9d2876f339"
+    },
+    {
+      "id": "066",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "8cd8f9cbbcfc62bc0856ff53531a3d1e4c8f89ac4ef9fda01e4076650211d77f"
+    },
+    {
+      "id": "067",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "f293a9e6b6ce05ae9e082125a047851eabd708e8b5f472ad125345f956e93288"
+    },
+    {
+      "id": "068",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "d43a1ef4b8fbcc083b6e218ac6f3b95c9016cb191cae7cba730359b73bad4c10"
+    },
+    {
+      "id": "069",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "3844800e6a817cd1f6076f7f5994c992313e73b57be656db6deae50da793ebbf"
+    },
+    {
+      "id": "070",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "man",
+      "sha256": "c06b42b15a6176724468dedb3ce0d29cb37c36272a4d361ca51ed842808c756d"
+    },
+    {
+      "id": "071",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "cf5e01b3fda0f704c53e21a3249c2e8c4dddc319c068f2c7df334b271f74b713"
+    },
+    {
+      "id": "072",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "0490928ffe3e3d4f9f9459b2e1b91785baf570d0bdfc2c7cf284fe90875abfdb"
+    },
+    {
+      "id": "073",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "1cca88512a3dbe2db4864369205f734c7ae7941bb53de9f6e357231d8f3e9783"
+    },
+    {
+      "id": "074",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "2139198a00785b5680588eb30d44b6c59fbb7800fa76b1c5a21cd49c146b63de"
+    },
+    {
+      "id": "075",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "man",
+      "sha256": "ac0ff9564b927ca2fad6dd49370b63966764f0cb538e192778e9115bfd00411a"
+    },
+    {
+      "id": "076",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "bf0f79b57c49e28259e5e1dbbe62abbd97e294aff5479cd0028f4a0a95de0a64"
+    },
+    {
+      "id": "077",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "4af31c196815cac03fe4067010f7c60b3223b9c6680d1dfde8de3aab8b0dc422"
+    },
+    {
+      "id": "078",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "1b9b0c15f679a80bda4b5dd2d1e737e17a2ce80a44da0c49270116dc2339c774"
+    },
+    {
+      "id": "079",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "woman",
+      "sha256": "d72576fcf7330d7f141a04bc4c16a1bf1390b14e7e9f36a1c36b48e045a95298"
+    },
+    {
+      "id": "080",
+      "era": "contemporary and near future 2000–2199",
+      "gender": "man",
+      "sha256": "285c35abf9e165d8ffae1504473ab9805c83d2f2dd7ac06dc4f1b0cf30a11796"
+    },
+    {
+      "id": "081",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "d98264c80a16651eadbe36b177f32f7b3a4b916a2beeaf58e020ca903359bf49"
+    },
+    {
+      "id": "082",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "9f4d758cf6358457aa04720c50252f43b8b8b76f94cdc6d498d2523119b9d7c2"
+    },
+    {
+      "id": "083",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "f64f56b363a324fdcf9123b467ed0280d69840a730830c9fe969794ce10ed301"
+    },
+    {
+      "id": "084",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "81f9cf5b925f6152f1954bb35a2b72f7fb4cfe7288e8101f753db4395efd7b5b"
+    },
+    {
+      "id": "085",
+      "era": "far future 2200–3000",
+      "gender": "man",
+      "sha256": "99b24a3ce6a898b29506020c18974d7d39c8d275f80448072e50b5fb38c73423"
+    },
+    {
+      "id": "086",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "7d38dbdf89b90ebc88b1e6ffd2ec02f64a2b0242f594068c58aafd606fe773eb"
+    },
+    {
+      "id": "087",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "c4493be14641d8ae8c92c27f4dc3814c8b2f44975a7b57c7667e6ee6f32e6b13"
+    },
+    {
+      "id": "088",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "447e164758cc691b0b2cbad9cbb2a9a915930c399af9fce6e5dcd66ecacfcc71"
+    },
+    {
+      "id": "089",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "e069e9bae0b5cca1be8f1cb919df95f1698c487ec1b0899bb696d1689d66d0b9"
+    },
+    {
+      "id": "090",
+      "era": "far future 2200–3000",
+      "gender": "man",
+      "sha256": "999e7754f972605baa4891d12371a510aa8cbf599589d66c9894e3d0e578246a"
+    },
+    {
+      "id": "091",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "b96dd1f50f680421688d12e0bc45c1165442a74e63afdbca91912f4c27e29d89"
+    },
+    {
+      "id": "092",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "6509791029eafa9422c41d07a1e24c8f619c2386aea5b307ab8d2b4b714f3813"
+    },
+    {
+      "id": "093",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "b7f6d5920572ad4a09c3ab01e0ea774bb4472c666717598e9e182b35bc531cb0"
+    },
+    {
+      "id": "094",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "ebc06fed6345b0febefa52ead5f61678b2f419700598ebb2d42e3bb8531a4202"
+    },
+    {
+      "id": "095",
+      "era": "far future 2200–3000",
+      "gender": "man",
+      "sha256": "5345dee4212f73f7b8294869e701aef8df5a1bc0d542ef62626a42ad1aa3d3f2"
+    },
+    {
+      "id": "096",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "b56e457c40036f5b27f6c8943859e6f5cee8a76f2c2b5341e2ca96c2a47bb37c"
+    },
+    {
+      "id": "097",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "663b6b6dba89b8b1d3f498eefb8e1f3d07cd487a15765a3d86a9005307fbb825"
+    },
+    {
+      "id": "098",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "219ccb2a677ceae95b3c88f50f11d116dbf1503765f1fb3d5436722b2ca511ec"
+    },
+    {
+      "id": "099",
+      "era": "far future 2200–3000",
+      "gender": "woman",
+      "sha256": "cce93d8c745fb0725fb4ab80b7146d70c05a89c012f2c03915f7b211d760dca9"
+    },
+    {
+      "id": "100",
+      "era": "far future 2200–3000",
+      "gender": "man",
+      "sha256": "7b0350f479ff9c8af9e5ca633ba81575b3e2794b187c95305be0a081dc273e56"
+    }
+  ]
+}

@@ -14,6 +14,7 @@ import (
 
 	"noxa/internal/auth"
 	"noxa/internal/authorization"
+	"noxa/internal/defaultavatars"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
 )
@@ -150,6 +151,19 @@ func TestAvatarSetGet(t *testing.T) {
 
 	conn, _ := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = conn.Close() }()
+
+	// Accounts without an upload receive the same server-selected portrait.
+	for range 2 {
+		send(t, conn, netproto.MsgAvatarGet, netproto.AvatarGet{UniqueID: "user-uid"})
+		var avatar netproto.AvatarData
+		if err := netproto.Decode(readOfType(t, conn, netproto.MsgAvatarData), &avatar); err != nil {
+			t.Fatal(err)
+		}
+		want, err := defaultavatars.Get("user-uid")
+		if err != nil || avatar.UniqueID != "user-uid" || avatar.ContentType != "image/webp" || avatar.DataBase64 != b64(want) {
+			t.Fatalf("default avatar mismatch: type=%s err=%v", avatar.ContentType, err)
+		}
+	}
 
 	// Wrong type rejected.
 	send(t, conn, netproto.MsgAvatarSet, netproto.AvatarSet{DataBase64: b64([]byte("not an image"))})

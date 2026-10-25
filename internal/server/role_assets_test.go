@@ -133,6 +133,26 @@ func TestRoleAvatarsFollowMemberVisibilityAndUploadCapability(t *testing.T) {
 	if got := readError(t, member); got.Code != errCodePermissionDenied {
 		t.Fatalf("legacy admin upload: %+v", got)
 	}
+	// Defaults obey the same visibility rules as uploaded portraits.
+	send(t, member, netproto.MsgAvatarGet, netproto.AvatarGet{UniqueID: "user-uid"})
+	var initial netproto.AvatarData
+	if err := netproto.Decode(readOfType(t, member, netproto.MsgAvatarData), &initial); err != nil || initial.ContentType != "image/webp" {
+		t.Fatalf("visible default: type=%s err=%v", initial.ContentType, err)
+	}
+	if err := env.state.MoveClient(ownerID, 1); err != nil {
+		t.Fatal(err)
+	}
+	send(t, member, netproto.MsgAvatarGet, netproto.AvatarGet{UniqueID: "user-uid"})
+	if got := readError(t, member); got.Code != errCodeNotFound {
+		t.Fatalf("hidden default: %+v", got)
+	}
+	if err := env.state.LeaveChannel(ownerID); err != nil {
+		t.Fatal(err)
+	}
+	send(t, member, netproto.MsgAvatarGet, netproto.AvatarGet{UniqueID: "unknown-uid"})
+	if got := readError(t, member); got.Code != errCodeNotFound {
+		t.Fatalf("unknown default: %+v", got)
+	}
 	send(t, owner, netproto.MsgAvatarSet, netproto.AvatarSet{DataBase64: b64(tinyPNG)})
 	send(t, owner, netproto.MsgAvatarGet, netproto.AvatarGet{UniqueID: "user-uid"})
 	readOfType(t, owner, netproto.MsgAvatarData)
