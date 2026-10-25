@@ -128,3 +128,16 @@ test("poll bodies parse and percentages, ballots and validation follow the serve
     assert.equal(newerPollState({ version: 3 }, { version: 2 }).version, 3);
     assert.equal(newerPollState({ version: 3 }, { version: 4 }).version, 4);
 });
+
+test("rate-limited actions are retried a few times, other errors are not", async () => {
+    const { withRateRetry } = await import("../src/core/poll-state.js");
+    const waits = [];
+    let calls = 0;
+    const flaky = async () => { if (++calls < 3) throw new Error("poll rate limit exceeded — slow down"); return "ok"; };
+    assert.equal(await withRateRetry(flaky, { wait: async ms => waits.push(ms) }), "ok");
+    assert.deepEqual(waits, [1000, 2000]);
+    await assert.rejects(withRateRetry(async () => { throw new Error("thread not found"); }, { wait: async () => {} }), /not found/);
+    calls = 0;
+    await assert.rejects(withRateRetry(async () => { calls++; throw new Error("rate limit"); }, { attempts: 2, wait: async () => {} }), /rate limit/);
+    assert.equal(calls, 2);
+});

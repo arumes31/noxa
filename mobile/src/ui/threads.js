@@ -5,20 +5,17 @@
 // and the author's and moderators' actions. Managers configure forum mode,
 // the channel's tags and auto-archive here as well.
 import { app } from "../app.js";
+import { withRateRetry } from "../core/poll-state.js";
 import { t } from "../i18n.js";
 import { avatar, clock, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { header, scopeName } from "./common.js";
 import { richBody, watchCustomEmoji } from "./rich-text.js";
 import { chooseChat, discussionsFor } from "./chat-tools.js";
+import { personName } from "./tool-sources.js";
 import { encryptionBadge, headerActions, lineCache, menuButton, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 import "./chat-tools-strings.js";
 import "./chat-tools.css";
-
-function personName(session, uid) {
-    if (uid === session.uniqueID) return session.nickname;
-    return session.clients().find(c => c.unique_id === uid)?.nickname || app.dm?.conversations.get(uid)?.nickname || t("dm.someone");
-}
 
 function when(seconds) {
     if (!seconds) return "";
@@ -171,6 +168,8 @@ export function renderThreads(root, arg) {
         if (!s.threads.length && !loading) list.replaceChildren(h("li", { class: "hint" }, t(filters.following ? "threads.noneFollowing" : "threads.none")));
         more.hidden = !s.hasMore || !s.threads.length;
         manage.hidden = !s.canManage;
+        // A forum channel's chat link would lead straight back here.
+        head.querySelector("a.icon-btn")?.setAttribute("href", s.forum ? "#/servers" : `#/chat/${channelID}`);
         forumHint.hidden = !s.forum;
         newButton.textContent = t(s.forum ? "threads.newPost" : "threads.new");
     }
@@ -199,6 +198,7 @@ export function renderThreads(root, arg) {
     const forumHint = h("p", { class: "hint", hidden: true }, t("threads.forumHint"));
     body.append(h("div", { class: "tool-actions" }, newButton, chatButton, manage), forumHint, filterBar, status, list, more);
 
+    const head = header(t("threads.title"), { back: `#/chat/${channelID}`, sub: name });
     let timer = 0;
     const onList = event => { if (event.detail.channelID === channelID) render(); };
     const onChanged = event => {
@@ -208,9 +208,7 @@ export function renderThreads(root, arg) {
     };
     discussions.addEventListener("list", onList);
     discussions.addEventListener("changed", onChanged);
-    root.replaceChildren(h("section", { class: "screen chat-tools" },
-        header(t("threads.title"), { back: state().forum ? "#/servers" : `#/chat/${channelID}`, sub: name }),
-        body));
+    root.replaceChildren(h("section", { class: "screen chat-tools" }, head, body));
     render();
     load().then(() => {
         if (mode === "new") {
@@ -263,13 +261,26 @@ export function renderThread(root, arg) {
         if (atBottom || messages.at(-1)?.own) log.scrollTop = log.scrollHeight;
     }
 
+    const toolbarButton = run => h("button", { class: "btn", type: "button", hidden: true, onclick: () => thread && run() });
+    const toolbarButtons = {
+        join: toolbarButton(() => act(thread.joined ? "leave" : "join")()),
+        follow: toolbarButton(() => act("subscribe", !thread.subscribed)()),
+        resolve: toolbarButton(() => act("resolve", !thread.resolved)()),
+        pin: toolbarButton(() => act("pin", !thread.pinned)()),
+    };
+
+    // While a change is on its way the toolbar waits for it.
+    const busy = on => Object.values(toolbarButtons).forEach(button => { button.disabled = on; });
     const act = (action, value) => async () => {
+        busy(true);
         try {
-            await discussions.setFlag(channelID, threadID, action, value);
+            await withRateRetry(() => discussions.setFlag(channelID, threadID, action, value));
             thread = await discussions.get(channelID, threadID) || thread;
             renderMeta();
         } catch (error) {
             toast(t("common.error", { error: error.message }), "warn");
+        } finally {
+            busy(false);
         }
     };
 
@@ -277,12 +288,18 @@ export function renderThread(root, arg) {
         if (!thread) return;
         title.textContent = thread.title;
         chips.replaceChildren(threadChips({ ...thread, unread: false }));
-        const pressed = (label, on, run) => h("button", { class: "btn", type: "button", "aria-pressed": String(on), onclick: run }, label);
-        toolbar.replaceChildren(
-            pressed(t(thread.joined ? "threads.joined" : "threads.join"), thread.joined, thread.joined ? act("leave") : act("join")),
-            thread.joined ? pressed(t(thread.subscribed ? "threads.following" : "threads.follow"), thread.subscribed, act("subscribe", !thread.subscribed)) : null,
-            canEdit() ? pressed(t(thread.resolved ? "threads.resolved" : "threads.resolve"), thread.resolved, act("resolve", !thread.resolved)) : null,
-            canModerate() ? pressed(t(thread.pinned ? "threads.pinned" : "threads.pin"), thread.pinned, act("pin", !thread.pinned)) : null);
+        // The buttons stay in place (only their state changes), so a tap
+        // never lands on one a refresh just replaced.
+        const set = (button, label, on, shown = true) => {
+            button.textContent = label;
+            button.setAttribute("aria-pressed", String(on));
+            button.hidden = !shown;
+        };
+        set(toolbarButtons.join, t(thread.joined ? "threads.joined" : "threads.join"), thread.joined);
+        set(toolbarButtons.follow, t(thread.subscribed ? "threads.following" : "threads.follow"), thread.subscribed, thread.joined);
+        set(toolbarButtons.resolve, t(thread.resolved ? "threads.resolved" : "threads.resolve"), thread.resolved, !!canEdit());
+        set(toolbarButtons.pin, t(thread.pinned ? "threads.pinned" : "threads.pin"), thread.pinned, canModerate());
+        if (!toolbar.childElementCount) toolbar.append(...Object.values(toolbarButtons));
         if (thread.archived) {
             footer.replaceChildren(h("p", { class: "thread-hint" }, t("threads.archivedHint"),
                 canEdit() ? h("button", { class: "btn", type: "button", onclick: act("archive", false) }, t("threads.reopen")) : null));
@@ -354,7 +371,7 @@ export function renderThread(root, arg) {
         input.value = "";
         input.style.height = "";
         try {
-            await discussions.send(channelID, threadID, text);
+            await withRateRetry(() => discussions.send(channelID, threadID, text));
         } catch (error) {
             input.value = text;
             toast(t("chat.sendFailed", { error: error.message }), "warn");

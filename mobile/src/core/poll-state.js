@@ -56,3 +56,19 @@ export function newerPollState(current, next) {
     if (!current || (next.version || 0) >= (current.version || 0)) return next;
     return current;
 }
+
+/**
+ * Runs a server action, retrying a few times when the account's chat rate
+ * limit (shared by messages, polls and thread actions) refuses it: a
+ * quick series of taps should land, not fail with "slow down".
+ */
+export async function withRateRetry(action, { attempts = 4, delay = 1000, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+    for (let attempt = 1; ; attempt++) {
+        try {
+            return await action();
+        } catch (error) {
+            if (attempt >= attempts || !/rate limit|slow down/i.test(error?.message || "")) throw error;
+            await wait(delay * attempt);
+        }
+    }
+}

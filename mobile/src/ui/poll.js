@@ -3,7 +3,7 @@
 // in the sealed body; counts, the own ballot and closing come from the
 // server (PollRequest/PollState), which never reveals who voted for what.
 import { ChatSession } from "../core/chat-session.js";
-import { POLL_DURATIONS, newerPollState, pollClosed, pollPercentages, pollRemaining, togglePollChoice, validatePoll } from "../core/poll-state.js";
+import { POLL_DURATIONS, newerPollState, withRateRetry, pollClosed, pollPercentages, pollRemaining, togglePollChoice, validatePoll } from "../core/poll-state.js";
 import { lang, t } from "../i18n.js";
 import { h, toast } from "./dom.js";
 import "./chat-tools-strings.js";
@@ -102,7 +102,7 @@ export function pollCard(message, session) {
         busy = true;
         render();
         try {
-            const result = await session.poll(message.id, action, choices);
+            const result = await withRateRetry(() => session.poll(message.id, action, choices), { attempts: action === "get" ? 1 : 4 });
             if (!Array.isArray(result.counts) || result.counts.length !== poll.options.length) throw new Error(t("poll.unavailable"));
             const before = state;
             state = newerPollState(state, result);
