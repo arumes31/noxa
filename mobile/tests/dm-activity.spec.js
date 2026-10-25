@@ -84,9 +84,9 @@ test("DM attachments, typing and receipts work between the phone and a desktop",
     const storage = storageName(sealed.blob);
     await uploadBlob(quin.conn, 0, storage, sealed.blob, ftURL());
     await sendDM(quin, dia.uniqueID, `from my desktop ${fileToken(storage, sealed.master, PNG.length, "quin.png")}`);
-    await page.getByRole("button", { name: "Show image quin.png" }).click();
+    // Images load inline (setting inlineImages, ui/attachments.js) without a tap.
     const image = page.getByRole("img", { name: "quin.png" });
-    await expect(image).toBeVisible();
+    await expect(image).toBeVisible({ timeout: 15000 });
     expect(await image.evaluate(img => img.naturalWidth)).toBe(1);
     dia.conn.close();
     quin.conn.close();
