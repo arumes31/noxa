@@ -100,6 +100,7 @@ export async function forgetDevice() {
     app.meta = {};
     app.guestPassword = "";
     app.unread.clear();
+    unreadChanged();
     app.viewing = null;
     emit("signedout");
 }

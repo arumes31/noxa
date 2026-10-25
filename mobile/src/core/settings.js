@@ -117,7 +117,7 @@ export function clearAccountSettings() {
     reset(["contacts", "notes", "blockedUsers", "buddies", "keywords", "chatTabs",
         "userVolumes", "mutedUsers", "shareVolumes", "whisperTargets", "channelNotify",
         "channelWatch", "mutedConversations", "unsubscribedChannels", "motdSeen",
-        "presenceStatus", "presenceMessage"]);
+        "presenceStatus", "presenceMessage", "autoAwayMessage"]);
 }
 
 /** Calls listener({changed, settings}) after every change; returns a stop function. */

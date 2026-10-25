@@ -101,12 +101,13 @@ test("encrypted chat imports reject excessive or invalid work factors before Web
 
 test("account cleanup removes private settings but keeps appearance", async () => {
     const settings = await import("../src/core/settings.js");
-    settings.set({ theme: "light", fontScale: 1.2, contacts: [{ uid: "a", note: "secret" }], notes: { a: "secret" }, presenceMessage: "private", chatTabs: { order: ["dm:a"], pinned: [] } });
+    settings.set({ theme: "light", fontScale: 1.2, contacts: [{ uid: "a", note: "secret" }], notes: { a: "secret" }, presenceMessage: "private", autoAwayMessage: "private away", chatTabs: { order: ["dm:a"], pinned: [] } });
     settings.clearAccountSettings();
     assert.deepEqual(settings.get("contacts"), []);
     assert.deepEqual(settings.get("notes"), {});
     assert.deepEqual(settings.get("chatTabs"), { order: [], pinned: [] });
     assert.equal(settings.get("presenceMessage"), "");
+    assert.equal(settings.get("autoAwayMessage"), "");
     assert.equal(settings.get("theme"), "light");
     assert.equal(settings.get("fontScale"), 1.2);
     settings.reset();
