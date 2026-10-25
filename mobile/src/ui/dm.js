@@ -11,6 +11,7 @@ import { richBody, watchCustomEmoji } from "./rich-text.js";
 import { header } from "./common.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
+import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage, shareText } from "./chat-actions.js";
 import { aboutEncryption, encryptionBadge, headerActions, lineCache, menuButton, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 
 export function renderDM(root, peer) {
@@ -42,9 +43,7 @@ export function renderDM(root, peer) {
                 ? h("span", { class: "msg-locked" }, t("chat.locked"))
                 : richBody(message.body, { session, conn: session.conn, channelID: 0 });
         const from = message.self ? session.nickname : (message.fromNickname || name);
-        const changeable = message.self && !message.deleted && !message.pending && !message.queued && !message.failed;
-        return h("div", { class: classes, dataset: { id: String(message.id ?? "") }, tabindex: changeable ? "0" : null, role: changeable ? "button" : null,
-            "aria-label": changeable ? t("dm.messageActions") : null, onclick: changeable ? event => { if (!event.target.closest("a, button, img, video")) messageActions(message); } : null },
+        const el = h("div", { class: classes, dataset: { id: String(message.id ?? "") }, tabindex: message.deleted ? null : "0", "aria-haspopup": message.deleted ? null : "dialog" },
             timeNode(message.sentAt),
             avatar(from, "sm"),
             h("div", { class: "msg-body" },
@@ -54,7 +53,10 @@ export function renderDM(root, peer) {
                 message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
                 message.queued ? h("div", { class: "msg-state" }, t("outbox.waiting")) : null,
                 message.failed ? h("div", { class: "error" }, t("outbox.notSent")) : null));
+        el.noxaMessage = message.deleted ? null : message;
+        return el;
     });
+    bindMessageTaps(log, message => messageActions(message));
 
     function render() {
         const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
@@ -101,12 +103,22 @@ export function renderDM(root, peer) {
         input.value = "";
     }
     async function messageActions(message) {
-        const choice = await sheet(t("dm.messageActions"), null, [
-            { label: t("dm.edit"), value: "edit", primary: true },
-            { label: t("dm.delete"), value: "delete", danger: true },
-            { label: t("link.cancel"), value: null },
-        ]);
-        if (choice === "edit") {
+        const changeable = message.self && !message.deleted && !message.pending && !message.queued && !message.failed;
+        const hasText = typeof message.body === "string" && !!message.body;
+        const sent = !message.pending && !message.queued && !message.failed;
+        const actions = [
+            hasText ? { label: t("act.copy"), value: "copy" } : null,
+            hasText && canShare() ? { label: t("act.share"), value: "share" } : null,
+            sent ? { label: t("act.save"), value: "save" } : null,
+            changeable ? { label: t("dm.edit"), value: "edit" } : null,
+            changeable ? { label: t("dm.delete"), value: "delete", danger: true } : null,
+        ].filter(Boolean);
+        if (!actions.length) return;
+        const choice = await actionSheet({ title: t("dm.messageActions"), subtitle: excerpt(message.body, 160), actions });
+        if (choice === "copy") copyText(message.body);
+        else if (choice === "share") shareText(message.body);
+        else if (choice === "save") saveMessage({ kind: "dm", peer, clientMsgID: message.id }).catch(error => toast(t("act.failed", { error: error.message }), "warn"));
+        else if (choice === "edit") {
             editing = message.id;
             editBar.hidden = false;
             input.value = message.body || "";

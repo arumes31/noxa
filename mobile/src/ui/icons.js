@@ -23,6 +23,9 @@ const paths = {
     share: "M12 15V3M8 7l4-4 4 4M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7",
     download: "M12 3v12M8 11l4 4 4-4M5 21h14",
     shield: "M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z",
+    // Message actions (pins, replies).
+    pin: "M9 4h6l-1 5 4 4H6l4-4zM12 13v8",
+    reply: "M10 8L4 13l6 5M4 13h10a6 6 0 0 1 6 6",
 };
 
 export function icon(name) {

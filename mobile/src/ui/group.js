@@ -8,6 +8,7 @@ import { header } from "./common.js";
 import { richBody, watchCustomEmoji } from "./rich-text.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
+import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage, shareText } from "./chat-actions.js";
 import { aboutEncryption, blockedLine, encryptionBadge, headerActions, isBlockedUser, lineCache, menuButton, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 
 const EXPORT_PAGES = 20;
@@ -55,10 +56,26 @@ export function renderGroup(root, id) {
             : message.text === null || message.text === undefined ? h("span", { class: "msg-locked" }, t("group.locked"))
                 : richBody(message.text, { session: app.session, conn: app.session.conn, channelID: folder });
         const from = nameOf(message.from_unique_id);
-        return h("div", { class: `msg${own ? " own" : ""}`, dataset: { id: String(message.id ?? "") } },
+        const el = h("div", { class: `msg${own ? " own" : ""}`, dataset: { id: String(message.id ?? "") }, tabindex: message.deleted ? null : "0", "aria-haspopup": message.deleted ? null : "dialog" },
             timeNode(message.created_at),
             avatar(from, "sm"),
             h("div", { class: "msg-body" }, h("span", { class: "msg-from" }, from), message.deleted ? null : encryptionBadge("e2e"), body));
+        el.noxaMessage = message.deleted ? null : message;
+        return el;
+    });
+    bindMessageTaps(log, async message => {
+        const hasText = typeof message.text === "string" && !!message.text;
+        const choice = await actionSheet({
+            title: t("act.messageFrom", { name: nameOf(message.from_unique_id) }), subtitle: excerpt(message.text, 160),
+            actions: [
+                hasText ? { label: t("act.copy"), value: "copy" } : null,
+                hasText && canShare() ? { label: t("act.share"), value: "share" } : null,
+                message.id ? { label: t("act.save"), value: "save" } : null,
+            ].filter(Boolean),
+        });
+        if (choice === "copy") copyText(message.text);
+        else if (choice === "share") shareText(message.text);
+        else if (choice === "save") saveMessage({ kind: "group", groupID: id, messageID: message.id }).catch(error => toast(t("act.failed", { error: error.message }), "warn"));
     });
 
     function render() {

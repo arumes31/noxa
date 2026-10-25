@@ -1,0 +1,79 @@
+/* chat-actions.css — message actions, replies, reactions, pins, mentions,
+   unread markers and the undo-send countdown. */
+
+.msg[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.msg.flash { animation: msg-flash 1.8s ease-out; border-radius: 8px; }
+@keyframes msg-flash { 0%, 30% { background: var(--accent-dim); } 100% { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .msg.flash { animation: none; background: var(--accent-dim); } }
+
+/* Action sheet */
+.act-sheet .act-excerpt { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; }
+.act-quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.act-emoji { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--glass); font-size: 1.3rem; line-height: 1; padding: 0; }
+.act-emoji.mine { border-color: var(--accent); background: var(--accent-dim); }
+.act-more { color: var(--text-dim); font-size: 1.4rem; }
+.act-list { display: flex; flex-direction: column; gap: 6px; }
+.act-item { width: 100%; min-height: 44px; justify-content: flex-start; text-align: left; }
+.act-prompt { display: flex; flex-direction: column; gap: 10px; }
+.act-field { width: 100%; min-height: 44px; font-size: 16px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); resize: vertical; }
+.act-field:focus { outline: none; border-color: var(--border-strong); }
+.act-row { display: flex; gap: 8px; justify-content: flex-end; }
+.act-pins { margin: 0; padding: 0; list-style: none; }
+.act-pin { gap: 8px; }
+.act-pin .row-sub { white-space: normal; }
+
+/* Reply quote and pin badge */
+.reply-quote { display: flex; align-items: center; gap: 6px; max-width: 100%; min-height: 32px; margin: 0 0 3px; padding: 2px 8px; border: 0; border-left: 2px solid var(--accent); border-radius: 6px; background: var(--accent-dim); color: var(--text-dim); font-size: .78rem; text-align: left; white-space: nowrap; overflow: hidden; }
+.reply-quote svg { width: 14px; height: 14px; flex-shrink: 0; }
+.reply-from { color: var(--accent); font-weight: 600; flex-shrink: 0; }
+.reply-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pin-badge { display: inline-flex; vertical-align: -2px; margin-right: 4px; color: var(--amber); }
+.pin-badge svg { width: 14px; height: 14px; }
+
+/* Reaction chips (override the plain list from styles.css) */
+.msg-body .reactions { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 0; white-space: normal; }
+.msg-body .reaction { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; min-width: 44px; padding: 0 8px; border-radius: 16px; border: 1px solid var(--border); background: var(--glass); color: var(--text); font-size: .85rem; }
+.msg-body .reaction.mine { border-color: var(--accent); background: var(--accent-dim); }
+.reaction-count { font-family: var(--font-mono); font-size: .72rem; color: var(--text-dim); }
+.reaction.mine .reaction-count { color: var(--accent); }
+.reaction-add { color: var(--text-faint); justify-content: center; }
+
+/* Reply / edit bar above the composer */
+.compose-bar { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border-top: 1px solid var(--border); background: var(--bg-raised); font-size: .8rem; }
+.compose-bar[hidden] { display: none; }
+.compose-bar-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.compose-bar-title { color: var(--accent); font-weight: 600; }
+.compose-bar-detail { color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Mention suggestions */
+.mention-pop { flex-shrink: 0; max-height: min(40dvh, 264px); overflow-y: auto; margin: 0 8px; padding: 4px; border: 1px solid var(--border-strong); border-radius: 14px 14px 0 0; background: var(--glass-strong); }
+.mention-pop[hidden] { display: none; }
+.mention-opt { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 8px; border-radius: 10px; cursor: pointer; }
+.mention-opt.active, .mention-opt:hover { background: var(--accent-dim); }
+.mention-avatar { position: relative; display: inline-flex; flex-shrink: 0; }
+.mention-avatar::after { content: ""; position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--bg-raised); background: var(--accent); }
+.mention-avatar.status-away::after { background: var(--amber); }
+.mention-avatar.status-busy::after { background: var(--coral); }
+.mention-avatar.status-invisible::after { background: var(--text-faint); }
+.mention-symbol { width: 28px; height: 28px; align-items: center; justify-content: center; border-radius: 8px; background: var(--accent-dim); color: var(--accent); font-weight: 700; }
+.mention-symbol::after { display: none; }
+
+/* Unread markers */
+.unread-sep { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin: 6px 0; color: var(--coral); font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.unread-sep::before, .unread-sep::after { content: ""; flex: 1; height: 1px; background: var(--coral); opacity: .6; }
+.chat-log-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.new-pill { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 5; min-height: 36px; padding: 0 16px; border-radius: 18px; border: 1px solid var(--border-strong); background: var(--glass-strong); color: var(--accent); font-weight: 600; font-size: .85rem; box-shadow: 0 4px 16px rgba(0, 0, 0, .4); }
+.new-pill[hidden] { display: none; }
+
+/* Undo send */
+.msg.held .msg-body { opacity: .75; }
+.undo-state { display: flex; align-items: center; gap: 4px; }
+
+/* Join / leave lines */
+.sys-line { flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding-left: 50px; color: var(--text-faint); font-size: .75rem; min-height: 22px; }
+.sys-line details summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+.sys-line details ul { margin: 2px 0 4px; padding-left: 16px; }
+
+/* Settings rows */
+.act-settings .act-field { margin-top: 6px; }
+.act-select { min-height: 44px; font-size: 16px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text); }

@@ -171,7 +171,7 @@ export async function connect({ guest = null } = {}) {
     });
     session.addEventListener("incoming", event => {
         const { scope, message } = event.detail;
-        if (!message.own) noteUnread(`channel:${scope}`, message.mentioned);
+        if (!message.own) noteUnread(`channel:${scope}`, message.mentioned || !!message.keyword);
     });
     if (!app.meta.guest) reportVisibility(conn);
     if (!app.meta.guest) syncPush(conn).then(state => {
@@ -362,6 +362,8 @@ function noteUnread(tag, mention) {
 /** Marks a conversation read here and on the account's other devices. */
 export function markRead(tag) {
     closeNotifications(tag);
+    // The chat screen places its "New messages" divider from this.
+    if (app.unread.has(tag)) app.lastUnread = { tag, ...app.unread.get(tag) };
     const had = app.unread.delete(tag);
     const split = tag.indexOf(":");
     if (app.session) announceRead(app.session.conn, tag.slice(0, split), tag.slice(split + 1));
