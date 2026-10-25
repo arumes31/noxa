@@ -76,8 +76,8 @@ func (s *Store) PrepareRolePolicy(ctx context.Context, ownerID int64) (_ authori
 		if err := tx.QueryRowContext(ctx, `INSERT INTO auth_roles(name,position) VALUES($1,$2) RETURNING id`, role.Name, role.Position).Scan(&role.ID); err != nil {
 			return authorization.RolePolicy{}, err
 		}
-		for _, capability := range role.Permissions {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO auth_role_grants(role_id,capability) VALUES($1,$2)`, role.ID, capability); err != nil {
+		if len(role.Permissions) > 0 {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO auth_role_grants(role_id,capability) SELECT $1, UNNEST($2::text[])`, role.ID, pq.Array(role.Permissions)); err != nil {
 				return authorization.RolePolicy{}, err
 			}
 		}
@@ -291,8 +291,8 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_role_grants WHERE role_id=$1`, r.ID); err != nil {
 			return err
 		}
-		for _, c := range r.Permissions {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO auth_role_grants(role_id,capability) VALUES($1,$2)`, r.ID, c); err != nil {
+		if len(r.Permissions) > 0 {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO auth_role_grants(role_id,capability) SELECT $1, UNNEST($2::text[])`, r.ID, pq.Array(r.Permissions)); err != nil {
 				return err
 			}
 		}
@@ -315,8 +315,8 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_member_roles WHERE user_id=$1`, m.UserID); err != nil {
 			return err
 		}
-		for _, id := range m.RoleIDs {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO auth_member_roles(user_id,role_id) VALUES($1,$2)`, m.UserID, id); err != nil {
+		if len(m.RoleIDs) > 0 {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO auth_member_roles(user_id,role_id) SELECT $1, unnest($2::bigint[])`, m.UserID, pq.Array(m.RoleIDs)); err != nil {
 				return err
 			}
 		}

@@ -10,6 +10,7 @@ const media = {
 };
 
 export default defineConfig({
+    outputDir: "test-results/e2e",
     testDir: "tests",
     testMatch: /.*\.spec\.js/,
     timeout: 60000,

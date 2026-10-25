@@ -39,6 +39,21 @@ async function freeUDPPort() {
     });
 }
 
+// Managed TURN binds both UDP and TCP. A UDP-only free port may be reserved
+// for TCP by Windows (for example Hyper-V), so check both transports.
+async function freeTurnPort() {
+    for (let attempt = 0; attempt < 20; attempt++) {
+        const port = await freePort();
+        const available = await new Promise(resolve => {
+            const socket = dgram.createSocket("udp4");
+            socket.once("error", () => { socket.close(); resolve(false); });
+            socket.bind(port, "0.0.0.0", () => socket.close(() => resolve(true)));
+        });
+        if (available) return port;
+    }
+    throw new Error("no port available for both TURN transports");
+}
+
 const slash = p => p.replace(/\\/g, "/");
 
 function tool(name) {
@@ -84,7 +99,7 @@ export async function startServer({ databaseURL = process.env.NOXA_E2E_DATABASE_
     for (const name of ["tcp", "grpc", "health", "query", "file", "web"]) ports[name] = await freePort();
     ports.udp = await freeUDPPort();
     ports.sfu = await freeUDPPort();
-    ports.turn = await freeUDPPort();
+    ports.turn = await freeTurnPort();
     // Chrome gathers on real interfaces only, so a loopback relay never
     // answers it: serve TURN on a private LAN address when there is one.
     const turnHost = process.env.NOXA_E2E_TURN_HOST || Object.values(os.networkInterfaces()).flat()

@@ -87,3 +87,31 @@ test('linked event hides banner and stale responses cannot cross tabs', async ({
     await page.evaluate(async()=>{window.__noxa.state.activeTabID='other';window.__noxaMobile.clear();window.__releaseDevices([]);await window.__pendingRefresh;});
     await expect(page.locator('#mobile-announcement')).toBeHidden();
 });
+
+test('small sidebar banner stays available for linked accounts and opens QR setup', async ({ page }, testInfo) => {
+    await page.evaluate(() => window.__devices.push({ kind: 'web' }));
+    await refresh(page);
+    const shortcut = page.locator('#mobile-setup-banner');
+    await expect(shortcut).toBeVisible();
+    await expect(page.locator('#mobile-announcement')).toBeHidden();
+    expect((await shortcut.boundingBox()).height).toBeLessThan(40);
+    await page.screenshot({ path: testInfo.outputPath('mobile-sidebar-banner.png') });
+    await shortcut.click();
+    await expect(page.locator('.mobile-quick-guide').getByRole('img', { name: 'QR code that links your phone to this account' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => { for (const f of window.__events.disconnected) f(); });
+    await expect(shortcut).toBeHidden();
+});
+
+test('dismissing during a pending device refresh keeps the promotion hidden', async ({ page }) => {
+    await refresh(page);
+    await page.evaluate(() => {
+        window.__devicePromise = new Promise(resolve => { window.__releaseDevices = resolve; });
+        window.__pendingRefresh = window.__noxaMobile.refresh();
+    });
+    await page.waitForFunction(() => window.__calls.filter(c => c[0] === 'DevicesForTab').length >= 2);
+    await page.locator('#mobile-announcement').getByRole('button', { name: 'Not now' }).click();
+    await page.evaluate(async () => { window.__releaseDevices([]); await window.__pendingRefresh; });
+    await expect(page.locator('#mobile-announcement')).toBeHidden();
+    await expect(page.locator('#mobile-setup-banner')).toBeVisible();
+});

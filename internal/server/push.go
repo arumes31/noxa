@@ -298,6 +298,13 @@ func (s *TCPServer) deliverPush(ctx context.Context, sub store.PushSubscription,
 	if !ok {
 		return
 	}
+	// A notice can wait behind desktop activity or another send. Re-read the
+	// subscription so a later mute, sign-out or privacy change takes effect.
+	current, err := pushes.PushSubscriptionForDevice(ctx, sub.Principal, sub.DeviceID)
+	if err != nil || pushFiltered(current.Filters, n, time.Now()) {
+		return
+	}
+	sub = current
 	payload := pushPayload{Kind: n.Kind, Tag: n.Tag, Video: n.Video, At: time.Now().Unix()}
 	if !sub.HideDetails {
 		payload.From, payload.Place = n.From, n.Place

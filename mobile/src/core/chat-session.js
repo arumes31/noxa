@@ -388,23 +388,29 @@ export class ChatSession extends EventTarget {
         if (missing.length && this.conn.open) this.conn.send(Msg.ChatKeyRequest, { channel_id: scope, key_ids: missing.slice(0, 64) });
     }
 
-    #subscribing = new Set();
+    #subscribing = new Map();
+    #subscriptionQueue = Promise.resolve();
 
-    /**
-     * Subscribes to text channels so their chat and keys reach this device.
-     * Channels with a request in flight are skipped: snapshots arrive in
-     * bursts, and every request costs a token of the server's chat limit.
-     */
+    /** Batch every channel, coalesce duplicate intents and preserve intent order. */
     async subscribe(channelIDs, subscribe = true) {
-        const ids = channelIDs.filter(id => id > 0 && !this.#subscribing.has(id));
+        const ids = [...new Set(channelIDs)].filter(id => Number.isSafeInteger(id) && id > 0 && this.#subscribing.get(id)?.subscribe !== subscribe);
         if (!ids.length) return;
-        ids.forEach(id => this.#subscribing.add(id));
-        try {
-            const state = await this.conn.request(Msg.ChannelSubscribe, { channel_ids: ids.slice(0, 64), subscribe }, Msg.SubscriptionState);
-            this.subscriptions = new Set(state.channel_ids || []);
-        } finally {
-            ids.forEach(id => this.#subscribing.delete(id));
-        }
+        const intent = { subscribe };
+        ids.forEach(id => this.#subscribing.set(id, intent));
+        const operation = this.#subscriptionQueue.then(async () => {
+            try {
+                for (let offset = 0; offset < ids.length; offset += 64) {
+                    const state = await this.conn.request(Msg.ChannelSubscribe, { channel_ids: ids.slice(offset, offset + 64), subscribe }, Msg.SubscriptionState);
+                    this.subscriptions = new Set(state.channel_ids || []);
+                }
+            } finally {
+                ids.forEach(id => {
+                    if (this.#subscribing.get(id) === intent) this.#subscribing.delete(id);
+                });
+            }
+        });
+        this.#subscriptionQueue = operation.catch(() => {});
+        return operation;
     }
 
     #entryToMessage(scope, entry) {

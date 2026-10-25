@@ -20,32 +20,39 @@ export class ActivityLog extends EventTarget {
         this.storage = storage;
         this.entries = [];
         this.ready = this.#load();
-        this.#saving = Promise.resolve();
     }
 
-    #saving;
+    #saving = Promise.resolve();
+    #loaded = false;
+    #dirty = false;
+    #discardLoaded = false;
 
     async #load() {
         try {
             const stored = await this.storage.load();
             // Entries added before the load finished stay in front.
-            if (Array.isArray(stored)) this.entries = [...this.entries, ...stored.filter(e => !this.entries.some(x => x.id === e.id))].slice(0, CAP);
+            if (!this.#discardLoaded && Array.isArray(stored)) this.entries = [...this.entries, ...stored.filter(e => !this.entries.some(x => x.id === e.id))].slice(0, CAP);
         } catch {
             // A missing or unreadable log starts empty.
         }
-        this.#changed(false);
+        this.#loaded = true;
+        this.#changed(this.#dirty);
+        this.#dirty = false;
     }
 
     #changed(persist = true) {
-        if (persist) {
-            const snapshot = this.entries.slice();
+        if (persist && !this.#loaded) {
+            this.#dirty = true;
+        } else if (persist) {
+            const snapshot = this.entries.map(entry => ({ ...entry }));
             this.#saving = this.#saving.then(() => this.storage.save(snapshot)).catch(() => {});
         }
         this.dispatchEvent(new CustomEvent("change"));
     }
 
     /** Waits until every change so far is stored. */
-    flush() {
+    async flush() {
+        await this.ready;
         return this.#saving;
     }
 
@@ -92,6 +99,7 @@ export class ActivityLog extends EventTarget {
     }
 
     clear() {
+        this.#discardLoaded = true;
         this.entries = [];
         this.#changed();
     }

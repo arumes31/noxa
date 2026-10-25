@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 func TestPushFilteredRules(t *testing.T) {
@@ -121,5 +122,46 @@ func TestPushPreferencesCarryFilters(t *testing.T) {
 	if e := deviceCallError(t, phone, netproto.DeviceRequest{Action: netproto.DeviceActionPushPreferences,
 		Preferences: &netproto.PushPreferences{Filters: &netproto.PushFilters{QuietFrom: "99:99"}}}); e.Code != errCodeMalformed {
 		t.Fatalf("invalid filters error = %+v", e)
+	}
+}
+
+func TestDelayedPushUsesCurrentSubscription(t *testing.T) {
+	for _, scenario := range []string{"dnd", "mute", "privacy", "unsubscribe"} {
+		t.Run(scenario, func(t *testing.T) {
+			p := startPushTestEnv(t)
+			stale := store.PushSubscription{Principal: "user-uid", DeviceID: "phone", Endpoint: "https://push.example/phone"}
+			if err := p.pushes.SavePushSubscription(t.Context(), stale); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			switch scenario {
+			case "dnd":
+				filters, _ := json.Marshal(netproto.PushFilters{DNDUntil: time.Now().Add(time.Hour).Unix()})
+				err = p.pushes.SetPushFilters(t.Context(), stale.Principal, stale.DeviceID, filters)
+			case "mute":
+				filters, _ := json.Marshal(netproto.PushFilters{MutedTags: []string{"dm:ivy"}})
+				err = p.pushes.SetPushFilters(t.Context(), stale.Principal, stale.DeviceID, filters)
+			case "privacy":
+				err = p.pushes.SetPushPreferences(t.Context(), stale.Principal, stale.DeviceID, true, false)
+			case "unsubscribe":
+				err = p.pushes.DeletePushSubscription(t.Context(), stale.Principal, stale.DeviceID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.env.srv.deliverPush(t.Context(), stale, pushNotice{Kind: pushKindDM, Tag: "dm:ivy", From: "Ivy"})
+			if scenario == "privacy" {
+				got := p.sender.next(t)
+				if got.payload.From != "" {
+					t.Fatalf("sender leaked after hiding details: %+v", got.payload)
+				}
+			} else {
+				select {
+				case got := <-p.sender.sent:
+					t.Fatalf("stale subscription delivered: %+v", got.payload)
+				default:
+				}
+			}
+		})
 	}
 }

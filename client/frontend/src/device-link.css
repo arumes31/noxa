@@ -80,3 +80,9 @@
 @media (max-width: 450px) { .device-link .mobile-platform-guide { grid-template-columns: minmax(0, 1fr); } }
 
 .mobile-platform-guide .device-link-pane > .hint { display: none; }
+
+/* Persistent QR setup entry above the desktop account card. */
+#mobile-setup-banner { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; min-height: 30px; margin: 4px 10px 0; padding: 5px 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-panel); color: var(--accent); font-size: 12px; text-align: left; }
+#mobile-setup-banner[hidden] { display: none; }
+#mobile-setup-banner span { flex: 1; }
+#mobile-setup-banner .ui-icon { width: 16px; height: 16px; }

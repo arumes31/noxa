@@ -359,3 +359,55 @@ func TestRoleStoreChannelAccessAndMemberSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRoleBulkWritesPreserveAndClearAllAssignments(t *testing.T) {
+	s, owner, member := roleTestStore(t)
+	p, err := s.PrepareRolePolicy(t.Context(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := p.Roles[1]
+	role.Permissions = []authorization.Capability{authorization.ViewChannel, authorization.SendMessages}
+	p, err = s.ChangeRolePolicy(t.Context(), owner, authorization.RoleChange{Kind: authorization.RoleUpdate, ExpectedRevision: p.Revision, RoleID: role.ID, Role: role})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []int64{role.ID, p.Roles[2].ID}
+	p, err = s.ChangeRolePolicy(t.Context(), owner, authorization.RoleChange{Kind: authorization.MemberRolesSet, ExpectedRevision: p.Revision, UserID: member, RoleIDs: ids})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.RolePolicy(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Members) != 1 || len(stored.Members[0].RoleIDs) != 2 {
+		t.Fatalf("assignments: %+v", stored.Members)
+	}
+	for _, r := range stored.Roles {
+		if r.ID == role.ID && len(r.Permissions) != 2 {
+			t.Fatalf("grants: %+v", r.Permissions)
+		}
+	}
+	role.Permissions = nil
+	p, err = s.ChangeRolePolicy(t.Context(), owner, authorization.RoleChange{Kind: authorization.RoleUpdate, ExpectedRevision: p.Revision, RoleID: role.ID, Role: role})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.ChangeRolePolicy(t.Context(), owner, authorization.RoleChange{Kind: authorization.MemberRolesSet, ExpectedRevision: p.Revision, UserID: member})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err = s.RolePolicy(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Members) != 0 {
+		t.Fatalf("assignments not cleared: %+v", stored.Members)
+	}
+	for _, r := range stored.Roles {
+		if r.ID == role.ID && len(r.Permissions) != 0 {
+			t.Fatalf("grants not cleared: %+v", r.Permissions)
+		}
+	}
+}

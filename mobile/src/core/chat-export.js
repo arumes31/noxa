@@ -15,6 +15,7 @@ import { fromBase64, toBase64 } from "./crypto.js";
 
 export const EXPORT_ITERATIONS = 600000;
 export const EXPORT_FORMAT = "noxa-chat-export";
+const validIterations = value => Number.isInteger(value) && value >= 1000 && value <= 10000000;
 
 function pad(n) {
     return String(n).padStart(2, "0");
@@ -67,6 +68,7 @@ async function deriveKey(passphrase, salt, iterations, subtle) {
 /** Encrypts text with a passphrase; returns the container as a JSON string. */
 export async function sealExport(text, passphrase, { iterations = EXPORT_ITERATIONS, subtle = globalThis.crypto.subtle } = {}) {
     if (!passphrase) throw new Error("a passphrase is required for an encrypted export");
+    if (!validIterations(iterations)) throw new Error("unsupported export iteration count");
     const salt = globalThis.crypto.getRandomValues(new Uint8Array(16));
     const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
     const key = await deriveKey(passphrase, salt, iterations, subtle);
@@ -77,7 +79,7 @@ export async function sealExport(text, passphrase, { iterations = EXPORT_ITERATI
 /** Reverses sealExport; throws on a wrong passphrase or a foreign file. */
 export async function openExport(container, passphrase, { subtle = globalThis.crypto.subtle } = {}) {
     const box = typeof container === "string" ? JSON.parse(container) : container;
-    if (box?.format !== EXPORT_FORMAT || box.v !== 1 || box.kdf !== "pbkdf2-sha256" || !(box.iter > 0)) throw new Error("not a noXa encrypted chat export");
+    if (box?.format !== EXPORT_FORMAT || box.v !== 1 || box.kdf !== "pbkdf2-sha256" || box.cipher !== "aes-256-gcm" || !validIterations(box.iter)) throw new Error("not a noXa encrypted chat export");
     const key = await deriveKey(passphrase, fromBase64(box.salt), box.iter, subtle);
     try {
         return new TextDecoder().decode(await subtle.decrypt({ name: "AES-GCM", iv: fromBase64(box.iv) }, key, fromBase64(box.data)));
