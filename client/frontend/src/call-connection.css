@@ -1,0 +1,14 @@
+/* call-connection.css — three-step call status (141): connecting, connected, media. */
+.call-connection-status { display: flex; align-items: center; gap: 6px; margin: 4px 0 8px; font-size: .8571rem; color: var(--text-dim); }
+.call-connection-status[hidden] { display: none; }
+.call-connection-status[data-phase="media"] { color: var(--text); }
+.call-connection-status[data-phase="connecting"] svg { animation: call-link-spin 1.4s linear infinite; }
+.voice-link-phase { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; font-size: .8571rem; color: var(--text-dim); }
+.voice-link-phase[hidden] { display: none; }
+.voice-link-phase[data-phase="media"] { color: var(--text); }
+.voice-link-phase[data-phase="connecting"] svg { animation: call-link-spin 1.4s linear infinite; }
+@keyframes call-link-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .call-connection-status svg, .voice-link-phase svg { animation: none !important; }
+}
+:root[data-reduce-motion="1"] .call-connection-status svg, :root[data-reduce-motion="1"] .voice-link-phase svg { animation: none !important; }

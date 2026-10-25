@@ -283,7 +283,7 @@ test("chat history exports as text and as an encrypted file", async () => {
     let [download] = await Promise.all([page.waitForEvent("download"), dialog.getByRole("button", { name: "Export", exact: true }).click()]);
     expect(download.suggestedFilename()).toMatch(/^noxa-server-chat-\d{8}\.txt$/);
     const text = await readFile(await download.path(), "utf8");
-    expect(text).toMatch(new RegExp(`\\] \\[server encrypted\\] ${server.accounts.owner.nickname}(#M\d+)?: ${marker}`));
+    expect(text).toMatch(new RegExp(`\\] \\[server encrypted\\] ${server.accounts.owner.nickname}(#M\\d+)?: ${marker}`));
 
     await page.getByRole("button", { name: "More options" }).click();
     await page.getByRole("button", { name: "Export history" }).click();

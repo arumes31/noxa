@@ -194,7 +194,7 @@ const (
 func newConnManager(wailsCtx context.Context) *connManager {
 	return &connManager{
 		sink:                wailsSink{ctx: wailsCtx},
-		confirmPeerChange:   nativePeerConfirmation(wailsCtx),
+		confirmPeerChange:   frontendPeerConfirmation(wailsCtx),
 		pending:             make(map[netproto.MessageType]pendingRequest),
 		requestGates:        make(map[netproto.MessageType]*sync.Mutex),
 		heartbeatInterval:   defaultHeartbeatInterval,

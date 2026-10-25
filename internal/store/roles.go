@@ -343,15 +343,31 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_channel_member_overrides WHERE channel_id=$1`, ch.ChannelID); err != nil {
 			return err
 		}
+		// ⚡ Optimize: batch insert overrides to reduce DB roundtrips from O(N) to O(1)
+		var roleIDs, memberIDs []int64
+		var roleCaps, roleEffects, memberCaps, memberEffects []string
+
 		for _, o := range ch.Overrides {
 			if o.RoleID != 0 {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO auth_channel_role_overrides(channel_id,role_id,capability,effect) VALUES($1,$2,$3,$4)`, ch.ChannelID, o.RoleID, o.Capability, o.Effect); err != nil {
-					return err
-				}
+				roleIDs = append(roleIDs, o.RoleID)
+				roleCaps = append(roleCaps, string(o.Capability))
+				roleEffects = append(roleEffects, string(o.Effect))
 			} else {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO auth_channel_member_overrides(channel_id,user_id,capability,effect) VALUES($1,$2,$3,$4)`, ch.ChannelID, o.UserID, o.Capability, o.Effect); err != nil {
-					return err
-				}
+				memberIDs = append(memberIDs, o.UserID)
+				memberCaps = append(memberCaps, string(o.Capability))
+				memberEffects = append(memberEffects, string(o.Effect))
+			}
+		}
+
+		if len(roleIDs) > 0 {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO auth_channel_role_overrides(channel_id,role_id,capability,effect) SELECT $1, unnest($2::bigint[]), unnest($3::text[]), unnest($4::text[])`, ch.ChannelID, pq.Array(roleIDs), pq.Array(roleCaps), pq.Array(roleEffects)); err != nil {
+				return err
+			}
+		}
+
+		if len(memberIDs) > 0 {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO auth_channel_member_overrides(channel_id,user_id,capability,effect) SELECT $1, unnest($2::bigint[]), unnest($3::text[]), unnest($4::text[])`, ch.ChannelID, pq.Array(memberIDs), pq.Array(memberCaps), pq.Array(memberEffects)); err != nil {
+				return err
 			}
 		}
 	}

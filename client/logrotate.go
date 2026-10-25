@@ -80,9 +80,12 @@ func (w *dailyLogWriter) Write(p []byte) (int, error) {
 			return 0, err
 		}
 	}
-	n, err := w.file.Write(p)
+	// Pairing secrets never reach disk (253); report the caller's byte count
+	// so the log package treats the redacted record as fully written.
+	n, err := w.file.Write(redactLogSecrets(p))
 	if err == nil {
 		w.sincePrune += int64(n)
+		n = len(p)
 	}
 	if err == nil && w.sincePrune >= pruneCheckBytes {
 		w.sincePrune = 0

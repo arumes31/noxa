@@ -1,0 +1,20 @@
+/* unified-search.css — scope switch and grouped sections inside the search workspace. */
+.search-scope-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 22px 10px; }
+.search-scope-label { color: var(--text-dim); font-size: .8rem; margin-right: 4px; }
+.search-scope { border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text-dim); padding: 4px 12px; font: inherit; font-size: .85rem; cursor: pointer; }
+.search-scope:hover { background: var(--bg-hover); color: var(--text); }
+.search-scope[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-dim); color: var(--text); }
+.search-scope-count { margin-left: 6px; color: var(--text-faint); font-family: var(--font-mono); font-size: .75rem; }
+.search-scope[aria-pressed="true"] .search-scope-count { color: var(--text-dim); }
+.search-group-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 6px 6px; color: var(--text-dim); font-size: .78rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.search-group-title:first-child { margin-top: 2px; }
+.search-group-more { border: 0; background: transparent; color: var(--accent); font: inherit; font-size: .8rem; text-transform: none; letter-spacing: 0; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+.search-group-more:hover { background: var(--bg-hover); }
+.search-workspace .search-hit.search-entity { flex-direction: row; align-items: center; gap: 12px; padding: 10px 14px; }
+.search-entity-icon { display: inline-flex; width: 28px; height: 28px; align-items: center; justify-content: center; border-radius: 50%; background: var(--bg-raised); color: var(--text-dim); flex: 0 0 28px; }
+.search-entity-icon.avatar { width: 28px; height: 28px; flex-basis: 28px; background: var(--avatar-color, var(--bg-panel)); color: #031014; font-size: .75rem; }
+.search-entity-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.search-entity-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-entity-meta { color: var(--text-dim); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-group-note { margin: 0 6px 8px; color: var(--text-faint); font-size: .8rem; }
+@media (max-width: 760px) { .search-scope-bar { padding: 0 12px 8px; } }

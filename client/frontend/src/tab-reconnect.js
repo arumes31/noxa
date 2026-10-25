@@ -1,9 +1,24 @@
+import { connectFailureIsDefinitive, loginFailure } from "./login-errors.js";
+
 // One retry series per native server tab. A record owns its captured
 // credentials and timers; replacing or canceling it invalidates every await.
 export function reconnectDelay(attempt, random = Math.random) {
     if (attempt <= 1) return 5000;
     const ceiling = Math.min(30000, 10000 * 2 ** Math.min(2, attempt - 2));
     return Math.floor(ceiling * (0.8 + 0.2 * random()));
+}
+
+// (314) A failed authentication (wrong password, rejected identity, ban,
+// revoked trust) cannot be fixed by waiting. Only transport failures keep
+// the capped exponential backoff above; everything definitive stops the
+// series and leaves the manual "Retry now" action to the user.
+export const RECONNECT_MAX_ATTEMPTS = Infinity;
+export function reconnectDecision({ error = "", terminal = false, attempts = 0, maxAttempts = RECONNECT_MAX_ATTEMPTS } = {}) {
+    if (terminal) return { retry: false, reason: "terminal" };
+    const failure = loginFailure(error);
+    if (connectFailureIsDefinitive(failure)) return { retry: false, reason: "authentication", failure };
+    if (attempts >= maxAttempts) return { retry: false, reason: "exhausted", failure };
+    return { retry: true, reason: "network", failure, delay: reconnectDelay(attempts + 1) };
 }
 
 export function createTabReconnects(options) {
@@ -43,14 +58,15 @@ export function createTabReconnects(options) {
             notify(entry);
             const lossVersion = entry.lossVersion;
             const attemptCurrent = () => current(entry) && entry.lossVersion === lossVersion;
-            let error = "";
+            let error = "", terminal = false;
             try {
                 const result = await options.connect(entry.tabID, entry.target);
                 if (!current(entry)) return;
                 error = String(result?.error || "");
-                if (result?.terminal) {
+                terminal = !!result?.terminal;
+                if (terminal) {
                     cancel(entry.tabID);
-                    options.stopped?.(entry.tabID, error);
+                    options.stopped?.(entry.tabID, error, "terminal");
                     return;
                 }
                 if (!error && attemptCurrent() && await options.complete(entry.tabID, entry.target, attemptCurrent)) {
@@ -65,6 +81,14 @@ export function createTabReconnects(options) {
             if (!current(entry)) return;
             entry.inFlight = false; entry.manual = false;
             if (error) options.failed?.(entry.tabID, error);
+            // (314) An older native bridge may not flag auth rejections as
+            // terminal; the error text is classified here as a second guard.
+            const decision = (options.decide || reconnectDecision)({ error, terminal, attempts: entry.attempts });
+            if (!decision.retry) {
+                cancel(entry.tabID);
+                options.stopped?.(entry.tabID, error, decision.reason);
+                return;
+            }
             schedule(entry);
         }, delay);
         notify(entry);

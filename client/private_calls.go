@@ -78,11 +78,26 @@ func (m *connManager) privateCallRequest(request netproto.CallRequest) (netproto
 		uid, clientID := m.uniqueID, m.clientID
 		m.mu.Unlock()
 		participant, found := result.Call.Participant(uid)
-		if !found || participant.ClientID != clientID {
+		if !found || !callParticipantVisible(participant, clientID) {
 			return netproto.CallResult{}, errors.New("call belongs to another session")
 		}
 	}
 	return result, nil
+}
+
+// callParticipantVisible reports whether this session may read the account's
+// participation: its own bound participant, a callee still ringing on every
+// device (unbound, no ClientID yet), or the server's "elsewhere" projection
+// after another device of the account answered (441). Media and signaling
+// still require the bound participant (privateCallPeerKey).
+func callParticipantVisible(participant netproto.CallParticipant, clientID string) bool {
+	if participant.ClientID == clientID {
+		return true
+	}
+	if participant.ClientID == "" && participant.State == "ringing" {
+		return true
+	}
+	return participant.State == netproto.CallStateElsewhere
 }
 
 func (a *App) PrivateCallForTab(tabID string, request netproto.CallRequest) (netproto.CallResult, error) {

@@ -2,6 +2,7 @@
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
 import { openDeviceLinkDialog } from "./device-link-ui.js";
+import { DEVICE_LIST_CHANGED } from "./my-devices.js";
 
 export function initMobileAnnouncement() {
     const banner = document.createElement("section");
@@ -25,7 +26,16 @@ export function initMobileAnnouncement() {
             openDeviceLinkDialog({ quickGuide: true });
         }
     };
-    const dismissed = new Set();
+    const dismissed = new Set(); // banner "Not now": this session only
+    // (453/454) the persistent hint mode lives in settings.mobile_hint:
+    // "" = until a phone is linked, "dismissed" = hidden, "shown" = always.
+    const hintMode = () => String(state().settings?.mobile_hint || "");
+    function setHintMode(mode) {
+        const settings = state().settings;
+        if (!settings) return;
+        settings.mobile_hint = mode;
+        void Promise.resolve(window.go.main.App.SaveSettings(settings)).catch(() => {});
+    }
     let request = 0;
     let shownKey = "";
     const state = () => window.__noxa.state;
@@ -46,6 +56,8 @@ export function initMobileAnnouncement() {
         later.textContent = t("mobileAnnouncement.later");
         const dismiss = () => { dismissed.add(key); shownKey = ""; banner.hidden = true; };
         later.onclick = dismiss;
+        // The close button hides hint and sidebar shortcut for good (453).
+        const dismissForever = () => { dismiss(); setHintMode("dismissed"); void refresh(); };
         const setup = document.createElement("button");
         setup.type = "button";
         setup.className = "mobile-announcement-setup";
@@ -58,7 +70,7 @@ export function initMobileAnnouncement() {
         close.className = "icon-btn";
         close.innerHTML = icon("close");
         close.setAttribute("aria-label", t("common.close"));
-        close.onclick = dismiss;
+        close.onclick = dismissForever;
         banner.setAttribute("aria-label", t("mobileAnnouncement.title"));
         banner.replaceChildren(glyph, copy, later, setup, close);
         shownKey = key;
@@ -76,19 +88,21 @@ export function initMobileAnnouncement() {
             const info = await window.go.main.App.SessionInfoForTab(tab);
             if (!current()) return;
             if (!info?.connected || info.is_guest || !info.mobile_available) { banner.hidden = true; return; }
-            shortcutSession = { tab, client, generation, session };
-            shortcut.hidden = false;
-            shortcut.title = t("mobileAnnouncement.setup");
             const key = info.mobile_account_key;
-            if (!key || dismissed.has(key)) { banner.hidden = true; return; }
             const devices = await window.go.main.App.DevicesForTab(tab);
             if (!current()) return;
             // Missing/failed device metadata must never become an advertisement.
-            if (!Array.isArray(devices) || devices.some(device => device.kind === "web" && !device.revoked_at)) {
-                banner.hidden = true;
-                return;
+            const linked = !Array.isArray(devices) || devices.some(device => device.kind === "web" && !device.revoked_at);
+            const mode = hintMode();
+            // (453) the sidebar hint hides once a phone is linked or the user
+            // dismissed it; Help can bring it back ("shown") even then (454).
+            const hideShortcut = mode === "dismissed" || (mode !== "shown" && linked);
+            if (!hideShortcut) {
+                shortcutSession = { tab, client, generation, session };
+                shortcut.hidden = false;
+                shortcut.title = t("mobileAnnouncement.setup");
             }
-            if (dismissed.has(key)) { banner.hidden = true; return; }
+            if (!key || dismissed.has(key) || linked || mode === "dismissed") { banner.hidden = true; return; }
             render(key);
         } catch { if (current()) banner.hidden = true; }
     }
@@ -97,5 +111,10 @@ export function initMobileAnnouncement() {
         if (["linked", "revoked"].includes(event?.event)) void refresh();
     });
     window.addEventListener("noxa-language-changed", () => { if (!banner.hidden) render(shownKey); });
-    window.__noxaMobile = { refresh, clear };
+    window.addEventListener(DEVICE_LIST_CHANGED, () => void refresh());
+    window.__noxaMobile = {
+        refresh, clear,
+        hintHidden: () => shortcut.hidden || hintMode() === "dismissed",
+        showHint: () => { setHintMode("shown"); dismissed.clear(); void refresh(); },
+    };
 }

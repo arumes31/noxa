@@ -13,6 +13,7 @@ import { startPrivateCall } from "./private-calls.js";
 import { updateLocalSettings } from "./settings-store.js";
 import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-menu.js";
 import { memberAudioControls } from "./member-audio-ui.js";
+import { primarySessionLabel, resolveAccountTarget } from "./account-identity.js";
 import { openMemberMove } from "./member-move.js";
 import { escapeHTML } from "./markdown.js";
 import { sessionUserID } from "./session-identity.js";
@@ -46,6 +47,10 @@ function replacementTrigger(trigger) {
 function openContextMenu(x, y, client, trigger) {
     closeMenu();
     const tabID = V().state.activeTabID;
+    // (521) account actions key on unique_id; session-bound ones (Client Info,
+    // poke) keep the clicked session, even if its account also has a desktop.
+    const account = client.account || (client.client_id ? resolveAccountTarget(V().state.clients, client.client_id, V().state.myClientID) : null);
+    const session = account?.clicked || client;
     const disconnectTarget = { clientID: client.client_id, channelID: client.channel_id };
     const { $ } = V();
     const P = window.__noxaPerms;
@@ -139,7 +144,7 @@ function openContextMenu(x, y, client, trigger) {
     }
     menuEl.querySelector('[data-act="info"]').onclick = () => {
         closeMenu();
-        openClientInfo(client);
+        openClientInfo(session, account);
     };
     menuEl.querySelector('[data-act="pm"]').onclick = () => {
         closeMenu();
@@ -166,7 +171,7 @@ function openContextMenu(x, y, client, trigger) {
     const pokeAct = menuEl.querySelector('[data-act="poke"]');
     if (pokeAct) pokeAct.onclick = () => {
         closeMenu();
-        window.__noxaSocial.openPoke(client);
+        window.__noxaSocial.openPoke(session);
     };
     const contactAct = menuEl.querySelector('[data-act="contact"]');
     if (contactAct) contactAct.onclick = async () => {
@@ -213,7 +218,7 @@ function openContextMenu(x, y, client, trigger) {
         banDialog(client, tabID);
     };
     if (client.client_id && client.client_id !== V().state.myClientID) {
-        const move = document.createElement("button"); move.type = "button"; move.className = "ctx-action";
+        const move = document.createElement("button"); move.type = "button"; move.className = "ctx-action"; move.dataset.act = "move";
         move.textContent = t("context.move"); move.onclick = () => { closeMenu(); openMemberMove(client); };
         menuEl.append(move);
     }
@@ -457,7 +462,7 @@ export function renderClientRoles(row, client) {
     chips.append(...roles.map(roleChip));
 }
 
-function openClientInfo(client) {
+function openClientInfo(client, account = null) {
     const tabID = V().state.activeTabID;
     const overlay = document.createElement("div");
     overlay.className = "dlg-overlay";
@@ -495,6 +500,12 @@ function openClientInfo(client) {
         </div>`;
 
     overlay.querySelector(".ci-nick").textContent = client.nickname || client.unique_id;
+    const sessionLabel = account?.primary === client ? primarySessionLabel(account, t) : "";
+    if (sessionLabel) {
+        const note = document.createElement("div"); note.className = "dlg-label ci-session";
+        note.textContent = sessionLabel; note.title = t("account.sessionOnly");
+        overlay.querySelector(".ci-title").after(note);
+    }
     overlay.querySelector(".ci-copy").onclick = () => {
         void copyToClipboard(client.unique_id, { success: t("desktop.unique.id.copied"), isCurrent: () => overlay.isConnected });
     };

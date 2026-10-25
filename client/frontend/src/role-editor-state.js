@@ -28,3 +28,29 @@ export function reorderedRoles(roles, roleID, direction) {
     [ordered[index], ordered[target]] = [ordered[target], ordered[index]];
     return ordered.map((r) => r.id);
 }
+
+// (335) A form captures the server revision and the role it edits when it
+// opens. Before saving, the latest snapshot is compared against that baseline:
+// a newer revision that touched this very role (or removed it) must not be
+// overwritten silently; a newer revision that left the role alone is safe to
+// rebase onto.
+export function roleFormBaseline(snapshot, roleID = 0) {
+    const roles = snapshot?.policy?.roles || [];
+    const role = roleID ? roles.find((r) => r.id === roleID) : null;
+    return Object.freeze({
+        revision: snapshot?.policy?.revision ?? null,
+        roleID: roleID || 0,
+        exists: !roleID || !!role,
+        role: role ? JSON.stringify(roleDraft(role)) : "",
+    });
+}
+
+export function roleSaveConflict(baseline, latest) {
+    if (!baseline || !latest?.policy) return null;
+    const current = roleFormBaseline(latest, baseline.roleID);
+    if (current.revision === baseline.revision) return null;
+    const name = baseline.roleID ? (latest.policy.roles || []).find((r) => r.id === baseline.roleID)?.name || "" : "";
+    if (baseline.roleID && baseline.exists && !current.exists) return { kind: "deleted", blocking: true, revision: current.revision, name };
+    if (baseline.roleID && current.role !== baseline.role) return { kind: "role", blocking: true, revision: current.revision, name };
+    return { kind: "policy", blocking: false, revision: current.revision, name };
+}

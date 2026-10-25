@@ -1,0 +1,15 @@
+/* contact-key-change.css — "contact's signing key changed" dialog (241). */
+.key-change-dlg { max-width: 580px; }
+.key-change-dlg .key-change-risky { margin: 0 0 12px; }
+.key-change-fingerprints { display: grid; gap: 12px; margin: 12px 0 8px; }
+.key-change-fingerprint { display: grid; gap: 4px; }
+.key-change-fingerprint-value {
+    display: block; padding: 8px 10px; border-radius: 6px;
+    font-family: var(--font-mono, ui-monospace, monospace); font-size: .9286rem; line-height: 1.7; letter-spacing: .04em;
+    background: var(--panel-2, var(--panel, #0b141a)); border: 1px solid var(--border, #233640); overflow-wrap: anywhere;
+}
+.key-change-group { display: inline-block; margin-right: .55em; }
+.key-change-group-changed { font-weight: 700; text-decoration: underline dotted; text-underline-offset: 3px; color: var(--warn, #f5b35b); }
+.key-change-legend, .key-change-help { margin: 0 0 10px; color: var(--text-dim); font-size: .8571rem; }
+.key-change-buttons { flex-wrap: wrap; }
+.key-change-buttons .key-change-trust { margin-right: auto; }

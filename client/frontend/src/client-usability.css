@@ -36,3 +36,4 @@ body.compact #sidebar-resize { display: none; }
 #voice-bar .status-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 #workspace-connection-status[data-state="connected"] { color: var(--arc-ok, #75d6a6); }
 #voice-bar #voice-status[data-whisper="true"] { color: var(--warn); }
+.chat-upload-item .upload-stage { grid-column: 1 / -1; color: var(--text-dim); font-size: .75rem; line-height: 1.3; overflow-wrap: anywhere; }

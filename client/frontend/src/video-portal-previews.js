@@ -1,4 +1,4 @@
-import { previewImage } from "./preview-image.js";
+import { blockedPreviewPlaceholder, resolvePreviewImage } from "./preview-source-policy.js";
 import { t } from "./i18n.js";
 import { loadPreviewMetadata } from "./preview-metadata.js";
 
@@ -44,8 +44,10 @@ export function videoPortal(value) {
     return null;
 }
 
+// portalThumbnail applies the preview source policy (181): only server bytes
+// may be loaded; a third-party URL is reported as blocked, never fetched.
 export function portalThumbnail(_provider, value) {
-    return previewImage(value);
+    return resolvePreviewImage(value).src;
 }
 
 export function renderVideoPortalPreviews(container, { enabled, scope, isCurrent }) {
@@ -82,10 +84,18 @@ export function renderVideoPortalPreviews(container, { enabled, scope, isCurrent
             if (result.live_state === "scheduled" && result.starts_at && Number.isFinite(Date.parse(result.starts_at))) details.unshift(t("usability.scheduled", { time: new Date(result.starts_at).toLocaleString() }));
             broadcast.textContent = details.join(" · "); broadcast.hidden = !details.length;
             broadcast.dataset.state = result.live_state || ""; broadcast.title = t("usability.statusSnapshot");
-            const thumbnail = portalThumbnail(video.provider, result.thumbnail);
-            if (thumbnail) {
+            const thumbnail = resolvePreviewImage(result.thumbnail);
+            if (thumbnail.src) {
                 image.onload = () => { if (card.isConnected && isCurrent()) { image.hidden = false; placeholder.hidden = true; } };
-                image.onerror = () => image.remove(); image.hidden = false; image.src = thumbnail;
+                image.onerror = () => image.remove(); image.hidden = false; image.src = thumbnail.src;
+            } else if (thumbnail.blocked) {
+                image.remove();
+                const marker = blockedPreviewPlaceholder(visual.ownerDocument || document, {
+                    label: t("midnight.previewBlocked"),
+                    title: t("midnight.previewBlockedHelp", { host: thumbnail.host || t("midnight.previewBlockedUnknownHost") }),
+                    host: thumbnail.host,
+                });
+                if (marker) visual.insertBefore(marker, play);
             }
         });
         card.onclick = () => {

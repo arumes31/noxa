@@ -71,6 +71,21 @@ export const deviceLinkEnglish = {
     "devices.historyCopying": "Copying direct messages to {name}…",
     "devices.historyDone": "Copied {messages} direct messages to the new device.",
     "devices.historyFailed": "Copying direct messages failed: {error}",
+
+    "devices.mine": "My devices",
+    "devices.mineHint": "Devices signed in to this account. Online is derived from your live sessions; the last use comes from the server.",
+    "devices.online": "Online now",
+    "devices.offline": "Offline",
+    "devices.defaultMobileName": "Mobile · {platform}",
+    "devices.defaultDesktopName": "Desktop · {platform}",
+    "devices.renameInline": "Rename {name}",
+    "devices.renameSave": "Save",
+    "devices.renameCancel": "Cancel",
+    "devices.renamed": "Device renamed to {name}.",
+    "devices.renameInvalid": "Enter a name of 1 to 64 characters.",
+    "devices.showHintAgain": "Show the noXa Mobile hint again",
+    "devices.hintRestored": "The noXa Mobile hint is shown in the sidebar again.",
+    "menu.mobileSetup": "Set up noXa Mobile…",
 };
 
 export const deviceLinkGerman = {
@@ -144,4 +159,19 @@ export const deviceLinkGerman = {
     "devices.historyCopying": "Direktnachrichten werden auf {name} kopiert…",
     "devices.historyDone": "{messages} Direktnachrichten auf das neue Gerät kopiert.",
     "devices.historyFailed": "Kopieren der Direktnachrichten fehlgeschlagen: {error}",
+
+    "devices.mine": "Meine Geräte",
+    "devices.mineHint": "Geräte, die mit diesem Konto angemeldet sind. Online wird aus deinen aktiven Sitzungen abgeleitet; die letzte Nutzung meldet der Server.",
+    "devices.online": "Jetzt online",
+    "devices.offline": "Offline",
+    "devices.defaultMobileName": "Mobil · {platform}",
+    "devices.defaultDesktopName": "Desktop · {platform}",
+    "devices.renameInline": "{name} umbenennen",
+    "devices.renameSave": "Speichern",
+    "devices.renameCancel": "Abbrechen",
+    "devices.renamed": "Gerät in {name} umbenannt.",
+    "devices.renameInvalid": "Gib einen Namen mit 1 bis 64 Zeichen ein.",
+    "devices.showHintAgain": "Hinweis zu noXa Mobile wieder anzeigen",
+    "devices.hintRestored": "Der Hinweis zu noXa Mobile wird wieder in der Seitenleiste angezeigt.",
+    "menu.mobileSetup": "noXa Mobile einrichten…",
 };

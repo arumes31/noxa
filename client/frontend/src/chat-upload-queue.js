@@ -1,4 +1,5 @@
 import { t } from "./i18n.js";
+import { describeUploadFailure } from "./upload-stage.js";
 
 export function createChatUploadQueue({ app, currentTab, container }) {
     let serial = 0;
@@ -6,6 +7,7 @@ export function createChatUploadQueue({ app, currentTab, container }) {
     const render = job => {
         if (!job.row.isConnected) return;
         job.row.querySelector(".upload-state").textContent = t("usability.upload" + job.state);
+        renderStage(job);
         const progress = job.row.querySelector("progress");
         progress.hidden = !["Queued", "Active", "Sending"].includes(job.state);
         if (job.total > 0) { progress.max = job.total; progress.value = job.transferred || 0; } else progress.removeAttribute("value");
@@ -22,12 +24,22 @@ export function createChatUploadQueue({ app, currentTab, container }) {
             if (job.started && typeof app().CancelTransferForTab === "function") void Promise.resolve(app().CancelTransferForTab(job.tabID, job.id)).catch(() => {});
         };
     };
+    // The failure stage (502) rides in its own line and tooltip so the state
+    // label stays a short, stable word.
+    const renderStage = job => {
+        const stage = job.row.querySelector(".upload-stage"), state = job.row.querySelector(".upload-state");
+        const failure = job.state === "Failed" ? job.failure : null;
+        stage.hidden = !failure;
+        stage.textContent = failure ? failure.summary : "";
+        if (failure) { stage.title = failure.hint; state.title = failure.hint; job.row.dataset.stage = failure.stage; }
+        else { stage.removeAttribute("title"); state.removeAttribute("title"); delete job.row.dataset.stage; }
+    };
     return {
         add(files, tabID, retry) {
             return files.map(file => {
                 const id = "chat-" + Date.now().toString(36) + "-" + ++serial;
                 const row = document.createElement("div"); row.className = "chat-upload-item";
-                row.innerHTML = '<span class="upload-name"></span><span class="upload-state"></span><button type="button"></button><progress></progress>';
+                row.innerHTML = '<span class="upload-name"></span><span class="upload-state"></span><button type="button"></button><progress></progress><span class="upload-stage" hidden></span>';
                 row.querySelector(".upload-name").textContent = file.name; row.querySelector(".upload-name").title = file.name;
                 row.querySelector("progress").setAttribute("aria-label", file.name);
                 if (jobs.size >= 50) { const previous = [...jobs.values()].find(entry => ["Done", "Failed", "Canceled"].includes(entry.state)); if (previous) { previous.row.remove(); jobs.delete(previous.id); } }
@@ -38,7 +50,7 @@ export function createChatUploadQueue({ app, currentTab, container }) {
         },
         async upload(job, channelID, isCurrent) {
             if (!isCurrent()) return null;
-            job.canceled = false; job.cancelAcknowledged = false;
+            job.canceled = false; job.cancelAcknowledged = false; job.failure = null;
             if (job.token) { job.state = "Sending"; render(job); return job.token; }
             job.state = "Active"; job.started = true; render(job);
             try {
@@ -49,9 +61,9 @@ export function createChatUploadQueue({ app, currentTab, container }) {
                 if (job.canceled || !isCurrent()) return null;
                 if (typeof token !== "string" || !token.startsWith("[file:")) throw new Error("Invalid attachment response");
                 job.token = token; job.state = "Sending"; render(job); return token;
-            } catch (error) { if (!job.canceled && isCurrent()) { job.state = "Failed"; render(job); } throw error; }
+            } catch (error) { if (!job.canceled && isCurrent()) { job.state = "Failed"; job.failure = describeUploadFailure(error, "transfer"); render(job); } throw error; }
         },
-        finish(job, error) { if (!job.canceled) { job.state = error ? "Failed" : "Done"; if (!error) { job.file = { name: job.file.name }; job.token = ""; job.retry = null; } render(job); } },
+        finish(job, error) { if (!job.canceled) { job.state = error ? "Failed" : "Done"; job.failure = error ? describeUploadFailure(error, "publish") : null; if (!error) { job.file = { name: job.file.name }; job.token = ""; job.retry = null; } render(job); } },
         remove(job) { job.row.remove(); jobs.delete(job.id); container.hidden = !jobs.size; },
         reset() { for (const job of jobs.values()) { job.canceled = true; if (job.started && ["Active", "Queued"].includes(job.state)) void Promise.resolve(app().CancelTransferForTab(job.tabID, job.id)).catch(() => {}); } jobs.clear(); container.replaceChildren(); container.hidden = true; },
         progress(event) {

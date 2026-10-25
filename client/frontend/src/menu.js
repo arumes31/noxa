@@ -4,6 +4,8 @@ import { closeDialog, mountDialog } from "./modal.js";
 import { copyToClipboard } from "./clipboard.js";
 import { openDisplayNameDialog } from "./display-name-ui.js";
 import { openDeviceLinkDialog } from "./device-link-ui.js";
+import { bookmarkExportPayload, serializeBookmarkExport } from "./bookmark-export.js";
+import "./bookmark-export.css";
 
 const V = () => window.__noxa;
 
@@ -352,8 +354,28 @@ function manageBookmarks() {
         <div class="dlg dlg-wide">
             <h3>${t("menu.bookmarksTitle")}</h3>
             <div class="bm-list"></div>
-            <div class="dlg-buttons"><button class="dlg-ok">${t("common.close")}</button></div>
+            <div class="bm-export">
+                <label class="bm-export-credentials"><input type="checkbox" class="bm-export-include"> <span>${t("menu.bookmarkExportCredentials")}</span></label>
+                <small class="bm-export-help">${t("menu.bookmarkExportCredentialsHelp")}</small>
+            </div>
+            <div class="dlg-buttons"><button class="bm-export-run">${t("menu.bookmarkExport")}</button><button class="dlg-ok">${t("common.close")}</button></div>
         </div>`;
+    // (318) credentials are excluded unless this checkbox is ticked for this export.
+    const exportButton = overlay.querySelector(".bm-export-run"), includeCredentials = overlay.querySelector(".bm-export-include");
+    exportButton.onclick = async () => {
+        const { toast } = V();
+        const bookmarks = currentSettings().bookmarks || [];
+        if (!bookmarks.length) { toast(t("menu.bookmarkExportEmpty"), "warn"); return; }
+        const include = includeCredentials.checked;
+        exportButton.disabled = true;
+        try {
+            const contents = serializeBookmarkExport(bookmarkExportPayload(bookmarks, { includeCredentials: include }));
+            const outcome = await window.go?.main?.App?.SaveBookmarkExport?.(contents, include);
+            if (outcome === "saved") toast(t("menu.bookmarkExported"));
+            else if (outcome !== "cancelled") toast(t("menu.bookmarkExportFailed"), "warn");
+        } catch { toast(t("menu.bookmarkExportFailed"), "warn"); }
+        finally { exportButton.disabled = false; includeCredentials.checked = false; }
+    };
     overlay.querySelector(".dlg-ok").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
     mountDialog(overlay);
@@ -647,6 +669,7 @@ export function initMenu() {
 
     const help = buildMenu(t("menu.help"), [
         menuAction(t("menu.checkUpdates"), () => window.__noxa.checkForUpdatesInteractive()),
+        menuAction(t("menu.mobileSetup"), () => openDeviceLinkDialog({ quickGuide: true, fromHelp: true })),
         menuAction(t("menu.exportLogs"), async () => {
             const err = await window.go.main.App.ExportLogs();
             if (err) V().toast(t("menu.exportFailed", { error: err }), "warn");

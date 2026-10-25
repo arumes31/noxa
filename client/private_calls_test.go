@@ -87,3 +87,29 @@ func TestPrivateCallCandidatesAreAuthenticatedAndBounded(t *testing.T) {
 		})
 	}
 }
+
+// (441) A callee ringing on several devices is unbound until one answers;
+// afterwards the server projects the account's other sessions as
+// "elsewhere". Both must stay readable so the desktop can stop ringing, while
+// a participant bound to another session in any other state stays rejected.
+func TestCallParticipantVisibleAcrossOwnSessions(t *testing.T) {
+	cases := []struct {
+		name string
+		p    netproto.CallParticipant
+		want bool
+	}{
+		{"own bound", netproto.CallParticipant{ClientID: "mine", State: "accepted"}, true},
+		{"own ringing", netproto.CallParticipant{ClientID: "mine", State: "ringing"}, true},
+		{"unbound ringing", netproto.CallParticipant{State: "ringing"}, true},
+		{"unbound accepted", netproto.CallParticipant{State: "accepted"}, false},
+		{"answered elsewhere", netproto.CallParticipant{ClientID: "phone", State: netproto.CallStateElsewhere}, true},
+		{"other session accepted", netproto.CallParticipant{ClientID: "phone", State: "accepted"}, false},
+		{"other session ringing", netproto.CallParticipant{ClientID: "phone", State: "ringing"}, false},
+		{"other session left", netproto.CallParticipant{ClientID: "phone", State: "left"}, false},
+	}
+	for _, tc := range cases {
+		if got := callParticipantVisible(tc.p, "mine"); got != tc.want {
+			t.Errorf("%s: visible=%v want %v", tc.name, got, tc.want)
+		}
+	}
+}

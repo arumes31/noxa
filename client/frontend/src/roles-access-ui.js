@@ -3,6 +3,7 @@ import { escapeHTML as escapeTranslation } from "./markdown.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog, registerDialogLifecycle } from "./modal.js";
 import { memberRoles, hoistedRoles, roleColor } from "./role-presentation.js";
 import { t } from "./i18n.js";
+import { filterBans } from "./ban-filter.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
@@ -196,6 +197,7 @@ async function openBanList() {
             <h3>${escapeTranslation(t("desktop.bans"))}</h3>
             <button class="icon-btn ban-close" title="${escapeTranslation(t("desktop.close"))}">✕</button>
         </div>
+        <label class="ban-filter-row"><span class="sr-only">${escapeTranslation(t("desktop.ban.filter"))}</span><input type="search" class="dlg-input ban-filter" placeholder="${escapeTranslation(t("desktop.ban.filter"))}" autocomplete="off"><small class="ban-filter-help">${escapeTranslation(t("desktop.ban.filterHelp"))}</small></label>
         <div class="ban-list"></div>`);
     q(".ban-close").onclick = () => closeDialog(overlay);
     const reload = document.createElement("button");
@@ -205,6 +207,8 @@ async function openBanList() {
     dlg.append(status, reload);
     let busy = false;
     let needsRefresh = false;
+    let allBans = [];
+    const filter = q(".ban-filter");
     const controls = () => {
         reload.disabled = busy;
         for (const button of dlg.querySelectorAll(".ban-lift")) button.disabled = busy || needsRefresh;
@@ -214,11 +218,10 @@ async function openBanList() {
         busy = true;
         controls();
         const list = q(".ban-list");
-        let bans;
         try {
             const response = await App().BanListForTab(tabID);
             if (!isCurrentServerDialog(overlay)) return;
-            bans = response.bans || [];
+            allBans = response.bans || [];
             needsRefresh = false;
             status.textContent = "";
         } catch (error) {
@@ -231,7 +234,13 @@ async function openBanList() {
             busy = false;
             if (isCurrentServerDialog(overlay)) controls();
         }
-        list.innerHTML = bans.length ? "" : `<div class="empty-state">${escapeTranslation(t("desktop.no.bans"))}</div>`;
+        draw();
+    };
+    // (350) the filter re-draws the fetched list without another server round trip.
+    const draw = () => {
+        const list = q(".ban-list");
+        const bans = filterBans(allBans, filter.value, { formatTime: fmtTime, permanentLabel: t("desktop.permanent") });
+        list.innerHTML = bans.length ? "" : `<div class="empty-state">${escapeTranslation(t(allBans.length ? "desktop.ban.filterNone" : "desktop.no.bans"))}</div>`;
         const table = document.createElement("table");
         table.className = "perm-grid audit-grid";
         table.innerHTML = `<thead><tr><th>${escapeTranslation(t("desktop.target"))}</th><th>${escapeTranslation(t("desktop.reason"))}</th><th>${escapeTranslation(t("desktop.banned.by"))}</th><th>${escapeTranslation(t("desktop.expires"))}</th><th></th></tr></thead><tbody></tbody>`;
@@ -277,6 +286,7 @@ async function openBanList() {
         list.appendChild(table);
         controls();
     };
+    filter.oninput = () => { if (isCurrentServerDialog(overlay)) draw(); };
     reload.onclick = render;
     render();
 }

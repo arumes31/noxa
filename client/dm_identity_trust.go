@@ -7,12 +7,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync"
+	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"noxa/internal/auth"
@@ -30,18 +31,97 @@ type dmIdentityPin struct {
 	Retired     []string `json:"retired,omitempty"`
 }
 
-func nativePeerConfirmation(ctx context.Context) func(string, string, string, string) bool {
+// ContactIdentityChange is the payload of the "contact_identity_changed"
+// event (item 241). The webview renders the confirmation dialog and answers
+// through AnswerContactIdentityChange; until then the contact stays blocked.
+type ContactIdentityChange struct {
+	RequestID      string `json:"request_id"`
+	Server         string `json:"server"`
+	Contact        string `json:"contact"`
+	OldFingerprint string `json:"old_fingerprint"`
+	NewFingerprint string `json:"new_fingerprint"`
+}
+
+type peerConfirmationRegistry struct {
+	mu      sync.Mutex
+	serial  uint64
+	pending map[string]chan bool
+}
+
+var peerConfirmations = &peerConfirmationRegistry{pending: map[string]chan bool{}}
+
+// peerConfirmationTimeout bounds how long a send or call waits for the
+// dialog. Expiry keeps the safe default: the new key stays untrusted.
+var peerConfirmationTimeout = 10 * time.Minute
+
+var peerConfirmationEmitter = func(ctx context.Context, change ContactIdentityChange) {
+	wailsRuntime.EventsEmit(ctx, "contact_identity_changed", change)
+}
+
+func (r *peerConfirmationRegistry) open() (string, chan bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.serial++
+	id := strconv.FormatUint(r.serial, 10)
+	answer := make(chan bool, 1)
+	r.pending[id] = answer
+	return id, answer
+}
+
+func (r *peerConfirmationRegistry) close(id string) {
+	r.mu.Lock()
+	delete(r.pending, id)
+	r.mu.Unlock()
+}
+
+// answer delivers the dialog's decision. It reports false for unknown,
+// expired or already answered requests.
+func (r *peerConfirmationRegistry) answer(id string, trust bool) bool {
+	r.mu.Lock()
+	answer, ok := r.pending[id]
+	if ok {
+		delete(r.pending, id)
+	}
+	r.mu.Unlock()
+	if !ok {
+		return false
+	}
+	answer <- trust
+	return true
+}
+
+// frontendPeerConfirmation asks the webview dialog whether a contact's new
+// signing key may be trusted. Anything but an explicit "trust" answer
+// (closed dialog, timeout, shutdown) keeps the contact blocked.
+func frontendPeerConfirmation(ctx context.Context) func(string, string, string, string) bool {
 	if ctx == nil {
 		return nil
 	}
 	return func(server, uid, oldFingerprint, newFingerprint string) bool {
-		answer, err := wailsRuntime.MessageDialog(ctx, wailsRuntime.MessageDialogOptions{
-			Type: wailsRuntime.WarningDialog, Title: "Contact identity changed",
-			Message: fmt.Sprintf("Contact: %s\nServer: %s\n\nPreviously trusted fingerprint:\n%s\n\nNew fingerprint:\n%s\n\nVerify the new fingerprint with your contact through another trusted channel. Until confirmed, this contact remains blocked.", uid, server, oldFingerprint, newFingerprint),
-			Buttons: []string{"Cancel", "Trust new fingerprint"}, DefaultButton: "Cancel", CancelButton: "Cancel",
-		})
-		return err == nil && answer == "Trust new fingerprint"
+		id, answer := peerConfirmations.open()
+		defer peerConfirmations.close(id)
+		peerConfirmationEmitter(ctx, ContactIdentityChange{RequestID: id, Server: server, Contact: uid, OldFingerprint: oldFingerprint, NewFingerprint: newFingerprint})
+		timer := time.NewTimer(peerConfirmationTimeout)
+		defer timer.Stop()
+		select {
+		case trusted := <-answer:
+			return trusted
+		case <-timer.C:
+			return false
+		case <-ctx.Done():
+			return false
+		}
 	}
+}
+
+// AnswerContactIdentityChange is the dialog's reply (item 241). The request
+// ID comes from the "contact_identity_changed" event; an empty result means
+// the decision was delivered.
+func (a *App) AnswerContactIdentityChange(requestID string, trust bool) string {
+	if !peerConfirmations.answer(requestID, trust) {
+		return "this key change is no longer waiting for a decision"
+	}
+	return ""
 }
 func (m *connManager) peerPinPath(uid string) (string, string, error) {
 	id, err := m.identity()

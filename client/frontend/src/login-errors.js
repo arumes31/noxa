@@ -20,10 +20,33 @@ export function loginFailure(error, request = {}) {
     if (["saved password is no longer available; enter it again", "saved passwords cannot be unlocked by this os account; enter them again", "password storage is unavailable", "os password protection is unavailable"].includes(reason)) {
         return { kind: "savedPassword", field: request.use_saved_server && !request.use_saved_account ? "login-serverpw" : "login-accountpw" };
     }
-    if (/^(tls[: ]|x509:|certificate |server certificate |trust store )/.test(reason)) return { kind: "certificate" };
+    if (/^(tls[: ]|x509:|certificate |server certificate |trust store )/.test(reason) || /(^|[:\s])(x509:|tls: |certificate (has|is|signed|verify|expired|unknown)|fingerprint mismatch|trust store)/.test(reason)) return { kind: "certificate" };
+    // DNS resolution is reported before the socket dial: a typo in the host
+    // name needs a different next step than an offline server.
+    if (/\bno such host\b|\bserver misbehaving\b|^lookup [^:]+: |: lookup [^:]+: /.test(reason)) return { kind: "dns", field: "login-addr", invalid: true };
     if (/^(dial (tcp|udp)|read (tcp|udp)|write (tcp|udp)|lookup )/.test(reason) || /^(context deadline exceeded|i\/o timeout|connection refused|network is unreachable)$/.test(reason)) return { kind: "network", field: "login-addr" };
     if (reason === "unsupported server authorization model; upgrade noxa") return { kind: "version" };
+    // Authorization (a known identity lacking a right) is not authentication.
+    if (/^(permission denied|forbidden|not authorized|unauthorized|access denied|insufficient permission|registration required|guests are not allowed|guest access is disabled|invite required|invitation required)\b/.test(reason)) return { kind: "permission" };
     return { kind: "unknown" };
+}
+
+// Coarse category for the connect dialog and support logs. Every kind maps to
+// exactly one category so the UI can show a label and one next step.
+const FAILURE_CATEGORIES = {
+    dns: "dns", certificate: "tls", network: "network", permission: "permission",
+    serverPassword: "authentication", account: "authentication", authentication: "authentication", banned: "authentication", rateLimit: "authentication", savedPassword: "authentication",
+    minimumVersion: "version", version: "version",
+    addressRequired: "input", nameRequired: "input", displayName: "input",
+};
+export function connectFailureCategory(failure) {
+    return FAILURE_CATEGORIES[failure?.kind] || "other";
+}
+
+// True when the rejection came from the server's auth/authorization decision
+// or a trust failure rather than the path to it. Retrying cannot resolve it.
+export function connectFailureIsDefinitive(failure) {
+    return ["authentication", "permission", "version", "tls"].includes(connectFailureCategory(failure)) && failure?.kind !== "rateLimit";
 }
 
 export function createLoginFeedback($) {
@@ -48,6 +71,11 @@ export function createLoginFeedback($) {
         const { error, request } = current, failure = loginFailure(error, request);
         const area = $("login-error");
         if (failure.kind === "unknown") { area.textContent = String(error?.message || error); return; }
+        const category = connectFailureCategory(failure);
+        if (category !== "input") {
+            const badge = document.createElement("span"); badge.className = "login-failure-category"; badge.dataset.category = category;
+            badge.textContent = t(`login.category.${category}`); area.append(badge);
+        }
         const message = document.createElement("p"); message.textContent = t(`login.failure.${failure.kind}`, failure); area.append(message);
         const action = t(`login.recovery.${failure.kind}`);
         const field = failure.field && $(failure.field);

@@ -1,4 +1,5 @@
 import { saveStreamDiagnostics } from "./stream-diagnostic-export.js";
+import { redactPairingSecrets } from "./secret-redaction.js";
 import { mountStreamDiagnosticRecording, receiverRecordingSample } from "./stream-diagnostic-recording.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
 // video-grid.js — received stream tiles, quality selection and diagnostics.
@@ -185,7 +186,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                     stream_path_age_ms: remoteDiagnosticsAge(t),
                     note: "Browser bitrate is RTP payload, including retransmissions. Server byte counts include RTP headers. Stage sample windows are independent; server FPS counts observed RTP timestamps, not complete or decoded frames. Receiver cumulative counters belong to each stats_epoch/stats_id/SSRC; counter regression starts a new counter lifetime. timestamp_ms is the browser RTCStats timestamp; sampled_at is local collection time. Freeze duration is in seconds and browser-reported; freezes in progress may not yet be counted. Presentation intervals describe compositor submission, not physical display. Callback gaps may reflect main-thread scheduling; unobserved callbacks are not decoded frame drops. Capture-to-display is a browser clock-mapping estimate, which the relay can change, not end-to-end latency. Null means unavailable.",
                 };
-                void (save ? saveStreamDiagnostics : copyToClipboard)(JSON.stringify(payload, null, 2), { success: tLabel("wins.streamCopied"), isCurrent: () => el.isConnected });
+                void (save ? saveStreamDiagnostics : copyToClipboard)(redactPairingSecrets(JSON.stringify(payload, null, 2)), { success: tLabel("wins.streamCopied"), isCurrent: () => el.isConnected });
             };
             el.querySelector(".vtile-copy-diagnostics").onclick = () => exportSnapshot(false);
             el.querySelector(".vtile-save-diagnostics").onclick = () => exportSnapshot(true);

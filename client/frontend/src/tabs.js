@@ -362,7 +362,8 @@ function quickConnectTarget() {
 }
 
 // quickConnectLast connects the most recently used bookmark in a new tab
-// (285, default Ctrl+Shift+C). Tray callers pass their captured target.
+// (285). Reached from the tray menu; it has no global hotkey. Tray callers
+// pass their captured target.
 async function quickConnectLast(target = quickConnectTarget(), isCancelled = () => false) {
     if (updateStartupBlocked()) return;
     if (!target) {

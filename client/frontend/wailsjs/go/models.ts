@@ -1014,7 +1014,6 @@ export namespace main {
 	    ptt?: string;
 	    mute_toggle?: string;
 	    whisper_reply?: string;
-	    quick_connect?: string;
 	    compact_toggle?: string;
 	    zen_toggle?: string;
 	    deafen_toggle?: string;
@@ -1028,7 +1027,6 @@ export namespace main {
 	        this.ptt = source["ptt"];
 	        this.mute_toggle = source["mute_toggle"];
 	        this.whisper_reply = source["whisper_reply"];
-	        this.quick_connect = source["quick_connect"];
 	        this.compact_toggle = source["compact_toggle"];
 	        this.zen_toggle = source["zen_toggle"];
 	        this.deafen_toggle = source["deafen_toggle"];
@@ -1364,7 +1362,6 @@ export namespace main {
 	    hotkey_ptt: string;
 	    hotkey_mute: string;
 	    hotkey_deafen: string;
-	    hotkey_quick_connect: string;
 	    hotkey_zen: string;
 	    hotkey_compact: string;
 	    hotkey_profiles?: Record<string, HotkeyProfile>;
@@ -1492,7 +1489,6 @@ export namespace main {
 	        this.hotkey_ptt = source["hotkey_ptt"];
 	        this.hotkey_mute = source["hotkey_mute"];
 	        this.hotkey_deafen = source["hotkey_deafen"];
-	        this.hotkey_quick_connect = source["hotkey_quick_connect"];
 	        this.hotkey_zen = source["hotkey_zen"];
 	        this.hotkey_compact = source["hotkey_compact"];
 	        this.hotkey_profiles = this.convertValues(source["hotkey_profiles"], HotkeyProfile, true);

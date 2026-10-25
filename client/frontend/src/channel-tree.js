@@ -5,10 +5,12 @@ import * as chatUI from "./chat-ui.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
 import { visibleInChannelTree } from "./member-presence.js";
 import { roleIconElement } from "./role-icons.js";
+import { deniedActionMessage, missingPermissionHint } from "./permission-denied.js";
 import { roleChip } from "./role-presentation.js";
 import { setSafeImage } from "./safe-media.js";
 import { t } from "./i18n.js";
 import { presenceLabel } from "./presence.js";
+import { channelPath, titleWhenTruncated } from "./ui-format.js";
 import { icon } from "./icons.js";
 import { memberScreenStream } from "./stream-controls.js";
 import { renderWorkspace } from "./workspace-ui.js";
@@ -174,12 +176,14 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         if (isEcho) accessLabels.push(t("echo.channelHint"));
         if (restricted) accessLabels.push(t("channel.access.private"));
         if (ch.HasPassword) accessLabels.push(t("channel.access.password"));
-        if (cannotJoin) accessLabels.push(t("channel.access.denied"));
+        if (cannotJoin) accessLabels.push(`${t("channel.access.denied")} – ${missingPermissionHint("connect")}`);
         el.classList.toggle("access-denied", cannotJoin);
         el.setAttribute("aria-label", t("runtime.channelName", { name: ch.Name }) + (accessLabels.length ? ", " + accessLabels.join(", ") : ""));
         el.title = accessLabels.join(" · ") || t("channel.access.open");
         el.innerHTML = `<span class="ch-disclosure" aria-hidden="true">${icon("chevron")}</span><span class="ch-icon">${icon(isHome ? "home" : isEcho ? "echo" : "speaker")}</span><span class="ch-name"></span>`;
         el.querySelector(".ch-name").textContent = ch.Name;
+        // A clipped name reveals its full "Parent › Child" path on hover.
+        titleWhenTruncated(el.querySelector(".ch-name"), channelPath(state.channels, ch.ChannelID));
         if (ch.Recording) {
             const recording = document.createElement("span");
             recording.className = "channel-recording-dot";
@@ -227,7 +231,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         }
         el.onclick = async () => {
             if (generation !== state.serverGeneration) return;
-            if (cannotJoin) { toast(joinFailure("permission denied"), "warn", "alert", { bypassDND: true }); return; }
+            if (cannotJoin) { toast(deniedActionMessage("connect"), "warn", "alert", { bypassDND: true }); return; }
             // Channel chat navigation is immediate, even when joining the same
             // voice channel emits no new membership event.
             window.__noxa.closeDirectMessages?.();
@@ -311,6 +315,9 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 list.className = "channel-members";
                 list.setAttribute("role", "group");
                 list.setAttribute("aria-label", t("runtime.members", { name: ch.Name }));
+                // One row per session: a phone and a desktop of the same account
+                // stay separately addressable (drag, move, Client Info); the
+                // online count deduplicates accounts (member-presence.js).
                 for (const c of members) list.appendChild(clientRow(c));
                 node.appendChild(list);
             }
@@ -413,12 +420,14 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         }
         const name = document.createElement("span");
         name.className = "client-name";
-        name.textContent = (c.nickname || c.unique_id) + (c.client_id === state.myClientID ? t("workspace.you") : "");
+        const fullName = (c.nickname || c.unique_id) + (c.client_id === state.myClientID ? t("workspace.you") : "");
+        name.textContent = fullName;
         // (178) nickname color from the first applicable server group.
         const gColor = P().groupColorFor(c.unique_id);
         if (gColor) name.style.color = gColor;
         const g = P().primaryGroup(c.unique_id);
-        if (g) name.title = `${t("roles.title")}: ${(c.roles || []).map((r) => r.name).join(", ")}`;
+        // A clipped name shows in full on hover; the role list stays visible either way.
+        titleWhenTruncated(name, fullName, g ? `${t("roles.title")}: ${(c.roles || []).map((r) => r.name).join(", ")}` : "");
         row.appendChild(speakingHere ? speakingAvatar(av) : av);
         row.appendChild(name);
         if (sharing) {
@@ -452,7 +461,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             pr.title = t("runtime.priority");
             row.appendChild(pr);
         }
-        // A phone session: shown so others know replies may come slower.
+        // Keep the mobile label readable alongside the member role.
         if (c.on_mobile) {
             const phone = document.createElement("span");
             phone.className = "role-chip group-badge on-mobile";

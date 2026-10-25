@@ -106,22 +106,22 @@ func uploadChatAttachmentUsing(name, dataBase64 string, put func(string, []byte)
 		int64(maxChatAttachmentBytes)+1,
 	))
 	if err != nil {
-		return "", errors.New("invalid file data")
+		return "", stageUploadError(uploadStageRead, errors.New("invalid file data"))
 	}
 	if len(data) > maxChatAttachmentBytes {
-		return "", errors.New("attachment exceeds 25 MiB limit")
+		return "", stageUploadError(uploadStageRead, errors.New("attachment exceeds 25 MiB limit"))
 	}
 	var key [32]byte
 	if _, err := rand.Read(key[:]); err != nil {
-		return "", err
+		return "", stageUploadError(uploadStageEncrypt, err)
 	}
 	blob, err := sealFile(data, key)
 	if err != nil {
-		return "", err
+		return "", stageUploadError(uploadStageEncrypt, err)
 	}
 	storage := attachmentStorageName(blob)
 	if err := put(storage, blob); err != nil {
-		return "", err
+		return "", stageUploadError(uploadStageTransfer, err)
 	}
 	return formatFileRef(storage, base64.StdEncoding.EncodeToString(key[:]), attachmentMeta{Size: int64(len(data))}, name), nil
 }

@@ -31,7 +31,7 @@ func (a *App) UploadChatAttachmentProgressForTab(tabID, id string, channelID int
 		return "", errTransferCanceled
 	}
 	defer untrack()
-	return uploadChatAttachmentUsing(name, dataBase64, func(storage string, blob []byte) error {
+	token, err := uploadChatAttachmentUsing(name, dataBase64, func(storage string, blob []byte) error {
 		p := ftProgress{ID: id, Direction: "upload", Name: name, Total: int64(len(blob)), Status: "active"}
 		cm.ftEmit(p)
 		err := uploadChatCiphertext(ctx, cm, id, channelID, storage, blob, &p)
@@ -48,6 +48,7 @@ func (a *App) UploadChatAttachmentProgressForTab(tabID, id string, channelID int
 		cm.ftEmit(p)
 		return err
 	})
+	return token, err
 }
 
 type chatUploadCancellation struct {

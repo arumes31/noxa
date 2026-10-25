@@ -88,11 +88,19 @@ test('linked event hides banner and stale responses cannot cross tabs', async ({
     await expect(page.locator('#mobile-announcement')).toBeHidden();
 });
 
-test('small sidebar banner stays available for linked accounts and opens QR setup', async ({ page }, testInfo) => {
+test('small sidebar banner hides for linked accounts until Help restores it and opens QR setup', async ({ page }, testInfo) => {
     await page.evaluate(() => window.__devices.push({ kind: 'web' }));
     await refresh(page);
     const shortcut = page.locator('#mobile-setup-banner');
+    // (453) a linked phone hides both the promotion and the sidebar shortcut.
+    await expect(shortcut).toBeHidden();
+    await expect(page.locator('#mobile-announcement')).toBeHidden();
+    expect(await page.evaluate(() => window.__noxaMobile.hintHidden())).toBe(true);
+    // (454) Help → "show hint again" brings the compact shortcut back, persisted in settings.
+    await page.evaluate(() => window.__noxaMobile.showHint());
     await expect(shortcut).toBeVisible();
+    expect(await page.evaluate(() => window.__noxa.state.settings.mobile_hint)).toBe('shown');
+    expect(await page.evaluate(() => window.__calls.some(c => c[0] === 'SaveSettings' && c[1]?.mobile_hint === 'shown'))).toBe(true);
     await expect(page.locator('#mobile-announcement')).toBeHidden();
     expect((await shortcut.boundingBox()).height).toBeLessThan(40);
     await page.screenshot({ path: testInfo.outputPath('mobile-sidebar-banner.png') });
