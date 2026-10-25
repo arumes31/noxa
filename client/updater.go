@@ -518,6 +518,8 @@ func (a *App) ApplyAndRestart() string {
 		return "an update is already processing"
 	}
 	a.update.running = true
+	resume := a.updateReconnect
+	a.updateReconnect = ""
 	a.update.mu.Unlock()
 	defer func() {
 		a.update.mu.Lock()
@@ -528,6 +530,22 @@ func (a *App) ApplyAndRestart() string {
 	if err != nil {
 		return err.Error()
 	}
+	// Only the updater supervisor/child inherits the protected connection.
+	previous, hadPrevious := os.LookupEnv(updateReconnectEnv)
+	if resume != "" {
+		if err := os.Setenv(updateReconnectEnv, resume); err != nil {
+			return err.Error()
+		}
+	} else {
+		_ = os.Unsetenv(updateReconnectEnv)
+	}
+	defer func() {
+		if hadPrevious {
+			_ = os.Setenv(updateReconnectEnv, previous)
+		} else {
+			_ = os.Unsetenv(updateReconnectEnv)
+		}
+	}()
 	// #nosec G204 -- exe is the current executable path returned by the OS, not user input.
 	if err := restartLaunch(exe); err != nil {
 		if errors.Is(err, errUpdateRestored) {

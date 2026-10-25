@@ -182,7 +182,7 @@ type Settings struct {
 	DownloadFolder     string `json:"download_folder"`
 	ReconnectOnLoss    bool   `json:"reconnect_on_loss"`
 	UpdatesAutoCheck   bool   `json:"updates_auto_check"`
-	UpdatesAutoInstall bool   `json:"updates_auto_install"` // install/restart only on application startup
+	UpdatesAutoInstall bool   `json:"updates_auto_install"` // install/restart after countdown on startup or reconnect
 
 	UpdatesCheckOnReconnect bool `json:"updates_check_on_reconnect"`
 

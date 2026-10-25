@@ -602,3 +602,18 @@ test("a new loss after recovery invalidates recovery even while its recording is
         assert.equal(f.queue.pending.length, 0, `recovery delay ${delay}`);
     }
 });
+
+for (const flag of ["muted", "deafened"]) {
+    test(`${flag} silences speech except poke without replaying queued notifications on unmute`, () => {
+        const f = fixture();
+        f.queue.enqueue("user_join", { delay: 1000 });
+        f.state[flag] = true;
+        for (const event of Object.keys(SPEECH_EVENTS)) assert.equal(f.queue.allowed(event, f.state.settings, false), event === "poke", event);
+        f.queue.reconcile();
+        assert.equal(f.queue.pending.length, 0);
+        assert.equal(f.queue.enqueue("poke", { delay: 0 }), true);
+        assert.equal(f.played[0].id, "speech_en_poke");
+        f.state[flag] = false; f.tick(1000);
+        assert.equal(f.played.length, 1);
+    });
+}

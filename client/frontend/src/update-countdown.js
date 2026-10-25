@@ -1,6 +1,6 @@
 // Owned by one verified update attempt, never by raw download progress.
-export function createUpdateCountdown({ current, tick, restart, now = () => performance.now(), schedule = setTimeout, unschedule = clearTimeout }) {
-    const deadline = now() + 3000;
+export function createUpdateCountdown({ current, tick, restart, delayMs = 3000, now = () => performance.now(), schedule = setTimeout, unschedule = clearTimeout }) {
+    const deadline = now() + delayMs;
     let timer = null, settled = false, started = false, resolve;
     const done = new Promise(r => { resolve = r; });
     const cancel = () => {

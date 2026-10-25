@@ -15,7 +15,7 @@ for (const [language, clips] of Object.entries(SPEECH_ASSETS)) {
         const id = "speech_" + language + "_" + event;
         const policy = SPEECH_EVENTS[event] || SPEECH_EVENTS[SPEECH_VARIANTS[event]];
         definitions[id] = { duration: clip.duration, priority: policy.priority, cooldown: 0, category: "Speech",
-            application: policy.category === "application" };
+            muteException: event === "poke", application: policy.category === "application" };
         urls[id] = clip.url;
     }
 }
@@ -38,6 +38,10 @@ export function playSpeech(event, options) { return speechQueue.enqueue(event, o
 export function playAlert(event, options) {
     stopPreviews();
     return speechQueue.enqueue(event, options);
+}
+export function reconcileNotificationMute() {
+    speechQueue.reconcile();
+    soundEngine.reconcile();
 }
 export function clearSpeech(category) { speechQueue.clear(category); }
 // From 20:00 until 04:59 a language with a night recording says good night.

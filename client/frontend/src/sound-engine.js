@@ -162,6 +162,7 @@ export class SoundEngine {
         const settings = options.settings || state?.settings;
         const def = this.definitions[name];
         if (!Object.hasOwn(this.definitions, name) || !settings) return "unavailable";
+        if (!options.preview && (state?.muted || state?.deafened) && name !== "poke" && !def.muteException) return "audio_muted";
         if (!options.preview && settings.play_sounds === false) return "master_muted";
         if (!options.preview && !def.application && state?.replayingTabID) return "history";
         if (this.isDND(settings)) return "dnd";
@@ -246,7 +247,7 @@ export class SoundEngine {
             // Reserve the slot while its previous cue fades. Rapid replacements
             // cancel unstarted sources, so no burst can accumulate audible tails.
             const startAt = Math.max(ctx.currentTime, ...[...this.retiring].map(e => e.stopAt));
-            const entry = { source, gain, family, scope, startAt, volume, baseVolume, duckEligible, settings: options.settings,
+            const entry = { name, source, gain, family, scope, startAt, volume, baseVolume, duckEligible, settings: options.settings,
                 priority: def.priority, preview: !!options.preview, onEnded: options.onEnded };
             source.onended = () => this.release(entry, false);
             this.active.add(entry);
@@ -284,6 +285,12 @@ export class SoundEngine {
             entry.gain.gain.linearRampToValueAtTime(0, entry.stopAt);
             entry.source.stop(entry.stopAt);
         } catch { this.release(entry); }
+    }
+
+    reconcile() {
+        for (const entry of this.active) {
+            if (!this.allowed(entry.name, entry)) this.retire(entry);
+        }
     }
 
     stopPreviews() {

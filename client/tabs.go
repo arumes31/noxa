@@ -549,6 +549,7 @@ func (a *App) ConnectNamedBookmarkTabWithID(bookmark, addr, nickname, displayNam
 	ts.info.Addr = addr
 	ts.info.Nickname = nickname
 	ts.bookmark = bookmark
+	ts.loginPasswords = &loginPasswords{Password: password, ServerPassword: serverPassword}
 	a.tabsMu.Unlock()
 	a.onTabConnected(ts.cm, bookmark, addr, nickname, displayName)
 	a.activate(id)

@@ -55,7 +55,7 @@ import { initClientInfo } from "./clientinfo.js";
 import { initUpdater, startupAutoCheck, reconnectAutoCheck } from "./updater.js";
 import { showConnectSplash } from "./connect-splash.js";
 import { playUpdateIntro } from "./update-intro.js";
-import { playEvent, playAlert, clearSpeech, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
+import { playEvent, playAlert, clearSpeech, reconcileNotificationMute, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
 import { initClosingAudio } from "./closing-audio.js";
 import { startMicMeter, stopMicMeter, pttRelease, refreshUserAudio, setUserShareVolume, setUserShareMuted, captureConstraints, markCaptureProfile, applyCaptureProfile, syncMuteButton, renderMicStatus } from "./audio.js";
 import { createMicrophoneGate, microphoneSendTrack, disposeMicrophoneGate, updateMicrophoneGate, replaceMicrophoneGate } from "./voice-gate.js";
@@ -3161,6 +3161,7 @@ $("voice-mute").onclick = () => {
         state.muted = true; // An explicit unmute overrides the pre-deafen state.
     }
     state.muted = !state.muted;
+    reconcileNotificationMute();
     syncMuteButton($("voice-mute"), state.muted);
     window.go.main.App.SetMuted(state.muted);
     if (state.muted) playEvent("mic_off");
@@ -3172,12 +3173,24 @@ $("voice-mute").onclick = () => {
 syncMuteButton($("voice-mute"), state.muted);
 
 let mutedBeforeDeafen = false;
+window.runtime.EventsOn("update_connection_restoring", audio => {
+    state.deafened = audio?.deafened === true;
+    state.muted = audio?.muted === true || state.deafened;
+    mutedBeforeDeafen = audio?.muted_before_deafen === true;
+    reconcileNotificationMute();
+    syncMuteButton($("voice-mute"), state.muted);
+    $("remote-video").muted = state.deafened;
+    applyVoiceState();
+    refreshVoicePlayback();
+    renderTree();
+});
 function setDeafened(on) {
     if (updateStartupBlocked()) return;
     if (state.deafened === on) return;
     if (on) { mutedBeforeDeafen = state.muted; state.muted = true; }
     else state.muted = mutedBeforeDeafen;
     state.deafened = on;
+    reconcileNotificationMute();
     syncMuteButton($("voice-mute"), state.muted);
     window.go.main.App.SetMuted(state.muted);
     applyVoiceState();
@@ -3426,6 +3439,10 @@ window.__noxa = {
     soundEngine,
     speechQueue,
     startupInitialized,
+    updateStartupConfirmed: () => updateStartupConfirmed,
+    updateReconnectAudio: () => ({ muted: state.muted, deafened: state.deafened, mutedBeforeDeafen }),
+    completeUpdateReconnect: result => completeReconnect({ addr: result.addr, nick: result.nick,
+        displayName: result.displayName || "", bookmark: result.bookmark || "", pw: "", spw: "" }, null, result.tab_id),
     state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT, noteActivity,
     setDeafened, refreshPermissions, applyVoiceState, applyOutputSettings, applyLiveAudioSettings,
     startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor, prepareChannelMicrophone, readRemoteAudioLevel,
@@ -3497,8 +3514,11 @@ initAppShell(); // top bar search/ping, sidebar sections, voice card
 
 // A replacement is ready only once native settings and all UI modules have
 // initialized. A startup exception leaves the old app's recovery guard active.
-void startupInitialized.then(ready => ready && window.go.main.App.ConfirmUpdateStartup())
-    .catch(error => console.warn("Update startup confirmation failed", error));
+const updateStartupConfirmed = startupInitialized.then(async ready => {
+    if (!ready) return false;
+    await window.go.main.App.ConfirmUpdateStartup();
+    return true;
+}).catch(error => { console.warn("Update startup confirmation failed", error); return false; });
 
 // C20: the first start after an update restart greets with the wordmark.
 void Promise.resolve(window.go?.main?.App?.StartedAfterUpdate?.())

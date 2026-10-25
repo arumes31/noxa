@@ -45,3 +45,10 @@ test("measured bytes determine real core progress and never invent missing bytes
     assert.equal(measuredUpdateProgress(100, { downloaded_bytes: -2, total_bytes: Infinity }).downloaded, null);
     assert.equal(measuredUpdateProgress(500).ratio, 1);
 });
+
+test("automatic install countdown waits five seconds and rechecks permission", async () => {
+    const c = clock(), ticks = []; let calls = 0;
+    const d = createUpdateCountdown({ ...c, delayMs: 5000, current: () => true, tick: n => ticks.push(n), restart: () => { calls++; return true; } });
+    c.advance(4999); await flush(); assert.equal(calls, 0); assert.deepEqual(ticks, [5,4,3,2,1]);
+    c.advance(1); assert.equal(await d.done, true); assert.equal(calls, 1);
+});

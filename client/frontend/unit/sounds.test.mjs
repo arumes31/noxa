@@ -487,3 +487,20 @@ test("a missing headset keeps notifications audible on fallback across retries",
     }
     await f.engine.dispose();
 });
+
+for (const flag of ["muted", "deafened"]) {
+    test(`${flag} suppresses every live effect except poke and drops active audio`, async () => {
+        const f = fixture(); await f.engine.preload();
+        assert.equal(f.engine.play("dm"), true);
+        f.state[flag] = true;
+        f.engine.reconcile();
+        assert.equal(f.engine.active.size, 0);
+        for (const event of SOUND_EVENTS) assert.equal(f.engine.allowed(event), event === "poke", event);
+        assert.equal(f.engine.play("poke"), true);
+        f.state.settings.play_sounds = false;
+        assert.equal(f.engine.allowed("poke"), false, "poke must still respect explicit sound preferences");
+        f.state.settings.play_sounds = true; f.state[flag] = false;
+        assert.equal(f.engine.allowed("dm"), true);
+        await f.engine.dispose();
+    });
+}

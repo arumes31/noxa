@@ -604,3 +604,6 @@ export function WhisperSet(arg1:Array<string>,arg2:Array<number>,arg3:boolean):P
 export function WhisperSetForTab(arg1:string,arg2:Array<string>,arg3:Array<number>,arg4:boolean):Promise<string>;
 
 export function SupportsStreamHEVCForTab(arg1:string):Promise<boolean>;
+
+export function PrepareUpdateReconnect(arg1:boolean,arg2:boolean,arg3:boolean):Promise<string>;
+export function RestoreUpdateConnection():Promise<{[key:string]:any}>;
