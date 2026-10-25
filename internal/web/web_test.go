@@ -313,3 +313,23 @@ func TestInfoExposesGuestPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestManifestContentType(t *testing.T) {
+	cfg := testConfig(t)
+	if err := os.WriteFile(filepath.Join(cfg.AppDir, "manifest.webmanifest"), []byte(`{"name":"noXa","display":"standalone"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ts := newTestServer(t, cfg, &echoControl{})
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/app/manifest.webmanifest", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "application/manifest+json" || resp.Header.Get("Cache-Control") != "no-cache" {
+		t.Fatalf("manifest response: %d %v", resp.StatusCode, resp.Header)
+	}
+}
