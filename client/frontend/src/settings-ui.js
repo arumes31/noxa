@@ -382,7 +382,7 @@ function pageGeneral() {
             row(t("settings.close.to.tray"), checkbox(s.close_to_tray, (v) => { s.close_to_tray = v; }), "", { key: "close_to_tray" }),
             row(t("settings.minimize.to.tray"), checkbox(s.minimize_to_tray, (v) => { s.minimize_to_tray = v; }), "", { key: "minimize_to_tray" })),
         group(t("settings.group.updates"), "updates",
-            row(t("settings.install.updates.at.startup"), checkbox(s.updates_auto_install !== false, (v) => { s.updates_auto_install = v; }), "startup", { key: "updates_auto_install", help: t("settings.install.updates.at.startup.help") }),
+            row(t("settings.install.updates.at.startup"), checkbox(s.updates_auto_install !== false, (v) => { s.updates_auto_install = v; }), "saved", { key: "updates_auto_install", help: t("settings.install.updates.at.startup.help") }),
             row(t("settings.check.for.updates.at.startup"), checkbox(s.updates_auto_check !== false, (v) => { s.updates_auto_check = v; }), "startup", { key: "updates_auto_check" }),
             row(t("settings.check.for.updates.on.reconnect"), checkbox(s.updates_check_on_reconnect !== false, (v) => { s.updates_check_on_reconnect = v; }), "", { key: "updates_check_on_reconnect" })),
         group(t("settings.downloads"), "downloads",

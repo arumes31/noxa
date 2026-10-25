@@ -8192,8 +8192,8 @@ test("settings explain when saved changes and temporary previews take effect", a
     await expect(page.getByLabel("Window opacity", { exact: true })).toHaveAccessibleDescription("Preview now; Apply or Done keeps the change. Cancel restores the saved appearance.");
     await page.getByRole("tab", { name: "General", exact: true }).click();
     await expect(page.getByLabel("Check for updates at startup", { exact: true })).toHaveAccessibleDescription("After saving, takes effect at the next app start.");
-    await expect(page.getByLabel("Automatically install updates at startup", { exact: true })).toBeChecked();
-    await expect(page.getByLabel("Automatically install updates at startup", { exact: true })).toHaveAccessibleDescription(/^Downloads updates and restarts noXa when the app starts\..*After saving, takes effect at the next app start\.$/);
+    await expect(page.getByLabel("Automatically install updates", { exact: true })).toBeChecked();
+    await expect(page.getByLabel("Automatically install updates", { exact: true })).toHaveAccessibleDescription(/^Starts updates after a 5-second countdown at startup or server reconnect\..*Applies immediately after saving\.$/);
 });
 
 test("video CPU pressure respects efficient decoding and discards stale polls", async ({ page }) => {
