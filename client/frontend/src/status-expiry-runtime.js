@@ -19,12 +19,39 @@ function save(record) {
     } catch { /* Storage is optional. */ }
 }
 
-// An expired record only acts on the account that set it; otherwise the
-// server already started this connection with a fresh status.
+// An expired record clears the status on the connection that set it: the
+// originating tab when it still exists, else a connected tab to the same
+// server. Returns false while no such connection is up (the scheduler then
+// retries), and true once the status was cleared or is no longer ours.
 async function expire(record) {
     const state = V()?.state;
-    if (!state?.myClientID || !state.myStatus || (record.uniqueID && record.uniqueID !== state.myUniqueID)) return;
-    if (await setPresence("online", "", capturePresenceScope())) V().sysMsg(t("status.expiry.cleared"));
+    if (!state) return false;
+    if (record.uniqueID && state.myUniqueID && record.uniqueID !== state.myUniqueID) return true;
+    const tabs = await listTabs();
+    const target = tabs.find(tab => tab.id === record.tabID && tab.connected)
+        || tabs.find(tab => record.server && tab.addr === record.server && tab.connected);
+    if (!target) return false;
+    if (target.id === state.activeTabID) {
+        if (!state.myClientID) return false;
+        if (!state.myStatus) return true;
+        if (!await setPresence("online", "", capturePresenceScope())) return false;
+    } else {
+        try {
+            const error = await window.go.main.App.SetStatusForTab(target.id, "online", "");
+            if (error) return false;
+        } catch { return false; }
+    }
+    V().sysMsg?.(t("status.expiry.cleared"));
+    return true;
+}
+
+async function listTabs() {
+    try { return (await window.go?.main?.App?.ListTabs?.()) || []; } catch { return []; }
+}
+
+async function activeTabAddr() {
+    const tabID = V()?.state?.activeTabID;
+    return (await listTabs()).find(tab => tab.id === tabID)?.addr || "";
 }
 
 export function initStatusExpiry() {
@@ -43,7 +70,14 @@ export function initStatusExpiry() {
 export function armStatusExpiry({ status, message, expiresAt }) {
     const active = initStatusExpiry();
     if (!expiresAt || !status || status === "online") { active.clear(); return null; }
-    return active.set({ uniqueID: V()?.state?.myUniqueID || "", status, message, expiresAt });
+    const state = V()?.state;
+    const record = active.set({ uniqueID: state?.myUniqueID || "", tabID: state?.activeTabID || "", server: "", status, message, expiresAt });
+    // The server address lets the expiry survive a closed/reopened tab.
+    void activeTabAddr().then(addr => {
+        const current = active.current();
+        if (addr && current && current.expiresAt === expiresAt) active.set({ ...current, server: addr });
+    });
+    return record;
 }
 
 export function statusExpiryTimeLabel(expiresAt) {

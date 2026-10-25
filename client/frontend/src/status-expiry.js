@@ -4,6 +4,9 @@
 export const STATUS_EXPIRY_OPTIONS = ["none", "30m", "1h", "4h", "today", "custom"];
 const MINUTE = 60_000;
 const MAX_TIMER = 2_147_000_000; // setTimeout saturates above ~24.8 days
+// RETRY_DELAY spaces attempts to clear a status whose expiry already passed
+// but could not be delivered yet (startup before the connection is up).
+const RETRY_DELAY = 15_000;
 const MAX_CUSTOM_MINUTES = 7 * 24 * 60;
 
 // statusExpiryAt returns the absolute expiry in ms, or 0 for "never".
@@ -33,12 +36,23 @@ export function createStatusExpiryScheduler({ now = Date.now, setTimer = setTime
         if (!record) return;
         timer = setTimer(check, Math.min(Math.max(0, record.expiresAt - now()), MAX_TIMER));
     }
+    // settle consumes the record once onExpire handled it. A callback result
+    // of exactly `false` (or a rejected promise) means "could not clear yet",
+    // e.g. no connection: the record stays and is retried after RETRY_DELAY.
+    function settle(expired, ok) {
+        if (record !== expired) return;
+        if (ok === false) { stop(); timer = setTimer(check, RETRY_DELAY); return; }
+        record = null; stop(); persist();
+    }
     function check() {
         if (!record) { stop(); return false; }
         if (record.expiresAt > now()) { arm(); return false; }
         const expired = record;
-        record = null; stop(); persist();
-        onExpire?.(expired);
+        stop();
+        let result;
+        try { result = onExpire?.(expired); } catch { result = false; }
+        if (result && typeof result.then === "function") result.then(ok => settle(expired, ok), () => settle(expired, false));
+        else settle(expired, result);
         return true;
     }
     arm();

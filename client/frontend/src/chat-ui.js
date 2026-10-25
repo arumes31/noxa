@@ -5292,7 +5292,7 @@ export function applyRemoteRead(marker) {
     if (!marker || !marker.id) return;
     if (marker.scope === "channel") {
         const chID = Number(marker.id);
-        if (!Number.isFinite(chID) || chID <= 0) return;
+        if (!Number.isFinite(chID) || chID < 0) return; // 0 is global chat
         const s = V().state.settings;
         if (marker.messageID && s) {
             s.last_read_channels = s.last_read_channels || {};

@@ -68,7 +68,7 @@ test("resolvePreviewImage distinguishes allowed, blocked and absent images", () 
 test("the blocked host exposes only a bounded hostname", () => {
     assert.equal(blockedPreviewHost("https://cdn.example.test/private/path?token=1"), "cdn.example.test");
     assert.equal(blockedPreviewHost("https://" + "a".repeat(200) + ".test/x"), "a".repeat(80));
-    for (const value of ["data:text/html,<b>", "blob:https://x/y", "javascript:alert(1)", "nope", "", null]) assert.equal(blockedPreviewHost(value), "", String(value));
+    for (const value of ["data:text/html,<b>", "blob:https://x/y", "javascript:alert(1)", "vbscript:msgbox(1)", "file:///C:/x", "ftp://files.example.test/a", "nope", "", null]) assert.equal(blockedPreviewHost(value), "", String(value));
 });
 
 // Minimal DOM double shared by the renderer tests below.

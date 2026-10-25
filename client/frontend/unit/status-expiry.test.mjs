@@ -94,3 +94,40 @@ test("replacing or clearing the status cancels the previous expiry", () => {
     assert.equal(scheduler.set({ status: "busy", expiresAt: clock.now() - 1 }), null, "a past expiry is ignored");
     assert.equal(createStatusExpiryScheduler({ ...clock, load: () => "garbage" }).current(), null);
 });
+
+test("an expiry that cannot be delivered yet keeps its record and retries", async () => {
+    const clock = fakeClock();
+    const saved = [];
+    let online = false, cleared = 0;
+    const stored = { status: "away", message: "Back soon", expiresAt: clock.now() - MINUTE, tabID: "t1" };
+    const scheduler = createStatusExpiryScheduler({
+        ...clock, load: () => stored, save: record => saved.push(record),
+        onExpire: () => { if (!online) return false; cleared++; return true; },
+    });
+    assert.equal(scheduler.check(), true, "the startup check runs the callback");
+    assert.equal(cleared, 0);
+    assert.equal(scheduler.current()?.tabID, "t1", "the record survives a failed clear");
+    assert.deepEqual(saved, [], "nothing is persisted while the clear is pending");
+    assert.equal(clock.pending(), 1, "a retry timer is armed");
+    clock.advance(15_000);
+    assert.equal(cleared, 0, "still offline: retried, record kept");
+    assert.equal(scheduler.current()?.tabID, "t1");
+    online = true;
+    clock.advance(15_000);
+    assert.equal(cleared, 1, "the retry clears the status once a connection is up");
+    assert.equal(scheduler.current(), null);
+    assert.deepEqual(saved, [null], "the record is consumed exactly once");
+    assert.equal(clock.pending(), 0);
+});
+
+test("a promise-returning expiry callback settles the record asynchronously", async () => {
+    const clock = fakeClock();
+    const scheduler = createStatusExpiryScheduler({ ...clock, load: () => ({ status: "busy", expiresAt: clock.now() - 1 }), onExpire: () => Promise.resolve(false) });
+    scheduler.check();
+    await Promise.resolve();
+    assert.ok(scheduler.current(), "rejected async clear keeps the record");
+    const done = createStatusExpiryScheduler({ ...clock, load: () => ({ status: "busy", expiresAt: clock.now() - 1 }), onExpire: () => Promise.resolve(true) });
+    done.check();
+    await Promise.resolve();
+    assert.equal(done.current(), null, "successful async clear consumes the record");
+});

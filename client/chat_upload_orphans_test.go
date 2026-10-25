@@ -93,9 +93,11 @@ func TestUploadOrphanSweepSelection(t *testing.T) {
 		{Server: "s", Storage: "failed", State: uploadOrphanPublishFailed, CreatedAt: fresh},
 		{Server: "s", Storage: "uncertain", State: uploadOrphanUncertain, CreatedAt: old},
 		{Server: "elsewhere", Storage: "old", State: uploadOrphanUploaded, CreatedAt: old},
+		{Server: "s", Storage: "mine-old", State: uploadOrphanUploaded, CreatedAt: old, Session: "this-process"},
+		{Server: "s", Storage: "mine-failed", State: uploadOrphanPublishFailed, CreatedAt: old, Session: "this-process"},
 	}
 	var names []string
-	for _, entry := range sweepableUploadOrphans(entries, "s", now) {
+	for _, entry := range sweepableUploadOrphans(entries, "s", "this-process", now) {
 		names = append(names, entry.Storage)
 	}
 	if strings.Join(names, ",") != "old,failed" {

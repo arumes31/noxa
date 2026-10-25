@@ -118,8 +118,10 @@ export function callConnectionAnnouncement(previousPhase, nextPhase) {
 }
 
 // trackIsFlowing reports whether a MediaStreamTrack currently carries media:
-// live and not muted. A remote track is muted until RTP arrives, so this is
-// the browser's own "packets are flowing" signal for the receive side.
+// live, enabled and not muted. A remote track is muted until RTP arrives, so
+// that is the browser's own "packets are flowing" signal for the receive
+// side; a local sender track is gated by `enabled` (mute, deafen, PTT idle),
+// which the browser never mirrors into `muted`.
 export function trackIsFlowing(track) {
-    return !!track && track.readyState === "live" && track.muted !== true;
+    return !!track && track.readyState === "live" && track.muted !== true && track.enabled !== false;
 }

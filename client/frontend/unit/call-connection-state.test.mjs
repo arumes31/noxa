@@ -101,5 +101,8 @@ describe("call connection presentation", () => {
         assert.equal(trackIsFlowing({ readyState: "live", muted: true }), false);
         assert.equal(trackIsFlowing({ readyState: "ended", muted: false }), false);
         assert.equal(trackIsFlowing(null), false);
+        // A local sender track that mute/deafen/PTT disabled carries no media.
+        assert.equal(trackIsFlowing({ readyState: "live", muted: false, enabled: false }), false);
+        assert.equal(trackIsFlowing({ readyState: "live", muted: false, enabled: true }), true);
     });
 });

@@ -5,6 +5,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -39,6 +41,22 @@ type uploadOrphan struct {
 	CreatedAt int64  `json:"created_at"`
 	State     string `json:"state"`
 	Error     string `json:"error,omitempty"`
+	// Session identifies the client process that uploaded the file. The
+	// upload queue of that process may still hold the token (composing, or a
+	// failed send waiting for Retry), so only entries from earlier processes
+	// are ever swept.
+	Session string `json:"session,omitempty"`
+}
+
+// uploadOrphanSession is this process's identity for the ledger.
+var uploadOrphanSession = newUploadOrphanSession()
+
+func newUploadOrphanSession() string {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return time.Now().Format(time.RFC3339Nano)
+	}
+	return hex.EncodeToString(raw[:])
 }
 
 // UploadOrphanCleanup is the sweep summary shown as "N orphaned uploads
@@ -155,7 +173,7 @@ func (a *App) recordUploadedAttachment(cm *connManager, channelID int64, token, 
 	now := time.Now().UnixMilli()
 	a.mutateUploadOrphans(func(entries []uploadOrphan) []uploadOrphan {
 		for _, storage := range storages {
-			entries = append(entries, uploadOrphan{Server: server, ChannelID: channelID, Storage: storage, Name: name, CreatedAt: now, State: uploadOrphanUploaded})
+			entries = append(entries, uploadOrphan{Server: server, ChannelID: channelID, Storage: storage, Name: name, CreatedAt: now, State: uploadOrphanUploaded, Session: uploadOrphanSession})
 		}
 		return entries
 	})
@@ -205,12 +223,14 @@ func settleUploadOrphans(entries []uploadOrphan, server string, storages []strin
 
 // sweepableUploadOrphans selects the entries of server that may be deleted
 // now: never-published uploads past the grace window and definite publish
-// rejections. Uncertain entries are excluded.
-func sweepableUploadOrphans(entries []uploadOrphan, server string, now time.Time) []uploadOrphan {
+// rejections, but only from earlier client processes. Entries recorded by
+// the running process (session) stay: its upload queue may still publish or
+// retry with that token. Uncertain entries are excluded.
+func sweepableUploadOrphans(entries []uploadOrphan, server, session string, now time.Time) []uploadOrphan {
 	var selected []uploadOrphan
 	cutoff := now.Add(-uploadOrphanGrace).UnixMilli()
 	for _, entry := range entries {
-		if entry.Server != server {
+		if entry.Server != server || entry.Session == session {
 			continue
 		}
 		switch entry.State {
@@ -268,7 +288,7 @@ func (a *App) cleanupOrphanUploads(cm *connManager, remove func(uploadOrphan) st
 		entries = []uploadOrphan{}
 	}
 	entries = expireUploadOrphans(entries, now)
-	selected := sweepableUploadOrphans(entries, server, now)
+	selected := sweepableUploadOrphans(entries, server, uploadOrphanSession, now)
 	uploadOrphanMu.Unlock()
 	deleted := map[string]bool{}
 	failures := map[string]string{}

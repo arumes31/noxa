@@ -70,7 +70,9 @@ export function blockedPreviewHost(value) {
     if (typeof value !== "string") return "";
     try {
         const parsed = new URL(value);
-        if (parsed.protocol === "data:" || parsed.protocol === "blob:" || parsed.protocol === "javascript:") return "";
+        // Allow-list instead of naming bad schemes (data:, blob:, javascript:,
+        // vbscript:, ...): only web origins have a hostname worth showing.
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
         return parsed.hostname.slice(0, MAX_HOST_LENGTH);
     } catch {
         return "";
