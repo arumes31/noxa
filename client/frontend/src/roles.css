@@ -72,3 +72,22 @@
 .role-image-controls input { width: 100%; max-width: 100%; min-width: 0; }
 
 .role-image-controls input::file-selector-button { background: var(--bg-hover); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 5px 9px; margin-right: 10px; cursor: pointer; }
+
+/* (337) icon previews at real render sizes, on the Midnight surfaces they appear on. */
+.role-image-previews { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; }
+.role-image-sizes { display: flex; flex-direction: column; gap: 4px; }
+.role-image-sample { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: .857rem; color: var(--text); white-space: nowrap; }
+.role-image-sample-member { background: var(--bg-panel, var(--bg)); }
+.role-image-sample-chat { background: var(--bg, #000); }
+.role-image-sample-icon { display: inline-flex; width: var(--role-sample-size); height: var(--role-sample-size); flex: 0 0 var(--role-sample-size); }
+.role-image-sample-icon .role-icon { width: 100%; height: 100%; font-size: var(--role-sample-size); line-height: 1; }
+.role-image-sample-label { color: var(--text-dim); }
+
+/* (335) stale-form conflict dialog. */
+.role-conflict-dialog { max-width: 32rem; }
+.role-conflict-dialog .dlg-buttons { flex-wrap: wrap; margin-top: 12px; }
+
+/* (350) ban list filter. */
+.ban-filter-row { display: flex; flex-direction: column; gap: 2px; margin: 0 0 10px; }
+.ban-filter-row input { width: 100%; }
+.ban-filter-help { color: var(--text-dim); font-size: .786rem; }

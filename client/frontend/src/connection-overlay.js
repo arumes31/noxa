@@ -54,7 +54,7 @@ export function createConnectionOverlay({ getState, translate, retry, retryNow, 
         const phase = record.phase === "checking" ? "checking" : record.retry?.inFlight ? "reconnecting" : "disconnected";
         const title = translate(`connectionOverlay.${phase}`);
         overlay.querySelector("h2").textContent = title;
-        overlay.querySelector(".connection-overlay-explanation").textContent = translate(record.terminal ? "connectionOverlay.stopped" : "connectionOverlay.explanation");
+        overlay.querySelector(".connection-overlay-explanation").textContent = translate(record.terminal ? record.cause === "authentication" ? "connectionOverlay.stoppedAuth" : "connectionOverlay.stopped" : "connectionOverlay.explanation");
         overlay.querySelector(".connection-overlay-countdown").textContent = record.retry
             ? translate(record.retry.inFlight ? "runtime.reconnectAttempt" : "runtime.retry", { attempt: record.retry.attempts, seconds: record.retry.remaining }) : "";
         overlay.querySelector(".connection-overlay-reason").textContent = record.reason || (record.unknown ? translate("connectionOverlay.unknown") : "");
@@ -89,7 +89,7 @@ export function createConnectionOverlay({ getState, translate, retry, retryNow, 
             if (progress) Object.assign(value, { phase: "disconnected", terminal: false, reason: "", unknown: false });
             render();
         },
-        terminal(tabID, reason) { if (!tabID) return; Object.assign(entry(tabID), { phase: "disconnected", retry: null, terminal: true, unknown: false, reason: String(reason || "").slice(0, 2048) }); render(); },
+        terminal(tabID, reason, cause = "terminal") { if (!tabID) return; Object.assign(entry(tabID), { phase: "disconnected", retry: null, terminal: true, cause, unknown: false, reason: String(reason || "").slice(0, 2048) }); render(); },
         confirmed(tabID, generation, session, info) {
             if (!matches(tabID, generation, session)) return;
             const value = entry(tabID);

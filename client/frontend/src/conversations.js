@@ -1,4 +1,5 @@
 import { t } from "./i18n.js";
+import { mergeReadMarker } from "./read-markers.js";
 import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
 import { confirmDialog, promptDialog } from "./modal.js";
 import { startPrivateCall, showCallHistory } from "./private-calls.js";
@@ -7,6 +8,7 @@ import { encryptionBadge } from "./message-encryption.js";
 import { parseFileRef } from "./chat-parsers.js";
 import { applySeen, createTypingStore, GROUP_TYPING_PING_MS, seenLabel, seenMarkers, typingLabel } from "./group-activity.js";
 import { avatarColor } from "./workspace-ui.js";
+import { buildMemberCandidates, openMemberPicker } from "./member-picker.js";
 
 const V = () => window.__noxa;
 const app = () => window.go.main.App;
@@ -262,6 +264,12 @@ export function initConversations() {
             const result = await request({ action: "list" });
             if (!current() || token !== generation || !destinationCurrent()) return;
             const groups = (result.conversations || []).filter(group => !group.members.find(member => member.unique_id === uid())?.pending || !blocked(group.owner));
+            // (458) a list fetched while a mark_read is in flight must not
+            // regress the position this device already read to.
+            for (const group of groups) {
+                const pending = queuedReads.get(group.id)?.messageID;
+                if (pending) group.read_message_id = mergeReadMarker(group.read_message_id, pending);
+            }
             listedGroups = groups; updateSummary();
             if (sidebarOnly) activity?.seen(selected);
             // The authoritative list also restores tabs for messages received
@@ -370,7 +378,23 @@ export function initConversations() {
                 const option = el("option", "", client.nickname); option.value = client.unique_id; suggestions.append(option);
             }
             const add = button("group.invite"); add.type = "submit"; add.disabled = group.members.length >= 16;
-            invite.append(target, suggestions, add); invite.onsubmit = event => { event.preventDefault(); void mutate(group, "invite", target.value.trim()); }; details.append(invite);
+            // Pick by name (avatar, server, short ID, friend, channel) instead of
+            // typing an account ID; the ID field stays as the advanced fallback.
+            const pick = button("picker.chooseMember", () => {
+                const generation = V().state.serverGeneration, groupID = group.id;
+                openMemberPicker({
+                    title: t("picker.inviteTitle"), hint: t("picker.inviteHint"), exclude: group.members.map(member => member.unique_id),
+                    current: () => current() && generation === V().state.serverGeneration,
+                    candidates: () => buildMemberCandidates({
+                        clients: V().state.clients, contacts: V().state.settings?.contacts || [], groups: listedGroups,
+                        blocked: V().state.settings?.blocked_users || [], me: uid(), channels: V().state.channels,
+                        server: document.getElementById("server-name")?.textContent?.trim() || "",
+                    }),
+                    onPick: entry => { if (current() && selected === groupID) { target.value = entry.uid; void mutate(group, "invite", entry.uid); } },
+                });
+            });
+            pick.type = "button"; pick.disabled = add.disabled;
+            invite.append(target, suggestions, pick, add); invite.onsubmit = event => { event.preventDefault(); void mutate(group, "invite", target.value.trim()); }; details.append(invite);
             const renameButton = button("group.rename", async () => {
                 const value = await promptDialog({ title: t("group.rename"), label: t("group.name"), value: group.name, serverScoped: true });
                 if (value !== null && current() && selected === group.id) void mutate(group, "rename", "", { name: value });

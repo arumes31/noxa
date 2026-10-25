@@ -135,3 +135,6 @@
     #login-background, #login-overlay::before, .login-toolbar { display: none; }
     .login-shell, .login-recents-panel { border-color: CanvasText; }
 }
+
+/* (313) failure category badge: one label per error class above the explanation. */
+#login-error .login-failure-category { display: inline-block; margin-bottom: 4px; padding: 1px 8px; border: 1px solid currentColor; border-radius: 999px; font-size: .786rem; letter-spacing: .02em; text-transform: uppercase; opacity: .85; }

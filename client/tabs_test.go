@@ -743,13 +743,16 @@ func TestSetHotkeyValidation(t *testing.T) {
 	if err := a.SetHotkey("nope", "F1"); err == "" {
 		t.Fatal("unknown action accepted")
 	}
-	if err := a.SetHotkey("quick_connect", "not a key!!"); err == "" {
+	if err := a.SetHotkey("quick_connect", "Ctrl+Shift+C"); err == "" {
+		t.Fatal("removed quick-connect hotkey action accepted")
+	}
+	if err := a.SetHotkey("zen_toggle", "not a key!!"); err == "" {
 		t.Fatal("invalid spec accepted")
 	}
-	if err := a.SetHotkey("quick_connect", "Ctrl+Shift+C"); err != "" {
+	if err := a.SetHotkey("zen_toggle", "Ctrl+Shift+Z"); err != "" {
 		t.Fatalf("valid spec rejected: %s", err)
 	}
-	if a.settings.HotkeyQuickConnect != "Ctrl+Shift+C" {
-		t.Fatalf("spec = %q", a.settings.HotkeyQuickConnect)
+	if a.settings.HotkeyZen != "Ctrl+Shift+Z" {
+		t.Fatalf("spec = %q", a.settings.HotkeyZen)
 	}
 }

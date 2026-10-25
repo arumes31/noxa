@@ -90,7 +90,7 @@ export function renderRoleForm(host, model, changed) {
     const color = field(cosmetics, t("roles.color"), "text", draft.color, (value) => { draft.color = value; changed(); });
     color.placeholder = "#RRGGBB";
     color.maxLength = 7;
-    const icon = field(cosmetics, t("roles.icon"), "text", draft.icon, (value) => { draft.icon = value; imageEditor.querySelector(".role-image-preview").replaceChildren(roleIconElement(draft)); changed(); });
+    const icon = field(cosmetics, t("roles.icon"), "text", draft.icon, (value) => { draft.icon = value; imageEditor.refreshPreview(); changed(); });
     icon.maxLength = 16;
     icon.placeholder = t("roles.iconFallback");
     const imageEditor = renderRoleImageEditor(model, form, changed);
@@ -153,7 +153,26 @@ function renderRoleImageEditor(model, form, changed) {
     label.append(upload);
     const error = roleElement("p", "role-error"); error.setAttribute("role", "alert");
     let sequence = 0;
-    const refresh = () => preview.replaceChildren(roleIconElement(draft));
+    // (337) the icon at the sizes it is actually rendered at: 16px in member
+    // rows and 20px in chat, on the Midnight panel/chat backgrounds, so the
+    // operator judges legibility before uploading.
+    const sizes = roleElement("div", "role-image-sizes");
+    sizes.setAttribute("aria-label", t("roles.imageSizes"));
+    sizes.title = t("roles.imageSizes");
+    const samples = [["member", 16, t("roles.imageSampleMember")], ["chat", 20, t("roles.imageSampleChat")]].map(([context, size, label]) => {
+        const sample = roleElement("span", `role-image-sample role-image-sample-${context}`);
+        sample.dataset.size = String(size);
+        const slot = roleElement("span", "role-image-sample-icon");
+        slot.style.setProperty("--role-sample-size", `${size}px`);
+        sample.append(slot, roleElement("span", "role-image-sample-label", label));
+        return { slot, sample };
+    });
+    sizes.append(...samples.map(({ sample }) => sample));
+    const refresh = () => {
+        preview.replaceChildren(roleIconElement(draft));
+        for (const { slot } of samples) slot.replaceChildren(roleIconElement(draft));
+    };
+    box.refreshPreview = refresh;
     const reset = roleButton(t("roles.imageReset"), () => {
         sequence++; model.imagePending = null; draft.icon_image = ""; draft.icon = "";
         error.textContent = ""; changed(true);
@@ -178,6 +197,8 @@ function renderRoleImageEditor(model, form, changed) {
     };
     refresh();
     controls.append(label, roleElement("p", "role-hint", t("roles.imageLimits")), reset, error);
-    box.append(preview, controls);
+    const previews = roleElement("div", "role-image-previews");
+    previews.append(preview, sizes);
+    box.append(previews, controls);
     return box;
 }

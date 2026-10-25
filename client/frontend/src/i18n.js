@@ -36,6 +36,7 @@ import { streamEnglish, streamGerman } from "./stream-messages.js";
 import { chatEnglish, chatGerman } from "./chat-messages.js";
 import { conversationEnglish, conversationGerman } from "./conversation-messages.js";
 import { callEnglish, callGerman } from "./call-messages.js";
+import { contactKeyChangeEnglish, contactKeyChangeGerman } from "./contact-key-change-messages.js";
 import { selectedWinEnglish, selectedWinGerman } from "./selected-win-messages.js";
 import { contextEnglish, contextGerman } from "./context-messages.js";
 import { micEnglish, micGerman } from "./mic-messages.js";
@@ -52,13 +53,25 @@ import { connectEnglish, connectGerman } from "./connect-messages.js";
 import { directMessageEnglish, directMessageGerman } from "./dm-messages.js";
 import { shellEnglish, shellGerman } from "./shell-messages.js";
 import { fullscreenEnglish, fullscreenGerman } from "./fullscreen-messages.js";
+import { searchEnglish, searchGerman } from "./search-messages.js";
+import { memberPresenceEnglish, memberPresenceGerman } from "./member-presence-messages.js";
+import { uploadStageEnglish, uploadStageGerman } from "./upload-stage-messages.js";
+import { accountIdentityEnglish, accountIdentityGerman } from "./account-identity-messages.js";
+import { statusExpiryEnglish, statusExpiryGerman } from "./status-expiry-messages.js";
+import { hardeningEnglish, hardeningGerman } from "./hardening-messages.js";
 
 const en = {
  ...overviewEnglish,
+    ...searchEnglish,
     ...deliveryEnglish,
     ...usabilityEnglish,
     ...directMessageEnglish,
     ...fullscreenEnglish,
+    ...memberPresenceEnglish,
+    ...uploadStageEnglish,
+    ...accountIdentityEnglish,
+    ...statusExpiryEnglish,
+    ...hardeningEnglish,
     ...midnightEnglish,
     ...loginErrorEnglish, ...streamHealthEnglish,
     ...voiceDiagnosticsEnglish,
@@ -71,6 +84,7 @@ const en = {
     ...micEnglish,
     ...selectedWinEnglish,
     ...callEnglish,
+    ...contactKeyChangeEnglish,
     ...conversationEnglish,
     ...chatEnglish,
     ...streamEnglish,
@@ -169,10 +183,16 @@ const en = {
 
 const de = {
  ...overviewGerman,
+    ...searchGerman,
     ...deliveryGerman,
     ...usabilityGerman,
     ...directMessageGerman,
     ...fullscreenGerman,
+    ...memberPresenceGerman,
+    ...uploadStageGerman,
+    ...accountIdentityGerman,
+    ...statusExpiryGerman,
+    ...hardeningGerman,
     ...midnightGerman,
     ...loginErrorGerman, ...streamHealthGerman,
     ...voiceDiagnosticsGerman,
@@ -185,6 +205,7 @@ const de = {
     ...micGerman,
     ...selectedWinGerman,
     ...callGerman,
+    ...contactKeyChangeGerman,
     ...conversationGerman,
     ...chatGerman,
     ...streamGerman,

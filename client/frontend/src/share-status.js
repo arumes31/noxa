@@ -1,4 +1,5 @@
 import { saveStreamDiagnostics } from "./stream-diagnostic-export.js";
+import { redactPairingSecrets } from "./secret-redaction.js";
 import { diagnosticSample, mountStreamDiagnosticRecording } from "./stream-diagnostic-recording.js";
 import { t } from "./i18n.js";
 import { mountSenderTrace } from "./sender-trace.js";
@@ -65,9 +66,9 @@ export function startShareStatus(options) {
     root.querySelector(".sharing-stop").onclick = () => { if (current(s)) s.stop(); };
     const exportSnapshot = save => {
         if (!current(s) || (!s.layers?.length && !s.recording.status())) return;
-        void (save ? saveStreamDiagnostics : copyToClipboard)(JSON.stringify({ sampled_at: s.sampledAt, direction: "sent", slot: "screen", video_senders: s.layers,
+        void (save ? saveStreamDiagnostics : copyToClipboard)(redactPairingSecrets(JSON.stringify({ sampled_at: s.sampledAt, direction: "sent", slot: "screen", video_senders: s.layers,
             ...(s.recording.status() ? { recording: s.recording.snapshot() } : {}),
-            note: "Measured RTP payload counters. capture_width/capture_height are current capture-track output settings in pixels; width/height are encoded dimensions. Requested and capture settings are not measured frame rates. Null means unavailable." }, null, 2), { isCurrent: () => current(s) });
+            note: "Measured RTP payload counters. capture_width/capture_height are current capture-track output settings in pixels; width/height are encoded dimensions. Requested and capture settings are not measured frame rates. Null means unavailable." }, null, 2)), { isCurrent: () => current(s) });
     };
     root.querySelector(".sharing-copy").onclick = () => exportSnapshot(false);
     root.querySelector(".sharing-save").onclick = () => exportSnapshot(true);

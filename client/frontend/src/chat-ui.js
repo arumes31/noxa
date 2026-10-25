@@ -1,5 +1,5 @@
 import { createActivityHistory } from "./activity-history.js";
-import { previewImage } from "./preview-image.js";
+import { blockedPreviewPlaceholder, resolvePreviewImage } from "./preview-source-policy.js";
 // chat-ui.js — wave-5b rich chat UI: markdown messages (91-93), link preview
 // cards (94), emoji picker + custom server emoji (95/96), reactions (97), file
 // paste/drop/upload + inline rendering (98-100), edit/delete (101/102),
@@ -16,6 +16,7 @@ import { fileCardText, previewLine } from "./dm-model.js";
 import { manageChatGIFPlayback } from "./chat-gif-playback.js";
 import { openChatMediaLightbox } from "./chat-media-lightbox.js";
 import { createChatUploadQueue } from "./chat-upload-queue.js";
+import { createUploadOrphanSweeper } from "./upload-orphans.js";
 import { createUnreadTabEffects } from "./chat-unread.js";
 import { createChatTabs } from "./chat-tabs.js";
 import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
@@ -26,7 +27,8 @@ import { mountContextMenu, closeContextMenu, contextMenuKey } from "./context-me
 import { createPoll, renderPoll } from "./polls.js";
 import { parsePoll } from "./poll-state.js";
 import { closeDiscussions, initDiscussions, openDiscussions, renderForumChannel, resetDiscussions } from "./discussions.js";
-import { closeConversations, initConversations, isPrivateGroupActive, openConversationsAt, resetConversations, viewedConversationID } from "./conversations.js";
+import { closeConversations, initConversations, isPrivateGroupActive, listedPrivateGroups, openConversationsAt, resetConversations, viewedConversationID } from "./conversations.js";
+import { mergeReadMarker } from "./read-markers.js";
 import { QUICK_SWITCH_SETTINGS } from "./shell-model.js";
 import { createChatDelivery } from "./chat-delivery.js";
 import { sessionUserID } from "./session-identity.js";
@@ -47,6 +49,10 @@ import { youtubeVideo, renderYouTubePreviews } from "./youtube-previews.js";
 import { xPost, renderXPostPreviews } from "./x-previews.js";
 import { videoPortal, renderVideoPortalPreviews } from "./video-portal-previews.js";
 import { createSearchWorkspace } from "./search-workspace.js";
+import { conceptScore } from "./search-synonyms.js";
+import "./unified-search.css";
+import { buildMemberCandidates, openMemberPicker } from "./member-picker.js";
+import { channelPath } from "./ui-format.js";
 
 const V = () => window.__noxa;
 const $ = (id) => document.getElementById(id);
@@ -105,6 +111,7 @@ let replyTo = null; // message object being replied to (107)
 let replyRevision = 0;
 let draftRevision = 0;
 let chatDelivery = null;
+let orphanSweeper = null; // (504) sweeps uploads whose message was never published
 let activeSend = null;
 let attachmentQueue = null;
 let pendingFiles = []; // {name, dataBase64, isImage, dataURL} staged for send (98/100)
@@ -2097,7 +2104,7 @@ function renderTabs() {
         const badge = unread.get(id);
         const joined = id === V().state.myChannelID;
         items.push({
-            key: "ch:" + id, name: "# " + channelName(id),
+            key: "ch:" + id, name: "# " + channelName(id), fullName: "# " + (channelPath(V().state.channels, id) || channelName(id)),
             active: activeChannelID() === id && view.kind !== "global" && view.kind !== "dm",
             unread: badge?.n || 0, arrivedAt: badge?.unreadAt, mention: badge?.mention, mentions: badge?.mentions, replies: badge?.replies,
             title: t(joined ? "chat.joinedChannel" : "chat.subscribedChannel"),
@@ -3561,7 +3568,16 @@ async function linkPreview(url, controller) {
     const owner = captureScope(readExportScope);
     try {
         const data = await window.go.main.App.LinkPreviewForTab(owner.tabID, url);
-        if (data) card = { title: data.title, desc: data.description, image: previewImage(data.thumbnail) };
+        if (data) {
+            // (181) Only server-transcoded bytes become an <img src>; a
+            // third-party URL is shown as a visible blocked marker instead.
+            const image = resolvePreviewImage(data);
+            card = { title: data.title, desc: data.description, image: image.src, imageBlocked: image.blocked, imageHost: image.host };
+            if (image.blocked) {
+                card.blockedLabel = t("midnight.previewBlocked");
+                card.blockedTitle = t("midnight.previewBlockedHelp", { host: image.host || t("midnight.previewBlockedUnknownHost") });
+            }
+        }
     } catch { /* unavailable: domain-only card, never a direct HTTP fallback */ }
     if (!controller.signal.aborted && exportScopeIsCurrent(owner)) linkCards.set(url, card);
     return card;
@@ -3633,6 +3649,12 @@ function scheduleLinkCard(linkEl) {
             im.src = card.image;
             im.onerror = () => im.remove();
             linkCardEl.appendChild(im);
+        } else if (card.imageBlocked) {
+            // Labels were translated in linkPreview(); `t` is shadowed below.
+            const marker = blockedPreviewPlaceholder(document, {
+                label: card.blockedLabel, title: card.blockedTitle, className: "link-card-blocked", host: card.imageHost,
+            });
+            if (marker) linkCardEl.appendChild(marker);
         }
         const t = document.createElement("div");
         t.className = "link-card-title";
@@ -3931,6 +3953,14 @@ function showSearchResults(q, response, scope) {
     const current = () => exportScopeIsCurrent(scope);
     const overlay = createSearchWorkspace({ query: q, results, summary, channels, selectedChannel: searchChannel, current,
         highlight: markIn,
+        unified: {
+            members: V().state.clients, channels: V().state.channels, me: sessionUserID(V().state), blocked: V().state.settings?.blocked_users || [], avatars: V().state.avatars, avatarColor,
+            // Files: the current channel's storage (there is no cross-channel file search on the server).
+            loadFiles: scope.kind === "dm" ? null : async () => { const page = await app().FileListForTab(scope.tabID, scope.channelID, ""); return current() ? (page?.entries || []).map(entry => ({ ...entry, channel_id: scope.channelID })) : []; },
+            onOpenMember: hit => { if (current()) openPM(hit.uid, hit.name); },
+            onOpenChannel: hit => { if (current()) { window.__noxaFiles?.activateWorkspaceTab?.("chat"); void openChannelTab(hit.id); } },
+            onOpenFile: () => { if (current()) window.__noxaFiles?.activateWorkspaceTab?.("files", { focus: true }); },
+        },
         renderBadge: message => encryptionBadgeElement(searchEncryptionBadge(message, scope.kind === "dm")),
         onAdvanced: scope.kind !== "dm" ? openHistorySearch : null,
         renderBody: (container, message) => renderBody(container, normalize(message, Number(message.channel_id ?? scope.channelID))),
@@ -4521,14 +4551,14 @@ function openQS() {
     for (const ch of st.channels) {
         // Text channels have no voice: picking one opens its chat.
         if (ch.TextOnly) {
-            items.push({ label: "# " + ch.Name, hint: t("shell.qs.kind.text"), action: () => {
+            items.push({ label: "# " + ch.Name, hint: t("shell.qs.kind.text"), concepts: ["channel"], action: () => {
                 if (generation !== st.serverGeneration) return;
                 toChat();
                 void openChannelTab(ch.ChannelID);
             } });
             continue;
         }
-        items.push({ label: "# " + ch.Name, hint: t("chat.channelHint"), action: async () => {
+        items.push({ label: "# " + ch.Name, hint: t("chat.channelHint"), concepts: ["channel", "voice"], action: async () => {
             if (generation !== st.serverGeneration) return;
             try {
                 const err = await app().JoinChannelForTab(tabID, ch.SystemKind === "home" ? 0 : ch.ChannelID);
@@ -4540,15 +4570,31 @@ function openQS() {
     }
     for (const c of st.clients) {
         if (c.unique_id && c.unique_id !== sessionUserID(st)) {
-            items.push({ label: "@ " + (c.nickname || c.unique_id), hint: t("chat.userHint"), action: () => openPM(c.unique_id, c.nickname) });
+            items.push({ label: "@ " + (c.nickname || c.unique_id), hint: t("chat.userHint"), concepts: ["member", "dm"], action: () => openPM(c.unique_id, c.nickname) });
         }
     }
     for (const tab of pmTabs.values()) {
-        items.push({ label: "✉ " + tab.nick, hint: t("chat.pmTabHint"), action: () => activatePM(tab.uid) });
+        items.push({ label: "✉ " + tab.nick, hint: t("chat.pmTabHint"), concepts: ["dm"], action: () => activatePM(tab.uid) });
     }
     for (const tab of chanTabs.values()) {
-        items.push({ label: "# " + channelName(tab.id), hint: t("chat.channelTabHint"), action: () => activateChannel(tab.id) });
+        items.push({ label: "# " + channelName(tab.id), hint: t("chat.channelTabHint"), concepts: ["channel"], action: () => activateChannel(tab.id) });
     }
+    // Commands: the Messages view, a new direct message through the member
+    // picker, and the unified search. "DM", "Nachricht", "conversation" and
+    // the other synonyms reach them through their concepts.
+    items.push({ label: "✉ " + t("shell.qs.openMessages"), hint: t("shell.qs.kind.command"), concepts: ["dm", "group"], action: () => {
+        if (generation !== st.serverGeneration) return;
+        toChat();
+        if (typeof V().openDirectMessages === "function") V().openDirectMessages(); else window.__noxaShell?.openDirectMessages?.();
+    } });
+    items.push({ label: "✉ " + t("shell.qs.newDirect"), hint: t("shell.qs.kind.command"), concepts: ["dm", "member"], action: () => {
+        if (generation === st.serverGeneration) openNewDirectMessagePicker();
+    } });
+    items.push({ label: "🔍 " + t("shell.qs.searchAll"), hint: t("shell.qs.kind.command"), concepts: ["search", "files", "member", "channel"], action: () => {
+        if (generation !== st.serverGeneration) return;
+        toChat();
+        openSearch();
+    } });
     // Settings pages match once the user types, so they never crowd the
     // default list of channels and people.
     // The settings dialog may publish its own page list (settingsPages());
@@ -4560,7 +4606,7 @@ function openQS() {
         : QUICK_SWITCH_SETTINGS;
     for (const [page, key] of pages) {
         const label = /^[\w-]+(\.[\w-]+)+$/.test(key) ? t(key) : key;
-        items.push({ label: "⚙ " + label, hint: t("shell.qs.kind.setting"), typed: true, action: () => V()?.openSettings?.(page) });
+        items.push({ label: "⚙ " + label, hint: t("shell.qs.kind.setting"), typed: true, concepts: ["settings"], action: () => V()?.openSettings?.(page) });
     }
 
     qsOverlay = document.createElement("div");
@@ -4611,7 +4657,7 @@ function openQS() {
         const q = input.value.trim();
         matches = items
             .filter((it) => q || !it.typed)
-            .map((it) => ({ it, score: qsScore(q, it.label.replace(/^[#@✉⚙👥] /u, "")) }))
+            .map((it) => ({ it, score: Math.max(qsScore(q, it.label.replace(/^[#@✉⚙👥🔍] /u, "")), conceptScore(q, it, qsScore)) }))
             .filter((x) => x.score >= 0)
             .sort((a, b) => b.score - a.score)
             .slice(0, 12)
@@ -4683,13 +4729,41 @@ function openQS() {
         const me = sessionUserID(st);
         for (const group of result?.conversations || []) {
             if (!group?.id || group.members?.find((member) => member.unique_id === me)?.pending) continue;
-            items.push({ label: "👥 " + (group.name || group.id), hint: t("shell.qs.kind.group"), action: () => {
+            items.push({ label: "👥 " + (group.name || group.id), hint: t("shell.qs.kind.group"), concepts: ["group", "dm"], action: () => {
                 toChat();
                 void openConversationsAt(group.id);
             } });
         }
         renderList();
     }).catch(() => { /* Groups are optional; channels and people still work. */ });
+}
+
+// openNewDirectMessagePicker starts a direct message through the member
+// picker: members online, contacts, open conversations and private-group
+// members, told apart by server, short account ID, friend and channel; an
+// account ID can still be pasted under "Advanced". An existing conversation
+// with the chosen member is reopened rather than duplicated (openPM reuses
+// the tab).
+export function openNewDirectMessagePicker({ onPick = null } = {}) {
+    const st = V().state;
+    const generation = st.serverGeneration;
+    const me = sessionUserID(st);
+    const server = document.getElementById("server-name")?.textContent?.trim() || st.lastConnect?.addr || "";
+    const groups = (() => { try { return listedPrivateGroups()?.groups || []; } catch { return []; } })();
+    return openMemberPicker({
+        title: t("picker.newMessageTitle"), hint: t("picker.newMessageHint"),
+        current: () => generation === V().state.serverGeneration,
+        candidates: () => buildMemberCandidates({
+            clients: st.clients, contacts: st.settings?.contacts || [], conversations: directPeers().map(peer => ({ uid: peer.uid, name: peer.nick })),
+            groups, blocked: st.settings?.blocked_users || [], me, channels: st.channels, server,
+        }),
+        onPick: entry => {
+            if (generation !== V().state.serverGeneration) return;
+            if (onPick) { onPick(entry); return; }
+            window.__noxaFiles?.activateWorkspaceTab?.("chat");
+            openPM(entry.uid, entry.name || "");
+        },
+    });
 }
 
 // The top bar's "Search or jump to…" field opens the same switcher.
@@ -4762,6 +4836,8 @@ export function initChat() {
     const uploadHost = document.createElement("div"); uploadHost.className = "chat-upload-queue"; uploadHost.hidden = true;
     $("file-preview-row").after(uploadHost);
     attachmentQueue = createChatUploadQueue({ app, currentTab: () => V().state.activeTabID, container: uploadHost });
+    orphanSweeper?.dispose();
+    orphanSweeper = createUploadOrphanSweeper({ app, state: () => V().state, toast: (text, kind) => V().toast(text, kind) });
     window.runtime.EventsOn("ft_progress", event => attachmentQueue.progress(event));
     unreadEffects = createUnreadTabEffects($("pm-tabs"));
     chatTabs = createChatTabs($("pm-tabs"), { onLayoutChange: saveTabLayout, onRefresh: () => unreadEffects?.refresh() });
@@ -5205,4 +5281,38 @@ export function renderActivityMessage(container, entry) {
         previewCurrent: current, saveCurrent: current,
         save: (ref, name) => app().SaveConversationAttachmentForTab(scope.tabID, id, ref.storage, ref.key, name),
     });
+}
+
+// (458) applyRemoteRead merges a read position another device of this account
+// reported (read-sync.js). Positions only move forward: a channel marker with
+// an id advances last_read_channels to max(local, remote) and clears the badge
+// only when nothing newer is known here; a marker without an id (the other
+// device opened the chat) clears the badge the way our own view would.
+export function applyRemoteRead(marker) {
+    if (!marker || !marker.id) return;
+    if (marker.scope === "channel") {
+        const chID = Number(marker.id);
+        if (!Number.isFinite(chID) || chID <= 0) return;
+        const s = V().state.settings;
+        if (marker.messageID && s) {
+            s.last_read_channels = s.last_read_channels || {};
+            const next = mergeReadMarker(s.last_read_channels[chID], marker.messageID);
+            if (next > (Number(s.last_read_channels[chID]) || 0)) { s.last_read_channels[chID] = next; persistSettings(); }
+        }
+        if (!unread.has(chID)) return;
+        const msgs = store.get(`ch:${chID}`)?.msgs || [];
+        const newest = msgs.length ? msgs[msgs.length - 1].id : 0;
+        if (marker.messageID && newest > marker.messageID) return;
+        unread.delete(chID);
+        V().renderTree();
+        renderTabs();
+        return;
+    }
+    if (marker.scope === "dm") {
+        const tab = pmTabs.get(marker.id);
+        if (!tab?.unread) return;
+        tab.unread = 0;
+        tab.unreadAt = undefined;
+        renderTabs();
+    }
 }

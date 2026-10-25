@@ -1,0 +1,24 @@
+/* member-picker.css — the "choose a member" dialog (OLED Midnight). */
+.member-picker-overlay { align-items: flex-start; padding-top: 12vh; }
+.dlg.member-picker { position: relative; width: min(520px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; padding: 18px 18px 14px; }
+.member-picker-title { margin: 0; font-size: 1.1rem; }
+.member-picker-hint { margin: 0 0 4px; }
+.member-picker-search-icon { position: absolute; left: 30px; top: 86px; display: inline-flex; color: var(--text-faint); pointer-events: none; }
+.member-picker-search-icon .ui-icon, .member-picker-search-icon svg { width: 16px; height: 16px; }
+.member-picker-input { width: 100%; box-sizing: border-box; padding-left: 36px; margin: 0; }
+.member-picker-list { max-height: 320px; overflow-y: auto; padding: 4px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-raised); }
+.member-picker-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; cursor: pointer; border-radius: 6px; }
+.member-picker-row.sel, .member-picker-row:hover { background: var(--bg-hover); color: var(--text); }
+.member-picker-avatar { width: 32px; height: 32px; flex: 0 0 32px; font-size: .8rem; background: var(--avatar-color, var(--bg-panel)); color: #031014; }
+.member-picker-text { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.member-picker-name { display: flex; align-items: center; gap: 7px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member-picker-presence { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); flex: 0 0 8px; }
+.member-picker-presence[data-presence="online"] { background: var(--ok, #58d68d); }
+.member-picker-presence[data-presence="away"] { background: var(--warn, #f6c779); }
+.member-picker-presence[data-presence="busy"] { background: var(--danger, #ff8fa3); }
+.member-picker-context { color: var(--text-dim); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member-picker-empty { margin: 0; padding: 14px 12px; }
+.member-picker-manual summary { cursor: pointer; color: var(--text-dim); font-size: .85rem; }
+.member-picker-manual-form { display: flex; gap: 8px; margin-top: 8px; }
+.member-picker-manual-form .dlg-input { flex: 1; min-width: 0; margin: 0; font-family: var(--font-mono); }
+.member-picker-actions { display: flex; justify-content: flex-end; gap: 8px; }

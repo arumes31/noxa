@@ -6,7 +6,8 @@ import { watchMicrophone, watchAudioOutput } from "./microphone-recovery.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { sessionUserID } from "./session-identity.js";
 import { memberTarget } from "./member-target.js";
-import { icon } from "./icons.js";
+import { icon, setStatusIcon } from "./icons.js";
+import { aggregateCallConnections, callConnectionAnnouncement, describeCallConnection, initialCallConnection, reduceCallConnection, trackIsFlowing } from "./call-connection-state.js";
 import { answerCallMedia, createCallMedia, offerCallMedia } from "./private-call-media.js";
 import { callUndockButton, closeCallUndock } from "./call-undocking.js";
 
@@ -129,6 +130,18 @@ async function applyCall(call, tabID, generation) {
     const uid = sessionUserID(V().state);
     const me = call.participants.find(peer => peer.unique_id === uid);
     if (!me) return;
+    // (441) another device of this account answered: stop ringing here at
+    // once. The server projects our participant as "elsewhere"; no decline
+    // or leave is sent, the call continues on the other device.
+    if (me.state === "elsewhere") {
+        if (session?.call.id === call.id) {
+            const wasRinging = session.call.participants.find(peer => peer.unique_id === uid)?.state === "ringing";
+            session.call = call;
+            stopPrivateCall();
+            if (wasRinging) V().toast?.(t("call.answeredElsewhere"));
+        }
+        return;
+    }
     if (call.ended_at || !["accepted", "ringing"].includes(me.state)) {
         if (session?.call.id === call.id) { session.call = call; stopPrivateCall(); }
         return;
@@ -194,6 +207,8 @@ function render(owner) {
     const incoming = me?.state === "ringing";
     const accepted = owner.call.participants.filter(peer => peer.state === "accepted").length;
     const title = node("strong", t(incoming ? "call.incoming" : accepted < 2 ? "call.ringing" : "call.active"));
+    // (141) connecting / connected / media status, text + icon (never color alone).
+    owner.status = node("p"); owner.status.className = "call-connection-status";
     const people = node("p");
     for (const participant of owner.call.participants.filter(peer => ["accepted", "ringing"].includes(peer.state))) {
         const person = node("button", label(participant.unique_id)); person.type = "button"; person.className = "call-participant";
@@ -230,7 +245,8 @@ function render(owner) {
     }
     owner.controls = controls;
     syncPTTControl(owner, V().state.settings?.activation_mode || "ptt");
-    owner.panel.replaceChildren(title, people, owner.media.grid, controls);
+    owner.panel.replaceChildren(title, owner.status, people, owner.media.grid, controls);
+    syncConnectionStatus(owner);
     if (owner.captureLost) {
         const recovery = node("div"); recovery.setAttribute("role", "status");
         renderMicStatus(recovery, "disconnected", async () => {
@@ -391,11 +407,45 @@ function syncAudio(owner) {
     for (const [uid, peer] of owner.peers) {
         if (!acceptedPeer(owner, uid)) { closePeer(peer); owner.peers.delete(uid); owner.media.updateGrid(); continue; }
         syncPeerOutput(owner, uid, peer);
+        updatePeerLink(owner, peer, { type: "media", direction: "send", active: trackIsFlowing(peer.voiceSender?.track) });
         peer.audio.muted = !!(owner.deafened || state.deafened || blocked(uid));
         const master = Math.min(2, Math.max(0, (state.settings?.volume ?? 100) / 100));
         if (peer.gain) peer.gain.gain.value = isUserMuted(uid) ? 0 : master * personalVolumeGain(getUserVolume(uid));
         if (peer.shareGain) peer.shareGain.gain.value = isUserShareMuted(uid) ? 0 : master * personalVolumeGain(getUserShareVolume(uid));
     }
+}
+
+// (141) Per-peer transport/media state feeds one aggregated status line.
+function updatePeerLink(owner, peer, event) {
+    const next = reduceCallConnection(peer.link, event);
+    if (next === peer.link) return;
+    peer.link = next;
+    syncConnectionStatus(owner);
+}
+
+function watchPeerRemoteAudio(owner, peer, track) {
+    peer.remoteAudioTracks ||= new Set();
+    if (peer.remoteAudioTracks.has(track)) return;
+    peer.remoteAudioTracks.add(track);
+    const sync = () => updatePeerLink(owner, peer, { type: "media", direction: "receive", active: [...peer.remoteAudioTracks].some(trackIsFlowing) });
+    track.addEventListener("unmute", sync);
+    track.addEventListener("mute", sync);
+    track.addEventListener("ended", () => { peer.remoteAudioTracks.delete(track); sync(); }, { once: true });
+    sync();
+}
+
+function syncConnectionStatus(owner) {
+    if (!owner.status) return;
+    const accepted = owner.call.participants.filter(peer => peer.state === "accepted").length;
+    if (accepted < 2 || owner.peers.size === 0) { owner.status.hidden = true; return; }
+    const link = describeCallConnection(aggregateCallConnections([...owner.peers.values()].map(peer => peer.link)));
+    const text = t(link.key) + (link.detailKey ? " · " + t(link.detailKey) : "");
+    owner.status.hidden = false;
+    owner.status.dataset.phase = link.phase;
+    setStatusIcon(owner.status, link.icon, text);
+    const announcement = callConnectionAnnouncement(owner.linkPhase, link.phase);
+    owner.linkPhase = link.phase;
+    if (announcement) V().announceLive?.(t(announcement), "polite");
 }
 
 function ensurePeer(owner, uid) {
@@ -404,7 +454,7 @@ function ensurePeer(owner, uid) {
     const audio = node("audio"); audio.autoplay = true;
     // Keep playback separate from the panel, which rerenders as call state changes.
     audio.hidden = true; document.body.append(audio);
-    const peer = { pc, audio, started: false, chain: Promise.resolve(), localCandidates: [], remoteCandidates: [], localCandidateCount: 0, remoteCandidateCount: 0, descriptionSent: false, candidateTimer: null };
+    const peer = { pc, audio, started: false, chain: Promise.resolve(), localCandidates: [], remoteCandidates: [], localCandidateCount: 0, remoteCandidateCount: 0, descriptionSent: false, candidateTimer: null, link: initialCallConnection() };
     peer.closeMedia = () => owner.media.closePeer(peer);
     owner.peers.set(uid, peer);
     peer.stopRelay = maintainRelay(pc, {
@@ -451,6 +501,7 @@ function ensurePeer(owner, uid) {
         if (event.track.kind === "video") { owner.media.receiveVideo(peer, event); return; }
         peer.audioSources ||= new Map();
         if (peer.audioSources.has(event.track.id)) return;
+        watchPeerRemoteAudio(owner, peer, event.track);
         const remote = createRemoteAudioSource(owner.context, event.track);
         peer.audioSources.set(event.track.id, remote);
         if (!peer.gain) {
@@ -474,6 +525,7 @@ function ensurePeer(owner, uid) {
         void audio.play().catch(report);
     };
     pc.onconnectionstatechange = () => {
+        updatePeerLink(owner, peer, { type: "transport", state: pc.connectionState });
         if (pc.connectionState === "connected") clearTimeout(peer.connectTimer);
         if (pc.connectionState === "failed" && acceptedPeer(owner, uid)) failCall(owner, t("call.connecting"));
     };

@@ -115,7 +115,6 @@ test("compatibility transition blocks interaction capture and persisted preferen
         await window.__noxa.connectFromLogin();
         await window.__noxaTabs.quickConnectLast();
         await window.__noxa.ensureVoiceForChannel();
-        for (const cb of window.__events.hotkey || []) await cb("quick_connect");
         for (const name of ["tray_reconnect", "tray_disconnect"]) for (const cb of window.__events[name] || []) await cb();
         const video = await import("/src/video.js");
         await video.shareToggle();

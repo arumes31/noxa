@@ -1,0 +1,4 @@
+/* (318) bookmark export controls inside the bookmark manager. */
+.bm-export { display: flex; flex-direction: column; gap: 4px; margin: 12px 0 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.bm-export-credentials { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.bm-export-help { color: var(--text-dim); font-size: .786rem; line-height: 1.35; }

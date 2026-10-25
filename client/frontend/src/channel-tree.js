@@ -3,12 +3,14 @@ import { joinFailure, unreadLabel } from "./client-usability-model.js";
 import { isUserMuted } from "./audio.js";
 import * as chatUI from "./chat-ui.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
-import { visibleInChannelTree } from "./member-presence.js";
+import { deviceKind, groupSessionsByAccount, visibleInChannelTree } from "./member-presence.js";
 import { roleIconElement } from "./role-icons.js";
+import { deniedActionMessage, missingPermissionHint } from "./permission-denied.js";
 import { roleChip } from "./role-presentation.js";
 import { setSafeImage } from "./safe-media.js";
 import { t } from "./i18n.js";
 import { presenceLabel } from "./presence.js";
+import { channelPath, titleWhenTruncated } from "./ui-format.js";
 import { icon } from "./icons.js";
 import { memberScreenStream } from "./stream-controls.js";
 import { renderWorkspace } from "./workspace-ui.js";
@@ -174,12 +176,14 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         if (isEcho) accessLabels.push(t("echo.channelHint"));
         if (restricted) accessLabels.push(t("channel.access.private"));
         if (ch.HasPassword) accessLabels.push(t("channel.access.password"));
-        if (cannotJoin) accessLabels.push(t("channel.access.denied"));
+        if (cannotJoin) accessLabels.push(`${t("channel.access.denied")} – ${missingPermissionHint("connect")}`);
         el.classList.toggle("access-denied", cannotJoin);
         el.setAttribute("aria-label", t("runtime.channelName", { name: ch.Name }) + (accessLabels.length ? ", " + accessLabels.join(", ") : ""));
         el.title = accessLabels.join(" · ") || t("channel.access.open");
         el.innerHTML = `<span class="ch-disclosure" aria-hidden="true">${icon("chevron")}</span><span class="ch-icon">${icon(isHome ? "home" : isEcho ? "echo" : "speaker")}</span><span class="ch-name"></span>`;
         el.querySelector(".ch-name").textContent = ch.Name;
+        // A clipped name reveals its full "Parent › Child" path on hover.
+        titleWhenTruncated(el.querySelector(".ch-name"), channelPath(state.channels, ch.ChannelID));
         if (ch.Recording) {
             const recording = document.createElement("span");
             recording.className = "channel-recording-dot";
@@ -227,7 +231,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         }
         el.onclick = async () => {
             if (generation !== state.serverGeneration) return;
-            if (cannotJoin) { toast(joinFailure("permission denied"), "warn", "alert", { bypassDND: true }); return; }
+            if (cannotJoin) { toast(deniedActionMessage("connect"), "warn", "alert", { bypassDND: true }); return; }
             // Channel chat navigation is immediate, even when joining the same
             // voice channel emits no new membership event.
             window.__noxa.closeDirectMessages?.();
@@ -311,7 +315,8 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 list.className = "channel-members";
                 list.setAttribute("role", "group");
                 list.setAttribute("aria-label", t("runtime.members", { name: ch.Name }));
-                for (const c of members) list.appendChild(clientRow(c));
+                // One row per account; extra device sessions fold into that row.
+                for (const group of groupSessionsByAccount(members, state.myClientID)) list.appendChild(clientRow(group.primary, group.others));
                 node.appendChild(list);
             }
             const children = byParent.get(ch.ChannelID) || [];
@@ -367,7 +372,13 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             String(a.client_id).localeCompare(String(b.client_id)));
     }
 
-    function clientRow(c) {
+    function deviceLabel(client) {
+        return t(`presence.device.${deviceKind(client)}`);
+    }
+
+    function clientRow(c, others = []) {
+        const sessionsLabel = others.length ? t(others.length === 1 ? "presence.sessions.one" : "presence.sessions.many",
+            { count: others.length, devices: others.map(deviceLabel).join(", ") }) : "";
         const inVoice = c.channel_id > 0 && !state.channels.some(ch => ch.ChannelID === c.channel_id && ch.SystemKind === "home");
         const tabID = state.activeTabID, generation = state.serverGeneration;
         const row = document.createElement("div");
@@ -386,6 +397,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             c.status && presenceLabel(c.status), speakingHere && t("runtime.speaking"),
             c.priority_speaker && t("runtime.priority"),
             c.on_mobile && t("runtime.onMobile"),
+            sessionsLabel,
             streamLabel,
             inVoice && c.client_id === state.myClientID && state.muted && t("runtime.muted"),
             c.client_id === state.myClientID && state.deafened && t("runtime.deaf")].filter(Boolean).join(", "));
@@ -413,14 +425,41 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         }
         const name = document.createElement("span");
         name.className = "client-name";
-        name.textContent = (c.nickname || c.unique_id) + (c.client_id === state.myClientID ? t("workspace.you") : "");
+        const fullName = (c.nickname || c.unique_id) + (c.client_id === state.myClientID ? t("workspace.you") : "");
+        name.textContent = fullName;
         // (178) nickname color from the first applicable server group.
         const gColor = P().groupColorFor(c.unique_id);
         if (gColor) name.style.color = gColor;
         const g = P().primaryGroup(c.unique_id);
-        if (g) name.title = `${t("roles.title")}: ${(c.roles || []).map((r) => r.name).join(", ")}`;
+        // A clipped name shows in full on hover; the role list stays visible either way.
+        titleWhenTruncated(name, fullName, g ? `${t("roles.title")}: ${(c.roles || []).map((r) => r.name).join(", ")}` : "");
         row.appendChild(speakingHere ? speakingAvatar(av) : av);
+        // A phone session: a uniform glyph overlaid on the avatar's corner so
+        // others know replies may come slower, without a text chip taking width.
+        if (c.on_mobile) {
+            const device = document.createElement("span");
+            device.className = "avatar-device";
+            device.innerHTML = icon("phone");
+            device.title = t("runtime.onMobile");
+            device.setAttribute("role", "img");
+            device.setAttribute("aria-label", t("runtime.onMobile"));
+            row.appendChild(device);
+        }
         row.appendChild(name);
+        if (others.length) {
+            // The same account signed in on more devices: a compact "+N" marker.
+            const sessions = document.createElement("span");
+            sessions.className = "client-sessions";
+            sessions.innerHTML = icon(others.some((s) => s.on_mobile) ? "phone" : "screen");
+            const count = document.createElement("span");
+            count.className = "client-sessions-count";
+            count.textContent = t("presence.sessions.short", { count: others.length });
+            sessions.appendChild(count);
+            sessions.title = sessionsLabel;
+            sessions.setAttribute("role", "img");
+            sessions.setAttribute("aria-label", sessionsLabel);
+            row.appendChild(sessions);
+        }
         if (sharing) {
             // "● LIVE": the badge carries its state in text, not colour alone.
             const indicator = document.createElement("span");
@@ -451,14 +490,6 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             pr.textContent = " ★";
             pr.title = t("runtime.priority");
             row.appendChild(pr);
-        }
-        // A phone session: shown so others know replies may come slower.
-        if (c.on_mobile) {
-            const phone = document.createElement("span");
-            phone.className = "role-chip group-badge on-mobile";
-            phone.textContent = t("runtime.mobileBadge");
-            phone.title = t("runtime.onMobile");
-            row.appendChild(phone);
         }
         // (307-309) presence status icons; (381) invisible marker (admin view).
         if (c.status === "away" || c.status === "busy" || c.status === "invisible") {

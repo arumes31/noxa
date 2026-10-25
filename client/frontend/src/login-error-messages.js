@@ -26,6 +26,17 @@ export const loginErrorEnglish = {
     "login.failure.version": "This client and server use incompatible authorization versions.",
     "login.recovery.version": "Update noXa and ask the administrator to check the server version.",
     "login.failureDetails": "Technical details",
+    "login.failure.dns": "The server name could not be resolved.",
+    "login.recovery.dns": "Check the spelling of the server address. If it is correct, your DNS or internet connection may be down; try an IP address from the administrator.",
+    "login.failure.permission": "The server knows this account but refused access.",
+    "login.recovery.permission": "This is a permission problem, not a password problem. Ask the server administrator to grant access, register the account, or send an invitation.",
+    "login.category.dns": "Name resolution",
+    "login.category.tls": "Secure connection / certificate",
+    "login.category.network": "Network",
+    "login.category.authentication": "Authentication",
+    "login.category.permission": "Authorization",
+    "login.category.version": "Version",
+    "login.category.other": "Unexpected error",
 };
 
 export const loginErrorGerman = {
@@ -56,4 +67,15 @@ export const loginErrorGerman = {
     "login.failure.version": "Client und Server verwenden inkompatible Berechtigungsversionen.",
     "login.recovery.version": "Aktualisiere noXa und bitte den Administrator, die Serverversion zu prüfen.",
     "login.failureDetails": "Technische Details",
+    "login.failure.dns": "Der Servername konnte nicht aufgelöst werden.",
+    "login.recovery.dns": "Prüfe die Schreibweise der Serveradresse. Ist sie korrekt, sind möglicherweise DNS oder Internetverbindung gestört; versuche eine IP-Adresse vom Administrator.",
+    "login.failure.permission": "Der Server kennt diesen Account, hat den Zugang aber verweigert.",
+    "login.recovery.permission": "Das ist ein Berechtigungsproblem, kein Passwortproblem. Bitte den Serveradministrator, den Zugang freizugeben, den Account zu registrieren oder eine Einladung zu senden.",
+    "login.category.dns": "Namensauflösung",
+    "login.category.tls": "Sichere Verbindung / Zertifikat",
+    "login.category.network": "Netzwerk",
+    "login.category.authentication": "Authentifizierung",
+    "login.category.permission": "Berechtigung",
+    "login.category.version": "Version",
+    "login.category.other": "Unerwarteter Fehler",
 };

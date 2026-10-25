@@ -26,7 +26,7 @@ export const SETTINGS_CATEGORIES = Object.freeze([
         "gaming_overlay_only_speaking", "gaming_overlay_chat_peek", "gaming_overlay_auto_hide",
     ] },
     { id: "hotkeys", icon: "keyboard", rail: "main", keys: [
-        "hotkey_ptt", "hotkey_mute", "hotkey_deafen", "whisper_reply_hotkey", "hotkey_quick_connect",
+        "hotkey_ptt", "hotkey_mute", "hotkey_deafen", "whisper_reply_hotkey",
         "hotkey_compact", "hotkey_zen", "hotkey_profiles",
     ] },
     { id: "appearance", icon: "palette", rail: "main", keys: [
@@ -85,6 +85,7 @@ export const SETTINGS_OUTSIDE_DIALOG = Object.freeze({
     active_identity: "identity manager on the Privacy page (Go-owned)",
     channel_notify: "channel notification menu",
     alpha_dismissed: "alpha notice",
+    mobile_hint: "noXa Mobile sidebar hint (device dialog / Help menu)",
 });
 
 // Lists and maps the user curates by hand survive "Reset to default".

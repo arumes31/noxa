@@ -1,6 +1,7 @@
 import { t } from "./i18n.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
-import { roleDraft, roleIsDirty, reorderedRoles } from "./role-editor-state.js";
+import { roleDraft, roleIsDirty, reorderedRoles, roleFormBaseline, roleSaveConflict } from "./role-editor-state.js";
+import { describeDeniedError } from "./permission-denied.js";
 import { renderRoleForm, renderRoleList, roleButton, roleElement } from "./role-editor-view.js";
 import "./roles.css";
 import { openRoleMembers } from "./role-members-ui.js";
@@ -59,7 +60,9 @@ export function openRolesManager() {
         const selected = model.snapshot.policy.roles.find((r) => r.id === id);
         model.saved = roleDraft(selected);
         model.draft = roleDraft(selected);
+        model.baseline = roleFormBaseline(model.snapshot, selected?.id || 0);
         model.dirty = !selected;
+        model.conflictKept = false;
         render();
         editor.querySelector("input")?.focus();
     };
@@ -71,16 +74,54 @@ export function openRolesManager() {
         const selected = snapshot.policy.roles.find((r) => r.id === selectedID) || snapshot.policy.roles[0];
         model.saved = roleDraft(selected);
         model.draft = roleDraft(selected);
+        model.baseline = roleFormBaseline(snapshot, selected?.id || 0);
         model.dirty = false;
+        model.conflictKept = false;
     };
+    // (335) three-way choice when the edited role changed on the server.
+    const conflictDialog = (conflict) => new Promise((resolve) => {
+        let result = "keep", settled = false;
+        const overlay = roleElement("div", "dlg-overlay");
+        const dialog = roleElement("section", "dlg role-conflict-dialog");
+        dialog.setAttribute("role", "alertdialog");
+        dialog.append(roleElement("h3", "", t("roles.conflictTitle")),
+            roleElement("p", "", t(conflict.kind === "deleted" ? "roles.conflictDeleted" : "roles.conflictRole", { name: conflict.name || model.draft?.name || "" })));
+        const buttons = roleElement("div", "dlg-buttons");
+        const finish = (value) => { if (settled) return; result = value; closeDialog(overlay, value === "keep" ? "cancel" : "close"); };
+        buttons.append(roleButton(t("roles.conflictKeep"), () => finish("keep")), roleButton(t("roles.conflictReload"), () => finish("reload")));
+        if (conflict.kind !== "deleted") { const overwrite = roleButton(t("roles.conflictOverwrite"), () => finish("overwrite")); overwrite.className = "danger-btn"; buttons.append(overwrite); }
+        dialog.append(buttons);
+        overlay.append(dialog);
+        overlay.onclick = (event) => { if (event.target === overlay) finish("keep"); };
+        mountServerDialog(overlay, { onCancel: () => { result = "keep"; }, onClose: () => { if (settled) return; settled = true; resolve(result); } });
+    });
     const commit = async (change) => {
         if (!current() || model.busy || model.needsRefresh || model.imagePending?.draft === model.draft) return;
         model.busy = true;
         error.textContent = "";
         render();
         let acknowledged = false;
+        let expectedRevision = model.snapshot.policy.revision;
         try {
-            const result = await app.RoleChangeForTab(tabID, { ...change, expected_revision: model.snapshot.policy.revision });
+            if (change.kind === "role_update" || change.kind === "role_create") {
+                // (335) compare the form's baseline with the latest server state before writing.
+                const latest = await app.RoleStateForTab(tabID, 0);
+                if (!current()) return;
+                const conflict = roleSaveConflict(model.baseline, latest);
+                if (conflict?.blocking) {
+                    const choice = await conflictDialog(conflict);
+                    if (!current()) return;
+                    if (choice === "reload") { await refresh(model.draft?.id); return; }
+                    if (choice !== "overwrite") { status.textContent = t("roles.conflictKept"); model.conflictKept = true; return; }
+                }
+                if (conflict) {
+                    expectedRevision = conflict.revision;
+                    model.snapshot = latest;
+                    model.baseline = roleFormBaseline(latest, model.baseline?.roleID || 0);
+                }
+            }
+            model.conflictKept = false;
+            const result = await app.RoleChangeForTab(tabID, { ...change, expected_revision: expectedRevision });
             acknowledged = true;
             if (!current()) return;
             if (result.enforcement_pending) {
@@ -95,7 +136,9 @@ export function openRolesManager() {
         } catch (failure) {
             if (!current()) return;
             model.needsRefresh = acknowledged;
-            error.textContent = t(acknowledged ? "roles.refreshFailed" : /conflict|changed|refresh/i.test(String(failure)) ? "roles.conflict" : "roles.failed");
+            // (321) a refusal names the permission that the role editor needs.
+            const denied = acknowledged ? "" : describeDeniedError(failure, "manage_roles", { capabilities: model.snapshot?.capabilities });
+            error.textContent = t(acknowledged ? "roles.refreshFailed" : /conflict|changed|refresh/i.test(String(failure)) ? "roles.conflict" : "roles.failed") + (denied ? ` ${denied}` : "");
         } finally {
             if (current()) { model.busy = false; render(); }
         }
@@ -126,7 +169,7 @@ export function openRolesManager() {
         remove.disabled = model.busy || model.dirty || model.saved?.deletion_protected || !model.draft?.id || model.draft.id === model.snapshot?.policy.everyone_id ||
             !model.snapshot?.manageable_role_ids.includes(model.draft.id) || model.needsRefresh;
         if (model.busy) status.textContent = t(model.snapshot ? "roles.saving" : "roles.loading");
-        else if (model.dirty) status.textContent = t("roles.unsaved");
+        else if (model.dirty) status.textContent = t(model.conflictKept ? "roles.conflictKept" : "roles.unsaved");
         else if (status.textContent !== t("roles.saved")) status.textContent = "";
     };
     const render = () => {

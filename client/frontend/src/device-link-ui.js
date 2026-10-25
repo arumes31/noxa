@@ -4,6 +4,7 @@
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
 import { relativeTime } from "./dm-model.js";
 import { t } from "./i18n.js";
+import { DEVICE_LIST_CHANGED, announceDeviceListChanged, mountMyDevices } from "./my-devices.js";
 
 const app = () => window.go.main.App;
 
@@ -32,7 +33,7 @@ function watchHistoryCopy(deviceID) {
     });
 }
 
-export function openDeviceLinkDialog({ quickGuide = false } = {}) {
+export function openDeviceLinkDialog({ quickGuide = false, fromHelp = false } = {}) {
     const v = window.__noxa;
     if (!v.state.myClientID) return v.toast(t("menu.notConnected"), "warn");
     const tabID = v.state.activeTabID;
@@ -51,6 +52,17 @@ export function openDeviceLinkDialog({ quickGuide = false } = {}) {
     const close = button(t("common.close"), "dlg-cancel", () => closeDialog(overlay));
     const footer = el("div", "dlg-buttons");
     footer.append(close);
+    // (454) Help > "Set up noXa Mobile": offer to bring the hidden hint back.
+    if (fromHelp && window.__noxaMobile?.hintHidden?.()) {
+        const restore = button(t("devices.showHintAgain"), "", () => {
+            window.__noxaMobile.showHint();
+            window.__noxa.toast(t("devices.hintRestored"));
+            restore.remove();
+        });
+        footer.prepend(restore);
+    }
+    // (442) "My devices": online state, last use, inline rename.
+    const minePane = el("div", "device-link-mine");
     const guide = el("section", "mobile-platform-guide");
     {
         const platforms = el("div", "mobile-platforms");
@@ -75,6 +87,7 @@ export function openDeviceLinkDialog({ quickGuide = false } = {}) {
         select("iphone");
         guide.append(platforms, linkPane, steps, install);
         dialog.append(title, guide, pwaPane);
+        dialog.append(minePane);
         if (!quickGuide) dialog.append(listTitle, list);
         dialog.append(footer);
     }
@@ -234,6 +247,7 @@ export function openDeviceLinkDialog({ quickGuide = false } = {}) {
             const devices = await app().DevicesForTab(tabID);
             if (!live()) return;
             renderList(devices || []);
+            mine.setDevices(devices || []);
         } catch (error) {
             if (live()) list.replaceChildren(el("li", "dlg-error", t("devices.failed", { error: error?.message || String(error) })));
         }
@@ -272,7 +286,7 @@ export function openDeviceLinkDialog({ quickGuide = false } = {}) {
             actions.append(button(t("devices.rename"), "", async () => {
                 const next = await promptDialog({ title: t("devices.rename"), label: t("devices.renamePrompt"), value: device.name, serverScoped: true });
                 if (!next || !next.trim() || !live()) return;
-                try { await app().RenameDeviceForTab(tabID, device.device_id, next.trim()); }
+                try { await app().RenameDeviceForTab(tabID, device.device_id, next.trim()); announceDeviceListChanged({ tabID, deviceID: device.device_id, name: next.trim(), source: "device-dialog" }); }
                 catch (error) { v.toast(t("devices.failed", { error: error?.message || String(error) }), "warn"); }
                 if (live()) refreshList();
             }));
@@ -295,6 +309,10 @@ export function openDeviceLinkDialog({ quickGuide = false } = {}) {
         }));
     }
 
+    const mine = mountMyDevices(minePane, { tabID, live, fetchDevices: false });
+    // (459) a rename anywhere (My devices, another window) refreshes this list.
+    const onListChanged = event => { if (live() && event?.detail?.source !== "device-dialog") refreshList(); };
+    window.addEventListener(DEVICE_LIST_CHANGED, onListChanged);
     const stopEvents = window.runtime.EventsOn("device_event", event => {
         if (!live() || !event) return;
         if (event.event === "link_claimed" && link && event.link_id === link.link_id) renderClaim(event);
@@ -306,6 +324,8 @@ export function openDeviceLinkDialog({ quickGuide = false } = {}) {
         onClose: () => {
             stopTimer();
             if (typeof stopEvents === "function") stopEvents();
+            window.removeEventListener(DEVICE_LIST_CHANGED, onListChanged);
+            mine.dispose();
             if (link) app().CancelDeviceLinkForTab(tabID, link.link_id).catch(() => {});
         },
     });

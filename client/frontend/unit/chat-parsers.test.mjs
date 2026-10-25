@@ -56,4 +56,27 @@ describe("transformCustomEmoji", () => {
         assert.equal(transformCustomEmoji(null, [{ name: "wave" }], new Map([["wave", url]])), "");
         assert.equal(transformCustomEmoji(":wave:", [{}, ""], new Map()), ":wave:");
     });
+
+    it("marks referenced emoji that are not loaded yet and reports each once", () => {
+        const missing = [];
+        const output = transformCustomEmoji(
+            ":wave: :hello: :hello: :fresh: :bad: <code>:late:</code>",
+            [{ name: "wave" }, { name: "hello" }, { name: "fresh" }, { name: "bad" }, { name: "late" }, { name: "unused" }],
+            new Map([["wave", url], ["hello", ""], ["bad", "javascript:alert(1)"]]),
+            name => missing.push(name),
+        );
+        // Loading ("") and never-requested (undefined) names are reported and
+        // marked; a rejected URL, a code-only token and an unreferenced emoji are not.
+        assert.deepEqual(missing, ["hello", "fresh"]);
+        assert.equal((output.match(/class="md-emoji"/g) || []).length, 1);
+        assert.equal((output.match(/<span class="md-emoji-pending" data-emoji="hello">:hello:<\/span>/g) || []).length, 2);
+        assert.match(output, /<span class="md-emoji-pending" data-emoji="fresh">:fresh:<\/span>/);
+        assert.match(output, / :bad: /);
+        assert.match(output, /<code>:late:<\/code>/);
+        assert.doesNotMatch(output, /data-emoji="(?:bad|late|unused)"/);
+        // The callback is optional, and the placeholder escapes hostile names.
+        const hostile = transformCustomEmoji(':x" onerror="boom:', [{ name: 'x" onerror="boom' }], new Map());
+        assert.match(hostile, /data-emoji="x&quot; onerror=&quot;boom"/);
+        assert.doesNotMatch(hostile, / onerror="/);
+    });
 });

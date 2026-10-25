@@ -10,6 +10,8 @@ export function AcceptServerRulesForTab(arg1:string,arg2:string):Promise<string>
 
 export function ApplyAndRestart():Promise<string>;
 
+export function AnswerContactIdentityChange(arg1:string,arg2:boolean):Promise<string>;
+
 export function ApplyHotkeyProfile(arg1:string):Promise<void>;
 
 export function ApplyIdentityProtection():Promise<void>;
@@ -31,6 +33,8 @@ export function CancelIdentityLevel(arg1:string):Promise<boolean>;
 export function CancelTransfer(arg1:string):Promise<void>;
 
 export function CancelTransferForTab(arg1:string,arg2:string):Promise<string>;
+
+export function CleanupOrphanUploadsForTab(arg1:string):Promise<{removed:number,failed:number,kept:number}>;
 
 export function CancelUpdate():Promise<boolean>;
 

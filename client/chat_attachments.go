@@ -71,7 +71,7 @@ func (a *App) UploadChatAttachment(channelID int64, name, dataBase64 string) (st
 	if err != nil {
 		return "", err
 	}
-	return uploadChatAttachmentWith(cm, channelID, name, dataBase64)
+	return a.uploadTrackedChatAttachment(cm, channelID, name, dataBase64)
 }
 
 // UploadChatAttachmentForTab captures the server before preparing encrypted bytes.
@@ -80,7 +80,17 @@ func (a *App) UploadChatAttachmentForTab(tabID string, channelID int64, name, da
 	if err != nil {
 		return "", err
 	}
-	return uploadChatAttachmentWith(cm, channelID, name, dataBase64)
+	return a.uploadTrackedChatAttachment(cm, channelID, name, dataBase64)
+}
+
+// uploadTrackedChatAttachment remembers the returned token as an orphan
+// candidate until SendChat publishes a message referencing it (504).
+func (a *App) uploadTrackedChatAttachment(cm *connManager, channelID int64, name, dataBase64 string) (string, error) {
+	token, err := uploadChatAttachmentWith(cm, channelID, name, dataBase64)
+	if err == nil {
+		a.recordUploadedAttachment(cm, channelID, token, name)
+	}
+	return token, err
 }
 
 func uploadChatAttachmentWith(cm *connManager, channelID int64, name, dataBase64 string) (string, error) {
@@ -106,22 +116,22 @@ func uploadChatAttachmentUsing(name, dataBase64 string, put func(string, []byte)
 		int64(maxChatAttachmentBytes)+1,
 	))
 	if err != nil {
-		return "", errors.New("invalid file data")
+		return "", stageUploadError(uploadStageRead, errors.New("invalid file data"))
 	}
 	if len(data) > maxChatAttachmentBytes {
-		return "", errors.New("attachment exceeds 25 MiB limit")
+		return "", stageUploadError(uploadStageRead, errors.New("attachment exceeds 25 MiB limit"))
 	}
 	var key [32]byte
 	if _, err := rand.Read(key[:]); err != nil {
-		return "", err
+		return "", stageUploadError(uploadStageEncrypt, err)
 	}
 	blob, err := sealFile(data, key)
 	if err != nil {
-		return "", err
+		return "", stageUploadError(uploadStageEncrypt, err)
 	}
 	storage := attachmentStorageName(blob)
 	if err := put(storage, blob); err != nil {
-		return "", err
+		return "", stageUploadError(uploadStageTransfer, err)
 	}
 	return formatFileRef(storage, base64.StdEncoding.EncodeToString(key[:]), attachmentMeta{Size: int64(len(data))}, name), nil
 }

@@ -1,6 +1,7 @@
 import { unreadLabel } from "./client-usability-model.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
+import { titleWhenTruncated } from "./ui-format.js";
 import { appendUnreadBadge } from "./chat-unread.js";
 import { mountContextMenu, closeContextMenu, contextMenuKey } from "./context-menu.js";
 import "./chat-tabs.css";
@@ -132,6 +133,8 @@ export function createChatTabs(root, { onLayoutChange, onRefresh } = {}) {
             button.tabIndex = item.key === focusKey ? 0 : -1;
             if (pinned(item.key)) { const pin = document.createElement("span"); pin.className = "pm-tab-pin"; pin.innerHTML = icon("pin"); pin.setAttribute("aria-hidden", "true"); button.append(pin); }
             const name = document.createElement("span"); name.className = "pm-tab-name"; name.textContent = item.name; button.append(name);
+            // An ellipsized label reveals the full name (channel path) on hover.
+            titleWhenTruncated(name, item.fullName || item.name);
             tab.append(button);
             if (item.offline) { const badge = document.createElement("span"); badge.className = "pm-badge offline"; badge.textContent = t("chat.offline"); tab.append(badge); }
             if (item.unread > 0) appendUnreadBadge(tab, item.unread, item.arrivedAt, item.mention, item.mentions, item.replies);

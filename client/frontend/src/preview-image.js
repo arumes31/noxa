@@ -1,4 +1,8 @@
-// Only server-transcoded JPEG bytes may become a preview image source.
+import { resolvePreviewImage } from "./preview-source-policy.js";
+
+// Only server-transcoded JPEG bytes may become a preview image source. The
+// decision lives in preview-source-policy.js; this keeps the historic helper
+// for callers that only need the accepted source or null.
 export function previewImage(value) {
-    return typeof value === "string" && value.length <= 280000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(value) ? value : null;
+    return resolvePreviewImage(value).src;
 }

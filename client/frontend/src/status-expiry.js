@@ -1,0 +1,59 @@
+// Status messages with an optional expiry (533/534). The server's SetStatus
+// carries no expiry, so the schedule lives on this device: a timer fires while
+// the client runs, and check() re-evaluates on startup and resume.
+export const STATUS_EXPIRY_OPTIONS = ["none", "30m", "1h", "4h", "today", "custom"];
+const MINUTE = 60_000;
+const MAX_TIMER = 2_147_000_000; // setTimeout saturates above ~24.8 days
+const MAX_CUSTOM_MINUTES = 7 * 24 * 60;
+
+// statusExpiryAt returns the absolute expiry in ms, or 0 for "never".
+export function statusExpiryAt(option, now, customMinutes = 0) {
+    switch (option) {
+    case "30m": return now + 30 * MINUTE;
+    case "1h": return now + 60 * MINUTE;
+    case "4h": return now + 240 * MINUTE;
+    case "today": { const end = new Date(now); end.setHours(23, 59, 59, 999); return end.getTime(); }
+    case "custom": {
+        const minutes = Math.round(Number(customMinutes));
+        return Number.isFinite(minutes) && minutes > 0 ? now + Math.min(minutes, MAX_CUSTOM_MINUTES) * MINUTE : 0;
+    }
+    default: return 0;
+    }
+}
+
+// createStatusExpiryScheduler keeps at most one pending expiry. load/save
+// persist the record; onExpire(record) runs exactly once per expiry.
+export function createStatusExpiryScheduler({ now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, load, save, onExpire }) {
+    let record = normalize(load?.());
+    let timer = null;
+    const persist = () => save?.(record);
+    const stop = () => { if (timer !== null) { clearTimer(timer); timer = null; } };
+    function arm() {
+        stop();
+        if (!record) return;
+        timer = setTimer(check, Math.min(Math.max(0, record.expiresAt - now()), MAX_TIMER));
+    }
+    function check() {
+        if (!record) { stop(); return false; }
+        if (record.expiresAt > now()) { arm(); return false; }
+        const expired = record;
+        record = null; stop(); persist();
+        onExpire?.(expired);
+        return true;
+    }
+    arm();
+    return {
+        set(next) { record = normalize(next, now()); persist(); arm(); return record; },
+        clear() { record = null; persist(); stop(); },
+        current: () => record,
+        check,
+        dispose: stop,
+    };
+}
+
+function normalize(record, now) {
+    if (!record || typeof record !== "object") return null;
+    const expiresAt = Number(record.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= 0 || (now !== undefined && expiresAt <= now)) return null;
+    return { ...record, expiresAt };
+}

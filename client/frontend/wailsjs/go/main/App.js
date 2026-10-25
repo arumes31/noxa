@@ -14,6 +14,10 @@ export function ApplyAndRestart() {
   return window['go']['main']['App']['ApplyAndRestart']();
 }
 
+export function AnswerContactIdentityChange(arg1, arg2) {
+  return window['go']['main']['App']['AnswerContactIdentityChange'](arg1, arg2);
+}
+
 export function ApplyHotkeyProfile(arg1) {
   return window['go']['main']['App']['ApplyHotkeyProfile'](arg1);
 }

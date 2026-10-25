@@ -3,6 +3,7 @@
 // Page ids, their saved keys and deep links live in settings-catalog.js.
 import { icon } from "./icons.js";
 import { SETTINGS_CATEGORIES, resetPageDraft, resolveSettingsTarget } from "./settings-catalog.js";
+import { buildSettingsSearchIndex, searchSettings } from "./settings-search.js";
 import { capturedHotkey, hotkeyLabel } from "./hotkey-input.js";
 import { gamingOverlaySettings } from "./gaming-overlay-settings.js";
 import { securitySettings } from "./security-settings.js";
@@ -1050,7 +1051,6 @@ function pageHotkeys() {
         ["mute_toggle", t("settings.mute.toggle"), "hotkey_mute", "mute"],
         ["deafen_toggle", t("settings.deafen.toggle"), "hotkey_deafen", "deafen"],
         ["whisper_reply", t("settings.whisper.reply"), "whisper_reply_hotkey", "whisper_reply"],
-        ["quick_connect", t("settings.quick.connect.new.tab"), "hotkey_quick_connect", "quick_connect"],
         ["compact_toggle", t("settings.compact.mode.toggle"), "hotkey_compact", "compact"],
         ["zen_toggle", t("settings.zen.mode.toggle"), "hotkey_zen", "zen"],
     ];
@@ -1075,7 +1075,7 @@ function pageHotkeys() {
         s.hotkey_profiles = s.hotkey_profiles || {};
         s.hotkey_profiles[name] = {
             ptt: s.hotkey_ptt, mute: s.hotkey_mute, deafen: s.hotkey_deafen,
-            whisper_reply: s.whisper_reply_hotkey, quick_connect: s.hotkey_quick_connect,
+            whisper_reply: s.whisper_reply_hotkey,
             compact: s.hotkey_compact,
         };
         renderPage("hotkeys");
@@ -1461,6 +1461,20 @@ function setPageHeader(title, description) {
     if (desc) { desc.textContent = description; desc.hidden = !description; }
 }
 
+// flashSettingsHit marks a row found by search or a deep link and runs the
+// short highlight animation (CSS respects prefers-reduced-motion). The
+// animation class is removed afterwards so a second hit animates again.
+function flashSettingsHit(element) {
+    if (!element?.classList) return;
+    for (const previous of element.ownerDocument?.querySelectorAll?.(".set-hit-flash") || []) previous.classList.remove("set-hit-flash");
+    element.classList.add("set-hit");
+    element.classList.remove("set-hit-flash");
+    element.classList.add("set-hit-flash");
+    const clear = () => element.classList.remove("set-hit-flash");
+    element.addEventListener?.("animationend", clear, { once: true });
+    setTimeout(clear, 2600);
+}
+
 // revealSettingsTarget scrolls to and focuses a deep-linked section or row.
 function revealSettingsTarget(container, { section = "", setting = "" } = {}) {
     const escape = value => globalThis.CSS?.escape ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
@@ -1473,7 +1487,7 @@ function revealSettingsTarget(container, { section = "", setting = "" } = {}) {
     target.scrollIntoView?.({ block: "start" });
     const selector = "input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])";
     const control = setting ? target.querySelector(selector) : null;
-    if (setting) target.classList.add("set-hit");
+    if (setting) flashSettingsHit(target);
     if (control) control.focus({ preventScroll: true });
     else {
         const heading = target.querySelector(".set-group-title, summary") || target;
@@ -1620,17 +1634,26 @@ function openSettings(target = "general", options = {}) {
         overlay.querySelector(".settings-footer-extra").replaceChildren();
         overlay.querySelector("#set-reset").hidden = true;
         if (!searchIndex || searchLanguage !== currentLanguage()) {
-            searchIndex = [];
+            // (261) Every row carries its saved-preference key, help text and
+            // section so settings-search.js can add keywords and problem
+            // phrases ("Mikrofon zu leise") and the hit can be navigated to.
+            const entries = [];
             searchLanguage = currentLanguage();
             for (const p of PAGES) {
                 const pageEl = PAGE_BUILDERS[p.id]({ detached: true });
                 pageEl.querySelectorAll(".set-row, .set-subhead, .set-group-title, .ovl-side-label, .set-hint, button").forEach((r) => {
-                    const label = (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase().trim();
-                    searchIndex.push({ page: p.id, label });
+                    const label = (r.querySelector(".set-label")?.textContent || r.textContent || "").trim();
+                    const section = r.closest("[data-section]");
+                    entries.push({
+                        page: p.id, pageLabel: t(p.label), label,
+                        key: r.dataset?.setting || "", help: r.querySelector?.(".set-help")?.textContent?.trim() || "",
+                        section: section?.dataset.section || "", sectionLabel: section?.querySelector(".set-group-title")?.textContent?.trim() || "",
+                    });
                 });
             }
+            searchIndex = buildSettingsSearchIndex(entries);
         }
-        const hits = searchIndex.filter(hit => hit.label.includes(q));
+        const hits = searchSettings(searchIndex, q, { limit: 40 });
         summary.hidden = false;
         summary.textContent = hits.length > 40
             ? t("settings.searchLimited", { shown: 40, total: hits.length })
@@ -1643,24 +1666,32 @@ function openSettings(target = "general", options = {}) {
             content.appendChild(empty);
             return;
         }
-        for (const h of hits.slice(0, 40)) {
+        for (const h of hits) {
             const row = document.createElement("button");
             row.type = "button";
             row.className = "set-search-hit";
-            row.innerHTML = `<span class="mono set-search-page"></span><span class="set-search-label"></span>`;
+            row.innerHTML = `<span class="mono set-search-page"></span><span class="set-search-label"></span><span class="set-search-phrase"></span>`;
             row.querySelector(".set-search-page").textContent = t(PAGES.find(p => p.id === h.page).label);
             row.querySelector(".set-search-label").textContent = h.label;
+            const phrase = row.querySelector(".set-search-phrase");
+            if (h.phrase) phrase.textContent = t("settings.searchMatched", { phrase: h.phrase });
+            else phrase.remove();
             row.onclick = () => {
                 search.value = "";
                 renderPage(h.page);
-                const match = [...content.querySelectorAll(".set-row, .set-subhead, .set-group-title, .ovl-side-label, .set-hint, button")].find(r =>
-                    (r.querySelector(".set-label")?.textContent || r.textContent || "").toLowerCase().trim() === h.label);
+                // (262) Prefer the saved-preference key; labels are the
+                // fallback for headings, hints and buttons without a key.
+                const escape = value => globalThis.CSS?.escape ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
+                const match = (h.key && content.querySelector(`[data-setting="${escape(h.key)}"]`))
+                    || [...content.querySelectorAll(".set-row, .set-subhead, .set-group-title, .ovl-side-label, .set-hint, button")].find(r =>
+                        (r.querySelector(".set-label")?.textContent || r.textContent || "").trim() === h.label)
+                    || (h.section && content.querySelector(`[data-section="${escape(h.section)}"]`));
                 if (!match) return;
                 for (let parent = match.parentElement; parent && parent !== content; parent = parent.parentElement) {
                     if (parent.tagName === "DETAILS") parent.open = true;
                 }
                 const highlighted = match.closest(".set-row") || match;
-                highlighted.classList.add("set-hit");
+                flashSettingsHit(highlighted);
                 highlighted.scrollIntoView({ block: "center" });
                 const selector = "input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])";
                 const target = match.matches(selector) ? match : match.querySelector(selector) || (match.htmlFor && document.getElementById(match.htmlFor));

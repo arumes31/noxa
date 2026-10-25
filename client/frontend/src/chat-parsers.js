@@ -36,7 +36,11 @@ function emojiURL(cache, name) {
 // transformCustomEmoji only changes text nodes in already-safe markdown HTML.
 // The URL is independently validated so a compromised emoji response cannot
 // turn the renderer into an arbitrary-URL or markup injection sink.
-export function transformCustomEmoji(html, emojis, cache) {
+// onMissing (optional) is told once about every referenced emoji whose image
+// is still loading ("" in the cache) or was never requested (absent); such
+// tokens become a pending placeholder the renderer can swap once the image
+// arrives. Rejected URLs stay plain text and are not reported.
+export function transformCustomEmoji(html, emojis, cache, onMissing) {
     let output = typeof html === "string" ? html : "";
     if (!Array.isArray(emojis) || emojis.length === 0) return output;
     if (output.indexOf(":") === -1) return output;
@@ -55,8 +59,12 @@ export function transformCustomEmoji(html, emojis, cache) {
 
     for (const {name, token} of foundEmojis) {
         const url = emojiURL(cache, name);
-        if (!isSafeImageDataURL(url)) continue;
-        const image = `<img class="md-emoji" src="${escapeHTML(url)}" alt=":${escapeHTML(name)}:">`;
+        const pending = url === "" || url === undefined;
+        if (!pending && !isSafeImageDataURL(url)) continue;
+        const image = pending
+            ? `<span class="md-emoji-pending" data-emoji="${escapeHTML(name)}">:${escapeHTML(name)}:</span>`
+            : `<img class="md-emoji" src="${escapeHTML(url)}" alt=":${escapeHTML(name)}:">`;
+        let replaced = false;
         const parts = output.split(/(<[^>]*>)/g);
         let literalDepth = 0;
         for (let index = 0; index < parts.length; index++) {
@@ -70,10 +78,12 @@ export function transformCustomEmoji(html, emojis, cache) {
             } else if (literalDepth === 0) {
                 if (parts[index].includes(token)) {
                     parts[index] = part.split(token).join(image);
+                    replaced = true;
                 }
             }
         }
         output = parts.join("");
+        if (pending && replaced && typeof onMissing === "function") onMissing(name);
     }
     return output;
 }

@@ -1,4 +1,5 @@
 import { initMobileAnnouncement } from "./mobile-announcement.js";
+import { initReadSync } from "./read-sync.js";
 import { initWindowControls } from "./window-controls.js";
 import { setStatusIcon } from "./icons.js";
 import { maintainRelay } from "./relay-renewal.js";
@@ -11,7 +12,8 @@ import { stopDisplayCapture } from "./display-capture-lease.js";
 import { parseChannelInvite } from "./channel-invite-links.js";
 import { createConnectionQuality } from './connection-quality.js';
 import { createLoginMemory } from './login-memory.js';
-import { createLoginFeedback } from './login-errors.js';
+import { createLoginFeedback, connectFailureIsDefinitive, loginFailure } from './login-errors.js';
+import { describeDeniedError } from './permission-denied.js';
 import { initLoginBackground } from './login-background.js';
 import { watchMicrophone } from "./microphone-recovery.js";
 import { voiceSendEncoding, applyVoicePriority } from "./voice-priority.js";
@@ -34,6 +36,7 @@ import "./conversations.css";
 import { conversationChanged, conversationRead, conversationTyping } from "./conversations.js";
 import { initDirectMessages } from "./dm-view.js";
 import "./private-calls.css";
+import "./call-connection.css";
 import "./device-link.css";
 import { privateCallChanged, privateCallSignal, stopPrivateCall, applyPrivateCallAudioSettings } from "./private-calls.js";
 import { createTabReconnects, reconnectDelay } from "./tab-reconnect.js";
@@ -80,6 +83,8 @@ import { imageDataURL, setSafeImage } from "./safe-media.js";
 import { initNotifications } from "./notifications.js";
 import { setLanguage, currentLanguage, applyStaticLabels, t } from "./i18n.js";
 import { extractPresentedFingerprint } from "./security.js";
+import { describeCallConnection, initialCallConnection, reduceCallConnection, trackIsFlowing } from "./call-connection-state.js";
+import { openContactKeyChangeDialog } from "./contact-key-change-ui.js";
 import { isActivationKey } from "./a11y.js";
 import { createLiveAnnouncementQueue } from "./live-announcer.js";
 import { dialogFocusableSelector, initModalSystem, mountServerDialog, closeServerDialogs } from "./modal.js";
@@ -670,6 +675,7 @@ async function rememberTabConnect(c, expectedGeneration = null, tabID = "", curr
 let reconnectCountdownTimer = null;
 let reconnectRequestPending = false;
 let reconnectGeneration = 0;
+let reconnectHaltedGeneration = -1; // (314) generation whose series a rejected login ended
 let reconnectCueTimer = null;
 let reconnectTimerSourceTabID = "";
 
@@ -795,6 +801,16 @@ async function attemptReconnect(c = state.lastConnect, { announceFailure = true,
     }
     if (err) {
         if (sourceTabID !== state.activeTabID || sourceServerGeneration !== state.serverGeneration) return false;
+        // (314) a rejected login must not feed the automatic retry series.
+        if (connectFailureIsDefinitive(loginFailure(err))) {
+            reconnectHaltedGeneration = generation;
+            connectionOverlay.terminal(sourceTabID, err, "authentication");
+            const message = t("runtime.reconnectStoppedAuth", { error: err });
+            sysMsg(message); toast(message, "warn", "conn");
+            playAlert("reconnect_failed");
+            $("conn-pill").textContent = t("runtime.offlineFailed");
+            return false;
+        }
         connectionOverlay.attempt(sourceTabID, sourceServerGeneration, sourceSessionGeneration, false, err);
         sysMsg(t("runtime.reconnectFailed", { error: err }));
         if (announceFailure) toast(t("runtime.reconnectToast", { error: err }), "warn", "conn");
@@ -865,6 +881,8 @@ function scheduleReconnect(
         const connected = await attemptReconnect(reconnectTarget, { announceFailure: false, sourceTabID });
         if (connected) return;
         if (generation !== reconnectGeneration) return;
+        // (314) the login was rejected: leave the manual retry to the user.
+        if (reconnectHaltedGeneration === generation) { chatUI.cancelReconnectAnnouncementBatch(); return; }
         // A disconnect during finalization already scheduled its own recovery.
         if (sessionGeneration !== state.sessionGeneration) return;
         chatUI.cancelReconnectAnnouncementBatch();
@@ -933,9 +951,11 @@ const tabReconnects = createTabReconnects({
     failed(tabID, error) {
         if (state.activeTabID === tabID) sysMsg(t("runtime.reconnectFailed", { error }));
     },
-    stopped(tabID, error) {
-        connectionOverlay.terminal(tabID, error);
-        reconnectNotices.set(tabID, { key: "runtime.reconnectStopped", error });
+    stopped(tabID, error, cause = "terminal") {
+        // (314) a rejected login stops the series; only a manual retry follows.
+        const rejected = cause === "authentication" || connectFailureIsDefinitive(loginFailure(error));
+        connectionOverlay.terminal(tabID, error, rejected ? "authentication" : cause);
+        reconnectNotices.set(tabID, { key: rejected ? "runtime.reconnectStoppedAuth" : "runtime.reconnectStopped", error });
         showReconnectNotice(tabID);
         if (state.activeTabID !== tabID) return;
         chatUI.cancelReconnectAnnouncementBatch();
@@ -1148,9 +1168,19 @@ window.runtime.EventsOn("disconnected", () => {
     if (!scopedReconnectAvailable()) scheduleReconnect();
 });
 
+// (241) a contact's signing key changed: the Go side keeps the contact
+// blocked until the dialog answers through AnswerContactIdentityChange.
+window.runtime.EventsOn("contact_identity_changed", (event) => {
+    try {
+        openContactKeyChangeDialog(typeof event === "string" ? JSON.parse(event) : event);
+    } catch { /* an unreadable event leaves the safe default: still blocked */ }
+});
+
 window.runtime.EventsOn("servererror", (msg) => {
     const text = String(msg).replace(/^\d+:\s*/, "");
-    toast(text || t("runtime.actionRejected"), "warn");
+    // (321) name the missing permission when the server (or a known message) identifies it.
+    const denied = describeDeniedError(text);
+    toast(denied ? `${denied} (${text})` : text || t("runtime.actionRejected"), "warn");
     if (/^insufficient permission[: ]|^permission denied\b/i.test(text)) playAlert("permission_denied");
     else playEvent("server_error");
 });
@@ -2392,6 +2422,14 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     // (59) ICE restart: re-offer with iceRestart on failed/disconnected,
     // backing off 1s, 2s, 5s, 15s before giving up with a warning toast.
     pc.oniceconnectionstatechange = () => onICEStateChange(pc);
+    // (141) transport + media-flow status beside the voice label.
+    resetVoiceLink();
+    pc.addEventListener("connectionstatechange", () => {
+        if (state.pc !== pc) return;
+        updateVoiceLink({ type: "transport", state: pc.connectionState });
+        syncVoiceLinkMedia();
+    });
+    updateVoiceLink({ type: "transport", state: pc.connectionState });
     stopRemoteMedia();
     startStreamSession(pc, videoTrackAdded, videoTrackRemoved);
     stopRemoteMedia = startRemoteMedia(pc, () => current() && state.pc === pc, (track, trackID) => {
@@ -2411,6 +2449,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         }
         track.enabled = true;
         attachRemoteAudio(track, publisher, trackID);
+        watchVoiceRemoteAudio(track);
     }, (track, trackID) => {
         // Only the receiver that owns this publisher track ID may drop it; a
         // duplicate browser track.id never removes another user's state.
@@ -2421,7 +2460,11 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
             removeShareAudio(track, clientID);
             if (shareAudio.get(String(clientID))?.track === track) remoteAudio.detachShareAudio(clientID);
         }
-        else remoteAudio.detachRemoteTrack(track);
+        else {
+            remoteAudio.detachRemoteTrack(track);
+            voiceRemoteAudioTracks.delete(track);
+            syncVoiceLinkMedia();
+        }
     }, (track, trackID) => track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID));
 
     await renegotiate(pc, state.serverGeneration, undefined, () => expectedEpoch === voiceSessionEpoch);
@@ -2645,6 +2688,7 @@ function teardownVoice() {
     stopVoiceMonitor();
     stopMicMeter();
     resetICERestart(state.pc);
+    resetVoiceLink();
     if (unduckTimer) {
         clearTimeout(unduckTimer);
         unduckTimer = null;
@@ -2698,6 +2742,69 @@ function renderVoiceStatus() {
     setStatusIcon(status, state.whisperArmed ? "whisper" : { connected: "phone", connecting: "refresh", unavailable: "warning", off: "phoneOff" }[status.dataset.state], label);
     status.title = label;
     status.tabIndex = 0;
+    renderVoiceLinkPhase(status);
+}
+
+// (141) Three-step transport status beside the voice label: connecting
+// (peer transport not up), connected (transport up, no audio yet) and media
+// (audio tracks actually flowing). The element is its own polite live region.
+let voiceLink = initialCallConnection();
+const voiceRemoteAudioTracks = new Set();
+
+function updateVoiceLink(event) {
+    const next = reduceCallConnection(voiceLink, event);
+    if (next === voiceLink) return;
+    voiceLink = next;
+    renderVoiceStatus();
+}
+
+function syncVoiceLinkMedia() {
+    const pc = state.pc;
+    const sending = !!pc && pc.connectionState !== "closed"
+        && pc.getSenders().some((sender) => sender.track?.kind === "audio" && trackIsFlowing(sender.track));
+    updateVoiceLink({ type: "media", direction: "send", active: sending });
+    updateVoiceLink({ type: "media", direction: "receive", active: [...voiceRemoteAudioTracks].some(trackIsFlowing) });
+}
+
+function watchVoiceRemoteAudio(track) {
+    if (voiceRemoteAudioTracks.has(track)) return;
+    voiceRemoteAudioTracks.add(track);
+    const sync = () => syncVoiceLinkMedia();
+    track.addEventListener("unmute", sync);
+    track.addEventListener("mute", sync);
+    track.addEventListener("ended", () => { voiceRemoteAudioTracks.delete(track); syncVoiceLinkMedia(); }, { once: true });
+    syncVoiceLinkMedia();
+}
+
+function resetVoiceLink() {
+    voiceRemoteAudioTracks.clear();
+    voiceLink = initialCallConnection();
+}
+
+function renderVoiceLinkPhase(status) {
+    let phase = $("voice-link-phase");
+    if (!phase) {
+        phase = document.createElement("span");
+        phase.id = "voice-link-phase";
+        phase.className = "voice-link-phase";
+        phase.setAttribute("role", "status");
+        phase.setAttribute("aria-live", "polite");
+        status.insertAdjacentElement("afterend", phase);
+    }
+    if (voiceStatusBase !== "voice on") {
+        phase.hidden = true;
+        delete phase.dataset.phase;
+        delete phase.dataset.icon;
+        phase.textContent = "";
+        phase.removeAttribute("aria-label");
+        return;
+    }
+    const link = describeCallConnection(voiceLink);
+    const label = t(link.key) + (link.detailKey ? " · " + t(link.detailKey) : "");
+    phase.hidden = false;
+    phase.dataset.phase = link.phase;
+    setStatusIcon(phase, link.icon, label);
+    phase.title = label;
 }
 
 function resetVoiceUI() {
@@ -2900,6 +3007,7 @@ function applyVoiceState() {
         t.enabled = audible;
         updateMicrophoneGate(t);
     }
+    syncVoiceLinkMedia();
 }
 
 // Voice monitor: a UI-only level feed for talking-while-muted warnings,
@@ -3096,11 +3204,6 @@ window.runtime.EventsOn("hotkey", async (action) => {
         const { state, setDeafened, sysMsg } = window.__noxa;
         setDeafened(!state.deafened);
         sysMsg(state.deafened ? t("runtime.deafened") : t("runtime.undeafened"));
-        return;
-    }
-    // (285) quick connect: last-used bookmark/recent in a new tab.
-    if (action === "quick_connect") {
-        window.__noxaTabs?.quickConnectLast();
         return;
     }
     // (293) compact mode toggle.
@@ -3381,6 +3484,7 @@ initUpdater();
 initPermsUI(); // roles-v1 access and moderation UI
 initFilesUI(); // wave-7 file browser/transfers (registers window.__noxaFiles)
 initMobileAnnouncement();
+initReadSync();
 initTabs();    // wave-8a server tabs (registers window.__noxaTabs)
 initSocialUI(); // wave-8b presence/contacts/hover (registers window.__noxaSocial)
 initMetaUI();   // wave-8b debug/stats/onboarding (registers window.__noxaMeta)

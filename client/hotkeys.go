@@ -56,7 +56,7 @@ func (a *App) registerHotkeys() {
 
 // hotkeyActions is the full bindable action set (299/300).
 var hotkeyActions = []string{
-	"ptt", "mute_toggle", "deafen_toggle", "whisper_reply", "quick_connect", "compact_toggle", "zen_toggle",
+	"ptt", "mute_toggle", "deafen_toggle", "whisper_reply", "compact_toggle", "zen_toggle",
 }
 
 // specFor returns the configured spec for an action (empty = unbound).
@@ -73,8 +73,6 @@ func (a *App) specFor(action string) string {
 		return s.HotkeyDeafen
 	case "whisper_reply":
 		return s.WhisperReplyHotkey
-	case "quick_connect":
-		return s.HotkeyQuickConnect
 	case "compact_toggle":
 		return s.HotkeyCompact
 	case "zen_toggle":
@@ -98,7 +96,7 @@ func (a *App) profileSpecs(name string) map[string]string {
 	}
 	overrides := map[string]string{
 		"ptt": p.PTT, "mute_toggle": p.Mute, "deafen_toggle": p.Deafen,
-		"whisper_reply": p.WhisperReply, "quick_connect": p.QuickConnect, "compact_toggle": p.Compact,
+		"whisper_reply": p.WhisperReply, "compact_toggle": p.Compact,
 		"zen_toggle": p.Zen,
 	}
 	for action, spec := range overrides {
@@ -119,8 +117,6 @@ func hotkeySpecFor(s Settings, action string) string {
 		return s.HotkeyDeafen
 	case "whisper_reply":
 		return s.WhisperReplyHotkey
-	case "quick_connect":
-		return s.HotkeyQuickConnect
 	case "compact_toggle":
 		return s.HotkeyCompact
 	case "zen_toggle":
@@ -334,8 +330,6 @@ func (a *App) SetHotkey(action, spec string) string {
 			settings.HotkeyDeafen = spec
 		case "whisper_reply":
 			settings.WhisperReplyHotkey = spec
-		case "quick_connect":
-			settings.HotkeyQuickConnect = spec
 		case "compact_toggle":
 			settings.HotkeyCompact = spec
 		case "zen_toggle":
@@ -362,7 +356,6 @@ func (a *App) applySettingsHotkeys(s Settings) {
 	settingsHotkeyApplier(a, "ptt", s.HotkeyPTT)
 	settingsHotkeyApplier(a, "mute_toggle", s.HotkeyMute)
 	settingsHotkeyApplier(a, "deafen_toggle", s.HotkeyDeafen)
-	settingsHotkeyApplier(a, "quick_connect", s.HotkeyQuickConnect)
 	settingsHotkeyApplier(a, "compact_toggle", s.HotkeyCompact)
 	settingsHotkeyApplier(a, "whisper_reply", s.WhisperReplyHotkey)
 	settingsHotkeyApplier(a, "zen_toggle", s.HotkeyZen)

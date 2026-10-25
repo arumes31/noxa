@@ -492,7 +492,16 @@ function openMoreMenu() {
 
 function openNewMenu() {
     openMenu(ui.add, [
-        menuItem("dm.newDirect", () => { ui.searchInput.focus(); }),
+        // The member picker lists members online, contacts, open conversations
+        // and group members by name; an existing conversation with the chosen
+        // member is selected rather than started again.
+        menuItem("dm.newDirect", () => {
+            chat.openNewDirectMessagePicker({ onPick: entry => {
+                if (!active) return;
+                const existing = entries.find(item => item.kind === "dm" && item.uid === entry.uid);
+                select({ kind: "dm", uid: entry.uid, name: entry.name || existing?.name || "" }, { focus: true });
+            } });
+        }),
         menuItem("dm.newGroup", async () => {
             const name = await promptDialog({ title: t("dm.newGroup"), label: t("dm.newGroupName"), serverScoped: true });
             if (name && name.trim() && active) await createPrivateGroup(name.trim());

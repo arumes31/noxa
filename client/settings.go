@@ -91,7 +91,6 @@ type HotkeyProfile struct {
 	PTT          string `json:"ptt,omitempty"`
 	Mute         string `json:"mute_toggle,omitempty"`
 	WhisperReply string `json:"whisper_reply,omitempty"`
-	QuickConnect string `json:"quick_connect,omitempty"`
 	Compact      string `json:"compact_toggle,omitempty"`
 	Zen          string `json:"zen_toggle,omitempty"`
 	Deafen       string `json:"deafen_toggle,omitempty"`
@@ -155,7 +154,6 @@ type Settings struct {
 	HotkeyPTT          string `json:"hotkey_ptt"`
 	HotkeyMute         string `json:"hotkey_mute"`
 	HotkeyDeafen       string `json:"hotkey_deafen"`        // (299) deafen toggle
-	HotkeyQuickConnect string `json:"hotkey_quick_connect"` // (285) default "Ctrl+Shift+C"
 	HotkeyZen          string `json:"hotkey_zen"`           // (341) zen mode toggle, default "Ctrl+Shift+Z"
 	HotkeyCompact      string `json:"hotkey_compact"`       // (293/299) compact-mode toggle
 	// HotkeyProfiles maps profile name -> overrides (300). The bookmark's
@@ -292,6 +290,9 @@ type Settings struct {
 	ChannelNotify  map[string]ChannelOverride `json:"channel_notify,omitempty"` // (386-389) "addr#channelID" -> override
 	Keywords       map[string][]string        `json:"keywords,omitempty"`       // (388) server addr -> keywords
 	AlphaDismissed string                     `json:"alpha_dismissed"`          // (215) version whose notice was dismissed
+	// (453/454) noXa Mobile hint: "" shows it until a phone is linked,
+	// "dismissed" hides it, "shown" shows it even with linked devices.
+	MobileHint     string                     `json:"mobile_hint,omitempty"`
 }
 
 // DefaultSettings returns the defaults used when no settings file exists.
@@ -306,7 +307,6 @@ func DefaultSettings() Settings {
 		Volume:                100,
 		HotkeyPTT:             "",
 		HotkeyMute:            "Ctrl+M",
-		HotkeyQuickConnect:    "Ctrl+Shift+C",
 		HotkeyZen:             "Ctrl+Shift+Z",
 		Theme:                 "midnight",
 		UIFont:                "outfit",

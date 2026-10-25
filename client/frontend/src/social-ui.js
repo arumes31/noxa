@@ -11,6 +11,8 @@ import { setUserBlocked } from "./audio.js";
 import { isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { setSafeImage } from "./safe-media.js";
 import { capturePresenceScope, setPresence, presenceLabel } from "./presence.js";
+import { STATUS_EXPIRY_OPTIONS, statusExpiryAt } from "./status-expiry.js";
+import { armStatusExpiry, initStatusExpiry, statusExpiryTimeLabel } from "./status-expiry-runtime.js";
 import { updateLocalSettings } from "./settings-store.js";
 
 const V = () => window.__noxa;
@@ -67,6 +69,9 @@ function openStatusPicker() {
             </select>
             <label class="dlg-label">${escapeTranslation(t("desktop.status.message.optional"))}</label>
             <input class="dlg-input st-msg" maxlength="200" placeholder="${escapeTranslation(t("desktop.e.g.in.a.meeting"))}" />
+            <label class="dlg-label">${escapeTranslation(t("status.expiry.label"))}</label>
+            <select class="dlg-input st-exp">${STATUS_EXPIRY_OPTIONS.map(option => `<option value="${option}">${escapeTranslation(t("status.expiry." + option))}</option>`).join("")}</select>
+            <input class="dlg-input st-exp-custom" type="number" min="1" max="10080" hidden aria-label="${escapeTranslation(t("status.expiry.customMinutes"))}" placeholder="${escapeTranslation(t("status.expiry.customMinutes"))}" />
             <div class="dlg-buttons">
                 <button class="dlg-ok">${escapeTranslation(t("desktop.set"))}</button>
                 <button class="dlg-cancel">${escapeTranslation(t("desktop.cancel"))}</button>
@@ -74,13 +79,19 @@ function openStatusPicker() {
         </div>`;
     const sel = overlay.querySelector(".st-sel");
     sel.value = state.myStatus || "online";
+    // (533) optional expiry, scheduled on this device (the server has no field).
+    const expiry = overlay.querySelector(".st-exp"), customMinutes = overlay.querySelector(".st-exp-custom");
+    expiry.onchange = () => { customMinutes.hidden = expiry.value !== "custom"; if (!customMinutes.hidden) customMinutes.focus(); };
     overlay.querySelector(".dlg-ok").onclick = async () => {
         if (!isCurrentServerDialog(overlay)) return;
         const status = sel.value;
         const msg = overlay.querySelector(".st-msg").value.trim();
+        const expiresAt = status === "online" ? 0 : statusExpiryAt(expiry.value, Date.now(), customMinutes.value);
         overlay.remove();
         if (await setPresence(status, msg, scope)) {
-            V().sysMsg(t("desktop.status") + presenceLabel(state.myStatus) + (msg ? " — " + msg : ""));
+            armStatusExpiry({ status, message: msg, expiresAt });
+            const until = expiresAt ? " · " + t("status.expiry.until", { time: statusExpiryTimeLabel(expiresAt) }) : "";
+            V().sysMsg(t("desktop.status") + presenceLabel(state.myStatus) + (msg ? " — " + msg : "") + until);
         }
     };
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
@@ -412,6 +423,7 @@ async function saveUserNote(uid, note) {
 export function initSocialUI() {
     initTreeTools();
     initHoverCards();
+    initStatusExpiry(); // (534) clears an expired status on startup, resume and while running
     window.__noxaSocial = {
         openStatusPicker, openContacts, openPoke, refreshNews, resetServerView,
         avatarLightbox, userNote, saveUserNote, esc,

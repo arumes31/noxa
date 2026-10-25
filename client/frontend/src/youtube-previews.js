@@ -1,6 +1,19 @@
-import { previewImage } from "./preview-image.js";
+import { blockedPreviewPlaceholder, resolvePreviewImage } from "./preview-source-policy.js";
 import { t } from "./i18n.js";
 import { loadPreviewMetadata } from "./preview-metadata.js";
+
+// blockedThumbnail swaps the image for the visible "server only" marker (181)
+// when the metadata points at a third-party host instead of server bytes.
+function blockedThumbnail(visual, image, host) {
+    image.hidden = true;
+    image.removeAttribute?.("src");
+    const marker = blockedPreviewPlaceholder(visual.ownerDocument || document, {
+        label: t("midnight.previewBlocked"),
+        title: t("midnight.previewBlockedHelp", { host: host || t("midnight.previewBlockedUnknownHost") }),
+        host,
+    });
+    if (marker) visual.insertBefore(marker, image);
+}
 
 // Parse only YouTube video URLs. Neither arbitrary hosts nor provider HTML
 // are used by the native metadata request or the image renderer.
@@ -59,8 +72,9 @@ export function renderYouTubePreviews(container, { enabled, scope, isCurrent }) 
                 card.setAttribute("aria-label", t("midnight.openVideoTitle", { title: title.textContent }));
             }
             if (typeof result.author === "string" && result.author) author.textContent = result.author.slice(0, 120);
-            const thumbnail = previewImage(result.thumbnail);
-            if (thumbnail) { image.hidden = false; image.src = thumbnail; }
+            const thumbnail = resolvePreviewImage(result);
+            if (thumbnail.src) { image.hidden = false; image.src = thumbnail.src; }
+            else if (thumbnail.blocked) blockedThumbnail(visual, image, thumbnail.host);
         };
         image.hidden = true;
         image.onerror = () => { image.hidden = true; };
