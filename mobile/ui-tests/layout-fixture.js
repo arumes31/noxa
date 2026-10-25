@@ -19,6 +19,12 @@ const messages = Array.from({ length: 60 }, (_, i) => ({ id: String(i), from: "A
 const session = Object.assign(new EventTarget(), {
     uniqueID: "self", clientID: "self", deviceID: "current", nickname: "Daniel", channels: () => channels, clients: () => clients,
     chatScopes: () => [1], current: new Map([[1, 1]]), messages: new Map([[1, messages]]), typing: new Map(), loadHistory: async () => false,
+    // Lookups the richer screens make; the fixture answers them with nothing.
+    capabilities: new Set(), isAdmin: false, authority: "", announcement: null, motd: "", pins: new Map(), subscriptions: new Set([1, 2]),
+    self: () => clients[0], messageByID: (scope, id) => (session.messages.get(scope) || []).find(m => m.id === id) || null,
+    emojiList: async () => [], emojiImage: async () => "", linkPreview: async () => { throw new Error("no previews"); }, avatar: async () => "",
+    loadPins: async () => [], loadUntil: async () => null, search: async () => [], serverInfo: async () => ({ name: "The Common Room" }),
+    sendTyping: () => {}, sendTypingDirect: () => {}, relayServers: async () => [], onRelayRenewal: () => () => {},
     conn: { request: async () => ({ devices: [
         { device_id: "master", name: "Master desktop", kind: "desktop", first_device: true, fingerprint: "aa:bb" },
         { device_id: "current", name: "This phone", kind: "web", current: true, fingerprint: "aa:cc" },
@@ -33,7 +39,11 @@ if (view === "presence") {
 app.session = session; app.info = { server_name: "The Common Room" };
 app.dm = Object.assign(new EventTarget(), { ready: Promise.resolve(), conversations: new Map([["peer", { nickname: "Avery", messages }]]), list: () => [{ peer: "peer", nickname: "Avery", messages }], devicesOf: async () => ({ fingerprint: "verified", devices: [{ deviceID: "current" }], trust: "trusted" }) });
 app.groups = Object.assign(new EventTarget(), { list: new Map([["group", { id: "group", name: "Weekend crew", members: [{ unique_id: "self" }, { unique_id: "peer" }] }]]), messages: new Map([["group", messages]]), get: async () => {}, loadNewer: async () => {}, markRead: () => {} });
-app.voice = Object.assign(new EventTarget(), { active: view === "voice-active", channelID: 1, speaking: new Set(["peer"]), camera: null, bytes: { sent: 0, received: 0 }, streams: async () => [], outputs: async () => [], watching: new Map(), video: new Map(), setTalking: () => {} });
+app.voice = Object.assign(new EventTarget(), { active: view === "voice-active", channelID: 1, speaking: new Set(["peer"]), camera: null, bytes: { sent: 0, received: 0 }, streams: async () => [], outputs: async () => [], watching: new Map(), video: new Map(), setTalking: () => {},
+    // The richer voice room reads these too.
+    whisperers: new Set(), watched: new Map(), queue: [], muted: false, deafened: false, pushToTalk: false, lowBandwidth: false, lastWhisperer: null,
+    applyQualities: async () => {}, receiveLayer: () => "default", setMuted: () => {}, setDeafened: () => {}, setPushToTalk: () => {}, stats: async () => ({}), pc: null,
+    whisperTargets: { uniqueIDs: [], channelIDs: [] }, setWhisperTargets: () => {}, queue: async () => {}, watch: async () => {}, endEchoTest: async () => {}, chooseOutput: async () => {}, outputSelectable: () => false, sinkId: "", mode: "continuous", level: 0 });
 app.calls = Object.assign(new EventTarget(), { active: view === "call", incoming: view === "incoming", peers: new Map(), camera: null, uid: "self", usage: async () => ({ sent: 0, received: 0 }), call: { id: "call", caller: "peer", participants: [{ unique_id: "self", state: "accepted" }, { unique_id: "peer", state: "accepted" }] } });
 if (view.startsWith("signout")) {
     const request = session.conn.request;
