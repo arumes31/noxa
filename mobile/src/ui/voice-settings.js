@@ -6,7 +6,7 @@ import { app } from "../app.js";
 import * as settings from "../core/settings.js";
 import { meterFraction, METER_MAX, volumeFromPercent, volumePercent, MAX_VOLUME } from "../core/voice-gate.js";
 import { t } from "../i18n.js";
-import { h } from "./dom.js";
+import { h, replaceContent } from "./dom.js";
 import { levelMeter, micTestSheet, panel, slider, toggleRow } from "./voice-sheets.js";
 import "./voice-strings.js";
 import "./voice.css";
@@ -47,7 +47,7 @@ export function voiceSettings() {
     const card = h("div", { class: "card vc-stack vc-settings" });
     const renderMode = () => {
         const mode = settings.get("activation");
-        modeBox.replaceChildren(
+        replaceContent(modeBox,
             mode === "voice" ? h("div", { class: "vc-stack" },
                 meter.node,
                 slider({ label: t("vc.threshold"), min: 0, max: METER_MAX, step: 0.005, value: settings.get("voiceThreshold"),

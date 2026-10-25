@@ -7,7 +7,7 @@
 import { app } from "../app.js";
 import { withRateRetry } from "../core/poll-state.js";
 import { t } from "../i18n.js";
-import { avatar, clock, h, sheet, toast } from "./dom.js";
+import { avatar, clock, h, sheet, toast, replaceContent } from "./dom.js";
 import { icon } from "./icons.js";
 import { header, scopeName } from "./common.js";
 import { richBody, watchCustomEmoji } from "./rich-text.js";
@@ -153,7 +153,7 @@ export function renderThreads(root, arg) {
         const toggle = (key, label) => h("button", { class: "btn", type: "button", "aria-pressed": String(filters[key]), onclick: () => { filters[key] = !filters[key]; load(); } }, label);
         const tagSelect = s.tags?.length ? h("select", { class: "input", "aria-label": t("threads.tagFilter"), onchange: event => { filters.tag = event.target.value; load(); } },
             h("option", { value: "" }, t("threads.allTags")), s.tags.map(tag => h("option", { value: tag, selected: filters.tag === tag || null }, tag))) : null;
-        filterBar.replaceChildren(toggle("following", t("threads.followingOnly")), toggle("archived", t("threads.showArchived")), tagSelect);
+        replaceContent(filterBar, toggle("following", t("threads.followingOnly")), toggle("archived", t("threads.showArchived")), tagSelect);
     }
 
     function render() {

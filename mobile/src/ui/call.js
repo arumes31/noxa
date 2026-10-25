@@ -4,7 +4,7 @@
 import { app, remindLater } from "../app.js";
 import { t } from "../i18n.js";
 import { Calls } from "../core/calls.js";
-import { avatar, h, toast } from "./dom.js";
+import { avatar, h, toast, replaceContent } from "./dom.js";
 import { icon } from "./icons.js";
 import {
     cameraSheet, enterFullscreen, exitFullscreen, fullscreenElement, fullscreenSupported, iconButton,
@@ -37,7 +37,7 @@ export function renderCall(root, id) {
 
     function incoming(call) {
         const caller = nameOf(call.caller);
-        body.replaceChildren(
+        replaceContent(body,
             h("div", { class: "call-hero" }, avatar(caller, "xl", call.caller), h("h1", {}, caller), h("p", { class: "hint" }, t("call.incoming"))),
             h("div", { class: "call-actions" },
                 h("button", { class: "round-btn decline", type: "button", "aria-label": t("call.decline"), onclick: () => calls.decline() }, icon("hangup")),
@@ -98,7 +98,7 @@ export function renderCall(root, id) {
             ...(pressed === undefined ? {} : { "aria-pressed": String(pressed) }), onclick,
         }, typeof name === "string" ? icon(name) : name);
         const failed = error => toast(errorText(error), "warn");
-        body.replaceChildren(
+        replaceContent(body,
             h("p", { class: "call-status", role: "status" }, status),
             h("div", { class: "call-tiles" }, tiles),
             own,
@@ -142,12 +142,12 @@ export function renderCall(root, id) {
     function render() {
         const call = calls?.call;
         if (!call || call.id !== id) {
-            body.replaceChildren(h("p", { class: "hint" }, t("call.ended")));
+            replaceContent(body,h("p", { class: "hint" }, t("call.ended")));
             return;
         }
         if (calls.incoming) incoming(call);
         else if (calls.active) active(call);
-        else body.replaceChildren(h("p", { class: "hint" }, t("call.ended")));
+        else replaceContent(body,h("p", { class: "hint" }, t("call.ended")));
     }
 
     async function refreshUsage() {

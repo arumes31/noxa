@@ -96,8 +96,7 @@ export function lockBadge(channel) {
 export async function joinWithPassword(channel) {
     const password = await channelPassword(channel);
     if (password === null) return false;
-    await joinVoice(channel.id, password);
-    return true;
+    return await joinVoice(channel.id, password) !== false;
 }
 
 // --- Server info -------------------------------------------------------------------

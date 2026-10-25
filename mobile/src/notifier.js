@@ -4,6 +4,7 @@
 // filters the server applies while the app is closed. app.js asks
 // decide() for every incoming message; everything else follows app and
 // session events.
+import { excerpt } from "./core/search.js";
 import { ActivityLog } from "./core/activity.js";
 import { channelEvent, decide, pushFilters } from "./core/notify-policy.js";
 import { AutoAway } from "./core/presence.js";
@@ -86,7 +87,7 @@ class Notifier {
         if (from && isBlocked(from)) return decision;
         const place = channelID !== null ? this.#channelName(channelID) : "";
         const title = kind === "channel" ? (place ? `${name} · ${place}` : name) : name || t("dm.someone");
-        const preview = typeof text === "string" ? text.slice(0, 140) : "";
+        const preview = typeof text === "string" ? excerpt(text, "", 70) : "";
         if (!viewing && (event === "mention" || event === "keyword" || event === "dm" || event === "group")) {
             this.activity?.add({ kind: event === "mention" || event === "keyword" ? "mention" : "dm", title, body: preview, route: routeOf(tag), tag });
         }

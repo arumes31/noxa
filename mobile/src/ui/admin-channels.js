@@ -7,7 +7,7 @@ import {
 } from "../core/access-matrix.js";
 import { ICON_TYPES, inviteLink } from "../core/admin.js";
 import { addStrings, lang, t } from "../i18n.js";
-import { h, toast } from "./dom.js";
+import { h, toast, replaceContent } from "./dom.js";
 import { icon } from "./icons.js";
 import {
     adminScreen, busy, chooseSheet, confirmSheet, copyBox, emptyNote, field, input, linkRow, loadingNote, pickImage, select, textarea, textSheet, toggle, when,
@@ -311,7 +311,7 @@ addStrings({
 });
 
 const channelOf = (session, id) => session.channels().find(c => c.id === id);
-const unavailable = (body, error) => body.replaceChildren(h("p", { class: "error" }, error.message), h("p", { class: "hint" }, t("admin.unavailable")));
+const unavailable = (body, error) => replaceContent(body, h("p", { class: "error" }, error.message), h("p", { class: "hint" }, t("admin.unavailable")));
 
 // --- Channel hub ----------------------------------------------------------------------
 
@@ -445,7 +445,7 @@ export function renderChannelForm({ root, session, admin }, kind, id) {
                 if (!settings.name?.trim()) { toast(t("chan.nameRequired"), "warn"); form.querySelector("input")?.focus(); return; }
                 busy(submit, () => save());
             };
-            form.replaceChildren(
+            replaceContent(form,
                 creating ? h("p", { class: "hint" }, `${t("chan.parent")}: ${parentName}`) : null,
                 text("name", t("chan.name"), { required: true, max: "255" }),
                 text("topic", t("chan.topic")),
@@ -482,7 +482,7 @@ export function renderChannelForm({ root, session, admin }, kind, id) {
             location.hash = `#/admin/channel/${creating ? result.channel_id : id}`;
         };
         render();
-        body.replaceChildren(form);
+        replaceContent(body, form);
         form.querySelector("input")?.focus();
     })();
 }
@@ -575,7 +575,7 @@ export function renderAccess({ root, session, admin }, id) {
             render();
         }) }, t("acc.preview"));
         status.textContent = dirty() ? (reviewed === JSON.stringify(draft) ? t("acc.unsaved") : t("acc.previewFirst")) : "";
-        body.replaceChildren(
+        replaceContent(body,
             h("div", { class: "card" },
                 toggle(t("acc.synced"), draft.synced, value => {
                     draft = setSynced(draft, value, inherited());
@@ -681,7 +681,7 @@ export function renderInvites({ root, session, admin }, id) {
             render();
             toast(t("inv.revoked"));
         }) }, t("inv.revoke"));
-        body.replaceChildren(
+        replaceContent(body,
             h("p", { class: "hint" }, t("inv.help")),
             h("p", { class: "admin-result", role: "status" }, result.active ? (token ? t("inv.ready") : t("inv.active", { access: t(result.access === "member" ? "inv.member" : "inv.guest") })) : t("inv.none")),
             link ? copyBox(t("inv.link"), link, { share: t("inv.shareTitle", { name: channel.name }) }) : null,
@@ -705,7 +705,7 @@ export function renderWebhooks({ root, session, admin }, id) {
     const name = input({ maxlength: "60", required: true, autocomplete: "off" });
     const render = () => {
         const submit = h("button", { class: "btn btn-primary", type: "submit" }, t("hook.create"));
-        body.replaceChildren(
+        replaceContent(body,
             h("p", { class: "hint" }, t("hook.help")),
             secret ? h("div", { class: "card admin-stack admin-secret", role: "alert" },
                 h("p", { class: "row-title admin-wrap" }, t("hook.secret")),

@@ -6,7 +6,7 @@ import {
     capabilityLabel, groupCapabilities, memberCounts, reorderedRoles, ROLE_TEMPLATES, roleDirty, roleDraft, roleTemplate, withRole,
 } from "../core/access-matrix.js";
 import { addStrings, lang, t } from "../i18n.js";
-import { h, toast } from "./dom.js";
+import { h, toast, replaceContent } from "./dom.js";
 import { icon } from "./icons.js";
 import {
     adminScreen, busy, chooseSheet, confirmSheet, fail, field, formSheet, input, loadingNote, select, toggle,
@@ -180,7 +180,7 @@ export function renderRoles({ root, admin }) {
         try {
             state = await admin.roleState(0);
         } catch (error) {
-            body.replaceChildren(h("p", { class: "error" }, error.message), h("p", { class: "hint" }, t("admin.unavailable")));
+            replaceContent(body, h("p", { class: "error" }, error.message), h("p", { class: "hint" }, t("admin.unavailable")));
             return;
         }
         render();
@@ -206,7 +206,7 @@ export function renderRoles({ root, admin }) {
             await commit(admin, { kind: "default_member_role_set", expected_revision: policy.revision, role_id: Number(defaultSelect.value) });
             await load();
         });
-        body.replaceChildren(
+        replaceContent(body,
             h("div", { class: "admin-actions" },
                 h("button", { class: "btn btn-primary", type: "button", onclick: async () => {
                     const template = await chooseSheet(t("roles.template"), ROLE_TEMPLATES.map(key => ({ value: key, label: t(`roles.template.${key}`),
@@ -269,7 +269,7 @@ export function renderRoleEditor({ root, admin }, id, template) {
         try {
             state = await admin.roleState(0);
         } catch (error) {
-            body.replaceChildren(h("p", { class: "error" }, error.message), h("p", { class: "hint" }, t("admin.unavailable")));
+            replaceContent(body, h("p", { class: "error" }, error.message), h("p", { class: "hint" }, t("admin.unavailable")));
             return;
         }
         const role = state.policy.roles.find(r => String(r.id) === String(roleID));
@@ -324,7 +324,7 @@ export function renderRoleEditor({ root, admin }, id, template) {
                 location.hash = "#/admin/roles";
             } else await load(draft.id);
         }) }, t("roles.deleteRole")) : null);
-        body.replaceChildren(form);
+        replaceContent(body, form);
         renderPermissions();
         update();
     };
@@ -410,10 +410,10 @@ export function renderMembers({ root, admin }) {
     } }, field(t("roles.search"), box), h("button", { class: "btn", type: "submit" }, t("roles.search")));
     (async () => {
         try { await refreshState(); } catch (error) {
-            body.replaceChildren(h("p", { class: "error" }, error.message), h("p", { class: "hint" }, t("admin.unavailable")));
+            replaceContent(body, h("p", { class: "error" }, error.message), h("p", { class: "hint" }, t("admin.unavailable")));
             return;
         }
-        body.replaceChildren(form, batch, status, list, loadMore);
+        replaceContent(body, form, batch, status, list, loadMore);
         await search().catch(fail);
     })();
 }

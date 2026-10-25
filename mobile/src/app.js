@@ -243,7 +243,7 @@ export async function flushNow() {
 /** Joins a voice channel (with its password, if any) and keeps the phone awake while connected. */
 export async function joinVoice(channelID, password = "") {
     if (!app.voice) throw new Error("not connected");
-    await app.voice.join(channelID, password);
+    return app.voice.join(channelID, password);
 }
 
 /**

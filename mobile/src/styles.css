@@ -47,6 +47,7 @@ button { cursor: pointer; }
 .screen-header h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; text-align: center; font-family: var(--font-mono); font-size: 1rem; font-weight: 600; }
 .screen-header .sub { display: block; text-align: center; font-size: .72rem; color: var(--text-faint); font-family: var(--font-body); font-weight: 400; }
 .icon-btn { width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 12px; background: transparent; color: var(--text-dim); }
+.header-actions .icon-btn { flex-shrink: 0; }
 .icon-btn:active { background: var(--accent-dim); }
 .screen-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 16px calc(var(--nav-h) + 24px + var(--safe-bottom)); }
 

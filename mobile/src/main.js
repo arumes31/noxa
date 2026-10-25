@@ -59,8 +59,12 @@ async function route() {
     root = screenRoot(appRoot, !!app.session);
     if (!app.session) {
         app.viewing = null;
-        const { renderConnect } = await screens.connect();
-        if (token === routeToken) cleanup = renderConnect(root, { onSignedIn });
+        try {
+            const { renderConnect } = await screens.connect();
+            if (token === routeToken) cleanup = renderConnect(root, { onSignedIn });
+        } catch {
+            if (token === routeToken) showRouteLoadFailure();
+        }
         return;
     }
     let [, screen = "home", ...rest] = location.hash.split("/");
@@ -77,8 +81,9 @@ async function route() {
     try {
         module = await screens[screen]();
     } catch (error) {
-        // A deploy replaced the chunk; reload to the new version.
-        toast(t("common.error", { error: error.message }), "warn");
+        // A deploy may have removed a lazy chunk. Offer explicit recovery;
+        // never leave the previous screen's controls under the new route.
+        if (token === routeToken) showRouteLoadFailure();
         return;
     }
     if (token !== routeToken) return;
@@ -209,6 +214,20 @@ app.addEventListener("signedout", () => {
 });
 window.addEventListener("hashchange", route);
 onWideChange(() => route());
+
+function showRouteLoadFailure() {
+    root.replaceChildren(h("section", { class: "screen" },
+        h("div", { class: "screen-body", role: "alert" },
+            h("p", { class: "hint" }, t("update.loadFailed")),
+            h("button", { class: "btn btn-primary", type: "button", onclick: async event => {
+                event.currentTarget.disabled = true;
+                try {
+                    const registration = await navigator.serviceWorker?.getRegistration("/app/");
+                    registration?.waiting?.postMessage("activate-update");
+                } catch { /* Reload still works without service-worker access. */ }
+                location.reload();
+            } }, t("update.reloadPage")))));
+}
 
 async function registerServiceWorker() {
     if (!("serviceWorker" in navigator) || location.protocol !== "https:") return;

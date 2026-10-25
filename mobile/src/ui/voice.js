@@ -7,7 +7,7 @@ import { joinWithPassword, lockBadge } from "./server-tools.js";
 import { Voice } from "../core/voice.js";
 import { speakingQueue } from "../core/voice-gate.js";
 import { t } from "../i18n.js";
-import { avatar, h, toast } from "./dom.js";
+import { avatar, h, toast, replaceContent } from "./dom.js";
 import { icon } from "./icons.js";
 import { header, nav } from "./common.js";
 import { streamsPanel } from "./streams.js";
@@ -190,7 +190,7 @@ export function renderVoice(root) {
         const called = channel?.clients.find(c => c.hand_called);
         const failed = error => toast(t("vc.queueFailed", { error: error.message }), "warn");
         queueBox.hidden = !queue.length && !called;
-        queueBox.replaceChildren(
+        replaceContent(queueBox,
             h("p", { class: "section-label" }, t("vc.queueTitle")),
             called ? h("p", { class: "hint" }, called.client_id === session.clientID ? t("vc.called") : t("vc.queueCurrent", { name: called.nickname })) : null,
             queue.length ? h("ol", { class: "vc-queue-list" }, queue.map(member => h("li", {},
@@ -237,7 +237,7 @@ export function renderVoice(root) {
         const whisperers = members.filter(m => voice.whisperers.has(m.client_id)).map(m => m.nickname);
         // A whisperer in another channel has no tile here.
         if (!whisperers.length && voice.whisperers.size && last) whisperers.push(last.nickname);
-        notices.replaceChildren(
+        replaceContent(notices,
             voice.whispering ? h("p", { class: "vc-notice vc-notice-whisper" }, t("vc.whisperingNow")) : null,
             whisperers.length ? h("p", { class: "vc-notice vc-notice-whisper" }, t("vc.whisperIncoming", { name: whisperers.join(", ") })) : null,
             members.length <= 1 && !voice.echo ? h("p", { class: "vc-notice" }, t("vc.alone")) : null,

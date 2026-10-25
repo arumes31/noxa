@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 for (const width of [320, 390, 1440]) {
-    for (const view of ["home", "new-chat", "new-group", "servers", "you", "voice", "voice-active", "chat", "dm", "group", "incoming", "call"]) {
+    for (const view of ["home", "files", "inbox", "new-chat", "new-group", "servers", "you", "voice", "voice-active", "chat", "dm", "group", "incoming", "call"]) {
         test(`${view} fits ${width}px`, async ({ page }, testInfo) => {
             const errors = [];
             page.on("pageerror", error => errors.push(error.message));
@@ -20,6 +20,14 @@ for (const width of [320, 390, 1440]) {
                 await expect(page.locator("li").filter({ hasText: "Master desktop" }).getByRole("button", { name: "Sign out", exact: true })).toHaveCount(0);
                 await expect(page.locator("li").filter({ hasText: "Master desktop" }).getByRole("button", { name: /^Rename/ })).toHaveCount(1);
             }
+            // Overflow can be clipped by #app, so document width alone misses it.
+            for (const control of await page.locator(".screen-header a, .screen-header button").all()) {
+                const rect = await control.boundingBox();
+                expect(rect.x).toBeGreaterThanOrEqual(0);
+                expect(rect.x + rect.width).toBeLessThanOrEqual(width + 1);
+                expect(rect.width).toBeGreaterThanOrEqual(40);
+            }
+            expect(await page.locator(".screen").innerText()).not.toMatch(/\b(?:null|undefined)\b/);
             expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
             expect(await page.locator("svg").evaluateAll(nodes => nodes.every(n => n.getBoundingClientRect().width <= 26 && n.getBoundingClientRect().height <= 26))).toBe(true);
             await page.screenshot({ path: testInfo.outputPath(`${view}-${width}.png`) });
@@ -46,5 +54,19 @@ for (const failure of [false, true]) {
         await expect(page.locator("html")).toHaveAttribute("data-device-request", JSON.stringify({ action: "sign_out" }));
         if (failure) await expect(page.getByText("Server unavailable", { exact: false })).toBeVisible();
         expect(errors).toEqual([]);
+    });
+}
+
+for (const kind of ["attachments", "deleted"]) {
+    test(`Home uses readable ${kind} previews in channel, direct and group rows`, async ({ page }) => {
+        await page.goto(`http://127.0.0.1:5175/app/ui-tests/layout.html?view=home-${kind}`);
+        await expect(page.locator("html")).toHaveAttribute("data-ready", "true");
+        const rows = page.locator(".list .row-sub");
+        await expect(rows).toHaveCount(3);
+        for (const row of await rows.all()) {
+            await expect(row).toContainText(kind === "attachments" ? "example.txt" : "Message deleted");
+            await expect(row).not.toContainText("[file:");
+            await expect(row).not.toContainText("AAAAAAAA");
+        }
     });
 }
