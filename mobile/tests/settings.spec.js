@@ -80,7 +80,8 @@ test("the search box filters setting rows across sections", async ({ page }) => 
     await search.fill("nothing like this");
     await expect(page.getByText("No setting matches “nothing like this”.")).toBeVisible();
     await search.fill("");
-    await expect(page.locator(".settings-section")).toHaveCount(6);
+    // Appearance, Chat, Notifications, Voice, Direct messages, Language, Data, About.
+    await expect(page.locator(".settings-section")).toHaveCount(8);
 
     // About shows the version and links to Diagnostics.
     await page.locator(".settings-section", { hasText: "About" }).locator("summary").click();

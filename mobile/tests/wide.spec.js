@@ -172,9 +172,10 @@ test("the phone layout returns below 900 px", async ({ page }) => {
     // A landscape phone keeps the bottom navigation as a slim strip.
     await page.setViewportSize({ width: 844, height: 390 });
     await expect(page.locator(".shell")).toHaveCount(0);
+    // The app height follows the viewport on the next animation frame.
+    await expect.poll(async () => { const box = await phoneNav.boundingBox(); return box.y + box.height; }).toBeLessThanOrEqual(390);
     const strip = await phoneNav.boundingBox();
     expect(strip.height).toBeLessThanOrEqual(44);
-    expect(strip.y + strip.height).toBeLessThanOrEqual(390);
     await page.setViewportSize({ width: 1194, height: 834 });
     await expect(page.locator(".shell")).toHaveCount(1);
     await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();

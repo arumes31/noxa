@@ -11,6 +11,7 @@ import { setPushPreferences } from "./core/push.js";
 import * as settings from "./core/settings.js";
 import { PresenceWatch, isBlocked } from "./core/social.js";
 import { EVENT_SOUNDS, SoundEngine } from "./core/sounds.js";
+import { audioContext } from "./core/voice-audio.js";
 import { lang, t } from "./i18n.js";
 import { h, refreshAvatars, setAvatarSource } from "./ui/dom.js";
 import "./ui/social-strings.js";
@@ -33,7 +34,8 @@ class Notifier {
         this.watch = new PresenceWatch();
         this.away = null;
         this.sounds = new SoundEngine({
-            createContext: () => new (globalThis.AudioContext || globalThis.webkitAudioContext)(),
+            // One AudioContext for the app: shared with voice playback (core/voice-audio.js).
+            createContext: () => audioContext() || new (globalThis.AudioContext || globalThis.webkitAudioContext)(),
             load: async url => {
                 const response = await fetch(url);
                 if (!response.ok) throw new Error(`sound ${response.status}`);
