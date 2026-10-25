@@ -48,7 +48,7 @@ static product/download website hosted at [noxa.wowcraft.pw](https://noxa.wowcra
 | Website and downloads | [noxa.wowcraft.pw](https://noxa.wowcraft.pw/) |
 | Mobile / browser client | [Launch the PWA](https://noxa.wowcraft.pw/app/) |
 | Desktop server address (Server IP / hostname) | `wowcraft.pw` (default control port `12333`) |
-| Windows x64 client | [Download for Windows](https://noxa.wowcraft.pw/dl/noxa-client-windows-amd64.exe) |
+| Windows x64 client | [Download for Windows](https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe) |
 
 This is a public **test server** for trying noXa. The Windows download redirects
 to the current GitHub Release. GitHub Pages is no longer used.

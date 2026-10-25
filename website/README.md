@@ -2,9 +2,9 @@
 
 A static product and Windows-download page using the client's OLED Midnight
 palette, hosted at <https://noxa.wowcraft.pw/>. The same origin serves the PWA
-at `/app/` and redirects `/dl/noxa-client-windows-amd64.exe` to the latest
-Windows release on GitHub, through HTTPS port 443. The desktop public test
-server address is `wowcraft.pw`.
+at `/app/` through HTTPS port 443. Windows download links point directly to
+the latest release asset on GitHub. The desktop public test server address
+is `wowcraft.pw`.
 
 ## Files and local preview
 
@@ -94,16 +94,14 @@ External requests and service workers are blocked during both capture workflows.
 Every Windows download points to:
 
 ```text
-https://noxa.wowcraft.pw/dl/noxa-client-windows-amd64.exe
+https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe
 ```
 
 The release marked **Latest** must contain an asset named exactly
 `noxa-client-windows-amd64.exe`. This is the Windows x64 client, not the server.
-The reverse proxy returns a temporary redirect to
-`https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe`.
-The executable stays on GitHub; no server-side copy is maintained. Existing authenticated
-file transfers under `/dl/` keep their capability checks; the public Windows
-installer is an exact route exception.
+The executable is downloaded directly from GitHub; no NPM download redirect
+or server-side copy is needed. Authenticated file-transfer routes under
+`/dl/` are separate from these public release links.
 
 Changing the release asset name requires updating the page and its download
 tests together. No release version is embedded in the page, and download links
