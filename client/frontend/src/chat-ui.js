@@ -16,7 +16,6 @@ import { fileCardText, previewLine } from "./dm-model.js";
 import { manageChatGIFPlayback } from "./chat-gif-playback.js";
 import { openChatMediaLightbox } from "./chat-media-lightbox.js";
 import { createChatUploadQueue } from "./chat-upload-queue.js";
-import { createUploadOrphanSweeper } from "./upload-orphans.js";
 import { createUnreadTabEffects } from "./chat-unread.js";
 import { createChatTabs } from "./chat-tabs.js";
 import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
@@ -111,7 +110,6 @@ let replyTo = null; // message object being replied to (107)
 let replyRevision = 0;
 let draftRevision = 0;
 let chatDelivery = null;
-let orphanSweeper = null; // (504) sweeps uploads whose message was never published
 let activeSend = null;
 let attachmentQueue = null;
 let pendingFiles = []; // {name, dataBase64, isImage, dataURL} staged for send (98/100)
@@ -4836,8 +4834,6 @@ export function initChat() {
     const uploadHost = document.createElement("div"); uploadHost.className = "chat-upload-queue"; uploadHost.hidden = true;
     $("file-preview-row").after(uploadHost);
     attachmentQueue = createChatUploadQueue({ app, currentTab: () => V().state.activeTabID, container: uploadHost });
-    orphanSweeper?.dispose();
-    orphanSweeper = createUploadOrphanSweeper({ app, state: () => V().state, toast: (text, kind) => V().toast(text, kind) });
     window.runtime.EventsOn("ft_progress", event => attachmentQueue.progress(event));
     unreadEffects = createUnreadTabEffects($("pm-tabs"));
     chatTabs = createChatTabs($("pm-tabs"), { onLayoutChange: saveTabLayout, onRefresh: () => unreadEffects?.refresh() });

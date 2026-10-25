@@ -34,7 +34,6 @@ export function CancelTransfer(arg1:string):Promise<void>;
 
 export function CancelTransferForTab(arg1:string,arg2:string):Promise<string>;
 
-export function CleanupOrphanUploadsForTab(arg1:string):Promise<{removed:number,failed:number,kept:number}>;
 
 export function CancelUpdate():Promise<boolean>;
 

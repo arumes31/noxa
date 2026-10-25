@@ -264,11 +264,12 @@ export function searchSettings(index, query, { limit = 40 } = {}) {
         const position = labels.findIndex(text => text && text.includes(normalized));
         if (position < 0) continue;
         const text = labels[position];
-        const score = (text === normalized ? 100 : text.startsWith(normalized) ? 50 : 10) + Math.max(0, 20 - (text.length - normalized.length));
+        const score = text === normalized ? 100 : 10;
         literal.push({ page: entry.page, pageLabel: entry.pageLabel, section: entry.section, key: entry.key, label: entry.label, score, phrase: "" });
     }
     if (literal.length) {
-        literal.sort((a, b) => b.score - a.score || a.label.localeCompare(b.label));
+        // Broad label queries preserve the familiar settings-page order.
+        literal.sort((a, b) => b.score - a.score);
         return literal.slice(0, limit);
     }
     const needles = tokenizeSearchText(query);

@@ -29,6 +29,7 @@ export function statusExpiryAt(option, now, customMinutes = 0) {
 export function createStatusExpiryScheduler({ now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, load, save, onExpire }) {
     let record = normalize(load?.());
     let timer = null;
+    let inFlight = null;
     const persist = () => save?.(record);
     const stop = () => { if (timer !== null) { clearTimer(timer); timer = null; } };
     function arm() {
@@ -40,14 +41,17 @@ export function createStatusExpiryScheduler({ now = Date.now, setTimer = setTime
     // of exactly `false` (or a rejected promise) means "could not clear yet",
     // e.g. no connection: the record stays and is retried after RETRY_DELAY.
     function settle(expired, ok) {
+        if (inFlight === expired) inFlight = null;
         if (record !== expired) return;
         if (ok === false) { stop(); timer = setTimer(check, RETRY_DELAY); return; }
         record = null; stop(); persist();
     }
     function check() {
         if (!record) { stop(); return false; }
+        if (inFlight === record) return false;
         if (record.expiresAt > now()) { arm(); return false; }
         const expired = record;
+        inFlight = expired;
         stop();
         let result;
         try { result = onExpire?.(expired); } catch { result = false; }

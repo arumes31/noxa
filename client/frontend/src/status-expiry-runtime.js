@@ -26,20 +26,20 @@ function save(record) {
 async function expire(record) {
     const state = V()?.state;
     if (!state) return false;
-    if (record.uniqueID && state.myUniqueID && record.uniqueID !== state.myUniqueID) return true;
     const tabs = await listTabs();
-    const target = tabs.find(tab => tab.id === record.tabID && tab.connected)
+    const target = tabs.find(tab => tab.id === record.tabID && tab.connected && (!record.server || tab.addr === record.server))
         || tabs.find(tab => record.server && tab.addr === record.server && tab.connected);
     if (!target) return false;
     if (target.id === state.activeTabID) {
         if (!state.myClientID) return false;
+        if (record.uniqueID && record.uniqueID !== state.myUniqueID) return true;
         if (!state.myStatus) return true;
         if (!await setPresence("online", "", capturePresenceScope())) return false;
     } else {
-        try {
-            const error = await window.go.main.App.SetStatusForTab(target.id, "online", "");
-            if (error) return false;
-        } catch { return false; }
+        // Native SetStatusForTab deliberately accepts only the active tab.
+        // Keep the record until that server is active and its account can be
+        // verified, rather than clearing an unverified background identity.
+        return false;
     }
     V().sysMsg?.(t("status.expiry.cleared"));
     return true;
@@ -56,7 +56,7 @@ async function activeTabAddr() {
 
 export function initStatusExpiry() {
     if (scheduler) return scheduler;
-    scheduler = createStatusExpiryScheduler({ load, save, onExpire: record => void expire(record) });
+    scheduler = createStatusExpiryScheduler({ load, save, onExpire: expire });
     const check = () => scheduler.check();
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") check(); });
     window.addEventListener("focus", check);
@@ -75,7 +75,7 @@ export function armStatusExpiry({ status, message, expiresAt }) {
     // The server address lets the expiry survive a closed/reopened tab.
     void activeTabAddr().then(addr => {
         const current = active.current();
-        if (addr && current && current.expiresAt === expiresAt) active.set({ ...current, server: addr });
+        if (addr && current === record) active.set({ ...current, server: addr });
     });
     return record;
 }

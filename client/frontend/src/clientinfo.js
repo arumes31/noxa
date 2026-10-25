@@ -48,9 +48,9 @@ function openContextMenu(x, y, client, trigger) {
     closeMenu();
     const tabID = V().state.activeTabID;
     // (521) account actions key on unique_id; session-bound ones (Client Info,
-    // poke) address the explicitly chosen primary session of that account.
+    // poke) keep the clicked session, even if its account also has a desktop.
     const account = client.account || (client.client_id ? resolveAccountTarget(V().state.clients, client.client_id, V().state.myClientID) : null);
-    const session = account?.primary || client;
+    const session = account?.clicked || client;
     const disconnectTarget = { clientID: client.client_id, channelID: client.channel_id };
     const { $ } = V();
     const P = window.__noxaPerms;
@@ -500,7 +500,7 @@ function openClientInfo(client, account = null) {
         </div>`;
 
     overlay.querySelector(".ci-nick").textContent = client.nickname || client.unique_id;
-    const sessionLabel = primarySessionLabel(account, t);
+    const sessionLabel = account?.primary === client ? primarySessionLabel(account, t) : "";
     if (sessionLabel) {
         const note = document.createElement("div"); note.className = "dlg-label ci-session";
         note.textContent = sessionLabel; note.title = t("account.sessionOnly");

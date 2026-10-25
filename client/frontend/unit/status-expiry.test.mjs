@@ -131,3 +131,18 @@ test("a promise-returning expiry callback settles the record asynchronously", as
     await Promise.resolve();
     assert.equal(done.current(), null, "successful async clear consumes the record");
 });
+
+
+test("resume events cannot start duplicate expiry requests while a clear is pending", async () => {
+    const clock = fakeClock();
+    let finish, calls = 0;
+    const scheduler = createStatusExpiryScheduler({ ...clock, load: () => ({ expiresAt: clock.now() - 1 }), onExpire: () => { calls++; return new Promise(resolve => { finish = resolve; }); } });
+    scheduler.check(); scheduler.check(); clock.advance(30_000);
+    assert.equal(calls, 1);
+    finish(false); await Promise.resolve();
+    assert.ok(scheduler.current());
+    clock.advance(15_000);
+    assert.equal(calls, 2);
+    finish(true); await Promise.resolve();
+    assert.equal(scheduler.current(), null);
+});

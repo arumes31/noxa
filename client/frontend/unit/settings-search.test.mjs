@@ -133,3 +133,14 @@ describe("settings dialog wiring", () => {
         assert.match(css, /@media \(prefers-reduced-motion: no-preference\) \{\s*\.set-hit-flash \{ animation: set-hit-flash/);
     });
 });
+
+
+it("preserves page order for broad German labels but prioritizes exact labels", () => {
+    const translated = buildSettingsSearchIndex([
+        { key: "volume", page: "audio", label: "Sprachlautstärke" },
+        { key: "sound_volume", page: "notifications", label: "Tonlautstärke" },
+        { key: "speech_volume", page: "notifications", label: "Lautstärke der Sprachmeldungen" },
+    ]);
+    assert.equal(searchSettings(translated, "Lautstärke")[0].key, "volume");
+    assert.equal(searchSettings(translated, "Tonlautstärke")[0].key, "sound_volume");
+});

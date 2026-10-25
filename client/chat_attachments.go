@@ -71,7 +71,7 @@ func (a *App) UploadChatAttachment(channelID int64, name, dataBase64 string) (st
 	if err != nil {
 		return "", err
 	}
-	return a.uploadTrackedChatAttachment(cm, channelID, name, dataBase64)
+	return uploadChatAttachmentWith(cm, channelID, name, dataBase64)
 }
 
 // UploadChatAttachmentForTab captures the server before preparing encrypted bytes.
@@ -80,17 +80,7 @@ func (a *App) UploadChatAttachmentForTab(tabID string, channelID int64, name, da
 	if err != nil {
 		return "", err
 	}
-	return a.uploadTrackedChatAttachment(cm, channelID, name, dataBase64)
-}
-
-// uploadTrackedChatAttachment remembers the returned token as an orphan
-// candidate until SendChat publishes a message referencing it (504).
-func (a *App) uploadTrackedChatAttachment(cm *connManager, channelID int64, name, dataBase64 string) (string, error) {
-	token, err := uploadChatAttachmentWith(cm, channelID, name, dataBase64)
-	if err == nil {
-		a.recordUploadedAttachment(cm, channelID, token, name)
-	}
-	return token, err
+	return uploadChatAttachmentWith(cm, channelID, name, dataBase64)
 }
 
 func uploadChatAttachmentWith(cm *connManager, channelID int64, name, dataBase64 string) (string, error) {

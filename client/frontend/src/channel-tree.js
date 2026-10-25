@@ -429,17 +429,6 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         // A clipped name shows in full on hover; the role list stays visible either way.
         titleWhenTruncated(name, fullName, g ? `${t("roles.title")}: ${(c.roles || []).map((r) => r.name).join(", ")}` : "");
         row.appendChild(speakingHere ? speakingAvatar(av) : av);
-        // A phone session: a uniform glyph overlaid on the avatar's corner so
-        // others know replies may come slower, without a text chip taking width.
-        if (c.on_mobile) {
-            const device = document.createElement("span");
-            device.className = "avatar-device";
-            device.innerHTML = icon("phone");
-            device.title = t("runtime.onMobile");
-            device.setAttribute("role", "img");
-            device.setAttribute("aria-label", t("runtime.onMobile"));
-            row.appendChild(device);
-        }
         row.appendChild(name);
         if (sharing) {
             // "● LIVE": the badge carries its state in text, not colour alone.
@@ -471,6 +460,14 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             pr.textContent = " ★";
             pr.title = t("runtime.priority");
             row.appendChild(pr);
+        }
+        // Keep the mobile label readable alongside the member role.
+        if (c.on_mobile) {
+            const phone = document.createElement("span");
+            phone.className = "role-chip group-badge on-mobile";
+            phone.textContent = t("runtime.mobileBadge");
+            phone.title = t("runtime.onMobile");
+            row.appendChild(phone);
         }
         // (307-309) presence status icons; (381) invisible marker (admin view).
         if (c.status === "away" || c.status === "busy" || c.status === "invisible") {

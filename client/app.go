@@ -651,9 +651,7 @@ func (a *App) SendChatReplyForTab(tabID, scope, target, text string, replyToID i
 	if err != nil {
 		return err.Error()
 	}
-	failure := sendChatWith(cm, scope, target, text, replyToID)
-	a.resolvePublishedAttachments(cm, text, failure)
-	return failure
+	return sendChatWith(cm, scope, target, text, replyToID)
 }
 
 func (a *App) sendChat(scope, target, text string, replyToID int64) string {
@@ -664,9 +662,7 @@ func (a *App) sendChat(scope, target, text string, replyToID int64) string {
 	if err != nil {
 		return err.Error()
 	}
-	failure := sendChatWith(cm, scope, target, text, replyToID)
-	a.resolvePublishedAttachments(cm, text, failure)
-	return failure
+	return sendChatWith(cm, scope, target, text, replyToID)
 }
 
 func sendChatWith(cm *connManager, scope, target, text string, replyToID int64) string {

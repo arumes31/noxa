@@ -48,9 +48,6 @@ func (a *App) UploadChatAttachmentProgressForTab(tabID, id string, channelID int
 		cm.ftEmit(p)
 		return err
 	})
-	if err == nil {
-		a.recordUploadedAttachment(cm, channelID, token, name)
-	}
 	return token, err
 }
 

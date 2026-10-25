@@ -116,7 +116,7 @@ export function mountMyDevices(container, { tabID, live = () => true, fetchDevic
                 announceDeviceListChanged({ tabID, deviceID: row.deviceID, name, source: "my-devices" });
             } catch (error) {
                 if (live()) v?.toast(t("devices.failed", { error: error?.message || String(error) }), "warn");
-            } finally { busy = false; }
+            } finally { busy = false; save.disabled = cancel.disabled = false; }
         };
         form.append(input, save, cancel);
         return form;
