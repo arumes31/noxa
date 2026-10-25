@@ -143,9 +143,14 @@ function openContextMenu(x, y, client, trigger) {
     };
     menuEl.querySelector('[data-act="pm"]').onclick = () => {
         closeMenu();
-        // wave 5b: open a PM tab (falls back to the plain direct-scope form).
+        // Open the Messages workspace, including when Files was selected.
+        if (V().openDirectMessages?.({ uid: client.unique_id, name: client.nickname })) {
+            $("chat-text").focus();
+            return;
+        }
         if (V().openPM) {
             V().openPM(client.unique_id, client.nickname);
+            $("chat-text").focus();
             return;
         }
         $("chat-scope").value = "direct";
