@@ -35,6 +35,22 @@ test.beforeEach(async ({ page }) => {
     });
 });
 
+for (const previousView of ["channel", "files", "another DM"]) {
+    test(`member message action opens the selected DM from ${previousView} and focuses its composer`, async ({ page }) => {
+        if (previousView === "files") await page.locator("#tab-files").click();
+        if (previousView === "another DM") await page.evaluate(() => window.__noxa.openDirectMessages({ uid: "bob-uid", name: "Bob" }));
+        await page.locator('#channel-tree .client[data-clid="alice"]').click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Send private message", exact: true }).click();
+        await expect(page.getByRole("menu")).toHaveCount(0);
+        await expect(page.locator("#center")).toHaveClass(/dm-view-active/);
+        await expect(page.locator("#dm-head-name")).toHaveText("Alice");
+        await expect(page.locator("#chat-text")).toBeVisible();
+        await expect(page.locator("#chat-text")).toBeFocused();
+        expect(await page.evaluate(() => window.__noxaChat.activeDirectPeer())).toBe("alice-uid");
+        expect(await page.evaluate(() => window.__joins)).toEqual([]);
+    });
+}
+
 test("member audio is compact and inline with gain and keyboard dismissal", async ({ page }) => {
     const trigger = page.locator('#channel-tree .client[data-clid="alice"]');
     await trigger.focus(); await page.keyboard.press("Shift+F10");
