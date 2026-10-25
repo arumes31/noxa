@@ -18,7 +18,7 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 let info;
 // One linked phone for the whole file: every link adds a device to the
 // owner's account, and accounts have a device limit.
-let page, desktop, chat, before;
+let page, desktop, chat;
 
 test.describe.configure({ mode: "serial" });
 
@@ -26,7 +26,9 @@ test.beforeAll(async ({ browser }) => {
     info = await (await fetch(`${server.webURL}/api/v1/web/info`)).json();
     desktop = await desktopSession(server.controlAddr, server.accounts.owner, { version: info.version });
     chat = new ChatSession(desktop.conn, desktop.identity, desktop.auth);
-    before = new Set((await deviceList()).map(d => d.device_id));
+    // Earlier specs leave the owner's phones and desktops registered; free
+    // their slots (the first device cannot be revoked from here and stays).
+    for (const device of await deviceList()) if (!device.current) await revoke(device.device_id);
     const context = await browser.newContext({ ...devices["Pixel 7"], permissions: ["microphone"] });
     page = await context.newPage();
     page.on("pageerror", error => console.log("pageerror:", error.message));
@@ -34,15 +36,30 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
-    // Sign the phone out again so later specs keep a free device slot.
-    for (const device of await deviceList().catch(() => [])) {
-        if (!before.has(device.device_id) && !device.current) {
-            await desktop.conn.request(Msg.DeviceRequest, { action: "revoke", device_id: device.device_id }, Msg.DeviceResult, { accept: r => r.action === "revoke" }).catch(() => {});
-        }
-    }
+    // Sign the phone and this desktop out again so later specs keep free slots.
+    const list = await deviceList().catch(() => []);
+    for (const device of list) if (!device.current) await revoke(device.device_id);
+    const self = list.find(d => d.current);
+    if (self) await revoke(self.device_id);
     chat?.close();
     await page?.context().close();
 });
+
+/** Sends as the desktop, waiting out the account's chat rate limit (5 per 3 s). */
+async function send(text) {
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await chat.send(0, text);
+        } catch (error) {
+            if (attempt >= 10 || !/rate limit/.test(error.message)) throw error;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    }
+}
+
+function revoke(deviceID) {
+    return desktop.conn.request(Msg.DeviceRequest, { action: "revoke", device_id: deviceID }, Msg.DeviceResult, { accept: r => r.action === "revoke", timeout: 5000 }).catch(() => {});
+}
 
 async function deviceList() {
     const list = await desktop.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
@@ -81,7 +98,7 @@ test("markdown, links, emoji and custom server emoji render", async () => {
     await openServerChat();
 
     const long = `https://example.com/${"segment/".repeat(12)}end`;
-    await chat.send(0, [
+    await send([
         `**bold** *it* __under__ ~~gone~~ \`inline\` :fire: :${emoji}:`,
         "```js", "let x = 1;", "```",
         "| a | b |", "|---|---|", "| 1 | 2 |",
@@ -133,7 +150,7 @@ test("a link preview card appears under the first link", async () => {
     const online = await fetch("https://example.com/", { signal: AbortSignal.timeout(5000) }).then(r => r.ok, () => false);
     test.skip(!online, "example.com is not reachable from this machine");
     await openServerChat();
-    await chat.send(0, "preview this https://example.com/ please");
+    await send("preview this https://example.com/ please");
     const card = page.getByRole("group", { name: "Link preview" }).last();
     await expect(card).toContainText("Example Domain", { timeout: 20000 });
     await expect(card).toContainText("example.com");
@@ -257,7 +274,7 @@ test("messages from blocked users are folded until shown", async () => {
 test("chat history exports as text and as an encrypted file", async () => {
     await openServerChat();
     const marker = `export-me-${Date.now().toString(36)}`;
-    await chat.send(0, marker);
+    await send(marker);
     await expect(page.getByRole("log", { name: "Server chat" })).toContainText(marker);
 
     await page.getByRole("button", { name: "More options" }).click();
