@@ -98,8 +98,9 @@ async function restoreFromBackup(values, { onSignedIn, error }) {
         await connect();
         onSignedIn({ offerPasskey: false });
     } catch (err) {
-        // A device that no longer exists cannot come back; forget it again.
-        if (!err.revoked) await forgetDevice().catch(() => {});
+        // Only a device the server no longer knows is forgotten again; a server
+        // that is unreachable or full keeps the restored keys for the next try.
+        if (err.revoked) await forgetDevice().catch(() => {});
         error.textContent = signInMessage(err);
     }
 }

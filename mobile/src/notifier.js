@@ -219,8 +219,8 @@ class Notifier {
         if (decision.sound) {
             this.sounds.play("poke");
             this.sounds.speak("poke");
+            navigator.vibrate?.([200, 100, 200]);
         }
-        navigator.vibrate?.([200, 100, 200]);
         if (decision.toast) {
             import("./ui/poke-popup.js").then(({ showPoke }) => showPoke({ clientID: fromClientID, uid, name: from, message, at })).catch(() => {});
         }
