@@ -6,7 +6,7 @@
 
 **Self-hosted voice, video, screen sharing, and chat**
 
-*Go server, Wails desktop client, Pion WebRTC media routing, PostgreSQL persistence, and named roles with channel access overrides.*
+*Go server, Windows desktop client, installable mobile/web PWA, and PostgreSQL persistence.*
 
 [![CI](https://github.com/arumes31/noxa/actions/workflows/ci.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/ci.yml)
 [![golangci-lint](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/arumes31/noxa/actions/workflows/golangci-lint.yml)
@@ -15,11 +15,13 @@
 [![Container Image](https://img.shields.io/badge/container-ghcr.io-blue?logo=docker)](https://github.com/arumes31/noxa/pkgs/container/noxa)
 [![License](https://img.shields.io/github/license/arumes31/noxa)](LICENSE)
 
-[Architecture](#architecture) • [Features](#features) • [Quick Start](#quick-start) • [Server Setup](#new-server-setup) • [Permissions](#permissions) • [ServerQuery API](#serverquery) • [Configuration](#configuration) • [Development](#development-and-checks) • [Operations](#operations)
+[Public test server](#public-test-server) • [Mobile / PWA](#mobile) • [Architecture](#architecture) • [Features](#features) • [Quick Start](#quick-start) • [Server Setup](#new-server-setup) • [Permissions](#permissions) • [ServerQuery API](#serverquery) • [Configuration](#configuration) • [Development](#development-and-checks) • [Operations](#operations)
 
 ---
 
-<img width="1280" height="800" alt="noXa desktop client" src="https://github.com/user-attachments/assets/d3ed3136-b468-476c-8e99-2de600d3c0f5" />
+<img width="1280" height="800" alt="Current noXa desktop client in OLED Midnight with fictional demo conversations" src="website/public/assets/screenshots/app-chat.png" />
+
+*Actual client UI with fictional demo data; [capture details](website/README.md#product-screenshot-provenance).*
 
 
 </div>
@@ -27,7 +29,7 @@
 ## 🌟 Overview
 
 **noXa** combines voice channels, camera and screen sharing, direct and group
-conversations, and channel forums in a desktop client. Its Go server uses a
+conversations, and channel forums in a desktop client and an installable web app. Its Go server uses a
 framed control protocol, a **Pion WebRTC SFU**, PostgreSQL for persistent state,
 and optional Redis pub/sub. Named roles control access and moderation.
 
@@ -35,7 +37,37 @@ The published desktop binary targets **Windows x64**. The Wails source also has
 Linux/macOS platform code; CI exercises Windows and Linux, but does not publish
 Linux/macOS desktop releases. The Vite frontend uses the native Go bridge: it is
 not a standalone browser client. [`website/`](website/README.md) is a separate
-static product/download website.
+static product/download website hosted at [noxa.wowcraft.pw](https://noxa.wowcraft.pw/).
+
+<a id="public-test-server"></a>
+
+### Try the public test server
+
+| Open | Address |
+| :--- | :--- |
+| Website and downloads | [noxa.wowcraft.pw](https://noxa.wowcraft.pw/) |
+| Mobile / browser client | [Launch the PWA](https://noxa.wowcraft.pw/app/) |
+| Desktop server address (Server IP / hostname) | `wowcraft.pw` (default control port `12333`) |
+| Windows x64 client | [Download for Windows](https://noxa.wowcraft.pw/dl/noxa-client-windows-amd64.exe) |
+
+This is a public **test server** for trying noXa. The Windows download redirects
+to the current GitHub Release. GitHub Pages is no longer used.
+
+Link your account through **Connections → PWA / Mobile login** in the desktop
+client, or continue as a guest when the server permits it. The dialog includes a
+QR code, a PWA link, and installation guidance. On Android, install from Chrome;
+on iPhone/iPad, open in Safari and add to the Home Screen; on macOS, use Safari's
+Add to Dock where available or Chrome's install option. Browser features and
+system permissions determine the available voice, camera and notification tools.
+
+<details>
+<summary>More current interface screenshots</summary>
+
+![Role management with fictional demo roles](website/public/assets/screenshots/app-roles.png)
+
+<img src="website/public/assets/screenshots/pwa-chat.png" width="390" alt="Mobile PWA chat with fictional demo messages" />
+
+</details>
 
 > [!NOTE]
 > **Encryption boundaries:** Desktop direct-message bodies use X25519 +
@@ -57,6 +89,7 @@ static product/download website.
 graph TD
     subgraph Clients["Clients"]
         Wails["Wails Desktop Client\nGo bridge + webview UI / WebRTC"]
+        PWA["Mobile / Browser PWA\nHTTPS + WebSocket / WebRTC"]
         Bot["Integration clients / CLI\nServerQuery / gRPC / events"]
     end
 
@@ -75,6 +108,9 @@ graph TD
         Redis[(Redis 7\nOptional pub/sub)]
     end
 
+    PWA <-->|HTTPS / WebSocket| Web["Web Listener :12342\n/app/, /ws, /ft, /api/v1/web/info"]
+    Web --> Control
+    PWA <-->|DTLS-SRTP| WebRTC
     Wails <-->|TLS Control JSON| Control
     Wails <-->|UDP WebRTC Media| WebRTC
     Bot <-->|TCP Text Commands| Query
@@ -233,9 +269,9 @@ retained beside the executable for manual recovery.
 
 #### Prerequisites
 
-* **Go**: `>= 1.27.2` for the root and client modules; the separately tested WebView2 fork declares its own version.
+* **Go**: `>= 1.27.3` for the root and client modules; the separately tested WebView2 fork declares its own version.
 * **Node.js**: `>= 24`
-* **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0` (match `client/go.mod`)
+* **Wails CLI**: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0` (match `client/go.mod`)
 * **PostgreSQL**: `>= 16`
 * **Desktop platform dependencies**: WebView2 on Windows; GTK 3, WebKitGTK 4.1, Ayatana AppIndicator, X11/XTest development libraries on Linux. The [CI workflow](.github/workflows/ci.yml) lists the Linux packages it installs.
 * **Optional services**: Redis 7 for pub/sub, TURN for restrictive NATs, and FFmpeg for server recording (included in the Docker image).
@@ -359,7 +395,7 @@ server certificate fingerprint with its startup log before trusting it.
 
 To appear as `Daniel`, enter it in the optional **Display name** field. Everyone
 on the server sees that name; the `owner` login, identity, and roles stay the same.
-Use **Self → Change display name** to change it during a session. The login form
+Use **Settings → Change display name** to change it during a session. The login form
 restores the server, account and optional display name from the last successful
 connection. A new installation starts with empty fields; a bookmark's **Display
 name override** applies when loading that bookmark. Names must contain 1–64 characters without control characters.
@@ -372,12 +408,12 @@ to delete that pair's saved passwords immediately. Failed connections do not
 replace the remembered profile or passwords. Platforms without OS protection
 can remember connection details but do not store passwords.
 
-Open **Permissions → Roles**, then **Members**. Find a registered member,
+Open **Tools → Roles**, then **Members**. Find a registered member,
 select the **Administrator** role and choose **Add role** to grant admin access.
 Only the owner can grant Administrator or transfer ownership. Keep this role
 limited to trusted operators; use Moderator for routine moderation.
 
-In **Permissions → Roles**, the owner can enable **Protect from deletion** for
+In **Tools → Roles**, the owner can enable **Protect from deletion** for
 important roles. Administrator roles start protected. To delete a protected
 role, the owner must turn protection off and save first. Deletion then requires
 confirmation in a modal and removes the role's assignments and channel overrides.
@@ -392,7 +428,7 @@ the recipient ownership and removes your owner protection.
 The initial policy is closed: `@everyone` has no grants, the Member, Moderator
 and Administrator roles are unassigned, and no default member role is selected.
 
-1. In **Permissions → Roles**, select an existing role or **Create role**. Use
+1. In **Tools → Roles**, select an existing role or **Create role**. Use
    **Start from a template** for Member or Moderator, adjust the permissions,
    and save. Roles add permissions together; a role's name alone grants nothing.
 2. Order roles with **Move role up/down**. Managers can only manage roles and
@@ -500,8 +536,9 @@ defaults. Nested YAML keys use underscores in environment variables, for example
 `webrtc.udp_addr` becomes `NOXA_WEBRTC_UDP_ADDR`. The server does not load `.env`
 itself; Docker Compose uses it for interpolation.
 
-The native-client minimum is set in YAML as `client_min_version: "0.5.94"`
-(or through `NOXA_CLIENT_MIN_VERSION`) and takes effect after server restart.
+Set a required native-client minimum in YAML, for example
+`client_min_version: "0.6.20"`, or through `NOXA_CLIENT_MIN_VERSION`; it takes
+effect after server restart. The checked-in default is `0.0.0`.
 `0.0.0` keeps compatibility with older clients that omit a version or report a
 non-semantic descriptive version; existing length/control-character checks remain.
 With a minimum enabled, missing, malformed and older versions are rejected before
@@ -581,7 +618,7 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 Use secret injection for the override; it accepts either a single base64 32-byte
 key or a newline-separated `id:base64` key ring for key rotation.
 
-Default member assignment is managed through **Permissions → Roles** in the
+Default member assignment is managed through **Tools → Roles** in the
 active `roles-v1` policy. The retired `NOXA_DEFAULT_GROUPS_ENABLED` setting does
 not configure current roles. Video ceilings can also be managed through the
 authorized media-limits interface.
@@ -654,6 +691,12 @@ fingerprint. Later changes fail closed. For a planned rotation:
 <a id="mobile"></a>
 
 ### Mobile web app
+
+The Docker build compiles `mobile/` through Vite's production pipeline, including
+its separate service-worker build. The runtime image contains the minified
+JavaScript in `/web/app/assets/` and `/web/app/sw.js`; source maps and frontend
+source files are not shipped. The separately hosted product website and the
+Windows desktop frontend are not part of that Docker image.
 
 The server can serve an installable web app for phones. It needs a domain name
 with a publicly trusted certificate: browsers cannot pin the control
@@ -754,8 +797,7 @@ features:
 - **Sharing into the app:** on Android, the app appears in the system share
   sheet; shared text and files go to a chat you pick.
 
-**Linking a phone.** In the desktop client choose **Connections → Other login
-for this server**. Scan the QR code with the phone camera, or open the server
+**Linking a phone.** In the desktop client choose **Connections → PWA / Mobile login**. Scan the QR code with the phone camera, or open the server
 address on the phone and type the hidden code. Both screens show the same
 two-digit code; compare it, then approve on the desktop. The phone can then save
 a passkey, which lets a new phone sign in without the desktop. Administrators
@@ -805,9 +847,10 @@ a visible notification.
 **Direct messages, voice and calls.** Direct messages are sealed once for
 every confirmed device of both people, so they reach the desktop and the
 phone. Contacts verify each device against the identity they pinned: the
-account's first desktop, and devices it approved. A phone that signed in with
-a passkey must be confirmed once on the desktop (Connections → Other login
-for this server → Confirm). When you approve a phone, the desktop can copy
+account's first desktop, and devices it approved. After passkey sign-in, a connected trusted desktop automatically confirms the
+new device for direct messages after verifying the server's passkey proof.
+If no trusted desktop is online, that endorsement waits until one connects;
+manual confirmation remains available in **Connections → PWA / Mobile login**. When you approve a phone, the desktop can copy
 recent direct-message history to it (90 days by default; up to 10,000
 messages and 50 MB, deleted from the server when the phone has it or after
 24 hours). Desktops older than this release are asked to update before they
@@ -816,7 +859,8 @@ can message someone who has a phone.
 Voice channels, watching streams and private calls use WebRTC in the
 browser. Private calls are relay-only, so they need TURN (`turn.managed`);
 on mobile networks that block UDP, offer TURN over TLS on port 443 as well
-(see `docs/managed-turn-tls.md`). A callee's desktop and phones ring
+(configure `turn.tls_proxy_listen_addr` and exact `turn.tls_proxy_trusted_ips`
+for a private PROXY-protocol backend behind the TLS proxy). A callee's desktop and phones ring
 together; the device that answers takes the call. Attachments travel over
 `/ft` on the web listener, end-to-end encrypted as on the desktop.
 
@@ -826,10 +870,13 @@ Sync on Android. Unsent messages expire after 14 days.
 
 **What the phone stores.** The device's Ed25519 and X25519 keys live in the
 browser's IndexedDB, encrypted with a non-extractable WebCrypto key. Signing out
-or revocation deletes them. Direct-message history, contacts' pinned
+or revocation deletes the local device keys. Normal sign-out preserves saved
+passkeys so they can be used to sign in again. Direct-message history, contacts' pinned
 identities, the outbox, saved-message references, the activity list, call
 history and content shared into the app are kept in IndexedDB under the same
-key and are deleted on sign-out. The server keeps each device's public keys, name,
+key and are deleted on sign-out. Account-specific settings (including contacts,
+notes, blocks and presence text) are cleared too; browser appearance preferences
+and server bookmarks are retained. The server keeps each device's public keys, name,
 creation and last-use times, and the passkey's public key and sign counter; it
 never receives private keys. Channel messages are encrypted with
 server-managed keys, as on the desktop.
@@ -987,6 +1034,7 @@ noxa/
 │   ├── query/                  # ServerQuery line-based admin protocol
 │   ├── store/                  # PostgreSQL data access layer & migrations
 │   └── webrtc/                 # Pion WebRTC SFU, routing and RTCP diagnostics
+├── mobile/                     # Installable PWA, service worker and browser tests
 ├── proto/                      # Protobuf sources and Buf generation policy
 ├── v1/                         # Generated Go protocol code
 ├── website/                    # Static product/download site and its tests

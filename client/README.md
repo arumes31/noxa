@@ -1,701 +1,120 @@
-# noxa
+# noXa desktop client
 
-Wails v2 desktop client for the noxa voice/chat server (see the repository
-root README for the server). Core flows include connect/auth, the channel
-tree, chat, voice over WebRTC and role-based administration.
+The Wails v2 desktop client connects to the noXa Go server for voice, video,
+screen sharing, channel chat and end-to-end encrypted direct/group messages.
+Published binaries target **Windows x64**. Linux and macOS have source/platform
+support; they do not currently have published desktop release binaries.
 
-## UI
+- [Website and downloads](https://noxa.wowcraft.pw/)
+- Public test server: **`wowcraft.pw`**, default control port `12333`
+- [Mobile / browser PWA](https://noxa.wowcraft.pw/app/)
+- [Server setup and complete feature reference](../README.md)
 
-A dark "voice ops console" (vanilla JS/CSS, fonts bundled locally via
-fontsource — fully offline in WebView2):
+## Current interface
 
-- **Client Info** — right-click any user in the channel tree for a context
-  menu (Client Info, private message, copy unique ID). The TS3-style dialog
-  shows connection/idle time (ticking), ping (or `unknown`), client address
-  (IP only for self or with ViewConnectionInfo), and transfer
-  stats — live-refreshing every 2s.
-- **Personal audio** — compact voice and screen-share volume, mute, and reset
-  controls appear directly in the member context menu. Tall menus scroll within
-  the window, including actions loaded after the menu opens.
-- Notification audio retries temporary output-device failures on interaction or
-  subsequent live cues, while preserving mute/DND preferences and avoiding replay
-  of missed sounds.
-- **Server information** — click the server name, the latency readout, or
-  Connections → Server information. Shows server details and your connection's
-  latency, incoming audio loss/jitter, and In/Out control and media traffic.
-  Refreshes every 2s while visible (server metadata every 10s); closing or hiding
-  it stops polling. Missing metrics show `—`; platform requires an updated server.
-  Tools → Connection stats opens the same dialog, including optional history charts.
-- **Channel edit** — right-click a channel → Edit channel for its topic,
-  limits and audio settings. ManageChannels authorizes the revision-checked
-  save; the channel tree refreshes from the resulting server state.
-- **Menu bar** (TS3-style): Connections (Connect/Disconnect/Quit), Bookmarks
-  (save/connect/manage server bookmarks — passwords are never stored), Self
-  (nickname, avatar, mute/deafen), Permissions, Tools (Settings, Whisper
-  lists), Help (About, Open log folder).
-- **Settings dialog** (Tools → Settings…, left icon nav): Application (chat
-  lines, toasts, reconnect-on-loss), Capture (input device, PTT/VAD/
-  continuous activation, VAD threshold, EC/NS, live mic test meter),
-  Playback (output device, volume, test sound), Hotkeys (key capture fields
-  + rebind at runtime), Whisper (list editor), Downloads (folder picker —
-  download UI itself is future work), Chat (max lines, per-scope file
-  logging), Security (identity manager: UID display/copy, export/import,
-  regenerate), Notifications (toast + synthesized sound toggles).
-- Voice activation keeps transmission open for 450 ms after the last detected
-  speech to preserve quiet word endings. Channels, private calls, and the mic
-  preview use the same release time; mute and deafen remain immediate.
-- **Left** — wordmark + connection pill, channel tree with nesting indent
-  lines, users with avatar circles (initials fallback) and a pulsing
-  speaking glow ring.
-- **Center** — voice control bar (large hold-to-talk mic button with glow
-  when live, mute/screen-share/priority/low-bandwidth buttons, hotkey
-  status), a full-width **● TALKING banner** whenever you are transmitting,
-  the **video grid** (appears when publishers stream video; chat stays
-  below), and chat with scope tags, timestamps, and centered system lines.
-- **Right** — selected-user card and the resolved-permissions grid.
-- Signal green (`#2ee6a8`) is used *only* for voice activity so talk state
-  is scannable at a glance; warnings are amber.
+The desktop uses **OLED Midnight**, with locally bundled fonts, icons and
+notification audio. The top menu contains Connections, Settings, View, Tools
+and Help. Windows controls share that bar. The sidebar contains channels and
+the current user's voice controls.
 
-Settings persist to `<UserConfigDir>/noxa/settings.json` (identity to
-`identity.json`, logs to `client.log` / `chat.log` in the same folder).
+![Actual desktop UI with fictional demo data](../website/public/assets/screenshots/app-chat.png)
 
-**Camera privacy**: Voice sessions start with the camera off. Camera access
-requires turning it on in the voice controls or selecting **Test camera** in
-Settings → Camera. Turning the camera off releases its capture track. The
-settings preview stays local and stops on Stop, page changes, or dialog close.
+- **Connections:** connect/disconnect, server information, bookmarks and
+  **PWA / Mobile login**. The mobile dialog provides a QR code, a direct PWA
+  link, device/passkey management and platform installation guidance. The
+  **noXa Mobile** sidebar shortcut opens the same setup.
+- **Settings:** application settings, microphone and playback, camera,
+  notifications, hotkeys, whisper lists, identity and local storage. Change
+  display name and presence from this menu. Optional remembered passwords use
+  the Windows account's OS-protected credential storage.
+- **Activity:** mentions, recent accessible conversations, friends, media,
+  calls and notifications. Audit is available only with the required server
+  permission; the server enforces that access independently of the UI.
+- **Chat:** channel/direct-message tabs, replies, reactions, polls, threads,
+  files, voice messages, search, Inbox and saved messages. Chat subscriptions
+  and voice membership are separate.
+- **Voice and video:** channel and private/group calls, explicit camera and
+  screen capture, microphone recovery, per-member voice/share-audio controls,
+  echo tests and stream diagnostics. Camera capture starts only on request.
+- **Tools → Roles:** named roles, hierarchy, member assignments and role icon
+  uploads with displayed/enforced limits. Channel access can be synced with a
+  parent or customized per role/member.
+- **Member menus:** profile, message/call, personal audio, Client Info and
+  permitted moderation actions. Only authorized viewers receive privileged
+  connection/diagnostic information.
 
-**No-mic machines**: `getUserMedia` failures permit a receive-only voice join
-with an inline "No microphone found" / "Mic access denied" state (PTT disabled).
-Screen sharing and explicitly enabling the camera still work.
+The screenshots are captures of real components with fictional local API
+fixtures, not production chats. [Capture and refresh instructions](../website/README.md#product-screenshot-provenance).
 
-Toasts (top-right) fire for channel join/leave, kicks, hotkey registration
-failures, and connection loss.
+## Build and development
 
-## Voice UX (wave 1)
+Use **Go 1.27.3 or later**, **Node.js 24 or later**, and Wails matching
+[`go.mod`](go.mod):
 
-- **Per-user volume & local mute** — right-click a user → Volume slider
-  (0–200%) or Mute locally; persisted per unique ID in `settings.json`.
-  The same personal controls are available from chat authors, member mentions,
-  member cards and private-call participants. Volume previews while dragging,
-  saves on release, and can be reset to 100%; cancelling restores the saved
-  level. Member cards stay synchronized with changes made in menus and keep
-  keyboard focus after saving. Private calls multiply personal volume by the
-  master voice volume and apply output-device and activation-mode changes live.
-  The server emits one audio track per publisher (track ID = publisher
-  client ID, carried in the MSID), and each track gets its own gain+mute
-  node pair in the shared WebAudio chain, so per-sender volume/mute is
-  audible.
-- **Context menus** — Shift+F10 or the Menu key opens member, channel,
-  message, and video menus. Up/Down selects actions, Left/Right adjusts a
-  volume slider, and Escape closes the menu and restores focus. Menus fit
-  the window and scroll when needed. Member menus include a searchable,
-  server-authorized “Move to channel…” action; channel menus offer explicit
-  Join/Leave voice actions. Direct-message tabs offer Open, Close, and a
-  separately confirmed Delete local history action. Moderation from a member
-  card targets that exact connected session. Identity-only menus require a
-  session selected in the tree when the same member has multiple devices online.
-- **Mic level meter** in the voice bar while voice is joined (green/amber/
-  red gradient), with **local microphone testing** in Capture settings.
-- **Microphone setup** — Capture settings place local testing beneath device
-  selection: average and held peak levels in dBFS, clipping/quiet feedback,
-  a voice-activation threshold marker, and a push-to-talk preview. Five-second
-  recordings and live monitoring use the selected playback device; recordings
-  are discarded when leaving the page. Device/processing edits restart capture.
-  Guided calibration measures five seconds of quiet and five seconds of speech,
-  then offers a threshold to preview and explicitly accept. The settings footer
-  distinguishes unsaved changes, applied changes, and failures to apply live audio.
-- **PTT release delay** slider (0–2000 ms) so sentence ends aren't clipped.
-- **Voice detection** uses a local microphone track independent of the
-  transmitted track, so silence, mute, and PTT release cannot disable the
-  detector. This local track is released when voice disconnects and replaced
-  when the channel's capture profile changes.
-- **Own status icons** in the tree (muted / deafened / screen sharing) and a
-  local-mute icon on users you muted.
-- **Talking-while-muted warning** (amber banner "You're muted!",
-  rate-limited, click to dismiss) and **talking-to-empty-channel hint** —
-  both toggleable in Settings → Notifications.
-- **Sound pack system** (Settings → Notifications): soft/bright/retro
-  synthesized packs, per-event enable (join/leave/mention/DM/whisper/poke/
-  mic on/off), master volume, "Test all sounds".
-- **Whisper**: DM plays its sound and flashes the taskbar (Windows
-  FlashWindow); **Ctrl+R** (rebindable) arms whisper-reply to the last
-  whisperer.
-- **Voice limiter** (compressor, default on) and **per-user gain
-  normalization** (RMS target, 4x cap) toggles in Settings → Playback.
-- **Client Info Voice section**: packet loss %, jitter, jitter buffer delay,
-  packets received/lost, audio level — from `getStats()`, refreshed every
-  2 s.
-- **Priority speaker & ducking** — the PRIO button in the voice bar toggles
-  your priority-speaker flag (server-gated by PrioritySpeaker).
-  While another priority speaker in your channel is talking, all
-  non-priority publishers are ducked to 25% (−12 dB); priority speakers are
-  exempt. Un-ducking is delayed 500 ms so sentence gaps don't pump the gain.
-- **Per-channel Opus quality** — the current channel's Opus settings are
-  applied to the outgoing audio: a `maxBitrate` cap on the sender encoding
-  (`opus_bitrate` 0 = server default 32000 bits/s) and a `contentHint` of
-  `music` on stereo channels (`speech` otherwise), re-applied on channel
-  switch and `channel_updated`.
-- **Server-provided ICE servers** — the server delivers STUN/TURN entries
-  (with time-limited TURN credentials) in the auth response; a non-empty
-  list is passed to `RTCPeerConnection`, empty means browser defaults.
+```sh
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0
+```
 
-## Video (wave 3)
+Windows requires WebView2. Linux requires the GTK/WebKitGTK and desktop
+libraries installed by the [CI workflow](../.github/workflows/ci.yml).
 
-- **Video grid** — one tile per publisher video track (per-publisher SFU
-  tracks, keyed by track ID = publisher client ID) with nickname overlay,
-  speaking ring, avatar fallback behind the video, and a best-effort layer
-  badge (HD/MD/LD from `getStats().frameWidth`, refreshed every 3 s). Auto
-  layout: 1 tile full width, 2 half, 3–4 in 2×2, more in a scrollable
-  three-column grid. The grid sits above chat and only takes space when
-  someone streams video.
-- **Focus mode** — click a tile for the large view; the others keep playing
-  in a filmstrip row below. Click again or press Esc to return to the grid.
-  This is how you watch multiple simultaneous screen shares: every share is
-  a separate tile. A publisher's camera and screen share can run together,
-  with independent watch/stop controls.
-- **Quality selector** — right-click a tile → Auto/High/Mid/Low, sent as
-  `MsgVideoQuality` (the server routes the RID f/h/q simulcast layer). Note:
-  the preference is per subscriber connection, so it applies to all incoming
-  video. Auto heuristic: focused view → high, grid view → mid, low-bandwidth
-  mode → low.
-- **Screen share dialog** — source preference (Screen / Window via
-  `displaySurface`; Chromium's picker ultimately decides), quality presets
-  (Text 1080p15@2.5 Mbps, Balanced 720p30@1.5 Mbps, Motion 720p60@2.5 Mbps,
-  applied via capture constraints + sender `maxBitrate`), and an "include
-  system audio" toggle (`getDisplayMedia({audio: true})` — published as a
-  second audio track after renegotiation; on Windows Chromium this works for
-  screen/tab shares, and the client falls back to video-only when refused).
-- **Region share** — when the Region Capture API (`CropTarget.fromElement`)
-  is available, "Region of this app" offers a draggable/resizable crop box
-  over the app window; the option is disabled with a note when the API is
-  missing.
-- **Stop-share confirm** — stopping a share while others are in the channel
-  asks first ("N users may be watching").
-- **Camera frame rate** — Camera settings: 15/30/60 fps applied to
-  `getUserMedia` video constraints + `contentHint` (`motion` at 60).
-  Saved changes take effect on the next camera start; restart a local test
-  to preview an unsaved frame rate. Timing notes beside settings distinguish
-  immediate application after saving, voice reconnect, next app start, and
-  temporary local previews. Camera and microphone tests stop on page exit.
-- **Low-bandwidth mode** — 📶 toggle in the voice bar (persisted): outgoing
-  video is capped to a single 150 kbps layer, incoming video requests the
-  low simulcast layer, and tile rendering is paused with a LOW BANDWIDTH
-  badge on the grid.
+From the repository root:
 
-## Transport security (wave 4a)
+```sh
+npm --prefix client/frontend ci
+make client-build
+```
 
-- **TLS everywhere on the control channel** — the client dials TLS by
-  default; media is encrypted by WebRTC's DTLS-SRTP as always. Plaintext is
-  an explicit dev opt-in (Settings → Security → "Allow plaintext
-  connections"); connecting to a plaintext-only server without it fails with
-  a clear hint, and an active plaintext session is reported as "PLAINTEXT —
-  traffic is NOT encrypted" in the connect info line.
-- **TOFU fingerprint pinning** — the server's self-signed certificate is
-  pinned in `<UserConfigDir>/noxa/known_servers.json` (addr → SHA-256
-  fingerprint). First connect: accepted, pinned, and reported as "new server
-  fingerprint pinned". Later **mismatch: the connect hard-fails** with a
-  prominent warning dialog (possible MITM) and only proceeds after an
-  explicit "Trust new fingerprint" click.
-- New bindings: `ServerFingerprint` (presented cert fingerprint),
-  `TrustServerFingerprint(addr, fp)` (explicit trust action),
-  `ConnectionSecurity` (display string for the login flow).
+Or in Windows PowerShell:
 
-## Chat encryption (wave 4b)
-
-All chat payloads are encrypted in the Go backend (`client/e2e.go`) — the
-frontend never touches ciphertext:
-
-- **Direct messages are true E2EE** (🔒 in the chat log): sealed with
-  nacl/box to the recipient's X25519 public key (generated alongside the
-  Ed25519 identity in `identity.json`; older identity files are upgraded in
-  place). Public keys resolve through the server directory with a local
-  cache; the server only relays ciphertext — including offline-spooled DMs.
-- **Channel and global chat use server-held keys** (🛡): secretbox with the
-  scope key, delivered sealed (`box.SealAnonymous`) via `MsgChannelKey` and
-  rotated when a member leaves. The server can read these scopes (history,
-  search, moderation in wave 5).
-- Decryption failures (missing key, e.g. history from before a rotation)
-  render as `[encrypted message — missing key]` instead of garbage.
-- A 🔒 indicator in the sidebar shows when the connection is TLS + chat
-  encryption; the Chat settings page carries the trust-model note.
-
-## Chat (wave 5b)
-
-The chat UI (`frontend/src/chat-ui.js` + `frontend/src/markdown.js`) renders
-per-message elements with full metadata instead of plain text lines:
-
-- **Markdown (91-93)**: `**bold**`, `*italic*`, `__underline__`, `~~strike~~`,
-  `` `inline code` ``, fenced code blocks with light js/go highlighting
-  (strings/comments/keywords), autolinked URLs (open externally via
-  `BrowserOpenURL`, tooltip = full URL), and `:shortcode:` emoji. Rendering is
-  XSS-safe: text is HTML-escaped first, then markup is applied.
-- **Link previews (94)**: hovering a link shows a card. It tries a client-side
-  `fetch` to scrape the `<title>`, but CORS blocks most cross-origin pages in
-  the webview, so it usually falls back to a domain-only card. No external
-  preview services are used.
-- **Emoji (95)**: picker next to the input (unicode categories + custom server
-  emoji fetched via `EmojiList`/`EmojiGet`, cached as data URLs); `:shortcode:`
-  in messages renders as emoji.
-- **Reactions (97)**: hover → 😊 strip (8 common + custom), toggle via
-  `ChatReact`; chips with counts under the message. The own-reaction highlight
-  only tracks toggles made this session (history carries counts only).
-- **Files (98-100)**: paste or drop files onto the chat → preview row → on
-  send they upload via `UploadFile` and post as `[file:<name>]`. Images render
-  inline (click for a lightbox); other types get a download chip.
-- **Edit/delete (101/102)**: hover your own message → ✎ (inline edit, Enter
-  saves, Esc cancels) / 🗑 (confirm). Edits show "(edited)"; deletes render a
-  muted tombstone. Note: `chat_edited` bodies arrive re-sealed and are not
-  decrypted by the backend, so the UI re-fetches the message from history.
-- **History (103)**: channel/global views page `ChatHistory` (50/page) — on
-  channel join and when scrolling to the top (spinner + "beginning of
-  history" marker).
-- **Unread badges (104)** on tree channels (accent when they include a
-  mention), **mention highlight + sound (106)**, `@nick` Tab-completion.
-- **Reply-to (107)**: hover → ↩ quotes a message; sent as a `↪ <nick>: `
-  prefix (the protocol has no reply field); clicking a quote jumps to the
-  original. Threads (108) are descoped — reply-chains cover the basics.
-- **Pins (109)**: 📌 in the channel header lists pinned messages
-  (jump/unpin); pin via the message hover action.
-- **Search (110)**: Ctrl+F filters loaded messages live (matches marked);
-  "search server history" pages up to 10 history pages backwards.
-- **Topic/description (111-113)**: the header shows the channel topic
-  (tooltip = full text); ⓘ opens the markdown channel description panel
-  (inline images supported).
-- **Read state (121)**: last-read pointers persist in settings
-  (`last_read_channels`); a "— new messages —" divider marks the first unread.
-- **PM tabs (122-124)**: DMs open per-user tabs (unread dot, offline badge +
-  toast for spooled messages). Delivery/read receipts: received DMs ack
-  `SendChatDelivered`, focused tabs ack `SendChatRead`; outgoing DMs show
-  ✓ (delivered) / ✓✓ (read).
-- **Export (125)**: ⬇ in the header saves a plain-text transcript of the
-  loaded messages via the native save dialog.
-- **Display prefs (126-129)**: Settings → Chat: timestamps
-  off/relative/absolute, density, font size (12-18), IRC-lines/bubbles —
-  applied live.
-- **System lines (130/131)**: join/leave and kick lines can be hidden;
-  consecutive join/leave lines within 60s collapse into one.
-- **Announcement (132)**: server announcements show a dismissible accent
-  banner (dismissal persisted by content hash); the MOTD (133) appears as a
-  system line once per connect (`App.MOTD`).
-- **Scroll lock (134)**: auto-scroll only at the bottom; otherwise a
-  "↓ N new messages" pill jumps down.
-- **Quick switcher (135)**: Ctrl+K fuzzy-jumps to channels, online users
-  (opens a PM tab), and open PM tabs.
-
-## Roles and channel access
-
-The Roles manager creates ordered roles with named capabilities. Members can
-hold several roles; their color, icon and hoisted display use the highest
-applicable role. The owner and Administrator role have protected authority.
-The server checks every protected operation against the current policy.
-
-Channel access supports parent sync and explicit role or member Allow/Deny
-overrides. The channel editor offers Public, Private, Read-only and Listen-only
-presets, previews affected members and saves with a revision-checked
-acknowledgement. **Check access** explains a member's effective result without
-granting access. Bans and audit history use the same role-scoped controls.
-
-## Files & Media (wave 7)
-
-The files UI (`frontend/src/files-ui.js`, bindings in `files.go`) adds a
-**Files** center tab next to Chat:
-
-- **Browser (256)**: the current channel's files (follows the channel you're
-  in) with name/size/uploader/date/SHA-256 columns, download/delete/rename/
-  refresh, and a breadcrumb for the virtual folders (261 — folders derive
-  from file rows; empty folders do not persist). A quota bar shows channel
-  usage (265).
-- **Upload (257/260)**: drop files anywhere on the pane or use ⬆ — a
-  sequential queue uploads them with per-file progress (258). Cancel from the
-  transfers window; the server cleans up the partial file.
-- **Versions (264)**: overwrites keep the last 3 versions (`<name>.vN`);
-  expand a row to list and download old versions.
-- **Links (267)**: 🔗 mints a 15-minute `/dl/<token>` URL (served on the
-  health port) and copies it — LAN-friendly sharing without a client.
-- **Integrity (279/280)**: each row shows the truncated SHA-256 (click to
-  copy); ✓ re-downloads and compares (green/red result).
-- **Transfers window (277/278)**: ⇅ button — active + recent transfers with
-  direction, progress, speed, ETA, status, cancel, and a live aggregate
-  throughput sparkline.
-- **Images (268/269/274)**: the avatar dialog crops/zooms on a canvas and
-  outputs 256×256 PNG; icons (server/channel) are downscaled to 1024px
-  and recompressed JPEG q0.85; animated GIF/WebP always pass through
-  untouched so animation survives. The server icon (admin, Self menu) renders
-  in the sidebar; the channel edit dialog can upload an icon or reuse one
-  from another channel (271).
-
-## Window & System Integration (wave 8a)
-
-- **Multi-server tabs (281)**: TS3-style server tab bar above the panes.
-  Architecture (documented in `tabs.go`): the backend keeps one connManager
-  per tab; all bindings operate on the *active* tab, so the bound API is
-  unchanged. State events from every tab are journaled in Go and replayed on
-  activation (after a `tab_reset` that clears chat/tree state), keeping the
-  frontend single-state. Tabs show addr + nickname, unread/mention badges,
-  and a close button; "+" opens the connect dialog for a new tab. Voice is
-  active-tab only this wave (torn down on switch).
-- **Connect dialog (282)**: recent-servers list (last 10, no passwords) with
-  a bookmark star toggle.
-- **Bookmarks (283/284)**: folders (grouped menu + manager), manual ordering,
-  color dots, per-bookmark hotkey profile and auto-connect flag.
-- **Quick connect (285)**: rebindable hotkey (default Ctrl+Shift+C) connects
-  the last-used bookmark/recent in a new tab (guest direct, accounts prefill
-  — passwords are never stored).
-- **Auto-connect (286)**: bookmark flag; on startup flagged bookmarks connect
-  as guests or prefill the login dialog (same password limitation).
-- **Tray (287-290)**: `getlantern/systray` (new client dep — Wails v2 has no
-  tray API). Threading: systray owns the main thread, wails.Run a goroutine.
-  Menu: show/hide, mute, deafen, disconnect, quit; title shows PTT state;
-  mentions bump the tooltip badge and flash the taskbar. Close-to-tray via
-  `OnBeforeClose`. Minimize-to-tray is not possible (Wails v2 has no minimize
-  event) and window opacity is not supported by the WebView2 backend — both
-  are honestly disabled/marked.
-- **Compact mode (293)**: View menu / hotkey / setting — voice bar only.
-- **Closing announcement**: X, Alt+F4, and menu/tray Quit play “Closing. Good
-  bye.” before exiting (German follows the speech language). Notifications
-  settings control its volume and per-event toggle; master mute and DND apply.
-  Closing to the tray and update restarts stay silent. Exit continues if audio
-  is unavailable, with a four-second fallback for an unresponsive renderer.
-- **Channel announcements**: live membership snapshots announce users joining,
-  leaving, disconnecting or moving out of your current voice channel. English
-  and German recordings follow Notifications speech and join/leave preferences.
-  Initial connection, reconnect and tab-history replay do not announce old changes.
-- **Themes & fonts (294-297)**: Arctic Night (default; design 45, scoped in
-  `frontend/src/arctic-night.css`), classic dark, light and high-contrast
-  variable sets, accent color picker, scoped user-CSS textarea, UI font
-  family + size, all live-applied. Outfit, Sora and JetBrains Mono are
-  bundled from `@fontsource-variable/*` (SIL Open Font License 1.1); no
-  fonts are fetched at runtime.
-- **Keyboard navigation (298)**: Esc closes dialogs/menus, `:focus-visible`
-  outlines, arrow-key channel-tree navigation.
-- **Hotkey map (299-301)**: settings page lists all six bindable actions
-  with rebind/unbind, named per-server profiles (assigned via the bookmark),
-  and registration-conflict errors naming the action.
-
-## Client UX & Social (wave 8b)
-
-- **Tree polish (302-306, 310, 319)**: collapse/expand-all buttons +
-  double-click toggle, client counts `[n/max]`, password lock icons (new
-  `has_password` snapshot flag), role icons next to names, live filter box,
-  drag users onto channels (self joins, others via the new `MoveClient`
-  binding), ctrl/shift multi-select with a batch context menu.
-- **Presence (307-309)**: `MsgSetStatus` (online/away/busy + message)
-  broadcasts `status_changed`; tree icons, auto-away after N idle minutes
-  (setting, default 15) restoring on input; Self → Set status.
-- **Social (316-318, 321/322)**: contacts page (online status from presence,
-  nickname history), block list (chat hidden + voice locally muted), poke
-  dialog → toast + sound + flash on receipt (server: `MsgPoke` with
-  permission check and a 30 s per-target cooldown).
-- **Information (313-315, 323-325)**: server news pane
-  (`MsgServerInfoQuery`: name/version/uptime/counts/MOTD), client-info
-  additions (avatar lightbox, roles, local per-user notes persisted in
-  settings), 500 ms hover cards for users and channels, copy helpers
-  (UID / channel ID / server address).
-- **Diagnostics (326-328, 332/333)**: Help → Export logs (zip), Tools →
-  Debug console (live protocol frame viewer with filter/pause/clear),
-  Connection stats (1 s RTT/loss charts from ping samples + getStats),
-  reconnect countdown in the status pill, connection-quality pill (good
-  <100 ms, fair <250 ms RTT).
-- **Lifecycle (329-331)**: first-run onboarding wizard (identity, mic test,
-  connect), What's New dialog on version change (bundled offline notes),
-  crash guard writing `crash.log` (offered at next start, exportable — no
-  upload).
-- **Per-server overrides (334/335)**: bookmark nickname override (applied at
-  connect) and avatar override (uploaded after connect).
-
-## Polish & Accessibility (wave 8c)
-
-- **i18n (336)**: `frontend/src/i18n.js` — message catalogs (en/de) with a
-  `t(key)` helper; settings language dropdown (system/en/de) applies live
-  (menus, settings dialog, login card). Adding strings: add the key to both
-  catalogs (a Go parity test keeps them in sync; missing keys warn in the
-  debug console). Full string coverage is intentionally future work.
-- **Motion (337/344)**: 150 ms fade/slide on dialogs/toasts/tabs, disabled
-  by the reduce-motion setting and `prefers-reduced-motion`.
-- **Layout (338)**: drag handles between sidebar/center/details, widths
-  persisted, double-click resets.
-- **Windows (339-341)**: pop-out chat as a floating draggable panel (a true
-  second OS window needs Wails v3 — documented), fullscreen video tiles,
-  zen mode (channels + voice only; View menu, rebindable Ctrl+Shift+Z, exit
-  indicator).
-- **Idle video (342)**: unfocused >60 s pauses remote video and drops to
-  low quality; resumes on focus (setting).
-- **Accessibility (343)**: tree/treeitem/log/dialog ARIA roles, a visually
-  hidden aria-live region announcing speaking events.
-- **Notifications (345-348)**: native Windows balloon notifications for
-  unfocused mentions/pokes (PowerShell WinForms balloon — verified working
-  on the dev machine; WinRT toast is unreliable for unpackaged apps), a
-  bell-icon notification center (50 entries, click-through, clear-all), and
-  DND with a quiet-hours schedule suppressing toasts/sounds/flashes while
-  badges keep counting.
-- **Performance (349)**: windowed tree above 500 rows — DOM stays
-  O(channels); branches expand on double-click; `window.__noxaFakeTree(n)`
-  in the console measures render time.
-- **Settings search (350)**: cross-page search with jump + highlight.
-
-## Notifications & Presence (wave 9)
-
-- **Invisible status (381)**: a 4th presence value, admin-only to set.
-  Invisible users are hidden from non-admin snapshots (visible to admins and
-  themselves; they still see everyone). Going invisible looks like a leave
-  to non-admins, returning looks like a join; further status changes while
-  invisible reach only admins. The 👻 marker shows in admin trees.
-- **Notification matrix (385)**: central `notify()` dispatch
-  (`frontend/src/notifications.js`) — rows mention/keyword/DM/poke/
-  join-leave/buddy-online/kick/announcement/channel-watch, columns
-  toast/sound/flash/native, edited on the Notifications settings page. All
-  dispatch sites (chat, DMs, pokes, joins, kicks, announcements, buddy
-  alerts, keyword hits, channel watch) route through it; DND still records
-  silently.
-- **Per-channel overrides (386/391) + mute (387)**: channel context menu →
-  Notifications… — inherit/on/off for messages, mentions, and joins; full
-  channel mute (🔕 in the tree; messages still visible when selected);
-  channel watch: toast when the user count crosses a threshold (389).
-- **Buddy alerts (383)**: per-contact "notify when online" bell, fired once
-  per connect from snapshots.
-- **Sounds (384)**: per-event custom beep (frequency + duration + preview)
-  overriding the sound-pack preset.
-- **Keywords (388)**: per-server keyword list (Chat settings); whole-word
-  matches get mention-style highlight + the matrix's keyword row.
-- **Alpha notice (215)**: per-version alpha dialog with a dismiss checkbox,
-  plus a permanent α badge next to the wordmark that re-opens it.
-
-## Architecture
-
-- **Go backend** (`app.go`, `conn.go`, `hotkeys.go`) owns all protocol
-  state. It speaks the noxa control protocol (`noxa/internal/netproto` —
-  this module imports it via `require noxa v0.4.0` + `replace noxa => ../`)
-  and exposes a bound API to the frontend. Server traffic (snapshot, events,
-  chat, ICE) is pushed to the UI as Wails runtime events.
-- **Frontend** (`frontend/`) is deliberately vanilla JS + CSS (no React —
-  no build risk, no runtime deps). Built with Vite.
-- **WebRTC** runs in the WebView2 (Chromium) page: `getUserMedia` +
-  `RTCPeerConnection`, with SDP offer/answer and ICE candidates bridged
-  through the Go backend over the control channel. Hardware encode/decode is
-  browser-managed (Chromium picks HW acceleration automatically when
-  available; there is no JS flag to force it). The server emits separate microphone,
-  camera, screen and share-audio tracks per publisher (slot-qualified IDs via MSID) and
-  renegotiates over the control channel when membership changes; on ICE
-  failure the client re-offers with `iceRestart` and a 1s/2s/5s/15s backoff
-  ladder before warning.
-
-## Bound API (Go backend)
-
-`Connect`, `Disconnect`, `Connected`, `ClientID`, `JoinChannel`, `SendChat`
-(global/channel/direct), `WhisperSet`, `GetPermissions` (resolved permission
-set via `MsgPermissionsQuery`), `WebRTCOffer`/`WebRTCAnswer`/
-`SendICECandidate`, `GetICEServers` (STUN/TURN from the auth response),
-`SetPrioritySpeaker`, `ChannelEdit`, `SetScreenShare`, `SetVideoQuality`
-(simulcast layer high/mid/low), `SetMuted`, `SetPTT`, `SetAvatar`,
-`ServerFingerprint`, `TrustServerFingerprint`, `ConnectionSecurity` (TOFU).
-
-Wave 5b adds `ChatHistory`, `ChatEditMessage`, `ChatDeleteMessage`,
-`ChatPinMessage`, `ChatPins`, `ChatReact`, `SendTyping`, `SendChatDelivered`,
-`SendChatRead`, `EmojiList`, `EmojiGet`, `UploadFile`, `DownloadFile`,
-`ExportChat` and `MOTD` (message of the day from the auth response).
-
-Role administration uses tab-bound `RoleStateForTab`, `RoleChangeForTab`,
-`RoleMembersForTab`, `RoleChannelStateForTab`, `ChangeRoleChannelForTab`
-and `PreviewChannelAccessForTab` bindings. Legacy group, numeric-permission
-and privilege-key bindings have been removed.
-
-Wave 7 adds `FileList`, `FileDelete`, `FileRename`, `FileVersions`,
-`FileLink`, `VerifyFile`, `ServerIconSet`, `ServerIconGet`,
-`ChannelIconSet`, `UploadFileProgress`/`DownloadFileProgress` (async,
-`ft_progress` events), `CancelTransfer`, and `PickSavePath`.
-
-Wave 8a adds `ConnectTab`, `ConnectGuestTab`, `CloseTab`, `SetActiveTab`,
-`ListTabs`, `RecordRecent`, `SetHotkey`, `ApplyHotkeyProfile`, and
-`SetAlwaysOnTop` (plus the `tab_update`/`tab_reset` events and the systray
-integration).
-
-Wave 8b adds `SetStatus`, `Poke`, `ServerInfo`, `MoveClient`, `ExportLogs`,
-`SetDebugFrames` (+ `debug_frame` event), `LastCrash`, and `WhatsNew`.
-
-## Hotkeys
-
-- **Space** — push-to-talk (held = talk; ignored while the chat input is
-  focused).
-- **Ctrl+M** — mute toggle.
-
-Registration failures (platform limits, conflicts) are logged and the hotkey
-is disabled; the app keeps working. Change the bindings in `hotkeys.go`.
-
-## Run
-
-Prereqs: Go 1.25+, Node 24+, Wails CLI v2 (`go install
-github.com/wailsapp/wails/v2/cmd/wails@v2.16.0`, matching `go.mod`).
-
-```bash
-# Start a local server first (repo root): postgres required
-#   go run ./cmd/server
-
-# Dev mode with live frontend reload
-wails dev
-
-# Production build with the canonical commit/source version (repo root)
-make client-build  # output: client/build/bin/noxa.exe
-
-# Windows PowerShell equivalent (repo root)
+```powershell
 ./scripts/build.ps1 client
 ```
 
-Direct `wails dev`/`wails build` builds still derive a commit and dirty binary
-fingerprint through Go's embedded VCS metadata. The root Make target is the
-release-equivalent path and uses the shared `cmd/version` calculator also used
-by CI and Docker.
+Build output is under `client/build/bin/`. Version metadata comes from the
+source revision and release tags. Custom builds that use the signed updater
+must embed trusted **public** signing keys; see the [root README](../README.md#quick-start).
 
-Connect from the login dialog: server address (`127.0.0.1:12333`), your
-nickname, and the server password if the server has one
-set.
+For frontend/native development, configure a local server using the
+[new-server setup](../README.md#new-server-setup), then run `wails dev` from
+`client/`. The frontend expects the native Go bridge; opening the desktop
+frontend in a browser is not a standalone client. Use `mobile/` for the PWA.
 
-## Test account
+## Checks
 
-There is no protocol-level registration. Create a user directly (from the
-repo root):
+From `client/frontend/`:
 
-```go
-// one-off: go run ./cmd/migrate first, then a tiny snippet or psql INSERT
-// using auth.RegisterUser equivalent. Easiest: psql.
+```sh
+npm run quality
+npm run test:e2e
 ```
 
-Or insert via psql (Argon2id hash from `auth.HashPassword`), or redeem the
-first-run admin token the server logs at WARN on an empty database.
+From the repository root, `make test` runs root/client Go tests and supplies
+the embed placeholder needed for source tests. Database-backed tests use a
+separate test database. CI also validates Windows, the WebView2 fork, browser
+scenarios, race checks and security analysis. Do not point destructive test
+fixtures at a production database.
 
-## Identity & login
+## Identity, privacy and updates
 
-Cryptographic identity: on first run the client generates an Ed25519 key pair
-and persists it to `<UserConfigDir>/noxa/identity.json` (0600). The unique
-ID is derived from the public key — you never type one.
+The client keeps settings, identity and logs under the OS user configuration
+directory's `noxa` folder. Treat identity exports, local chat data and logs as
+private. Import the same identity to recover it; changing a contact's signing
+key requires explicit fingerprint confirmation.
 
-The login dialog asks for:
+The control and file-transfer connections use TLS and pinned server identity.
+Direct-message bodies use device-specific recipient keys with X25519 and
+XSalsa20-Poly1305; they do not currently use the separate Double Ratchet library
+or provide its per-message forward secrecy. Channel messages use server-managed
+scope keys. WebRTC channel media is protected in transit to the SFU, without
+channel media E2EE. See the root README for the precise encryption boundaries.
 
-- **Server** — host:port of the control channel.
-- **Nickname** — your display name. The client uses its locally stored
-  cryptographic identity to connect; no account password is needed.
-- **Server password** — only if the server has a global password set.
+A linked phone normally signs in with its saved device key or a passkey.
+Trusted desktops automatically endorse passkey-created devices only after
+verifying the signed proof. Normal phone sign-out preserves its passkeys; the
+first/master device cannot be remotely signed out from another device.
 
-## Hotkeys & troubleshooting
-
-- **Push-to-talk is unbound by default.** Configure it in Settings → Hotkeys,
-  or hold the big mic button in the voice bar. On Windows, configured hotkeys
-  are observed passively, so the foreground application still receives the
-  same keys.
-- **Ctrl+M** — mute toggle (also rebindable).
-
-The big mic button glows and the **● TALKING** banner appears while
-push-to-talk is active. The keyboard icon in the voice bar shows hotkey
-status (`⌨ ptt` = active, `⌨ off` = failed). If a hotkey shows off, check
-`<UserConfigDir>/noxa/client.log`. Debug lines like `hotkey ptt_down fired`
-are logged there for every observed event.
-
-## Auto-update
-
-The client can update itself from GitHub Releases (Help → **Check for
-updates…**): it queries the latest release of the configured repo, compares
-canonical semantic versions against the embedded version, downloads the
-Windows asset with a progress bar, verifies its SHA-256 against the
-release's `checksums.txt`, and self-applies via `minio/selfupdate` (which
-handles the running-exe rename dance on Windows). Nothing applies without
-explicit confirmation — a final "Restart now" button relaunches the new
-binary.
-
-At application startup, before connecting to a server, it checks once and
-opens an update dialog with an **Update now** button when a newer release
-exists. Download progress is shown, followed by **Restart now**. Failed
-downloads and restarts display an error and can be retried. Disable the
-automatic check in Settings → Application → "Check for updates at startup".
-Offline and up-to-date clients remain quiet; manual checks remain available
-in Help → **Check for updates…**.
-
-The update source is the `UpdateRepo` ldflags variable
-(`-X noxa/internal/version.UpdateRepo=<owner/repo>` — CI sets it to the
-repo automatically). With the placeholder default the check reports "no
-update source" and stays silent.
-
-**Security note**: SHA-256 verifies artifact integrity and the detached
-Ed25519 signature authenticates the signed manifest against keys embedded in
-the client. Custom builds must embed trusted public keys with
-`NOXA_UPDATE_PUBLIC_KEYS` for Make or `-UpdatePublicKeys` for the PowerShell wrapper.
-Never include the private signing key in a client build.
-
-## Headless backend test
-
-`conn_live_test.go` verifies the Go backend (connect/auth, snapshot, channel
-join + `user_moved`, channel chat, `GetPermissions`) against a **live**
-server — no Wails runtime needed (the backend's events go through an
-`eventSink` seam; tests install a recorder). It skips unless
-`NOXA_LIVE_ADDR` is set:
-
-This live-server test is manual-only: CI intentionally does not run it because
-it requires an explicitly selected live server.
-
-```bash
-# server must be running (e.g. docker compose up)
-cd client
-NOXA_LIVE_ADDR=127.0.0.1:12333 go test -run Live -v ./... -count=1
-NOXA_LIVE_ADDR=127.0.0.1:12333 go test -race -run Live ./... -count=1
-```
-
-Optional env: `NOXA_LIVE_QUERY_ADDR` (ServerQuery port, default
-`<host>:12335`). The test creates a throwaway permanent channel via
-ServerQuery (admin account) so channel-dependent assertions are real. Note
-`GetPermissions` returns an empty set on a fresh server — registered users
-have no granted permissions until seeded; the test asserts the
-request/response round-trip works.
-
-## Notes / limitations
-
-### Calls, camera, discussions and voice messages
-
-- Channel, private and group calls support simultaneous camera and screen-sharing tiles,
-  with optional display audio when the operating system's picker provides it.
-  Camera and screen capture require explicit actions and stop when the call ends.
-- Settings → Camera selects the device and an offline background effect: blur
-  or a replacement scene/custom local image. Blur strength is adjustable and
-  mirroring applies only to your local preview. Uploaded images are resized and
-  stored locally; person segmentation runs locally using
-  bundled assets. Effects cap processing at 15 fps; ordinary camera capture
-  retains the selected frame rate and server limits.
-- Channel discussions provide persistent independent threads and forum boards,
-  tags, membership, following, unread state, and archive/reopen controls. Message
-  bodies use channel encryption; titles and tags are server-visible metadata.
-- The microphone button in channel, private-group and discussion composers
-  records up to five minutes or 5 MiB. Preview, discard or send the recording as
-  an encrypted attachment; recipients explicitly load it for inline playback.
-  Playback follows the output device, voice volume and Deafen settings. Controls
-  include duration, seeking, playback speed and local resume history (30 days,
-  at most 100 hashed references). Local previews show a decoded waveform;
-  received waveforms fill while listening without fully decoding untrusted
-  attachments into memory.
-- Calls stay docked by default. **Undock call** opens an optional always-on-top
-  window when Document Picture-in-Picture is supported; closing it returns the
-  controls to the main window without ending the call.
-- Shared audio has a separate personal mute and 0–200% volume setting per member,
-  independent of that member's microphone volume. Deafen still silences both.
-- The inbox, older-history search and personal saved collections provide message
-  navigation scoped to the current server.
-- Discussion controls include title/tag editing, pinning, resolved status and
-  inactivity archiving. Channel managers can create/revoke incoming text webhooks.
-  Remote HTTP access requires an HTTPS proxy.
-- Settings → Overlay contains the voice overlay controls. It is enabled by default on Windows and
-  can be disabled. Only active, unmuted speakers appear, each with a circular
-  avatar, name and animated cyan activity indicator on a transparent background.
-  It defaults to the left edge at 45% of the primary monitor work-area height, expanding
-  upward and downward as speakers join, with compact 40 px avatars
-  (80% size), and hides when everyone is quiet or you mute/deafen in the main
-  controls or an active private call. Unmuting/undeafening restores the overlay
-  if someone is speaking. The native animation continues
-  while noXa is unfocused and even when Windows animations are disabled. The
-  separate "Animate speaking indicators" setting can disable overlay motion.
-  Settings provide monitor selection, position presets or a draggable preview,
-  size and opacity. Missing avatars fall back to initials. The activity waveform
-  indicates speaking, not measured volume.
-  It passes input through and supports windowed/borderless games. Exclusive
-  fullscreen and other operating systems are not supported.
-
-- The frontend is a scaffold: channel icons and avatars are stored/flagged
-  but not rendered yet; permission editing is read-only.
-- `wails build` was verified on Windows 11 + WebView2 runtime. On other
-  platforms install the Wails platform prerequisites (see
-  https://wails.io/docs/gettingstarted/installation).
+The updater verifies a signed manifest and artifact hash, then supervises
+restart. Failed startup restores the previous executable, without rolling back
+identity, settings or message history. Keep recovery copies of important local
+data independently of application updates.

@@ -22,7 +22,21 @@ test("guest can sign in, reload and sign out without linking a device", async ({
     });
     await page.reload();
     await expect(page.getByText(/^Guest visitor(#M\d+)?$/)).toBeVisible();
-    await page.evaluate(() => { window.__clearedBadges = 0; });
+    await page.evaluate(async () => {
+        window.__clearedBadges = 0;
+        localStorage.setItem("noxa.callReminders", JSON.stringify([{ uid: "private-peer", name: "Private reminder", at: Date.now() + 600000 }]));
+        const db = await new Promise((resolve, reject) => {
+            const request = indexedDB.open("noxa"); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+        });
+        try {
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(["calls", "saved"], "readwrite");
+                tx.objectStore("calls").put({ private: "old calls" }, "private-peer");
+                tx.objectStore("saved").put({ private: "old references" }, "saved-messages");
+                tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+            });
+        } finally { db.close(); }
+    });
     await page.getByRole("button", { name: "Sign out of this device", exact: true }).click();
     await page.getByRole("button", { name: "Sign out of this device", exact: true }).last().click();
     await expect(page.getByRole("button", { name: "Sign in with passkey" })).toBeVisible();
@@ -34,5 +48,21 @@ test("guest can sign in, reload and sign out without linking a device", async ({
     expect(stored.settings.autoAwayMessage).toBeUndefined();
     expect(await page.evaluate(() => window.__clearedBadges)).toBeGreaterThan(0);
     expect(stored.servers).toContain("Saved server");
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Sign in with passkey" })).toBeVisible();
+    const remaining = await page.evaluate(async () => {
+        const db = await new Promise((resolve, reject) => {
+            const request = indexedDB.open("noxa"); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+        });
+        try {
+            const counts = {};
+            for (const name of ["calls", "saved"]) counts[name] = await new Promise((resolve, reject) => {
+                const request = db.transaction(name).objectStore(name).count();
+                request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+            });
+            return { ...counts, reminders: localStorage.getItem("noxa.callReminders") };
+        } finally { db.close(); }
+    });
+    expect(remaining).toEqual({ calls: 0, saved: 0, reminders: null });
     expect(errors).toEqual([]);
 });

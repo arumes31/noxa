@@ -9,7 +9,7 @@
 // the service worker gets the list by postMessage and keeps it in its cache.
 import { get, onChange, set } from "./settings.js";
 
-export { watchCallLog } from "./call-log.js";
+export { watchCallLog, resetCallLog } from "./call-log.js";
 
 /** Whether typing indicators and read receipts may be sent. */
 export function activityShared() {
