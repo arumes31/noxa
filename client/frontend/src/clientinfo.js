@@ -13,7 +13,7 @@ import { startPrivateCall } from "./private-calls.js";
 import { updateLocalSettings } from "./settings-store.js";
 import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-menu.js";
 import { memberAudioControls } from "./member-audio-ui.js";
-import { primarySessionLabel, resolveAccountTarget, resolveAccountTargetByUID } from "./account-identity.js";
+import { primarySessionLabel, resolveAccountTarget } from "./account-identity.js";
 import { openMemberMove } from "./member-move.js";
 import { escapeHTML } from "./markdown.js";
 import { sessionUserID } from "./session-identity.js";
@@ -221,14 +221,6 @@ function openContextMenu(x, y, client, trigger) {
         const move = document.createElement("button"); move.type = "button"; move.className = "ctx-action"; move.dataset.act = "move";
         move.textContent = t("context.move"); move.onclick = () => { closeMenu(); openMemberMove(client); };
         menuEl.append(move);
-    }
-    if (client.client_id && client.multipleSessions) {
-        // Several devices share this account: session-only moderation stays
-        // off until one device is chosen; account actions and the labelled
-        // primary session remain available.
-        for (const item of menuEl.querySelectorAll('[data-act="kick-ch"], [data-act="kick-srv"], [data-act="ban"], [data-act="move"], button.ctx-action:not([data-act])')) {
-            item.classList.add("disabled"); item.setAttribute("aria-disabled", "true"); item.onclick = null; item.title = t("context.multipleSessions");
-        }
     }
     if (!client.client_id) {
         for (const item of menuEl.querySelectorAll('[data-act="info"], [data-act="poke"], [data-act="kick-ch"], [data-act="kick-srv"], [data-act="ban"], [data-act="call"], button:not([data-act])')) {
@@ -873,11 +865,8 @@ export function initClientInfo() {
             const uid = row.dataset.memberUid;
             const clientID = row.dataset.memberClientId || row.dataset.clid;
             const matches = V().state.clients.filter(c => (!uid || c.unique_id === uid) && (!clientID || c.client_id === clientID));
-            // Session-specific actions must never fall back to another device;
-            // account actions resolve to the labelled primary session (521).
-            const account = matches.length > 1 ? resolveAccountTargetByUID(matches, uid || matches[0].unique_id, V().state.myClientID) : null;
+            // Session-specific actions must never fall back to another device.
             const client = (matches.length === 1 ? matches[0] : null)
-                || (account?.multiple ? { ...account.primary, multipleSessions: true, account } : null)
                 || (uid ? { unique_id: uid, nickname: row.dataset.memberName || row.textContent, client_id: "", channel_id: 0, multipleSessions: matches.length > 1 } : null);
             if (client) { e.preventDefault(); e.stopPropagation(); openContextMenu(x, y, client, row); }
             return;

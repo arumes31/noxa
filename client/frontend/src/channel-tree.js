@@ -3,7 +3,7 @@ import { joinFailure, unreadLabel } from "./client-usability-model.js";
 import { isUserMuted } from "./audio.js";
 import * as chatUI from "./chat-ui.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
-import { deviceKind, groupSessionsByAccount, visibleInChannelTree } from "./member-presence.js";
+import { visibleInChannelTree } from "./member-presence.js";
 import { roleIconElement } from "./role-icons.js";
 import { deniedActionMessage, missingPermissionHint } from "./permission-denied.js";
 import { roleChip } from "./role-presentation.js";
@@ -315,8 +315,10 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 list.className = "channel-members";
                 list.setAttribute("role", "group");
                 list.setAttribute("aria-label", t("runtime.members", { name: ch.Name }));
-                // One row per account; extra device sessions fold into that row.
-                for (const group of groupSessionsByAccount(members, state.myClientID)) list.appendChild(clientRow(group.primary, group.others));
+                // One row per session: a phone and a desktop of the same account
+                // stay separately addressable (drag, move, Client Info); the
+                // online count deduplicates accounts (member-presence.js).
+                for (const c of members) list.appendChild(clientRow(c));
                 node.appendChild(list);
             }
             const children = byParent.get(ch.ChannelID) || [];
@@ -372,13 +374,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             String(a.client_id).localeCompare(String(b.client_id)));
     }
 
-    function deviceLabel(client) {
-        return t(`presence.device.${deviceKind(client)}`);
-    }
-
-    function clientRow(c, others = []) {
-        const sessionsLabel = others.length ? t(others.length === 1 ? "presence.sessions.one" : "presence.sessions.many",
-            { count: others.length, devices: others.map(deviceLabel).join(", ") }) : "";
+    function clientRow(c) {
         const inVoice = c.channel_id > 0 && !state.channels.some(ch => ch.ChannelID === c.channel_id && ch.SystemKind === "home");
         const tabID = state.activeTabID, generation = state.serverGeneration;
         const row = document.createElement("div");
@@ -397,7 +393,6 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             c.status && presenceLabel(c.status), speakingHere && t("runtime.speaking"),
             c.priority_speaker && t("runtime.priority"),
             c.on_mobile && t("runtime.onMobile"),
-            sessionsLabel,
             streamLabel,
             inVoice && c.client_id === state.myClientID && state.muted && t("runtime.muted"),
             c.client_id === state.myClientID && state.deafened && t("runtime.deaf")].filter(Boolean).join(", "));
@@ -446,20 +441,6 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             row.appendChild(device);
         }
         row.appendChild(name);
-        if (others.length) {
-            // The same account signed in on more devices: a compact "+N" marker.
-            const sessions = document.createElement("span");
-            sessions.className = "client-sessions";
-            sessions.innerHTML = icon(others.some((s) => s.on_mobile) ? "phone" : "screen");
-            const count = document.createElement("span");
-            count.className = "client-sessions-count";
-            count.textContent = t("presence.sessions.short", { count: others.length });
-            sessions.appendChild(count);
-            sessions.title = sessionsLabel;
-            sessions.setAttribute("role", "img");
-            sessions.setAttribute("aria-label", sessionsLabel);
-            row.appendChild(sessions);
-        }
         if (sharing) {
             // "● LIVE": the badge carries its state in text, not colour alone.
             const indicator = document.createElement("span");

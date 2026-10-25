@@ -12,7 +12,7 @@ import { stopDisplayCapture } from "./display-capture-lease.js";
 import { parseChannelInvite } from "./channel-invite-links.js";
 import { createConnectionQuality } from './connection-quality.js';
 import { createLoginMemory } from './login-memory.js';
-import { createLoginFeedback, connectFailureIsDefinitive, loginFailure } from './login-errors.js';
+import { createLoginFeedback, connectFailureCategory, connectFailureIsDefinitive, loginFailure } from './login-errors.js';
 import { describeDeniedError } from './permission-denied.js';
 import { initLoginBackground } from './login-background.js';
 import { watchMicrophone } from "./microphone-recovery.js";
@@ -953,7 +953,7 @@ const tabReconnects = createTabReconnects({
     },
     stopped(tabID, error, cause = "terminal") {
         // (314) a rejected login stops the series; only a manual retry follows.
-        const rejected = cause === "authentication" || connectFailureIsDefinitive(loginFailure(error));
+        const rejected = cause === "authentication" || ["authentication", "permission"].includes(connectFailureCategory(loginFailure(error)));
         connectionOverlay.terminal(tabID, error, rejected ? "authentication" : cause);
         reconnectNotices.set(tabID, { key: rejected ? "runtime.reconnectStoppedAuth" : "runtime.reconnectStopped", error });
         showReconnectNotice(tabID);

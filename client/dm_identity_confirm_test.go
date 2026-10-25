@@ -102,7 +102,7 @@ func TestFrontendPeerConfirmationDefaultsToBlocking(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("confirmation did not return on shutdown")
 	}
-	if frontendPeerConfirmation(nil) != nil {
+	if frontendPeerConfirmation(nil) != nil { //nolint:staticcheck // a nil context deliberately disables prompting
 		t.Fatal("nil context must disable prompting")
 	}
 }

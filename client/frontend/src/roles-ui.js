@@ -104,10 +104,13 @@ export function openRolesManager() {
         let expectedRevision = model.snapshot.policy.revision;
         try {
             if (change.kind === "role_update" || change.kind === "role_create") {
-                // (335) compare the form's baseline with the latest server state before writing.
-                const latest = await app.RoleStateForTab(tabID, 0);
+                // (335) compare the form's baseline with the latest server state before
+                // writing. If that lookup fails, the write itself carries the expected
+                // revision and the server (or native tab guard) still rejects stale drafts.
+                let latest = null;
+                try { latest = await app.RoleStateForTab(tabID, 0); } catch { latest = null; }
                 if (!current()) return;
-                const conflict = roleSaveConflict(model.baseline, latest);
+                const conflict = latest ? roleSaveConflict(model.baseline, latest) : null;
                 if (conflict?.blocking) {
                     const choice = await conflictDialog(conflict);
                     if (!current()) return;

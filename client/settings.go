@@ -151,11 +151,11 @@ type Settings struct {
 	Volume           int    `json:"volume"` // 0..200 (percent)
 
 	// Hotkeys (canonical specs like "Space", "Ctrl+M", "Ctrl+Shift+F5").
-	HotkeyPTT          string `json:"hotkey_ptt"`
-	HotkeyMute         string `json:"hotkey_mute"`
-	HotkeyDeafen       string `json:"hotkey_deafen"`        // (299) deafen toggle
-	HotkeyZen          string `json:"hotkey_zen"`           // (341) zen mode toggle, default "Ctrl+Shift+Z"
-	HotkeyCompact      string `json:"hotkey_compact"`       // (293/299) compact-mode toggle
+	HotkeyPTT     string `json:"hotkey_ptt"`
+	HotkeyMute    string `json:"hotkey_mute"`
+	HotkeyDeafen  string `json:"hotkey_deafen"`  // (299) deafen toggle
+	HotkeyZen     string `json:"hotkey_zen"`     // (341) zen mode toggle, default "Ctrl+Shift+Z"
+	HotkeyCompact string `json:"hotkey_compact"` // (293/299) compact-mode toggle
 	// HotkeyProfiles maps profile name -> overrides (300). The bookmark's
 	// profile applies on connect; "default" is the base set above.
 	HotkeyProfiles map[string]HotkeyProfile `json:"hotkey_profiles,omitempty"`
@@ -292,7 +292,7 @@ type Settings struct {
 	AlphaDismissed string                     `json:"alpha_dismissed"`          // (215) version whose notice was dismissed
 	// (453/454) noXa Mobile hint: "" shows it until a phone is linked,
 	// "dismissed" hides it, "shown" shows it even with linked devices.
-	MobileHint     string                     `json:"mobile_hint,omitempty"`
+	MobileHint string `json:"mobile_hint,omitempty"`
 }
 
 // DefaultSettings returns the defaults used when no settings file exists.

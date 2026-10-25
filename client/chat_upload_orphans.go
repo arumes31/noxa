@@ -78,7 +78,15 @@ func (a *App) uploadOrphanPath() string {
 }
 
 func loadUploadOrphans(path string) ([]uploadOrphan, error) {
-	raw, err := os.ReadFile(path)
+	root, name, err := openParentRoot(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return []uploadOrphan{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	raw, err := root.ReadFile(name)
 	if errors.Is(err, os.ErrNotExist) {
 		return []uploadOrphan{}, nil
 	}

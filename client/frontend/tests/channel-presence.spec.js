@@ -293,7 +293,10 @@ test('idle mobile sessions stay out of Lobby and online counts each identity onc
     await expect(page.locator('#channel-tree .hoist-head')).toHaveCount(0);
     await page.evaluate(() => window.emitMobilePresence(7));
     await expect(page.locator('#channel-tree')).toContainText('Daniel mobile');
-    await expect(page.locator('#channel-tree .on-mobile')).toHaveText(['Mobile','Mobile']);
+    // (104) a phone session carries a glyph on its avatar instead of a text chip.
+    await expect(page.locator('#channel-tree .on-mobile')).toHaveCount(0);
+    await expect(page.locator('#channel-tree .avatar-device')).toHaveCount(2);
+    await expect(page.locator('#channel-tree .avatar-device').first()).toHaveAttribute('aria-label', 'On mobile');
     await expect(page.locator('#channel-tree .hoist-head')).toContainText('Mobile group');
     await expect(page.locator('#server-summary')).toHaveText('1 online');
     await page.evaluate(() => window.emitMobilePresence(0));

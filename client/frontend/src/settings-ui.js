@@ -1653,11 +1653,13 @@ function openSettings(target = "general", options = {}) {
             }
             searchIndex = buildSettingsSearchIndex(entries);
         }
-        const hits = searchSettings(searchIndex, q, { limit: 40 });
+        // All matches are counted for the summary; the list shows the first 40.
+        const allHits = searchSettings(searchIndex, q, { limit: Infinity });
+        const hits = allHits.slice(0, 40);
         summary.hidden = false;
-        summary.textContent = hits.length > 40
-            ? t("settings.searchLimited", { shown: 40, total: hits.length })
-            : t(hits.length === 1 ? "settings.searchOne" : "settings.searchCount", { count: hits.length });
+        summary.textContent = allHits.length > 40
+            ? t("settings.searchLimited", { shown: 40, total: allHits.length })
+            : t(allHits.length === 1 ? "settings.searchOne" : "settings.searchCount", { count: allHits.length });
         content.innerHTML = "";
         if (hits.length === 0) {
             const empty = document.createElement("div");

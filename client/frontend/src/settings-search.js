@@ -254,11 +254,30 @@ function tokenScore(variants, entry) {
 export function searchSettings(index, query, { limit = 40 } = {}) {
     const normalized = normalizeSearchText(query);
     if (!normalized) return [];
+    // Tier 1: the query appears literally in a setting label. These are the
+    // precise hits a user typing a known name expects ("Overlay opacity" is
+    // one setting, not every row mentioning the overlay). The problem-phrase
+    // search below only answers when no label contains the query.
+    const literal = [];
+    for (const entry of index || []) {
+        const labels = entry.fields?.label || [];
+        const position = labels.findIndex(text => text && text.includes(normalized));
+        if (position < 0) continue;
+        const text = labels[position];
+        const score = (text === normalized ? 100 : text.startsWith(normalized) ? 50 : 10) + Math.max(0, 20 - (text.length - normalized.length));
+        literal.push({ page: entry.page, pageLabel: entry.pageLabel, section: entry.section, key: entry.key, label: entry.label, score, phrase: "" });
+    }
+    if (literal.length) {
+        literal.sort((a, b) => b.score - a.score || a.label.localeCompare(b.label));
+        return literal.slice(0, limit);
+    }
     const needles = tokenizeSearchText(query);
     // A query made only of function words ("zu", "the") would match every
     // problem phrase by substring; it finds nothing until a real term follows.
     if (!needles.length) return [];
-    const required = Math.max(1, Math.ceil(needles.length / 2));
+    // Every real term has to hit somewhere: a query that shares only one of
+    // four words with a setting is noise, not a match ("nothing matches this value").
+    const required = needles.length;
     const results = [];
     for (const entry of index || []) {
         let score = 0;

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -103,7 +104,7 @@ func TestUploadOrphanSweepSelection(t *testing.T) {
 	if strings.Join(names, ",") != "old,failed" {
 		t.Fatalf("sweep selection: %v", names)
 	}
-	stale := append(entries, uploadOrphan{Server: "s", Storage: "ancient", State: uploadOrphanUncertain, CreatedAt: now.Add(-8 * 24 * time.Hour).UnixMilli()})
+	stale := append(slices.Clone(entries), uploadOrphan{Server: "s", Storage: "ancient", State: uploadOrphanUncertain, CreatedAt: now.Add(-8 * 24 * time.Hour).UnixMilli()})
 	if kept := expireUploadOrphans(stale, now); len(kept) != len(entries) {
 		t.Fatalf("retention: %d", len(kept))
 	}
