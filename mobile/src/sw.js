@@ -149,25 +149,28 @@ async function onPush(push) {
         await updateBadge();
         return;
     }
-    // An open app shows the event itself.
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    if (push.kind !== "call" && windows.some(client => client.visibilityState === "visible")) return;
-    // A muted conversation stays quiet: nothing while the app is open (in
-    // the background); without it the browser requires a notification, so
-    // it is shown silently.
+    const foreground = push.kind !== "call" && windows.some(client => client.visibilityState === "visible");
     const muted = push.kind !== "call" && (await mutedTags()).includes(push.tag);
-    if (muted && windows.length) return;
+    // The server filters foreground/muted deliveries, but state can change
+    // while a push is in flight. Apple revokes subscriptions for an event
+    // without a visible notification, even when the app is already open.
+    const ua = self.navigator.userAgent || "";
+    const apple = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && /Safari/.test(ua) && !/(?:Chrome|Chromium|Edg|OPR)\//.test(ua));
+    if (!apple && (foreground || (muted && windows.length))) return;
+    const quiet = muted || foreground;
     const text = describe(push);
     await self.registration.showNotification(text.title, {
         body: text.body,
         tag: push.tag,
-        renotify: !muted,
-        silent: muted,
+        renotify: !quiet,
+        silent: quiet,
         icon: "/app/icons/icon-192.png",
         badge: "/app/icons/icon-192.png",
         timestamp: (push.at || Date.now() / 1000) * 1000,
         requireInteraction: !!text.call,
-        vibrate: muted ? [] : text.call ? [400, 200, 400, 200, 400] : [120],
+        // A silent notification must omit vibrate, including an empty array.
+        ...(quiet ? {} : { vibrate: text.call ? [400, 200, 400, 200, 400] : [120] }),
         // iOS shows no actions; Android gets Answer and Decline on calls, Reply and Mark as read on messages.
         actions: text.call ? [{ action: "answer", title: words().answer }, { action: "decline", title: words().decline }] : messageActions(push),
         data: { url: routeFor(push.tag), tag: push.tag },

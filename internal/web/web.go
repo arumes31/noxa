@@ -363,6 +363,9 @@ func (s *Server) appHandler() http.Handler {
 		case strings.HasPrefix(rel, "assets/"):
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
+		if rel == "manifest.webmanifest" {
+			w.Header().Set("Content-Type", "application/manifest+json")
+		}
 		if rel == "sw.js" {
 			w.Header().Set("Service-Worker-Allowed", "/")
 		}

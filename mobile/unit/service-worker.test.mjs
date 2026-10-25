@@ -103,6 +103,7 @@ test("a muted conversation stays quiet while the app is open and is silent other
     await push({ kind: "dm", tag: "dm:quiet", from: "Noa" });
     assert.equal(shown.length, 1);
     assert.equal(shown[0].silent, true);
+    assert.equal(Object.hasOwn(shown[0], "vibrate"), false);
 });
 
 test("notification actions: decline and answer reach an open app, a closed app opens the call", async () => {
@@ -137,4 +138,43 @@ test("an inline reply is queued in the outbox and the open app is asked to send 
     assert.deepEqual(messages, [{ type: "notification-action", action: "read", tag: "dm:uid-1", flush: false }]);
     windows.length = 0;
     for (const entry of await pending()) await remove(entry.id);
+});
+
+
+test("Apple push deliveries stay visible when foreground or mute state changed in flight", async () => {
+    const previousUA = fakeNavigator.userAgent;
+    try {
+        for (const userAgent of ["Mozilla/5.0 (iPhone) Safari", "Mozilla/5.0 (Macintosh) Safari"]) {
+            fakeNavigator.userAgent = userAgent;
+            for (const [visibilityState, muted] of [["visible", false], ["visible", true], ["hidden", true]]) {
+                windows.length = 0; shown.length = 0;
+                windows.push({ visibilityState, url: "https://chat.example/app/#/home" });
+                await dispatch("message", { data: { type: "muted", tags: muted ? ["dm:apple-muted"] : [] } });
+                await push({ kind: "dm", tag: "dm:apple-muted", from: "Ivy" });
+                assert.equal(shown.length, 1, `${userAgent} ${visibilityState} must show a notification`);
+                assert.equal(shown[0].silent, true);
+                assert.equal(shown[0].renotify, false);
+                assert.equal(Object.hasOwn(shown[0], "vibrate"), false);
+            }
+        }
+    } finally {
+        windows.length = 0;
+        fakeNavigator.userAgent = previousUA;
+        await dispatch("message", { data: { type: "muted", tags: [] } });
+    }
+});
+
+
+test("desktop Chrome on macOS keeps foreground push suppression", async () => {
+    const previousUA = fakeNavigator.userAgent;
+    try {
+        fakeNavigator.userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/141.0.0.0 Safari/537.36";
+        windows.length = 0; shown.length = 0;
+        windows.push({ visibilityState: "visible", url: "https://chat.example/app/#/home" });
+        await push({ kind: "dm", tag: "dm:chrome", from: "Ivy" });
+        assert.equal(shown.length, 0);
+    } finally {
+        windows.length = 0;
+        fakeNavigator.userAgent = previousUA;
+    }
 });
