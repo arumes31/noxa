@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"filippo.io/edwards25519"
 	"github.com/lib/pq"
 	"go.uber.org/zap"
 
@@ -41,6 +42,7 @@ type AuthService struct {
 	store            *store.Store
 	logger           *zap.Logger
 	verifyPassword   func(password, encodedHash string) error
+	verifyChallenge  func(string, []byte, []byte) error
 	lookupIdentifier func(context.Context, string) (passwordCredential, error)
 }
 
@@ -139,23 +141,45 @@ func (a *AuthService) AuthenticateChallenge(ctx context.Context, uniqueID string
 // avoiding a second lookup that could race an account key replacement.
 func (a *AuthService) AuthenticateIdentityChallenge(ctx context.Context, uniqueID string, challenge, signature []byte) (string, bool, error) {
 	var pubPEM string
-	const q = `SELECT public_key FROM users WHERE unique_id = $1`
+	const q = `SELECT COALESCE(public_key, '') FROM users WHERE unique_id = $1`
 	err := a.store.DB().QueryRowContext(ctx, q, uniqueID).Scan(&pubPEM)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", false, ErrUserNotFound
-		}
+	missing := errors.Is(err, sql.ErrNoRows)
+	if err != nil && !missing {
 		return "", false, fmt.Errorf("querying user public key: %w", err)
 	}
-	if pubPEM == "" {
-		return "", false, nil
+	// Missing, unbound and malformed stored keys must perform the same signature
+	// verification work as a wrong signature for a usable account key. A dummy
+	// key is never an identity credential, even if its signature verifies.
+	publicKey, keyErr := LoadPublicKey(pubPEM)
+	if keyErr == nil {
+		// Length-valid encodings can still fail before Ed25519's scalar work.
+		_, keyErr = new(edwards25519.Point).SetBytes(publicKey)
 	}
-
-	if err := VerifyChallenge(pubPEM, challenge, signature); err != nil {
+	usable := !missing && keyErr == nil
+	verificationKey := pubPEM
+	if !usable {
+		verificationKey = dummyChallengePublicKey
+	}
+	verify := a.verifyChallenge
+	if verify == nil {
+		verify = VerifyChallenge
+	}
+	verificationErr := verify(verificationKey, challenge, signature)
+	if missing {
+		return "", false, ErrUserNotFound
+	}
+	if !usable || verificationErr != nil {
 		return "", false, nil
 	}
 	return pubPEM, true, nil
 }
+
+// Fixed Ed25519 test public key (RFC 8032, test 1). Its known private key is
+// harmless: verification with this key is only performed on a denied path.
+const dummyChallengePublicKey = `-----BEGIN PUBLIC KEY-----
+11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=
+-----END PUBLIC KEY-----
+`
 
 // User holds the identity fields the server needs after a successful
 // authentication.

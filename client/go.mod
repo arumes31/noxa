@@ -16,6 +16,7 @@ require (
 
 require (
 	aead.dev/minisign v0.3.0 // indirect
+	filippo.io/edwards25519 v1.2.0 // indirect
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
