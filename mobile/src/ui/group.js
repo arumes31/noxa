@@ -15,6 +15,7 @@ import { voiceNoteButton } from "./voice-note.js";
 import { richBody, watchCustomEmoji } from "./rich-text.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
+import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage, shareText } from "./chat-actions.js";
 import { aboutEncryption, blockedLine, encryptionBadge, isBlockedUser, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 
 const EXPORT_PAGES = 20;
@@ -65,13 +66,25 @@ export function renderGroup(root, id) {
     }
 
     async function messageActions(message) {
-        const choice = await sheet(t("dm.messageActions"), null, [
-            { label: t("link.cancel"), value: null },
-            { label: t("dm.delete"), value: "delete", danger: true },
-        ]);
-        if (choice !== "delete") return;
-        const sure = await sheet(t("dm.deleteTitle"), t("groupManage.deleteMessageBody"), [{ label: t("dm.delete"), value: true, danger: true }, { label: t("link.cancel"), value: false }]);
-        if (sure) await groups.deleteMessage(id, message.id).catch(error => toast(t("common.error", { error: error.message }), "warn"));
+        const hasText = typeof message.text === "string" && !!message.text;
+        // Only the owner may delete messages in a group (netproto.ChangeConversation).
+        const deletable = !message.local && !message.deleted && conversation()?.owner === app.session.uniqueID;
+        const choice = await actionSheet({
+            title: t("act.messageFrom", { name: memberName(message.from_unique_id) }), subtitle: excerpt(message.text, 160),
+            actions: [
+                hasText ? { label: t("act.copy"), value: "copy" } : null,
+                hasText && canShare() ? { label: t("act.share"), value: "share" } : null,
+                message.id ? { label: t("act.save"), value: "save" } : null,
+                deletable ? { label: t("dm.delete"), value: "delete", danger: true } : null,
+            ].filter(Boolean),
+        });
+        if (choice === "copy") copyText(message.text);
+        else if (choice === "share") shareText(message.text);
+        else if (choice === "save") saveMessage({ kind: "group", groupID: id, messageID: message.id }).catch(error => toast(t("act.failed", { error: error.message }), "warn"));
+        else if (choice === "delete") {
+            const sure = await sheet(t("dm.deleteTitle"), t("groupManage.deleteMessageBody"), [{ label: t("dm.delete"), value: true, danger: true }, { label: t("link.cancel"), value: false }]);
+            if (sure) await groups.deleteMessage(id, message.id).catch(error => toast(t("common.error", { error: error.message }), "warn"));
+        }
     }
 
     // seen is part of the cache key: "Seen by" changes without the message changing.
@@ -84,20 +97,19 @@ export function renderGroup(root, id) {
             : message.text === null || message.text === undefined ? h("span", { class: "msg-locked" }, t("group.locked"))
                 : richBody(message.text, { session: app.session, conn: app.session.conn, channelID: folder });
         const from = memberName(message.from_unique_id);
-        // Only the owner may delete messages in a group (netproto.ChangeConversation).
-        const deletable = !message.local && !message.deleted && conversation()?.owner === app.session.uniqueID;
-        const props = message.failed ? retryProps(message, retryActions(message))
-            : deletable ? { tabindex: "0", role: "button", "aria-label": t("dm.messageActions"), onclick: event => {
-                if (!event.target.closest(".voice-note, .file-chip, a, button, img, video")) messageActions(message);
-            } } : {};
         const classes = ["msg", own ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
-        return h("div", { class: classes, dataset: { id: String(message.id ?? "") }, ...props },
+        // Not sent: tapping offers Retry or Delete; otherwise the action sheet (bindMessageTaps).
+        const props = message.failed ? retryProps(message, retryActions(message)) : { tabindex: message.deleted ? null : "0", "aria-haspopup": message.deleted ? null : "dialog" };
+        const el = h("div", { class: classes, dataset: { id: String(message.id ?? "") }, ...props },
             timeNode(message.created_at),
             avatar(from, "sm", message.from_unique_id),
             h("div", { class: "msg-body" }, h("span", { class: "msg-from" }, from), message.deleted ? null : encryptionBadge("e2e"), body,
                 own ? sendState(message) : null,
                 seen?.length ? h("div", { class: "msg-seen" }, t("conv.seenBy", { names: seen.map(memberName).join(", ") })) : null));
+        el.noxaMessage = message.deleted || message.failed ? null : message;
+        return el;
     });
+    bindMessageTaps(log, message => messageActions(message));
 
     function render() {
         const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;

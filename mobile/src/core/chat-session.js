@@ -10,6 +10,9 @@
 import { fromBase64, openScope, openSealed, sealScope } from "./crypto.js";
 import { ProtocolError } from "./connection.js";
 import { Msg } from "./frame.js";
+import { joinLeaveLog } from "./join-leave.js";
+import { keywordHit } from "./mentions.js";
+import * as settings from "./settings.js";
 
 export const MsgChatAccepted = Msg.ChatAccepted;
 export const MsgChannelJoined = Msg.ChannelJoined;
@@ -63,6 +66,8 @@ export class ChatSession extends EventTarget {
             conn.on(Msg.ServerRules, rules => this.#setRules(rules)),
             conn.on(Msg.MediaLimitsChanged, limits => { this.mediaLimits = limits.media_limits || limits; this.#emit("media-limits"); }),
         ];
+        // Join/leave lines for the channel chats are derived from presence events.
+        joinLeaveLog(this);
     }
 
     #unsubscribe = [];
@@ -199,6 +204,8 @@ export class ChatSession extends EventTarget {
                     mentioned: (data.mentions || []).includes(this.uniqueID) || (data.role_mentions || []).includes(this.uniqueID),
                     mentions: data.mentions || [], roleMentions: data.role_mentions || [],
                 };
+                // A highlight keyword (settings) counts as a mention for unread badges.
+                if (!message.own) message.keyword = keywordHit(text, settings.get("keywords"));
                 this.#store(scope, message);
                 this.#emit("incoming", { scope, message });
                 return;
@@ -450,7 +457,7 @@ export class ChatSession extends EventTarget {
      * scope's current key and waits for the server's acceptance.
      */
     async send(scope, text, { replyTo = 0, clientMsgID = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}) {
-        this.#store(scope, { clientMsgID, fromUniqueID: this.uniqueID, from: this.nickname, text, sentAt, own: true, pending: true, queued: false, failed: false, replyTo });
+        this.#store(scope, { clientMsgID, fromUniqueID: this.uniqueID, from: this.nickname, text, sentAt, own: true, pending: true, queued: false, failed: false, holdUntil: 0, replyTo });
         const keyID = this.current.get(scope);
         const key = keyID && this.keys.get(scope)?.get(keyID);
         if (!key) {
@@ -472,9 +479,10 @@ export class ChatSession extends EventTarget {
         }
     }
 
-    /** Shows an own message waiting in the outbox. */
-    showQueued(scope, { clientMsgID, text, sentAt, expired = false }) {
-        this.#store(scope, { clientMsgID, fromUniqueID: this.uniqueID, from: this.nickname, text, sentAt, own: true, queued: !expired, failed: expired, pending: false });
+    /** Shows an own message waiting in the outbox (holdUntil: an Undo countdown, ms). */
+    showQueued(scope, { clientMsgID, text, sentAt, expired = false, holdUntil = 0, replyTo = 0 }) {
+        const held = !expired && holdUntil > Date.now();
+        this.#store(scope, { clientMsgID, fromUniqueID: this.uniqueID, from: this.nickname, text, sentAt, own: true, queued: !expired && !held, failed: expired, pending: false, holdUntil: held ? holdUntil : 0, replyTo });
     }
 
     /** Removes a message that never reached the server from the local list. */
@@ -542,8 +550,11 @@ export class ChatSession extends EventTarget {
             message: pin.message ? this.#entryToMessage(scope, pin.message) : this.messageByID(scope, pin.message_id),
         }));
         this.pins.set(scope, pins.map(p => p.messageID));
+        // Only messages already in the log are marked: inserting an old pinned
+        // message would leave a gap and move the history cursor past it.
         for (const pin of pins) {
-            if (pin.message) this.#store(scope, { ...pin.message, pinned: true });
+            const known = this.messageByID(scope, pin.messageID);
+            if (known && !known.pinned) this.#store(scope, { ...known, pinned: true });
         }
         this.#emit("pins", { scope });
         return pins;

@@ -14,8 +14,9 @@ export const SYNC_TAG = "noxa-outbox";
  * "conversation", conversation} for a private group, where the ID doubles as
  * the message reference. Returns the entry.
  */
-export async function enqueue(target, text, { id = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}) {
-    const entry = { id, ...target, text, sentAt, createdAt: Date.now() };
+export async function enqueue(target, text, { id = crypto.randomUUID(), sentAt = Date.now() / 1000, holdUntil = 0, replyTo = 0 } = {}) {
+    // holdUntil (ms) keeps an "Undo send" message back until its countdown ends.
+    const entry = { id, ...target, text, sentAt, createdAt: Date.now(), holdUntil, replyTo };
     await putSealed(Stores.outbox, id, entry);
     requestBackgroundSync();
     return entry;
@@ -55,6 +56,7 @@ export async function requestBackgroundSync() {
 }
 
 let flushing = null;
+let heldTimer = 0;
 
 /**
  * Sends waiting entries in order through a signed-in session, its direct
@@ -66,6 +68,7 @@ export function flush(session, dm, groups = null) {
     if (flushing) return flushing;
     flushing = (async () => {
         let sent = 0;
+        let nextHeld = Infinity;
         try {
             for (const entry of await pending()) {
                 if (entry.expired || entry.failed) {
@@ -74,11 +77,16 @@ export function flush(session, dm, groups = null) {
                 }
                 // Without groups (an older caller) the entry waits for one.
                 if (entry.kind === "conversation" && !groups) continue;
+                // Held for Undo: sent by a later flush once the countdown ends.
+                if (entry.holdUntil > Date.now()) {
+                    nextHeld = Math.min(nextHeld, entry.holdUntil);
+                    continue;
+                }
                 try {
                     for (let attempt = 0; ; attempt++) {
                         try {
                             if (entry.kind === "channel") {
-                                await session.send(entry.scope, entry.text, { clientMsgID: entry.id, sentAt: entry.sentAt });
+                                await session.send(entry.scope, entry.text, { clientMsgID: entry.id, sentAt: entry.sentAt, replyTo: entry.replyTo || 0 });
                             } else if (entry.kind === "conversation") {
                                 await groups.send(entry.conversation, entry.text, { reference: entry.id, sentAt: entry.sentAt });
                             } else {
@@ -102,6 +110,8 @@ export function flush(session, dm, groups = null) {
         } finally {
             flushing = null;
         }
+        clearTimeout(heldTimer);
+        if (nextHeld < Infinity && session.conn?.open) heldTimer = setTimeout(() => flush(session, dm, groups).catch(() => {}), Math.max(50, nextHeld - Date.now() + 50));
         return sent;
     })();
     return flushing;
@@ -113,7 +123,7 @@ export async function showPending(session, dm, groups = null) {
 }
 
 export function show(session, dm, entry, groups = null) {
-    const state = { text: entry.text, sentAt: entry.sentAt, expired: !!entry.expired || !!entry.failed };
+    const state = { text: entry.text, sentAt: entry.sentAt, expired: !!entry.expired || !!entry.failed, holdUntil: entry.holdUntil || 0, replyTo: entry.replyTo || 0 };
     if (entry.kind === "channel") session.showQueued(entry.scope, { clientMsgID: entry.id, ...state });
     else if (entry.kind === "conversation") groups?.showQueued(entry.conversation, { reference: entry.id, ...state });
     else dm?.showQueued(entry.peer, { id: entry.id, ...state });

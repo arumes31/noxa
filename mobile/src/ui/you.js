@@ -16,6 +16,7 @@ import { voiceSettings } from "./voice-settings.js";
 import { filterSettings, registerSettings } from "./settings-registry.js";
 import "./settings-sections.js";
 import { dmPrivacySettings } from "./dm-settings.js";
+import "./chat-settings.js";
 
 import { backupFlow, renderDeviceList, serversSection } from "./devices.js";
 

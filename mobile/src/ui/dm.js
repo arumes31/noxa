@@ -19,6 +19,7 @@ import { deleteLocalHistory, showCalls, showSafetyNumber } from "./dm-tools.js";
 import { voiceNoteButton } from "./voice-note.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
+import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage, shareText } from "./chat-actions.js";
 import { aboutEncryption, encryptionBadge, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 
 export function renderDM(root, peer) {
@@ -82,13 +83,9 @@ export function renderDM(root, peer) {
                 ? h("span", { class: "msg-locked" }, t("chat.locked"))
                 : richBody(message.body, { session, conn: session.conn, channelID: 0 });
         const from = message.self ? session.nickname : (message.fromNickname || name);
-        const changeable = message.self && !message.deleted && !message.pending && !message.queued && !message.failed;
-        const props = message.failed ? retryProps(message, retryActions(message))
-            : changeable ? { tabindex: "0", role: "button", "aria-label": t("dm.messageActions"), onclick: event => {
-                // Taps on the voice player, an attachment, a link or media are not message actions.
-                if (!event.target.closest(".voice-note, .file-chip, a, button, img, video")) messageActions(message);
-            } } : {};
-        return h("div", { class: classes, dataset: { id: String(message.id ?? "") }, ...props },
+        // Not sent: tapping offers Retry or Delete; otherwise the action sheet (bindMessageTaps).
+        const retry = message.failed ? retryProps(message, retryActions(message)) : { tabindex: message.deleted ? null : "0", "aria-haspopup": message.deleted ? null : "dialog" };
+        const el = h("div", { class: classes, dataset: { id: String(message.id ?? "") }, ...retry },
             timeNode(message.sentAt),
             avatar(from, "sm", message.self ? session.uniqueID : peer),
             h("div", { class: "msg-body" },
@@ -98,7 +95,10 @@ export function renderDM(root, peer) {
                 message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
                 message.self && !message.deleted ? receiptTicks(message.receipt) : null,
                 sendState(message)));
+        el.noxaMessage = message.deleted || message.failed ? null : message;
+        return el;
     });
+    bindMessageTaps(log, message => messageActions(message));
 
     function callLine(record) {
         return h("div", { class: "msg-system" }, icon("phone"),
@@ -194,12 +194,22 @@ export function renderDM(root, peer) {
         input.value = "";
     }
     async function messageActions(message) {
-        const choice = await sheet(t("dm.messageActions"), null, [
-            { label: t("dm.edit"), value: "edit", primary: true },
-            { label: t("dm.delete"), value: "delete", danger: true },
-            { label: t("link.cancel"), value: null },
-        ]);
-        if (choice === "edit") {
+        const changeable = message.self && !message.deleted && !message.pending && !message.queued && !message.failed;
+        const hasText = typeof message.body === "string" && !!message.body;
+        const sent = !message.pending && !message.queued && !message.failed;
+        const actions = [
+            hasText ? { label: t("act.copy"), value: "copy" } : null,
+            hasText && canShare() ? { label: t("act.share"), value: "share" } : null,
+            sent ? { label: t("act.save"), value: "save" } : null,
+            changeable ? { label: t("dm.edit"), value: "edit" } : null,
+            changeable ? { label: t("dm.delete"), value: "delete", danger: true } : null,
+        ].filter(Boolean);
+        if (!actions.length) return;
+        const choice = await actionSheet({ title: t("dm.messageActions"), subtitle: excerpt(message.body, 160), actions });
+        if (choice === "copy") copyText(message.body);
+        else if (choice === "share") shareText(message.body);
+        else if (choice === "save") saveMessage({ kind: "dm", peer, clientMsgID: message.id }).catch(error => toast(t("act.failed", { error: error.message }), "warn"));
+        else if (choice === "edit") {
             editing = message.id;
             editBar.hidden = false;
             input.value = message.body || "";

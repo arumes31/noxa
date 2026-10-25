@@ -199,7 +199,7 @@ export async function connect({ guest = null } = {}) {
     });
     session.addEventListener("incoming", event => {
         const { scope, message } = event.detail;
-        if (!message.own) noteUnread(`channel:${scope}`, message.mentioned, { kind: "channel", channelID: scope, from: message.fromUniqueID, name: message.from, text: message.text });
+        if (!message.own) noteUnread(`channel:${scope}`, message.mentioned || !!message.keyword, { kind: "channel", channelID: scope, from: message.fromUniqueID, name: message.from, text: message.text });
     });
     if (!app.meta.guest) reportVisibility(conn);
     if (!app.meta.guest) syncPush(conn).then(state => {
@@ -416,6 +416,8 @@ function noteUnread(tag, mention, info = {}) {
 export function markRead(tag) {
     closeNotifications(tag);
     notifier.read(tag);
+    // The chat screen places its "New messages" divider from this.
+    if (app.unread.has(tag)) app.lastUnread = { tag, ...app.unread.get(tag) };
     const had = app.unread.delete(tag);
     const split = tag.indexOf(":");
     if (app.session) announceRead(app.session.conn, tag.slice(0, split), tag.slice(split + 1));
