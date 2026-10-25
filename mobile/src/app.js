@@ -15,7 +15,7 @@ import { announceRead, closeNotifications, reportVisibility, setBadge, syncPush 
 import { get as setting } from "./core/settings.js";
 import { addServer } from "./core/servers.js";
 import { notifier } from "./notifier.js";
-import { activityShared, isMuted, syncMuted, watchCallLog } from "./core/conversation-prefs.js";
+import { activityShared, isMuted, syncMuted, watchCallLog, resetCallLog } from "./core/conversation-prefs.js";
 
 export const app = new EventTarget();
 notifier.install(app);
@@ -95,8 +95,9 @@ export async function forgetDevice() {
     const previousSession = app.session;
     app.session = null;
     previousSession?.close();
+    await resetCallLog();
+    await app.saved?.clear();
     await clearIdentity();
-    if (app.saved) app.saved.references = [];
     app.identity = null;
     app.meta = {};
     app.guestPassword = "";

@@ -21,23 +21,30 @@ export class SavedMessages extends EventTarget {
         this.ready = this.#load();
     }
 
+    #generation = 0;
+    #writes = Promise.resolve();
+
     async #load() {
+        const generation = this.#generation;
         try {
             const stored = await getSealed(Stores.saved, KEY);
-            if (Array.isArray(stored)) this.references = stored;
+            if (generation === this.#generation && Array.isArray(stored)) this.references = stored;
         } catch {
             // Storage unavailable: the list lives in memory.
         }
     }
 
     #write() {
-        putSealed(Stores.saved, KEY, this.references).catch(() => {});
+        const snapshot = this.references.map(reference => ({ ...reference }));
+        this.#writes = this.#writes.then(() => putSealed(Stores.saved, KEY, snapshot)).catch(() => {});
         this.dispatchEvent(new CustomEvent("change"));
     }
 
     /** Saves a reference ({kind:"channel"|"thread"|"group"|"dm", ...}) into a collection. */
     async save(reference, collection = "") {
+        const generation = this.#generation;
         await this.ready;
+        if (generation !== this.#generation) return null;
         const entry = { ...reference, collection, savedAt: Date.now() };
         const index = this.references.findIndex(r => sameReference(r, reference));
         if (index >= 0) this.references[index] = { ...this.references[index], collection };
@@ -47,7 +54,9 @@ export class SavedMessages extends EventTarget {
     }
 
     async remove(reference) {
+        const generation = this.#generation;
         await this.ready;
+        if (generation !== this.#generation) return;
         this.references = this.references.filter(r => !sameReference(r, reference));
         this.#write();
     }
@@ -59,6 +68,14 @@ export class SavedMessages extends EventTarget {
     async isSaved(reference) {
         await this.ready;
         return this.references.some(r => sameReference(r, reference));
+    }
+
+    /** Invalidate pending reads and drain writes before account storage is erased. */
+    async clear() {
+        this.#generation++;
+        this.references = [];
+        await this.ready;
+        await this.#writes;
     }
 
     /** Collection names in use, the default first. */

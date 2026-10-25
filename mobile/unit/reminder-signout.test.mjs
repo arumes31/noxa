@@ -14,7 +14,7 @@ async function fixture(stored = [], registration = async () => null) {
         './core/push.js': { announceRead: none, closeNotifications: tag => closed.push(tag), reportVisibility: none, setBadge: none, syncPush: none },
         './core/settings.js': { get: () => [] }, './core/servers.js': { addServer: none },
         './notifier.js': { notifier: { install: none, decide: () => ({ count: true }), read: none } },
-        './core/conversation-prefs.js': { activityShared: () => false, isMuted: () => false, syncMuted: none, watchCallLog: none },
+        './core/conversation-prefs.js': { activityShared: () => false, isMuted: () => false, syncMuted: none, watchCallLog: none, resetCallLog: none },
         './core/saved.js': { SavedMessages: class {} },
     };
     const storage = new Map([['noxa.callReminders', JSON.stringify(stored)]]);
