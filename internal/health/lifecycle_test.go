@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -57,7 +58,11 @@ func TestListenerLifecycle(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				_, readErr := io.Copy(io.Discard, response.Body)
 				_ = response.Body.Close()
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
 				if response.StatusCode != http.StatusOK {
 					t.Fatalf("%s: status %d", endpoint, response.StatusCode)
 				}
@@ -65,6 +70,7 @@ func TestListenerLifecycle(t *testing.T) {
 					t.Fatal("HTTPS request did not negotiate TLS")
 				}
 			}
+			client.CloseIdleConnections()
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 			defer cancel()
 			if err := srv.Shutdown(ctx); err != nil {
