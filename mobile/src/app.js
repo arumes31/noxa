@@ -99,6 +99,8 @@ export async function forgetDevice() {
     app.identity = null;
     app.meta = {};
     app.guestPassword = "";
+    app.unread.clear();
+    app.viewing = null;
     emit("signedout");
 }
 

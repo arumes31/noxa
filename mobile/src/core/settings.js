@@ -112,6 +112,14 @@ export function reset(names = []) {
     set(values);
 }
 
+/** Clear account data on sign-out, keeping this browser's appearance and preferences. */
+export function clearAccountSettings() {
+    reset(["contacts", "notes", "blockedUsers", "buddies", "keywords", "chatTabs",
+        "userVolumes", "mutedUsers", "shareVolumes", "whisperTargets", "channelNotify",
+        "channelWatch", "mutedConversations", "unsubscribedChannels", "motdSeen",
+        "presenceStatus", "presenceMessage"]);
+}
+
 /** Calls listener({changed, settings}) after every change; returns a stop function. */
 export function onChange(listener) {
     const handler = event => listener(event.detail);
