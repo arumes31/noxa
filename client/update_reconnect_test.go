@@ -68,8 +68,8 @@ func TestUpdateReconnectSnapshotUsesActiveConnection(t *testing.T) {
 	tab.info.Addr, tab.info.Nickname, tab.bookmark, tab.lastVoiceChannel = "server.test:1234", "account", "home", 42
 	tab.loginPasswords = &loginPasswords{Password: "native-password", ServerPassword: "native-server-password"}
 	local, remote := net.Pipe()
-	defer local.Close()
-	defer remote.Close()
+	defer func() { _ = local.Close() }()
+	defer func() { _ = remote.Close() }()
 	tab.cm.conn = local
 	tab.cm.displayName = "Daniel"
 	a.activate(active)
