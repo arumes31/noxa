@@ -466,7 +466,23 @@ export function initTabs() {
 
     // (286) auto-connect flagged bookmarks once settings are loaded.
     void V().startupInitialized.then(async ready => {
-        if (ready && !updateStartupBlocked() && !await V().startupUpdateFinished()) setTimeout(autoConnectBookmarks, 300);
+        if (!ready || updateStartupBlocked() || await V().startupUpdateFinished()) return;
+        if (!await V().updateStartupConfirmed()) return;
+        if (typeof App().RestoreUpdateConnection === "function") {
+            const restored = await App().RestoreUpdateConnection();
+            if (restored?.attempted) {
+                if (restored.tab_id) await V().completeUpdateReconnect(restored);
+                if (restored.error || restored.warning) {
+                    const message = restored.error || restored.warning;
+                    V().sysMsg(message);
+                    V().toast(message, "warn");
+                }
+                // Restore the selected session, not the cold-start guest bookmarks:
+                // those would duplicate this server or switch away from its voice channel.
+                return;
+            }
+        }
+        setTimeout(autoConnectBookmarks, 300);
     }).catch(() => {});
 
     window.__noxaTabs = { renderTabs, quickConnectLast, quickConnectTarget, renderRecents };

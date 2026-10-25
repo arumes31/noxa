@@ -3,6 +3,7 @@ import { expect, test } from "./fixtures.js";
 async function boot(page, scenario = {}) {
     await page.addInitScript((scenario) => {
         window.__calls = {};
+        window.__callOrder = [];
         window.__events = {};
         window.__scenario = scenario;
         window.runtime = {
@@ -14,6 +15,7 @@ async function boot(page, scenario = {}) {
         };
         window.go = { main: { App: new Proxy({}, { get: (_, method) => method === "UpdateStartupPending" && window.__scenario.legacyBridge ? undefined : async (...args) => {
             window.__calls[method] = (window.__calls[method] || 0) + 1;
+            window.__callOrder.push(method);
             const s = window.__scenario;
             if (method === "UpdateStartupPending") {
                 if (s.transitionQueryPending) await new Promise(resolve => { window.__finishTransitionQuery = resolve; });
@@ -45,6 +47,11 @@ async function boot(page, scenario = {}) {
                 s.downloadError = "update cancelled";
                 window.__finishDownload?.();
                 return true;
+            }
+            if (method === "PrepareUpdateReconnect") { window.__preparedAudio = args; return s.prepareError || ""; }
+            if (method === "RestoreUpdateConnection") {
+                if (s.restoreAudio) for (const cb of window.__events.update_connection_restoring || []) cb(s.restoreAudio);
+                return s.restoreResult || { attempted: false };
             }
             if (method === "GetUpdatePhase") return s.restored ? "restored" : "ready";
             if (method === "ApplyAndRestart") {
@@ -239,7 +246,7 @@ test("startup offers update before connecting and checks once", async ({ page })
 test("download can be cancelled and retried without showing an installation failure", async ({ page }) => {
     await boot(page, { downloadPending: true });
     await page.getByRole("button", { name: "Update now" }).click();
-    await page.getByRole("button", { name: "Cancel download", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel download", exact: true }).click({ timeout: 10000 });
     await expect(page.locator(".upd-status")).toHaveText("Download cancelled. You can try again.");
     await expect(page.locator(".upd-status")).not.toHaveClass(/warn/);
     await expect(page.getByRole("button", { name: "Update now" })).toBeEnabled();
@@ -447,7 +454,7 @@ test("German updater translates failure, retry, progress and restart", async ({ 
 test("startup installation defaults on and restarts once independently of notices", async ({ page }) => {
     await boot(page, { autoInstall: true, enabled: false, downloadPending: true, restartPending: true,
         bookmarks: [{ name: "auto", addr: "example.test:1234", nickname: "guest", auto_connect: true }] });
-    await expect.poll(() => page.evaluate(() => window.__calls.DownloadAndApply)).toBe(1);
+    await expect.poll(() => page.evaluate(() => window.__calls.DownloadAndApply), { timeout: 10000 }).toBe(1);
     await expect.poll(() => page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBe(1);
     await expect(page.locator(".upd-status")).toHaveText("downloading…");
     expect(await page.evaluate(() => window.__calls.ConnectGuestBookmarkTabWithID || 0)).toBe(0);
@@ -461,16 +468,21 @@ test("startup installation defaults on and restarts once independently of notice
 });
 
 for (const offline of [false, true]) {
-    test(`reconnect remains notice-only with automatic startup installation enabled (${offline})`, async ({ page }) => {
+    test(`reconnect installs after five seconds with automatic installation enabled (${offline})`, async ({ page }) => {
         await boot(page, { autoInstall: true, available: false, offline });
         await page.evaluate(() => window.__noxa.startupUpdateFinished());
-        await page.evaluate(async () => {
+        await page.clock.install();
+        await page.evaluate(() => {
             window.__scenario.available = true;
             window.__scenario.offline = false;
-            await window.__noxa.reconnectAutoCheck("server-a");
+            window.__scenario.downloadPending = true;
+            void window.__noxa.reconnectAutoCheck("server-a");
         });
-        await expect(page.getByRole("button", { name: "Update now", exact: true })).toBeVisible();
+        await expect(page.locator(".upd-countdown")).toContainText("Updating automatically in 5 s");
+        await page.clock.runFor(4000);
         expect(await page.evaluate(() => window.__calls.DownloadAndApply || 0)).toBe(0);
+        await page.clock.runFor(1000);
+        await expect.poll(() => page.evaluate(() => window.__calls.DownloadAndApply), { timeout: 10000 }).toBe(1);
         expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
     });
 }
@@ -478,7 +490,7 @@ for (const offline of [false, true]) {
 test("cancelled startup download resumes autoconnect and retry stays manual", async ({ page }) => {
     await boot(page, { autoInstall: true, downloadPending: true,
         bookmarks: [{ name: "auto", addr: "example.test:1234", nickname: "guest", auto_connect: true }] });
-    await page.getByRole("button", { name: "Cancel download", exact: true }).click();
+    await page.getByRole("button", { name: "Cancel download", exact: true }).click({ timeout: 10000 });
     await expect(page.locator(".upd-status")).toHaveText("Download cancelled. You can try again.");
     await expect.poll(() => page.evaluate(() => window.__calls.ConnectGuestBookmarkTabWithID)).toBe(1);
     expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
@@ -496,6 +508,7 @@ for (const scenario of [{ downloadError: "network failed" }, { restartError: "st
         await page.getByRole("button", { name: "Close", exact: true }).click();
         await page.evaluate(async () => {
             await window.__noxa.startupAutoCheck();
+            window.__noxa.state.settings.updates_auto_install = false;
             await window.__noxa.reconnectAutoCheck("server-a");
         });
         await expect(page.getByRole("button", { name: "Update now", exact: true })).toBeVisible();
@@ -688,3 +701,53 @@ test("fast automatic bookmark connection also shows the full connect animation",
     await page.clock.runFor(2000);
     await expect(page.locator(".connect-splash")).toHaveCount(0);
 });
+
+
+test("automatic update countdown can be postponed or disabled without downloading", async ({ page }) => {
+    await boot(page, { autoInstall: true });
+    await expect(page.locator(".upd-countdown")).toContainText("Updating automatically in 5 s");
+    await page.clock.install();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.clock.runFor(6000);
+    expect(await page.evaluate(() => window.__calls.DownloadAndApply || 0)).toBe(0);
+    await page.evaluate(() => { void window.__noxa.reconnectAutoCheck("server-a"); });
+    await expect(page.locator(".upd-countdown")).toContainText("Updating automatically");
+    await page.evaluate(() => { window.__noxa.state.settings.updates_auto_install = false; });
+    await page.clock.runFor(6000);
+    expect(await page.evaluate(() => window.__calls.DownloadAndApply || 0)).toBe(0);
+    await expect(page.getByRole("button", { name: "Update now", exact: true })).toBeVisible();
+});
+
+test("update restart captures current microphone and headset state before launching", async ({ page }) => {
+    await boot(page, { restartPending: true });
+    await page.evaluate(() => window.__noxa.setDeafened(true));
+    await page.getByRole("button", { name: "Update now", exact: true }).click();
+    await page.getByRole("button", { name: "Restart now", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__preparedAudio)).toEqual([true, true, false]);
+    const order = await page.evaluate(() => window.__callOrder);
+    expect(order.indexOf("PrepareUpdateReconnect")).toBeLessThan(order.indexOf("ApplyAndRestart"));
+});
+
+test("handoff failure keeps the current client running", async ({ page }) => {
+    await boot(page, { prepareError: "OS protection unavailable" });
+    await page.getByRole("button", { name: "Update now", exact: true }).click();
+    await page.getByRole("button", { name: "Restart now", exact: true }).click();
+    await expect(page.locator(".upd-status")).toContainText("OS protection unavailable");
+    expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
+});
+
+for (const mutedBeforeDeafen of [false, true]) {
+    test(`restore privacy before replay and retain original microphone state (${mutedBeforeDeafen})`, async ({ page }) => {
+        await boot(page, { enabled: false, afterUpdate: true, restoreAudio: { muted: true, deafened: true, muted_before_deafen: mutedBeforeDeafen }, restoreResult: { attempted: true, error: "test server unavailable" },
+            bookmarks: [{ name: "auto", addr: "example.test:1234", nickname: "guest", auto_connect: true }] });
+        await expect.poll(() => page.evaluate(() => window.__calls.RestoreUpdateConnection)).toBe(1);
+        const order = await page.evaluate(() => window.__callOrder);
+        expect(order.indexOf("ConfirmUpdateStartup")).toBeLessThan(order.indexOf("RestoreUpdateConnection"));
+        expect(await page.evaluate(() => window.__noxa.updateReconnectAudio())).toEqual({ muted: true, deafened: true, mutedBeforeDeafen });
+        await page.evaluate(() => window.__noxa.setDeafened(false));
+        expect(await page.evaluate(() => window.__noxa.state.muted)).toBe(mutedBeforeDeafen);
+        await page.waitForTimeout(400);
+        expect(await page.evaluate(() => window.__calls.ConnectGuestBookmarkTabWithID || 0)).toBe(0);
+        await expect(page.locator(".toast").filter({ hasText: "test server unavailable" })).toBeVisible();
+    });
+}

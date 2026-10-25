@@ -66,6 +66,7 @@ export class SpeechQueue {
         const def = SPEECH_EVENTS[event];
         if (!def || !settings || this.isDND(settings) || settings.spoken_messages === false) return false;
         if (!preview && (settings.play_sounds === false || (def.category !== "application" && this.getState()?.replayingTabID))) return false;
+        if (!preview && (this.getState()?.muted || this.getState()?.deafened) && event !== "poke") return false;
         if (!speechEventEnabled(settings, event, effect)) return false;
         if (def.matrix && (settings.notify_matrix?.[def.matrix]?.sound === false || settings.event_sounds?.[def.matrix] === false)) return false;
         if (event === "permission_denied" && settings.speech_permissions === false) return false;
@@ -187,6 +188,11 @@ export class SpeechQueue {
     }
 
     reconcile() {
+        this.pending = this.pending.filter(item => {
+            if (this.allowed(item.event, item.settings || this.getState()?.settings, item.preview, item.effect)) return true;
+            item.onEnded?.();
+            return false;
+        });
         if (this.current && !this.allowed(this.current.event, this.current.settings || this.getState()?.settings, this.current.preview, this.current.effect)) this.stopCurrent();
         this.pump();
     }

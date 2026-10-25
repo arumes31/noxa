@@ -148,6 +148,7 @@ async function startDownload(m, info) {
     downloading = true;
     const status = m.querySelector(".upd-status");
     const btn = m.querySelector(".upd-update");
+    btn.onclick = () => startDownload(m, info); // Retries must not reuse a settled countdown.
     const prog = m.querySelector(".upd-progress");
     const cancel = m.querySelector(".upd-cancel");
     let phase = "downloading";
@@ -345,7 +346,13 @@ async function restartUpdate(m) {
     m.querySelector(".upd-close").disabled = true;
     status.textContent = t("updater.starting");
     try {
-        const error = await window.go.main.App.ApplyAndRestart();
+        const app = window.go.main.App;
+        if (typeof app.PrepareUpdateReconnect === "function") {
+            const audio = window.__noxa.updateReconnectAudio();
+            const preparationError = await app.PrepareUpdateReconnect(audio.muted, audio.deafened, audio.mutedBeforeDeafen);
+            if (preparationError) throw new Error(preparationError);
+        }
+        const error = await app.ApplyAndRestart();
         if (error) throw new Error(error);
         restartCompleted = true;
         return true;
@@ -393,14 +400,34 @@ async function quietUpdateCheck(enabled, current = async () => true, autoInstall
             const m = showUpdateModal();
             await runCheck(m, info);
             if (autoInstall() && m.isConnected && modal === m && !applied) {
-                return await startDownload(m, info);
+                const countdown = createUpdateCountdown({
+                    delayMs: 5000,
+                    current: () => autoInstall() && enabled() && modal === m && m.isConnected && !applied,
+                    tick: seconds => {
+                        const label = m.querySelector(".upd-countdown");
+                        label.classList.toggle("hidden", seconds === 0);
+                        label.textContent = seconds ? t("updater.installCountdown", { seconds }) : "";
+                    },
+                    restart: async () => {
+                        if (!autoInstall() || !enabled() || !await current()) return false;
+                        return startDownload(m, info);
+                    },
+                });
+                countdowns.set(m, countdown);
+                m.querySelector(".upd-update").onclick = () => countdown.startNow();
+                const completed = await countdown.done;
+                if (countdowns.get(m) === countdown) {
+                    countdowns.delete(m);
+                    m.querySelector(".upd-countdown").classList.add("hidden");
+                    m.querySelector(".upd-update").onclick = () => startDownload(m, info);
+                }
+                return completed;
             }
         }
     } catch { /* Offline or no update source: stay quiet. */ }
 }
 
-// Only this once-per-app-start path may install automatically. Reconnects
-// share metadata requests, never this installation permission.
+// Automatic installation always requires the saved opt-in and a cancellable countdown.
 export function startupAutoCheck() {
     if (startupChecked) return startupCheck;
     startupChecked = true;
@@ -420,7 +447,7 @@ export async function reconnectAutoCheck(tabID) {
         await quietUpdateCheck(enabled, async () => {
             const latest = await window.go.main.App.SessionInfoForTab(tabID);
             return latest?.connected && latest.client_id === session.client_id;
-        });
+        }, () => !!V().state.settings && V().state.settings.updates_auto_install !== false);
     } catch { /* A closing or disconnected tab cannot offer an update. */ }
 }
 

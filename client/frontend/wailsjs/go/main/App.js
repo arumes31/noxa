@@ -1201,3 +1201,11 @@ export function WhisperSetForTab(arg1, arg2, arg3, arg4) {
 export function SupportsStreamHEVCForTab(arg1) {
     return window['go']['main']['App']['SupportsStreamHEVCForTab'](arg1);
 }
+
+export function PrepareUpdateReconnect(arg1, arg2, arg3) {
+  return window['go']['main']['App']['PrepareUpdateReconnect'](arg1, arg2, arg3);
+}
+
+export function RestoreUpdateConnection() {
+  return window['go']['main']['App']['RestoreUpdateConnection']();
+}

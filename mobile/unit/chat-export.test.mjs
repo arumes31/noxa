@@ -45,7 +45,13 @@ test("the encrypted container round-trips and rejects a wrong passphrase", async
     assert.equal(box.iter, 1000);
     assert.equal(Buffer.from(box.salt, "base64").length, 16);
     assert.equal(Buffer.from(box.iv, "base64").length, 12);
-    assert.ok(!sealed.includes("Ada"));
+    // Random base64 can contain any short name by chance. Check that only the
+    // encrypted container is exposed, then verify authentication and integrity.
+    assert.deepEqual(Object.keys(box).sort(), ["cipher", "data", "format", "iter", "iv", "kdf", "salt", "v"]);
+    const ciphertext = Buffer.from(box.data, "base64");
+    assert.equal(ciphertext.length, Buffer.byteLength(plain) + 16); // GCM tag
+    ciphertext[0] ^= 1;
+    await assert.rejects(openExport({ ...box, data: ciphertext.toString("base64") }, "correct horse"), /corrupt export/);
     assert.equal(await openExport(sealed, "correct horse"), plain);
     await assert.rejects(openExport(sealed, "wrong"), /wrong passphrase/);
     await assert.rejects(openExport({ format: "other" }, "x"), /not a noXa/);

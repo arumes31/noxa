@@ -38,7 +38,7 @@ func TestBackgroundDisconnectPublishesReconnectOwner(t *testing.T) {
 
 // The authentication response is held until the test has changed tab ownership.
 // This exercises the actual TLS/authentication boundary rather than a fake swap.
-func gatedReconnectServer(t *testing.T) (string, <-chan netproto.Authenticate, chan<- struct{}) {
+func gatedReconnectServer(t *testing.T, handlers ...frameHandler) (string, <-chan netproto.Authenticate, chan<- struct{}) {
 	t.Helper()
 	cert, _, err := tlscert.Ensure(t.TempDir(), "", "", nil)
 	if err != nil {
@@ -88,6 +88,16 @@ func gatedReconnectServer(t *testing.T) (string, <-chan netproto.Authenticate, c
 			frame, err := netproto.ReadFrame(conn)
 			if err != nil {
 				return
+			}
+			if len(handlers) > 0 {
+				kind, payload, reply := handlers[0](frame)
+				if reply {
+					response, _ := netproto.Encode(kind, payload)
+					if netproto.WriteFrame(conn, response) != nil {
+						return
+					}
+				}
+				continue
 			}
 			if netproto.MessageType(frame.Type) == netproto.MsgJoinChannel {
 				t.Error("canceled authentication sent a channel join")

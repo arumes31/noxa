@@ -63,6 +63,9 @@ type App struct {
 	// Wails invokes beforeClose for programmatic Quit as well as window close.
 	// Explicit Quit and update restart bypass close-to-tray.
 	quitting atomic.Bool
+	// update.mu guards the one-shot native restart envelope.
+	updateReconnect         string
+	updateReconnectConsumed bool
 	// closeMu guards the renderer readiness and one pending goodbye handshake.
 	closeMu                 sync.Mutex
 	closeNotificationsReady bool
