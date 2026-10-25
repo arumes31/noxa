@@ -11,6 +11,8 @@ import { richBody, watchCustomEmoji } from "./rich-text.js";
 import { header } from "./common.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
+import { dmEntry } from "../core/search.js";
+import { chatSearch } from "./chat-search.js";
 import { aboutEncryption, encryptionBadge, headerActions, lineCache, menuButton, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 
 export function renderDM(root, peer) {
@@ -165,6 +167,13 @@ export function renderDM(root, peer) {
         { label: t("rich.exportHistory"), run: () => import("./export.js").then(({ openExport }) => openExport({ title: name, kind: "dm", load: exportLoad })) },
     ]);
 
+    // Direct messages all live on the phone: nothing older to load.
+    const search = chatSearch({
+        tag: `dm:${peer}`, log,
+        entries: () => (dm.conversations.get(peer)?.messages || []).filter(m => !m.pending && !m.queued && !m.failed)
+            .map(m => dmEntry(peer, m, { selfName: session.nickname, selfUID: session.uniqueID, peerName: nickname() })),
+        loadOlder: async () => false,
+    });
     const progress = h("div", { class: "history-progress", role: "status" });
     const onMessages = event => { if (event.detail.peer === peer) render(); };
     const onHistory = event => {
@@ -175,11 +184,11 @@ export function renderDM(root, peer) {
     dm.addEventListener("messages", onMessages);
     dm.addEventListener("history", onHistory);
     const rerender = () => { line.clear(); render(); };
-    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log)];
+    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log), search.stop];
     const call = h("button", { class: "icon-btn", type: "button", "aria-label": t("call.start", { name }), onclick: () => startCall(peer).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone"));
     root.replaceChildren(h("section", { class: "screen chat" },
-        header(name, { back: "#/home", action: headerActions(call, menu) }),
-        banner, announcementBanner(session), notice, progress, log, editBar, form));
+        header(name, { back: "#/home", action: headerActions(search.button, call, menu) }),
+        banner, announcementBanner(session), notice, progress, search.bar, log, editBar, form));
     dm.ready.then(render);
     checkTrust();
     return () => {

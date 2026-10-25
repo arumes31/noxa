@@ -69,9 +69,14 @@ export class Discussions extends EventTarget {
         return state;
     }
 
-    /** Lists a channel's threads (newest activity first) and its forum settings. */
-    async list(channelID, { beforeID = 0, beforePinned = false } = {}) {
-        const result = await this.#request({ action: "list", channel_id: channelID, before_id: beforeID || undefined, before_pinned: beforePinned || undefined });
+    /**
+     * Lists a channel's threads (pinned first, then newest) and its forum
+     * settings. archived lists the archive instead; tags narrows to threads
+     * carrying all of them; following to threads this account follows.
+     */
+    async list(channelID, { beforeID = 0, beforePinned = false, archived = false, tags = [], following = false } = {}) {
+        const result = await this.#request({ action: "list", channel_id: channelID, before_id: beforeID || undefined, before_pinned: beforePinned || undefined,
+            archived: archived || undefined, tags: tags.length ? tags : undefined, subscribed: following || undefined });
         const state = this.#storeState(channelID, result);
         const threads = result.threads || [];
         state.threads = beforeID ? [...state.threads, ...threads.filter(t => !state.threads.some(s => s.id === t.id))] : threads;
@@ -80,13 +85,29 @@ export class Discussions extends EventTarget {
         return state;
     }
 
-    /** One thread's current metadata. */
+    /**
+     * One thread's current metadata and its newest page of messages; unlike
+     * history this marks the thread read for this account.
+     */
     async get(channelID, threadID) {
         const result = await this.#request({ action: "get", channel_id: channelID, thread_id: threadID });
         this.#storeState(channelID, result);
         const thread = result.threads?.[0];
         if (thread) this.#upsertThread(channelID, thread);
+        if (result.messages) this.#merge(channelID, threadID, result.messages);
+        this.hasMore.set(threadID, !!result.has_more);
         return thread || null;
+    }
+
+    /** thread -> whether older messages exist than those loaded */
+    hasMore = new Map();
+
+    #merge(channelID, threadID, entries) {
+        const list = this.messages.get(threadID) || [];
+        const page = entries.map(entry => this.#entry(channelID, entry));
+        const byID = new Map([...list, ...page].map(m => [m.id, m]));
+        this.messages.set(threadID, [...byID.values()].sort((a, b) => a.sentAt - b.sentAt || a.id - b.id));
+        this.#emit("messages", { channelID, threadID });
     }
 
     #upsertThread(channelID, thread) {
@@ -102,10 +123,8 @@ export class Discussions extends EventTarget {
         const beforeID = list.find(m => m.id)?.id || 0;
         const result = await this.#request({ action: "history", channel_id: channelID, thread_id: threadID, before_id: beforeID || undefined });
         this.#storeState(channelID, result);
-        const page = (result.messages || []).map(entry => this.#entry(channelID, entry));
-        const merged = [...page.filter(m => !list.some(l => l.id === m.id)), ...list].sort((a, b) => a.sentAt - b.sentAt || a.id - b.id);
-        this.messages.set(threadID, merged);
-        this.#emit("messages", { channelID, threadID });
+        this.#merge(channelID, threadID, result.messages || []);
+        this.hasMore.set(threadID, !!result.has_more);
         return !!result.has_more;
     }
 
@@ -127,6 +146,8 @@ export class Discussions extends EventTarget {
     /** Replies in a thread. */
     async send(channelID, threadID, text) {
         const result = await this.#request({ action: "send", channel_id: channelID, thread_id: threadID, request_id: crypto.randomUUID(), ...this.#seal(channelID, text) });
+        if (result.messages?.length) this.#merge(channelID, threadID, result.messages);
+        if (result.threads?.[0]) this.#upsertThread(channelID, result.threads[0]);
         const list = this.messages.get(threadID) || [];
         if (result.message_id && !list.some(m => m.id === result.message_id)) {
             list.push({ id: result.message_id, fromUniqueID: this.session.uniqueID, from: this.session.nickname, text, sentAt: Date.now() / 1000, own: true, reactions: {} });
@@ -137,8 +158,10 @@ export class Discussions extends EventTarget {
     }
 
     /** Edits a thread's title and tags. */
-    edit(channelID, threadID, { title, tags = [] }) {
-        return this.#request({ action: "edit", channel_id: channelID, thread_id: threadID, title, tags });
+    async edit(channelID, threadID, { title, tags = [] }) {
+        const result = await this.#request({ action: "edit", channel_id: channelID, thread_id: threadID, title, tags });
+        if (result.threads?.[0]) this.#upsertThread(channelID, result.threads[0]);
+        return result;
     }
 
     /** Thread flags: archive/reopen, pin, resolve, join/leave, subscribe (follow). */

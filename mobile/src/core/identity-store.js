@@ -58,5 +58,5 @@ export async function clearIdentity() {
     } finally {
         db.close();
     }
-    await clearStores(Stores.dm, Stores.pins, Stores.outbox);
+    await clearStores(Stores.dm, Stores.pins, Stores.outbox, Stores.saved);
 }

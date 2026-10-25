@@ -10,6 +10,10 @@ import { header, scopeName } from "./common.js";
 import { uploadAttachment } from "../core/files.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
+import { channelEntry } from "../core/search.js";
+import { chatSearch } from "./chat-search.js";
+import { threadsButton, watchOpenThread } from "./chat-tools.js";
+import { isPoll, openCreatePoll, pollCard } from "./poll.js";
 import { aboutEncryption, blockedLine, encryptionBadge, headerActions, isBlockedUser, lineCache, menuButton, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 
 const EXPORT_PAGES = 20;
@@ -31,7 +35,7 @@ export function renderChat(root, scope) {
         } catch (error) {
             toast(t("file.uploadFailed", { error: error.message }), "warn");
         }
-    });
+    }, { extras: [{ label: t("poll.create"), run: () => openCreatePoll(session, scope) }] });
     let hasOlder = true;
     let lastTyping = 0;
     const shown = new Set(); // blocked messages the user chose to show
@@ -53,6 +57,7 @@ export function renderChat(root, scope) {
         let body;
         if (message.deleted) body = h("span", { class: "msg-deleted" }, t("chat.deleted"));
         else if (message.text === null || message.text === undefined) body = h("span", { class: "msg-locked" }, t("chat.locked"));
+        else if (isPoll(message.text)) body = pollCard(message, session);
         else body = richBody(message.text, { session, conn: session.conn, channelID: scope });
         const reactions = Object.entries(message.reactions || {}).filter(([, n]) => n > 0);
         return h("div", { class: classes, dataset: { id: String(message.id ?? ""), client: message.clientMsgID || "" } },
@@ -74,6 +79,22 @@ export function renderChat(root, scope) {
         log.replaceChildren(hasOlder ? older : h("span"), ...withDays(messages, m => m.sentAt, line));
         if (stick && (atBottom || messages.at(-1)?.own)) log.scrollTop = log.scrollHeight;
     }
+
+    const search = chatSearch({
+        tag: `channel:${scope}`, log,
+        entries: () => (session.messages.get(scope) || []).filter(m => m.id).map(m => channelEntry(scope, m)),
+        loadOlder: async () => {
+            if (hasOlder) hasOlder = await session.loadHistory(scope);
+            render(false);
+            return hasOlder;
+        },
+        ensure: async id => {
+            const found = await session.loadUntil(scope, id, 50);
+            render(false);
+            return !!found;
+        },
+    });
+    const threads = scope > 0 ? threadsButton(session, scope) : null;
 
     function renderTyping() {
         const entry = session.typing.get(scope);
@@ -136,11 +157,11 @@ export function renderChat(root, scope) {
     const onTyping = event => { if (event.detail.scope === scope) { renderTyping(); setTimeout(renderTyping, 5100); } };
     session.addEventListener("messages", onMessages);
     session.addEventListener("typing", onTyping);
-    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log)];
+    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log), search.stop, () => threads?.stop(), watchOpenThread(session)];
     root.replaceChildren(h("section", { class: "screen chat" },
-        header(name, { back: "#/servers", action: headerActions(menu) }),
+        header(name, { back: "#/servers", action: headerActions(search.button, threads?.button, menu) }),
         topicButton, announcementBanner(session),
-        log, typing, slowMode, form));
+        search.bar, log, typing, slowMode, form));
     render();
     if (!(session.messages.get(scope) || []).length) older.click();
     return () => {

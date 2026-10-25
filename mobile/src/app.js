@@ -5,6 +5,7 @@ import { DirectMessages } from "./core/direct.js";
 import { Calls } from "./core/calls.js";
 import { Groups } from "./core/groups.js";
 import { Voice } from "./core/voice.js";
+import { SavedMessages } from "./core/saved.js";
 import { Connection } from "./core/connection.js";
 import { generateIdentity } from "./core/crypto.js";
 import { signIn } from "./core/device.js";
@@ -36,6 +37,8 @@ app.unread = new Map();
 app.viewing = null;
 /** Messages waiting in the outbox. */
 app.outboxWaiting = 0;
+/** Saved message references, shared by the message menu and the Saved screen. */
+app.saved = typeof indexedDB === "undefined" ? null : new SavedMessages();
 
 const RECONNECT_STEPS = [1000, 2000, 5000, 10000, 20000, 30000];
 let reconnectAttempt = 0;
@@ -83,6 +86,7 @@ export async function forgetDevice() {
     app.session = null;
     previousSession?.close();
     await clearIdentity();
+    if (app.saved) app.saved.references = [];
     app.identity = null;
     app.meta = {};
     app.guestPassword = "";

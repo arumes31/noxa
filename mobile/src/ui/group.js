@@ -8,6 +8,8 @@ import { header } from "./common.js";
 import { richBody, watchCustomEmoji } from "./rich-text.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
+import { groupEntry } from "../core/search.js";
+import { chatSearch } from "./chat-search.js";
 import { aboutEncryption, blockedLine, encryptionBadge, headerActions, isBlockedUser, lineCache, menuButton, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 
 const EXPORT_PAGES = 20;
@@ -102,17 +104,32 @@ export function renderGroup(root, id) {
         }
     });
 
+    const search = chatSearch({
+        tag: `conversation:${id}`, log,
+        entries: () => (groups.messages.get(id) || []).map(m => groupEntry(id, m, nameOf)),
+        loadOlder: async () => {
+            if (hasOlder) hasOlder = await groups.loadOlder(id);
+            render();
+            return hasOlder;
+        },
+        ensure: async messageID => {
+            const has = () => (groups.messages.get(id) || []).some(m => m.id === messageID);
+            for (let page = 0; page < 50 && !has() && hasOlder; page++) hasOlder = await groups.loadOlder(id);
+            render();
+            return has();
+        },
+    });
     const call = h("button", { class: "icon-btn", type: "button", "aria-label": t("group.call"), onclick: () => startGroupCall(id).catch(error => toast(error.code ? t(`call.error.${error.code}`) : error.message, "warn")) }, icon("phone"));
     const menu = menuButton([
         { label: t("rich.aboutEncryption"), run: aboutEncryption },
         { label: t("rich.exportHistory"), run: () => import("./export.js").then(({ openExport }) => openExport({ title, kind: "group", load: exportLoad })) },
     ]);
     root.replaceChildren(h("section", { class: "screen chat" },
-        header(title, { back: "#/home", action: headerActions(call, menu) }),
+        header(title, { back: "#/home", action: headerActions(search.button, call, menu) }),
         h("div", { class: "e2e-banner", role: "note" }, icon("lock"), " ", t("dm.encrypted")),
-        announcementBanner(app.session), notice, log, form));
+        announcementBanner(app.session), notice, search.bar, log, form));
     const rerender = () => { line.clear(); render(); };
-    const stops = [watchCustomEmoji(app.session, rerender), watchDisplaySettings(rerender), relativeTicker(log)];
+    const stops = [watchCustomEmoji(app.session, rerender), watchDisplaySettings(rerender), relativeTicker(log), search.stop];
     const onMessages = event => { if (event.detail.id === id) { render(); groups.markRead(id); } };
     const onList = () => render();
     groups.addEventListener("messages", onMessages);

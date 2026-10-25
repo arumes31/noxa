@@ -5,6 +5,7 @@ import { clock, h, sheet } from "./dom.js";
 import { dmHref, header, lastMessage, nav, scopeName, unreadBadge } from "./common.js";
 import { avatar } from "./dom.js";
 import { announcementBanner } from "./announcement.js";
+import { toolLinks } from "./tool-links.js";
 
 export function renderHome(root) {
     const session = app.session;
@@ -42,14 +43,14 @@ export function renderHome(root) {
     const recent = [...channelRows, ...dmRows, ...groupRows].sort((a, b) => b.at - a.at);
     const invitations = [...(app.groups?.list.values() || [])].filter(g => g.members?.find(m => m.unique_id === session.uniqueID)?.pending);
     root.replaceChildren(h("section", { class: "screen" },
-        header(t("home.title"), { action: h("button", { class: "icon-btn", type: "button", "aria-label": t("home.new"), onclick: async () => {
+        header(t("home.title"), { action: toolLinks(h("button", { class: "icon-btn", type: "button", "aria-label": t("home.new"), onclick: async () => {
             const destination = await sheet(t("home.new"), "", [
                 { label: t("home.newMessage"), value: "new-chat", primary: true },
                 { label: t("group.create"), value: "new-group" },
                 { label: t("home.cancel"), value: null },
             ]);
             if (destination && app.session === session) location.hash = `#/${destination}`;
-        } }, "+") }),
+        } }, "+")) }),
         h("div", { class: "screen-body" },
             announcementBanner(session),
             h("a", { class: "btn btn-primary", href: "#/new-chat" }, t("chatNew.title")),

@@ -21,6 +21,11 @@ const screens = {
     voice: () => import("./ui/voice.js"),
     you: () => import("./ui/you.js"),
     share: () => import("./ui/share.js"),
+    search: () => import("./ui/global-search.js"),
+    inbox: () => import("./ui/inbox.js"),
+    saved: () => import("./ui/saved.js"),
+    threads: () => import("./ui/threads.js"),
+    thread: () => import("./ui/threads.js"),
 };
 
 document.documentElement.lang = lang();
@@ -45,7 +50,7 @@ async function route() {
     let arg = "";
     try { arg = decodeURIComponent(rest.join("/")); } catch { arg = ""; }
     if (!screens[screen] || screen === "connect") screen = "home";
-    if ((screen === "dm" || screen === "call" || screen === "group") && !arg) screen = "home";
+    if ((screen === "dm" || screen === "call" || screen === "group" || screen === "threads" || screen === "thread") && !arg) screen = "home";
     app.viewing = null;
     if (screen === "chat") app.viewing = `channel:${Number(arg) || 0}`;
     if (screen === "dm") app.viewing = `dm:${arg}`;
@@ -71,6 +76,11 @@ async function route() {
         case "voice": cleanup = module.renderVoice(root); break;
         case "you": module.renderYou(root); break;
         case "share": cleanup = module.renderShare(root); break;
+        case "search": cleanup = module.renderSearch(root); break;
+        case "inbox": cleanup = module.renderInbox(root); break;
+        case "saved": cleanup = module.renderSaved(root); break;
+        case "threads": cleanup = module.renderThreads(root, arg); break;
+        case "thread": cleanup = module.renderThread(root, arg); break;
         default: module.renderHome(root);
     }
     renderBanner();

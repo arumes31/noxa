@@ -23,6 +23,11 @@ const paths = {
     share: "M12 15V3M8 7l4-4 4 4M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7",
     download: "M12 3v12M8 11l4 4 4-4M5 21h14",
     shield: "M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z",
+    // Chat tools (search, inbox, saved messages, threads).
+    search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
+    inbox: "M3 13l3-8h12l3 8v6H3zM3 13h5l1 3h6l1-3h5",
+    bookmark: "M6 3h12v18l-6-4-6 4z",
+    threads: "M4 5h16v10H9l-5 4zM8 9h8M8 12h5",
 };
 
 export function icon(name) {
