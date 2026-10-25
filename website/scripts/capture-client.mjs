@@ -130,17 +130,18 @@ try {
   await page.locator('#toasts .toast').waitFor({ state: 'hidden' });
   await page.mouse.move(1270, 790);
   await page.screenshot({ path: path.join(output, 'app-chat.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 1280, height: 1100 });
   await page.evaluate(async () => {
     const { openRolesManager } = await import('/src/roles-ui.js');
     openRolesManager();
   });
   const roles = page.getByRole('dialog', { name: 'Roles', exact: true });
   await roles.getByRole('button', { name: 'Member', exact: true }).click();
-  await roles.getByLabel('Search permissions', { exact: true }).fill('voice');
+  await roles.locator('.roles-editor').evaluate(node => { node.scrollTop = 0; });
   await roles.locator('.roles-dialog').screenshot({ path: path.join(output, 'app-roles.png'), animations: 'disabled' });
   assert.deepEqual(errors, [], 'Client screenshot runtime errors');
   const manifest = { sourceCommit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
-    browser: browser.version(), viewport: '1280x800', scale: 1, locale: 'en-GB', timezone: 'UTC',
+    browser: browser.version(), viewport: '1280x800', rolesViewport: '1280x1100', scale: 1, locale: 'en-GB', timezone: 'UTC',
     fixtureTime: '2026-10-24T18:35:00Z',
     fixture: 'website/scripts/capture-client.mjs', data: 'Fictional local-only demo data',
     appChat: 'Full actual frontend viewport', appRoles: 'Actual Roles dialog crop',

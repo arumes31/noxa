@@ -56,14 +56,14 @@ outside the published directory.
 
 `public/assets/screenshots/app-chat.png` and `app-roles.png` are captures of
 the actual noXa frontend at application commit
-`5442eb2e4275fe2c6c651dcc0cea955fc5dfdd36`. They use fictional local demo
+`68bb5cfe75c3f450590d92cca5b9cca1a7ef9aee`. They use fictional local demo
 messages, members, channels, roles, and the reserved `community.example`
 hostname. The page identifies the images as demo data. They are browser
 captures with native API fixtures, not a connection to a production server
 or proof of an active voice or encrypted session.
 
 The chat image captures the 1280 by 800 client viewport. The roles image is a
-crop of the real Roles dialog. `scripts/capture-manifest.json` records the
+crop of the real Roles dialog at a 1280 by 1100 viewport. `scripts/capture-manifest.json` records the
 application source commit, Chromium version, viewport, locale, timezone, and
 capture timestamp. The supplied concept mockups are not used as app captures.
 

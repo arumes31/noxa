@@ -1,7 +1,8 @@
 {
-  "sourceCommit": "5442eb2e4275fe2c6c651dcc0cea955fc5dfdd36",
+  "sourceCommit": "68bb5cfe75c3f450590d92cca5b9cca1a7ef9aee",
   "browser": "156.0.8078.4",
   "viewport": "1280x800",
+  "rolesViewport": "1280x1100",
   "scale": 1,
   "locale": "en-GB",
   "timezone": "UTC",
@@ -10,5 +11,5 @@
   "data": "Fictional local-only demo data",
   "appChat": "Full actual frontend viewport",
   "appRoles": "Actual Roles dialog crop",
-  "generatedAt": "2026-10-25T09:28:41.648Z"
+  "generatedAt": "2026-10-25T09:41:07.826Z"
 }
