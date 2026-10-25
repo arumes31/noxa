@@ -536,8 +536,9 @@ defaults. Nested YAML keys use underscores in environment variables, for example
 `webrtc.udp_addr` becomes `NOXA_WEBRTC_UDP_ADDR`. The server does not load `.env`
 itself; Docker Compose uses it for interpolation.
 
-The native-client minimum is set in YAML as `client_min_version: "0.5.94"`
-(or through `NOXA_CLIENT_MIN_VERSION`) and takes effect after server restart.
+Set a required native-client minimum in YAML, for example
+`client_min_version: "0.6.20"`, or through `NOXA_CLIENT_MIN_VERSION`; it takes
+effect after server restart. The checked-in default is `0.0.0`.
 `0.0.0` keeps compatibility with older clients that omit a version or report a
 non-semantic descriptive version; existing length/control-character checks remain.
 With a minimum enabled, missing, malformed and older versions are rejected before
