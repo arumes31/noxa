@@ -17,3 +17,27 @@ test("ratchet wrapper rejects missing storage keys and closed instances", async 
     core.close();
     await assert.rejects(core.apply({ op: "new_account", key: new Uint8Array(32) }), /closed/);
 });
+
+test("ratchet initialization rejects supplied bytes when already cancelled", async t => {
+    const bytes = await readFile(new URL("../../internal/e2ee/ratchet/core.wasm", import.meta.url));
+    const controller = new AbortController();
+    controller.abort();
+    const digest = t.mock.method(crypto.subtle, "digest");
+    await assert.rejects(createRatchetCore({ bytes, signal: controller.signal }), { name: "AbortError" });
+    assert.equal(digest.mock.callCount(), 0, "cancelled initialization must not start hashing");
+});
+
+for (const stage of ["digest", "compile"]) {
+    test(`ratchet initialization rejects cancellation during ${stage}`, async t => {
+        const bytes = await readFile(new URL("../../internal/e2ee/ratchet/core.wasm", import.meta.url));
+        const controller = new AbortController();
+        const owner = stage === "digest" ? crypto.subtle : WebAssembly;
+        const original = owner[stage].bind(owner);
+        t.mock.method(owner, stage, async (...args) => {
+            const result = await original(...args);
+            controller.abort();
+            return result;
+        });
+        await assert.rejects(createRatchetCore({ bytes, signal: controller.signal }), { name: "AbortError" });
+    });
+}

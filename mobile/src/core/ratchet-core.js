@@ -38,11 +38,15 @@ async function loadBytes(signal) {
 export async function createRatchetCore({ bytes, signal } = {}) {
     const timeout = AbortSignal.timeout(TIMEOUT);
     const loadingSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    loadingSignal.throwIfAborted();
     const binary = bytes ? new Uint8Array(bytes) : await loadBytes(loadingSignal);
+    loadingSignal.throwIfAborted();
     if (!binary.length || binary.length > MAX_WASM) throw new Error("invalid ratchet core size");
     const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", binary));
+    loadingSignal.throwIfAborted();
     if ([...hash].map(b => b.toString(16).padStart(2, "0")).join("") !== CORE_SHA256) throw new Error("ratchet core hash mismatch");
     const module = await WebAssembly.compile(binary);
+    loadingSignal.throwIfAborted();
     const active = new Set();
     let closed = false;
     return {
