@@ -17,3 +17,22 @@ func TestOlmDirectoryStrictWire(t *testing.T) {
 		}
 	}
 }
+
+func TestOlmDirectoryCanonicalWireNames(t *testing.T) {
+	cases := map[string]string{
+		"mixed case duplicate": `{"request_id":"a","Request_ID":"b","claim_until":1900000000,"action":"claim","principal":"bob","device_id":"phone"}`,
+		"uppercase duplicate":  `{"request_id":"a","REQUEST_ID":"b","claim_until":1900000000,"action":"claim","principal":"bob","device_id":"phone"}`,
+		"noncanonical only":    `{"Request_ID":"a","claim_until":1900000000,"action":"claim","principal":"bob","device_id":"phone"}`,
+		"nested duplicate":     `{"request_id":"a","action":"publish","bundle":{"signature":"","Signature":""}}`,
+		"nested unicode fold":  `{"request_id":"a","action":"publish","bundle":{"signature":"","\u017fignature":""}}`,
+		"unicode fold only":    `{"reque\u017ft_id":"a","claim_until":1900000000,"action":"claim","principal":"bob","device_id":"phone"}`,
+		"key entry case":       `{"request_id":"a","action":"publish","bundle":{"one_time_keys":[{"id":"a","ID":"b","key":"c"}]}}`,
+	}
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := DecodeOlmDirectoryRequest(&Frame{Payload: []byte(payload)}); err == nil {
+				t.Fatal("accepted noncanonical wire field")
+			}
+		})
+	}
+}

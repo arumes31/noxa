@@ -38,7 +38,14 @@ test(
             const url = new URL(req.url, "http://localhost");
             if (url.pathname === "/") {
                 res.setHeader("Content-Type", "text/html");
-                res.end("<!doctype html><title>Directory fixture</title>");
+                res.setHeader(
+                    "Content-Security-Policy",
+                    "script-src 'self'; object-src 'none'",
+                );
+                res.end(
+                    "<!doctype html><title>Directory fixture</title>" +
+                        "<script>globalThis.directoryInlineProbe = true;</script>",
+                );
                 return;
             }
             const file = path.resolve(root, "web", `.${url.pathname}`);
@@ -48,10 +55,6 @@ test(
             }
             try {
                 res.setHeader("Content-Type", "application/javascript");
-                res.setHeader(
-                    "Content-Security-Policy",
-                    "script-src 'self'; object-src 'none'",
-                );
                 res.end(await readFile(file));
             } catch {
                 res.writeHead(404).end();
@@ -64,7 +67,28 @@ test(
             );
             browser = await chromium.launch({ headless: true });
             const page = await browser.newPage();
-            await page.goto(`http://127.0.0.1:${server.address().port}/`);
+            // Observe the isolated fixture's document policy, not production CSP.
+            await page.addInitScript(() => {
+                globalThis.directoryCspViolations = [];
+                document.addEventListener("securitypolicyviolation", (event) => {
+                    globalThis.directoryCspViolations.push(event.blockedURI);
+                });
+            });
+            const response = await page.goto(
+                `http://127.0.0.1:${server.address().port}/`,
+            );
+            assert.equal(
+                response.headers()["content-security-policy"],
+                "script-src 'self'; object-src 'none'",
+            );
+            await page.waitForFunction(() =>
+                globalThis.directoryCspViolations.includes("inline"),
+            );
+            assert.equal(
+                await page.evaluate(() => globalThis.directoryInlineProbe),
+                undefined,
+                "document CSP must block the inline probe",
+            );
             const result = await page.evaluate(
                 async ({ entry, f }) => {
                     const { verifyOlmClaim, bundleTranscript, serverBinding } =

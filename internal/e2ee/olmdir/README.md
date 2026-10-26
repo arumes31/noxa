@@ -11,7 +11,7 @@ and its existing protocol/security limitations still apply.
 currentDevices)` and the PWA `trustedDevices` return verified Ed25519 **and**
 X25519 keys. Expected root keys come from the existing identity pin and signed
 keyrecord, never from the candidate list. Duplicate/empty IDs, multiple/missing
-roots, a revoked root, root key mismatch or more than64 records refuse the
+roots, a revoked root, root key mismatch or more than 64 records refuse the
 list. Unapproved, revoked, malformed, dangling and cyclic children are excluded.
 Existing passkey proof verification and automatic endorsement remain unchanged;
 a passkey-created device still needs that existing completed endorsement chain.
@@ -27,7 +27,7 @@ the locked stored row. Registered users and signed/key-derived linked guests
 (`UserID=0`) are supported. Unsigned anonymous guests fail `authority-required`.
 
 `ServerBinding` / `serverBinding` accept the already authenticated control-server
-certificate SHA256 fingerprint, either64 hexadecimal characters or exactly32
+certificate SHA256 fingerprint, either 64 hexadecimal characters or exactly 32
 colon-separated hex byte pairs. They emit `tls-sha256:<64 lowercase hex>`.
 Native callers must first authenticate/pin that certificate. Browser callers
 must obtain the fingerprint through authenticated HTTPS/WSS and preserve the
@@ -55,16 +55,16 @@ Bundle JSON fields, all required:
 
 - `version`: `noxa-olm-directory-v1`; `protocol`: `noxa-olm-v1`.
 - `server`, `principal`, `device_id`: independently expected identities.
-- `generation`: integer1..9007199254740991; initial1, then previous+1.
-- `issued_at`, `expires_at`: safe positive integer Unix seconds, at most7days
-  apart. Future issuance tolerance300seconds; fresh claims require unexpired data.
+- `generation`: integer 1..9007199254740991; initial 1, then previous+1.
+- `issued_at`, `expires_at`: safe positive integer Unix seconds, at most 7 days
+  apart. Future issuance tolerance 300 seconds; fresh claims require unexpired data.
 - `identity`, `signing`: Olm Curve25519/Ed25519 public keys, canonical **unpadded**
   standard base64, as returned by the pinned core.
-- `one_time_keys`:1..100 ordered `{id,key}` entries. IDs are the core's canonical
+- `one_time_keys`: 1..100 ordered `{id,key}` entries. IDs are the core's canonical
   unpadded big-endian eight-byte base64 counters, bounded to signed int64 and
   handled as `BigInt` in JS, never coerced through Number. IDs/public keys must
   be unique; OTKs cannot equal the account Curve25519 key.
-- `signature`: the existing noXa device's64-byte signature, padded standard
+- `signature`: the existing noXa device's 64-byte signature, padded standard
   base64 in JSON (Go `[]byte`).
 
 The signed transcript is UTF-8 concatenated byte-length-prefixed fields
@@ -72,7 +72,7 @@ The signed transcript is UTF-8 concatenated byte-length-prefixed fields
 signature. After the signing public-key field comes decimal key count, then each ordered ID and key.
 `Bundle.Transcript()` and `bundleTranscript()` share fixed UTF-8 fixtures. JSON
 field ordering/escaping is irrelevant. X25519 canonical encodings and low-order
-points are checked with Go `crypto/ecdh` and pinned `@noble/curves`2.4.0; Ed25519
+points are checked with Go `crypto/ecdh` and pinned `@noble/curves` 2.4.0; Ed25519
 points use `filippo.io/edwards25519` and noble. No custom curve arithmetic or
 alternative session protocol was added. The PWA distributes both noble MIT
 notices in `olm-directory-licenses.txt`, verified in the packaged browser test.
@@ -80,7 +80,7 @@ notices in `olm-directory-licenses.txt`, verified in the packaged browser test.
 Native `Bundle.Sign(existingNoXaPrivateKey)` and browser
 `signBundle(bundle, existingNoXaSecret)` create a candidate signed publication.
 They do not persist or publish. Commit the core's candidate account snapshot and
-exact signed publication outbox atomically in Task1b-ii before transport.
+exact signed publication outbox atomically in Task 1b-ii before transport.
 
 Native client `verifyOlmClaim(...)` and browser `verifyOlmClaim(bundle, expected)`
 first validate the current device chain, then signature, context, lifetime,
@@ -94,7 +94,7 @@ inbound messages after expiry.
 
 ## Wire and consumer sequence
 
-Additive frames200/201: `MsgOlmDirectoryRequest` / `MsgOlmDirectoryResult`;
+Additive frames 200/201: `MsgOlmDirectoryRequest` / `MsgOlmDirectoryResult`;
 capability `noxa-olm-directory-v1` advertises **directory only**. The old prekey
 and legacy message formats remain unchanged. The PWA build exports a standalone
 `directory-*.js` entry alongside the existing ratchet entry.
@@ -111,11 +111,11 @@ Claim request: one target device only, no batch draining interface:
 {"request_id":"persisted unique token","action":"claim","principal":"recipient","device_id":"recipient-device","claim_until":1800003600}
 ```
 
-`claim_until` is a fixed positive Unix-second deadline no more than1hour ahead of
+`claim_until` is a fixed positive Unix-second deadline no more than 1 hour ahead of
 the server. Persist and retry the **identical request** before that deadline;
 never extend its deadline. An exact retry after its deadline fails `exhausted`,
 even if expired public rows have been swept. This prevents old retry IDs from
-consuming fresh keys after cleanup. The1hour is a claim transaction retry window,
+consuming fresh keys after cleanup. The 1 hour is a claim transaction retry window,
 not the lifetime of already committed initial-message ciphertext.
 
 Results echo `request_id`, `action` and claim deadline. Successful publication
@@ -127,9 +127,11 @@ matching entry only after local chain/bundle verification. Errors are explicit:
 Malformed requests fail the existing protocol malformed error before processing.
 Correlated valid-request authorization/backend errors use the directory result.
 
-Request parsing is capped24KiB and rejects unknown fields, duplicate JSON member
-names (including nested objects), trailing JSON and excessive nesting. Strings
-are at most128 UTF-8 bytes with no controls. Persist the generation with the
+Request parsing is capped 24 KiB and rejects unknown fields, duplicate JSON member
+names (including nested objects), trailing JSON and excessive nesting. Field
+names must use canonical lowercase ASCII snake_case; case-folded aliases are
+rejected before Go JSON field matching. Strings
+are at most 128 UTF-8 bytes with no controls. Persist the generation with the
 exact publication. A retained older publication's exact retry also succeeds;
 conflicting same generation or recycled OTK IDs fails. Root identity changes
 continue to require existing explicit noXa trust approval.
@@ -144,19 +146,21 @@ or account-wide OTK replacement endpoint is added.
 
 ## Transactions, quotas and revocation
 
-Migration061 adds immutable publication/key rows and one state watermark per
+Migration 061 adds immutable publication/key rows and one state watermark per
 existing device. It changes no existing identity, device, legacy prekey or message
 rows. Generation/account identity/OTK high-watermark survive payload cleanup.
 Olm identity or signing-key replacement is explicitly rejected with the typed
 `ErrOlmAccountChanged`/`account-change-required`, even if signed by the same noXa
-device. This is a staged restriction: Task1b-ii/1c must add a deliberate versioned
+device. This is a staged restriction: Task 1b-ii/1c must add a deliberate versioned
 lost/restored-account reset with authenticated approval, fresh sessions and
 preserved readable history/pins. It must not silently regenerate the account.
 
 Publications and claims lock active device rows, serializing with all existing
 revocation/sign-out/reset updates. Claims lock source and target in deterministic
-ID order, then select/update atomically. Their principal advisory lock serializes
-quota checks and retry lookup across reconnects and sender devices. Claim identity
+ID order, then select/update atomically. Bulk reset, idle revocation and idle
+warning updates prelock their complete selected sets in that same order before
+updating only those captured rows; revocation and dependent cleanup remain atomic.
+Claims also take a principal advisory lock to serialize quota checks and retry lookup across reconnects and sender devices. Claim identity
 binds requester principal AND device, target device, deadline, and the immutable
 publication generation via its foreign key. A reused ID with another target,
 device or deadline fails. Exact retries do not spend quota or consume another key.
@@ -171,18 +175,18 @@ Limits:
 
 | Resource | Bound |
 | --- | --- |
-| Retained OTK obligations per recipient device |100, including claimed keys until public expiry+grace |
-| Fresh source-device → target-device claims |2 per rolling24hours |
-| Fresh sender-principal → recipient-principal claims |2 × active endorsed sender devices × active endorsed recipient devices, each count capped100 |
-| Fresh claims per sender principal |4096 per rolling24hours across all targets |
-| Request work |existing principal limiter plus session bucket burst12/refill2 per second; five-second DB operation deadline |
-| Publication lifetime |at most7days |
-| Public retention grace |24hours after publication expiry |
-| Background cleanup work |at most256 publications per hourly sweep; at most100 keys per legitimate publication |
-| Device trust chain |at most64 entries |
+| Retained OTK obligations per recipient device | 100, including claimed keys until public expiry+grace |
+| Fresh source-device → target-device claims | 2 per rolling 24 hours |
+| Fresh sender-principal → recipient-principal claims | 2 × active endorsed sender devices × active endorsed recipient devices, each count capped 100 |
+| Fresh claims per sender principal | 4096 per rolling 24 hours across all targets |
+| Request work | existing principal limiter plus session bucket burst 12/refill 2 per second; five-second DB operation deadline |
+| Publication lifetime | at most 7 days |
+| Public retention grace | 24 hours after publication expiry |
+| Background cleanup work | at most 256 publications per hourly sweep; at most 100 keys per legitimate publication |
+| Device trust chain | at most 64 entries |
 
-The pair quota supports full default10×10 device-pair startup (100 unique claims)
-and the4096 total bound covers default16-member ×10×10 initialization. Changing
+The pair quota supports full default 10×10 device-pair startup (100 unique claims)
+and the 4096 total bound covers default 16-member × 10 × 10 initialization. Changing
 request IDs cannot let one source device drain an entire normal recipient pool.
 Many independently authorized malicious principals remain a denial-of-service
 risk; there is no Sybil-resistance claim. Quota failures are explicit, never
@@ -190,9 +194,9 @@ silently skipped fanout copies. Configuration beyond supported fanout/chain
 limits must fail explicitly in the eventual send path.
 
 Expiry forbids NEW claims; cleanup removes only public directory material. The
-24hour grace is **not** a promise that existing pending offline messages expire:
+24 hour grace is **not** a promise that existing pending offline messages expire:
 the current spool retains undelivered messages. Do not use this cleanup as a
-command to delete claimed private keys or readable archives. Task1b-ii/1c must
+command to delete claimed private keys or readable archives. Task 1b-ii/1c must
 retain private keys while supported delivery obligations remain, or explicitly
 surface unsupported late delivery; it must solve bounded exhaustion and recovery
 without deleting old history. No private key/session/account storage is implemented
@@ -220,7 +224,10 @@ npm --prefix mobile run test:directory
 `scripts/generate-olm-directory-fixtures.mjs` deterministically regenerates it.
 Tests cover real PostgreSQL spent-key concurrency, exact/altered retries,
 replenishment, authority including signed guests, revocation lock contention,
-crossed claims, quota scope and default10×10 fanout, expiry/bounded cleanup,
+crossed claims, quota scope and default 10×10 fanout, expiry/bounded cleanup,
 watermarks, TLS rotation and shared malformed trust/bundle vectors. Packaged
-Chromium runs the actual built verifier under the page's normal script policy.
+Chromium runs the actual built verifier under an isolated document CSP
+(`script-src 'self'; object-src 'none'`),
+with an inline-script probe that proves enforcement. This is not validation of
+the production application's complete CSP.
 Passing tests are not an independent cryptographic audit or live-send validation.

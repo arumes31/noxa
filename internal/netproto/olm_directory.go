@@ -61,7 +61,7 @@ func DecodeOlmDirectoryRequest(f *Frame) (OlmDirectoryRequest, error) {
 					return e
 				}
 				k, ok := t.(string)
-				if !ok || seen[k] {
+				if !ok || !canonicalOlmWireName(k) || seen[k] {
 					return olmdir.ErrInvalid
 				}
 				seen[k] = true
@@ -108,4 +108,22 @@ func DecodeOlmDirectoryRequest(f *Frame) (OlmDirectoryRequest, error) {
 		return r, olmdir.ErrInvalid
 	}
 	return r, nil
+}
+
+// encoding/json matches struct fields case-insensitively, including Unicode
+// folds. Check decoded names before that matching can create ambiguous fields.
+func canonicalOlmWireName(name string) bool {
+	if len(name) == 0 || name[0] == '_' || name[len(name)-1] == '_' {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 'a' && c <= 'z' {
+			continue
+		}
+		if c != '_' || name[i-1] == '_' {
+			return false
+		}
+	}
+	return true
 }

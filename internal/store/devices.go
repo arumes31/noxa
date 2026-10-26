@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // Device kinds.
@@ -279,56 +280,91 @@ func (s *Store) RevokeDevice(ctx context.Context, principal, deviceID, reason st
 	return d, nil
 }
 
-// ResetDevices revokes every active device of the principal except keep
-// (may be empty) and returns the revoked devices.
-func (s *Store) ResetDevices(ctx context.Context, principal, keep, reason string) ([]Device, error) {
-	rows, err := s.db.QueryContext(ctx, revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason=$3
-		WHERE principal=$1 AND device_id<>$2 AND (revoked_at IS NULL OR EXISTS
-			(SELECT 1 FROM webauthn_credentials w WHERE w.device_id=user_devices.device_id)) RETURNING *`),
-		principal, keep, reason)
+// updateLockedDevices locks the complete selected set before changing any row.
+// The device-ID order matches Olm claims; limiting the UPDATE to captured IDs
+// prevents newly eligible rows from acquiring locks out of order. The caller's
+// update must use $1 for those IDs and return deviceColumns (possibly through
+// revokingDevices, retaining its atomic dependent-data cleanup).
+func (s *Store) updateLockedDevices(ctx context.Context, predicate string, selectionArgs []any, update string, updateArgs ...any) ([]Device, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("resetting devices: %w", err)
+		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var revoked []Device
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT device_id FROM user_devices WHERE `+predicate+` ORDER BY device_id COLLATE "C" FOR UPDATE`, selectionArgs...)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := append([]any{pq.Array(ids)}, updateArgs...)
+	rows, err = tx.QueryContext(ctx, update, args...)
+	if err != nil {
+		return nil, err
+	}
+	var out []Device
 	for rows.Next() {
 		d, err := scanDevice(rows)
 		if err != nil {
-			return nil, fmt.Errorf("resetting devices: %w", err)
+			rows.Close()
+			return nil, err
 		}
-		revoked = append(revoked, d)
+		out = append(out, d)
 	}
-	return revoked, rows.Err()
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ResetDevices revokes every active device of the principal except keep
+// (may be empty) and returns the revoked devices.
+func (s *Store) ResetDevices(ctx context.Context, principal, keep, reason string) ([]Device, error) {
+	revoked, err := s.updateLockedDevices(ctx,
+		`principal=$1 AND device_id<>$2 AND (revoked_at IS NULL OR EXISTS
+			(SELECT 1 FROM webauthn_credentials w WHERE w.device_id=user_devices.device_id))`,
+		[]any{principal, keep},
+		revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason=$2 WHERE device_id=ANY($1) RETURNING *`), reason)
+	if err != nil {
+		return nil, fmt.Errorf("resetting devices: %w", err)
+	}
+	return revoked, nil
 }
 
 // ExpireIdleDevices marks devices idle since warnBefore as warned and revokes
 // devices idle since revokeBefore. First devices never expire. It returns the
-// newly warned and the revoked devices.
+// newly warned and the revoked devices. Each phase commits separately, as before,
+// releasing all ordered row locks before the next phase selects its own set.
 func (s *Store) ExpireIdleDevices(ctx context.Context, warnBefore, revokeBefore time.Time) (warned, revoked []Device, err error) {
-	collect := func(q string, at time.Time) ([]Device, error) {
-		rows, err := s.db.QueryContext(ctx, q, at)
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = rows.Close() }()
-		var out []Device
-		for rows.Next() {
-			d, err := scanDevice(rows)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, d)
-		}
-		return out, rows.Err()
-	}
-	revoked, err = collect(revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason='idle'
-		WHERE revoked_at IS NULL AND NOT first_device AND last_seen_at < $1 RETURNING *`), revokeBefore)
+	revoked, err = s.updateLockedDevices(ctx,
+		`revoked_at IS NULL AND NOT first_device AND last_seen_at < $1`, []any{revokeBefore},
+		revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason='idle' WHERE device_id=ANY($1) RETURNING *`))
 	if err != nil {
 		return nil, nil, fmt.Errorf("revoking idle devices: %w", err)
 	}
-	warned, err = collect(`UPDATE user_devices SET expiry_warned_at=now()
-		WHERE revoked_at IS NULL AND NOT first_device AND expiry_warned_at IS NULL AND last_seen_at < $1
-		RETURNING `+deviceColumns, warnBefore)
+	warned, err = s.updateLockedDevices(ctx,
+		`revoked_at IS NULL AND NOT first_device AND expiry_warned_at IS NULL AND last_seen_at < $1`, []any{warnBefore},
+		`UPDATE user_devices SET expiry_warned_at=now() WHERE device_id=ANY($1) RETURNING `+deviceColumns)
 	if err != nil {
 		return nil, revoked, fmt.Errorf("warning idle devices: %w", err)
 	}

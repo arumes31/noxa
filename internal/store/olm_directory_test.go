@@ -435,3 +435,149 @@ func TestOlmDirectoryCertificateRotation(t *testing.T) {
 		t.Fatalf("old binding shadowed new publication: %+v %v", c, e)
 	}
 }
+
+func TestOlmDirectoryBulkDeviceLockOrder(t *testing.T) {
+	if os.Getenv("NOXA_TEST_DATABASE_URL") == "" {
+		t.Fatal("real PostgreSQL URL required")
+	}
+	for _, operation := range []string{"reset", "revoke-idle", "warn-idle"} {
+		t.Run(operation, func(t *testing.T) {
+			s := pollTestStore(t)
+			s.db.SetMaxOpenConns(6)
+			ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+			defer cancel()
+			root, _, _ := olmFixture(t, s, "owner")
+			// Physical insertion order opposes the shared device-ID lock order.
+			high, highKey, bundle := olmFixture(t, s, root.Principal)
+			low, _, _ := olmFixture(t, s, root.Principal)
+			for _, item := range []struct {
+				device *Device
+				id     string
+			}{
+				{&high, "ffffffff-ffff-ffff-ffff-ffffffffffff"},
+				{&low, "00000000-0000-0000-0000-000000000000"},
+			} {
+				_, err := s.db.ExecContext(ctx, `UPDATE user_devices SET device_id=$2,approved_by=$3,approval_signature=$4,last_seen_at=now()-interval '200 days' WHERE device_id=$1`, item.device.DeviceID, item.id, root.DeviceID, make([]byte, 64))
+				if err != nil {
+					t.Fatal(err)
+				}
+				item.device.DeviceID = item.id
+			}
+			handle, err := s.PasskeyUserHandle(ctx, root.Principal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, device := range []Device{root, low, high} {
+				if err := s.AddPasskey(ctx, Passkey{CredentialID: []byte(device.DeviceID), Principal: device.Principal, UserHandle: handle, DeviceID: device.DeviceID, Name: "test", Credential: []byte(`{}`)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			bundle.DeviceID = high.DeviceID
+			signOlm(t, &bundle, highKey)
+			if err := s.PublishOlmBundle(ctx, high.Principal, high.DeviceID, bundle.Server, bundle); err != nil {
+				t.Fatal(err)
+			}
+			blocker, err := s.db.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer blocker.Rollback()
+			if _, err = blocker.ExecContext(ctx, `SELECT device_id FROM user_devices WHERE device_id=$1 FOR UPDATE`, low.DeviceID); err != nil {
+				t.Fatal(err)
+			}
+			type bulkResult struct {
+				count int
+				err   error
+			}
+			bulk := make(chan bulkResult, 1)
+			go func() {
+				if operation == "reset" {
+					rows, err := s.ResetDevices(ctx, root.Principal, root.DeviceID, DeviceRevokedByAdminReset)
+					bulk <- bulkResult{len(rows), err}
+					return
+				}
+				revokeBefore := time.Now().Add(-180 * 24 * time.Hour)
+				if operation == "warn-idle" {
+					revokeBefore = time.Now().Add(-300 * 24 * time.Hour)
+				}
+				warned, revoked, err := s.ExpireIdleDevices(ctx, time.Now().Add(-166*24*time.Hour), revokeBefore)
+				bulk <- bulkResult{len(warned) + len(revoked), err}
+			}()
+			waitForLocks := func(want int) {
+				t.Helper()
+				deadline := time.Now().Add(2 * time.Second)
+				for {
+					var n int
+					err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%user_devices%' AND pid<>pg_backend_pid()`).Scan(&n)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if n >= want {
+						return
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("wanted %d contending device operations, saw %d", want, n)
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+			}
+			waitForLocks(1)
+			// Bulk work must not hold the higher row while waiting for the lower
+			// row. Otherwise a claim holding low and waiting for high can deadlock.
+			probe, err := s.db.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = probe.ExecContext(ctx, `SELECT device_id FROM user_devices WHERE device_id=$1 FOR UPDATE NOWAIT`, high.DeviceID)
+			_ = probe.Rollback()
+			if err != nil {
+				t.Fatalf("bulk operation acquired higher ID before lower ID: %v", err)
+			}
+			claim := make(chan error, 1)
+			go func() {
+				_, err := s.ClaimOlmKey(ctx, low.Principal, low.DeviceID, high.Principal, high.DeviceID, "bulk-race", bundle.ExpiresAt, bundle.Server)
+				claim <- err
+			}()
+			waitForLocks(2)
+			if err = blocker.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			result := <-bulk
+			if result.err != nil || result.count != 2 {
+				t.Fatalf("bulk update: count=%d err=%v", result.count, result.err)
+			}
+			var credentials int
+			if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM webauthn_credentials WHERE principal=$1`, root.Principal).Scan(&credentials); err != nil {
+				t.Fatal(err)
+			}
+			wantCredentials := 1
+			if operation == "warn-idle" {
+				wantCredentials = 3
+			}
+			if credentials != wantCredentials {
+				t.Fatalf("dependent passkey cleanup: got %d, want %d", credentials, wantCredentials)
+			}
+			claimErr := <-claim
+			if operation == "warn-idle" {
+				if claimErr != nil {
+					t.Fatalf("warning blocked a valid claim: %v", claimErr)
+				}
+			} else if !errors.Is(claimErr, ErrOlmAuthority) {
+				t.Fatalf("post-revocation claim: %v", claimErr)
+			}
+			for _, device := range []Device{low, high} {
+				got, err := s.DeviceByID(ctx, device.Principal, device.DeviceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if operation == "warn-idle" {
+					if !got.Active() || got.ExpiryWarnedAt.IsZero() {
+						t.Fatalf("warning lost: %+v", got)
+					}
+				} else if got.Active() {
+					t.Fatal("bulk revocation rolled back")
+				}
+			}
+		})
+	}
+}
