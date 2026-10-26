@@ -9,8 +9,9 @@ const FIELDS = ["edPublic", "edSecret", "xPublic", "xSecret"];
 const SIZES = { edPublic: 32, edSecret: 64, xPublic: 32, xSecret: 32 };
 
 /** Stores the device identity and any link metadata (deviceID, principal). */
-export async function saveIdentity(identity, meta = {}, { onboarding = false, fence } = {}) {
+export async function saveIdentity(identity, meta = {}, { onboarding = false, fence, replaceAccount = false } = {}) {
     if (onboarding && !fence) throw new Error("explicit onboarding fence required");
+    if (replaceAccount && !onboarding) throw new Error("account replacement requires onboarding");
     for (const field of FIELDS) if (!(identity[field] instanceof Uint8Array) || identity[field].length !== SIZES[field]) throw new Error("invalid device identity");
     const db = await openDB();
     try {
@@ -23,14 +24,30 @@ export async function saveIdentity(identity, meta = {}, { onboarding = false, fe
         }
         const { iv, sealed } = await seal(db, plain);
         plain.fill(0);
-        await fencedWrite(db, Object.values(Stores), expected, (tx, current) => {
+        const committed = await fencedWrite(db, Object.values(Stores), expected, (tx, current) => {
             const device = tx.objectStore(Stores.device);
+            let next = current;
             if (onboarding) {
                 if (current.generation >= Number.MAX_SAFE_INTEGER) throw new Error("identity generation exhausted");
-                device.put({ generation: current.generation + 1, active: true }, "identity-fence");
+                next = { generation: current.generation + 1, active: true };
             }
-            device.put({ iv, sealed, meta }, "identity");
+            const write = () => {
+                device.put(next, "identity-fence");
+                device.put({ iv, sealed, meta }, "identity");
+            };
+            if (replaceAccount) {
+                const key = device.get("wrapping-key");
+                key.onsuccess = () => {
+                    device.clear();
+                    device.put(key.result, "wrapping-key");
+                    write();
+                };
+                for (const name of Object.values(Stores)) if (name !== Stores.device) tx.objectStore(name).clear();
+            } else write();
+            return next;
         }, { onboarding });
+        if (replaceAccount) clearAccountSettings();
+        return committed;
     } finally {
         db.close();
     }
@@ -54,16 +71,16 @@ export async function loadIdentity() {
         }
         plain.fill(0);
         try { await fencedWrite(db, [], expected, () => {}); } catch (error) { if (error.code === "fenced") return null; throw error; }
-        return { identity, meta: record.meta || {} };
+        return { identity, meta: record.meta || {}, fence: expected };
     } finally {
         db.close();
     }
 }
 
-export async function updateMeta(patch) {
+export async function updateMeta(patch, fence) {
     const db = await openDB();
     try {
-        const expected = await identityFence(db);
+        const expected = fence || await identityFence(db);
         await fencedWrite(db, [], expected, tx => {
             const store = tx.objectStore(Stores.device);
             const read = store.get("identity");
@@ -78,8 +95,14 @@ export async function beginIdentity() {
     try { return await identityFence(db); } finally { db.close(); }
 }
 
+/** Validate a flow's original generation before publishing an authenticated session. */
+export async function assertIdentityFence(fence) {
+    const db = await openDB();
+    try { await fencedWrite(db, [], fence, () => {}); } finally { db.close(); }
+}
+
 /** Logout clears account data and advances its fence in ONE transaction. */
-export async function clearIdentity() {
+export async function clearIdentity(expected) {
     const db = await openDB();
     try {
         const next = await new Promise((resolve, reject) => {
@@ -89,6 +112,9 @@ export async function clearIdentity() {
             let next, failure;
             read.onsuccess = () => {
                 const current = read.result || defaultFence();
+                if (expected && current.generation !== expected.generation) {
+                    failure = Object.assign(new Error("identity operation fenced"), { code: "fenced" }); tx.abort(); return;
+                }
                 if (current.generation >= Number.MAX_SAFE_INTEGER) { failure = new Error("identity generation exhausted"); tx.abort(); return; }
                 next = { generation: current.generation + 1, active: false };
                 const keyRead = device.get("wrapping-key");

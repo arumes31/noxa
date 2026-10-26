@@ -37,3 +37,23 @@ func TestCommitAtomicRetryAndFence(t *testing.T) {
 		t.Fatalf("logout retry %v", err)
 	}
 }
+
+func TestInterruptedFirstInitializationRetries(t *testing.T) {
+	dir := t.TempDir()
+	ns := Namespace{"server", "alice", "device"}
+	protection := IdentityProtection(bytes.Repeat([]byte{9}, 32))
+	failed := protection
+	failure := errors.New("vault temporarily unavailable")
+	failed.Seal = func([]byte) ([]byte, error) { return nil, failure }
+	if _, err := Open(dir, ns, failed, 0); !errors.Is(err, failure) {
+		t.Fatalf("first initialization: %v", err)
+	}
+	s, err := Open(dir, ns, protection, 0)
+	if err != nil {
+		t.Fatalf("retry after rolled-back initialization: %v", err)
+	}
+	defer s.Close()
+	if _, err := s.Read(); err != nil {
+		t.Fatal(err)
+	}
+}

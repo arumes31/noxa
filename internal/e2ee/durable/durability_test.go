@@ -229,7 +229,18 @@ func TestStoreSubprocess(t *testing.T) {
 		return
 	}
 	dir := os.Getenv("NOXA_STORE_DIR")
-	s, e := Open(dir, testNS, IdentityProtection(bytes.Repeat([]byte{7}, 32)), 100*time.Millisecond)
+	protection := IdentityProtection(bytes.Repeat([]byte{7}, 32))
+	if mode == "initialize" {
+		protection.Seal = func([]byte) ([]byte, error) {
+			if err := os.WriteFile(filepath.Join(dir, "ready"), []byte("before first commit"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for {
+				time.Sleep(time.Hour)
+			}
+		}
+	}
+	s, e := Open(dir, testNS, protection, 100*time.Millisecond)
 	if mode == "lock" {
 		if !errors.Is(e, ErrInUse) {
 			t.Fatalf("expected exclusive lock: %v", e)
@@ -267,17 +278,21 @@ func TestStoreSubprocess(t *testing.T) {
 	}
 }
 func TestActualProcessLockAndKill(t *testing.T) {
-	for _, mode := range []string{"before", "after"} {
+	for _, mode := range []string{"initialize", "before", "after"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
-			s := openTest(t, dir)
-			trusted(t, s, "bob")
-			cmd := exec.Command(os.Args[0], "-test.run=^TestStoreSubprocess$")
-			cmd.Env = append(os.Environ(), "NOXA_STORE_HELPER=lock", "NOXA_STORE_DIR="+dir)
-			if output, e := cmd.CombinedOutput(); e != nil {
-				t.Fatalf("lock child: %s %v", output, e)
+			var s *Store
+			var cmd *exec.Cmd
+			if mode != "initialize" {
+				s = openTest(t, dir)
+				trusted(t, s, "bob")
+				cmd = exec.Command(os.Args[0], "-test.run=^TestStoreSubprocess$")
+				cmd.Env = append(os.Environ(), "NOXA_STORE_HELPER=lock", "NOXA_STORE_DIR="+dir)
+				if output, e := cmd.CombinedOutput(); e != nil {
+					t.Fatalf("lock child: %s %v", output, e)
+				}
+				s.Close()
 			}
-			s.Close()
 			cmd = exec.Command(os.Args[0], "-test.run=^TestStoreSubprocess$")
 			cmd.Env = append(os.Environ(), "NOXA_STORE_HELPER="+mode, "NOXA_STORE_DIR="+dir)
 			var output bytes.Buffer
@@ -306,7 +321,7 @@ func TestActualProcessLockAndKill(t *testing.T) {
 			defer s.Close()
 			got := readTest(t, s, Ref{Session, "bob"}, Ref{Outbox, "crash"})
 			for _, v := range got.Records {
-				if mode == "before" && v.Revision != 0 {
+				if mode != "after" && v.Revision != 0 {
 					t.Fatal("uncommitted bytes visible")
 				}
 				if mode == "after" && v.Revision != 1 {
@@ -392,5 +407,53 @@ func TestNamespaceReplacementRecoveryAndBounds(t *testing.T) {
 	}
 	if _, err = s.Read(Ref{Account, "epoch-1"}, Ref{Account, "epoch-2"}); !errors.Is(err, ErrFenced) {
 		t.Fatal("logout left account epoch active")
+	}
+}
+
+// First initialization is recoverable only when no committed bucket exists.
+func TestInitializationDoesNotResetPartialOrUnknownState(t *testing.T) {
+	for _, damage := range []string{"unexpected bucket", "extra bucket", "missing master", "missing control", "missing payload", "missing key bucket"} {
+		t.Run(damage, func(t *testing.T) {
+			dir := t.TempDir()
+			s := openTest(t, dir)
+			file := s.db.Path()
+			s.Close()
+			db, err := bolt.Open(file, 0600, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = db.Update(func(tx *bolt.Tx) error {
+				switch damage {
+				case "extra bucket":
+					_, e := tx.CreateBucket([]byte("unexpected"))
+					return e
+				case "unexpected bucket":
+					if e := tx.DeleteBucket(keyBucket); e != nil {
+						return e
+					}
+					if e := tx.DeleteBucket(bucket); e != nil {
+						return e
+					}
+					_, e := tx.CreateBucket([]byte("unexpected"))
+					return e
+				case "missing master":
+					return tx.Bucket(keyBucket).Delete([]byte("master"))
+				case "missing control":
+					return tx.Bucket(bucket).Delete(keyOf(controlRef))
+				case "missing payload":
+					return tx.DeleteBucket(bucket)
+				case "missing key bucket":
+					return tx.DeleteBucket(keyBucket)
+				}
+				return nil
+			})
+			db.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Open(dir, testNS, IdentityProtection(bytes.Repeat([]byte{7}, 32)), 0); !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("%s: %v", damage, err)
+			}
+		})
 	}
 }

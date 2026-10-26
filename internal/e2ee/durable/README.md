@@ -13,7 +13,11 @@ One exclusive OS lock covers every account record in that device database.
 Default lock timeout is 500 ms; accepted positive overrides are at most 5 s.
 `NoSync` is never enabled. The wrapped random 32-byte master key is created in
 that same locked database transaction, not a separate racing sidecar file.
-Missing/unreadable keys or control records are errors, never account recovery.
+A valid bbolt file with no committed buckets may retry first initialization
+following a failed key-protection call or interrupted first transaction. Any
+unexpected bucket, missing key/payload bucket in populated state, unreadable
+master, or missing control record is corruption; initialization never clears
+existing buckets. Complete malicious erasure/rollback is outside this guarantee.
 AES-256-GCM authenticates namespace, record kind, ID and revision for every
 value, including control counters, readable archives, trust and outboxes.
 Keys/record IDs and storage sizes are metadata, not hidden by this scheme.
@@ -142,13 +146,34 @@ also be DOMExceptions (quota/abort/etc.). The existing global `clearIdentity()`
 is the browser logout boundary, clearing account stores and advancing the
 persistent fence in ONE transaction while retaining only the wrapping key.
 
-`saveIdentity` reads a fence before crypto and checks it at commit; `updateMeta`
-uses a fenced transaction directly and cannot rewrite a decrypted stale identity.
-Explicit onboarding requires a fresh `beginIdentity()` token passed as
-`saveIdentity(identity,meta,{onboarding:true,fence})`. Existing guest/link flows
-supply this token. Onboarding advances generation but does not retroactively
-purge archives; explicit logout/clear follows the existing account-clear policy.
+`beginIdentity()` captures the generation at the start of user intent, BEFORE
+passkey authentication, QR scanning, link approval, backup reading/import or
+guest authentication. `rememberLinkedIdentity(identity,meta,fence)` requires
+that original token. `saveIdentity(identity,meta,{onboarding:true,fence})`
+checks it in the commit and returns the new active fence; callers pass this
+returned fence to `connect({fence})`. `loadIdentity()` also returns its checked
+`fence`; reconnect never grants an old in-memory identity a newer generation.
+`updateMeta(patch,fence)` uses that same session generation. `clearIdentity(fence)`
+can conditionally clear a revoked session without deleting a newer identity.
+Stale operations fail with `code:"fenced"`.
+
+Guest replacement uses `saveIdentity(...,{onboarding:true,fence,replaceAccount:true})`
+to clear all account stores, retain the wrapping key, advance the generation
+and save the new identity in ONE checked transaction. Bad authentication or a
+stale fence does not clear anything. Ordinary onboarding still retains archives.
+A deliberate guest flow started after logout/replacement reads a new token and
+creates a fresh identity if the former guest's generation is no longer active.
 The legacy `putSealed` path is also fenced across its awaited encryption.
+
+`connect` stages its ChatSession before awaited identity validation, closes a
+rejected connection, and publishes only after validation. Local attempt generations
+also stop a superseded connect from replacing or closing a newer app session.
+`ChatSession(...,{deferIncoming:true})` buffers up to 1024 unsolicited frames and 8 MiB of aggregate UTF-8 JSON payload
+bytes (checked before retention; decoded object overhead is additional);
+`activateIncoming()` flushes once, in order, after receivers are installed.
+Overflow closes the connection and initialization fails; rejected sessions drop
+the buffer. This is transient memory staging, not a durable transport ACK or
+cross-tab notification that immediately disconnects every already-active socket.
 
 ## Bounds, retention and deferred lifecycle
 

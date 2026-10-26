@@ -9,7 +9,7 @@ import { SavedMessages } from "./core/saved.js";
 import { Connection } from "./core/connection.js";
 import { generateIdentity } from "./core/crypto.js";
 import { signIn } from "./core/device.js";
-import { beginIdentity, clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
+import { assertIdentityFence, beginIdentity, clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
 import { enqueue, flush as flushOutbox, showPending, waitingCount } from "./core/outbox.js";
 import { announceRead, closeNotifications, reportVisibility, setBadge, syncPush } from "./core/push.js";
 import { get as setting } from "./core/settings.js";
@@ -22,6 +22,7 @@ notifier.install(app);
 
 app.info = null;
 app.identity = null;
+app.identityFence = null;
 app.meta = {};
 app.guestPassword = "";
 app.session = null;
@@ -50,6 +51,7 @@ app.saved = typeof indexedDB === "undefined" ? null : new SavedMessages();
 const RECONNECT_STEPS = [1000, 2000, 5000, 10000, 20000, 30000];
 let reconnectAttempt = 0;
 let reconnectTimer = 0;
+let connectionGeneration = 0;
 
 function emit(type, detail) {
     app.dispatchEvent(new CustomEvent(type, { detail }));
@@ -67,6 +69,7 @@ export async function loadInfo(fetchImpl = fetch) {
 export async function loadDevice() {
     const stored = await loadIdentity();
     app.identity = stored?.identity || null;
+    app.identityFence = stored?.fence || null;
     app.meta = stored?.meta || {};
     return stored;
 }
@@ -76,14 +79,17 @@ export function newIdentity() {
     return generateIdentity();
 }
 
-export async function rememberLinkedIdentity(identity, meta) {
-    const fence = await beginIdentity();
-    await saveIdentity(identity, { ...meta, linked: true }, { onboarding: true, fence });
+export async function rememberLinkedIdentity(identity, meta, fence) {
+    const committed = await saveIdentity(identity, { ...meta, linked: true }, { onboarding: true, fence });
+    connectionGeneration++;
     app.identity = identity;
+    app.identityFence = committed;
     app.meta = { ...meta, linked: true };
+    return committed;
 }
 
-export async function forgetDevice() {
+export async function forgetDevice(fence) {
+    connectionGeneration++;
     clearReminders();
     app.groups?.close();
     app.groups = null;
@@ -98,8 +104,9 @@ export async function forgetDevice() {
     previousSession?.close();
     await resetCallLog();
     await app.saved?.clear();
-    await clearIdentity();
+    await clearIdentity(fence);
     app.identity = null;
+    app.identityFence = null;
     app.meta = {};
     app.guestPassword = "";
     app.unread.clear();
@@ -109,11 +116,18 @@ export async function forgetDevice() {
 }
 
 /** Signs in with the stored device key and starts the chat session. */
-export async function connect({ guest = null } = {}) {
+export async function connect({ guest = null, fence } = {}) {
+    const attempt = ++connectionGeneration;
+    const checkAttempt = () => {
+        if (attempt !== connectionGeneration) throw Object.assign(new Error("connection operation fenced"), { code: "fenced" });
+    };
     clearTimeout(reconnectTimer);
     app.paused = false;
-    const reuseGuest = !!(guest && app.meta.guest && app.identity);
-    const identity = guest ? (reuseGuest ? app.identity : newIdentity()) : app.identity;
+    const previousIdentity = app.identity, previousFence = app.identityFence, previousMeta = app.meta;
+    fence = fence || (!guest && previousFence) || await beginIdentity();
+    checkAttempt();
+    const reuseGuest = !!(guest && previousMeta.guest && previousIdentity && fence?.active && fence.generation === previousFence?.generation);
+    const identity = guest ? (reuseGuest ? previousIdentity : newIdentity()) : previousIdentity;
     const conn = await Connection.open();
     let auth;
     try {
@@ -125,35 +139,52 @@ export async function connect({ guest = null } = {}) {
     } catch (error) {
         conn.close();
         if (!guest && /signed out|link it again/i.test(error.message)) {
-            await forgetDevice();
+            checkAttempt();
+            await forgetDevice(fence);
             error.revoked = true;
         }
         throw error;
     }
-    const previousSession = app.session;
-    const session = new ChatSession(conn, identity, auth);
-    app.session = session;
-    previousSession?.close();
+    const session = new ChatSession(conn, identity, auth, { deferIncoming: true });
+    let activated = false;
     // Subscribing delivers a channel's chat and keys without joining it;
     // channels the user unsubscribed from in Servers stay unsubscribed.
     const subscribeMissing = () => {
-        if (session.pendingRules) return;
+        if (!activated || session.pendingRules) return;
         const skip = new Set(setting("unsubscribedChannels") || []);
         const missing = session.channels().filter(c => c.chat && !session.subscriptions.has(c.id) && !skip.has(c.id)).map(c => c.id);
         if (missing.length) session.subscribe(missing).catch(() => {});
     };
     session.addEventListener("snapshot", subscribeMissing);
+    const meta = { ...(guest ? { guest: true, linked: false, guestNickname: guest.nickname } : app.meta), deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
+    try {
+        checkAttempt();
+        if (guest) {
+            // Retain early channel frames locally. Replacement and its original
+            // flow generation check commit atomically before publishing a session.
+            fence = await saveIdentity(identity, meta, { onboarding: !reuseGuest, replaceAccount: !reuseGuest, fence });
+        }
+        await assertIdentityFence(fence);
+        if (session.initializationError) throw session.initializationError;
+        if (conn.open === false) throw new Error("connection closed during session initialization");
+        checkAttempt();
+    } catch (error) {
+        session.close();
+        conn.close();
+        throw error;
+    }
+    const previousSession = app.session;
+    app.session = session;
+    previousSession?.close();
+    app.identityFence = fence;
+    app.meta = meta;
+    activated = true;
+    subscribeMissing();
     reconnectAttempt = 0;
     setOnline(true);
-    app.meta = { ...(guest ? { guest: true, linked: false } : app.meta), deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
     if (guest) {
-        // Authentication has succeeded. Retain incoming channel frames while
-        // replacing local data, and never erase a saved login on a bad password.
         app.identity = identity;
         app.guestPassword = guest.serverPassword;
-        app.meta.guestNickname = guest.nickname;
-        const fence = !reuseGuest ? await clearIdentity() : undefined;
-        await saveIdentity(identity, app.meta, { onboarding: !reuseGuest, fence });
     }
     const rejoin = app.voice?.channelID || 0;
     const previousVoice = app.voice;
@@ -195,7 +226,7 @@ export async function connect({ guest = null } = {}) {
         scheduleReconnect();
     });
     session.addEventListener("device", event => {
-        if (event.detail?.event === "revoked" && event.detail.device?.device_id === session.deviceID) forgetDevice();
+        if (event.detail?.event === "revoked" && event.detail.device?.device_id === session.deviceID && app.session === session) forgetDevice(fence).catch(() => {});
         if (event.detail?.event === "read" && event.detail.read) readElsewhere(event.detail.read);
         if (event.detail?.event === "history_ready") dm.importHistory().catch(() => {});
     });
@@ -218,7 +249,16 @@ export async function connect({ guest = null } = {}) {
     }).catch(() => {});
     emit("session", session);
     // Register every incoming handler before IndexedDB can yield to replayed DMs.
-    await updateMeta({ deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname });
+    try {
+        session.activateIncoming();
+        await updateMeta({ deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname }, fence);
+        checkAttempt();
+    } catch (error) {
+        if (app.session === session) disconnect();
+        else session.close();
+        conn.close();
+        throw error;
+    }
     return session;
 }
 
@@ -252,6 +292,7 @@ export async function joinVoice(channelID, password = "") {
  * the rules. The Connect screen offers to sign in again.
  */
 export function disconnect() {
+    connectionGeneration++;
     clearTimeout(reconnectTimer);
     const session = app.session;
     app.session = null;

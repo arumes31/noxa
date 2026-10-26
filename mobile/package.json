@@ -9,7 +9,7 @@
     "test:unit": "node --experimental-vm-modules --test unit/*.test.mjs",
     "test:e2e": "playwright test",
     "test:directory": "node --test tests/olm-directory-browser.mjs",
-    "test:storage": "node --test tests/ratchet-storage-browser.mjs",
+    "test:storage": "node --test tests/ratchet-storage-browser.mjs tests/onboarding-browser.mjs",
     "test:ratchet": "node --test tests/ratchet-interop.mjs",
     "test": "npm run test:unit && npm run test:e2e",
     "test:ui": "playwright test --config playwright.ui.config.js"

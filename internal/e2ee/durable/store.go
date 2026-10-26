@@ -156,11 +156,6 @@ func Open(dir string, ns Namespace, protection Protection, timeout time.Duration
 		return nil, e
 	}
 	file := filepath.Join(dir, hex.EncodeToString(hash[:])+".db")
-	_, statErr := os.Stat(file)
-	existed := statErr == nil
-	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-		return nil, statErr
-	}
 	db, e := bolt.Open(file, 0600, &bolt.Options{Timeout: timeout})
 	if errors.Is(e, bolt.ErrTimeout) {
 		return nil, ErrInUse
@@ -170,16 +165,23 @@ func Open(dir string, ns Namespace, protection Protection, timeout time.Duration
 	}
 	s := &Store{db: db, ns: namespace}
 	e = db.Update(func(tx *bolt.Tx) error {
+		if err := tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
+			if !bytes.Equal(name, keyBucket) && !bytes.Equal(name, bucket) {
+				return ErrCorrupt
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
 		kb := tx.Bucket(keyBucket)
 		created := kb == nil
 		b := tx.Bucket(bucket)
 		if kb == nil {
-			if existed {
-				return ErrCorrupt
-			}
-			// An existing payload bucket without a key is corruption, never a reset.
-			if b != nil {
-				return ErrCorrupt
+			// bbolt creates its file before our first transaction. A failed vault
+			// call or interrupted first commit may leave a valid bucketless DB.
+			// Any bucket proves this is not an uninitialized database.
+			if err := tx.ForEach(func([]byte, *bolt.Bucket) error { return ErrCorrupt }); err != nil {
+				return err
 			}
 			var err error
 			kb, err = tx.CreateBucket(keyBucket)

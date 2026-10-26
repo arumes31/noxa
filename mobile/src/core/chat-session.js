@@ -18,11 +18,13 @@ export const MsgChatAccepted = Msg.ChatAccepted;
 export const MsgChannelJoined = Msg.ChannelJoined;
 
 const HISTORY_PAGE = 50;
+const MAX_STAGED_BYTES = 8 * 1024 * 1024;
+const stagingEncoder = new TextEncoder();
 /** Polls travel inside the sealed body with this prefix (internal/netproto/poll.go). */
 export const POLL_PREFIX = "[noxa-poll:v1]";
 
 export class ChatSession extends EventTarget {
-    constructor(conn, identity, auth) {
+    constructor(conn, identity, auth, { deferIncoming = false } = {}) {
         super();
         this.conn = conn;
         this.identity = identity;
@@ -53,26 +55,56 @@ export class ChatSession extends EventTarget {
         this.motd = auth.motd_enc ? null : auth.motd || "";
         for (const key of auth.chat_keys || []) this.#installKey(key, true);
         if (auth.motd_enc) this.motd = this.decrypt(0, auth.motd_key_id, auth.motd) ?? "";
+        this.#pendingIncoming = deferIncoming ? [] : null;
+        const on = (type, handler) => conn.on(type, value => {
+            if (!this.#pendingIncoming) return handler(value);
+            // Bound both frame overhead and aggregate UTF-8 payload bytes before
+            // retaining decoded data while local identity validation awaits.
+            const bytes = stagingEncoder.encode(JSON.stringify(value)).byteLength;
+            if (this.#pendingIncoming.length >= 1024 || bytes > MAX_STAGED_BYTES - this.#pendingIncomingBytes) {
+                this.#stagingError = new Error("session initialization replay limit exceeded");
+                this.close();
+                return;
+            }
+            this.#pendingIncomingBytes += bytes;
+            this.#pendingIncoming.push(() => handler(value));
+        });
         this.#unsubscribe = [
-            conn.on(Msg.Snapshot, snapshot => this.#setSnapshot(snapshot)),
-            conn.on(Msg.ChannelKey, key => this.#installKey(key, true)),
-            conn.on(Msg.ChatKeyBundle, bundle => (bundle.keys || []).forEach(key => this.#installKey(key, false))),
-            conn.on(Msg.SubscriptionState, state => {
+            on(Msg.Snapshot, snapshot => this.#setSnapshot(snapshot)),
+            on(Msg.ChannelKey, key => this.#installKey(key, true)),
+            on(Msg.ChatKeyBundle, bundle => (bundle.keys || []).forEach(key => this.#installKey(key, false))),
+            on(Msg.SubscriptionState, state => {
                 this.subscriptions = new Set(state.channel_ids || []);
                 this.#emit("subscriptions");
             }),
-            conn.on(Msg.Event, event => this.#handleEvent(event)),
-            conn.on(Msg.DeviceEvent, event => this.#emit("device", event)),
-            conn.on(Msg.ServerRules, rules => this.#setRules(rules)),
-            conn.on(Msg.MediaLimitsChanged, limits => { this.mediaLimits = limits.media_limits || limits; this.#emit("media-limits"); }),
+            on(Msg.Event, event => this.#handleEvent(event)),
+            on(Msg.DeviceEvent, event => this.#emit("device", event)),
+            on(Msg.ServerRules, rules => this.#setRules(rules)),
+            on(Msg.MediaLimitsChanged, limits => { this.mediaLimits = limits.media_limits || limits; this.#emit("media-limits"); }),
         ];
         // Join/leave lines for the channel chats are derived from presence events.
         joinLeaveLog(this);
     }
 
     #unsubscribe = [];
+    #pendingIncoming = null;
+    #pendingIncomingBytes = 0;
+    #stagingError = null;
+
+    get initializationError() { return this.#stagingError; }
+
+    /** Deliver frames only after the app has validated identity and installed receivers. */
+    activateIncoming() {
+        if (this.#stagingError) throw this.#stagingError;
+        const pending = this.#pendingIncoming || [];
+        this.#pendingIncoming = null;
+        this.#pendingIncomingBytes = 0;
+        for (const deliver of pending) deliver();
+    }
 
     close() {
+        this.#pendingIncoming = null;
+        this.#pendingIncomingBytes = 0;
         clearTimeout(this.#relayTimer);
         this.#relayListeners.clear();
         this.#unsubscribe.forEach(stop => stop());
