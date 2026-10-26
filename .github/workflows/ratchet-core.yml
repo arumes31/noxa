@@ -24,7 +24,7 @@ jobs:
       - name: Rebuild and check source, binary hash and dependency notices
         run: node scripts/build-ratchet-core.mjs --container --check
       - name: Native core and deterministic vectors
-        run: go test -count=1 ./internal/e2ee/ratchet
+        run: go test -count=1 ./internal/e2ee/ratchet ./internal/e2ee/durable
       - run: npm ci --prefix mobile --no-audit --no-fund
       - name: Install browser
         working-directory: mobile
@@ -33,5 +33,7 @@ jobs:
         run: npm --prefix mobile run build
       - name: Packaged browser and native interoperability
         run: npm --prefix mobile run test:ratchet
+      - name: Real IndexedDB multi-tab durability
+        run: npm --prefix mobile run test:storage
       - name: Browser loader failure checks
         run: node --test mobile/unit/ratchet-core.test.mjs

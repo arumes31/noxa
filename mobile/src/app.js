@@ -9,7 +9,7 @@ import { SavedMessages } from "./core/saved.js";
 import { Connection } from "./core/connection.js";
 import { generateIdentity } from "./core/crypto.js";
 import { signIn } from "./core/device.js";
-import { clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
+import { beginIdentity, clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
 import { enqueue, flush as flushOutbox, showPending, waitingCount } from "./core/outbox.js";
 import { announceRead, closeNotifications, reportVisibility, setBadge, syncPush } from "./core/push.js";
 import { get as setting } from "./core/settings.js";
@@ -77,7 +77,8 @@ export function newIdentity() {
 }
 
 export async function rememberLinkedIdentity(identity, meta) {
-    await saveIdentity(identity, { ...meta, linked: true });
+    const fence = await beginIdentity();
+    await saveIdentity(identity, { ...meta, linked: true }, { onboarding: true, fence });
     app.identity = identity;
     app.meta = { ...meta, linked: true };
 }
@@ -151,8 +152,8 @@ export async function connect({ guest = null } = {}) {
         app.identity = identity;
         app.guestPassword = guest.serverPassword;
         app.meta.guestNickname = guest.nickname;
-        if (!reuseGuest) await clearIdentity();
-        await saveIdentity(identity, app.meta);
+        const fence = !reuseGuest ? await clearIdentity() : undefined;
+        await saveIdentity(identity, app.meta, { onboarding: !reuseGuest, fence });
     }
     const rejoin = app.voice?.channelID || 0;
     const previousVoice = app.voice;
