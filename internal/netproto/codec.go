@@ -332,6 +332,10 @@ func (m MessageType) String() string {
 		return "ClientInfoResponse"
 	case MsgPrioritySpeaker:
 		return "PrioritySpeaker"
+	case MsgOlmDirectoryRequest:
+		return "OlmDirectoryRequest"
+	case MsgOlmDirectoryResult:
+		return "OlmDirectoryResult"
 	case MsgKeyPublish:
 		return "KeyPublish"
 	case MsgKeyRequest:

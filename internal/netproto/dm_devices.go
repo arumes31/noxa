@@ -22,6 +22,7 @@ const MaxDMCopies = 24
 
 // DMDevice is one device of an account as the key directory lists it.
 type DMDevice struct {
+	RevokedAt     int64  `json:"revoked_at,omitempty"`
 	DeviceID      string `json:"device_id"`
 	Kind          string `json:"kind"`
 	Ed25519Public string `json:"ed25519_public_key"`

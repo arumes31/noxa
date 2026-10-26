@@ -33,6 +33,11 @@ func (s *TCPServer) MaintainDeviceExpiry(ctx context.Context) {
 	for {
 		s.expireIdleDevices(ctx, time.Now())
 		s.expireHistoryCopies(ctx, time.Now())
+		if db, _, ok := s.olmDirectory(); ok {
+			if _, err := db.ExpireOlmDirectory(ctx); err != nil {
+				s.logger.Warn("Olm directory sweep failed", zap.Error(err))
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return

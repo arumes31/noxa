@@ -230,7 +230,8 @@ export class DirectMessages extends EventTarget {
             } else {
                 entry.trust = Trust.ok;
                 entry.signingKey = signingKey;
-                entry.devices = trustedDevices(uid, devices, signingKey);
+                entry.encryptionKey = record && toBase64(record.signingKey) === signingB64 ? record.encryptionKey : null;
+                entry.devices = trustedDevices(uid, devices, signingKey, entry.encryptionKey);
                 const ids = entry.devices.map(d => d.deviceID);
                 if (!pinned || !Array.isArray(pinned.devices)) {
                     // First contact (or a pin from before device tracking): remember the list.
@@ -252,7 +253,7 @@ export class DirectMessages extends EventTarget {
         if (!Array.isArray(chain) || !chain.length || chain.length > 64) return null;
         const entry = await this.devicesOf(uid);
         if (entry.trust !== Trust.ok || !entry.signingKey) return null;
-        const device = trustedDevices(uid, chain, entry.signingKey)
+        const device = trustedDevices(uid, chain, entry.signingKey, entry.encryptionKey)
             .find(d => d.deviceID === deviceID && d.x25519B64 === encoded);
         return device?.x25519 || null;
     }

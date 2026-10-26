@@ -142,7 +142,7 @@ func TestVerifyDMDevicesRefusesAnotherFirstDevice(t *testing.T) {
 	}
 }
 
-func TestVerifyDMDevicesKeepsOnlyTheRecordKeyWhenTheFirstDeviceDisagrees(t *testing.T) {
+func TestVerifyDMDevicesRejectsDirectoryWhenFirstEncryptionKeyDisagrees(t *testing.T) {
 	const principal = "alice"
 	desktop := newTestDevice(t, "desktop", "desktop")
 	phone := newTestDevice(t, "phone", "web")
@@ -151,12 +151,10 @@ func TestVerifyDMDevicesKeepsOnlyTheRecordKeyWhenTheFirstDeviceDisagrees(t *test
 	first.FirstDevice = true
 	first.X25519Public = other.deviceInfo.X25519Public
 	trusted, err := verifyDMDevices(principal, desktop.signingKey(t), desktop.xPublic, []netproto.DMDevice{first, phone.approve(t, principal, desktop)})
-	if err != nil {
-		t.Fatal(err)
+	if err != errDMDevicesUnverified || len(trusted) != 0 {
+		t.Fatalf("trusted = %+v, error = %v", trusted, err)
 	}
-	if len(trusted) != 1 || trusted[0].DeviceID != "desktop" || trusted[0].X25519 != desktop.xPublic {
-		t.Fatalf("trusted = %+v", trusted)
-	}
+
 }
 
 func openCopy(t *testing.T, blob string, sender, recipient [32]byte) string {

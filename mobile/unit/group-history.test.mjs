@@ -11,7 +11,7 @@ test('revoked group sender remains verifiable without entering the live director
  const first={device_id:'desktop',first_device:true,ed25519_public_key:publicKeyPEM(root.edPublic),x25519_public_key:toBase64(root.xPublic)};
  const phone={device_id:'phone',ed25519_public_key:publicKeyPEM(sender.edPublic),x25519_public_key:toBase64(sender.xPublic),approved_by:'desktop'};
  phone.approval_signature=toBase64(nacl.sign.detached(approvalTranscript('alice','desktop',phone.ed25519_public_key,phone.x25519_public_key),root.edSecret));
- const entry={trust:'ok',signingKey:root.edPublic,devices:[]};
+ const entry={trust:'ok',signingKey:root.edPublic,encryptionKey:root.xPublic,devices:[]};
  // Exercise the real historical verifier; the active directory intentionally
  // contains no phone (including after idle expiry or explicit sign-out).
  const dm={devicesOf:async()=>entry,historicalSenderKey:DirectMessages.prototype.historicalSenderKey};

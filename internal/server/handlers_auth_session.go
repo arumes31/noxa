@@ -205,6 +205,9 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 			resp.Capabilities = append(resp.Capabilities, netproto.CapabilityWebLogin)
 		}
 		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityDevices, netproto.CapabilityDMDevices)
+		if _, _, ok := s.olmDirectory(); ok {
+			resp.Capabilities = append(resp.Capabilities, netproto.CapabilityOlmDirectory)
+		}
 		resp.DeviceID = s.attachSessionDevice(ctx, client, id.uniqueID)
 	}
 	if s.deps.ICEServers != nil {

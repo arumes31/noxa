@@ -23,7 +23,7 @@ func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) boo
 	}
 	class, burst, rate := 0, 120.0, 60.0
 	switch mt {
-	case netproto.MsgLinkPreviewRequest:
+	case netproto.MsgLinkPreviewRequest, netproto.MsgOlmDirectoryRequest:
 		class, burst, rate = 3, 12, 2
 	case netproto.MsgChatHistory, netproto.MsgFileList, netproto.MsgFileTransferInit, netproto.MsgJoinChannel:
 		class, burst, rate = 1, 24, 4
