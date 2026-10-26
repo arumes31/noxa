@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"noxa/internal/e2ee/admission"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,10 +77,14 @@ type Store struct {
 	keyMu sync.RWMutex
 }
 type control struct {
-	Fence        uint64
-	Active       bool
-	Count, Bytes int
-	Outstanding  int
+	Fence          uint64
+	Active         bool
+	Count, Bytes   int
+	Outstanding    int
+	AccountID      string
+	AccountEpoch   int64
+	SendingBlocked bool
+	NextAttempt    int64
 }
 
 var bucket = []byte("protected-v1")
@@ -91,7 +96,7 @@ func validID(s string) bool {
 }
 func validRef(r Ref) bool {
 	switch r.Kind {
-	case Account, Session, Trust, Outbox, Inbox, Publication, Claim, Obligation:
+	case Account, Session, Trust, Outbox, Inbox, Publication, Claim, Obligation, Transition, Logical:
 		return validID(r.ID)
 	}
 	return false
@@ -229,7 +234,7 @@ func Open(dir string, ns Namespace, protection Protection, timeout time.Duration
 			if tx.Bucket(bucket).Stats().KeyN != 0 {
 				return ErrCorrupt
 			}
-			return s.put(tx, controlRef, Record{1, encode(control{Fence: 1, Active: true})})
+			return s.put(tx, controlRef, Record{1, encode(control{Fence: 1, Active: true, AccountID: "local", AccountEpoch: 1})})
 		}
 		_, err = s.control(tx)
 		return err
@@ -389,10 +394,10 @@ func (s *Store) changes(tx *bolt.Tx, c control, snap Snapshot, changes map[Ref][
 			if old.Revision > 0 && json.Unmarshal(old.Data, &before) != nil {
 				return ErrCorrupt
 			}
-			if old.Revision == 0 && !after.Consumed {
+			if old.Revision == 0 && !after.Consumed && !after.Closed {
 				c.Outstanding++
 			}
-			if old.Revision > 0 && !before.Consumed && after.Consumed {
+			if old.Revision > 0 && !before.Consumed && !before.Closed && (after.Consumed || after.Closed) {
 				c.Outstanding--
 			}
 		}
@@ -470,11 +475,14 @@ func (s *Store) SetTrust(snap Snapshot, id string, value []byte, revoked bool) e
 }
 
 type SessionContext struct {
-	PeerPrincipal string `json:"peer_principal"`
-	PeerDevice    string `json:"peer_device"`
-	PeerIdentity  string `json:"peer_identity"`
-	Conversation  string `json:"conversation"`
-	Protocol      string `json:"protocol"`
+	LocalAccountID string `json:"local_account_id"`
+	LocalEpoch     int64  `json:"local_epoch"`
+	PeerEpoch      int64  `json:"peer_epoch"`
+	PeerPrincipal  string `json:"peer_principal"`
+	PeerDevice     string `json:"peer_device"`
+	PeerIdentity   string `json:"peer_identity"`
+	Conversation   string `json:"conversation"`
+	Protocol       string `json:"protocol"`
 }
 type SessionState struct {
 	Snapshot  []byte         `json:"snapshot"`
@@ -484,7 +492,7 @@ type SessionState struct {
 }
 
 func validContext(c SessionContext) bool {
-	return validID(c.PeerPrincipal) && validID(c.PeerDevice) && validID(c.PeerIdentity) && validID(c.Conversation) && c.Protocol == "noxa-olm-v1"
+	return validID(c.LocalAccountID) && c.LocalEpoch > 0 && c.PeerEpoch > 0 && validID(c.PeerPrincipal) && validID(c.PeerDevice) && validID(c.PeerIdentity) && validID(c.Conversation) && c.Protocol == "noxa-olm-v1"
 }
 func (s *Store) sessionValue(tx *bolt.Tx, id string, state []byte, context SessionContext, receiving bool) ([]byte, error) {
 	if len(state) == 0 || !validContext(context) {
@@ -525,16 +533,21 @@ type SendResult struct {
 }
 
 type sentBatch struct {
-	Packets []SendCandidate `json:"packets"`
-	Status  string          `json:"status"`
-	Archive []byte          `json:"archive"`
+	Attempt *AttemptDescriptor `json:"attempt,omitempty"`
+	Receipt *admission.Receipt `json:"receipt,omitempty"`
+	Packets []SendCandidate    `json:"packets"`
+	Status  string             `json:"status"`
+	Archive []byte             `json:"archive"`
 }
 
 func (s *Store) CommitSend(snap Snapshot, id string, packets []SendCandidate, archive []byte) (SendResult, error) {
+	return s.commitSend(snap, id, packets, archive, nil)
+}
+func (s *Store) commitSend(snap Snapshot, id string, packets []SendCandidate, archive []byte, attempt *AttemptDescriptor) (SendResult, error) {
 	if len(archive) > MaxRecordBytes {
 		return SendResult{}, ErrExhausted
 	}
-	if !validID(id) || len(packets) == 0 || len(archive) == 0 {
+	if !validID(id) || (len(packets) == 0 && attempt == nil) || len(archive) == 0 {
 		return SendResult{}, ErrInvalid
 	}
 	if len(packets) > MaxFanout {
@@ -558,6 +571,9 @@ func (s *Store) CommitSend(snap Snapshot, id string, packets []SendCandidate, ar
 			if json.Unmarshal(old.Data, &saved) != nil {
 				return ErrCorrupt
 			}
+			if e = checkSendAuthority(c, saved.Packets, saved.Attempt); e != nil {
+				return e
+			}
 			for _, p := range saved.Packets {
 				if e = s.checkTrust(tx, snap, p.TrustID); e != nil {
 					return e
@@ -578,7 +594,15 @@ func (s *Store) CommitSend(snap Snapshot, id string, packets []SendCandidate, ar
 			return e
 		}
 		changes := map[Ref][]byte{}
-		saved := sentBatch{Status: "pending", Archive: archive}
+		saved := sentBatch{Status: "pending", Archive: archive, Attempt: attempt}
+		if e = checkSendAuthority(c, packets, attempt); e != nil {
+			return e
+		}
+		if attempt != nil {
+			if e = s.prepareAttempt(tx, &c, snap, attempt, changes); e != nil {
+				return e
+			}
+		}
 		for _, p := range packets {
 			r := Ref{Session, p.SessionID}
 			if _, ok := snap.Records[r]; !ok {
@@ -650,6 +674,9 @@ func (s *Store) Ack(snap Snapshot, id string) error {
 		}
 		var b sentBatch
 		if v.Revision == 0 || json.Unmarshal(v.Data, &b) != nil {
+			return ErrInvalid
+		}
+		if b.Attempt != nil {
 			return ErrInvalid
 		}
 		if b.Status == "sent" {
@@ -746,7 +773,7 @@ func (s *Store) CommitReceive(snap Snapshot, id string, p ReceiveCandidate) ([]b
 			if accountID == "" {
 				accountID = "local"
 			}
-			if o.AccountID != accountID {
+			if o.AccountID != accountID || o.Closed {
 				return ErrConflict
 			}
 			o.Consumed = true
@@ -796,6 +823,11 @@ type OTKObligation struct {
 	PublicationID string `json:"publication_id"`
 	ExpiresAt     int64  `json:"expires_at"`
 	Consumed      bool   `json:"consumed"`
+	Closed        bool   `json:"closed"`
+	ClosureProof  string `json:"closure_proof,omitempty"`
+	AccountEpoch  int64  `json:"account_epoch"`
+	KeyID         string `json:"key_id"`
+	PublicKey     string `json:"public_key"`
 }
 
 func (s *Store) CommitPublication(snap Snapshot, id string, account, signed []byte, otks map[string]OTKObligation) ([]byte, error) {
@@ -822,6 +854,9 @@ func (s *Store) CommitPublicationForAccount(snap Snapshot, accountID, id string,
 		c, e := s.fence(tx, snap)
 		if e != nil {
 			return e
+		}
+		if c.SendingBlocked || accountID != c.AccountID {
+			return ErrFenced
 		}
 		old, e := s.get(tx, r)
 		if e != nil {
@@ -855,13 +890,20 @@ func (s *Store) CommitPublicationForAccount(snap Snapshot, accountID, id string,
 			if e != nil {
 				return e
 			}
-			if v.Revision != 0 || o.PublicationID != r.ID || o.Consumed {
+			if v.Revision != 0 || o.PublicationID != r.ID || o.Consumed || o.Closed {
 				return ErrConflict
 			}
 			if o.AccountID != "" && o.AccountID != accountID {
 				return ErrInvalid
 			}
 			o.AccountID = accountID
+			if o.AccountEpoch != 0 && o.AccountEpoch != c.AccountEpoch {
+				return ErrConflict
+			}
+			o.AccountEpoch = c.AccountEpoch
+			if o.KeyID == "" {
+				o.KeyID = id
+			}
 			changes[ref] = encode(o)
 		}
 		if e = s.changes(tx, c, snap, changes); e != nil {
@@ -879,6 +921,8 @@ func (s *Store) CommitPublicationForAccount(snap Snapshot, accountID, id string,
 // ReserveClaim freezes the exact signed-directory request before transport.
 // The fixed claim deadline is part of request bytes, never a private-key TTL.
 type claimRecord struct {
+	AccountID     string
+	AccountEpoch  int64
 	TrustID       string
 	TrustRevision uint64
 	Request       []byte
@@ -898,6 +942,9 @@ func (s *Store) ReserveClaim(snap Snapshot, id, trustID string, request []byte) 
 		if e != nil {
 			return e
 		}
+		if c.SendingBlocked {
+			return ErrFenced
+		}
 		if e = s.checkTrust(tx, snap, trustID); e != nil {
 			return e
 		}
@@ -914,6 +961,9 @@ func (s *Store) ReserveClaim(snap Snapshot, id, trustID string, request []byte) 
 			if e != nil {
 				return e
 			}
+			if saved.AccountID != c.AccountID || saved.AccountEpoch != c.AccountEpoch {
+				return ErrFenced
+			}
 			if saved.TrustID != trustID || current.Revision != saved.TrustRevision {
 				return ErrConflict
 			}
@@ -923,7 +973,7 @@ func (s *Store) ReserveClaim(snap Snapshot, id, trustID string, request []byte) 
 		if e = s.cas(tx, snap); e != nil {
 			return e
 		}
-		if e = s.changes(tx, c, snap, map[Ref][]byte{r: encode(claimRecord{trustID, snap.Records[Ref{Trust, trustID}].Revision, request})}); e != nil {
+		if e = s.changes(tx, c, snap, map[Ref][]byte{r: encode(claimRecord{c.AccountID, c.AccountEpoch, trustID, snap.Records[Ref{Trust, trustID}].Revision, request})}); e != nil {
 			return e
 		}
 		out = append([]byte(nil), request...)
@@ -979,7 +1029,8 @@ func (s *Store) PendingRefs(kind, after string, limit int) ([]Ref, error) {
 func (s *Store) RetrySend(fence uint64, id string) (SendResult, error) {
 	var out SendResult
 	err := s.db.View(func(tx *bolt.Tx) error {
-		if _, e := s.fence(tx, Snapshot{Fence: fence, Namespace: s.ns}); e != nil {
+		c, e := s.fence(tx, Snapshot{Fence: fence, Namespace: s.ns})
+		if e != nil {
 			return e
 		}
 		v, e := s.get(tx, Ref{Outbox, id})
@@ -992,6 +1043,12 @@ func (s *Store) RetrySend(fence uint64, id string) (SendResult, error) {
 		var saved sentBatch
 		if json.Unmarshal(v.Data, &saved) != nil {
 			return ErrCorrupt
+		}
+		if e = checkSendAuthority(c, saved.Packets, saved.Attempt); e != nil {
+			return e
+		}
+		if saved.Attempt != nil && saved.Status != "pending" {
+			return ErrConflict
 		}
 		for _, p := range saved.Packets {
 			r, e := s.get(tx, Ref{Trust, p.TrustID})

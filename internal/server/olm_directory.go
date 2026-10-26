@@ -14,7 +14,7 @@ import (
 
 type olmDirectoryStore interface {
 	PublishOlmBundle(context.Context, string, string, string, olmdir.Bundle) error
-	ClaimOlmKey(context.Context, string, string, string, string, string, int64, string) (store.OlmClaim, error)
+	ClaimOlmKey(context.Context, string, string, string, string, string, int64, string, ...int64) (store.OlmClaim, error)
 	ExpireOlmDirectory(context.Context) (int64, error)
 }
 
@@ -78,7 +78,7 @@ func (s *TCPServer) handleOlmDirectory(ctx context.Context, client *Client, f *n
 			// rolePolicyRead, rules and active-device gates match direct-message entry;
 			// recipient current trust must independently be checked by the caller.
 			var claim store.OlmClaim
-			claim, e = db.ClaimOlmKey(opCtx, principal, id, r.Principal, r.DeviceID, r.RequestID, r.ClaimUntil, binding)
+			claim, e = db.ClaimOlmKey(opCtx, principal, id, r.Principal, r.DeviceID, r.RequestID, r.ClaimUntil, binding, r.AccountEpoch)
 			if e == nil {
 				response.Bundle = &claim.Bundle
 				response.KeyID = claim.KeyID

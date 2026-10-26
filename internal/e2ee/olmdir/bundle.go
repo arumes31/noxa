@@ -116,27 +116,28 @@ type Key struct {
 	Key string `json:"key"`
 }
 type Bundle struct {
-	Version     string `json:"version"`
-	Protocol    string `json:"protocol"`
-	Server      string `json:"server"`
-	Principal   string `json:"principal"`
-	DeviceID    string `json:"device_id"`
-	Generation  int64  `json:"generation"`
-	IssuedAt    int64  `json:"issued_at"`
-	ExpiresAt   int64  `json:"expires_at"`
-	Identity    string `json:"identity"`
-	Signing     string `json:"signing"`
-	OneTimeKeys []Key  `json:"one_time_keys"`
-	Signature   []byte `json:"signature"`
+	Version      string `json:"version"`
+	Protocol     string `json:"protocol"`
+	Server       string `json:"server"`
+	Principal    string `json:"principal"`
+	DeviceID     string `json:"device_id"`
+	AccountEpoch int64  `json:"account_epoch"`
+	Generation   int64  `json:"generation"`
+	IssuedAt     int64  `json:"issued_at"`
+	ExpiresAt    int64  `json:"expires_at"`
+	Identity     string `json:"identity"`
+	Signing      string `json:"signing"`
+	OneTimeKeys  []Key  `json:"one_time_keys"`
+	Signature    []byte `json:"signature"`
 }
 
 // Transcript is a UTF-8 byte-length-prefixed sequence, independent of JSON layout.
 // Key order is signed; callers must persist and retry the original ordered bundle.
 func (b Bundle) Transcript() ([]byte, error) {
-	if b.Version != Version || b.Protocol != Protocol || !strings.HasPrefix(b.Server, "tls-sha256:") || !fingerprint.MatchString(strings.TrimPrefix(b.Server, "tls-sha256:")) || !ValidText(b.Principal) || !ValidText(b.DeviceID) || b.Generation < 1 || b.Generation > 9007199254740991 || b.IssuedAt < 1 || b.ExpiresAt <= b.IssuedAt || b.ExpiresAt > 9007199254740991 || b.ExpiresAt-b.IssuedAt > int64(MaxLifetime/time.Second) || !ValidCurve(b.Identity) || !ValidSigning(b.Signing) || len(b.OneTimeKeys) < 1 || len(b.OneTimeKeys) > MaxKeys {
+	if b.Version != Version || b.Protocol != Protocol || !strings.HasPrefix(b.Server, "tls-sha256:") || !fingerprint.MatchString(strings.TrimPrefix(b.Server, "tls-sha256:")) || !ValidText(b.Principal) || !ValidText(b.DeviceID) || b.AccountEpoch < 1 || b.AccountEpoch > 9007199254740991 || b.Generation < 1 || b.Generation > 9007199254740991 || b.IssuedAt < 1 || b.ExpiresAt <= b.IssuedAt || b.ExpiresAt > 9007199254740991 || b.ExpiresAt-b.IssuedAt > int64(MaxLifetime/time.Second) || !ValidCurve(b.Identity) || !ValidSigning(b.Signing) || len(b.OneTimeKeys) < 1 || len(b.OneTimeKeys) > MaxKeys {
 		return nil, ErrInvalid
 	}
-	fields := []string{b.Version, b.Protocol, b.Server, b.Principal, b.DeviceID, strconv.FormatInt(b.Generation, 10), strconv.FormatInt(b.IssuedAt, 10), strconv.FormatInt(b.ExpiresAt, 10), b.Identity, b.Signing, strconv.Itoa(len(b.OneTimeKeys))}
+	fields := []string{b.Version, b.Protocol, b.Server, b.Principal, b.DeviceID, strconv.FormatInt(b.AccountEpoch, 10), strconv.FormatInt(b.Generation, 10), strconv.FormatInt(b.IssuedAt, 10), strconv.FormatInt(b.ExpiresAt, 10), b.Identity, b.Signing, strconv.Itoa(len(b.OneTimeKeys))}
 	seen := map[string]bool{}
 	pubs := map[string]bool{}
 	for _, k := range b.OneTimeKeys {
@@ -191,4 +192,26 @@ func (b Bundle) Sign(noxaDeviceKey ed25519.PrivateKey) (Bundle, error) {
 	}
 	b.Signature = ed25519.Sign(noxaDeviceKey, t)
 	return b, nil
+}
+
+// VerifyEvidence validates immutable signed identity evidence for an admitted
+// delayed initial packet. Publication expiry forbids new claims, not receipt.
+// Caller independently verifies the admitted claim/session and current trust.
+func (b Bundle) VerifyEvidence(key ed25519.PublicKey, server, principal, device string) error {
+	t, e := b.Transcript()
+	if e != nil || b.Server != server || b.Principal != principal || b.DeviceID != device || len(key) != 32 || len(b.Signature) != 64 || !ed25519.Verify(key, t, b.Signature) {
+		return ErrInvalid
+	}
+	return nil
+}
+func (b Bundle) VerifyReservedClaim(key ed25519.PublicKey, server, principal, device, pinnedIdentity, claimedID string, claimUntil int64, now time.Time) (Key, error) {
+	if claimUntil <= now.Unix() || claimUntil > b.ExpiresAt+3600 || b.IssuedAt > now.Unix()+300 || b.VerifyEvidence(key, server, principal, device) != nil || (pinnedIdentity != "" && pinnedIdentity != b.Identity) {
+		return Key{}, ErrInvalid
+	}
+	for _, k := range b.OneTimeKeys {
+		if k.ID == claimedID {
+			return k, nil
+		}
+	}
+	return Key{}, ErrInvalid
 }

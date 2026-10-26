@@ -1185,6 +1185,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handleComplaint(ctx, client, f)
 	case netproto.MsgScreenShare:
 		return s.handleScreenShare(ctx, client, f)
+	case netproto.MsgOlmAdmissionRequest:
+		return s.handleOlmAdmission(ctx, client, f)
 	case netproto.MsgOlmDirectoryRequest:
 		return s.handleOlmDirectory(ctx, client, f)
 	case netproto.MsgKeyPublish:

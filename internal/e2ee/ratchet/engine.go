@@ -28,12 +28,13 @@ const MaxPreKeys = 100
 const operationTimeout = 5 * time.Second
 
 const (
-	NewAccount = "new_account"
-	PreKeys    = "prekeys"
-	Outbound   = "outbound"
-	Inbound    = "inbound"
-	Encrypt    = "encrypt"
-	Decrypt    = "decrypt"
+	NewAccount   = "new_account"
+	PreKeys      = "prekeys"
+	RetirePreKey = "retire_prekey"
+	Outbound     = "outbound"
+	Inbound      = "inbound"
+	Encrypt      = "encrypt"
+	Decrypt      = "decrypt"
 )
 
 //go:embed core.wasm

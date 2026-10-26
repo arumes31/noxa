@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,6 +128,9 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('user_devices:' || $1, 0))`, d.Principal); err != nil {
 		return Device{}, fmt.Errorf("adding device: locking principal: %w", err)
 	}
+	if _, err = lockOlmRosters(ctx, tx, []string{d.Principal}); err != nil {
+		return Device{}, err
+	}
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_devices WHERE ed25519_public=$1)`, d.Ed25519Public).Scan(&exists); err != nil {
 		return Device{}, fmt.Errorf("adding device: %w", err)
@@ -154,6 +158,9 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 	device, err := scanDevice(row)
 	if err != nil {
 		return Device{}, fmt.Errorf("adding device: %w", err)
+	}
+	if err = bumpOlmRoster(ctx, tx, d.Principal); err != nil {
+		return Device{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return Device{}, fmt.Errorf("adding device: %w", err)
@@ -254,7 +261,15 @@ func endingDevices(update string, removePasskeys bool) string {
 // SignOutDevice invalidates this device key and removes device-bound push/history
 // state, but retains passkeys so the account can sign in again with a fresh key.
 func (s *Store) SignOutDevice(ctx context.Context, principal, deviceID string) (Device, error) {
-	d, err := scanDevice(s.db.QueryRowContext(ctx, endingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason='user'
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Device{}, err
+	}
+	defer tx.Rollback()
+	if _, err = lockOlmRosters(ctx, tx, []string{principal}); err != nil {
+		return Device{}, err
+	}
+	d, err := scanDevice(tx.QueryRowContext(ctx, endingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason='user'
 		WHERE principal=$1 AND device_id=$2 AND revoked_at IS NULL RETURNING *`, false), principal, deviceID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrDeviceNotFound
@@ -262,12 +277,26 @@ func (s *Store) SignOutDevice(ctx context.Context, principal, deviceID string) (
 	if err != nil {
 		return Device{}, fmt.Errorf("signing out device: %w", err)
 	}
+	if err = bumpOlmRoster(ctx, tx, principal); err != nil {
+		return Device{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return Device{}, err
+	}
 	return d, nil
 }
 
 // RevokeDevice revokes a device and any passkeys retained by a prior sign-out.
 func (s *Store) RevokeDevice(ctx context.Context, principal, deviceID, reason string) (Device, error) {
-	d, err := scanDevice(s.db.QueryRowContext(ctx, revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason=$3
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Device{}, err
+	}
+	defer tx.Rollback()
+	if _, err = lockOlmRosters(ctx, tx, []string{principal}); err != nil {
+		return Device{}, err
+	}
+	d, err := scanDevice(tx.QueryRowContext(ctx, revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason=$3
 		WHERE principal=$1 AND device_id=$2 AND (revoked_at IS NULL OR EXISTS
 			(SELECT 1 FROM webauthn_credentials w WHERE w.device_id=user_devices.device_id)) RETURNING *`),
 		principal, deviceID, reason))
@@ -276,6 +305,12 @@ func (s *Store) RevokeDevice(ctx context.Context, principal, deviceID, reason st
 	}
 	if err != nil {
 		return Device{}, fmt.Errorf("revoking device: %w", err)
+	}
+	if err = bumpOlmRoster(ctx, tx, principal); err != nil {
+		return Device{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return Device{}, err
 	}
 	return d, nil
 }
@@ -291,7 +326,12 @@ func (s *Store) updateLockedDevices(ctx context.Context, predicate string, selec
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT device_id FROM user_devices WHERE `+predicate+` ORDER BY device_id COLLATE "C" FOR UPDATE`, selectionArgs...)
+	principals, err := lockMutationPrincipals(ctx, tx, predicate, selectionArgs)
+	if err != nil {
+		return nil, err
+	}
+	selectionArgs = append(append([]any(nil), selectionArgs...), pq.Array(principals))
+	rows, err := tx.QueryContext(ctx, `SELECT device_id FROM user_devices WHERE (`+predicate+`) AND principal=ANY($`+strconv.Itoa(len(selectionArgs))+`) ORDER BY device_id COLLATE "C" FOR UPDATE`, selectionArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -329,6 +369,9 @@ func (s *Store) updateLockedDevices(ctx context.Context, predicate string, selec
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
+		return nil, err
+	}
+	if err = bumpMutationPrincipals(ctx, tx, ids); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {

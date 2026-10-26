@@ -55,7 +55,7 @@ impl Binding {
         ]
         .iter()
         .all(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
-            && matches!(self.purpose.as_str(), "message" | "edit" | "media-key")
+            && matches!(self.purpose.as_str(), "message" | "edit" | "delete" | "media-key")
     }
 }
 #[derive(Deserialize, Serialize)]
@@ -244,6 +244,15 @@ fn process(r: &Request) -> Result<Response> {
                 bundle: Some(bundle),
                 ..Default::default()
             })
+        }
+        "retire_prekey" => {
+            let mut a = account(r, &key)?;
+            let otk = Curve25519PublicKey::from_base64(&r.one_time_key)
+                .map_err(|_| "invalid one-time key")?;
+            if a.remove_one_time_key(otk).is_none() {
+                return Err("one-time key not found");
+            }
+            Ok(Response { account: a.pickle().encrypt(&key), ..Default::default() })
         }
         "outbound" => {
             let a = account(r, &key)?;

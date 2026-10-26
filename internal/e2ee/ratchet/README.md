@@ -177,3 +177,11 @@ any change. The native tests also check storage-key errors, entropy failure,
 cancellation and prekey capacity. CI rebuilds/checks artifacts and runs the
 packaged cross-runtime test. This does not test real iOS/Android devices or durable
 crash/multitab behavior; those remain mandatory later validation.
+
+Task 1c-i adds `retire_prekey`, invoking vodozemac 0.11.1 low-level
+`remove_one_time_key` on a candidate account. Only authoritative unused-key closure
+permits committing that candidate. Public expiry alone never does. `delete` joins
+`message` and `edit` as an authenticated binding purpose. Canonical WASM is
+465764 bytes, SHA-256 `1c32ede1328c8a8b3ab8961c77f861c53ed202997159fc281d553824f7d2f9e1`.
+The [admission harness](../admission/README.md) additionally exercises real durable
+Go/browser stores against PostgreSQL; physical mobile hardware is not tested.

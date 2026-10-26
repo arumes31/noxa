@@ -224,7 +224,7 @@ bbolt v1.5.0, upstream etcd-io/bbolt tag commit
 Go module checksums pin it in both module graphs. Full MIT notice is in
 `BBOLT_LICENSE.txt` and `client/frontend/public/ratchet-storage-licenses.txt`,
 which Vite copies into the embedded desktop assets. No new browser crypto
-library was added. Existing reviewed shared core bytes/hash are unchanged.
+library was added. The shared core now exposes maintained upstream prekey retirement; its canonical build/hash are checked separately.
 
 Run `go test ./internal/e2ee/durable`, `go test -C client ./...`,
 `npm --prefix mobile run test:unit`, `npm --prefix mobile run build`, and
@@ -238,3 +238,11 @@ core-key winner, real-core CAS, abort, identity/meta/ratchet logout races,
 original retry/archive, duplicate receive and corrupted ciphertext. Allocation
 failure is a real bbolt MaxSize error, not a claim of tested physical disk loss.
 Passing tests are not an independent security audit or live messaging proof.
+
+## Task 1c-i extensions
+
+See [admission contract](../admission/README.md) for `CommitAttempt`, immutable
+metadata resolution/receipt retirement, active account fencing and signed reset
+preparation/promotion, OTK closure and shared native handles. The matching browser
+methods live in `mobile/src/core/ratchet-store.js`. These adapters do not transmit
+local archives, approve trust pins, or activate live messaging.

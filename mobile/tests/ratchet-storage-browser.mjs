@@ -282,6 +282,7 @@ test(
           globalThis.j = (v) => JSON.parse(dec.decode(v));
           globalThis.e = (v) => enc.encode(JSON.stringify(v));
           globalThis.context = {
+            local_account_id:"local",local_epoch:1,peer_epoch:1,
             peer_principal: "bob",
             peer_device: "bob-device",
             peer_identity: "verified-olm-bob",

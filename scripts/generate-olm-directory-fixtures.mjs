@@ -44,6 +44,7 @@ const bundle = {
     server,
     principal,
     device_id: "phone",
+    account_epoch: 1,
     generation: 1,
     issued_at: now - 10,
     expires_at: now + 3600,

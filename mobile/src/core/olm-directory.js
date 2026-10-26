@@ -36,6 +36,7 @@ export function bundleTranscript(b) {
         !/^tls-sha256:[0-9a-f]{64}$/.test(b.server) ||
         !validText(b.principal) ||
         !validText(b.device_id) ||
+        !Number.isSafeInteger(b.account_epoch) || b.account_epoch < 1 ||
         !Number.isSafeInteger(b.generation) ||
         b.generation < 1 ||
         !Number.isSafeInteger(b.issued_at) ||
@@ -56,6 +57,7 @@ export function bundleTranscript(b) {
         b.server,
         b.principal,
         b.device_id,
+        String(b.account_epoch),
         String(b.generation),
         String(b.issued_at),
         String(b.expires_at),
@@ -94,6 +96,8 @@ export function verifyOlmClaim(
         principal,
         deviceID,
         pinnedOlmIdentity = "",
+        accountEpoch = 0,
+        claimUntil = 0,
         keyID,
         rootSigning,
         rootEncryption,
@@ -124,7 +128,8 @@ export function verifyOlmClaim(
         bundle.principal !== principal ||
         bundle.device_id !== deviceID ||
         bundle.issued_at > now + 300 ||
-        bundle.expires_at <= now ||
+        (claimUntil ? (!Number.isSafeInteger(claimUntil)||claimUntil<=now||claimUntil>bundle.expires_at+3600) : bundle.expires_at<=now) ||
+        (accountEpoch && bundle.account_epoch!==accountEpoch) ||
         !verifySignature(signature, transcript, device.signingKey)
     )
         throw new Error("invalid Olm bundle");
@@ -135,4 +140,12 @@ export function verifyOlmClaim(
     const key = bundle.one_time_keys.find((k) => k.id === keyID);
     if (!key) throw new Error("unlisted one-time key");
     return key;
+}
+
+// Only for already admitted delivery evidence. The key must come from the
+// independently verified noXa device chain; this never approves a new pin.
+export function verifyBundleEvidence(bundle,{trustedSigningKey,server,principal,deviceID,accountEpoch,pinnedOlmIdentity}){
+ const signature=fromBase64(bundle.signature);
+ if(bundle.server!==server||bundle.principal!==principal||bundle.device_id!==deviceID||bundle.account_epoch!==accountEpoch||bundle.identity!==pinnedOlmIdentity||signature.length!==64||toBase64(signature)!==bundle.signature||!verifySignature(signature,bundleTranscript(bundle),trustedSigningKey))throw new Error("invalid admitted bundle evidence");
+ return bundle;
 }

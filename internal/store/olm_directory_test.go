@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -30,7 +31,7 @@ func olmFixture(t *testing.T, s *Store, principal string) (Device, ed25519.Priva
 		k, _ := ecdh.X25519().GenerateKey(rand.Reader)
 		return base64.RawStdEncoding.EncodeToString(k.PublicKey().Bytes())
 	}
-	b := olmdir.Bundle{Version: olmdir.Version, Protocol: olmdir.Protocol, Server: "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Principal: principal, DeviceID: d.DeviceID, Generation: 1, IssuedAt: time.Now().Unix(), ExpiresAt: time.Now().Add(time.Hour).Unix(), Identity: curve(), Signing: base64.RawStdEncoding.EncodeToString(pub)}
+	b := olmdir.Bundle{Version: olmdir.Version, Protocol: olmdir.Protocol, Server: "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Principal: principal, DeviceID: d.DeviceID, AccountEpoch: 1, Generation: 1, IssuedAt: time.Now().Unix(), ExpiresAt: time.Now().Add(time.Hour).Unix(), Identity: curve(), Signing: base64.RawStdEncoding.EncodeToString(pub)}
 	for i := 1; i <= 10; i++ {
 		var id [8]byte
 		binary.BigEndian.PutUint64(id[:], uint64(i))
@@ -247,6 +248,33 @@ func TestOlmDirectoryConcurrentClaimsAndReplenishment(t *testing.T) {
 	if e = s.PublishOlmBundle(ctx, d.Principal, d.DeviceID, b.Server, next); !errors.Is(e, ErrOlmConflict) {
 		t.Fatal("watermark erased", e)
 	}
+	// Public cleanup retains all private-key obligations. Explicit closure,
+	// serialized with admission, is required before their capacity can be reused.
+	if _, e = s.db.Exec(`UPDATE olm_directory_keys SET claim_until=1 WHERE device_id=$1 AND lifecycle='reserved'`, d.DeviceID); e != nil {
+		t.Fatal(e)
+	}
+	rows, e := s.db.Query(`SELECT key_id FROM olm_directory_keys WHERE device_id=$1`, d.DeviceID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if e = rows.Scan(&id); e != nil {
+			t.Fatal(e)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	closed, e := s.CloseOlmKeys(ctx, OlmSource{Server: b.Server, Principal: d.Principal, Device: d.DeviceID, Signing: d.Ed25519Public, AccountEpoch: 1}, ids)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, c := range closed {
+		if c.State != "closed" {
+			t.Fatal("unresolved key", c.State)
+		}
+	}
 	freshOlmKeys(t, &next, 41, 100)
 	signOlm(t, &next, secret)
 	if e = s.PublishOlmBundle(ctx, d.Principal, d.DeviceID, b.Server, next); e != nil {
@@ -363,7 +391,7 @@ func TestOlmDirectoryCrossedClaimsAndQuotaScope(t *testing.T) {
 		t.Fatal(e)
 	}
 	// Seed only synthetic consumed obligations to hit the exact peer budget.
-	if _, e := s.db.Exec(`INSERT INTO olm_directory_keys(device_id,generation,key_id,claimed_by,claimed_at,claimed_device,request_id,claim_until) SELECT $1,1,'budget-'||n,$2,now(),$3,'budget-'||n,$4 FROM generate_series(1,23)n`, b.DeviceID, a.Principal, a.DeviceID, ba.ExpiresAt); e != nil {
+	if _, e := s.db.Exec(`INSERT INTO olm_directory_keys(device_id,generation,key_id,claimed_by,claimed_at,claimed_device,request_id,claim_until,principal,server,bundle,account_epoch,claimed_epoch,lifecycle) SELECT $1,1,'budget-'||n,$2,now(),$3,'budget-'||n,$4,$5,$6,$7,1,1,'received' FROM generate_series(1,23)n`, b.DeviceID, a.Principal, a.DeviceID, ba.ExpiresAt, b.Principal, bb.Server, mustOlmJSON(bb)); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := s.ClaimOlmKey(ctx, a.Principal, a.DeviceID, b.Principal, b.DeviceID, "blocked-peer", ba.ExpiresAt, ba.Server); !errors.Is(e, ErrOlmLimit) {
@@ -508,7 +536,7 @@ func TestOlmDirectoryBulkDeviceLockOrder(t *testing.T) {
 				deadline := time.Now().Add(2 * time.Second)
 				for {
 					var n int
-					err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%user_devices%' AND pid<>pg_backend_pid()`).Scan(&n)
+					err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND (query LIKE '%user_devices%' OR query LIKE '%olm_rosters%') AND pid<>pg_backend_pid()`).Scan(&n)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -581,3 +609,5 @@ func TestOlmDirectoryBulkDeviceLockOrder(t *testing.T) {
 		})
 	}
 }
+
+func mustOlmJSON(b olmdir.Bundle) []byte { v, _ := json.Marshal(b); return v }

@@ -49,6 +49,9 @@ func (s *Store) PublishOlmBundle(ctx context.Context, principal, id, server stri
 		return e
 	}
 	defer tx.Rollback()
+	if _, e = lockOlmRosters(ctx, tx, []string{principal}); e != nil {
+		return e
+	}
 	d, e := lockOlmDevice(ctx, tx, principal, id)
 	if e != nil {
 		return e
@@ -66,13 +69,16 @@ func (s *Store) PublishOlmBundle(ctx context.Context, principal, id, server stri
 		return olmdir.ErrInvalid
 	}
 	var identity, signing string
-	var generation, high int64
+	var generation, high, epoch int64
 	var previous []byte
-	e = tx.QueryRowContext(ctx, `SELECT identity,signing,generation,key_highwater,last_bundle FROM olm_directory_state WHERE device_id=$1`, id).Scan(&identity, &signing, &generation, &high, &previous)
+	e = tx.QueryRowContext(ctx, `SELECT identity,signing,generation,key_highwater,last_bundle,account_epoch FROM olm_directory_state WHERE device_id=$1`, id).Scan(&identity, &signing, &generation, &high, &previous, &epoch)
 	if e != nil && !errors.Is(e, sql.ErrNoRows) {
 		return e
 	}
 	exists := e == nil
+	if exists && epoch != b.AccountEpoch || !exists && b.AccountEpoch != 1 {
+		return ErrOlmAccountChanged
+	}
 	if exists && b.Generation <= generation {
 		var retained []byte
 		err := tx.QueryRowContext(ctx, `SELECT bundle FROM olm_directory_publications WHERE device_id=$1 AND generation=$2`, id, b.Generation).Scan(&retained)
@@ -115,14 +121,14 @@ func (s *Store) PublishOlmBundle(ctx context.Context, principal, id, server stri
 	if e != nil {
 		return e
 	}
-	var count int
-	if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM olm_directory_keys WHERE device_id=$1`, id).Scan(&count); e != nil {
+	var count, totalRecords int
+	if e = tx.QueryRowContext(ctx, `SELECT count(*) FILTER(WHERE lifecycle IN ('available','reserved','admitted')),count(*) FROM olm_directory_keys WHERE device_id=$1`, id).Scan(&count, &totalRecords); e != nil {
 		return e
 	}
-	if count+len(b.OneTimeKeys) > olmdir.MaxKeys {
+	if count+len(b.OneTimeKeys) > olmdir.MaxKeys || totalRecords+len(b.OneTimeKeys) > 100000 {
 		return ErrOlmLimit
 	}
-	_, e = tx.ExecContext(ctx, `INSERT INTO olm_directory_state(device_id,identity,signing,generation,key_highwater,last_bundle) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(device_id) DO UPDATE SET generation=EXCLUDED.generation,key_highwater=EXCLUDED.key_highwater,last_bundle=EXCLUDED.last_bundle`, id, b.Identity, b.Signing, b.Generation, maxID, encoded)
+	_, e = tx.ExecContext(ctx, `INSERT INTO olm_directory_state(device_id,identity,signing,generation,key_highwater,last_bundle,account_epoch) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(device_id) DO UPDATE SET generation=EXCLUDED.generation,key_highwater=EXCLUDED.key_highwater,last_bundle=EXCLUDED.last_bundle`, id, b.Identity, b.Signing, b.Generation, maxID, encoded, b.AccountEpoch)
 	if e != nil {
 		return e
 	}
@@ -131,7 +137,12 @@ func (s *Store) PublishOlmBundle(ctx context.Context, principal, id, server stri
 		return e
 	}
 	for _, k := range b.OneTimeKeys {
-		if _, e = tx.ExecContext(ctx, `INSERT INTO olm_directory_keys(device_id,generation,key_id) VALUES($1,$2,$3)`, id, b.Generation, k.ID); e != nil {
+		if _, e = tx.ExecContext(ctx, `INSERT INTO olm_directory_keys(device_id,generation,key_id,account_epoch,principal,server,bundle) VALUES($1,$2,$3,$4,$5,$6,$7)`, id, b.Generation, k.ID, b.AccountEpoch, principal, server, encoded); e != nil {
+			return e
+		}
+	}
+	if !exists {
+		if e = bumpOlmRoster(ctx, tx, principal); e != nil {
 			return e
 		}
 	}
@@ -140,7 +151,7 @@ func (s *Store) PublishOlmBundle(ctx context.Context, principal, id, server stri
 
 // ClaimOlmKey is single-target and idempotent per requester principal/request ID.
 // The durable account-pair and device-pair budgets survive reconnects.
-func (s *Store) ClaimOlmKey(ctx context.Context, principal, id, target, targetID, requestID string, claimUntil int64, server string) (OlmClaim, error) {
+func (s *Store) ClaimOlmKey(ctx context.Context, principal, id, target, targetID, requestID string, claimUntil int64, server string, expectedEpoch ...int64) (OlmClaim, error) {
 	var out OlmClaim
 	if claimUntil <= time.Now().Unix() {
 		return out, ErrOlmExhausted
@@ -159,6 +170,9 @@ func (s *Store) ClaimOlmKey(ctx context.Context, principal, id, target, targetID
 	if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('olm_claim:'||$1,0))`, principal); e != nil {
 		return out, e
 	}
+	if _, e = lockOlmRosters(ctx, tx, []string{principal, target}); e != nil {
+		return out, e
+	}
 	// Stable lock order also covers self-send; revocation updates these rows.
 	pairs := [][2]string{{principal, id}, {target, targetID}}
 	if id > targetID {
@@ -172,13 +186,21 @@ func (s *Store) ClaimOlmKey(ctx context.Context, principal, id, target, targetID
 	var encoded []byte
 	var foundDevice, claimDevice string
 	var storedUntil int64
-	var expires time.Time
-	e = tx.QueryRowContext(ctx, `SELECT k.device_id,k.key_id,p.bundle,p.expires_at,k.claimed_device,k.claim_until FROM olm_directory_keys k JOIN olm_directory_publications p USING(device_id,generation) WHERE claimed_by=$1 AND request_id=$2`, principal, requestID).Scan(&foundDevice, &out.KeyID, &encoded, &expires, &claimDevice, &storedUntil)
+	var lifecycle string
+	var sourceEpoch int64
+	if e = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT account_epoch FROM olm_directory_state WHERE device_id=$1),1)`, id).Scan(&sourceEpoch); e != nil {
+		return out, e
+	}
+	if len(expectedEpoch) > 1 || len(expectedEpoch) == 1 && expectedEpoch[0] != sourceEpoch {
+		return out, ErrOlmAccountChanged
+	}
+	var claimedEpoch int64
+	e = tx.QueryRowContext(ctx, `SELECT k.device_id,k.key_id,k.bundle,k.lifecycle,k.claimed_device,k.claim_until,k.claimed_epoch FROM olm_directory_keys k WHERE claimed_by=$1 AND request_id=$2`, principal, requestID).Scan(&foundDevice, &out.KeyID, &encoded, &lifecycle, &claimDevice, &storedUntil, &claimedEpoch)
 	if e == nil {
-		if foundDevice != targetID || claimDevice != id || storedUntil != claimUntil {
+		if foundDevice != targetID || claimDevice != id || storedUntil != claimUntil || claimedEpoch != sourceEpoch {
 			return out, ErrOlmConflict
 		}
-		if !expires.After(time.Now()) {
+		if lifecycle == "closed" {
 			return out, ErrOlmExhausted
 		}
 	} else {
@@ -200,19 +222,26 @@ func (s *Store) ClaimOlmKey(ctx context.Context, principal, id, target, targetID
 		if count >= pairCapacity || total >= OlmTotalClaimsPerDay || devicePairCount >= OlmDevicePairClaimsPerDay {
 			return out, ErrOlmLimit
 		}
-		e = tx.QueryRowContext(ctx, `SELECT k.key_id,p.bundle FROM olm_directory_keys k JOIN olm_directory_publications p USING(device_id,generation) WHERE k.device_id=$1 AND p.server=$2 AND k.claimed_by IS NULL AND p.expires_at>now() ORDER BY k.generation,k.key_id LIMIT 1`, targetID, server).Scan(&out.KeyID, &encoded)
+		e = tx.QueryRowContext(ctx, `SELECT k.key_id,p.bundle FROM olm_directory_keys k JOIN olm_directory_publications p USING(device_id,generation) WHERE k.device_id=$1 AND p.server=$2 AND k.lifecycle='available' AND k.account_epoch=(SELECT account_epoch FROM olm_directory_state WHERE device_id=k.device_id) AND p.expires_at>now() ORDER BY k.generation,k.key_id LIMIT 1`, targetID, server).Scan(&out.KeyID, &encoded)
 		if errors.Is(e, sql.ErrNoRows) {
 			return out, ErrOlmExhausted
 		}
 		if e != nil {
 			return out, e
 		}
-		if _, e = tx.ExecContext(ctx, `UPDATE olm_directory_keys SET claimed_by=$3,request_id=$4,claimed_at=now(),claimed_device=$5,claim_until=$6 WHERE device_id=$1 AND key_id=$2`, targetID, out.KeyID, principal, requestID, id, claimUntil); e != nil {
+		if _, e = tx.ExecContext(ctx, `UPDATE olm_directory_keys SET claimed_by=$3,request_id=$4,claimed_at=now(),claimed_device=$5,claim_until=$6,claimed_epoch=$7,lifecycle='reserved' WHERE device_id=$1 AND key_id=$2 AND lifecycle='available' AND account_epoch=(SELECT account_epoch FROM olm_directory_state WHERE device_id=$1)`, targetID, out.KeyID, principal, requestID, id, claimUntil, sourceEpoch); e != nil {
 			return out, e
 		}
 	}
 	if e = json.Unmarshal(encoded, &out.Bundle); e != nil {
 		return OlmClaim{}, e
+	}
+	var targetEpoch int64
+	if e = tx.QueryRowContext(ctx, `SELECT account_epoch FROM olm_directory_state WHERE device_id=$1`, targetID).Scan(&targetEpoch); e != nil {
+		return OlmClaim{}, e
+	}
+	if targetEpoch != out.Bundle.AccountEpoch {
+		return OlmClaim{}, ErrOlmAccountChanged
 	}
 	if out.Bundle.Server != server || out.Bundle.Principal != target {
 		return OlmClaim{}, ErrOlmAuthority

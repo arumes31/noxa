@@ -25,6 +25,8 @@ export default {
             input: {
                 app: fileURLToPath(new URL("./index.html", import.meta.url)),
                 directory: fileURLToPath(new URL("./src/core/olm-directory.js", import.meta.url)),
+                admission: fileURLToPath(new URL("./src/core/olm-admission.js", import.meta.url)),
+                accountReset: fileURLToPath(new URL("./src/core/olm-reset.js", import.meta.url)),
                 ratchetStorage: fileURLToPath(new URL("./src/core/ratchet-store.js", import.meta.url)),
                 ratchet: fileURLToPath(new URL("./src/core/ratchet-core.js", import.meta.url)),
             },

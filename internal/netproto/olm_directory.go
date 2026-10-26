@@ -15,12 +15,13 @@ const (
 )
 
 type OlmDirectoryRequest struct {
-	RequestID  string         `json:"request_id"`
-	ClaimUntil int64          `json:"claim_until,omitempty"`
-	Action     string         `json:"action"`
-	Principal  string         `json:"principal,omitempty"`
-	DeviceID   string         `json:"device_id,omitempty"`
-	Bundle     *olmdir.Bundle `json:"bundle,omitempty"`
+	AccountEpoch int64          `json:"account_epoch,omitempty"`
+	RequestID    string         `json:"request_id"`
+	ClaimUntil   int64          `json:"claim_until,omitempty"`
+	Action       string         `json:"action"`
+	Principal    string         `json:"principal,omitempty"`
+	DeviceID     string         `json:"device_id,omitempty"`
+	Bundle       *olmdir.Bundle `json:"bundle,omitempty"`
 }
 type OlmDirectoryResult struct {
 	RequestID  string         `json:"request_id"`
@@ -97,11 +98,11 @@ func DecodeOlmDirectoryRequest(f *Frame) (OlmDirectoryRequest, error) {
 	}
 	switch r.Action {
 	case "publish":
-		if r.ClaimUntil != 0 || r.Bundle == nil || r.Principal != "" || r.DeviceID != "" {
+		if r.AccountEpoch != 0 || r.ClaimUntil != 0 || r.Bundle == nil || r.Principal != "" || r.DeviceID != "" {
 			return r, olmdir.ErrInvalid
 		}
 	case "claim":
-		if r.ClaimUntil < 1 || r.ClaimUntil > 9007199254740991 || r.Bundle != nil || !olmdir.ValidText(r.Principal) || !olmdir.ValidText(r.DeviceID) {
+		if r.AccountEpoch < 1 || r.AccountEpoch > 9007199254740991 || r.ClaimUntil < 1 || r.ClaimUntil > 9007199254740991 || r.Bundle != nil || !olmdir.ValidText(r.Principal) || !olmdir.ValidText(r.DeviceID) {
 			return r, olmdir.ErrInvalid
 		}
 	default:

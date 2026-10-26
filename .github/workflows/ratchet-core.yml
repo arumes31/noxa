@@ -9,6 +9,19 @@ jobs:
   ratchet-core:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: noxa
+          POSTGRES_PASSWORD: noxa
+          POSTGRES_DB: noxa
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U noxa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,5 +48,10 @@ jobs:
         run: npm --prefix mobile run test:ratchet
       - name: Real IndexedDB multi-tab durability
         run: npm --prefix mobile run test:storage
+      - name: Real PostgreSQL admission with native and browser durable adapters
+        run: go test -tags integration -count=1 -timeout=3m ./internal/server -run '^TestIntegrationOlmAdmissionBrowser$' -v
+        env:
+          NOXA_BROWSER_INTEGRATION: "1"
+          NOXA_TEST_DATABASE_URL: postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable
       - name: Browser loader failure checks
         run: node --test mobile/unit/ratchet-core.test.mjs

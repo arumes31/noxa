@@ -231,3 +231,11 @@ Chromium runs the actual built verifier under an isolated document CSP
 with an inline-script probe that proves enforcement. This is not validation of
 the production application's complete CSP.
 Passing tests are not an independent cryptographic audit or live-send validation.
+
+## Final inactive epoch contract
+
+`account_epoch` is signed immediately after device ID. `VerifyReservedClaim`
+preserves exact reserved evidence until the attempt deadline; `VerifyEvidence`
+only authenticates retained admitted evidence after public expiry. Neither
+approves a changed pin. Signed `Reset` requires cached old pins and existing noXa
+authority. See [admission lifecycle](../admission/README.md).

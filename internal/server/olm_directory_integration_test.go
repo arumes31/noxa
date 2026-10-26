@@ -97,7 +97,7 @@ func TestIntegrationOlmDirectorySessionAuthority(t *testing.T) {
 	if out := call(recipient, pub); out.Error != "" {
 		t.Fatalf("signed UserID0 guest publication: %+v", out)
 	}
-	query := netproto.OlmDirectoryRequest{RequestID: "claim", ClaimUntil: b.ExpiresAt, Action: "claim", Principal: b.Principal, DeviceID: b.DeviceID}
+	query := netproto.OlmDirectoryRequest{RequestID: "claim", ClaimUntil: b.ExpiresAt, Action: "claim", AccountEpoch: 1, Principal: b.Principal, DeviceID: b.DeviceID}
 	if out := call(sender, query); out.Error != "" || out.Bundle == nil || out.KeyID == "" {
 		t.Fatalf("claim: %+v", out)
 	}

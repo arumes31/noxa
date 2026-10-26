@@ -50,7 +50,7 @@ func applyTest(t *testing.T, e *ratchet.Engine, r ratchet.Request) ratchet.Respo
 	return v
 }
 func contextFor(peer string) SessionContext {
-	return SessionContext{peer, peer + "-device", peer + "-olm", "alice:bob", "noxa-olm-v1"}
+	return SessionContext{"local", 1, 1, peer, peer + "-device", peer + "-olm", "alice:bob", "noxa-olm-v1"}
 }
 func TestRealCoreAtomicFanoutReceive(t *testing.T) {
 	a := openTest(t, t.TempDir())
@@ -394,12 +394,10 @@ func TestNamespaceReplacementRecoveryAndBounds(t *testing.T) {
 	if _, err = s.CommitSend(snap, "group161", append(packets, packet), []byte("archive")); !errors.Is(err, ErrExhausted) {
 		t.Fatalf("fanout overflow %v", err)
 	}
-	// Two explicit account IDs remain under the same logout transaction/fence.
-	for _, id := range []string{"epoch-1", "epoch-2"} {
-		snap = readTest(t, s, Ref{Account, id})
-		if _, err = s.CommitPublicationForAccount(snap, id, "pub-"+id, []byte("protected account"), []byte("signed pub"), map[string]OTKObligation{"otk-" + id: {PublicationID: "pub-" + id}}); err != nil {
-			t.Fatal(err)
-		}
+	// Arbitrary account IDs cannot bypass current account authority.
+	snap = readTest(t, s, Ref{Account, "other"})
+	if _, err = s.CommitPublicationForAccount(snap, "other", "pub-other", []byte("candidate"), []byte("signed"), map[string]OTKObligation{"unused": {PublicationID: "pub-other"}}); !errors.Is(err, ErrFenced) {
+		t.Fatal("unactivated account publication", err)
 	}
 	oldFence := snap.Fence
 	if err = s.Logout(oldFence); err != nil {

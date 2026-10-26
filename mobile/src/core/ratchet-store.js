@@ -1,3 +1,14 @@
+import {
+  openAttempt,
+  validateManifest,
+  digestBytes,
+  attemptSequence,
+  canonicalJSON,
+  jsonBytes,
+  equalJSON,
+  checkEnvelope,
+  expectedBinding,
+} from "./olm-admission.js";
 // Candidate storage only: no wire migration or transport lives in this module.
 import {
   Stores,
@@ -27,6 +38,8 @@ const kinds = new Set([
   "publication",
   "claim",
   "obligation",
+  "logical",
+  "transition",
 ]);
 const ctl = ["control", "identity"];
 const key = (r) => JSON.stringify(r);
@@ -167,6 +180,10 @@ class RatchetStore {
         count: 0,
         bytes: 0,
         obligations: 0,
+        accountID: "local",
+        accountEpoch: 1,
+        sendingBlocked: false,
+        nextAttempt: 0,
       });
       const candidate = await this.encode(db, ctl, 1, data);
       await fencedWrite(db, [Stores.ratchet], before.fence, (tx) => {
@@ -226,10 +243,11 @@ class RatchetStore {
     if (t.revoked) throw fail("revoked");
     return r.revision;
   }
-  async #commit(s, changes) {
+  async #commit(s, changes, authorityUpdate = null) {
     this.validate(s);
     return withDB(async (db) => {
       const c = json(s.records[key(ctl)].data);
+      if (authorityUpdate) Object.assign(c, authorityUpdate);
       let total = 0;
       for (const [k, data] of Object.entries(changes)) {
         const ref = JSON.parse(k);
@@ -245,8 +263,13 @@ class RatchetStore {
         if (ref[0] === "obligation") {
           const before = old.revision ? json(old.data) : null,
             after = json(data);
-          if (!before && !after.consumed) c.obligations++;
-          else if (before && !before.consumed && after.consumed)
+          if (!before && !after.consumed && !after.closed) c.obligations++;
+          else if (
+            before &&
+            !before.consumed &&
+            !before.closed &&
+            (after.consumed || after.closed)
+          )
             c.obligations--;
         }
       }
@@ -339,7 +362,12 @@ class RatchetStore {
       !["peer_principal", "peer_device", "peer_identity", "conversation"].every(
         (k) => validID(context[k]),
       ) ||
-      context.protocol !== "noxa-olm-v1"
+      context.protocol !== "noxa-olm-v1" ||
+      !validID(context.local_account_id) ||
+      !Number.isSafeInteger(context.local_epoch) ||
+      context.local_epoch < 1 ||
+      !Number.isSafeInteger(context.peer_epoch) ||
+      context.peer_epoch < 1
     )
       throw fail("invalid");
     const old = this.require(s, ref),
@@ -364,8 +392,9 @@ class RatchetStore {
       throw fail("revoked");
     await this.#commit(s, { [key(r)]: bytes({ value, revoked }) });
   }
-  async commitSend(s, id, packets, archive) {
-    if (!validID(id) || !packets.length || !archive?.length)
+  async commitSend(s, id, packets, archive, attempt = null) {
+    if (attempt) await this.#validateAttempt(attempt, packets);
+    if (!validID(id) || (!packets.length && !attempt) || !archive?.length)
       throw fail("invalid");
     if (packets.length > Limits.fanout) throw fail("exhausted");
     if (
@@ -377,10 +406,14 @@ class RatchetStore {
     )
       throw fail("exhausted");
     const r = ["outbox", id],
-      fresh = await this.extended(s, [r]);
+      fresh = await this.extended(s, [
+        r,
+        ...(attempt ? [["logical", attempt.manifest.logical_id]] : []),
+      ]);
     const old = fresh.records[key(r)];
     if (old.revision) {
       const b = json(old.data);
+      this.sendAuthority(fresh, b.packets, b.attempt);
       for (const p of b.packets)
         if (this.trust(fresh, p.trustID) !== p.trustRevision)
           throw fail("conflict");
@@ -388,8 +421,30 @@ class RatchetStore {
       return { data: old.data, reused: true };
     }
     this.compare(s, fresh);
+    this.sendAuthority(fresh, packets, attempt);
     const changes = {},
-      saved = { status: "pending", packets: [], archive: Array.from(archive) };
+      saved = {
+        status: "pending",
+        packets: [],
+        archive: Array.from(archive),
+        ...(attempt ? { attempt } : {}),
+      };
+    let authorityUpdate = null;
+    if (attempt) {
+      const m = attempt.manifest,
+        c = json(fresh.records[key(ctl)].data),
+        seq = attemptSequence(m.attempt_id);
+      if (seq !== c.nextAttempt + 1) throw fail("conflict");
+      const lr = ["logical", m.logical_id],
+        old = this.require(fresh, lr);
+      if (
+        old.revision &&
+        !["rejected", "aborted"].includes(json(old.data).state)
+      )
+        throw fail("conflict");
+      changes[key(lr)] = bytes({ attemptID: id, state: "pending" });
+      authorityUpdate = { nextAttempt: seq };
+    }
     for (const p of packets) {
       const ref = ["session", p.sessionID],
         k = key(ref);
@@ -421,11 +476,12 @@ class RatchetStore {
         trustID: p.trustID,
         trustRevision,
         envelope: base64(p.envelope),
+        context: p.context,
       });
     }
     const result = bytes(saved);
     changes[key(r)] = result;
-    await this.#commit(fresh, changes);
+    await this.#commit(fresh, changes, authorityUpdate);
     return { data: result, reused: false };
   }
   async ack(s, id) {
@@ -433,6 +489,7 @@ class RatchetStore {
       old = this.require(s, r);
     if (!old.revision) throw fail("invalid");
     const b = json(old.data);
+    if (b.attempt) throw fail("invalid");
     if (b.status === "sent") {
       await this.#commit(s, {});
       return;
@@ -477,7 +534,10 @@ class RatchetStore {
         v = this.require(s, ref);
       if (!v.revision || !p.account) throw fail("invalid");
       const obligation = json(v.data);
-      if (obligation.account_id !== (p.accountID || "local"))
+      if (
+        obligation.account_id !== (p.accountID || "local") ||
+        obligation.closed
+      )
         throw fail("conflict");
       changes[key(ref)] = bytes({ ...obligation, consumed: true });
     }
@@ -505,6 +565,9 @@ class RatchetStore {
     const r = ["publication", id],
       refs = [r, ...entries.map(([id]) => ["obligation", id])],
       fresh = await this.extended(s, refs);
+    const authority = json(fresh.records[key(ctl)].data);
+    if (authority.sendingBlocked || authority.accountID !== accountID)
+      throw fail("fenced");
     const old = fresh.records[key(r)];
     if (old.revision) {
       await this.#commit(fresh, {});
@@ -523,11 +586,17 @@ class RatchetStore {
       if (
         fresh.records[key(ref)].revision ||
         o.publication_id !== id ||
-        o.consumed
+        o.consumed ||
+        o.closed
       )
         throw fail("conflict");
       if (o.account_id && o.account_id !== accountID) throw fail("invalid");
-      changes[key(ref)] = bytes({ ...o, account_id: accountID });
+      changes[key(ref)] = bytes({
+        ...o,
+        account_id: accountID,
+        account_epoch: authority.accountEpoch,
+        key_id: o.key_id || oid,
+      });
     }
     await this.#commit(fresh, changes);
     return signed.slice();
@@ -538,10 +607,17 @@ class RatchetStore {
     if (request.length > Limits.record) throw fail("exhausted");
     const r = ["claim", id],
       fresh = await this.extended(s, [r]);
+    const authority = json(fresh.records[key(ctl)].data);
+    if (authority.sendingBlocked) throw fail("fenced");
     const revision = this.trust(fresh, trustID),
       old = fresh.records[key(r)];
     if (old.revision) {
       const saved = json(old.data);
+      if (
+        saved.accountID !== authority.accountID ||
+        saved.accountEpoch !== authority.accountEpoch
+      )
+        throw fail("fenced");
       if (saved.trustID !== trustID || saved.trustRevision !== revision)
         throw fail("conflict");
       await this.#commit(fresh, {});
@@ -550,6 +626,8 @@ class RatchetStore {
     this.compare(s, fresh);
     await this.#commit(fresh, {
       [key(r)]: bytes({
+        accountID: authority.accountID,
+        accountEpoch: authority.accountEpoch,
         trustID,
         trustRevision: revision,
         request: Array.from(request),
@@ -562,6 +640,8 @@ class RatchetStore {
     const old = fresh.records[key(["outbox", id])];
     if (!old.revision) throw fail("invalid");
     const saved = json(old.data);
+    this.sendAuthority(fresh, saved.packets, saved.attempt);
+    if (saved.attempt && saved.status !== "pending") throw fail("conflict");
     const checked = await this.extended(
       fresh,
       saved.packets.map((p) => ["trust", p.trustID]),
@@ -572,6 +652,371 @@ class RatchetStore {
         throw fail("conflict");
     await this.#commit(checked, {});
     return { data: old.data, reused: true };
+  }
+
+  sendAuthority(s, packets, attempt) {
+    const c = json(this.require(s, ctl).data);
+    if (
+      c.sendingBlocked ||
+      !c.accountID ||
+      !Number.isSafeInteger(c.accountEpoch) ||
+      c.accountEpoch < 1 ||
+      (attempt && attempt.manifest.account_epoch !== c.accountEpoch)
+    )
+      throw fail("fenced");
+    for (const p of packets)
+      if (
+        p.context?.local_account_id !== c.accountID ||
+        p.context?.local_epoch !== c.accountEpoch
+      )
+        throw fail("fenced");
+    return c;
+  }
+  async #validateAttempt(attempt, packets) {
+    const m = attempt.manifest,
+      [server, principal, device] = JSON.parse(this.namespace);
+    const parts = attempt.parts.map((p) =>
+      Uint8Array.from(atob(p), (c) => c.charCodeAt(0)),
+    );
+    const copies = await openAttempt(m, parts);
+    if (
+      m.server !== server ||
+      m.sender !== principal ||
+      m.device !== device ||
+      copies.length !== packets.length
+    )
+      throw fail("invalid");
+    const seen = new Set();
+    for (const p of packets) {
+      const c = copies.find((c) => c.device === p.context?.peer_device);
+      if (
+        !c ||
+        seen.has(c.device) ||
+        c.principal !== p.context.peer_principal ||
+        c.account_epoch !== p.context.peer_epoch ||
+        base64(jsonBytes(c.envelope)) !== base64(p.envelope)
+      )
+        throw fail("invalid");
+      checkEnvelope(m, c);
+      const target = m.targets.find((t) => t.device === c.device);
+      if (
+        p.context.peer_identity !== target.identity ||
+        p.context.conversation !== expectedBinding(m, target).conversation
+      )
+        throw fail("invalid");
+      seen.add(c.device);
+    }
+  }
+  async commitAttempt(s, manifest, parts, packets, archive) {
+    const attempt = {
+      manifest: structuredClone(manifest),
+      parts: parts.map(base64),
+    };
+    return this.commitSend(
+      s,
+      manifest.account_epoch + ":" + manifest.attempt_id,
+      packets,
+      archive,
+      attempt,
+    );
+  }
+  async attemptStatusRequest(s, id) {
+    const fresh = await this.extended(s, [["outbox", id]]),
+      old = this.require(fresh, ["outbox", id]);
+    if (!old.revision) throw fail("invalid");
+    const b = json(old.data);
+    if (!b.attempt) throw fail("invalid");
+    const digest = await digestBytes(validateManifest(b.attempt.manifest));
+    await this.#commit(fresh, {});
+    return {
+      manifest: b.attempt.manifest,
+      digest,
+      ...(b.receipt ? { receipt: b.receipt } : {}),
+    };
+  }
+  async applyAttemptResult(s, id, result) {
+    if (!["accepted", "rejected", "aborted"].includes(result.state))
+      throw fail("invalid");
+    const ref = ["outbox", id],
+      old = this.require(s, ref);
+    if (!old.revision) throw fail("invalid");
+    const b = json(old.data);
+    if (!b.attempt) throw fail("invalid");
+    const m = b.attempt.manifest;
+    if (
+      result.server !== m.server ||
+      result.account_epoch !== m.account_epoch ||
+      result.attempt_id !== m.attempt_id ||
+      result.logical_id !== m.logical_id ||
+      result.digest !== (await digestBytes(validateManifest(m))) ||
+      (result.state === "accepted" && !result.message_id)
+    )
+      throw fail("conflict");
+    if (b.receipt) {
+      if (!equalJSON(b.receipt, result)) throw fail("conflict");
+      await this.#commit(s, {});
+      return;
+    }
+    const lr = ["logical", m.logical_id],
+      logical = json(this.require(s, lr).data);
+    if (logical.attemptID !== id) throw fail("conflict");
+    b.receipt = result;
+    b.status = result.state;
+    logical.state = result.state;
+    await this.#commit(s, { [key(ref)]: bytes(b), [key(lr)]: bytes(logical) });
+  }
+  async attemptRetirementRequest(s, id) {
+    const result = await this.attemptStatusRequest(s, id);
+    if (!result.receipt) throw fail("invalid");
+    return {
+      attempt_id: result.manifest.attempt_id,
+      account_epoch: result.manifest.account_epoch,
+      digest: result.receipt.digest,
+    };
+  }
+  async attemptWire(s, id) {
+    const result = await this.retrySend(s, id),
+      b = json(result.data);
+    if (!b.attempt || b.status !== "pending") throw fail("invalid");
+    return {
+      manifest: b.attempt.manifest,
+      parts: b.attempt.parts.map((p) =>
+        Uint8Array.from(atob(p), (c) => c.charCodeAt(0)),
+      ),
+    };
+  }
+  async accountAuthority(s) {
+    const fresh = await this.extended(s, []),
+      c = json(this.require(fresh, ctl).data);
+    await this.#commit(fresh, {});
+    return {
+      accountID: c.accountID,
+      epoch: c.accountEpoch,
+      fence: fresh.fence.generation,
+      blocked: c.sendingBlocked,
+      nextAttempt: c.nextAttempt,
+    };
+  }
+  async checkAccountAuthority(s, token) {
+    const c = await this.accountAuthority(s);
+    if (
+      c.fence !== token.fence ||
+      c.accountID !== token.accountID ||
+      c.epoch !== token.epoch ||
+      c.blocked
+    )
+      throw fail("fenced");
+  }
+  async prepareAccountTransition(s, accountID, account, reset, bundle, otks) {
+    const [server, principal, device] = JSON.parse(this.namespace);
+    const { publicationDigest, resetTranscript } = await import(
+      "./olm-reset.js"
+    );
+    resetTranscript(reset);
+    if ((await publicationDigest(bundle)) !== reset.publication_digest)
+      throw fail("invalid");
+    if (
+      !validID(accountID) ||
+      !account?.length ||
+      reset.server !== server ||
+      reset.principal !== principal ||
+      reset.device !== device ||
+      reset.new_epoch !== reset.old_epoch + 1 ||
+      reset.new_epoch !== bundle.account_epoch ||
+      reset.generation !== bundle.generation ||
+      reset.new_identity !== bundle.identity ||
+      reset.new_signing !== bundle.signing ||
+      Object.keys(otks).length !== bundle.one_time_keys.length
+    )
+      throw fail("invalid");
+    const ref = ["transition", reset.transition_id],
+      ar = ["account", accountID],
+      pr = ["publication", reset.transition_id],
+      fresh = await this.extended(s, [
+        ref,
+        ar,
+        pr,
+        ...Object.keys(otks).map((id) => ["obligation", id]),
+      ]);
+    this.compare(s, fresh);
+    const expected = { account_id: accountID, reset, bundle },
+      old = this.require(fresh, ref);
+    if (old.revision) {
+      const prior = json(old.data);
+      delete prior.receipt;
+      if (!equalJSON(prior, expected)) throw fail("conflict");
+      await this.#commit(fresh, {});
+      return;
+    }
+    const c = json(this.require(fresh, ctl).data);
+    if (
+      c.sendingBlocked ||
+      c.accountEpoch !== reset.old_epoch ||
+      c.accountID === accountID ||
+      this.require(fresh, ar).revision
+    )
+      throw fail("fenced");
+    const changes = {
+        [key(ref)]: bytes(expected),
+        [key(ar)]: account,
+        [key(pr)]: bytes({
+          account_id: accountID,
+          payload: Array.from(jsonBytes(bundle)),
+        }),
+      },
+      seen = new Set();
+    for (const [id, o] of Object.entries(otks)) {
+      const kr = ["obligation", id];
+      if (
+        this.require(fresh, kr).revision ||
+        o.consumed ||
+        o.closed ||
+        o.account_id !== accountID ||
+        o.account_epoch !== reset.new_epoch ||
+        o.publication_id !== reset.transition_id ||
+        seen.has(o.key_id) ||
+        !bundle.one_time_keys.some(
+          (k) => k.id === o.key_id && k.key === o.public_key,
+        )
+      )
+        throw fail("conflict");
+      seen.add(o.key_id);
+      changes[key(kr)] = bytes(o);
+    }
+    await this.#commit(fresh, changes, { sendingBlocked: true });
+  }
+  async promoteAccount(s, id, receipt) {
+    const ref = ["transition", id],
+      old = this.require(s, ref);
+    if (!old.revision) throw fail("invalid");
+    const t = json(old.data),
+      r = t.reset;
+    const canonical = {
+      version: r.version,
+      server: r.server,
+      principal: r.principal,
+      device: r.device,
+      transition_id: r.transition_id,
+      old_epoch: r.old_epoch,
+      old_identity: r.old_identity,
+      old_signing: r.old_signing,
+      new_epoch: r.new_epoch,
+      new_identity: r.new_identity,
+      new_signing: r.new_signing,
+      generation: r.generation,
+      publication_digest: r.publication_digest,
+      reason: r.reason,
+      signature: r.signature,
+    };
+    if (
+      receipt.server !== r.server ||
+      receipt.device !== r.device ||
+      receipt.transition_id !== r.transition_id ||
+      receipt.account_epoch !== r.new_epoch ||
+      receipt.publication_digest !== r.publication_digest ||
+      receipt.digest !== (await digestBytes(jsonBytes(canonical)))
+    )
+      throw fail("conflict");
+    if (t.receipt) {
+      if (!equalJSON(t.receipt, receipt)) throw fail("conflict");
+      await this.#commit(s, {});
+      return;
+    }
+    const c = json(this.require(s, ctl).data);
+    if (c.accountEpoch !== r.old_epoch || !c.sendingBlocked)
+      throw fail("fenced");
+    t.receipt = receipt;
+    await this.#commit(
+      s,
+      { [key(ref)]: bytes(t) },
+      {
+        accountID: t.account_id,
+        accountEpoch: r.new_epoch,
+        nextAttempt: 0,
+        sendingBlocked: false,
+      },
+    );
+  }
+  async accountTransitionRequest(s, id) {
+    const fresh = await this.extended(s, [["transition", id]]),
+      old = this.require(fresh, ["transition", id]);
+    if (!old.revision) throw fail("invalid");
+    const out = json(old.data);
+    await this.#commit(fresh, {});
+    return out;
+  }
+  async retireUnsubmittedKeys(s, accountID, account, proofs) {
+    if (
+      !account?.length ||
+      Object.keys(proofs).length < 1 ||
+      Object.keys(proofs).length > 100
+    )
+      throw fail("invalid");
+    const [server, , device] = JSON.parse(this.namespace),
+      ar = ["account", accountID];
+    this.require(s, ar);
+    const changes = { [key(ar)]: account };
+    for (const [id, p] of Object.entries(proofs)) {
+      const ref = ["obligation", id],
+        v = this.require(s, ref);
+      if (!v.revision) throw fail("invalid");
+      const o = json(v.data);
+      if (
+        p.state !== "closed" ||
+        p.server !== server ||
+        p.device !== device ||
+        p.account_epoch !== o.account_epoch ||
+        p.key_id !== o.key_id ||
+        o.account_id !== accountID ||
+        o.consumed ||
+        o.closed ||
+        !o.public_key ||
+        !/^[a-f0-9]{64}$/.test(p.proof)
+      )
+        throw fail("conflict");
+      if (
+        p.proof !==
+        (await digestBytes(
+          jsonBytes({
+            server: p.server,
+            device: p.device,
+            account_epoch: p.account_epoch,
+            key_id: p.key_id,
+            state: p.state,
+            proof: "",
+          }),
+        ))
+      )
+        throw fail("conflict");
+      changes[key(ref)] = bytes({ ...o, closed: true, closure_proof: p.proof });
+    }
+    await this.#commit(s, changes);
+  }
+  async retirePeerSessions(s, trustID, reset, ids) {
+    if (
+      ids.length < 1 ||
+      ids.length > 160 ||
+      reset.server !== JSON.parse(this.namespace)[0]
+    )
+      throw fail("invalid");
+    this.trust(s, trustID);
+    const changes = {};
+    for (const id of ids) {
+      const ref = ["session", id],
+        v = this.require(s, ref);
+      if (!v.revision) throw fail("invalid");
+      const state = json(v.data),
+        c = state.context;
+      if (
+        c.peer_principal !== reset.principal ||
+        c.peer_device !== reset.device ||
+        c.peer_epoch !== reset.old_epoch ||
+        c.peer_identity !== reset.old_identity
+      )
+        throw fail("conflict");
+      changes[key(ref)] = bytes({ ...state, retired: true });
+    }
+    await this.#commit(s, changes);
   }
   async pendingRefs(kind, after = "", limit = 100) {
     if (

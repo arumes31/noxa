@@ -8,7 +8,7 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 [dependencies]
-vodozemac = "=0.11.1"
+vodozemac = { version = "=0.11.1", features = ["low-level-api"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 getrandom = "=0.4.3"
