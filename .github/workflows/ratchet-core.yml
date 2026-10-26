@@ -1,0 +1,37 @@
+name: Shared DM ratchet core
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  ratchet-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Rebuild and check source, binary hash and dependency notices
+        run: node scripts/build-ratchet-core.mjs --container --check
+      - name: Native core and deterministic vectors
+        run: go test -count=1 ./internal/e2ee/ratchet
+      - run: npm ci --prefix mobile --no-audit --no-fund
+      - name: Install browser
+        working-directory: mobile
+        run: npx playwright install --with-deps chromium
+      - name: Build standalone PWA adapter
+        run: npm --prefix mobile run build
+      - name: Packaged browser and native interoperability
+        run: npm --prefix mobile run test:ratchet
+      - name: Browser loader failure checks
+        run: node --test mobile/unit/ratchet-core.test.mjs

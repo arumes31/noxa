@@ -8,6 +8,7 @@
     "build": "vite build && vite build -c vite.sw.config.js",
     "test:unit": "node --experimental-vm-modules --test unit/*.test.mjs",
     "test:e2e": "playwright test",
+    "test:ratchet": "node --test tests/ratchet-interop.mjs",
     "test": "npm run test:unit && npm run test:e2e",
     "test:ui": "playwright test --config playwright.ui.config.js"
   },

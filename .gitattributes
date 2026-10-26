@@ -5,3 +5,9 @@ go.mod text eol=lf
 go.sum text eol=lf
 client/frontend/public/camera/vision*.js text eol=lf
 *.golden text eol=lf
+
+# Ratchet artifacts are byte-checked during reproducible builds.
+internal/e2ee/ratchet/** text eol=lf
+internal/e2ee/ratchet/core.wasm binary
+mobile/src/core/ratchet-integrity.js text eol=lf
+scripts/build-ratchet-core.mjs text eol=lf

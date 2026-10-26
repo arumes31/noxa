@@ -1,0 +1,71 @@
+{
+  "inbound": {
+    "op": "inbound",
+    "key": "KgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "account": "nMh6NdfRxaFujFCb+0fWF58LHv+HRSr7BYcA045t5fSLaa/jyJpzZm7BmRa88h2NJ9lAjAtimFmczoparcSJxc9D6EsGjOMWebpfMXHmM226Fp9QbodQVpfw4oCy99eWVKB9xLrWAn6vjiFde+REb9tQIAOodBB5f+lhsHFBCgsFV/twpw+Hyce9ylb0sP3nnAN/4703m+rdO4LKtf0+pk3NdkwZhLHkYAsghoHSv1SW66eYgSd1IT60bBz9L2QMKBsirlyv7G4JG0t/rwLRb8SDuvAFdGUxIeV3/z0V+Y/qHfe/g739xpdOrGWFxkLptQcNX+eOVRPZSwmCk8+Ls2/frz4gB5TnW40QTsUTYMeXGH5gqLZJ6ePGvLmO7pdE3YveUtWUgLRKIFCVm3Fvw9xgLc2BRwJlatVb6ywZ0ICxip/avBhPv9TM3OHr/Azq7XHh5Jp2iT9NohEuFAWPk7/bSpEylRMIwLIQaWppwMn+Gi/Jf8AO33BTLQ9ItL3frRXPTslz4RPROfHBmzN3LQRCBD3Tcuh/hT86FMn6bmrPB4DAkXRYjlhoaRlLCGcx7tLyO0qBb3zN8xEMO++LJd4M0EwaVxel3BEI+xikNaeSs3hlP5cvpOzbiuWPATynw3Y8shpraQd6ZzeqEZHoVQRMCNqy8jhZBEUx1/vpQKeI/ENLPnT8rb5cRhlCEaL95je1iCkj9rSxEoxvBwAIkj2sCEzdyu752dEt36lR4mF//YMzMi0FeQ",
+    "peer_identity": "ZfcZ6FKLJ2w9/2gKef17HoeCIP1MzakG5WhEeq8XOlA",
+    "binding": {
+      "server": "vector-server",
+      "conversation": "vector-conversation",
+      "sender": "alice",
+      "sender_device": "desktop",
+      "recipient": "bob",
+      "recipient_device": "browser",
+      "message_id": "one",
+      "purpose": "message"
+    },
+    "envelope": {
+      "version": "noxa-olm-v1",
+      "session_id": "1pPIUOifH6RDUh5OjmvwXZyonT5f5P+C7eO3Ttxvcrg",
+      "binding": {
+        "server": "vector-server",
+        "conversation": "vector-conversation",
+        "sender": "alice",
+        "sender_device": "desktop",
+        "recipient": "bob",
+        "recipient_device": "browser",
+        "message_id": "one",
+        "purpose": "message"
+      },
+      "message": {
+        "type": 0,
+        "body": "Awogr98rCXC3LWg7xdfJiQLwUTkYsRcc00ogR76zTMClpnESINzsaXnUdsC0NZeZWqTk8+qgWItPV6OqlASnBriBv+cfGiBl9xnoUosnbD3/aAp5/Xseh4Ig/UzNqQblaER6rxc6UCKQAwMKIJ7WW4v3Y0cjGbjpGtr99y942pb8Knzn5nld2uVB7ScEEAAi4AKjkuiLf0GLkX7OwgaxFJ0W6VXWr67/BM4tuxym9sZJfjsul8YFWenJDQ/2QODktxU28Ur9GPwwOpfjO5nqtxU1mbwpTfzDhuNaQBuBDvCJofGlk+nwKaErfAj9PKSI/Ny5BihAtcSLrqw17nDMzAURkMD05TQQIb8lVW5QCB4cAlTZbRLx268708+8QwgjtN/nACOcB9FKl4OMJdw5fP5gGpRIt6Y58Hbx/LhzYOtq45QqAwhS2781spR+VorNsgT4nbbKw6KZILyYBQwYlaHfoQ/i9YsthZ2BVP07XOENjokumhUBru4lIOCvqBcX5qfwXnIZXpR+fzuGOChVYJHCUnjbYfsTqe5afCX6A14lHy+fnvBcVum1WyK7Uv8nQDnzjRENUxTrVg4FlHeZ//vHc3ouAYzggaKEzAIcoptZgm9/3uaPQu/nqp+YZizY7cNr72rRGtBxk7FPzc/JFu9290soin18aGU"
+      }
+    }
+  },
+  "decrypt": {
+    "op": "decrypt",
+    "key": "KgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "session": "6PBSquMWjeK5TuneW1Ir59NJXh47LeqjzCH0wnW9JrWntcO3Uszzu99U0mxK9N8ROmOp1l7FVgD17P8ZKUlR+inlJ/LHxqZpn7ffysvWXZT9wPg3j54uxEiPUY/mq4kxTicYGfIyja+p5N/Y0r2JOJtYiKKyNiKsXJpYipnEPPW3hdj/kSb5BCZXs1fkBtBKsbMZdYJCz/ZK8IR9dgpECMy9CeP6/GybnnJT7tHHFvH8rOMscqz10qF2LCmLmqi3qYnTiTVAa7rc3qk1JBWUVFaTubGf0JtXhB8DQcu2+8+gL5N6TeTbzgLo6vQsMi0ez4K/AOh0wXGwEqMzDlMYqw3Cs5X1l7c5oSIKcjNSZ3blfHtmKGyhzaVl88mpWXKcylXbenTAoLmur2VqM3WKV3gItHBSKEHcZtCZRxB48cDrtMN06I32MqAHD7uS+Jsx1DTr1aMyLxgn7WTs6R7idNHxGHWHuJUSRwsg1PJGyHAl+6VXKZyeoy1jCtcJgJYhqdYyV8hCwjSSgZPdHqdd0okpJWaPL/calkmCSppSAFN3ZYs+n2laGAIxHwix+PquKwIz4JdpWMF5GhDA/KdWdeg9+fdQZ6rcprIMCSiQ7ew5mYINFrauMOFAKkryxvAtSPHCa1mix9p+NHbv0R9woJDljYHgBRShLHSMZzcPiuRXP6dP2pFZzm7ICFFLZKmJhAPQxuSlt5nCtdnefqsOmMAD15NFslcxkVv30jm4sg+0uhue/NoazKVUhjceDxR4UecuJFGTsxKvXbrcd2k+hmSZtOBWZFvcwdRzHXUQioNT7XaXla4p3goOFq1GjZxpj+fCLj1MotxBMYXQqCTMMYS8rcOyXu6n5ZrdW6xVic/1j42PFhOPt1OtO8wVsO6WOeNCUjCOEx8aTLd/i9oY97lIB/8ybE2i04RIBNrsvdCc7ax+Kma4OEHTgJgk5N8OHVrn9Tx/mO2Yx8atkX4GLD/RiTxbNN8SjDhprOnH7nASbYjGKkkMfHabETV3SKw5Hr8OYG6QBkmCf77O/uIdq75DVKASeXu6UO/Uv2qcmLQTeYnI3TkgRXpzFO1JD9vamjhKyE9Zt0/OYbef2k6/CoSe+D/ImFYlYARSxM/i+xnWjNM8apXQrxGGcl8lvvD9agMN7muL33fE13JgazKVKyNrZlribDtImeCs91ZoGL8EChIxUDaYX3Hb3TCxPNob4AFq/mpGOr2W2chhYwsjWjlwO0I2fy3dmohDHt7SRaQ1csa+qj3LJFXEAmAntaXJewofkWjpYBdTwPzvRhq3X1Z5lAYDsjK69phVt8K8xC/+WmHltjkVEvPDqcg3C9iHzZCGlwitUz4",
+    "binding": {
+      "server": "vector-server",
+      "conversation": "vector-conversation",
+      "sender": "bob",
+      "sender_device": "browser",
+      "recipient": "alice",
+      "recipient_device": "desktop",
+      "message_id": "two",
+      "purpose": "message"
+    },
+    "envelope": {
+      "version": "noxa-olm-v1",
+      "session_id": "1pPIUOifH6RDUh5OjmvwXZyonT5f5P+C7eO3Ttxvcrg",
+      "binding": {
+        "server": "vector-server",
+        "conversation": "vector-conversation",
+        "sender": "bob",
+        "sender_device": "browser",
+        "recipient": "alice",
+        "recipient_device": "desktop",
+        "message_id": "two",
+        "purpose": "message"
+      },
+      "message": {
+        "type": 1,
+        "body": "AwoguUoOgkrHYdOyVmic4HxkufyRVOYnUicuuzWC9kJDeCYQACLgAkYsbf2Sd6WirWgtUQu9Tqc7dnahjGCXH7hojv8asFT69QnFjOJXyajaydayNTHIpQRgUvc4lPvMv9yyONYzuHozLeF1C0rTqzoJT3D36BQuObqMJglkYpTNDrKXdkh+Q0P3e4y3ATVvi8omneITthbz+060Dxs+sh6NitTpBvlrCkyRNNu05JRnJusnSRTMrAkmC6xHbY3yPDfYxerfy0hjjzvmPonRmCwu25dI25UCijtOtn94U4NwHkLc3kaZyUWV7h9DcpZEUQ0b7YjYPGWouMV+AXU62FKGoqSX9CaXql5mkLCzP1rNRk8TUXf4+bmxU3JUQB/ExGnNdcrnqJPc45nQxuxD/Owlpeo37nShbWH25Ce0vtYvZqjJwVVfP6mSwpzCLgPwfIYZ06sEoJgDOmMprzEnElN7+5N3UrDR9mlrt8ZRngkgovmBVKnt2sltLCQHwul4JsI8UOjvDI6oh6gPiFoREw"
+      }
+    }
+  },
+  "first_plaintext": "deterministic native/browser vector",
+  "reply_plaintext": "deterministic browser/native reply"
+}

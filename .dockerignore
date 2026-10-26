@@ -83,3 +83,6 @@ config.yaml
 # Review artifacts and automated work notes
 output/
 .jules/
+
+# Local Rust rebuild cache; the committed core.wasm is the shipped asset.
+internal/e2ee/ratchet/rust/target/
