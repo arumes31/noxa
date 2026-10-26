@@ -3,7 +3,7 @@ import { joinFailure, unreadLabel } from "./client-usability-model.js";
 import { isUserMuted } from "./audio.js";
 import * as chatUI from "./chat-ui.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
-import { visibleInChannelTree } from "./member-presence.js";
+import { memberIsInLobby, visibleInChannelTree } from "./member-presence.js";
 import { roleIconElement } from "./role-icons.js";
 import { deniedActionMessage, missingPermissionHint } from "./permission-denied.js";
 import { roleChip } from "./role-presentation.js";
@@ -280,6 +280,10 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             const clientID = e.dataTransfer.getData("text/noxa-client");
             const target = state.clients.find((c) => c.client_id === clientID && c.unique_id === uid);
             if (!target) return;
+            if (target.client_id !== state.myClientID && memberIsInLobby(target, state.channels)) {
+                toast(t("context.lobbyMoveBlocked"), "warn");
+                return;
+            }
             try {
                 const err = target.client_id === state.myClientID
                     ? await window.go.main.App.JoinChannelForTab(tabID, isHome ? 0 : ch.ChannelID)

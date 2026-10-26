@@ -32,10 +32,14 @@ func (s *TCPServer) moveRoleMember(ctx context.Context, e *authorization.RoleEva
 	target.lockRoleAction()
 	defer target.unlockRoleAction()
 	before, ok := s.deps.State.GetClient(target.ID)
-	if !ok || target.rulesBlocked() || !e.CanMoveMember(actorID, target.userID()) ||
+	if !ok || before.ChannelID == 0 || target.rulesBlocked() || !e.CanMoveMember(actorID, target.userID()) ||
 		!e.Evaluate(actorID, before.ChannelID, authorization.MoveMembers).Allowed ||
 		(!isHome && !e.Evaluate(target.userID(), msg.ChannelID, authorization.Connect).Allowed) ||
 		(before.Status == "invisible" && !e.Evaluate(actorID, 0, authorization.ViewConnectionInfo).Allowed) {
+		return authorization.ErrRoleForbidden
+	}
+	// Lobby admission is voluntary, including when a home channel has an ID.
+	if source, exists := s.deps.State.GetChannel(before.ChannelID); exists && source.SystemKind == "home" {
 		return authorization.ErrRoleForbidden
 	}
 	if err := ctx.Err(); err != nil {

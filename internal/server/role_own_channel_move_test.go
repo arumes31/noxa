@@ -84,6 +84,9 @@ func TestRoleSnapshotRetainsOwnMoveCauseAcrossQueuedStructuralEvents(t *testing.
 		t.Fatal("voluntary move retained an old forced cause")
 	}
 	// Integration moderation has authoritative actor identity but no desktop ID.
+	if err := env.srv.moveClient(t.Context(), otherID, 1, otherID); err != nil {
+		t.Fatal(err)
+	}
 	if err := env.srv.moveRoleMember(t.Context(), evaluator, 2, "user-uid", "", netproto.MoveClient{ClientID: otherID, ChannelID: 2}); err != nil {
 		t.Fatal(err)
 	}

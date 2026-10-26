@@ -163,6 +163,21 @@ func TestIntegrationMemberVoiceAdmissionAndMedia(t *testing.T) {
 	if _, err := db.DB().ExecContext(t.Context(), "UPDATE users SET integration_enabled=TRUE WHERE id=$1", moderator.UserID()); err != nil {
 		t.Fatal(err)
 	}
+	// Neither owner nor moderator integrations may pull a member out of the lobby.
+	if err := sm.LeaveChannel("target"); err != nil {
+		t.Fatal(err)
+	}
+	for _, actor := range []auth.IntegrationPrincipal{owner, moderator} {
+		if err := srv.MoveIntegrationMember(t.Context(), actor, move); !errors.Is(err, authorization.ErrRoleForbidden) {
+			t.Fatalf("integration moved lobby member: %v", err)
+		}
+	}
+	if current, _ := sm.GetClient("target"); current.ChannelID != 0 || !current.ServerDeafened || current.ServerMuted || current.VoiceRevision != 2 {
+		t.Fatalf("denied lobby move changed state: %+v", current)
+	}
+	if err := sm.MoveClient("target", 1); err != nil {
+		t.Fatal(err)
+	}
 	if err := srv.MoveIntegrationMember(t.Context(), moderator, move); err != nil {
 		t.Fatal(err)
 	}
