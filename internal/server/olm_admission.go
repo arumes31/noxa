@@ -26,7 +26,7 @@ func (s *TCPServer) handleOlmAdmission(ctx context.Context, client *Client, f *n
 		response.Error = code
 		return s.writeMessageInContext(ctx, client, netproto.MsgOlmAdmissionResult, response)
 	}
-	e = s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
+	e = s.withRoleSession(ctx, client, func(ctx context.Context) error {
 		if !client.isAuthed() || client.sessionRevoked() || client.rulesBlocked() {
 			return reply("authority-required")
 		}
