@@ -62,6 +62,17 @@ test("N1/F6: malformed deliveries become coded invalid placeholders and never ab
     assert.equal(pages, 2);
 });
 
+test("CodeRabbit: a page without a deliveries array is rejected, not treated as empty", async () => {
+    for (const bad of [{ after: "", has_more: false }, { deliveries: null, after: "", has_more: false }, { deliveries: {}, has_more: false }, null]) {
+        const c = consumer(fakeStore(), async r => (r.action === "deliveries" ? bad : {}));
+        ready(c);
+        await assert.rejects(c.drain(), e => e.code === "invalid");
+    }
+    const ok = consumer(fakeStore(), async r => (r.action === "deliveries" ? { deliveries: [], after: "", has_more: false } : {}));
+    ready(ok);
+    assert.deepEqual((await ok.drain()).quarantined, [], "a valid empty page still completes");
+});
+
 test("F7: a failed refresh keeps the valid readiness and backs off; recovery_required is sticky", async () => {
     let failing = false;
     const store = fakeStore({ authority: () => { if (failing) throw coded("unavailable"); return { accountID: "local", epoch: 1, blocked: false, nextAttempt: 0, fence: 1, retired: { through: 0, above: [] } }; } });

@@ -648,7 +648,11 @@ export class RatchetConsumer {
         let after = "";
         for (let pages = 0; pages < 4096; pages++) {
             const page = await this.#handoff(a, { action: "deliveries", after });
-            const deliveries = Array.isArray(page?.deliveries) ? page.deliveries : [];
+            // A successful page always carries a deliveries array (possibly
+            // empty after server-side filtering); anything else is a malformed
+            // response, never an empty page that could end the drain early.
+            if (!page || typeof page !== "object" || !Array.isArray(page.deliveries)) throw fail("invalid");
+            const deliveries = page.deliveries;
             for (let i = 0; i < deliveries.length; i++) {
                 const d = deliveries[i];
                 // A missing/invalid server ID still gets a stable local key, so
