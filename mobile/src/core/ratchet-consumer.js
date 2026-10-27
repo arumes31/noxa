@@ -15,8 +15,10 @@ import {
     ADMISSION_VERSION,
     checkEnvelope,
     expectedBinding,
+    equalJSON,
     freezeAttempt,
     jsonBytes,
+    validateManifest,
     openPayload,
     sealPayload,
 } from "./olm-admission.js";
@@ -37,6 +39,8 @@ const now = () => Math.floor(Date.now() / 1000);
 const delay = ms => new Promise(r => setTimeout(r, ms));
 /** Local CAS losses are retried from scratch at most this often. */
 const LOCAL_RETRY = 3;
+/** Seconds before a deadline at which an unstarted attempt is aborted, not begun. */
+const DEADLINE_MARGIN = 30;
 
 /** Pure fanout bound: direct <= 20 and group <= 160 complete targets. */
 export function checkFanout(scope, targets) {
@@ -65,7 +69,13 @@ export const DETERMINISTIC_RECEIVE = new Set(["invalid", "unauthenticated", "inv
     "revoked", "account_changed", "identity_changed", "legacy_session", "session_mismatch", "digest_mismatch"]);
 const deterministic = async (code, work) => {
     try { return await work(); }
-    catch (e) { throw e.code && DETERMINISTIC_RECEIVE.has(e.code) ? e : fail(code, { cause: e }); }
+    catch (e) {
+        // Coded transient errors (core_unavailable, rate-limit, fenced...) pass
+        // through unchanged; only uncoded core/verification rejections are
+        // relabelled as the stage's deterministic code.
+        if (e.code) throw e;
+        throw fail(code, { cause: e });
+    }
 };
 /** Collision-free UI/semantic key for one sender's logical message ID. */
 export const semanticKey = (sender, logicalID) => JSON.stringify([RATCHET_PROTOCOL, sender, logicalID]);
@@ -157,6 +167,7 @@ export class RatchetConsumer {
      * idempotent publication step so it refreshes before expiry.
      */
     ready() {
+        if (this.sticky) { const p = Promise.reject(this.sticky); p.catch(() => {}); return p; }
         const due = this.readiness && this.readyAt && Date.now() - this.readyAt > this.refreshMS;
         if (due && !this.refreshing) {
             // Background refresh: the last good readiness stays in force while
@@ -165,9 +176,13 @@ export class RatchetConsumer {
             this.refreshing = this.#serial(() => this.#ready());
             this.refreshing.then(v => { this.readyValue = v; this.readiness = Promise.resolve(v); this.readyAt = Date.now(); },
                 e => {
-                    if (e.code === "recovery_required") { this.readiness = Promise.reject(e); this.readiness.catch(() => {}); }
+                    if (e.code === "recovery_required") { this.sticky = e; this.readiness = null; }
                     else if (!(this.readyValue?.expiresAt > now() + 300)) this.readiness = null;
-                    else this.readiness = previous;
+                    else {
+                        // Keep the valid readiness; retry the refresh in a minute.
+                        this.readiness = previous;
+                        this.readyAt = Date.now() - this.refreshMS + 60000;
+                    }
                 }).finally(() => { this.refreshing = null; });
             if (this.readyValue?.expiresAt > now() + 300) return this.readiness;
             return this.refreshing;
@@ -176,7 +191,11 @@ export class RatchetConsumer {
             const attempt = this.#serial(() => this.#ready());
             this.readiness = attempt;
             attempt.then(v => { if (this.readiness === attempt) { this.readyAt = Date.now(); this.readyValue = v; } },
-                e => { if (this.readiness === attempt && e.code !== "recovery_required") this.readiness = null; });
+                e => {
+                    if (this.readiness !== attempt) return;
+                    if (e.code === "recovery_required") this.sticky = e;
+                    this.readiness = null;
+                });
         }
         return this.readiness;
     }
@@ -269,7 +288,15 @@ export class RatchetConsumer {
      * chain). An Olm pin is adopted only from a bundle signed by that key, and a
      * changed epoch/identity blocks (verified reset promotion is required).
      */
-    async #trust(principal, device) {
+    /** Idempotent re-read+write steps retried after a cross-tab CAS loss. */
+    async #casRetry(fn) {
+        for (let i = 0; ; i++) {
+            try { return await fn(); }
+            catch (e) { if (e.code !== "conflict" || i >= LOCAL_RETRY) throw e; this.#check(); }
+        }
+    }
+    #trust(principal, device) { return this.#casRetry(() => this.#trustOnce(principal, device)); }
+    async #trustOnce(principal, device) {
         const key = await this.deviceKey(principal, device);
         this.#check();
         if (!(key instanceof Uint8Array) || key.length !== 32) throw fail("untrusted_device");
@@ -292,14 +319,21 @@ export class RatchetConsumer {
         if (saved.value.noxa !== b64(key)) throw fail("account_changed");
         return { id, key, pin: saved.value.pin || null };
     }
-    async #adopt(trusted, principal, device, bundle) {
+    #adopt(trusted, principal, device, bundle) { return this.#casRetry(() => this.#adoptOnce(trusted, principal, device, bundle)); }
+    async #adoptOnce(trusted, principal, device, bundle) {
         if (trusted.pin) {
             if (trusted.pin.epoch !== bundle.account_epoch || trusted.pin.identity !== bundle.identity) throw fail("account_changed");
             return trusted;
         }
         const s = await this.store.read([["trust", trusted.id]]), r = rec(s, "trust", trusted.id);
         const saved = parse(r.data);
-        if (saved.value.noxa !== b64(trusted.key) || saved.value.pin) throw fail("conflict");
+        if (saved.value.noxa !== b64(trusted.key)) throw fail("account_changed");
+        if (saved.value.pin) {
+            // Another tab/consumer adopted concurrently: identical pin is fine.
+            const p = saved.value.pin;
+            if (p.epoch !== bundle.account_epoch || p.identity !== bundle.identity) throw fail("account_changed");
+            return { ...trusted, pin: p };
+        }
         const pin = { epoch: bundle.account_epoch, identity: bundle.identity, signing: bundle.signing };
         await this.store.setTrust(s, trusted.id, { ...saved.value, pin }, false);
         this.#check();
@@ -388,14 +422,28 @@ export class RatchetConsumer {
             const binding = expectedBinding(m, t), context = this.#context(a, t);
             // Without a verified Olm pin (first contact or a confirmed root
             // change) a fresh signed claim is required even if a session exists.
-            const prior = trusted.pin ? sessions.get(JSON.stringify(context)) : undefined;
-            let claim = null;
+            let prior = trusted.pin ? sessions.get(JSON.stringify(context)) : undefined;
+            let claim = null, pendingClaim = null, replaces;
+            // A claim must cover the new attempt's deadline plus a margin.
+            const covers = until => until > now() + this.attemptTTL + 60;
+            if (prior) {
+                // F1: a first-contact session whose claim-carrying attempt was
+                // never accepted has no server session row yet. Resend with its
+                // ORIGINAL reserved claim while that still covers the deadline;
+                // otherwise replace it (retired in the same commit) with a fresh
+                // claim. Never use a pending session without its claim.
+                const ps = rec(await this.store.read([["session", prior]]), "session", prior);
+                if (!ps.revision) throw fail("local_conflict");
+                const pending = parse(ps.data).pending;
+                if (pending && covers(pending.claim_until)) pendingClaim = pending;
+                else if (pending) { replaces = prior; prior = undefined; }
+            }
             const claimKey = JSON.stringify([a.accountID, a.epoch, t.principal, t.device, t.account_epoch, t.identity]);
             const kept = this.claims.get(claimKey);
-            if (!prior && kept && kept.until > now() + 60 && trusted.pin) {
+            if (!prior && kept && covers(kept.until) && trusted.pin) {
                 // The reservation from a lost local_conflict race is still ours
                 // on the server; reuse it instead of spending more claim budget.
-                claim = { id: kept.id, key: kept.key, cacheKey: claimKey };
+                claim = { id: kept.id, key: kept.key, until: kept.until, cacheKey: claimKey };
             } else if (!prior) {
                 const claimID = crypto.randomUUID(), until = now() + 3600;
                 const request = { action: "claim", request_id: claimID, principal: t.principal, device_id: t.device, account_epoch: a.epoch, claim_until: until };
@@ -408,13 +456,13 @@ export class RatchetConsumer {
                 const selected = verifyReservedClaim(result.bundle, { trustedSigningKey: trusted.key, server: m.server, principal: t.principal,
                     deviceID: t.device, accountEpoch: t.account_epoch, pinnedOlmIdentity: trusted.pin?.identity || t.identity, keyID: result.key_id, claimUntil: until });
                 trusted = await this.#adopt(trusted, t.principal, t.device, result.bundle);
-                claim = { id: claimID, key: selected.key, cacheKey: claimKey };
+                claim = { id: claimID, key: selected.key, until, cacheKey: claimKey };
                 this.claims.set(claimKey, { id: claimID, key: selected.key, until });
             }
-            plans.push({ t, trusted, binding, context, prior, claim });
+            plans.push({ t, trusted, binding, context, prior, claim, pendingClaim, replaces });
         }
         const refs = [["logical", logicalID], ["account", a.accountID]];
-        for (const p of plans) refs.push(["trust", p.trusted.id], ...(p.prior ? [["session", p.prior]] : []));
+        for (const p of plans) refs.push(["trust", p.trusted.id], ...(p.prior ? [["session", p.prior]] : []), ...(p.replaces ? [["session", p.replaces]] : []));
         const before = await this.store.read(refs);
         this.#check();
         const key = this.store.coreKey(before), account = dec.decode(rec(before, "account", a.accountID).data);
@@ -427,15 +475,19 @@ export class RatchetConsumer {
             if (p.prior && !rec(before, "session", p.prior).revision) throw fail("local_conflict");
             const prior = p.prior ? parse(rec(before, "session", p.prior).data) : null;
             if (prior && (prior.retired || JSON.stringify(prior.context) !== JSON.stringify(p.context))) throw fail("local_conflict");
+            // The pending claim decided above must still be the recorded one.
+            if (prior && !equalJSON(prior.pending || null, p.pendingClaim || null)) throw fail("local_conflict");
             const result = await this.core.apply({ op: prior ? "encrypt" : "outbound", key,
                 ...(prior ? { session: dec.decode(Uint8Array.from(prior.snapshot)) } : { account, peer_identity: p.t.identity, one_time_key: p.claim.key }),
                 binding: p.binding, plaintext: sealPayload(m, p.t, body) });
             this.#check();
             const sessionID = "olm:" + result.session_id;
             if (p.prior && p.prior !== sessionID) throw fail("local_conflict");
-            packets.push({ sessionID, trustID: p.trusted.id, state: enc.encode(result.session), envelope: jsonBytes(result.envelope), context: p.context });
+            const sessionClaim = p.claim ? { claim_id: p.claim.id, claim_until: p.claim.until } : p.pendingClaim;
+            packets.push({ sessionID, trustID: p.trusted.id, state: enc.encode(result.session), envelope: jsonBytes(result.envelope), context: p.context,
+                ...(sessionClaim ? { claim: sessionClaim } : {}), ...(p.replaces ? { replaces: p.replaces } : {}) });
             copies.push({ principal: p.t.principal, device: p.t.device, account_epoch: p.t.account_epoch, session_id: result.session_id,
-                ...(p.claim ? { claim_id: p.claim.id } : {}), envelope: result.envelope });
+                ...(sessionClaim ? { claim_id: sessionClaim.claim_id } : {}), envelope: result.envelope });
         }
         const frozen = await freezeAttempt(m, copies);
         // Extend the exact pre-crypto snapshot with new session refs; any
@@ -473,7 +525,9 @@ export class RatchetConsumer {
                 let result = await this.#call({ action: "status", account_epoch: m.account_epoch, attempt_id: m.attempt_id });
                 // An attempt the server never saw cannot be begun after its
                 // deadline: fence it with a metadata-only abort instead.
-                const expired = m.deadline <= now();
+                // Margin: a begin that may land at/after the deadline is aborted
+                // (and resealed) rather than misreported as clock skew.
+                const expired = m.deadline <= now() + DEADLINE_MARGIN;
                 if (!expired && this.skewed.has(id) && !TERMINAL.has(result.state)) throw fail("clock_skew");
                 if (!TERMINAL.has(result.state)) {
                     let wire = null;
@@ -487,7 +541,7 @@ export class RatchetConsumer {
                             // The server refuses an unexpired deadline (client clock
                             // skew): fail without aborting or resealing, so no attempt
                             // IDs are burned. Once it is genuinely past, abort.
-                            if (m.deadline > now()) { this.skewed.add(id); throw fail("clock_skew"); }
+                            if (m.deadline > now() + DEADLINE_MARGIN) { this.skewed.add(id); throw fail("clock_skew"); }
                             result = await this.#call({ action: "abort", account_epoch: m.account_epoch, manifest: m });
                         }
                         if (!TERMINAL.has(result.state)) {
@@ -501,8 +555,9 @@ export class RatchetConsumer {
                     }
                 }
                 if (!TERMINAL.has(result.state)) throw fail("uncertain");
-                const s = await this.store.read([["outbox", id], ["logical", m.logical_id]]);
-                await this.store.applyAttemptResult(s, id, result);
+                // Applying an accepted receipt also establishes its sessions, so a
+                // concurrent session write elsewhere can lose the CAS: retry.
+                await this.#casRetry(async () => this.store.applyAttemptResult(await this.store.read([["outbox", id], ["logical", m.logical_id]]), id, result));
                 this.#check();
                 ({ op, record } = await this.#outcome(id));
             }
@@ -576,6 +631,9 @@ export class RatchetConsumer {
                     if (e.code === "fenced" || e.afterCommit) throw e;
                     // Transient failures retry on the next poll (not quarantined).
                     if (!DETERMINISTIC_RECEIVE.has(e.code)) continue;
+                    // Another tab may have committed (and ACKed) this delivery
+                    // meanwhile: never quarantine a copy that has a stored outcome.
+                    if (rec(await this.store.read([["inbox", d.id]]), "inbox", d.id).revision) continue;
                     // Unreadable ciphertext stays pending on the server and is
                     // NEVER passed to legacy decoders or acknowledged.
                     const m = d.manifest || {}, own = m.sender === this.namespace.principal;
@@ -611,6 +669,12 @@ export class RatchetConsumer {
     }
 
     async #receive(d, a) {
+        // Malformed server data is a deterministic, coded failure (placeholder),
+        // not an uncoded TypeError retried silently forever.
+        await deterministic("invalid", () => {
+            validateManifest(d?.manifest);
+            if (typeof d.id !== "string" || !d.copy || typeof d.copy !== "object" || !d.source_bundle || !d.target_bundle) throw fail("invalid");
+        });
         const m = d.manifest, c = d.copy, ns = this.namespace;
         if (m.server !== ns.server || c.principal !== ns.principal || c.device !== ns.device || c.account_epoch !== a.epoch) throw fail("fenced_copy");
         await deterministic("invalid", () => checkEnvelope(m, c));

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"noxa/internal/e2ee/admission"
 	"noxa/internal/e2ee/ratchet"
 	"strings"
@@ -135,5 +136,78 @@ func TestDevicePairSessionAcrossConversations(t *testing.T) {
 	}
 	if e = commit(group, contextFor("bob")); e != nil {
 		t.Fatal("device-pair session not reusable by a group conversation", e)
+	}
+}
+
+// F1: a first-contact session stays Pending (carrying its reserved claim)
+// until an attempt using it is accepted; aborted/rejected attempts keep the
+// claim for an exact resend, and acceptance clears it.
+func TestPendingFirstContactSessionClaim(t *testing.T) {
+	server := "tls-sha256:" + strings.Repeat("a", 64)
+	s, e := Open(t.TempDir(), Namespace{server, "alice", "local-device"}, IdentityProtection(bytes.Repeat([]byte{7}, 32)), 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	trusted(t, s, "bob")
+	claim := &SessionClaim{ClaimID: "claim-1", ClaimUntil: 1900000000}
+	seq := 0
+	commit := func(logical string, c *SessionClaim) (admission.Manifest, error) {
+		seq++
+		m := admission.Manifest{Version: admission.Version, Server: server, Sender: "alice", Device: "local-device", AccountEpoch: 1, AttemptID: fmt.Sprint(seq), LogicalID: logical, Purpose: "chat", Scope: "direct", Peer: "bob", Deadline: 1900000000,
+			Rosters: []admission.Roster{{Principal: "alice", Version: 1}, {Principal: "bob", Version: 1}},
+			Targets: []admission.Target{{Principal: "alice", Device: "local-device", AccountEpoch: 1, Identity: "alice-key", Local: true}, {Principal: "bob", Device: "bob-device", AccountEpoch: 1, Identity: "bob-olm"}}}
+		env, _ := json.Marshal(ratchet.Envelope{Version: ratchet.Version, SessionID: "pair", Binding: admission.ExpectedBinding(m, m.Targets[1]), Message: json.RawMessage(`{"type":0,"body":"cipher"}`)})
+		parts, e := admission.Freeze(&m, []admission.Copy{{Principal: "bob", Device: "bob-device", AccountEpoch: 1, SessionID: "pair", ClaimID: "claim-1", Envelope: env}})
+		if e != nil {
+			return m, e
+		}
+		snap := readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "pair"}, Ref{Logical, logical})
+		_, e = s.CommitAttempt(snap, m, parts, []SendCandidate{{SessionID: "pair", TrustID: "bob", State: []byte("state-" + m.AttemptID), Envelope: env, Context: contextFor("bob"), Claim: c}}, []byte("archive"))
+		if e != nil {
+			seq--
+		}
+		return m, e
+	}
+	apply := func(m admission.Manifest, state string) {
+		mb, _ := m.Bytes()
+		r := admission.Receipt{State: state, AttemptID: m.AttemptID, Digest: admission.Digest(mb), Server: server, AccountEpoch: 1, LogicalID: m.LogicalID}
+		if state == "accepted" {
+			r.MessageID = "message"
+		}
+		snap := readTest(t, s, Ref{Outbox, AttemptID(m)}, Ref{Logical, m.LogicalID})
+		if e := s.ApplyAttemptResult(snap, AttemptID(m), r); e != nil {
+			t.Fatal(e)
+		}
+	}
+	pending := func() *SessionClaim {
+		var st SessionState
+		json.Unmarshal(readTest(t, s, Ref{Session, "pair"}).Records[Ref{Session, "pair"}].Data, &st)
+		return st.Pending
+	}
+	m1, e := commit("first", claim)
+	if e != nil || pending() == nil || *pending() != *claim {
+		t.Fatal("first contact not pending with its claim", e, pending())
+	}
+	apply(m1, "aborted")
+	if pending() == nil {
+		t.Fatal("aborted first contact lost its claim")
+	}
+	if _, e = commit("first-resend", nil); !errors.Is(e, ErrConflict) {
+		t.Fatal("pending session used without its claim", e)
+	}
+	if _, e = commit("first-resend", &SessionClaim{ClaimID: "other", ClaimUntil: 1900000000}); !errors.Is(e, ErrConflict) {
+		t.Fatal("pending session accepted a different claim", e)
+	}
+	m2, e := commit("first-resend", claim)
+	if e != nil {
+		t.Fatal(e)
+	}
+	apply(m2, "accepted")
+	if pending() != nil {
+		t.Fatal("accepted attempt did not establish the session")
+	}
+	if _, e = commit("later", claim); !errors.Is(e, ErrConflict) {
+		t.Fatal("established session re-acquired a claim", e)
 	}
 }

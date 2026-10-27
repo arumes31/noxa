@@ -178,7 +178,35 @@ func (s *Store) ApplyAttemptResult(snap Snapshot, id string, result admission.Re
 		b.Receipt = &result
 		b.Status = result.State
 		logical.State = result.State
-		return s.changes(tx, c, snap, map[Ref][]byte{ref: encode(b), lr: encode(logical)})
+		changes := map[Ref][]byte{ref: encode(b), lr: encode(logical)}
+		if result.State == "accepted" {
+			// The server now has the session rows: first-contact sessions of
+			// this attempt are established and stop carrying their claim.
+			// Read inside this transaction, so they join the CAS set.
+			records := make(map[Ref]Record, len(snap.Records)+len(b.Packets))
+			for k, v := range snap.Records {
+				records[k] = v
+			}
+			for _, p := range b.Packets {
+				sr := Ref{Session, p.SessionID}
+				cur, e := s.get(tx, sr)
+				if e != nil {
+					return e
+				}
+				var st SessionState
+				if cur.Revision == 0 || json.Unmarshal(cur.Data, &st) != nil {
+					return ErrCorrupt
+				}
+				if st.Pending == nil {
+					continue
+				}
+				st.Pending = nil
+				records[sr] = cur
+				changes[sr] = encode(st)
+			}
+			snap.Records = records
+		}
+		return s.changes(tx, c, snap, changes)
 	})
 }
 func (s *Store) AttemptRetirementRequest(fence uint64, id string) (ReceiptAcknowledgment, error) {

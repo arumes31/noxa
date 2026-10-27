@@ -285,7 +285,7 @@ try {
     //     then a reseal of the ORIGINAL content (not the changed draft).
     await post({ op: "fail", device: "alice-phone", action: "begin" });
     const parked = await run("alice-phone", async () => {
-        T.consumer.attemptTTL = 6;
+        T.consumer.attemptTTL = 36; // deadline - 30 s margin passes after ~6 s
         try { return await T.dm.send("bob", "before deadline", "", { id: "late-1" }).then(() => "sent", e => e.retryable); }
         finally { T.consumer.attemptTTL = 300; }
     });
@@ -431,7 +431,61 @@ try {
     after = await counts();
     assert.equal((after["alice-phone/claim"] || 0) - (before["alice-phone/claim"] || 0), 0);
 
-    // 23. Logout/session replacement fences the consumer before any transport.
+    // 23. F1: first contact with a NEW bob device whose attempt is aborted after
+    //     its deadline. The reseal reuses the ORIGINAL reserved claim (no new
+    //     claim, no conflict), and the device pair then works for DM + groups.
+    assert.equal(await post({ op: "fake_devices", action: "bob:1" }), true);
+    await post({ op: "fail", device: "alice-phone", action: "begin" });
+    const f1Claims = (await counts())["alice-phone/claim"] || 0;
+    const f1Parked = await run("alice-phone", async () => {
+        T.consumer.attemptTTL = 40; // expires (minus the 30 s margin) after ~10 s
+        try { return await T.dm.send("bob", "first contact parked", "", { id: "f1-abort" }).then(() => "sent", e => e.retryable); }
+        finally { T.consumer.attemptTTL = 300; }
+    });
+    assert.equal(f1Parked, true);
+    assert.equal(((await counts())["alice-phone/claim"] || 0) - f1Claims, 1, "one claim for the new device");
+    await new Promise(r => setTimeout(r, 11000));
+    const f1 = await run("alice-phone", async () => {
+        const aborted = await T.dm.send("bob", "CHANGED", "", { id: "f1-abort" }).then(o => o.receipt.state, e => [e.code, e.retryable]);
+        const resent = await T.dm.send("bob", "CHANGED", "", { id: "f1-abort" }).then(o => [o.receipt.state, o.record.body.text], e => [e.code, e.retryable]);
+        return { aborted, resent };
+    });
+    assert.deepEqual(f1, { aborted: ["aborted", true], resent: ["accepted", "first contact parked"] });
+    assert.equal(((await counts())["alice-phone/claim"] || 0) - f1Claims, 1, "the reseal reused the reserved claim");
+
+    // 24. F1 rejected variant: begin + parts land, finalize is lost, and the
+    //     server-side deadline passes -> rejected. A resend still succeeds.
+    assert.equal(await post({ op: "fake_devices", action: "bob:1" }), true);
+    await post({ op: "fail", device: "alice-phone", action: "finalize" });
+    const f1bClaims = (await counts())["alice-phone/claim"] || 0;
+    const f1bParked = await run("alice-phone", async () => {
+        T.consumer.attemptTTL = 35;
+        try { return await T.dm.send("bob", "first contact rejected", "", { id: "f1-reject" }).then(() => "sent", e => e.retryable); }
+        finally { T.consumer.attemptTTL = 300; }
+    });
+    assert.equal(f1bParked, true);
+    await new Promise(r => setTimeout(r, 37000));
+    // Any later begin from this device runs the server's bounded expiry
+    // maintenance, which terminally rejects the expired staging attempt.
+    assert.equal(await run("alice-phone", () => T.dm.send("dave", "after the deadline", "", { id: "maint-1" }).then(o => o.receipt.state)), "accepted");
+    const f1b = await run("alice-phone", async () => {
+        const rejected = await T.dm.send("bob", "CHANGED", "", { id: "f1-reject" }).then(o => o.receipt.state, e => [e.committed?.receipt?.state, e.retryable]);
+        const resent = await T.dm.send("bob", "CHANGED", "", { id: "f1-reject" }).then(o => [o.receipt.state, o.record.body.text], e => [e.code, e.retryable]);
+        return { rejected, resent };
+    });
+    assert.deepEqual(f1b.rejected, ["rejected", false], "rejected is terminal for the outbox");
+    assert.deepEqual(f1b.resent, ["accepted", "first contact rejected"]);
+    assert.equal(((await counts())["alice-phone/claim"] || 0) - f1bClaims, 1, "the rejected first contact's claim was reused");
+
+    // 25. F1: a group fanout including both formerly failed devices succeeds
+    //     with no further claims.
+    const f1cClaims = (await counts())["alice-phone/claim"] || 0;
+    assert.equal(await run("alice-phone", g => T.groups.send(g, "group after first-contact recovery", { reference: "f1-group" }).then(o => o.receipt.state, e => e.code), group), "accepted");
+    assert.equal(((await counts())["alice-phone/claim"] || 0) - f1cClaims, 0);
+    await drain("bob-phone");
+    assert.ok((await run("bob-phone", g => T.groupView(g).map(m => m.text), group)).includes("group after first-contact recovery"));
+
+    // 26. Logout/session replacement fences the consumer before any transport.
     before = await counts();
     const fenced = await run("alice-tablet", async () => { await T.consumer.close(); return T.dm.send("bob", "after logout", "", { id: "t1" }).then(() => "sent", e => e.code); });
     assert.equal(fenced, "fenced");

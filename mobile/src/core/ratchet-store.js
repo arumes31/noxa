@@ -362,8 +362,17 @@ class RatchetStore {
     for (const [k, v] of Object.entries(s.records))
       if (fresh.records[k]?.revision !== v.revision) throw fail("conflict");
   }
-  sessionValue(s, ref, state, context, receiving = false) {
+  // Mirror of Go SessionState.Pending: a first-contact outbound session keeps
+  // {claim_id, claim_until} of its reserved claim until an attempt using it is
+  // accepted (or the session receives). Every send on a pending session must
+  // carry exactly that claim; an established session can never acquire one.
+  sessionValue(s, ref, state, context, receiving = false, claim = null) {
     if (
+      (claim &&
+        (receiving ||
+          !validID(claim.claim_id) ||
+          !Number.isSafeInteger(claim.claim_until) ||
+          claim.claim_until <= 0)) ||
       !state?.length ||
       !context ||
       !["peer_principal", "peer_device", "peer_identity"].every((k) =>
@@ -387,11 +396,21 @@ class RatchetStore {
       JSON.stringify(previous.context) !== JSON.stringify(context)
     )
       throw fail("conflict");
+    let pending = claim
+      ? { claim_id: claim.claim_id, claim_until: claim.claim_until }
+      : null;
+    if (previous) {
+      if (!receiving && previous.pending && !claim) throw fail("conflict");
+      if (claim && (!previous.pending || !equalJSON(previous.pending, pending)))
+        throw fail("conflict");
+      pending = receiving ? null : previous.pending || null;
+    }
     return bytes({
       snapshot: Array.from(state),
       context,
       created_at: previous?.created_at || Math.floor(Date.now() / 1000),
       retired: previous?.retired || false,
+      ...(pending ? { pending } : {}),
     });
   }
   async setTrust(s, id, value, revoked = false) {
@@ -470,7 +489,7 @@ class RatchetStore {
       this.require(s, ref);
       if (changes[k] || !p.envelope?.length) throw fail("invalid");
       const trustRevision = this.trust(s, p.trustID);
-      changes[k] = this.sessionValue(s, ref, p.state, p.context);
+      changes[k] = this.sessionValue(s, ref, p.state, p.context, false, p.claim || null);
       if (p.replaces) {
         const oldRef = ["session", p.replaces],
           oldKey = key(oldRef),
@@ -782,7 +801,27 @@ class RatchetStore {
     b.receipt = result;
     b.status = result.state;
     logical.state = result.state;
-    await this.#commit(s, { [key(ref)]: bytes(b), [key(lr)]: bytes(logical) });
+    let snap = s;
+    const changes = { [key(ref)]: bytes(b), [key(lr)]: bytes(logical) };
+    if (result.state === "accepted") {
+      // The server now holds these session rows: establish first-contact
+      // sessions of this attempt (drop their pending claim) in the same commit.
+      snap = await this.extended(
+        s,
+        b.packets.map((p) => ["session", p.sessionID]),
+      );
+      this.compare(s, snap);
+      for (const p of b.packets) {
+        const sr = ["session", p.sessionID],
+          v = this.require(snap, sr);
+        if (!v.revision) throw fail("corrupt");
+        const st = json(v.data);
+        if (!st.pending) continue;
+        delete st.pending;
+        changes[key(sr)] = bytes(st);
+      }
+    }
+    await this.#commit(snap, changes);
   }
   async attemptRetirementRequest(s, id) {
     const result = await this.attemptStatusRequest(s, id);

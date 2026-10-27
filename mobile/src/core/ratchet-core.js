@@ -7,6 +7,10 @@ const CORE_URL = new URL("../../../internal/e2ee/ratchet/core.wasm", import.meta
 const MAX_WASM = 2 << 20;
 const MAX_INPUT = 1 << 20;
 const TIMEOUT = 5000;
+// Local environment failures (timeout, worker, busy, closed, cancelled) carry
+// code core_unavailable: retryable, never evidence about a ciphertext. Errors
+// reported by the core itself (via the worker) stay uncoded.
+const unavailable = message => Object.assign(new Error(message), { code: "core_unavailable" });
 
 async function loadBytes(signal) {
     const response = await fetch(CORE_URL, { signal, credentials: "same-origin" });
@@ -51,9 +55,9 @@ export async function createRatchetCore({ bytes, signal } = {}) {
     let closed = false;
     return {
         async apply(request, { signal } = {}) {
-            if (closed) throw new Error("ratchet core closed");
-            if (signal?.aborted) throw new Error("ratchet operation cancelled");
-            if (active.size >= 2) throw new Error("ratchet core busy");
+            if (closed) throw unavailable("ratchet core closed");
+            if (signal?.aborted) throw unavailable("ratchet operation cancelled");
+            if (active.size >= 2) throw unavailable("ratchet core busy");
             if (!(request?.key instanceof Uint8Array) || request.key.length !== 32) throw new Error("invalid storage key");
             // Avoid posting an unbounded object to a worker. The worker and core
             // independently check encoded input and plaintext bounds as well.
@@ -62,23 +66,23 @@ export async function createRatchetCore({ bytes, signal } = {}) {
             return new Promise((resolve, reject) => {
                 let worker;
                 try { worker = new Worker(new URL("./ratchet.worker.js", import.meta.url), { type: "module" }); }
-                catch { reject(new Error("ratchet workers unavailable")); return; }
+                catch { reject(unavailable("ratchet workers unavailable")); return; }
                 let settled = false;
-                const finish = (error, response) => {
+                const finish = (error, response, environment = true) => {
                     if (settled) return;
                     settled = true;
                     clearTimeout(timer);
                     signal?.removeEventListener("abort", aborted);
                     active.delete(cancel);
                     worker.terminate();
-                    if (error) reject(new Error(error)); else resolve(response);
+                    if (error) reject(environment ? unavailable(error) : new Error(error)); else resolve(response);
                 };
                 const aborted = () => finish("ratchet operation cancelled");
                 const cancel = () => finish("ratchet core closed");
                 const timer = setTimeout(() => finish("ratchet operation timed out"), TIMEOUT);
                 active.add(cancel);
                 signal?.addEventListener("abort", aborted, { once: true });
-                worker.onmessage = event => finish(event.data.error, event.data.response);
+                worker.onmessage = event => finish(event.data.error, event.data.response, false);
                 worker.onerror = () => finish("ratchet worker failed");
                 try { worker.postMessage({ module, request }); }
                 catch { finish("invalid ratchet request"); }

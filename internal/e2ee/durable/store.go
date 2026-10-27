@@ -491,25 +491,35 @@ type SessionContext struct {
 	Scope          string `json:"scope"`
 	Protocol       string `json:"protocol"`
 }
+// SessionClaim is the reserved directory claim that created an outbound
+// first-contact session. While a session is Pending, the server has no session
+// row yet: every attempt using it must carry this claim_id (valid through the
+// attempt deadline). An accepted attempt, or any authenticated receive on the
+// session, clears Pending. Receive-created and legacy records have no Pending.
+type SessionClaim struct {
+	ClaimID    string `json:"claim_id"`
+	ClaimUntil int64  `json:"claim_until"`
+}
 type SessionState struct {
 	Snapshot  []byte         `json:"snapshot"`
 	Context   SessionContext `json:"context"`
 	CreatedAt int64          `json:"created_at"`
 	Retired   bool           `json:"retired"`
+	Pending   *SessionClaim  `json:"pending,omitempty"`
 }
 
 func validContext(c SessionContext) bool {
 	return validID(c.LocalAccountID) && c.LocalEpoch > 0 && c.PeerEpoch > 0 && validID(c.PeerPrincipal) && validID(c.PeerDevice) && validID(c.PeerIdentity) && c.Scope == DevicePairScope && c.Protocol == "noxa-olm-v1"
 }
-func (s *Store) sessionValue(tx *bolt.Tx, id string, state []byte, context SessionContext, receiving bool) ([]byte, error) {
-	if len(state) == 0 || !validContext(context) {
+func (s *Store) sessionValue(tx *bolt.Tx, id string, state []byte, context SessionContext, receiving bool, claim *SessionClaim) ([]byte, error) {
+	if len(state) == 0 || !validContext(context) || (claim != nil && (receiving || !validID(claim.ClaimID) || claim.ClaimUntil <= 0)) {
 		return nil, ErrInvalid
 	}
 	old, e := s.get(tx, Ref{Session, id})
 	if e != nil {
 		return nil, e
 	}
-	v := SessionState{Snapshot: state, Context: context, CreatedAt: time.Now().Unix()}
+	v := SessionState{Snapshot: state, Context: context, CreatedAt: time.Now().Unix(), Pending: claim}
 	if old.Revision > 0 {
 		var prev SessionState
 		if json.Unmarshal(old.Data, &prev) != nil {
@@ -523,6 +533,18 @@ func (s *Store) sessionValue(tx *bolt.Tx, id string, state []byte, context Sessi
 		if prev.Retired && !receiving {
 			return nil, ErrConflict
 		}
+		// A pending session keeps its original claim; an established one
+		// cannot acquire a claim. Receiving on it proves admission.
+		if !receiving && prev.Pending != nil && claim == nil {
+			return nil, ErrConflict
+		}
+		if claim != nil && (prev.Pending == nil || *prev.Pending != *claim) {
+			return nil, ErrConflict
+		}
+		v.Pending = prev.Pending
+		if receiving {
+			v.Pending = nil
+		}
 	}
 	return encode(v), nil
 }
@@ -533,6 +555,9 @@ type SendCandidate struct {
 	State, Envelope    []byte
 	Context            SessionContext
 	TrustRevision      uint64
+	// Claim: for a new first-contact session, the reserved claim it was
+	// created with; for a pending session, exactly its recorded claim.
+	Claim *SessionClaim `json:",omitempty"`
 }
 type SendResult struct {
 	Data   []byte
@@ -627,7 +652,7 @@ func (s *Store) commitSend(snap Snapshot, id string, packets []SendCandidate, ar
 			if e = s.checkTrust(tx, snap, p.TrustID); e != nil {
 				return e
 			}
-			state, e := s.sessionValue(tx, p.SessionID, p.State, p.Context, false)
+			state, e := s.sessionValue(tx, p.SessionID, p.State, p.Context, false, p.Claim)
 			if e != nil {
 				return e
 			}
@@ -750,7 +775,7 @@ func (s *Store) CommitReceive(snap Snapshot, id string, p ReceiveCandidate) ([]b
 		if _, ok := snap.Records[sr]; !ok {
 			return ErrInvalid
 		}
-		state, e := s.sessionValue(tx, p.SessionID, p.Session, p.Context, true)
+		state, e := s.sessionValue(tx, p.SessionID, p.Session, p.Context, true, nil)
 		if e != nil {
 			return e
 		}

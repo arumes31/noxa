@@ -96,6 +96,18 @@ explicit reads. No transport callback is accepted by either adapter.
   the core authenticates each message's conversation binding (`ExpectedBinding`)
   and a binding mismatch still fails closed. `CommitAttempt` requires every
   candidate context to carry the device-pair scope.
+- First-contact sessions: a candidate that creates a new outbound session
+  passes `Claim` (`{claim_id, claim_until}`, browser `claim`) and the session is
+  stored `Pending` (JSON `pending`). Until an attempt using it is accepted, the
+  server has no session row, so every later candidate on that session MUST carry
+  exactly the same claim (else `ErrConflict`) and its attempt copy carries that
+  `claim_id`. `ApplyAttemptResult(accepted)` clears `Pending` for the attempt's
+  sessions in the same transaction; an authenticated receive on the session also
+  clears it. Aborted/rejected attempts keep it, so the original still-reserved
+  claim is reused (no extra claim budget). Once the claim can no longer cover a
+  new attempt deadline, the caller replaces the session (`Replaces`) with a fresh
+  claim. An established session can never acquire a claim. Receive-created and
+  legacy records have no `Pending`.
 - Migration rule: session records written before this rule carried a
   per-conversation `conversation` value. They fail `validContext`/context
   equality, so they are never reused for sending, never advanced by a receive
