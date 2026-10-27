@@ -41,6 +41,24 @@ func (s *TCPServer) MaintainDeviceExpiry(ctx context.Context) {
 					s.logger.Warn("Olm attempt sweep failed", zap.Error(err))
 				}
 			}
+			if retention, ok := db.(interface {
+				ExpireReceivedOlm(context.Context) (int64, error)
+			}); ok {
+				// Catch up across bounded transactions. Per-pass row and time
+				// budgets keep retention work from monopolizing maintenance.
+				retentionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				for batch := 0; batch < 100; batch++ {
+					cleared, err := retention.ExpireReceivedOlm(retentionCtx)
+					if err != nil {
+						s.logger.Warn("Olm delivered retention sweep failed", zap.Error(err))
+						break
+					}
+					if cleared < 200 {
+						break
+					}
+				}
+				cancel()
+			}
 			if _, err := db.ExpireOlmDirectory(ctx); err != nil {
 				s.logger.Warn("Olm directory sweep failed", zap.Error(err))
 			}

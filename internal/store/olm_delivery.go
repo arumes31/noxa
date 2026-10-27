@@ -174,7 +174,7 @@ func (s *Store) AckOlmDelivery(ctx context.Context, a OlmSource, id, digest stri
 	if digest != hash {
 		return ErrOlmConflict
 	}
-	if _, e = tx.ExecContext(ctx, `UPDATE olm_deliveries SET state='received' WHERE id=$1`, id); e != nil {
+	if _, e = tx.ExecContext(ctx, `UPDATE olm_deliveries SET state='received',received_at=COALESCE(received_at,now()) WHERE id=$1`, id); e != nil {
 		return e
 	}
 	// Only the exact admitted first delivery releases an initial-key obligation.
