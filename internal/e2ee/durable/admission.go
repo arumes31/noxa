@@ -6,6 +6,7 @@ import (
 	"fmt"
 	bolt "go.etcd.io/bbolt"
 	"noxa/internal/e2ee/admission"
+	"sort"
 )
 
 const Logical = "logical"
@@ -238,4 +239,54 @@ func (s *Store) AttemptWire(fence uint64, id string) (AttemptDescriptor, error) 
 		return AttemptDescriptor{}, ErrInvalid
 	}
 	return *b.Attempt, nil
+}
+
+// NoteRetired records that the server retired this attempt's terminal receipt,
+// so a later consumer session never repeats retire_receipt for it. The attempt
+// must carry a committed receipt and belong to the current account epoch; snap
+// must include Ref{Outbox, id}. Browser mirror: noteRetired.
+func (s *Store) NoteRetired(snap Snapshot, id string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		c, e := s.fence(tx, snap)
+		if e != nil {
+			return e
+		}
+		ref := Ref{Outbox, id}
+		if _, ok := snap.Records[ref]; !ok {
+			return ErrInvalid
+		}
+		if e = s.cas(tx, snap); e != nil {
+			return e
+		}
+		r, e := s.get(tx, ref)
+		if e != nil {
+			return e
+		}
+		var b sentBatch
+		if r.Revision == 0 || json.Unmarshal(r.Data, &b) != nil || b.Attempt == nil || b.Receipt == nil || b.Attempt.Manifest.AccountEpoch != c.AccountEpoch {
+			return ErrInvalid
+		}
+		seq, e := admission.AttemptSequence(b.Attempt.Manifest.AttemptID)
+		if e != nil || AttemptID(b.Attempt.Manifest) != id {
+			return ErrInvalid
+		}
+		mark := RetiredMark{Epoch: c.AccountEpoch, Above: []int64{}}
+		if c.Retired != nil && c.Retired.Epoch == c.AccountEpoch {
+			mark = RetiredMark{Epoch: c.Retired.Epoch, Through: c.Retired.Through, Above: append([]int64{}, c.Retired.Above...)}
+		}
+		if mark.Has(seq) {
+			return nil
+		}
+		mark.Above = append(mark.Above, seq)
+		sort.Slice(mark.Above, func(i, j int) bool { return mark.Above[i] < mark.Above[j] })
+		for len(mark.Above) > 0 && mark.Above[0] == mark.Through+1 {
+			mark.Through++
+			mark.Above = mark.Above[1:]
+		}
+		if len(mark.Above) > 1024 {
+			return ErrExhausted
+		}
+		c.Retired = &mark
+		return s.changes(tx, c, snap, map[Ref][]byte{})
+	})
 }

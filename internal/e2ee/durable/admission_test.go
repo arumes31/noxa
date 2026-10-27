@@ -70,6 +70,23 @@ func TestAttemptReceiptAndHistoricalResolution(t *testing.T) {
 	if _, e = s.CommitAttempt(snap, m, parts, []SendCandidate{{SessionID: "olm:session", TrustID: "bob", State: []byte("advance"), Envelope: env, Context: context, Claim: first}}, []byte("changed")); !errors.Is(e, ErrConflict) {
 		t.Fatal("accepted intent resealed", e)
 	}
+	// Durable retire_receipt progress: only an attempt with a committed receipt
+	// of the current epoch, idempotent, and visible through AccountAuthority.
+	if e = s.NoteRetired(readTest(t, s), AttemptID(m)); !errors.Is(e, ErrInvalid) {
+		t.Fatal("retired without the outbox in the snapshot", e)
+	}
+	if e = s.NoteRetired(readTest(t, s, Ref{Outbox, "1:7"}), "1:7"); !errors.Is(e, ErrInvalid) {
+		t.Fatal("retired an unknown attempt", e)
+	}
+	for i := 0; i < 2; i++ {
+		if e = s.NoteRetired(readTest(t, s, Ref{Outbox, "1:1"}), "1:1"); e != nil {
+			t.Fatal(e)
+		}
+	}
+	a, e := s.AccountAuthority(snap.Fence)
+	if e != nil || a.Retired.Through != 1 || len(a.Retired.Above) != 0 || !a.Retired.Has(1) || a.Retired.Has(2) {
+		t.Fatal("retirement watermark", a, e)
+	}
 }
 func TestSharedStoreReferences(t *testing.T) {
 	dir := t.TempDir()

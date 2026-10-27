@@ -14,6 +14,30 @@ type AccountAuthority struct {
 	Fence       uint64 `json:"fence"`
 	Blocked     bool   `json:"blocked"`
 	NextAttempt int64  `json:"next_attempt"`
+	// Retired is the current epoch's durable retire_receipt watermark.
+	Retired RetiredMark `json:"retired"`
+}
+
+// RetiredMark is durable retire_receipt progress for one account epoch: a
+// contiguous watermark plus at most 1,024 sparse sequences above it (browser
+// mirror: noteRetired / accountAuthority().retired).
+type RetiredMark struct {
+	Epoch   int64   `json:"epoch"`
+	Through int64   `json:"through"`
+	Above   []int64 `json:"above"`
+}
+
+// Has reports whether the attempt sequence is already durably retired.
+func (r RetiredMark) Has(seq int64) bool {
+	if seq <= r.Through {
+		return true
+	}
+	for _, v := range r.Above {
+		if v == seq {
+			return true
+		}
+	}
+	return false
 }
 type AccountTransition struct {
 	AccountID string               `json:"account_id"`
@@ -37,7 +61,10 @@ func (s *Store) AccountAuthority(fence uint64) (AccountAuthority, error) {
 		if e != nil {
 			return e
 		}
-		out = AccountAuthority{c.AccountID, c.AccountEpoch, c.Fence, c.SendingBlocked, c.NextAttempt}
+		out = AccountAuthority{c.AccountID, c.AccountEpoch, c.Fence, c.SendingBlocked, c.NextAttempt, RetiredMark{Epoch: c.AccountEpoch, Above: []int64{}}}
+		if r := c.Retired; r != nil && r.Epoch == c.AccountEpoch {
+			out.Retired = RetiredMark{Epoch: r.Epoch, Through: r.Through, Above: append([]int64{}, r.Above...)}
+		}
 		return nil
 	})
 	return out, e

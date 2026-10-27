@@ -85,6 +85,8 @@ type control struct {
 	AccountEpoch   int64
 	SendingBlocked bool
 	NextAttempt    int64
+	// Retired is durable retire_receipt progress (see NoteRetired).
+	Retired *RetiredMark `json:",omitempty"`
 }
 
 var bucket = []byte("protected-v1")
