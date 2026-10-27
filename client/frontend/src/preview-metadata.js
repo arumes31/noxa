@@ -13,7 +13,10 @@ function drain() {
 }
 
 // Providers share one bounded queue and cache, scoped to the active connection.
+// Every automatic metadata caller must supply explicit renderer-owned channel context.
+// Check before cache access as well as queueing: private callers cannot reuse channel metadata.
 export function loadPreviewMetadata(provider, id, scope, isCurrent, request) {
+    if (scope?.conversation !== "channel") return Promise.resolve(null);
     const key = JSON.stringify([scope.generation, scope.tabID, provider, id]);
     if (expires.has(key) && expires.get(key) < Date.now()) { metadata.delete(key); expires.delete(key); }
     if (!metadata.has(key)) {
@@ -21,7 +24,7 @@ export function loadPreviewMetadata(provider, id, scope, isCurrent, request) {
         let skipped = false;
         const pending = new Promise(resolve => {
             queue.push({ resolve, run: () => {
-                if (!isCurrent()) { skipped = true; return null; }
+                if (scope.conversation !== "channel" || !isCurrent()) { skipped = true; return null; }
                 return request();
             } });
             drain();

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { previewConversation, previewConversationFor, setPreviewConversation } from "../src/preview-privacy.js";
+import { previewConversation, previewConversationFor, previewReferenceConversation, setPreviewConversation } from "../src/preview-privacy.js";
 
 test("only explicit channel messages permit automatic previews", () => {
     for (const channelID of [0, 1, 500]) assert.equal(previewConversation({ channelID }), "channel");
@@ -18,4 +18,10 @@ test("hover context follows renderer ownership and private nested contexts overr
     assert.equal(previewConversationFor({ dataset: { conversation: "channel" } }), "private");
     setPreviewConversation(body, "unknown");
     assert.equal(previewConversationFor(link), "private");
+});
+
+
+test("Activity references authorize only explicit channel destinations", () => {
+    for (const kind of ["channel", "thread"]) for (const channel_id of [0, 1]) assert.equal(previewReferenceConversation({ kind, channel_id }), "channel");
+    for (const reference of [undefined, {}, { kind: "channel" }, { kind: "channel", channel_id: "0" }, { kind: "dm", channel_id: 0 }, { kind: "group", channel_id: 1 }, { kind: "unknown", channel_id: 0 }]) assert.equal(previewReferenceConversation(reference), "private");
 });

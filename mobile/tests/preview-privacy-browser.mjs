@@ -6,9 +6,10 @@ import { chromium } from "@playwright/test";
 
 test("PWA encrypted renderers and preview API keep URLs private; channels request sanitized metadata", { timeout: 60000 }, async () => {
     const server = await createServer({ base: "/", root: fileURLToPath(new URL("../", import.meta.url)), server: { host: "127.0.0.1", port: 0 }, logLevel: "error" });
-    await server.listen();
-    const browser = await chromium.launch();
+    let browser;
     try {
+        await server.listen();
+        browser = await chromium.launch();
         const page = await browser.newPage();
         await page.route(server.resolvedUrls.local[0], route => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>preview privacy</title>" }));
         await page.goto(server.resolvedUrls.local[0]);
@@ -49,5 +50,5 @@ test("PWA encrypted renderers and preview API keep URLs private; channels reques
         assert.equal(result.requests[0].type, result.frame);
         assert.match(result.title, /Channel preview/);
         assert.deepEqual(result.remoteImages, ["data:image/jpeg;base64,/9j/2Q=="]);
-    } finally { await browser.close(); await server.close(); }
+    } finally { try { await browser?.close(); } finally { await server.close(); } }
 });

@@ -14,3 +14,8 @@ export function previewConversationFor(node) {
     }
     return "private";
 }
+
+// Activity/notification references are captured by their conversation owner.
+export function previewReferenceConversation(reference) {
+    return ["channel", "thread"].includes(reference?.kind) && Number.isInteger(reference.channel_id) && reference.channel_id >= 0 ? "channel" : "private";
+}

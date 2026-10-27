@@ -40,6 +40,7 @@ function loadMetadata(video, scope, isCurrent) {
 
 export function renderYouTubePreviews(container, { enabled, scope, isCurrent, conversation }) {
     if (!enabled || conversation !== "channel") return;
+    scope = { ...scope, conversation };
     const seen = new Set();
     for (const link of container.querySelectorAll(".md-link[data-url]")) {
         const video = youtubeVideo(link.dataset.url);

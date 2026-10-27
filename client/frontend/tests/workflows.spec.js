@@ -12869,3 +12869,51 @@ test.describe("compact Activity workspace", () => {
         await expect(page.locator(".activity-message")).toHaveCount(0);
     });
 });
+
+
+test("outer Activity notification and compact private rows never request metadata", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(async () => {
+        window.__dmStorageIdentity = "self";
+        const state = window.__noxa.state;
+        Object.assign(state, { activeTabID: "outer-privacy", myUniqueID: "self", myClientID: "self", channels: [], clients: [] });
+        state.settings.link_previews = true;
+        const base = window.go.main.App;
+        window.__outerPreviewCalls = [];
+        window.go.main.App = new Proxy(base, { get(target, key) {
+            if (["YouTubePreviewForTab", "VideoPortalPreviewForTab", "XPostPreviewForTab", "LinkPreviewForTab"].includes(key)) return async (...args) => {
+                window.__outerPreviewCalls.push([key, ...args]); return { thumbnail: document.createElement("canvas").toDataURL("image/jpeg") };
+            };
+            if (key === "DMHistoryPeersForContext") return async () => [{ unique_id: "private-peer", nickname: "Private peer" }];
+            if (key === "DMHistoryLoadForContext") return async () => [{ seq: 1, client_msg_id: "compact-dm", from_unique_id: "private-peer", from_nickname: "Private peer", body: "Compact DM https://youtu.be/dQw4w9WgXcQ", sent_at: 1000, enc_verified: true, enc_mode: "e2e" }];
+            if (key === "ChatHistoryForTab") return async () => ({ messages: [] });
+            if (key === "ConversationForTab") return async (_tab, command) => command.action === "list"
+                ? { conversations: [{ id: "private-group", name: "Private group", members: [{ unique_id: "self", pending: false }] }] }
+                : { messages: [{ id: 1, from_unique_id: "private-peer", body: "Compact group https://www.twitch.tv/privategroup", created_at: 1000, enc_verified: true }] };
+            return target[key];
+        } });
+        const notifications = [
+            { kind: "dm", text: "DM notification https://youtu.be/Fvr-SJPAh7o", destination: { reference: { kind: "dm", peer_id: "other" } } },
+            { kind: "mention", text: "Group notification https://www.twitch.tv/privatealert", destination: { reference: { kind: "group", group_id: "other" } } },
+            { kind: "unknown", text: "Unknown notification https://youtu.be/ZZZZZZZZZZZ", destination: null },
+        ].map((n, i) => ({ ...n, at: Date.now() + i }));
+        window.__outerNotifications = notifications;
+        const { initActivityWorkspace } = await import("/src/activity-ui.js");
+        initActivityWorkspace({ entries: () => window.__outerNotifications, subscribe: callback => { window.__refreshOuterNotifications = callback; }, open: () => {}, markRead: () => {} });
+        window.__noxaActivity.open("activity");
+    });
+    const root = page.locator("#activity-workspace");
+    await expect(root.locator(".activity-notifications .activity-notification")).toHaveCount(3);
+    await expect(root.locator(".activity-feed-row")).toHaveCount(2);
+    await expect(root.getByText("Loading…", { exact: true })).toHaveCount(0);
+    expect(await page.evaluate(() => window.__outerPreviewCalls)).toEqual([]);
+    await expect(root.locator(".activity-thumbnail")).toHaveCount(0);
+    // Explicit global channel context still enables one cached server request across outer rows.
+    await page.evaluate(() => {
+        window.__outerNotifications.push({ kind: "channel_message", text: "Global preview https://youtu.be/CCCCCCCCCCC", at: Date.now(), destination: { reference: { kind: "channel", channel_id: 0 } } });
+        window.__refreshOuterNotifications();
+    });
+    await expect.poll(() => page.evaluate(() => window.__outerPreviewCalls.length)).toBe(1);
+    expect(await page.evaluate(() => window.__outerPreviewCalls[0])).toEqual(["YouTubePreviewForTab", "outer-privacy", "CCCCCCCCCCC"]);
+    await expect(root.locator(".activity-notifications .activity-thumbnail")).toHaveCount(1);
+});
