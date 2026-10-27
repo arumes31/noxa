@@ -17,7 +17,7 @@ func TestCommitAtomicRetryAndFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	snap, _ = s.Read(Ref{Trust, "bob"}, Ref{Session, "bob"})
-	batch := []SendCandidate{{SessionID: "bob", TrustID: "bob", State: []byte("next protected snapshot"), Envelope: []byte("ciphertext"), Context: SessionContext{"local", 1, 1, "bob", "device", "olm-key", "alice:bob", "noxa-olm-v1"}}}
+	batch := []SendCandidate{{SessionID: "bob", TrustID: "bob", State: []byte("next protected snapshot"), Envelope: []byte("ciphertext"), Context: SessionContext{"local", 1, 1, "bob", "device", "olm-key", DevicePairScope, "noxa-olm-v1"}}}
 	out, err := s.CommitSend(snap, "message", batch, []byte("original readable text"))
 	if err != nil {
 		t.Fatal(err)

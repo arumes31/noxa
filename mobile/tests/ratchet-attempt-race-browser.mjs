@@ -37,7 +37,7 @@ test("same attempt sequence with different content conflicts; exact retry reuses
                 const envelope = { version: "noxa-olm-v1", session_id: sid, binding: wire.expectedBinding(m, m.targets[1]), message: { type: 0, body: "c" } };
                 const frozen = await wire.freezeAttempt(m, [{ principal: "bob", device: "b", account_epoch: 1, session_id: sid, envelope }]);
                 const p = { sessionID: sid, trustID: "bob", state: enc.encode("st"), envelope: wire.jsonBytes(envelope),
-                    context: { local_account_id: "local", local_epoch: 1, peer_epoch: 1, peer_principal: "bob", peer_device: "b", peer_identity: "b-key", conversation: envelope.binding.conversation, protocol: "noxa-olm-v1" } };
+                    context: { local_account_id: "local", local_epoch: 1, peer_epoch: 1, peer_principal: "bob", peer_device: "b", peer_identity: "b-key", scope: "device-pair", protocol: "noxa-olm-v1" } };
                 return { frozen, p };
             };
             // Both writers read before either commits (nextAttempt=0 -> attempt 1).
@@ -50,13 +50,21 @@ test("same attempt sequence with different content conflicts; exact retry reuses
             catch (e) { bError = e.code; }
             // The exact same frozen attempt (crash/retry of A) is still reusable.
             const again = await s.commitAttempt(await s.read([["trust", "bob"], ["session", "sA"], ["logical", "tab-A-logical"]]), A.frozen.manifest, A.frozen.parts, [A.p], enc.encode("A"));
+            // Device-pair scope: a pre-rule per-conversation context is invalid
+            // (a valid context would reach the reuse check and give "conflict").
+            const L = await build("legacy-logical", "sL");
+            L.p.context = { ...L.p.context, scope: undefined, conversation: "direct:[\"alice\",\"bob\"]" };
+            delete L.p.context.scope;
+            let legacy = null;
+            try { await s.commitAttempt(await s.read([["trust", "bob"], ["session", "sL"], ["logical", "legacy-logical"]]), L.frozen.manifest, L.frozen.parts, [L.p], enc.encode("L")); }
+            catch (e) { legacy = e.code; }
             const k = o => JSON.stringify(o);
             const stored = await s.read([["outbox", "1:1"], ["logical", "tab-B-logical"], ["session", "sB"]]);
             const outbox = JSON.parse(dec.decode(stored.records[k(["outbox", "1:1"])].data));
-            return { aReused: ra.reused, bReused, bError, againReused: again.reused, outboxLogical: outbox.attempt.manifest.logical_id,
+            return { legacy, aReused: ra.reused, bReused, bError, againReused: again.reused, outboxLogical: outbox.attempt.manifest.logical_id,
                 bLogical: stored.records[k(["logical", "tab-B-logical"])].revision, bSession: stored.records[k(["session", "sB"])].revision };
         });
-        assert.deepEqual(out, { aReused: false, bReused: null, bError: "conflict", againReused: true, outboxLogical: "tab-A-logical", bLogical: 0, bSession: 0 });
+        assert.deepEqual(out, { legacy: "invalid", aReused: false, bReused: null, bError: "conflict", againReused: true, outboxLogical: "tab-A-logical", bLogical: 0, bSession: 0 });
     } finally {
         await browser.close();
         server.close();

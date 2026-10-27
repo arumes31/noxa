@@ -15,7 +15,13 @@ until Task 1c-ii.
 2. Persist claims before requesting them. Claim requests include the source
    account epoch and immutable `claim_until` (at most one hour from fresh reservation). Verify the exact
    signed retained bundle and selected key, with independently expected identity,
-   device, epoch, server and current noXa authority.
+   device, epoch, server and current noXa authority. A claim is needed only when
+   no session exists for that **device pair**: Olm sessions are scoped per local
+   account/epoch and peer device/epoch/identity and are reused by every direct
+   and group conversation (`OlmDevicePairClaimsPerDay` = 2 is unchanged). The
+   conversation is authenticated per message by `ExpectedBinding`, never by the
+   session. A claim reserved by a writer that lost a local commit race is reused
+   on retry rather than spending more claim budget.
 3. For every target except the one local archive target, put `SealPayload` inside
    the core plaintext using `ExpectedBinding`. The inner payload binds attempt,
    routing, action/reference, sender/recipient epochs and group revision/epoch.

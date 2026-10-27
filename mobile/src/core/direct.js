@@ -13,7 +13,9 @@ import { RATCHET_PROTOCOL } from "./ratchet-consumer.js";
 
 const MsgChatAccepted = 154;
 /** Ratchet conditions an unchanged retry (outbox) can still resolve. */
-export const RETRYABLE_RATCHET = new Set(["uncertain", "rate-limit", "unavailable", "local_conflict", "fenced"]);
+export const RETRYABLE_RATCHET = new Set(["uncertain", "rate-limit", "unavailable", "local_conflict", "fenced", "aborted"]);
+/** Failures that stay failed even for a committed attempt (no reseal loop). */
+export const TERMINAL_RATCHET = new Set(["clock_skew"]);
 
 /**
  * Whether a failed ratchet send should stay queued. A committed attempt without
@@ -24,6 +26,7 @@ export const RETRYABLE_RATCHET = new Set(["uncertain", "rate-limit", "unavailabl
  */
 export function ratchetRetryable(error) {
     const committed = error?.committed;
+    if (TERMINAL_RATCHET.has(error?.code)) return false;
     if (committed && !committed.receipt) return true;
     if (committed?.receipt) return committed.receipt.state === "aborted";
     if (!error?.code) return !(error instanceof ProtocolError);
@@ -614,6 +617,8 @@ export class DirectMessages extends EventTarget {
             return await this.ratchet.send({ logicalID: id, scope: "direct", peer, body: { text, sentAt } });
         } catch (error) {
             const committed = error.committed;
+            // An accepted receipt is success even if later housekeeping failed.
+            if (committed?.receipt?.state === "accepted") return { record: committed.record, receipt: committed.receipt, reused: committed.reused };
             // Without a terminal receipt a committed attempt is uncertain: keep
             // its ORIGINAL committed text queued for exact resolution.
             const retryable = ratchetRetryable(error);

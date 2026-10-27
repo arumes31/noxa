@@ -111,7 +111,7 @@ test(
             peer_principal: "bob",
             peer_device: "b",
             peer_identity: "b-key",
-            conversation: envelope.binding.conversation,
+            scope: "device-pair",
             protocol: "noxa-olm-v1",
           },
         };

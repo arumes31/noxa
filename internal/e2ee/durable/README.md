@@ -89,7 +89,19 @@ explicit reads. No transport callback is accepted by either adapter.
   commits every candidate session and one exact complete fanout together.
   Candidate fields: `SessionID`, `TrustID`, `State`, `Envelope`, `Context`,
   optional `Replaces`. Context pins peer principal/device/account identity,
-  conversation and protocol `noxa-olm-v1`; it cannot change under a session ID.
+  `Scope` = `DevicePairScope` (`"device-pair"`) and protocol `noxa-olm-v1`; it
+  cannot change under a session ID. **Sessions are scoped per device pair**: one
+  session per local account/epoch and peer device/epoch/identity serves every
+  direct and group conversation. The conversation is NOT part of the session;
+  the core authenticates each message's conversation binding (`ExpectedBinding`)
+  and a binding mismatch still fails closed. `CommitAttempt` requires every
+  candidate context to carry the device-pair scope.
+- Migration rule: session records written before this rule carried a
+  per-conversation `conversation` value. They fail `validContext`/context
+  equality, so they are never reused for sending, never advanced by a receive
+  (`ErrConflict`) and never mixed with device-pair sessions. They only existed
+  in pre-activation test namespaces; new sessions are established by a fresh
+  signed claim (the 2-per-device-pair daily claim budget is unchanged).
   `Replaces` requires the old session in the snapshot, marks it retired for
   new sends and retains it for delayed receives in the SAME commit.
 - `SendResult{Data,Reused}` contains a protected-local operation JSON snapshot.
@@ -133,7 +145,8 @@ adapter. Methods are `read([[kind,id],...])`, `coreKey(snapshot)`, `setTrust`,
 private. Snapshot records are keyed by `JSON.stringify([kind,id])` and values
 are `{revision,data:Uint8Array}`. Arguments parallel native API with camelCase
 candidate names; context fields use `peer_principal`, `peer_device`,
-`peer_identity`, `conversation`, `protocol`. Publication's optional final
+`peer_identity`, `scope` (must be `DEVICE_PAIR_SCOPE` = `"device-pair"`; a
+legacy `conversation` field is rejected), `protocol`. Publication's optional final
 `{accountID}` selects the account ID, default local. OTK metadata uses
 `publication_id`, `expires_at`, `account_id`, `consumed`.
 

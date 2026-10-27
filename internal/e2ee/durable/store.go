@@ -474,6 +474,13 @@ func (s *Store) SetTrust(snap Snapshot, id string, value []byte, revoked bool) e
 	})
 }
 
+// DevicePairScope is the only session scope: one Olm session per local
+// account/device pair, reused by every direct and group conversation. The
+// core authenticates each message's conversation binding separately. Records
+// written with an earlier per-conversation context (pre-activation test data)
+// fail validation and context equality, so they are never mixed or reused.
+const DevicePairScope = "device-pair"
+
 type SessionContext struct {
 	LocalAccountID string `json:"local_account_id"`
 	LocalEpoch     int64  `json:"local_epoch"`
@@ -481,7 +488,7 @@ type SessionContext struct {
 	PeerPrincipal  string `json:"peer_principal"`
 	PeerDevice     string `json:"peer_device"`
 	PeerIdentity   string `json:"peer_identity"`
-	Conversation   string `json:"conversation"`
+	Scope          string `json:"scope"`
 	Protocol       string `json:"protocol"`
 }
 type SessionState struct {
@@ -492,7 +499,7 @@ type SessionState struct {
 }
 
 func validContext(c SessionContext) bool {
-	return validID(c.LocalAccountID) && c.LocalEpoch > 0 && c.PeerEpoch > 0 && validID(c.PeerPrincipal) && validID(c.PeerDevice) && validID(c.PeerIdentity) && validID(c.Conversation) && c.Protocol == "noxa-olm-v1"
+	return validID(c.LocalAccountID) && c.LocalEpoch > 0 && c.PeerEpoch > 0 && validID(c.PeerPrincipal) && validID(c.PeerDevice) && validID(c.PeerIdentity) && c.Scope == DevicePairScope && c.Protocol == "noxa-olm-v1"
 }
 func (s *Store) sessionValue(tx *bolt.Tx, id string, state []byte, context SessionContext, receiving bool) ([]byte, error) {
 	if len(state) == 0 || !validContext(context) {

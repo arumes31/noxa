@@ -138,6 +138,17 @@ func TestIntegrationRatchetProductPWA(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	// A second group with the same members: one device-pair session serves the
+	// DM and both groups without spending more claim budget.
+	const group2 = "00000000-0000-4000-8000-0000000000b2"
+	if _, e = db.DB().ExecContext(ctx, `INSERT INTO private_conversations(id,name,owner_uid) VALUES($1,'second product group','alice')`, group2); e != nil {
+		t.Fatal(e)
+	}
+	for _, p := range []string{"alice", "bob"} {
+		if _, e = db.DB().ExecContext(ctx, `INSERT INTO private_conversation_members(conversation_id,unique_id,pending,joined_epoch) VALUES($1,$2,FALSE,1)`, group2, p); e != nil {
+			t.Fatal(e)
+		}
+	}
 
 	core, e := ratchet.New(ctx)
 	if e != nil {
@@ -226,7 +237,7 @@ func TestIntegrationRatchetProductPWA(t *testing.T) {
 		run := func() (any, error) {
 			switch req.Op {
 			case "fixture":
-				return map[string]any{"binding": binding, "group": group, "devices": devices}, nil
+				return map[string]any{"binding": binding, "group": group, "group2": group2, "devices": devices}, nil
 			case "drop":
 				drop[req.Device+"/"+req.Action]++
 				return true, nil

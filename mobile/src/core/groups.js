@@ -512,6 +512,8 @@ export class Groups extends EventTarget {
             return await this.ratchet.send({ logicalID: reference, scope: "group", conversation: id, body: { text, sentAt } });
         } catch (error) {
             const original = error.committed;
+            // An accepted receipt is success even if later housekeeping failed.
+            if (original?.receipt?.state === "accepted") return { record: original.record, receipt: original.receipt, reused: original.reused };
             const retryable = ratchetRetryable(error);
             this.#local(id, { reference, text: original ? original.record.body?.text ?? "" : text, sentAt: original?.record.sentAt || sentAt,
                 queued: retryable, failed: !retryable, protocol: RATCHET_PROTOCOL });

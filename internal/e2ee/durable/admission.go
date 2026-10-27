@@ -72,7 +72,7 @@ func (s *Store) CommitAttempt(snap Snapshot, m admission.Manifest, parts [][]byt
 		matched := false
 		for _, target := range m.Targets {
 			if target.Device == copy.Device {
-				matched = p.Context.PeerIdentity == target.Identity && p.Context.Conversation == admission.ExpectedBinding(m, target).Conversation
+				matched = p.Context.PeerIdentity == target.Identity && p.Context.Scope == DevicePairScope
 			}
 		}
 		if !matched {

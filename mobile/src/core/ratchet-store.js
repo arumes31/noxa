@@ -18,6 +18,11 @@ import {
   seal,
   unseal,
 } from "./db.js";
+// Mirror of durable.DevicePairScope: one Olm session per local account/device
+// pair, reused by every direct and group conversation. The core authenticates
+// each message's conversation binding. Per-conversation session records from
+// before this rule fail validation/context equality and are never mixed.
+export const DEVICE_PAIR_SCOPE = "device-pair";
 export const Limits = Object.freeze({
   fanout: 160,
   reads: 512,
@@ -361,9 +366,11 @@ class RatchetStore {
     if (
       !state?.length ||
       !context ||
-      !["peer_principal", "peer_device", "peer_identity", "conversation"].every(
-        (k) => validID(context[k]),
+      !["peer_principal", "peer_device", "peer_identity"].every((k) =>
+        validID(context[k]),
       ) ||
+      context.scope !== DEVICE_PAIR_SCOPE ||
+      Object.hasOwn(context, "conversation") ||
       context.protocol !== "noxa-olm-v1" ||
       !validID(context.local_account_id) ||
       !Number.isSafeInteger(context.local_epoch) ||
@@ -713,7 +720,7 @@ class RatchetStore {
       const target = m.targets.find((t) => t.device === c.device);
       if (
         p.context.peer_identity !== target.identity ||
-        p.context.conversation !== expectedBinding(m, target).conversation
+        p.context.scope !== DEVICE_PAIR_SCOPE
       )
         throw fail("invalid");
       seen.add(c.device);

@@ -23,6 +23,8 @@ import {
 import { verifyBundleEvidence, verifyReservedClaim, OLM_DIRECTORY_VERSION } from "./olm-directory.js";
 
 export const RATCHET_PROTOCOL = "noxa-olm-v1";
+/** Mirror of ratchet-store DEVICE_PAIR_SCOPE / durable.DevicePairScope. */
+export const DEVICE_PAIR_SCOPE = "device-pair";
 export const Limits = Object.freeze({ direct: 20, group: 160, prekeys: 20, refill: 10, retireWindow: 64 });
 const TERMINAL = new Set(["accepted", "rejected", "aborted"]);
 const enc = new TextEncoder(), dec = new TextDecoder();
@@ -46,11 +48,25 @@ export function checkFanout(scope, targets) {
  * numeric attempt sequence (a reseal after abort/reject supersedes it).
  */
 export function latestAttempts(entries) {
-    const seq = id => Number(String(id).split(":")[1]);
+    const order = id => String(id).split(":").map(Number);
+    const cmp = (x, y) => { const [ex, sx] = order(x.id), [ey, sy] = order(y.id); return ex - ey || sx - sy; };
     const latest = new Map();
-    for (const e of [...entries].sort((x, y) => seq(x.id) - seq(y.id))) latest.set(e.record.logicalID, e);
+    for (const e of [...entries].sort(cmp)) latest.set(e.record.logicalID, e);
     return [...latest.values()];
 }
+
+/**
+ * Receive failures that a retry cannot fix (authentication, evidence, trust,
+ * lost key, legacy/mismatched session). Only these are quarantined and
+ * skipped; anything else (transport, rate limit, unavailable, local CAS) is
+ * retried on the next poll.
+ */
+export const DETERMINISTIC_RECEIVE = new Set(["invalid", "unauthenticated", "invalid_evidence", "lost_key", "fenced_copy", "untrusted_device",
+    "revoked", "account_changed", "identity_changed", "legacy_session", "session_mismatch", "digest_mismatch"]);
+const deterministic = async (code, work) => {
+    try { return await work(); }
+    catch (e) { throw e.code && DETERMINISTIC_RECEIVE.has(e.code) ? e : fail(code, { cause: e }); }
+};
 /** Collision-free UI/semantic key for one sender's logical message ID. */
 export const semanticKey = (sender, logicalID) => JSON.stringify([RATCHET_PROTOCOL, sender, logicalID]);
 
@@ -70,6 +86,9 @@ export class RatchetConsumer {
     constructor({ store, core, namespace, admission, directory, deviceKey, signBundle, assertCurrent, attemptTTL = 300, refreshMS = 3600000 }) {
         Object.assign(this, { store, core, namespace, admission, directoryRequest: directory, deviceKey, signBundle, assertCurrent, attemptTTL, refreshMS });
         this.readyAt = 0;
+        this.readyValue = null;   // last successful readiness {identity, epoch, expiresAt}
+        this.claims = new Map();  // verified, not yet committed claims kept across local_conflict retries
+        this.skewed = new Set();  // attempts the server refuses as invalid while locally unexpired
         this.closed = false;
         this.tail = Promise.resolve();
         this.projectors = [];
@@ -138,11 +157,25 @@ export class RatchetConsumer {
      * idempotent publication step so it refreshes before expiry.
      */
     ready() {
-        if (this.readiness && this.readyAt && Date.now() - this.readyAt > this.refreshMS) this.readiness = null;
+        const due = this.readiness && this.readyAt && Date.now() - this.readyAt > this.refreshMS;
+        if (due && !this.refreshing) {
+            // Background refresh: the last good readiness stays in force while
+            // its publication is still valid; only recovery_required replaces it.
+            const previous = this.readiness;
+            this.refreshing = this.#serial(() => this.#ready());
+            this.refreshing.then(v => { this.readyValue = v; this.readiness = Promise.resolve(v); this.readyAt = Date.now(); },
+                e => {
+                    if (e.code === "recovery_required") { this.readiness = Promise.reject(e); this.readiness.catch(() => {}); }
+                    else if (!(this.readyValue?.expiresAt > now() + 300)) this.readiness = null;
+                    else this.readiness = previous;
+                }).finally(() => { this.refreshing = null; });
+            if (this.readyValue?.expiresAt > now() + 300) return this.readiness;
+            return this.refreshing;
+        }
         if (!this.readiness) {
             const attempt = this.#serial(() => this.#ready());
             this.readiness = attempt;
-            attempt.then(() => { if (this.readiness === attempt) this.readyAt = Date.now(); },
+            attempt.then(v => { if (this.readiness === attempt) { this.readyAt = Date.now(); this.readyValue = v; } },
                 e => { if (this.readiness === attempt && e.code !== "recovery_required") this.readiness = null; });
         }
         return this.readiness;
@@ -179,7 +212,7 @@ export class RatchetConsumer {
         this.#check();
         this.identity = latest.bundle.identity;
         this.epoch = a.epoch;
-        return { identity: this.identity, epoch: a.epoch };
+        return { identity: this.identity, epoch: a.epoch, expiresAt: latest.bundle.expires_at };
     }
     async #commitBundle(s, a, created, generation, previous = null) {
         const issued = now();
@@ -275,16 +308,18 @@ export class RatchetConsumer {
 
     // --- Sessions -------------------------------------------------------------
 
-    #context(a, t, conversation) {
+    /** Device-pair session context (no conversation: bound per message). */
+    #context(a, t) {
         return { local_account_id: a.accountID, local_epoch: a.epoch, peer_epoch: t.account_epoch, peer_principal: t.principal,
-            peer_device: t.device, peer_identity: t.identity, conversation, protocol: RATCHET_PROTOCOL };
+            peer_device: t.device, peer_identity: t.identity, scope: DEVICE_PAIR_SCOPE, protocol: RATCHET_PROTOCOL };
     }
     async #sessionIndex() {
         if (!this.sessions) {
             const map = new Map();
             for (const [ref, r] of await this.#readMany(await this.#refs("session"))) {
                 const state = parse(r.data);
-                if (!state.retired) map.set(JSON.stringify(state.context), ref[1]);
+                // Legacy per-conversation records are never selected for sending.
+                if (!state.retired && state.context?.scope === DEVICE_PAIR_SCOPE) map.set(JSON.stringify(state.context), ref[1]);
             }
             this.sessions = map;
         }
@@ -341,7 +376,7 @@ export class RatchetConsumer {
         checkFanout(scope, m.targets);
         const locals = m.targets.filter(t => t.local);
         if (locals.length !== 1 || locals[0].principal !== m.sender || locals[0].device !== m.device ||
-            locals[0].account_epoch !== a.epoch || locals[0].identity !== this.identity) throw fail("fenced");
+            locals[0].account_epoch !== a.epoch || locals[0].identity !== this.identity) throw fail("local_identity_mismatch");
         const sessions = await this.#sessionIndex();
         const plans = [];
         // Every non-local target is required: an unverifiable device fails the
@@ -350,12 +385,18 @@ export class RatchetConsumer {
             if (t.local) continue;
             let trusted = await this.#trust(t.principal, t.device);
             if (trusted.pin && (trusted.pin.epoch !== t.account_epoch || trusted.pin.identity !== t.identity)) throw fail("account_changed");
-            const binding = expectedBinding(m, t), context = this.#context(a, t, binding.conversation);
+            const binding = expectedBinding(m, t), context = this.#context(a, t);
             // Without a verified Olm pin (first contact or a confirmed root
             // change) a fresh signed claim is required even if a session exists.
             const prior = trusted.pin ? sessions.get(JSON.stringify(context)) : undefined;
             let claim = null;
-            if (!prior) {
+            const claimKey = JSON.stringify([a.accountID, a.epoch, t.principal, t.device, t.account_epoch, t.identity]);
+            const kept = this.claims.get(claimKey);
+            if (!prior && kept && kept.until > now() + 60 && trusted.pin) {
+                // The reservation from a lost local_conflict race is still ours
+                // on the server; reuse it instead of spending more claim budget.
+                claim = { id: kept.id, key: kept.key, cacheKey: claimKey };
+            } else if (!prior) {
                 const claimID = crypto.randomUUID(), until = now() + 3600;
                 const request = { action: "claim", request_id: claimID, principal: t.principal, device_id: t.device, account_epoch: a.epoch, claim_until: until };
                 const cs = await this.store.read([["trust", trusted.id], ["claim", claimID]]);
@@ -367,7 +408,8 @@ export class RatchetConsumer {
                 const selected = verifyReservedClaim(result.bundle, { trustedSigningKey: trusted.key, server: m.server, principal: t.principal,
                     deviceID: t.device, accountEpoch: t.account_epoch, pinnedOlmIdentity: trusted.pin?.identity || t.identity, keyID: result.key_id, claimUntil: until });
                 trusted = await this.#adopt(trusted, t.principal, t.device, result.bundle);
-                claim = { id: claimID, key: selected.key };
+                claim = { id: claimID, key: selected.key, cacheKey: claimKey };
+                this.claims.set(claimKey, { id: claimID, key: selected.key, until });
             }
             plans.push({ t, trusted, binding, context, prior, claim });
         }
@@ -384,13 +426,13 @@ export class RatchetConsumer {
         for (const p of plans) {
             if (p.prior && !rec(before, "session", p.prior).revision) throw fail("local_conflict");
             const prior = p.prior ? parse(rec(before, "session", p.prior).data) : null;
-            if (prior && (prior.retired || JSON.stringify(prior.context) !== JSON.stringify(p.context))) throw fail("conflict");
+            if (prior && (prior.retired || JSON.stringify(prior.context) !== JSON.stringify(p.context))) throw fail("local_conflict");
             const result = await this.core.apply({ op: prior ? "encrypt" : "outbound", key,
                 ...(prior ? { session: dec.decode(Uint8Array.from(prior.snapshot)) } : { account, peer_identity: p.t.identity, one_time_key: p.claim.key }),
                 binding: p.binding, plaintext: sealPayload(m, p.t, body) });
             this.#check();
             const sessionID = "olm:" + result.session_id;
-            if (p.prior && p.prior !== sessionID) throw fail("conflict");
+            if (p.prior && p.prior !== sessionID) throw fail("local_conflict");
             packets.push({ sessionID, trustID: p.trusted.id, state: enc.encode(result.session), envelope: jsonBytes(result.envelope), context: p.context });
             copies.push({ principal: p.t.principal, device: p.t.device, account_epoch: p.t.account_epoch, session_id: result.session_id,
                 ...(p.claim ? { claim_id: p.claim.id } : {}), envelope: result.envelope });
@@ -411,6 +453,7 @@ export class RatchetConsumer {
         // sequence belongs to another writer. Never resolve its archive as ours,
         // and only cache session IDs of a verified fresh commit.
         if (committed.reused) throw fail("local_conflict");
+        for (const p of plans) if (p.claim) this.claims.delete(p.claim.cacheKey);
         this.#check();
         for (const p of packets) sessions.set(JSON.stringify(p.context), p.sessionID);
         return this.#resolve(a.epoch + ":" + m.attempt_id, a, reused);
@@ -430,7 +473,8 @@ export class RatchetConsumer {
                 let result = await this.#call({ action: "status", account_epoch: m.account_epoch, attempt_id: m.attempt_id });
                 // An attempt the server never saw cannot be begun after its
                 // deadline: fence it with a metadata-only abort instead.
-                const expired = m.deadline <= now() + 5;
+                const expired = m.deadline <= now();
+                if (!expired && this.skewed.has(id) && !TERMINAL.has(result.state)) throw fail("clock_skew");
                 if (!TERMINAL.has(result.state)) {
                     let wire = null;
                     try { wire = await this.store.attemptWire(await this.store.read(), id); }
@@ -440,6 +484,10 @@ export class RatchetConsumer {
                         try { result = await this.#handoff(a, { action: "begin", manifest: wire.manifest }); }
                         catch (e) {
                             if (e.code !== "invalid") throw e;
+                            // The server refuses an unexpired deadline (client clock
+                            // skew): fail without aborting or resealing, so no attempt
+                            // IDs are burned. Once it is genuinely past, abort.
+                            if (m.deadline > now()) { this.skewed.add(id); throw fail("clock_skew"); }
                             result = await this.#call({ action: "abort", account_epoch: m.account_epoch, manifest: m });
                         }
                         if (!TERMINAL.has(result.state)) {
@@ -458,22 +506,28 @@ export class RatchetConsumer {
                 this.#check();
                 ({ op, record } = await this.#outcome(id));
             }
+        } catch (e) {
+            // The committed original remains authoritative for the caller's view.
+            throw Object.assign(e, { committed: { record, receipt: op.receipt || null, reused } });
+        }
+        // The terminal receipt is committed: retirement is best-effort
+        // housekeeping that a later drain repeats; it never changes the outcome.
+        try {
             if (!this.retired.has(id) && !retiredIn(await this.store.accountAuthority(await this.store.read()), id)) {
                 const retirement = await this.store.attemptRetirementRequest(await this.store.read(), id);
                 try { await this.#call({ action: "retire_receipt", ...retirement }); }
                 catch (e) { if (e.code !== "retired") throw e; }
                 // Durable progress: later sessions skip this retirement.
                 await this.store.noteRetired(await this.store.read(), id);
-                this.#check();
             }
             this.retired.add(id);
         } catch (e) {
-            // The committed original remains authoritative for the caller's view.
-            throw Object.assign(e, { committed: { record, receipt: op.receipt || null, reused } });
+            if (e.code === "fenced") throw Object.assign(e, { committed: { record, receipt: op.receipt, reused } });
         }
         const receipt = op.receipt;
         const projected = { ...record, transport: { message: receipt.message_id || "", attempt: id }, status: receipt.state, reason: receipt.reason || "" };
-        await this.#emit(projected, false);
+        try { await this.#emit(projected, false); }
+        catch (e) { if (e.code !== "fenced") throw e; }
         if (receipt.state !== "accepted") throw fail(receipt.reason || receipt.state, { committed: { record: projected, receipt, reused } });
         return { record: projected, receipt, reused };
     }
@@ -520,6 +574,8 @@ export class RatchetConsumer {
                     // A transport loss after durable commit stops this drain; the
                     // next drain replays the stored outcome and exact ACK.
                     if (e.code === "fenced" || e.afterCommit) throw e;
+                    // Transient failures retry on the next poll (not quarantined).
+                    if (!DETERMINISTIC_RECEIVE.has(e.code)) continue;
                     // Unreadable ciphertext stays pending on the server and is
                     // NEVER passed to legacy decoders or acknowledged.
                     const m = d.manifest || {}, own = m.sender === this.namespace.principal;
@@ -557,14 +613,14 @@ export class RatchetConsumer {
     async #receive(d, a) {
         const m = d.manifest, c = d.copy, ns = this.namespace;
         if (m.server !== ns.server || c.principal !== ns.principal || c.device !== ns.device || c.account_epoch !== a.epoch) throw fail("fenced_copy");
-        checkEnvelope(m, c);
+        await deterministic("invalid", () => checkEnvelope(m, c));
         let s = await this.store.read([["inbox", d.id]]);
         const saved = rec(s, "inbox", d.id);
         let record, isNew = false;
         if (saved.revision) {
             // Committed before a lost ACK: exact stored outcome, no re-decrypt.
             const prior = parse(saved.data);
-            if (prior.digest !== await sha256(jsonBytes(c.envelope))) throw fail("conflict");
+            if (prior.digest !== await sha256(jsonBytes(c.envelope))) throw fail("digest_mismatch");
             record = parse(prior.archive);
         } else {
             const own = m.targets.find(t => t.device === c.device && t.principal === c.principal);
@@ -575,12 +631,12 @@ export class RatchetConsumer {
             let trusted = await this.#trust(m.sender, m.device);
             // Retained admission evidence is authenticated under the current
             // independently trusted noXa device key, without publication TTL.
-            verifyBundleEvidence(d.source_bundle, { trustedSigningKey: trusted.key, server: m.server, principal: m.sender, deviceID: m.device,
-                accountEpoch: m.account_epoch, pinnedOlmIdentity: trusted.pin?.identity || d.source_bundle.identity });
+            await deterministic("invalid_evidence", () => verifyBundleEvidence(d.source_bundle, { trustedSigningKey: trusted.key, server: m.server, principal: m.sender, deviceID: m.device,
+                accountEpoch: m.account_epoch, pinnedOlmIdentity: trusted.pin?.identity || d.source_bundle.identity }));
             if (d.source_bundle.identity !== sourceTarget.identity) throw fail("invalid");
             trusted = await this.#adopt(trusted, m.sender, m.device, d.source_bundle);
             const source = { principal: m.sender, device: m.device, account_epoch: m.account_epoch, identity: trusted.pin.identity };
-            const binding = expectedBinding(m, c), context = this.#context(a, source, binding.conversation);
+            const binding = expectedBinding(m, c), context = this.#context(a, source);
             const sessionID = "olm:" + c.session_id;
             const refs = [["trust", trusted.id], ["session", sessionID], ["inbox", d.id], ["account", a.accountID]];
             let consumed = "";
@@ -603,15 +659,19 @@ export class RatchetConsumer {
             if (existing.revision) {
                 if (consumed) throw fail("conflict");
                 const state = parse(existing.data);
-                if (JSON.stringify(state.context) !== JSON.stringify(context)) throw fail("conflict");
-                result = await this.core.apply({ op: "decrypt", key, session: dec.decode(Uint8Array.from(state.snapshot)), binding, envelope: c.envelope });
+                // A pre-device-pair (per-conversation) record or a session bound
+                // to another peer identity/epoch is a deterministic failure.
+                if (state.context?.scope !== DEVICE_PAIR_SCOPE) throw fail("legacy_session");
+                if (JSON.stringify(state.context) !== JSON.stringify(context)) throw fail("session_mismatch");
+                // Core failures (MAC, binding, session mismatch) are deterministic.
+                result = await deterministic("unauthenticated", () => this.core.apply({ op: "decrypt", key, session: dec.decode(Uint8Array.from(state.snapshot)), binding, envelope: c.envelope }));
             } else {
                 if (!consumed) throw fail("conflict");
-                result = await this.core.apply({ op: "inbound", key, account: dec.decode(rec(s, "account", a.accountID).data), peer_identity: source.identity, binding, envelope: c.envelope });
+                result = await deterministic("unauthenticated", () => this.core.apply({ op: "inbound", key, account: dec.decode(rec(s, "account", a.accountID).data), peer_identity: source.identity, binding, envelope: c.envelope }));
                 if ("olm:" + result.session_id !== sessionID) throw fail("invalid");
             }
             this.#check();
-            const body = openPayload(m, c, result.plaintext);
+            const body = await deterministic("invalid", () => openPayload(m, c, result.plaintext));
             const self = m.sender === ns.principal;
             record = { protocol: RATCHET_PROTOCOL, provenance: "authenticated", sender: m.sender, senderDevice: m.device, logicalID: m.logical_id,
                 key: semanticKey(m.sender, m.logical_id), scope: m.scope, peer: m.scope === "direct" ? (self ? m.peer : m.sender) : "",

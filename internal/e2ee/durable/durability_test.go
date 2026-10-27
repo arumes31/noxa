@@ -50,7 +50,7 @@ func applyTest(t *testing.T, e *ratchet.Engine, r ratchet.Request) ratchet.Respo
 	return v
 }
 func contextFor(peer string) SessionContext {
-	return SessionContext{"local", 1, 1, peer, peer + "-device", peer + "-olm", "alice:bob", "noxa-olm-v1"}
+	return SessionContext{"local", 1, 1, peer, peer + "-device", peer + "-olm", DevicePairScope, "noxa-olm-v1"}
 }
 func TestRealCoreAtomicFanoutReceive(t *testing.T) {
 	a := openTest(t, t.TempDir())

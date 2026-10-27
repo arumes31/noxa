@@ -286,7 +286,7 @@ test(
             peer_principal: "bob",
             peer_device: "bob-device",
             peer_identity: "verified-olm-bob",
-            conversation: "alice:bob",
+            scope: "device-pair",
             protocol: "noxa-olm-v1",
           };
         });

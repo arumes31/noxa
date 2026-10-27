@@ -227,6 +227,7 @@ try {
 
     // 8. Group vertical with mixed legacy numeric history and opaque records.
     await run("bob-phone", g => T.groups.messages.set(g, [{ id: 7, conversation_id: g, from_unique_id: "alice", text: "legacy numeric", created_at: 1 }]), group);
+    const claimsBeforeGroups = (await counts())["alice-phone/claim"] || 0;
     const gs = await run("alice-phone", g => T.groups.send(g, "group hello", { reference: "g1" }).then(o => ({ state: o.receipt.state, message: o.receipt.message_id })), group);
     assert.equal(gs.state, "accepted");
     assert.equal(typeof gs.message, "string");
@@ -243,6 +244,16 @@ try {
     await drain("bob-phone");
     gv = await run("bob-phone", g => T.groupView(g), group);
     assert.deepEqual(gv.find(m => m.id === olmID).deleted, true);
+
+    // 8b. Device-pair sessions: the DM and BOTH groups reuse the same
+    //     alice-phone<->bob-phone and alice-phone<->alice-tablet sessions, so
+    //     three conversations need no further claims (budget is 2/pair/day).
+    const g2 = await run("alice-phone", g => T.groups.send(g, "second group", { reference: "g2-1" }).then(o => o.receipt.state), fixture.group2);
+    assert.equal(g2, "accepted");
+    assert.equal(((await counts())["alice-phone/claim"] || 0) - claimsBeforeGroups, 0, "no claim for further conversations with the same devices");
+    await drain("bob-phone");
+    assert.deepEqual(await run("bob-phone", g => T.groupView(g).map(m => m.text), fixture.group2), ["second group"]);
+    await drain("alice-tablet");
 
     // 9. Stale roster: an approved device without Olm publication blocks the
     //    whole send (no silent omission); after revocation it succeeds.
@@ -330,18 +341,17 @@ try {
 
     // 15. P2-7: explicit changed-identity confirmation resets ratchet pins; the
     //     next send re-adopts only via a freshly signed claim.
-    // A fresh contact: the server allows only 2 claims per device pair per
-    // day, and sessions are per conversation (interface concern in report).
+    // A fresh contact (one Go-published device with two one-time keys).
     assert.equal(await post({ op: "fake_devices", action: "dave:1" }), true);
-    assert.equal(await run("alice-tablet", () => T.dm.send("dave", "first contact", "", { id: "dave-1" }).then(o => o.receipt.state)), "accepted");
+    assert.equal(await run("alice-phone", () => T.dm.send("dave", "first contact", "", { id: "dave-1" }).then(o => o.receipt.state)), "accepted");
     before = await counts();
-    const reset = await run("alice-tablet", async () => {
+    const reset = await run("alice-phone", async () => {
         await T.consumer.resetTrust("dave");
         return T.dm.send("dave", "after confirmation", "", { id: "trust-1" }).then(o => o.receipt.state);
     });
     after = await counts();
     assert.equal(reset, "accepted");
-    assert.equal((after["alice-tablet/claim"] || 0) - (before["alice-tablet/claim"] || 0), 1, "fresh signed claim, no silent reuse");
+    assert.equal((after["alice-phone/claim"] || 0) - (before["alice-phone/claim"] || 0), 1, "fresh signed claim, no silent reuse");
 
     // 16. Client-side authorship refusal (no request reaches the server).
     before = await counts();
@@ -350,19 +360,78 @@ try {
     after = await counts();
     assert.equal(after["alice-phone/snapshot"], before["alice-phone/snapshot"]);
 
-    // 17. Direct fanout bound: alice(2) + carol(18), sent from alice-tablet, = 20 targets is accepted;
+    // 17. Direct fanout bound: alice(2) + carol(18) = 20 targets is accepted;
     //     a 19th carol device makes 21 and fails before any transport.
     assert.equal(await post({ op: "fake_devices", action: "carol:18" }), true);
-    const twenty = await run("alice-tablet", () => T.dm.send("carol", "to twenty devices", "", { id: "c20" }).then(o => o.receipt.state, e => e.code));
+    const twenty = await run("alice-phone", () => T.dm.send("carol", "to twenty devices", "", { id: "c20" }).then(o => o.receipt.state, e => e.code));
     assert.equal(twenty, "accepted");
     assert.equal(await post({ op: "fake_devices", action: "carol:1" }), true);
     before = await counts();
-    const twentyOne = await run("alice-tablet", () => T.dm.send("carol", "to twenty-one", "", { id: "c21" }).then(() => "sent", e => [e.code, e.retryable]));
+    const twentyOne = await run("alice-phone", () => T.dm.send("carol", "to twenty-one", "", { id: "c21" }).then(() => "sent", e => [e.code, e.retryable]));
     after = await counts();
     assert.deepEqual(twentyOne, ["fanout_limit", false]);
-    assert.equal(transport(after, "alice-tablet") - transport(before, "alice-tablet"), 0);
+    assert.equal(transport(after, "alice-phone") - transport(before, "alice-phone"), 0);
 
-    // 18. Logout/session replacement fences the consumer before any transport.
+    // 19. N1: a transient receive failure (sender key lookup lost) is NOT
+    //     quarantined; the next poll opens the message.
+    await run("alice-phone", () => T.dm.send("bob", "transient lookup", "", { id: "n1-msg" }));
+    await run("bob-phone", () => T.restart()); // fresh directory cache
+    await post({ op: "fail", device: "bob-phone", action: "" }); // next KeyRequest lost
+    const n1 = await run("bob-phone", async () => {
+        const first = await T.consumer.drain();
+        const after1 = T.view("alice").filter(m => m.id === "n1-msg").length;
+        const second = await T.consumer.drain();
+        return { q1: first.quarantined.length, after1, q2: second.quarantined.length, view: T.view("alice").filter(m => m.id === "n1-msg").map(m => m.body) };
+    });
+    assert.deepEqual(n1, { q1: 0, after1: 0, q2: 0, view: ["transient lookup"] });
+
+    // 20. N2: accepted receipt is success even if retire_receipt is lost;
+    //     retirement is repeated later, the message never shows failed.
+    await post({ op: "drop", device: "alice-phone", action: "retire_receipt" });
+    const n2 = await run("alice-phone", () => T.dm.send("bob", "accepted then housekeeping lost", "", { id: "n2-msg" })
+        .then(o => ({ state: o.receipt.state, view: T.view("bob").filter(m => m.id === "n2-msg").map(m => [m.failed, m.queued, m.pending]) }), e => ({ error: e.code || e.message })));
+    assert.deepEqual(n2, { state: "accepted", view: [[false, false, false]] });
+    before = await counts();
+    await run("alice-phone", () => T.restart());
+    await drain("alice-phone");
+    after = await counts();
+    assert.equal((after["alice-phone/retire_receipt"] || 0) - (before["alice-phone/retire_receipt"] || 0), 1, "the skipped retirement is completed later");
+
+    // 21. N3: persistent clock skew (server refuses an unexpired deadline)
+    //     fails the message without aborting, resealing or burning IDs.
+    before = await counts();
+    const n3 = await run("alice-phone", async () => {
+        T.consumer.attemptTTL = 4000; // > server's 3600 s window = "fast clock"
+        try {
+            const one = await T.dm.send("bob", "skewed", "", { id: "n3-msg" }).then(() => "sent", e => [e.code, e.retryable]);
+            const two = await T.dm.send("bob", "skewed again", "", { id: "n3-msg" }).then(() => "sent", e => [e.code, e.retryable]);
+            return { one, two, view: T.view("bob").filter(m => m.id === "n3-msg").map(m => [m.body, m.failed, m.queued]) };
+        } finally { T.consumer.attemptTTL = 300; }
+    });
+    after = await counts();
+    assert.deepEqual(n3, { one: ["clock_skew", false], two: ["clock_skew", false], view: [["skewed", true, false]] });
+    assert.equal((after["alice-phone/begin"] || 0) - (before["alice-phone/begin"] || 0), 1, "one begin, no retry loop");
+    assert.equal((after["alice-phone/abort"] || 0) - (before["alice-phone/abort"] || 0), 0, "no abort/reseal while unexpired");
+
+    // 22. N5 smoke: two current consumers race on first contact with a fresh
+    //     device; both succeed and a third send needs no new claim.
+    assert.equal(await post({ op: "fake_devices", action: "erin:1" }), true);
+    const n5 = await run("alice-phone", async () => {
+        const other = await T.spawn();
+        const r = await Promise.all([
+            T.consumer.send({ logicalID: "erin-A", scope: "direct", peer: "erin", body: { text: "A" } }),
+            other.consumer.send({ logicalID: "erin-B", scope: "direct", peer: "erin", body: { text: "B" } }),
+        ]);
+        other.consumer.closed = true;
+        return r.map(o => [o.record.body.text, o.receipt.state]);
+    });
+    assert.deepEqual(n5, [["A", "accepted"], ["B", "accepted"]]);
+    before = await counts();
+    assert.equal(await run("alice-phone", () => T.dm.send("erin", "third", "", { id: "erin-C" }).then(o => o.receipt.state)), "accepted");
+    after = await counts();
+    assert.equal((after["alice-phone/claim"] || 0) - (before["alice-phone/claim"] || 0), 0);
+
+    // 23. Logout/session replacement fences the consumer before any transport.
     before = await counts();
     const fenced = await run("alice-tablet", async () => { await T.consumer.close(); return T.dm.send("bob", "after logout", "", { id: "t1" }).then(() => "sent", e => e.code); });
     assert.equal(fenced, "fenced");

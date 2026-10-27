@@ -129,8 +129,7 @@ try {
         peer_principal: alice.principal,
         peer_device: alice.device_id,
         peer_identity: alice.identity,
-        conversation: wire.expectedBinding(delivery.manifest, delivery.copy)
-          .conversation,
+        scope: "device-pair",
         protocol: "noxa-olm-v1",
       };
       const binding = wire.expectedBinding(delivery.manifest, delivery.copy),

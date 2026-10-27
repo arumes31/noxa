@@ -148,7 +148,7 @@ func TestIntegrationOlmAdmissionBrowser(t *testing.T) {
 	decode := func(v any, out any) error { return json.Unmarshal(encode(v), out) }
 	var nativeSession string
 	sessionContext := func() durable.SessionContext {
-		return durable.SessionContext{LocalAccountID: "local", LocalEpoch: 1, PeerEpoch: 1, PeerPrincipal: bob.UniqueID, PeerDevice: bob.deviceID, PeerIdentity: bb.Identity, Conversation: `direct:["browser","native"]`, Protocol: ratchet.Version}
+		return durable.SessionContext{LocalAccountID: "local", LocalEpoch: 1, PeerEpoch: 1, PeerPrincipal: bob.UniqueID, PeerDevice: bob.deviceID, PeerIdentity: bb.Identity, Scope: durable.DevicePairScope, Protocol: ratchet.Version}
 	}
 	var mu sync.Mutex
 	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

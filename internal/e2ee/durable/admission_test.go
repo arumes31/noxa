@@ -28,7 +28,6 @@ func TestAttemptReceiptAndHistoricalResolution(t *testing.T) {
 	bind := admission.ExpectedBinding(m, target)
 	env, _ := json.Marshal(ratchet.Envelope{Version: ratchet.Version, SessionID: "session", Binding: bind, Message: json.RawMessage(`{"type":0,"body":"cipher"}`)})
 	context := contextFor("bob")
-	context.Conversation = bind.Conversation
 	parts, e := admission.Freeze(&m, []admission.Copy{{Principal: "bob", Device: "bob-device", AccountEpoch: 1, SessionID: "session", Envelope: env}})
 	if e != nil {
 		t.Fatal(e)
@@ -96,5 +95,45 @@ func TestSharedStoreReferences(t *testing.T) {
 	}
 	if e = b.Close(); e != nil {
 		t.Fatal(e)
+	}
+}
+
+// One Olm session per device pair serves direct AND group attempts; legacy
+// per-conversation contexts are invalid and never mixed into it.
+func TestDevicePairSessionAcrossConversations(t *testing.T) {
+	server := "tls-sha256:" + strings.Repeat("a", 64)
+	s, e := Open(t.TempDir(), Namespace{server, "alice", "local-device"}, IdentityProtection(bytes.Repeat([]byte{7}, 32)), 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	trusted(t, s, "bob")
+	base := admission.Manifest{Version: admission.Version, Server: server, Sender: "alice", Device: "local-device", AccountEpoch: 1, Purpose: "chat", Deadline: 1900000000,
+		Rosters: []admission.Roster{{Principal: "alice", Version: 1}, {Principal: "bob", Version: 1}},
+		Targets: []admission.Target{{Principal: "alice", Device: "local-device", AccountEpoch: 1, Identity: "alice-key", Local: true}, {Principal: "bob", Device: "bob-device", AccountEpoch: 1, Identity: "bob-olm"}}}
+	direct, group := base, base
+	direct.AttemptID, direct.LogicalID, direct.Scope, direct.Peer = "1", "dm", "direct", "bob"
+	group.AttemptID, group.LogicalID, group.Scope, group.Conversation, group.Revision, group.Epoch = "2", "group-msg", "group", "g1", 1, 1
+	commit := func(m admission.Manifest, context SessionContext) error {
+		target := m.Targets[1]
+		env, _ := json.Marshal(ratchet.Envelope{Version: ratchet.Version, SessionID: "pair", Binding: admission.ExpectedBinding(m, target), Message: json.RawMessage(`{"type":1,"body":"cipher"}`)})
+		parts, e := admission.Freeze(&m, []admission.Copy{{Principal: "bob", Device: "bob-device", AccountEpoch: 1, SessionID: "pair", Envelope: env}})
+		if e != nil {
+			return e
+		}
+		snap := readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "pair"}, Ref{Logical, m.LogicalID})
+		_, e = s.CommitAttempt(snap, m, parts, []SendCandidate{{SessionID: "pair", TrustID: "bob", State: []byte("state-" + m.AttemptID), Envelope: env, Context: context}}, []byte("archive"))
+		return e
+	}
+	legacy := contextFor("bob")
+	legacy.Scope = admission.ExpectedBinding(direct, direct.Targets[1]).Conversation
+	if e = commit(direct, legacy); !errors.Is(e, ErrInvalid) {
+		t.Fatal("per-conversation session context accepted", e)
+	}
+	if e = commit(direct, contextFor("bob")); e != nil {
+		t.Fatal(e)
+	}
+	if e = commit(group, contextFor("bob")); e != nil {
+		t.Fatal("device-pair session not reusable by a group conversation", e)
 	}
 }
