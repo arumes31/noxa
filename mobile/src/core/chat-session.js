@@ -619,7 +619,8 @@ export class ChatSession extends EventTarget {
     #previews = new Map();
 
     /** A link preview from the server (provider "web", "youtube", "x", "twitch", ...). */
-    linkPreview(provider, resource) {
+    linkPreview(provider, resource, conversation) {
+        if (conversation !== "channel") return Promise.reject(new Error("Link previews are disabled in encrypted private conversations"));
         if (!this.capabilities.has("server_link_previews_v1")) return Promise.reject(new Error("link previews are not available on this server"));
         const key = `${provider}\u0000${resource}`;
         if (!this.#previews.has(key)) {

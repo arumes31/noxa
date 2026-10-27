@@ -97,8 +97,14 @@ network handoff; the server also fences old epochs.
 Task 1c-ii must integrate every direct/group send, edit/delete, attachment-key,
 history/read/control path; mandatory capability negotiation and cutover; durable
 receive-before-ACK and background retry/draining; account reset UI/peer transition
-verification; and approved 30-day ACKed ciphertext retention. Automatic link
-previews in encrypted direct/groups must remain disabled at that cutover.
+verification. Approved 30-day ACKed server ciphertext retention is already
+implemented; pending ciphertext remains retained. Automatic link
+previews are disabled now in native/PWA encrypted direct/group bodies, provider
+cards, hover and shared activity/search renderers. Renderers pass explicit channel
+context to permit server metadata requests; unknown destinations stay private.
+Explicit links retain their existing external navigation. Channel previews accept
+only server-transcoded/proxied raster bytes, with no direct HTTP fallback. This
+privacy checkpoint does not activate admission or complete the live migration.
 Short-lived targeted control/archive-import traffic needs a separate authenticated
 purpose/schema and authorization path. It may not relax complete chat fanout.
 There is no chat `media-key` escape hatch in this manifest.

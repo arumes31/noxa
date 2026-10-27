@@ -1,3 +1,4 @@
+import { previewConversation, previewConversationFor, setPreviewConversation } from "./preview-privacy.js";
 import { createActivityHistory } from "./activity-history.js";
 import { blockedPreviewPlaceholder, resolvePreviewImage } from "./preview-source-policy.js";
 // chat-ui.js — wave-5b rich chat UI: markdown messages (91-93), link preview
@@ -978,6 +979,8 @@ function applyPendingDMChanges(peer, m) {
 // renderMarkdown (which escapes first); file names only ever go into
 // textContent or DOM properties, never raw HTML.
 function renderBody(container, m) {
+    const conversation = previewConversation(m);
+    setPreviewConversation(container, conversation);
     const voiceScope = captureScope(() => readInlineAttachmentScope(m.isDM ? 0 : Number(m.channelID) || 0));
     if (!m.deleted && renderVoiceMessage(container, m.text, { tabID: voiceScope.tabID, channelID: voiceScope.channelID, isCurrent: () => inlineAttachmentScopeIsCurrent(voiceScope, container) })) return;
     if (renderPoll(container, m)) return;
@@ -998,6 +1001,7 @@ function renderBody(container, m) {
     for (let i = 1; i < parts.length; i += 2) attachFileRef(container, m, parts[i]);
     const previewScope = captureScope(readExportScope);
     const previewOptions = {
+        conversation,
         enabled: V().state.settings?.link_previews !== false,
         scope: previewScope,
         isCurrent: () => exportScopeIsCurrent(previewScope) && V().state.settings?.link_previews !== false,
@@ -1116,6 +1120,7 @@ function chatAttachmentSource(chID) {
 // embeds, server emoji, mentions and encrypted [file:...] attachments with
 // inline image/GIF/video previews. Callers handle voice messages first.
 export function renderSharedRichText(container, text, source) {
+    setPreviewConversation(container, "private");
     const parts = String(text ?? "").split(/\[file:([^\]]+)\]/);
     let html = "";
     for (let i = 0; i < parts.length; i += 2) html += renderMarkdown(parts[i]);
@@ -3608,7 +3613,7 @@ function initLinkCardDismissal() {
 function scheduleLinkCard(linkEl) {
     closeLinkCard();
     const settings = V().state.settings || {};
-    if (settings.link_previews === false) return;
+    if (settings.link_previews === false || previewConversationFor(linkEl) !== "channel") return;
     const url = linkEl.getAttribute("data-url");
     if (!url || youtubeVideo(url)) return;
     const video = videoPortal(url);
@@ -3629,6 +3634,7 @@ function scheduleLinkCard(linkEl) {
     }
     linkCardTimer = setTimeout(async () => {
         linkCardTimer = null;
+        if (previewConversationFor(linkEl) !== "channel") return;
         const controller = new AbortController();
         linkCardRequest = controller;
         let domain = url;
@@ -3961,7 +3967,7 @@ function showSearchResults(q, response, scope) {
         },
         renderBadge: message => encryptionBadgeElement(searchEncryptionBadge(message, scope.kind === "dm")),
         onAdvanced: scope.kind !== "dm" ? openHistorySearch : null,
-        renderBody: (container, message) => renderBody(container, normalize(message, Number(message.channel_id ?? scope.channelID))),
+        renderBody: (container, message) => renderBody(container, { ...normalize(message, Number(message.channel_id ?? scope.channelID)), isDM: scope.kind === "dm" }),
         onSearch: (query, channel) => { $("chat-search").value = query; searchChannel = channel; searchQ = query; applySearchFilter(); void searchAll(); },
         onOpen: (message, panel) => {
             closeDialog(panel);
@@ -4495,14 +4501,14 @@ export function applyChatPrefs() {
     const previewsEnabled = s.link_previews !== false;
     if (linkPreviewPreference !== previewsEnabled) {
         linkPreviewPreference = previewsEnabled;
-        if (!previewsEnabled) { closeLinkCard(); document.querySelectorAll(".youtube-preview, .x-post-preview").forEach(card => card.remove()); }
+        if (!previewsEnabled) { closeLinkCard(); document.querySelectorAll(".youtube-preview, .x-post-preview, .video-portal-preview").forEach(card => card.remove()); }
         else {
             const scope = captureScope(readExportScope);
             for (const message of getStore(activeKey()).msgs) {
                 const body = log.querySelector(`[data-scroll-key="${CSS.escape(message.renderKey || "")}"] .msg-text`);
-                if (body && !body.querySelector(".youtube-preview")) renderYouTubePreviews(body, { enabled: true, scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
-                if (body && !body.querySelector(".x-post-preview")) renderXPostPreviews(body, { enabled: true, scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
-                if (body && !body.querySelector(".video-portal-preview")) renderVideoPortalPreviews(body, { enabled: true, scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
+                if (body && !body.querySelector(".youtube-preview")) renderYouTubePreviews(body, { enabled: true, conversation: previewConversation(message), scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
+                if (body && !body.querySelector(".x-post-preview")) renderXPostPreviews(body, { enabled: true, conversation: previewConversation(message), scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
+                if (body && !body.querySelector(".video-portal-preview")) renderVideoPortalPreviews(body, { enabled: true, conversation: previewConversation(message), scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
             }
         }
     }

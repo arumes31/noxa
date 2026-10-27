@@ -11,8 +11,8 @@ import "./rich-strings.js";
 const results = new Map(); // url -> result, or null after a failure
 const collapsed = new Set(); // urls the user folded away
 
-export function previewsEnabled(session) {
-    return !!session?.capabilities?.has("server_link_previews_v1") && !!settings.get("linkPreviews");
+export function previewsEnabled(session, conversation) {
+    return conversation === "channel" && !!session?.capabilities?.has("server_link_previews_v1") && !!settings.get("linkPreviews");
 }
 
 function details(result) {
@@ -34,7 +34,7 @@ function fill(card, url, result) {
     let host = "";
     try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { /* not shown */ }
     const body = h("div", { class: "lp-body", id: `lp-${Math.random().toString(36).slice(2)}` },
-        typeof result.thumbnail === "string" && result.thumbnail.startsWith("data:image/") ? h("img", { class: "lp-thumb", src: result.thumbnail, alt: "", loading: "lazy" }) : null,
+        typeof result.thumbnail === "string" && result.thumbnail.length <= 280000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(result.thumbnail) ? h("img", { class: "lp-thumb", src: result.thumbnail, alt: "", loading: "lazy" }) : null,
         h("div", { class: "lp-text" },
             result.title ? h("a", { class: "lp-title", href: safeURL(url) || "#", target: "_blank", rel: "noopener noreferrer" }, result.title.slice(0, 300)) : null,
             result.author ? h("span", { class: "lp-author" }, result.author.slice(0, 200)) : null,
@@ -58,16 +58,16 @@ function fill(card, url, result) {
 }
 
 /** A card element that fills itself, or null when previews are off. */
-export function linkPreview(session, url) {
+export function linkPreview(session, url, conversation) {
     const request = previewRequest(url);
-    if (!request || !previewsEnabled(session)) return null;
+    if (!request || !previewsEnabled(session, conversation)) return null;
     if (results.has(url) && !results.get(url)) return null;
     const card = h("div", { class: "link-preview", role: "group", "aria-label": t("rich.preview.label"), hidden: true });
     if (results.has(url)) {
         fill(card, url, results.get(url));
         return card;
     }
-    session.linkPreview(request.provider, request.resource).then(result => {
+    session.linkPreview(request.provider, request.resource, conversation).then(result => {
         results.set(url, result || null);
         if (result) fill(card, url, result);
         else card.remove();

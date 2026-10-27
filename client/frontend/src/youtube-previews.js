@@ -38,8 +38,8 @@ function loadMetadata(video, scope, isCurrent) {
     return loadPreviewMetadata("youtube", video.id, scope, isCurrent, () => window.go.main.App.YouTubePreviewForTab(scope.tabID, video.id));
 }
 
-export function renderYouTubePreviews(container, { enabled, scope, isCurrent }) {
-    if (!enabled) return;
+export function renderYouTubePreviews(container, { enabled, scope, isCurrent, conversation }) {
+    if (!enabled || conversation !== "channel") return;
     const seen = new Set();
     for (const link of container.querySelectorAll(".md-link[data-url]")) {
         const video = youtubeVideo(link.dataset.url);

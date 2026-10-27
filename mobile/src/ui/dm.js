@@ -70,7 +70,7 @@ export function renderDM(root, peer) {
         const body = message.deleted ? h("span", { class: "msg-deleted" }, t("chat.deleted"))
             : message.body === null || message.body === undefined
                 ? h("span", { class: "msg-locked" }, t("chat.locked"))
-                : richBody(message.body, { session, conn: session.conn, channelID: 0 });
+                : richBody(message.body, { conversation: "direct", session, conn: session.conn, channelID: 0 });
         const from = message.self ? session.nickname : (message.fromNickname || name);
         // Not sent: tapping offers Retry or Delete; otherwise the action sheet (bindMessageTaps).
         const retry = message.failed ? retryProps(message, retryActions(message)) : { tabindex: message.deleted ? null : "0", "aria-haspopup": message.deleted ? null : "dialog" };

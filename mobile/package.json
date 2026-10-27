@@ -8,6 +8,7 @@
     "build": "vite build && vite build -c vite.sw.config.js",
     "test:unit": "node --experimental-vm-modules --test unit/*.test.mjs",
     "test:e2e": "playwright test",
+    "test:preview-privacy": "node --test tests/preview-privacy-browser.mjs",
     "test:directory": "node --test tests/olm-directory-browser.mjs",
     "test:storage": "node --test tests/ratchet-storage-browser.mjs tests/onboarding-browser.mjs tests/olm-admission-browser.mjs",
     "test:ratchet": "node --test tests/ratchet-interop.mjs",

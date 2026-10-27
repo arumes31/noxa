@@ -114,7 +114,7 @@ export function renderChat(root, scope) {
         if (message.deleted) body = h("span", { class: "msg-deleted" }, t("chat.deleted"));
         else if (message.text === null || message.text === undefined) body = h("span", { class: "msg-locked" }, t("chat.locked"));
         else if (isPoll(message.text)) body = pollCard(message, session);
-        else body = richBody(message.text, { session, conn: session.conn, channelID: scope });
+        else body = richBody(message.text, { conversation: "channel", session, conn: session.conn, channelID: scope });
         // Not sent: tapping offers Retry (same client message ID, same reply) or Delete.
         const retry = retryProps(message, {
             retry: () => { session.showQueued(scope, { clientMsgID: message.clientMsgID, text: message.text, sentAt: message.sentAt, replyTo: message.replyTo || 0 }); return queueMessage({ kind: "channel", scope }, message.text, { id: message.clientMsgID, sentAt: message.sentAt, replyTo: message.replyTo || 0 }); },

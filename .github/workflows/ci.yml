@@ -122,6 +122,7 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:directory
+      - run: npm run test:preview-privacy
       - run: npm run test:ui
 
   frontend-checks:

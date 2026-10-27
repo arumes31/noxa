@@ -2609,6 +2609,28 @@ test.describe("tab-bound chat search and export", () => {
         await page.evaluate(() => { window.__noxa.state.myChannelID = 2; window.__noxaChat.onMyChannelChanged(); });
         await expect(page.locator(".search-results")).toHaveCount(0);
     });
+    test("DM search and context preserve private preview policy without relying on stored encryption labels", async ({ page }) => {
+        await page.evaluate(() => {
+            const app = window.go.main.App;
+            window.__searchPreviewRequests = [];
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (["YouTubePreviewForTab", "XPostPreviewForTab", "VideoPortalPreviewForTab", "LinkPreviewForTab"].includes(key)) return async (...args) => {
+                    window.__searchPreviewRequests.push([key, ...args]); return { title: "Unexpected preview" };
+                };
+                return target[key];
+            } });
+            window.__scanScope.hold = true; window.__noxa.openPM("peer-a", "Peer A");
+        });
+        await search(page);
+        await expect.poll(() => page.evaluate(() => window.__scanScope.pending.length)).toBe(1);
+        await page.evaluate(() => window.__scanScope.pending[0].resolve({ messages: [{ id: 5, body: "https://youtu.be/dQw4w9WgXcQ https://search-private.example/secret" }], scanned: 1 }));
+        await expect(page.locator(".search-preview-message .md-link")).toHaveCount(2);
+        await page.locator(".search-preview-message .md-link").last().hover();
+        await page.waitForTimeout(450);
+        expect(await page.evaluate(() => window.__searchPreviewRequests)).toEqual([]);
+        await expect(page.locator(".search-preview-message .youtube-preview")).toHaveCount(0);
+    });
+
     test("a local DM search cannot reopen after switching peers and returning", async ({ page }) => {
         await page.evaluate(() => { window.__scanScope.hold = true; window.__noxa.openPM("peer-a", "Peer A"); });
         await search(page);
@@ -12266,6 +12288,41 @@ test.describe("link hover lifecycle", () => {
         await expect(page.locator('#chat-log .md-link[data-url="https://hover.example/first"]')).toBeVisible();
     });
 
+    test("encrypted and unknown shared bodies never request provider or hover metadata", async ({ page }) => {
+        await page.evaluate(async () => {
+            const chat = await import("/src/chat-ui.js");
+            const app = window.go.main.App;
+            window.__privatePreviewRequests = [];
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (["YouTubePreviewForTab", "XPostPreviewForTab", "VideoPortalPreviewForTab", "LinkPreviewForTab"].includes(key)) return async (...args) => {
+                    window.__privatePreviewRequests.push([key, ...args]); return { title: "Unexpected preview" };
+                };
+                return target[key];
+            } });
+            const text = "https://private.example/secret https://youtu.be/dQw4w9WgXcQ https://x.com/alex/status/123 https://www.twitch.tv/twitch";
+            const root = document.createElement("section"); root.id = "private-preview-test";
+            document.getElementById("chat-log").replaceChildren(root);
+            chat.bindSharedLinks(root);
+            for (const kind of ["dm", "group"]) {
+                const body = document.createElement("p"); body.dataset.kind = kind;
+                chat.renderActivityMessage(body, { reference: { kind, group_id: "group-one" }, message: { text, channelID: 2 } });
+                root.append(body);
+            }
+            const unknown = document.createElement("p"); unknown.dataset.kind = "unknown";
+            chat.renderSharedRichText(unknown, text, {}); root.append(unknown);
+            // Settings refresh cannot authorize private messages through an active channel.
+            window.__noxa.state.settings.link_previews = false; chat.applyChatPrefs();
+            window.__noxa.state.settings.link_previews = true; chat.applyChatPrefs();
+        });
+        for (const kind of ["dm", "group", "unknown"]) {
+            await page.locator(`#private-preview-test [data-kind="${kind}"] .md-link`).first().hover();
+            await page.waitForTimeout(450);
+        }
+        expect(await page.evaluate(() => window.__privatePreviewRequests)).toEqual([]);
+        await expect(page.locator("#private-preview-test .youtube-preview, #private-preview-test .x-post-preview, #private-preview-test .video-portal-preview, .link-card")).toHaveCount(0);
+        await expect(page.locator("#private-preview-test .md-link")).toHaveCount(12);
+    });
+
     test("disabled link previews do not start requests", async ({ page }) => {
         await page.clock.install();
         await page.evaluate(() => { window.__noxa.state.settings.link_previews = false; });
@@ -12285,11 +12342,13 @@ test.describe("link hover lifecycle", () => {
 
     for (const surface of ["channel", "shared"]) test(`${surface} out-of-order previews leave only the currently hovered card`, async ({ page }) => {
         if (surface === "shared") await page.evaluate(() => {
-            // Private-group message surfaces bind the same exported link policy.
+            // A shared channel surface receives explicit context through its renderer.
             const old = document.getElementById("chat-log");
             const root = old.cloneNode(true);
             old.replaceWith(root);
             window.__noxaChat.bindSharedLinks(root);
+            const body = root.querySelector(".msg-text");
+            window.__noxaChat.renderActivityMessage(body, { reference: { kind: "channel" }, message: { channelID: 2, text: "https://hover.example/first https://hover.example/second" } });
         });
         const links = page.locator('#chat-log .md-link');
         await links.first().hover();

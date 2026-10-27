@@ -10,6 +10,7 @@ import {
 } from "../src/preview-source-policy.js";
 import { previewImage } from "../src/preview-image.js";
 import { renderYouTubePreviews } from "../src/youtube-previews.js";
+import { renderXPostPreviews } from "../src/x-previews.js";
 import { renderVideoPortalPreviews } from "../src/video-portal-previews.js";
 
 const JPEG = "data:image/jpeg;base64,/9j/2Q==";
@@ -116,7 +117,7 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 10));
 test("YouTube cards never load a third-party thumbnail and show the blocked marker instead", async (t) => {
     installDOM(t, { title: "Clip", author: "Author", thumbnail: "https://i.ytimg.com/vi/Fvr-SJPAh7o/hqdefault.jpg" }, "YouTubePreviewForTab");
     const root = container("https://www.youtube.com/watch?v=Fvr-SJPAh7o");
-    renderYouTubePreviews(root, { enabled: true, scope, isCurrent: () => true });
+    renderYouTubePreviews(root, { enabled: true, conversation: "channel", scope, isCurrent: () => true });
     await flush();
     const images = findAll(root, node => node.tagName === "img");
     assert.equal(images.length, 1);
@@ -133,7 +134,7 @@ test("YouTube cards never load a third-party thumbnail and show the blocked mark
 test("YouTube cards still load server-transcoded bytes without a marker", async (t) => {
     installDOM(t, { title: "Clip", thumbnail: JPEG }, "YouTubePreviewForTab");
     const root = container("https://youtu.be/Fvr-SJPAh7o");
-    renderYouTubePreviews(root, { enabled: true, scope: { ...scope, tabID: scope.tabID + "-ok" }, isCurrent: () => true });
+    renderYouTubePreviews(root, { enabled: true, conversation: "channel", scope: { ...scope, tabID: scope.tabID + "-ok" }, isCurrent: () => true });
     await flush();
     const [image] = findAll(root, node => node.tagName === "img");
     assert.equal(image.src, JPEG);
@@ -144,7 +145,7 @@ test("YouTube cards still load server-transcoded bytes without a marker", async 
 test("video portal cards block CDN thumbnails visibly", async (t) => {
     installDOM(t, { title: "Stream", author: "Someone", thumbnail: "https://static-cdn.jtvnw.net/previews-ttv/live_user_twitch.jpg" }, "VideoPortalPreviewForTab");
     const root = container("https://www.twitch.tv/twitch");
-    renderVideoPortalPreviews(root, { enabled: true, scope: { ...scope, tabID: scope.tabID + "-portal" }, isCurrent: () => true });
+    renderVideoPortalPreviews(root, { enabled: true, conversation: "channel", scope: { ...scope, tabID: scope.tabID + "-portal" }, isCurrent: () => true });
     await flush();
     const images = findAll(root, node => node.tagName === "img");
     assert.equal(images[0].src, "");
@@ -164,4 +165,26 @@ test("the placeholder is text-only markup with a tooltip", () => {
     assert.equal(marker.getAttribute("role"), "note");
     assert.equal(marker.dataset.blockedHost, "cdn.example");
     assert.equal(blockedPreviewPlaceholder(null, { label: "x" }), null);
+});
+
+
+test("private and unknown conversation providers issue no native requests", async (t) => {
+    let calls = 0;
+    const previous = { document: globalThis.document, window: globalThis.window };
+    globalThis.document = { createElement: element };
+    globalThis.window = { go: { main: { App: new Proxy({}, { get: () => async () => { calls++; return { title: "Leak" }; } }) } } };
+    t.after(() => Object.assign(globalThis, previous));
+    for (const conversation of [undefined, "direct", "group", "unknown"]) {
+        for (const [render, url] of [
+            [renderYouTubePreviews, "https://youtu.be/Fvr-SJPAh7o"],
+            [renderXPostPreviews, "https://x.com/alex/status/123"],
+            [renderVideoPortalPreviews, "https://www.twitch.tv/twitch"],
+        ]) {
+            const root = container(url);
+            render(root, { enabled: true, conversation, scope, isCurrent: () => true });
+            await flush();
+            assert.equal(calls, 0, String(conversation));
+            assert.equal(root.children.length, 0);
+        }
+    }
 });

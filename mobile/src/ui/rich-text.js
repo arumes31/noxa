@@ -130,7 +130,7 @@ function renderNode(node, context) {
 
 /**
  * The body of a message: markdown, attachments and (for the first link) a
- * preview card. context: {session, conn, channelID, preview}.
+ * preview card. context: {session, conn, channelID, preview, conversation}.
  */
 export function richBody(text, context = {}) {
     const options = { customEmoji: customEmoji(context.session) };
@@ -148,7 +148,7 @@ export function richBody(text, context = {}) {
     }
     const url = context.session && context.preview !== false ? previewLink(textNodes) : null;
     if (url) {
-        const card = linkPreview(context.session, url);
+        const card = linkPreview(context.session, url, context.conversation);
         if (card) out.append(card);
     }
     return out;
