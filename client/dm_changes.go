@@ -20,6 +20,10 @@ import (
 // the server or the contact runs a noXa without them.
 var errDMChangeUnsupported = errors.New("editing needs an updated noXa on both sides")
 
+// errDMChangeNotDelivered refuses a change to an own new-protocol message
+// whose delivery is still pending or failed.
+var errDMChangeNotDelivered = errors.New("this message is not delivered yet; it can be changed once it is sent")
+
 // errDMChangeNotOwn refuses a change to a message this account did not send.
 var errDMChangeNotOwn = errors.New("only your own messages can be edited or deleted")
 
@@ -284,6 +288,15 @@ func (a *App) ownDirectMessageProtocol(m *connManager, peer, ref string) (string
 	}
 	if !found {
 		return "", errDMChangeNotOwn
+	}
+	if protocol == ratchetProtocol {
+		// As the PWA: only a delivered own message can be changed; a pending
+		// or failed one may never reach the contact.
+		for _, e := range entries {
+			if e.Protocol == ratchetProtocol && e.ClientMsgID == ref && e.FromUniqueID == own && e.Status != "" && e.Status != "accepted" {
+				return "", errDMChangeNotDelivered
+			}
+		}
 	}
 	return protocol, nil
 }

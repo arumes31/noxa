@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -207,14 +208,14 @@ func TestRatchetDMProjectionMixedLegacy(t *testing.T) {
 			Purpose: purpose, Reference: reference, Body: ratchetJSON(map[string]string{"text": text}), SentAt: 100, Self: self}
 	}
 	// bob reuses the logical string "m1" under the new protocol: no collision.
-	cm.projectRatchet(rec("bob", "m1", "chat", "", "olm m1", false), true)
-	cm.projectRatchet(rec("bob", "m1", "chat", "", "olm m1", false), false) // replay: idempotent
+	cm.projectRatchet(rec("bob", "m1", "chat", "", "olm m1", false), true, nil)
+	cm.projectRatchet(rec("bob", "m1", "chat", "", "olm m1", false), false, nil) // replay: idempotent
 	// An edit that overtakes its original waits, then applies.
-	cm.projectRatchet(rec("me", "e1", "edit", "n1", "mine (edited)", true), false)
-	cm.projectRatchet(rec("me", "n1", "chat", "", "mine", true), false)
+	cm.projectRatchet(rec("me", "e1", "edit", "n1", "mine (edited)", true), false, nil)
+	cm.projectRatchet(rec("me", "n1", "chat", "", "mine", true), false, nil)
 	// A forged change by bob of my record is ignored; a legacy change never
 	// touches a new-protocol entry.
-	cm.projectRatchet(rec("bob", "x", "delete", "n1", "", false), true)
+	cm.projectRatchet(rec("bob", "x", "delete", "n1", "", false), true, nil)
 	if _, err := app.dmHistoryApplyChangeWith(mustStore(t, app, id), "bob", dmChange{Action: netproto.DMActionDelete, Ref: "m1", From: "bob"}); err != nil {
 		t.Fatal(err)
 	}
@@ -243,6 +244,21 @@ func TestRatchetDMProjectionMixedLegacy(t *testing.T) {
 	if p, err := app.ownDirectMessageProtocol(cm, "bob", "m2"); err != nil || p != "" {
 		t.Fatal(p, err)
 	}
+	// P3-1: a pending (or failed) own new-protocol message cannot be changed.
+	pending := rec("me", "n2", "chat", "", "not yet", true)
+	pending.Status = "pending"
+	cm.projectRatchet(pending, false, nil)
+	if _, err := app.ownDirectMessageProtocol(cm, "bob", "n2"); !errors.Is(err, errDMChangeNotDelivered) {
+		t.Fatal("pending message changed", err)
+	}
+	// P3-4: a stale replay never regresses a terminal status to pending.
+	accepted := pending
+	accepted.Status = "accepted"
+	cm.projectRatchet(accepted, false, nil)
+	cm.projectRatchet(pending, false, nil)
+	if p, err := app.ownDirectMessageProtocol(cm, "bob", "n2"); err != nil || p != ratchetProtocol {
+		t.Fatal("accepted status regressed", p, err)
+	}
 	if _, err := app.ownDirectMessageProtocol(cm, "bob", "m1"); !errors.Is(err, errDMChangeNotOwn) {
 		t.Fatal("another sender's record is not own", err)
 	}
@@ -259,4 +275,53 @@ func mustStore(t *testing.T, app *App, id *identity) dmHistoryStore {
 		t.Fatal(err)
 	}
 	return s
+}
+
+func TestIdentityDeletionDestroysOnlyItsRatchetNamespaces(t *testing.T) {
+	old := identityRootOverride
+	identityRootOverride = t.TempDir()
+	t.Cleanup(func() { identityRootOverride = old })
+	a := &App{tabs: map[string]*tabState{}, hotkeys: map[string]*hotkeyReg{}, settingsPath: t.TempDir() + "/settings.json"}
+	if msg := a.CreateIdentity("first"); msg != "" {
+		t.Fatal(msg)
+	}
+	if msg := a.CreateIdentity("work"); msg != "" {
+		t.Fatal(msg)
+	}
+	list := a.ListIdentities()
+	if len(list) != 2 {
+		t.Fatalf("identities: %+v", list)
+	}
+	base, err := defaultRatchetBase()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]*identity{}
+	for _, e := range list {
+		path, _ := identityPathFor(e.ID)
+		id, err := loadIdentityAtStrict(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[e.ID] = id
+		ns := durable.Namespace{Server: "tls-sha256:" + strings.Repeat("f", 64), Principal: e.UniqueID, Device: "d1"}
+		s, err := durable.Open(ratchetStoreDir(base, id), ns, durable.IdentityProtection(bytes.Repeat([]byte{3}, 32)), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+	}
+	victim, keep := list[1], list[0]
+	if msg := a.DeleteIdentity(victim.ID, true); msg != "" {
+		t.Fatal(msg)
+	}
+	if _, err := os.Stat(ratchetStoreDir(base, ids[victim.ID])); !os.IsNotExist(err) {
+		t.Fatal("deleted identity's ratchet namespaces must be destroyed", err)
+	}
+	if _, err := os.Stat(ratchetStoreDir(base, ids[keep.ID])); err != nil {
+		t.Fatal("another identity's namespaces must be kept", err)
+	}
+	if _, deleted := ratchetDeleted.Load(ids[victim.ID].PublicKey); !deleted {
+		t.Fatal("new sessions of the deleted identity must be fenced")
+	}
 }

@@ -251,6 +251,9 @@ func (a *App) ChatOutboxForTab(tabID string, request ChatOutboxRequest) (ChatOut
 			return result, errors.New("sending has started; check history")
 		}
 		if request.Action == "cancel" {
+			if err := cm.ratchetOutboxCancelable(entries[index]); err != nil {
+				return result, err
+			}
 			entries = append(entries[:index], entries[index+1:]...)
 		} else {
 			entries[index].State = "queued"
@@ -306,11 +309,18 @@ func (a *App) pumpChatOutbox(cm *connManager) {
 		outboxMu.Unlock()
 		return
 	}
+	// New-protocol direct entries wait for this connection's ratchet session
+	// instead of failing while it is still starting (store/core warm-up).
+	_, ratchetErr := cm.ratchetConsumerOn(nil)
+	ratchetWaiting := cm.ratchetConfigured() && ratchetErr != nil
 	index := -1
 	for i, entry := range entries {
 		if outboxSending[store.path+"|"+entry.ID] {
 			outboxMu.Unlock()
 			return
+		}
+		if ratchetWaiting && entry.Scope == "direct" {
+			continue
 		}
 		if (entry.State == "held" || entry.State == "queued") && entry.DueAt <= time.Now().UnixMilli() {
 			index = i
@@ -322,6 +332,7 @@ func (a *App) pumpChatOutbox(cm *connManager) {
 		return
 	}
 	entry := entries[index]
+	previousState := entry.State
 	key := store.path + "|" + entry.ID
 	entries[index].State = "sending"
 	if store.save(entries) != nil {
@@ -345,6 +356,8 @@ func (a *App) pumpChatOutbox(cm *connManager) {
 		}
 		if failure == "" {
 			entries = append(entries[:i], entries[i+1:]...)
+		} else if failure == outboxStayQueued {
+			entries[i].State = previousState // nothing was committed or sent
 		} else {
 			entries[i].State = "uncertain"
 			entries[i].Error = failure
@@ -375,6 +388,9 @@ func (a *App) sendOutboxEntry(cm *connManager, store chatOutboxStore, entry Chat
 		// uncertain attempt resolves that original operation, never reseals
 		// changed text. The consumer is pinned to this connection.
 		if _, err := cm.sendRatchetDirect(conn, entry.ID, entry.Target, entry.Text); err != nil {
+			if errors.Is(err, errRatchetUnavailable) {
+				return outboxStayQueued
+			}
 			return ratchetFailure(err).Error()
 		}
 		return ""
@@ -397,4 +413,29 @@ func (a *App) sendOutboxEntry(cm *connManager, store chatOutboxStore, entry Chat
 		return err.Error()
 	}
 	return ""
+}
+
+// outboxStayQueued: the session was not ready and nothing was committed, so
+// the entry returns to its queue and is pumped again automatically.
+const outboxStayQueued = "\x00stay-queued"
+
+// ratchetOutboxCancelable refuses to drop an uncertain new-protocol entry
+// whose committed attempt may still be delivered: undo + resend would then
+// duplicate it. Retry resolves it first (accepted, or aborted/rejected).
+func (m *connManager) ratchetOutboxCancelable(e ChatOutboxEntry) error {
+	if e.Scope != "direct" || e.State != "uncertain" || !m.ratchetConfigured() {
+		return nil
+	}
+	c, err := m.ratchetConsumerOn(nil)
+	if err != nil {
+		return errors.New("connect first: this message may still be delivered and must be resolved before it is removed")
+	}
+	state, err := c.logicalState(e.ID)
+	if err != nil {
+		return err
+	}
+	if state == "pending" {
+		return errors.New("this message may still be delivered; retry to resolve it before removing it")
+	}
+	return nil
 }

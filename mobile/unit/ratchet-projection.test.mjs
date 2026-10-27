@@ -134,3 +134,29 @@ test("P2-8: fanout bounds are exactly 20 direct and 160 group targets", () => {
     assert.throws(() => checkFanout("group", targets(161)), /fanout_limit/);
     assert.throws(() => checkFanout("direct", []), /fanout_limit/);
 });
+
+test("Fix P2-3: an identity confirmation without a live consumer is stored durably and applied later", async () => {
+    const peer = "carol" + ++n;
+    const dm = new DirectMessages(session("alice"), {});
+    dm.conn.request = async () => ({ unique_id: peer, public_key: "", devices: [] });
+    await dm.trustNewIdentity(peer); // offline: no consumer attached
+    assert.equal((await getSealed(Stores.pins, peer)).ratchetReset, true, "intent persisted with the pin");
+    assert.equal(await dm.ratchetResetPending(peer), false, "not applicable before the new key is pinned");
+    await putSealed(Stores.pins, peer, { ...(await getSealed(Stores.pins, peer)), signingKey: "AAAA" }); // re-pinned by devicesOf
+    assert.equal(await dm.ratchetResetPending(peer), true);
+    await dm.clearRatchetReset(peer);
+    assert.equal(await dm.ratchetResetPending(peer), false);
+    assert.equal((await getSealed(Stores.pins, peer)).signingKey, "AAAA", "the confirmed pin is kept");
+});
+
+test("Fix P3-2: an own edit/delete is applied only once accepted", async () => {
+    const peer = "dave" + ++n;
+    const dm = new DirectMessages(session("alice"), {});
+    const consumer = consumerStub();
+    await dm.attachRatchet(consumer);
+    await consumer.projector(record({ sender: "alice", peer, logicalID: "m", key: "km", status: "accepted", body: { text: "orig" } }), { isNew: false });
+    await consumer.projector(record({ sender: "alice", peer, logicalID: "d", purpose: "delete", reference: "m", referenceKey: "km", status: "aborted", body: {} }), { isNew: false });
+    assert.equal(dm.conversations.get(peer).messages.find(m => m.id === "m").deleted, false, "an aborted delete is not shown");
+    await consumer.projector(record({ sender: "alice", peer, logicalID: "d", purpose: "delete", reference: "m", referenceKey: "km", status: "accepted", body: {} }), { isNew: false });
+    assert.equal(dm.conversations.get(peer).messages.find(m => m.id === "m").deleted, true);
+});

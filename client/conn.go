@@ -127,6 +127,9 @@ type connManager struct {
 	ratchetTest    *ratchetTestConfig
 	ratchetSess    *ratchetSession
 	ratchetProject func(m *connManager, r RatchetRecord, isNew bool)
+	// ratchetEdits maps an uncertain edit operation (peer, ref, text) to its
+	// logical ID until it is accepted, so a retry resolves it.
+	ratchetEdits sync.Map
 
 	// debugFrames tees frame summaries to the "debug_frame" event (327 debug
 	// console) when enabled.

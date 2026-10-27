@@ -253,7 +253,7 @@ export class DirectMessages extends EventTarget {
         if (signingKey) {
             const pinned = await this.#pin(uid);
             const signingB64 = toBase64(signingKey);
-            if (pinned && pinned.signingKey !== signingB64) {
+            if (pinned?.signingKey && pinned.signingKey !== signingB64) {
                 entry.trust = Trust.changed;
                 // A changed identity is no longer the one the user verified.
                 if (pinned.verified) await putSealed(Stores.pins, uid, { ...pinned, verified: false }).catch(() => {});
@@ -330,12 +330,28 @@ export class DirectMessages extends EventTarget {
 
     /** Accepts a contact's new identity after the user compared it. */
     async trustNewIdentity(uid) {
-        await putSealed(Stores.pins, uid, null).catch(() => {});
+        // The explicit confirmation is stored durably with the (now unpinned)
+        // contact: the ratchet consumer applies the reset on its next trust
+        // check even if no session is live now or the immediate reset fails.
+        await putSealed(Stores.pins, uid, { ratchetReset: true });
         this.directory.delete(uid);
-        // The same explicit confirmation resets ratchet pins for this contact;
-        // Olm keys are then re-adopted only from bundles the new chain signs.
-        await this.ratchet?.resetTrust(uid);
-        return this.devicesOf(uid, { refresh: true });
+        const entry = await this.devicesOf(uid, { refresh: true });
+        if (this.ratchet) {
+            await this.ratchet.resetTrust(uid);
+            await this.clearRatchetReset(uid);
+        }
+        return entry;
+    }
+
+    /** A confirmed identity change whose ratchet reset is not applied yet (re-pinned to the new key). */
+    async ratchetResetPending(uid) {
+        const pinned = await this.#pin(uid);
+        return !!(pinned?.ratchetReset && pinned.signingKey);
+    }
+
+    async clearRatchetReset(uid) {
+        const pinned = await this.#pin(uid);
+        if (pinned?.ratchetReset) await putSealed(Stores.pins, uid, { ...pinned, ratchetReset: false });
     }
 
     /** Whether this device may send: the account's desktop confirmed it. */
@@ -555,6 +571,8 @@ export class DirectMessages extends EventTarget {
         const body = record.body && typeof record.body === "object" ? record.body : {};
         const text = typeof body.text === "string" ? body.text : "";
         if (record.purpose === "edit" || record.purpose === "delete") {
+            // An own change shows only once accepted (linked copies carry no status).
+            if (record.sender === this.ownUID && record.status && record.status !== "accepted") return;
             this.#applyChange(record.peer, { action: record.purpose, ref: record.reference, from: record.sender, text, protocol: RATCHET_PROTOCOL });
             return;
         }

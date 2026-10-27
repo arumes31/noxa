@@ -105,3 +105,38 @@ test("N6: attemptTTL must exceed the abort margin and let a fresh claim cover a 
     assert.throws(() => consumer(fakeStore(), undefined, { attemptTTL: 120.5 }), e => e.code === "invalid_config");
     assert.equal(consumer(fakeStore(), undefined, { attemptTTL: 300 }).attemptTTL, 300);
 });
+
+test("Fix P2-3: a durable confirmed identity reset is applied before the trust check (no account_changed)", async () => {
+    const trustID = JSON.stringify(["bob", "b1"]);
+    const saved = { revoked: false, value: { principal: "bob", device: "b1", noxa: "OLD", pin: { epoch: 1, identity: "bi", signing: "s" } } };
+    const writes = [];
+    const run = async withHook => {
+        let pending = withHook, done = 0;
+        saved.value = { principal: "bob", device: "b1", noxa: "OLD", pin: { epoch: 1, identity: "bi", signing: "s" } };
+        writes.length = 0;
+        const store = {
+            ...fakeStore(),
+            async pendingRefs(kind) { return kind === "trust" ? [["trust", trustID]] : []; },
+            async read(refs = []) { const records = {}; for (const r of refs) records[JSON.stringify(r)] = r[0] === "trust" ? { revision: 1, data: new TextEncoder().encode(JSON.stringify(saved)) } : { revision: 0, data: null }; return { records }; },
+            async setTrust(s, id, value) { writes.push(value); saved.value = value; },
+        };
+        const roster = { revision: 0, epoch: 0, rosters: [{ principal: "alice", version: 1 }, { principal: "bob", version: 1 }],
+            targets: [{ principal: "alice", device: "a", account_epoch: 1, identity: "id", local: true }, { principal: "bob", device: "b1", account_epoch: 1, identity: "bi" }] };
+        const c = consumer(store, async r => (r.action === "snapshot" ? roster : {}), {
+            deviceKey: async () => new Uint8Array(32).fill(7),
+            ...(withHook ? { trustReset: async () => pending, trustResetDone: async () => { pending = false; done++; } } : {}),
+        });
+        ready(c);
+        c.identity = "id";
+        const error = await c.send({ logicalID: "x", scope: "direct", peer: "bob", body: {} }).then(() => null, e => e);
+        return { code: error?.code ?? String(error), done };
+    };
+    const without = await run(false);
+    assert.equal(without.code, "account_changed", "without the durable intent the changed key blocks");
+    const withReset = await run(true);
+    assert.notEqual(withReset.code, "account_changed");
+    assert.equal(withReset.done, 1, "the intent is cleared once applied");
+    assert.equal(writes[0].noxa, null, "old pins dropped first");
+    assert.equal(writes[1].noxa, Buffer.from(new Uint8Array(32).fill(7)).toString("base64"), "the newly confirmed chain key is pinned, Olm pin re-adopted later");
+    assert.equal(writes[1].pin, undefined);
+});

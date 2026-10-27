@@ -714,6 +714,10 @@ export function Quit() {
   return window['go']['main']['App']['Quit']();
 }
 
+export function SendChatOperationForTab(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['SendChatOperationForTab'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
 export function RatchetConversationHistoryForTab(arg1, arg2) {
   return window['go']['main']['App']['RatchetConversationHistoryForTab'](arg1, arg2);
 }

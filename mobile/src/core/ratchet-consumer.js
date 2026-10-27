@@ -109,14 +109,16 @@ export const semanticKey = (sender, logicalID) => JSON.stringify([RATCHET_PROTOC
  *  signBundle(bundle)   signs with the EXISTING noXa device identity
  *  assertCurrent()      throws unless connection/account/identity generation
  *                       that created this consumer is still current
+ *  trustReset(p), trustResetDone(p)   optional: a durable, explicitly confirmed
+ *                       identity change of p whose reset is still pending
  */
 export class RatchetConsumer {
-    constructor({ store, core, namespace, admission, directory, deviceKey, signBundle, assertCurrent, attemptTTL = 300, refreshMS = 3600000 }) {
+    constructor({ store, core, namespace, admission, directory, deviceKey, signBundle, assertCurrent, trustReset = null, trustResetDone = null, attemptTTL = 300, refreshMS = 3600000 }) {
         // attemptTTL must exceed the abort margin (else every attempt expires at
         // once and loops) and leave a fresh 1 h claim able to cover a resend
         // (else every pending resend spends a new claim).
         if (!Number.isSafeInteger(attemptTTL) || attemptTTL < DEADLINE_MARGIN + 5 || attemptTTL > 3000) throw fail("invalid_config");
-        Object.assign(this, { store, core, namespace, admission, directoryRequest: directory, deviceKey, signBundle, assertCurrent, attemptTTL, refreshMS });
+        Object.assign(this, { store, core, namespace, admission, directoryRequest: directory, deviceKey, signBundle, assertCurrent, trustReset, trustResetDone, attemptTTL, refreshMS });
         this.readyAt = 0;
         this.readyValue = null;   // last successful readiness {identity, epoch, expiresAt}
         this.claims = new Map();  // verified, not yet committed claims kept across local_conflict retries
@@ -319,6 +321,14 @@ export class RatchetConsumer {
     }
     #trust(principal, device) { return this.#casRetry(() => this.#trustOnce(principal, device)); }
     async #trustOnce(principal, device) {
+        if (this.trustReset && await this.trustReset(principal)) {
+            // Apply the durable confirmation first; Olm keys are re-adopted
+            // only from bundles the newly confirmed chain signs.
+            this.#check();
+            await this.#resetTrustRecords(principal);
+            await this.trustResetDone?.(principal);
+            this.#check();
+        }
         const key = await this.deviceKey(principal, device);
         this.#check();
         if (!(key instanceof Uint8Array) || key.length !== 32) throw fail("untrusted_device");
@@ -697,8 +707,8 @@ export class RatchetConsumer {
      * chain and re-adopts Olm keys only from bundles it signs. Never adopts
      * anything by itself.
      */
-    resetTrust(principal) { return this.#serial(() => this.#resetTrust(principal)); }
-    async #resetTrust(principal) {
+    resetTrust(principal) { return this.#serial(() => this.#resetTrustRecords(principal)); }
+    async #resetTrustRecords(principal) {
         for (const ref of await this.#refs("trust")) {
             let parsed;
             try { parsed = JSON.parse(ref[1]); } catch { continue; }

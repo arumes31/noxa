@@ -969,6 +969,25 @@ export function onDMChanged(d) {
 // "ratchet_message"). Go already merged it into the sealed DM log, so nothing
 // is re-recorded here and legacy receipts are not sent. Only a durable NEW
 // receive (is_new, not own, not a linked copy) counts as unread or notifies.
+// One stable operation ID per user operation (attachment, text sent with
+// attachments, voice message): a retry after an uncertain new-protocol send
+// passes the SAME ID, so the original resolves instead of a second send.
+const sendOperations = new Map();
+function operationIDFor(key) {
+    let id = sendOperations.get(key);
+    if (!id) {
+        if (sendOperations.size >= 512) sendOperations.clear();
+        id = crypto.randomUUID();
+        sendOperations.set(key, id);
+    }
+    return id;
+}
+function sendChatOperation(tabID, scope, target, text, parent, operationID) {
+    const api = app();
+    if (typeof api.SendChatOperationForTab === "function") return api.SendChatOperationForTab(tabID, scope, target, text, parent || 0, operationID);
+    return parent ? api.SendChatReplyForTab(tabID, scope, target, text, parent) : api.SendChatForTab(tabID, scope, target, text);
+}
+
 export function onRatchetMessage(d) {
     if (!d || d.protocol !== RATCHET_PROTOCOL) return false;
     if (d.scope === "group") {
@@ -980,6 +999,8 @@ export function onRatchetMessage(d) {
     const key = "dm:" + peer;
     const st = getStore(key);
     if (d.purpose === "edit" || d.purpose === "delete") {
+        // An own change shows only once accepted; a linked copy carries no status.
+        if (d.self && d.status && d.status !== "accepted") return false;
         const change = { action: d.purpose, from_unique_id: d.sender, body: d.body?.text ?? "", peer, ref_client_msg_id: d.reference };
         const target = st.msgs.find((x) => x.protocol === RATCHET_PROTOCOL && x.fromUID === d.sender && x.clientMsgID === d.reference);
         if (!target) {
@@ -3282,7 +3303,8 @@ export async function sendMessage() {
         try {
             const token = await attachmentQueue.upload(job, captured.sendScope === "channel" ? captured.channelID : 0, retryCurrent);
             if (!token || !retryCurrent()) return;
-            const error = await app().SendChatForTab(captured.tabID, captured.sendScope, captured.target, token);
+            file.operationID ||= crypto.randomUUID();
+            const error = await sendChatOperation(captured.tabID, captured.sendScope, captured.target, token, 0, file.operationID);
             if (!retryCurrent()) return;
             attachmentQueue.finish(job, error);
             if (!error) { pendingFiles = pendingFiles.filter(entry => entry !== file); renderFilePreview(); }
@@ -3348,7 +3370,8 @@ export async function sendMessage() {
             }
             if (!current()) return;
             try {
-                const err = await app().SendChatForTab(captured.tabID, scope, target, token);
+                f.operationID ||= crypto.randomUUID();
+                const err = await sendChatOperation(captured.tabID, scope, target, token, 0, f.operationID);
                 if (!current()) return;
                 attachmentQueue.finish(job, err);
                 if (err) { failure = err; retryFiles.push(f); }
@@ -3366,10 +3389,10 @@ export async function sendMessage() {
         }
         if (text) {
             let err = "";
+            const operationKey = JSON.stringify(["text", captured.tabID, scope, target, parentID, text]);
             try {
-                err = parentID
-                    ? await app().SendChatReplyForTab(captured.tabID, scope, target, text, parentID)
-                    : await app().SendChatForTab(captured.tabID, scope, target, text);
+                err = await sendChatOperation(captured.tabID, scope, target, text, parentID, operationIDFor(operationKey));
+                if (!err) sendOperations.delete(operationKey);
             } catch (e) {
                 failure = e;
                 return;
@@ -5121,9 +5144,13 @@ export function initChat() {
         return {
             tabID: scope.tabID, channelID: scope.sendScope === "channel" ? scope.channelID : 0,
             isCurrent: () => scopeIsCurrent(scope, readSendScope),
-            send: token => parent
-                ? app().SendChatReplyForTab(scope.tabID, scope.sendScope, scope.target, token, parent)
-                : app().SendChatForTab(scope.tabID, scope.sendScope, scope.target, token),
+            send: async token => {
+                // The recording keeps its uploaded token across retries.
+                const key = JSON.stringify(["voice", scope.tabID, scope.target, token]);
+                const error = await sendChatOperation(scope.tabID, scope.sendScope, scope.target, token, parent, operationIDFor(key));
+                if (!error) sendOperations.delete(key);
+                return error;
+            },
         };
     }));
     $("chat-file").addEventListener("change", (e) => {

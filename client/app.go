@@ -668,14 +668,37 @@ func (a *App) sendChat(scope, target, text string, replyToID int64) string {
 	return sendChatWith(cm, scope, target, text, replyToID)
 }
 
+// SendChatOperationForTab is SendChatReplyForTab with the caller's stable
+// operation ID: the composer mints it once per user operation (attachment,
+// voice, quick DM, retry of the same item) and passes the same ID on every
+// retry, so an uncertain new-protocol send resolves its original operation
+// instead of sealing a second one. Legacy sends ignore it.
+func (a *App) SendChatOperationForTab(tabID, scope, target, text string, replyToID int64, operationID string) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	return sendChatOperation(cm, scope, target, text, replyToID, operationID)
+}
+
 func sendChatWith(cm *connManager, scope, target, text string, replyToID int64) string {
+	return sendChatOperation(cm, scope, target, text, replyToID, "")
+}
+
+func sendChatOperation(cm *connManager, scope, target, text string, replyToID int64, operationID string) string {
 	if text == "" {
 		return "empty message"
 	}
 	if scope == "direct" && cm.ratchetConfigured() {
-		// One durable operation; the logical ID is captured at intent. No
-		// legacy fallback once the new protocol is configured.
-		if _, err := cm.sendRatchetDirect(nil, newClientMsgID(), target, text); err != nil {
+		// One durable operation per user intent; without a caller ID the
+		// intent is this single call. No legacy fallback once configured.
+		if operationID == "" {
+			operationID = newClientMsgID()
+		}
+		if !validOperationID(operationID) {
+			return "invalid message operation"
+		}
+		if _, err := cm.sendRatchetDirect(nil, operationID, target, text); err != nil {
 			return ratchetFailure(err).Error()
 		}
 		return ""
@@ -691,6 +714,19 @@ func sendChatWith(cm *connManager, scope, target, text string, replyToID int64) 
 		return err.Error()
 	}
 	return ""
+}
+
+// validOperationID accepts the composer's UUIDs (and other short safe IDs).
+func validOperationID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == ':') {
+			return false
+		}
+	}
+	return true
 }
 
 // WhisperSet configures the whisper list and mode.

@@ -306,9 +306,14 @@ type ratchetDeps struct {
 	DeviceKey     func(ctx context.Context, principal, device string) (ed25519.PublicKey, error)
 	SignBundle    func(olmdir.Bundle) (olmdir.Bundle, error)
 	AssertCurrent func() error
-	AttemptTTL    int64
-	RefreshEvery  time.Duration
-	Now           func() time.Time
+	// TrustReset reports a durable, explicitly confirmed identity change of
+	// principal whose ratchet reset is not applied yet; TrustResetDone clears
+	// it after the reset committed. Both optional.
+	TrustReset     func(principal string) (bool, error)
+	TrustResetDone func(principal string) error
+	AttemptTTL     int64
+	RefreshEvery   time.Duration
+	Now            func() time.Time
 }
 
 type ratchetReadiness struct {
@@ -799,6 +804,25 @@ func (c *ratchetConsumer) trust(principal, device string) (ratchetTrusted, error
 }
 
 func (c *ratchetConsumer) trustOnce(principal, device string) (ratchetTrusted, error) {
+	if c.d.TrustReset != nil {
+		pending, err := c.d.TrustReset(principal)
+		if err != nil {
+			return ratchetTrusted{}, err
+		}
+		if pending {
+			// Apply the durable confirmation first: drop this principal's pins
+			// so the newly confirmed chain is pinned below and Olm keys are
+			// re-adopted only from bundles it signs.
+			if err = c.resetTrustRecords(principal); err != nil {
+				return ratchetTrusted{}, err
+			}
+			if c.d.TrustResetDone != nil {
+				if err = c.d.TrustResetDone(principal); err != nil {
+					return ratchetTrusted{}, err
+				}
+			}
+		}
+	}
 	key, err := c.d.DeviceKey(c.ctx, principal, device)
 	if err != nil {
 		return ratchetTrusted{}, err
@@ -1461,7 +1485,8 @@ func (c *ratchetConsumer) retire(id string) error {
 	if err != nil {
 		return err
 	}
-	if !a.Retired.Has(ratchetAttemptSeq(id)) || !strings.HasPrefix(id, strconv.FormatInt(a.Epoch, 10)+":") {
+	current := strings.HasPrefix(id, strconv.FormatInt(a.Epoch, 10)+":")
+	if !current || !a.Retired.Has(ratchetAttemptSeq(id)) {
 		r, err := c.d.Store.AttemptRetirementRequest(s.Fence, id)
 		if err != nil {
 			return err
@@ -1469,13 +1494,18 @@ func (c *ratchetConsumer) retire(id string) error {
 		if err = c.call(netproto.OlmAdmissionRequest{Action: "retire_receipt", AttemptID: r.AttemptID, AccountEpoch: r.AccountEpoch, Digest: r.Digest}, nil); err != nil && ratchetCode(err) != "retired" {
 			return err
 		}
-		// Durable progress: later sessions skip this retirement.
-		ns, err := c.read(durable.Ref{Kind: durable.Outbox, ID: id})
-		if err != nil {
-			return err
-		}
-		if err = c.d.Store.NoteRetired(ns, id); err != nil {
-			return err
+		// Durable progress for the current epoch: later sessions skip it. An
+		// older epoch has no watermark, and a full sparse set (exhausted) is
+		// remembered for this session only, so neither repeats the network
+		// call on every resolve (P3-7).
+		if current {
+			ns, err := c.read(durable.Ref{Kind: durable.Outbox, ID: id})
+			if err != nil {
+				return err
+			}
+			if err = c.d.Store.NoteRetired(ns, id); err != nil && ratchetCode(err) != "exhausted" {
+				return err
+			}
 		}
 	}
 	c.retired[id] = true
@@ -1489,10 +1519,8 @@ func (c *ratchetConsumer) retire(id string) error {
 func (c *ratchetConsumer) history() ([]RatchetRecord, error) {
 	c.serial.Lock()
 	defer c.serial.Unlock()
+	// Reading the local archive needs no network readiness (P3-4).
 	if err := c.check(); err != nil {
-		return nil, err
-	}
-	if err := c.ensureReady(); err != nil {
 		return nil, err
 	}
 	var out []RatchetRecord
@@ -1707,6 +1735,10 @@ func (c *ratchetConsumer) resetTrust(principal string) error {
 	if err := c.check(); err != nil {
 		return err
 	}
+	return c.resetTrustRecords(principal)
+}
+
+func (c *ratchetConsumer) resetTrustRecords(principal string) error {
 	refs, err := c.refs(durable.Trust)
 	if err != nil {
 		return err
@@ -1951,4 +1983,28 @@ func (c *ratchetConsumer) receive(d ratchetDelivery, a durable.AccountAuthority)
 		return &ratchetError{Code: ratchetCode(err), AfterCommit: true, Err: err}
 	}
 	return nil
+}
+
+// logicalState returns the committed state of a logical ID ("" when no
+// operation was ever committed for it): pending, accepted, rejected, aborted.
+func (c *ratchetConsumer) logicalState(logicalID string) (string, error) {
+	c.serial.Lock()
+	defer c.serial.Unlock()
+	if !olmdir.ValidText(logicalID) {
+		return "", rfail("invalid")
+	}
+	ref := durable.Ref{Kind: durable.Logical, ID: logicalID}
+	s, err := c.read(ref)
+	if err != nil {
+		return "", err
+	}
+	r := s.Records[ref]
+	if r.Revision == 0 {
+		return "", nil
+	}
+	var l ratchetLogical
+	if json.Unmarshal(r.Data, &l) != nil {
+		return "", rfail("corrupt")
+	}
+	return l.State, nil
 }

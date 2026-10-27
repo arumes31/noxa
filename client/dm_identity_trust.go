@@ -29,6 +29,11 @@ type dmIdentityPin struct {
 	Fingerprint string   `json:"fingerprint"`
 	Pending     string   `json:"pending,omitempty"`
 	Retired     []string `json:"retired,omitempty"`
+	// RatchetReset is the fingerprint the user explicitly confirmed while the
+	// noxa-olm-v1 trust records still pin the previous noXa keys. It is the
+	// durable reset intent: the consumer applies it on the next trust check
+	// (only while this fingerprint is still the pinned one) and clears it.
+	RatchetReset string `json:"ratchet_reset,omitempty"`
 }
 
 // ContactIdentityChange is the payload of the "contact_identity_changed"
@@ -261,12 +266,12 @@ func (m *connManager) verifyPeerRecordAt(uid, encoded string, prompt bool, path,
 		}
 		retired = append(retired, current.Fingerprint)
 	}
-	if err := writeDMPin(path, dmIdentityPin{Version: 1, Fingerprint: fingerprint, Retired: retired}); err != nil {
+	// The same explicit confirmation is the durable ratchet reset intent:
+	// stored with the new pin, applied (and cleared) by the consumer.
+	if err := writeDMPin(path, dmIdentityPin{Version: 1, Fingerprint: fingerprint, Retired: retired, RatchetReset: fingerprint}); err != nil {
 		return [32]byte{}, err
 	}
-	// The explicit confirmation also drops this contact's new-protocol pins;
-	// Olm keys are re-adopted only from bundles the new chain signs.
-	go m.resetRatchetTrust(uid)
+	go m.applyRatchetTrustReset(uid)
 	return record.PublicKey(), nil
 }
 func (m *connManager) verifyMessageKey(uid, encoded, ownUID string, ownPub [32]byte) ([32]byte, error) {
@@ -311,4 +316,36 @@ func (m *connManager) verifiedCachedPeer(uid string, key [32]byte) bool {
 		m.pubKeys.forgetKey(uid, key)
 	}
 	return trusted
+}
+
+// ratchetResetPending reports whether the user explicitly confirmed uid's
+// current pinned identity and its ratchet trust reset is not yet applied.
+func (m *connManager) ratchetResetPending(uid string) (bool, error) {
+	path, _, err := m.peerPinPath(uid)
+	if err != nil {
+		return false, err
+	}
+	dmTrustMu.Lock()
+	defer dmTrustMu.Unlock()
+	pin, err := readDMPin(path)
+	if err != nil {
+		return false, err
+	}
+	return pin.Version == 1 && pin.Pending == "" && pin.RatchetReset != "" && pin.RatchetReset == pin.Fingerprint, nil
+}
+
+// clearRatchetReset removes the applied intent (only if it is still the same).
+func (m *connManager) clearRatchetReset(uid string) error {
+	path, _, err := m.peerPinPath(uid)
+	if err != nil {
+		return err
+	}
+	dmTrustMu.Lock()
+	defer dmTrustMu.Unlock()
+	pin, err := readDMPin(path)
+	if err != nil || pin.Version != 1 || pin.RatchetReset == "" {
+		return err
+	}
+	pin.RatchetReset = ""
+	return writeDMPin(path, pin)
 }

@@ -465,6 +465,8 @@ export class Groups extends EventTarget {
         const id = record.conversation, list = [...(this.messages.get(id) || [])];
         const text = typeof record.body?.text === "string" ? record.body.text : "";
         if (record.purpose === "delete" || record.purpose === "edit") {
+            // An own change shows only once accepted (linked copies carry no status).
+            if (record.self && record.status && record.status !== "accepted") return;
             // Authenticated sender + logical reference; a different sender that
             // reused the same logical string can never match.
             const index = list.findIndex(m => m.key === record.referenceKey);

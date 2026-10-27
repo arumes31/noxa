@@ -361,6 +361,8 @@ export function PublishPositionForTab(arg1:string,arg2:netproto.PositionUpdate):
 
 export function Quit():Promise<void>;
 
+export function SendChatOperationForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number,arg6:string):Promise<string>;
+
 export function RatchetConversationHistoryForTab(arg1:string,arg2:string):Promise<Array<main.RatchetRecord>>;
 
 export function ReadPositionalInput():Promise<main.PositionalInput>;

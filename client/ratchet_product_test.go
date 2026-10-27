@@ -11,6 +11,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -93,6 +94,7 @@ type productEvents struct {
 	mu      sync.Mutex
 	records []RatchetMessageEvent
 	quar    []RatchetQuarantine
+	trusts  [][2]string
 }
 
 func (r *productEvents) Emit(name string, payload any) {
@@ -114,6 +116,14 @@ func (r *productEvents) Emit(name string, payload any) {
 		var e RatchetMessageEvent
 		if json.Unmarshal(env.Data, &e) == nil {
 			r.records = append(r.records, e)
+		}
+	case "ratchet_trust":
+		var t struct {
+			Contact string `json:"contact"`
+			State   string `json:"state"`
+		}
+		if json.Unmarshal(env.Data, &t) == nil {
+			r.trusts = append(r.trusts, [2]string{t.Contact, t.State})
 		}
 	case "ratchet_quarantine":
 		var q struct {
@@ -194,6 +204,11 @@ func (n *nativeNode) boot() {
 	n.app.cmStore(n.cm)
 }
 
+func (n *nativeNode) identity() *identity {
+	id, _ := n.cm.identity()
+	return id
+}
+
 func (n *nativeNode) protection() *durable.Protection {
 	p := durable.IdentityProtection([]byte(strings.Repeat("k", 16) + n.dev.Name + strings.Repeat("p", 32)))
 	return &p
@@ -223,7 +238,41 @@ func (n *nativeNode) connect() {
 	n.pipeMu.Unlock()
 	go n.cm.readLoop(client)
 	go n.pump(server, done)
-	if err := n.cm.startRatchet(client); err != nil {
+	n.startSession()
+}
+
+// connectTransport installs the authenticated connection only: the ratchet
+// session is still starting (device registration, store, core warm-up).
+func (n *nativeNode) connectTransport() {
+	n.t.Helper()
+	client, server := net.Pipe()
+	n.cm.mu.Lock()
+	n.cm.ratchetTest = &ratchetTestConfig{Dir: filepath.Join(n.base, "ratchet"), Binding: n.binding, Poll: time.Hour, Protection: n.protection(), AttemptTTL: n.ttl}
+	n.cm.conn = client
+	n.cm.connEpoch++
+	n.cm.closed = false
+	n.cm.clientID = "native-" + n.dev.Name
+	n.cm.uniqueID = n.dev.Principal
+	n.cm.deviceID = n.dev.Device
+	n.cm.addr = "ratchet-product.test:12333"
+	n.cm.supportsDevices = true
+	n.cm.supportsDMDevices = true
+	n.cm.readTimeout = 0
+	n.cm.mu.Unlock()
+	done := make(chan struct{})
+	n.pipeMu.Lock()
+	n.pipeDone = done
+	n.pipeMu.Unlock()
+	go n.cm.readLoop(client)
+	go n.pump(server, done)
+}
+
+func (n *nativeNode) startSession() {
+	n.t.Helper()
+	n.cm.mu.Lock()
+	conn := n.cm.conn
+	n.cm.mu.Unlock()
+	if err := n.cm.startRatchet(conn); err != nil {
 		n.t.Fatalf("%s: start ratchet session: %v", n.dev.Name, err)
 	}
 }
@@ -467,6 +516,11 @@ func TestRatchetProductBridge(t *testing.T) {
 	if e, ok := A.outboxEntry(qid); !ok || e.State != "uncertain" || !strings.Contains(e.Error, "not confirmed") {
 		t.Fatalf("uncertain outbox entry: %+v %v", e, ok)
 	}
+	// P3-6: an uncertain committed entry cannot be cancelled (undo + resend
+	// would duplicate it); it must be resolved first.
+	if _, err := A.app.ChatOutboxForTab(A.tab, ChatOutboxRequest{Action: "cancel", ID: qid}); err == nil {
+		t.Fatal("cancel of an uncertain committed entry must be refused")
+	}
 	A.reconnect()
 	A.drain()
 	if e, ok := A.entry("nbob", "nalice", qid); !ok || e.Status != "accepted" || e.Body != "queued original" {
@@ -486,6 +540,49 @@ func TestRatchetProductBridge(t *testing.T) {
 	B.drain()
 	if _, n := B.entryByBody("nalice", "queued original"); n != 1 {
 		t.Fatal("receiver must see the original exactly once")
+	}
+
+	// 3b. P2-1: an immediate attachment/voice send whose finalize is lost is
+	//     retried with the composer's SAME operation ID: the original resolves,
+	//     the recipient sees exactly one message.
+	step("3b immediate send retry with a stable operation ID")
+	voice := "[file:storage-v#" + strings.Repeat("B", 43) + "=#nx1;s=9#voice.webm]"
+	op := newClientMsgID()
+	b.post(map[string]any{"op": "drop", "device": "nalice-desk", "action": "finalize"}, nil)
+	if e := A.app.SendChatOperationForTab(A.tab, "direct", "nbob", voice, 0, op); !strings.Contains(e, "not confirmed") {
+		t.Fatalf("lost finalize must be uncertain: %q", e)
+	}
+	A.reconnect()
+	if e := A.app.SendChatOperationForTab(A.tab, "direct", "nbob", voice, 0, op); e != "" {
+		t.Fatalf("retry of the same operation: %q", e)
+	}
+	B.drain()
+	if _, n := B.entryByBody("nalice", voice); n != 1 {
+		t.Fatalf("recipient must see the retried operation exactly once, got %d", n)
+	}
+
+	// 3c. P2-2: entries queued offline stay queued while the session starts
+	//     and are sent automatically once it is ready.
+	step("3c offline queue drains automatically on reconnect")
+	A.disconnect()
+	staged, err := A.app.ChatOutboxForTab(A.tab, ChatOutboxRequest{Action: "stage", Scope: "direct", Target: "nbob", Text: "queued offline", QueueOffline: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oid := staged.Entries[len(staged.Entries)-1].ID
+	A.connectTransport()
+	A.app.pumpChatOutbox(A.cm)
+	if e, ok := A.outboxEntry(oid); !ok || e.State != "queued" {
+		t.Fatalf("entry must wait for the session, not fail: %+v", e)
+	}
+	A.startSession()
+	A.app.pumpChatOutbox(A.cm)
+	if e, ok := A.outboxEntry(oid); ok {
+		t.Fatalf("queued entry not sent automatically: %+v", e)
+	}
+	B.drain()
+	if _, n := B.entryByBody("nalice", "queued offline"); n != 1 {
+		t.Fatal("offline-queued message delivered once")
 	}
 
 	// 4. Local commit failure: zero transport; the next send commits.
@@ -675,7 +772,7 @@ func TestRatchetProductBridge(t *testing.T) {
 	// 11. Second process: the namespace store is exclusively locked.
 	step("11 second process")
 	ns := durable.Namespace{Server: fixture.Binding, Principal: "nalice", Device: A.dev.Device}
-	if s, err := durable.Open(filepath.Join(A.base, "ratchet"), ns, *A.protection(), 100*time.Millisecond); !errors.Is(err, durable.ErrInUse) {
+	if s, err := durable.Open(ratchetStoreDir(filepath.Join(A.base, "ratchet"), A.identity()), ns, *A.protection(), 100*time.Millisecond); !errors.Is(err, durable.ErrInUse) {
 		if s != nil {
 			s.Close()
 		}
@@ -771,6 +868,71 @@ func TestRatchetProductBridge(t *testing.T) {
 		t.Fatalf("native applies PWA delete: %+v", e)
 	}
 
+	// 16b. P2-3: the new-protocol path reaches the identity confirmation, and an
+	//      explicit confirmation is a DURABLE ratchet reset (applied by the next
+	//      session even when none is live at confirmation time).
+	step("16b identity confirmation reachability + durable reset")
+	pinPath, _, err := A.cm.peerPinPath("nbob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, err := readDMPin(pinPath)
+	if err != nil || pin.Version != 1 {
+		t.Fatal(pin, err)
+	}
+	changed := pin
+	changed.Fingerprint = strings.Repeat("e", 64) // the pinned identity no longer matches nbob's record
+	if err = writeDMPin(pinPath, changed); err != nil {
+		t.Fatal(err)
+	}
+	A.cm.forgetDMDevices("nbob")
+	if e := A.app.SendChatForTab(A.tab, "direct", "nbob", "to a changed identity"); !strings.Contains(e, "identity_changed") {
+		t.Fatalf("changed identity: %q", e)
+	}
+	if !A.events.trust("nbob", "confirmation_required") {
+		t.Fatal("the ratchet path must surface the identity confirmation")
+	}
+	// The user confirms (the pin holds the confirmed fingerprint and the
+	// reset intent) while the ratchet trust record still pins an older noXa
+	// key, and no session is live.
+	trustID := ratchetTrustID("nbob", B.dev.Device)
+	c := A.consumer()
+	ts, err := c.d.Store.Read(durable.Ref{Kind: durable.Trust, ID: trustID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := base64OfKey(bytes.Repeat([]byte{1}, 32))
+	if err = c.d.Store.SetTrust(ts, trustID, ratchetJSON(ratchetTrustValue{Principal: "nbob", Device: B.dev.Device, Noxa: &stale}), false); err != nil {
+		t.Fatal(err)
+	}
+	A.disconnect()
+	confirmed := pin
+	confirmed.RatchetReset = pin.Fingerprint
+	if err = writeDMPin(pinPath, confirmed); err != nil {
+		t.Fatal(err)
+	}
+	A.connect()
+	A.cm.forgetDMDevices("nbob")
+	if e := A.app.SendChatForTab(A.tab, "direct", "nbob", "after confirmed reset"); e != "" {
+		t.Fatalf("durable reset not applied: %q", e)
+	}
+	if after, _ := readDMPin(pinPath); after.RatchetReset != "" {
+		t.Fatal("applied reset intent must be cleared")
+	}
+	B.drain()
+	if _, n := B.entryByBody("nalice", "after confirmed reset"); n != 1 {
+		t.Fatal("message after reset")
+	}
+	// Without the explicit intent a changed noXa key still blocks.
+	c = A.consumer()
+	ts, _ = c.d.Store.Read(durable.Ref{Kind: durable.Trust, ID: trustID})
+	if err = c.d.Store.SetTrust(ts, trustID, ratchetJSON(ratchetTrustValue{Principal: "nbob", Device: B.dev.Device, Noxa: &stale}), false); err != nil {
+		t.Fatal(err)
+	}
+	if e := A.app.SendChatForTab(A.tab, "direct", "nbob", "never adopted silently"); !strings.Contains(e, "account_changed") {
+		t.Fatalf("changed key without confirmation: %q", e)
+	}
+
 	// 17. Logout/session replacement fences the consumer before any transport.
 	step("17 logout fencing")
 	old := A.consumer()
@@ -785,5 +947,43 @@ func TestRatchetProductBridge(t *testing.T) {
 	if d := productTransport(b.counts(), "nalice-desk") - productTransport(before, "nalice-desk"); d != 0 {
 		t.Fatalf("transport after logout: %d", d)
 	}
+	// A normal sign-out/disconnect keeps the namespace and readable archive.
+	if _, err := os.Stat(ratchetStoreDir(filepath.Join(A.base, "ratchet"), A.identity())); err != nil {
+		t.Fatal("sign-out must keep the ratchet namespace", err)
+	}
+
+	// 18. Identity deletion destroys the identity's namespaces, fenced against
+	//     its live session.
+	step("18 identity deletion")
+	dc := D.consumer()
+	if err := D.app.destroyRatchetNamespaces(D.identity()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dc.drain(); ratchetCode(err) != "fenced" {
+		t.Fatalf("live session must be fenced: %v", err)
+	}
+	if _, err := os.Stat(ratchetStoreDir(filepath.Join(D.base, "ratchet"), D.identity())); !os.IsNotExist(err) {
+		t.Fatal("namespaces of a deleted identity must be destroyed", err)
+	}
+	D.cm.mu.Lock()
+	dconn := D.cm.conn
+	D.cm.mu.Unlock()
+	if err := D.cm.startRatchet(dconn); err == nil {
+		t.Fatal("a deleted identity must not reopen a session")
+	}
 	t.Logf("PASS native product vertical + native<->PWA interop with production rate limits in %s", time.Since(started).Round(time.Millisecond))
+}
+
+func base64OfKey(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+
+// trust reports whether a ratchet_trust event with state was emitted for uid.
+func (r *productEvents) trust(uid, state string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, e := range r.trusts {
+		if e[0] == uid && e[1] == state {
+			return true
+		}
+	}
+	return false
 }
