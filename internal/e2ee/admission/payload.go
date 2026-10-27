@@ -3,8 +3,10 @@ package admission
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"noxa/internal/e2ee/ratchet"
 	"sort"
+	"strings"
 )
 
 type PayloadContext struct {
@@ -42,7 +44,46 @@ func OpenPayload(m Manifest, t Target, plaintext string) (json.RawMessage, error
 		Context PayloadContext  `json:"context"`
 		Body    json.RawMessage `json:"body"`
 	}
-	if Decode([]byte(plaintext), &p, ratchet.MaxPlaintext) != nil || p.Context != Context(m, t) || len(p.Body) == 0 {
+	// Decode only the two outer fields here. Application JSON is opaque;
+	// strict wire grammar applies exclusively to authenticated context.
+	if len(plaintext) == 0 || len(plaintext) > ratchet.MaxPlaintext {
+		return nil, ErrInvalid
+	}
+	d := json.NewDecoder(strings.NewReader(plaintext))
+	token, err := d.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, ErrInvalid
+	}
+	seen := map[string]bool{}
+	for d.More() {
+		token, err = d.Token()
+		key, ok := token.(string)
+		if err != nil || !ok || seen[key] {
+			return nil, ErrInvalid
+		}
+		seen[key] = true
+		var raw json.RawMessage
+		if d.Decode(&raw) != nil {
+			return nil, ErrInvalid
+		}
+		switch key {
+		case "context":
+			if Decode(raw, &p.Context, ratchet.MaxPlaintext) != nil {
+				return nil, ErrInvalid
+			}
+		case "body":
+			p.Body = raw
+		default:
+			return nil, ErrInvalid
+		}
+	}
+	if token, err = d.Token(); err != nil || token != json.Delim('}') {
+		return nil, ErrInvalid
+	}
+	if _, err = d.Token(); err != io.EOF {
+		return nil, ErrInvalid
+	}
+	if !seen["context"] || p.Context != Context(m, t) || !json.Valid(p.Body) {
 		return nil, ErrInvalid
 	}
 	return p.Body, nil

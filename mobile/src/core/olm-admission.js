@@ -240,10 +240,54 @@ export function payloadContext(m, t) {
   };
 }
 export function sealPayload(m, target, body) {
-  return canonicalJSON({ context: payloadContext(m, target), body });
+  const plaintext = canonicalJSON({ context: payloadContext(m, target), body });
+  if (body === undefined || enc.encode(plaintext).length > 65536) throw fail();
+  return plaintext;
+}
+// JSON.parse validates syntax; this token walk preserves duplicate-field evidence
+// at the outer/context boundary without constraining opaque application JSON.
+function checkPayloadFields(plaintext) {
+  const tokens = plaintext.match(/"(?:\\.|[^"\\])*"|[{}\[\],:]|[^\s{}\[\],:]+/g);
+  let i = 0;
+  const walk = (strict, outer = false) => {
+    const token = tokens[i++];
+    if (!strict) {
+      if (token === "{" || token === "[") {
+        let depth = 1;
+        while (depth > 0) {
+          const next = tokens[i++];
+          if (next === "{" || next === "[") depth++;
+          if (next === "}" || next === "]") depth--;
+        }
+      }
+      return;
+    }
+    if (token === "{") {
+      const seen = new Set();
+      while (tokens[i] !== "}") {
+        const key = JSON.parse(tokens[i++]); i++; // colon
+        if (strict && (seen.has(key) || (outer && key !== "context" && key !== "body"))) throw fail();
+        seen.add(key);
+        walk(outer ? key === "context" : strict);
+        if (tokens[i] !== ",") break;
+        i++;
+      }
+      i++;
+    } else if (token === "[") {
+      while (tokens[i] !== "]") {
+        walk(strict);
+        if (tokens[i] !== ",") break;
+        i++;
+      }
+      i++;
+    }
+  };
+  walk(true, true);
 }
 export function openPayload(m, target, plaintext) {
+  if (typeof plaintext !== "string" || enc.encode(plaintext).length > 65536) throw fail();
   const p = JSON.parse(plaintext);
+  checkPayloadFields(plaintext);
   if (
     !equalJSON(p.context, payloadContext(m, target)) ||
     !Object.hasOwn(p, "body")
@@ -257,7 +301,13 @@ export function expectedBinding(m, t) {
     server: m.server,
     conversation:
       m.scope === "direct"
-        ? "direct:" + JSON.stringify([m.sender, m.peer].sort())
+        ? "direct:" + canonicalJSON([m.sender, m.peer].sort((a, b) => {
+            const x = enc.encode(a), y = enc.encode(b);
+            for (let i = 0; i < Math.min(x.length, y.length); i++) {
+              if (x[i] !== y[i]) return x[i] - y[i];
+            }
+            return x.length - y.length;
+          }))
         : "group:" + m.conversation,
     sender: m.sender,
     sender_device: m.device,

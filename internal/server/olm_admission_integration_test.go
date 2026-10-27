@@ -48,6 +48,7 @@ func TestIntegrationOlmAdmissionBrowser(t *testing.T) {
 	srv := New(&config.Config{}, zap.NewNop(), &Deps{Authority: authority, Devices: db})
 	srv.tlsFingerprint = strings.TrimSuffix(strings.Repeat("aa:", 32), ":")
 	srv.chatRate = nil
+	srv.olmAdmissionEnabled = true
 	binding := "tls-sha256:" + strings.Repeat("a", 64)
 	makeClient := func(p string) (*Client, ed25519.PrivateKey) {
 		pub, priv, e := auth.GenerateIdentityKeyPair()
@@ -220,7 +221,7 @@ func TestIntegrationOlmAdmissionBrowser(t *testing.T) {
 				}
 				m := admission.Manifest{Version: admission.Version, Server: binding, Sender: alice.UniqueID, Device: alice.deviceID, AccountEpoch: 1, AttemptID: "1", LogicalID: "native-message", Purpose: "chat", Scope: "direct", Peer: bob.UniqueID, Deadline: deadline, Rosters: roster.Rosters, Targets: roster.Targets}
 				target := admission.Target{Principal: bob.UniqueID, Device: bob.deviceID, AccountEpoch: 1}
-				body, _ := admission.SealPayload(m, target, json.RawMessage(`{"text":"native to browser"}`))
+				body, _ := admission.SealPayload(m, target, json.RawMessage(`{"text":"native to browser","mentions":{"User-1":{"é":1}}}`))
 				bind := admission.ExpectedBinding(m, target)
 				sent, e := apply(ratchet.Request{Op: ratchet.Outbound, Account: native.Account, PeerIdentity: bb.Identity, OneTimeKey: bb.OneTimeKeys[0].Key, Binding: &bind, Plaintext: body})
 				if e != nil {

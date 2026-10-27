@@ -163,7 +163,7 @@ try {
         delivery.copy,
         incoming.plaintext,
       );
-      if (plain.text !== "native to browser")
+      if (plain.text !== "native to browser" || plain.mentions?.["User-1"]?.["é"] !== 1)
         throw new Error("wrong native plaintext");
       snap = await s.read([
         ["trust", "native"],
@@ -224,6 +224,7 @@ try {
         binding: wire.expectedBinding(manifest, target),
         plaintext: wire.sealPayload(manifest, target, {
           text: "browser to native",
+          mentions: { "User-1": { "é": 1 } },
         }),
       });
       const frozen = await wire.freezeAttempt(manifest, [
@@ -285,6 +286,8 @@ try {
         request: { action: "retire_receipt", ...ack },
       });
       const got = await rpc("native_receive");
+      if (got.mentions?.["User-1"]?.["é"] !== 1)
+        throw new Error("native rejected opaque application JSON");
       const token = await s.accountAuthority(await s.read()),
         freshAccount = await core.apply({
           op: "new_account",

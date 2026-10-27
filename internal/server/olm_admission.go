@@ -12,14 +12,19 @@ import (
 )
 
 func (s *TCPServer) handleOlmAdmission(ctx context.Context, client *Client, f *netproto.Frame) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if !s.olmAdmissionEnabled {
+		return s.writeMessageInContext(ctx, client, netproto.MsgError, netproto.Error{Code: errCodeMalformed, Message: "Olm admission unavailable", OriginType: uint16(netproto.MsgOlmAdmissionRequest)})
+	}
 	r, e := netproto.DecodeOlmAdmissionRequest(f)
 	if e != nil {
-		return s.sendErrorFor(client, netproto.MsgOlmAdmissionRequest, errCodeMalformed, "invalid Olm admission request")
+		return s.writeMessageInContext(ctx, client, netproto.MsgError, netproto.Error{Code: errCodeMalformed, Message: "invalid Olm admission request", OriginType: uint16(netproto.MsgOlmAdmissionRequest)})
 	}
 	response := netproto.OlmAdmissionResult{RequestID: r.RequestID, Action: r.Action}
 	reply := func(code string) error {
 		response.Error = code
-		return s.writeMessage(client, netproto.MsgOlmAdmissionResult, response)
+		return s.writeMessageInContext(ctx, client, netproto.MsgOlmAdmissionResult, response)
 	}
 	e = s.rolePolicyRead(ctx, client, func(ctx context.Context) error {
 		if !client.isAuthed() || client.sessionRevoked() || client.rulesBlocked() {

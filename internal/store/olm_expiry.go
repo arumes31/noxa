@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"noxa/internal/e2ee/admission"
 )
@@ -17,7 +18,15 @@ func (s *Store) ExpireOlmAttempts(ctx context.Context) (int, error) {
 	if e = admissionBudget(ctx, tx); e != nil {
 		return 0, e
 	}
-	rows, e := tx.QueryContext(ctx, `SELECT server,sender,device_id,account_epoch,receipt FROM olm_attempts WHERE state='staging' AND deadline<=EXTRACT(EPOCH FROM now())::bigint ORDER BY deadline,device_id LIMIT 200 FOR UPDATE`)
+	n, e := expireOlmAttempts(ctx, tx, 200, "")
+	if e != nil {
+		return 0, e
+	}
+	return n, tx.Commit()
+}
+
+func expireOlmAttempts(ctx context.Context, tx *sql.Tx, limit int, device string) (int, error) {
+	rows, e := tx.QueryContext(ctx, `SELECT server,sender,device_id,account_epoch,receipt FROM olm_attempts WHERE state='staging' AND ($2='' OR device_id=$2) AND deadline<=EXTRACT(EPOCH FROM now())::bigint ORDER BY deadline,device_id LIMIT $1 FOR UPDATE`, limit, device)
 	if e != nil {
 		return 0, e
 	}
@@ -51,5 +60,5 @@ func (s *Store) ExpireOlmAttempts(ctx context.Context) (int, error) {
 			return 0, e
 		}
 	}
-	return len(items), tx.Commit()
+	return len(items), nil
 }

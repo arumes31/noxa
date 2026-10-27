@@ -328,6 +328,8 @@ func (c *Client) takeChallenge(uniqueID string) ([]byte, string, bool) {
 
 // TCPServer accepts and serves control-channel connections.
 type TCPServer struct {
+	// Internal integration harness opt-in; no production activation before 1c-ii.
+	olmAdmissionEnabled   bool
 	previewOnce           sync.Once
 	previewService        *linkpreview.Service
 	spoolDelivery         [64]sync.Mutex

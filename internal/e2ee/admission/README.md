@@ -3,7 +3,9 @@
 This is the final unreleased `noxa-olm-admission-v1` contract. Directory signatures
 also bind `account_epoch`; there is no reader for intermediate unshipped Olm
 signatures. TCP request/result frames are 202/203. No capability advertises this
-path, and the existing live NaCl consumers remain in place until Task 1c-ii.
+path. Frame 202 is disabled by default through an internal server gate, enabled
+only by the integration harness. Existing live NaCl consumers remain in place
+until Task 1c-ii.
 
 ## Send and resolution
 
@@ -19,6 +21,8 @@ path, and the existing live NaCl consumers remain in place until Task 1c-ii.
    routing, action/reference, sender/recipient epochs and group revision/epoch.
    After authenticated decryption, `OpenPayload` must succeed before display or
    mutation. Copying public routing fields is not independent authentication.
+   The outer payload and context have strict fields; the application body is
+   opaque JSON within the core's 64 KiB plaintext bound, including arbitrary keys.
 4. `Freeze` produces at most eight 512 KiB parts, at most 4 MiB including manifest,
    with exactly complete current fanout (up to 160 targets). `CommitAttempt`
    atomically commits every ratchet candidate, immutable manifest/parts, readable

@@ -3,6 +3,7 @@ package durable
 import (
 	"bytes"
 	bolt "go.etcd.io/bbolt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -10,8 +11,9 @@ import (
 )
 
 type sharedEntry struct {
-	store *Store
-	refs  int
+	store   *Store
+	refs    int
+	dirInfo os.FileInfo
 }
 
 var sharedStores = struct {
@@ -32,22 +34,38 @@ func OpenShared(dir string, ns Namespace, p Protection) (*Handle, error) {
 	if e != nil {
 		return nil, e
 	}
+	if e = os.MkdirAll(path, 0700); e != nil {
+		return nil, e
+	}
 	if resolved, e := filepath.EvalSymlinks(path); e == nil {
 		path = resolved
 	}
 	if runtime.GOOS == "windows" {
 		path = strings.ToLower(path)
 	}
+	info, e := os.Stat(path)
+	if e != nil {
+		return nil, e
+	}
 	key := path + "\x00" + string(encode(ns))
 	sharedStores.Lock()
 	defer sharedStores.Unlock()
 	entry := sharedStores.entries[key]
+	// Windows junction aliases may not be resolved by EvalSymlinks.
+	if entry == nil {
+		for existingKey, candidate := range sharedStores.entries {
+			if candidate.store.ns == string(encode(ns)) && os.SameFile(info, candidate.dirInfo) {
+				key, entry = existingKey, candidate
+				break
+			}
+		}
+	}
 	if entry == nil {
 		s, e := Open(path, ns, p, 0)
 		if e != nil {
 			return nil, e
 		}
-		entry = &sharedEntry{store: s}
+		entry = &sharedEntry{store: s, dirInfo: info}
 		sharedStores.entries[key] = entry
 	}
 	if p.Open == nil {

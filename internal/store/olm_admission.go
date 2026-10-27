@@ -45,6 +45,13 @@ func sourceAuthority(ctx context.Context, tx *sql.Tx, a OlmSource, current bool)
 }
 func admissionBudget(ctx context.Context, tx *sql.Tx) error {
 	_, e := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('olm-admission-budget',0))`)
+	if e != nil {
+		return e
+	}
+	// Keep lock order, but never monopolize global admission behind a slow
+	// authorized delivery handoff. Lock timeout aborts this transaction and is
+	// retryable; it must not create a terminal receipt.
+	_, e = tx.ExecContext(ctx, `SET LOCAL lock_timeout = '100ms'`)
 	return e
 }
 func sourceLock(ctx context.Context, tx *sql.Tx, a OlmSource, current bool) error {
@@ -174,6 +181,14 @@ func insertAttempt(ctx context.Context, tx *sql.Tx, a OlmSource, m admission.Man
 	}
 	b, _ := m.Bytes()
 	rb, _ := json.Marshal(r)
+	// Expiry removes persisted parts before releasing quota, while retaining
+	// bounded terminal receipts and immutable retry identity.
+	if _, e := expireOlmAttempts(ctx, tx, 4, a.Device); e != nil {
+		return r, e
+	}
+	if _, e := expireOlmAttempts(ctx, tx, 200, ""); e != nil {
+		return r, e
+	}
 	// Retained fences are bounded, never removed and reinterpreted as fresh IDs.
 	var retained, open, total int
 	var wire int64
@@ -557,7 +572,7 @@ func (s *Store) FinalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 			var state, claimSource, claimPrincipal, server, keyID string
 			var targetBundle, sourceBundle []byte
 			var sourceEpoch, deadline int64
-			e = tx.QueryRowContext(ctx, `SELECT lifecycle,claimed_device,claimed_by,claimed_epoch,claim_until,server,key_id,bundle FROM olm_directory_keys WHERE device_id=$1 AND account_epoch=$2 AND request_id=$3 FOR UPDATE`, c.Device, c.AccountEpoch, c.ClaimID).Scan(&state, &claimSource, &claimPrincipal, &sourceEpoch, &deadline, &server, &keyID, &targetBundle)
+			e = tx.QueryRowContext(ctx, `SELECT lifecycle,claimed_device,claimed_by,claimed_epoch,claim_until,server,key_id,bundle FROM olm_directory_keys WHERE device_id=$1 AND account_epoch=$2 AND request_id=$3 AND claimed_by=$4 AND claimed_device=$5 AND claimed_epoch=$6 AND server=$7 FOR UPDATE`, c.Device, c.AccountEpoch, c.ClaimID, a.Principal, a.Device, a.AccountEpoch, a.Server).Scan(&state, &claimSource, &claimPrincipal, &sourceEpoch, &deadline, &server, &keyID, &targetBundle)
 			if errors.Is(e, sql.ErrNoRows) {
 				return empty, ErrOlmConflict
 			}
