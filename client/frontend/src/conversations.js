@@ -9,6 +9,25 @@ import { parseFileRef } from "./chat-parsers.js";
 import { applySeen, createTypingStore, GROUP_TYPING_PING_MS, seenLabel, seenMarkers, typingLabel } from "./group-activity.js";
 import { avatarColor } from "./workspace-ui.js";
 import { buildMemberCandidates, openMemberPicker } from "./member-picker.js";
+import { groupRatchetRows, quarantineRows, ratchetIsIncoming } from "./ratchet-projection.js";
+
+// Latest new-protocol placeholders (locked rows) announced by chat-ui.js.
+let ratchetQuarantine = [];
+window.addEventListener?.("noxa-ratchet-quarantine", event => { ratchetQuarantine = Array.isArray(event.detail) ? event.detail : []; refreshOpen?.(); });
+// A noxa-olm-v1 group record (Go "ratchet_message"): refresh the open view
+// and notify only for a durable NEW receive, without any message text.
+window.addEventListener?.("noxa-ratchet-group", event => {
+    const record = event.detail || {};
+    refreshOpen?.({ id: record.conversation });
+    if (!ratchetIsIncoming(record) || !record.conversation) return;
+    const state = V().state;
+    if ((state.settings?.muted_conversations || []).includes(record.conversation)) return;
+    if (viewedGroup?.() === record.conversation && document.hasFocus()) return;
+    const group = (workspace?.snapshot().groups || []).find(listed => listed.id === record.conversation);
+    if (!group) return;
+    window.__noxaNotify?.notify("dm", t("group.messageNotification", { name: group.name }),
+        { className: "messages", kind: "info", announce: false, reference: { kind: "group", group_id: group.id, message_id: 0 } });
+});
 
 const V = () => window.__noxa;
 const app = () => window.go.main.App;
@@ -592,6 +611,36 @@ export function initConversations() {
         messages.onscroll = () => {
             if (!loading && messages.scrollHeight - messages.scrollTop - messages.clientHeight <= 24) void markRead(group, latestRendered, token);
         };
+        // One authenticated new-protocol row; locked when quarantined.
+        const ratchetRow = message => {
+            const row = el("article", "group-message ratchet-message");
+            row.dataset.messageId = message.id;
+            row.dataset.protocol = "noxa-olm-v1";
+            row.dataset.from = message.from_unique_id;
+            row.dataset.ts = String(message.created_at * 1000);
+            row.classList.toggle("own", message.from_unique_id === uid());
+            row.classList.toggle("pending", !!message.pending);
+            row.classList.toggle("failed", !!message.failed);
+            const body = el("div", "group-message-body");
+            const badge = message.quarantined
+                ? encryptionBadge({ text: "[Encryption key unavailable]", enc: false, encVerified: false, encMode: "" })
+                : encryptionBadge({ text: message.body, enc: true, encVerified: true, encMode: "e2e" });
+            if (blocked(message.from_unique_id)) body.textContent = t("group.blocked");
+            else if (badge.bodyKey) { body.textContent = t(badge.bodyKey); row.classList.add("missing-key"); }
+            else if (message.deleted) body.textContent = t("runtime.deleted");
+            else if (!renderVoiceMessage(body, message.body, { tabID, channelID: 0, isCurrent: () => current() && token === generation, download: voiceDownload })) {
+                const rich = window.__noxaChat?.renderSharedRichText;
+                if (rich) rich(body, message.body, attachments); else body.textContent = message.body;
+            }
+            const sent = new Date(message.created_at * 1000);
+            const stamp = el("time", "");
+            stamp.dateTime = sent.toISOString(); stamp.title = sent.toLocaleString();
+            stamp.append(el("span", "group-time-full", sent.toLocaleString()), el("span", "group-time-short", sent.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
+            const lock = window.__noxaChat?.encryptionBadgeElement?.(badge);
+            if (lock) stamp.append(lock);
+            row.append(el("strong", "", label(message.from_unique_id)), stamp, body);
+            return row;
+        };
         const history = async () => {
             if (loading || !current() || token !== generation) return;
             const navigationCurrent = initialNavigation ? destinationCurrent : () => true;
@@ -606,6 +655,7 @@ export function initConversations() {
                 for (const message of [...result.messages].reverse()) {
                     const row = el("article", "group-message");
                     row.dataset.messageId = String(message.id);
+                    row.dataset.legacy = "1";
                     row.dataset.from = message.from_unique_id;
                     row.dataset.ts = String(message.created_at * 1000);
                     row.classList.toggle("own", message.from_unique_id === uid());
@@ -653,7 +703,23 @@ export function initConversations() {
                 messages.prepend(fragment);
                 paintSeen();
                 if (result.messages.length) before = Math.min(...result.messages.map(message => message.id));
-                else if (initial) messages.append(el("p", "group-empty", t("group.noMessages")));
+                if (initial) {
+                    // noxa-olm-v1 records come from the protected archive, never
+                    // from numeric server history: string row IDs, inserted by
+                    // time, outside numeric paging, read markers and legacy delete.
+                    let records = [];
+                    try { records = await app().RatchetConversationHistoryForTab(tabID, group.id) || []; } catch { records = []; }
+                    if (!current() || token !== generation) return;
+                    const rows = [...groupRatchetRows(records), ...quarantineRows(ratchetQuarantine, { scope: "group", conversation: group.id })
+                        .map(q => ({ id: q.id, from_unique_id: q.fromUID, created_at: q.ts / 1000, quarantined: q.code }))];
+                    for (const row of rows.sort((a, b) => a.created_at - b.created_at)) {
+                        const element = ratchetRow(row);
+                        const after = [...messages.querySelectorAll(".group-message[data-legacy]")].find(node => Number(node.dataset.ts) > row.created_at * 1000);
+                        if (after) messages.insertBefore(element, after); else messages.append(element);
+                    }
+                    if (!result.messages.length && !rows.length) messages.append(el("p", "group-empty", t("group.noMessages")));
+                    if (rows.length && !preserveScroll) messages.scrollTop = messages.scrollHeight;
+                }
                 older.disabled = result.messages.length < 25;
                 if (initial) {
                     messages.scrollTop = preserveScroll ? previousScrollTop : messages.scrollHeight;

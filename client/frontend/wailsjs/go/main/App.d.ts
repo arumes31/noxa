@@ -361,6 +361,8 @@ export function PublishPositionForTab(arg1:string,arg2:netproto.PositionUpdate):
 
 export function Quit():Promise<void>;
 
+export function RatchetConversationHistoryForTab(arg1:string,arg2:string):Promise<Array<main.RatchetRecord>>;
+
 export function ReadPositionalInput():Promise<main.PositionalInput>;
 
 export function ReadyForCloseNotifications():Promise<void>;
@@ -427,7 +429,7 @@ export function SendChatReplyForTab(arg1:string,arg2:string,arg3:string,arg4:str
 
 export function SendConversationTypingForTab(arg1:string,arg2:string):Promise<string>;
 
-export function SendConversationForTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<number>;
+export function SendConversationForTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<main.ConversationSendResult>;
 
 export function SendICECandidate(arg1:string,arg2:string,arg3:number):Promise<void>;
 

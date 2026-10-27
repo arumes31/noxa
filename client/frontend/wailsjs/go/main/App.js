@@ -714,6 +714,10 @@ export function Quit() {
   return window['go']['main']['App']['Quit']();
 }
 
+export function RatchetConversationHistoryForTab(arg1, arg2) {
+  return window['go']['main']['App']['RatchetConversationHistoryForTab'](arg1, arg2);
+}
+
 export function ReadPositionalInput() {
   return window['go']['main']['App']['ReadPositionalInput']();
 }

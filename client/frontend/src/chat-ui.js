@@ -32,6 +32,7 @@ import { mergeReadMarker } from "./read-markers.js";
 import { QUICK_SWITCH_SETTINGS } from "./shell-model.js";
 import { createChatDelivery } from "./chat-delivery.js";
 import { sessionUserID } from "./session-identity.js";
+import { RATCHET_PROTOCOL, ratchetDMMessage, ratchetIsIncoming, sameDMMessage } from "./ratchet-projection.js";
 import { DOWNGRADED, encModeFrom, encryptionBadge, UNOPENED_BODIES } from "./message-encryption.js";
 import { chatEnglish } from "./chat-messages.js";
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
@@ -950,7 +951,7 @@ export function onDMChanged(d) {
     const ref = d?.ref_client_msg_id || "";
     if (!peer || !ref || !d.from_unique_id) return;
     const st = store.get("dm:" + peer);
-    const m = st?.msgs.find((x) => x.clientMsgID === ref && x.fromUID === d.from_unique_id);
+    const m = st?.msgs.find((x) => x.clientMsgID === ref && x.fromUID === d.from_unique_id && !x.protocol);
     if (!m) {
         const now = Date.now();
         for (const [key, waiting] of pendingDMChanges) if (waiting.at + DM_CHANGE_WAIT_MS < now) pendingDMChanges.delete(key);
@@ -962,6 +963,91 @@ export function onDMChanged(d) {
     if (!applyDMChange(m, d)) return;
     if (view.kind === "dm" && view.uid === peer) refreshDMEl(m);
     window.dispatchEvent(new CustomEvent("noxa-direct-changed"));
+}
+
+// onRatchetMessage projects one authoritative noxa-olm-v1 record (Go
+// "ratchet_message"). Go already merged it into the sealed DM log, so nothing
+// is re-recorded here and legacy receipts are not sent. Only a durable NEW
+// receive (is_new, not own, not a linked copy) counts as unread or notifies.
+export function onRatchetMessage(d) {
+    if (!d || d.protocol !== RATCHET_PROTOCOL) return false;
+    if (d.scope === "group") {
+        window.dispatchEvent(new CustomEvent("noxa-ratchet-group", { detail: d }));
+        return false;
+    }
+    const peer = d.peer || "";
+    if (d.scope !== "direct" || !peer) return false;
+    const key = "dm:" + peer;
+    const st = getStore(key);
+    if (d.purpose === "edit" || d.purpose === "delete") {
+        const change = { action: d.purpose, from_unique_id: d.sender, body: d.body?.text ?? "", peer, ref_client_msg_id: d.reference };
+        const target = st.msgs.find((x) => x.protocol === RATCHET_PROTOCOL && x.fromUID === d.sender && x.clientMsgID === d.reference);
+        if (!target) {
+            const waitKey = peer + "|olm|" + d.reference;
+            if (pendingDMChanges.size >= 256) pendingDMChanges.clear();
+            pendingDMChanges.set(waitKey, { at: Date.now(), changes: [...(pendingDMChanges.get(waitKey)?.changes || []), change] });
+            return false;
+        }
+        if (applyDMChange(target, change) && view.kind === "dm" && view.uid === peer) refreshDMEl(target);
+        window.dispatchEvent(new CustomEvent("noxa-direct-changed"));
+        return false;
+    }
+    if (d.purpose !== "chat") return false;
+    const tab = pmTabs.get(peer) || { uid: peer, nick: knownPeerName(peer, ""), unread: 0, offline: false, pendingRead: "" };
+    if (!pmTabs.has(peer)) pmTabs.set(peer, tab);
+    const m = ratchetDMMessage(d, d.self ? V().state.myNickname : knownPeerName(peer, ""));
+    st.msgs = st.msgs.filter((x) => x.clientMsgID !== "quarantine:" + (d.transport?.delivery_id || ""));
+    const existing = st.msgs.find((x) => sameDMMessage(x, m));
+    if (existing) {
+        // The committed original is authoritative: only its status moves.
+        Object.assign(existing, { pending: m.pending, failed: m.failed });
+        if (view.kind === "dm" && view.uid === peer) refreshDMEl(existing);
+        return false;
+    }
+    if (pushMsg(key, m) === "duplicate") return false;
+    const waitKey = peer + "|olm|" + m.clientMsgID;
+    for (const change of pendingDMChanges.get(waitKey)?.changes || []) applyDMChange(m, change);
+    pendingDMChanges.delete(waitKey);
+    const incoming = ratchetIsIncoming(d);
+    if (incoming) {
+        window.__noxaNotify?.notify("dm", (m.from || "someone") + ": " + previewLine(m),
+            { uid: peer, className: "messages", kind: "info", announce: false,
+                reference: { kind: "dm", peer_id: peer, client_message_id: m.clientMsgID, local_seq: 0 } });
+    }
+    const live = key === activeKey() && !isPrivateGroupActive();
+    if (live) appendLive(m);
+    else if (incoming) {
+        tab.unread++;
+        if (!V().state.replayingTabID) tab.unreadAt = Date.now();
+    }
+    renderTabs();
+    return true;
+}
+
+// onRatchetQuarantine shows truthful locked placeholders for new-protocol
+// copies that could not be opened. They are never unread and disappear once
+// the copy opens or is no longer quarantined.
+export function onRatchetQuarantine(d) {
+    const list = Array.isArray(d?.placeholders) ? d.placeholders : [];
+    const current = new Set();
+    for (const q of list) {
+        if (q?.scope !== "direct" || !q.peer || !q.id) continue;
+        const id = "quarantine:" + q.id;
+        current.add(id);
+        const st = getStore("dm:" + q.peer);
+        if (st.msgs.some((x) => x.clientMsgID === id)) continue;
+        pushMsg("dm:" + q.peer, { id: 0, localSeq: 0, protocol: RATCHET_PROTOCOL, from: knownPeerName(q.sender, "") || q.sender || "?", fromUID: q.sender || "",
+            text: "[encrypted message — key unavailable]", ts: Math.round((Number(q.seen_at) || Date.now() / 1000) * 1000), edited: false, deleted: false,
+            reactions: null, mentions: [], e2e: false, direct: true, enc: false, encVerified: false, encMode: "", quarantined: q.code || "",
+            offline: false, clientMsgID: id, channelID: null, self: false, mentioned: false });
+    }
+    for (const [key, st] of store) {
+        if (!key.startsWith("dm:")) continue;
+        const keep = st.msgs.filter((x) => !x.quarantined || current.has(x.clientMsgID));
+        if (keep.length !== st.msgs.length) st.msgs = keep;
+    }
+    if (view.kind === "dm") renderView();
+    window.dispatchEvent(new CustomEvent("noxa-ratchet-quarantine", { detail: list }));
 }
 
 function applyPendingDMChanges(peer, m) {
@@ -2204,6 +2290,12 @@ function dmMsg(e, peerNick) {
         localUnverified: !verified,
         offline: !!e.offline,
         clientMsgID: e.client_msg_id || "",
+        // A noxa-olm-v1 record (projected by Go from the protected archive)
+        // is identified by protocol + sender + logical ID, never by number.
+        protocol: e.protocol || "",
+        ratchetKey: e.key || "",
+        pending: !!e.protocol && self && e.status === "pending",
+        failed: !!e.protocol && self && (e.status === "rejected" || e.status === "aborted"),
         channelID: null,
         self,
         mentioned: false,
@@ -2241,9 +2333,10 @@ async function ensureDMHistory(uid) {
         if (st.dmClearPending) await st.dmClearPending;
         if (!current()) return false;
         const nick = peerName(uid);
-        const live = new Set(st.msgs.map((m) => m.clientMsgID).filter(Boolean));
+        const liveKey = (m) => m.clientMsgID ? JSON.stringify([m.protocol || "", m.protocol ? m.fromUID : "", m.clientMsgID]) : "";
+        const live = new Set(st.msgs.map(liveKey).filter(Boolean));
         const older = (rows || []).map((e) => dmMsg(e, nick))
-            .filter((m) => !m.clientMsgID || !live.has(m.clientMsgID));
+            .filter((m) => !m.clientMsgID || !live.has(liveKey(m)));
         st.msgs = older.concat(st.msgs);
         const tab = pmTabs.get(uid);
         if (tab) tab.nick = knownPeerName(uid);
@@ -2719,7 +2812,8 @@ export function addChat(d) {
 function pushMsg(key, m) {
     const st = getStore(key);
     const duplicate = st.msgs.find((existing) => (m.id && existing.id === m.id) ||
-        (m.clientMsgID && existing.clientMsgID === m.clientMsgID && existing.self === m.self));
+        (m.clientMsgID && existing.clientMsgID === m.clientMsgID && existing.self === m.self &&
+            (existing.protocol || "") === (m.protocol || "") && (!m.protocol || existing.fromUID === m.fromUID)));
     if (duplicate) {
         upgradeEncryption(duplicate, m);
         return "duplicate";

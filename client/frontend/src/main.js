@@ -1716,6 +1716,13 @@ window.runtime.EventsOn("event", (json) => {
         case "dm_changed":
             chatUI.onDMChanged(d);
             return;
+        // noxa-olm-v1 archive projections (test-enabled sessions only).
+        case "ratchet_message":
+            chatUI.onRatchetMessage(d);
+            return;
+        case "ratchet_quarantine":
+            chatUI.onRatchetQuarantine(d);
+            return;
         case "chat_pinned":
             chatUI.onChatPinned(d, true);
             return;
