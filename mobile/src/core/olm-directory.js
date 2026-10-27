@@ -149,3 +149,16 @@ export function verifyBundleEvidence(bundle,{trustedSigningKey,server,principal,
  if(bundle.server!==server||bundle.principal!==principal||bundle.device_id!==deviceID||bundle.account_epoch!==accountEpoch||bundle.identity!==pinnedOlmIdentity||signature.length!==64||toBase64(signature)!==bundle.signature||!verifySignature(signature,bundleTranscript(bundle),trustedSigningKey))throw new Error("invalid admitted bundle evidence");
  return bundle;
 }
+
+// Mirror of olmdir.Bundle.VerifyReservedClaim for a fresh claim response. The
+// signing key comes from the independently verified noXa device chain and the
+// expected identity/epoch from local pins (or, on first adoption, the admission
+// target that the signed bundle must then match exactly).
+export function verifyReservedClaim(bundle, { trustedSigningKey, server, principal, deviceID, accountEpoch, pinnedOlmIdentity, keyID, claimUntil, now = Math.floor(Date.now() / 1000) }) {
+    if (!bundle || !Number.isSafeInteger(claimUntil) || claimUntil <= now || claimUntil > bundle.expires_at + 3600 || bundle.issued_at > now + 300)
+        throw new Error("invalid Olm claim");
+    verifyBundleEvidence(bundle, { trustedSigningKey, server, principal, deviceID, accountEpoch, pinnedOlmIdentity });
+    const key = bundle.one_time_keys.find((k) => k.id === keyID);
+    if (!key) throw new Error("unlisted one-time key");
+    return key;
+}

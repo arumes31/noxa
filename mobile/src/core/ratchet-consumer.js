@@ -1,0 +1,548 @@
+// ratchet-consumer.js — session-owned noxa-olm-v1 product consumer for the PWA.
+//
+// One instance belongs to exactly one authenticated connection, account fence
+// and protected store namespace. Activation is supplied by that lifecycle; no
+// capability, trust or storage failure ever selects legacy NaCl sending or
+// decoding. Callers (DirectMessages/Groups) receive projections through
+// project(); the protected archive in RatchetStore is authoritative.
+//
+// Identities are kept distinct:
+//   protocol/provenance   record.protocol / record.provenance
+//   semantic reference    record.key = semanticKey(sender, logicalID)
+//   transport identifiers record.transport = {message, delivery}
+// Edit/delete references always name the ORIGINAL sender's logical ID.
+import {
+    ADMISSION_VERSION,
+    checkEnvelope,
+    expectedBinding,
+    freezeAttempt,
+    jsonBytes,
+    openPayload,
+    sealPayload,
+} from "./olm-admission.js";
+import { verifyBundleEvidence, verifyReservedClaim, OLM_DIRECTORY_VERSION } from "./olm-directory.js";
+
+export const RATCHET_PROTOCOL = "noxa-olm-v1";
+export const Limits = Object.freeze({ direct: 20, group: 160, prekeys: 20, refill: 10, retireWindow: 64 });
+const TERMINAL = new Set(["accepted", "rejected", "aborted"]);
+const enc = new TextEncoder(), dec = new TextDecoder();
+const parse = b => JSON.parse(dec.decode(b instanceof Uint8Array ? b : Uint8Array.from(b)));
+const rk = (kind, id) => JSON.stringify([kind, id]);
+const rec = (s, kind, id) => s.records[rk(kind, id)];
+const b64 = b => { let s = ""; for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192)); return btoa(s); };
+const fail = (code, extra = {}) => Object.assign(new Error(`ratchet: ${code}`), { code, ...extra });
+const now = () => Math.floor(Date.now() / 1000);
+/** Collision-free UI/semantic key for one sender's logical message ID. */
+export const semanticKey = (sender, logicalID) => JSON.stringify([RATCHET_PROTOCOL, sender, logicalID]);
+
+/**
+ * deps:
+ *  store, core          protected RatchetStore + authenticated WASM core
+ *  namespace            {server, principal, device} of the authenticated session
+ *  admission(request)   frame 202 -> 203 data; throws {code} on result.error
+ *  directory(request)   frame 200 -> 201 result; throws {code}
+ *  deviceKey(p, d)      Ed25519 noXa device key from the independently pinned
+ *                       root chain (NOT from Olm/admission data); throws if absent
+ *  signBundle(bundle)   signs with the EXISTING noXa device identity
+ *  assertCurrent()      throws unless connection/account/identity generation
+ *                       that created this consumer is still current
+ */
+export class RatchetConsumer {
+    constructor({ store, core, namespace, admission, directory, deviceKey, signBundle, assertCurrent }) {
+        Object.assign(this, { store, core, namespace, admission, directory, deviceKey, signBundle, assertCurrent });
+        this.closed = false;
+        this.tail = Promise.resolve();
+        this.projectors = [];
+        this.quarantined = new Map();
+        this.sessions = null;      // JSON(context) -> session ref id
+        this.retired = new Set();  // attempt IDs retired during this session
+        this.readiness = null;
+        this.identity = "";
+    }
+
+    /** Registers async fn(record, {isNew}) awaited after each durable commit. */
+    project(fn) { this.projectors.push(fn); }
+    #check() { if (this.closed) throw fail("fenced"); this.assertCurrent(); }
+    #serial(work) {
+        const next = this.tail.then(() => { this.#check(); return work(); });
+        this.tail = next.catch(() => {});
+        return next;
+    }
+    async close() { this.closed = true; await this.tail; }
+    async #emit(record, isNew) {
+        this.#check();
+        for (const fn of this.projectors) {
+            try { await fn(record, { isNew }); } catch { /* views are not receipt proof */ }
+            this.#check();
+        }
+    }
+    async #call(request) {
+        this.#check();
+        const result = await this.admission(request);
+        this.#check();
+        return result;
+    }
+    async #authority() {
+        this.#check();
+        const a = await this.store.accountAuthority(await this.store.read());
+        this.#check();
+        if (a.blocked || !a.accountID || !(a.epoch >= 1)) throw fail("recovery_required");
+        return a;
+    }
+    /** Authority is rechecked immediately before every network handoff. */
+    async #handoff(a, request) {
+        await this.store.checkAccountAuthority(await this.store.read(), a);
+        return this.#call({ account_epoch: a.epoch, ...request });
+    }
+
+    // --- Readiness and own publication ----------------------------------------
+
+    ready() {
+        if (!this.readiness) {
+            this.readiness = this.#serial(() => this.#ready());
+            this.readiness.catch(() => {});
+        }
+        return this.readiness;
+    }
+    async #ready() {
+        const a = await this.#authority();
+        let s = await this.store.read([["account", a.accountID]]);
+        if (!rec(s, "account", a.accountID).revision) {
+            // Only a fresh epoch-1 namespace may create an account. The server
+            // refuses epoch 1 over an existing device account; that blocks below
+            // instead of silently replacing old keys.
+            if (a.epoch !== 1) throw fail("recovery_required");
+            const created = await this.core.apply({ op: "new_account", key: this.store.coreKey(s), count: Limits.prekeys });
+            this.#check();
+            await this.#commitBundle(s, a, created, 1);
+        }
+        let latest = await this.#latestPublication(a);
+        if (!latest) throw fail("recovery_required");
+        if (latest.bundle.expires_at - now() < 86400) {
+            // Refresh before expiry with new one-time keys and next generation.
+            s = await this.store.read([["account", a.accountID]]);
+            const refreshed = await this.core.apply({ op: "prekeys", key: this.store.coreKey(s), account: dec.decode(rec(s, "account", a.accountID).data), count: Limits.refill });
+            this.#check();
+            await this.#commitBundle(s, a, refreshed, latest.bundle.generation + 1, latest.bundle);
+            latest = await this.#latestPublication(a);
+        }
+        try {
+            await this.store.checkAccountAuthority(await this.store.read(), a);
+            await this.directory({ action: "publish", request_id: crypto.randomUUID(), bundle: latest.bundle });
+        } catch (e) {
+            if (e.code === "account-change-required") throw fail("recovery_required");
+            throw e;
+        }
+        this.#check();
+        this.identity = latest.bundle.identity;
+        this.epoch = a.epoch;
+        return { identity: this.identity, epoch: a.epoch };
+    }
+    async #commitBundle(s, a, created, generation, previous = null) {
+        const issued = now();
+        const bundle = {
+            version: OLM_DIRECTORY_VERSION, protocol: RATCHET_PROTOCOL, server: this.namespace.server,
+            principal: this.namespace.principal, device_id: this.namespace.device, account_epoch: a.epoch,
+            generation, issued_at: issued, expires_at: issued + 6 * 86400,
+            identity: previous ? previous.identity : created.bundle.identity,
+            signing: previous ? previous.signing : created.bundle.signing,
+            one_time_keys: created.bundle.one_time_keys.map(k => ({ id: k.id, key: k.key })),
+        };
+        const signed = await this.signBundle(bundle);
+        this.#check();
+        const id = `pub:${a.accountID}:${String(generation).padStart(10, "0")}`;
+        const otks = {};
+        for (const k of bundle.one_time_keys) otks[`${a.accountID}:${k.id}`] = { publication_id: id, expires_at: bundle.expires_at, key_id: k.id, public_key: k.key, account_id: a.accountID };
+        await this.store.commitPublication(s, id, enc.encode(created.account), jsonBytes(signed), otks, { accountID: a.accountID });
+        this.#check();
+    }
+    async #latestPublication(a) {
+        const prefix = `pub:${a.accountID}:`;
+        const refs = (await this.#refs("publication")).filter(r => r[1].startsWith(prefix)).sort((x, y) => (x[1] < y[1] ? -1 : 1));
+        const last = refs.at(-1);
+        if (!last) return null;
+        const s = await this.store.read([last]);
+        return { id: last[1], bundle: parse(parse(rec(s, ...last).data).payload) };
+    }
+    async #refs(kind) {
+        const refs = [];
+        let after = "";
+        for (;;) {
+            const page = await this.store.pendingRefs(kind, after, 200);
+            this.#check();
+            refs.push(...page);
+            if (page.length < 200) return refs;
+            after = page.at(-1)[1];
+        }
+    }
+    async #readMany(refs) {
+        const out = [];
+        for (let i = 0; i < refs.length; i += 200) {
+            const s = await this.store.read(refs.slice(i, i + 200));
+            this.#check();
+            for (const r of refs.slice(i, i + 200)) out.push([r, rec(s, ...r)]);
+        }
+        return out;
+    }
+
+    // --- Trust ----------------------------------------------------------------
+
+    static trustID(principal, device) { return JSON.stringify([principal, device]); }
+    /**
+     * Returns {id, key, pin}. The noXa key always comes from deviceKey (root
+     * chain). An Olm pin is adopted only from a bundle signed by that key, and a
+     * changed epoch/identity blocks (verified reset promotion is required).
+     */
+    async #trust(principal, device) {
+        const key = await this.deviceKey(principal, device);
+        this.#check();
+        if (!(key instanceof Uint8Array) || key.length !== 32) throw fail("untrusted_device");
+        const id = RatchetConsumer.trustID(principal, device);
+        const s = await this.store.read([["trust", id]]), r = rec(s, "trust", id);
+        if (!r.revision) {
+            await this.store.setTrust(s, id, { principal, device, noxa: b64(key) }, false);
+            this.#check();
+            return { id, key, pin: null };
+        }
+        const saved = parse(r.data);
+        if (saved.revoked) throw fail("revoked");
+        if (saved.value.noxa !== b64(key)) throw fail("account_changed");
+        return { id, key, pin: saved.value.pin || null };
+    }
+    async #adopt(trusted, principal, device, bundle) {
+        if (trusted.pin) {
+            if (trusted.pin.epoch !== bundle.account_epoch || trusted.pin.identity !== bundle.identity) throw fail("account_changed");
+            return trusted;
+        }
+        const s = await this.store.read([["trust", trusted.id]]), r = rec(s, "trust", trusted.id);
+        const saved = parse(r.data);
+        if (saved.value.noxa !== b64(trusted.key) || saved.value.pin) throw fail("conflict");
+        const pin = { epoch: bundle.account_epoch, identity: bundle.identity, signing: bundle.signing };
+        await this.store.setTrust(s, trusted.id, { ...saved.value, pin }, false);
+        this.#check();
+        return { ...trusted, pin };
+    }
+
+    // --- Sessions -------------------------------------------------------------
+
+    #context(a, t, conversation) {
+        return { local_account_id: a.accountID, local_epoch: a.epoch, peer_epoch: t.account_epoch, peer_principal: t.principal,
+            peer_device: t.device, peer_identity: t.identity, conversation, protocol: RATCHET_PROTOCOL };
+    }
+    async #sessionIndex() {
+        if (!this.sessions) {
+            const map = new Map();
+            for (const [ref, r] of await this.#readMany(await this.#refs("session"))) {
+                const state = parse(r.data);
+                if (!state.retired) map.set(JSON.stringify(state.context), ref[1]);
+            }
+            this.sessions = map;
+        }
+        return this.sessions;
+    }
+
+    // --- Sending --------------------------------------------------------------
+
+    /**
+     * intent {logicalID, scope:"direct"|"group", peer|conversation, purpose,
+     * reference, body}. Returns {record, receipt, reused}. A logical ID that
+     * already has a committed operation ALWAYS yields its original archive,
+     * whatever body the caller passes now.
+     */
+    send(intent) { return this.ready().then(() => this.#serial(() => this.#send(intent))); }
+    async #send(intent) {
+        const a = await this.#authority();
+        const s = await this.store.read([["logical", intent.logicalID]]), lr = rec(s, "logical", intent.logicalID);
+        if (lr.revision) {
+            const logical = parse(lr.data);
+            const original = await this.#outcome(logical.attemptID);
+            if (!["rejected", "aborted"].includes(logical.state)) return this.#resolve(logical.attemptID, a, true);
+            // A terminal non-accepted intent may be resealed with NEW ratchet
+            // state, but only with its original committed content.
+            const r = original.record;
+            return this.#seal(a, { logicalID: r.logicalID, scope: r.scope, peer: r.scope === "direct" ? r.peer : "", conversation: r.conversation,
+                purpose: r.purpose, reference: r.reference, body: r.body }, true);
+        }
+        return this.#seal(a, intent, false);
+    }
+    async #seal(a, { logicalID, scope, peer = "", conversation = "", purpose = "chat", reference = "", body }, reused) {
+        if (!["direct", "group"].includes(scope) || !["chat", "edit", "delete"].includes(purpose) || (purpose === "chat") === !!reference) throw fail("invalid");
+        const roster = await this.#handoff(a, { action: "snapshot", scope, ...(scope === "direct" ? { peer } : { conversation }) });
+        const m = {
+            version: ADMISSION_VERSION, server: this.namespace.server, sender: this.namespace.principal, device: this.namespace.device,
+            account_epoch: a.epoch, attempt_id: String(a.nextAttempt + 1), logical_id: logicalID, purpose,
+            ...(reference ? { reference } : {}), scope,
+            ...(scope === "direct" ? { peer } : { conversation, revision: roster.revision, epoch: roster.epoch }),
+            deadline: now() + 300, rosters: roster.rosters, targets: roster.targets,
+        };
+        if (!Array.isArray(m.targets) || !m.targets.length || m.targets.length > Limits[scope]) throw fail("fanout_limit");
+        const locals = m.targets.filter(t => t.local);
+        if (locals.length !== 1 || locals[0].principal !== m.sender || locals[0].device !== m.device ||
+            locals[0].account_epoch !== a.epoch || locals[0].identity !== this.identity) throw fail("fenced");
+        const sessions = await this.#sessionIndex();
+        const plans = [];
+        // Every non-local target is required: an unverifiable device fails the
+        // whole operation rather than being silently omitted.
+        for (const t of m.targets) {
+            if (t.local) continue;
+            let trusted = await this.#trust(t.principal, t.device);
+            if (trusted.pin && (trusted.pin.epoch !== t.account_epoch || trusted.pin.identity !== t.identity)) throw fail("account_changed");
+            const binding = expectedBinding(m, t), context = this.#context(a, t, binding.conversation);
+            const prior = sessions.get(JSON.stringify(context));
+            let claim = null;
+            if (!prior) {
+                const claimID = crypto.randomUUID(), until = now() + 3600;
+                const request = { action: "claim", request_id: claimID, principal: t.principal, device_id: t.device, account_epoch: a.epoch, claim_until: until };
+                const cs = await this.store.read([["trust", trusted.id], ["claim", claimID]]);
+                await this.store.reserveClaim(cs, claimID, trusted.id, jsonBytes(request));
+                await this.store.checkAccountAuthority(await this.store.read(), a);
+                this.#check();
+                const result = await this.directory(request);
+                this.#check();
+                const selected = verifyReservedClaim(result.bundle, { trustedSigningKey: trusted.key, server: m.server, principal: t.principal,
+                    deviceID: t.device, accountEpoch: t.account_epoch, pinnedOlmIdentity: trusted.pin?.identity || t.identity, keyID: result.key_id, claimUntil: until });
+                trusted = await this.#adopt(trusted, t.principal, t.device, result.bundle);
+                claim = { id: claimID, key: selected.key };
+            }
+            plans.push({ t, trusted, binding, context, prior, claim });
+        }
+        const refs = [["logical", logicalID], ["account", a.accountID]];
+        for (const p of plans) refs.push(["trust", p.trusted.id], ...(p.prior ? [["session", p.prior]] : []));
+        const before = await this.store.read(refs);
+        this.#check();
+        const key = this.store.coreKey(before), account = dec.decode(rec(before, "account", a.accountID).data);
+        const record = { protocol: RATCHET_PROTOCOL, provenance: "authenticated", sender: m.sender, senderDevice: m.device,
+            logicalID, key: semanticKey(m.sender, logicalID), scope, peer: scope === "direct" ? peer : "", conversation: scope === "group" ? conversation : "",
+            purpose, reference, referenceKey: reference ? semanticKey(m.sender, reference) : "", body, sentAt: Number(body?.sentAt) || Date.now() / 1000,
+            self: true, copied: false };
+        const packets = [], copies = [];
+        for (const p of plans) {
+            const prior = p.prior ? parse(rec(before, "session", p.prior).data) : null;
+            if (prior && (prior.retired || JSON.stringify(prior.context) !== JSON.stringify(p.context))) throw fail("conflict");
+            const result = await this.core.apply({ op: prior ? "encrypt" : "outbound", key,
+                ...(prior ? { session: dec.decode(Uint8Array.from(prior.snapshot)) } : { account, peer_identity: p.t.identity, one_time_key: p.claim.key }),
+                binding: p.binding, plaintext: sealPayload(m, p.t, body) });
+            this.#check();
+            const sessionID = "olm:" + result.session_id;
+            if (p.prior && p.prior !== sessionID) throw fail("conflict");
+            packets.push({ sessionID, trustID: p.trusted.id, state: enc.encode(result.session), envelope: jsonBytes(result.envelope), context: p.context });
+            copies.push({ principal: p.t.principal, device: p.t.device, account_epoch: p.t.account_epoch, session_id: result.session_id,
+                ...(p.claim ? { claim_id: p.claim.id } : {}), envelope: result.envelope });
+        }
+        const frozen = await freezeAttempt(m, copies);
+        // Extend the exact pre-crypto snapshot with new session refs; any
+        // concurrent change to the prior reads aborts the whole immutable batch.
+        const commit = await this.store.extended(before, packets.map(p => ["session", p.sessionID]));
+        this.store.compare(before, commit);
+        await this.store.commitAttempt(commit, frozen.manifest, frozen.parts, packets, jsonBytes(record));
+        this.#check();
+        for (const p of packets) sessions.set(JSON.stringify(p.context), p.sessionID);
+        return this.#resolve(a.epoch + ":" + m.attempt_id, a, reused);
+    }
+    async #outcome(id) {
+        const s = await this.store.read([["outbox", id]]), r = rec(s, "outbox", id);
+        if (!r.revision) throw fail("invalid");
+        const op = parse(r.data);
+        return { op, record: parse(op.archive) };
+    }
+    /** Resolves exactly one committed attempt; never seals a new one. */
+    async #resolve(id, a, reused) {
+        let { op, record } = await this.#outcome(id);
+        try {
+            if (!op.receipt) {
+                const meta = await this.store.attemptStatusRequest(await this.store.read(), id), m = meta.manifest;
+                let result = await this.#call({ action: "status", account_epoch: m.account_epoch, attempt_id: m.attempt_id });
+                if (!TERMINAL.has(result.state)) {
+                    let wire = null;
+                    try { wire = await this.store.attemptWire(await this.store.read(), id); }
+                    catch (e) { if (!["fenced", "revoked", "conflict"].includes(e.code)) throw e; }
+                    this.#check();
+                    if (wire && m.account_epoch === a.epoch) {
+                        result = await this.#handoff(a, { action: "begin", manifest: wire.manifest });
+                        if (!TERMINAL.has(result.state)) {
+                            for (let part = 0; part < wire.parts.length; part++) await this.#handoff(a, { action: "put_part", attempt_id: m.attempt_id, part, data: b64(wire.parts[part]) });
+                            result = await this.#handoff(a, { action: "finalize", attempt_id: m.attempt_id });
+                        }
+                    } else {
+                        // Trust/epoch changed: metadata-only abort fences the old
+                        // attempt without handing its packets to anyone.
+                        result = await this.#call({ action: "abort", account_epoch: m.account_epoch, manifest: m });
+                    }
+                }
+                if (!TERMINAL.has(result.state)) throw fail("uncertain");
+                const s = await this.store.read([["outbox", id], ["logical", m.logical_id]]);
+                await this.store.applyAttemptResult(s, id, result);
+                this.#check();
+                ({ op, record } = await this.#outcome(id));
+            }
+            if (!this.retired.has(id)) {
+                const retirement = await this.store.attemptRetirementRequest(await this.store.read(), id);
+                try { await this.#call({ action: "retire_receipt", ...retirement }); }
+                catch (e) { if (e.code !== "retired") throw e; }
+                this.retired.add(id);
+            }
+        } catch (e) {
+            // The committed original remains authoritative for the caller's view.
+            throw Object.assign(e, { committed: { record, receipt: op.receipt || null, reused } });
+        }
+        const receipt = op.receipt;
+        const projected = { ...record, transport: { message: receipt.message_id || "", attempt: id }, status: receipt.state, reason: receipt.reason || "" };
+        await this.#emit(projected, false);
+        if (receipt.state !== "accepted") throw fail(receipt.reason || receipt.state, { committed: { record: projected, receipt, reused } });
+        return { record: projected, receipt, reused };
+    }
+
+    // --- Receiving --------------------------------------------------------------
+
+    /** Replays every authoritative archive (own sends and receipts) as non-new. */
+    history() { return this.ready().then(() => this.#serial(() => this.#history())); }
+    async #history() {
+        const out = [];
+        for (const [, r] of await this.#readMany(await this.#refs("inbox"))) out.push(parse(parse(r.data).archive));
+        for (const [ref, r] of await this.#readMany(await this.#refs("outbox"))) {
+            const op = parse(r.data);
+            if (!op.attempt) continue;
+            out.push({ ...parse(op.archive), transport: { message: op.receipt?.message_id || "", attempt: ref[1] }, status: op.receipt?.state || "pending", reason: op.receipt?.reason || "" });
+        }
+        return out.sort((x, y) => x.sentAt - y.sentAt);
+    }
+
+    drain() { return this.ready().then(() => this.#serial(() => this.#drain())); }
+    async #drain() {
+        const a = await this.#authority();
+        // Resolve recent committed attempts first: uncertainty never reseals.
+        const recent = (await this.#refs("outbox")).map(r => r[1]).filter(id => id.startsWith(a.epoch + ":"))
+            .sort((x, y) => Number(x.split(":")[1]) - Number(y.split(":")[1])).slice(-Limits.retireWindow);
+        for (const id of recent) {
+            if (this.retired.has(id)) continue;
+            try { await this.#resolve(id, a, true); }
+            catch (e) { if (e.code === "fenced" || !e.committed) throw e; }
+        }
+        let after = "";
+        for (let pages = 0; pages < 4096; pages++) {
+            const page = await this.#handoff(a, { action: "deliveries", after });
+            for (const d of page.deliveries || []) {
+                try {
+                    await this.#receive(d, a);
+                    this.quarantined.delete(d.id);
+                } catch (e) {
+                    // A transport loss after durable commit stops this drain; the
+                    // next drain replays the stored outcome and exact ACK.
+                    if (e.code === "fenced" || e.afterCommit) throw e;
+                    // Unreadable ciphertext stays pending on the server and is
+                    // NEVER passed to legacy decoders or acknowledged.
+                    this.quarantined.set(d.id, { id: d.id, sender: d.manifest?.sender || "", code: e.code || "unreadable", scope: d.manifest?.scope || "", peer: d.manifest?.sender || "", conversation: d.manifest?.conversation || "" });
+                }
+            }
+            // Continue across filtered empty pages; a fresh drain restarts at "".
+            if (!page.has_more) return { quarantined: [...this.quarantined.values()] };
+            if (!page.after || page.after === after) throw fail("invalid");
+            after = page.after;
+        }
+        throw fail("exhausted");
+    }
+    async #receive(d, a) {
+        const m = d.manifest, c = d.copy, ns = this.namespace;
+        if (m.server !== ns.server || c.principal !== ns.principal || c.device !== ns.device || c.account_epoch !== a.epoch) throw fail("fenced_copy");
+        checkEnvelope(m, c);
+        let s = await this.store.read([["inbox", d.id]]);
+        const saved = rec(s, "inbox", d.id);
+        let record, isNew = false;
+        if (saved.revision) {
+            // Committed before a lost ACK: exact stored outcome, no re-decrypt.
+            const prior = parse(saved.data);
+            if (prior.digest !== await sha256(jsonBytes(c.envelope))) throw fail("conflict");
+            record = parse(prior.archive);
+        } else {
+            const own = m.targets.find(t => t.device === c.device && t.principal === c.principal);
+            if (!own || own.local || own.identity !== this.identity || own.account_epoch !== a.epoch ||
+                d.target_bundle.identity !== this.identity || d.target_bundle.account_epoch !== a.epoch) throw fail("fenced_copy");
+            const sourceTarget = m.targets.find(t => t.device === m.device && t.principal === m.sender && t.local);
+            if (!sourceTarget || sourceTarget.account_epoch !== m.account_epoch) throw fail("invalid");
+            let trusted = await this.#trust(m.sender, m.device);
+            // Retained admission evidence is authenticated under the current
+            // independently trusted noXa device key, without publication TTL.
+            verifyBundleEvidence(d.source_bundle, { trustedSigningKey: trusted.key, server: m.server, principal: m.sender, deviceID: m.device,
+                accountEpoch: m.account_epoch, pinnedOlmIdentity: trusted.pin?.identity || d.source_bundle.identity });
+            if (d.source_bundle.identity !== sourceTarget.identity) throw fail("invalid");
+            trusted = await this.#adopt(trusted, m.sender, m.device, d.source_bundle);
+            const source = { principal: m.sender, device: m.device, account_epoch: m.account_epoch, identity: trusted.pin.identity };
+            const binding = expectedBinding(m, c), context = this.#context(a, source, binding.conversation);
+            const sessionID = "olm:" + c.session_id;
+            const refs = [["trust", trusted.id], ["session", sessionID], ["inbox", d.id], ["account", a.accountID]];
+            let consumed = "";
+            if (!rec(await this.store.read([["session", sessionID]]), "session", sessionID).revision) {
+                // Only an Olm prekey message may open a receive chain, and only
+                // with a retained local obligation; never by TTL or server data.
+                if (c.envelope?.message?.type !== 0) throw fail("lost_key");
+                const otk = initialOneTimeKey(c.envelope.message.body);
+                for (const [ref, r] of await this.#readMany(await this.#refs("obligation"))) {
+                    const o = parse(r.data);
+                    if (o.account_id === a.accountID && o.public_key === otk && !o.closed && !o.consumed) { consumed = ref[1]; break; }
+                }
+                if (!consumed) throw fail("lost_key");
+                refs.push(["obligation", consumed]);
+            }
+            s = await this.store.read(refs);
+            this.#check();
+            const existing = rec(s, "session", sessionID), key = this.store.coreKey(s);
+            let result;
+            if (existing.revision) {
+                if (consumed) throw fail("conflict");
+                const state = parse(existing.data);
+                if (JSON.stringify(state.context) !== JSON.stringify(context)) throw fail("conflict");
+                result = await this.core.apply({ op: "decrypt", key, session: dec.decode(Uint8Array.from(state.snapshot)), binding, envelope: c.envelope });
+            } else {
+                if (!consumed) throw fail("conflict");
+                result = await this.core.apply({ op: "inbound", key, account: dec.decode(rec(s, "account", a.accountID).data), peer_identity: source.identity, binding, envelope: c.envelope });
+                if ("olm:" + result.session_id !== sessionID) throw fail("invalid");
+            }
+            this.#check();
+            const body = openPayload(m, c, result.plaintext);
+            const self = m.sender === ns.principal;
+            record = { protocol: RATCHET_PROTOCOL, provenance: "authenticated", sender: m.sender, senderDevice: m.device, logicalID: m.logical_id,
+                key: semanticKey(m.sender, m.logical_id), scope: m.scope, peer: m.scope === "direct" ? (self ? m.peer : m.sender) : "",
+                conversation: m.scope === "group" ? m.conversation : "", purpose: m.purpose, reference: m.reference || "",
+                referenceKey: m.reference ? semanticKey(m.sender, m.reference) : "", body, sentAt: Number(body?.sentAt) || Date.now() / 1000,
+                self, copied: self, transport: { delivery: d.id } };
+            await this.store.commitReceive(s, d.id, { sessionID, trustID: trusted.id, session: enc.encode(result.session), envelope: jsonBytes(c.envelope),
+                archive: jsonBytes(record), context, ...(consumed ? { accountID: a.accountID, account: enc.encode(result.account), consumedOTK: consumed } : {}) });
+            this.#check();
+            if (this.sessions) this.sessions.set(JSON.stringify(context), sessionID);
+            isNew = true;
+        }
+        // Archive/session/OTK/dedup are durable before projection and the exact
+        // ACK. A replay after a lost ACK projects isNew=false (no unread/notify).
+        await this.#emit(record, isNew);
+        try { await this.#handoff(a, { action: "receive_ack", delivery_id: d.id, digest: d.digest }); }
+        catch (e) { throw Object.assign(e, { afterCommit: true }); }
+    }
+}
+
+async function sha256(bytes) {
+    return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), x => x.toString(16).padStart(2, "0")).join("");
+}
+
+// Olm v1 prekey message: version 3, protobuf field 1 = recipient one-time key.
+// The key only selects a local obligation; the core authenticates the message.
+export function initialOneTimeKey(body) {
+    if (typeof body !== "string" || body.length > 8192) throw fail("invalid");
+    const bytes = Uint8Array.from(atob(body + "=".repeat((4 - (body.length % 4)) % 4)), ch => ch.charCodeAt(0));
+    if (bytes.length < 35 || bytes[0] !== 3 || bytes[1] !== 0x0a || bytes[2] !== 32) throw fail("invalid");
+    return b64(bytes.subarray(3, 35)).replace(/=+$/, "");
+}
+
+/** Frame 200/202 request functions over one authenticated Connection. */
+export function connectionTransport(conn, Msg) {
+    const correlated = async (type, result, request) => {
+        // Claims keep their reserved request ID: it is the admitted claim ID.
+        const id = request.request_id || crypto.randomUUID();
+        const response = await conn.request(type, { ...request, request_id: id }, result, { accept: r => r.request_id === id, timeout: 15000 });
+        if (response.error) throw fail(response.error);
+        return response;
+    };
+    return {
+        admission: async request => (await correlated(Msg.OlmAdmissionRequest, Msg.OlmAdmissionResult, request)).data,
+        directory: request => correlated(Msg.OlmDirectoryRequest, Msg.OlmDirectoryResult, request),
+    };
+}
