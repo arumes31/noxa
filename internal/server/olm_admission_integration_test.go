@@ -146,7 +146,7 @@ func TestIntegrationOlmAdmissionBrowser(t *testing.T) {
 		return nil
 	}
 	decode := func(v any, out any) error { return json.Unmarshal(encode(v), out) }
-	var nativeSession string
+	var nativeSession, nativeSessionRef string
 	sessionContext := func() durable.SessionContext {
 		return durable.SessionContext{LocalAccountID: "local", LocalEpoch: 1, PeerEpoch: 1, PeerPrincipal: bob.UniqueID, PeerDevice: bob.deviceID, PeerIdentity: bb.Identity, Scope: durable.DevicePairScope, Protocol: ratchet.Version}
 	}
@@ -228,15 +228,16 @@ func TestIntegrationOlmAdmissionBrowser(t *testing.T) {
 					return nil, e
 				}
 				nativeSession = sent.Session
+				nativeSessionRef = durable.SessionRef(sent.SessionID)
 				parts, e := admission.Freeze(&m, []admission.Copy{{Principal: bob.UniqueID, Device: bob.deviceID, AccountEpoch: 1, SessionID: sent.SessionID, ClaimID: "native-claim", Envelope: encode(sent.Envelope)}})
 				if e != nil {
 					return nil, e
 				}
-				sn, e := read(durable.Ref{Kind: durable.Trust, ID: "browser"}, durable.Ref{Kind: durable.Session, ID: "browser"}, durable.Ref{Kind: durable.Logical, ID: m.LogicalID})
+				sn, e := read(durable.Ref{Kind: durable.Trust, ID: "browser"}, durable.Ref{Kind: durable.Session, ID: nativeSessionRef}, durable.Ref{Kind: durable.Logical, ID: m.LogicalID})
 				if e != nil {
 					return nil, e
 				}
-				if _, e = local.CommitAttempt(sn, m, parts, []durable.SendCandidate{{SessionID: "browser", TrustID: "browser", State: []byte(sent.Session), Envelope: encode(sent.Envelope), Context: sessionContext()}}, []byte(body)); e != nil {
+				if _, e = local.CommitAttempt(sn, m, parts, []durable.SendCandidate{{SessionID: nativeSessionRef, TrustID: "browser", State: []byte(sent.Session), Envelope: encode(sent.Envelope), Context: sessionContext(), Claim: &durable.SessionClaim{ClaimID: "native-claim", ClaimUntil: deadline}}}, []byte(body)); e != nil {
 					return nil, e
 				}
 				if _, e = call(alice, netproto.OlmAdmissionRequest{Action: "begin", Manifest: &m}); e != nil {
@@ -310,11 +311,11 @@ func TestIntegrationOlmAdmissionBrowser(t *testing.T) {
 				if e != nil {
 					return nil, e
 				}
-				sn, e := read(durable.Ref{Kind: durable.Trust, ID: "browser"}, durable.Ref{Kind: durable.Session, ID: "browser"})
+				sn, e := read(durable.Ref{Kind: durable.Trust, ID: "browser"}, durable.Ref{Kind: durable.Session, ID: nativeSessionRef})
 				if e != nil {
 					return nil, e
 				}
-				if _, e = local.CommitReceive(sn, d.ID, durable.ReceiveCandidate{SessionID: "browser", TrustID: "browser", Session: []byte(received.Session), Archive: plain, Envelope: d.Copy.Envelope, Context: sessionContext()}); e != nil {
+				if _, e = local.CommitReceive(sn, d.ID, durable.ReceiveCandidate{SessionID: nativeSessionRef, TrustID: "browser", Session: []byte(received.Session), Archive: plain, Envelope: d.Copy.Envelope, Context: sessionContext()}); e != nil {
 					return nil, e
 				}
 				if _, e = call(alice, netproto.OlmAdmissionRequest{Action: "receive_ack", DeliveryID: d.ID, Digest: d.Digest}); e != nil {

@@ -91,17 +91,19 @@ test(
               device: "b",
               account_epoch: 1,
               session_id: "session",
+              claim_id: "claim-1",
               envelope,
             },
           ]);
         snap = await s.read([
           ["trust", "bob"],
-          ["session", "bob"],
+          ["session", "olm:session"],
           ["logical", "logical"],
         ]);
         const p = {
-          sessionID: "bob",
+          sessionID: "olm:session",
           trustID: "bob",
+          claim: { claim_id: "claim-1", claim_until: 1900000000 },
           state: enc.encode("protected"),
           envelope: wire.jsonBytes(envelope),
           context: {

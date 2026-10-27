@@ -23,6 +23,8 @@ import {
 // each message's conversation binding. Per-conversation session records from
 // before this rule fail validation/context equality and are never mixed.
 export const DEVICE_PAIR_SCOPE = "device-pair";
+/** Mirror of durable.SessionRef: an attempt packet's session record is "olm:" + core session ID. */
+export const sessionRef = (coreSessionID) => "olm:" + coreSessionID;
 export const Limits = Object.freeze({
   fanout: 160,
   reads: 512,
@@ -488,6 +490,9 @@ class RatchetStore {
         k = key(ref);
       this.require(s, ref);
       if (changes[k] || !p.envelope?.length) throw fail("invalid");
+      // A new outbound session in an attempt is always a first contact: it
+      // must carry its reserved claim (becomes the pending claim).
+      if (attempt && !s.records[k].revision && !p.claim) throw fail("invalid");
       const trustRevision = this.trust(s, p.trustID);
       changes[k] = this.sessionValue(s, ref, p.state, p.context, false, p.claim || null);
       if (p.replaces) {
@@ -739,7 +744,11 @@ class RatchetStore {
       const target = m.targets.find((t) => t.device === c.device);
       if (
         p.context.peer_identity !== target.identity ||
-        p.context.scope !== DEVICE_PAIR_SCOPE
+        p.context.scope !== DEVICE_PAIR_SCOPE ||
+        // The wire copy must name exactly this packet's session and claim, so an
+        // accepted receipt establishes the session that was actually admitted.
+        p.sessionID !== sessionRef(c.session_id) ||
+        (c.claim_id || "") !== (p.claim?.claim_id || "")
       )
         throw fail("invalid");
       seen.add(c.device);

@@ -72,7 +72,14 @@ func (s *Store) CommitAttempt(snap Snapshot, m admission.Manifest, parts [][]byt
 		matched := false
 		for _, target := range m.Targets {
 			if target.Device == copy.Device {
-				matched = p.Context.PeerIdentity == target.Identity && p.Context.Scope == DevicePairScope
+				claimID := ""
+				if p.Claim != nil {
+					claimID = p.Claim.ClaimID
+				}
+				// The wire copy names exactly this packet's session and claim, so an
+				// accepted receipt establishes the session that was admitted.
+				matched = p.Context.PeerIdentity == target.Identity && p.Context.Scope == DevicePairScope &&
+					p.SessionID == SessionRef(copy.SessionID) && copy.ClaimID == claimID
 			}
 		}
 		if !matched {

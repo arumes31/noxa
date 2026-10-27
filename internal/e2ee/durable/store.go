@@ -481,6 +481,10 @@ func (s *Store) SetTrust(snap Snapshot, id string, value []byte, revoked bool) e
 // fail validation and context equality, so they are never mixed or reused.
 const DevicePairScope = "device-pair"
 
+// SessionRef is the session record ID of an attempt packet: "olm:" + the core
+// session ID carried by its wire copy (browser mirror: sessionRef).
+func SessionRef(coreSessionID string) string { return "olm:" + coreSessionID }
+
 type SessionContext struct {
 	LocalAccountID string `json:"local_account_id"`
 	LocalEpoch     int64  `json:"local_epoch"`
@@ -647,6 +651,11 @@ func (s *Store) commitSend(snap Snapshot, id string, packets []SendCandidate, ar
 				return ErrExhausted
 			}
 			if len(p.Envelope) == 0 {
+				return ErrInvalid
+			}
+			// A new outbound session in an attempt is a first contact and must carry
+			// its reserved claim (it becomes Pending).
+			if attempt != nil && snap.Records[r].Revision == 0 && p.Claim == nil {
 				return ErrInvalid
 			}
 			if e = s.checkTrust(tx, snap, p.TrustID); e != nil {

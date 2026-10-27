@@ -108,6 +108,12 @@ explicit reads. No transport callback is accepted by either adapter.
   new attempt deadline, the caller replaces the session (`Replaces`) with a fresh
   claim. An established session can never acquire a claim. Receive-created and
   legacy records have no `Pending`.
+- Attempt binding: in `CommitAttempt` every packet's `SessionID` must equal
+  `SessionRef(copy.SessionID)` (`"olm:"` + the core session ID; browser
+  `sessionRef`) and the wire copy's `ClaimID` must equal the packet's
+  `Claim.ClaimID` (both empty for an established session). A new session in an
+  attempt must carry a `Claim`. An accepted receipt therefore establishes exactly
+  the sessions the server admitted.
 - Migration rule: session records written before this rule carried a
   per-conversation `conversation` value. They fail `validContext`/context
   equality, so they are never reused for sending, never advanced by a receive

@@ -166,12 +166,12 @@ try {
         throw new Error("wrong native plaintext");
       snap = await s.read([
         ["trust", "native"],
-        ["session", "native"],
+        ["session", "olm:" + incoming.session_id],
         ["account", "local"],
         ["obligation", bob.one_time_keys[0].id],
       ]);
       const candidate = {
-        sessionID: "native",
+        sessionID: "olm:" + incoming.session_id,
         trustID: "native",
         session: enc.encode(incoming.session),
         account: enc.encode(incoming.account),
@@ -237,7 +237,7 @@ try {
       ]);
       snap = await s.read([
         ["trust", "native"],
-        ["session", "native"],
+        ["session", "olm:" + incoming.session_id],
         ["logical", manifest.logical_id],
       ]);
       await s.commitAttempt(
@@ -246,7 +246,7 @@ try {
         frozen.parts,
         [
           {
-            sessionID: "native",
+            sessionID: "olm:" + incoming.session_id,
             trustID: "native",
             state: enc.encode(reply.session),
             envelope: bytes(reply.envelope),

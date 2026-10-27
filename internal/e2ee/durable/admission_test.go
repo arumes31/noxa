@@ -29,12 +29,13 @@ func TestAttemptReceiptAndHistoricalResolution(t *testing.T) {
 	bind := admission.ExpectedBinding(m, target)
 	env, _ := json.Marshal(ratchet.Envelope{Version: ratchet.Version, SessionID: "session", Binding: bind, Message: json.RawMessage(`{"type":0,"body":"cipher"}`)})
 	context := contextFor("bob")
-	parts, e := admission.Freeze(&m, []admission.Copy{{Principal: "bob", Device: "bob-device", AccountEpoch: 1, SessionID: "session", Envelope: env}})
+	parts, e := admission.Freeze(&m, []admission.Copy{{Principal: "bob", Device: "bob-device", AccountEpoch: 1, SessionID: "session", ClaimID: "c1", Envelope: env}})
 	if e != nil {
 		t.Fatal(e)
 	}
-	snap := readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "bob"}, Ref{Logical, "logical"})
-	out, e := s.CommitAttempt(snap, m, parts, []SendCandidate{{SessionID: "bob", TrustID: "bob", State: []byte("candidate"), Envelope: env, Context: context}}, []byte("readable secret"))
+	first := &SessionClaim{ClaimID: "c1", ClaimUntil: 1900000000}
+	snap := readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "olm:session"}, Ref{Logical, "logical"})
+	out, e := s.CommitAttempt(snap, m, parts, []SendCandidate{{SessionID: "olm:session", TrustID: "bob", State: []byte("candidate"), Envelope: env, Context: context, Claim: first}}, []byte("readable secret"))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -65,8 +66,8 @@ func TestAttemptReceiptAndHistoricalResolution(t *testing.T) {
 		t.Fatal(ack, e)
 	}
 	m.AttemptID = "2"
-	snap = readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "bob"}, Ref{Logical, "logical"})
-	if _, e = s.CommitAttempt(snap, m, parts, []SendCandidate{{SessionID: "bob", TrustID: "bob", State: []byte("advance"), Envelope: env, Context: context}}, []byte("changed")); !errors.Is(e, ErrConflict) {
+	snap = readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "olm:session"}, Ref{Logical, "logical"})
+	if _, e = s.CommitAttempt(snap, m, parts, []SendCandidate{{SessionID: "olm:session", TrustID: "bob", State: []byte("advance"), Envelope: env, Context: context, Claim: first}}, []byte("changed")); !errors.Is(e, ErrConflict) {
 		t.Fatal("accepted intent resealed", e)
 	}
 }
@@ -118,12 +119,14 @@ func TestDevicePairSessionAcrossConversations(t *testing.T) {
 	commit := func(m admission.Manifest, context SessionContext) error {
 		target := m.Targets[1]
 		env, _ := json.Marshal(ratchet.Envelope{Version: ratchet.Version, SessionID: "pair", Binding: admission.ExpectedBinding(m, target), Message: json.RawMessage(`{"type":1,"body":"cipher"}`)})
-		parts, e := admission.Freeze(&m, []admission.Copy{{Principal: "bob", Device: "bob-device", AccountEpoch: 1, SessionID: "pair", Envelope: env}})
+		// First contact: the device-pair session is created (and stays pending)
+		// with one reserved claim, reused by the group attempt.
+		parts, e := admission.Freeze(&m, []admission.Copy{{Principal: "bob", Device: "bob-device", AccountEpoch: 1, SessionID: "pair", ClaimID: "c-pair", Envelope: env}})
 		if e != nil {
 			return e
 		}
-		snap := readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "pair"}, Ref{Logical, m.LogicalID})
-		_, e = s.CommitAttempt(snap, m, parts, []SendCandidate{{SessionID: "pair", TrustID: "bob", State: []byte("state-" + m.AttemptID), Envelope: env, Context: context}}, []byte("archive"))
+		snap := readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "olm:pair"}, Ref{Logical, m.LogicalID})
+		_, e = s.CommitAttempt(snap, m, parts, []SendCandidate{{SessionID: "olm:pair", TrustID: "bob", State: []byte("state-" + m.AttemptID), Envelope: env, Context: context, Claim: &SessionClaim{ClaimID: "c-pair", ClaimUntil: 1900000000}}}, []byte("archive"))
 		return e
 	}
 	legacy := contextFor("bob")
@@ -158,12 +161,16 @@ func TestPendingFirstContactSessionClaim(t *testing.T) {
 			Rosters: []admission.Roster{{Principal: "alice", Version: 1}, {Principal: "bob", Version: 1}},
 			Targets: []admission.Target{{Principal: "alice", Device: "local-device", AccountEpoch: 1, Identity: "alice-key", Local: true}, {Principal: "bob", Device: "bob-device", AccountEpoch: 1, Identity: "bob-olm"}}}
 		env, _ := json.Marshal(ratchet.Envelope{Version: ratchet.Version, SessionID: "pair", Binding: admission.ExpectedBinding(m, m.Targets[1]), Message: json.RawMessage(`{"type":0,"body":"cipher"}`)})
-		parts, e := admission.Freeze(&m, []admission.Copy{{Principal: "bob", Device: "bob-device", AccountEpoch: 1, SessionID: "pair", ClaimID: "claim-1", Envelope: env}})
+		copyClaim := ""
+		if c != nil {
+			copyClaim = c.ClaimID
+		}
+		parts, e := admission.Freeze(&m, []admission.Copy{{Principal: "bob", Device: "bob-device", AccountEpoch: 1, SessionID: "pair", ClaimID: copyClaim, Envelope: env}})
 		if e != nil {
 			return m, e
 		}
-		snap := readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "pair"}, Ref{Logical, logical})
-		_, e = s.CommitAttempt(snap, m, parts, []SendCandidate{{SessionID: "pair", TrustID: "bob", State: []byte("state-" + m.AttemptID), Envelope: env, Context: contextFor("bob"), Claim: c}}, []byte("archive"))
+		snap := readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "olm:pair"}, Ref{Logical, logical})
+		_, e = s.CommitAttempt(snap, m, parts, []SendCandidate{{SessionID: "olm:pair", TrustID: "bob", State: []byte("state-" + m.AttemptID), Envelope: env, Context: contextFor("bob"), Claim: c}}, []byte("archive"))
 		if e != nil {
 			seq--
 		}
@@ -182,7 +189,7 @@ func TestPendingFirstContactSessionClaim(t *testing.T) {
 	}
 	pending := func() *SessionClaim {
 		var st SessionState
-		json.Unmarshal(readTest(t, s, Ref{Session, "pair"}).Records[Ref{Session, "pair"}].Data, &st)
+		json.Unmarshal(readTest(t, s, Ref{Session, "olm:pair"}).Records[Ref{Session, "olm:pair"}].Data, &st)
 		return st.Pending
 	}
 	m1, e := commit("first", claim)
@@ -209,5 +216,71 @@ func TestPendingFirstContactSessionClaim(t *testing.T) {
 	}
 	if _, e = commit("later", claim); !errors.Is(e, ErrConflict) {
 		t.Fatal("established session re-acquired a claim", e)
+	}
+}
+
+// N4/N5: wire copies must name the packet's session and claim; a new session
+// in an attempt needs a claim; and a pending session whose claim can no
+// longer cover a resend is replaced (old retired) in the same commit.
+func TestAttemptBindingAndPendingReplacement(t *testing.T) {
+	server := "tls-sha256:" + strings.Repeat("a", 64)
+	s, e := Open(t.TempDir(), Namespace{server, "alice", "local-device"}, IdentityProtection(bytes.Repeat([]byte{7}, 32)), 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	trusted(t, s, "bob")
+	seq := 0
+	commit := func(logical, sessionRef, coreID, copyClaim string, c *SessionClaim, replaces string) (admission.Manifest, error) {
+		seq++
+		m := admission.Manifest{Version: admission.Version, Server: server, Sender: "alice", Device: "local-device", AccountEpoch: 1, AttemptID: fmt.Sprint(seq), LogicalID: logical, Purpose: "chat", Scope: "direct", Peer: "bob", Deadline: 1900000000,
+			Rosters: []admission.Roster{{Principal: "alice", Version: 1}, {Principal: "bob", Version: 1}},
+			Targets: []admission.Target{{Principal: "alice", Device: "local-device", AccountEpoch: 1, Identity: "alice-key", Local: true}, {Principal: "bob", Device: "bob-device", AccountEpoch: 1, Identity: "bob-olm"}}}
+		env, _ := json.Marshal(ratchet.Envelope{Version: ratchet.Version, SessionID: coreID, Binding: admission.ExpectedBinding(m, m.Targets[1]), Message: json.RawMessage(`{"type":0,"body":"cipher"}`)})
+		parts, e := admission.Freeze(&m, []admission.Copy{{Principal: "bob", Device: "bob-device", AccountEpoch: 1, SessionID: coreID, ClaimID: copyClaim, Envelope: env}})
+		if e != nil {
+			return m, e
+		}
+		refs := []Ref{{Trust, "bob"}, {Session, sessionRef}, {Logical, logical}}
+		if replaces != "" {
+			refs = append(refs, Ref{Session, replaces})
+		}
+		_, e = s.CommitAttempt(readTest(t, s, refs...), m, parts, []SendCandidate{{SessionID: sessionRef, TrustID: "bob", State: []byte("state"), Envelope: env, Context: contextFor("bob"), Claim: c, Replaces: replaces}}, []byte("archive"))
+		if e != nil {
+			seq--
+		}
+		return m, e
+	}
+	c1 := &SessionClaim{ClaimID: "c1", ClaimUntil: 1900000000}
+	if _, e = commit("x", "olm:other", "s1", "c1", c1, ""); !errors.Is(e, ErrInvalid) {
+		t.Fatal("packet session not bound to the copy's session", e)
+	}
+	if _, e = commit("x", "olm:s1", "s1", "c2", c1, ""); !errors.Is(e, ErrInvalid) {
+		t.Fatal("copy claim differs from packet claim", e)
+	}
+	if _, e = commit("x", "olm:s1", "s1", "", nil, ""); !errors.Is(e, ErrInvalid) {
+		t.Fatal("new attempt session without a claim", e)
+	}
+	m1, e := commit("first", "olm:s1", "s1", "c1", c1, "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	mb, _ := m1.Bytes()
+	snap := readTest(t, s, Ref{Outbox, AttemptID(m1)}, Ref{Logical, "first"})
+	if e = s.ApplyAttemptResult(snap, AttemptID(m1), admission.Receipt{State: "aborted", AttemptID: m1.AttemptID, Digest: admission.Digest(mb), Server: server, AccountEpoch: 1, LogicalID: "first"}); e != nil {
+		t.Fatal(e)
+	}
+	// The claim can no longer cover a resend: replace the pending session.
+	c2 := &SessionClaim{ClaimID: "c2", ClaimUntil: 1900003600}
+	if _, e = commit("first-again", "olm:s2", "s2", "c2", c2, "olm:s1"); e != nil {
+		t.Fatal("pending session replacement", e)
+	}
+	read := func(id string) SessionState {
+		var st SessionState
+		json.Unmarshal(readTest(t, s, Ref{Session, id}).Records[Ref{Session, id}].Data, &st)
+		return st
+	}
+	if old, next := read("olm:s1"), read("olm:s2"); !old.Retired || next.Retired || next.Pending == nil || *next.Pending != *c2 {
+		t.Fatal("replacement did not retire the old session and pend the new claim", old, next)
 	}
 }

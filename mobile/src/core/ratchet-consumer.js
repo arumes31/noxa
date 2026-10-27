@@ -67,16 +67,34 @@ export function latestAttempts(entries) {
  */
 export const DETERMINISTIC_RECEIVE = new Set(["invalid", "unauthenticated", "invalid_evidence", "lost_key", "fenced_copy", "untrusted_device",
     "revoked", "account_changed", "identity_changed", "legacy_session", "session_mismatch", "digest_mismatch"]);
-const deterministic = async (code, work) => {
+/** Retryable receive conditions (environment, transport, local CAS). */
+export const TRANSIENT_RECEIVE = new Set(["core_unavailable", "fenced", "rate-limit", "unavailable", "conflict", "aborted", "local_conflict"]);
+/**
+ * Runs one verification/crypto stage. Only known STRING codes from our own
+ * allow-lists pass through unchanged; anything else (uncoded core or
+ * verification rejections, DOMException numeric codes, TypeErrors from
+ * malformed data) becomes the stage's deterministic code.
+ */
+export async function deterministic(code, work) {
     try { return await work(); }
     catch (e) {
-        // Coded transient errors (core_unavailable, rate-limit, fenced...) pass
-        // through unchanged; only uncoded core/verification rejections are
-        // relabelled as the stage's deterministic code.
-        if (e.code) throw e;
+        if (typeof e?.code === "string" && (DETERMINISTIC_RECEIVE.has(e.code) || TRANSIENT_RECEIVE.has(e.code))) throw e;
         throw fail(code, { cause: e });
     }
-};
+}
+/** Deterministic failures that a concurrent commit of the SAME delivery by another tab can cause. */
+const RACE_RECEIVE = new Set(["lost_key", "unauthenticated"]);
+/**
+ * What #drain does with a receive failure: "retry" next poll, "skip" (another
+ * tab committed this delivery; its stored outcome is used next poll, no
+ * placeholder) or "quarantine" (locked placeholder, never ACKed).
+ */
+export function receiveDisposition(code, committedElsewhere) {
+    if (!DETERMINISTIC_RECEIVE.has(code)) return "retry";
+    if (committedElsewhere && RACE_RECEIVE.has(code)) return "skip";
+    return "quarantine";
+}
+const validDeliveryID = id => typeof id === "string" && id.length > 0 && new TextEncoder().encode(id).length <= 512 && !/[\p{Cc}\p{Cf}]/u.test(id);
 /** Collision-free UI/semantic key for one sender's logical message ID. */
 export const semanticKey = (sender, logicalID) => JSON.stringify([RATCHET_PROTOCOL, sender, logicalID]);
 
@@ -94,6 +112,10 @@ export const semanticKey = (sender, logicalID) => JSON.stringify([RATCHET_PROTOC
  */
 export class RatchetConsumer {
     constructor({ store, core, namespace, admission, directory, deviceKey, signBundle, assertCurrent, attemptTTL = 300, refreshMS = 3600000 }) {
+        // attemptTTL must exceed the abort margin (else every attempt expires at
+        // once and loops) and leave a fresh 1 h claim able to cover a resend
+        // (else every pending resend spends a new claim).
+        if (!Number.isSafeInteger(attemptTTL) || attemptTTL < DEADLINE_MARGIN + 5 || attemptTTL > 3000) throw fail("invalid_config");
         Object.assign(this, { store, core, namespace, admission, directoryRequest: directory, deviceKey, signBundle, assertCurrent, attemptTTL, refreshMS });
         this.readyAt = 0;
         this.readyValue = null;   // last successful readiness {identity, epoch, expiresAt}
@@ -477,6 +499,14 @@ export class RatchetConsumer {
             if (prior && (prior.retired || JSON.stringify(prior.context) !== JSON.stringify(p.context))) throw fail("local_conflict");
             // The pending claim decided above must still be the recorded one.
             if (prior && !equalJSON(prior.pending || null, p.pendingClaim || null)) throw fail("local_conflict");
+            if (p.replaces) {
+                // Replace only a session that is STILL pending with a claim that
+                // cannot cover this attempt; if another tab established it
+                // meanwhile, start over and reuse it instead of burning a claim.
+                const old = rec(before, "session", p.replaces);
+                const st = old.revision ? parse(old.data) : null;
+                if (!st || st.retired || !st.pending || st.pending.claim_until > now() + this.attemptTTL + 60) throw fail("local_conflict");
+            }
             const result = await this.core.apply({ op: prior ? "encrypt" : "outbound", key,
                 ...(prior ? { session: dec.decode(Uint8Array.from(prior.snapshot)) } : { account, peer_identity: p.t.identity, one_time_key: p.claim.key }),
                 binding: p.binding, plaintext: sealPayload(m, p.t, body) });
@@ -618,27 +648,36 @@ export class RatchetConsumer {
         let after = "";
         for (let pages = 0; pages < 4096; pages++) {
             const page = await this.#handoff(a, { action: "deliveries", after });
-            for (const d of page.deliveries || []) {
+            const deliveries = Array.isArray(page?.deliveries) ? page.deliveries : [];
+            for (let i = 0; i < deliveries.length; i++) {
+                const d = deliveries[i];
+                // A missing/invalid server ID still gets a stable local key, so
+                // it is quarantined once instead of aborting the whole drain.
+                const qid = validDeliveryID(d?.id) ? d.id : `malformed:${after}:${i}`;
                 // Quarantined copies are retried once per consumer (session) or
                 // after resetTrust, not on every poll.
-                if (this.quarantined.has(d.id)) continue;
+                if (this.quarantined.has(qid)) continue;
                 try {
                     await this.#receive(d, a);
-                    this.quarantined.delete(d.id);
+                    this.quarantined.delete(qid);
                 } catch (e) {
                     // A transport loss after durable commit stops this drain; the
                     // next drain replays the stored outcome and exact ACK.
                     if (e.code === "fenced" || e.afterCommit) throw e;
-                    // Transient failures retry on the next poll (not quarantined).
-                    if (!DETERMINISTIC_RECEIVE.has(e.code)) continue;
-                    // Another tab may have committed (and ACKed) this delivery
-                    // meanwhile: never quarantine a copy that has a stored outcome.
-                    if (rec(await this.store.read([["inbox", d.id]]), "inbox", d.id).revision) continue;
+                    // Did another tab commit this same delivery? Only a fresh-
+                    // decrypt failure (lost key / key already used) can be that
+                    // race; a digest mismatch etc. is a genuine failure.
+                    let committedElsewhere = false;
+                    if (qid === d?.id && RACE_RECEIVE.has(e.code)) {
+                        try { committedElsewhere = !!rec(await this.store.read([["inbox", qid]]), "inbox", qid).revision; } catch { /* treat as not committed */ }
+                    }
+                    if (receiveDisposition(e.code, committedElsewhere) !== "quarantine") continue;
                     // Unreadable ciphertext stays pending on the server and is
                     // NEVER passed to legacy decoders or acknowledged.
-                    const m = d.manifest || {}, own = m.sender === this.namespace.principal;
-                    this.quarantined.set(d.id, { id: d.id, sender: m.sender || "", code: e.code || "unreadable", scope: m.scope || "",
-                        peer: m.scope === "direct" ? (own ? m.peer || "" : m.sender || "") : "", conversation: m.scope === "group" ? m.conversation || "" : "", seenAt: Date.now() / 1000 });
+                    const m = d?.manifest && typeof d.manifest === "object" ? d.manifest : {}, own = m.sender === this.namespace.principal;
+                    const text = v => (typeof v === "string" ? v : "");
+                    this.quarantined.set(qid, { id: qid, sender: text(m.sender), code: e.code, scope: text(m.scope),
+                        peer: m.scope === "direct" ? text(own ? m.peer : m.sender) : "", conversation: m.scope === "group" ? text(m.conversation) : "", seenAt: Date.now() / 1000 });
                 }
             }
             // Continue across filtered empty pages; a fresh drain restarts at "".
@@ -673,7 +712,7 @@ export class RatchetConsumer {
         // not an uncoded TypeError retried silently forever.
         await deterministic("invalid", () => {
             validateManifest(d?.manifest);
-            if (typeof d.id !== "string" || !d.copy || typeof d.copy !== "object" || !d.source_bundle || !d.target_bundle) throw fail("invalid");
+            if (!validDeliveryID(d.id) || !d.copy || typeof d.copy !== "object" || !d.source_bundle || !d.target_bundle) throw fail("invalid");
         });
         const m = d.manifest, c = d.copy, ns = this.namespace;
         if (m.server !== ns.server || c.principal !== ns.principal || c.device !== ns.device || c.account_epoch !== a.epoch) throw fail("fenced_copy");
