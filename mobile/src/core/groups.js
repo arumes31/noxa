@@ -18,7 +18,9 @@ import { ProtocolError } from "./connection.js";
 import { openDM, sealDM } from "./crypto.js";
 import { Msg } from "./frame.js";
 import { RATCHET_PROTOCOL } from "./ratchet-consumer.js";
-import { FINAL_RATCHET_ERRORS } from "./direct.js";
+import { ratchetRetryable } from "./direct.js";
+/** Bound on edits/deletes waiting for an unknown (sender, logical) target. */
+const MAX_WAITING_CHANGES = 200;
 
 const MsgConversationRequest = 170;
 const MsgConversationResult = 171;
@@ -431,8 +433,31 @@ export class Groups extends EventTarget {
     /** Routes private group sends through the session's durable consumer. */
     async attachRatchet(consumer) {
         this.ratchet = consumer;
-        consumer.project((record, { isNew }) => this.#project(record, isNew));
-        for (const record of await consumer.history()) if (record.scope === "group") this.#project(record, false);
+        const owned = () => this.ratchet === consumer && !consumer.closed;
+        consumer.project((record, { isNew }) => { if (owned()) this.#project(record, isNew); });
+        const history = await consumer.history();
+        for (const record of history) {
+            if (!owned()) return;
+            if (record.scope === "group") this.#project(record, false);
+        }
+    }
+
+    /** Truthful locked placeholders for unopenable group copies (never ACKed). */
+    showQuarantined(list = []) {
+        const current = new Set();
+        for (const q of list) {
+            if (q.scope !== "group" || !q.conversation) continue;
+            const id = "quarantine:" + q.id;
+            current.add(id);
+            const messages = this.messages.get(q.conversation) || [];
+            if (messages.some(m => m.id === id)) continue;
+            this.#put(q.conversation, [...messages, { id, protocol: RATCHET_PROTOCOL, conversation_id: q.conversation, from_unique_id: q.sender,
+                text: null, quarantined: q.code, created_at: q.seenAt || Date.now() / 1000 }]);
+        }
+        for (const [id, messages] of this.messages) {
+            const keep = messages.filter(m => !m.quarantined || current.has(m.id));
+            if (keep.length !== messages.length) this.#put(id, keep);
+        }
     }
 
     #project(record, isNew) {
@@ -444,7 +469,9 @@ export class Groups extends EventTarget {
             // reused the same logical string can never match.
             const index = list.findIndex(m => m.key === record.referenceKey);
             if (index < 0) {
+                this.#waiting.delete(record.referenceKey);
                 this.#waiting.set(record.referenceKey, record);
+                if (this.#waiting.size > MAX_WAITING_CHANGES) this.#waiting.delete(this.#waiting.keys().next().value);
                 return;
             }
             list[index] = record.purpose === "delete" ? { ...list[index], text: "", deleted: true } : { ...list[index], text, edited: true };
@@ -452,6 +479,10 @@ export class Groups extends EventTarget {
             return;
         }
         const key = "olm:" + record.key, own = record.sender === this.uid;
+        if (record.transport?.delivery) {
+            const placeholder = list.findIndex(m => m.id === "quarantine:" + record.transport.delivery);
+            if (placeholder >= 0) list.splice(placeholder, 1);
+        }
         const index = list.findIndex(m => m.id === key);
         const status = record.status || (own ? "" : "received");
         const message = { id: key, key: record.key, protocol: RATCHET_PROTOCOL, reference: record.logicalID, conversation_id: id,
@@ -481,7 +512,7 @@ export class Groups extends EventTarget {
             return await this.ratchet.send({ logicalID: reference, scope: "group", conversation: id, body: { text, sentAt } });
         } catch (error) {
             const original = error.committed;
-            const retryable = !original?.receipt && !(error instanceof ProtocolError) && !FINAL_RATCHET_ERRORS.has(error.code);
+            const retryable = ratchetRetryable(error);
             this.#local(id, { reference, text: original ? original.record.body?.text ?? "" : text, sentAt: original?.record.sentAt || sentAt,
                 queued: retryable, failed: !retryable, protocol: RATCHET_PROTOCOL });
             throw Object.assign(error, { retryable });

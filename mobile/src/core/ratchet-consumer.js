@@ -32,6 +32,25 @@ const rec = (s, kind, id) => s.records[rk(kind, id)];
 const b64 = b => { let s = ""; for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192)); return btoa(s); };
 const fail = (code, extra = {}) => Object.assign(new Error(`ratchet: ${code}`), { code, ...extra });
 const now = () => Math.floor(Date.now() / 1000);
+const delay = ms => new Promise(r => setTimeout(r, ms));
+/** Local CAS losses are retried from scratch at most this often. */
+const LOCAL_RETRY = 3;
+
+/** Pure fanout bound: direct <= 20 and group <= 160 complete targets. */
+export function checkFanout(scope, targets) {
+    if (!Array.isArray(targets) || !targets.length || targets.length > Limits[scope]) throw fail("fanout_limit");
+}
+
+/**
+ * Archive replay keeps only the newest attempt per logical ID, ordered by
+ * numeric attempt sequence (a reseal after abort/reject supersedes it).
+ */
+export function latestAttempts(entries) {
+    const seq = id => Number(String(id).split(":")[1]);
+    const latest = new Map();
+    for (const e of [...entries].sort((x, y) => seq(x.id) - seq(y.id))) latest.set(e.record.logicalID, e);
+    return [...latest.values()];
+}
 /** Collision-free UI/semantic key for one sender's logical message ID. */
 export const semanticKey = (sender, logicalID) => JSON.stringify([RATCHET_PROTOCOL, sender, logicalID]);
 
@@ -48,8 +67,9 @@ export const semanticKey = (sender, logicalID) => JSON.stringify([RATCHET_PROTOC
  *                       that created this consumer is still current
  */
 export class RatchetConsumer {
-    constructor({ store, core, namespace, admission, directory, deviceKey, signBundle, assertCurrent }) {
-        Object.assign(this, { store, core, namespace, admission, directory, deviceKey, signBundle, assertCurrent });
+    constructor({ store, core, namespace, admission, directory, deviceKey, signBundle, assertCurrent, attemptTTL = 300, refreshMS = 3600000 }) {
+        Object.assign(this, { store, core, namespace, admission, directoryRequest: directory, deviceKey, signBundle, assertCurrent, attemptTTL, refreshMS });
+        this.readyAt = 0;
         this.closed = false;
         this.tail = Promise.resolve();
         this.projectors = [];
@@ -76,12 +96,27 @@ export class RatchetConsumer {
             this.#check();
         }
     }
-    async #call(request) {
-        this.#check();
-        const result = await this.admission(request);
-        this.#check();
-        return result;
+    /**
+     * Server rate limits are checked before any handler action, so the same
+     * request is retried with bounded backoff; afterwards the caller sees a
+     * retryable rate-limit with a retry hint.
+     */
+    async #net(fn) {
+        for (let i = 0; ; i++) {
+            this.#check();
+            try {
+                const result = await fn();
+                this.#check();
+                return result;
+            } catch (e) {
+                if (e.code !== "rate-limit") throw e;
+                if (i >= 7) throw Object.assign(e, { retryAfterMS: 3000 });
+                await delay(400 * (i + 1));
+            }
+        }
     }
+    #call(request) { return this.#net(() => this.admission(request)); }
+    directory(request) { return this.#net(() => this.directoryRequest(request)); }
     async #authority() {
         this.#check();
         const a = await this.store.accountAuthority(await this.store.read());
@@ -97,10 +132,18 @@ export class RatchetConsumer {
 
     // --- Readiness and own publication ----------------------------------------
 
+    /**
+     * Only recovery_required (an account the server refuses) is sticky. Other
+     * failures retry on the next call, and a long-lived session re-runs the
+     * idempotent publication step so it refreshes before expiry.
+     */
     ready() {
+        if (this.readiness && this.readyAt && Date.now() - this.readyAt > this.refreshMS) this.readiness = null;
         if (!this.readiness) {
-            this.readiness = this.#serial(() => this.#ready());
-            this.readiness.catch(() => {});
+            const attempt = this.#serial(() => this.#ready());
+            this.readiness = attempt;
+            attempt.then(() => { if (this.readiness === attempt) this.readyAt = Date.now(); },
+                e => { if (this.readiness === attempt && e.code !== "recovery_required") this.readiness = null; });
         }
         return this.readiness;
     }
@@ -206,6 +249,13 @@ export class RatchetConsumer {
         }
         const saved = parse(r.data);
         if (saved.revoked) throw fail("revoked");
+        if (saved.value.noxa === null) {
+            // Explicitly confirmed changed root (resetTrust): pin the newly
+            // trusted noXa key; an Olm pin must be re-adopted from a bundle it signs.
+            await this.store.setTrust(s, id, { principal, device, noxa: b64(key) }, false);
+            this.#check();
+            return { id, key, pin: null };
+        }
         if (saved.value.noxa !== b64(key)) throw fail("account_changed");
         return { id, key, pin: saved.value.pin || null };
     }
@@ -249,7 +299,20 @@ export class RatchetConsumer {
      * already has a committed operation ALWAYS yields its original archive,
      * whatever body the caller passes now.
      */
-    send(intent) { return this.ready().then(() => this.#serial(() => this.#send(intent))); }
+    send(intent) {
+        const run = async (tries = 0) => {
+            await this.ready();
+            try { return await this.#serial(() => this.#send(intent)); }
+            catch (e) {
+                // A concurrent tab/consumer won this snapshot. Nothing was
+                // committed or transported for this intent; start over.
+                if (e.code !== "local_conflict" || tries >= LOCAL_RETRY) throw e;
+                this.sessions = null;
+                return run(tries + 1);
+            }
+        };
+        return run();
+    }
     async #send(intent) {
         const a = await this.#authority();
         const s = await this.store.read([["logical", intent.logicalID]]), lr = rec(s, "logical", intent.logicalID);
@@ -273,9 +336,9 @@ export class RatchetConsumer {
             account_epoch: a.epoch, attempt_id: String(a.nextAttempt + 1), logical_id: logicalID, purpose,
             ...(reference ? { reference } : {}), scope,
             ...(scope === "direct" ? { peer } : { conversation, revision: roster.revision, epoch: roster.epoch }),
-            deadline: now() + 300, rosters: roster.rosters, targets: roster.targets,
+            deadline: now() + this.attemptTTL, rosters: roster.rosters, targets: roster.targets,
         };
-        if (!Array.isArray(m.targets) || !m.targets.length || m.targets.length > Limits[scope]) throw fail("fanout_limit");
+        checkFanout(scope, m.targets);
         const locals = m.targets.filter(t => t.local);
         if (locals.length !== 1 || locals[0].principal !== m.sender || locals[0].device !== m.device ||
             locals[0].account_epoch !== a.epoch || locals[0].identity !== this.identity) throw fail("fenced");
@@ -288,7 +351,9 @@ export class RatchetConsumer {
             let trusted = await this.#trust(t.principal, t.device);
             if (trusted.pin && (trusted.pin.epoch !== t.account_epoch || trusted.pin.identity !== t.identity)) throw fail("account_changed");
             const binding = expectedBinding(m, t), context = this.#context(a, t, binding.conversation);
-            const prior = sessions.get(JSON.stringify(context));
+            // Without a verified Olm pin (first contact or a confirmed root
+            // change) a fresh signed claim is required even if a session exists.
+            const prior = trusted.pin ? sessions.get(JSON.stringify(context)) : undefined;
             let claim = null;
             if (!prior) {
                 const claimID = crypto.randomUUID(), until = now() + 3600;
@@ -317,6 +382,7 @@ export class RatchetConsumer {
             self: true, copied: false };
         const packets = [], copies = [];
         for (const p of plans) {
+            if (p.prior && !rec(before, "session", p.prior).revision) throw fail("local_conflict");
             const prior = p.prior ? parse(rec(before, "session", p.prior).data) : null;
             if (prior && (prior.retired || JSON.stringify(prior.context) !== JSON.stringify(p.context))) throw fail("conflict");
             const result = await this.core.apply({ op: prior ? "encrypt" : "outbound", key,
@@ -332,9 +398,19 @@ export class RatchetConsumer {
         const frozen = await freezeAttempt(m, copies);
         // Extend the exact pre-crypto snapshot with new session refs; any
         // concurrent change to the prior reads aborts the whole immutable batch.
-        const commit = await this.store.extended(before, packets.map(p => ["session", p.sessionID]));
-        this.store.compare(before, commit);
-        await this.store.commitAttempt(commit, frozen.manifest, frozen.parts, packets, jsonBytes(record));
+        let committed;
+        try {
+            const commit = await this.store.extended(before, packets.map(p => ["session", p.sessionID]));
+            this.store.compare(before, commit);
+            committed = await this.store.commitAttempt(commit, frozen.manifest, frozen.parts, packets, jsonBytes(record));
+        } catch (e) {
+            if (e.code === "conflict") throw fail("local_conflict");
+            throw e;
+        }
+        // This consumer never re-commits a frozen attempt: "reused" means the
+        // sequence belongs to another writer. Never resolve its archive as ours,
+        // and only cache session IDs of a verified fresh commit.
+        if (committed.reused) throw fail("local_conflict");
         this.#check();
         for (const p of packets) sessions.set(JSON.stringify(p.context), p.sessionID);
         return this.#resolve(a.epoch + ":" + m.attempt_id, a, reused);
@@ -352,13 +428,20 @@ export class RatchetConsumer {
             if (!op.receipt) {
                 const meta = await this.store.attemptStatusRequest(await this.store.read(), id), m = meta.manifest;
                 let result = await this.#call({ action: "status", account_epoch: m.account_epoch, attempt_id: m.attempt_id });
+                // An attempt the server never saw cannot be begun after its
+                // deadline: fence it with a metadata-only abort instead.
+                const expired = m.deadline <= now() + 5;
                 if (!TERMINAL.has(result.state)) {
                     let wire = null;
                     try { wire = await this.store.attemptWire(await this.store.read(), id); }
                     catch (e) { if (!["fenced", "revoked", "conflict"].includes(e.code)) throw e; }
                     this.#check();
-                    if (wire && m.account_epoch === a.epoch) {
-                        result = await this.#handoff(a, { action: "begin", manifest: wire.manifest });
+                    if (wire && m.account_epoch === a.epoch && !(expired && result.state === "absent")) {
+                        try { result = await this.#handoff(a, { action: "begin", manifest: wire.manifest }); }
+                        catch (e) {
+                            if (e.code !== "invalid") throw e;
+                            result = await this.#call({ action: "abort", account_epoch: m.account_epoch, manifest: m });
+                        }
                         if (!TERMINAL.has(result.state)) {
                             for (let part = 0; part < wire.parts.length; part++) await this.#handoff(a, { action: "put_part", attempt_id: m.attempt_id, part, data: b64(wire.parts[part]) });
                             result = await this.#handoff(a, { action: "finalize", attempt_id: m.attempt_id });
@@ -375,12 +458,15 @@ export class RatchetConsumer {
                 this.#check();
                 ({ op, record } = await this.#outcome(id));
             }
-            if (!this.retired.has(id)) {
+            if (!this.retired.has(id) && !retiredIn(await this.store.accountAuthority(await this.store.read()), id)) {
                 const retirement = await this.store.attemptRetirementRequest(await this.store.read(), id);
                 try { await this.#call({ action: "retire_receipt", ...retirement }); }
                 catch (e) { if (e.code !== "retired") throw e; }
-                this.retired.add(id);
+                // Durable progress: later sessions skip this retirement.
+                await this.store.noteRetired(await this.store.read(), id);
+                this.#check();
             }
+            this.retired.add(id);
         } catch (e) {
             // The committed original remains authoritative for the caller's view.
             throw Object.assign(e, { committed: { record, receipt: op.receipt || null, reused } });
@@ -399,11 +485,13 @@ export class RatchetConsumer {
     async #history() {
         const out = [];
         for (const [, r] of await this.#readMany(await this.#refs("inbox"))) out.push(parse(parse(r.data).archive));
+        const attempts = [];
         for (const [ref, r] of await this.#readMany(await this.#refs("outbox"))) {
             const op = parse(r.data);
             if (!op.attempt) continue;
-            out.push({ ...parse(op.archive), transport: { message: op.receipt?.message_id || "", attempt: ref[1] }, status: op.receipt?.state || "pending", reason: op.receipt?.reason || "" });
+            attempts.push({ id: ref[1], record: { ...parse(op.archive), transport: { message: op.receipt?.message_id || "", attempt: ref[1] }, status: op.receipt?.state || "pending", reason: op.receipt?.reason || "" } });
         }
+        for (const e of latestAttempts(attempts)) out.push(e.record);
         return out.sort((x, y) => x.sentAt - y.sentAt);
     }
 
@@ -411,7 +499,7 @@ export class RatchetConsumer {
     async #drain() {
         const a = await this.#authority();
         // Resolve recent committed attempts first: uncertainty never reseals.
-        const recent = (await this.#refs("outbox")).map(r => r[1]).filter(id => id.startsWith(a.epoch + ":"))
+        const recent = (await this.#refs("outbox")).map(r => r[1]).filter(id => id.startsWith(a.epoch + ":") && !retiredIn(a, id))
             .sort((x, y) => Number(x.split(":")[1]) - Number(y.split(":")[1])).slice(-Limits.retireWindow);
         for (const id of recent) {
             if (this.retired.has(id)) continue;
@@ -422,6 +510,9 @@ export class RatchetConsumer {
         for (let pages = 0; pages < 4096; pages++) {
             const page = await this.#handoff(a, { action: "deliveries", after });
             for (const d of page.deliveries || []) {
+                // Quarantined copies are retried once per consumer (session) or
+                // after resetTrust, not on every poll.
+                if (this.quarantined.has(d.id)) continue;
                 try {
                     await this.#receive(d, a);
                     this.quarantined.delete(d.id);
@@ -431,7 +522,9 @@ export class RatchetConsumer {
                     if (e.code === "fenced" || e.afterCommit) throw e;
                     // Unreadable ciphertext stays pending on the server and is
                     // NEVER passed to legacy decoders or acknowledged.
-                    this.quarantined.set(d.id, { id: d.id, sender: d.manifest?.sender || "", code: e.code || "unreadable", scope: d.manifest?.scope || "", peer: d.manifest?.sender || "", conversation: d.manifest?.conversation || "" });
+                    const m = d.manifest || {}, own = m.sender === this.namespace.principal;
+                    this.quarantined.set(d.id, { id: d.id, sender: m.sender || "", code: e.code || "unreadable", scope: m.scope || "",
+                        peer: m.scope === "direct" ? (own ? m.peer || "" : m.sender || "") : "", conversation: m.scope === "group" ? m.conversation || "" : "", seenAt: Date.now() / 1000 });
                 }
             }
             // Continue across filtered empty pages; a fresh drain restarts at "".
@@ -441,6 +534,26 @@ export class RatchetConsumer {
         }
         throw fail("exhausted");
     }
+    /**
+     * After the user explicitly confirmed a contact's changed identity: drop
+     * that principal's noXa/Olm pins so the next use pins the newly trusted
+     * chain and re-adopts Olm keys only from bundles it signs. Never adopts
+     * anything by itself.
+     */
+    resetTrust(principal) { return this.#serial(() => this.#resetTrust(principal)); }
+    async #resetTrust(principal) {
+        for (const ref of await this.#refs("trust")) {
+            let parsed;
+            try { parsed = JSON.parse(ref[1]); } catch { continue; }
+            if (!Array.isArray(parsed) || parsed[0] !== principal) continue;
+            const s = await this.store.read([ref]), saved = parse(rec(s, ...ref).data);
+            if (saved.revoked) continue;
+            await this.store.setTrust(s, ref[1], { principal, device: parsed[1], noxa: null }, false);
+            this.#check();
+        }
+        for (const [id, q] of this.quarantined) if (q.sender === principal) this.quarantined.delete(id);
+    }
+
     async #receive(d, a) {
         const m = d.manifest, c = d.copy, ns = this.namespace;
         if (m.server !== ns.server || c.principal !== ns.principal || c.device !== ns.device || c.account_epoch !== a.epoch) throw fail("fenced_copy");
@@ -517,6 +630,11 @@ export class RatchetConsumer {
         try { await this.#handoff(a, { action: "receive_ack", delivery_id: d.id, digest: d.digest }); }
         catch (e) { throw Object.assign(e, { afterCommit: true }); }
     }
+}
+
+function retiredIn(a, id) {
+    const seq = Number(String(id).split(":")[1]);
+    return !!a.retired && (seq <= a.retired.through || a.retired.above.includes(seq));
 }
 
 async function sha256(bytes) {

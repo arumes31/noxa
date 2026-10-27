@@ -129,11 +129,14 @@ export async function forgetDevice(fence) {
 let ratchetTest = null;
 app.ratchet = null;
 export function enableRatchetTestSession(options = null) {
-    ratchetTest = options ? { serverBinding: serverBinding(options.serverBinding), pollMS: options.pollMS || 5000 } : null;
+    ratchetTest = options ? { serverBinding: serverBinding(options.serverBinding), pollMS: options.pollMS || 5000, modules: options.modules || null } : null;
 }
 
 async function openRatchet(session, fence, isCurrent) {
-    const [{ openRatchetStore }, { createRatchetCore }] = await Promise.all([import("./core/ratchet-store.js"), import("./core/ratchet-core.js")]);
+    // modules: test-only injection of the store/core factories (lifecycle tests).
+    const [{ openRatchetStore }, { createRatchetCore }] = ratchetTest.modules
+        ? await ratchetTest.modules()
+        : await Promise.all([import("./core/ratchet-store.js"), import("./core/ratchet-core.js")]);
     const namespace = { server: ratchetTest.serverBinding, principal: session.uniqueID, device: session.deviceID };
     const store = await openRatchetStore(namespace);
     const core = await createRatchetCore();
@@ -166,7 +169,14 @@ function stopRatchet() {
 }
 
 function pollRatchet(owner, session) {
-    const tick = () => owner.consumer.drain().catch(() => {}).finally(() => {
+    const current = () => app.ratchet === owner && app.session === session && !owner.consumer.closed;
+    const tick = () => owner.consumer.drain().then(result => {
+        // Unreadable authenticated-protocol copies stay pending on the server
+        // and are shown as locked placeholders, never dropped or ACKed.
+        if (!current()) return;
+        owner.dm?.showQuarantined(result?.quarantined || []).catch(() => {});
+        owner.groups?.showQuarantined(result?.quarantined || []);
+    }).catch(() => {}).finally(() => {
         if (app.ratchet === owner && app.session === session && !owner.consumer.closed) owner.timer = setTimeout(tick, ratchetTest?.pollMS || 5000);
     });
     tick();
@@ -281,6 +291,7 @@ export async function connect({ guest = null, fence } = {}) {
     app.groups = new Groups(session, dm);
     app.groups.shareActivity = activityShared;
     if (ratchet) {
+        ratchet.groups = app.groups;
         app.groups.attachRatchet(ratchet.consumer).catch(() => {});
         pollRatchet(ratchet, session);
     }

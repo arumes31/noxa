@@ -92,13 +92,18 @@ async function boot({ entries, device, binding }) {
             signBundle: async bundle => dirAPI.signBundle(bundle, edSecret),
             assertCurrent: () => { if (mine !== generation) throw Object.assign(new Error("fenced"), { code: "fenced" }); },
         });
-        await dm.attachRatchet(consumer);
-        await groups.attachRatchet(consumer);
+        // As in app.js, a failed readiness never aborts the session: sends and
+        // drains re-attempt readiness and fail explicitly meanwhile.
+        await dm.attachRatchet(consumer).catch(() => {});
+        await groups.attachRatchet(consumer).catch(() => {});
         return { store, core: counted, dm, groups, consumer };
     };
     const T = { device, stats, ...(await make()) };
     // Simulated process crash/restart: drop the in-memory instances and their
     // generation; protected IndexedDB state survives.
+    // A second consumer over the same IndexedDB namespace (another tab, or
+    // an old consumer during reconnect), still current.
+    T.spawn = () => make();
     T.restart = async () => { generation++; T.consumer.closed = true; Object.assign(T, await make()); stats.ops = {}; };
     T.view = peer => (T.dm.conversations.get(peer)?.messages || []).map(m => ({ id: m.id, from: m.from, body: m.body, protocol: m.protocol || "", self: !!m.self, copied: !!m.copied, pending: !!m.pending, queued: !!m.queued, failed: !!m.failed, edited: !!m.edited, deleted: !!m.deleted, key: m.key || "" }));
     T.groupView = id => (T.groups.messages.get(id) || []).map(m => ({ id: m.id, text: m.text, from: m.from_unique_id, protocol: m.protocol || "", local: !!m.local, deleted: !!m.deleted, reference: m.reference }));
@@ -250,14 +255,121 @@ try {
     assert.deepEqual(await post({ op: "revoke", device: "bob-laptop" }), true);
     assert.equal(await run("alice-phone", () => T.dm.send("bob", "needs every device", "", { id: "m9" }).then(o => o.receipt.state)), "accepted");
 
-    // 10. Logout/session replacement fences the consumer before any transport.
+    // 10. P1-1: two current consumers on one namespace race for the same
+    //     attempt sequence; each operation ends with its OWN content.
+    const raced = await run("alice-phone", async () => {
+        const other = await T.spawn();
+        const [a, b] = await Promise.all([
+            T.consumer.send({ logicalID: "race-A", scope: "direct", peer: "bob", body: { text: "A text" } }),
+            other.consumer.send({ logicalID: "race-B", scope: "direct", peer: "bob", body: { text: "B text" } }),
+        ]);
+        other.consumer.closed = true;
+        return [[a.record.logicalID, a.record.body.text, a.receipt.state, a.receipt.logical_id], [b.record.logicalID, b.record.body.text, b.receipt.state, b.receipt.logical_id]];
+    });
+    assert.deepEqual(raced, [["race-A", "A text", "accepted", "race-A"], ["race-B", "B text", "accepted", "race-B"]]);
+    await drain("bob-phone");
+    assert.deepEqual(await run("bob-phone", () => T.view("alice").filter(m => m.id.startsWith("race-")).map(m => [m.id, m.body]).sort()), [["race-A", "A text"], ["race-B", "B text"]]);
+
+    // 11. P2-4: committed, never begun, deadline passes -> metadata-only abort,
+    //     then a reseal of the ORIGINAL content (not the changed draft).
+    await post({ op: "fail", device: "alice-phone", action: "begin" });
+    const parked = await run("alice-phone", async () => {
+        T.consumer.attemptTTL = 6;
+        try { return await T.dm.send("bob", "before deadline", "", { id: "late-1" }).then(() => "sent", e => e.retryable); }
+        finally { T.consumer.attemptTTL = 300; }
+    });
+    assert.equal(parked, true);
+    await new Promise(r => setTimeout(r, 7000));
+    const resolved = await run("alice-phone", async () => {
+        const first = await T.dm.send("bob", "CHANGED", "", { id: "late-1" }).then(o => o.receipt.state, e => [e.code, e.retryable]);
+        const second = await T.dm.send("bob", "CHANGED", "", { id: "late-1" }).then(o => [o.receipt.state, o.record.body.text]);
+        return { first, second, view: T.view("bob").filter(m => m.id === "late-1").map(m => [m.body, m.queued, m.failed]) };
+    });
+    assert.deepEqual(resolved.first, ["aborted", true], "the expired attempt is fenced, not stuck");
+    assert.deepEqual(resolved.second, ["accepted", "before deadline"]);
+    assert.deepEqual(resolved.view, [["before deadline", false, false]]);
+
+    // 12. P2-6: retirement progress is durable; a restarted session replays
+    //     no retire_receipt (production rate limits are on in this test).
+    await run("alice-phone", () => T.consumer.drain());
+    before = await counts();
+    await run("alice-phone", () => T.restart());
+    await drain("alice-phone");
+    after = await counts();
+    assert.equal((after["alice-phone/retire_receipt"] || 0) - (before["alice-phone/retire_receipt"] || 0), 0);
+
+    // 13. P2-5: a transient readiness failure is not cached for the session.
+    await post({ op: "fail", device: "bob-phone", action: "publish" });
+    const retried = await run("bob-phone", async () => {
+        await T.restart();
+        return T.consumer.ready().then(r => r.epoch, e => e.code || e.message);
+    });
+    assert.equal(retried, 1);
+
+    // 14. P2-7: a copy that fails authentication is quarantined (locked
+    //     placeholder, no unread, no ACK), then opens on the next session.
+    await drain("bob-phone");
+    await run("alice-phone", () => T.dm.send("bob", "tampered in transit", "", { id: "q-1" }));
+    await post({ op: "corrupt", device: "bob-phone" });
+    const unreadQ = await run("bob-phone", () => T.stats.unread);
+    const q = await run("bob-phone", async () => {
+        const result = await T.consumer.drain();
+        await T.dm.showQuarantined(result.quarantined);
+        return { list: result.quarantined.map(x => [x.sender, x.peer, x.scope]), view: T.view("alice").filter(m => m.id.startsWith("quarantine:")).map(m => [m.from, m.body]), unread: T.stats.unread };
+    });
+    assert.deepEqual(q.list, [["alice", "alice", "direct"]]);
+    assert.deepEqual(q.view, [["alice", null]]);
+    assert.equal(q.unread, unreadQ);
+    const healed = await run("bob-phone", async () => {
+        await T.restart();
+        const result = await T.consumer.drain();
+        await T.dm.showQuarantined(result.quarantined);
+        return { quarantined: result.quarantined.length, view: T.view("alice").filter(m => m.id === "q-1" || m.id.startsWith("quarantine:")).map(m => [m.id, m.body]) };
+    });
+    assert.deepEqual(healed, { quarantined: 0, view: [["q-1", "tampered in transit"]] });
+
+    // 15. P2-7: explicit changed-identity confirmation resets ratchet pins; the
+    //     next send re-adopts only via a freshly signed claim.
+    // A fresh contact: the server allows only 2 claims per device pair per
+    // day, and sessions are per conversation (interface concern in report).
+    assert.equal(await post({ op: "fake_devices", action: "dave:1" }), true);
+    assert.equal(await run("alice-tablet", () => T.dm.send("dave", "first contact", "", { id: "dave-1" }).then(o => o.receipt.state)), "accepted");
+    before = await counts();
+    const reset = await run("alice-tablet", async () => {
+        await T.consumer.resetTrust("dave");
+        return T.dm.send("dave", "after confirmation", "", { id: "trust-1" }).then(o => o.receipt.state);
+    });
+    after = await counts();
+    assert.equal(reset, "accepted");
+    assert.equal((after["alice-tablet/claim"] || 0) - (before["alice-tablet/claim"] || 0), 1, "fresh signed claim, no silent reuse");
+
+    // 16. Client-side authorship refusal (no request reaches the server).
+    before = await counts();
+    const refused = await run("alice-phone", () => T.dm.editMessage("bob", "b1", "forged").then(() => "edited", e => e.message));
+    assert.match(refused, /only your sent messages/);
+    after = await counts();
+    assert.equal(after["alice-phone/snapshot"], before["alice-phone/snapshot"]);
+
+    // 17. Direct fanout bound: alice(2) + carol(18), sent from alice-tablet, = 20 targets is accepted;
+    //     a 19th carol device makes 21 and fails before any transport.
+    assert.equal(await post({ op: "fake_devices", action: "carol:18" }), true);
+    const twenty = await run("alice-tablet", () => T.dm.send("carol", "to twenty devices", "", { id: "c20" }).then(o => o.receipt.state, e => e.code));
+    assert.equal(twenty, "accepted");
+    assert.equal(await post({ op: "fake_devices", action: "carol:1" }), true);
+    before = await counts();
+    const twentyOne = await run("alice-tablet", () => T.dm.send("carol", "to twenty-one", "", { id: "c21" }).then(() => "sent", e => [e.code, e.retryable]));
+    after = await counts();
+    assert.deepEqual(twentyOne, ["fanout_limit", false]);
+    assert.equal(transport(after, "alice-tablet") - transport(before, "alice-tablet"), 0);
+
+    // 18. Logout/session replacement fences the consumer before any transport.
     before = await counts();
     const fenced = await run("alice-tablet", async () => { await T.consumer.close(); return T.dm.send("bob", "after logout", "", { id: "t1" }).then(() => "sent", e => e.code); });
     assert.equal(fenced, "fenced");
     after = await counts();
     assert.equal(transport(after, "alice-tablet") - transport(before, "alice-tablet"), 0);
 
-    console.log(`PASS PWA product vertical (direct+group, linked copies, uncertainty, commit failure, crash/ACK, authorship, attachment, mixed projection, stale roster, logout) in ${Date.now() - started}ms`);
+    console.log(`PASS PWA product vertical with production rate limits (direct+group, linked copies, uncertainty, commit failure, crash/ACK, authorship, attachment, mixed projection, stale roster, two-writer race, deadline abort, durable retirement, readiness retry, quarantine, trust reset, client refusal, direct-20 bound, logout) in ${Date.now() - started}ms`);
 } catch (e) { await globalThis.dumpCounts?.(); throw e; } finally {
     await browser?.close();
     await new Promise(r => server.close(r));

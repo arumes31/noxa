@@ -12,8 +12,23 @@ import { ProtocolError } from "./connection.js";
 import { RATCHET_PROTOCOL } from "./ratchet-consumer.js";
 
 const MsgChatAccepted = 154;
-/** Ratchet failures that a retry with the same state cannot fix. */
-export const FINAL_RATCHET_ERRORS = new Set(["recovery_required", "account_changed", "identity_changed", "untrusted_device", "revoked", "fanout_limit", "invalid", "fenced_copy"]);
+/** Ratchet conditions an unchanged retry (outbox) can still resolve. */
+export const RETRYABLE_RATCHET = new Set(["uncertain", "rate-limit", "unavailable", "local_conflict", "fenced"]);
+
+/**
+ * Whether a failed ratchet send should stay queued. A committed attempt without
+ * a terminal receipt is uncertain and must be resolved exactly; an aborted
+ * attempt was never delivered and may be resealed with its original content.
+ * Every other coded refusal before commit (authority, limit, exhausted,
+ * account change, conflict, invalid...) fails only this message.
+ */
+export function ratchetRetryable(error) {
+    const committed = error?.committed;
+    if (committed && !committed.receipt) return true;
+    if (committed?.receipt) return committed.receipt.state === "aborted";
+    if (!error?.code) return !(error instanceof ProtocolError);
+    return RETRYABLE_RATCHET.has(error.code);
+}
 const MAX_MESSAGES = 5000;
 const DIRECTORY_TTL = 5 * 60 * 1000;
 const TYPING_PING_MS = 3000;
@@ -314,6 +329,9 @@ export class DirectMessages extends EventTarget {
     async trustNewIdentity(uid) {
         await putSealed(Stores.pins, uid, null).catch(() => {});
         this.directory.delete(uid);
+        // The same explicit confirmation resets ratchet pins for this contact;
+        // Olm keys are then re-adopted only from bundles the new chain signs.
+        await this.ratchet?.resetTrust(uid);
         return this.devicesOf(uid, { refresh: true });
     }
 
@@ -437,9 +455,14 @@ export class DirectMessages extends EventTarget {
 
     /** Shows an own message waiting in the outbox. */
     showQueued(peer, { id, text, sentAt, expired = false }) {
-        const existing = this.conversations.get(peer)?.messages.find(m => m.id === id);
+        // With a consumer attached, outbox entries are ratchet operations: match
+        // and update that record (same sender + protocol) instead of a ghost.
+        const protocol = this.ratchet ? RATCHET_PROTOCOL : "";
+        const existing = this.conversations.get(peer)?.messages.find(m => m.id === id && m.from === this.ownUID && (m.protocol || "") === protocol);
         if (existing && !existing.queued && !existing.failed) return;
-        this.#add(peer, "", { id, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, queued: !expired, failed: expired });
+        // A committed original keeps its text; the draft never replaces it.
+        const body = existing && protocol ? existing.body : text;
+        this.#add(peer, "", { id, ...(protocol ? { protocol } : {}), from: this.ownUID, fromNickname: this.session.nickname, self: true, body, verified: true, sentAt, queued: !expired, failed: expired });
     }
 
     /** Removes a message that never reached the server from this device. */
@@ -509,14 +532,23 @@ export class DirectMessages extends EventTarget {
      */
     async attachRatchet(consumer) {
         this.ratchet = consumer;
-        consumer.project((record, { isNew }) => this.#project(record, isNew));
+        const owned = () => this.ratchet === consumer && !consumer.closed;
+        consumer.project((record, { isNew }) => this.#project(record, isNew, owned));
         await this.ready;
         // The protected archive is authoritative: restore views it holds.
-        for (const record of await consumer.history()) if (record.scope === "direct") await this.#project(record, false);
+        const history = await consumer.history();
+        for (const record of history) {
+            if (!owned()) return;
+            if (record.scope === "direct") await this.#project(record, false, owned);
+        }
     }
 
-    async #project(record, isNew) {
+    async #project(record, isNew, owned = () => true) {
         if (record.scope !== "direct" || record.protocol !== RATCHET_PROTOCOL || !record.peer) return;
+        // Never project into (and persist over) a conversation before cached
+        // history is loaded, nor after this consumer lost ownership.
+        await this.ready;
+        if (!owned()) return;
         const body = record.body && typeof record.body === "object" ? record.body : {};
         const text = typeof body.text === "string" ? body.text : "";
         if (record.purpose === "edit" || record.purpose === "delete") {
@@ -535,7 +567,41 @@ export class DirectMessages extends EventTarget {
         };
         if (!own && this.typing.delete(record.peer)) this.#emit("typing", { peer: record.peer });
         this.#add(record.peer, "", message, { notify: isNew && !own });
-        if (!prior) await putSealed(Stores.dm, record.peer, this.conversations.get(record.peer)).catch(() => {});
+        this.#unquarantine(record.peer, record.transport?.delivery);
+        if (!prior && owned()) await putSealed(Stores.dm, record.peer, this.conversations.get(record.peer)).catch(() => {});
+    }
+
+    /**
+     * Truthful placeholders for authenticated-protocol copies that could not
+     * be opened (lost key, failed authentication, untrusted sender). They are
+     * never ACKed or decoded as legacy and never count as unread.
+     */
+    async showQuarantined(list = []) {
+        await this.ready;
+        const current = new Set();
+        for (const q of list) {
+            if (q.scope !== "direct" || !q.peer) continue;
+            const id = "quarantine:" + q.id;
+            current.add(id);
+            if (this.conversations.get(q.peer)?.messages.some(m => m.id === id)) continue;
+            this.#add(q.peer, "", { id, protocol: RATCHET_PROTOCOL, from: q.sender, self: q.sender === this.ownUID, copied: q.sender === this.ownUID,
+                body: null, verified: false, quarantined: q.code, sentAt: q.seenAt || Date.now() / 1000 }, { notify: false });
+        }
+        for (const conversation of this.conversations.values()) {
+            const keep = conversation.messages.filter(m => !m.quarantined || current.has(m.id));
+            if (keep.length !== conversation.messages.length) {
+                conversation.messages = keep;
+                this.#write(conversation.peer);
+                this.#emit("messages", { peer: conversation.peer, message: null, isNew: false });
+            }
+        }
+    }
+
+    #unquarantine(peer, delivery) {
+        const conversation = delivery && this.conversations.get(peer);
+        if (!conversation) return;
+        const id = "quarantine:" + delivery;
+        if (conversation.messages.some(m => m.id === id)) conversation.messages = conversation.messages.filter(m => m.id !== id);
     }
 
     async #sendRatchet(peer, text, nickname, id, sentAt) {
@@ -550,7 +616,7 @@ export class DirectMessages extends EventTarget {
             const committed = error.committed;
             // Without a terminal receipt a committed attempt is uncertain: keep
             // its ORIGINAL committed text queued for exact resolution.
-            const retryable = !committed?.receipt && !(error instanceof ProtocolError) && !FINAL_RATCHET_ERRORS.has(error.code);
+            const retryable = ratchetRetryable(error);
             this.#add(peer, nickname, { id, protocol: RATCHET_PROTOCOL, from: this.ownUID, fromNickname: this.session.nickname, self: true,
                 body: committed ? committed.record.body?.text ?? "" : existing?.body ?? text, verified: true, sentAt: committed?.record.sentAt || sentAt,
                 pending: false, failed: !retryable, queued: retryable });

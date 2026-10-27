@@ -16,7 +16,10 @@ import (
 	"noxa/internal/config"
 	"noxa/internal/e2ee"
 	"noxa/internal/netproto"
+	"noxa/internal/e2ee/olmdir"
+	"noxa/internal/e2ee/ratchet"
 	"noxa/internal/store"
+	"time"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,6 +48,7 @@ type productDevice struct {
 	Device    string `json:"device"`
 	EdSecret  string `json:"edSecret"`
 	client    *Client
+	key       ed25519.PrivateKey
 }
 
 // TestIntegrationRatchetProductPWA drives the actual PWA DirectMessages,
@@ -67,7 +71,8 @@ func TestIntegrationRatchetProductPWA(t *testing.T) {
 	keys := productKeyAuth{keys: map[string]string{}}
 	srv := New(&config.Config{}, zap.NewNop(), &Deps{Authority: authority, Devices: db, Auth: keys})
 	srv.tlsFingerprint = strings.TrimSuffix(strings.Repeat("ab:", 32), ":")
-	srv.chatRate = nil
+	// Production chat/admission/directory rate limits stay ON (5 per 3 s per
+	// principal and bucket); the consumer must live within them.
 	srv.olmAdmissionEnabled = true
 	binding := "tls-sha256:" + strings.Repeat("ab", 32)
 
@@ -113,7 +118,7 @@ func TestIntegrationRatchetProductPWA(t *testing.T) {
 			}
 			keys.keys[principal] = record
 		}
-		pd := &productDevice{Name: name, Principal: principal, Device: d.DeviceID, EdSecret: base64.StdEncoding.EncodeToString(priv),
+		pd := &productDevice{Name: name, Principal: principal, Device: d.DeviceID, EdSecret: base64.StdEncoding.EncodeToString(priv), key: priv,
 			client: &Client{UniqueID: principal, UserID: 1, authed: true, deviceID: d.DeviceID, authSigningKey: nd.Ed25519Public}}
 		devices[name] = pd
 		return pd
@@ -134,6 +139,49 @@ func TestIntegrationRatchetProductPWA(t *testing.T) {
 		}
 	}
 
+	core, e := ratchet.New(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer core.Close(context.Background())
+	// publishFake publishes a signed Olm bundle for a device that never runs a
+	// client (fanout-bound coverage); only its public directory entry exists.
+	publishFake := func(d *productDevice) error {
+		key := make([]byte, 32)
+		rand.Read(key)
+		acct, e := core.Apply(ctx, ratchet.Request{Op: ratchet.NewAccount, Key: key, Count: 2})
+		if e != nil {
+			return e
+		}
+		now := time.Now().Unix()
+		b := olmdir.Bundle{Version: olmdir.Version, Protocol: olmdir.Protocol, Server: binding, Principal: d.Principal, DeviceID: d.Device, AccountEpoch: 1, Generation: 1,
+			Identity: acct.Bundle.Identity, Signing: acct.Bundle.Signing, IssuedAt: now, ExpiresAt: now + 3600}
+		for _, k := range acct.Bundle.OneTimeKeys {
+			b.OneTimeKeys = append(b.OneTimeKeys, olmdir.Key{ID: k.ID, Key: k.Key})
+		}
+		tr, e := b.Transcript()
+		if e != nil {
+			return e
+		}
+		b.Signature = ed25519.Sign(d.key, tr)
+		payload, _ := json.Marshal(netproto.OlmDirectoryRequest{RequestID: "fake-" + d.Name, Action: "publish", Bundle: &b})
+		conn := &sessionResponseConn{blockingTCPConn: newBlockingTCPConn()}
+		d.client.Conn = conn
+		if e = srv.handleOlmDirectory(ctx, d.client, &netproto.Frame{Type: uint16(netproto.MsgOlmDirectoryRequest), Payload: payload}); e != nil {
+			return e
+		}
+		f, e := netproto.ReadFrame(&conn.output)
+		if e != nil {
+			return e
+		}
+		var out netproto.OlmDirectoryResult
+		json.Unmarshal(f.Payload, &out)
+		if out.Error != "" {
+			return fmt.Errorf("fake publish: %s", out.Error)
+		}
+		return nil
+	}
+	corrupt := map[string]int{} // device -> deliveries pages to tamper with
 	drop := map[string]int{} // device/action -> handled-but-lost responses
 	fail := map[string]int{} // device/action -> refused before the handler
 	counts := map[string]int{}
@@ -185,6 +233,31 @@ func TestIntegrationRatchetProductPWA(t *testing.T) {
 			case "fail":
 				fail[req.Device+"/"+req.Action]++
 				return true, nil
+			case "corrupt":
+				corrupt[req.Device]++
+				return true, nil
+			case "fake_devices":
+				// Action carries "principal:count"; devices are linked under one
+				// root (approval chain) and published from Go.
+				var principal string
+				var count int
+				fmt.Sscanf(strings.Replace(req.Action, ":", " ", 1), "%s %d", &principal, &count)
+				for i := 0; i < count; i++ {
+					d := link(fmt.Sprintf("%s-%02d-%d", principal, i, len(devices)), principal)
+					e := publishFake(d)
+					// Production directory limits apply here too: back off.
+					for tries := 0; e != nil && strings.Contains(e.Error(), "rate-limit") && tries < 20; tries++ {
+						time.Sleep(500 * time.Millisecond)
+						e = publishFake(d)
+					}
+					if e != nil {
+						return nil, e
+					}
+				}
+				if _, e := db.DB().ExecContext(ctx, `INSERT INTO users(unique_id,nickname) VALUES($1,$1) ON CONFLICT DO NOTHING`, principal); e != nil {
+					return nil, e
+				}
+				return true, nil
 			case "counts":
 				return counts, nil
 			case "link_unpublished":
@@ -209,6 +282,28 @@ func TestIntegrationRatchetProductPWA(t *testing.T) {
 					return map[string]any{"lost": true}, nil
 				}
 				out, e := dispatch(d.client, req.Type, req.Payload)
+				if e == nil && probe.Action == "deliveries" && corrupt[req.Device] > 0 {
+					// Tamper with one delivered copy (authenticated ciphertext
+					// body) without touching server state: it must quarantine.
+					var result map[string]any
+					json.Unmarshal(out["payload"].(json.RawMessage), &result)
+					if data, ok := result["data"].(map[string]any); ok {
+						if ds, ok := data["deliveries"].([]any); ok && len(ds) > 0 {
+							msg := ds[0].(map[string]any)["copy"].(map[string]any)["envelope"].(map[string]any)["message"].(map[string]any)
+							body := []byte(msg["body"].(string))
+							i := len(body) / 2
+							if body[i] == 'A' {
+								body[i] = 'B'
+							} else {
+								body[i] = 'A'
+							}
+							msg["body"] = string(body)
+							corrupt[req.Device]--
+							raw, _ := json.Marshal(result)
+							out["payload"] = json.RawMessage(raw)
+						}
+					}
+				}
 				if e == nil && drop[k] > 0 {
 					drop[k]--
 					return map[string]any{"lost": true}, nil

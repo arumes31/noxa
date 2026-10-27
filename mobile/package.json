@@ -10,7 +10,7 @@
     "test:e2e": "playwright test",
     "test:preview-privacy": "node --test tests/preview-privacy-browser.mjs",
     "test:directory": "node --test tests/olm-directory-browser.mjs",
-    "test:storage": "node --test tests/ratchet-storage-browser.mjs tests/onboarding-browser.mjs tests/olm-admission-browser.mjs",
+    "test:storage": "node --test tests/ratchet-storage-browser.mjs tests/ratchet-attempt-race-browser.mjs tests/onboarding-browser.mjs tests/olm-admission-browser.mjs",
     "test:ratchet": "node --test tests/ratchet-interop.mjs",
     "test": "npm run test:unit && npm run test:e2e",
     "test:ui": "playwright test --config playwright.ui.config.js"

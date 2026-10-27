@@ -282,7 +282,9 @@ class RatchetStore {
         throw fail("exhausted");
       const prepared = {};
       for (const [k, data] of Object.entries(
-        Object.keys(changes).length ? { ...changes, [key(ctl)]: bytes(c) } : {},
+        Object.keys(changes).length || authorityUpdate
+          ? { ...changes, [key(ctl)]: bytes(c) }
+          : {},
       )) {
         prepared[k] = await this.encode(
           db,
@@ -413,6 +415,16 @@ class RatchetStore {
     const old = fresh.records[key(r)];
     if (old.revision) {
       const b = json(old.data);
+      // An attempt ID is reused only for the SAME frozen attempt. A concurrent
+      // writer that chose the same sequence for different content conflicts;
+      // it must never inherit another operation's archive or receipt.
+      if (
+        !!attempt !== !!b.attempt ||
+        (attempt &&
+          (!equalJSON(b.attempt.manifest, attempt.manifest) ||
+            !equalJSON(b.attempt.parts, attempt.parts)))
+      )
+        throw fail("conflict");
       this.sendAuthority(fresh, b.packets, b.attempt);
       for (const p of b.packets)
         if (this.trust(fresh, p.trustID) !== p.trustRevision)
@@ -795,7 +807,38 @@ class RatchetStore {
       fence: fresh.fence.generation,
       blocked: c.sendingBlocked,
       nextAttempt: c.nextAttempt,
+      retired:
+        c.retired?.epoch === c.accountEpoch
+          ? { through: c.retired.through, above: c.retired.above.slice() }
+          : { through: 0, above: [] },
     };
+  }
+  // Durable retire_receipt progress for the current account epoch: a
+  // contiguous watermark plus sparse sequences above it (bounded), so a new
+  // session never replays retirement of already retired attempts.
+  async noteRetired(s, id) {
+    const [epochText, seqText] = String(id).split(":");
+    const epoch = Number(epochText),
+      seq = attemptSequence(seqText);
+    const fresh = await this.extended(s, [["outbox", id]]),
+      c = json(this.require(fresh, ctl).data),
+      old = this.require(fresh, ["outbox", id]);
+    if (!old.revision || !json(old.data).receipt || epoch !== c.accountEpoch)
+      throw fail("invalid");
+    const r =
+      c.retired?.epoch === epoch ? c.retired : { epoch, through: 0, above: [] };
+    if (seq <= r.through || r.above.includes(seq)) {
+      await this.#commit(fresh, {});
+      return;
+    }
+    const above = [...r.above, seq].sort((a, b) => a - b);
+    let through = r.through;
+    while (above[0] === through + 1) {
+      through++;
+      above.shift();
+    }
+    if (above.length > 1024) throw fail("exhausted");
+    await this.#commit(fresh, {}, { retired: { epoch, through, above } });
   }
   async checkAccountAuthority(s, token) {
     const c = await this.accountAuthority(s);
