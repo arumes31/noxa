@@ -51,7 +51,10 @@ func historyMessagesSince(store dmHistoryStore, since int64) []netproto.HistoryM
 			continue
 		}
 		for _, e := range entries {
-			if e.SentAt < since || !openedChatText(e.Body) {
+			// New-protocol records are not exported by the legacy copy: their
+			// authorized history transfer (provenance kept separate from the
+			// source) belongs to the remaining 1c-ii history checkpoint.
+			if e.SentAt < since || !openedChatText(e.Body) || e.Protocol != "" {
 				continue
 			}
 			out = append(out, netproto.HistoryMessage{

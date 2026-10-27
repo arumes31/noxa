@@ -1327,7 +1327,14 @@ func (c *ratchetConsumer) resolve(id string, a durable.AccountAuthority, reused 
 	}
 	if op.Receipt == nil {
 		if err = c.settle(id, a); err != nil {
-			return RatchetOutcome{}, withCommitted(err, RatchetOutcome{Record: record, Reused: reused})
+			// Still uncertain (or clock skew): views show the ORIGINAL committed
+			// text as pending; a later drain resolves it exactly.
+			pending := record
+			pending.Transport, pending.Status = RatchetTransport{Attempt: id}, "pending"
+			if ratchetCode(err) != "fenced" {
+				_ = c.emit(pending, false)
+			}
+			return RatchetOutcome{}, withCommitted(err, RatchetOutcome{Record: pending, Reused: reused})
 		}
 		if op, record, err = c.outcome(id); err != nil {
 			return RatchetOutcome{}, withCommitted(err, RatchetOutcome{Record: record, Reused: reused})

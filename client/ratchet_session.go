@@ -208,21 +208,30 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 	}
 	go guardCrash("ratchet drain", func() {
 		defer close(s.done)
-		// The protected archive is authoritative: restore views it holds.
+		// The protected archive is authoritative: restore the persisted views
+		// it holds (idempotent). Live views load the DM log/group history
+		// themselves, so the replay emits no per-record frontend events.
 		if records, err := consumer.history(); err == nil {
 			for _, r := range records {
 				if consumer.check() != nil {
 					return
 				}
-				m.projectRatchet(r, false)
+				if hook := m.ratchetProject; hook != nil && r.Protocol == ratchetProtocol {
+					hook(m, r, false)
+				}
 			}
 		} else {
 			log.Printf("ratchet: history replay: %v", err)
 		}
+		last := ""
 		for {
 			list, err := consumer.drain()
 			if err == nil {
-				m.showRatchetQuarantine(list)
+				// Placeholders are announced only when the list changes.
+				if key := string(ratchetJSON(list)); key != last {
+					last = key
+					m.showRatchetQuarantine(list)
+				}
 			} else if ratchetCode(err) == "fenced" {
 				return
 			}

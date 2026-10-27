@@ -362,6 +362,15 @@ func (a *App) sendOutboxEntry(cm *connManager, store chatOutboxStore, entry Chat
 	conn, epoch, identity := cm.conn, cm.connEpoch, cm.id
 	cm.mu.Unlock()
 	if entry.Scope == "direct" && cm.ratchetConfigured() {
+		// Same binding guard as the legacy path: the queued text belongs to
+		// this outbox (identity + server) and the captured connection only.
+		currentStore, err := a.outboxStore(cm)
+		cm.mu.Lock()
+		current := conn != nil && cm.conn == conn && cm.connEpoch == epoch && cm.id == identity
+		cm.mu.Unlock()
+		if err != nil || currentStore.path != store.path || !current {
+			return "connection or identity changed; check history before retrying"
+		}
 		// The queued entry ID is the stable logical ID: a retry after an
 		// uncertain attempt resolves that original operation, never reseals
 		// changed text. The consumer is pinned to this connection.

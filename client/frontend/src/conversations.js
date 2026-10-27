@@ -13,12 +13,23 @@ import { groupRatchetRows, quarantineRows, ratchetIsIncoming } from "./ratchet-p
 
 // Latest new-protocol placeholders (locked rows) announced by chat-ui.js.
 let ratchetQuarantine = [];
-window.addEventListener?.("noxa-ratchet-quarantine", event => { ratchetQuarantine = Array.isArray(event.detail) ? event.detail : []; refreshOpen?.(); });
+window.addEventListener?.("noxa-ratchet-quarantine", event => {
+    const next = Array.isArray(event.detail) ? event.detail : [];
+    const viewed = viewedGroup?.();
+    const touches = list => list.some(q => q?.scope === "group" && q.conversation === viewed);
+    const changed = viewed && (touches(next) || touches(ratchetQuarantine));
+    ratchetQuarantine = next;
+    if (changed) refreshOpen?.();
+});
 // A noxa-olm-v1 group record (Go "ratchet_message"): refresh the open view
 // and notify only for a durable NEW receive, without any message text.
+let ratchetGroupRefresh = 0;
 window.addEventListener?.("noxa-ratchet-group", event => {
     const record = event.detail || {};
-    refreshOpen?.({ id: record.conversation });
+    // Only the viewed group re-renders, coalesced into one refresh.
+    if (record.conversation && viewedGroup?.() === record.conversation && !ratchetGroupRefresh) {
+        ratchetGroupRefresh = window.setTimeout(() => { ratchetGroupRefresh = 0; refreshOpen?.(); }, 250);
+    }
     if (!ratchetIsIncoming(record) || !record.conversation) return;
     const state = V().state;
     if ((state.settings?.muted_conversations || []).includes(record.conversation)) return;

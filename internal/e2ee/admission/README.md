@@ -47,7 +47,10 @@ until Task 1c-ii.
    `AttemptRetirementRequest` and send `retire_receipt`. Acknowledged contiguous
    detail compacts into a persistent retired-through watermark. Older sequences
    can never be admitted again. Missing/unfinished gaps cause backpressure. A
-   `retired` reply is not a replacement acceptance receipt.
+   `retired` reply is not a replacement acceptance receipt. Clients then record
+   local progress with `NoteRetired` (browser `noteRetired`); the current
+   epoch's watermark is returned as `AccountAuthority.Retired` (browser
+   `accountAuthority().retired`), so a later session never repeats it.
 
 Sequences are positive canonical JS-safe decimal integers, per source account.
 The source has four open attempts and 10,000 retained details; admission has 1,024
