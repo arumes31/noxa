@@ -267,10 +267,13 @@ func (m *connManager) verifyPeerRecordAt(uid, encoded string, prompt bool, path,
 		retired = append(retired, current.Fingerprint)
 	}
 	// The same explicit confirmation is the durable ratchet reset intent:
-	// stored with the new pin, applied (and cleared) by the consumer.
+	// stored with the new pin, applied (and cleared) by the consumer. Cached
+	// pre-change device lists must never be re-pinned.
+	m.forgetDMDevices(uid)
 	if err := writeDMPin(path, dmIdentityPin{Version: 1, Fingerprint: fingerprint, Retired: retired, RatchetReset: fingerprint}); err != nil {
 		return [32]byte{}, err
 	}
+	m.forgetDMDevices(uid)
 	go m.applyRatchetTrustReset(uid)
 	return record.PublicKey(), nil
 }
@@ -320,22 +323,26 @@ func (m *connManager) verifiedCachedPeer(uid string, key [32]byte) bool {
 
 // ratchetResetPending reports whether the user explicitly confirmed uid's
 // current pinned identity and its ratchet trust reset is not yet applied.
-func (m *connManager) ratchetResetPending(uid string) (bool, error) {
+func (m *connManager) ratchetResetPending(uid string) (string, error) {
 	path, _, err := m.peerPinPath(uid)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	dmTrustMu.Lock()
 	defer dmTrustMu.Unlock()
 	pin, err := readDMPin(path)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	return pin.Version == 1 && pin.Pending == "" && pin.RatchetReset != "" && pin.RatchetReset == pin.Fingerprint, nil
+	if pin.Version == 1 && pin.Pending == "" && pin.RatchetReset != "" && pin.RatchetReset == pin.Fingerprint {
+		return pin.RatchetReset, nil
+	}
+	return "", nil
 }
 
-// clearRatchetReset removes the applied intent (only if it is still the same).
-func (m *connManager) clearRatchetReset(uid string) error {
+// clearRatchetReset removes the applied intent only if it is still exactly
+// token and token is still the pinned fingerprint (compare-and-clear).
+func (m *connManager) clearRatchetReset(uid, token string) error {
 	path, _, err := m.peerPinPath(uid)
 	if err != nil {
 		return err
@@ -343,7 +350,7 @@ func (m *connManager) clearRatchetReset(uid string) error {
 	dmTrustMu.Lock()
 	defer dmTrustMu.Unlock()
 	pin, err := readDMPin(path)
-	if err != nil || pin.Version != 1 || pin.RatchetReset == "" {
+	if err != nil || pin.Version != 1 || pin.RatchetReset == "" || pin.RatchetReset != token || pin.Fingerprint != token {
 		return err
 	}
 	pin.RatchetReset = ""

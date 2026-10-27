@@ -292,6 +292,32 @@ var (
 	ratchetCoreFor      func(durable.Namespace, ratchetCore) ratchetCore
 )
 
+// ratchetFreshKey marks a DeviceKey lookup that must bypass device-list caches.
+type ratchetFreshKey struct{}
+
+// ratchetSameContent reports whether a committed record carries the intent's
+// content (scope, destination, purpose, reference, body without sentAt).
+func ratchetSameContent(r RatchetRecord, in ratchetIntent) bool {
+	purpose := in.Purpose
+	if purpose == "" {
+		purpose = "chat"
+	}
+	dest := in.Peer
+	got := r.Peer
+	if in.Scope == "group" {
+		dest, got = in.Conversation, r.Conversation
+	}
+	norm := func(b json.RawMessage) string {
+		var v map[string]any
+		if json.Unmarshal(b, &v) != nil {
+			return string(b)
+		}
+		delete(v, "sentAt")
+		return string(ratchetJSON(v))
+	}
+	return r.Scope == in.Scope && got == dest && r.Purpose == purpose && r.Reference == in.Reference && norm(r.Body) == norm(in.Body)
+}
+
 // ratchetCore is the WASM core boundary (ratchet.Engine).
 type ratchetCore interface {
 	Apply(ctx context.Context, r ratchet.Request) (ratchet.Response, error)
@@ -309,8 +335,11 @@ type ratchetDeps struct {
 	// TrustReset reports a durable, explicitly confirmed identity change of
 	// principal whose ratchet reset is not applied yet; TrustResetDone clears
 	// it after the reset committed. Both optional.
-	TrustReset     func(principal string) (bool, error)
-	TrustResetDone func(principal string) error
+	// TrustReset returns the token (confirmed fingerprint) of a pending reset
+	// or ""; TrustResetDone clears exactly that token (compare-and-clear),
+	// only after the NEW key was fetched fresh and pinned.
+	TrustReset     func(principal string) (string, error)
+	TrustResetDone func(principal, token string) error
 	AttemptTTL     int64
 	RefreshEvery   time.Duration
 	Now            func() time.Time
@@ -804,26 +833,25 @@ func (c *ratchetConsumer) trust(principal, device string) (ratchetTrusted, error
 }
 
 func (c *ratchetConsumer) trustOnce(principal, device string) (ratchetTrusted, error) {
+	token := ""
+	ctx := c.ctx
 	if c.d.TrustReset != nil {
-		pending, err := c.d.TrustReset(principal)
-		if err != nil {
+		var err error
+		if token, err = c.d.TrustReset(principal); err != nil {
 			return ratchetTrusted{}, err
 		}
-		if pending {
-			// Apply the durable confirmation first: drop this principal's pins
-			// so the newly confirmed chain is pinned below and Olm keys are
-			// re-adopted only from bundles it signs.
+		if token != "" {
+			// Apply the durable confirmation: drop this principal's pins so the
+			// newly confirmed chain is pinned below (fetched FRESH, never from a
+			// cached pre-change device list) and Olm keys are re-adopted only
+			// from bundles it signs.
 			if err = c.resetTrustRecords(principal); err != nil {
 				return ratchetTrusted{}, err
 			}
-			if c.d.TrustResetDone != nil {
-				if err = c.d.TrustResetDone(principal); err != nil {
-					return ratchetTrusted{}, err
-				}
-			}
+			ctx = context.WithValue(ctx, ratchetFreshKey{}, true)
 		}
 	}
-	key, err := c.d.DeviceKey(c.ctx, principal, device)
+	key, err := c.d.DeviceKey(ctx, principal, device)
 	if err != nil {
 		return ratchetTrusted{}, err
 	}
@@ -850,6 +878,12 @@ func (c *ratchetConsumer) trustOnce(principal, device string) (ratchetTrusted, e
 		// bundle it signs.
 		if err = c.d.Store.SetTrust(s, id, ratchetJSON(ratchetTrustValue{Principal: principal, Device: device, Noxa: &encoded}), false); err != nil {
 			return ratchetTrusted{}, err
+		}
+		// The new key is pinned: only now the intent is cleared.
+		if token != "" && c.d.TrustResetDone != nil {
+			if err = c.d.TrustResetDone(principal, token); err != nil {
+				return ratchetTrusted{}, err
+			}
 		}
 		return ratchetTrusted{id: id, key: key}, c.check()
 	}

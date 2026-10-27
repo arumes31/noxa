@@ -157,8 +157,8 @@ async function openRatchet(session, fence, isCurrent) {
         signBundle: async bundle => { await assertIdentityFence(fence); return signBundle(bundle, session.identity.edSecret); },
         assertCurrent: () => { if (!isCurrent()) throw fenced(); },
         // Durable identity-change confirmations (stored with the contact pin).
-        trustReset: principal => owner.dm ? owner.dm.ratchetResetPending(principal) : false,
-        trustResetDone: principal => owner.dm?.clearRatchetReset(principal),
+        trustReset: principal => owner.dm ? owner.dm.ratchetResetPending(principal) : "",
+        trustResetDone: (principal, token) => owner.dm?.clearRatchetReset(principal, token),
     });
     return owner;
 }

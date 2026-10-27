@@ -60,3 +60,11 @@ test("quarantine placeholders are locked rows scoped to their conversation", () 
     assert.deepEqual(quarantineRows(q, { scope: "group", conversation: "g" }).map(r => r.id), ["quarantine:d2"]);
     assert.deepEqual(quarantineRows(q, { scope: "direct", peer: "carol" }), []);
 });
+
+test("own group changes apply only once accepted", () => {
+    const msg = record("me", "L1", { self: true, status: "accepted" });
+    const del = record("me", "d", { purpose: "delete", reference: "L1", reference_key: key("me", "L1"), self: true, status: "aborted", body: {} });
+    assert.deepEqual(groupRatchetRows([msg, del]).map(r => [r.deleted, r.body]), [[false, "me:L1"]]);
+    assert.deepEqual(groupRatchetRows([msg, { ...del, status: "accepted" }]).map(r => [r.deleted, r.body]), [[true, ""]]);
+    assert.deepEqual(groupRatchetRows([msg, { ...del, status: "" }]).map(r => r.deleted), [true], "a linked copy carries no status");
+});

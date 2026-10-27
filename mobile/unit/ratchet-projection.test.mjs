@@ -140,12 +140,15 @@ test("Fix P2-3: an identity confirmation without a live consumer is stored durab
     const dm = new DirectMessages(session("alice"), {});
     dm.conn.request = async () => ({ unique_id: peer, public_key: "", devices: [] });
     await dm.trustNewIdentity(peer); // offline: no consumer attached
-    assert.equal((await getSealed(Stores.pins, peer)).ratchetReset, true, "intent persisted with the pin");
-    assert.equal(await dm.ratchetResetPending(peer), false, "not applicable before the new key is pinned");
+    const token = (await getSealed(Stores.pins, peer)).ratchetReset;
+    assert.match(token, /^[0-9a-f-]{36}$/, "intent persisted with the pin");
+    assert.equal(await dm.ratchetResetPending(peer), "", "not applicable before the new key is pinned");
     await putSealed(Stores.pins, peer, { ...(await getSealed(Stores.pins, peer)), signingKey: "AAAA" }); // re-pinned by devicesOf
-    assert.equal(await dm.ratchetResetPending(peer), true);
-    await dm.clearRatchetReset(peer);
-    assert.equal(await dm.ratchetResetPending(peer), false);
+    assert.equal(await dm.ratchetResetPending(peer), token);
+    await dm.clearRatchetReset(peer, "other-token");
+    assert.equal(await dm.ratchetResetPending(peer), token, "compare-and-clear keeps a newer confirmation");
+    await dm.clearRatchetReset(peer, token);
+    assert.equal(await dm.ratchetResetPending(peer), "");
     assert.equal((await getSealed(Stores.pins, peer)).signingKey, "AAAA", "the confirmed pin is kept");
 });
 

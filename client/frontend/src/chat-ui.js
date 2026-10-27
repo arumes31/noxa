@@ -976,7 +976,8 @@ const sendOperations = new Map();
 function operationIDFor(key) {
     let id = sendOperations.get(key);
     if (!id) {
-        if (sendOperations.size >= 512) sendOperations.clear();
+        // Bounded FIFO: only the oldest operation is forgotten, never all.
+        if (sendOperations.size >= 512) sendOperations.delete(sendOperations.keys().next().value);
         id = crypto.randomUUID();
         sendOperations.set(key, id);
     }
@@ -1043,6 +1044,20 @@ export function onRatchetMessage(d) {
     }
     renderTabs();
     return true;
+}
+
+// onRatchetTrust tells the user why secure messaging with a contact is held:
+// a changed identity needs explicit confirmation, or a confirmed change is
+// still being applied. Nothing is adopted without that confirmation.
+const ratchetTrustNoticeAt = new Map();
+export function onRatchetTrust(d) {
+    const contact = d?.contact || "";
+    const key = { confirmation_required: "chat.secureConfirmIdentity", blocked: "chat.secureIdentityBlocked", pending: "chat.secureResetPending" }[d?.state];
+    if (!contact || !key) return;
+    const noticeKey = contact + "|" + d.state;
+    if (Date.now() - (ratchetTrustNoticeAt.get(noticeKey) || 0) < 60000) return;
+    ratchetTrustNoticeAt.set(noticeKey, Date.now());
+    V().toast(t(key, { name: knownPeerName(contact, "") || contact }), "warn");
 }
 
 // onRatchetQuarantine shows truthful locked placeholders for new-protocol
@@ -3389,7 +3404,9 @@ export async function sendMessage() {
         }
         if (text) {
             let err = "";
-            const operationKey = JSON.stringify(["text", captured.tabID, scope, target, parentID, text]);
+            // Bound to this composer item: its draft revision and attachment set
+            // (a retry keeps both; a later identical text is a new operation).
+            const operationKey = JSON.stringify(["text", captured.tabID, scope, target, parentID, text, inputRevision, files.map(file => file.operationID || "")]);
             try {
                 err = await sendChatOperation(captured.tabID, scope, target, text, parentID, operationIDFor(operationKey));
                 if (!err) sendOperations.delete(operationKey);

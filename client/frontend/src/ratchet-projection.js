@@ -88,6 +88,8 @@ export function groupRatchetRows(records = []) {
         });
     }
     for (const change of changes) {
+        // An own change shows only once accepted (linked copies carry no status).
+        if (change.self && change.status && change.status !== "accepted") continue;
         const row = rows.get(change.reference_key);
         if (!row || row.from_unique_id !== change.sender || row.deleted) continue;
         if (change.purpose === "delete") Object.assign(row, { deleted: true, body: "" });

@@ -333,25 +333,29 @@ export class DirectMessages extends EventTarget {
         // The explicit confirmation is stored durably with the (now unpinned)
         // contact: the ratchet consumer applies the reset on its next trust
         // check even if no session is live now or the immediate reset fails.
-        await putSealed(Stores.pins, uid, { ratchetReset: true });
+        // A fresh token per confirmation: clearing is compare-and-clear.
+        await putSealed(Stores.pins, uid, { ratchetReset: crypto.randomUUID() });
         this.directory.delete(uid);
         const entry = await this.devicesOf(uid, { refresh: true });
-        if (this.ratchet) {
-            await this.ratchet.resetTrust(uid);
-            await this.clearRatchetReset(uid);
-        }
+        // A live consumer drops the old pins now; the intent itself is cleared
+        // by its next trust check once the new key is pinned.
+        await this.ratchet?.resetTrust(uid);
         return entry;
     }
 
-    /** A confirmed identity change whose ratchet reset is not applied yet (re-pinned to the new key). */
+    /**
+     * Token of a confirmed identity change whose ratchet reset is not applied
+     * yet, once the contact is re-pinned to the new key; otherwise "".
+     */
     async ratchetResetPending(uid) {
         const pinned = await this.#pin(uid);
-        return !!(pinned?.ratchetReset && pinned.signingKey);
+        return pinned?.signingKey && typeof pinned.ratchetReset === "string" ? pinned.ratchetReset : "";
     }
 
-    async clearRatchetReset(uid) {
+    /** Clears exactly this token (a newer confirmation keeps its own). */
+    async clearRatchetReset(uid, token) {
         const pinned = await this.#pin(uid);
-        if (pinned?.ratchetReset) await putSealed(Stores.pins, uid, { ...pinned, ratchetReset: false });
+        if (token && pinned?.ratchetReset === token) await putSealed(Stores.pins, uid, { ...pinned, ratchetReset: "" });
     }
 
     /** Whether this device may send: the account's desktop confirmed it. */

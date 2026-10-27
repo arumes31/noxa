@@ -312,6 +312,25 @@ func TestIdentityDeletionDestroysOnlyItsRatchetNamespaces(t *testing.T) {
 		s.Close()
 	}
 	victim, keep := list[1], list[0]
+	// Fix2 P3-F: a store held by another process fails the deletion as a
+	// whole: nothing is removed, the identity stays usable (fence lifted).
+	held, err := durable.Open(ratchetStoreDir(base, ids[victim.ID]), durable.Namespace{Server: "tls-sha256:" + strings.Repeat("f", 64), Principal: victim.UniqueID, Device: "d1"}, durable.IdentityProtection(bytes.Repeat([]byte{3}, 32)), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg := a.DeleteIdentity(victim.ID, true); msg == "" {
+		t.Fatal("deletion with a held store must fail")
+	}
+	held.Close()
+	if _, err := os.Stat(ratchetStoreDir(base, ids[victim.ID])); err != nil {
+		t.Fatal("a failed deletion must keep the stores", err)
+	}
+	if _, fenced := ratchetDeleted.Load(ids[victim.ID].PublicKey); fenced {
+		t.Fatal("a failed deletion must not leave the identity fenced")
+	}
+	if len(a.ListIdentities()) != 2 {
+		t.Fatal("the identity survives a failed deletion")
+	}
 	if msg := a.DeleteIdentity(victim.ID, true); msg != "" {
 		t.Fatal(msg)
 	}
@@ -323,5 +342,28 @@ func TestIdentityDeletionDestroysOnlyItsRatchetNamespaces(t *testing.T) {
 	}
 	if _, deleted := ratchetDeleted.Load(ids[victim.ID].PublicKey); !deleted {
 		t.Fatal("new sessions of the deleted identity must be fenced")
+	}
+	// Re-importing the same key lifts the fence.
+	restoreRatchetIdentity(ids[victim.ID].PublicKey)
+	if _, deleted := ratchetDeleted.Load(ids[victim.ID].PublicKey); deleted {
+		t.Fatal("re-import must lift the fence")
+	}
+}
+
+func TestRatchetSameContent(t *testing.T) {
+	rec := RatchetRecord{Scope: "direct", Peer: "bob", Purpose: "chat", Body: ratchetJSON(map[string]any{"text": "hi", "sentAt": 1.5})}
+	same := ratchetIntent{Scope: "direct", Peer: "bob", Purpose: "chat", Body: ratchetChatBody("hi")}
+	if !ratchetSameContent(rec, same) {
+		t.Fatal("a retry with a new sentAt is the same content")
+	}
+	for name, in := range map[string]ratchetIntent{
+		"text":    {Scope: "direct", Peer: "bob", Purpose: "chat", Body: ratchetChatBody("other")},
+		"peer":    {Scope: "direct", Peer: "carol", Purpose: "chat", Body: ratchetChatBody("hi")},
+		"purpose": {Scope: "direct", Peer: "bob", Purpose: "edit", Reference: "x", Body: ratchetChatBody("hi")},
+		"scope":   {Scope: "group", Conversation: "bob", Purpose: "chat", Body: ratchetChatBody("hi")},
+	} {
+		if ratchetSameContent(rec, in) {
+			t.Fatalf("%s change treated as the same content", name)
+		}
 	}
 }

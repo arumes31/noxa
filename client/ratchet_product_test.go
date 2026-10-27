@@ -11,6 +11,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -521,6 +522,14 @@ func TestRatchetProductBridge(t *testing.T) {
 	if _, err := A.app.ChatOutboxForTab(A.tab, ChatOutboxRequest{Action: "cancel", ID: qid}); err == nil {
 		t.Fatal("cancel of an uncertain committed entry must be refused")
 	}
+	// Fix2 P3-E: Retry puts it back to queued (the pump waits for the session);
+	// cancel must still be refused.
+	if _, err := A.app.ChatOutboxForTab(A.tab, ChatOutboxRequest{Action: "retry", ID: qid}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := A.app.ChatOutboxForTab(A.tab, ChatOutboxRequest{Action: "cancel", ID: qid}); err == nil {
+		t.Fatal("cancel bypass through retry -> queued")
+	}
 	A.reconnect()
 	A.drain()
 	if e, ok := A.entry("nbob", "nalice", qid); !ok || e.Status != "accepted" || e.Body != "queued original" {
@@ -560,6 +569,11 @@ func TestRatchetProductBridge(t *testing.T) {
 	if _, n := B.entryByBody("nalice", voice); n != 1 {
 		t.Fatalf("recipient must see the retried operation exactly once, got %d", n)
 	}
+	// Fix2 P3-A: the same operation ID with different content never reports
+	// the original as this message being sent.
+	if e := A.app.SendChatOperationForTab(A.tab, "direct", "nbob", "different content", 0, op); !strings.Contains(e, "different message") {
+		t.Fatalf("reused operation with different content: %q", e)
+	}
 
 	// 3c. P2-2: entries queued offline stay queued while the session starts
 	//     and are sent automatically once it is ready.
@@ -575,6 +589,21 @@ func TestRatchetProductBridge(t *testing.T) {
 	if e, ok := A.outboxEntry(oid); !ok || e.State != "queued" {
 		t.Fatalf("entry must wait for the session, not fail: %+v", e)
 	}
+	// Fix2 P3-D: another process holds the store, so the session cannot
+	// attach: the waiting entry says so truthfully instead of waiting silently.
+	held, err := durable.Open(ratchetStoreDir(filepath.Join(A.base, "ratchet"), A.identity()), durable.Namespace{Server: fixture.Binding, Principal: "nalice", Device: A.dev.Device}, *A.protection(), 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	A.cm.mu.Lock()
+	heldConn := A.cm.conn
+	A.cm.mu.Unlock()
+	A.cm.startRatchetRecorded(heldConn)
+	A.app.pumpChatOutbox(A.cm)
+	if e, ok := A.outboxEntry(oid); !ok || e.State != "queued" || !strings.Contains(e.Error, "secure messaging unavailable") {
+		t.Fatalf("blocked session must be surfaced: %+v", e)
+	}
+	held.Close()
 	A.startSession()
 	A.app.pumpChatOutbox(A.cm)
 	if e, ok := A.outboxEntry(oid); ok {
@@ -912,7 +941,12 @@ func TestRatchetProductBridge(t *testing.T) {
 		t.Fatal(err)
 	}
 	A.connect()
-	A.cm.forgetDMDevices("nbob")
+	// Fix2 P2-1: prime the 5-minute device-list cache with a STALE (pre-change)
+	// key for nbob's device. Applying the reset must fetch fresh and pin the
+	// newly confirmed key, never the cached old one.
+	_, cacheEpoch, _ := A.cm.dmDevices.get("nbob", time.Now())
+	staleKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, 32)).Public().(ed25519.PublicKey)
+	A.cm.dmDevices.put("nbob", []dmTrustedDevice{{DeviceID: B.dev.Device, Signing: staleKey, First: true}}, cacheEpoch, time.Now())
 	if e := A.app.SendChatForTab(A.tab, "direct", "nbob", "after confirmed reset"); e != "" {
 		t.Fatalf("durable reset not applied: %q", e)
 	}

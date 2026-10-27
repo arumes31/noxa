@@ -90,6 +90,19 @@ func sharedRatchetEngine() (*ratchet.Engine, error) {
 
 var errRatchetUnavailable = errors.New("secure messaging (noxa-olm-v1) is not ready for this session; nothing was sent")
 
+var errRatchetIdentityDeleted = errors.New("secure messaging is unavailable: this identity's secure message store was deleted")
+
+var ratchetIdentityLocks sync.Map // identity public key -> *sync.Mutex
+
+// lockRatchetIdentity serialises opening and destroying one identity's stores,
+// so a deletion cannot race a store recreation.
+func lockRatchetIdentity(publicKey string) func() {
+	v, _ := ratchetIdentityLocks.LoadOrStore(publicKey, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 // ratchetConfigured reports whether this manager uses the new protocol.
 func (m *connManager) ratchetConfigured() bool {
 	m.mu.Lock()
@@ -125,8 +138,10 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 	if !current || identity == nil || uid == "" || device == "" {
 		return errRatchetUnavailable
 	}
+	unlock := lockRatchetIdentity(identity.PublicKey)
+	defer unlock()
 	if _, deleted := ratchetDeleted.Load(identity.PublicKey); deleted {
-		return errRatchetUnavailable
+		return errRatchetIdentityDeleted
 	}
 	base := cfg.Dir
 	if base == "" {
@@ -206,7 +221,8 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 	s := &ratchetSession{conn: conn, epoch: epoch, handle: handle, consumer: consumer, quit: make(chan struct{}), done: make(chan struct{})}
 	consumer.project(func(r RatchetRecord, isNew bool) { m.projectRatchet(r, isNew, assertCurrent) })
 	m.mu.Lock()
-	if m.conn != conn || m.connEpoch != epoch || m.closed {
+	_, deleted := ratchetDeleted.Load(identity.PublicKey)
+	if m.conn != conn || m.connEpoch != epoch || m.closed || deleted {
 		m.mu.Unlock()
 		close(s.done)
 		s.stop()
@@ -214,6 +230,7 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 	}
 	old := m.ratchetSess
 	m.ratchetSess = s
+	m.ratchetStartErr = nil
 	m.mu.Unlock()
 	if old != nil {
 		go old.stop()
@@ -324,8 +341,12 @@ func (m *connManager) ratchetTransport(conn net.Conn) (func(context.Context, net
 // ratchetDeviceKey returns a device's noXa signing key from the pinned root
 // chain (dmDeviceList: own identity, or the TOFU-pinned contact record plus
 // approval signatures), refreshing once for a newly linked device.
-func (m *connManager) ratchetDeviceKey(_ context.Context, principal, device string) (ed25519.PublicKey, error) {
-	for _, force := range []bool{false, true} {
+func (m *connManager) ratchetDeviceKey(ctx context.Context, principal, device string) (ed25519.PublicKey, error) {
+	order := []bool{false, true}
+	if fresh, _ := ctx.Value(ratchetFreshKey{}).(bool); fresh {
+		order = []bool{true}
+	}
+	for _, force := range order {
 		devices, err := m.dmDeviceList(principal, force)
 		if err != nil {
 			if errors.Is(err, errDMIdentityChanged) {
@@ -377,6 +398,9 @@ func ratchetSent(out RatchetOutcome, err error) (RatchetOutcome, bool) {
 // text stays queued and later resolves exactly; it is never resent changed.
 func ratchetFailure(err error) error {
 	var r *ratchetError
+	if ratchetCode(err) == "logical_mismatch" {
+		return errors.New("a different message was already sent with this operation; nothing new was sent")
+	}
 	if errors.As(err, &r) && r.Committed != nil && r.Committed.Receipt == nil && r.Code != "clock_skew" {
 		return fmt.Errorf("secure delivery is not confirmed yet (%s); the original message stays queued and is resolved exactly", r.Code)
 	}
@@ -393,8 +417,14 @@ func (m *connManager) sendRatchetDirect(conn net.Conn, logicalID, peer, text str
 	if err != nil {
 		return RatchetOutcome{}, err
 	}
-	out, err := c.send(ratchetIntent{LogicalID: logicalID, Scope: "direct", Peer: peer, Purpose: "chat", Body: ratchetChatBody(text)})
+	intent := ratchetIntent{LogicalID: logicalID, Scope: "direct", Peer: peer, Purpose: "chat", Body: ratchetChatBody(text)}
+	out, err := c.send(intent)
 	if sent, ok := ratchetSent(out, err); ok {
+		// A reused operation ID with different content never reports the
+		// original as this message being sent.
+		if sent.Reused && !ratchetSameContent(sent.Record, intent) {
+			return sent, &ratchetError{Code: "logical_mismatch", Committed: &sent}
+		}
 		return sent, nil
 	}
 	return out, err
@@ -449,6 +479,12 @@ func (m *connManager) changeRatchetDirect(peer, reference, action, text string) 
 		key = peer + "\x00" + reference + "\x00" + text
 		minted, _ := m.ratchetEdits.LoadOrStore(key, "edit:"+newClientMsgID())
 		id = minted.(string)
+		// Reuse an edit ID only while that edit is unresolved (or resealable);
+		// once accepted, a later identical edit is a new operation.
+		if state, err := c.logicalState(id); err == nil && state == "accepted" {
+			id = "edit:" + newClientMsgID()
+			m.ratchetEdits.Store(key, id)
+		}
 	}
 	out, err := c.send(ratchetIntent{LogicalID: id, Scope: "direct", Peer: peer, Purpose: action, Reference: reference, Body: body})
 	if _, ok := ratchetSent(out, err); !ok {
@@ -646,9 +682,13 @@ func (m *connManager) applyRatchetTrustReset(uid string) {
 	if err != nil {
 		return
 	}
-	if err = c.resetTrust(uid); err == nil {
-		err = m.clearRatchetReset(uid)
+	token, err := m.ratchetResetPending(uid)
+	if err != nil || token == "" {
+		return
 	}
+	// The intent is cleared by the consumer's next trust check once the new
+	// key is fetched fresh and pinned; here the old pins are dropped now.
+	err = c.resetTrust(uid)
 	if err != nil {
 		log.Printf("ratchet: trust reset for %s stays pending: %v", uid, err)
 		m.emitRatchetTrust(uid, "pending", err)
@@ -671,15 +711,23 @@ var ratchetPrompts sync.Map // manager+contact -> confirmation in flight
 // explicit confirmation pins the new key and stores the ratchet reset intent.
 func (m *connManager) promptRatchetIdentity(uid string) {
 	key := fmt.Sprintf("%p\x00%s", m, uid)
-	if _, busy := ratchetPrompts.LoadOrStore(key, true); busy {
-		return
+	if v, busy := ratchetPrompts.LoadOrStore(key, time.Time{}); busy {
+		// In flight, or declined recently: do not re-prompt on every
+		// reconnect or send; the notice stays truthful.
+		if at, ok := v.(time.Time); !ok || at.IsZero() || time.Since(at) < 10*time.Minute {
+			m.emitRatchetTrust(uid, "blocked", nil)
+			return
+		}
+		ratchetPrompts.Store(key, time.Time{})
 	}
 	m.emitRatchetTrust(uid, "confirmation_required", nil)
 	go guardCrash("ratchet identity prompt", func() {
-		defer ratchetPrompts.Delete(key)
 		if _, result := m.lookupPeerPubKey(uid); result == peerKeyFound {
 			m.forgetDMDevices(uid)
+			ratchetPrompts.Delete(key)
+			return
 		}
+		ratchetPrompts.Store(key, time.Now()) // declined or unanswered
 	})
 }
 
@@ -710,6 +758,8 @@ var ratchetDeleted sync.Map
 // its protected stores. A store still held (another process) fails the
 // deletion explicitly.
 func (a *App) destroyRatchetNamespaces(id *identity) error {
+	unlock := lockRatchetIdentity(id.PublicKey)
+	defer unlock()
 	ratchetDeleted.Store(id.PublicKey, true)
 	bases := map[string]bool{}
 	if base, err := defaultRatchetBase(); err == nil {
@@ -737,10 +787,71 @@ func (a *App) destroyRatchetNamespaces(id *identity) error {
 			s.stop()
 		}
 	}
+	// All-or-nothing: rename every store directory to a tombstone first (a
+	// store held by another process makes the rename fail, nothing is lost
+	// and the identity stays usable), then delete the tombstones.
+	var moved []string
 	for base := range bases {
-		if err := os.RemoveAll(ratchetStoreDir(base, id)); err != nil {
+		dir := ratchetStoreDir(base, id)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+		tomb := dir + ".deleted-" + newClientMsgID()
+		if err := os.Rename(dir, tomb); err != nil {
+			for _, t := range moved {
+				_ = os.Rename(t, t[:strings.LastIndex(t, ".deleted-")])
+			}
+			ratchetDeleted.Delete(id.PublicKey) // the identity survives
 			return fmt.Errorf("secure message store of this identity is in use: %w", err)
+		}
+		moved = append(moved, tomb)
+	}
+	for _, t := range moved {
+		if err := os.RemoveAll(t); err != nil {
+			log.Printf("ratchet: deleted store remains as an unreachable tombstone: %v", err)
 		}
 	}
 	return nil
+}
+
+// restoreRatchetIdentity lifts the deletion fence (deletion failed, or the
+// same identity was imported again).
+func restoreRatchetIdentity(publicKey string) { ratchetDeleted.Delete(publicKey) }
+
+// startRatchetRecorded starts the session and records a failure for the
+// outbox (truthful blocked state) and bounded background retries.
+func (m *connManager) startRatchetRecorded(conn net.Conn) {
+	m.mu.Lock()
+	if m.ratchetStarting || m.conn != conn {
+		m.mu.Unlock()
+		return
+	}
+	m.ratchetStarting, m.ratchetStartAt = true, time.Now()
+	m.mu.Unlock()
+	err := m.startRatchet(conn)
+	m.mu.Lock()
+	m.ratchetStarting = false
+	if m.conn == conn {
+		m.ratchetStartErr = err
+	}
+	m.mu.Unlock()
+	if err != nil {
+		log.Printf("ratchet session unavailable: %v", err)
+	}
+}
+
+// ratchetBlockedReason is the waiting entries' text while the configured
+// session cannot attach; it schedules a bounded retry (30 s).
+func (m *connManager) ratchetBlockedReason() string {
+	m.mu.Lock()
+	err, conn := m.ratchetStartErr, m.conn
+	retry := err != nil && conn != nil && !m.ratchetStarting && time.Since(m.ratchetStartAt) > 30*time.Second
+	m.mu.Unlock()
+	if err == nil {
+		return ""
+	}
+	if retry {
+		go guardCrash("ratchet restart", func() { m.startRatchetRecorded(conn) })
+	}
+	return "secure messaging unavailable: " + err.Error()
 }

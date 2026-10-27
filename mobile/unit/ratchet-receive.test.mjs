@@ -124,7 +124,7 @@ test("Fix P2-3: a durable confirmed identity reset is applied before the trust c
             targets: [{ principal: "alice", device: "a", account_epoch: 1, identity: "id", local: true }, { principal: "bob", device: "b1", account_epoch: 1, identity: "bi" }] };
         const c = consumer(store, async r => (r.action === "snapshot" ? roster : {}), {
             deviceKey: async () => new Uint8Array(32).fill(7),
-            ...(withHook ? { trustReset: async () => pending, trustResetDone: async () => { pending = false; done++; } } : {}),
+            ...(withHook ? { trustReset: async () => (pending ? "tok" : ""), trustResetDone: async (p, token) => { assert.equal(token, "tok"); pending = false; done++; } } : {}),
         });
         ready(c);
         c.identity = "id";

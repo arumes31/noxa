@@ -1723,6 +1723,9 @@ window.runtime.EventsOn("event", (json) => {
         case "ratchet_quarantine":
             chatUI.onRatchetQuarantine(d);
             return;
+        case "ratchet_trust":
+            chatUI.onRatchetTrust(d);
+            return;
         case "chat_pinned":
             chatUI.onChatPinned(d, true);
             return;

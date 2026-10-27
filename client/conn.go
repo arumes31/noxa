@@ -130,6 +130,12 @@ type connManager struct {
 	// ratchetEdits maps an uncertain edit operation (peer, ref, text) to its
 	// logical ID until it is accepted, so a retry resolves it.
 	ratchetEdits sync.Map
+	// ratchetStartErr is the last session-start failure of the current
+	// connection (surfaced on waiting outbox entries); ratchetStartAt bounds
+	// background retries.
+	ratchetStartErr error
+	ratchetStartAt  time.Time
+	ratchetStarting bool
 
 	// debugFrames tees frame summaries to the "debug_frame" event (327 debug
 	// console) when enabled.
@@ -607,9 +613,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	go guardCrash("device registration", func() {
 		m.ensureDeviceRegistered(conn)
 		m.approvePasskeyDevices(conn)
-		if err := m.startRatchet(conn); err != nil {
-			log.Printf("ratchet session unavailable: %v", err)
-		}
+		m.startRatchetRecorded(conn)
 	})
 	return ""
 }

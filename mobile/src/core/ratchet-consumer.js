@@ -321,31 +321,37 @@ export class RatchetConsumer {
     }
     #trust(principal, device) { return this.#casRetry(() => this.#trustOnce(principal, device)); }
     async #trustOnce(principal, device) {
-        if (this.trustReset && await this.trustReset(principal)) {
-            // Apply the durable confirmation first; Olm keys are re-adopted
-            // only from bundles the newly confirmed chain signs.
-            this.#check();
-            await this.#resetTrustRecords(principal);
-            await this.trustResetDone?.(principal);
-            this.#check();
-        }
+        // deviceKey first: it re-pins a confirmed contact, so the durable reset
+        // intent is visible on the FIRST trust check after an offline confirm.
         const key = await this.deviceKey(principal, device);
         this.#check();
+        const token = this.trustReset ? await this.trustReset(principal) : "";
+        if (token) {
+            // Apply the durable confirmation; Olm keys are re-adopted only from
+            // bundles the newly confirmed chain signs.
+            this.#check();
+            await this.#resetTrustRecords(principal);
+            this.#check();
+        }
         if (!(key instanceof Uint8Array) || key.length !== 32) throw fail("untrusted_device");
         const id = RatchetConsumer.trustID(principal, device);
         const s = await this.store.read([["trust", id]]), r = rec(s, "trust", id);
+        const done = async () => { if (token) { await this.trustResetDone?.(principal, token); this.#check(); } };
         if (!r.revision) {
             await this.store.setTrust(s, id, { principal, device, noxa: b64(key) }, false);
             this.#check();
+            await done();
             return { id, key, pin: null };
         }
         const saved = parse(r.data);
         if (saved.revoked) throw fail("revoked");
         if (saved.value.noxa === null) {
             // Explicitly confirmed changed root (resetTrust): pin the newly
-            // trusted noXa key; an Olm pin must be re-adopted from a bundle it signs.
+            // trusted noXa key; an Olm pin must be re-adopted from a bundle it
+            // signs. Only now the intent is cleared (compare-and-clear).
             await this.store.setTrust(s, id, { principal, device, noxa: b64(key) }, false);
             this.#check();
+            await done();
             return { id, key, pin: null };
         }
         if (saved.value.noxa !== b64(key)) throw fail("account_changed");

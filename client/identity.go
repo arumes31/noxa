@@ -816,6 +816,8 @@ func (a *App) adoptImportedIdentityLocked(id *identity, fallbackName string) str
 		return err.Error()
 	}
 	migrateLegacyIdentity(dir)
+	// Importing a key again lifts an earlier deletion fence of its stores.
+	restoreRatchetIdentity(id.PublicKey)
 	for _, existing := range identityIDs(dir) {
 		if e := entryFor(dir, existing, ""); e.UniqueID != "" {
 			if uid, err := id.uniqueID(); err == nil && uid == e.UniqueID {
@@ -936,6 +938,7 @@ func (a *App) DeleteIdentity(id string, confirmUnexported bool) string {
 		return err.Error()
 	}
 	if err := os.Remove(path); err != nil {
+		restoreRatchetIdentity(loaded.PublicKey) // the identity survives
 		return err.Error()
 	}
 	a.settingsMu.Lock()

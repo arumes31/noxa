@@ -26,6 +26,9 @@ type ChatOutboxEntry struct {
 	DueAt     int64  `json:"due_at"`
 	State     string `json:"state"`
 	Error     string `json:"error,omitempty"`
+	// Attempted: a new-protocol send was started for this ID, so a committed
+	// operation may exist and may still be delivered.
+	Attempted bool `json:"attempted,omitempty"`
 }
 type ChatOutboxRequest struct {
 	Action       string `json:"action"`
@@ -35,6 +38,9 @@ type ChatOutboxRequest struct {
 	Text         string `json:"text,omitempty"`
 	ReplyToID    int64  `json:"reply_to_id,omitempty"`
 	QueueOffline bool   `json:"queue_offline,omitempty"`
+	// AcknowledgeUndelivered removes an attempted new-protocol entry although
+	// it cannot be resolved now; the user accepts it may still be delivered.
+	AcknowledgeUndelivered bool `json:"acknowledge_undelivered,omitempty"`
 }
 type ChatOutboxResult struct {
 	Available bool              `json:"available"`
@@ -186,6 +192,22 @@ func (a *App) ChatOutboxForTab(tabID string, request ChatOutboxRequest) (ChatOut
 	if err != nil {
 		return result, err
 	}
+	// The new-protocol cancel check waits on the consumer: never while the
+	// app-wide outbox lock is held. The decision is re-validated below.
+	var cancelChecked *ChatOutboxEntry
+	if request.Action == "cancel" && !request.AcknowledgeUndelivered {
+		if pre, err := store.load(); err == nil {
+			for _, e := range pre {
+				if e.ID == request.ID {
+					if err := cm.ratchetOutboxCancelable(e); err != nil {
+						return result, err
+					}
+					checked := e
+					cancelChecked = &checked
+				}
+			}
+		}
+	}
 	outboxMu.Lock()
 	defer outboxMu.Unlock()
 	if request.Action == "reset" {
@@ -251,8 +273,9 @@ func (a *App) ChatOutboxForTab(tabID string, request ChatOutboxRequest) (ChatOut
 			return result, errors.New("sending has started; check history")
 		}
 		if request.Action == "cancel" {
-			if err := cm.ratchetOutboxCancelable(entries[index]); err != nil {
-				return result, err
+			e := entries[index]
+			if e.Attempted && !request.AcknowledgeUndelivered && (cancelChecked == nil || cancelChecked.State != e.State || !cancelChecked.Attempted) {
+				return result, errors.New("this message changed while checking; try again")
 			}
 			entries = append(entries[:index], entries[index+1:]...)
 		} else {
@@ -313,6 +336,21 @@ func (a *App) pumpChatOutbox(cm *connManager) {
 	// instead of failing while it is still starting (store/core warm-up).
 	_, ratchetErr := cm.ratchetConsumerOn(nil)
 	ratchetWaiting := cm.ratchetConfigured() && ratchetErr != nil
+	if ratchetWaiting {
+		// A session that cannot attach is surfaced truthfully on the waiting
+		// entries (and retried in the background), never a silent wait.
+		if reason := cm.ratchetBlockedReason(); reason != "" {
+			changed := false
+			for i := range entries {
+				if entries[i].Scope == "direct" && (entries[i].State == "held" || entries[i].State == "queued") && entries[i].Error != reason {
+					entries[i].Error, changed = reason, true
+				}
+			}
+			if changed {
+				_ = store.save(entries)
+			}
+		}
+	}
 	index := -1
 	for i, entry := range entries {
 		if outboxSending[store.path+"|"+entry.ID] {
@@ -335,6 +373,10 @@ func (a *App) pumpChatOutbox(cm *connManager) {
 	previousState := entry.State
 	key := store.path + "|" + entry.ID
 	entries[index].State = "sending"
+	entries[index].Error = ""
+	if entry.Scope == "direct" && cm.ratchetConfigured() {
+		entries[index].Attempted = true
+	}
 	if store.save(entries) != nil {
 		outboxMu.Unlock()
 		return
@@ -423,19 +465,21 @@ const outboxStayQueued = "\x00stay-queued"
 // whose committed attempt may still be delivered: undo + resend would then
 // duplicate it. Retry resolves it first (accepted, or aborted/rejected).
 func (m *connManager) ratchetOutboxCancelable(e ChatOutboxEntry) error {
-	if e.Scope != "direct" || e.State != "uncertain" || !m.ratchetConfigured() {
+	// Any attempted entry (uncertain, or retried back to queued) may have a
+	// committed operation; a never-attempted one stays cancellable offline.
+	if e.Scope != "direct" || !e.Attempted || !m.ratchetConfigured() {
 		return nil
 	}
 	c, err := m.ratchetConsumerOn(nil)
 	if err != nil {
-		return errors.New("connect first: this message may still be delivered and must be resolved before it is removed")
+		return errors.New("this message may still be delivered: connect to resolve it first, or remove it acknowledging that it may still arrive")
 	}
 	state, err := c.logicalState(e.ID)
 	if err != nil {
 		return err
 	}
 	if state == "pending" {
-		return errors.New("this message may still be delivered; retry to resolve it before removing it")
+		return errors.New("this message may still be delivered; retry to resolve it, or remove it acknowledging that it may still arrive")
 	}
 	return nil
 }
