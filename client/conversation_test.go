@@ -67,8 +67,8 @@ func TestConversationSendResolvesColdGroupThroughKeyRateLimit(t *testing.T) {
 	app.tabs = map[string]*tabState{"a": {cm: cm}}
 	app.activeID = "a"
 	messageID, err := app.SendConversationForTab("a", group.ID, "hello group", "reference")
-	if err != nil || messageID != 42 {
-		t.Fatalf("send = %d, %v", messageID, err)
+	if err != nil || messageID.MessageID != 42 || messageID.Protocol != "legacy" {
+		t.Fatalf("send = %+v, %v", messageID, err)
 	}
 	if limited != 2 || sent != 1 {
 		t.Fatalf("rate limits = %d, sends = %d; want 2, 1", limited, sent)

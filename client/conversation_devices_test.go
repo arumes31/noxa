@@ -92,8 +92,8 @@ func TestConversationSendRetriesStaleDevicesWithTheSameReference(t *testing.T) {
 	app.tabs = map[string]*tabState{"a": {cm: cm}}
 	app.activeID = "a"
 	id, err := app.SendConversationForTab("a", group.ID, "hello group", "ref-1")
-	if err != nil || id != 7 {
-		t.Fatalf("send = %d, %v", id, err)
+	if err != nil || id.MessageID != 7 || id.Protocol != "legacy" || id.Transport != "" {
+		t.Fatalf("send = %+v, %v", id, err)
 	}
 	mu.Lock()
 	defer mu.Unlock()

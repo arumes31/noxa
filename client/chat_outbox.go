@@ -361,6 +361,15 @@ func (a *App) sendOutboxEntry(cm *connManager, store chatOutboxStore, entry Chat
 	cm.mu.Lock()
 	conn, epoch, identity := cm.conn, cm.connEpoch, cm.id
 	cm.mu.Unlock()
+	if entry.Scope == "direct" && cm.ratchetConfigured() {
+		// The queued entry ID is the stable logical ID: a retry after an
+		// uncertain attempt resolves that original operation, never reseals
+		// changed text. The consumer is pinned to this connection.
+		if _, err := cm.sendRatchetDirect(conn, entry.ID, entry.Target, entry.Text); err != nil {
+			return ratchetFailure(err).Error()
+		}
+		return ""
+	}
 	msg, err := cm.encryptChat(entry.Scope, entry.Target, entry.Text)
 	if err != nil {
 		return encryptFailure(err).Error()

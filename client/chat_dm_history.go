@@ -55,6 +55,13 @@ type DMEntry struct {
 	Edited   bool  `json:"edited,omitempty"`
 	EditedAt int64 `json:"edited_at,omitempty"`
 	Deleted  bool  `json:"deleted,omitempty"`
+	// Protocol is "noxa-olm-v1" for a record projected from the protected
+	// ratchet archive (empty = legacy). Such entries are keyed by (protocol,
+	// sender, ClientMsgID = sender logical ID); Key is the semantic key and
+	// Status the own-send receipt state or "received".
+	Protocol string `json:"protocol,omitempty"`
+	Key      string `json:"key,omitempty"`
+	Status   string `json:"status,omitempty"`
 }
 
 // DMPeer summarises one stored conversation, so PM tabs can be restored on
@@ -319,7 +326,7 @@ func (a *App) dmHistoryAppendWith(store dmHistoryStore, peer, nickname string, e
 		// Re-delivery of the same message (a reconnect replaying an offline
 		// spool) must not duplicate the log.
 		for _, old := range l.Messages {
-			if old.ClientMsgID == e.ClientMsgID && old.Self == e.Self {
+			if old.ClientMsgID == e.ClientMsgID && old.Self == e.Self && old.Protocol == e.Protocol {
 				return ""
 			}
 		}

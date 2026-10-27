@@ -672,6 +672,14 @@ func sendChatWith(cm *connManager, scope, target, text string, replyToID int64) 
 	if text == "" {
 		return "empty message"
 	}
+	if scope == "direct" && cm.ratchetConfigured() {
+		// One durable operation; the logical ID is captured at intent. No
+		// legacy fallback once the new protocol is configured.
+		if _, err := cm.sendRatchetDirect(nil, newClientMsgID(), target, text); err != nil {
+			return ratchetFailure(err).Error()
+		}
+		return ""
+	}
 	msg, err := cm.encryptChat(scope, target, text)
 	if err != nil {
 		return encryptFailure(err).Error()

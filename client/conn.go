@@ -121,6 +121,12 @@ type connManager struct {
 	// returns the conversation it belongs to; set once by the App for tab
 	// managers, nil otherwise.
 	dmChanges func(m *connManager, peer string, c dmChange) string
+	// ratchetTest explicitly enables the noxa-olm-v1 consumer (test sessions
+	// only; production activation is off). ratchetSess is the consumer of the
+	// current (conn, epoch); ratchetProject persists its records (App).
+	ratchetTest    *ratchetTestConfig
+	ratchetSess    *ratchetSession
+	ratchetProject func(m *connManager, r RatchetRecord, isNew bool)
 
 	// debugFrames tees frame summaries to the "debug_frame" event (327 debug
 	// console) when enabled.
@@ -595,7 +601,13 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	})
 	go guardCrash("heartbeat", func() { m.heartbeatLoop(conn) })
 	go guardCrash("relay renewal", func() { m.relayRenewalLoop(conn) })
-	go guardCrash("device registration", func() { m.ensureDeviceRegistered(conn); m.approvePasskeyDevices(conn) })
+	go guardCrash("device registration", func() {
+		m.ensureDeviceRegistered(conn)
+		m.approvePasskeyDevices(conn)
+		if err := m.startRatchet(conn); err != nil {
+			log.Printf("ratchet session unavailable: %v", err)
+		}
+	})
 	return ""
 }
 
@@ -652,6 +664,11 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	m.closed = true
 	m.conn = nil
 	m.connEpoch++
+	// The consumer is fenced by the epoch change; stopping awaits its
+	// in-flight operation (which takes m.mu), so it runs after unlocking.
+	if s := m.takeRatchetLocked(); s != nil {
+		go s.stop()
+	}
 	m.acceptingTransfers = false
 	m.transferEpoch++
 	transferConns := m.detachTransfersLocked()

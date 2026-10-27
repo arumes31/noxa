@@ -264,6 +264,9 @@ func (m *connManager) verifyPeerRecordAt(uid, encoded string, prompt bool, path,
 	if err := writeDMPin(path, dmIdentityPin{Version: 1, Fingerprint: fingerprint, Retired: retired}); err != nil {
 		return [32]byte{}, err
 	}
+	// The explicit confirmation also drops this contact's new-protocol pins;
+	// Olm keys are re-adopted only from bundles the new chain signs.
+	go m.resetRatchetTrust(uid)
 	return record.PublicKey(), nil
 }
 func (m *connManager) verifyMessageKey(uid, encoded, ownUID string, ownPub [32]byte) ([32]byte, error) {
