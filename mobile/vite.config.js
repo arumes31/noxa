@@ -29,6 +29,10 @@ export default {
                 accountReset: fileURLToPath(new URL("./src/core/olm-reset.js", import.meta.url)),
                 ratchetStorage: fileURLToPath(new URL("./src/core/ratchet-store.js", import.meta.url)),
                 ratchet: fileURLToPath(new URL("./src/core/ratchet-core.js", import.meta.url)),
+                // Product consumer entries for the packaged PG/Chromium vertical test.
+                ratchetConsumer: fileURLToPath(new URL("./src/core/ratchet-consumer.js", import.meta.url)),
+                directMessages: fileURLToPath(new URL("./src/core/direct.js", import.meta.url)),
+                groups: fileURLToPath(new URL("./src/core/groups.js", import.meta.url)),
             },
         },
     },

@@ -9,8 +9,11 @@ import { keyFingerprint, openDM, sealDM, toBase64 } from "./crypto.js";
 import { ed25519FromPEM, parseKeyRecord, trustedDevices } from "./dm-trust.js";
 import { Msg } from "./frame.js";
 import { ProtocolError } from "./connection.js";
+import { RATCHET_PROTOCOL } from "./ratchet-consumer.js";
 
 const MsgChatAccepted = 154;
+/** Ratchet failures that a retry with the same state cannot fix. */
+export const FINAL_RATCHET_ERRORS = new Set(["recovery_required", "account_changed", "identity_changed", "untrusted_device", "revoked", "fanout_limit", "invalid", "fenced_copy"]);
 const MAX_MESSAGES = 5000;
 const DIRECTORY_TTL = 5 * 60 * 1000;
 const TYPING_PING_MS = 3000;
@@ -157,17 +160,23 @@ export class DirectMessages extends EventTarget {
             .sort((a, b) => (b.messages.at(-1)?.sentAt || 0) - (a.messages.at(-1)?.sentAt || 0));
     }
 
-    #add(peer, nickname, message) {
+    /** Same message: equal sender-chosen ID from the same sender and protocol. */
+    static same(a, b) {
+        return !!a.id && a.id === b.id && (a.from || "") === (b.from || "") && (a.protocol || "") === (b.protocol || "");
+    }
+
+    #add(peer, nickname, message, { notify = null } = {}) {
         const conversation = this.conversation(peer, nickname);
-        const existing = conversation.messages.findIndex(m => m.id && m.id === message.id);
+        const existing = conversation.messages.findIndex(m => DirectMessages.same(m, message));
         if (existing >= 0) {
             conversation.messages[existing] = { ...conversation.messages[existing], ...message };
         } else {
             conversation.messages.push(message);
             conversation.messages.sort((a, b) => a.sentAt - b.sentAt);
-            const waiting = (conversation.pendingChanges || []).filter(change => change.ref === message.id);
+            const waits = change => change.ref === message.id && change.from === message.from && (change.protocol || "") === (message.protocol || "");
+            const waiting = (conversation.pendingChanges || []).filter(waits);
             if (waiting.length) {
-                conversation.pendingChanges = conversation.pendingChanges.filter(change => change.ref !== message.id);
+                conversation.pendingChanges = conversation.pendingChanges.filter(change => !waits(change));
                 queueMicrotask(() => waiting.forEach(change => this.#applyChange(peer, change)));
             }
             if (conversation.messages.length > MAX_MESSAGES) conversation.messages.splice(0, conversation.messages.length - MAX_MESSAGES);
@@ -175,7 +184,10 @@ export class DirectMessages extends EventTarget {
         // Own messages are written at once; incoming bursts are batched.
         if (message.self) this.#write(peer);
         else this.#save(peer);
-        this.#emit("messages", { peer, message, isNew: existing < 0 });
+        // New-protocol unread/notification effects follow the durable receive
+        // outcome (notify), never whether a debounced display cache had it.
+        const isNew = notify === null ? existing < 0 : existing < 0 && notify;
+        this.#emit("messages", { peer, message, isNew });
         return existing < 0;
     }
 
@@ -384,7 +396,9 @@ export class DirectMessages extends EventTarget {
      */
     #applyChange(peer, change) {
         const conversation = this.conversation(peer);
-        const message = conversation.messages.find(m => m.id === change.ref);
+        // Authenticated changes address the original sender's logical ID within
+        // the same protocol; a legacy change never edits a ratcheted record.
+        const message = conversation.messages.find(m => m.id === change.ref && m.from === change.from && (m.protocol || "") === (change.protocol || ""));
         if (!message) {
             conversation.pendingChanges = [...(conversation.pendingChanges || []), change].slice(-50);
             this.#save(peer);
@@ -405,6 +419,7 @@ export class DirectMessages extends EventTarget {
     /** Sends text to peer, sealed for every trusted device. */
     async send(peer, text, nickname = "", { id = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}) {
         await this.ready;
+        if (this.ratchet) return this.#sendRatchet(peer, text, nickname, id, sentAt);
         const message = { id, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, pending: true, queued: false };
         this.#add(peer, nickname, message);
         try {
@@ -449,6 +464,7 @@ export class DirectMessages extends EventTarget {
     /** Edits one of this account's messages on every device. */
     async editMessage(peer, ref, text) {
         const message = this.#ownMessage(peer, ref);
+        if (message.protocol === RATCHET_PROTOCOL) return this.#changeRatchet(peer, message, "edit", text);
         await this.#sendCopies(peer, text, crypto.randomUUID(), false, { dm_action: "edit", ref_client_msg_id: ref });
         this.#add(peer, "", { ...message, body: text, edited: true });
     }
@@ -456,12 +472,13 @@ export class DirectMessages extends EventTarget {
     /** Deletes one of this account's messages on every device. */
     async deleteMessage(peer, ref) {
         const message = this.#ownMessage(peer, ref);
+        if (message.protocol === RATCHET_PROTOCOL) return this.#changeRatchet(peer, message, "delete", "");
         await this.#sendCopies(peer, "", crypto.randomUUID(), false, { dm_action: "delete", ref_client_msg_id: ref });
         this.#add(peer, "", { ...message, body: "", deleted: true, edited: false });
     }
 
     #ownMessage(peer, ref) {
-        const message = this.conversations.get(peer)?.messages.find(m => m.id === ref);
+        const message = this.conversations.get(peer)?.messages.find(m => m.id === ref && m.from === this.ownUID);
         if (!message || !message.self || message.deleted || message.queued || message.pending) throw new Error("only your sent messages can be changed");
         return message;
     }
@@ -481,6 +498,69 @@ export class DirectMessages extends EventTarget {
             if (!retried && error instanceof ProtocolError && error.devicesStale) return this.#sendCopies(peer, text, id, true, change);
             throw error;
         }
+    }
+
+    // --- noxa-olm-v1 (explicitly enabled sessions only) ---------------------
+
+    /**
+     * Routes this session's direct sends/edits/deletes through one durable
+     * RatchetConsumer and projects its authenticated archive. Once attached,
+     * new-protocol failures never fall back to legacy sending or decoding.
+     */
+    async attachRatchet(consumer) {
+        this.ratchet = consumer;
+        consumer.project((record, { isNew }) => this.#project(record, isNew));
+        await this.ready;
+        // The protected archive is authoritative: restore views it holds.
+        for (const record of await consumer.history()) if (record.scope === "direct") await this.#project(record, false);
+    }
+
+    async #project(record, isNew) {
+        if (record.scope !== "direct" || record.protocol !== RATCHET_PROTOCOL || !record.peer) return;
+        const body = record.body && typeof record.body === "object" ? record.body : {};
+        const text = typeof body.text === "string" ? body.text : "";
+        if (record.purpose === "edit" || record.purpose === "delete") {
+            this.#applyChange(record.peer, { action: record.purpose, ref: record.reference, from: record.sender, text, protocol: RATCHET_PROTOCOL });
+            return;
+        }
+        const own = record.sender === this.ownUID;
+        const prior = this.conversations.get(record.peer)?.messages.find(m => m.id === record.logicalID && m.from === record.sender && m.protocol === RATCHET_PROTOCOL);
+        const status = record.status || (own ? "" : "received");
+        const message = {
+            id: record.logicalID, key: record.key, protocol: RATCHET_PROTOCOL, from: record.sender, fromNickname: prior?.fromNickname || "",
+            self: own, copied: own && !!record.copied, body: prior?.deleted ? "" : prior?.edited ? prior.body : text,
+            edited: !!prior?.edited, deleted: !!prior?.deleted, verified: true, sentAt: record.sentAt, transport: record.transport || {},
+            pending: own && status === "pending", queued: false, failed: own && (status === "rejected" || status === "aborted"),
+            ...(own && status === "accepted" ? { receipt: prior?.receipt || "sent" } : {}),
+        };
+        if (!own && this.typing.delete(record.peer)) this.#emit("typing", { peer: record.peer });
+        this.#add(record.peer, "", message, { notify: isNew && !own });
+        if (!prior) await putSealed(Stores.dm, record.peer, this.conversations.get(record.peer)).catch(() => {});
+    }
+
+    async #sendRatchet(peer, text, nickname, id, sentAt) {
+        const existing = this.conversations.get(peer)?.messages.find(m => m.id === id && m.from === this.ownUID && m.protocol === RATCHET_PROTOCOL);
+        // Never paint a changed draft over an already committed operation.
+        if (!existing) {
+            this.#add(peer, nickname, { id, protocol: RATCHET_PROTOCOL, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, pending: true, queued: false });
+        }
+        try {
+            return await this.ratchet.send({ logicalID: id, scope: "direct", peer, body: { text, sentAt } });
+        } catch (error) {
+            const committed = error.committed;
+            // Without a terminal receipt a committed attempt is uncertain: keep
+            // its ORIGINAL committed text queued for exact resolution.
+            const retryable = !committed?.receipt && !(error instanceof ProtocolError) && !FINAL_RATCHET_ERRORS.has(error.code);
+            this.#add(peer, nickname, { id, protocol: RATCHET_PROTOCOL, from: this.ownUID, fromNickname: this.session.nickname, self: true,
+                body: committed ? committed.record.body?.text ?? "" : existing?.body ?? text, verified: true, sentAt: committed?.record.sentAt || sentAt,
+                pending: false, failed: !retryable, queued: retryable });
+            throw Object.assign(error, { retryable });
+        }
+    }
+
+    async #changeRatchet(peer, message, action, text) {
+        // reference = the original sender's logical ID, never a transport UUID.
+        await this.ratchet.send({ logicalID: crypto.randomUUID(), scope: "direct", peer, purpose: action, reference: message.id, body: action === "edit" ? { text } : {} });
     }
 
     // --- History copy ---------------------------------------------------------

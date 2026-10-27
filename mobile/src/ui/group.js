@@ -3,7 +3,7 @@
 import { app, queueMessage, startGroupCall } from "../app.js";
 import { isMuted } from "../core/conversation-prefs.js";
 import { uploadAttachment } from "../core/files.js";
-import { seenMarkers } from "../core/groups.js";
+import { legacyID, seenMarkers } from "../core/groups.js";
 import { remove as removeQueued } from "../core/outbox.js";
 import { t } from "../i18n.js";
 import { avatar, h, sheet, toast } from "./dom.js";
@@ -70,13 +70,15 @@ export function renderGroup(root, id) {
     async function messageActions(message) {
         const hasText = typeof message.text === "string" && !!message.text;
         // Only the owner may delete messages in a group (netproto.ChangeConversation).
-        const deletable = !message.local && !message.deleted && conversation()?.owner === app.session.uniqueID;
+        // Ratcheted records are deleted only by their authenticated sender.
+        const deletable = !message.local && !message.deleted && (message.protocol ? message.from_unique_id === app.session.uniqueID : conversation()?.owner === app.session.uniqueID);
         const choice = await actionSheet({
             title: t("act.messageFrom", { name: memberName(message.from_unique_id) }), subtitle: excerpt(message.text, 160),
             actions: [
                 hasText ? { label: t("act.copy"), value: "copy" } : null,
                 hasText && canShare() ? { label: t("act.share"), value: "share" } : null,
-                message.id ? { label: t("act.save"), value: "save" } : null,
+                // Saved items resolve legacy numeric history only.
+                legacyID(message) ? { label: t("act.save"), value: "save" } : null,
                 deletable ? { label: t("dm.delete"), value: "delete", danger: true } : null,
             ].filter(Boolean),
         });

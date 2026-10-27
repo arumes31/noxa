@@ -8,7 +8,7 @@ async function fixture(stored = [], registration = async () => null) {
     const sources = {
         './core/chat-session.js': { ChatSession: class {} }, './core/direct.js': { DirectMessages: class {} },
         './core/calls.js': { Calls: class {} }, './core/groups.js': { Groups: class {} }, './core/voice.js': { Voice: class {} },
-        './core/connection.js': { Connection: class {} }, './core/crypto.js': { generateIdentity: none }, './core/device.js': { signIn: none },
+        './core/connection.js': { Connection: class {} }, './core/frame.js':{Msg:{}}, './core/olm-directory.js':{serverBinding:()=>'',signBundle:()=>({})}, './core/ratchet-consumer.js':{RatchetConsumer:class{},connectionTransport:()=>({})}, './core/crypto.js': { generateIdentity: none }, './core/device.js': { signIn: none },
         './core/identity-store.js': { assertIdentityFence: none, beginIdentity: none, clearIdentity: none, loadIdentity: none, saveIdentity: none, updateMeta: none },
         './core/outbox.js': { enqueue: none, flush: none, showPending: none, waitingCount: none },
         './core/push.js': { announceRead: none, closeNotifications: tag => closed.push(tag), reportVisibility: none, setBadge: none, syncPush: none },

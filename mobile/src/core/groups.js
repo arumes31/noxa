@@ -17,6 +17,8 @@
 import { ProtocolError } from "./connection.js";
 import { openDM, sealDM } from "./crypto.js";
 import { Msg } from "./frame.js";
+import { RATCHET_PROTOCOL } from "./ratchet-consumer.js";
+import { FINAL_RATCHET_ERRORS } from "./direct.js";
 
 const MsgConversationRequest = 170;
 const MsgConversationResult = 171;
@@ -27,10 +29,18 @@ export const MAX_GROUP_MEMBERS = 16;
 export const GROUP_TYPING_TTL_MS = 4500;
 const TYPING_PING_MS = 3000;
 
-/** Server messages by ID, then messages not yet accepted (local) by time. */
+/** Legacy server history keeps numeric IDs; noxa-olm-v1 records are opaque. */
+export const legacyID = m => !m.local && typeof m.id === "number" && m.id > 0;
+
+/**
+ * Server messages by ID, then messages not yet accepted (local) by time.
+ * Opaque ratcheted records order by authenticated send time; their string
+ * IDs are never coerced into legacy numeric positions.
+ */
 function byOrder(a, b) {
     if (a.local !== b.local) return a.local ? 1 : -1;
-    return a.local ? a.created_at - b.created_at : a.id - b.id;
+    if (!a.local && legacyID(a) && legacyID(b)) return a.id - b.id;
+    return (a.created_at || 0) - (b.created_at || 0);
 }
 
 /**
@@ -180,6 +190,13 @@ export class Groups extends EventTarget {
 
     /** Deletes one message for every member (owner). */
     async deleteMessage(id, messageID) {
+        const record = (this.messages.get(id) || []).find(m => m.id === messageID);
+        if (record?.protocol === RATCHET_PROTOCOL) {
+            if (!this.ratchet || record.from_unique_id !== this.uid) throw new Error("only your sent messages can be changed");
+            // reference = the original sender's logical ID, never a transport UUID.
+            await this.ratchet.send({ logicalID: crypto.randomUUID(), scope: "group", conversation: id, purpose: "delete", reference: record.reference, body: {} });
+            return;
+        }
         await this.#change(id, { action: "delete_message", message_id: messageID });
         const list = this.messages.get(id) || [];
         const index = list.findIndex(m => m.id === messageID);
@@ -299,12 +316,12 @@ export class Groups extends EventTarget {
     }
 
     #newest(id) {
-        return (this.messages.get(id) || []).filter(m => !m.local).at(-1)?.id || 0;
+        return (this.messages.get(id) || []).filter(legacyID).at(-1)?.id || 0;
     }
 
     /** Loads one page of older messages; returns whether more exist. */
     async loadOlder(id) {
-        const oldest = (this.messages.get(id) || []).find(m => !m.local)?.id || 0;
+        const oldest = (this.messages.get(id) || []).find(legacyID)?.id || 0;
         const result = await this.#request({ action: "history", id, before_id: oldest });
         await this.#store(id, result.messages || []);
         return (result.messages || []).length === 25;
@@ -371,6 +388,7 @@ export class Groups extends EventTarget {
      * Lost connections throw with retryable set (for the outbox).
      */
     async send(id, text, { reference = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}, retried = false) {
+        if (this.ratchet) return this.#sendRatchet(id, text, reference, sentAt);
         this.#local(id, { reference, text, sentAt, pending: true });
         try {
             const conversation = await this.get(id);
@@ -404,6 +422,68 @@ export class Groups extends EventTarget {
             // Lost connections leave the message for the outbox; refusals fail it.
             const retryable = !(error instanceof ProtocolError) && !error.code;
             this.#local(id, { reference, text, sentAt, queued: retryable, failed: !retryable });
+            throw Object.assign(error, { retryable });
+        }
+    }
+
+    // --- noxa-olm-v1 (explicitly enabled sessions only) --------------------
+
+    /** Routes private group sends through the session's durable consumer. */
+    async attachRatchet(consumer) {
+        this.ratchet = consumer;
+        consumer.project((record, { isNew }) => this.#project(record, isNew));
+        for (const record of await consumer.history()) if (record.scope === "group") this.#project(record, false);
+    }
+
+    #project(record, isNew) {
+        if (record.scope !== "group" || record.protocol !== RATCHET_PROTOCOL || !record.conversation) return;
+        const id = record.conversation, list = [...(this.messages.get(id) || [])];
+        const text = typeof record.body?.text === "string" ? record.body.text : "";
+        if (record.purpose === "delete" || record.purpose === "edit") {
+            // Authenticated sender + logical reference; a different sender that
+            // reused the same logical string can never match.
+            const index = list.findIndex(m => m.key === record.referenceKey);
+            if (index < 0) {
+                this.#waiting.set(record.referenceKey, record);
+                return;
+            }
+            list[index] = record.purpose === "delete" ? { ...list[index], text: "", deleted: true } : { ...list[index], text, edited: true };
+            this.#put(id, list);
+            return;
+        }
+        const key = "olm:" + record.key, own = record.sender === this.uid;
+        const index = list.findIndex(m => m.id === key);
+        const status = record.status || (own ? "" : "received");
+        const message = { id: key, key: record.key, protocol: RATCHET_PROTOCOL, reference: record.logicalID, conversation_id: id,
+            from_unique_id: record.sender, text, created_at: record.sentAt, transport: record.transport || {},
+            ...(own && status === "pending" ? { local: true, pending: true } : {}),
+            ...(own && (status === "rejected" || status === "aborted") ? { local: true, failed: true } : {}) };
+        if (index >= 0) {
+            // Keep later authenticated edits/deletes over a replayed original.
+            const prior = list[index];
+            list[index] = { ...message, ...(prior.deleted ? { text: "", deleted: true } : prior.edited ? { text: prior.text, edited: true } : {}) };
+        } else list.push(message);
+        if (message.local) message.id = "local:" + record.logicalID;
+        this.#put(id, list.filter(m => !(m.local && m.reference === record.logicalID && m.from_unique_id === this.uid && m !== message)));
+        const waiting = this.#waiting.get(record.key);
+        if (waiting) { this.#waiting.delete(record.key); this.#project(waiting, false); }
+        if (isNew && !own) this.#emit("incoming", { id, messageID: key });
+    }
+
+    #waiting = new Map();
+
+    async #sendRatchet(id, text, reference, sentAt) {
+        const committed = (this.messages.get(id) || []).find(m => m.reference === reference && m.from_unique_id === this.uid && m.protocol === RATCHET_PROTOCOL && !m.local);
+        if (!committed) this.#local(id, { reference, text, sentAt, pending: true, protocol: RATCHET_PROTOCOL });
+        try {
+            // Returns the typed {record, receipt, reused}; receipt.message_id
+            // is an opaque transport UUID, NOT a legacy numeric message ID.
+            return await this.ratchet.send({ logicalID: reference, scope: "group", conversation: id, body: { text, sentAt } });
+        } catch (error) {
+            const original = error.committed;
+            const retryable = !original?.receipt && !(error instanceof ProtocolError) && !FINAL_RATCHET_ERRORS.has(error.code);
+            this.#local(id, { reference, text: original ? original.record.body?.text ?? "" : text, sentAt: original?.record.sentAt || sentAt,
+                queued: retryable, failed: !retryable, protocol: RATCHET_PROTOCOL });
             throw Object.assign(error, { retryable });
         }
     }

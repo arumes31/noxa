@@ -7,6 +7,9 @@ import { Groups } from "./core/groups.js";
 import { Voice } from "./core/voice.js";
 import { SavedMessages } from "./core/saved.js";
 import { Connection } from "./core/connection.js";
+import { Msg } from "./core/frame.js";
+import { serverBinding, signBundle } from "./core/olm-directory.js";
+import { RatchetConsumer, connectionTransport } from "./core/ratchet-consumer.js";
 import { generateIdentity } from "./core/crypto.js";
 import { signIn } from "./core/device.js";
 import { assertIdentityFence, beginIdentity, clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
@@ -90,6 +93,7 @@ export async function rememberLinkedIdentity(identity, meta, fence) {
 
 export async function forgetDevice(fence) {
     connectionGeneration++;
+    stopRatchet();
     clearReminders();
     app.groups?.close();
     app.groups = null;
@@ -113,6 +117,59 @@ export async function forgetDevice(fence) {
     unreadChanged();
     app.viewing = null;
     emit("signedout");
+}
+
+// --- noxa-olm-v1 consumer (inactive in production) -----------------------
+//
+// No capability advertises admission yet and the PWA has no independently
+// verified certificate binding of its own; production activation stays OFF
+// until the final cutover supplies both. Only an explicitly enabled test
+// session constructs a consumer, and then every direct/group send uses it with
+// no legacy fallback.
+let ratchetTest = null;
+app.ratchet = null;
+export function enableRatchetTestSession(options = null) {
+    ratchetTest = options ? { serverBinding: serverBinding(options.serverBinding), pollMS: options.pollMS || 5000 } : null;
+}
+
+async function openRatchet(session, fence, isCurrent) {
+    const [{ openRatchetStore }, { createRatchetCore }] = await Promise.all([import("./core/ratchet-store.js"), import("./core/ratchet-core.js")]);
+    const namespace = { server: ratchetTest.serverBinding, principal: session.uniqueID, device: session.deviceID };
+    const store = await openRatchetStore(namespace);
+    const core = await createRatchetCore();
+    const owner = { consumer: null, core, timer: 0, dm: null };
+    const fenced = () => Object.assign(new Error("ratchet session fenced"), { code: "fenced" });
+    owner.consumer = new RatchetConsumer({
+        store, core, namespace, ...connectionTransport(session.conn, Msg),
+        // noXa device keys come only from the pinned root/approval chain.
+        deviceKey: async (principal, device) => {
+            for (const refresh of [false, true]) {
+                const entry = await owner.dm.devicesOf(principal, { refresh });
+                if (entry.trust === "changed") throw Object.assign(new Error("identity changed"), { code: "identity_changed" });
+                const found = entry.devices.find(d => d.deviceID === device);
+                if (found) return found.signingKey;
+            }
+            throw Object.assign(new Error("untrusted device"), { code: "untrusted_device" });
+        },
+        signBundle: async bundle => { await assertIdentityFence(fence); return signBundle(bundle, session.identity.edSecret); },
+        assertCurrent: () => { if (!isCurrent()) throw fenced(); },
+    });
+    return owner;
+}
+
+function stopRatchet() {
+    const owner = app.ratchet;
+    app.ratchet = null;
+    if (!owner) return;
+    clearTimeout(owner.timer);
+    owner.consumer.close().finally(() => owner.core.close());
+}
+
+function pollRatchet(owner, session) {
+    const tick = () => owner.consumer.drain().catch(() => {}).finally(() => {
+        if (app.ratchet === owner && app.session === session && !owner.consumer.closed) owner.timer = setTimeout(tick, ratchetTest?.pollMS || 5000);
+    });
+    tick();
 }
 
 /** Signs in with the stored device key and starts the chat session. */
@@ -147,6 +204,7 @@ export async function connect({ guest = null, fence } = {}) {
     }
     const session = new ChatSession(conn, identity, auth, { deferIncoming: true });
     let activated = false;
+    let ratchet = null;
     // Subscribing delivers a channel's chat and keys without joining it;
     // channels the user unsubscribed from in Servers stay unsubscribed.
     const subscribeMissing = () => {
@@ -166,16 +224,27 @@ export async function connect({ guest = null, fence } = {}) {
         }
         await assertIdentityFence(fence);
         if (session.initializationError) throw session.initializationError;
+        if (ratchetTest && !guest && !meta.guest) {
+            let published = false;
+            ratchet = await openRatchet(session, fence, () => attempt === connectionGeneration && (!published || app.session === session) && session.conn.open !== false);
+            ratchet.publish = () => { published = true; };
+        }
         if (conn.open === false) throw new Error("connection closed during session initialization");
         checkAttempt();
     } catch (error) {
+        if (ratchet) ratchet.consumer.close().finally(() => ratchet.core.close());
         session.close();
         conn.close();
         throw error;
     }
+    stopRatchet();
     const previousSession = app.session;
     app.session = session;
     previousSession?.close();
+    if (ratchet) {
+        ratchet.publish();
+        app.ratchet = ratchet;
+    }
     app.identityFence = fence;
     app.meta = meta;
     activated = true;
@@ -197,6 +266,11 @@ export async function connect({ guest = null, fence } = {}) {
     app.dm?.close();
     const dm = new DirectMessages(session, app.meta);
     dm.shareActivity = activityShared;
+    if (ratchet) {
+        // Attached before dm/groups are published, so no send can go legacy.
+        ratchet.dm = dm;
+        dm.attachRatchet(ratchet.consumer).catch(() => {});
+    }
     app.dm = dm;
     dm.addEventListener("messages", event => {
         const { peer, message, isNew } = event.detail;
@@ -206,6 +280,10 @@ export async function connect({ guest = null, fence } = {}) {
     app.groups?.close();
     app.groups = new Groups(session, dm);
     app.groups.shareActivity = activityShared;
+    if (ratchet) {
+        app.groups.attachRatchet(ratchet.consumer).catch(() => {});
+        pollRatchet(ratchet, session);
+    }
     app.groups.addEventListener("incoming", event => noteUnread(`conversation:${event.detail.id}`, false, { kind: "group", name: app.groups?.list.get(event.detail.id)?.name }));
     app.groups.addEventListener("list", () => emit("groups"));
     app.groups.refresh().catch(() => {});
@@ -222,6 +300,7 @@ export async function connect({ guest = null, fence } = {}) {
     }).catch(() => {});
     conn.addEventListener("close", () => {
         if (app.session !== session) return;
+        stopRatchet();
         setOnline(false);
         scheduleReconnect();
     });
@@ -294,6 +373,7 @@ export async function joinVoice(channelID, password = "") {
 export function disconnect() {
     connectionGeneration++;
     clearTimeout(reconnectTimer);
+    stopRatchet();
     const session = app.session;
     app.session = null;
     app.voice?.close();
