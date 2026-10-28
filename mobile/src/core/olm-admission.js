@@ -462,19 +462,30 @@ export function validateControlSend(body, now) {
   return b;
 }
 
-/** "delivered", "expired" or "invalid" for a received control body (an
- * expiry further ahead than a sender may set, plus clock skew, is invalid). */
-export function controlDisposition(body, now) {
+/**
+ * Judges a received control ONCE, on its exact authenticated bytes (Go
+ * parity): {status: "delivered"|"expired"|"invalid", body}. body is the parsed
+ * control (null when invalid); it is handed to the handlers and the archive as
+ * is, never re-serialized and re-checked (JSON.stringify can lengthen numbers,
+ * so a re-check could reject a body the raw bound accepted). An expiry further
+ * ahead than a sender may set, plus clock skew, is invalid.
+ */
+export function judgeControl(raw, now) {
   let b;
-  try { b = parseControlBody(body); } catch { return "invalid"; }
-  if (b.expires_at > now + MAX_CONTROL_TTL + CONTROL_CLOCK_SKEW) return "invalid";
-  return b.expires_at <= now ? "expired" : "delivered";
+  try { b = parseControlBody(raw); } catch { return { status: "invalid", body: null }; }
+  if (b.expires_at > now + MAX_CONTROL_TTL + CONTROL_CLOCK_SKEW) return { status: "invalid", body: null };
+  return { status: b.expires_at <= now ? "expired" : "delivered", body: b };
 }
 
-/** What is kept at rest for a control: never its data (future media keys). */
-export function controlArchiveBody(body) {
-  let b;
-  try { b = parseControlBody(body); } catch { return null; }
+/** "delivered", "expired" or "invalid" for a received control body. */
+export function controlDisposition(body, now) {
+  return judgeControl(body, now).status;
+}
+
+/** What is kept at rest for an already parsed control (judgeControl /
+ * validateControlSend): never its data (future media keys). */
+export function controlArchiveBody(b) {
+  if (!b || typeof b !== "object" || !b.scope || typeof b.scope !== "object") return null;
   return { kind: b.kind, scope: { type: b.scope.type, id: b.scope.id }, epoch: b.epoch, expires_at: b.expires_at };
 }
 export function checkEnvelope(m, c) {

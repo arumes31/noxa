@@ -5,7 +5,7 @@
 import { dayKey, daysBetween, relativeTime } from "../core/message-format.js";
 import * as settings from "../core/settings.js";
 import { lang, t } from "../i18n.js";
-import { clock, h, sheet } from "./dom.js";
+import { clock, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import "./rich-strings.js";
 import "./rich-text.css";
@@ -120,8 +120,14 @@ export async function reviewCertificateChange(status) {
         { label: t("guest.certificateAccept"), value: true, danger: true },
         { label: t("link.cancel"), value: false, primary: true },
     ]);
-    if (choice === true) return status.confirm();
-    return false;
+    if (choice !== true) return false;
+    // A failed save keeps the old pin (fail closed); say so instead of
+    // leaving an unhandled rejection behind an unchanged banner.
+    try { return await status.confirm(); }
+    catch {
+        toast(t("guest.certificateSaveFailed"), "error");
+        return false;
+    }
 }
 
 /** A blocked sender's message, folded; Show calls onShow. */

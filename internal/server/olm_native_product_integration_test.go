@@ -6,9 +6,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lib/pq"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/curve25519"
 )
@@ -348,9 +351,17 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 				return map[string]any{"binding": binding, "groups": groupIDs, "devices": devices, "real_addr": live.addr, "web_url": webHTTP.URL}, nil
 			case "app_guest_principal":
 				// The PWA guest's key-derived principal: its self-registered
-				// first web device (no other web device is first).
+				// first web device. Fixture accounts (whose web devices may be
+				// first too) are excluded; "" until the guest has registered.
+				fixture := make([]string, 0, len(devices))
+				for _, d := range devices {
+					fixture = append(fixture, d.Principal)
+				}
 				var p string
-				e := db.DB().QueryRowContext(ctx, `SELECT principal FROM user_devices WHERE kind='web' AND first_device AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1`).Scan(&p)
+				e := db.DB().QueryRowContext(ctx, `SELECT principal FROM user_devices WHERE kind='web' AND first_device AND revoked_at IS NULL AND NOT (principal = ANY($1)) ORDER BY created_at DESC LIMIT 1`, pq.Array(fixture)).Scan(&p)
+				if errors.Is(e, sql.ErrNoRows) {
+					return "", nil
+				}
 				return p, e
 			case "drop":
 				drop[req.Device+"/"+req.Action]++

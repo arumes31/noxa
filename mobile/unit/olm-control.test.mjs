@@ -2,7 +2,7 @@
 // internal/e2ee/admission/control.go and control_test.go).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateManifest, expectedBinding, controlTarget, parseControlBody, validateControlSend, controlDisposition, controlArchiveBody, MAX_CONTROL_TTL } from "../src/core/olm-admission.js";
+import { validateManifest, expectedBinding, controlTarget, parseControlBody, validateControlSend, controlDisposition, controlArchiveBody, judgeControl, MAX_CONTROL_TTL } from "../src/core/olm-admission.js";
 
 const manifest = () => ({
     version: "noxa-olm-admission-v1", server: "tls-sha256:" + "a".repeat(64), sender: "a", device: "d0", account_epoch: 1, attempt_id: "1", logical_id: "ctl1",
@@ -80,6 +80,33 @@ test("review b7 P3-1: shared Go/JS control vectors give the same disposition (ra
     const vectors = JSON.parse(await readFile(new URL("../../internal/e2ee/admission/testdata/control-vectors.json", import.meta.url), "utf8"));
     assert.ok(vectors.length >= 20);
     for (const v of vectors) assert.equal(controlDisposition(v.body, v.now), v.want, v.name);
+});
+
+test("review b8 P3-2: a control is parsed once from its raw bytes; handlers and archive get that parse", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const vectors = JSON.parse(await readFile(new URL("../../internal/e2ee/admission/testdata/control-vectors.json", import.meta.url), "utf8"));
+    for (const v of vectors) {
+        const judged = judgeControl(v.body, v.now);
+        assert.equal(judged.status, v.want, v.name);
+        if (v.want === "invalid") { assert.equal(judged.body, null, v.name); continue; }
+        // What #emitControl hands out and what the archive keeps come from
+        // this single parse (no JSON.stringify round trip, no second check).
+        assert.equal(typeof judged.body, "object", v.name);
+        assert.notEqual(controlArchiveBody(judged.body), null, v.name);
+    }
+    // The review repro: 1000 exponent literals pass the raw 4096-byte bound
+    // (Go delivers) although JSON.stringify would expand them past it.
+    const now = 1_800_000_000;
+    const data = "[" + Array(1000).fill("1e9").join(",") + "]";
+    const raw = `{"kind":"media-key","scope":{"type":"call","id":"c"},"epoch":1,"expires_at":${now + 60},"data":${data}}`;
+    assert.equal(raw.length, 4096);
+    const judged = judgeControl(raw, now);
+    assert.equal(judged.status, "delivered");
+    assert.equal(judged.body.data.length, 1000, "handlers receive the data");
+    assert.ok(JSON.stringify(judged.body.data).length > 4096, "a re-check of the re-serialized body would have dropped it");
+    assert.deepEqual(controlArchiveBody(judged.body), { kind: "media-key", scope: { type: "call", id: "c" }, epoch: 1, expires_at: now + 60 });
+    const src = await readFile(new URL("../src/core/ratchet-consumer.js", import.meta.url), "utf8");
+    assert.ok(!src.includes("parseControlBody("), "the consumer never re-parses a received control");
 });
 
 test("the frame rate-limit text matches netproto.RequestRateLimitMessage", async () => {

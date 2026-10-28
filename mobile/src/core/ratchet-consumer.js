@@ -24,9 +24,8 @@ import {
     recoveryReceipt,
     sealPayload,
     validateControlSend,
-    controlDisposition,
+    judgeControl,
     controlArchiveBody,
-    parseControlBody,
     MAX_CONTROL_TTL,
 } from "./olm-admission.js";
 import { verifyBundleEvidence, verifyReservedClaim, OLM_DIRECTORY_VERSION } from "./olm-directory.js";
@@ -540,8 +539,10 @@ export class RatchetConsumer {
     onControl(fn) { this.controls.push(fn); }
     async #emitControl(record, isNew) {
         if (!isNew || record.status !== "delivered" || !record.transport?.delivery || record.senderDevice === this.namespace.device) return;
-        let b;
-        try { b = parseControlBody(record.body); } catch { return; }
+        // Parsed once from the exact received bytes (judgeControl): never
+        // re-serialized and re-checked here.
+        const b = record.body;
+        if (!b || typeof b !== "object") return;
         const out = { sender: record.sender, senderDevice: record.senderDevice, logicalID: record.logicalID, kind: b.kind, scope: b.scope,
             epoch: b.epoch, expiresAt: b.expires_at, ...(b.data !== undefined ? { data: b.data } : {}), delivery: record.transport.delivery };
         const handlers = [...this.controls];
@@ -742,9 +743,11 @@ export class RatchetConsumer {
         const control = purpose === "control";
         if (!["direct", "group"].includes(scope) || !["chat", "edit", "delete", "control"].includes(purpose) || (purpose === "chat" || control) === !!reference) throw fail("invalid");
         let deadline = now() + this.attemptTTL;
+        let controlBody = null;
         if (control) {
             let b;
             try { b = validateControlSend(body, now()); } catch { throw fail("invalid"); }
+            controlBody = b;
             if (scope !== "direct" || typeof device !== "string" || !device || device === this.namespace.device) throw fail("invalid");
             deadline = Math.min(deadline, b.expires_at, now() + MAX_CONTROL_TTL);
             if (deadline - now() < DEADLINE_MARGIN + 5) throw fail("invalid");
@@ -833,7 +836,7 @@ export class RatchetConsumer {
             purpose, reference, referenceKey: reference ? semanticKey(m.sender, reference) : "", body, sentAt: Number(body?.sentAt) || Date.now() / 1000,
             self: true, copied: false, ...(control ? { device } : {}) };
         // The sealed payload carries a control's data; the archive never keeps it.
-        if (control) record.body = controlArchiveBody(body);
+        if (control) record.body = controlArchiveBody(controlBody);
         const packets = [], copies = [];
         for (const p of plans) {
             if (p.prior && !rec(before, "session", p.prior).revision) throw fail("local_conflict");
@@ -1142,9 +1145,10 @@ export class RatchetConsumer {
                 // acknowledged without delivering its data.
                 record.device = c.device;
                 // Judged on the exact authenticated bytes (Go parity).
-                record.status = controlDisposition(opened.raw, now());
+                const judged = judgeControl(opened.raw, now());
+                record.status = judged.status;
                 record.sentAt = Date.now() / 1000;
-                if (record.status !== "delivered") record.body = null;
+                record.body = judged.status === "delivered" ? judged.body : null;
             }
             await this.store.commitReceive(s, d.id, { sessionID, trustID: trusted.id, session: enc.encode(result.session), envelope: jsonBytes(c.envelope),
                 archive: jsonBytes(m.purpose === "control" ? { ...record, body: controlArchiveBody(record.body) } : record), context, ...(consumed ? { accountID: a.accountID, account: enc.encode(result.account), consumedOTK: consumed } : {}) });

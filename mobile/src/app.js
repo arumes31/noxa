@@ -169,21 +169,48 @@ function guestBinding(meta, auth) {
 }
 
 /**
- * A guest's secure-messaging preparation (connect and every retry): its own
- * device, then its first-use pinned binding, which must be durable before any
- * consumer opens (fail closed: an unstored pin is retried, never used).
+ * A guest's secure-messaging preparation (connect and every retry): first its
+ * pin check (a changed server certificate stops here, before this guest
+ * publishes or registers anything on that server), then its confirmed key
+ * record and its own device, then its first-use pinned binding, which must be
+ * durable before any consumer opens (fail closed: an unstored pin is retried,
+ * never used).
  */
 async function prepareGuest(session, meta, auth, fence) {
-    // Its key is its own account root: publish the signed key record (as a
-    // desktop does) so contacts and its own device chain can verify it.
-    session.conn.send(Msg.KeyPublish, { public_key: signKeyRecord(session.uniqueID, session.identity.xPublic, session.identity.edSecret) });
-    meta.deviceID = await ensureGuestDevice(session);
     const binding = guestBinding(meta, auth);
+    await publishGuestKey(session);
+    meta.deviceID = await ensureGuestDevice(session);
     if (meta.guestBinding !== binding) {
         try { await updateMeta({ deviceID: meta.deviceID, guestBinding: binding }, fence); }
         catch (error) { throw Object.assign(new Error("this guest identity's server pin could not be stored"), { code: "secure_unavailable", cause: error }); }
         meta.guestBinding = binding;
     }
+}
+
+/**
+ * Its key is its own account root: publish the signed key record (as a
+ * desktop does) so contacts and its own device chain can verify it. The
+ * server answers a publish only with a refusal, so the record is read back
+ * (frames are handled in order): a refused or missing record is a retryable
+ * secure_unavailable carrying the server's reason, never ignored.
+ */
+async function publishGuestKey(session) {
+    const uid = session.uniqueID;
+    const record = signKeyRecord(uid, session.identity.xPublic, session.identity.edSecret);
+    let refusal = "";
+    const off = session.conn.on(Msg.Error, error => { if (error?.origin_type === Msg.KeyPublish) refusal = String(error.message || "refused"); });
+    try {
+        let back;
+        try {
+            session.conn.send(Msg.KeyPublish, { public_key: record });
+            back = await session.conn.request(Msg.KeyRequest, { unique_id: uid }, Msg.KeyResponse, { accept: r => r.unique_id === uid, timeout: 15000 });
+        } catch (error) {
+            throw Object.assign(new Error(`this guest identity's key could not be published: ${refusal || error.message}`), { code: "secure_unavailable", cause: error });
+        }
+        if (back?.public_key !== record) {
+            throw Object.assign(new Error(`this guest identity's key could not be published: ${refusal || "the server does not hold it"}`), { code: "secure_unavailable" });
+        }
+    } finally { off(); }
 }
 
 /** A self-rooted guest registers its own key as its first device (once). */
@@ -306,7 +333,10 @@ function retryRatchet(session, fence, meta, auth, n, delay = RATCHET_RETRY_MS[n]
 export async function confirmGuestCertificateChange(expected) {
     const ctx = app.ratchetContext, error = app.ratchetError;
     if (!ctx || error?.code !== "guest_binding_rotated" || error.announced !== expected || !ctx.meta.guest || app.session !== ctx.session) return false;
-    await updateMeta({ guestBinding: expected }, ctx.fence);
+    // Fails closed: an unstored pin is never used. The caller (the review
+    // sheet) shows the failure; the blocked state stays as it was.
+    try { await updateMeta({ guestBinding: expected }, ctx.fence); }
+    catch (error) { throw Object.assign(new Error("the accepted server certificate could not be stored"), { code: "secure_unavailable", cause: error }); }
     ctx.meta.guestBinding = expected;
     app.ratchetError = Object.assign(new Error("secure messaging is starting"), { code: "secure_unavailable" });
     retryRatchet(ctx.session, ctx.fence, ctx.meta, ctx.auth, 0, 0);

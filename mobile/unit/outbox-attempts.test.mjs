@@ -54,9 +54,9 @@ test("an expired draft is dropped, an expired committed attempt still resolves",
     try {
         await enqueue({ kind: "dm", peer: "bob" }, "attempted", { id: "attempted" });
         await enqueue({ kind: "dm", peer: "bob" }, "never attempted", { id: "never" });
-        // The first entry's attempt stays uncertain (retryable stops the flush
-        // before the second is tried).
-        await flush(session, ratchetDM(() => { throw uncertain("attempted"); }));
+        // The first entry's attempt stays uncertain; a rate limit (it covers
+        // the whole connection) stops the flush before the second is tried.
+        await flush(session, ratchetDM(() => { throw Object.assign(uncertain("attempted"), { code: "rate-limit" }); }));
         Date.now = () => realNow() + OUTBOX_TTL + 1000;
         const list = await pending();
         const attempted = list.find(e => e.id === "attempted"), never = list.find(e => e.id === "never");

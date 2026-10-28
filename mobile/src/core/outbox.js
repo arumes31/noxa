@@ -172,15 +172,20 @@ export function flush(session, dm, groups = null) {
                     // re-link needed): this entry stays queued with the reason
                     // (a committed attempt is never marked failed) and the
                     // flush continues with the others (channel messages need
-                    // no secure messaging). Only a lost connection stops it.
+                    // no secure messaging). Only a lost connection or a
+                    // rate limit (it covers the whole connection) stops it.
                     if (error.blocked) {
                         await putSealedIn(fence, Stores.outbox, current.id, { ...current, error: error.message }).catch(() => {});
                         show(session, dm, { ...current, error: error.message }, groups);
                         continue;
                     }
                     if (error.retryable) {
+                        // Kept with its committed state; any other retryable
+                        // failure (e.g. a server backend "unavailable") skips
+                        // only this entry, so later ones are not starved.
                         if (current !== entry) await putSealedIn(fence, Stores.outbox, current.id, current).catch(() => {});
-                        break;
+                        if (stopsFlush(session, error)) break;
+                        continue;
                     }
                     console.warn(`outbox: ${current.kind} message ${current.id} refused: ${error.message}`);
                     await putSealedIn(fence, Stores.outbox, current.id, { ...current, failed: true, error: error.message }).catch(() => {});
@@ -194,6 +199,11 @@ export function flush(session, dm, groups = null) {
         return sent;
     })();
     return flushing;
+}
+
+/** A retryable failure stops the whole flush only when the connection is gone or rate limited. */
+function stopsFlush(session, error) {
+    return !session.conn?.open || error.code === "rate-limit" || !!error.retryAfterMS;
 }
 
 /** Shows waiting and expired entries in their conversations. */

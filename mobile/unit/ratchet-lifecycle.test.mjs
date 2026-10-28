@@ -18,9 +18,22 @@ export function statementFor(device, { principal = "alice", binding = "tls-sha25
     return { binding, signature: toBase64(sign(transcript, desktop.edSecret)), approverDeviceID: "desk", approverKey: publicKeyPEM(desktop.edPublic), principal };
 }
 
+// The guest key record the fake server holds (KeyPublish / KeyRequest
+// read-back) and an optional refusal of the next publishes.
+const Msg = { Error: 1, KeyPublish: 42, KeyRequest: 43, KeyResponse: 44 };
+const keyServer = { refuse: "", order: [] };
 class FakeConnection extends EventTarget {
     open = true;
-    send() {}
+    send(type, msg) {
+        if (type !== Msg.KeyPublish) return;
+        keyServer.order.push("publish");
+        if (keyServer.refuse) this.dispatchEvent(new CustomEvent(String(Msg.Error), { detail: { origin_type: Msg.KeyPublish, message: keyServer.refuse } }));
+        else this.held = msg.public_key;
+    }
+    async request(type, msg) {
+        if (type === Msg.KeyRequest) return { unique_id: msg.unique_id, public_key: this.held || "" };
+        throw new Error("unexpected request " + type);
+    }
     on(type, fn) { const f = e => fn(e.detail); this.addEventListener(String(type), f); return () => this.removeEventListener(String(type), f); }
     close() { this.open = false; this.dispatchEvent(new Event("close")); }
 }
@@ -56,7 +69,7 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
     const sources = {
         "./core/chat-session.js": { ChatSession },
         "./core/direct.js": { DirectMessages }, "./core/calls.js": { Calls: Empty }, "./core/groups.js": { Groups }, "./core/voice.js": { Voice: Empty },
-        "./core/connection.js": { Connection: { open: async () => new FakeConnection() } }, "./core/frame.js": { Msg: {} },
+        "./core/connection.js": { Connection: { open: async () => new FakeConnection() } }, "./core/frame.js": { Msg },
         "./core/olm-directory.js": { signBundle: () => ({}) },
         "./core/olm-reset.js": { signReset: () => ({}) },
         "./core/link-binding.js": { verifyLinkBinding, announcedBinding },
@@ -189,8 +202,12 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
     assert.equal(app.meta.guestBinding, "tls-sha256:" + "ab".repeat(32), "first-use binding pinned");
     assert.ok(keyPublished.length > 0, "a guest publishes its signed key record");
     announced = "cd".repeat(32);
+    const publishedBefore = keyPublished.length;
     await connect();
     assert.equal(app.ratchet, null);
+    // Review b8 P3-3a: the pin is checked before anything is published or
+    // registered on a server whose certificate changed.
+    assert.equal(keyPublished.length, publishedBefore, "no key record published to a rotated server");
     // Review b7 P3-3: a guest gets an explicit review, never a re-link
     // instruction and never an automatic re-pin.
     assert.equal(app.ratchetError?.code, "guest_binding_rotated");
@@ -198,6 +215,13 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
     assert.equal(JSON.stringify(status.rotation), JSON.stringify({ previous: "tls-sha256:" + "ab".repeat(32), announced: "tls-sha256:" + "cd".repeat(32) }));
     assert.equal(app.meta.guestBinding, "tls-sha256:" + "ab".repeat(32), "not re-pinned without confirmation");
     assert.equal(await confirmGuestCertificateChange("tls-sha256:" + "ef".repeat(32)), false, "only the reviewed binding");
+    // Review b8 P3-3c: a failed save is reported to the caller (the review
+    // sheet shows it) and nothing is re-pinned.
+    failMeta = true;
+    await assert.rejects(status.confirm(), e => e.code === "secure_unavailable");
+    assert.equal(app.meta.guestBinding, "tls-sha256:" + "ab".repeat(32), "an unsaved acceptance is not used");
+    assert.equal(app.ratchetError?.code, "guest_binding_rotated", "still blocked for review");
+    failMeta = false;
     assert.equal(await status.confirm(), true);
     await tick(50);
     assert.equal(app.meta.guestBinding, "tls-sha256:" + "cd".repeat(32));
@@ -212,6 +236,16 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
     assert.equal(app.ratchetError?.code, "secure_unavailable");
     assert.equal(app.meta.guestBinding, undefined, "an unstored pin is not kept");
     failMeta = false;
+    // Review b8 P3-3b: a refused key publish is surfaced (retryable, with the
+    // server's reason) and no consumer opens.
+    app.identity = generateIdentity();
+    app.meta = { guest: true };
+    keyServer.refuse = "encryption identity does not match authenticated identity";
+    await connect();
+    assert.equal(app.ratchet, null);
+    assert.equal(app.ratchetError?.code, "secure_unavailable");
+    assert.match(app.ratchetError.message, /could not be published: encryption identity does not match/);
+    keyServer.refuse = "";
     disconnect();
     configureRatchetForTests(null);
 });
