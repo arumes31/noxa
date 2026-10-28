@@ -134,15 +134,50 @@ const RATCHET_CAPABILITIES = ["noxa-olm-admission-v1", "noxa-olm-directory-v1"];
 let ratchetOptions = { pollMS: 5000, modules: null };
 app.ratchet = null;
 app.ratchetError = null;
+// App-level media-control handlers (Task 2): every session's consumer is
+// wired to them before its first drain, so registration survives
+// reconnects. Delivery is at most once (see RatchetConsumer.onControl).
+const controlHandlers = [];
+/** Registers fn for controls delivered to this device; returns unregister(). */
+export function onSecureControl(fn) {
+    controlHandlers.push(fn);
+    return () => { const i = controlHandlers.indexOf(fn); if (i >= 0) controlHandlers.splice(i, 1); };
+}
+
 /** Test-only tuning: poll period and store/core factory injection. */
 export function configureRatchetForTests(options = null) {
     ratchetOptions = { pollMS: options?.pollMS || 5000, modules: options?.modules || null };
 }
 
+/**
+ * A guest's binding. A guest identity is self-rooted (no desktop vouches for
+ * it), so its server binding is pinned on first use from the server-announced
+ * certificate fingerprint and every later session must announce the same one;
+ * a change blocks secure messaging (server_binding_rotated).
+ */
+function guestBinding(meta, auth) {
+    const announced = announcedBinding(auth?.tls_fingerprint);
+    if (!announced) throw Object.assign(new Error("the server announces no certificate for secure messaging"), { code: "server_binding_unavailable" });
+    if (meta?.guestBinding && meta.guestBinding !== announced) throw Object.assign(new Error("the server's certificate changed since this guest identity first used it"), { code: "server_binding_rotated" });
+    return announced;
+}
+
+/** A self-rooted guest registers its own key as its first device (once). */
+async function ensureGuestDevice(session) {
+    if (session.deviceID) return session.deviceID;
+    const result = await session.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list", timeout: 15000 });
+    const current = (result.devices || []).find(d => d.current);
+    if (!current?.device_id) throw Object.assign(new Error("this guest identity could not register a device"), { code: "secure_unavailable" });
+    session.deviceID = current.device_id;
+    return session.deviceID;
+}
+
 async function openRatchet(session, fence, isCurrent, meta, auth = {}) {
-    // Re-verified on every open against this device's keys and the signed-in
-    // account: missing or mismatching statements block secure messaging.
-    const binding = verifyLinkBinding(meta?.linkBinding, { identity: session.identity, principal: session.uniqueID, approverFingerprint: meta?.bindingAnchor || "" });
+    // Members: re-verified on every open against this device's keys and the
+    // signed-in account (missing or mismatching statements block secure
+    // messaging). Guests: the first-use pinned binding.
+    const binding = meta?.guest ? guestBinding(meta, auth)
+        : verifyLinkBinding(meta?.linkBinding, { identity: session.identity, principal: session.uniqueID, approverFingerprint: meta?.bindingAnchor || "" });
     // A server certificate that changed since the desktop signed the binding
     // (rotation) blocks too: the device must be linked again from a desktop
     // that accepted the new certificate. The announced value only detects.
@@ -178,6 +213,7 @@ async function openRatchet(session, fence, isCurrent, meta, auth = {}) {
         trustReset: principal => owner.dm ? owner.dm.ratchetResetPending(principal) : "",
         trustResetDone: (principal, token) => owner.dm?.clearRatchetReset(principal, token),
     });
+    owner.consumer.onControl(async control => { for (const fn of [...controlHandlers]) await fn(control); });
     return owner;
 }
 
@@ -192,7 +228,43 @@ export function secureMessagingStatus() {
     return { active: false, reason: owner?.consumer.sticky?.code || app.ratchetError?.code || "inactive" };
 }
 
+// Transient open failures (store contention, a failed lazy import, an
+// IndexedDB error) are retried with bounded backoff in the same session; the
+// outbox keeps its entries queued meanwhile. Configuration refusals
+// (old server, binding) need a reconnect or re-link instead.
+const RATCHET_RETRYABLE = new Set(["secure_unavailable", "conflict", "local_conflict", "unavailable", "busy"]);
+const RATCHET_RETRY_MS = [5000, 15000, 30000, 60000, 120000, 300000];
+let ratchetRetryTimer = 0;
+function retryRatchet(session, fence, meta, auth, n) {
+    clearTimeout(ratchetRetryTimer);
+    if (n >= RATCHET_RETRY_MS.length) return;
+    ratchetRetryTimer = setTimeout(async () => {
+        const current = () => app.session === session && session.conn.open !== false && !app.ratchet;
+        if (!current()) return;
+        let owner;
+        try {
+            owner = await openRatchet(session, fence, () => app.session === session && session.conn.open !== false, meta, auth);
+        } catch (error) {
+            if (!current()) return;
+            app.ratchetError = error.code ? error : Object.assign(error, { code: "secure_unavailable" });
+            if (RATCHET_RETRYABLE.has(app.ratchetError.code)) retryRatchet(session, fence, meta, auth, n + 1);
+            return;
+        }
+        if (!current()) { owner.consumer.close().finally(() => owner.core.close()); return; }
+        app.ratchet = owner;
+        app.ratchetError = null;
+        owner.dm = app.dm;
+        app.dm?.attachRatchet(owner.consumer).catch(() => {});
+        owner.groups = app.groups;
+        app.groups?.attachRatchet(owner.consumer).catch(() => {});
+        pollRatchet(owner, session);
+        emit("secure-messaging", { active: true, reason: "" });
+        flushNow().catch(() => {});
+    }, RATCHET_RETRY_MS[n]);
+}
+
 function stopRatchet() {
+    clearTimeout(ratchetRetryTimer);
     const owner = app.ratchet;
     app.ratchet = null;
     if (!owner) return;
@@ -266,21 +338,28 @@ export async function connect({ guest = null, fence } = {}) {
         }
         await assertIdentityFence(fence);
         if (session.initializationError) throw session.initializationError;
-        if (!guest && !meta.guest) {
-            const capabilities = session.capabilities instanceof Set ? session.capabilities : new Set();
-            if (!RATCHET_CAPABILITIES.every(c => capabilities.has(c))) {
-                ratchetError = Object.assign(new Error("this server needs an update for secure messaging"), { code: "server_outdated" });
-            } else {
-                try {
-                    let published = false;
-                    ratchet = await openRatchet(session, fence, () => attempt === connectionGeneration && (!published || app.session === session) && session.conn.open !== false, meta, auth);
-                    ratchet.publish = () => { published = true; };
-                } catch (error) {
-                    // Blocks secure sending with an explanation; the session
-                    // (channels, legacy history) continues.
-                    checkAttempt();
-                    ratchetError = error.code ? error : Object.assign(error, { code: "secure_unavailable" });
+        // Every session with an identity key (members, linked devices and
+        // key-identity guests) uses noxa-olm-v1.
+        // Iterable from any realm (never instanceof: tests run app.js in a vm).
+        const capabilities = new Set(session.capabilities || []);
+        if (!RATCHET_CAPABILITIES.every(c => capabilities.has(c))) {
+            ratchetError = Object.assign(new Error("this server needs an update for secure messaging"), { code: "server_outdated" });
+        } else {
+            try {
+                if (meta.guest) {
+                    meta.deviceID = await ensureGuestDevice(session);
+                    meta.guestBinding = guestBinding(meta, auth);
+                    await updateMeta({ deviceID: meta.deviceID, guestBinding: meta.guestBinding }, fence).catch(() => {});
                 }
+                let published = false;
+                ratchet = await openRatchet(session, fence, () => attempt === connectionGeneration && (!published || app.session === session) && session.conn.open !== false, meta, auth);
+                ratchet.publish = () => { published = true; };
+            } catch (error) {
+                // Blocks secure sending with an explanation; the session
+                // (channels, legacy history) continues. Transient failures
+                // are retried below.
+                checkAttempt();
+                ratchetError = error.code ? error : Object.assign(error, { code: "secure_unavailable" });
             }
         }
         if (conn.open === false) throw new Error("connection closed during session initialization");
@@ -301,7 +380,7 @@ export async function connect({ guest = null, fence } = {}) {
     }
     app.ratchetError = ratchetError;
     // One in-app explanation of the upgrade (shown once by the UI).
-    if (!guest && !meta.guest) emit("secure-messaging", { active: !!ratchet, reason: ratchetError?.code || "" });
+    emit("secure-messaging", { active: !!ratchet, reason: ratchetError?.code || "" });
     app.identityFence = fence;
     app.meta = meta;
     activated = true;
@@ -325,9 +404,7 @@ export async function connect({ guest = null, fence } = {}) {
     dm.shareActivity = activityShared;
     // No legacy send for a signed-in session: without a consumer, sends fail
     // with the blocking reason.
-    dm.secureRequired = guest || meta.guest
-        ? () => Object.assign(new Error("sign in with an identity to send direct and group messages"), { code: "guest_session" })
-        : () => app.ratchetError || Object.assign(new Error("secure messaging is not ready"), { code: "secure_unavailable" });
+    dm.secureRequired = () => app.ratchetError || Object.assign(new Error("secure messaging is not ready"), { code: "secure_unavailable" });
     if (ratchet) {
         // Attached before dm/groups are published, so no send can go legacy.
         ratchet.dm = dm;
@@ -347,6 +424,8 @@ export async function connect({ guest = null, fence } = {}) {
         ratchet.groups = app.groups;
         app.groups.attachRatchet(ratchet.consumer).catch(() => {});
         pollRatchet(ratchet, session);
+    } else if (ratchetError && RATCHET_RETRYABLE.has(ratchetError.code)) {
+        retryRatchet(session, fence, meta, auth, 0);
     }
     app.groups.addEventListener("incoming", event => noteUnread(`conversation:${event.detail.id}`, false, { kind: "group", name: app.groups?.list.get(event.detail.id)?.name }));
     app.groups.addEventListener("list", () => emit("groups"));
@@ -394,7 +473,7 @@ export async function connect({ guest = null, fence } = {}) {
     // Register every incoming handler before IndexedDB can yield to replayed DMs.
     try {
         session.activateIncoming();
-        await updateMeta({ deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname }, fence);
+        await updateMeta({ deviceID: session.deviceID || auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname }, fence);
         checkAttempt();
     } catch (error) {
         if (app.session === session) disconnect();

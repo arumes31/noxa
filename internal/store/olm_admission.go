@@ -578,9 +578,11 @@ func (s *Store) FinalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 		if m.Purpose == "control" {
 			// Controls are bounded separately so they can never crowd out
 			// messages (and are never a fanout).
+			// Per sender device and target device: one sender's unreadable
+			// (never acknowledged) controls cannot block anyone else's.
 			var controls int
 			if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM olm_deliveries d JOIN olm_messages o ON o.id=d.message_id
-				WHERE d.device_id=$1 AND d.state='pending' AND convert_from(o.manifest,'UTF8')::jsonb->>'purpose'='control'`, c.Device).Scan(&controls); e != nil {
+				WHERE d.device_id=$1 AND o.device_id=$2 AND d.state='pending' AND convert_from(o.manifest,'UTF8')::jsonb->>'purpose'='control'`, c.Device, a.Device).Scan(&controls); e != nil {
 				return empty, e
 			}
 			if controls >= admission.MaxPendingControls {

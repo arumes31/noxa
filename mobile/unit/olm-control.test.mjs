@@ -2,7 +2,7 @@
 // internal/e2ee/admission/control.go and control_test.go).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateManifest, expectedBinding, controlTarget, parseControlBody, validateControlSend, controlDisposition, MAX_CONTROL_TTL } from "../src/core/olm-admission.js";
+import { validateManifest, expectedBinding, controlTarget, parseControlBody, validateControlSend, controlDisposition, controlArchiveBody, MAX_CONTROL_TTL } from "../src/core/olm-admission.js";
 
 const manifest = () => ({
     version: "noxa-olm-admission-v1", server: "tls-sha256:" + "a".repeat(64), sender: "a", device: "d0", account_epoch: 1, attempt_id: "1", logical_id: "ctl1",
@@ -50,4 +50,17 @@ test("control body: shape, expiry window and disposition", () => {
     assert.equal(controlDisposition(ok, now), "delivered");
     assert.equal(controlDisposition({ ...ok, expires_at: now }, now), "expired");
     assert.equal(controlDisposition({ nope: 1 }, now), "invalid");
+});
+
+test("review b46: parity (case-sensitive names, safe epoch), expiry bound on receive, no data at rest", () => {
+    const now = 1_800_000_000;
+    for (const body of [
+        { Kind: "media-key", scope: { type: "call", id: "c" }, epoch: 1, expires_at: now + 60 },
+        { kind: "media-key", scope: { Type: "call", id: "c" }, epoch: 1, expires_at: now + 60 },
+        { kind: "media-key", scope: { type: "call", id: "c" }, epoch: 2 ** 53, expires_at: now + 60 },
+    ]) assert.throws(() => parseControlBody(body), undefined, JSON.stringify(body));
+    const far = { kind: "media-key", scope: { type: "call", id: "c" }, epoch: 1, expires_at: now + MAX_CONTROL_TTL + 301 };
+    assert.equal(controlDisposition(far, now), "invalid");
+    const archived = controlArchiveBody({ kind: "media-key", scope: { type: "call", id: "c" }, epoch: 1, expires_at: 5, data: { key: "secret" } });
+    assert.deepEqual(archived, { kind: "media-key", scope: { type: "call", id: "c" }, epoch: 1, expires_at: 5 });
 });

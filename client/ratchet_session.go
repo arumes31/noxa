@@ -92,10 +92,12 @@ func sharedRatchetEngine() (*ratchet.Engine, error) {
 var errRatchetUnavailable = errors.New("secure messaging (noxa-olm-v1) is not ready for this session; nothing was sent")
 
 // errRatchetServerOutdated: the server does not offer noxa-olm-v1.
-var errRatchetServerOutdated = errors.New("this server needs an update for secure messaging; direct and group messages cannot be sent until it is updated")
+var errRatchetServerOutdated = errors.New("this server does not offer secure messaging (it needs an update, or it runs without control-channel TLS or its database); direct and group messages cannot be sent until it does")
 
-// errRatchetGuest: a guest session has no device identity for secure messaging.
-var errRatchetGuest = errors.New("sign in with an identity to send direct and group messages")
+// errRatchetGuest: a keyless session (an ephemeral "guest:" principal from a
+// third-party client) has no identity key for secure messaging. Key-identity
+// guests use secure messaging like members.
+var errRatchetGuest = errors.New("this session has no identity key, so it cannot send direct or group messages; sign in with an identity")
 
 // errLegacyReadOnly: messages from before the upgrade stay readable only.
 var errLegacyReadOnly = errors.New("messages from before secure messaging was upgraded stay readable but can no longer be edited or deleted for others")
@@ -142,6 +144,25 @@ func (m *connManager) ratchetConsumerOn(conn net.Conn) (*ratchetConsumer, error)
 	return s.consumer, nil
 }
 
+// ratchetSendConsumer is ratchetConsumerOn for send paths: when no session
+// is attached it returns the recorded start failure (old server, guest,
+// store or binding problem) instead of a generic "not ready", and schedules
+// the bounded restart.
+func (m *connManager) ratchetSendConsumer(conn net.Conn) (*ratchetConsumer, error) {
+	c, err := m.ratchetConsumerOn(conn)
+	if err == nil {
+		return c, nil
+	}
+	m.mu.Lock()
+	start := m.ratchetStartErr
+	m.mu.Unlock()
+	if start != nil {
+		m.ratchetBlockedReason()
+		return nil, start
+	}
+	return nil, err
+}
+
 // startRatchet opens the shared protected store for the authenticated
 // namespace, attaches projections, replays the authoritative archive and
 // starts the session-owned drain loop. Every await is fenced on (conn, epoch,
@@ -151,7 +172,7 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 	cfg, epoch, identity := m.ratchetCfg, m.connEpoch, m.id
 	uid, device, fingerprint := m.uniqueID, m.deviceID, m.fingerprint
 	current := conn != nil && m.conn == conn && !m.closed
-	enabled, guest, supported := m.ratchetDefault, m.isGuest, m.supportsOlm
+	enabled, keyless, supported := m.ratchetDefault, m.keyless, m.supportsOlm
 	m.mu.Unlock()
 	if cfg == nil {
 		if !enabled {
@@ -160,7 +181,7 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 		// The production configuration; a test override skips the
 		// capability check (its in-memory transport has no handshake).
 		switch {
-		case guest:
+		case keyless:
 			return errRatchetGuest
 		case !supported:
 			return errRatchetServerOutdated
@@ -443,10 +464,13 @@ func ratchetFailure(err error) error {
 	}
 	switch code := ratchetCode(err); code {
 	case "":
-	case "exhausted":
+	case "device_unpublished":
 		// A device of the conversation has no secure-messaging keys (an old
 		// app, or one that never signed in since the upgrade): never omitted.
-		return fmt.Errorf("secure send failed: %s — a device in this conversation does not support secure messaging yet; it needs an updated noXa app (and to sign in once) before messages can be sent. Nothing was sent", code)
+		return fmt.Errorf("secure send failed: %s — a device in this conversation has not set up secure messaging yet (it needs a current noXa app and to sign in once). Nothing was sent", code)
+	case "exhausted":
+		// Local store quota (or an over-long drain): never blame a contact.
+		return fmt.Errorf("secure send failed: %s — this device's secure message store is full. Nothing was sent", code)
 	case "device_unavailable":
 		return fmt.Errorf("secure send failed: %s — that device is not available for secure messaging", code)
 	default:
@@ -461,7 +485,7 @@ func ratchetFailure(err error) error {
 // sendRatchetDirect is the single durable path for direct text: immediate
 // sends and queued outbox entries pass a stable logical ID captured at intent.
 func (m *connManager) sendRatchetDirect(conn net.Conn, logicalID, peer, text string) (RatchetOutcome, error) {
-	c, err := m.ratchetConsumerOn(conn)
+	c, err := m.ratchetSendConsumer(conn)
 	if err != nil {
 		return RatchetOutcome{}, err
 	}
@@ -492,7 +516,7 @@ type ConversationSendResult struct {
 }
 
 func (m *connManager) sendRatchetGroup(groupID, reference, text string) (ConversationSendResult, error) {
-	c, err := m.ratchetConsumerOn(nil)
+	c, err := m.ratchetSendConsumer(nil)
 	if err != nil {
 		return ConversationSendResult{}, err
 	}
@@ -514,7 +538,7 @@ func (m *connManager) sendRatchetGroup(groupID, reference, text string) (Convers
 // changeRatchetDirect sends an authenticated edit/delete of one of this
 // account's new-protocol messages. reference is its sender logical ID.
 func (m *connManager) changeRatchetDirect(peer, reference, action, text string) error {
-	c, err := m.ratchetConsumerOn(nil)
+	c, err := m.ratchetSendConsumer(nil)
 	if err != nil {
 		return err
 	}

@@ -509,7 +509,12 @@ type AuthResponse struct {
 	// Zero/absent is the startup/legacy baseline; subsequent updates are positive.
 	MediaLimitsRevision uint64 `json:"media_limits_revision,string,omitempty"`
 
-	OK       bool   `json:"ok"`
+	OK bool `json:"ok"`
+	// Guest reports the resolved session kind: true for a guest (a key-derived
+	// principal without an account, or an ephemeral "guest:" session), false
+	// for a member. Clients use it instead of their own Anonymous flag, which
+	// is set by every password-less key login.
+	Guest    bool   `json:"guest,omitempty"`
 	ClientID string `json:"client_id,omitempty"`
 	// DeviceID names the linked device this session signed in with.
 	DeviceID string `json:"device_id,omitempty"`
@@ -1215,6 +1220,9 @@ type ChatHistoryEntry struct {
 	// EncMode is set by the CLIENT next to EncVerified ("server" for a scope
 	// body, "e2e" for a local end-to-end DM record); never by a server.
 	EncMode string `json:"enc_mode,omitempty"`
+	// Protocol is set by the CLIENT for a local direct-message search hit
+	// ("noxa-olm-v1", or empty for legacy encryption); servers never send it.
+	Protocol string `json:"protocol,omitempty"`
 
 	SentAt    int64          `json:"sent_at"` // unix seconds
 	EditedAt  int64          `json:"edited_at,omitempty"`

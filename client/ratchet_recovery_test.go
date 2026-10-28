@@ -339,3 +339,59 @@ func TestRatchetRecoveryCancel(t *testing.T) {
 		}
 	})
 }
+
+// Review b46 A P3-1 (adopted repro): the documented honest-server limit of
+// the recovery evidence. A hostile server that applies the reset, loses the
+// response, then replays the genuine pre-recovery own_state and refuses the
+// resume makes the device abandon an applied intent; a second recovery signs
+// a second successor of the same epoch. Peers shown both refuse the chain
+// (fork rule); a server that withholds the first can steer peers onto the
+// second, which carries this device's own fresh keys only.
+func TestRatchetRecoveryHostileEvidenceLimit(t *testing.T) {
+	c, srv, _ := recoveryConsumer(t)
+	c.sticky = rfail("recovery_required")
+	old := srv.state
+	n := 0
+	c.d.Admission = func(_ context.Context, r netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+		n++
+		if n == 1 {
+			if _, err := srv.admission(r); err != nil {
+				t.Fatal(err)
+			}
+			srv.ownState = &old // the stored, genuinely signed epoch-3 publication
+			return nil, errors.New("connection lost")
+		}
+		return nil, rfail("conflict")
+	}
+	err := c.recoverAccount("restored")
+	t.Logf("call1: %v", err)
+	err = c.recoverAccount("restored")
+	a := authorityOf(t, c)
+	t.Logf("first: err=%v code=%s local=%+v server epoch=%d resets=%d", err, ratchetCode(err), a, srv.state.AccountEpoch, len(srv.resets))
+	if a.Blocked || a.Epoch != 1 || srv.state.AccountEpoch != 4 {
+		t.Fatalf("expected abandonment of an applied intent")
+	}
+	// Second recovery over the same replayed old own_state: a second signed 3->4.
+	var second olmdir.Reset
+	c.d.Admission = func(_ context.Context, r netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+		second = *r.Reset
+		return nil, rfail("conflict")
+	}
+	_ = c.recoverAccount("restored")
+	if second.OldEpoch != 3 || second.NewIdentity == srv.resets[0].NewIdentity {
+		t.Fatalf("second reset: %+v", second)
+	}
+	ns := c.d.Namespace
+	_, _, verr := olmdir.VerifyResetChain(olmdir.ResetPin{Epoch: 3, Identity: old.Identity, Signing: old.Signing},
+		olmdir.ResetPin{Epoch: 4, Identity: srv.resets[0].NewIdentity, Signing: srv.resets[0].NewSigning}, c.d.OwnKey, ns.Server, ns.Principal, ns.Device,
+		func(int64) ([]olmdir.Reset, error) { return []olmdir.Reset{srv.resets[0], second}, nil })
+	if verr == nil {
+		t.Fatal("peers shown both successors must refuse the fork")
+	}
+	_, _, verr = olmdir.VerifyResetChain(olmdir.ResetPin{Epoch: 3, Identity: old.Identity, Signing: old.Signing},
+		olmdir.ResetPin{Epoch: 4, Identity: second.NewIdentity, Signing: second.NewSigning}, c.d.OwnKey, ns.Server, ns.Principal, ns.Device,
+		func(int64) ([]olmdir.Reset, error) { return []olmdir.Reset{second}, nil })
+	if verr != nil {
+		t.Fatalf("documented limit changed: %v", verr)
+	}
+}

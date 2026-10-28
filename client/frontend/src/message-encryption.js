@@ -51,7 +51,11 @@ export function encryptionBadge(m) {
         return { kind: "warning", label: "chat.downgradedHelp", bodyKey: "" };
     }
     if (m.encMode === "e2e" || (m.encMode !== "server" && (m.e2e || (m.direct && m.enc)))) {
-        return { kind: "lock", label: m.direct ? "chat.directHelp" : "chat.groupHelp", bodyKey: "" };
+        // The protocol it actually arrived with: Olm (noxa-olm-v1), or the
+        // legacy static-key encryption (older history, or an older app),
+        // which has its own badge and stays read-only.
+        if (m.protocol === "noxa-olm-v1") return { kind: "lock", label: "chat.olmHelp", bodyKey: "" };
+        return { kind: "legacy", label: "chat.legacyHelp", bodyKey: "" };
     }
     if (m.encMode === "server" || m.enc) {
         return { kind: "shield", label: "chat.channelHelp", bodyKey: "" };

@@ -71,6 +71,13 @@ async function boot({ entries, device, binding }) {
     const edSecret = Uint8Array.from(atob(device.edSecret), c => c.charCodeAt(0));
     const identity = { edSecret };
     if (device.x25519_private) identity.xSecret = Uint8Array.from(atob(device.x25519_private), c => c.charCodeAt(0));
+    // A self-rooted guest (no device yet) registers its own key exactly as
+    // app.js ensureGuestDevice does, through the real device handler.
+    if (!device.device) {
+        const result = await conn.request(195, { action: "list" }, 196);
+        device = { ...device, device: (result.devices || []).find(d => d.current)?.device_id || "" };
+        if (!device.device) throw new Error("guest device registration failed");
+    }
     const session = Object.assign(new EventTarget(), { conn, identity, uniqueID: device.principal, deviceID: device.device, nickname: device.principal, capabilities: new Set() });
     const namespace = { server: binding, principal: device.principal, device: device.device };
     const stats = { unread: 0, incoming: 0, ops: {} };

@@ -260,7 +260,7 @@ try {
     await post({ op: "link_unpublished", device: "bob-laptop", action: "bob" });
     before = await counts();
     const blocked = await run("alice-phone", () => T.dm.send("bob", "needs every device", "", { id: "m9" }).then(() => "sent", e => e.code));
-    assert.equal(blocked, "exhausted");
+    assert.equal(blocked, "device_unpublished", "the unpublished contact device is named, never local store exhaustion");
     after = await counts();
     assert.equal(transport(after, "alice-phone") - transport(before, "alice-phone"), 0);
     assert.deepEqual(await post({ op: "revoke", device: "bob-laptop" }), true);

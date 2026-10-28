@@ -88,3 +88,27 @@ func TestControlBody(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Review b46 P3-5/P3-2: Go/JS parity (case-sensitive names, JS-safe epoch,
+// compact data size) and no data at rest.
+func TestControlBodyParityAndArchive(t *testing.T) {
+	for name, body := range map[string]string{
+		"capitalised name":   `{"Kind":"media-key","scope":{"type":"call","id":"c"},"epoch":1,"expires_at":5}`,
+		"capitalised scope":  `{"kind":"media-key","scope":{"Type":"call","id":"c"},"epoch":1,"expires_at":5}`,
+		"duplicate name":     `{"kind":"media-key","kind":"x","scope":{"type":"call","id":"c"},"epoch":1,"expires_at":5}`,
+		"epoch above 2^53-1": `{"kind":"media-key","scope":{"type":"call","id":"c"},"epoch":9007199254740992,"expires_at":5}`,
+	} {
+		if _, err := ParseControlBody(json.RawMessage(body)); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+	// Whitespace does not count toward the data bound (compact size, as JSON.stringify).
+	spaced := `{"kind":"media-key","scope":{"type":"call","id":"c"},"epoch":1,"expires_at":5,"data":{"k":"` + strings.Repeat("a", MaxControlData-12) + `"   }}`
+	if _, err := ParseControlBody(json.RawMessage(spaced)); err != nil {
+		t.Fatalf("compact size: %v", err)
+	}
+	archived := ControlArchiveBody(json.RawMessage(`{"kind":"media-key","scope":{"type":"call","id":"c"},"epoch":1,"expires_at":5,"data":{"key":"secret"}}`))
+	if strings.Contains(string(archived), "secret") || strings.Contains(string(archived), "data") || !strings.Contains(string(archived), `"expires_at":5`) {
+		t.Fatalf("archive body keeps data: %s", archived)
+	}
+}

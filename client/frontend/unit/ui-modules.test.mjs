@@ -423,7 +423,8 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         const retired = chat.directMessageFromEntry({ from_unique_id: "u-mia", body: "old", sent_at: 6, enc_verified: true, enc_mode: "server" });
         assert.deepEqual([retired.encVerified, retired.enc, retired.encMode, encryptionBadge(retired).kind], [false, false, "downgraded", "warning"]);
         const legacy = chat.directMessageFromEntry({ from_unique_id: "u-mia", body: "old", sent_at: 6, enc_verified: true });
-        assert.deepEqual([legacy.encVerified, legacy.encMode, encryptionBadge(legacy).kind], [true, "e2e", "lock"]);
+        // A verified legacy (static-key) record gets the legacy badge, never the Olm lock.
+        assert.deepEqual([legacy.encVerified, legacy.encMode, encryptionBadge(legacy).kind], [true, "e2e", "legacy"]);
         const bogus = chat.directMessageFromEntry({ from_unique_id: "u-mia", body: "old", sent_at: 6, enc_verified: true, enc_mode: "bogus" });
         assert.deepEqual([bogus.encVerified, bogus.encMode, encryptionBadge(bogus).label], [false, "", "chat.unverifiedHelp"]);
         // A live DM in "server" mode is a warning too; channels keep the shield.
@@ -434,7 +435,8 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.match(source, /enc_mode: m\.encVerified \? m\.encMode : encModeFrom\(false, m\.encMode\)/);
         assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_mode: "downgraded" }, true).label, "chat.downgradedHelp");
         assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_verified: true, enc_mode: "server" }, true).kind, "warning");
-        assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_verified: true, enc_mode: "e2e" }, true).kind, "lock");
+        assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_verified: true, enc_mode: "e2e" }, true).kind, "legacy");
+        assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_verified: true, enc_mode: "e2e", protocol: "noxa-olm-v1" }, true).kind, "lock");
     });
 
     await t.test("channel edit offers no new password on a text channel", async (t) => {

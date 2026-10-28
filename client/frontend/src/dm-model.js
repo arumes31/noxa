@@ -168,6 +168,7 @@ export function conversationEncryption({ group = false, peerKey = null, last = n
     if (peerKey === false) return { kind: "warning", labelKey: "dm.encryption.noKey", helpKey: "dm.encryption.noKeyHelp" };
     const badge = last ? encryptionBadge(last) : null;
     if (badge?.kind === "lock") return { kind: "lock", labelKey: "dm.encryption.e2e", helpKey: "chat.directHelp" };
+    if (badge?.kind === "legacy") return { kind: "legacy", labelKey: "dm.encryption.legacy", helpKey: "chat.legacyHelp" };
     if (badge?.kind === "shield") return { kind: "warning", labelKey: "dm.encryption.unverified", helpKey: "chat.downgradedHelp" };
     if (badge?.kind === "warning") return { kind: "warning", labelKey: "dm.encryption.unverified", helpKey: badge.label };
     return { kind: "shield", labelKey: "dm.encryption.pending", helpKey: "dm.encryption.pendingHelp" };

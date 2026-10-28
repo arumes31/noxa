@@ -5,7 +5,9 @@ test("own direct messages can be edited and deleted for everyone", async ({ page
         window.__calls = [];
         window.__dmRows = [
             { seq: 1, client_msg_id: "dm-bob", body: "Hi from Bob", from_unique_id: "bob", from_nickname: "Bob", sent_at: 1700000000, enc_verified: true },
-            { seq: 2, client_msg_id: "dm-own", body: "My first draft", from_unique_id: "me", from_nickname: "Me", self: true, sent_at: 1700000060, enc_verified: true },
+            { seq: 2, client_msg_id: "dm-own", body: "My first draft", from_unique_id: "me", from_nickname: "Me", self: true, sent_at: 1700000060, enc_verified: true, protocol: "noxa-olm-v1" },
+            // An own legacy (static-key) message stays read-only (review b46 P2-2).
+            { seq: 3, client_msg_id: "dm-old", body: "An old legacy note", from_unique_id: "me", from_nickname: "Me", self: true, sent_at: 1700000030, enc_verified: true },
         ];
         window.runtime = { EventsOn: () => () => {}, EventsEmit() {}, WindowIsFullscreen: async () => false };
         const settings = { language: "en", onboarding_done: true, alpha_dismissed: "test", bookmarks: [], chat_max_lines: 200 };
@@ -38,6 +40,10 @@ test("own direct messages can be edited and deleted for everyone", async ({ page
     const theirs = log.locator(".msg", { hasText: "Hi from Bob" });
     await theirs.hover();
     await expect(theirs.getByRole("button", { name: "edit", exact: true })).toHaveCount(0);
+    const legacy = log.locator(".msg", { hasText: "An old legacy note" });
+    await legacy.hover();
+    await expect(legacy.getByRole("button", { name: "edit", exact: true })).toHaveCount(0);
+    await expect(legacy.getByRole("button", { name: "delete", exact: true })).toHaveCount(0);
     await own.hover();
     await own.getByRole("button", { name: "edit", exact: true }).click();
     const input = log.locator(".msg-edit-input");
@@ -47,8 +53,10 @@ test("own direct messages can be edited and deleted for everyone", async ({ page
 
     // The change applies when it comes back; a forged one from Bob does not.
     await page.evaluate(() => {
-        window.__noxaChat.onDMChanged({ peer: "bob", ref_client_msg_id: "dm-own", from_unique_id: "me", action: "edit", body: "My final text" });
-        window.__noxaChat.onDMChanged({ peer: "bob", ref_client_msg_id: "dm-own", from_unique_id: "bob", action: "edit", body: "Forged by Bob" });
+        // An Olm message's change arrives as an authenticated ratchet record.
+        const change = (sender, purpose, text) => ({ protocol: "noxa-olm-v1", scope: "direct", peer: "bob", purpose, sender, reference: "dm-own", body: text === undefined ? {} : { text }, self: sender === "me", status: sender === "me" ? "accepted" : "" });
+        window.__noxaChat.onRatchetMessage(change("me", "edit", "My final text"));
+        window.__noxaChat.onRatchetMessage(change("bob", "edit", "Forged by Bob"));
     });
     await expect(log).toContainText("My final text");
     await expect(log).not.toContainText("Forged by Bob");
@@ -57,6 +65,6 @@ test("own direct messages can be edited and deleted for everyone", async ({ page
     await log.locator(".msg", { hasText: "My final text" }).getByRole("button", { name: "delete", exact: true }).click();
     await page.getByRole("dialog").getByRole("button", { name: /delete/i }).last().click();
     await expect.poll(() => page.evaluate(() => window.__calls[1])).toEqual(["DeleteDirectMessageForTab", "a", "bob", "dm-own"]);
-    await page.evaluate(() => window.__noxaChat.onDMChanged({ peer: "bob", ref_client_msg_id: "dm-own", from_unique_id: "me", action: "delete" }));
+    await page.evaluate(() => window.__noxaChat.onRatchetMessage({ protocol: "noxa-olm-v1", scope: "direct", peer: "bob", purpose: "delete", sender: "me", reference: "dm-own", body: {}, self: true, status: "accepted" }));
     await expect(log).not.toContainText("My final text");
 });

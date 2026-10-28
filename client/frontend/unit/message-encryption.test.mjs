@@ -5,13 +5,14 @@ import { DOWNGRADED, encModeFrom, encryptionBadge, UNOPENED_BODIES } from "../sr
 const kind = (m) => encryptionBadge(m).kind;
 
 test("every displayed message gets lock, shield or warning", () => {
-    // End-to-end: DMs opened locally, legacy e2e flags, private groups.
-    assert.equal(kind({ text: "hi", direct: true, enc: true, encVerified: true, encMode: "e2e" }), "lock");
-    assert.equal(kind({ text: "hi", e2e: true }), "lock");
-    assert.equal(kind({ text: "hi", direct: true, enc: true }), "lock");
-    assert.equal(kind({ text: "hi", enc: true, encMode: "e2e" }), "lock");
-    assert.equal(encryptionBadge({ text: "hi", enc: true, encMode: "e2e" }).label, "chat.groupHelp");
-    assert.equal(encryptionBadge({ text: "hi", direct: true, encMode: "e2e" }).label, "chat.directHelp");
+    // End-to-end: the Olm lock only for noxa-olm-v1; legacy static-key
+    // encryption (older history, older apps) gets its own badge (review b46 P2-2).
+    const olm = { protocol: "noxa-olm-v1" };
+    assert.equal(kind({ text: "hi", direct: true, enc: true, encVerified: true, encMode: "e2e", ...olm }), "lock");
+    assert.equal(kind({ text: "hi", enc: true, encMode: "e2e", ...olm }), "lock");
+    assert.equal(encryptionBadge({ text: "hi", direct: true, encMode: "e2e", ...olm }).label, "chat.olmHelp");
+    for (const m of [{ text: "hi", direct: true, enc: true, encVerified: true, encMode: "e2e" }, { text: "hi", e2e: true }, { text: "hi", direct: true, enc: true }, { text: "hi", enc: true, encMode: "e2e" }])
+        assert.deepEqual(encryptionBadge(m), { kind: "legacy", label: "chat.legacyHelp", bodyKey: "" }, JSON.stringify(m));
 
     // Client→server→client: channel and global chat only.
     assert.equal(kind({ text: "hi", enc: true }), "shield");

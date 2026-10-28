@@ -32,6 +32,13 @@ package main
 // A server that withholds the genuine successor can still steer peers pinned
 // at or before the old epoch onto the new branch, which carries this
 // device's own fresh keys (no key compromise).
+//
+// The applied/not-applied evidence (recoveryEvidence) is server data: it is
+// trustworthy only from an honest server. A hostile server can replay the
+// genuine pre-recovery publication after applying a reset and make the
+// device abandon an applied intent; that costs a wasted epoch and leaves a
+// second signed successor of the old epoch (handled by the fork rule above),
+// which such a server could cause anyway by refusing before applying.
 
 import (
 	"crypto/ed25519"
@@ -217,7 +224,7 @@ func (c *ratchetConsumer) promoteRecovery(id string, receipt olmdir.ResetReceipt
 	}
 	// The new account is ready: the sticky refusal is lifted and the next
 	// operation publishes (idempotently) and refreshes normally.
-	c.sticky, c.ready = nil, nil
+	c.setSticky(nil)
 	return c.check()
 }
 

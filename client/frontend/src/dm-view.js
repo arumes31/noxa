@@ -361,7 +361,7 @@ function renderThread() {
     if (secure !== null) maybeSecureNotice();
     const encryption = conversationEncryption({ group, peerKey, last: entry?.last || null, secure });
     ui.pill.dataset.encryption = encryption.kind;
-    ui.pill.innerHTML = icon(encryption.kind);
+    ui.pill.innerHTML = icon(encryption.kind === "legacy" ? "key" : encryption.kind);
     ui.pill.append(node("span", "", t(encryption.labelKey)));
     ui.pill.title = t(encryption.helpKey);
     ui.pill.setAttribute("aria-label", `${t(encryption.labelKey)}. ${t(encryption.helpKey)}`);

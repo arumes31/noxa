@@ -696,7 +696,8 @@ export function encryptionBadgeElement(badge) {
     const lock = document.createElement("span");
     lock.className = "msg-lock";
     lock.dataset.encryption = badge.kind;
-    lock.innerHTML = icon(badge.kind);
+    // Legacy static-key encryption draws a key, never the Olm lock.
+    lock.innerHTML = icon(badge.kind === "legacy" ? "key" : badge.kind);
     lock.setAttribute("role", "img");
     lock.setAttribute("aria-label", t(badge.label));
     lock.title = t(badge.label);
@@ -859,6 +860,8 @@ function renderDMActions(m, peer) {
         };
         acts.appendChild(b);
     };
+    // Legacy records are read-only: only Olm messages can be changed.
+    if (m.protocol !== RATCHET_PROTOCOL) return acts;
     // Attachments and voice messages carry tokens that an edit would break.
     if (!encryptionBadge(m).bodyKey && !/\[(file|voice):/.test(m.text || "")) mk("edit", t("chat.action.edit"), () => startDMEdit(m, peer));
     mk("trash", t("chat.action.delete"), () => deleteDM(m, peer));
@@ -4088,7 +4091,7 @@ async function searchAll() {
 
 export function searchEncryptionBadge(message, direct = false) {
     const verified = !!message.enc_verified;
-    return encryptionBadge({ text: message.body, direct, enc: verified, encVerified: verified, encMode: encModeFrom(verified, message.enc_mode) });
+    return encryptionBadge({ text: message.body, direct, enc: verified, encVerified: verified, encMode: encModeFrom(verified, message.enc_mode), protocol: message.protocol || "" });
 }
 
 function showSearchResults(q, response, scope) {

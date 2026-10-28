@@ -531,7 +531,9 @@ export class DirectMessages extends EventTarget {
     showQueued(peer, { id, text, sentAt, expired = false }) {
         // With a consumer attached, outbox entries are ratchet operations: match
         // and update that record (same sender + protocol) instead of a ghost.
-        const protocol = this.ratchet ? RATCHET_PROTOCOL : "";
+        // A signed-in session sends only noxa-olm-v1: a queued entry is an Olm
+        // operation even while the consumer is not attached yet.
+        const protocol = this.ratchet || this.secureRequired ? RATCHET_PROTOCOL : "";
         const existing = this.conversations.get(peer)?.messages.find(m => m.id === id && m.from === this.ownUID && (m.protocol || "") === protocol);
         if (existing && !existing.queued && !existing.failed) return;
         // A committed original keeps its text; the draft never replaces it.
@@ -725,7 +727,9 @@ export class DirectMessages extends EventTarget {
     #refuseLegacySend() {
         if (!this.secureRequired) return;
         const reason = this.secureRequired();
-        throw Object.assign(new Error(reason?.message || "secure messaging is not available"), { code: reason?.code || "secure_unavailable", retryable: false });
+        // blocked: the outbox keeps the entry queued (never failed) until a
+        // consumer is attached; an immediate send shows the reason.
+        throw Object.assign(new Error(reason?.message || "secure messaging is not available"), { code: reason?.code || "secure_unavailable", retryable: false, blocked: true });
     }
 
     async #changeRatchet(peer, message, action, text) {
@@ -759,6 +763,9 @@ export class DirectMessages extends EventTarget {
         // seq 0 under one signed transfer ID; a chunk spliced from another
         // transfer, or a replay of a completed transfer, imports nothing.
         const completed = new Set(Array.isArray(state.completed) ? state.completed : []);
+        // Transfer IDs are recorded when they start: a known transfer never
+        // restarts from seq 0 (a replay of an abandoned transfer imports nothing).
+        const started = new Set(Array.isArray(state.started) ? state.started : []);
         let current = state.current && typeof state.current.transfer === "string" ? state.current : null;
         let seq = 0;
         let imported = 0, skipped = 0;
@@ -777,7 +784,10 @@ export class DirectMessages extends EventTarget {
                 // DM copy imports nothing.
                 const envelope = plain ? decodeHistoryEnvelope(plain, { source: chunk.from_device_id, target: this.deviceID, seq: chunk.seq, total: chunk.total, signingKey: sender.signingKey }) : null;
                 const h = envelope?.header;
-                if (h && !completed.has(h.transfer) && h.seq === 0) current = { transfer: h.transfer, source: h.source, next: 0 };
+                if (h && !completed.has(h.transfer) && !started.has(h.transfer) && h.seq === 0) {
+                    current = { transfer: h.transfer, source: h.source, next: 0 };
+                    started.add(h.transfer);
+                }
                 const inOrder = h && !completed.has(h.transfer) && current && current.transfer === h.transfer && current.source === h.source && current.next === h.seq;
                 if (envelope && inOrder) {
                     current.next++;
@@ -807,7 +817,7 @@ export class DirectMessages extends EventTarget {
             }
             for (const d of digests) done.add(d);
             await putSealed(Stores.device, HISTORY_IMPORTS, { digests: [...done].slice(-MAX_HISTORY_DIGESTS),
-                completed: [...completed].slice(-MAX_HISTORY_TRANSFERS), current });
+                completed: [...completed].slice(-MAX_HISTORY_TRANSFERS), started: [...started].slice(-MAX_HISTORY_TRANSFERS), current });
             await this.conn.request(Msg.DeviceRequest, { action: "history_ack", seq: seq - 1 }, Msg.DeviceResult, { accept: r => r.action === "history_ack" });
         }
         this.lastImport = { imported, skipped };

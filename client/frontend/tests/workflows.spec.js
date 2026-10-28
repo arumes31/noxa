@@ -5447,6 +5447,13 @@ test("selected quick wins retry only the unchanged failed draft", async ({ page 
     await page.evaluate(() => window.__resolveRetry("offline again"));
     await page.locator("#chat-retry").click();
     await expect.poll(() => page.evaluate(() => window.__retryPayloads)).toEqual(["first draft", "new draft", "new draft"]);
+    // Production path: every send carries an operation ID; retrying the
+    // unchanged failed draft reuses it, a new draft gets a new one.
+    const ops = await page.evaluate(() => (window.__sendOperations || []).map(o => o.operationID));
+    expect(ops).toHaveLength(3);
+    expect(ops.every(id => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(ops[1]).not.toBe(ops[0]);
+    expect(ops[2]).toBe(ops[1]);
     await page.evaluate(() => window.__resolveRetry(""));
     await expect(page.locator("#chat-text")).toHaveValue("");
     await expect(page.locator("#chat-send-error")).toBeHidden();
@@ -6036,9 +6043,14 @@ test.beforeEach(async ({ page }) => {
         const app = new Proxy({}, {
             get(_target, nativeMethod) {
                 if (nativeMethod === "UploadChatAttachmentProgressForTab") return undefined;
-                // These send workflows model the SendChat/SendChatReply entries
-                // (the frontend's fallback); operation-ID sends have their own tests.
-                if (nativeMethod === "SendChatOperationForTab" && !window.__sendChatOperations) return undefined;
+                // The production send entry: routed through window.go.main.App to
+                // the SendChat/SendChatReply handlers (so per-suite proxies see
+                // it), recording the stable operation ID of every call.
+                if (nativeMethod === "SendChatOperationForTab") return async (tab, scope, target, text, parent, operationID) => {
+                    (window.__sendOperations ||= []).push({ tab, scope, target, text, parent: parent || 0, operationID });
+                    const api = window.go.main.App;
+                    return parent ? api.SendChatReplyForTab(tab, scope, target, text, parent) : api.SendChatForTab(tab, scope, target, text);
+                };
                 if (nativeMethod === "ReconnectTab" && !window.__tabScopedReconnect) return undefined;
                 return async (...args) => {
                     let method = nativeMethod;
@@ -7826,8 +7838,10 @@ test("routes decrypted direct messages and echoes without mixing global chat or 
     await bravoTab.click();
     await expect(page.locator("#chat-log")).toContainText("private Grüße 🌿");
     await expect(page.locator("#chat-log .msg-tag")).toHaveText("Direct message");
-    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("title", /end-to-end encrypted/);
-    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("aria-label", /end-to-end encrypted/);
+    // A legacy (static-key) DM: its own badge, never the Olm lock (review b46 P2-2).
+    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("data-encryption", "legacy");
+    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("title", /Legacy static-key encryption/);
+    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("aria-label", /Legacy static-key encryption/);
 
     await page.evaluate(() => {
         window.__noxaChat.openPM("charlie", "CHARLIE");
@@ -7866,10 +7880,11 @@ test("restores DM history without claiming legacy or plaintext records were veri
     // Every message carries a badge: only the verified record gets the lock,
     // the legacy and plaintext records keep their text under a warning.
     await expect(page.locator("#chat-log .msg-lock")).toHaveCount(3);
-    const lock = page.locator('#chat-log .msg-lock[data-encryption="lock"]');
+    // The verified record is legacy (static-key): its own badge, not the Olm lock.
+    const lock = page.locator('#chat-log .msg-lock[data-encryption="legacy"]');
     await expect(lock).toHaveCount(1);
-    await expect(lock).toHaveAttribute("title", /end-to-end encrypted/);
-    await expect(lock).toHaveAttribute("aria-label", /end-to-end encrypted/);
+    await expect(lock).toHaveAttribute("title", /Legacy static-key encryption/);
+    await expect(lock).toHaveAttribute("aria-label", /Legacy static-key encryption/);
     await expect(page.locator('#chat-log .msg-lock[data-encryption="warning"]')).toHaveCount(2);
     await expect(page.locator('#chat-log .msg-lock[data-encryption="warning"]').first()).not.toHaveAttribute("title", /end-to-end encrypted/);
 });

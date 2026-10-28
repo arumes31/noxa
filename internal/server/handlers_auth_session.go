@@ -194,6 +194,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		ClientID:           client.ID,
 		UniqueID:           id.uniqueID,
 		Nickname:           id.nickname,
+		Guest:              id.guest,
 		TLSFingerprint:     s.tlsFingerprint,
 		Capabilities:       []string{netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity},
 	}

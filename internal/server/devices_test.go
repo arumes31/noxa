@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net"
 	"net/url"
 	"strings"
@@ -17,6 +18,8 @@ import (
 	"noxa/internal/eventbus"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
+
+	"go.uber.org/zap"
 )
 
 // fakeDevices is an in-memory DeviceStore with the store's semantics.
@@ -704,5 +707,36 @@ func TestDeviceLinkRelaysSignedServerBinding(t *testing.T) {
 	other := deviceCall(t, phoneConn, netproto.DeviceRequest{Action: netproto.DeviceActionLinkStatus, LinkID: linkID, Ed25519PublicKey: newLinkTestKeys(t).public})
 	if other.ServerBinding != "" || other.State != netproto.LinkStateExpired {
 		t.Fatalf("other key status = %+v", other)
+	}
+}
+
+// Ruling 2: a self-rooted key identity (a guest whose principal derives from
+// its own session key) registers its key as its first web device, so a PWA
+// guest can use secure messaging; linked web devices and members still
+// cannot self-register from the browser.
+func TestSelfRootedWebGuestRegistersDevice(t *testing.T) {
+	pub, _, err := auth.GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := auth.UniqueIDFromPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := &fakeDevices{}
+	s := &TCPServer{cfg: &config.Config{}, logger: zap.NewNop(), deps: &Deps{Devices: devices}}
+	web := func(uid string, userID int64) *Client {
+		c := &Client{UniqueID: uid, UserID: userID, authed: true, authSigningKey: pub}
+		c.webTransport.Store(true)
+		return c
+	}
+	d, err := s.ensureDesktopDevice(t.Context(), web(principal, 0))
+	if err != nil || d.Kind != store.DeviceKindWeb || d.Principal != principal || d.Ed25519Public != pub {
+		t.Fatalf("self-rooted web guest: %+v %v", d, err)
+	}
+	for name, c := range map[string]*Client{"member": web(principal, 7), "linked device": web("someone-else", 0)} {
+		if _, err := s.ensureDesktopDevice(t.Context(), c); !errors.Is(err, store.ErrDeviceNotFound) {
+			t.Fatalf("%s self-registered from the browser: %v", name, err)
+		}
 	}
 }

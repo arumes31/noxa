@@ -474,6 +474,7 @@ func (s dmHistoryStore) search(peer, query string, maxMessages int) ChatSearchRe
 				SentAt:       m.SentAt,
 			}
 			entry.EncVerified, entry.EncMode = dmEncState(m)
+			entry.Protocol = m.Protocol
 			res.Messages = append(res.Messages, entry)
 		}
 	}

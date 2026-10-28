@@ -132,6 +132,13 @@ test("import: chunks spliced across transfers and replays of completed transfers
     serve([{ seq: 0, total: 1, from_device_id: "dsk", data: chunkOf("C", [rec("C0", 4)], 0, 1) }]);
     assert.equal(await dm.importHistory(), 1);
     assert.equal(ids(), "C0");
+    // Review b46 P3-6: an abandoned (never completed) transfer B started with
+    // seq 0 cannot be restarted from seq 0 later, even re-sealed.
+    serve([{ seq: 0, total: 2, from_device_id: "dsk", data: chunkOf("B", [rec("B0", 5)], 0, 2) }]);
+    assert.equal(await dm.importHistory(), 1, "B starts");
+    dm.conversations.get("pat").messages = [];
+    serve([{ seq: 0, total: 2, from_device_id: "dsk", data: chunkOf("B", [rec("B0", 5)], 0, 2) }]);
+    assert.equal(await dm.importHistory(), 0, "a restart of a started transfer imports nothing");
 });
 
 // b2-review P3-4 + CodeRabbit: own and peer legacy records are accepted

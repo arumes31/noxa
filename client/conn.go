@@ -87,9 +87,12 @@ type connManager struct {
 	nickname                     string
 	displayName                  string // requested public name; separate from the account login
 	isGuest                      bool
-	authorizationModel           string
-	closed                       bool
-	reconnectTerminal            bool // authenticated rejection or trust failure; guarded by mu
+	// keyless: an ephemeral "guest:" session without an identity key (only a
+	// third-party client can get one: the desktop always signs in with its key).
+	keyless            bool
+	authorizationModel string
+	closed             bool
+	reconnectTerminal  bool // authenticated rejection or trust failure; guarded by mu
 	// The latest snapshot is replayed when a tab becomes active.
 	lastSnapshot string
 	// lastSubscriptions is the newest authoritative subscription set (312).
@@ -133,6 +136,8 @@ type connManager struct {
 	ratchetProject func(m *connManager, r RatchetRecord, isNew bool)
 	// ratchetControls receive delivered media controls (ratchet_control.go).
 	ratchetControls []func(RatchetControl)
+	controlQueue    []RatchetControl
+	controlRunning  bool
 	// ratchetEdits maps an uncertain edit operation (peer, ref, text) to its
 	// logical ID until it is accepted, so a retry resolves it.
 	ratchetEdits sync.Map
@@ -603,11 +608,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsWebLogin = slices.Contains(resp.Capabilities, netproto.CapabilityWebLogin)
 	m.supportsLinkPreview = slices.Contains(resp.Capabilities, netproto.CapabilityLinkPreview)
 	m.supportsDMDevices = m.supportsDevices && slices.Contains(resp.Capabilities, netproto.CapabilityDMDevices)
-	// Direct and private-group messages use noxa-olm-v1 only: there is no
-	// legacy send path for an authenticated session (an old server or a guest
-	// session gets an explicit "unavailable" instead).
-	m.supportsOlm = slices.Contains(resp.Capabilities, netproto.CapabilityOlmAdmission) && slices.Contains(resp.Capabilities, netproto.CapabilityOlmDirectory)
-	m.ratchetDefault = true
+	m.applySecureAuthLocked(resp, authMsg.Anonymous)
 	m.activityReportedAt = time.Time{}
 	m.deviceLinks = nil
 	m.nickname = resp.Nickname
@@ -623,7 +624,6 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsStreamCodecRefresh = slices.Contains(resp.Capabilities, netproto.CapabilityStreamCodecRefresh)
 	m.supportsStreamReceiverRecovery = slices.Contains(resp.Capabilities, netproto.CapabilityStreamReceiverRecovery)
 	m.supportsConversationActivity = slices.Contains(resp.Capabilities, netproto.CapabilityConversationActivity)
-	m.isGuest = authMsg.Anonymous
 	m.iceServers = resp.ICEServers
 	m.managedRelay = slices.Contains(resp.Capabilities, netproto.CapabilityManagedRelay)
 	m.relayLease = netproto.RelayResponse{}
@@ -662,6 +662,22 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 		m.startRatchetRecorded(conn)
 	})
 	return ""
+}
+
+// applySecureAuthLocked records what an authentication result means for
+// secure messaging (m.mu held). Direct and private-group messages use
+// noxa-olm-v1 only: every authenticated session has no legacy send path (an
+// old server or a keyless session gets an explicit "unavailable" instead).
+// The server resolves the session kind; an updated server reports it, since
+// every password-less key login sends Anonymous, members included.
+func (m *connManager) applySecureAuthLocked(resp netproto.AuthResponse, anonymous bool) {
+	m.supportsOlm = slices.Contains(resp.Capabilities, netproto.CapabilityOlmAdmission) && slices.Contains(resp.Capabilities, netproto.CapabilityOlmDirectory)
+	m.ratchetDefault = true
+	m.isGuest = anonymous
+	if slices.Contains(resp.Capabilities, netproto.CapabilityOlmAdmission) {
+		m.isGuest = resp.Guest
+	}
+	m.keyless = strings.HasPrefix(resp.UniqueID, "guest:")
 }
 
 // openMOTD unseals the AuthResponse MOTD with the global generation that came

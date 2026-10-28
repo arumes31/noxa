@@ -259,20 +259,31 @@ func (s *TCPServer) attachSessionDevice(ctx context.Context, client *Client, pri
 }
 
 // ensureDesktopDevice registers a desktop session's identity key as a device
-// the first time it manages devices. Web sessions are only ever linked.
+// the first time it manages devices. Web sessions are linked, except a
+// self-rooted key identity (a guest whose principal is derived from its own
+// session key): its key is its account root, so it registers itself as its
+// first web device and can use secure messaging like a desktop guest.
 func (s *TCPServer) ensureDesktopDevice(ctx context.Context, client *Client) (store.Device, error) {
 	if id := client.currentDeviceID(); id != "" {
 		return s.deps.Devices.DeviceByID(ctx, client.uniqueID(), id)
 	}
 	key := client.sessionKey()
-	if key == "" || client.isWebTransport() {
+	if key == "" {
 		return store.Device{}, store.ErrDeviceNotFound
+	}
+	kind, name := store.DeviceKindDesktop, "Desktop"
+	if client.isWebTransport() {
+		derived, err := auth.UniqueIDFromPublicKey(key)
+		if err != nil || derived != client.uniqueID() || client.userID() > 0 {
+			return store.Device{}, store.ErrDeviceNotFound
+		}
+		kind, name = store.DeviceKindWeb, "Browser"
 	}
 	d, err := s.deps.Devices.AddDevice(ctx, store.NewDevice{
 		Principal:     client.uniqueID(),
 		UserID:        client.userID(),
-		Kind:          store.DeviceKindDesktop,
-		Name:          "Desktop",
+		Kind:          kind,
+		Name:          name,
 		Ed25519Public: key,
 		X25519Public:  client.x25519(),
 	}, s.cfg.Web.DeviceLimit())

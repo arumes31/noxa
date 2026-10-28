@@ -138,6 +138,60 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 		d.X25519Private = base64.StdEncoding.EncodeToString(xpriv[:])
 		return d
 	}
+	// Key identities that sign in WITHOUT any pre-registered device, exactly
+	// like the production desktop: a key-derived guest (no users row) or a
+	// member, both registering their key through the real device handler on
+	// first use (ruling 2: guests use secure messaging too).
+	keyIdentity := func(name string, member bool) {
+		pubPEM, privPEM, e := auth.GenerateIdentityKeyPair()
+		if e != nil {
+			t.Fatal(e)
+		}
+		priv, _ := auth.LoadPrivateKey(privPEM)
+		principal, e := auth.UniqueIDFromPublicKey(pubPEM)
+		if e != nil {
+			t.Fatal(e)
+		}
+		xpub, xpriv := x25519Pair()
+		record, e := e2ee.SignKeyRecord(principal, xpub, priv)
+		if e != nil {
+			t.Fatal(e)
+		}
+		keys.keys[principal] = record
+		var userID int64
+		if member {
+			if e = db.DB().QueryRowContext(ctx, `INSERT INTO users(unique_id,nickname) VALUES($1,$2) RETURNING id`, principal, name).Scan(&userID); e != nil {
+				t.Fatal(e)
+			}
+		}
+		xs := base64.StdEncoding.EncodeToString(xpub[:])
+		devices[name] = &nativeProductDevice{Name: name, Principal: principal, Kind: store.DeviceKindDesktop, PublicKey: pubPEM, PrivateKey: privPEM,
+			X25519Public: xs, X25519Private: base64.StdEncoding.EncodeToString(xpriv[:]),
+			client: &Client{UniqueID: principal, UserID: userID, authed: true, authSigningKey: pubPEM, x25519Key: xs}}
+	}
+	// A PWA guest: a self-rooted browser key identity (web transport).
+	{
+		pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+		pubPEM := pemOf(pub)
+		principal, e := auth.UniqueIDFromPublicKey(pubPEM)
+		if e != nil {
+			t.Fatal(e)
+		}
+		xpub, xpriv := x25519Pair()
+		record, e := e2ee.SignKeyRecord(principal, xpub, priv)
+		if e != nil {
+			t.Fatal(e)
+		}
+		keys.keys[principal] = record
+		xs := base64.StdEncoding.EncodeToString(xpub[:])
+		c := &Client{UniqueID: principal, authed: true, authSigningKey: pubPEM, x25519Key: xs}
+		c.webTransport.Store(true)
+		devices["pguest-phone"] = &nativeProductDevice{Name: "pguest-phone", Principal: principal, Kind: store.DeviceKindWeb,
+			EdSecret: base64.StdEncoding.EncodeToString(priv), X25519Private: base64.StdEncoding.EncodeToString(xpriv[:]), client: c}
+	}
+	keyIdentity("gguest1-desk", false)
+	keyIdentity("gguest2-desk", false)
+	keyIdentity("nmia-desk", true)
 	native("nalice-desk", "nalice")
 	native("nbob-desk", "nbob")
 	native("ncarol-desk", "ncarol")
@@ -337,6 +391,10 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 					return map[string]any{"lost": true}, nil
 				}
 				out, e := dispatch(d.client, req.Type, req.Payload)
+				if d.Device == "" {
+					// Registered on first use through the real handler.
+					d.Device = d.client.currentDeviceID()
+				}
 				if e == nil && drop[k] > 0 {
 					drop[k]--
 					return map[string]any{"lost": true}, nil

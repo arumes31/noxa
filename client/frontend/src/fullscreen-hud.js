@@ -689,7 +689,7 @@ export function createFullscreenHud(stage) {
             text.textContent = message.text;
             li.append(text);
             if (message.badge?.kind) {
-                const badge = el("span", "fs-bubble-encryption", svg(message.badge.kind));
+                const badge = el("span", "fs-bubble-encryption", svg(message.badge.kind === "legacy" ? "key" : message.badge.kind));
                 badge.dataset.kind = message.badge.kind;
                 badge.setAttribute("role", "img");
                 setLabel(badge, t(message.badge.label));

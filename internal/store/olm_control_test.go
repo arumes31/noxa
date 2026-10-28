@@ -120,4 +120,17 @@ func TestOlmControlSingleTargetAdmission(t *testing.T) {
 	if _, e := controlSend(t, s, a, snap, b, strconv.Itoa(attempt), "ctl-over", "", deadline); !errors.Is(e, ErrOlmLimit) {
 		t.Fatalf("pending control bound: %v", e)
 	}
+	// Review b46 P3-3: the bound is per sender device. Another sender (bob's
+	// second device, to his first) is not blocked by alice's pending controls.
+	if _, e := s.ClaimOlmKey(t.Context(), "bob", b2.Device, "bob", b.Device, "claim-b2", deadline, b.Server); e != nil {
+		t.Fatal(e)
+	}
+	b2.Signing = b2dev.Ed25519Public
+	own, e := s.OlmSnapshot(t.Context(), b2, "direct", "bob", "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if r, e := controlSend(t, s, b2, own, b, "1", "ctl-b2", "claim-b2", deadline); e != nil || r.State != "accepted" {
+		t.Fatalf("other sender blocked by alice's controls: %+v %v", r, e)
+	}
 }

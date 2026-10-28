@@ -134,7 +134,9 @@ describe("thread encryption claim", () => {
     });
 
     it("falls back to the newest message when the key could not be checked", () => {
-        assert.equal(conversationEncryption({ last: e2e("x") }).kind, "lock");
+        assert.equal(conversationEncryption({ last: { ...e2e("x"), protocol: "noxa-olm-v1" } }).kind, "lock");
+        // A legacy (static-key) newest message is labelled legacy, not Olm.
+        assert.equal(conversationEncryption({ last: e2e("x") }).kind, e2e("x").protocol ? "lock" : "legacy");
         // A server-mode DM is never shielded.
         assert.deepEqual(conversationEncryption({ last: { text: "x", direct: true, enc: true, encVerified: true, encMode: "server" } }),
             { kind: "warning", labelKey: "dm.encryption.unverified", helpKey: "chat.downgradedHelp" });

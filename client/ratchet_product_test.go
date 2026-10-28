@@ -276,6 +276,56 @@ func (n *nativeNode) connectTransport() {
 	go n.pump(server, done)
 }
 
+// connectProduction connects WITHOUT the ratchetCfg test override, exactly
+// as connectWith leaves a manager after authentication: the auth result goes
+// through applySecureAuthLocked, the device is registered through the real
+// device handler, and the session opens with the production configuration
+// (default store base under the test identity root, store protection of the
+// platform, binding from the pinned certificate fingerprint).
+func (n *nativeNode) connectProduction(guest bool) {
+	n.t.Helper()
+	client, server := net.Pipe()
+	resp := netproto.AuthResponse{OK: true, UniqueID: n.dev.Principal, Guest: guest,
+		Capabilities: []string{netproto.CapabilityDevices, netproto.CapabilityDMDevices, netproto.CapabilityOlmDirectory, netproto.CapabilityOlmAdmission}}
+	n.cm.mu.Lock()
+	n.cm.ratchetCfg = nil
+	n.cm.conn = client
+	n.cm.connEpoch++
+	n.cm.closed = false
+	n.cm.clientID = "native-" + n.dev.Name
+	n.cm.uniqueID = n.dev.Principal
+	n.cm.deviceID = ""
+	n.cm.addr = "ratchet-product.test:12333"
+	n.cm.fingerprint = productFingerprint(n.binding)
+	n.cm.supportsDevices = true
+	n.cm.supportsDMDevices = true
+	n.cm.applySecureAuthLocked(resp, true)
+	n.cm.readTimeout = 0
+	n.cm.mu.Unlock()
+	done := make(chan struct{})
+	n.pipeMu.Lock()
+	n.pipeDone = done
+	n.pipeMu.Unlock()
+	go n.cm.readLoop(client)
+	go n.pump(server, done)
+	// connectWith's "device registration" goroutine, in order.
+	n.cm.ensureDeviceRegistered(client)
+	n.cm.startRatchetRecorded(client)
+	if _, err := n.cm.ratchetConsumerOn(nil); err != nil {
+		n.t.Fatalf("%s: production session: %v (blocked: %q)", n.dev.Name, err, n.cm.ratchetBlockedReason())
+	}
+}
+
+// productFingerprint is the pinned certificate fingerprint of a binding.
+func productFingerprint(binding string) string {
+	hexed := strings.TrimPrefix(binding, "tls-sha256:")
+	var parts []string
+	for i := 0; i+2 <= len(hexed); i += 2 {
+		parts = append(parts, hexed[i:i+2])
+	}
+	return strings.Join(parts, ":")
+}
+
 func (n *nativeNode) startSession() {
 	n.t.Helper()
 	n.cm.mu.Lock()
@@ -925,6 +975,12 @@ func TestRatchetProductBridge(t *testing.T) {
 	step("16d media controls native <-> PWA")
 	controlProduct(t, b, A, fixture.Devices)
 
+	// 16e. Ruling 2: key identities WITHOUT the test override (production
+	//      configuration, real device registration): guest <-> member,
+	//      guest <-> guest, and guest <-> an existing member, both ways.
+	step("16e guests and members without the test override")
+	keyIdentitiesProduct(t, b, fixture.Devices, fixture.Binding, root, A)
+
 	// 16b. P2-3: the new-protocol path reaches the identity confirmation, and an
 	//      explicit confirmation is a DURABLE ratchet reset (applied by the next
 	//      session even when none is live at confirmation time).
@@ -1302,7 +1358,8 @@ func controlProduct(t *testing.T, b productBridge, A *nativeNode, devices map[st
 		} `json:"controls"`
 		View int `json:"view"`
 	}
-	read := `await T.consumer.drain(); return { controls: T.controls, view: T.view("nalice").length };`
+	// Handlers run after the drain step (asynchronously).
+	read := `await T.consumer.drain(); await new Promise(r => setTimeout(r, 100)); return { controls: T.controls, view: T.view("nalice").length };`
 	if err := json.Unmarshal(b.pwa("pbob-phone", read), &r1); err != nil {
 		t.Fatal(err)
 	}
@@ -1314,7 +1371,7 @@ func controlProduct(t *testing.T, b productBridge, A *nativeNode, devices map[st
 		t.Fatal("delivered control must be acknowledged")
 	}
 	// A second drain hands nothing out again; history never lists controls.
-	if s := string(b.pwa("pbob-phone", `await T.consumer.drain(); return [T.controls.length, (await T.consumer.history()).filter(r => r.purpose === "control").length];`)); s != "[1,0]" {
+	if s := string(b.pwa("pbob-phone", `await T.consumer.drain(); await new Promise(r => setTimeout(r, 100)); return [T.controls.length, (await T.consumer.history()).filter(r => r.purpose === "control").length];`)); s != "[1,0]" {
 		t.Fatalf("PWA replay/history: %s", s)
 	}
 
@@ -1329,18 +1386,43 @@ func controlProduct(t *testing.T, b productBridge, A *nativeNode, devices map[st
 		}
 	}
 	A.drain()
-	mu.Lock()
-	n := len(got)
+	// Handlers run on their own goroutine after the commit (at most once).
+	var n int
 	var first RatchetControl
-	if n > 0 {
-		first = got[0]
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		mu.Lock()
+		n = len(got)
+		if n > 0 {
+			first = got[0]
+		}
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
 	}
-	mu.Unlock()
 	if n != 1 || first.Sender != "pbob" || first.LogicalID != "ctl-p2n" || first.Scope.Type != "call" || first.Epoch != 4 || string(first.Data) != `{"key":"p2n"}` {
 		t.Fatalf("native control receive: %d %+v", n, first)
 	}
 	if len(A.log("pbob")) != logBefore {
 		t.Fatal("a control reached the native DM log")
+	}
+	// Review b46 P3-2: control data is never kept at rest (receiver inbox and
+	// sender outbox archives keep kind/scope/epoch/expiry only).
+	ac := A.consumer()
+	for _, kind := range []string{durable.Inbox, durable.Outbox} {
+		refs, err := ac.refs(kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		records, err := ac.readMany(refs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range records {
+			if bytes.Contains(r.Data, []byte(`"n2p"`)) || bytes.Contains(r.Data, []byte(`"p2n"`)) {
+				t.Fatalf("control data kept at rest in %s", kind)
+			}
+		}
 	}
 	hist, err := A.consumer().history()
 	if err != nil {
@@ -1358,6 +1440,7 @@ func controlProduct(t *testing.T, b productBridge, A *nativeNode, devices map[st
 	}
 	late := `const real = Date.now; Date.now = () => real() + 90000;
 try { await T.consumer.drain(); } finally { Date.now = real; }
+await new Promise(r => setTimeout(r, 100));
 return T.controls.length;`
 	if s := string(b.pwa("pbob-phone", late)); s != "1" {
 		t.Fatalf("expired control handed out: %s", s)
@@ -1365,7 +1448,79 @@ return T.controls.length;`
 	if pending("pbob-phone") != before["pbob-phone"] {
 		t.Fatal("expired control must be acknowledged")
 	}
-	if s := string(b.pwa("nalice-phone", `await T.consumer.drain(); return T.controls.length;`)); s != "0" {
+	if s := string(b.pwa("nalice-phone", `await T.consumer.drain(); await new Promise(r => setTimeout(r, 100)); return T.controls.length;`)); s != "0" {
 		t.Fatalf("own linked device received a control: %s", s)
 	}
+}
+
+func keyIdentitiesProduct(t *testing.T, b productBridge, devices map[string]productFixtureDevice, binding, root string, A *nativeNode) {
+	t.Helper()
+	boot := func(name string, guest bool) *nativeNode {
+		n := &nativeNode{t: t, b: b, dev: devices[name], binding: binding, base: filepath.Join(root, name), tab: "tab-" + name}
+		n.boot()
+		n.connectProduction(guest)
+		if n.cm.ratchetConfigured() == false || n.cm.isGuestSnapshot() != guest {
+			t.Fatalf("%s: session kind", name)
+		}
+		return n
+	}
+	G1, G2, M := boot("gguest1-desk", true), boot("gguest2-desk", true), boot("nmia-desk", false)
+	defer func() {
+		for _, n := range []*nativeNode{G1, G2, M} {
+			n.disconnect()
+		}
+	}()
+	// The production store lives under the identity root (no override dir).
+	if _, err := os.Stat(ratchetStoreDir(filepath.Join(root, "identities", "ratchet"), G1.identity())); err != nil {
+		t.Fatalf("production store path: %v", err)
+	}
+	send := func(from, to *nativeNode, text string) {
+		t.Helper()
+		if e := from.app.SendChatForTab(from.tab, "direct", to.dev.Principal, text); e != "" {
+			t.Fatalf("%s -> %s: %s", from.dev.Name, to.dev.Name, e)
+		}
+		to.drain()
+		got, n := to.entryByBody(from.dev.Principal, text)
+		if n != 1 || got.Protocol != ratchetProtocol || got.Self || !got.EncVerified {
+			t.Fatalf("%s did not receive %q from %s: %+v (%d)", to.dev.Name, text, from.dev.Name, got, n)
+		}
+	}
+	send(G1, M, "guest to member")
+	send(M, G1, "member to guest")
+	send(G1, G2, "guest to guest")
+	send(G2, G1, "guest to guest reply")
+	send(G1, A, "guest to an existing member")
+	send(A, G1, "existing member to guest")
+
+	// A PWA guest in Chromium (self-registered browser device, no override
+	// beyond the harness transport): with a native member and a native guest.
+	pg := devices["pguest-phone"].Principal
+	if got := string(b.pwa("pguest-phone", `return (await T.consumer.ready()).epoch;`)); got != "1" {
+		t.Fatalf("PWA guest session: %s", got)
+	}
+	pwaSend := func(to *nativeNode, text string) {
+		t.Helper()
+		js := fmt.Sprintf(`return (await T.dm.send(%q, %q, "", { id: crypto.randomUUID() })).receipt.state;`, to.dev.Principal, text)
+		if s := string(b.pwa("pguest-phone", js)); s != `"accepted"` {
+			t.Fatalf("PWA guest -> %s: %s", to.dev.Name, s)
+		}
+		to.drain()
+		if _, n := to.entryByBody(pg, text); n != 1 {
+			t.Fatalf("%s did not receive %q from the PWA guest", to.dev.Name, text)
+		}
+	}
+	nativeToPWA := func(from *nativeNode, text string) {
+		t.Helper()
+		if e := from.app.SendChatForTab(from.tab, "direct", pg, text); e != "" {
+			t.Fatalf("%s -> PWA guest: %s", from.dev.Name, e)
+		}
+		js := fmt.Sprintf(`await T.consumer.drain(); return T.view(%q).filter(m => m.body === %q && m.protocol === "noxa-olm-v1").length;`, from.dev.Principal, text)
+		if s := string(b.pwa("pguest-phone", js)); s != "1" {
+			t.Fatalf("PWA guest did not receive %q from %s: %s", text, from.dev.Name, s)
+		}
+	}
+	pwaSend(M, "PWA guest to member")
+	nativeToPWA(M, "member to PWA guest")
+	pwaSend(G1, "PWA guest to native guest")
+	nativeToPWA(G1, "native guest to PWA guest")
 }

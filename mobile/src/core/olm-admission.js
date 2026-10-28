@@ -325,7 +325,8 @@ export function expectedBinding(m, t) {
 // --- Media controls (mirror of internal/e2ee/admission/control.go) ---------
 export const MAX_CONTROL_TTL = 300;
 export const MAX_CONTROL_DATA = 4096;
-export const MAX_PENDING_CONTROLS = 64;
+export const MAX_PENDING_CONTROLS = 64; // per sender device and target device
+export const CONTROL_CLOCK_SKEW = 300;
 const controlWord = (s) => typeof s === "string" && /^[a-z0-9._-]{1,64}$/.test(s);
 
 /** The single non-local target of a control manifest, or null. */
@@ -353,11 +354,20 @@ export function validateControlSend(body, now) {
   return b;
 }
 
-/** "delivered", "expired" or "invalid" for a received control body. */
+/** "delivered", "expired" or "invalid" for a received control body (an
+ * expiry further ahead than a sender may set, plus clock skew, is invalid). */
 export function controlDisposition(body, now) {
   let b;
   try { b = parseControlBody(body); } catch { return "invalid"; }
+  if (b.expires_at > now + MAX_CONTROL_TTL + CONTROL_CLOCK_SKEW) return "invalid";
   return b.expires_at <= now ? "expired" : "delivered";
+}
+
+/** What is kept at rest for a control: never its data (future media keys). */
+export function controlArchiveBody(body) {
+  let b;
+  try { b = parseControlBody(body); } catch { return null; }
+  return { kind: b.kind, scope: { type: b.scope.type, id: b.scope.id }, epoch: b.epoch, expires_at: b.expires_at };
 }
 export function checkEnvelope(m, c) {
   const e = c.envelope;

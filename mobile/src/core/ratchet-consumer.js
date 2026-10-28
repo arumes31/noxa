@@ -24,6 +24,7 @@ import {
     sealPayload,
     validateControlSend,
     controlDisposition,
+    controlArchiveBody,
     parseControlBody,
     MAX_CONTROL_TTL,
 } from "./olm-admission.js";
@@ -529,7 +530,10 @@ export class RatchetConsumer {
     /**
      * Registers fn({sender, senderDevice, logicalID, kind, scope, epoch,
      * expiresAt, data, delivery}) for controls delivered to this device:
-     * authenticated, unexpired, from another device, exactly once at commit.
+     * authenticated, unexpired, from another device, at commit. Delivery is
+     * AT MOST ONCE: handlers run after the drain step (never inside it, so a
+     * handler may send a reply control); a control committed while no handler
+     * is registered is not handed out later, and its data is never kept at rest.
      * Expired/invalid controls and replays are never handed out.
      */
     onControl(fn) { this.controls.push(fn); }
@@ -539,10 +543,13 @@ export class RatchetConsumer {
         try { b = parseControlBody(record.body); } catch { return; }
         const out = { sender: record.sender, senderDevice: record.senderDevice, logicalID: record.logicalID, kind: b.kind, scope: b.scope,
             epoch: b.epoch, expiresAt: b.expires_at, ...(b.data !== undefined ? { data: b.data } : {}), delivery: record.transport.delivery };
-        for (const fn of this.controls) {
-            try { await fn(out); } catch (e) { console.warn("ratchet: control handler", e); }
-            this.#check();
-        }
+        const handlers = [...this.controls];
+        setTimeout(async () => {
+            for (const fn of handlers) {
+                if (this.closed) return;
+                try { await fn(out); } catch (e) { console.warn("ratchet: control handler", e); }
+            }
+        }, 0);
     }
 
     // --- Trust ----------------------------------------------------------------
@@ -743,7 +750,14 @@ export class RatchetConsumer {
             deadline = Math.min(deadline, b.expires_at, now() + MAX_CONTROL_TTL);
             if (deadline - now() < DEADLINE_MARGIN + 5) throw fail("invalid");
         } else if (device) throw fail("invalid");
-        const roster = await this.#handoff(a, { action: "snapshot", scope, ...(scope === "direct" ? { peer } : { conversation }) });
+        let roster;
+        try { roster = await this.#handoff(a, { action: "snapshot", scope, ...(scope === "direct" ? { peer } : { conversation }) }); }
+        catch (e) {
+            // The server's roster holds a device without an Olm publication
+            // (distinct from this device's own store exhaustion).
+            if (e.code === "exhausted") throw Object.assign(e, { code: "device_unpublished" });
+            throw e;
+        }
         const m = {
             version: ADMISSION_VERSION, server: this.namespace.server, sender: this.namespace.principal, device: this.namespace.device,
             account_epoch: a.epoch, attempt_id: String(a.nextAttempt + 1), logical_id: logicalID, purpose,
@@ -819,6 +833,8 @@ export class RatchetConsumer {
             logicalID, key: semanticKey(m.sender, logicalID), scope, peer: scope === "direct" ? peer : "", conversation: scope === "group" ? conversation : "",
             purpose, reference, referenceKey: reference ? semanticKey(m.sender, reference) : "", body, sentAt: Number(body?.sentAt) || Date.now() / 1000,
             self: true, copied: false, ...(control ? { device } : {}) };
+        // The sealed payload carries a control's data; the archive never keeps it.
+        if (control) record.body = controlArchiveBody(body);
         const packets = [], copies = [];
         for (const p of plans) {
             if (p.prior && !rec(before, "session", p.prior).revision) throw fail("local_conflict");
@@ -1130,7 +1146,7 @@ export class RatchetConsumer {
                 if (record.status !== "delivered") record.body = null;
             }
             await this.store.commitReceive(s, d.id, { sessionID, trustID: trusted.id, session: enc.encode(result.session), envelope: jsonBytes(c.envelope),
-                archive: jsonBytes(record), context, ...(consumed ? { accountID: a.accountID, account: enc.encode(result.account), consumedOTK: consumed } : {}) });
+                archive: jsonBytes(m.purpose === "control" ? { ...record, body: controlArchiveBody(record.body) } : record), context, ...(consumed ? { accountID: a.accountID, account: enc.encode(result.account), consumedOTK: consumed } : {}) });
             this.#check();
             if (this.sessions) this.sessions.set(JSON.stringify(context), sessionID);
             isNew = true;

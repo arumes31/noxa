@@ -154,19 +154,25 @@ receive/ACK as chat. Wire rules (`control.go`, JS mirror in
 - Server: admits the control only if that one target equals its current
   directory state and the sender's roster versions are current (no complete
   fanout is required, and none is possible); deadline at most `MaxControlTTL`
-  (300 s); at most `MaxPendingControls` (64) unacknowledged controls per target
-  device, counted apart from messages. Edits/deletes can never reference a
+  (300 s); at most `MaxPendingControls` (64) unacknowledged controls per
+  sender device and target device, counted apart from messages (pending Olm
+  copies have no TTL: an unreadable control is never acknowledged, so the
+  bound is per sender, and one sender can only block its own controls). Edits/deletes can never reference a
   control. No delivery notification exists for any Olm copy.
 - Body (inside the ciphertext): `{kind, scope: {type, id}, epoch, expires_at,
   data?}` with lowercase word `kind`/`scope.type`, `data` at most 4096 bytes,
   `expires_at` within 300 s of sending.
 - Receive: authenticated, consumed and committed like any copy; only the
-  disposition is kept (`delivered`, or `expired`/`invalid` with the data
-  dropped), then the exact ACK. Delivered controls from another device are
-  handed to the control handlers once, at commit; replays, own sends and
-  expired/invalid controls are never handed out (an old key is never
-  installed). Unreadable controls stay unacknowledged and are never shown as
-  placeholders.
+  disposition is kept (`delivered`, `expired`, or `invalid`, which includes an
+  expiry further ahead than 300 s + 300 s skew), then the exact ACK. **Data is
+  never kept at rest** on either side: archives keep kind/scope/epoch/expiry
+  only. A delivered control from another device is handed to the handlers from
+  memory, after the drain step (never inside it, so a handler may reply), in
+  order. Delivery is **at most once**: a control committed while no handler is
+  registered, or before a crash, is not handed out again. Replays, own sends
+  and expired/invalid controls are never handed out (an old key is never
+  installed). Unreadable controls stay unacknowledged, are never shown as
+  placeholders, and are retried after an explicit trust reset.
 - Clients never project controls into chat, activity, search, history
   transfer or export, and never reseal one after rejection/abort.
 
@@ -175,7 +181,7 @@ API for Task 2:
 | | Desktop (Go, `client/ratchet_control.go`) | PWA (`RatchetConsumer`) |
 |---|---|---|
 | send | `connManager.SendRatchetControl(RatchetControlIntent{LogicalID, Principal, Device, Body admission.ControlBody}) (RatchetOutcome, error)` | `consumer.sendControl({logicalID, principal, device, body})` -> `{record, receipt}` |
-| receive | `connManager.OnRatchetControl(func(RatchetControl))` | `consumer.onControl(fn)` |
+| receive | `connManager.OnRatchetControl(func(RatchetControl))` (register before connecting; survives reconnects) | `onSecureControl(fn)` in `app.js` (app-level, wired to every consumer before its first drain; `consumer.onControl(fn)` per session) |
 | delivered | `RatchetControl{Sender, SenderDevice, LogicalID, Kind, Scope, Epoch, ExpiresAt, Data, Delivery}` | `{sender, senderDevice, logicalID, kind, scope, epoch, expiresAt, data, delivery}` |
 
 `receipt.state === "accepted"` means the server admitted the control for that

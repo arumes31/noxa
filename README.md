@@ -89,8 +89,8 @@ app:
   session per pair of devices; every device of the sender and of the
   recipients receives its own copy, and the conversation, sender, recipient
   device and message ID are authenticated inside every message. Keys ratchet
-  forward with every message, so a key stolen later cannot open earlier
-  messages.
+  forward with every message, so a session key stolen later cannot open
+  earlier messages (copied history is the exception, see "New devices").
 - **Primitives.** X25519 for the Olm handshake, AES-256-CBC with
   HMAC-SHA-256 for messages. The Olm MAC is **truncated to 64 bits**, as the
   Olm specification defines. Olm accounts are published as bundles signed by
@@ -104,14 +104,21 @@ app:
   admission (complete device fanout, limits, membership) without being able
   to read messages. It still sees metadata: who talks to whom, when, message
   sizes and device lists.
-- **Older history.** Direct messages from before this protocol used static
-  X25519 + XSalsa20-Poly1305 (NaCl box) keys without forward secrecy. Those
-  records stay readable; nothing new is sent that way. Clients that do not
-  support the new protocol are told to update instead of receiving a
-  weaker copy.
+- **Older history and older apps.** Direct messages from before this protocol
+  used static X25519 + XSalsa20-Poly1305 (NaCl box) keys without forward
+  secrecy. Updated apps never send that way. Older apps still can, and
+  updated apps still show such messages, labelled as legacy encryption
+  (readable, not editable); replying to an older app asks its user to update
+  instead of sending a weaker copy.
 - **New devices.** Copying history to a newly linked device transfers
-  readable records only (signed per transfer, never keys or sessions); copied
-  records are marked as verified on the other device, not on the new one.
+  readable records only (signed per transfer by the source device, never keys
+  or sessions); copied records are marked as verified on the other device,
+  not on the new one. The copy is sealed with the two devices' long-term
+  X25519 keys (NaCl box) and kept by the server for up to 24 hours, so it has
+  no forward secrecy: someone who stores it and later obtains one of those
+  long-term keys can read the copied history.
+- **Private-call signalling** still uses the static device keys (calls are
+  not end-to-end encrypted, see below).
 
 **What is not end-to-end encrypted (yet).** Channel and global chat, threads
 and forum bodies use server-managed scope keys: the server can decrypt them

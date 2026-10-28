@@ -413,10 +413,13 @@ type ratchetConsumer struct {
 	closed atomic.Bool
 
 	// serial runs one operation at a time; every field below is guarded by it.
-	serial      sync.Mutex
-	ready       *ratchetReadiness
-	readyAt     time.Time
-	sticky      error
+	serial  sync.Mutex
+	ready   *ratchetReadiness
+	readyAt time.Time
+	sticky  error
+	// stickyState mirrors sticky's code for lock-free status reads
+	// (diagnostics must not wait behind a long drain on serial).
+	stickyState atomic.Value // string
 	identity    string
 	claims      map[string]ratchetKeptClaim
 	skewed      map[string]bool
@@ -668,6 +671,18 @@ func (c *ratchetConsumer) readMany(refs []durable.Ref) (map[durable.Ref]durable.
 
 // --- Readiness and own publication -------------------------------------------
 
+// setSticky records (or clears, err == nil) the sticky refusal.
+func (c *ratchetConsumer) setSticky(err error) {
+	c.sticky, c.ready = err, nil
+	c.stickyState.Store(ratchetCode(err))
+}
+
+// stickyCode is the sticky refusal's code ("" when none), lock-free.
+func (c *ratchetConsumer) stickyCode() string {
+	s, _ := c.stickyState.Load().(string)
+	return s
+}
+
 // ensureReady publishes the own account. Only recovery_required is sticky; a
 // failed periodic refresh keeps a still-valid readiness and retries later.
 func (c *ratchetConsumer) ensureReady() error {
@@ -684,7 +699,7 @@ func (c *ratchetConsumer) ensureReady() error {
 	}
 	switch code := ratchetCode(err); {
 	case code == "recovery_required":
-		c.sticky, c.ready = err, nil
+		c.setSticky(err)
 	case code == "fenced":
 	case c.ready != nil && c.ready.expiresAt > c.now()+300:
 		c.readyAt = c.d.Now().Add(-c.d.RefreshEvery + time.Minute)
@@ -1348,6 +1363,10 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 	}
 	var roster ratchetRoster
 	if err := c.handoff(a, req, &roster); err != nil {
+		if ratchetCode(err) == "exhausted" {
+			// The server's roster holds a device without an Olm publication.
+			return RatchetOutcome{}, &ratchetError{Code: "device_unpublished", Err: err}
+		}
 		return RatchetOutcome{}, err
 	}
 	ns := c.d.Namespace
@@ -1512,6 +1531,10 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 	}
 	if in.Reference != "" {
 		record.ReferenceKey = ratchetSemanticKey(m.Sender, in.Reference)
+	}
+	if control {
+		// The sealed payload carries the data; the archive never keeps it.
+		record.Body = admission.ControlArchiveBody(in.Body)
 	}
 	var packets []durable.SendCandidate
 	var copies []admission.Copy
@@ -2095,8 +2118,10 @@ func (c *ratchetConsumer) resetTrustRecords(principal string) error {
 			return err
 		}
 	}
-	for _, id := range append([]string(nil), c.qorder...) {
-		if c.quarantined[id].Sender == principal {
+	// Every quarantined copy of this principal is retried, including
+	// controls (which are kept out of the placeholder order).
+	for id, q := range c.quarantined {
+		if q.Sender == principal {
 			c.unquarantine(id)
 		}
 	}
@@ -2305,7 +2330,13 @@ func (c *ratchetConsumer) receive(d ratchetDelivery, a durable.AccountAuthority)
 		if m.Reference != "" {
 			record.ReferenceKey = ratchetSemanticKey(m.Sender, m.Reference)
 		}
-		candidate := durable.ReceiveCandidate{AccountID: a.AccountID, SessionID: sessionID, TrustID: trusted.id, Session: []byte(result.Session), Envelope: envelope, Archive: ratchetJSON(record), Context: context}
+		archived := record
+		if m.Purpose == "control" {
+			// Only the disposition is kept at rest; delivered data reaches the
+			// handlers from memory once, at this commit.
+			archived.Body = admission.ControlArchiveBody(record.Body)
+		}
+		candidate := durable.ReceiveCandidate{AccountID: a.AccountID, SessionID: sessionID, TrustID: trusted.id, Session: []byte(result.Session), Envelope: envelope, Archive: ratchetJSON(archived), Context: context}
 		if consumed != "" {
 			candidate.Account, candidate.ConsumedOTK = []byte(result.Account), consumed
 		}

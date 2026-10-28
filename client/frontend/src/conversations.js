@@ -635,7 +635,7 @@ export function initConversations() {
             const body = el("div", "group-message-body");
             const badge = message.quarantined
                 ? encryptionBadge({ text: "[Encryption key unavailable]", enc: false, encVerified: false, encMode: "" })
-                : encryptionBadge({ text: message.body, enc: true, encVerified: true, encMode: "e2e" });
+                : encryptionBadge({ text: message.body, enc: true, encVerified: true, encMode: "e2e", protocol: "noxa-olm-v1" });
             if (blocked(message.from_unique_id)) body.textContent = t("group.blocked");
             else if (badge.bodyKey) { body.textContent = t(badge.bodyKey); row.classList.add("missing-key"); }
             else if (message.deleted) body.textContent = t("runtime.deleted");
@@ -675,7 +675,7 @@ export function initConversations() {
                     // envelope this client authenticated shows the lock; one
                     // it could not open shows the warning and its refusal.
                     const verified = !!message.enc_verified;
-                    const badge = encryptionBadge({ text: message.body, enc: verified, encVerified: verified, encMode: verified ? "e2e" : "" });
+                    const badge = encryptionBadge({ text: message.body, enc: verified, encVerified: verified, encMode: verified ? "e2e" : "", protocol: message.protocol || "" });
                     if (blocked(message.from_unique_id)) body.textContent = t("group.blocked");
                     else if (badge.bodyKey) body.textContent = t(badge.bodyKey);
                     else if (!renderVoiceMessage(body, message.body, { tabID, channelID: 0, isCurrent: () => current() && token === generation, download: voiceDownload })) {

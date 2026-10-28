@@ -401,7 +401,7 @@ export class Groups extends EventTarget {
         // A signed-in session never sends legacy encryption (set by the app).
         if (this.secureRequired) {
             const reason = this.secureRequired();
-            throw Object.assign(new Error(reason?.message || "secure messaging is not available"), { code: reason?.code || "secure_unavailable", retryable: false });
+            throw Object.assign(new Error(reason?.message || "secure messaging is not available"), { code: reason?.code || "secure_unavailable", retryable: false, blocked: true });
         }
         this.#local(id, { reference, text, sentAt, pending: true });
         try {

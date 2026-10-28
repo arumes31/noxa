@@ -15,7 +15,7 @@ package main
 // Receiving: an authenticated control is consumed and committed like any
 // copy (session advance, one-time-key obligation, exact receive ACK). Only
 // its disposition is kept: "delivered" (handed to OnRatchetControl
-// handlers exactly once, when committed), "expired" or "invalid" (data
+// handlers once, at commit; at most once), "expired" or "invalid" (data
 // dropped, acknowledged, never handed out, so an old key is never
 // installed). Controls never appear in chat, activity, search, history
 // transfer or export, and are never shown as placeholders.
@@ -52,11 +52,12 @@ type RatchetControl struct {
 	Delivery     string                 `json:"delivery_id"`
 }
 
-// ratchetControlDisposition classifies a received control body.
+// ratchetControlDisposition classifies a received control body. An expiry
+// further ahead than a sender may set (plus clock skew) is invalid.
 func ratchetControlDisposition(body json.RawMessage, now int64) string {
 	b, err := admission.ParseControlBody(body)
 	switch {
-	case err != nil:
+	case err != nil || b.ExpiresAt > now+admission.MaxControlTTL+admission.ControlClockSkew:
 		return "invalid"
 	case b.ExpiresAt <= now:
 		return "expired"
@@ -116,7 +117,7 @@ func (c *ratchetConsumer) sendControl(in RatchetControlIntent) (RatchetOutcome, 
 // The outcome's Receipt state "accepted" means the server admitted it for
 // the target device; any error is a coded ratchet error (ratchetCode).
 func (m *connManager) SendRatchetControl(in RatchetControlIntent) (RatchetOutcome, error) {
-	c, err := m.ratchetConsumerOn(nil)
+	c, err := m.ratchetSendConsumer(nil)
 	if err != nil {
 		return RatchetOutcome{}, err
 	}
@@ -124,21 +125,57 @@ func (m *connManager) SendRatchetControl(in RatchetControlIntent) (RatchetOutcom
 }
 
 // OnRatchetControl registers a handler for controls delivered to this
-// device. Handlers run on the receive path after the durable commit and
-// before the ACK; they must be quick and must not call back into the
-// ratchet session. Registration survives reconnects.
+// device. Register before connecting: registration survives reconnects and
+// every session is wired to it before its first drain.
+//
+// Delivery is AT MOST ONCE: a control is committed and acknowledged on the
+// receive path and then queued to the handlers, which run in order on a
+// separate goroutine (so a handler may send a reply control). A control
+// that arrives while no handler is registered, or a process that exits
+// before its handlers ran, is not delivered again; its data is never kept
+// at rest.
 func (m *connManager) OnRatchetControl(fn func(RatchetControl)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ratchetControls = append(m.ratchetControls, fn)
 }
 
-// dispatchRatchetControl fans a delivered control out to the handlers.
+// dispatchRatchetControl queues a delivered control for the handlers (never
+// run inside the drain, which holds the consumer's serial lock).
 func (m *connManager) dispatchRatchetControl(ctl RatchetControl) {
 	m.mu.Lock()
-	handlers := slices.Clone(m.ratchetControls)
-	m.mu.Unlock()
-	for _, fn := range handlers {
-		fn(ctl)
+	defer m.mu.Unlock()
+	if len(m.ratchetControls) == 0 {
+		return
+	}
+	m.controlQueue = append(m.controlQueue, ctl)
+	if !m.controlRunning {
+		m.controlRunning = true
+		go guardCrash("ratchet control handlers", m.runControlHandlers)
+	}
+}
+
+func (m *connManager) runControlHandlers() {
+	for {
+		m.mu.Lock()
+		if len(m.controlQueue) == 0 {
+			m.controlRunning = false
+			m.mu.Unlock()
+			return
+		}
+		ctl := m.controlQueue[0]
+		m.controlQueue = m.controlQueue[1:]
+		handlers := slices.Clone(m.ratchetControls)
+		m.mu.Unlock()
+		for _, fn := range handlers {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("ratchet: control handler: %v", r)
+					}
+				}()
+				fn(ctl)
+			}()
+		}
 	}
 }

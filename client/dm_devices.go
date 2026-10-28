@@ -362,7 +362,9 @@ func (m *connManager) openDeviceCopy(chat netproto.ChatBroadcast, pub, priv [32]
 // session's device id.
 func (m *connManager) ensureDeviceRegistered(conn net.Conn) {
 	m.mu.Lock()
-	due := m.supportsDevices && !m.isGuest && m.deviceID == "" && m.conn == conn
+	// Key-identity guests register their device too (secure messaging needs
+	// one); only a keyless session cannot.
+	due := m.supportsDevices && !m.keyless && m.deviceID == "" && m.conn == conn
 	m.mu.Unlock()
 	if !due {
 		return

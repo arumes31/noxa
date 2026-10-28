@@ -117,8 +117,11 @@ func (a *App) E2EEDiagnostics(peerUniqueID string) (E2EEDiagnostics, error) {
 	}
 	d := E2EEDiagnostics{PeerUniqueID: peerUniqueID}
 	// Reported from the active path, never a static label.
-	if _, err := m.ratchetConsumerOn(nil); err == nil {
+	if c, err := m.ratchetConsumerOn(nil); err == nil && c.stickyCode() == "" {
 		d.Cipher, d.Protocol, d.Active = ratchetCipherDescription, ratchetProtocol, true
+	} else if err == nil {
+		// A session exists but refuses every operation (e.g. recovery_required).
+		d.Unavailable = "secure messaging needs recovery: Settings → Security → Recover secure messaging (" + c.stickyCode() + ")"
 	} else if reason := m.ratchetBlockedReason(); reason != "" {
 		d.Unavailable = reason
 	} else {

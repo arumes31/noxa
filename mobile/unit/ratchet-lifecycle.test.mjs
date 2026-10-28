@@ -35,6 +35,7 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
         // Mirrors the real consumer: every operation first runs the app's
         // assertCurrent closure, so a stale session can never transport.
         async send(intent) { this.assertCurrent(); this.sent.push(intent); return { receipt: { state: "accepted" } }; }
+        onControl(fn) { (this.controlHandlers ||= []).push(fn); }
         async close() { this.closed = true; }
     }
     class DirectMessages extends EventTarget {
@@ -126,6 +127,7 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
     assert.equal(attached.dm[0], a, "attached to DirectMessages");
     assert.equal(attached.groups[0], a, "attached to Groups");
     assert.equal(app.ratchet.consumer, a);
+    assert.equal(a.controlHandlers?.length, 1, "app-level control registry wired before the first drain");
     await tick();
     assert.ok(a.drains >= 2, "session-owned poll timer drains");
     assert.equal(JSON.stringify(quarantine.at(-1)), JSON.stringify([{ id: "q0", scope: "direct" }]), "quarantine reaches the UI");
@@ -168,5 +170,24 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
     assert.equal(flushResult, "fenced");
     assert.equal(c.sent.length, 0);
     assert.equal(app.ratchet, null);
+
+    // Ruling 2: a key-identity PWA guest uses secure messaging too. Its
+    // binding is pinned on first use from the announced certificate; a later
+    // change blocks it (re-link is impossible without a desktop, so the
+    // explanation is the rotation one).
+    app.identity = generateIdentity();
+    app.meta = { guest: true };
+    announced = "ab".repeat(32);
+    await connect();
+    const g = consumers.at(-1);
+    assert.equal(app.ratchetError, null, "guest secure messaging active");
+    assert.equal(app.ratchet?.consumer, g);
+    assert.equal(g.namespace.server, "tls-sha256:" + "ab".repeat(32));
+    assert.equal(app.meta.guestBinding, "tls-sha256:" + "ab".repeat(32), "first-use binding pinned");
+    announced = "cd".repeat(32);
+    await connect();
+    assert.equal(app.ratchet, null);
+    assert.equal(app.ratchetError?.code, "server_binding_rotated");
+    disconnect();
     configureRatchetForTests(null);
 });

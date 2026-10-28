@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"noxa/internal/netproto"
 )
 
 // 1c-iii-b item 5: every authenticated session uses noxa-olm-v1. An old
@@ -15,14 +18,14 @@ func TestRatchetCutoverGates(t *testing.T) {
 	c, peer := net.Pipe()
 	defer func() { c.Close(); peer.Close() }()
 	for name, tc := range map[string]struct {
-		guest, supported bool
-		want             error
+		keyless, supported bool
+		want               error
 	}{
-		"old server": {supported: false, want: errRatchetServerOutdated},
-		"guest":      {guest: true, supported: true, want: errRatchetGuest},
+		"old server":      {supported: false, want: errRatchetServerOutdated},
+		"keyless session": {keyless: true, supported: true, want: errRatchetGuest},
 	} {
 		m := &connManager{}
-		m.conn, m.ratchetDefault, m.isGuest, m.supportsOlm = c, true, tc.guest, tc.supported
+		m.conn, m.ratchetDefault, m.keyless, m.supportsOlm = c, true, tc.keyless, tc.supported
 		m.id = mustTempIdentity(t)
 		m.uniqueID, m.deviceID = "alice", "a1"
 		if !m.ratchetConfigured() {
@@ -36,13 +39,28 @@ func TestRatchetCutoverGates(t *testing.T) {
 			t.Fatalf("%s: blocked reason %q", name, reason)
 		}
 	}
+	// Ruling 2: a key-identity guest is never refused for being a guest.
+	oldRoot := identityRootOverride
+	identityRootOverride = t.TempDir()
+	defer func() { identityRootOverride = oldRoot }()
+	g := &connManager{}
+	g.conn, g.ratchetDefault, g.isGuest, g.supportsOlm = c, true, true, true
+	g.id = mustTempIdentity(t)
+	g.uniqueID, g.deviceID = "guest-key-derived", "g1"
+	if err := g.startRatchet(c); errors.Is(err, errRatchetGuest) || errors.Is(err, errRatchetServerOutdated) {
+		t.Fatalf("key-identity guest refused: %v", err)
+	}
 	// A manager that never authenticated (and has no override) has no path.
 	if (&connManager{}).ratchetConfigured() {
 		t.Fatal("unauthenticated manager configured")
 	}
 	// Failure texts are explicit for devices without secure-messaging keys.
-	if got := ratchetFailure(rfail("exhausted")).Error(); !strings.Contains(got, "does not support secure messaging yet") || !strings.Contains(got, "exhausted") {
-		t.Fatalf("exhausted text: %q", got)
+	if got := ratchetFailure(rfail("device_unpublished")).Error(); !strings.Contains(got, "has not set up secure messaging yet") {
+		t.Fatalf("unpublished device text: %q", got)
+	}
+	// CodeRabbit: local store exhaustion never blames a contact's device.
+	if got := ratchetFailure(rfail("exhausted")).Error(); !strings.Contains(got, "store is full") || strings.Contains(got, "device in this conversation") {
+		t.Fatalf("local exhaustion text: %q", got)
 	}
 	if got := ratchetFailure(errRatchetServerOutdated).Error(); got != errRatchetServerOutdated.Error() {
 		t.Fatalf("server outdated text: %q", got)
@@ -77,5 +95,48 @@ func TestLegacyDirectChangeIsReadOnly(t *testing.T) {
 		if err := change(); !errors.Is(err, errLegacyReadOnly) {
 			t.Fatalf("legacy change: %v", err)
 		}
+	}
+}
+
+// CodeRabbit b46 finding 1: a session whose consumer is blocked by
+// recovery_required is not reported as an active Olm path.
+func TestDiagnosticsNotActiveWhileRecoveryRequired(t *testing.T) {
+	c, peer := net.Pipe()
+	defer func() { c.Close(); peer.Close() }()
+	cons, err := newTestRatchetConsumer(t, func(netproto.OlmAdmissionRequest) (json.RawMessage, error) { return nil, nil }, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm := newConnManager(t.Context())
+	cm.id = mustTempIdentity(t)
+	cm.conn = c
+	cm.ratchetSess = &ratchetSession{conn: c, epoch: cm.connEpoch, consumer: cons}
+	d, err := appWithCM(cm).E2EEDiagnostics("")
+	if err != nil || !d.Active {
+		t.Fatalf("healthy session: %+v %v", d, err)
+	}
+	cons.setSticky(rfail("recovery_required"))
+	d, err = appWithCM(cm).E2EEDiagnostics("")
+	if err != nil || d.Active || d.Protocol != "" || !strings.Contains(d.Unavailable, "recovery") {
+		t.Fatalf("blocked session reported as active: %+v %v", d, err)
+	}
+}
+
+// Review b46 B P3-1 (adopted repro): send paths report the specific blocked
+// reason (here: the server does not offer secure messaging), not a generic
+// "not ready".
+func TestRatchetBlockedSendReportsReason(t *testing.T) {
+	c, peer := net.Pipe()
+	defer func() { c.Close(); peer.Close() }()
+	m := &connManager{}
+	m.conn, m.ratchetDefault, m.supportsOlm = c, true, false
+	m.id = mustTempIdentity(t)
+	m.uniqueID, m.deviceID = "alice", "a1"
+	m.startRatchetRecorded(c)
+	if _, err := sendChatOperationErr(m, "direct", "bob", "hi", 0, "op-1"); err == nil || !strings.Contains(err.Error(), "does not offer secure messaging") {
+		t.Fatalf("direct send: %v", err)
+	}
+	if _, err := m.sendRatchetGroup("g1", "ref-1", "hi"); err == nil || !strings.Contains(err.Error(), "does not offer secure messaging") {
+		t.Fatalf("group send: %v", err)
 	}
 }

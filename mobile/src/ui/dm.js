@@ -124,6 +124,9 @@ export function renderDM(root, peer) {
     }
 
     function paintBanner(contact) {
+        // No end-to-end claim while no secure path is active: keep the
+        // explanation secureBanner() painted (CodeRabbit b46 finding 4).
+        if (!secureMessagingStatus().active) return;
         const verified = contact.trust === Trust.ok && contact.verified;
         banner.replaceChildren(icon(verified ? "shield" : "lock"), " ",
             contact.fingerprint ? t("dm.encryptedWith", { fingerprint: contact.fingerprint }) : t("dm.encrypted"),
@@ -179,7 +182,8 @@ export function renderDM(root, peer) {
         input.value = "";
     }
     async function messageActions(message) {
-        const changeable = message.self && !message.deleted && !message.pending && !message.queued && !message.failed;
+        // Legacy records are read-only: only Olm messages can be changed.
+        const changeable = message.self && message.protocol === "noxa-olm-v1" && !message.deleted && !message.pending && !message.queued && !message.failed;
         const hasText = typeof message.body === "string" && !!message.body;
         const sent = !message.pending && !message.queued && !message.failed;
         const actions = [
