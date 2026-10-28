@@ -11,3 +11,4 @@ internal/e2ee/ratchet/** text eol=lf
 internal/e2ee/ratchet/core.wasm binary
 mobile/src/core/ratchet-integrity.js text eol=lf
 scripts/build-ratchet-core.mjs text eol=lf
+mobile/unit/fixtures/history-envelope.txt -text

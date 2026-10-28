@@ -10,6 +10,7 @@ import { ed25519FromPEM, parseKeyRecord, trustedDevices } from "./dm-trust.js";
 import { Msg } from "./frame.js";
 import { ProtocolError } from "./connection.js";
 import { RATCHET_PROTOCOL } from "./ratchet-consumer.js";
+import { decodeHistoryChunk, isHistoryEnvelope } from "./history-envelope.js";
 
 const MsgChatAccepted = 154;
 /** Durable record of imported history chunks (exact dedup), in Stores.device. */
@@ -31,7 +32,12 @@ async function chunkDigest(data) {
  */
 export function historyRecord(m, ownUID, sourceDevice, n = 0) {
     if (!m || typeof m !== "object" || typeof m.peer !== "string" || !m.peer || typeof m.body !== "string" || typeof m.from !== "string") return null;
-    const sentAt = Number(m.sent_at) || 0;
+    // A DM record is from its conversation's peer or from this account, and
+    // never future-dated (a burst could otherwise evict real records under
+    // the per-conversation cap).
+    if (m.from !== m.peer && m.from !== ownUID) return null;
+    const sentAt = Number(m.sent_at);
+    if (!Number.isFinite(sentAt) || sentAt <= 0 || sentAt > Date.now() / 1000 + 300) return null;
     const base = { from: m.from, fromNickname: typeof m.from_nickname === "string" ? m.from_nickname : "", self: !!m.self, body: m.body, sentAt, copied: true };
     if (!m.protocol) return { ...base, id: m.client_msg_id || `history-${m.peer}-${m.sent_at}-${n}`, verified: true };
     if (m.protocol !== RATCHET_PROTOCOL || !HISTORY_PROVENANCE.has(m.provenance) || typeof m.client_msg_id !== "string" || !m.client_msg_id ||
@@ -410,7 +416,9 @@ export class DirectMessages extends EventTarget {
         if (!peer) return;
         let sender = await this.#senderDevice(from, data);
         if (!sender) sender = await this.#senderDevice(from, data, true);
-        const text = sender ? openDM(data.text, sender.x25519, this.identity.xSecret) : null;
+        let text = sender ? openDM(data.text, sender.x25519, this.identity.xSecret) : null;
+        // A history chunk replayed as a DM copy is never shown.
+        if (isHistoryEnvelope(text)) text = null;
         const own = from === this.ownUID;
         const nickname = own ? "" : data.from;
         if (data.dm_action) {
@@ -739,10 +747,12 @@ export class DirectMessages extends EventTarget {
                 const sender = own.devices.find(d => d.deviceID === chunk.from_device_id);
                 // Data is nonce||box, which JSON carries as standard base64.
                 const plain = digest && !done.has(digest) && sender ? openDM(chunk.data, sender.x25519, this.identity.xSecret) : null;
-                if (plain) {
-                    let messages = [];
-                    try { messages = JSON.parse(plain); } catch { messages = []; }
-                    for (const m of Array.isArray(messages) ? messages : []) {
+                // Only a signed history envelope for exactly this transfer
+                // position and this device opens; a bare array or a replayed
+                // DM copy imports nothing.
+                const messages = plain ? decodeHistoryChunk(plain, { source: chunk.from_device_id, target: this.deviceID, seq: chunk.seq, total: chunk.total, signingKey: sender.signingKey }) : null;
+                if (messages) {
+                    for (const m of messages) {
                         const message = historyRecord(m, this.ownUID, chunk.from_device_id, imported);
                         if (!message) continue;
                         // A transferred record never overwrites one this device holds.

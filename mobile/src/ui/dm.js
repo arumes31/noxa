@@ -84,7 +84,7 @@ export function renderDM(root, peer) {
                 message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
                 // Transferred history: shown as copied from another device of this
                 // account, never as authenticated on this device.
-                message.provenance === "transferred" ? h("span", { class: "msg-edited", title: t("chat.transferredHint") }, t("chat.transferred")) : null,
+                message.provenance === "transferred" ? h("span", { class: "msg-edited", title: t(message.origin?.provenance === "transferred" ? "chat.transferredCopyHint" : "chat.transferredHint") }, t("chat.transferred")) : null,
                 message.self && !message.deleted ? receiptTicks(message.receipt) : null,
                 sendState(message)));
         el.noxaMessage = message.deleted || message.failed ? null : message;

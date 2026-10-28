@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/crypto/nacl/box"
 
+	"noxa/internal/auth"
 	"noxa/internal/netproto"
 )
 
@@ -99,8 +100,16 @@ func transferableRatchetEntry(e DMEntry) bool {
 // MaxHistoryBytes in all; the oldest messages are left out when the limits
 // are reached. Chunks come out oldest first, each holding its messages
 // oldest first. It returns the chunks' sealed data and the messages kept.
-func buildHistoryChunks(messages []netproto.HistoryMessage, recipientPub, senderPriv [32]byte) ([][]byte, int, error) {
-	const maxPlain = netproto.MaxHistoryChunk - historySealOverhead
+// historyChunkEnv binds each chunk to its transfer (netproto history
+// envelope): source and target device, transfer ID, and the source device's
+// noXa signature.
+type historyChunkEnv struct {
+	Source, Target, Transfer string
+	Sign                     func([]byte) ([]byte, error)
+}
+
+func buildHistoryChunks(messages []netproto.HistoryMessage, recipientPub, senderPriv [32]byte, env historyChunkEnv) ([][]byte, int, error) {
+	const maxPlain = netproto.MaxHistoryChunk - historySealOverhead - netproto.HistoryEnvelopeReserve
 	var groups [][]json.RawMessage
 	var current []json.RawMessage
 	size, total, kept := 2, 0, 0 // "[]"
@@ -145,7 +154,12 @@ func buildHistoryChunks(messages []netproto.HistoryMessage, recipientPub, sender
 		for j := range group {
 			ordered[len(group)-1-j] = group[j]
 		}
-		plain, err := json.Marshal(ordered)
+		records, err := json.Marshal(ordered)
+		if err != nil {
+			return nil, 0, err
+		}
+		plain, err := netproto.EncodeHistoryChunk(netproto.HistoryHeader{Source: env.Source, Target: env.Target, Transfer: env.Transfer,
+			Seq: len(groups) - 1 - i, Total: len(groups)}, records, env.Sign)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -225,7 +239,9 @@ func (a *App) CopyHistoryToDeviceForTab(tabID, deviceID string, days int) error 
 			progress.State, progress.Error = "failed", err.Error()
 			cm.emit("device_history", progress)
 		}
-		chunks, kept, err := buildHistoryChunks(historyMessagesSince(store, since), recipient, priv)
+		env := historyChunkEnv{Source: selfDevice, Target: deviceID, Transfer: newClientMsgID(),
+			Sign: func(t []byte) ([]byte, error) { return auth.SignChallenge(id.PrivateKey, t) }}
+		chunks, kept, err := buildHistoryChunks(historyMessagesSince(store, since), recipient, priv, env)
 		if err != nil {
 			fail(err)
 			return

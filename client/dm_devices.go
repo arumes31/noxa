@@ -349,7 +349,9 @@ func (m *connManager) openDeviceCopy(chat netproto.ChatBroadcast, pub, priv [32]
 		return "", false
 	}
 	plain, err := openDM(chat.Text, senderKey, priv)
-	if err != nil {
+	// A history chunk replayed as a DM copy is never shown (same box keys,
+	// different purpose: netproto history envelope).
+	if err != nil || netproto.IsHistoryEnvelope(plain) {
 		return "", false
 	}
 	return plain, true

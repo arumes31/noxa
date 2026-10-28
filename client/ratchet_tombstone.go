@@ -253,6 +253,9 @@ func movedPairs(moved []move) [][2]string {
 // eraseCommittedTombstone marks a tombstone of a committed deletion .erasing-
 // (so it can never be restored, even if the key is imported again) and erases
 // it. It reports whether nothing is left.
+// ratchetEraseDir erases a committed tombstone (a test seam).
+var ratchetEraseDir = os.RemoveAll
+
 func eraseCommittedTombstone(tomb string) bool {
 	path := tomb
 	if strings.Contains(filepath.Base(tomb), ratchetTombstone) {
@@ -263,7 +266,7 @@ func eraseCommittedTombstone(tomb string) bool {
 			log.Printf("ratchet: marking a deleted store committed failed: %v", err)
 		}
 	}
-	if err := os.RemoveAll(path); err != nil {
+	if err := ratchetEraseDir(path); err != nil {
 		log.Printf("ratchet: erasing a deleted store failed, retried later: %v", err)
 		return false
 	}
@@ -522,8 +525,9 @@ func (a *App) finishRatchetDeletion(publicKey string) error {
 	for _, f := range found {
 		switch f.marker {
 		case ratchetTombstone:
-			eraseCommittedTombstone(f.tomb)
-			if _, err := os.Lstat(f.tomb); err == nil {
+			// The tombstone is renamed to .erasing- before the erase, so its
+			// old path is gone even when the erase failed: use the result.
+			if !eraseCommittedTombstone(f.tomb) {
 				return busy
 			}
 			continue

@@ -10,7 +10,10 @@ const { Stores, getSealed, putSealed } = await import("../src/core/db.js");
 await putSealed(Stores.device, "warmup", { ok: true }); // create the wrapping key once (the fake IDB does not serialize first-use races)
 const { DirectMessages, historyRecord } = await import("../src/core/direct.js");
 const { historyMessagesSince } = await import("../src/core/devices.js");
-const { sealDM } = await import("../src/core/crypto.js");
+const { sealDM, generateIdentity } = await import("../src/core/crypto.js");
+const { encodeHistoryChunk } = await import("../src/core/history-envelope.js");
+const desk = generateIdentity();
+const signed = (records, seq, total, target, key = desk.edSecret) => sealDM(encodeHistoryChunk({ source: "dsk", target, transfer: "t1", seq, total }, JSON.stringify(records), key), me.publicKey, desktop.secretKey);
 
 const me = nacl.box.keyPair(), desktop = nacl.box.keyPair();
 const session = uid => Object.assign(new EventTarget(), { conn: { open: true, send() {} }, identity: { xSecret: me.secretKey, xPublic: me.publicKey }, uniqueID: uid, deviceID: uid + "-dev", nickname: uid });
@@ -38,6 +41,10 @@ test("historyRecord keeps origin apart from source and refuses malformed records
         { peer: "bob", from: "bob", body: "hi", client_msg_id: "R1", protocol: "noxa-olm-v2", provenance: "authenticated" },
         { peer: "bob", from: "bob", body: "hi", client_msg_id: "R1", protocol: "noxa-olm-v1", provenance: "authenticated", self: true },
         { peer: "", from: "bob", body: "hi" },
+        // b1-review P3-1: from must be the peer or this account; no future dates.
+        { peer: "bob", from: "carol", body: "hi", sent_at: 5, client_msg_id: "R1", protocol: "noxa-olm-v1", provenance: "authenticated" },
+        { peer: "bob", from: "bob", body: "hi", sent_at: Date.now() / 1000 + 3600, client_msg_id: "R1", protocol: "noxa-olm-v1", provenance: "authenticated" },
+        { peer: "bob", from: "bob", body: "hi", sent_at: 0 },
     ]) assert.equal(historyRecord(bad, "me", "dsk"), null, JSON.stringify(bad));
 });
 
@@ -45,7 +52,7 @@ test("import: authorized source only, never overwrites local records, exact chun
     const own = "me-" + Math.random().toString(36).slice(2);
     const dm = new DirectMessages(session(own), {});
     await dm.ready;
-    dm.devicesOf = async () => ({ devices: [{ deviceID: "dsk", x25519: desktop.publicKey }] });
+    dm.devicesOf = async () => ({ devices: [{ deviceID: "dsk", x25519: desktop.publicKey, signingKey: desk.edPublic }] });
     // This device already holds R1 authenticated: the transfer must not replace it.
     dm.conversation("bob").messages.push({ id: "R1", protocol: "noxa-olm-v1", from: "bob", body: "local authoritative", sentAt: 2, verified: true });
     const records = [
@@ -53,7 +60,17 @@ test("import: authorized source only, never overwrites local records, exact chun
         { peer: "bob", from: "bob", body: "older R0", sent_at: 1, client_msg_id: "R0", protocol: "noxa-olm-v1", provenance: "authenticated" },
         { peer: "bob", from: own, self: true, body: "mine", sent_at: 3, client_msg_id: "M1", protocol: "noxa-olm-v1", provenance: "authenticated" },
     ];
-    const chunk = sealDM(JSON.stringify(records), me.publicKey, desktop.secretKey);
+    const chunk = signed(records, 0, 3, own + "-dev");
+    // b1-review P2-1: a bare array (e.g. a legacy own-device DM copy replayed
+    // by the server), another target, or a foreign signature imports nothing.
+    const bare = sealDM(JSON.stringify(records), me.publicKey, desktop.secretKey);
+    const elsewhere = signed(records, 0, 1, "other-device");
+    const forgedSig = signed(records, 0, 1, own + "-dev", generateIdentity().edSecret);
+    for (const data of [bare, elsewhere, forgedSig]) {
+        let page = [{ seq: 0, total: 1, from_device_id: "dsk", data }];
+        dm.conn.request = async (type, req) => { if (req.action === "history_get") { const p = page; page = []; return { history: p }; } return {}; };
+        assert.equal(await dm.importHistory(), 0);
+    }
     const foreign = sealDM(JSON.stringify([{ peer: "eve", from: "eve", body: "forged", sent_at: 1, client_msg_id: "F", protocol: "noxa-olm-v1", provenance: "authenticated" }]), me.publicKey, nacl.box.keyPair().secretKey);
     const log = [];
     let served = [{ seq: 0, total: 3, from_device_id: "dsk", data: chunk }, { seq: 1, total: 3, from_device_id: "evil", data: foreign }, { seq: 2, total: 3, from_device_id: "dsk", data: chunk }];

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -476,4 +477,21 @@ func TestRatchetImportUnknownLivenessErasesNothing(t *testing.T) {
 			t.Fatal("no leftover may become the imported key's store")
 		}
 	})
+}
+
+// CodeRabbit b1: a failed tombstone erase during an import is detected by
+// eraseCommittedTombstone's result (the tombstone was already renamed to
+// .erasing-, so its old path is gone either way): the import is refused.
+func TestRatchetImportRefusesWhenTombstoneEraseFails(t *testing.T) {
+	a, id, idName, live := tombSetup(t)
+	if msg := a.DeleteIdentity(idName, true); msg != "" {
+		t.Fatal(msg)
+	}
+	writeTomb(t, live+ratchetTombstone+"held", "a.db", "deleted")
+	old := ratchetEraseDir
+	t.Cleanup(func() { ratchetEraseDir = old })
+	ratchetEraseDir = func(string) error { return errors.New("erase failed") }
+	if msg := a.adoptImportedIdentity(id, "b.json"); !strings.Contains(msg, "still being finished") {
+		t.Fatalf("a failed erase must refuse the import, got %q", msg)
+	}
 }

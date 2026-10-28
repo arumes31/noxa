@@ -8,6 +8,10 @@ import { isForThisServer, parseInviteLink, pendingInvite, setPendingInvite, webI
 import { classifySignIn } from "../src/core/login-errors.js";
 import { addServer, listServers, normalizeServer, removeServer } from "../src/core/servers.js";
 import nacl from "tweetnacl";
+import { decodeHistoryChunk } from "../src/core/history-envelope.js";
+const chunkKey = generateIdentity();
+const envelope = { source: "phone", target: "dev-2", transfer: "t1", edSecret: chunkKey.edSecret };
+const openChunk = (c, sender, target, seq, total) => decodeHistoryChunk(openDM(c, sender.publicKey, target.secretKey), { source: "phone", target: "dev-2", seq, total, signingKey: chunkKey.edPublic });
 
 class MemoryStorage {
     #items = new Map();
@@ -155,22 +159,22 @@ describe("history copy chunks", () => {
 
     it("seals chunks the receiving device opens, oldest first", () => {
         const messages = historyMessagesSince(conversations, 0);
-        const { chunks, kept } = buildHistoryChunks(messages, target.publicKey, sender.secretKey);
+        const { chunks, kept } = buildHistoryChunks(messages, target.publicKey, sender.secretKey, { envelope });
         assert.equal(kept, 3);
         assert.equal(chunks.length, 1);
         // The receiving side as in core/direct.js importHistory.
-        const plain = JSON.parse(openDM(chunks[0], sender.publicKey, target.secretKey));
+        const plain = openChunk(chunks[0], sender, target, 0, 1);
         assert.deepEqual(plain.map(m => m.client_msg_id), ["m1", "i1", "m2"]);
         assert.equal(openDM(chunks[0], sender.publicKey, nacl.box.keyPair().secretKey), null);
     });
 
     it("splits into several chunks under the size limit", () => {
         const messages = Array.from({ length: 30 }, (_, i) => ({ peer: "p", from: "p", body: "x".repeat(100), sent_at: 1000 - i }));
-        const { chunks, kept } = buildHistoryChunks(messages, target.publicKey, sender.secretKey, { maxChunk: 600 });
+        const { chunks, kept } = buildHistoryChunks(messages, target.publicKey, sender.secretKey, { maxChunk: 1700, envelope });
         assert.equal(kept, 30);
         assert.ok(chunks.length > 5);
-        const opened = chunks.map(c => JSON.parse(openDM(c, sender.publicKey, target.secretKey)));
-        for (const chunk of chunks) assert.ok(fromBase64(chunk).length <= 600);
+        const opened = chunks.map((c, i) => openChunk(c, sender, target, i, chunks.length));
+        for (const chunk of chunks) assert.ok(fromBase64(chunk).length <= 1700);
         // Oldest chunk first, messages oldest first inside each chunk.
         const order = opened.flat().map(m => m.sent_at);
         assert.deepEqual(order, [...order].sort((a, b) => a - b));

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -258,6 +259,13 @@ func TestDecryptDeviceCopyRequiresATrustedSenderDevice(t *testing.T) {
 		t.Fatalf("echo = %q", got)
 	}
 
+	// b1-review P2-1: a history chunk replayed as an own-device DM copy is
+	// never shown, even from a trusted own device.
+	envelope := netproto.HistoryEnvelopePrefix + `,"source":"own-phone"}` + "\n[]"
+	if got := cm.decryptDeviceCopy(copyFrom("me", ownPhone, envelope), pub, priv); got == envelope {
+		t.Fatal("a history envelope was shown as a DM")
+	}
+
 	// An unknown device, a key swapped under a trusted id, and a copy for
 	// another device all stay unopened.
 	if got := cm.decryptDeviceCopy(copyFrom("peer", unknown, "spoofed"), pub, priv); got != missingKeyText {
@@ -375,7 +383,7 @@ func TestHistoryChunksStayWithinLimitsAndRoundTrip(t *testing.T) {
 	for i := 200; i > 0; i-- { // newest first
 		messages = append(messages, netproto.HistoryMessage{Peer: "peer", From: "peer", Body: body, SentAt: int64(i), ClientMsgID: "m"})
 	}
-	chunks, kept, err := buildHistoryChunks(messages, *recipientPub, *senderPriv)
+	chunks, kept, err := buildHistoryChunks(messages, *recipientPub, *senderPriv, testHistoryEnv(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,8 +401,16 @@ func TestHistoryChunksStayWithinLimitsAndRoundTrip(t *testing.T) {
 		if !ok {
 			t.Fatal("chunk does not open with the device key")
 		}
+		h, records, err := netproto.DecodeHistoryChunk(plain)
+		if err != nil || h.Source != "desk" || h.Target != "phone" || h.Total != len(chunks) {
+			t.Fatalf("envelope %+v %v", h, err)
+		}
+		tr, _ := netproto.HistoryChunkTranscript(h)
+		if !ed25519.Verify(historyTestKey.Public().(ed25519.PublicKey), tr, h.Signature) {
+			t.Fatal("chunk signature does not verify")
+		}
 		var part []netproto.HistoryMessage
-		if err := json.Unmarshal(plain, &part); err != nil {
+		if err := json.Unmarshal(records, &part); err != nil {
 			t.Fatal(err)
 		}
 		opened = append(opened, part...)
@@ -424,7 +440,7 @@ func TestHistoryChunksStopAtTheChunkLimit(t *testing.T) {
 	for i := range messages {
 		messages[i] = netproto.HistoryMessage{Peer: "peer", From: "me", Self: true, Body: body, SentAt: int64(len(messages) - i)}
 	}
-	chunks, kept, err := buildHistoryChunks(messages, *recipientPub, *senderPriv)
+	chunks, kept, err := buildHistoryChunks(messages, *recipientPub, *senderPriv, testHistoryEnv(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,4 +454,12 @@ func TestHistoryChunksStopAtTheChunkLimit(t *testing.T) {
 	if len(chunks) > netproto.MaxHistoryChunks || total > netproto.MaxHistoryBytes || kept != len(chunks) || kept >= len(messages) {
 		t.Fatalf("%d chunks, %d bytes, kept %d", len(chunks), total, kept)
 	}
+}
+
+var historyTestKey = ed25519.NewKeyFromSeed(bytes.Repeat([]byte{4}, 32))
+
+func testHistoryEnv(t *testing.T) historyChunkEnv {
+	t.Helper()
+	return historyChunkEnv{Source: "desk", Target: "phone", Transfer: "transfer-1",
+		Sign: func(b []byte) ([]byte, error) { return ed25519.Sign(historyTestKey, b), nil }}
 }

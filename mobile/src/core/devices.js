@@ -9,6 +9,7 @@
 // most MaxHistoryChunk sealed bytes, each chunk a JSON array (oldest first)
 // sealed as nacl/box nonce||box from this device to the target device.
 import { fromBase64, keyFingerprint, publicKeyPEM, sealDM, sign, toBase64, utf8 } from "./crypto.js";
+import { HISTORY_ENVELOPE_RESERVE, encodeHistoryChunk } from "./history-envelope.js";
 import { Msg } from "./frame.js";
 
 // internal/netproto/dm_devices.go
@@ -115,8 +116,11 @@ export function historyMessagesSince(conversations, since = 0) {
  * holding its messages oldest first. Returns {chunks: [base64 nonce||box],
  * kept}. Limits as in client/dm_history_copy.go buildHistoryChunks.
  */
-export function buildHistoryChunks(messages, recipientX25519, senderXSecret, { maxChunk = MAX_HISTORY_CHUNK } = {}) {
-    const maxPlain = maxChunk - SEAL_OVERHEAD;
+// envelope {source, target, transfer, edSecret}: every chunk is a signed
+// history envelope (history-envelope.js) bound to this transfer.
+export function buildHistoryChunks(messages, recipientX25519, senderXSecret, { maxChunk = MAX_HISTORY_CHUNK, envelope } = {}) {
+    if (!envelope) throw new Error("history chunks need a transfer envelope");
+    const maxPlain = maxChunk - SEAL_OVERHEAD - HISTORY_ENVELOPE_RESERVE;
     const encoder = new TextEncoder();
     const groups = [];
     let current = [];
@@ -149,7 +153,8 @@ export function buildHistoryChunks(messages, recipientX25519, senderXSecret, { m
     flush();
     const chunks = [];
     for (let i = groups.length - 1; i >= 0; i--) {
-        const plain = `[${[...groups[i]].reverse().join(",")}]`;
+        const records = `[${[...groups[i]].reverse().join(",")}]`;
+        const plain = encodeHistoryChunk({ source: envelope.source, target: envelope.target, transfer: envelope.transfer, seq: groups.length - 1 - i, total: groups.length }, records, envelope.edSecret);
         chunks.push(sealDM(plain, recipientX25519, senderXSecret));
     }
     return { chunks, kept };
@@ -169,7 +174,8 @@ export async function copyHistory(session, dm, deviceID, days, onProgress = () =
     const target = own.devices.find(d => d.deviceID === deviceID);
     if (!target) throw new Error("this device is not confirmed for direct messages");
     const since = days > 0 ? Math.floor(Date.now() / 1000) - days * 86400 : 0;
-    const { chunks, kept } = buildHistoryChunks(historyMessagesSince(dm.conversations.values(), since), target.x25519, session.identity.xSecret);
+    const { chunks, kept } = buildHistoryChunks(historyMessagesSince(dm.conversations.values(), since), target.x25519, session.identity.xSecret,
+        { envelope: { source: session.deviceID, target: deviceID, transfer: crypto.randomUUID(), edSecret: session.identity.edSecret } });
     for (let seq = 0; seq < chunks.length; seq++) {
         await deviceRequest(session.conn, { action: "history_put", device_id: deviceID, history: { seq, total: chunks.length, data: chunks[seq] } }, 30000);
         onProgress({ sent: seq + 1, total: chunks.length, messages: kept });
