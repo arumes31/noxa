@@ -360,6 +360,21 @@ class RatchetStore {
     if (fresh.fence.generation !== s.fence.generation) throw fail("fenced");
     return fresh;
   }
+  // A read-only validation: re-read and validate (empty commit) as one
+  // consistent snapshot. Writes elsewhere on the namespace (another tab or
+  // consumer) only move revisions, so a lost validation is re-read and
+  // re-validated here instead of failing the caller with "conflict".
+  async validated(s, refs) {
+    for (let attempt = 0; ; attempt++) {
+      const fresh = await this.extended(s, refs);
+      try {
+        await this.#commit(fresh, {});
+        return fresh;
+      } catch (e) {
+        if (e.code !== "conflict" || attempt >= 16) throw e;
+      }
+    }
+  }
   compare(s, fresh) {
     for (const [k, v] of Object.entries(s.records))
       if (fresh.records[k]?.revision !== v.revision) throw fail("conflict");
@@ -768,13 +783,12 @@ class RatchetStore {
     );
   }
   async attemptStatusRequest(s, id) {
-    const fresh = await this.extended(s, [["outbox", id]]),
+    const fresh = await this.validated(s, [["outbox", id]]),
       old = this.require(fresh, ["outbox", id]);
     if (!old.revision) throw fail("invalid");
     const b = json(old.data);
     if (!b.attempt) throw fail("invalid");
     const digest = await digestBytes(validateManifest(b.attempt.manifest));
-    await this.#commit(fresh, {});
     return {
       manifest: b.attempt.manifest,
       digest,
@@ -853,9 +867,8 @@ class RatchetStore {
     };
   }
   async accountAuthority(s) {
-    const fresh = await this.extended(s, []),
+    const fresh = await this.validated(s, []),
       c = json(this.require(fresh, ctl).data);
-    await this.#commit(fresh, {});
     return {
       accountID: c.accountID,
       epoch: c.accountEpoch,

@@ -680,16 +680,32 @@ func (a *App) SendChatOperationForTab(tabID, scope, target, text string, replyTo
 	if err != nil {
 		return err.Error()
 	}
+	// The outbox namespace (identity + server + certificate) is captured
+	// BEFORE the send: an uncertain entry never lands in another server's
+	// outbox after a reconnect during the send.
+	tracked := scope == "direct" && cm.ratchetConfigured() && validOperationID(operationID)
+	store, storeErr := chatOutboxStore{}, error(nil)
+	if tracked {
+		store, storeErr = a.outboxStore(cm)
+	}
 	result, err := sendChatOperationErr(cm, scope, target, text, replyToID, operationID)
 	// An uncertain new-protocol send becomes an "uncertain" outbox entry under
 	// the SAME operation ID: it survives a restart, and only an explicit Retry
 	// of that entry resolves the original (a new identical message is a new
-	// operation). Success forgets it.
-	if scope == "direct" && cm.ratchetConfigured() && validOperationID(operationID) {
+	// operation). Success forgets it. Failing to keep it is reported, never
+	// silent.
+	if tracked {
 		if result == "" {
-			a.forgetOutboxOperation(cm, operationID)
+			if storeErr == nil {
+				a.forgetOutboxOperation(cm, store, operationID)
+			}
 		} else if ratchetUncertain(err) {
-			a.keepOutboxOperation(cm, scope, target, text, operationID, result)
+			if storeErr == nil {
+				storeErr = a.keepOutboxOperation(cm, store, scope, target, text, operationID, result)
+			}
+			if storeErr != nil {
+				result += " (it could not be kept in the outbox for a later retry: " + storeErr.Error() + ")"
+			}
 		}
 	}
 	return result

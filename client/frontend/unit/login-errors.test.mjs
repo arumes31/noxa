@@ -82,3 +82,12 @@ test("(314) only server decisions and trust failures are definitive; the path to
         assert.equal(connectFailureIsDefinitive(loginFailure(reason)), false, reason);
     }
 });
+
+test("a server without the secure sign-in scheme is reported as needing an update (en/de)", async () => {
+    const reason = "this server needs an update: it does not support secure sign-in; ask the administrator to update the server";
+    assert.deepEqual(loginFailure(reason), { kind: "serverOutdated" });
+    assert.equal(loginErrorsModule.connectFailureIsDefinitive(loginFailure(reason)), true, "never retried automatically");
+    const messages = await import("../src/login-error-messages.js");
+    const text = JSON.stringify(messages);
+    for (const key of ["login.failure.serverOutdated", "login.recovery.serverOutdated"]) assert.equal(text.split(key).length - 1, 2, `${key} in en and de`);
+});

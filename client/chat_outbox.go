@@ -135,7 +135,7 @@ func (s chatOutboxStore) load() ([]ChatOutboxEntry, error) {
 		return nil, errors.New("cannot decrypt this outbox")
 	}
 	var entries []ChatOutboxEntry
-	if json.Unmarshal([]byte(plain), &entries) != nil || len(entries) > 100 {
+	if json.Unmarshal([]byte(plain), &entries) != nil || len(entries) > outboxUncertainCap {
 		return nil, errors.New("invalid outbox file")
 	}
 	for i := range entries {
@@ -491,41 +491,40 @@ func ratchetUncertain(err error) bool {
 	return errors.As(err, &r) && r.Committed != nil && r.Committed.Receipt == nil
 }
 
+// outboxUncertainCap bounds the outbox only for uncertain composer entries,
+// above the regular 100: they are never dropped for capacity below it.
+const outboxUncertainCap = 200
+
 // keepOutboxOperation records an uncertain composer send as an "uncertain"
-// outbox entry under its operation ID (persisted, sealed with the outbox).
-func (a *App) keepOutboxOperation(cm *connManager, scope, target, text, operationID, reason string) {
-	store, err := a.outboxStore(cm)
-	if err != nil {
-		return
+// outbox entry under its operation ID, in the outbox store captured before
+// the send (refused if this tab's outbox binding changed meanwhile).
+func (a *App) keepOutboxOperation(cm *connManager, store chatOutboxStore, scope, target, text, operationID, reason string) error {
+	if current, err := a.outboxStore(cm); err != nil || current.path != store.path {
+		return errors.New("connection or identity changed during the send")
 	}
 	outboxMu.Lock()
 	defer outboxMu.Unlock()
 	entries, err := store.load()
 	if err != nil {
-		return
+		return err
 	}
 	now := time.Now().UnixMilli()
 	for i := range entries {
 		if entries[i].ID == operationID {
 			entries[i].State, entries[i].Error, entries[i].Attempted = "uncertain", reason, true
-			_ = store.save(entries)
-			return
+			return store.save(entries)
 		}
 	}
-	if len(entries) >= 100 {
-		return
+	if len(entries) >= outboxUncertainCap {
+		return errors.New("outbox full")
 	}
 	entries = append(entries, ChatOutboxEntry{ID: operationID, Scope: scope, Target: target, Text: text, CreatedAt: now, DueAt: now,
 		State: "uncertain", Error: reason, Attempted: true})
-	_ = store.save(entries)
+	return store.save(entries)
 }
 
 // forgetOutboxOperation drops the entry of an operation that is now sent.
-func (a *App) forgetOutboxOperation(cm *connManager, operationID string) {
-	store, err := a.outboxStore(cm)
-	if err != nil {
-		return
-	}
+func (a *App) forgetOutboxOperation(cm *connManager, store chatOutboxStore, operationID string) {
 	outboxMu.Lock()
 	defer outboxMu.Unlock()
 	if outboxSending[store.path+"|"+operationID] {

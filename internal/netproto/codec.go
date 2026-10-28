@@ -550,7 +550,15 @@ type ICEServer struct {
 // private key and reply with an AuthSignature.
 type AuthChallenge struct {
 	Challenge []byte `json:"challenge"`
+	// Scheme advertises how the challenge must be signed. Servers that verify
+	// the domain-separated login signature set AuthChallengeSchemeV1; updated
+	// clients sign only then and refuse older servers (never raw signing).
+	Scheme string `json:"scheme,omitempty"`
 }
+
+// AuthChallengeSchemeV1: sign "noxa-auth-challenge-v1\n" || challenge
+// (auth.SignLoginChallenge).
+const AuthChallengeSchemeV1 = "noxa-auth-challenge-v1"
 
 // AuthSignature is the client's reply to an AuthChallenge, completing the
 // challenge-response handshake. PublicKey (PEM) is optional: registered

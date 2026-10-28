@@ -139,8 +139,11 @@ func ProbeUnlocked(dir string) error {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
-		if info, e := os.Stat(path); e == nil && info.Size() == 0 {
-			continue // crash during creation: never a usable store
+		// A crash during creation can leave 0 bytes or a torn bbolt init
+		// (fewer than its 4 initial pages, e.g. only the first meta page):
+		// never a usable store.
+		if info, e := os.Stat(path); e == nil && info.Size() < 4*int64(os.Getpagesize()) {
+			continue
 		}
 		db, e := bolt.Open(path, 0600, &bolt.Options{Timeout: 150 * time.Millisecond, ReadOnly: true})
 		if errors.Is(e, bolt.ErrTimeout) {

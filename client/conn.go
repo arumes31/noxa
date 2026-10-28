@@ -445,6 +445,24 @@ func loginSigner(id *identity) challengeSigner {
 	}
 }
 
+// errServerLoginOutdated: the server does not advertise the domain-separated
+// login scheme, so this client refuses to sign its challenge.
+const errServerLoginOutdated = "this server needs an update: it does not support secure sign-in; ask the administrator to update the server"
+
+// answerChallenge signs a login challenge only under the advertised
+// domain-separated scheme. An older server gets no signature at all (never a
+// raw fallback); the reason is errServerLoginOutdated.
+func answerChallenge(ch netproto.AuthChallenge, signer challengeSigner) ([]byte, string, string) {
+	if ch.Scheme != netproto.AuthChallengeSchemeV1 {
+		return nil, "", errServerLoginOutdated
+	}
+	sig, pub, err := signer(ch.Challenge)
+	if err != nil {
+		return nil, "", err.Error()
+	}
+	return sig, pub, ""
+}
+
 // challengeSigner signs a server challenge and returns the signature and
 // the public key to present in AuthSignature.
 type challengeSigner func(challenge []byte) (signature []byte, publicKey string, err error)
@@ -491,10 +509,13 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 				_ = conn.Close()
 				return err.Error()
 			}
-			sig, pub, err := signer(ch.Challenge)
-			if err != nil {
+			sig, pub, reason := answerChallenge(ch, signer)
+			if reason != "" {
 				_ = conn.Close()
-				return err.Error()
+				if reason == errServerLoginOutdated {
+					m.markReconnectTerminal() // no reconnect loop: it needs an update
+				}
+				return reason
 			}
 			if err := m.writeConn(conn, netproto.MsgAuthSignature, netproto.AuthSignature{
 				UniqueID:        authMsg.Username,

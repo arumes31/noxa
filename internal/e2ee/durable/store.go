@@ -254,6 +254,7 @@ func Open(dir string, ns Namespace, protection Protection, timeout time.Duration
 	if e != nil {
 		clear(s.key)
 		_ = db.Close()
+		unlockDir() // a failed open never keeps the directory lock
 		return nil, e
 	}
 	return s, nil

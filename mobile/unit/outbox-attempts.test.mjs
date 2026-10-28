@@ -163,3 +163,18 @@ test("pending()'s expiry rewrite during a flush is fenced against logout", async
         assert.deepEqual((await raw(Stores.outbox, s => s.getAllKeys())), ["noise"], "nothing written back for the old generation");
     } finally { Date.now = realNow; await raw(Stores.outbox, s => s.clear()); await setFence(1); }
 });
+
+test("fix-review P3-7: a draft another tab marked failed is not committed; one bad entry never stops the flush", async () => {
+    await setFence(1); await clear();
+    await enqueue({ kind: "dm", peer: "bob" }, "first", { id: "p7-a" });
+    await enqueue({ kind: "dm", peer: "bob" }, "second", { id: "p7-b" });
+    // Another tab marks p7-a failed (never attempted) while this flush runs.
+    const { putSealed } = await import("../src/core/db.js");
+    const [a] = await pending();
+    await putSealed(Stores.outbox, "p7-a", { ...a, failed: true, error: "elsewhere" });
+    const dm = ratchetDM(() => ({ receipt: { state: "accepted" } }));
+    await flush(session, dm);
+    const left = await pending();
+    assert.deepEqual(left.map(e => [e.id, !!e.committed]), [["p7-a", false]], "the failed draft stays uncommitted and editable");
+    assert.deepEqual(dm.sent, [["p7-b", "second"]]);
+});

@@ -114,6 +114,8 @@ export async function waitForDecision(identity, linkID, { open = () => Connectio
 
 /** auth.LoginChallengeSize / auth.LoginChallengeDomain (internal/auth). */
 export const LOGIN_CHALLENGE_SIZE = 32;
+export const LOGIN_CHALLENGE_SCHEME = "noxa-auth-challenge-v1";
+export const SERVER_LOGIN_OUTDATED = "this server needs an update: it does not support secure sign-in; ask the administrator to update the server";
 export const LOGIN_CHALLENGE_DOMAIN = "noxa-auth-challenge-v1\n";
 
 /**
@@ -146,6 +148,12 @@ export async function signIn(conn, identity, { version, nickname = "", serverPas
         nickname, server_password: serverPassword, x25519_public_key: x25519,
     }, [Msg.AuthChallenge, Msg.AuthResponse], { timeout: 10000 });
     if (!first.challenge) throw signInError(first.reason);
+    // Strict: sign only the advertised domain-separated scheme; an older
+    // server gets no signature (never a raw fallback).
+    if (first.scheme !== LOGIN_CHALLENGE_SCHEME) {
+        conn.close?.();
+        throw signInError(SERVER_LOGIN_OUTDATED);
+    }
     const signature = sign(loginChallengeMessage(Uint8Array.from(atob(first.challenge), c => c.charCodeAt(0))), identity.edSecret);
     const response = await conn.request(Msg.AuthSignature, {
         unique_id: "", public_key: publicKeyPEM(identity.edPublic), signature: toBase64(signature), x25519_public_key: x25519,

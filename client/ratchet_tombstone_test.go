@@ -255,6 +255,17 @@ func TestRatchetReimportNeverResurrectsWhenLivenessIncomplete(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Liveness is unknown (another identity file is unreadable): the import
+	// is refused, never resurrecting or erasing anything.
+	if msg := a.adoptImportedIdentity(id, "back.json"); !strings.Contains(msg, "could not be read") {
+		t.Fatalf("import with unknown liveness must be refused: %q", msg)
+	}
+	if !exists(plain) {
+		t.Fatal("a refused import must not erase the tombstone")
+	}
+	if err := os.Remove(filepath.Join(dir, "broken.json")); err != nil {
+		t.Fatal(err)
+	}
 	if msg := a.adoptImportedIdentity(id, "back.json"); msg != "" {
 		t.Fatal(msg)
 	}
@@ -334,4 +345,63 @@ func TestRatchetDeletionDetectsReopenedStore(t *testing.T) {
 			t.Fatal("a store reopened after the commit must still be erased")
 		}
 	})
+}
+
+// Adopted fix-review repro (P3-3): while the key's own identity file is
+// unreadable, an authoritative .deleted- tombstone is neither erased nor
+// resurrected: the import is refused with an explicit reason.
+func TestRatchetImportRefusedWhenOwnFileUnreadable(t *testing.T) {
+	a, id, idName, live := tombSetup(t)
+	tomb := live + ratchetTombstone + "crash"
+	writeTomb(t, tomb, "a.db", "authoritative-history")
+	path, _ := identityPathFor(idName)
+	if err := os.WriteFile(path, []byte("{damaged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	msg := a.adoptImportedIdentity(id, "backup.json")
+	if !strings.Contains(msg, "could not be read") {
+		t.Fatalf("import must be refused explicitly, got %q", msg)
+	}
+	if !exists(tomb) || exists(erasingName(tomb)) {
+		t.Fatal("DATA LOSS: authoritative tombstone erased or marked by import")
+	}
+}
+
+// Fix-review P3-4: the committed-deletion notice is a success-with-notice in
+// the UI (security-settings.js isDeletionNotice matches this prefix).
+func TestDeletionNoticeContractWithUI(t *testing.T) {
+	const prefix = "the identity was deleted, but "
+	if !strings.HasPrefix(errRatchetErasedLater.Error(), prefix) {
+		t.Fatal("notice text changed")
+	}
+	src, err := os.ReadFile("frontend/src/security-settings.js")
+	if err != nil || !strings.Contains(string(src), `startsWith("`+prefix+`")`) {
+		t.Fatal("the settings UI must treat the notice as success", err)
+	}
+}
+
+// Fix-review P3-6: with unknown liveness the sweep never erases a live store
+// next to an .erasing- marker (nor the marker); once the key is known gone it
+// erases both.
+func TestRatchetSweepKeepsLiveDirNextToMarkerWhenLivenessUnknown(t *testing.T) {
+	a, _, _, live := tombSetup(t)
+	base := filepath.Dir(live)
+	key := strings.Repeat("ab", 16)
+	liveOther := filepath.Join(base, key)
+	marker := liveOther + ratchetErasing + "m"
+	writeTomb(t, liveOther, "a.db", "maybe live")
+	writeTomb(t, marker, "x", "")
+	dir, _ := identitiesDir()
+	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.sweepRatchetStores()
+	if !exists(filepath.Join(liveOther, "a.db")) || !exists(marker) {
+		t.Fatal("unknown liveness must never erase")
+	}
+	os.Remove(filepath.Join(dir, "broken.json"))
+	a.sweepRatchetStores()
+	if exists(liveOther) || exists(marker) {
+		t.Fatal("a reopened store of a known-gone key must be erased with its marker")
+	}
 }

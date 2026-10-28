@@ -34,3 +34,25 @@ func TestDesktopRefusesForgedLoginChallenges(t *testing.T) {
 		t.Fatalf("normal login must be domain-separated and verify: %v", err)
 	}
 }
+
+// User decision (strict login): an older server that does not advertise the
+// domain-separated scheme gets no signature; the client reports that the
+// server needs an update.
+func TestDesktopRefusesUnadvertisedLoginScheme(t *testing.T) {
+	id, err := newIdentity("strict")
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	signer := func(c []byte) ([]byte, string, error) { called = true; return loginSigner(id)(c) }
+	challenge := make([]byte, auth.LoginChallengeSize)
+	_, _ = rand.Read(challenge)
+	challenge[0] = 'x'
+	if sig, _, reason := answerChallenge(netproto.AuthChallenge{Challenge: challenge}, signer); reason != errServerLoginOutdated || sig != nil || called {
+		t.Fatalf("old server: reason=%q signed=%v", reason, called)
+	}
+	sig, pub, reason := answerChallenge(netproto.AuthChallenge{Challenge: challenge, Scheme: netproto.AuthChallengeSchemeV1}, signer)
+	if reason != "" || auth.VerifyLoginChallenge(pub, challenge, sig) != nil {
+		t.Fatalf("new server: %q", reason)
+	}
+}

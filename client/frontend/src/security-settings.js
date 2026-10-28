@@ -21,6 +21,8 @@ const details = key => {
     return node;
 };
 const checkError = async promise => { const error = await promise; if (error) throw new Error(error); };
+// Go errRatchetErasedLater: the identity IS deleted; only its store is erased later.
+export const isDeletionNotice = text => String(text).startsWith("the identity was deleted, but ");
 const exportDate = value => {
     const date = new Date(value.replace(" ", "T"));
     return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(currentLanguage(), { dateStyle: "medium", timeStyle: "short" }).format(date);
@@ -172,7 +174,15 @@ export function securitySettings(settings) {
             }, "danger-btn");
             const remove = button("security.delete", async () => {
                 if (await ask("security.delete", t("security.deleteAsk", { name: entry.name }), "security.deleteConfirm", true) && current()) {
-                    await run(() => checkError(app.DeleteIdentity(entry.id, true)), "security.deleted");
+                    let notice = "";
+                    await run(async () => {
+                        const result = await app.DeleteIdentity(entry.id, true);
+                        // Committed deletion whose store another window still holds:
+                        // a success with a notice, never a failure.
+                        if (result && isDeletionNotice(result)) { notice = result; return true; }
+                        if (result) throw new Error(result);
+                        return true;
+                    }, () => notice ? t("security.deletedLater") : t("security.deleted"));
                 }
             }, "danger-btn");
             reset.disabled = !!entry.error; remove.disabled = !!entry.error || entries.length < 2;

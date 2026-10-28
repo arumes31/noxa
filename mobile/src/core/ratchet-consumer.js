@@ -535,7 +535,9 @@ export class RatchetConsumer {
             try { return await this.#serial(() => this.#send(intent)); }
             catch (e) {
                 // A concurrent tab/consumer won this snapshot. Nothing was
-                // committed or transported for this intent; start over.
+                // committed or transported for this intent; start over. A raw
+                // store "conflict" before any commit is the same case.
+                if (e.code === "conflict" && !e.committed) e.code = "local_conflict";
                 if (e.code !== "local_conflict" || tries >= LOCAL_RETRY) throw e;
                 this.sessions = null;
                 return run(tries + 1);

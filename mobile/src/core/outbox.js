@@ -124,7 +124,13 @@ export function flush(session, dm, groups = null) {
                     // Durable BEFORE the consumer commits an operation for this
                     // ID, as a CAS over the CURRENT draft (a concurrent replace
                     // is committed as it stands, never lost or overwritten).
-                    const latest = await updateSealed(Stores.outbox, current.id, cur => (cur && !cur.committed ? { ...cur, committed: { text: cur.text } } : undefined), fence);
+                    // Another tab's failed (never attempted) draft is not committed.
+                    let latest;
+                    try { latest = await updateSealed(Stores.outbox, current.id, cur => (cur && !cur.committed && !cur.failed ? { ...cur, committed: { text: cur.text } } : undefined), fence); }
+                    catch (error) {
+                        if (error.code === "fenced") break;
+                        continue; // one unreadable/contended entry never stops the others
+                    }
                     if (!latest) continue; // removed meanwhile
                     current = latest;
                     if (current.failed || !current.committed) continue;

@@ -217,6 +217,9 @@ func namedKeyLoginOn(t *testing.T, conn net.Conn, keys linkTestKeys, nickname st
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
 		t.Fatal(err)
 	}
+	if challenge.Scheme != netproto.AuthChallengeSchemeV1 {
+		t.Fatalf("new servers advertise the login scheme: %+v", challenge)
+	}
 	signature, err := auth.SignLoginChallenge(keys.private, challenge.Challenge)
 	if err != nil {
 		t.Fatal(err)

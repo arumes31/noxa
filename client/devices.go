@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"net"
 	"net/url"
@@ -317,6 +319,9 @@ func (a *App) DecideDeviceLinkForTab(tabID, linkID string, approve bool, ed25519
 		return netproto.DeviceResult{}, errors.New("this link is no longer pending")
 	}
 	request := netproto.DeviceRequest{Action: netproto.DeviceActionLinkDecide, LinkID: linkID, Approve: approve}
+	if approve && !validClaimedDeviceKeys(ed25519Public, x25519Public) {
+		return netproto.DeviceResult{}, errors.New("the claiming device's keys are invalid")
+	}
 	if approve {
 		if deviceID == "" {
 			return netproto.DeviceResult{}, errors.New("this desktop is not registered as a device yet")
@@ -483,4 +488,23 @@ func (m *connManager) approvePasskeyDevices(conn net.Conn) {
 		}
 		m.forgetDMDevices(principal)
 	}
+}
+
+// validClaimedDeviceKeys checks relayed claim keys before the desktop signs
+// a transcript over them: a canonical single-key Ed25519 PEM and a 32-byte
+// standard-base64 X25519 key, so no field can smuggle a newline into the
+// newline-joined approval or binding transcripts.
+func validClaimedDeviceKeys(ed25519Public, x25519Public string) bool {
+	key, err := auth.LoadPublicKey(ed25519Public)
+	if err != nil || len(key) != ed25519.PublicKeySize {
+		return false
+	}
+	if string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: key})) != ed25519Public {
+		return false
+	}
+	if strings.ContainsAny(x25519Public, "\r\n") || base64.StdEncoding.EncodeToString(func() []byte { k, _ := parseDeviceX25519(x25519Public); return k[:] }()) != x25519Public {
+		return false
+	}
+	_, ok := parseDeviceX25519(x25519Public)
+	return ok
 }

@@ -407,8 +407,22 @@ func resolveRatchetTombstones(base, key string, state ratchetLiveness) error {
 			// A committed deletion. A live directory next to it (reopened by
 			// another process during the deletion) is that deleted store:
 			// erased first, and the marker only once it is gone.
-			if state != ratchetLiveYes {
-				if err := os.RemoveAll(dir); err != nil {
+			// Only when the key is KNOWN gone (unknown never erases), and under
+			// the destroy lock (never under another process's open store).
+			if state == ratchetLiveUnknown {
+				if _, err := os.Lstat(dir); err == nil {
+					continue // keep the marker: it is the only record of that store
+				}
+			}
+			if state == ratchetLiveNo {
+				release, err := durable.LockForDestroy(dir)
+				if err != nil {
+					log.Printf("ratchet: a deleted store is still open elsewhere: %v", err)
+					continue
+				}
+				err = os.RemoveAll(dir)
+				release()
+				if err != nil {
 					log.Printf("ratchet: erasing a deleted store failed: %v", err)
 					continue
 				}
@@ -461,12 +475,12 @@ func (a *App) sweepRatchetStoresIn(bases map[string]bool) {
 // is erased (or at least marked .erasing-), so the import never resurrects
 // the deleted store.
 func (a *App) finishRatchetDeletion(publicKey string) error {
-	// The caller established this key is not stored; only a readable stored
-	// copy (global completeness is irrelevant here) keeps its tombstones.
-	live, _ := liveRatchetKeys()
+	// The caller found no readable stored copy of this key. A readable one
+	// keeps its tombstones (resolved at start).
+	live, complete := liveRatchetKeys()
 	key := ratchetStoreKey(publicKey)
 	if live[key] {
-		return nil // stored: its tombstones are resolved at start
+		return nil
 	}
 	unlock := lockRatchetStore(key)
 	defer unlock()
@@ -482,6 +496,12 @@ func (a *App) finishRatchetDeletion(publicKey string) error {
 			}
 			tomb := filepath.Join(base, e.Name())
 			if marker == ratchetTombstone {
+				// Unknown liveness: the key's own identity file may exist but be
+				// unreadable, and this tombstone may then be authoritative.
+				// Neither erase it nor let the import resurrect it: refuse.
+				if !complete {
+					return errors.New("an identity file could not be read; fix or remove it, then import this identity again")
+				}
 				eraseCommittedTombstone(tomb)
 				if _, err := os.Lstat(tomb); err == nil {
 					return errors.New("an earlier deletion of this identity's secure message store is still being finished; try the import again shortly")

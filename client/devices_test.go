@@ -25,6 +25,7 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	phoneX := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
 	var approval, bindingSig []byte
 	var binding string
 	app, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
@@ -69,7 +70,7 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 
 	claim := func(linkID, via string) {
 		frame, err := netproto.Encode(netproto.MsgDeviceEvent, netproto.DeviceEvent{
-			Event: netproto.DeviceEventLinkClaimed, LinkID: linkID, Ed25519PublicKey: phonePublic, X25519PublicKey: "x", Via: via,
+			Event: netproto.DeviceEventLinkClaimed, LinkID: linkID, Ed25519PublicKey: phonePublic, X25519PublicKey: phoneX, Via: via,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -80,7 +81,7 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 	if len(capture.views) != 0 {
 		t.Fatal("claim of a foreign link reached the webview")
 	}
-	transcript := netproto.LinkClaimTranscript("link-1", phonePublic, "x")
+	transcript := netproto.LinkClaimTranscript("link-1", phonePublic, phoneX)
 	claim("link-1", "qr")
 	claim("link-1", "code")
 	if len(capture.views) != 2 {
@@ -93,7 +94,14 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 		t.Fatalf("fingerprint = %q", capture.views[0].Fingerprint)
 	}
 
-	result, err := app.DecideDeviceLinkForTab("a", "link-1", true, phonePublic, "x")
+	// Claimed keys are validated before anything is signed (no newline can
+	// be smuggled into the newline-joined transcripts).
+	for _, bad := range [][2]string{{phonePublic, phoneX + "\nextra"}, {phonePublic + "x", phoneX}, {phonePublic, "short"}} {
+		if _, err := app.DecideDeviceLinkForTab("a", "link-1", true, bad[0], bad[1]); err == nil || approval != nil {
+			t.Fatalf("invalid claimed keys signed: %q", bad)
+		}
+	}
+	result, err := app.DecideDeviceLinkForTab("a", "link-1", true, phonePublic, phoneX)
 	if err != nil || result.State != netproto.LinkStateApproved {
 		t.Fatalf("decide = %+v, %v", result, err)
 	}
@@ -101,15 +109,15 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := auth.VerifyChallenge(id.PublicKey, netproto.DeviceApprovalTranscript("user-uid", "dev-desktop", phonePublic, "x"), approval); err != nil {
+	if err := auth.VerifyChallenge(id.PublicKey, netproto.DeviceApprovalTranscript("user-uid", "dev-desktop", phonePublic, phoneX), approval); err != nil {
 		t.Fatalf("approval signature: %v", err)
 	}
 	// 1c-iii-a item 1: the pinned TLS binding, signed for exactly these keys.
 	if binding != "tls-sha256:"+strings.Repeat("ab", 32) ||
-		auth.VerifyChallenge(id.PublicKey, netproto.DeviceLinkBindingTranscript("user-uid", "dev-desktop", phonePublic, "x", binding), bindingSig) != nil {
+		auth.VerifyChallenge(id.PublicKey, netproto.DeviceLinkBindingTranscript("user-uid", "dev-desktop", phonePublic, phoneX, binding), bindingSig) != nil {
 		t.Fatalf("binding statement %q not signed for the claimed keys", binding)
 	}
-	if _, err := app.DecideDeviceLinkForTab("a", "link-1", true, phonePublic, "x"); err == nil {
+	if _, err := app.DecideDeviceLinkForTab("a", "link-1", true, phonePublic, phoneX); err == nil {
 		t.Fatal("a decided link was decided twice")
 	}
 }

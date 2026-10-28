@@ -127,7 +127,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
 		}
 		client.setChallenge(msg.Username, msg.Nickname, challenge, time.Now().Add(authChallengeTTL))
-		return s.writeMessage(client, netproto.MsgAuthChallenge, netproto.AuthChallenge{Challenge: challenge})
+		return s.writeMessage(client, netproto.MsgAuthChallenge, netproto.AuthChallenge{Challenge: challenge, Scheme: netproto.AuthChallengeSchemeV1})
 	}
 
 	attempt, allowed := s.loginLimiter.Reserve(accountSourceScope, principalScope)

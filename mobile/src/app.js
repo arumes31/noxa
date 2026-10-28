@@ -614,7 +614,8 @@ function scheduleReconnect() {
     reconnectTimer = setTimeout(() => {
         if (!app.identity || app.paused) return;
         connect().catch(error => {
-            if (!error.revoked) scheduleReconnect();
+            // Revoked devices and servers that need an update never loop.
+            if (!error.revoked && error.kind !== "serverOutdated") scheduleReconnect();
         });
     }, delay);
 }
