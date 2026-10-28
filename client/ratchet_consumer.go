@@ -701,6 +701,11 @@ func (c *ratchetConsumer) readyOnce() (ratchetReadiness, error) {
 	if latest == nil {
 		return ratchetReadiness{}, rfail("recovery_required")
 	}
+	// Close what the server proves can no longer be admitted before the
+	// refill (the account holds at most 100 private one-time keys).
+	if err = c.closeKeys(a); err != nil && (ratchetCode(err) == "fenced" || ratchetCode(err) == "recovery_required") {
+		return ratchetReadiness{}, err
+	}
 	if latest.ExpiresAt-c.now() < 86400 {
 		// Refresh before expiry with new one-time keys and next generation.
 		if s, err = c.read(accountRef); err != nil {
@@ -730,6 +735,101 @@ func (c *ratchetConsumer) readyOnce() (ratchetReadiness, error) {
 		return ratchetReadiness{}, err
 	}
 	return ratchetReadiness{identity: latest.Identity, epoch: a.Epoch, expiresAt: latest.ExpiresAt}, nil
+}
+
+// closeKeys runs the one-time-key closure lifecycle (server rule:
+// close_keys closes an available key whose publication expired or whose
+// account epoch moved on, and a reserved key whose claim lapsed). It asks only
+// about unconsumed, unclosed obligations of the current account whose
+// publication expired, runs the core retire_prekey for each exact public key
+// the server authenticated as "closed", and commits the candidate account
+// with those closure receipts atomically (Store.RetireUnsubmittedKeys).
+// Keys still available/reserved/admitted stay; a timer is never evidence.
+func (c *ratchetConsumer) closeKeys(a durable.AccountAuthority) error {
+	obRefs, err := c.refs(durable.Obligation)
+	if err != nil {
+		return err
+	}
+	records, err := c.readMany(obRefs)
+	if err != nil {
+		return err
+	}
+	type due struct {
+		id string
+		o  durable.OTKObligation
+	}
+	var pending []due
+	for _, ref := range obRefs {
+		var o durable.OTKObligation
+		if json.Unmarshal(records[ref].Data, &o) == nil && o.AccountID == a.AccountID && !o.Consumed && !o.Closed && o.ExpiresAt <= c.now() {
+			pending = append(pending, due{ref.ID, o})
+		}
+	}
+	for i := 0; i < len(pending); i += 100 {
+		batch := pending[i:min(i+100, len(pending))]
+		keys := make([]string, len(batch))
+		for j, d := range batch {
+			keys[j] = d.o.KeyID
+		}
+		var lifecycle []durable.KeyClosure
+		if err = c.handoff(a, netproto.OlmAdmissionRequest{Action: "close_keys", Keys: keys}, &lifecycle); err != nil {
+			return err
+		}
+		closed := map[string]durable.KeyClosure{}
+		for _, l := range lifecycle {
+			if l.State == "closed" {
+				closed[l.KeyID] = l
+			}
+		}
+		var closing []due
+		for _, d := range batch {
+			if _, ok := closed[d.o.KeyID]; ok {
+				closing = append(closing, d)
+			}
+		}
+		if len(closing) == 0 {
+			continue
+		}
+		accountRef := durable.Ref{Kind: durable.Account, ID: a.AccountID}
+		err = c.casRetry(func() error {
+			refs := []durable.Ref{accountRef}
+			for _, d := range closing {
+				refs = append(refs, durable.Ref{Kind: durable.Obligation, ID: d.id})
+			}
+			s, err := c.read(refs...)
+			if err != nil {
+				return err
+			}
+			account := string(s.Records[accountRef].Data)
+			proofs := map[string]durable.KeyClosure{}
+			for _, d := range closing {
+				var cur durable.OTKObligation
+				if json.Unmarshal(s.Records[durable.Ref{Kind: durable.Obligation, ID: d.id}].Data, &cur) != nil || cur.Closed || cur.Consumed {
+					continue
+				}
+				next, err := c.coreApply(ratchet.Request{Op: ratchet.RetirePreKey, Account: account, OneTimeKey: d.o.PublicKey})
+				if err != nil {
+					if ratchetCode(err) != "" {
+						return err // environment, not the key
+					}
+					continue // not in the account: the obligation stays open
+				}
+				account = next.Account
+				proofs[d.id] = closed[d.o.KeyID]
+			}
+			if len(proofs) == 0 {
+				return nil
+			}
+			if err := c.d.Store.RetireUnsubmittedKeys(s, a.AccountID, []byte(account), proofs); err != nil {
+				return err
+			}
+			return c.check()
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *ratchetConsumer) commitBundle(s durable.Snapshot, a durable.AccountAuthority, created ratchet.Response, generation int64, previous *olmdir.Bundle) error {

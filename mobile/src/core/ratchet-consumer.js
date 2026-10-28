@@ -249,6 +249,10 @@ export class RatchetConsumer {
         }
         let latest = await this.#latestPublication(a);
         if (!latest) throw fail("recovery_required");
+        // Close what the server proves can no longer be admitted before the
+        // refill (the account holds at most 100 private one-time keys).
+        try { await this.#closeKeys(a); }
+        catch (e) { if (e.code === "fenced" || e.code === "recovery_required") throw e; }
         if (latest.bundle.expires_at - now() < 86400) {
             // Refresh before expiry with new one-time keys and next generation.
             s = await this.store.read([["account", a.accountID]]);
@@ -268,6 +272,51 @@ export class RatchetConsumer {
         this.identity = latest.bundle.identity;
         this.epoch = a.epoch;
         return { identity: this.identity, epoch: a.epoch, expiresAt: latest.bundle.expires_at };
+    }
+    /**
+     * One-time-key closure lifecycle (server rule: close_keys closes an
+     * available key whose publication expired or whose account epoch moved
+     * on, and a reserved key whose claim lapsed). Asks only about unconsumed,
+     * unclosed obligations of the current account whose publication expired,
+     * runs the core retire_prekey for each exact public key the server
+     * authenticated as "closed", then commits the candidate account with those
+     * closure receipts atomically (retireUnsubmittedKeys). Keys still
+     * available/reserved/admitted stay; a timer is never evidence.
+     */
+    async #closeKeys(a) {
+        const due = [];
+        for (const [ref, r] of await this.#readMany(await this.#refs("obligation"))) {
+            const o = parse(r.data);
+            if (o.account_id === a.accountID && !o.consumed && !o.closed && o.expires_at <= now()) due.push([ref[1], o]);
+        }
+        for (let i = 0; i < due.length; i += 100) {
+            const batch = due.slice(i, i + 100);
+            const lifecycle = await this.#handoff(a, { action: "close_keys", keys: batch.map(([, o]) => o.key_id) });
+            this.#check();
+            if (!Array.isArray(lifecycle)) throw fail("invalid");
+            const closed = new Map(lifecycle.filter(l => l?.state === "closed").map(l => [l.key_id, l]));
+            const closing = batch.filter(([, o]) => closed.has(o.key_id));
+            if (!closing.length) continue;
+            await this.#casRetry(async () => {
+                const s = await this.store.read([["account", a.accountID], ...closing.map(([id]) => ["obligation", id])]);
+                this.#check();
+                let account = dec.decode(rec(s, "account", a.accountID).data);
+                const proofs = {};
+                for (const [id, o] of closing) {
+                    const current = parse(rec(s, "obligation", id).data);
+                    if (current.closed || current.consumed) continue;
+                    let next;
+                    try { next = await this.core.apply({ op: "retire_prekey", key: this.store.coreKey(s), account, one_time_key: o.public_key }); }
+                    catch (e) { if (e.code) throw e; continue; } // not in the account: the obligation stays open
+                    this.#check();
+                    account = next.account;
+                    proofs[id] = closed.get(o.key_id);
+                }
+                if (!Object.keys(proofs).length) return;
+                await this.store.retireUnsubmittedKeys(s, a.accountID, enc.encode(account), proofs);
+                this.#check();
+            });
+        }
     }
     async #commitBundle(s, a, created, generation, previous = null) {
         const issued = now();
