@@ -93,6 +93,28 @@ export function putSealed(storeName, key, value) {
     });
 }
 
+/** The current persistent identity fence ({generation, active}). */
+export function currentFence() {
+    return withDB(db => identityFence(db));
+}
+
+/**
+ * putSealed that commits only while the identity fence still equals expected
+ * (captured before a long operation): a write resumed after logout or an
+ * identity replacement fails with code "fenced" instead of resurrecting data.
+ */
+export function putSealedIn(expected, storeName, key, value) {
+    return withDB(async db => {
+        const record = await seal(db, encoder.encode(JSON.stringify(value)));
+        await fencedWrite(db, [storeName], expected, tx => tx.objectStore(storeName).put(record, key));
+    });
+}
+
+/** deleteKey under the same identity-fence rule as putSealedIn. */
+export function deleteKeyIn(expected, storeName, key) {
+    return withDB(db => fencedWrite(db, [storeName], expected, tx => tx.objectStore(storeName).delete(key)));
+}
+
 /** Reads a JSON value stored with putSealed, or undefined. */
 export function getSealed(storeName, key) {
     return withDB(async db => {

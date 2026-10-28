@@ -973,15 +973,25 @@ export function onDMChanged(d) {
 // attachments, voice message): a retry after an uncertain new-protocol send
 // passes the SAME ID, so the original resolves instead of a second send.
 const sendOperations = new Map();
-function operationIDFor(key) {
+function operationIDFor(key, recovered = "") {
     let id = sendOperations.get(key);
     if (!id) {
         // Bounded FIFO: only the oldest operation is forgotten, never all.
         if (sendOperations.size >= 512) sendOperations.delete(sendOperations.keys().next().value);
-        id = crypto.randomUUID();
+        id = recovered || crypto.randomUUID();
         sendOperations.set(key, id);
     }
     return id;
+}
+// The backend keeps the ID of a FAILED new-protocol send (sealed beside the
+// outbox), so retrying the same text to the same destination after a restart
+// resolves the original operation instead of sending it twice.
+// Synchronous ("") when nothing can be recovered, so the send keeps its
+// ordering; a promise only when the backend is asked.
+function recoveredOperationID(key, tabID, scope, target, text, parent) {
+    const api = app();
+    if (sendOperations.has(key) || typeof api.ComposerOperationForTab !== "function") return "";
+    return Promise.resolve(api.ComposerOperationForTab(tabID, scope, target, text, parent || 0)).then(id => id || "", () => "");
 }
 function sendChatOperation(tabID, scope, target, text, parent, operationID) {
     const api = app();
@@ -3409,7 +3419,9 @@ export async function sendMessage() {
             // new operation.
             const operationKey = JSON.stringify(["text", captured.tabID, scope, target, parentID, text, inputRevision]);
             try {
-                err = await sendChatOperation(captured.tabID, scope, target, text, parentID, operationIDFor(operationKey));
+                let recovered = recoveredOperationID(operationKey, captured.tabID, scope, target, text, parentID);
+                if (recovered) recovered = await recovered;
+                err = await sendChatOperation(captured.tabID, scope, target, text, parentID, operationIDFor(operationKey, recovered));
                 if (!err) sendOperations.delete(operationKey);
             } catch (e) {
                 failure = e;
@@ -5165,7 +5177,9 @@ export function initChat() {
             send: async token => {
                 // The recording keeps its uploaded token across retries.
                 const key = JSON.stringify(["voice", scope.tabID, scope.target, token]);
-                const error = await sendChatOperation(scope.tabID, scope.sendScope, scope.target, token, parent, operationIDFor(key));
+                let recovered = recoveredOperationID(key, scope.tabID, scope.sendScope, scope.target, token, parent);
+                if (recovered) recovered = await recovered;
+                const error = await sendChatOperation(scope.tabID, scope.sendScope, scope.target, token, parent, operationIDFor(key, recovered));
                 if (!error) sendOperations.delete(key);
                 return error;
             },

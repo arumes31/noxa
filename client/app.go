@@ -680,7 +680,10 @@ func (a *App) SendChatOperationForTab(tabID, scope, target, text string, replyTo
 	if err != nil {
 		return err.Error()
 	}
-	return sendChatOperation(cm, scope, target, text, replyToID, operationID)
+	result := sendChatOperation(cm, scope, target, text, replyToID, operationID)
+	// A failed operation's ID survives a restart (manual retry resolves it).
+	a.recordComposerOperation(cm, scope, target, text, replyToID, operationID, result == "")
+	return result
 }
 
 func sendChatWith(cm *connManager, scope, target, text string, replyToID int64) string {
