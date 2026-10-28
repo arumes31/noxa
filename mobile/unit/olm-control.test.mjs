@@ -64,3 +64,27 @@ test("review b46: parity (case-sensitive names, safe epoch), expiry bound on rec
     const archived = controlArchiveBody({ kind: "media-key", scope: { type: "call", id: "c" }, epoch: 1, expires_at: 5, data: { key: "secret" } });
     assert.deepEqual(archived, { kind: "media-key", scope: { type: "call", id: "c" }, epoch: 1, expires_at: 5 });
 });
+
+test("review b7 P3-5: control handlers run serialized in commit order, never interleaved", async () => {
+    const { serialDispatcher } = await import("../src/core/ratchet-consumer.js");
+    const dispatch = serialDispatcher(), log = [];
+    const slow = async v => { log.push(`a-start-${v}`); await new Promise(r => setTimeout(r, 20)); log.push(`a-end-${v}`); };
+    const fast = async v => { log.push(`b-${v}`); };
+    dispatch([slow, fast], 1);
+    await dispatch([slow, fast], 2);
+    assert.deepEqual(log, ["a-start-1", "a-end-1", "b-1", "a-start-2", "a-end-2", "b-2"]);
+});
+
+test("review b7 P3-1: shared Go/JS control vectors give the same disposition (raw text)", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const vectors = JSON.parse(await readFile(new URL("../../internal/e2ee/admission/testdata/control-vectors.json", import.meta.url), "utf8"));
+    assert.ok(vectors.length >= 20);
+    for (const v of vectors) assert.equal(controlDisposition(v.body, v.now), v.want, v.name);
+});
+
+test("the frame rate-limit text matches netproto.RequestRateLimitMessage", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { REQUEST_RATE_LIMIT } = await import("../src/core/ratchet-consumer.js");
+    const go = await readFile(new URL("../../internal/netproto/olm_directory.go", import.meta.url), "utf8");
+    assert.ok(go.includes(`RequestRateLimitMessage = ${JSON.stringify(REQUEST_RATE_LIMIT)}`));
+});

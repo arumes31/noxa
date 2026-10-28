@@ -134,3 +134,38 @@ func TestOlmControlSingleTargetAdmission(t *testing.T) {
 		t.Fatalf("other sender blocked by alice's controls: %+v %v", r, e)
 	}
 }
+
+// Review b7 P3-6: pending controls are cleared ControlPendingTTL after their
+// deadline, except a copy that opened a device-pair session.
+func TestOlmPendingControlsExpire(t *testing.T) {
+	s, a, b, _, _ := admissionFixture(t)
+	snap, e := s.OlmSnapshot(t.Context(), a, "direct", "bob", "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	deadline := time.Now().Unix() + 120
+	if r, e := controlSend(t, s, a, snap, b, "1", "ctl-initial", "claim", deadline); e != nil || r.State != "accepted" {
+		t.Fatal(r, e)
+	}
+	if r, e := controlSend(t, s, a, snap, b, "2", "ctl-plain", "", deadline); e != nil || r.State != "accepted" {
+		t.Fatal(r, e)
+	}
+	pending := func() int {
+		var n int
+		if e := s.WithOlmDeliveries(t.Context(), b, "", func(p OlmDeliveryPage) error { n = len(p.Deliveries); return nil }); e != nil {
+			t.Fatal(e)
+		}
+		return n
+	}
+	if n, e := s.ExpirePendingOlmControls(t.Context()); e != nil || n != 0 || pending() != 2 {
+		t.Fatalf("fresh controls expired: %d %v (%d pending)", n, e, pending())
+	}
+	// Age both manifests past deadline + ControlPendingTTL.
+	if _, e = s.db.Exec(`UPDATE olm_messages SET manifest=convert_to(jsonb_set(convert_from(manifest,'UTF8')::jsonb,'{deadline}',to_jsonb(($1)::bigint))::text,'UTF8') WHERE logical_id IN ('ctl-initial','ctl-plain')`,
+		time.Now().Unix()-admission.ControlPendingTTL-1); e != nil {
+		t.Fatal(e)
+	}
+	if n, e := s.ExpirePendingOlmControls(t.Context()); e != nil || n != 1 || pending() != 1 {
+		t.Fatalf("stale control sweep: %d %v (%d pending)", n, e, pending())
+	}
+}

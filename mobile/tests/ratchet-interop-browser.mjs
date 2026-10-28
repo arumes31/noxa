@@ -71,13 +71,6 @@ async function boot({ entries, device, binding }) {
     const edSecret = Uint8Array.from(atob(device.edSecret), c => c.charCodeAt(0));
     const identity = { edSecret };
     if (device.x25519_private) identity.xSecret = Uint8Array.from(atob(device.x25519_private), c => c.charCodeAt(0));
-    // A self-rooted guest (no device yet) registers its own key exactly as
-    // app.js ensureGuestDevice does, through the real device handler.
-    if (!device.device) {
-        const result = await conn.request(195, { action: "list" }, 196);
-        device = { ...device, device: (result.devices || []).find(d => d.current)?.device_id || "" };
-        if (!device.device) throw new Error("guest device registration failed");
-    }
     const session = Object.assign(new EventTarget(), { conn, identity, uniqueID: device.principal, deviceID: device.device, nickname: device.principal, capabilities: new Set() });
     const namespace = { server: binding, principal: device.principal, device: device.device };
     const stats = { unread: 0, incoming: 0, ops: {} };
@@ -135,10 +128,66 @@ try {
         pages[name] = page;
     };
     for (const name of ["nalice-phone", "pbob-phone"]) await open(name, fixture.devices[name]);
+    // The real PWA (built app from the real web listener, app.js guest path),
+    // driven through its UI: "#app:join", "#app:send <peer>\t<text>",
+    // "#app:has <peer>\t<text>".
+    let appPage = null;
+    const appGuest = async cmd => {
+        if (cmd === "#app:join") {
+            const context = await browser.newContext({ serviceWorkers: "block" });
+            appPage = await context.newPage();
+            appPage.on("pageerror", e => console.error("app-guest", e));
+            appPage.on("console", m => { if (m.type() === "error" || m.type() === "warning") console.error("app-guest console:", m.text()); });
+            await appPage.goto(`${fixture.web_url}/app/`);
+            await appPage.locator("summary").filter({ hasText: "Continue as guest" }).click();
+            await appPage.getByLabel("Display name", { exact: true }).fill("App guest");
+            await appPage.getByRole("button", { name: "Continue as guest", exact: true }).click();
+            await appPage.getByRole("navigation", { name: "Main" }).waitFor({ timeout: 30000 });
+            // The one-time secure-messaging explanation.
+            const close = appPage.getByRole("button", { name: "Close", exact: true });
+            await close.click({ timeout: 10000 }).catch(() => {});
+            return "ok";
+        }
+        const [verb, rest] = [cmd.slice(0, cmd.indexOf(" ")), cmd.slice(cmd.indexOf(" ") + 1)];
+        const [peer, text] = rest.split("\t");
+        await appPage.evaluate(p => { location.hash = `#/dm/${encodeURIComponent(p)}`; }, peer);
+        if (verb === "#app:send") {
+            // Only with the active Olm path (never a legacy send): the composer
+            // unlocks once both device chains verify.
+            const composer = appPage.getByRole("textbox", { name: /Message/ });
+            const until = Date.now() + 45000;
+            while (!(await composer.isEnabled().catch(() => false))) {
+                if (Date.now() > until) throw new Error("composer stayed disabled");
+                await new Promise(r => setTimeout(r, 250));
+            }
+            const banner = await appPage.getByRole("note").first().innerText();
+            if (/not active/i.test(banner)) throw new Error(`secure messaging inactive: ${banner}`);
+            await composer.fill(text);
+            await composer.press("Enter");
+            await appPage.getByRole("log").filter({ hasText: text }).waitFor({ timeout: 30000 });
+            return "ok";
+        }
+        if (verb === "#app:has") {
+            await appPage.getByRole("log").filter({ hasText: text }).waitFor({ timeout: 45000 });
+            return "yes";
+        }
+        throw new Error(`unknown app command ${verb}`);
+    };
     for (;;) {
         const cmd = await post({ op: "pwa_next" });
         if (cmd.idle) continue;
         if (cmd.done) break;
+        if (cmd.device === "app-guest") {
+            let result;
+            try { result = { ok: await appGuest(cmd.js) }; } catch (e) {
+                const shown = await appPage?.evaluate(() => document.body.innerText.slice(0, 600)).catch(() => "") || "";
+                const first = String(e?.message || e).split(/\r?\n/)[0];
+                result = { error: `${first} | page: ${shown.replace(/\s+/g, " ")}` };
+            }
+            steps++;
+            await post({ op: "pwa_result", id: cmd.id, result });
+            continue;
+        }
         // A PWA device linked during the run boots on its first step.
         if (!pages[cmd.device]) {
             const device = (await post({ op: "fixture" })).devices[cmd.device];

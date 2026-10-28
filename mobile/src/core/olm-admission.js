@@ -289,6 +289,11 @@ function checkPayloadFields(plaintext) {
   walk(true, true);
 }
 export function openPayload(m, target, plaintext) {
+  return openPayloadRaw(m, target, plaintext).body;
+}
+
+/** As openPayload, plus the exact body text (raw), like Go's json.RawMessage. */
+export function openPayloadRaw(m, target, plaintext) {
   if (typeof plaintext !== "string" || enc.encode(plaintext).length > 65536) throw fail();
   const p = JSON.parse(plaintext);
   checkPayloadFields(plaintext);
@@ -297,7 +302,8 @@ export function openPayload(m, target, plaintext) {
     !Object.hasOwn(p, "body")
   )
     throw fail();
-  return p.body;
+  const raw = rawMembers(plaintext).find(member => member.key === "body")?.raw;
+  return { body: p.body, raw };
 }
 
 export function expectedBinding(m, t) {
@@ -336,14 +342,116 @@ export function controlTarget(m) {
   return t && t.principal === m.peer ? t : null;
 }
 
-/** Validates a control body's shape (not its expiry); returns it. */
-export function parseControlBody(body) {
-  const keys = ["kind", "scope", "epoch", "expires_at", "data"];
-  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => !keys.includes(k))) throw fail();
-  const scope = body.scope;
-  if (!controlWord(body.kind) || !scope || typeof scope !== "object" || Object.keys(scope).some((k) => k !== "type" && k !== "id") ||
-    !controlWord(scope.type) || !validText(scope.id) || !Number.isSafeInteger(body.epoch) || body.epoch < 0 || !safe(body.expires_at)) throw fail();
-  if (body.data !== undefined && enc.encode(JSON.stringify(body.data)).length > MAX_CONTROL_DATA) throw fail();
+// Raw-text control parsing with the Go semantics (internal/e2ee/admission
+// control.go): the receiver validates the exact authenticated bytes, so a
+// duplicate member, a non-integer number literal or escaped bytes are judged
+// the same on both clients. Shared vectors: internal/e2ee/admission/testdata.
+const WS = " \t\n\r";
+function skipWS(s, i) { while (i < s.length && WS.includes(s[i])) i++; return i; }
+function scanString(s, i) {
+  if (s[i] !== '"') throw fail();
+  for (i++; i < s.length; i++) {
+    if (s[i] === "\\") { i++; continue; }
+    if (s[i] === '"') return i + 1;
+  }
+  throw fail();
+}
+function scanValue(s, i) {
+  i = skipWS(s, i);
+  const c = s[i];
+  if (c === '"') return scanString(s, i);
+  if (c === "{" || c === "[") {
+    const close = c === "{" ? "}" : "]";
+    i = skipWS(s, i + 1);
+    if (s[i] === close) return i + 1;
+    for (;;) {
+      if (c === "{") {
+        i = skipWS(s, scanString(s, skipWS(s, i)));
+        if (s[i] !== ":") throw fail();
+        i++;
+      }
+      i = skipWS(s, scanValue(s, i));
+      if (s[i] === ",") { i++; continue; }
+      if (s[i] === close) return i + 1;
+      throw fail();
+    }
+  }
+  let j = i;
+  while (j < s.length && !",}]".includes(s[j]) && !WS.includes(s[j])) j++;
+  if (j === i) throw fail();
+  return j;
+}
+/** The members of a JSON object text in order: [{key, raw}] (raw value text). */
+function rawMembers(s) {
+  let i = skipWS(s, 0);
+  if (s[i] !== "{") throw fail();
+  const out = [];
+  i = skipWS(s, i + 1);
+  if (s[i] === "}") i++;
+  else for (;;) {
+    const ks = skipWS(s, i);
+    i = scanString(s, ks);
+    const key = JSON.parse(s.slice(ks, i));
+    i = skipWS(s, i);
+    if (s[i] !== ":") throw fail();
+    const vs = skipWS(s, i + 1);
+    i = scanValue(s, vs);
+    out.push({ key, raw: s.slice(vs, i) });
+    i = skipWS(s, i);
+    if (s[i] === ",") { i++; continue; }
+    if (s[i] === "}") { i++; break; }
+    throw fail();
+  }
+  if (skipWS(s, i) !== s.length) throw fail();
+  return out;
+}
+/** Exactly the allowed (case-sensitive) member names, each at most once. */
+function exactMembers(s, allowed) {
+  const members = rawMembers(s), seen = new Set();
+  for (const m of members) {
+    if (!allowed.includes(m.key) || seen.has(m.key)) throw fail();
+    seen.add(m.key);
+  }
+  return Object.fromEntries(members.map(m => [m.key, m.raw]));
+}
+/** UTF-8 size of a JSON text without insignificant whitespace (Go json.Compact). */
+function compactSize(raw) {
+  let n = 0, inString = false, escaped = false;
+  for (const ch of raw) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+    } else if (WS.includes(ch)) continue;
+    else if (ch === '"') inString = true;
+    n += enc.encode(ch).length;
+  }
+  return n;
+}
+const INTEGER = /^-?(0|[1-9][0-9]*)$/;
+function int64Literal(raw) {
+  if (typeof raw !== "string" || !INTEGER.test(raw) || raw.replace("-", "").length > 19) throw fail();
+  return Number(raw);
+}
+
+/**
+ * Validates a control body's shape (not its expiry); returns the parsed body.
+ * text: the exact JSON text (receive), or an object (send; serialized first).
+ */
+export function parseControlBody(text) {
+  if (typeof text !== "string") text = JSON.stringify(text ?? null);
+  if (enc.encode(text).length === 0 || enc.encode(text).length > MAX_CONTROL_DATA + 1024) throw fail();
+  const top = exactMembers(text, ["kind", "scope", "epoch", "expires_at", "data"]);
+  if (top.scope === undefined || top.kind === undefined || top.epoch === undefined || top.expires_at === undefined) throw fail();
+  const scopeRaw = exactMembers(top.scope, ["type", "id"]);
+  const kind = JSON.parse(top.kind), type = scopeRaw.type === undefined ? undefined : JSON.parse(scopeRaw.type), id = scopeRaw.id === undefined ? undefined : JSON.parse(scopeRaw.id);
+  const epoch = int64Literal(top.epoch), expiresAt = int64Literal(top.expires_at);
+  if (!controlWord(kind) || !controlWord(type) || !validText(id) || epoch < 0 || epoch > Number.MAX_SAFE_INTEGER || !safe(expiresAt)) throw fail();
+  const body = { kind, scope: { type, id }, epoch: epoch === 0 ? 0 : epoch, expires_at: expiresAt };
+  if (top.data !== undefined) {
+    if (compactSize(top.data) > MAX_CONTROL_DATA) throw fail();
+    body.data = JSON.parse(top.data);
+  }
   return body;
 }
 

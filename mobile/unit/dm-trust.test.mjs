@@ -43,3 +43,15 @@ test("devices chain to the pinned identity through approval signatures", () => {
     // A first device that is not the pinned identity trusts nothing.
     assert.deepEqual(trustedDevices(fixture.approval_principal, devices(), new Uint8Array(32)), []);
 });
+
+test("a self-rooted (guest) identity signs a key record that verifies", async () => {
+    const { signKeyRecord, parseKeyRecord } = await import("../src/core/dm-trust.js");
+    const { generateIdentity } = await import("../src/core/crypto.js");
+    const id = generateIdentity();
+    const record = signKeyRecord("guest-uid", id.xPublic, id.edSecret);
+    const parsed = parseKeyRecord(record, "guest-uid");
+    assert.ok(parsed, "verifies");
+    assert.deepEqual([...parsed.signingKey], [...id.edPublic]);
+    assert.deepEqual([...parsed.encryptionKey], [...id.xPublic]);
+    assert.equal(parseKeyRecord(record, "someone-else"), null);
+});

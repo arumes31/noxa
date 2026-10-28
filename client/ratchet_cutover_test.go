@@ -140,3 +140,41 @@ func TestRatchetBlockedSendReportsReason(t *testing.T) {
 		t.Fatalf("group send: %v", err)
 	}
 }
+
+// Review b7 P3-4: a send that never started (no session attached, whatever
+// the recorded reason) keeps its outbox entry queued, never "uncertain".
+func TestOutboxNeverStartedStaysQueued(t *testing.T) {
+	c, peer := net.Pipe()
+	defer func() { c.Close(); peer.Close() }()
+	cm := newConnManager(t.Context())
+	cm.id = mustTempIdentity(t)
+	cm.conn, cm.ratchetDefault, cm.supportsOlm = c, true, false
+	cm.uniqueID, cm.deviceID, cm.addr, cm.clientID = "alice", "a1", "srv.test:1", "c1"
+	cm.startRatchetRecorded(c) // records "server does not offer secure messaging"
+	a := appWithCM(cm)
+	a.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+	store, err := a.outboxStore(cm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.sendOutboxEntry(cm, store, ChatOutboxEntry{ID: "op-1", Scope: "direct", Target: "bob", Text: "hi"}); got != outboxStayQueued {
+		t.Fatalf("never-started send: %q", got)
+	}
+	// Another connection's start error never explains this connection's send.
+	other, otherPeer := net.Pipe()
+	defer func() { other.Close(); otherPeer.Close() }()
+	if _, err := cm.ratchetSendConsumer(other); err == nil || errors.Is(err, errRatchetServerOutdated) {
+		t.Fatalf("foreign connection got this connection's start error: %v", err)
+	}
+}
+
+// Found by the real-path product step: the session's frame rate limit is a
+// retryable rate limit for the consumer (backed off), never "unavailable".
+func TestRatchetFrameRateLimitIsRetryable(t *testing.T) {
+	if got := ratchetFailureCode(&requestFailure{response: netproto.Error{Message: netproto.RequestRateLimitMessage}}); got != "rate-limit" {
+		t.Fatal(got)
+	}
+	if got := ratchetFailureCode(&requestFailure{response: netproto.Error{Message: "invalid Olm admission request"}}); got != "unavailable" {
+		t.Fatal(got)
+	}
+}

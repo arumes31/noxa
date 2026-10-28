@@ -155,13 +155,23 @@ func (m *connManager) ratchetSendConsumer(conn net.Conn) (*ratchetConsumer, erro
 	}
 	m.mu.Lock()
 	start := m.ratchetStartErr
+	// Only the current connection's own start failure explains this send
+	// (never another connection's).
+	own := conn == nil || conn == m.conn
 	m.mu.Unlock()
-	if start != nil {
+	if start != nil && own {
 		m.ratchetBlockedReason()
-		return nil, start
+		return nil, &ratchetNotStarted{err: start}
 	}
-	return nil, err
+	return nil, &ratchetNotStarted{err: err}
 }
+
+// ratchetNotStarted: no session was attached, so nothing was committed or
+// sent for this operation (an outbox entry stays queued, never uncertain).
+type ratchetNotStarted struct{ err error }
+
+func (e *ratchetNotStarted) Error() string { return e.err.Error() }
+func (e *ratchetNotStarted) Unwrap() error { return e.err }
 
 // startRatchet opens the shared protected store for the authenticated
 // namespace, attaches projections, replays the authoritative archive and
@@ -344,6 +354,16 @@ func (m *connManager) takeRatchetLocked() *ratchetSession {
 	return s
 }
 
+// ratchetFailureCode maps a server Error frame: the session's frame rate
+// limit is a retryable "rate-limit" (backed off by the consumer), anything
+// else "unavailable".
+func ratchetFailureCode(f *requestFailure) string {
+	if f.response.Message == netproto.RequestRateLimitMessage {
+		return "rate-limit"
+	}
+	return "unavailable"
+}
+
 // ratchetTransport correlates frame 200/202 requests on exactly conn.
 func (m *connManager) ratchetTransport(conn net.Conn) (func(context.Context, netproto.OlmAdmissionRequest) (json.RawMessage, error), func(context.Context, netproto.OlmDirectoryRequest) (netproto.OlmDirectoryResult, error)) {
 	admissionReq := func(_ context.Context, r netproto.OlmAdmissionRequest) (json.RawMessage, error) {
@@ -354,7 +374,7 @@ func (m *connManager) ratchetTransport(conn net.Conn) (func(context.Context, net
 		if err != nil {
 			var failure *requestFailure
 			if errors.As(err, &failure) {
-				return nil, &ratchetError{Code: "unavailable", Err: err}
+				return nil, &ratchetError{Code: ratchetFailureCode(failure), Err: err}
 			}
 			return nil, err
 		}
@@ -380,7 +400,7 @@ func (m *connManager) ratchetTransport(conn net.Conn) (func(context.Context, net
 		if err != nil {
 			var failure *requestFailure
 			if errors.As(err, &failure) {
-				return netproto.OlmDirectoryResult{}, &ratchetError{Code: "unavailable", Err: err}
+				return netproto.OlmDirectoryResult{}, &ratchetError{Code: ratchetFailureCode(failure), Err: err}
 			}
 			return netproto.OlmDirectoryResult{}, err
 		}

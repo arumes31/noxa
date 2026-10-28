@@ -16,8 +16,10 @@ import (
 	"noxa/internal/authorization"
 	"noxa/internal/config"
 	"noxa/internal/e2ee"
+	"noxa/internal/e2ee/olmdir"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
+	"noxa/internal/web"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,10 +70,36 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 		t.Fatal(e)
 	}
 	keys := productKeyAuth{keys: map[string]string{}}
+	root, e := filepath.Abs("../..")
+	if e != nil {
+		t.Fatal(e)
+	}
+	// A REAL control server (TLS with its own certificate, full framed auth
+	// and dispatch) plus the real web listener serving the built PWA, over the
+	// same database: production-path clients (step 16e) connect to it
+	// directly, with no bridge and no test override. The bridge server below
+	// shares its certificate binding, so every party uses one namespace.
+	var fake *fakeAuth
+	live := startTestEnvDeps(t, nil, func(cfg *config.Config) { cfg.AllowAnonymous = true }, func(deps *Deps) {
+		fake = deps.Auth.(*fakeAuth)
+		deps.Devices, deps.Authority = db, authority
+		deps.Auth = productKeyAuth{AuthBackend: fake, keys: keys.keys}
+	})
+	defer live.stop()
+	webSrv, e := web.New(config.WebConfig{Enabled: true, AppDir: filepath.Join(root, "web", "app"), WSConnectionsPerIP: 16, WSAttemptsPerMinute: 120}, "noxa", live.srv, zap.NewNop())
+	if e != nil {
+		t.Fatal(e)
+	}
+	webSrv.AllowLoopbackOrigins()
+	webHTTP := httptest.NewServer(webSrv.Handler())
+	defer webHTTP.Close()
 	srv := New(&config.Config{}, zap.NewNop(), &Deps{Authority: authority, Devices: db, Auth: keys})
-	srv.tlsFingerprint = strings.TrimSuffix(strings.Repeat("cd:", 32), ":")
+	srv.tlsFingerprint = live.srv.TLSFingerprint()
 	srv.olmAdmissionEnabled = true
-	binding := "tls-sha256:" + strings.Repeat("cd", 32)
+	binding, e := olmdir.ServerBinding(srv.tlsFingerprint)
+	if e != nil {
+		t.Fatalf("real server fingerprint %q: %v", srv.tlsFingerprint, e)
+	}
 
 	pemOf := func(pub ed25519.PublicKey) string {
 		return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub}))
@@ -163,31 +191,15 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 			if e = db.DB().QueryRowContext(ctx, `INSERT INTO users(unique_id,nickname) VALUES($1,$2) RETURNING id`, principal, name).Scan(&userID); e != nil {
 				t.Fatal(e)
 			}
+			// The real server's account lookup knows the member too.
+			fake.mu.Lock()
+			fake.users[principal] = &auth.User{ID: userID, UniqueID: principal, Nickname: name}
+			fake.mu.Unlock()
 		}
 		xs := base64.StdEncoding.EncodeToString(xpub[:])
 		devices[name] = &nativeProductDevice{Name: name, Principal: principal, Kind: store.DeviceKindDesktop, PublicKey: pubPEM, PrivateKey: privPEM,
 			X25519Public: xs, X25519Private: base64.StdEncoding.EncodeToString(xpriv[:]),
 			client: &Client{UniqueID: principal, UserID: userID, authed: true, authSigningKey: pubPEM, x25519Key: xs}}
-	}
-	// A PWA guest: a self-rooted browser key identity (web transport).
-	{
-		pub, priv, _ := ed25519.GenerateKey(rand.Reader)
-		pubPEM := pemOf(pub)
-		principal, e := auth.UniqueIDFromPublicKey(pubPEM)
-		if e != nil {
-			t.Fatal(e)
-		}
-		xpub, xpriv := x25519Pair()
-		record, e := e2ee.SignKeyRecord(principal, xpub, priv)
-		if e != nil {
-			t.Fatal(e)
-		}
-		keys.keys[principal] = record
-		xs := base64.StdEncoding.EncodeToString(xpub[:])
-		c := &Client{UniqueID: principal, authed: true, authSigningKey: pubPEM, x25519Key: xs}
-		c.webTransport.Store(true)
-		devices["pguest-phone"] = &nativeProductDevice{Name: "pguest-phone", Principal: principal, Kind: store.DeviceKindWeb,
-			EdSecret: base64.StdEncoding.EncodeToString(priv), X25519Private: base64.StdEncoding.EncodeToString(xpriv[:]), client: c}
 	}
 	keyIdentity("gguest1-desk", false)
 	keyIdentity("gguest2-desk", false)
@@ -203,9 +215,14 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 	}
 	groupIDs := map[string]string{}
 	for _, p := range []string{"nalice", "nbob", "ncarol", "ndave", "pbob"} {
-		if _, e = db.DB().ExecContext(ctx, `INSERT INTO users(unique_id,nickname) VALUES($1,$1)`, p); e != nil {
+		var id int64
+		if e = db.DB().QueryRowContext(ctx, `INSERT INTO users(unique_id,nickname) VALUES($1,$1) RETURNING id`, p).Scan(&id); e != nil {
 			t.Fatal(e)
 		}
+		// The live server's account lookup knows every member.
+		fake.mu.Lock()
+		fake.users[p] = &auth.User{ID: id, UniqueID: p, Nickname: p}
+		fake.mu.Unlock()
 	}
 	n := 0
 	for name, members := range groups {
@@ -328,7 +345,13 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 		run := func() (any, error) {
 			switch req.Op {
 			case "fixture":
-				return map[string]any{"binding": binding, "groups": groupIDs, "devices": devices}, nil
+				return map[string]any{"binding": binding, "groups": groupIDs, "devices": devices, "real_addr": live.addr, "web_url": webHTTP.URL}, nil
+			case "app_guest_principal":
+				// The PWA guest's key-derived principal: its self-registered
+				// first web device (no other web device is first).
+				var p string
+				e := db.DB().QueryRowContext(ctx, `SELECT principal FROM user_devices WHERE kind='web' AND first_device AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1`).Scan(&p)
+				return p, e
 			case "drop":
 				drop[req.Device+"/"+req.Action]++
 				return true, nil
@@ -411,10 +434,6 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 		json.NewEncoder(w).Encode(data)
 	}))
 	defer bridge.Close()
-	root, e := filepath.Abs("../..")
-	if e != nil {
-		t.Fatal(e)
-	}
 	env := append(os.Environ(), "NOXA_PRODUCT_BRIDGE="+bridge.URL)
 	browser := exec.CommandContext(ctx, "node", filepath.Join(root, "mobile/tests/ratchet-interop-browser.mjs"))
 	browser.Dir = root

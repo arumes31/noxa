@@ -3,6 +3,7 @@ package admission
 import (
 	"bytes"
 	"encoding/json"
+	"regexp"
 
 	"noxa/internal/e2ee/olmdir"
 )
@@ -36,6 +37,11 @@ const MaxControlData = 4096
 // device and target device, so one sender's unreadable controls can never
 // block other senders' controls to that device.
 const MaxPendingControls = 64
+
+// ControlPendingTTL: a control copy still pending this many seconds after
+// its manifest deadline is cleared by server maintenance (unless it opened a
+// device-pair session), so unreadable controls cannot accumulate.
+const ControlPendingTTL = 86400
 
 // MaxControlEpoch keeps epochs JS-safe (both clients accept the same range).
 const MaxControlEpoch = 9007199254740991
@@ -103,6 +109,10 @@ func exactKeys(raw json.RawMessage, allowed ...string) bool {
 	return true
 }
 
+// integerLiteral: epoch and expires_at must be plain JSON integers (not
+// null, 1.0 or 1e2), exactly as the JS mirror requires.
+var integerLiteral = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
+
 // controlDataSize is the data's compact JSON size (the JS mirror measures
 // JSON.stringify of the parsed value, which is the same for honest data).
 func controlDataSize(data json.RawMessage) int {
@@ -117,12 +127,15 @@ func controlDataSize(data json.RawMessage) int {
 func ParseControlBody(body json.RawMessage) (ControlBody, error) {
 	var b ControlBody
 	var raw struct {
-		Scope json.RawMessage `json:"scope"`
+		Scope     json.RawMessage `json:"scope"`
+		Epoch     json.RawMessage `json:"epoch"`
+		ExpiresAt json.RawMessage `json:"expires_at"`
 	}
 	d := json.NewDecoder(bytes.NewReader(body))
 	d.DisallowUnknownFields()
 	if len(body) == 0 || len(body) > MaxControlData+1024 || !exactKeys(body, "kind", "scope", "epoch", "expires_at", "data") ||
-		json.Unmarshal(body, &raw) != nil || !exactKeys(raw.Scope, "type", "id") || d.Decode(&b) != nil || d.More() {
+		json.Unmarshal(body, &raw) != nil || !exactKeys(raw.Scope, "type", "id") || !integerLiteral.Match(raw.Epoch) || !integerLiteral.Match(raw.ExpiresAt) ||
+		d.Decode(&b) != nil || d.More() {
 		return ControlBody{}, ErrInvalid
 	}
 	if !validControlWord(b.Kind) || !validControlWord(b.Scope.Type) || !olmdir.ValidText(b.Scope.ID) || b.Epoch < 0 || b.Epoch > MaxControlEpoch || !safe(b.ExpiresAt) ||
@@ -130,6 +143,21 @@ func ParseControlBody(body json.RawMessage) (ControlBody, error) {
 		return ControlBody{}, ErrInvalid
 	}
 	return b, nil
+}
+
+// ControlDisposition classifies a received control body (the exact
+// authenticated bytes): "delivered", "expired", or "invalid" (malformed, or
+// an expiry further ahead than a sender may set plus clock skew). The JS
+// client mirrors it exactly (shared vectors in testdata/control-vectors.json).
+func ControlDisposition(body json.RawMessage, now int64) string {
+	b, err := ParseControlBody(body)
+	switch {
+	case err != nil || b.ExpiresAt > now+MaxControlTTL+ControlClockSkew:
+		return "invalid"
+	case b.ExpiresAt <= now:
+		return "expired"
+	}
+	return "delivered"
 }
 
 // ControlArchiveBody is what a client keeps at rest for a control: kind,

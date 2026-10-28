@@ -155,20 +155,26 @@ receive/ACK as chat. Wire rules (`control.go`, JS mirror in
   directory state and the sender's roster versions are current (no complete
   fanout is required, and none is possible); deadline at most `MaxControlTTL`
   (300 s); at most `MaxPendingControls` (64) unacknowledged controls per
-  sender device and target device, counted apart from messages (pending Olm
-  copies have no TTL: an unreadable control is never acknowledged, so the
-  bound is per sender, and one sender can only block its own controls). Edits/deletes can never reference a
+  sender device and target device, counted apart from messages, so one
+  sender can only block its own controls. A control copy still pending
+  `ControlPendingTTL` (24 h) after its manifest deadline is cleared by server
+  maintenance (`ExpirePendingOlmControls`), unless it opened a device-pair
+  session (its initial-session obligation is kept). Edits/deletes can never reference a
   control. No delivery notification exists for any Olm copy.
 - Body (inside the ciphertext): `{kind, scope: {type, id}, epoch, expires_at,
-  data?}` with lowercase word `kind`/`scope.type`, `data` at most 4096 bytes,
-  `expires_at` within 300 s of sending.
+  data?}` with lowercase word `kind`/`scope.type`, exactly these
+  (case-sensitive, unique) member names, `epoch`/`expires_at` plain JSON
+  integers (JS-safe), `data` at most 4096 compact bytes, `expires_at` within
+  300 s of sending. Receivers judge the exact authenticated bytes; the Go and
+  JS clients share `testdata/control-vectors.json`.
 - Receive: authenticated, consumed and committed like any copy; only the
   disposition is kept (`delivered`, `expired`, or `invalid`, which includes an
   expiry further ahead than 300 s + 300 s skew), then the exact ACK. **Data is
   never kept at rest** on either side: archives keep kind/scope/epoch/expiry
   only. A delivered control from another device is handed to the handlers from
-  memory, after the drain step (never inside it, so a handler may reply), in
-  order. Delivery is **at most once**: a control committed while no handler is
+  memory, after the drain step (never inside it, so a handler may reply),
+  strictly one control after another in commit order on both clients (Go: one
+  queue goroutine; JS: one promise chain per consumer). Delivery is **at most once**: a control committed while no handler is
   registered, or before a crash, is not handed out again. Replays, own sends
   and expired/invalid controls are never handed out (an old key is never
   installed). Unreadable controls stay unacknowledged, are never shown as

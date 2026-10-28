@@ -102,7 +102,26 @@ export function secureBanner(status) {
     // One explanation per blocking reason (e.g. "link this device again").
     const reason = status.reason && t(`dm.error.${status.reason}`) !== `dm.error.${status.reason}` ? t(`dm.error.${status.reason}`) : t("dm.error.secure_unavailable");
     const text = status.active ? t("rich.secureActive") : t("rich.secureInactive", { reason });
-    return h("div", { class: `e2e-banner${status.active ? "" : " warn"}`, role: "note" }, icon("lock"), " ", text);
+    const review = status.rotation && status.confirm
+        ? h("button", { class: "link-btn", type: "button", onclick: () => reviewCertificateChange(status) }, t("guest.reviewCertificate"))
+        : null;
+    return h("div", { class: `e2e-banner${status.active ? "" : " warn"}`, role: "note" }, icon("lock"), " ", text, review ? " " : null, review);
+}
+
+const fingerprintOf = binding => (String(binding || "").replace(/^tls-sha256:/, "").match(/.{1,2}/g) || []).join(":").toUpperCase();
+
+/**
+ * The guest's explicit review of a changed server certificate: both
+ * fingerprints and the risk. Only an explicit confirmation re-pins.
+ */
+export async function reviewCertificateChange(status) {
+    const body = t("guest.certificateBody", { previous: fingerprintOf(status.rotation.previous), announced: fingerprintOf(status.rotation.announced) });
+    const choice = await sheet(t("guest.certificateTitle"), body, [
+        { label: t("guest.certificateAccept"), value: true, danger: true },
+        { label: t("link.cancel"), value: false, primary: true },
+    ]);
+    if (choice === true) return status.confirm();
+    return false;
 }
 
 /** A blocked sender's message, folded; Show calls onShow. */

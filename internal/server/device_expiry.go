@@ -59,6 +59,13 @@ func (s *TCPServer) MaintainDeviceExpiry(ctx context.Context) {
 				}
 				cancel()
 			}
+			if controls, ok := db.(interface {
+				ExpirePendingOlmControls(context.Context) (int64, error)
+			}); ok {
+				if _, err := controls.ExpirePendingOlmControls(ctx); err != nil {
+					s.logger.Warn("Olm pending control sweep failed", zap.Error(err))
+				}
+			}
 			if _, err := db.ExpireOlmDirectory(ctx); err != nil {
 				s.logger.Warn("Olm directory sweep failed", zap.Error(err))
 			}

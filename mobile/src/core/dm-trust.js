@@ -76,6 +76,19 @@ export function parseKeyRecord(encoded, uid) {
     return { signingKey, encryptionKey };
 }
 
+/**
+ * Signs this identity's DM key record (mirror of internal/e2ee SignKeyRecord):
+ * a self-rooted identity (a guest) publishes it so contacts and its own
+ * device chain can verify its devices. edSecret is the 64-byte Ed25519 secret.
+ */
+export function signKeyRecord(uid, xPublic, edSecret) {
+    const signingKey = edSecret.slice(32, 64);
+    const payload = `{"UID":${goJSONString(uid)},"SigningKey":"${toBase64(signingKey)}","EncryptionKey":"${toBase64(xPublic)}"}`;
+    const signature = nacl.sign.detached(new Uint8Array([...utf8("noxa/dm-identity/v1\0"), ...utf8(payload)]), edSecret);
+    const record = JSON.stringify({ uid, signing_key: toBase64(signingKey), encryption_key: toBase64(xPublic), signature: toBase64(signature) });
+    return RECORD_PREFIX + toBase64(utf8(record));
+}
+
 /** Raw Ed25519 key of the identity text format (PEM around the raw key). */
 export function ed25519FromPEM(pem) {
     const body = String(pem)

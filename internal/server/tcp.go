@@ -1075,7 +1075,7 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.sendErrorFor(client, mt, errCodeNotAuthenticated, "not authenticated")
 	}
 	if client.isAuthed() && !client.requestBudget.allow(mt, time.Now()) {
-		return s.sendErrorFor(client, mt, errCodeMalformed, "request rate limit exceeded; retry shortly")
+		return s.sendErrorFor(client, mt, errCodeMalformed, netproto.RequestRateLimitMessage)
 	}
 	if client.rulesBlocked() && !allowedWhileRulesPending[mt] {
 		return s.sendErrorFor(client, mt, errCodePermissionDenied, "accept the server rules before continuing")

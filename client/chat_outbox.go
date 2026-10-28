@@ -430,7 +430,10 @@ func (a *App) sendOutboxEntry(cm *connManager, store chatOutboxStore, entry Chat
 		// uncertain attempt resolves that original operation, never reseals
 		// changed text. The consumer is pinned to this connection.
 		if _, err := cm.sendRatchetDirect(conn, entry.ID, entry.Target, entry.Text); err != nil {
-			if errors.Is(err, errRatchetUnavailable) {
+			// No session attached: nothing was committed or sent, so the
+			// entry stays queued (never "uncertain"), whatever the reason.
+			var notStarted *ratchetNotStarted
+			if errors.Is(err, errRatchetUnavailable) || errors.As(err, &notStarted) {
 				return outboxStayQueued
 			}
 			return ratchetFailure(err).Error()

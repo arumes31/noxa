@@ -169,11 +169,17 @@ export function flush(session, dm, groups = null) {
                         current = { ...current, committed: { text: original } };
                     }
                     // Secure messaging blocked (no consumer yet, old server,
-                    // re-link needed): the entry stays queued with the reason,
-                    // and a committed attempt is never marked failed.
-                    if (error.retryable || error.blocked) {
-                        const next = error.blocked ? { ...current, error: error.message } : current;
-                        if (next !== entry) await putSealedIn(fence, Stores.outbox, next.id, next).catch(() => {});
+                    // re-link needed): this entry stays queued with the reason
+                    // (a committed attempt is never marked failed) and the
+                    // flush continues with the others (channel messages need
+                    // no secure messaging). Only a lost connection stops it.
+                    if (error.blocked) {
+                        await putSealedIn(fence, Stores.outbox, current.id, { ...current, error: error.message }).catch(() => {});
+                        show(session, dm, { ...current, error: error.message }, groups);
+                        continue;
+                    }
+                    if (error.retryable) {
+                        if (current !== entry) await putSealedIn(fence, Stores.outbox, current.id, current).catch(() => {});
                         break;
                     }
                     console.warn(`outbox: ${current.kind} message ${current.id} refused: ${error.message}`);

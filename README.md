@@ -119,6 +119,13 @@ app:
   long-term keys can read the copied history.
 - **Private-call signalling** still uses the static device keys (calls are
   not end-to-end encrypted, see below).
+- **Guests.** A guest that signs in with an identity key (desktop password-less
+  logins, browser guests) uses the same protocol for direct messages: its key
+  is its own account root and registers its device itself. A browser guest has
+  no desktop to vouch for the server, so it pins the server's certificate on
+  first use; if the certificate changes, secure messaging pauses until the
+  guest explicitly reviews and accepts the new fingerprint. Sessions without an
+  identity key cannot send direct or group messages.
 
 **What is not end-to-end encrypted (yet).** Channel and global chat, threads
 and forum bodies use server-managed scope keys: the server can decrypt them
@@ -750,7 +757,9 @@ fingerprint. Later changes fail closed. For a planned rotation:
    afterwards. Each linked phone or browser holds a binding its desktop signed
    for the old certificate: it detects the change, blocks secure messaging
    and asks to be linked again. Link it again from a desktop that already
-   trusts the new fingerprint (**Connections → PWA / Mobile login**).
+   trusts the new fingerprint (**Connections → PWA / Mobile login**). A browser
+   guest instead shows the old and new fingerprints and continues only after
+   its user explicitly accepts the change.
 
 <a id="mobile"></a>
 

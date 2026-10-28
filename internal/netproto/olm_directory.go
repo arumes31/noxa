@@ -16,6 +16,10 @@ const (
 	// (frame 202). Updated clients send direct and group messages only through
 	// it and refuse to fall back to legacy encryption.
 	CapabilityOlmAdmission = "noxa-olm-admission-v1"
+	// RequestRateLimitMessage is the Error message of the per-session frame
+	// rate limit (central dispatch). Clients treat it as a retryable
+	// rate limit, never as a terminal refusal.
+	RequestRateLimitMessage = "request rate limit exceeded; retry shortly"
 )
 
 type OlmDirectoryRequest struct {

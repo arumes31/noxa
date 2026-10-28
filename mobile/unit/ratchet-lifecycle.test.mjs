@@ -20,6 +20,7 @@ export function statementFor(device, { principal = "alice", binding = "tls-sha25
 
 class FakeConnection extends EventTarget {
     open = true;
+    send() {}
     on(type, fn) { const f = e => fn(e.detail); this.addEventListener(String(type), f); return () => this.removeEventListener(String(type), f); }
     close() { this.open = false; this.dispatchEvent(new Event("close")); }
 }
@@ -28,7 +29,8 @@ const tick = (ms = 30) => new Promise(r => setTimeout(r, ms));
 test("app lifecycle owns, polls and fences the ratchet consumer across reconnect, disconnect and sign-out", { timeout: 15000 }, async () => {
     const consumers = [], cores = [], attached = { dm: [], groups: [] }, quarantine = [];
     let flushGate = null, flushEntered = null, flushResult = null;
-    let capabilities = [], announced = "";
+    let capabilities = [], announced = "", failMeta = false;
+    const keyPublished = [];
     class RatchetConsumer {
         constructor(options) { Object.assign(this, options); this.closed = false; this.drains = 0; this.sent = []; consumers.push(this); }
         async drain() { this.drains++; return { quarantined: [{ id: "q" + consumers.indexOf(this), scope: "direct" }] }; }
@@ -58,10 +60,11 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
         "./core/olm-directory.js": { signBundle: () => ({}) },
         "./core/olm-reset.js": { signReset: () => ({}) },
         "./core/link-binding.js": { verifyLinkBinding, announcedBinding },
+        "./core/dm-trust.js": { signKeyRecord: (uid) => { keyPublished.push(uid); return "record"; } },
         "./core/ratchet-consumer.js": { RatchetConsumer, connectionTransport: () => ({ admission: none, directory: none }) },
         "./core/crypto.js": { generateIdentity },
         "./core/device.js": { signIn: async () => ({ unique_id: "alice", device_id: "phone", client_id: "c1", capabilities: [...capabilities], tls_fingerprint: announced }) },
-        "./core/identity-store.js": { assertIdentityFence: async () => {}, beginIdentity: async () => ({ generation: 1, active: true }), clearIdentity: async () => {}, loadIdentity: none, saveIdentity: none, updateMeta: async () => {} },
+        "./core/identity-store.js": { assertIdentityFence: async () => {}, beginIdentity: async () => ({ generation: 1, active: true }), clearIdentity: async () => {}, loadIdentity: none, saveIdentity: none, updateMeta: async patch => { if (failMeta && patch?.guestBinding) throw new Error("IndexedDB write failed"); } },
         "./core/outbox.js": {
             enqueue: none, showPending: async () => {}, waitingCount: async () => 0,
             flush: async (session, dm) => {
@@ -81,7 +84,7 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
     const mod = new vm.SourceTextModule(await fs.readFile(new URL("../src/app.js", import.meta.url), "utf8"), { context });
     await mod.link(spec => new vm.SyntheticModule(Object.keys(sources[spec]), function () { for (const [k, v] of Object.entries(sources[spec])) this.setExport(k, v); }, { context }));
     await mod.evaluate();
-    const { app, connect, disconnect, forgetDevice, configureRatchetForTests } = mod.namespace;
+    const { app, connect, disconnect, forgetDevice, configureRatchetForTests, secureMessagingStatus, confirmGuestCertificateChange } = mod.namespace;
 
     configureRatchetForTests({
         pollMS: 10,
@@ -184,10 +187,31 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
     assert.equal(app.ratchet?.consumer, g);
     assert.equal(g.namespace.server, "tls-sha256:" + "ab".repeat(32));
     assert.equal(app.meta.guestBinding, "tls-sha256:" + "ab".repeat(32), "first-use binding pinned");
+    assert.ok(keyPublished.length > 0, "a guest publishes its signed key record");
     announced = "cd".repeat(32);
     await connect();
     assert.equal(app.ratchet, null);
-    assert.equal(app.ratchetError?.code, "server_binding_rotated");
+    // Review b7 P3-3: a guest gets an explicit review, never a re-link
+    // instruction and never an automatic re-pin.
+    assert.equal(app.ratchetError?.code, "guest_binding_rotated");
+    const status = secureMessagingStatus();
+    assert.equal(JSON.stringify(status.rotation), JSON.stringify({ previous: "tls-sha256:" + "ab".repeat(32), announced: "tls-sha256:" + "cd".repeat(32) }));
+    assert.equal(app.meta.guestBinding, "tls-sha256:" + "ab".repeat(32), "not re-pinned without confirmation");
+    assert.equal(await confirmGuestCertificateChange("tls-sha256:" + "ef".repeat(32)), false, "only the reviewed binding");
+    assert.equal(await status.confirm(), true);
+    await tick(50);
+    assert.equal(app.meta.guestBinding, "tls-sha256:" + "cd".repeat(32));
+    assert.equal(app.ratchetError, null);
+    assert.equal(app.ratchet?.consumer.namespace.server, "tls-sha256:" + "cd".repeat(32));
+    // Review b7 P3-2: a pin that cannot be stored is never used (fail closed).
+    app.identity = generateIdentity();
+    app.meta = { guest: true };
+    failMeta = true;
+    await connect();
+    assert.equal(app.ratchet, null);
+    assert.equal(app.ratchetError?.code, "secure_unavailable");
+    assert.equal(app.meta.guestBinding, undefined, "an unstored pin is not kept");
+    failMeta = false;
     disconnect();
     configureRatchetForTests(null);
 });

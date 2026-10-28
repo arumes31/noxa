@@ -71,7 +71,8 @@ func installPageKeys(m *connManager, scope int64, keys []netproto.ChannelKey, re
 // set only when this client actually opened the body itself.
 func openChatEntry(m *connManager, scope int64, e *netproto.ChatHistoryEntry, refused map[uint32]bool) {
 	defer func() { e.BodyEnc, e.KeyID = "", 0 }()
-	e.EncVerified, e.EncMode = false, ""
+	// Protocol is client-only (local DM search): a server value never survives.
+	e.EncVerified, e.EncMode, e.Protocol = false, "", ""
 	if e.Deleted {
 		e.Body = ""
 		return

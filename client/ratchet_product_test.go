@@ -276,56 +276,6 @@ func (n *nativeNode) connectTransport() {
 	go n.pump(server, done)
 }
 
-// connectProduction connects WITHOUT the ratchetCfg test override, exactly
-// as connectWith leaves a manager after authentication: the auth result goes
-// through applySecureAuthLocked, the device is registered through the real
-// device handler, and the session opens with the production configuration
-// (default store base under the test identity root, store protection of the
-// platform, binding from the pinned certificate fingerprint).
-func (n *nativeNode) connectProduction(guest bool) {
-	n.t.Helper()
-	client, server := net.Pipe()
-	resp := netproto.AuthResponse{OK: true, UniqueID: n.dev.Principal, Guest: guest,
-		Capabilities: []string{netproto.CapabilityDevices, netproto.CapabilityDMDevices, netproto.CapabilityOlmDirectory, netproto.CapabilityOlmAdmission}}
-	n.cm.mu.Lock()
-	n.cm.ratchetCfg = nil
-	n.cm.conn = client
-	n.cm.connEpoch++
-	n.cm.closed = false
-	n.cm.clientID = "native-" + n.dev.Name
-	n.cm.uniqueID = n.dev.Principal
-	n.cm.deviceID = ""
-	n.cm.addr = "ratchet-product.test:12333"
-	n.cm.fingerprint = productFingerprint(n.binding)
-	n.cm.supportsDevices = true
-	n.cm.supportsDMDevices = true
-	n.cm.applySecureAuthLocked(resp, true)
-	n.cm.readTimeout = 0
-	n.cm.mu.Unlock()
-	done := make(chan struct{})
-	n.pipeMu.Lock()
-	n.pipeDone = done
-	n.pipeMu.Unlock()
-	go n.cm.readLoop(client)
-	go n.pump(server, done)
-	// connectWith's "device registration" goroutine, in order.
-	n.cm.ensureDeviceRegistered(client)
-	n.cm.startRatchetRecorded(client)
-	if _, err := n.cm.ratchetConsumerOn(nil); err != nil {
-		n.t.Fatalf("%s: production session: %v (blocked: %q)", n.dev.Name, err, n.cm.ratchetBlockedReason())
-	}
-}
-
-// productFingerprint is the pinned certificate fingerprint of a binding.
-func productFingerprint(binding string) string {
-	hexed := strings.TrimPrefix(binding, "tls-sha256:")
-	var parts []string
-	for i := 0; i+2 <= len(hexed); i += 2 {
-		parts = append(parts, hexed[i:i+2])
-	}
-	return strings.Join(parts, ":")
-}
-
 func (n *nativeNode) startSession() {
 	n.t.Helper()
 	n.cm.mu.Lock()
@@ -507,9 +457,10 @@ func TestRatchetProductBridge(t *testing.T) {
 	started := time.Now()
 	b := productBridge{t: t, url: url}
 	var fixture struct {
-		Binding string                          `json:"binding"`
-		Groups  map[string]string               `json:"groups"`
-		Devices map[string]productFixtureDevice `json:"devices"`
+		Binding  string                          `json:"binding"`
+		Groups   map[string]string               `json:"groups"`
+		Devices  map[string]productFixtureDevice `json:"devices"`
+		RealAddr string                          `json:"real_addr"`
 	}
 	b.post(map[string]any{"op": "fixture"}, &fixture)
 	root := t.TempDir()
@@ -979,7 +930,7 @@ func TestRatchetProductBridge(t *testing.T) {
 	//      configuration, real device registration): guest <-> member,
 	//      guest <-> guest, and guest <-> an existing member, both ways.
 	step("16e guests and members without the test override")
-	keyIdentitiesProduct(t, b, fixture.Devices, fixture.Binding, root, A)
+	keyIdentitiesProduct(t, b, fixture.Devices, fixture.RealAddr, root, A)
 
 	// 16b. P2-3: the new-protocol path reaches the identity confirmation, and an
 	//      explicit confirmation is a DURABLE ratchet reset (applied by the next
@@ -1453,21 +1404,41 @@ return T.controls.length;`
 	}
 }
 
-func keyIdentitiesProduct(t *testing.T, b productBridge, devices map[string]productFixtureDevice, binding, root string, A *nativeNode) {
+func keyIdentitiesProduct(t *testing.T, b productBridge, devices map[string]productFixtureDevice, realAddr, root string, A *nativeNode) {
 	t.Helper()
+	// Production path end to end: App/connManager.connect -> connectWith over
+	// TLS (first-use pin of the live server's certificate) -> framed key login
+	// -> AuthResponse (Guest, capabilities) -> device registration through the
+	// real handler -> session with the production configuration (no
+	// ratchetCfg override, binding from the pinned certificate).
 	boot := func(name string, guest bool) *nativeNode {
-		n := &nativeNode{t: t, b: b, dev: devices[name], binding: binding, base: filepath.Join(root, name), tab: "tab-" + name}
+		n := &nativeNode{t: t, b: b, dev: devices[name], base: filepath.Join(root, name), tab: "tab-" + name}
 		n.boot()
-		n.connectProduction(guest)
-		if n.cm.ratchetConfigured() == false || n.cm.isGuestSnapshot() != guest {
-			t.Fatalf("%s: session kind", name)
+		if reason := n.cm.connect(realAddr, name, "", ""); reason != "" {
+			t.Fatalf("%s: connect: %s", name, reason)
+		}
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			if _, err := n.cm.ratchetConsumerOn(nil); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: no production session: %q", name, n.cm.ratchetBlockedReason())
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		n.cm.mu.Lock()
+		cfg, isGuest, tlsUsed := n.cm.ratchetCfg, n.cm.isGuest, n.cm.tlsUsed
+		n.cm.mu.Unlock()
+		if cfg != nil || isGuest != guest || !tlsUsed {
+			t.Fatalf("%s: override=%v guest=%v (want %v) tls=%v", name, cfg != nil, isGuest, guest, tlsUsed)
 		}
 		return n
 	}
 	G1, G2, M := boot("gguest1-desk", true), boot("gguest2-desk", true), boot("nmia-desk", false)
 	defer func() {
 		for _, n := range []*nativeNode{G1, G2, M} {
-			n.disconnect()
+			n.cm.disconnect()
 		}
 	}()
 	// The production store lives under the identity root (no override dir).
@@ -1492,21 +1463,40 @@ func keyIdentitiesProduct(t *testing.T, b productBridge, devices map[string]prod
 	send(G1, A, "guest to an existing member")
 	send(A, G1, "existing member to guest")
 
-	// A PWA guest in Chromium (self-registered browser device, no override
-	// beyond the harness transport): with a native member and a native guest.
-	pg := devices["pguest-phone"].Principal
-	if got := string(b.pwa("pguest-phone", `return (await T.consumer.ready()).epoch;`)); got != "1" {
-		t.Fatalf("PWA guest session: %s", got)
+	// A PWA guest through the real app (Chromium loads the built app from the
+	// real web listener, joins as a guest in the UI, self-registers its device
+	// and pins the announced certificate in app.js, sends from the composer).
+	app := func(cmd string) string {
+		t.Helper()
+		var out string
+		if err := json.Unmarshal(b.pwa("app-guest", cmd), &out); err != nil {
+			t.Fatalf("%s: %v", cmd, err)
+		}
+		return out
+	}
+	if r := app("#app:join"); r != "ok" {
+		t.Fatalf("PWA guest join: %s", r)
+	}
+	var pg string
+	b.post(map[string]any{"op": "app_guest_principal"}, &pg)
+	if pg == "" {
+		t.Fatal("PWA guest registered no device")
 	}
 	pwaSend := func(to *nativeNode, text string) {
 		t.Helper()
-		js := fmt.Sprintf(`return (await T.dm.send(%q, %q, "", { id: crypto.randomUUID() })).receipt.state;`, to.dev.Principal, text)
-		if s := string(b.pwa("pguest-phone", js)); s != `"accepted"` {
-			t.Fatalf("PWA guest -> %s: %s", to.dev.Name, s)
+		if r := app("#app:send " + to.dev.Principal + "\t" + text); r != "ok" {
+			t.Fatalf("PWA guest -> %s: %s", to.dev.Name, r)
 		}
-		to.drain()
-		if _, n := to.entryByBody(pg, text); n != 1 {
-			t.Fatalf("%s did not receive %q from the PWA guest", to.dev.Name, text)
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			to.drain()
+			if _, n := to.entryByBody(pg, text); n == 1 {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s did not receive %q from the PWA guest", to.dev.Name, text)
+			}
+			time.Sleep(200 * time.Millisecond)
 		}
 	}
 	nativeToPWA := func(from *nativeNode, text string) {
@@ -1514,9 +1504,8 @@ func keyIdentitiesProduct(t *testing.T, b productBridge, devices map[string]prod
 		if e := from.app.SendChatForTab(from.tab, "direct", pg, text); e != "" {
 			t.Fatalf("%s -> PWA guest: %s", from.dev.Name, e)
 		}
-		js := fmt.Sprintf(`await T.consumer.drain(); return T.view(%q).filter(m => m.body === %q && m.protocol === "noxa-olm-v1").length;`, from.dev.Principal, text)
-		if s := string(b.pwa("pguest-phone", js)); s != "1" {
-			t.Fatalf("PWA guest did not receive %q from %s: %s", text, from.dev.Name, s)
+		if r := app("#app:has " + from.dev.Principal + "\t" + text); r != "yes" {
+			t.Fatalf("PWA guest did not show %q from %s: %s", text, from.dev.Name, r)
 		}
 	}
 	pwaSend(M, "PWA guest to member")

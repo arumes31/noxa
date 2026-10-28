@@ -55,14 +55,7 @@ type RatchetControl struct {
 // ratchetControlDisposition classifies a received control body. An expiry
 // further ahead than a sender may set (plus clock skew) is invalid.
 func ratchetControlDisposition(body json.RawMessage, now int64) string {
-	b, err := admission.ParseControlBody(body)
-	switch {
-	case err != nil || b.ExpiresAt > now+admission.MaxControlTTL+admission.ControlClockSkew:
-		return "invalid"
-	case b.ExpiresAt <= now:
-		return "expired"
-	}
-	return "delivered"
+	return admission.ControlDisposition(body, now)
 }
 
 // onControl registers a handler for delivered controls.

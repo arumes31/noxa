@@ -14,6 +14,7 @@ import { announcedBinding, verifyLinkBinding } from "./core/link-binding.js";
 import { RatchetConsumer, connectionTransport } from "./core/ratchet-consumer.js";
 import { generateIdentity } from "./core/crypto.js";
 import { signIn } from "./core/device.js";
+import { signKeyRecord } from "./core/dm-trust.js";
 import { assertIdentityFence, beginIdentity, clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
 import { enqueue, flush as flushOutbox, showPending, waitingCount } from "./core/outbox.js";
 import { announceRead, closeNotifications, reportVisibility, setBadge, syncPush } from "./core/push.js";
@@ -158,8 +159,31 @@ export function configureRatchetForTests(options = null) {
 function guestBinding(meta, auth) {
     const announced = announcedBinding(auth?.tls_fingerprint);
     if (!announced) throw Object.assign(new Error("the server announces no certificate for secure messaging"), { code: "server_binding_unavailable" });
-    if (meta?.guestBinding && meta.guestBinding !== announced) throw Object.assign(new Error("the server's certificate changed since this guest identity first used it"), { code: "server_binding_rotated" });
+    // A guest cannot re-link: it may accept the change only by an explicit
+    // review of the old and new fingerprints (confirmGuestCertificateChange).
+    if (meta?.guestBinding && meta.guestBinding !== announced) {
+        throw Object.assign(new Error("the server's certificate changed since this guest identity first used it"),
+            { code: "guest_binding_rotated", previous: meta.guestBinding, announced });
+    }
     return announced;
+}
+
+/**
+ * A guest's secure-messaging preparation (connect and every retry): its own
+ * device, then its first-use pinned binding, which must be durable before any
+ * consumer opens (fail closed: an unstored pin is retried, never used).
+ */
+async function prepareGuest(session, meta, auth, fence) {
+    // Its key is its own account root: publish the signed key record (as a
+    // desktop does) so contacts and its own device chain can verify it.
+    session.conn.send(Msg.KeyPublish, { public_key: signKeyRecord(session.uniqueID, session.identity.xPublic, session.identity.edSecret) });
+    meta.deviceID = await ensureGuestDevice(session);
+    const binding = guestBinding(meta, auth);
+    if (meta.guestBinding !== binding) {
+        try { await updateMeta({ deviceID: meta.deviceID, guestBinding: binding }, fence); }
+        catch (error) { throw Object.assign(new Error("this guest identity's server pin could not be stored"), { code: "secure_unavailable", cause: error }); }
+        meta.guestBinding = binding;
+    }
 }
 
 /** A self-rooted guest registers its own key as its first device (once). */
@@ -225,7 +249,14 @@ async function openRatchet(session, fence, isCurrent, meta, auth = {}) {
 export function secureMessagingStatus() {
     const owner = app.ratchet;
     if (owner && !owner.consumer.closed && !owner.consumer.sticky) return { active: true, reason: "" };
-    return { active: false, reason: owner?.consumer.sticky?.code || app.ratchetError?.code || "inactive" };
+    const error = app.ratchetError;
+    const status = { active: false, reason: owner?.consumer.sticky?.code || error?.code || "inactive" };
+    // A guest whose server certificate changed may review and accept it.
+    if (status.reason === "guest_binding_rotated") {
+        status.rotation = { previous: error.previous, announced: error.announced };
+        status.confirm = () => confirmGuestCertificateChange(error.announced);
+    }
+    return status;
 }
 
 // Transient open failures (store contention, a failed lazy import, an
@@ -235,7 +266,7 @@ export function secureMessagingStatus() {
 const RATCHET_RETRYABLE = new Set(["secure_unavailable", "conflict", "local_conflict", "unavailable", "busy"]);
 const RATCHET_RETRY_MS = [5000, 15000, 30000, 60000, 120000, 300000];
 let ratchetRetryTimer = 0;
-function retryRatchet(session, fence, meta, auth, n) {
+function retryRatchet(session, fence, meta, auth, n, delay = RATCHET_RETRY_MS[n]) {
     clearTimeout(ratchetRetryTimer);
     if (n >= RATCHET_RETRY_MS.length) return;
     ratchetRetryTimer = setTimeout(async () => {
@@ -243,6 +274,9 @@ function retryRatchet(session, fence, meta, auth, n) {
         if (!current()) return;
         let owner;
         try {
+            // The same preparation as connect (CodeRabbit b7): a guest whose
+            // device list failed registers and pins before opening.
+            if (meta.guest) await prepareGuest(session, meta, auth, fence);
             owner = await openRatchet(session, fence, () => app.session === session && session.conn.open !== false, meta, auth);
         } catch (error) {
             if (!current()) return;
@@ -260,7 +294,23 @@ function retryRatchet(session, fence, meta, auth, n) {
         pollRatchet(owner, session);
         emit("secure-messaging", { active: true, reason: "" });
         flushNow().catch(() => {});
-    }, RATCHET_RETRY_MS[n]);
+    }, delay);
+}
+
+/**
+ * The guest's explicit acceptance of a changed server certificate, after
+ * the UI showed the previous and the announced fingerprint and the risk.
+ * Never automatic: only this call re-pins, and only the exact announced
+ * binding the review showed. Resolves true once secure messaging opens.
+ */
+export async function confirmGuestCertificateChange(expected) {
+    const ctx = app.ratchetContext, error = app.ratchetError;
+    if (!ctx || error?.code !== "guest_binding_rotated" || error.announced !== expected || !ctx.meta.guest || app.session !== ctx.session) return false;
+    await updateMeta({ guestBinding: expected }, ctx.fence);
+    ctx.meta.guestBinding = expected;
+    app.ratchetError = Object.assign(new Error("secure messaging is starting"), { code: "secure_unavailable" });
+    retryRatchet(ctx.session, ctx.fence, ctx.meta, ctx.auth, 0, 0);
+    return true;
 }
 
 function stopRatchet() {
@@ -328,7 +378,10 @@ export async function connect({ guest = null, fence } = {}) {
         if (missing.length) session.subscribe(missing).catch(() => {});
     };
     session.addEventListener("snapshot", subscribeMissing);
-    const meta = { ...(guest ? { guest: true, linked: false, guestNickname: guest.nickname } : app.meta), deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
+    // Re-entering the guest form with the same identity keeps its pinned
+    // server binding (never silently re-pinned).
+    const guestPin = reuseGuest && previousMeta?.guestBinding ? { guestBinding: previousMeta.guestBinding } : {};
+    const meta = { ...(guest ? { guest: true, linked: false, guestNickname: guest.nickname, ...guestPin } : app.meta), deviceID: auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname };
     try {
         checkAttempt();
         if (guest) {
@@ -346,11 +399,7 @@ export async function connect({ guest = null, fence } = {}) {
             ratchetError = Object.assign(new Error("this server needs an update for secure messaging"), { code: "server_outdated" });
         } else {
             try {
-                if (meta.guest) {
-                    meta.deviceID = await ensureGuestDevice(session);
-                    meta.guestBinding = guestBinding(meta, auth);
-                    await updateMeta({ deviceID: meta.deviceID, guestBinding: meta.guestBinding }, fence).catch(() => {});
-                }
+                if (meta.guest) await prepareGuest(session, meta, auth, fence);
                 let published = false;
                 ratchet = await openRatchet(session, fence, () => attempt === connectionGeneration && (!published || app.session === session) && session.conn.open !== false, meta, auth);
                 ratchet.publish = () => { published = true; };
@@ -379,6 +428,8 @@ export async function connect({ guest = null, fence } = {}) {
         app.ratchet = ratchet;
     }
     app.ratchetError = ratchetError;
+    // What an explicit guest certificate review needs (confirmGuestCertificateChange).
+    app.ratchetContext = { session, fence, meta, auth };
     // One in-app explanation of the upgrade (shown once by the UI).
     emit("secure-messaging", { active: !!ratchet, reason: ratchetError?.code || "" });
     app.identityFence = fence;

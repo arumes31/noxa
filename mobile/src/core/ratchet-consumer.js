@@ -20,6 +20,7 @@ import {
     jsonBytes,
     validateManifest,
     openPayload,
+    openPayloadRaw,
     recoveryReceipt,
     sealPayload,
     validateControlSend,
@@ -544,12 +545,10 @@ export class RatchetConsumer {
         const out = { sender: record.sender, senderDevice: record.senderDevice, logicalID: record.logicalID, kind: b.kind, scope: b.scope,
             epoch: b.epoch, expiresAt: b.expires_at, ...(b.data !== undefined ? { data: b.data } : {}), delivery: record.transport.delivery };
         const handlers = [...this.controls];
-        setTimeout(async () => {
-            for (const fn of handlers) {
-                if (this.closed) return;
-                try { await fn(out); } catch (e) { console.warn("ratchet: control handler", e); }
-            }
-        }, 0);
+        // One chain per consumer (like the Go queue): controls reach the
+        // handlers one after another, in commit order, after the drain step.
+        this.dispatchControl ||= serialDispatcher();
+        this.dispatchControl(handlers, out, () => this.closed);
     }
 
     // --- Trust ----------------------------------------------------------------
@@ -1129,7 +1128,8 @@ export class RatchetConsumer {
                 if ("olm:" + result.session_id !== sessionID) throw fail("invalid");
             }
             this.#check();
-            const body = await deterministic("invalid", () => openPayload(m, c, result.plaintext));
+            const opened = await deterministic("invalid", () => openPayloadRaw(m, c, result.plaintext));
+            const body = opened.body;
             const self = m.sender === ns.principal;
             record = { protocol: RATCHET_PROTOCOL, provenance: "authenticated", sender: m.sender, senderDevice: m.device, logicalID: m.logical_id,
                 key: semanticKey(m.sender, m.logical_id), scope: m.scope, peer: m.scope === "direct" ? (self ? m.peer : m.sender) : "",
@@ -1141,7 +1141,8 @@ export class RatchetConsumer {
                 // disposition is kept: an expired or malformed control is
                 // acknowledged without delivering its data.
                 record.device = c.device;
-                record.status = controlDisposition(body, now());
+                // Judged on the exact authenticated bytes (Go parity).
+                record.status = controlDisposition(opened.raw, now());
                 record.sentAt = Date.now() / 1000;
                 if (record.status !== "delivered") record.body = null;
             }
@@ -1177,12 +1178,40 @@ export function initialOneTimeKey(body) {
     return b64(bytes.subarray(3, 35)).replace(/=+$/, "");
 }
 
+/**
+ * Returns dispatch(handlers, value, closed): every value reaches all handlers
+ * (awaited one after another) strictly after the previous value finished,
+ * on a later task (never inside the caller's critical section).
+ */
+export function serialDispatcher() {
+    let chain = Promise.resolve();
+    return (handlers, value, closed = () => false) => {
+        chain = chain.then(() => new Promise(r => setTimeout(r, 0))).then(async () => {
+            for (const fn of handlers) {
+                if (closed()) return;
+                try { await fn(value); } catch (e) { console.warn("ratchet: control handler", e); }
+            }
+        });
+        return chain;
+    };
+}
+
+/** netproto.RequestRateLimitMessage (central dispatch frame rate limit). */
+export const REQUEST_RATE_LIMIT = "request rate limit exceeded; retry shortly";
+
 /** Frame 200/202 request functions over one authenticated Connection. */
 export function connectionTransport(conn, Msg) {
     const correlated = async (type, result, request) => {
         // Claims keep their reserved request ID: it is the admitted claim ID.
         const id = request.request_id || crypto.randomUUID();
-        const response = await conn.request(type, { ...request, request_id: id }, result, { accept: r => r.request_id === id, timeout: 15000 });
+        let response;
+        try { response = await conn.request(type, { ...request, request_id: id }, result, { accept: r => r.request_id === id, timeout: 15000 }); }
+        catch (e) {
+            // The session's frame rate limit (netproto.RequestRateLimitMessage)
+            // is a retryable rate limit (backed off by #net), never terminal.
+            if (e?.message === REQUEST_RATE_LIMIT) throw Object.assign(fail("rate-limit"), { cause: e });
+            throw e;
+        }
         if (response.error) throw fail(response.error);
         return response;
     };

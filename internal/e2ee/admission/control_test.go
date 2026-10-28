@@ -2,6 +2,7 @@ package admission
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -110,5 +111,28 @@ func TestControlBodyParityAndArchive(t *testing.T) {
 	archived := ControlArchiveBody(json.RawMessage(`{"kind":"media-key","scope":{"type":"call","id":"c"},"epoch":1,"expires_at":5,"data":{"key":"secret"}}`))
 	if strings.Contains(string(archived), "secret") || strings.Contains(string(archived), "data") || !strings.Contains(string(archived), `"expires_at":5`) {
 		t.Fatalf("archive body keeps data: %s", archived)
+	}
+}
+
+// Review b7 P3-1: the shared Go/JS vectors (testdata/control-vectors.json,
+// also run by mobile/unit/olm-control.test.mjs) give the same disposition.
+func TestControlVectorsShared(t *testing.T) {
+	raw, err := os.ReadFile("testdata/control-vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors []struct {
+		Name string `json:"name"`
+		Body string `json:"body"`
+		Now  int64  `json:"now"`
+		Want string `json:"want"`
+	}
+	if err = json.Unmarshal(raw, &vectors); err != nil || len(vectors) < 20 {
+		t.Fatal(len(vectors), err)
+	}
+	for _, v := range vectors {
+		if got := ControlDisposition(json.RawMessage(v.Body), v.Now); got != v.Want {
+			t.Errorf("%s: %s, want %s", v.Name, got, v.Want)
+		}
 	}
 }
