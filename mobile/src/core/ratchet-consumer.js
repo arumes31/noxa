@@ -37,6 +37,9 @@ const rec = (s, kind, id) => s.records[rk(kind, id)];
 const b64 = b => { let s = ""; for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192)); return btoa(s); };
 const fail = (code, extra = {}) => Object.assign(new Error(`ratchet: ${code}`), { code, ...extra });
 const now = () => Math.floor(Date.now() / 1000);
+// A pin left behind by a verified reset receives delayed deliveries only this
+// long after its retirement (never later: the old key may have been lost).
+const HISTORICAL_RECEIVE_WINDOW = 7 * 24 * 3600;
 const delay = ms => new Promise(r => setTimeout(r, ms));
 /** Local CAS losses are retried from scratch at most this often. */
 const LOCAL_RETRY = 3;
@@ -144,6 +147,7 @@ export class RatchetConsumer {
         this.quarantined = new Map();
         this.sessions = null;      // JSON(context) -> session ref id
         this.retired = new Set();  // attempt IDs retired during this session
+        this.unretirable = new Set(); // obligations the core could not retire (not re-asked this session)
         this.readiness = null;
         this.identity = "";
     }
@@ -281,16 +285,19 @@ export class RatchetConsumer {
      * available key whose publication expired or whose account epoch moved
      * on, and a reserved key whose claim lapsed). Asks only about unconsumed,
      * unclosed obligations of the current account whose publication expired,
-     * runs the core retire_prekey for each exact public key the server
-     * authenticated as "closed", then commits the candidate account with those
-     * closure receipts atomically (retireUnsubmittedKeys). Keys still
-     * available/reserved/admitted stay; a timer is never evidence.
+     * runs the core retire_prekey for each exact public key the TLS-pinned
+     * server reports as "closed" (its proof is a digest, not a signature: the
+     * server is trusted not to close a key it still admits), then commits the
+     * candidate account with those closure receipts atomically
+     * (retireUnsubmittedKeys). Keys still available/reserved/admitted stay; a
+     * timer is never evidence. A key the core cannot find is not asked about
+     * again in this session.
      */
     async #closeKeys(a) {
         const due = [];
         for (const [ref, r] of await this.#readMany(await this.#refs("obligation"))) {
             const o = parse(r.data);
-            if (o.account_id === a.accountID && !o.consumed && !o.closed && o.expires_at <= now()) due.push([ref[1], o]);
+            if (o.account_id === a.accountID && !o.consumed && !o.closed && o.expires_at <= now() && !this.unretirable.has(ref[1])) due.push([ref[1], o]);
         }
         for (let i = 0; i < due.length; i += 100) {
             const batch = due.slice(i, i + 100);
@@ -310,7 +317,7 @@ export class RatchetConsumer {
                     if (current.closed || current.consumed) continue;
                     let next;
                     try { next = await this.core.apply({ op: "retire_prekey", key: this.store.coreKey(s), account, one_time_key: o.public_key }); }
-                    catch (e) { if (e.code) throw e; continue; } // not in the account: the obligation stays open
+                    catch (e) { if (e.code) throw e; this.unretirable.add(id); continue; } // not in the account: stays open, not re-asked
                     this.#check();
                     account = next.account;
                     proofs[id] = closed.get(o.key_id);
@@ -435,8 +442,11 @@ export class RatchetConsumer {
         const pin = trusted.pin;
         if (!pin || (pin.epoch === epoch && pin.identity === identity)) return trusted;
         if (epoch < pin.epoch) {
-            const old = (trusted.history || []).find(h => h.epoch === epoch && h.identity === identity);
-            if (receiveOnly && old) return { ...trusted, pin: old };
+            // A retired pin receives only within the delayed-delivery window
+            // after its retirement (the old key may have been lost).
+            const old = (trusted.history || []).find(h => h.epoch === epoch && h.identity === identity &&
+                h.retired_at > 0 && now() - h.retired_at <= HISTORICAL_RECEIVE_WINDOW);
+            if (receiveOnly && old) return { ...trusted, pin: { epoch: old.epoch, identity: old.identity, signing: old.signing } };
             throw fail("account_changed");
         }
         if (epoch === pin.epoch) throw fail("account_changed");
@@ -463,7 +473,8 @@ export class RatchetConsumer {
         const s = await this.store.read([["trust", trusted.id]]), saved = parse(rec(s, "trust", trusted.id).data);
         if (saved.revoked) throw fail("revoked");
         if (saved.value.noxa !== b64(trusted.key) || !equalJSON(saved.value.pin, from)) throw fail("conflict");
-        const history = [...(saved.value.history || []), ...verified.passed].slice(-32);
+        const retiredAt = now();
+        const history = [...(saved.value.history || []), ...verified.passed.map(p => ({ ...p, retired_at: retiredAt }))].slice(-32);
         await this.store.setTrust(s, trusted.id, { ...saved.value, pin: verified.pin, history }, false);
         this.#check();
         return { ...trusted, pin: verified.pin, history };

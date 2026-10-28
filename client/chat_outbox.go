@@ -483,3 +483,62 @@ func (m *connManager) ratchetOutboxCancelable(e ChatOutboxEntry) error {
 	}
 	return nil
 }
+
+// ratchetUncertain: a committed new-protocol attempt without a terminal
+// receipt (it may still be delivered).
+func ratchetUncertain(err error) bool {
+	var r *ratchetError
+	return errors.As(err, &r) && r.Committed != nil && r.Committed.Receipt == nil
+}
+
+// keepOutboxOperation records an uncertain composer send as an "uncertain"
+// outbox entry under its operation ID (persisted, sealed with the outbox).
+func (a *App) keepOutboxOperation(cm *connManager, scope, target, text, operationID, reason string) {
+	store, err := a.outboxStore(cm)
+	if err != nil {
+		return
+	}
+	outboxMu.Lock()
+	defer outboxMu.Unlock()
+	entries, err := store.load()
+	if err != nil {
+		return
+	}
+	now := time.Now().UnixMilli()
+	for i := range entries {
+		if entries[i].ID == operationID {
+			entries[i].State, entries[i].Error, entries[i].Attempted = "uncertain", reason, true
+			_ = store.save(entries)
+			return
+		}
+	}
+	if len(entries) >= 100 {
+		return
+	}
+	entries = append(entries, ChatOutboxEntry{ID: operationID, Scope: scope, Target: target, Text: text, CreatedAt: now, DueAt: now,
+		State: "uncertain", Error: reason, Attempted: true})
+	_ = store.save(entries)
+}
+
+// forgetOutboxOperation drops the entry of an operation that is now sent.
+func (a *App) forgetOutboxOperation(cm *connManager, operationID string) {
+	store, err := a.outboxStore(cm)
+	if err != nil {
+		return
+	}
+	outboxMu.Lock()
+	defer outboxMu.Unlock()
+	if outboxSending[store.path+"|"+operationID] {
+		return
+	}
+	entries, err := store.load()
+	if err != nil {
+		return
+	}
+	for i := range entries {
+		if entries[i].ID == operationID {
+			_ = store.save(append(entries[:i], entries[i+1:]...))
+			return
+		}
+	}
+}

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -129,5 +131,56 @@ func TestRatchetClosesOnlyServerClosedOneTimeKeys(t *testing.T) {
 	}
 	if obligations()[keys[1].ID].Closed {
 		t.Fatal("forged closure committed")
+	}
+}
+
+type ratchetMissingKeyCore struct{}
+
+func (ratchetMissingKeyCore) Apply(context.Context, ratchet.Request) (ratchet.Response, error) {
+	return ratchet.Response{}, errors.New("ratchet: one-time key not found")
+}
+
+// Review P3-3 (1c-iii-a2): a key the core cannot find stays open but is not
+// asked about again in this session (no unbounded re-asking).
+func TestRatchetClosureDoesNotReaskUnretirableKeys(t *testing.T) {
+	var asked [][]string
+	c, err := newTestRatchetConsumer(t, func(r netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+		asked = append(asked, r.Keys)
+		var out []durable.KeyClosure
+		for _, id := range r.Keys {
+			out = append(out, durable.KeyClosure{KeyID: id, State: "closed"})
+		}
+		b, _ := json.Marshal(out)
+		return b, nil
+	}, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := sharedRatchetEngine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.d.Core = engine
+	snap, _ := c.d.Store.Read()
+	a, _ := c.d.Store.AccountAuthority(snap.Fence)
+	created, err := c.coreApply(ratchet.Request{Op: ratchet.NewAccount, Count: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := c.read(durable.Ref{Kind: durable.Account, ID: a.AccountID})
+	if err = c.commitBundle(s, a, created, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	a, _ = c.authority()
+	c.d.Core = ratchetMissingKeyCore{}
+	c.d.Now = func() time.Time { return time.Now().Add(7 * 24 * time.Hour) }
+	if err := c.closeKeys(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.closeKeys(a); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 || len(asked[0]) != 2 {
+		t.Fatalf("asked = %v", asked)
 	}
 }

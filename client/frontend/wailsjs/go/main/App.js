@@ -714,10 +714,6 @@ export function Quit() {
   return window['go']['main']['App']['Quit']();
 }
 
-export function ComposerOperationForTab(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['main']['App']['ComposerOperationForTab'](arg1, arg2, arg3, arg4, arg5);
-}
-
 export function SendChatOperationForTab(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['SendChatOperationForTab'](arg1, arg2, arg3, arg4, arg5, arg6);
 }

@@ -367,14 +367,25 @@ type ratchetTrustValue struct {
 	Pin       *ratchetPin `json:"pin,omitempty"`
 	// History keeps the pins a verified reset chain left behind (by epoch),
 	// for receiving delayed old-epoch deliveries only.
-	History []ratchetPin `json:"history,omitempty"`
+	History []ratchetHistoryPin `json:"history,omitempty"`
 }
+
+// ratchetHistoryPin is a pin a verified reset chain left behind, with when it
+// was retired. It is accepted for receiving only within
+// ratchetHistoricalReceiveWindow of that (delayed delivery), never after:
+// the peer may have reset because the old key was lost or compromised.
+type ratchetHistoryPin struct {
+	ratchetPin
+	RetiredAt int64 `json:"retired_at"`
+}
+
+const ratchetHistoricalReceiveWindow = 7 * 24 * 3600
 
 type ratchetTrusted struct {
 	id      string
 	key     ed25519.PublicKey
 	pin     *ratchetPin
-	history []ratchetPin
+	history []ratchetHistoryPin
 }
 
 type ratchetKeptClaim struct {
@@ -406,6 +417,7 @@ type ratchetConsumer struct {
 	qorder      []string
 	sessions    map[durable.SessionContext]string
 	retired     map[string]bool
+	unretirable map[string]bool // obligations the core could not retire (not re-asked this session)
 }
 
 func newRatchetConsumer(d ratchetDeps) (*ratchetConsumer, error) {
@@ -428,7 +440,7 @@ func newRatchetConsumer(d ratchetDeps) (*ratchetConsumer, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &ratchetConsumer{d: d, ctx: ctx, cancel: cancel, claims: map[string]ratchetKeptClaim{}, skewed: map[string]bool{},
-		quarantined: map[string]RatchetQuarantine{}, retired: map[string]bool{}}, nil
+		quarantined: map[string]RatchetQuarantine{}, retired: map[string]bool{}, unretirable: map[string]bool{}}, nil
 }
 
 func (c *ratchetConsumer) now() int64 { return c.d.Now().Unix() }
@@ -743,9 +755,12 @@ func (c *ratchetConsumer) readyOnce() (ratchetReadiness, error) {
 // account epoch moved on, and a reserved key whose claim lapsed). It asks only
 // about unconsumed, unclosed obligations of the current account whose
 // publication expired, runs the core retire_prekey for each exact public key
-// the server authenticated as "closed", and commits the candidate account
-// with those closure receipts atomically (Store.RetireUnsubmittedKeys).
-// Keys still available/reserved/admitted stay; a timer is never evidence.
+// the TLS-pinned server reports as "closed" (its proof is a digest, not a
+// signature: the server is trusted not to close a key it still admits), and
+// commits the candidate account with those closure receipts atomically
+// (Store.RetireUnsubmittedKeys). Keys still available/reserved/admitted stay;
+// a timer is never evidence. A key the core cannot find is not asked about
+// again in this session.
 func (c *ratchetConsumer) closeKeys(a durable.AccountAuthority) error {
 	obRefs, err := c.refs(durable.Obligation)
 	if err != nil {
@@ -762,7 +777,7 @@ func (c *ratchetConsumer) closeKeys(a durable.AccountAuthority) error {
 	var pending []due
 	for _, ref := range obRefs {
 		var o durable.OTKObligation
-		if json.Unmarshal(records[ref].Data, &o) == nil && o.AccountID == a.AccountID && !o.Consumed && !o.Closed && o.ExpiresAt <= c.now() {
+		if json.Unmarshal(records[ref].Data, &o) == nil && o.AccountID == a.AccountID && !o.Consumed && !o.Closed && o.ExpiresAt <= c.now() && !c.unretirable[ref.ID] {
 			pending = append(pending, due{ref.ID, o})
 		}
 	}
@@ -813,7 +828,8 @@ func (c *ratchetConsumer) closeKeys(a durable.AccountAuthority) error {
 					if ratchetCode(err) != "" {
 						return err // environment, not the key
 					}
-					continue // not in the account: the obligation stays open
+					c.unretirable[d.id] = true // not in the account: stays open, not re-asked
+					continue
 				}
 				account = next.Account
 				proofs[d.id] = closed[d.o.KeyID]
@@ -1015,8 +1031,9 @@ func (c *ratchetConsumer) promote(a durable.AccountAuthority, t ratchetTrusted, 
 	}
 	if epoch < pin.Epoch {
 		for _, h := range t.history {
-			if receiveOnly && h.Epoch == epoch && h.Identity == identity {
-				old := h
+			fresh := h.RetiredAt > 0 && c.now()-h.RetiredAt <= ratchetHistoricalReceiveWindow
+			if receiveOnly && fresh && h.Epoch == epoch && h.Identity == identity {
+				old := h.ratchetPin
 				t.pin = &old
 				return t, nil
 			}
@@ -1092,7 +1109,7 @@ func (c *ratchetConsumer) promoteOnce(a durable.AccountAuthority, t ratchetTrust
 		return t, rfail("conflict")
 	}
 	for _, p := range passed {
-		saved.History = append(saved.History, ratchetPin(p))
+		saved.History = append(saved.History, ratchetHistoryPin{ratchetPin: ratchetPin(p), RetiredAt: c.now()})
 	}
 	if len(saved.History) > 32 {
 		saved.History = saved.History[len(saved.History)-32:]

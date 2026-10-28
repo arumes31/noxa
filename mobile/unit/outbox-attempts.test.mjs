@@ -109,3 +109,57 @@ test("logout during a flush: nothing is sent or written back afterwards", async 
     assert.deepEqual(dm.sent.map(s => s[0]), ["l-1"], "no further entry is sent after logout");
     assert.deepEqual(await pending(), [], "the refused entry is not written back into the wiped outbox");
 });
+
+// Adopted review repros (1c-iii-a2 P2-3, P3-1, P3-2).
+test("an explicit Retry of a committed entry that failed terminally resolves the same operation", async () => {
+    await setFence(1); await clear();
+    await enqueue({ kind: "dm", peer: "bob" }, "hello", { id: "op-f" });
+    await flush(session, ratchetDM(() => { throw Object.assign(new Error("account_changed"), { code: "account_changed" }); }));
+    assert.equal((await pending())[0].failed, true);
+    const r = await enqueue({ kind: "dm", peer: "bob" }, "edited meanwhile", { id: "op-f" }); // UI Retry
+    assert.equal(r.replaced, false);
+    assert.equal(!!r.failed, false, "the terminal failure is cleared");
+    assert.deepEqual(r.committed, { text: "hello" }, "the attempt is kept");
+    const dm = ratchetDM(() => ({ receipt: { state: "accepted" } }));
+    await flush(session, dm);
+    assert.deepEqual(dm.sent, [["op-f", "hello"]], "the retry resends the SAME operation with its committed text");
+    assert.equal((await pending()).length, 0);
+});
+
+test("enqueue never overwrites an unreadable (possibly committed) entry", async () => {
+    await setFence(1); await clear();
+    await enqueue({ kind: "dm", peer: "bob" }, "original", { id: "op-u" });
+    await flush(session, ratchetDM(() => { throw Object.assign(new Error("uncertain"), { code: "uncertain", retryable: true }); }));
+    await raw(Stores.outbox, s => s.put({ broken: true }, "op-u"));
+    await assert.rejects(enqueue({ kind: "dm", peer: "bob" }, "changed draft", { id: "op-u" }), e => e.code === "unreadable");
+    const dm = ratchetDM(() => ({ receipt: { state: "accepted" } }));
+    await flush(session, dm);
+    assert.deepEqual(dm.sent, [], "nothing is sent under the committed operation's ID");
+    assert.equal((await pending())[0].unreadable, true);
+    await remove("op-u");
+});
+
+test("a draft replaced while its send is committing is committed as it stands, never dropped", async () => {
+    await setFence(1); await clear();
+    await enqueue({ kind: "dm", peer: "bob" }, "A", { id: "op-r" });
+    let enq;
+    const dm = ratchetDM(async () => { enq = await enqueue({ kind: "dm", peer: "bob" }, "B", { id: "op-r" }); throw Object.assign(new Error("uncertain"), { code: "uncertain", retryable: true }); });
+    await flush(session, dm);
+    assert.equal(enq.replaced, false, "the replace during the send sees the committed attempt");
+    const [after] = await pending();
+    assert.deepEqual(after.committed, { text: "A" }, "the committed part survives the concurrent enqueue");
+});
+
+test("pending()'s expiry rewrite during a flush is fenced against logout", async () => {
+    await setFence(1); await clear();
+    const realNow = Date.now;
+    try {
+        await enqueue({ kind: "dm", peer: "bob" }, "old draft", { id: "op-e" });
+        Date.now = () => realNow() + 15 * 24 * 3600 * 1000;
+        await setFence(2); // logged out
+        await raw(Stores.outbox, s => s.clear());
+        await raw(Stores.outbox, s => s.put({ broken: true }, "noise")); // keep the store non-empty
+        await pending(Date.now(), { fence: { generation: 1, active: true } });
+        assert.deepEqual((await raw(Stores.outbox, s => s.getAllKeys())), ["noise"], "nothing written back for the old generation");
+    } finally { Date.now = realNow; await raw(Stores.outbox, s => s.clear()); await setFence(1); }
+});

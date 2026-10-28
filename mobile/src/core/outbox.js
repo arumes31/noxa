@@ -14,7 +14,7 @@
 // An entry leaves the outbox once the server accepts it. A flush is fenced to
 // the identity generation it started in: after logout nothing is sent or
 // written back.
-import { Stores, currentFence, deleteKey, deleteKeyIn, getSealed, keys, putSealed, putSealedIn } from "./db.js";
+import { Stores, currentFence, deleteKey, deleteKeyIn, getSealed, keys, putSealed, putSealedIn, updateSealed } from "./db.js";
 
 export const OUTBOX_TTL = 14 * 24 * 3600 * 1000;
 export const SYNC_TAG = "noxa-outbox";
@@ -25,19 +25,24 @@ export const SYNC_TAG = "noxa-outbox";
  * {kind: "conversation", conversation} for a private group, where the ID
  * doubles as the message reference. An entry whose attempt is committed keeps
  * it: the new text is not stored and the existing entry is returned with
- * replaced: false. Returns the entry.
+ * replaced: false; an explicit retry of such an entry that failed terminally
+ * clears the failure, so the next flush resolves the SAME operation again.
+ * The read-check-write is one compare-and-swap (a concurrent flush commit or
+ * tab is never overwritten), and an entry that cannot be read is refused
+ * (code "unreadable"), never replaced. Returns the entry.
  */
 export async function enqueue(target, text, { id = crypto.randomUUID(), sentAt = Date.now() / 1000, holdUntil = 0, replyTo = 0 } = {}) {
-    const existing = await getSealed(Stores.outbox, id).catch(() => undefined);
-    if (existing?.committed) {
-        requestBackgroundSync();
-        return { ...existing, replaced: false };
-    }
     // holdUntil (ms) keeps an "Undo send" message back until its countdown ends.
     const entry = { id, ...target, text, sentAt, createdAt: Date.now(), holdUntil, replyTo };
-    await putSealed(Stores.outbox, id, entry);
+    let result = entry;
+    await updateSealed(Stores.outbox, id, existing => {
+        if (!existing?.committed) { result = entry; return entry; }
+        const { failed, error, ...kept } = existing;
+        result = { ...kept, replaced: false };
+        return failed || error ? kept : undefined;
+    });
     requestBackgroundSync();
-    return entry;
+    return result;
 }
 
 /**
@@ -46,7 +51,7 @@ export async function enqueue(target, text, { id = crypto.randomUUID(), sentAt =
  * cannot be read is returned as {id, unreadable: true} (never dropped, never
  * sent), so a storage failure cannot silently lose or replay a message.
  */
-export async function pending(now = Date.now()) {
+export async function pending(now = Date.now(), { fence = null } = {}) {
     const out = [];
     for (const id of await keys(Stores.outbox)) {
         let entry;
@@ -56,7 +61,8 @@ export async function pending(now = Date.now()) {
         if (!entry.committed && !entry.expired && now - entry.createdAt > OUTBOX_TTL) {
             entry.expired = true;
             entry.text = "";
-            await putSealed(Stores.outbox, id, entry).catch(() => {});
+            // Fenced when called by a flush: never written back after logout.
+            await (fence ? putSealedIn(fence, Stores.outbox, id, entry) : putSealed(Stores.outbox, id, entry)).catch(() => {});
         }
         out.push(entry);
     }
@@ -96,7 +102,7 @@ export function flush(session, dm, groups = null) {
         try {
             const fence = await currentFence();
             const stillCurrent = async () => sameFence(fence, await currentFence());
-            for (const entry of await pending()) {
+            for (const entry of await pending(Date.now(), { fence })) {
                 if (entry.unreadable) continue;
                 if (!(await stillCurrent())) break;
                 const ratchet = (entry.kind === "dm" && !!dm?.ratchet) || (entry.kind === "conversation" && !!groups?.ratchet);
@@ -115,9 +121,13 @@ export function flush(session, dm, groups = null) {
                 }
                 let current = entry;
                 if (ratchet && !current.committed) {
-                    // Durable BEFORE the consumer commits an operation for this ID.
-                    current = { ...current, committed: { text: current.text } };
-                    await putSealedIn(fence, Stores.outbox, current.id, current);
+                    // Durable BEFORE the consumer commits an operation for this
+                    // ID, as a CAS over the CURRENT draft (a concurrent replace
+                    // is committed as it stands, never lost or overwritten).
+                    const latest = await updateSealed(Stores.outbox, current.id, cur => (cur && !cur.committed ? { ...cur, committed: { text: cur.text } } : undefined), fence);
+                    if (!latest) continue; // removed meanwhile
+                    current = latest;
+                    if (current.failed || !current.committed) continue;
                 }
                 const text = current.committed ? current.committed.text : current.text;
                 try {

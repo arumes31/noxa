@@ -18,11 +18,18 @@ import (
 // directory, it closes the check-then-act gap of ProbeUnlocked: no other
 // process can open a store between the check and the rename.
 func LockForDestroy(dir string) (release func(), err error) {
-	entries, e := os.ReadDir(dir)
-	if os.IsNotExist(e) {
+	if _, e := os.Stat(dir); os.IsNotExist(e) {
 		return func() {}, nil
 	}
+	// The exclusive directory lock keeps every current (shared holder) and
+	// future store opener out, including namespace files created later.
+	unlockDir, e := lockStoreDir(dir, true, 150*time.Millisecond)
 	if e != nil {
+		return nil, e
+	}
+	entries, e := os.ReadDir(dir)
+	if e != nil {
+		unlockDir()
 		return nil, e
 	}
 	var held []*os.File
@@ -32,6 +39,7 @@ func LockForDestroy(dir string) (release func(), err error) {
 			_ = f.Close()
 		}
 		held = nil
+		unlockDir()
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".db") {

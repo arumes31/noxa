@@ -110,6 +110,43 @@ export function putSealedIn(expected, storeName, key, value) {
     });
 }
 
+const sameRecord = (a, b) => (!a && !b) || (!!a && !!b && a.iv?.length === b.iv?.length && Array.from(a.iv || []).every((v, i) => v === b.iv[i]));
+
+/**
+ * Read-modify-write of one sealed value as a compare-and-swap: mutate(value)
+ * gets the current value (undefined when absent) and returns the next value,
+ * or undefined to leave it unchanged. The write commits only if the record is
+ * still the one that was read (and, with expected, the identity fence still
+ * matches); otherwise it retries. A record that cannot be unsealed throws
+ * (code "unreadable") and is never overwritten.
+ */
+export function updateSealed(storeName, key, mutate, expected = null) {
+    return withDB(async db => {
+        for (let attempt = 0; attempt < 8; attempt++) {
+            const before = await run(db, storeName, "readonly", store => store.get(key));
+            let value;
+            if (before) {
+                try { value = JSON.parse(decoder.decode(await unseal(db, before))); }
+                catch { throw Object.assign(new Error("stored entry cannot be read"), { code: "unreadable" }); }
+            }
+            const next = mutate(value);
+            if (next === undefined) return value;
+            const record = await seal(db, encoder.encode(JSON.stringify(next)));
+            const fence = expected || await identityFence(db);
+            let lost = false;
+            await fencedWrite(db, [storeName], fence, tx => {
+                const st = tx.objectStore(storeName), current = st.get(key);
+                current.onsuccess = () => {
+                    if (!sameRecord(current.result, before)) { lost = true; return; }
+                    st.put(record, key);
+                };
+            });
+            if (!lost) return next;
+        }
+        throw Object.assign(new Error("stored entry changed concurrently"), { code: "conflict" });
+    });
+}
+
 /** deleteKey under the same identity-fence rule as putSealedIn. */
 export function deleteKeyIn(expected, storeName, key) {
     return withDB(db => fencedWrite(db, [storeName], expected, tx => tx.objectStore(storeName).delete(key)));

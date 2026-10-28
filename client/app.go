@@ -680,9 +680,18 @@ func (a *App) SendChatOperationForTab(tabID, scope, target, text string, replyTo
 	if err != nil {
 		return err.Error()
 	}
-	result := sendChatOperation(cm, scope, target, text, replyToID, operationID)
-	// A failed operation's ID survives a restart (manual retry resolves it).
-	a.recordComposerOperation(cm, scope, target, text, replyToID, operationID, result == "")
+	result, err := sendChatOperationErr(cm, scope, target, text, replyToID, operationID)
+	// An uncertain new-protocol send becomes an "uncertain" outbox entry under
+	// the SAME operation ID: it survives a restart, and only an explicit Retry
+	// of that entry resolves the original (a new identical message is a new
+	// operation). Success forgets it.
+	if scope == "direct" && cm.ratchetConfigured() && validOperationID(operationID) {
+		if result == "" {
+			a.forgetOutboxOperation(cm, operationID)
+		} else if ratchetUncertain(err) {
+			a.keepOutboxOperation(cm, scope, target, text, operationID, result)
+		}
+	}
 	return result
 }
 
@@ -691,8 +700,15 @@ func sendChatWith(cm *connManager, scope, target, text string, replyToID int64) 
 }
 
 func sendChatOperation(cm *connManager, scope, target, text string, replyToID int64, operationID string) string {
+	result, _ := sendChatOperationErr(cm, scope, target, text, replyToID, operationID)
+	return result
+}
+
+// sendChatOperationErr also returns the new-protocol error, so the caller can
+// tell an uncertain committed attempt from a send that never started.
+func sendChatOperationErr(cm *connManager, scope, target, text string, replyToID int64, operationID string) (string, error) {
 	if text == "" {
-		return "empty message"
+		return "empty message", nil
 	}
 	if scope == "direct" && cm.ratchetConfigured() {
 		// One durable operation per user intent; without a caller ID the
@@ -701,24 +717,24 @@ func sendChatOperation(cm *connManager, scope, target, text string, replyToID in
 			operationID = newClientMsgID()
 		}
 		if !validOperationID(operationID) {
-			return "invalid message operation"
+			return "invalid message operation", nil
 		}
 		if _, err := cm.sendRatchetDirect(nil, operationID, target, text); err != nil {
-			return ratchetFailure(err).Error()
+			return ratchetFailure(err).Error(), err
 		}
-		return ""
+		return "", nil
 	}
 	msg, err := cm.encryptChat(scope, target, text)
 	if err != nil {
-		return encryptFailure(err).Error()
+		return encryptFailure(err).Error(), nil
 	}
 	if scope != "direct" {
 		msg.ReplyToID = replyToID
 	}
 	if err := cm.sendChatWithKeyRetry(msg, text); err != nil {
-		return err.Error()
+		return err.Error(), nil
 	}
-	return ""
+	return "", nil
 }
 
 // validOperationID accepts the composer's UUIDs (and other short safe IDs).

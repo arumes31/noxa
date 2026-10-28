@@ -70,11 +70,12 @@ type Protection struct {
 	Open func([]byte) ([]byte, error)
 }
 type Store struct {
-	db    *bolt.DB
-	ns    string
-	key   []byte
-	aead  cipher.AEAD
-	keyMu sync.RWMutex
+	dirLock func() // shared store-directory lock (POSIX), released on Close
+	db      *bolt.DB
+	ns      string
+	key     []byte
+	aead    cipher.AEAD
+	keyMu   sync.RWMutex
 }
 type control struct {
 	Fence          uint64
@@ -163,14 +164,23 @@ func Open(dir string, ns Namespace, protection Protection, timeout time.Duration
 		return nil, e
 	}
 	file := filepath.Join(dir, hex.EncodeToString(hash[:])+".db")
-	db, e := bolt.Open(file, 0600, &bolt.Options{Timeout: timeout})
-	if errors.Is(e, bolt.ErrTimeout) {
-		return nil, ErrInUse
-	}
+	unlockDir, e := lockStoreDir(dir, false, timeout)
 	if e != nil {
 		return nil, e
 	}
-	s := &Store{db: db, ns: namespace}
+	db, e := bolt.Open(file, 0600, &bolt.Options{Timeout: timeout})
+	if errors.Is(e, bolt.ErrTimeout) {
+		unlockDir()
+		return nil, ErrInUse
+	}
+	if e != nil {
+		unlockDir()
+		return nil, e
+	}
+	// (POSIX) The shared directory lock was taken with a path re-check, and
+	// destruction needs the exclusive one before renaming: this file cannot be
+	// a renamed/unlinked deletion tombstone.
+	s := &Store{db: db, ns: namespace, dirLock: unlockDir}
 	e = db.Update(func(tx *bolt.Tx) error {
 		if err := tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
 			if !bytes.Equal(name, keyBucket) && !bytes.Equal(name, bucket) {
@@ -248,7 +258,15 @@ func Open(dir string, ns Namespace, protection Protection, timeout time.Duration
 	}
 	return s, nil
 }
-func (s *Store) Close() error { e := s.db.Close(); clear(s.key); return e }
+func (s *Store) Close() error {
+	e := s.db.Close()
+	clear(s.key)
+	if s.dirLock != nil {
+		s.dirLock()
+		s.dirLock = nil
+	}
+	return e
+}
 
 // CoreKey returns a copy for the pure core's protected snapshots; never transport it.
 func (s *Store) CoreKey() []byte {
@@ -497,6 +515,7 @@ type SessionContext struct {
 	Scope          string `json:"scope"`
 	Protocol       string `json:"protocol"`
 }
+
 // SessionClaim is the reserved directory claim that created an outbound
 // first-contact session. While a session is Pending, the server has no session
 // row yet: every attempt using it must carry this claim_id (valid through the

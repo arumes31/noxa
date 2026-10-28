@@ -588,25 +588,6 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal(calls.length, 3);
     });
 
-    await t.test("chat send reuses a persisted composer operation ID after a restart (1c-iii-a item 4)", async (t) => {
-        const state = { activeTabID: "a", serverGeneration: 1, myChannelID: 7 };
-        const nodes = new Map(["chat-text", "chat-send", "chat-scope", "file-preview-row", "reply-bar", "chat-send-error", "chat-retry"].map(id => [id, { ...element(), value: "" }]));
-        nodes.get("chat-send-error").querySelector = selector => selector === "span" ? element() : null;
-        nodes.get("chat-scope").value = "channel";
-        const asked = [], sent = [];
-        const app = {
-            ComposerOperationForTab: async (...args) => { asked.push(args); return "op-recovered"; },
-            SendChatOperationForTab: async (...args) => { sent.push(args); return ""; },
-        };
-        replaceGlobal(t, "window", { __noxa: { state, sysMsg() {} }, go: { main: { App: app } } });
-        replaceGlobal(t, "document", { getElementById: id => nodes.get(id) });
-        const chat = await import("../src/chat-ui.js");
-        nodes.get("chat-text").value = "retry me";
-        await chat.sendMessage();
-        assert.deepEqual(asked, [["a", "channel", "7", "retry me", 0]]);
-        assert.equal(sent.length, 1);
-        assert.equal(sent[0][5], "op-recovered", "the persisted ID of the failed operation is reused");
-    });
     await t.test("files switches both workspace tabs, restores focus, and protects sealed data", async (t) => {
         const tabChat = element();
         const tabFiles = element();

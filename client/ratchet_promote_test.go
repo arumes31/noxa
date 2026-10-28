@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"noxa/internal/e2ee/olmdir"
 	"noxa/internal/netproto"
@@ -89,6 +90,13 @@ func TestRatchetConsumerPromotesPinOnlyThroughSignedChain(t *testing.T) {
 	if _, err := c.promote(a, again, "dave", "d1", 1, id1, false); ratchetCode(err) != "account_changed" {
 		t.Fatal("never SEND to a superseded pin")
 	}
+	// Review P3-5: only within the delayed-delivery window after retirement.
+	realNow := c.d.Now
+	c.d.Now = func() time.Time { return realNow().Add(8 * 24 * time.Hour) }
+	if _, err := c.promote(a, again, "dave", "d1", 1, id1, true); ratchetCode(err) != "account_changed" {
+		t.Fatal("a retired pin must not receive after the window")
+	}
+	c.d.Now = realNow
 	// The promoted pin must also match the bundle's signing key.
 	if _, err := c.adopt(again, olmdir.Bundle{AccountEpoch: 2, Identity: id2, Signing: sg1}); ratchetCode(err) != "account_changed" {
 		t.Fatalf("signing mismatch: %v", err)
