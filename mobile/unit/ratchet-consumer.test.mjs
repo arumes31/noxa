@@ -27,3 +27,15 @@ test("only numeric accepted IDs are legacy group history positions", () => {
     assert.equal(legacyID({ id: "123" }), false, "no string-to-number coercion");
     assert.equal(legacyID({ id: 7, local: true }), false);
 });
+
+test("1c-iii-a item 5: drain resolves the oldest window first, never stranding old attempts", async () => {
+    const { resolveOrder } = await import("../src/core/ratchet-consumer.js");
+    const ids = Array.from({ length: 200 }, (_, i) => "1:" + (200 - i));
+    const got = resolveOrder(ids, 64);
+    assert.equal(got.length, 128);
+    assert.deepEqual([got[0], got[63], got[64], got[127]], ["1:1", "1:64", "1:137", "1:200"]);
+    assert.deepEqual(resolveOrder(["1:9", "1:2", "1:70"], 64), ["1:2", "1:9", "1:70"]);
+    const left = new Set(ids);
+    for (let round = 0; round < 4 && left.size; round++) for (const id of resolveOrder([...left], 64)) left.delete(id);
+    assert.equal(left.size, 0, "repeated drains reach every attempt");
+});

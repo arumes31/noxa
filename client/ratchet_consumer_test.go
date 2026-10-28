@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -433,5 +434,40 @@ func TestRatchetTombstoneSweep(t *testing.T) {
 	}
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Fatal("tombstone of a deleted identity must be erased", err)
+	}
+}
+
+// 1c-iii-a item 5: committed attempts beyond the 64-attempt window are never
+// stranded; the oldest (which hold the retired-through watermark) come first.
+func TestRatchetResolveOrderNeverStrandsOldAttempts(t *testing.T) {
+	var ids []string
+	for i := 200; i >= 1; i-- {
+		ids = append(ids, "1:"+strconv.Itoa(i))
+	}
+	got := ratchetResolveOrder(ids, ratchetRetireWin)
+	if len(got) != 2*ratchetRetireWin || got[0] != "1:1" || got[ratchetRetireWin-1] != "1:64" || got[ratchetRetireWin] != "1:137" || got[len(got)-1] != "1:200" {
+		t.Fatalf("order = %v", got)
+	}
+	// Under two windows: everything, sorted, once.
+	small := ratchetResolveOrder([]string{"1:9", "1:2", "1:70"}, ratchetRetireWin)
+	if strings.Join(small, ",") != "1:2,1:9,1:70" {
+		t.Fatalf("small = %v", small)
+	}
+	// Draining repeatedly (each resolved attempt is noted retired) reaches every one.
+	left := map[string]bool{}
+	for _, id := range ids {
+		left[id] = true
+	}
+	for round := 0; round < 4 && len(left) > 0; round++ {
+		var rest []string
+		for id := range left {
+			rest = append(rest, id)
+		}
+		for _, id := range ratchetResolveOrder(rest, ratchetRetireWin) {
+			delete(left, id)
+		}
+	}
+	if len(left) != 0 {
+		t.Fatalf("stranded: %d", len(left))
 	}
 }

@@ -1371,6 +1371,20 @@ func ratchetTerminal(state string) bool {
 	return state == "accepted" || state == "rejected" || state == "aborted"
 }
 
+// ratchetResolveOrder picks the unretired committed attempts one drain
+// resolves: the OLDEST window first (an unresolved old attempt is a gap that
+// keeps the retired-through watermark and so admission backpressure stuck;
+// never strand it behind newer ones) plus the newest window, each at most
+// window long, in sequence order without duplicates.
+func ratchetResolveOrder(ids []string, window int) []string {
+	sorted := append([]string(nil), ids...)
+	sort.Slice(sorted, func(i, j int) bool { return ratchetAttemptSeq(sorted[i]) < ratchetAttemptSeq(sorted[j]) })
+	if len(sorted) <= 2*window {
+		return sorted
+	}
+	return append(sorted[:window:window], sorted[len(sorted)-window:]...)
+}
+
 func ratchetAttemptSeq(id string) int64 {
 	_, s, _ := strings.Cut(id, ":")
 	n, _ := strconv.ParseInt(s, 10, 64)
@@ -1643,11 +1657,7 @@ func (c *ratchetConsumer) drain() ([]RatchetQuarantine, error) {
 			recent = append(recent, r.ID)
 		}
 	}
-	sort.Slice(recent, func(i, j int) bool { return ratchetAttemptSeq(recent[i]) < ratchetAttemptSeq(recent[j]) })
-	if len(recent) > ratchetRetireWin {
-		recent = recent[len(recent)-ratchetRetireWin:]
-	}
-	for _, id := range recent {
+	for _, id := range ratchetResolveOrder(recent, ratchetRetireWin) {
 		if c.retired[id] {
 			continue
 		}
