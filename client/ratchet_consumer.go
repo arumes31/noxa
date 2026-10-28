@@ -364,12 +364,16 @@ type ratchetTrustValue struct {
 	Device    string      `json:"device"`
 	Noxa      *string     `json:"noxa"`
 	Pin       *ratchetPin `json:"pin,omitempty"`
+	// History keeps the pins a verified reset chain left behind (by epoch),
+	// for receiving delayed old-epoch deliveries only.
+	History []ratchetPin `json:"history,omitempty"`
 }
 
 type ratchetTrusted struct {
-	id  string
-	key ed25519.PublicKey
-	pin *ratchetPin
+	id      string
+	key     ed25519.PublicKey
+	pin     *ratchetPin
+	history []ratchetPin
 }
 
 type ratchetKeptClaim struct {
@@ -893,7 +897,112 @@ func (c *ratchetConsumer) trustOnce(principal, device string) (ratchetTrusted, e
 	if *saved.Noxa != encoded {
 		return ratchetTrusted{}, rfail("account_changed")
 	}
-	return ratchetTrusted{id: id, key: key, pin: saved.Pin}, nil
+	return ratchetTrusted{id: id, key: key, pin: saved.Pin, history: saved.History}, nil
+}
+
+// promote brings a cached Olm pin to a peer's (epoch, identity). A newer epoch
+// is adopted ONLY through the signed reset chain verified from the cached pin
+// under the independently trusted noXa key (olmdir.VerifyResetChain); the
+// pins left behind are kept by epoch. An older epoch matches only a retained
+// historical pin, and only for receiving. Anything else blocks with
+// account_changed: server data never replaces an independent pin, and the
+// explicit identity-change confirmation stays the authoritative way out.
+func (c *ratchetConsumer) promote(a durable.AccountAuthority, t ratchetTrusted, principal, device string, epoch int64, identity string, receiveOnly bool) (ratchetTrusted, error) {
+	pin := t.pin
+	if pin == nil || (pin.Epoch == epoch && pin.Identity == identity) {
+		return t, nil
+	}
+	if epoch < pin.Epoch {
+		for _, h := range t.history {
+			if receiveOnly && h.Epoch == epoch && h.Identity == identity {
+				old := h
+				t.pin = &old
+				return t, nil
+			}
+		}
+		return t, rfail("account_changed")
+	}
+	if epoch == pin.Epoch {
+		return t, rfail("account_changed")
+	}
+	out := t
+	err := c.casRetry(func() error {
+		var e error
+		out, e = c.promoteOnce(a, t, principal, device, epoch, identity)
+		return e
+	})
+	return out, err
+}
+
+func (c *ratchetConsumer) promoteOnce(a durable.AccountAuthority, t ratchetTrusted, principal, device string, epoch int64, identity string) (ratchetTrusted, error) {
+	ref := durable.Ref{Kind: durable.Trust, ID: t.id}
+	encoded := base64.StdEncoding.EncodeToString(t.key)
+	s0, err := c.read(ref)
+	if err != nil {
+		return t, err
+	}
+	_, revoked, saved0, err := readTrust(s0, t.id)
+	if err != nil {
+		return t, err
+	}
+	if revoked {
+		return t, rfail("revoked")
+	}
+	if saved0.Noxa == nil || *saved0.Noxa != encoded || saved0.Pin == nil {
+		return t, rfail("account_changed")
+	}
+	from := *saved0.Pin
+	if from.Epoch == epoch && from.Identity == identity {
+		t.pin, t.history = &from, saved0.History
+		return t, nil
+	}
+	var fetchErr error
+	pin, passed, err := olmdir.VerifyResetChain(olmdir.ResetPin(from), olmdir.ResetPin{Epoch: epoch, Identity: identity}, t.key, c.d.Namespace.Server, principal, device,
+		func(after int64) ([]olmdir.Reset, error) {
+			var page []olmdir.Reset
+			if e := c.handoff(a, netproto.OlmAdmissionRequest{Action: "reset_chain", TargetDevice: device, AfterEpoch: after}, &page); e != nil {
+				fetchErr = e
+				return nil, e
+			}
+			return page, c.check()
+		})
+	if fetchErr != nil {
+		return t, fetchErr // transport/fence failures stay transient
+	}
+	if err != nil {
+		if ratchetCode(err) != "" {
+			return t, err
+		}
+		return t, rfail("account_changed")
+	}
+	// Commit against the exact pin the chain started from.
+	s, err := c.read(ref)
+	if err != nil {
+		return t, err
+	}
+	_, revoked, saved, err := readTrust(s, t.id)
+	if err != nil {
+		return t, err
+	}
+	if revoked {
+		return t, rfail("revoked")
+	}
+	if saved.Noxa == nil || *saved.Noxa != encoded || saved.Pin == nil || *saved.Pin != from {
+		return t, rfail("conflict")
+	}
+	for _, p := range passed {
+		saved.History = append(saved.History, ratchetPin(p))
+	}
+	if len(saved.History) > 32 {
+		saved.History = saved.History[len(saved.History)-32:]
+	}
+	next := ratchetPin(pin)
+	saved.Pin = &next
+	if err = c.d.Store.SetTrust(s, t.id, ratchetJSON(saved), false); err != nil {
+		return t, err
+	}
+	t.pin, t.history = &next, saved.History
+	return t, c.check()
 }
 
 // adopt pins an Olm account only from a bundle the caller verified under the
@@ -910,7 +1019,7 @@ func (c *ratchetConsumer) adopt(t ratchetTrusted, b olmdir.Bundle) (ratchetTrust
 
 func (c *ratchetConsumer) adoptOnce(t ratchetTrusted, b olmdir.Bundle) (ratchetTrusted, error) {
 	if t.pin != nil {
-		if t.pin.Epoch != b.AccountEpoch || t.pin.Identity != b.Identity {
+		if t.pin.Epoch != b.AccountEpoch || t.pin.Identity != b.Identity || (t.pin.Signing != "" && t.pin.Signing != b.Signing) {
 			return t, rfail("account_changed")
 		}
 		return t, nil
@@ -1132,8 +1241,8 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 		if err != nil {
 			return RatchetOutcome{}, err
 		}
-		if trusted.pin != nil && (trusted.pin.Epoch != t.AccountEpoch || trusted.pin.Identity != t.Identity) {
-			return RatchetOutcome{}, rfail("account_changed")
+		if trusted, err = c.promote(a, trusted, t.Principal, t.Device, t.AccountEpoch, t.Identity, false); err != nil {
+			return RatchetOutcome{}, err
 		}
 		p := ratchetPlan{t: t, trusted: trusted, binding: admission.ExpectedBinding(m, t), context: c.sessionContext(a, t)}
 		// Without a verified Olm pin (first contact or a confirmed root change)
@@ -1878,6 +1987,9 @@ func (c *ratchetConsumer) receive(d ratchetDelivery, a durable.AccountAuthority)
 		}
 		trusted, err := c.trust(m.Sender, m.Device)
 		if err != nil {
+			return err
+		}
+		if trusted, err = c.promote(a, trusted, m.Sender, m.Device, m.AccountEpoch, d.SourceBundle.Identity, true); err != nil {
 			return err
 		}
 		expected := d.SourceBundle.Identity

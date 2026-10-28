@@ -23,6 +23,7 @@ import {
     sealPayload,
 } from "./olm-admission.js";
 import { verifyBundleEvidence, verifyReservedClaim, OLM_DIRECTORY_VERSION } from "./olm-directory.js";
+import { verifyResetChain } from "./olm-reset.js";
 
 export const RATCHET_PROTOCOL = "noxa-olm-v1";
 /** Mirror of ratchet-store DEVICE_PAIR_SCOPE / durable.DevicePairScope. */
@@ -366,12 +367,60 @@ export class RatchetConsumer {
             return { id, key, pin: null };
         }
         if (saved.value.noxa !== b64(key)) throw fail("account_changed");
-        return { id, key, pin: saved.value.pin || null };
+        return { id, key, pin: saved.value.pin || null, history: saved.value.history || [] };
+    }
+    /**
+     * Brings a cached Olm pin to a peer's (epoch, identity). A newer epoch is
+     * adopted ONLY through the signed reset chain verified from the cached pin
+     * under the independently trusted noXa key (verifyResetChain); the pins
+     * left behind are kept by epoch. An older epoch matches only a retained
+     * historical pin, and only for receiving. Anything else blocks with
+     * account_changed: no server data ever replaces an independent pin, and
+     * the explicit identity-change confirmation (resetTrust) stays the
+     * authoritative way out.
+     */
+    #promote(a, trusted, principal, device, epoch, identity, { receiveOnly = false } = {}) {
+        const pin = trusted.pin;
+        if (!pin || (pin.epoch === epoch && pin.identity === identity)) return trusted;
+        if (epoch < pin.epoch) {
+            const old = (trusted.history || []).find(h => h.epoch === epoch && h.identity === identity);
+            if (receiveOnly && old) return { ...trusted, pin: old };
+            throw fail("account_changed");
+        }
+        if (epoch === pin.epoch) throw fail("account_changed");
+        return this.#casRetry(() => this.#promoteOnce(a, trusted, principal, device, epoch, identity));
+    }
+    async #promoteOnce(a, trusted, principal, device, epoch, identity) {
+        const s0 = await this.store.read([["trust", trusted.id]]), saved0 = parse(rec(s0, "trust", trusted.id).data);
+        if (saved0.revoked) throw fail("revoked");
+        if (saved0.value.noxa !== b64(trusted.key)) throw fail("account_changed");
+        const from = saved0.value.pin;
+        if (!from) throw fail("account_changed");
+        if (from.epoch === epoch && from.identity === identity) return { ...trusted, pin: from, history: saved0.value.history || [] };
+        let verified;
+        try {
+            verified = await verifyResetChain(from, { epoch, identity }, {
+                server: this.namespace.server, principal, device, noxaSigning: trusted.key,
+                fetch: async after => { const page = await this.#handoff(a, { action: "reset_chain", target_device: device, after_epoch: after }); this.#check(); return page; },
+            });
+        } catch (e) {
+            if (e.code) throw e; // transport/fence failures stay transient
+            throw fail("account_changed");
+        }
+        // Commit against the exact pin the chain started from (cross-tab CAS).
+        const s = await this.store.read([["trust", trusted.id]]), saved = parse(rec(s, "trust", trusted.id).data);
+        if (saved.revoked) throw fail("revoked");
+        if (saved.value.noxa !== b64(trusted.key) || !equalJSON(saved.value.pin, from)) throw fail("conflict");
+        const history = [...(saved.value.history || []), ...verified.passed].slice(-32);
+        await this.store.setTrust(s, trusted.id, { ...saved.value, pin: verified.pin, history }, false);
+        this.#check();
+        return { ...trusted, pin: verified.pin, history };
     }
     #adopt(trusted, principal, device, bundle) { return this.#casRetry(() => this.#adoptOnce(trusted, principal, device, bundle)); }
     async #adoptOnce(trusted, principal, device, bundle) {
         if (trusted.pin) {
-            if (trusted.pin.epoch !== bundle.account_epoch || trusted.pin.identity !== bundle.identity) throw fail("account_changed");
+            if (trusted.pin.epoch !== bundle.account_epoch || trusted.pin.identity !== bundle.identity ||
+                (trusted.pin.signing && trusted.pin.signing !== bundle.signing)) throw fail("account_changed");
             return trusted;
         }
         const s = await this.store.read([["trust", trusted.id]]), r = rec(s, "trust", trusted.id);
@@ -466,8 +515,7 @@ export class RatchetConsumer {
         // whole operation rather than being silently omitted.
         for (const t of m.targets) {
             if (t.local) continue;
-            let trusted = await this.#trust(t.principal, t.device);
-            if (trusted.pin && (trusted.pin.epoch !== t.account_epoch || trusted.pin.identity !== t.identity)) throw fail("account_changed");
+            let trusted = await this.#promote(a, await this.#trust(t.principal, t.device), t.principal, t.device, t.account_epoch, t.identity);
             const binding = expectedBinding(m, t), context = this.#context(a, t);
             // Without a verified Olm pin (first contact or a confirmed root
             // change) a fresh signed claim is required even if a session exists.
@@ -761,7 +809,7 @@ export class RatchetConsumer {
                 d.target_bundle.identity !== this.identity || d.target_bundle.account_epoch !== a.epoch) throw fail("fenced_copy");
             const sourceTarget = m.targets.find(t => t.device === m.device && t.principal === m.sender && t.local);
             if (!sourceTarget || sourceTarget.account_epoch !== m.account_epoch) throw fail("invalid");
-            let trusted = await this.#trust(m.sender, m.device);
+            let trusted = await this.#promote(a, await this.#trust(m.sender, m.device), m.sender, m.device, m.account_epoch, d.source_bundle?.identity, { receiveOnly: true });
             // Retained admission evidence is authenticated under the current
             // independently trusted noXa device key, without publication TTL.
             await deterministic("invalid_evidence", () => verifyBundleEvidence(d.source_bundle, { trustedSigningKey: trusted.key, server: m.server, principal: m.sender, deviceID: m.device,

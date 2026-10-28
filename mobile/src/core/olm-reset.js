@@ -77,3 +77,36 @@ export function verifyReset(
     throw fail();
   return r;
 }
+
+export const MAX_RESET_CHAIN_PAGES = 64;
+
+/**
+ * Advances a cached peer pin {epoch, identity, signing} to target {epoch,
+ * identity[, signing]} only through noxa-olm-reset-v1 transitions verified
+ * (verifyReset) from the pin reached so far under the independently trusted
+ * noXa key. fetch(after) returns one reset_chain page (old_epoch >= after,
+ * any order). A gap, a foreign/altered transition or a chain ending elsewhere
+ * throws: a server can never promote a pin (olmdir.VerifyResetChain).
+ * Returns {pin, passed} (passed: the pins left behind, oldest first).
+ */
+export async function verifyResetChain(from, to, { server, principal, device, noxaSigning, fetch }) {
+  if (!(to.epoch > from.epoch)) throw fail();
+  let cur = { epoch: from.epoch, identity: from.identity, signing: from.signing };
+  const passed = [];
+  for (let pages = 0; cur.epoch < to.epoch; pages++) {
+    if (pages >= MAX_RESET_CHAIN_PAGES) throw fail();
+    const page = await fetch(cur.epoch);
+    if (!Array.isArray(page)) throw fail();
+    const byOld = new Map();
+    for (const r of page) if (r && Number.isSafeInteger(r.old_epoch)) byOld.set(r.old_epoch, r);
+    const start = cur.epoch;
+    for (let r; cur.epoch < to.epoch && (r = byOld.get(cur.epoch)); ) {
+      verifyReset(r, { server, principal, device, epoch: cur.epoch, identity: cur.identity, signing: cur.signing, noxaSigning });
+      passed.push(cur);
+      cur = { epoch: r.new_epoch, identity: r.new_identity, signing: r.new_signing };
+    }
+    if (cur.epoch === start) throw fail(); // gap
+  }
+  if (cur.epoch !== to.epoch || cur.identity !== to.identity || (to.signing && cur.signing !== to.signing)) throw fail();
+  return { pin: cur, passed };
+}

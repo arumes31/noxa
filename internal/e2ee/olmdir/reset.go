@@ -75,3 +75,60 @@ type ResetReceipt struct {
 	Digest            string `json:"digest"`
 	PublicationDigest string `json:"publication_digest"`
 }
+
+// ResetPin is a cached peer Olm pin: the account epoch, identity and signing
+// key a client adopted from a bundle its independently trusted noXa key signed.
+type ResetPin struct {
+	Epoch    int64  `json:"epoch"`
+	Identity string `json:"identity"`
+	Signing  string `json:"signing"`
+}
+
+// MaxResetChainPages bounds one promotion (32 transitions per reset_chain page).
+const MaxResetChainPages = 64
+
+// VerifyResetChain advances from a cached pin to the target epoch/identity
+// (and signing, when given) only through noxa-olm-reset-v1 transitions, each
+// verified with Verify against the pin reached so far under the trusted noXa
+// key. fetch returns transitions with old_epoch >= after (one reset_chain
+// page, any order). A gap, a foreign or altered transition, or a chain that
+// ends elsewhere fails with ErrInvalid: a server can never promote a pin.
+// It returns the new pin and the pins passed on the way (oldest first).
+func VerifyResetChain(from ResetPin, to ResetPin, key ed25519.PublicKey, server, principal, device string, fetch func(after int64) ([]Reset, error)) (ResetPin, []ResetPin, error) {
+	if to.Epoch <= from.Epoch {
+		return from, nil, ErrInvalid
+	}
+	cur, passed := from, []ResetPin(nil)
+	for pages := 0; cur.Epoch < to.Epoch; pages++ {
+		if pages >= MaxResetChainPages {
+			return from, nil, ErrInvalid
+		}
+		page, err := fetch(cur.Epoch)
+		if err != nil {
+			return from, nil, err
+		}
+		byOld := map[int64]Reset{}
+		for _, r := range page {
+			byOld[r.OldEpoch] = r
+		}
+		start := cur.Epoch
+		for cur.Epoch < to.Epoch {
+			r, ok := byOld[cur.Epoch]
+			if !ok {
+				break
+			}
+			if r.Verify(key, server, principal, device, cur.Epoch, cur.Identity, cur.Signing) != nil {
+				return from, nil, ErrInvalid
+			}
+			passed = append(passed, cur)
+			cur = ResetPin{Epoch: r.NewEpoch, Identity: r.NewIdentity, Signing: r.NewSigning}
+		}
+		if cur.Epoch == start {
+			return from, nil, ErrInvalid // gap
+		}
+	}
+	if cur.Epoch != to.Epoch || cur.Identity != to.Identity || (to.Signing != "" && cur.Signing != to.Signing) {
+		return from, nil, ErrInvalid
+	}
+	return cur, passed, nil
+}
