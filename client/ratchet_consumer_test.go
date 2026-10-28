@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -234,11 +235,19 @@ func TestRatchetDMProjectionMixedLegacy(t *testing.T) {
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("mixed projection:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	// The legacy NaCl history copy never exports new-protocol records.
+	// 1c-iii-b item 1: the history transfer carries readable new-protocol
+	// records keyed by the sender's logical ID, with their provenance; a
+	// pending own send never travels.
+	cm.projectRatchet(RatchetRecord{Protocol: ratchetProtocol, Sender: "me", LogicalID: "p1", Key: ratchetSemanticKey("me", "p1"), Scope: "direct", Peer: "bob",
+		Purpose: "chat", Body: ratchetJSON(map[string]string{"text": "still pending"}), SentAt: 101, Self: true, Status: "pending"}, false, nil)
+	var exported []string
 	for _, m := range historyMessagesSince(mustStore(t, app, id), 0) {
-		if strings.Contains(m.Body, "olm") || strings.Contains(m.Body, "mine") {
-			t.Fatalf("legacy history copy exported a new-protocol record: %+v", m)
-		}
+		exported = append(exported, strings.Join([]string{m.Protocol, m.Provenance, m.From, m.ClientMsgID, m.Body}, "|"))
+	}
+	sort.Strings(exported)
+	wantExport := []string{"noxa-olm-v1|authenticated|bob|m1|olm m1", "noxa-olm-v1|authenticated|me|n1|mine (edited)", "||bob|m1|", "||me|m2|legacy m2"}
+	if strings.Join(exported, "\n") != strings.Join(wantExport, "\n") {
+		t.Fatalf("history export:\n%s\nwant:\n%s", strings.Join(exported, "\n"), strings.Join(wantExport, "\n"))
 	}
 	// Edit/delete routing picks the new-protocol own record.
 	if p, err := app.ownDirectMessageProtocol(cm, "bob", "n1"); err != nil || p != ratchetProtocol {

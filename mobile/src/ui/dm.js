@@ -82,6 +82,9 @@ export function renderDM(root, peer) {
                 message.deleted ? null : encryptionBadge("e2e"),
                 body,
                 message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
+                // Transferred history: shown as copied from another device of this
+                // account, never as authenticated on this device.
+                message.provenance === "transferred" ? h("span", { class: "msg-edited", title: t("chat.transferredHint") }, t("chat.transferred")) : null,
                 message.self && !message.deleted ? receiptTicks(message.receipt) : null,
                 sendState(message)));
         el.noxaMessage = message.deleted || message.failed ? null : message;

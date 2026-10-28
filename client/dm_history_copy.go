@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
@@ -51,16 +52,22 @@ func historyMessagesSince(store dmHistoryStore, since int64) []netproto.HistoryM
 			continue
 		}
 		for _, e := range entries {
-			// New-protocol records are not exported by the legacy copy: their
-			// authorized history transfer (provenance kept separate from the
-			// source) belongs to the remaining 1c-ii history checkpoint.
-			if e.SentAt < since || !openedChatText(e.Body) || e.Protocol != "" {
+			if e.SentAt < since || !openedChatText(e.Body) {
 				continue
 			}
-			out = append(out, netproto.HistoryMessage{
+			m := netproto.HistoryMessage{
 				Peer: peer.UniqueID, PeerNickname: peer.Nickname, From: e.FromUniqueID, FromNickname: e.FromNickname,
 				Body: e.Body, SentAt: e.SentAt, Self: e.Self, ClientMsgID: e.ClientMsgID,
-			})
+			}
+			if e.Protocol != "" {
+				// Only readable, authenticated archive records travel (keyed by
+				// the sender's logical ID); never ratchet state, keys or trust.
+				if !transferableRatchetEntry(e) {
+					continue
+				}
+				m.Protocol, m.Provenance = e.Protocol, netproto.HistoryProvenanceAuthenticated
+			}
+			out = append(out, m)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].SentAt > out[j].SentAt })
@@ -68,6 +75,23 @@ func historyMessagesSince(store dmHistoryStore, since int64) []netproto.HistoryM
 		out = out[:netproto.MaxHistoryMessages]
 	}
 	return out
+}
+
+// transferableRatchetEntry: a readable record of the authenticated archive,
+// i.e. received, or an own message accepted by the server (a linked copy of
+// an own send carries no status: it was accepted on the sending device).
+// Pending, uncertain or failed sends, deleted records and placeholders stay.
+func transferableRatchetEntry(e DMEntry) bool {
+	if e.Protocol != ratchetProtocol || e.Deleted || !e.EncVerified || e.ClientMsgID == "" || e.FromUniqueID == "" || strings.TrimSpace(e.Body) == "" {
+		return false
+	}
+	switch e.Status {
+	case "received", "accepted":
+		return true
+	case "":
+		return e.Self
+	}
+	return false
 }
 
 // buildHistoryChunks packs messages (newest first) into sealed chunks, each

@@ -112,4 +112,18 @@ type HistoryMessage struct {
 	SentAt       int64  `json:"sent_at"`
 	Self         bool   `json:"self,omitempty"`
 	ClientMsgID  string `json:"client_msg_id,omitempty"`
+	// Protocol is "noxa-olm-v1" for a readable record of the authenticated
+	// ratchet archive (empty = legacy); ClientMsgID is then the original
+	// sender's logical ID. Provenance is the record's provenance on the
+	// SOURCE device ("authenticated", or "transferred" when it was itself
+	// copied). The importing device keeps it separately from the source
+	// device's authorization and never imports keys, ratchets or trust.
+	Protocol   string `json:"protocol,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
 }
+
+// History transfer provenance values.
+const (
+	HistoryProvenanceAuthenticated = "authenticated"
+	HistoryProvenanceTransferred   = "transferred"
+)

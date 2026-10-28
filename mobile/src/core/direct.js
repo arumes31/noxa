@@ -12,6 +12,33 @@ import { ProtocolError } from "./connection.js";
 import { RATCHET_PROTOCOL } from "./ratchet-consumer.js";
 
 const MsgChatAccepted = 154;
+/** Durable record of imported history chunks (exact dedup), in Stores.device. */
+const HISTORY_IMPORTS = "history-imports";
+const MAX_HISTORY_DIGESTS = 4096;
+const HISTORY_PROVENANCE = new Set(["authenticated", "transferred"]);
+
+async function chunkDigest(data) {
+    const bytes = new TextEncoder().encode(data);
+    const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    return Array.from(hash, b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * One imported history message as a view record, or null. A new-protocol
+ * record must carry its sender's logical ID and a known provenance; it is
+ * marked transferred, with origin (its provenance on the source) kept apart
+ * from source (the device that sent the copy).
+ */
+export function historyRecord(m, ownUID, sourceDevice, n = 0) {
+    if (!m || typeof m !== "object" || typeof m.peer !== "string" || !m.peer || typeof m.body !== "string" || typeof m.from !== "string") return null;
+    const sentAt = Number(m.sent_at) || 0;
+    const base = { from: m.from, fromNickname: typeof m.from_nickname === "string" ? m.from_nickname : "", self: !!m.self, body: m.body, sentAt, copied: true };
+    if (!m.protocol) return { ...base, id: m.client_msg_id || `history-${m.peer}-${m.sent_at}-${n}`, verified: true };
+    if (m.protocol !== RATCHET_PROTOCOL || !HISTORY_PROVENANCE.has(m.provenance) || typeof m.client_msg_id !== "string" || !m.client_msg_id ||
+        m.client_msg_id.length > 512 || !m.from || !m.body || (m.self && m.from !== ownUID)) return null;
+    return { ...base, id: m.client_msg_id, protocol: RATCHET_PROTOCOL, self: m.from === ownUID, verified: true,
+        provenance: "transferred", origin: { provenance: m.provenance }, source: { device: String(sourceDevice || "") } };
+}
 /** Ratchet conditions an unchanged retry (outbox) can still resolve. */
 export const RETRYABLE_RATCHET = new Set(["uncertain", "rate-limit", "unavailable", "local_conflict", "fenced", "aborted"]);
 /** Failures that stay failed even for a committed attempt (no reseal loop). */
@@ -682,35 +709,61 @@ export class DirectMessages extends EventTarget {
     // --- History copy ---------------------------------------------------------
 
     /**
-     * Imports a history copy uploaded by this account's desktop. Emits
-     * "history" {done, total} as chunks arrive.
+     * Imports a history copy uploaded by another device of this account (a
+     * desktop or phone the account trusts). Emits "history" {done, total}.
+     *
+     * - Only readable archive records are imported, into this device's view
+     *   history: never send ratchets, keys, sessions or peer trust.
+     * - A new-protocol record keeps its original provenance (origin) apart
+     *   from the source device that authorized the copy (source); it is shown
+     *   as transferred, never as authenticated on this device, and never
+     *   replaces a record this device already holds.
+     * - Exact chunk dedup: a chunk whose sealed bytes were already imported
+     *   is skipped (a re-sent or replayed copy imports nothing twice).
+     * - Durable import ACK: a page is acknowledged to the server only after
+     *   its records and the imported-chunk digests are persisted.
      */
     async importHistory() {
         await this.ready;
         const own = await this.devicesOf(this.ownUID, { refresh: true });
+        const done = new Set((await getSealed(Stores.device, HISTORY_IMPORTS).catch(() => null))?.digests || []);
         let seq = 0;
         let imported = 0;
         for (;;) {
             const page = await this.conn.request(Msg.DeviceRequest, { action: "history_get", seq }, Msg.DeviceResult, { accept: r => r.action === "history_get" });
             const chunks = page.history || [];
             if (!chunks.length) break;
+            const touched = new Set(), digests = [];
             for (const chunk of chunks) {
+                const digest = typeof chunk.data === "string" && chunk.data ? await chunkDigest(chunk.data) : "";
                 const sender = own.devices.find(d => d.deviceID === chunk.from_device_id);
                 // Data is nonce||box, which JSON carries as standard base64.
-                const plain = sender && chunk.data ? openDM(chunk.data, sender.x25519, this.identity.xSecret) : null;
+                const plain = digest && !done.has(digest) && sender ? openDM(chunk.data, sender.x25519, this.identity.xSecret) : null;
                 if (plain) {
                     let messages = [];
                     try { messages = JSON.parse(plain); } catch { messages = []; }
                     for (const m of Array.isArray(messages) ? messages : []) {
-                        if (!m?.peer || typeof m.body !== "string") continue;
-                        if (this.#add(m.peer, m.peer_nickname || "", {
-                            id: m.client_msg_id || `history-${m.peer}-${m.sent_at}-${imported}`, from: m.from, fromNickname: m.from_nickname || "",
-                            self: !!m.self, body: m.body, verified: true, sentAt: Number(m.sent_at) || 0, copied: true,
-                        })) imported++;
+                        const message = historyRecord(m, this.ownUID, chunk.from_device_id, imported);
+                        if (!message) continue;
+                        // A transferred record never overwrites one this device holds.
+                        if (message.protocol && this.conversations.get(m.peer)?.messages.some(x => DirectMessages.same(x, message))) continue;
+                        if (this.#add(m.peer, typeof m.peer_nickname === "string" ? m.peer_nickname : "", message, { notify: false })) imported++;
+                        touched.add(m.peer);
                     }
+                    digests.push(digest);
                 }
                 seq = chunk.seq + 1;
                 this.#emit("history", { done: seq, total: chunk.total, imported });
+            }
+            // Persist the page (records, then chunk digests) BEFORE the ACK.
+            for (const peer of touched) {
+                clearTimeout(this.#saveTimers.get(peer));
+                this.#saveTimers.delete(peer);
+                await putSealed(Stores.dm, peer, this.conversations.get(peer));
+            }
+            if (digests.length) {
+                for (const d of digests) done.add(d);
+                await putSealed(Stores.device, HISTORY_IMPORTS, { digests: [...done].slice(-MAX_HISTORY_DIGESTS) });
             }
             await this.conn.request(Msg.DeviceRequest, { action: "history_ack", seq: seq - 1 }, Msg.DeviceResult, { accept: r => r.action === "history_ack" });
         }

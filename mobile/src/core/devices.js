@@ -93,11 +93,16 @@ export function historyMessagesSince(conversations, since = 0) {
     for (const conversation of conversations) {
         for (const m of conversation.messages || []) {
             if (typeof m.body !== "string" || !m.body || m.deleted || m.failed || m.queued || m.pending || m.verified === false) continue;
+            // A new-protocol record travels only as a readable record of the
+            // authenticated archive (or one already transferred), with its
+            // provenance; placeholders and unknown protocols never do.
+            if (m.protocol && (m.protocol !== "noxa-olm-v1" || m.quarantined)) continue;
             const sentAt = Math.floor(Number(m.sentAt) || 0);
             if (sentAt < since) continue;
             out.push({
                 peer: conversation.peer, peer_nickname: conversation.nickname || undefined, from: m.from || "", from_nickname: m.fromNickname || undefined,
                 body: m.body, sent_at: sentAt, self: !!m.self || undefined, client_msg_id: m.id || undefined,
+                ...(m.protocol ? { protocol: m.protocol, provenance: m.provenance === "transferred" ? "transferred" : "authenticated" } : {}),
             });
         }
     }
