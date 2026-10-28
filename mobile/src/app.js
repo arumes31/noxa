@@ -9,6 +9,7 @@ import { SavedMessages } from "./core/saved.js";
 import { Connection } from "./core/connection.js";
 import { Msg } from "./core/frame.js";
 import { signBundle } from "./core/olm-directory.js";
+import { signReset } from "./core/olm-reset.js";
 import { verifyLinkBinding } from "./core/link-binding.js";
 import { RatchetConsumer, connectionTransport } from "./core/ratchet-consumer.js";
 import { generateIdentity } from "./core/crypto.js";
@@ -159,6 +160,9 @@ async function openRatchet(session, fence, isCurrent, meta) {
             throw Object.assign(new Error("untrusted device"), { code: "untrusted_device" });
         },
         signBundle: async bundle => { await assertIdentityFence(fence); return signBundle(bundle, session.identity.edSecret); },
+        // Explicit secure-messaging recovery (Settings): the noXa key signs the reset.
+        signReset: async reset => { await assertIdentityFence(fence); return signReset(reset, session.identity.edSecret); },
+        ownKey: session.identity.edPublic,
         assertCurrent: () => { if (!isCurrent()) throw fenced(); },
         // Durable identity-change confirmations (stored with the contact pin).
         trustReset: principal => owner.dm ? owner.dm.ratchetResetPending(principal) : "",
@@ -642,4 +646,15 @@ if (typeof window !== "undefined") {
         if (app.viewing !== null) markRead(app.viewing);
         if (app.voice?.active) holdWakeLock(true);
     });
+}
+
+/**
+ * Explicit secure-messaging recovery after restoring a backup or losing this
+ * browser's message store (Settings). Resolves true, or rejects with a coded
+ * error (not_needed, invalid_evidence, authority-required, unavailable...).
+ */
+export async function recoverSecureMessaging() {
+    const owner = app.ratchet;
+    if (!owner || owner.consumer.closed) throw Object.assign(new Error("secure messaging is not active"), { code: "unavailable" });
+    return owner.consumer.recover("restored");
 }

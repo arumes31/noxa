@@ -937,7 +937,28 @@ class RatchetStore {
     )
       throw fail("fenced");
   }
-  async prepareAccountTransition(s, accountID, account, reset, bundle, otks) {
+  // Mirror of Go PrepareRecoveryTransition: the explicit, user-initiated
+  // recovery of a restored/lost store (reason lost|restored) may start from an
+  // OLDER local epoch than reset.old_epoch (the server's current one).
+  async prepareRecoveryTransition(s, accountID, account, reset, bundle, otks) {
+    if (reset?.reason !== "lost" && reset?.reason !== "restored")
+      throw fail("invalid");
+    return this.prepareAccountTransition(s, accountID, account, reset, bundle, otks, true);
+  }
+  // Mirror of Go AbandonRecoveryTransition.
+  async abandonRecoveryTransition(s, id) {
+    const ref = ["transition", id],
+      old = this.require(s, ref);
+    if (!old.revision) throw fail("invalid");
+    const t = json(old.data);
+    if (!t.recovery || t.receipt) throw fail("invalid");
+    if (t.abandoned) return;
+    const c = json(this.require(s, ctl).data);
+    if (c.accountEpoch !== t.from_epoch || !c.sendingBlocked) throw fail("fenced");
+    t.abandoned = true;
+    await this.#commit(s, { [key(ref)]: bytes(t) }, { sendingBlocked: false });
+  }
+  async prepareAccountTransition(s, accountID, account, reset, bundle, otks, recovery = false) {
     const [server, principal, device] = JSON.parse(this.namespace);
     const { publicationDigest, resetTranscript } = await import(
       "./olm-reset.js"
@@ -969,7 +990,8 @@ class RatchetStore {
         ...Object.keys(otks).map((id) => ["obligation", id]),
       ]);
     this.compare(s, fresh);
-    const expected = { account_id: accountID, reset, bundle },
+    const c0 = json(this.require(fresh, ctl).data);
+    const expected = { account_id: accountID, reset, bundle, ...(recovery ? { recovery: true, from_epoch: c0.accountEpoch } : {}) },
       old = this.require(fresh, ref);
     if (old.revision) {
       const prior = json(old.data);
@@ -981,7 +1003,7 @@ class RatchetStore {
     const c = json(this.require(fresh, ctl).data);
     if (
       c.sendingBlocked ||
-      c.accountEpoch !== reset.old_epoch ||
+      (recovery ? c.accountEpoch > reset.old_epoch : c.accountEpoch !== reset.old_epoch) ||
       c.accountID === accountID ||
       this.require(fresh, ar).revision
     )
@@ -1052,8 +1074,9 @@ class RatchetStore {
       await this.#commit(s, {});
       return;
     }
+    if (t.abandoned) throw fail("fenced");
     const c = json(this.require(s, ctl).data);
-    if (c.accountEpoch !== r.old_epoch || !c.sendingBlocked)
+    if (c.accountEpoch !== (t.recovery ? t.from_epoch : r.old_epoch) || !c.sendingBlocked)
       throw fail("fenced");
     t.receipt = receipt;
     await this.#commit(

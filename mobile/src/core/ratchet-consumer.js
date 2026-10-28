@@ -131,12 +131,12 @@ export const semanticKey = (sender, logicalID) => JSON.stringify([RATCHET_PROTOC
  *                       identity change of p whose reset is still pending
  */
 export class RatchetConsumer {
-    constructor({ store, core, namespace, admission, directory, deviceKey, signBundle, assertCurrent, trustReset = null, trustResetDone = null, attemptTTL = 300, refreshMS = 3600000 }) {
+    constructor({ store, core, namespace, admission, directory, deviceKey, signBundle, assertCurrent, trustReset = null, trustResetDone = null, attemptTTL = 300, refreshMS = 3600000, signReset = null, ownKey = null }) {
         // attemptTTL must exceed the abort margin (else every attempt expires at
         // once and loops) and leave a fresh 1 h claim able to cover a resend
         // (else every pending resend spends a new claim).
         if (!Number.isSafeInteger(attemptTTL) || attemptTTL < DEADLINE_MARGIN + 5 || attemptTTL > 3000) throw fail("invalid_config");
-        Object.assign(this, { store, core, namespace, admission, directoryRequest: directory, deviceKey, signBundle, assertCurrent, trustReset, trustResetDone, attemptTTL, refreshMS });
+        Object.assign(this, { store, core, namespace, admission, directoryRequest: directory, deviceKey, signBundle, assertCurrent, trustReset, trustResetDone, attemptTTL, refreshMS, signReset, ownKey });
         this.readyAt = 0;
         this.readyValue = null;   // last successful readiness {identity, epoch, expiresAt}
         this.claims = new Map();  // verified, not yet committed claims kept across local_conflict retries
@@ -373,6 +373,90 @@ export class RatchetConsumer {
             for (const r of refs.slice(i, i + 200)) out.push([r, rec(s, ...r)]);
         }
         return out;
+    }
+
+    /**
+     * Explicit, user-initiated recovery of a restored or lost account
+     * (mirror of client/ratchet_recovery.go). The server's own_state is only
+     * input: it must verify under this device's own noXa key and may never be
+     * older than the local epoch. A fresh account, bundle and noxa-olm-reset-v1
+     * transition are signed with the noXa key, durably recorded (old sending
+     * stops), submitted at the server's epoch and promoted only on the exact
+     * receipt. A deterministic server refusal abandons the intent. Old readable
+     * history stays; copies sent to the lost keys stay quarantined.
+     */
+    recover(reason = "restored") { return this.#serial(() => this.#recover(reason)); }
+    async #recover(reason) {
+        if (reason !== "restored" && reason !== "lost") throw fail("invalid");
+        if (!this.signReset || !(this.ownKey instanceof Uint8Array) || this.ownKey.length !== 32) throw fail("unavailable");
+        const ns = this.namespace;
+        let s = await this.store.read();
+        const local = await this.store.accountAuthority(s);
+        this.#check();
+        for (const ref of await this.#refs("transition")) {
+            const t = await this.store.accountTransitionRequest(await this.store.read([ref]), ref[1]).catch(() => null);
+            if (t?.recovery && !t.receipt && !t.abandoned) return this.#finishRecovery(t, ref[1]);
+        }
+        if (local.blocked) throw fail("fenced");
+        let own;
+        try { own = await this.directory({ action: "own_state", request_id: crypto.randomUUID() }); }
+        catch (e) { if (e.code === "absent") throw fail("not_needed"); throw e; }
+        this.#check();
+        if (own?.error === "absent") throw fail("not_needed");
+        const cur = own?.bundle;
+        if (own?.error || !cur) throw fail("unavailable");
+        try {
+            verifyBundleEvidence(cur, { trustedSigningKey: this.ownKey, server: ns.server, principal: ns.principal, deviceID: ns.device, accountEpoch: cur.account_epoch, pinnedOlmIdentity: cur.identity });
+        } catch { throw fail("invalid_evidence"); }
+        if (!Number.isSafeInteger(cur.account_epoch) || cur.account_epoch < 1 || cur.account_epoch < local.epoch || !Number.isSafeInteger(cur.generation) || cur.generation < 1)
+            throw fail("invalid_evidence");
+        const latest = await this.#latestPublication(local).catch(() => null);
+        if (latest && latest.bundle.account_epoch === cur.account_epoch && latest.bundle.identity === cur.identity) throw fail("not_needed");
+        s = await this.store.read();
+        const created = await this.core.apply({ op: "new_account", key: this.store.coreKey(s), count: Limits.prekeys });
+        this.#check();
+        const epoch = cur.account_epoch + 1, generation = cur.generation + 1;
+        const accountID = `epoch-${epoch}-${crypto.randomUUID()}`;
+        const transition = `pub:${accountID}:${String(generation).padStart(10, "0")}`;
+        const issued = now();
+        const bundle = await this.signBundle({
+            version: OLM_DIRECTORY_VERSION, protocol: RATCHET_PROTOCOL, server: ns.server, principal: ns.principal, device_id: ns.device,
+            account_epoch: epoch, generation, issued_at: issued, expires_at: issued + 6 * 86400,
+            identity: created.bundle.identity, signing: created.bundle.signing,
+            one_time_keys: created.bundle.one_time_keys.map(k => ({ id: k.id, key: k.key })),
+        });
+        this.#check();
+        const { publicationDigest } = await import("./olm-reset.js");
+        const reset = await this.signReset({
+            version: "noxa-olm-reset-v1", server: ns.server, principal: ns.principal, device: ns.device, transition_id: transition,
+            old_epoch: cur.account_epoch, old_identity: cur.identity, old_signing: cur.signing, new_epoch: epoch,
+            new_identity: bundle.identity, new_signing: bundle.signing, generation, publication_digest: await publicationDigest(bundle), reason,
+        });
+        this.#check();
+        const otks = {};
+        for (const k of bundle.one_time_keys)
+            otks[`${accountID}:${k.id}`] = { account_id: accountID, account_epoch: epoch, publication_id: transition, expires_at: bundle.expires_at, key_id: k.id, public_key: k.key, consumed: false, closed: false };
+        await this.store.prepareRecoveryTransition(await this.store.read(), accountID, enc.encode(created.account), reset, bundle, otks);
+        this.#check();
+        return this.#finishRecovery({ account_id: accountID, reset, bundle }, transition);
+    }
+    async #finishRecovery(t, id) {
+        const r = t.reset;
+        let receipt;
+        try {
+            receipt = await this.#call({ action: "reset", account_epoch: r.old_epoch, reset: r, bundle: t.bundle });
+        } catch (e) {
+            if (["authority-required", "account-change-required", "conflict", "invalid", "limit"].includes(e.code))
+                await this.store.abandonRecoveryTransition(await this.store.read([["transition", id]]), id);
+            throw e;
+        }
+        this.#check();
+        await this.store.promoteAccount(await this.store.read([["transition", id]]), id, receipt);
+        this.#check();
+        this.sticky = null;
+        this.readiness = null;
+        this.readyValue = null;
+        return true;
     }
 
     // --- Trust ----------------------------------------------------------------

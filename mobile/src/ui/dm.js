@@ -69,7 +69,7 @@ export function renderDM(root, peer) {
         const classes = ["msg", message.self ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
         const body = message.deleted ? h("span", { class: "msg-deleted" }, t("chat.deleted"))
             : message.body === null || message.body === undefined
-                ? h("span", { class: "msg-locked" }, t("chat.locked"))
+                ? h("span", { class: "msg-locked" }, t(message.quarantined === "fenced_copy" ? "chat.lockedPreviousKeys" : "chat.locked"))
                 : richBody(message.body, { conversation: "direct", session, conn: session.conn, channelID: 0 });
         const from = message.self ? session.nickname : (message.fromNickname || name);
         // Not sent: tapping offers Retry or Delete; otherwise the action sheet (bindMessageTaps).

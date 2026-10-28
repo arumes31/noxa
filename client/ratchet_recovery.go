@@ -66,6 +66,10 @@ func (c *ratchetConsumer) recoverAccount(reason string) error {
 		return rfail("fenced")
 	}
 	own, err := c.directory(netproto.OlmDirectoryRequest{Action: "own_state", RequestID: newClientMsgID()})
+	if ratchetCode(err) == "absent" {
+		// Nothing published yet: an ordinary first publication applies.
+		return rfail("not_needed")
+	}
 	if err != nil {
 		return err
 	}

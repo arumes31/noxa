@@ -1,6 +1,6 @@
 // you.js — You (14/15): profile, the searchable Settings sections (see
 // settings-registry.js), passkeys and devices.
-import { app, forgetDevice } from "../app.js";
+import { app, forgetDevice, recoverSecureMessaging } from "../app.js";
 import { registerPasskey, passkeysSupported } from "../core/device.js";
 import { Msg } from "../core/frame.js";
 import { disablePush, enablePush, needsInstallForPush, pushSupported, setPushPreferences } from "../core/push.js";
@@ -187,6 +187,14 @@ export function renderYou(root) {
             guest ? null : h("p", { class: "section-label" }, t("settings.devices")),
             list,
             guest ? null : h("button", { class: "btn btn-block", type: "button", onclick: backupFlow }, t("acct.backup")),
+            // Explicit secure-messaging recovery after a restore or a lost store.
+            guest ? null : h("p", { class: "hint" }, t("acct.recoverHelp")),
+            guest ? null : h("button", { class: "btn btn-block", type: "button", onclick: async () => {
+                const ok = await sheet(t("acct.recover"), t("acct.recoverAsk"), [{ label: t("acct.recoverConfirm"), value: true }, { label: t("link.cancel"), value: false }]);
+                if (!ok) return;
+                try { await recoverSecureMessaging(); toast(t("acct.recovered")); }
+                catch (error) { toast(t(`acct.recoverFail.${["not_needed", "invalid_evidence"].includes(error.code) ? error.code : "other"}`, { error: error.message }), "warn"); }
+            } }, t("acct.recover")),
             serversSection(),
             h("div", { style: "height:16px" }),
             h("button", { class: "btn btn-danger btn-block", onclick: async () => {

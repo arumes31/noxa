@@ -54,6 +54,7 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
         "./core/direct.js": { DirectMessages }, "./core/calls.js": { Calls: Empty }, "./core/groups.js": { Groups }, "./core/voice.js": { Voice: Empty },
         "./core/connection.js": { Connection: { open: async () => new FakeConnection() } }, "./core/frame.js": { Msg: {} },
         "./core/olm-directory.js": { signBundle: () => ({}) },
+        "./core/olm-reset.js": { signReset: () => ({}) },
         "./core/link-binding.js": { verifyLinkBinding },
         "./core/ratchet-consumer.js": { RatchetConsumer, connectionTransport: () => ({ admission: none, directory: none }) },
         "./core/crypto.js": { generateIdentity },
