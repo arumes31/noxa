@@ -99,6 +99,9 @@ export function flush(session, dm, groups = null) {
     flushing = (async () => {
         let sent = 0;
         let nextHeld = Infinity;
+        // Destinations whose earlier entry stayed queued: later entries to
+        // the same peer/conversation/channel wait, so send order is kept.
+        const waiting = new Set();
         try {
             const fence = await currentFence();
             const stillCurrent = async () => sameFence(fence, await currentFence());
@@ -114,6 +117,7 @@ export function flush(session, dm, groups = null) {
                 }
                 // Without groups (an older caller) the entry waits for one.
                 if (entry.kind === "conversation" && !groups) continue;
+                if (waiting.has(destination(entry))) continue;
                 // Held for Undo: sent by a later flush once the countdown ends.
                 if (entry.holdUntil > Date.now() && !entry.committed) {
                     nextHeld = Math.min(nextHeld, entry.holdUntil);
@@ -177,6 +181,7 @@ export function flush(session, dm, groups = null) {
                     if (error.blocked) {
                         await putSealedIn(fence, Stores.outbox, current.id, { ...current, error: error.message }).catch(() => {});
                         show(session, dm, { ...current, error: error.message }, groups);
+                        waiting.add(destination(current));
                         continue;
                     }
                     if (error.retryable) {
@@ -185,6 +190,7 @@ export function flush(session, dm, groups = null) {
                         // only this entry, so later ones are not starved.
                         if (current !== entry) await putSealedIn(fence, Stores.outbox, current.id, current).catch(() => {});
                         if (stopsFlush(session, error)) break;
+                        waiting.add(destination(current));
                         continue;
                     }
                     console.warn(`outbox: ${current.kind} message ${current.id} refused: ${error.message}`);
@@ -199,6 +205,13 @@ export function flush(session, dm, groups = null) {
         return sent;
     })();
     return flushing;
+}
+
+/** The ordering key of an entry: one peer, conversation or channel. */
+function destination(entry) {
+    if (entry.kind === "channel") return `channel:${entry.scope}`;
+    if (entry.kind === "conversation") return `conversation:${entry.conversation}`;
+    return `dm:${entry.peer}`;
 }
 
 /** A retryable failure stops the whole flush only when the connection is gone or rate limited. */

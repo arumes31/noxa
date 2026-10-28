@@ -54,3 +54,21 @@ test("b8 P3-1: a lost connection still stops the flush", async () => {
     assert.deepEqual(channelSends, [], "nothing more is sent on a closed connection");
     assert.deepEqual(Object.keys(left).sort(), ["op-ch", "op-dm"]);
 });
+
+test("b9 CodeRabbit: later entries to a peer wait behind its queued entry, others are sent", async () => {
+    await raw(Stores.outbox, s => s.clear());
+    const sess = { conn: { open: true }, showQueued() {}, async send() {} };
+    await enqueue({ kind: "dm", peer: "bob" }, "bob first", { id: "op-b1" });
+    await tick();
+    await enqueue({ kind: "dm", peer: "bob" }, "bob second", { id: "op-b2" });
+    await tick();
+    await enqueue({ kind: "dm", peer: "carol" }, "carol", { id: "op-c" });
+    const tried = [];
+    const dm = { ratchet: {}, showQueued() {}, async send(peer, text) {
+        tried.push(text);
+        if (peer === "bob") throw Object.assign(new Error("secure send failed: unavailable"), { code: "unavailable", retryable: true });
+    } };
+    await flush(sess, dm, null);
+    assert.deepEqual(tried, ["bob first", "carol"], "bob's second message is not sent before his first");
+    assert.deepEqual((await pending()).map(e => e.id).sort(), ["op-b1", "op-b2"]);
+});
