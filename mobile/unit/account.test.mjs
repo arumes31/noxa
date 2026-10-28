@@ -197,6 +197,12 @@ describe("device confirmation", () => {
         const transcript = approvalTranscript("uid-1", "dev-1", pem, target.x25519_public_key);
         assert.ok(nacl.sign.detached.verify(transcript, fromBase64(sent.signature), me.edPublic));
         await assert.rejects(endorseDevice(session, { ...target, fingerprint: "0000 0000 0000 0000" }));
+        // 1c-iii-b item 0: the X25519 key is validated before anything is signed.
+        sent = null;
+        for (const x of [target.x25519_public_key + "\nextra", "short", "A".repeat(43) + "=", " " + target.x25519_public_key])
+            await assert.rejects(endorseDevice(session, { ...target, x25519_public_key: x }), /invalid/);
+        assert.equal(sent, null, "nothing signed or sent for invalid keys");
+        await assert.rejects(endorseDevice(session, { ...target, ed25519_public_key: pem + "x: y\n", fingerprint: keyFingerprint(pem + "x: y\n") }), /invalid/);
     });
 });
 

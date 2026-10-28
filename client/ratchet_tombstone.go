@@ -474,6 +474,12 @@ func (a *App) sweepRatchetStoresIn(bases map[string]bool) {
 // (identityMu held): any tombstone of it belongs to a committed deletion and
 // is erased (or at least marked .erasing-), so the import never resurrects
 // the deleted store.
+//
+// It scans first and refuses before touching anything: with incomplete
+// liveness (an identity file could not be read) nothing at all is erased,
+// not even a kept-aside .conflict- store, and the import is refused whenever
+// a leftover could be authoritative (.deleted-) or could be reopened as the
+// re-imported key's store (a live directory next to .erasing-).
 func (a *App) finishRatchetDeletion(publicKey string) error {
 	// The caller found no readable stored copy of this key. A readable one
 	// keeps its tombstones (resolved at start).
@@ -484,42 +490,64 @@ func (a *App) finishRatchetDeletion(publicKey string) error {
 	}
 	unlock := lockRatchetStore(key)
 	defer unlock()
+	type leftover struct{ base, tomb, marker string }
+	var found []leftover
 	for base := range a.ratchetBases() {
 		entries, err := os.ReadDir(base)
 		if err != nil {
 			continue
 		}
 		for _, e := range entries {
-			k, marker, ok := splitRatchetTombstone(e)
-			if !ok || k != key {
-				continue
+			if k, marker, ok := splitRatchetTombstone(e); ok && k == key {
+				found = append(found, leftover{base, filepath.Join(base, e.Name()), marker})
 			}
-			tomb := filepath.Join(base, e.Name())
-			if marker == ratchetTombstone {
-				// Unknown liveness: the key's own identity file may exist but be
-				// unreadable, and this tombstone may then be authoritative.
-				// Neither erase it nor let the import resurrect it: refuse.
-				if !complete {
-					return errors.New("an identity file could not be read; fix or remove it, then import this identity again")
+		}
+	}
+	busy := errors.New("an earlier deletion of this identity's secure message store is still being finished; try the import again shortly")
+	if !complete {
+		for _, f := range found {
+			_, liveErr := os.Lstat(filepath.Join(f.base, key))
+			// Unknown liveness: the key's own identity file may exist but be
+			// unreadable, and a .deleted- tombstone may then be authoritative;
+			// a live directory next to .erasing- would be reopened as the
+			// imported key's store. Neither erase nor resurrect: refuse.
+			if f.marker == ratchetTombstone || (f.marker == ratchetErasing && liveErr == nil) {
+				return errors.New("an identity file could not be read; fix or remove it, then import this identity again")
+			}
+		}
+		// Only inert leftovers (.conflict- stores, bare .erasing- markers):
+		// never restored, kept until liveness is known.
+		return nil
+	}
+	for _, f := range found {
+		switch f.marker {
+		case ratchetTombstone:
+			eraseCommittedTombstone(f.tomb)
+			if _, err := os.Lstat(f.tomb); err == nil {
+				return busy
+			}
+			continue
+		case ratchetErasing:
+			// Next to a committed marker, a live directory is the deleted
+			// store that another process reopened: erased first, under the
+			// destroy lock (never under another process's open store).
+			dir := filepath.Join(f.base, key)
+			if _, err := os.Lstat(dir); err == nil {
+				release, err := durable.LockForDestroy(dir)
+				if err != nil {
+					return busy
 				}
-				eraseCommittedTombstone(tomb)
-				if _, err := os.Lstat(tomb); err == nil {
-					return errors.New("an earlier deletion of this identity's secure message store is still being finished; try the import again shortly")
-				}
-				continue
-			}
-			// Committed markers and kept-aside stores of the deleted key go too,
-			// so nothing of it can come back for the re-imported key. Next to
-			// a committed marker, a live directory is the deleted store that
-			// another process reopened: it is erased first.
-			if marker == ratchetErasing {
-				if err := os.RemoveAll(filepath.Join(base, key)); err != nil {
-					return errors.New("an earlier deletion of this identity's secure message store is still being finished; try the import again shortly")
+				err = os.RemoveAll(dir)
+				release()
+				if err != nil {
+					return busy
 				}
 			}
-			if err := os.RemoveAll(tomb); err != nil {
-				return errors.New("an earlier deletion of this identity's secure message store is still being finished; try the import again shortly")
-			}
+		}
+		// Committed markers and kept-aside stores of the deleted key go too,
+		// so nothing of it can come back for the re-imported key.
+		if err := os.RemoveAll(f.tomb); err != nil {
+			return busy
 		}
 	}
 	return nil

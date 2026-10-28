@@ -67,6 +67,18 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 		values.Get("id") != "link-1" || values.Get("k") != base64.RawURLEncoding.EncodeToString(secret) {
 		t.Fatalf("link URL = %q", link.URL)
 	}
+	// Item 0: the QR host is compared with the connected server's host.
+	if link.LinkHost != "chat.example" || link.ServerHost != "test.invalid" || !link.HostMismatch {
+		t.Fatalf("host comparison = %q vs %q mismatch=%v", link.LinkHost, link.ServerHost, link.HostMismatch)
+	}
+	for _, c := range []struct {
+		a, b string
+		same bool
+	}{{"Chat.Example.", "chat.example", true}, {"[::1]", "::1", true}, {"chat.example", "evil.example", false}, {"", "", false}} {
+		if sameHost(c.a, c.b) != c.same || connectedHost("chat.example:9000") != "chat.example" {
+			t.Fatalf("sameHost(%q, %q) != %v", c.a, c.b, c.same)
+		}
+	}
 
 	claim := func(linkID, via string) {
 		frame, err := netproto.Encode(netproto.MsgDeviceEvent, netproto.DeviceEvent{

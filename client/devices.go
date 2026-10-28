@@ -32,6 +32,12 @@ type DeviceLinkView struct {
 	Code      string `json:"code"`
 	ExpiresAt int64  `json:"expires_at"`
 	QR        string `json:"qr"` // PNG data URL of URL
+	// LinkHost is the host the QR opens (the server's configured web address);
+	// HostMismatch is set when it is not the host this desktop is connected
+	// to, so the UI can warn before the user scans it.
+	LinkHost     string `json:"link_host"`
+	ServerHost   string `json:"server_host"`
+	HostMismatch bool   `json:"host_mismatch"`
 }
 
 // deviceEventView is a DeviceEvent plus the locally derived SAS.
@@ -279,16 +285,35 @@ func (a *App) CreateDeviceLinkForTab(tabID string) (DeviceLinkView, error) {
 		return DeviceLinkView{}, err
 	}
 	base, _, _ := strings.Cut(result.URL, "#")
-	if u, err := url.Parse(base); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+	u, err := url.Parse(base)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" {
 		return DeviceLinkView{}, errors.New("invalid device link response")
 	}
+	cm.mu.Lock()
+	serverHost := connectedHost(cm.addr)
+	cm.mu.Unlock()
 	fragment := url.Values{"id": {result.LinkID}, "k": {base64.RawURLEncoding.EncodeToString(result.Secret)}, "a": {netproto.KeyFingerprint(id.PublicKey)}}
 	result.URL = base + "#" + fragment.Encode()
 	image, err := deviceLinkQR(result.URL)
 	if err != nil {
 		return DeviceLinkView{}, err
 	}
-	return DeviceLinkView{LinkID: result.LinkID, URL: result.URL, Code: result.Code, ExpiresAt: result.ExpiresAt, QR: image}, nil
+	return DeviceLinkView{LinkID: result.LinkID, URL: result.URL, Code: result.Code, ExpiresAt: result.ExpiresAt, QR: image,
+		LinkHost: u.Hostname(), ServerHost: serverHost, HostMismatch: !sameHost(u.Hostname(), serverHost)}, nil
+}
+
+// connectedHost is the host part of a "host:port" connect address.
+func connectedHost(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
+
+// sameHost compares host names case-insensitively, ignoring a trailing dot.
+func sameHost(a, b string) bool {
+	norm := func(h string) string { return strings.TrimSuffix(strings.ToLower(strings.Trim(h, "[]")), ".") }
+	return a != "" && norm(a) == norm(b)
 }
 
 // CancelDeviceLinkForTab withdraws a pending link.
@@ -491,20 +516,32 @@ func (m *connManager) approvePasskeyDevices(conn net.Conn) {
 }
 
 // validClaimedDeviceKeys checks relayed claim keys before the desktop signs
-// a transcript over them: a canonical single-key Ed25519 PEM and a 32-byte
-// standard-base64 X25519 key, so no field can smuggle a newline into the
-// newline-joined approval or binding transcripts.
+// a transcript over them, so no field can smuggle an extra line into the
+// newline-joined approval or binding transcripts. The Ed25519 key is
+// canonicalized first and then validated: the PEM must be exactly the
+// canonical single-key encoding (what the PWA's publicKeyPEM and Go's
+// pem.EncodeToMemory both produce, pinned by mobile/unit/fixtures/interop.json)
+// up to benign line-ending formatting (CRLF line breaks, a missing final
+// newline). The relayed string itself stays the signed value, because the
+// server and every later verifier check the signature over exactly that
+// string. The X25519 key must be canonical standard base64 of a non-zero
+// 32-byte key.
 func validClaimedDeviceKeys(ed25519Public, x25519Public string) bool {
 	key, err := auth.LoadPublicKey(ed25519Public)
 	if err != nil || len(key) != ed25519.PublicKeySize {
 		return false
 	}
-	if string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: key})) != ed25519Public {
+	canonical := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: key}))
+	benign := strings.ReplaceAll(ed25519Public, "\r\n", "\n")
+	if !strings.HasSuffix(benign, "\n") {
+		benign += "\n"
+	}
+	if benign != canonical {
 		return false
 	}
-	if strings.ContainsAny(x25519Public, "\r\n") || base64.StdEncoding.EncodeToString(func() []byte { k, _ := parseDeviceX25519(x25519Public); return k[:] }()) != x25519Public {
+	x, ok := parseDeviceX25519(x25519Public)
+	if !ok || strings.ContainsAny(x25519Public, "\r\n") || base64.StdEncoding.EncodeToString(x[:]) != x25519Public {
 		return false
 	}
-	_, ok := parseDeviceX25519(x25519Public)
-	return ok
+	return true
 }

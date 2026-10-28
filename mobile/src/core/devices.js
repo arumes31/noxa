@@ -8,7 +8,7 @@
 // client/dm_history_copy.go: messages newest first, packed into chunks of at
 // most MaxHistoryChunk sealed bytes, each chunk a JSON array (oldest first)
 // sealed as nacl/box nonce||box from this device to the target device.
-import { keyFingerprint, sealDM, sign, utf8 } from "./crypto.js";
+import { fromBase64, keyFingerprint, publicKeyPEM, sealDM, sign, toBase64, utf8 } from "./crypto.js";
 import { Msg } from "./frame.js";
 
 // internal/netproto/dm_devices.go
@@ -46,6 +46,26 @@ export function approvalTranscript(principal, approverDeviceID, ed25519PEM, x255
 }
 
 /**
+ * Mirrors client validClaimedDeviceKeys: before signing the newline-joined
+ * approval transcript, the Ed25519 key must be the canonical single-key PEM
+ * (benign CRLF / missing final newline aside) and the X25519 key canonical
+ * standard base64 of a non-zero 32-byte key, so no field can smuggle a line.
+ */
+export function validDeviceKeys(ed25519PEM, x25519B64) {
+    if (typeof ed25519PEM !== "string" || typeof x25519B64 !== "string") return false;
+    let benign = ed25519PEM.replaceAll("\r\n", "\n");
+    if (!benign.endsWith("\n")) benign += "\n";
+    const m = /^-----BEGIN PUBLIC KEY-----\n([A-Za-z0-9+/=]+)\n-----END PUBLIC KEY-----\n$/.exec(benign);
+    try {
+        if (!m) return false;
+        const ed = fromBase64(m[1]);
+        if (ed.length !== 32 || publicKeyPEM(ed) !== benign) return false;
+        const x = fromBase64(x25519B64);
+        return x.length === 32 && x.some(b => b !== 0) && toBase64(x) === x25519B64;
+    } catch { return false; }
+}
+
+/**
  * Confirms another device of the account for direct messages. The target's
  * keys come from the server's list and must match its fingerprint, which
  * the user compares with the one the other device shows.
@@ -55,6 +75,7 @@ export async function endorseDevice(session, target) {
     if (!target || target.device_id === session.deviceID || target.first_device || target.revoked_at) throw new Error("this device can no longer be confirmed");
     if (!target.ed25519_public_key || !target.x25519_public_key) throw new Error("the server does not share this device's keys");
     if (keyFingerprint(target.ed25519_public_key) !== target.fingerprint) throw new Error("the device's key does not match its fingerprint");
+    if (!validDeviceKeys(target.ed25519_public_key, target.x25519_public_key)) throw new Error("the device's keys are invalid");
     const signature = sign(approvalTranscript(session.uniqueID, session.deviceID, target.ed25519_public_key, target.x25519_public_key), session.identity.edSecret);
     let binary = "";
     for (const byte of signature) binary += String.fromCharCode(byte);

@@ -463,6 +463,13 @@ func answerChallenge(ch netproto.AuthChallenge, signer challengeSigner) ([]byte,
 	return sig, pub, ""
 }
 
+// loginReasonTerminal reports login refusals that retrying cannot fix: an
+// outdated server, or a challenge this client refuses to sign (a malicious
+// or broken server must not keep the desktop retrying).
+func loginReasonTerminal(reason string) bool {
+	return reason == errServerLoginOutdated || reason == auth.ErrUnsafeChallenge.Error()
+}
+
 // challengeSigner signs a server challenge and returns the signature and
 // the public key to present in AuthSignature.
 type challengeSigner func(challenge []byte) (signature []byte, publicKey string, err error)
@@ -512,8 +519,8 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 			sig, pub, reason := answerChallenge(ch, signer)
 			if reason != "" {
 				_ = conn.Close()
-				if reason == errServerLoginOutdated {
-					m.markReconnectTerminal() // no reconnect loop: it needs an update
+				if loginReasonTerminal(reason) {
+					m.markReconnectTerminal() // no reconnect loop: an update or another server is needed
 				}
 				return reason
 			}

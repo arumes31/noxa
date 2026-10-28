@@ -693,23 +693,42 @@ class RatchetStore {
     });
     return request.slice();
   }
+  // Re-validates a committed send for a retry. Only a real change (trust
+  // revision moved, attempt no longer pending, authority fenced) fails with
+  // "conflict"; a pure revision move by another tab or consumer re-reads and
+  // re-validates (bounded, like validated()), so a healthy committed attempt
+  // is never aborted because of an unrelated concurrent write. Exhausting the
+  // bound is "local_conflict" (transient), never a trust mismatch.
   async retrySend(s, id) {
-    let fresh = await this.extended(s, [["outbox", id]]);
-    const old = fresh.records[key(["outbox", id])];
-    if (!old.revision) throw fail("invalid");
-    const saved = json(old.data);
-    this.sendAuthority(fresh, saved.packets, saved.attempt);
-    if (saved.attempt && saved.status !== "pending") throw fail("conflict");
-    const checked = await this.extended(
-      fresh,
-      saved.packets.map((p) => ["trust", p.trustID]),
-    );
-    this.compare(fresh, checked);
-    for (const p of saved.packets)
-      if (this.trust(checked, p.trustID) !== p.trustRevision)
-        throw fail("conflict");
-    await this.#commit(checked, {});
-    return { data: old.data, reused: true };
+    for (let attempt = 0; ; attempt++) {
+      const fresh = await this.extended(s, [["outbox", id]]);
+      const old = fresh.records[key(["outbox", id])];
+      if (!old.revision) throw fail("invalid");
+      const saved = json(old.data);
+      const checked = await this.extended(
+        fresh,
+        saved.packets.map((p) => ["trust", p.trustID]),
+      );
+      const moved = Object.entries(fresh.records).some(
+        ([k, v]) => checked.records[k]?.revision !== v.revision,
+      );
+      if (!moved) {
+        this.sendAuthority(checked, saved.packets, saved.attempt);
+        if (saved.attempt && saved.status !== "pending")
+          throw fail("conflict");
+        for (const p of saved.packets)
+          if (this.trust(checked, p.trustID) !== p.trustRevision)
+            throw fail("conflict");
+        try {
+          await this.#commit(checked, {});
+          return { data: old.data, reused: true };
+        } catch (e) {
+          if (e.code !== "conflict") throw e;
+        }
+      }
+      if (attempt >= 16) throw fail("local_conflict");
+      s = checked;
+    }
   }
 
   sendAuthority(s, packets, attempt) {

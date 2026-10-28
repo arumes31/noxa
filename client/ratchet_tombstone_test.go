@@ -405,3 +405,75 @@ func TestRatchetSweepKeepsLiveDirNextToMarkerWhenLivenessUnknown(t *testing.T) {
 		t.Fatal("a reopened store of a known-gone key must be erased with its marker")
 	}
 }
+
+// Adopted fix2-review repro (P3-1a): a REFUSED import has no destructive side
+// effect: the kept-aside .conflict- store (sorted before .deleted-) survives.
+func TestRatchetRefusedImportKeepsKeptAsideStore(t *testing.T) {
+	a, id, idName, live := tombSetup(t)
+	tomb := live + ratchetTombstone + "crash"
+	writeTomb(t, tomb, "a.db", "authoritative-history")
+	aside := live + ratchetConflict + "k"
+	writeTomb(t, aside, "b.db", "kept-aside-history")
+	path, _ := identityPathFor(idName)
+	if err := os.WriteFile(path, []byte("{damaged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	msg := a.adoptImportedIdentity(id, "backup.json")
+	if !strings.Contains(msg, "could not be read") {
+		t.Fatalf("expected refusal, got %q", msg)
+	}
+	if !exists(tomb) {
+		t.Fatal("tombstone erased")
+	}
+	if !exists(aside) {
+		t.Fatal("DATA LOSS: refused import erased the kept-aside .conflict- store under unknown liveness")
+	}
+}
+
+// Fix2-review P3-1: with unknown liveness an import erases nothing at all; a
+// live directory next to a committed marker refuses (it would be reopened as
+// the imported key's store), and inert leftovers are kept for later.
+func TestRatchetImportUnknownLivenessErasesNothing(t *testing.T) {
+	t.Run("live dir next to .erasing- refuses", func(t *testing.T) {
+		a, id, idName, live := tombSetup(t)
+		if msg := a.DeleteIdentity(idName, true); msg != "" {
+			t.Fatal(msg)
+		}
+		marker := live + ratchetErasing + "z"
+		writeTomb(t, marker, "a.db", "deleted")
+		writeTomb(t, live, "a.db", "reopened-deleted")
+		dir, _ := identitiesDir()
+		if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if msg := a.adoptImportedIdentity(id, "b.json"); !strings.Contains(msg, "could not be read") {
+			t.Fatalf("expected refusal, got %q", msg)
+		}
+		if !exists(marker) || !exists(filepath.Join(live, "a.db")) {
+			t.Fatal("unknown liveness must not erase the marker or the directory next to it")
+		}
+	})
+	t.Run("inert leftovers are kept, import proceeds", func(t *testing.T) {
+		a, id, idName, live := tombSetup(t)
+		if msg := a.DeleteIdentity(idName, true); msg != "" {
+			t.Fatal(msg)
+		}
+		aside := live + ratchetConflict + "q"
+		writeTomb(t, aside, "a.db", "kept")
+		marker := live + ratchetErasing + "m"
+		writeTomb(t, marker, "a.db", "deleted")
+		dir, _ := identitiesDir()
+		if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if msg := a.adoptImportedIdentity(id, "b.json"); msg != "" {
+			t.Fatal(msg)
+		}
+		if !exists(aside) || !exists(marker) {
+			t.Fatal("unknown liveness must never erase leftovers")
+		}
+		if exists(live) {
+			t.Fatal("no leftover may become the imported key's store")
+		}
+	})
+}

@@ -56,3 +56,19 @@ func TestDesktopRefusesUnadvertisedLoginScheme(t *testing.T) {
 		t.Fatalf("new server: %q", reason)
 	}
 }
+
+// Fix2-review note: an unsafe challenge from a server that advertises the
+// scheme is refused unsigned and is reconnect-terminal (no retry loop).
+func TestUnsafeChallengeIsReconnectTerminal(t *testing.T) {
+	id, err := newIdentity("unsafe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, _, reason := answerChallenge(netproto.AuthChallenge{Challenge: []byte("short"), Scheme: netproto.AuthChallengeSchemeV1}, loginSigner(id))
+	if sig != nil || !loginReasonTerminal(reason) {
+		t.Fatalf("unsafe challenge: reason=%q signed=%v", reason, sig != nil)
+	}
+	if !loginReasonTerminal(errServerLoginOutdated) || loginReasonTerminal("connection reset") {
+		t.Fatal("terminal classification")
+	}
+}

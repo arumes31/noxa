@@ -244,8 +244,11 @@ export class DirectMessages extends EventTarget {
         let signingKey = record?.signingKey || null;
         if (uid === this.ownUID) {
             // This account's identity is the desktop that approved the link.
+            // The QR-pinned anchor (written by that desktop itself) wins over
+            // the server-relayed claim fingerprint whenever it exists.
             const first = devices.find(d => d.first_device);
-            if (first && this.meta.approverFingerprint && keyFingerprint(first.ed25519_public_key) === this.meta.approverFingerprint) {
+            const anchor = this.meta.bindingAnchor || this.meta.approverFingerprint;
+            if (first && anchor && keyFingerprint(first.ed25519_public_key) === anchor) {
                 signingKey = ed25519FromPEM(first.ed25519_public_key);
             }
         }
