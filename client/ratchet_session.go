@@ -230,6 +230,7 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 	}
 	s := &ratchetSession{conn: conn, epoch: epoch, handle: handle, consumer: consumer, quit: make(chan struct{}), done: make(chan struct{})}
 	consumer.project(func(r RatchetRecord, isNew bool) { m.projectRatchet(r, isNew, assertCurrent) })
+	consumer.onControl(m.dispatchRatchetControl)
 	m.mu.Lock()
 	_, deleted := ratchetDeleted.Load(identity.PublicKey)
 	if m.conn != conn || m.connEpoch != epoch || m.closed || deleted {

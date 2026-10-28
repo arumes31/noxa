@@ -97,8 +97,11 @@ func ExpectedBinding(m Manifest, t Target) ratchet.Binding {
 		conversation = "direct:" + string(b)
 	}
 	purpose := m.Purpose
-	if purpose == "chat" {
+	switch purpose {
+	case "chat":
 		purpose = "message"
+	case "control":
+		purpose = "media-key"
 	}
 	return ratchet.Binding{Server: m.Server, Conversation: conversation, Sender: m.Sender, SenderDevice: m.Device, Recipient: t.Principal, RecipientDevice: t.Device, MessageID: m.LogicalID, Purpose: purpose}
 }

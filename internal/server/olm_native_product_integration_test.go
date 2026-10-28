@@ -170,8 +170,8 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 
 	// history copy rows the (hostile) server captured, per device name
 	historySnap := map[string][]store.HistoryChunk{}
-	drop := map[string]int{}  // device/action -> handled-but-lost responses
-	fail := map[string]int{}  // device/action -> refused before the handler
+	drop := map[string]int{} // device/action -> handled-but-lost responses
+	fail := map[string]int{} // device/action -> refused before the handler
 	counts := map[string]int{}
 	dispatch := func(c *Client, typ uint16, payload json.RawMessage) (map[string]any, error) {
 		conn := &sessionResponseConn{blockingTCPConn: newBlockingTCPConn()}
@@ -206,10 +206,10 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 	// PWA command channel: the native orchestrator posts "pwa_eval"; the
 	// Chromium script long-polls "pwa_next" and answers "pwa_result".
 	type pwaCommand struct {
-		ID     int             `json:"id"`
-		Device string          `json:"device"`
-		JS     string          `json:"js"`
-		Done   bool            `json:"done,omitempty"`
+		ID     int    `json:"id"`
+		Device string `json:"device"`
+		JS     string `json:"js"`
+		Done   bool   `json:"done,omitempty"`
 		result chan json.RawMessage
 	}
 	commands := make(chan *pwaCommand)
@@ -285,6 +285,10 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 				return counts, nil
 			case "link_unpublished":
 				return pwa(req.Device, req.Action), nil
+			case "pending_deliveries":
+				var n int
+				e := db.DB().QueryRowContext(ctx, `SELECT count(*) FROM olm_deliveries WHERE device_id=$1 AND state='pending'`, devices[req.Device].Device).Scan(&n)
+				return n, e
 			case "history_rows":
 				d := devices[req.Device]
 				rows, e := db.HistoryChunks(ctx, d.Principal, d.Device, 0, 1000)

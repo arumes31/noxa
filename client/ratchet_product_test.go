@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"noxa/internal/e2ee/admission"
 	"noxa/internal/e2ee/durable"
 	"noxa/internal/e2ee/ratchet"
 	"noxa/internal/netproto"
@@ -918,6 +919,12 @@ func TestRatchetProductBridge(t *testing.T) {
 	step("16c history transfer desktop -> server -> PWA + hostile replay")
 	historyTransferProduct(t, b, A)
 
+	// 16d. Media controls: one explicitly targeted device, both directions,
+	//      never in chat views, no fanout to other devices, expired controls
+	//      acknowledged without being handed out.
+	step("16d media controls native <-> PWA")
+	controlProduct(t, b, A, fixture.Devices)
+
 	// 16b. P2-3: the new-protocol path reaches the identity confirmation, and an
 	//      explicit confirmation is a DURABLE ratchet reset (applied by the next
 	//      session even when none is live at confirmation time).
@@ -1245,5 +1252,120 @@ func historyTransferProduct(t *testing.T, b productBridge, A *nativeNode) {
 	copyTo()
 	if honest := runImport(); honest.N != 1 || shown(honest, "after the transfer") != 1 || len(honest.Records) != len(want)+1 {
 		t.Fatalf("honest copy after hostile ones: imported %d, %d records", honest.N, len(honest.Records))
+	}
+}
+
+func controlProduct(t *testing.T, b productBridge, A *nativeNode, devices map[string]productFixtureDevice) {
+	t.Helper()
+	pending := func(name string) int {
+		var n int
+		b.post(map[string]any{"op": "pending_deliveries", "device": name}, &n)
+		return n
+	}
+	var mu sync.Mutex
+	var got []RatchetControl
+	A.cm.OnRatchetControl(func(c RatchetControl) { mu.Lock(); got = append(got, c); mu.Unlock() })
+	b.pwa("pbob-phone", `T.controls = []; T.consumer.onControl(c => T.controls.push(c)); return true;`)
+	b.pwa("nalice-phone", `T.controls = []; T.consumer.onControl(c => T.controls.push(c)); return true;`)
+	pbob := devices["pbob-phone"].Device
+	body := func(id string, ttl int64) admission.ControlBody {
+		return admission.ControlBody{Kind: "media-key", Scope: admission.ControlScope{Type: "channel", ID: "chan-1"}, Epoch: 1,
+			ExpiresAt: time.Now().Unix() + ttl, Data: json.RawMessage(`{"key":"` + id + `"}`)}
+	}
+	aliceLinked := []string{"nalice-phone", "nalice-tab"}
+	before := map[string]int{"pbob-phone": pending("pbob-phone")}
+	for _, n := range aliceLinked {
+		before[n] = pending(n)
+	}
+	viewBefore := string(b.pwa("pbob-phone", `return T.view("nalice").length;`))
+	logBefore := len(A.log("pbob"))
+
+	// Native -> PWA.
+	out, err := A.cm.SendRatchetControl(RatchetControlIntent{LogicalID: "ctl-n2p", Principal: "pbob", Device: pbob, Body: body("n2p", 120)})
+	if err != nil || out.Receipt == nil || out.Receipt.State != "accepted" {
+		t.Fatalf("native control: %+v %v", out, err)
+	}
+	if d := pending("pbob-phone") - before["pbob-phone"]; d != 1 {
+		t.Fatalf("target copies: %d", d)
+	}
+	for _, n := range aliceLinked {
+		if pending(n) != before[n] {
+			t.Fatalf("control fanned out to own linked device %s", n)
+		}
+	}
+	var r1 struct {
+		Controls []struct {
+			Sender, LogicalID, Kind string
+			Scope                   struct{ Type, ID string }
+			Epoch                   int64
+			Data                    map[string]string
+		} `json:"controls"`
+		View int `json:"view"`
+	}
+	read := `await T.consumer.drain(); return { controls: T.controls, view: T.view("nalice").length };`
+	if err := json.Unmarshal(b.pwa("pbob-phone", read), &r1); err != nil {
+		t.Fatal(err)
+	}
+	if len(r1.Controls) != 1 || r1.Controls[0].Sender != "nalice" || r1.Controls[0].LogicalID != "ctl-n2p" || r1.Controls[0].Kind != "media-key" ||
+		r1.Controls[0].Scope.ID != "chan-1" || r1.Controls[0].Data["key"] != "n2p" || fmt.Sprint(r1.View) != viewBefore {
+		t.Fatalf("PWA control receive: %+v (view before %s)", r1, viewBefore)
+	}
+	if pending("pbob-phone") != before["pbob-phone"] {
+		t.Fatal("delivered control must be acknowledged")
+	}
+	// A second drain hands nothing out again; history never lists controls.
+	if s := string(b.pwa("pbob-phone", `await T.consumer.drain(); return [T.controls.length, (await T.consumer.history()).filter(r => r.purpose === "control").length];`)); s != "[1,0]" {
+		t.Fatalf("PWA replay/history: %s", s)
+	}
+
+	// PWA -> native.
+	js := fmt.Sprintf(`return (await T.consumer.sendControl({ logicalID: "ctl-p2n", principal: "nalice", device: %q, body: { kind: "media-key", scope: { type: "call", id: "call-9" }, epoch: 4, expires_at: Math.floor(Date.now() / 1000) + 120, data: { key: "p2n" } } })).receipt.state;`, A.dev.Device)
+	if s := string(b.pwa("pbob-phone", js)); s != `"accepted"` {
+		t.Fatalf("PWA control send: %s", s)
+	}
+	for _, n := range aliceLinked {
+		if pending(n) != before[n] {
+			t.Fatalf("PWA control fanned out to %s", n)
+		}
+	}
+	A.drain()
+	mu.Lock()
+	n := len(got)
+	var first RatchetControl
+	if n > 0 {
+		first = got[0]
+	}
+	mu.Unlock()
+	if n != 1 || first.Sender != "pbob" || first.LogicalID != "ctl-p2n" || first.Scope.Type != "call" || first.Epoch != 4 || string(first.Data) != `{"key":"p2n"}` {
+		t.Fatalf("native control receive: %d %+v", n, first)
+	}
+	if len(A.log("pbob")) != logBefore {
+		t.Fatal("a control reached the native DM log")
+	}
+	hist, err := A.consumer().history()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range hist {
+		if r.Purpose == "control" {
+			t.Fatal("history lists a control")
+		}
+	}
+
+	// Expired on arrival: acknowledged, never handed out.
+	if out, err := A.cm.SendRatchetControl(RatchetControlIntent{LogicalID: "ctl-expired", Principal: "pbob", Device: pbob, Body: body("old", 40)}); err != nil || out.Receipt.State != "accepted" {
+		t.Fatalf("short control: %+v %v", out, err)
+	}
+	late := `const real = Date.now; Date.now = () => real() + 90000;
+try { await T.consumer.drain(); } finally { Date.now = real; }
+return T.controls.length;`
+	if s := string(b.pwa("pbob-phone", late)); s != "1" {
+		t.Fatalf("expired control handed out: %s", s)
+	}
+	if pending("pbob-phone") != before["pbob-phone"] {
+		t.Fatal("expired control must be acknowledged")
+	}
+	if s := string(b.pwa("nalice-phone", `await T.consumer.drain(); return T.controls.length;`)); s != "0" {
+		t.Fatalf("own linked device received a control: %s", s)
 	}
 }

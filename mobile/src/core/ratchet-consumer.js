@@ -22,6 +22,10 @@ import {
     openPayload,
     recoveryReceipt,
     sealPayload,
+    validateControlSend,
+    controlDisposition,
+    parseControlBody,
+    MAX_CONTROL_TTL,
 } from "./olm-admission.js";
 import { verifyBundleEvidence, verifyReservedClaim, OLM_DIRECTORY_VERSION } from "./olm-directory.js";
 import { verifyResetChain } from "./olm-reset.js";
@@ -145,6 +149,7 @@ export class RatchetConsumer {
         this.closed = false;
         this.tail = Promise.resolve();
         this.projectors = [];
+        this.controls = [];
         this.quarantined = new Map();
         this.sessions = null;      // JSON(context) -> session ref id
         this.retired = new Set();  // attempt IDs retired during this session
@@ -164,6 +169,8 @@ export class RatchetConsumer {
     async close() { this.closed = true; await this.tail; }
     async #emit(record, isNew) {
         this.#check();
+        // Controls never reach chat/activity/search/export projections.
+        if (record.purpose === "control") return this.#emitControl(record, isNew);
         for (const fn of this.projectors) {
             try { await fn(record, { isNew }); } catch { /* views are not receipt proof */ }
             this.#check();
@@ -508,6 +515,36 @@ export class RatchetConsumer {
         throw fail("not_needed");
     }
 
+    // --- Media controls (1c-iii-b item 3; mirror of client/ratchet_control.go) --
+
+    /**
+     * Sends one explicitly targeted, expiring control to exactly one device
+     * ({logicalID, principal, device, body: {kind, scope: {type, id}, epoch,
+     * expires_at, data?}}). No fanout, no reseal. Resolves {record, receipt}
+     * like send(); receipt.state "accepted" means admitted for that device.
+     */
+    sendControl({ logicalID, principal, device, body }) {
+        return this.send({ logicalID, scope: "direct", peer: principal, device, purpose: "control", body });
+    }
+    /**
+     * Registers fn({sender, senderDevice, logicalID, kind, scope, epoch,
+     * expiresAt, data, delivery}) for controls delivered to this device:
+     * authenticated, unexpired, from another device, exactly once at commit.
+     * Expired/invalid controls and replays are never handed out.
+     */
+    onControl(fn) { this.controls.push(fn); }
+    async #emitControl(record, isNew) {
+        if (!isNew || record.status !== "delivered" || !record.transport?.delivery || record.senderDevice === this.namespace.device) return;
+        let b;
+        try { b = parseControlBody(record.body); } catch { return; }
+        const out = { sender: record.sender, senderDevice: record.senderDevice, logicalID: record.logicalID, kind: b.kind, scope: b.scope,
+            epoch: b.epoch, expiresAt: b.expires_at, ...(b.data !== undefined ? { data: b.data } : {}), delivery: record.transport.delivery };
+        for (const fn of this.controls) {
+            try { await fn(out); } catch (e) { console.warn("ratchet: control handler", e); }
+            this.#check();
+        }
+    }
+
     // --- Trust ----------------------------------------------------------------
 
     static trustID(principal, device) { return JSON.stringify([principal, device]); }
@@ -688,21 +725,38 @@ export class RatchetConsumer {
             // A terminal non-accepted intent may be resealed with NEW ratchet
             // state, but only with its original committed content.
             const r = original.record;
+            // A short-lived control is never resealed: its outcome stands.
+            if (r.purpose === "control") return this.#resolve(logical.attemptID, a, true);
             return this.#seal(a, { logicalID: r.logicalID, scope: r.scope, peer: r.scope === "direct" ? r.peer : "", conversation: r.conversation,
                 purpose: r.purpose, reference: r.reference, body: r.body }, true);
         }
         return this.#seal(a, intent, false);
     }
-    async #seal(a, { logicalID, scope, peer = "", conversation = "", purpose = "chat", reference = "", body }, reused) {
-        if (!["direct", "group"].includes(scope) || !["chat", "edit", "delete"].includes(purpose) || (purpose === "chat") === !!reference) throw fail("invalid");
+    async #seal(a, { logicalID, scope, peer = "", conversation = "", purpose = "chat", reference = "", device = "", body }, reused) {
+        const control = purpose === "control";
+        if (!["direct", "group"].includes(scope) || !["chat", "edit", "delete", "control"].includes(purpose) || (purpose === "chat" || control) === !!reference) throw fail("invalid");
+        let deadline = now() + this.attemptTTL;
+        if (control) {
+            let b;
+            try { b = validateControlSend(body, now()); } catch { throw fail("invalid"); }
+            if (scope !== "direct" || typeof device !== "string" || !device || device === this.namespace.device) throw fail("invalid");
+            deadline = Math.min(deadline, b.expires_at, now() + MAX_CONTROL_TTL);
+            if (deadline - now() < DEADLINE_MARGIN + 5) throw fail("invalid");
+        } else if (device) throw fail("invalid");
         const roster = await this.#handoff(a, { action: "snapshot", scope, ...(scope === "direct" ? { peer } : { conversation }) });
         const m = {
             version: ADMISSION_VERSION, server: this.namespace.server, sender: this.namespace.principal, device: this.namespace.device,
             account_epoch: a.epoch, attempt_id: String(a.nextAttempt + 1), logical_id: logicalID, purpose,
             ...(reference ? { reference } : {}), scope,
             ...(scope === "direct" ? { peer } : { conversation, revision: roster.revision, epoch: roster.epoch }),
-            deadline: now() + this.attemptTTL, rosters: roster.rosters, targets: roster.targets,
+            deadline, rosters: roster.rosters, targets: roster.targets,
         };
+        if (control) {
+            // Exactly the named, currently authorized device (plus the local
+            // archive target): never an implicit fanout.
+            m.targets = m.targets.filter(t => t.local || (t.principal === peer && t.device === device));
+            if (m.targets.length !== 2) throw fail("device_unavailable");
+        }
         checkFanout(scope, m.targets);
         const locals = m.targets.filter(t => t.local);
         if (locals.length !== 1 || locals[0].principal !== m.sender || locals[0].device !== m.device ||
@@ -764,7 +818,7 @@ export class RatchetConsumer {
         const record = { protocol: RATCHET_PROTOCOL, provenance: "authenticated", sender: m.sender, senderDevice: m.device,
             logicalID, key: semanticKey(m.sender, logicalID), scope, peer: scope === "direct" ? peer : "", conversation: scope === "group" ? conversation : "",
             purpose, reference, referenceKey: reference ? semanticKey(m.sender, reference) : "", body, sentAt: Number(body?.sentAt) || Date.now() / 1000,
-            self: true, copied: false };
+            self: true, copied: false, ...(control ? { device } : {}) };
         const packets = [], copies = [];
         for (const p of plans) {
             if (p.prior && !rec(before, "session", p.prior).revision) throw fail("local_conflict");
@@ -896,11 +950,14 @@ export class RatchetConsumer {
     history() { return this.ready().then(() => this.#serial(() => this.#history())); }
     async #history() {
         const out = [];
-        for (const [, r] of await this.#readMany(await this.#refs("inbox"))) out.push(parse(parse(r.data).archive));
+        for (const [, r] of await this.#readMany(await this.#refs("inbox"))) {
+            const record = parse(parse(r.data).archive);
+            if (record.purpose !== "control") out.push(record);
+        }
         const attempts = [];
         for (const [ref, r] of await this.#readMany(await this.#refs("outbox"))) {
             const op = parse(r.data);
-            if (!op.attempt) continue;
+            if (!op.attempt || parse(op.archive).purpose === "control") continue;
             attempts.push({ id: ref[1], record: { ...parse(op.archive), transport: { message: op.receipt?.message_id || "", attempt: ref[1] }, status: op.receipt?.state || "pending", reason: op.receipt?.reason || "" } });
         }
         for (const e of latestAttempts(attempts)) out.push(e.record);
@@ -957,12 +1014,13 @@ export class RatchetConsumer {
                     // NEVER passed to legacy decoders or acknowledged.
                     const m = d?.manifest && typeof d.manifest === "object" ? d.manifest : {}, own = m.sender === this.namespace.principal;
                     const text = v => (typeof v === "string" ? v : "");
-                    this.quarantined.set(qid, { id: qid, sender: text(m.sender), code: e.code, scope: text(m.scope),
+                    this.quarantined.set(qid, { id: qid, sender: text(m.sender), code: e.code, scope: text(m.scope), ...(m.purpose === "control" ? { control: true } : {}),
                         peer: m.scope === "direct" ? text(own ? m.peer : m.sender) : "", conversation: m.scope === "group" ? text(m.conversation) : "", seenAt: Date.now() / 1000 });
                 }
             }
             // Continue across filtered empty pages; a fresh drain restarts at "".
-            if (!page.has_more) return { quarantined: [...this.quarantined.values()] };
+            // An unreadable control is never shown as a chat placeholder.
+            if (!page.has_more) return { quarantined: [...this.quarantined.values()].filter(q => !q.control) };
             if (!page.after || page.after === after) throw fail("invalid");
             after = page.after;
         }
@@ -1062,6 +1120,15 @@ export class RatchetConsumer {
                 conversation: m.scope === "group" ? m.conversation : "", purpose: m.purpose, reference: m.reference || "",
                 referenceKey: m.reference ? semanticKey(m.sender, m.reference) : "", body, sentAt: Number(body?.sentAt) || Date.now() / 1000,
                 self, copied: self, transport: { delivery: d.id } };
+            if (m.purpose === "control") {
+                // Authenticated and consumed like any copy; only the
+                // disposition is kept: an expired or malformed control is
+                // acknowledged without delivering its data.
+                record.device = c.device;
+                record.status = controlDisposition(body, now());
+                record.sentAt = Date.now() / 1000;
+                if (record.status !== "delivered") record.body = null;
+            }
             await this.store.commitReceive(s, d.id, { sessionID, trustID: trusted.id, session: enc.encode(result.session), envelope: jsonBytes(c.envelope),
                 archive: jsonBytes(record), context, ...(consumed ? { accountID: a.accountID, account: enc.encode(result.account), consumedOTK: consumed } : {}) });
             this.#check();

@@ -97,6 +97,9 @@ export function validateManifest(m) {
   attemptSequence(m.attempt_id);
   if (m.purpose === "chat") {
     if (m.reference) throw fail();
+  } else if (m.purpose === "control") {
+    // One explicitly targeted device, never a fanout (admission/control.go).
+    if (m.reference || m.scope !== "direct" || m.targets.length !== 2) throw fail();
   } else if (!["edit", "delete"].includes(m.purpose) || !validText(m.reference))
     throw fail();
   if (m.scope === "direct") {
@@ -147,6 +150,7 @@ export function validateManifest(m) {
     }
   }
   if (local !== 1) throw fail();
+  if (m.purpose === "control" && !controlTarget(m)) throw fail();
   let total = 0;
   for (const p of m.parts) {
     if (
@@ -314,8 +318,46 @@ export function expectedBinding(m, t) {
     recipient: t.principal,
     recipient_device: t.device,
     message_id: m.logical_id,
-    purpose: m.purpose === "chat" ? "message" : m.purpose,
+    purpose: m.purpose === "chat" ? "message" : m.purpose === "control" ? "media-key" : m.purpose,
   };
+}
+
+// --- Media controls (mirror of internal/e2ee/admission/control.go) ---------
+export const MAX_CONTROL_TTL = 300;
+export const MAX_CONTROL_DATA = 4096;
+export const MAX_PENDING_CONTROLS = 64;
+const controlWord = (s) => typeof s === "string" && /^[a-z0-9._-]{1,64}$/.test(s);
+
+/** The single non-local target of a control manifest, or null. */
+export function controlTarget(m) {
+  if (m?.purpose !== "control" || !Array.isArray(m.targets) || m.targets.length !== 2) return null;
+  const t = m.targets.find((x) => !x.local);
+  return t && t.principal === m.peer ? t : null;
+}
+
+/** Validates a control body's shape (not its expiry); returns it. */
+export function parseControlBody(body) {
+  const keys = ["kind", "scope", "epoch", "expires_at", "data"];
+  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => !keys.includes(k))) throw fail();
+  const scope = body.scope;
+  if (!controlWord(body.kind) || !scope || typeof scope !== "object" || Object.keys(scope).some((k) => k !== "type" && k !== "id") ||
+    !controlWord(scope.type) || !validText(scope.id) || !Number.isSafeInteger(body.epoch) || body.epoch < 0 || !safe(body.expires_at)) throw fail();
+  if (body.data !== undefined && enc.encode(JSON.stringify(body.data)).length > MAX_CONTROL_DATA) throw fail();
+  return body;
+}
+
+/** A control about to be sealed: valid, unexpired, expiring within MAX_CONTROL_TTL. */
+export function validateControlSend(body, now) {
+  const b = parseControlBody(body);
+  if (b.expires_at <= now || b.expires_at > now + MAX_CONTROL_TTL) throw fail();
+  return b;
+}
+
+/** "delivered", "expired" or "invalid" for a received control body. */
+export function controlDisposition(body, now) {
+  let b;
+  try { b = parseControlBody(body); } catch { return "invalid"; }
+  return b.expires_at <= now ? "expired" : "delivered";
 }
 export function checkEnvelope(m, c) {
   const e = c.envelope;

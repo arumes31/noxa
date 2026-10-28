@@ -127,6 +127,8 @@ type connManager struct {
 	ratchetTest    *ratchetTestConfig
 	ratchetSess    *ratchetSession
 	ratchetProject func(m *connManager, r RatchetRecord, isNew bool)
+	// ratchetControls receive delivered media controls (ratchet_control.go).
+	ratchetControls []func(RatchetControl)
 	// ratchetEdits maps an uncertain edit operation (peer, ref, text) to its
 	// logical ID until it is accepted, so a retry resolves it.
 	ratchetEdits sync.Map

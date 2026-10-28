@@ -138,3 +138,48 @@ messages, uncertain response recovery, delayed initial delivery after public
 cleanup, tamper rejection, receipt/ACK ordering and signed reset promotion. It
 uses synthetic noXa identities and a test-only localhost HTTP bridge. It does not
 claim testing of physical iOS/Android hardware or production deployments.
+
+## Media controls (purpose `control`, 1c-iii-b item 3)
+
+A control is one short-lived, explicitly targeted operation for exactly one
+participating device (Task 2: encrypted channel/call media key distribution).
+It uses the same claims, device-pair sessions, atomic admission and durable
+receive/ACK as chat. Wire rules (`control.go`, JS mirror in
+`mobile/src/core/olm-admission.js`):
+
+- Manifest: `purpose: "control"`, `scope: "direct"`, no `reference`, exactly two
+  targets: the local archive target and ONE device whose principal is `peer`
+  (the sender's own other device is allowed: `peer == sender`). The core
+  binding purpose is `media-key`.
+- Server: admits the control only if that one target equals its current
+  directory state and the sender's roster versions are current (no complete
+  fanout is required, and none is possible); deadline at most `MaxControlTTL`
+  (300 s); at most `MaxPendingControls` (64) unacknowledged controls per target
+  device, counted apart from messages. Edits/deletes can never reference a
+  control. No delivery notification exists for any Olm copy.
+- Body (inside the ciphertext): `{kind, scope: {type, id}, epoch, expires_at,
+  data?}` with lowercase word `kind`/`scope.type`, `data` at most 4096 bytes,
+  `expires_at` within 300 s of sending.
+- Receive: authenticated, consumed and committed like any copy; only the
+  disposition is kept (`delivered`, or `expired`/`invalid` with the data
+  dropped), then the exact ACK. Delivered controls from another device are
+  handed to the control handlers once, at commit; replays, own sends and
+  expired/invalid controls are never handed out (an old key is never
+  installed). Unreadable controls stay unacknowledged and are never shown as
+  placeholders.
+- Clients never project controls into chat, activity, search, history
+  transfer or export, and never reseal one after rejection/abort.
+
+API for Task 2:
+
+| | Desktop (Go, `client/ratchet_control.go`) | PWA (`RatchetConsumer`) |
+|---|---|---|
+| send | `connManager.SendRatchetControl(RatchetControlIntent{LogicalID, Principal, Device, Body admission.ControlBody}) (RatchetOutcome, error)` | `consumer.sendControl({logicalID, principal, device, body})` -> `{record, receipt}` |
+| receive | `connManager.OnRatchetControl(func(RatchetControl))` | `consumer.onControl(fn)` |
+| delivered | `RatchetControl{Sender, SenderDevice, LogicalID, Kind, Scope, Epoch, ExpiresAt, Data, Delivery}` | `{sender, senderDevice, logicalID, kind, scope, epoch, expiresAt, data, delivery}` |
+
+`receipt.state === "accepted"` means the server admitted the control for that
+device. Errors are the usual coded ratchet errors, plus `invalid` (bad body,
+own device, expiry window) and `device_unavailable` (the device is not a
+current, published device of that principal). Task 2 checks `scope`/`epoch`
+against the current call/channel state before using `data`.

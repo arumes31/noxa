@@ -77,6 +77,7 @@ type RatchetRecord struct {
 	Peer         string           `json:"peer,omitempty"`
 	Conversation string           `json:"conversation,omitempty"`
 	Purpose      string           `json:"purpose"`
+	Device       string           `json:"device,omitempty"` // a control's single target device
 	Reference    string           `json:"reference,omitempty"`
 	ReferenceKey string           `json:"reference_key,omitempty"`
 	Body         json.RawMessage  `json:"body"`
@@ -109,12 +110,14 @@ type RatchetQuarantine struct {
 	SeenAt       float64 `json:"seen_at"`
 }
 
-// ratchetIntent is one logical operation. Purpose is chat, edit or delete;
-// edits/deletes reference the original sender's logical ID.
+// ratchetIntent is one logical operation. Purpose is chat, edit, delete or
+// control; edits/deletes reference the original sender's logical ID; a
+// control (scope direct) names its single target Device of Peer.
 type ratchetIntent struct {
 	LogicalID    string
 	Scope        string
 	Peer         string
+	Device       string
 	Conversation string
 	Purpose      string
 	Reference    string
@@ -418,6 +421,7 @@ type ratchetConsumer struct {
 	claims      map[string]ratchetKeptClaim
 	skewed      map[string]bool
 	projectors  []func(RatchetRecord, bool)
+	controls    []func(RatchetControl)
 	quarantined map[string]RatchetQuarantine
 	qorder      []string
 	sessions    map[durable.SessionContext]string
@@ -480,6 +484,10 @@ func (c *ratchetConsumer) check() error {
 func (c *ratchetConsumer) emit(rec RatchetRecord, isNew bool) error {
 	if err := c.check(); err != nil {
 		return err
+	}
+	if rec.Purpose == "control" {
+		// Controls never reach chat/activity/search/export projections.
+		return c.emitControl(rec, isNew)
 	}
 	for _, fn := range c.projectors {
 		func() {
@@ -1270,6 +1278,10 @@ func (c *ratchetConsumer) sendOnce(intent ratchetIntent) (RatchetOutcome, error)
 		if err != nil {
 			return RatchetOutcome{}, err
 		}
+		if rec.Purpose == "control" {
+			// A short-lived control is never resealed: its outcome stands.
+			return c.resolve(logical.AttemptID, a, true)
+		}
 		return c.seal(a, ratchetIntent{LogicalID: rec.LogicalID, Scope: rec.Scope, Peer: rec.Peer, Conversation: rec.Conversation, Purpose: rec.Purpose, Reference: rec.Reference, Body: rec.Body}, true)
 	}
 	return c.seal(a, intent, false)
@@ -1310,8 +1322,22 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 	if in.Purpose == "" {
 		in.Purpose = "chat"
 	}
-	if (in.Scope != "direct" && in.Scope != "group") || (in.Purpose != "chat" && in.Purpose != "edit" && in.Purpose != "delete") ||
-		(in.Purpose == "chat") == (in.Reference != "") || !json.Valid(in.Body) || !olmdir.ValidText(in.LogicalID) {
+	control := in.Purpose == "control"
+	if (in.Scope != "direct" && in.Scope != "group") || (in.Purpose != "chat" && in.Purpose != "edit" && in.Purpose != "delete" && !control) ||
+		(in.Purpose == "chat" || control) == (in.Reference != "") || !json.Valid(in.Body) || !olmdir.ValidText(in.LogicalID) {
+		return RatchetOutcome{}, rfail("invalid")
+	}
+	deadline := c.now() + c.d.AttemptTTL
+	if control {
+		body, err := admission.ValidateControlSend(in.Body, c.now())
+		if err != nil || in.Scope != "direct" || !olmdir.ValidText(in.Device) || in.Device == c.d.Namespace.Device {
+			return RatchetOutcome{}, rfail("invalid")
+		}
+		deadline = min(deadline, body.ExpiresAt, c.now()+admission.MaxControlTTL)
+		if deadline-c.now() < ratchetDeadlineMargin+5 {
+			return RatchetOutcome{}, rfail("invalid")
+		}
+	} else if in.Device != "" {
 		return RatchetOutcome{}, rfail("invalid")
 	}
 	req := netproto.OlmAdmissionRequest{Action: "snapshot", Scope: in.Scope}
@@ -1327,11 +1353,27 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 	ns := c.d.Namespace
 	m := admission.Manifest{Version: admission.Version, Server: ns.Server, Sender: ns.Principal, Device: ns.Device, AccountEpoch: a.Epoch,
 		AttemptID: strconv.FormatInt(a.NextAttempt+1, 10), LogicalID: in.LogicalID, Purpose: in.Purpose, Reference: in.Reference, Scope: in.Scope,
-		Deadline: c.now() + c.d.AttemptTTL, Rosters: roster.Rosters, Targets: roster.Targets}
+		Deadline: deadline, Rosters: roster.Rosters, Targets: roster.Targets}
 	if in.Scope == "direct" {
 		m.Peer = in.Peer
 	} else {
 		m.Conversation, m.Revision, m.Epoch = in.Conversation, roster.Revision, roster.Epoch
+	}
+	if control {
+		// Exactly the named, currently authorized device (plus the local
+		// archive target): never an implicit fanout.
+		var targets []admission.Target
+		found := false
+		for _, t := range m.Targets {
+			if t.Local || t.Principal == in.Peer && t.Device == in.Device {
+				found = found || !t.Local
+				targets = append(targets, t)
+			}
+		}
+		if !found {
+			return RatchetOutcome{}, rfail("device_unavailable")
+		}
+		m.Targets = targets
 	}
 	if err := ratchetCheckFanout(in.Scope, m.Targets); err != nil {
 		return RatchetOutcome{}, err
@@ -1462,7 +1504,7 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 	account := string(before.Records[accountRef].Data)
 	sentAt := ratchetBodySentAt(in.Body, float64(c.d.Now().UnixMilli())/1000)
 	record := RatchetRecord{Protocol: ratchetProtocol, Provenance: "authenticated", Sender: m.Sender, SenderDevice: m.Device, LogicalID: in.LogicalID,
-		Key: ratchetSemanticKey(m.Sender, in.LogicalID), Scope: in.Scope, Purpose: in.Purpose, Reference: in.Reference, Body: in.Body, SentAt: sentAt, Self: true}
+		Key: ratchetSemanticKey(m.Sender, in.LogicalID), Scope: in.Scope, Purpose: in.Purpose, Device: in.Device, Reference: in.Reference, Body: in.Body, SentAt: sentAt, Self: true}
 	if in.Scope == "direct" {
 		record.Peer = in.Peer
 	} else {
@@ -1820,7 +1862,7 @@ func (c *ratchetConsumer) history() ([]RatchetRecord, error) {
 			Archive []byte `json:"archive"`
 		}
 		var rec RatchetRecord
-		if json.Unmarshal(r.Data, &saved) == nil && json.Unmarshal(saved.Archive, &rec) == nil {
+		if json.Unmarshal(r.Data, &saved) == nil && json.Unmarshal(saved.Archive, &rec) == nil && rec.Purpose != "control" {
 			out = append(out, rec)
 		}
 	}
@@ -1837,7 +1879,7 @@ func (c *ratchetConsumer) history() ([]RatchetRecord, error) {
 	for ref, r := range outbox {
 		var op durable.OutboundRecord
 		var rec RatchetRecord
-		if json.Unmarshal(r.Data, &op) != nil || op.Attempt == nil || json.Unmarshal(op.Archive, &rec) != nil {
+		if json.Unmarshal(r.Data, &op) != nil || op.Attempt == nil || json.Unmarshal(op.Archive, &rec) != nil || rec.Purpose == "control" {
 			continue
 		}
 		rec.Transport = RatchetTransport{Attempt: ref.ID}
@@ -1979,7 +2021,11 @@ func (c *ratchetConsumer) drain() ([]RatchetQuarantine, error) {
 				}
 			}
 			c.quarantined[qid] = q
-			c.qorder = append(c.qorder, qid)
+			// An unreadable control is never shown as a chat placeholder (it
+			// stays unacknowledged like any unreadable copy).
+			if d.Manifest == nil || d.Manifest.Purpose != "control" {
+				c.qorder = append(c.qorder, qid)
+			}
 		}
 		// Continue across filtered empty pages; a fresh drain restarts at "".
 		if !page.HasMore {
@@ -2239,6 +2285,15 @@ func (c *ratchetConsumer) receive(d ratchetDelivery, a durable.AccountAuthority)
 		record = RatchetRecord{Protocol: ratchetProtocol, Provenance: "authenticated", Sender: m.Sender, SenderDevice: m.Device, LogicalID: m.LogicalID,
 			Key: ratchetSemanticKey(m.Sender, m.LogicalID), Scope: m.Scope, Purpose: m.Purpose, Reference: m.Reference, Body: body,
 			SentAt: ratchetBodySentAt(body, float64(c.d.Now().UnixMilli())/1000), Self: self, Copied: self, Transport: RatchetTransport{Delivery: d.ID}}
+		if m.Purpose == "control" {
+			// Authenticated and consumed like any copy (session advance, OTK
+			// obligation), then only its disposition is kept: an expired or
+			// malformed control is acknowledged without delivering its data.
+			record.Device, record.Status, record.SentAt = cp.Device, ratchetControlDisposition(body, c.now()), float64(c.d.Now().UnixMilli())/1000
+			if record.Status != "delivered" {
+				record.Body = nil
+			}
+		}
 		if m.Scope == "direct" {
 			record.Peer = m.Sender
 			if self {

@@ -243,7 +243,7 @@ func (s *Store) BeginOlmAttempt(ctx context.Context, a OlmSource, m admission.Ma
 		return r, tx.Commit()
 	}
 	now := time.Now().Unix()
-	if m.Deadline <= now || m.Deadline > now+3600 {
+	if m.Deadline <= now || m.Deadline > now+3600 || m.Purpose == "control" && m.Deadline > now+admission.MaxControlTTL {
 		return empty, admission.ErrInvalid
 	}
 	r, e = insertAttempt(ctx, tx, a, m, "staging")
@@ -383,7 +383,38 @@ func (s *Store) AbortOlmAttempt(ctx context.Context, a OlmSource, m admission.Ma
 	return r, tx.Commit()
 }
 
+// controlCoverage: a control covers exactly its one named target (current
+// directory state) and the local target, under current roster versions.
+func controlCoverage(m admission.Manifest, snap OlmRosterSnapshot) bool {
+	target, ok := admission.ControlTarget(m)
+	if !ok || len(m.Rosters) != len(snap.Rosters) {
+		return false
+	}
+	rs := map[string]int64{}
+	for _, r := range m.Rosters {
+		rs[r.Principal] = r.Version
+	}
+	for _, r := range snap.Rosters {
+		if rs[r.Principal] != r.Version {
+			return false
+		}
+	}
+	found, local := false, false
+	for _, t := range snap.Targets {
+		for _, mt := range m.Targets {
+			if mt == t {
+				found = found || !t.Local && t == target
+				local = local || t.Local
+			}
+		}
+	}
+	return found && local
+}
+
 func equalCoverage(m admission.Manifest, snap OlmRosterSnapshot) bool {
+	if m.Purpose == "control" {
+		return controlCoverage(m, snap)
+	}
 	if len(m.Targets) != len(snap.Targets) || len(m.Rosters) != len(snap.Rosters) {
 		return false
 	}
@@ -510,7 +541,7 @@ func (s *Store) FinalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 	if exists {
 		return reject("logical-accepted")
 	}
-	if m.Purpose != "chat" {
+	if m.Purpose == "edit" || m.Purpose == "delete" {
 		var original []byte
 		e = tx.QueryRowContext(ctx, `SELECT manifest FROM olm_messages WHERE server=$1 AND sender=$2 AND logical_id=$3`, a.Server, a.Principal, m.Reference).Scan(&original)
 		if errors.Is(e, sql.ErrNoRows) {
@@ -543,6 +574,18 @@ func (s *Store) FinalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 		}
 		if count >= 4096 || size+int64(len(c.Envelope))+1024 > 64<<20 {
 			return empty, ErrOlmLimit
+		}
+		if m.Purpose == "control" {
+			// Controls are bounded separately so they can never crowd out
+			// messages (and are never a fanout).
+			var controls int
+			if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM olm_deliveries d JOIN olm_messages o ON o.id=d.message_id
+				WHERE d.device_id=$1 AND d.state='pending' AND convert_from(o.manifest,'UTF8')::jsonb->>'purpose'='control'`, c.Device).Scan(&controls); e != nil {
+				return empty, e
+			}
+			if controls >= admission.MaxPendingControls {
+				return empty, ErrOlmLimit
+			}
 		}
 	}
 	// Device locks already cover target OTKs; claim operations follow the same

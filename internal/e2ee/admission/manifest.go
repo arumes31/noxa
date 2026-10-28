@@ -110,6 +110,11 @@ func (m Manifest) Validate() error {
 		if !olmdir.ValidText(m.Reference) {
 			return ErrInvalid
 		}
+	case "control":
+		// One explicitly targeted device, never a fanout (control.go).
+		if m.Reference != "" || m.Scope != "direct" || len(m.Targets) != 2 {
+			return ErrInvalid
+		}
 	default:
 		return ErrInvalid
 	}
@@ -150,6 +155,9 @@ func (m Manifest) Validate() error {
 		}
 	}
 	if local != 1 {
+		return ErrInvalid
+	}
+	if _, ok := ControlTarget(m); m.Purpose == "control" && !ok {
 		return ErrInvalid
 	}
 	total := 0
