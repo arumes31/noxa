@@ -1427,6 +1427,9 @@ func keyIdentitiesProduct(t *testing.T, b productBridge, devices map[string]prod
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
+		// The session publishes its account on its first operation; wait for
+		// it (a contact sending earlier gets device_unpublished, by design).
+		n.drain()
 		n.cm.mu.Lock()
 		cfg, isGuest, tlsUsed := n.cm.ratchetCfg, n.cm.isGuest, n.cm.tlsUsed
 		n.cm.mu.Unlock()
@@ -1478,9 +1481,12 @@ func keyIdentitiesProduct(t *testing.T, b productBridge, devices map[string]prod
 		t.Fatalf("PWA guest join: %s", r)
 	}
 	var pg string
-	b.post(map[string]any{"op": "app_guest_principal"}, &pg)
-	if pg == "" {
-		t.Fatal("PWA guest registered no device")
+	// The app registers and publishes asynchronously after the join.
+	for deadline := time.Now().Add(30 * time.Second); pg == ""; time.Sleep(200 * time.Millisecond) {
+		b.post(map[string]any{"op": "app_guest_principal"}, &pg)
+		if time.Now().After(deadline) {
+			t.Fatal("PWA guest registered no device")
+		}
 	}
 	pwaSend := func(to *nativeNode, text string) {
 		t.Helper()
@@ -1501,8 +1507,16 @@ func keyIdentitiesProduct(t *testing.T, b productBridge, devices map[string]prod
 	}
 	nativeToPWA := func(from *nativeNode, text string) {
 		t.Helper()
-		if e := from.app.SendChatForTab(from.tab, "direct", pg, text); e != "" {
-			t.Fatalf("%s -> PWA guest: %s", from.dev.Name, e)
+		// The PWA guest publishes after its join; a send before that is
+		// refused as device_unpublished (nothing sent), so retry briefly.
+		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+			e := from.app.SendChatForTab(from.tab, "direct", pg, text)
+			if e == "" {
+				break
+			}
+			if !strings.Contains(e, "device_unpublished") || time.Now().After(deadline) {
+				t.Fatalf("%s -> PWA guest: %s", from.dev.Name, e)
+			}
 		}
 		if r := app("#app:has " + from.dev.Principal + "\t" + text); r != "yes" {
 			t.Fatalf("PWA guest did not show %q from %s: %s", text, from.dev.Name, r)
