@@ -330,7 +330,10 @@ func (c *Client) takeChallenge(uniqueID string) ([]byte, string, bool) {
 type TCPServer struct {
 	// noxa-olm-v1 admission (frame 202), ON by default and advertised as
 	// netproto.CapabilityOlmAdmission whenever the Olm directory is available.
-	olmAdmissionEnabled   bool
+	olmAdmissionEnabled bool
+	// mediaE2EE requires end-to-end encrypted channel media (Task 2), ON by
+	// default; advertised as netproto.CapabilityMediaE2EE when available.
+	mediaE2EE             bool
 	previewOnce           sync.Once
 	previewService        *linkpreview.Service
 	spoolDelivery         [64]sync.Mutex
@@ -473,6 +476,7 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 	}
 	s := &TCPServer{
 		olmAdmissionEnabled: true,
+		mediaE2EE:           true,
 		cfg:                 cfg,
 		logger:              logger,
 		deps:                deps,

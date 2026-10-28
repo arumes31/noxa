@@ -48,6 +48,8 @@ type ClientInfo struct {
 	IsBot bool `json:"is_bot,omitempty"`
 	// OnMobile marks a session of the mobile web app.
 	OnMobile bool `json:"on_mobile,omitempty"`
+	// MediaDevice names the session's device for encrypted media keys.
+	MediaDevice string `json:"media_device,omitempty"`
 }
 
 // ChannelNode represents a single channel in the tree snapshot. It embeds the
@@ -128,6 +130,7 @@ func clientToInfo(c *state.Client) ClientInfo {
 		StatusMessage:   c.StatusMessage,
 		IsBot:           c.IsBot,
 		OnMobile:        c.OnMobile,
+		MediaDevice:     c.MediaDevice,
 	}
 }
 

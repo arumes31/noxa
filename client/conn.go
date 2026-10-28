@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -89,7 +90,13 @@ type connManager struct {
 	isGuest                      bool
 	// keyless: an ephemeral "guest:" session without an identity key (only a
 	// third-party client can get one: the desktop always signs in with its key).
-	keyless            bool
+	keyless bool
+	// supportsMediaE2EE: the server requires end-to-end encrypted channel
+	// media and supports its key transport (Task 2).
+	supportsMediaE2EE bool
+	// mediaKeyPriority: an encrypted voice session is active on this
+	// connection (faster ratchet drain for media-key controls).
+	mediaKeyPriority   atomic.Bool
 	authorizationModel string
 	closed             bool
 	reconnectTerminal  bool // authenticated rejection or trust failure; guarded by mu
@@ -218,7 +225,7 @@ const (
 )
 
 func newConnManager(wailsCtx context.Context) *connManager {
-	return &connManager{
+	m := &connManager{
 		sink:                wailsSink{ctx: wailsCtx},
 		confirmPeerChange:   frontendPeerConfirmation(wailsCtx),
 		pending:             make(map[netproto.MessageType]pendingRequest),
@@ -231,6 +238,9 @@ func newConnManager(wailsCtx context.Context) *connManager {
 		scopeKeys:           newScopeKeyStore(),
 		decryptSem:          make(chan struct{}, maxAsyncDecrypts),
 	}
+	// Media keys are relayed to the frontend from the first session on.
+	m.ratchetControls = append(m.ratchetControls, m.relayMediaKey)
+	return m
 }
 
 // identity returns the client's key pair, loading or generating it lazily.
@@ -672,6 +682,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 // every password-less key login sends Anonymous, members included.
 func (m *connManager) applySecureAuthLocked(resp netproto.AuthResponse, anonymous bool) {
 	m.supportsOlm = slices.Contains(resp.Capabilities, netproto.CapabilityOlmAdmission) && slices.Contains(resp.Capabilities, netproto.CapabilityOlmDirectory)
+	m.supportsMediaE2EE = m.supportsOlm && mediaE2EESupported(resp.Capabilities)
 	m.ratchetDefault = true
 	m.isGuest = anonymous
 	if slices.Contains(resp.Capabilities, netproto.CapabilityOlmAdmission) {

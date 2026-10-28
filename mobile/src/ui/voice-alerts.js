@@ -5,6 +5,7 @@ import { app } from "../app.js";
 import { t } from "../i18n.js";
 import { toast } from "./dom.js";
 import "./voice-strings.js";
+import { mediaErrorText } from "./media-e2ee-text.js";
 
 const attached = new WeakSet();
 /** Whisper toasts repeat at most this often per whisperer. */
@@ -29,6 +30,7 @@ function attach(voice) {
         navigator.vibrate?.([120, 80, 120]);
     });
     voice.addEventListener("mic-error", event => toast(t("vc.micError", { error: event.detail?.message || String(event.detail) }), "warn"));
+    voice.addEventListener("media-error", event => toast(mediaErrorText(event.detail), "warn"));
 }
 
 attach(app.voice);

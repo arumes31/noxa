@@ -91,13 +91,22 @@ test.beforeEach(async ({ page }) => {
             if (window.__media.delayCapture) await new Promise(resolve => { window.__media.finishCapture = resolve; });
             return stream;
         } });
+        // Encrypted channel media (Task 2): these stand-in peers carry no
+        // encoded transforms, so negotiation runs with the session double;
+        // offers go through the secure binding.
+        window.go.main.App.WebRTCOfferSecureForTab = (tab, sdp, slots) => window.go.main.App.WebRTCOfferForTab(tab, sdp, slots);
+        const channelMedia = await import("/src/channel-media.js");
+        const standIn = () => ({ active: true, identity: { channelID: 1 }, async start() { return this; }, stop() { this.active = false; }, setRoster() {}, protectPeer: pc => pc,
+            peerConfig: c => c, bindSenders: async () => {}, syncReceivers: async () => {}, rescope() {}, publicationsChanged() {}, receive: () => ({ ok: false }), status: () => ({ state: "encrypted" }) });
+        channelMedia.useChannelMediaFactory(standIn);
+        channelMedia.useChannelMediaSession(standIn());
         window.__media.video = await import("/src/video.js");
         (await import("/src/modal.js")).initModalSystem();
         document.getElementById("voice-screen").onclick = () => window.__media.video.shareToggle();
     });
 });
 
-test("screen preview uploads an asynchronously encoded JPEG while the capture stays live", async ({ page }) => {
+test("encrypted channel media never uploads a plaintext screen preview", async ({ page }) => {
     await page.evaluate(() => {
         const control = window.go.main.App.VideoStreamControlForTab;
         window.go.main.App.VideoStreamControlForTab = async (tab, msg) => {
@@ -114,16 +123,10 @@ test("screen preview uploads an asynchronously encoded JPEG while the capture st
     await page.locator("#voice-screen").click();
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => !!window.__media.previewUpload)).toBe(true);
-    expect(await page.evaluate(async () => {
-        const upload = window.__media.previewUpload;
-        const image = new Image(); image.src = `data:image/jpeg;base64,${upload.jpeg}`; await image.decode();
-        return { tab: upload.tab, slot: upload.slot, generation: upload.generation,
-            jpeg: atob(upload.jpeg).startsWith("\xff\xd8"), bounded: upload.jpeg.length <= 65536,
-            width: image.naturalWidth, height: image.naturalHeight,
-            capture: window.__noxa.state.shareStream.getVideoTracks()[0].readyState };
-    })).toEqual({ tab: "media-tab", slot: "screen", generation: "1", jpeg: true, bounded: true,
-        width: 640, height: 360, capture: "live" });
+    await expect.poll(() => page.evaluate(() => window.__noxa.state.shareStream?.getVideoTracks()[0]?.readyState)).toBe("live");
+    // The share runs; the server never receives a (plaintext) preview image.
+    await page.waitForTimeout(1500);
+    expect(await page.evaluate(() => window.__media.previewUpload ?? null)).toBe(null);
 });
 
 test("repeated screen shares reuse senders and declare shared audio after every restart", async ({ page }) => {
@@ -429,110 +432,6 @@ test("text sharing retains readable pixels and live motion changes update the sa
         encodings: [{ priority: "high", maxFramerate: 60 }] } });
     expect(await page.evaluate(() => window.__media.originalShare === window.__noxa.state.shareStream)).toBe(true);
     expect(await page.evaluate(() => window.__media.cameraSender.getParameters().encodings[0].priority)).toBe("medium");
-});
-
-test("compatible viewer joins and leaves preserve the active screen encoder", async ({ page }) => {
-    await page.evaluate(() => {
-        const app = window.go.main.App, pc = window.__noxa.state.pc;
-        app.SupportsStreamSourceQualityForTab = async () => true;
-        app.SupportsStreamCodecForTab = async () => true;
-        Object.defineProperty(navigator.mediaCapabilities, "encodingInfo", { configurable: true, value: async () => ({ supported: true, powerEfficient: true }) });
-        const add = pc.addTransceiver.bind(pc);
-        pc.addTransceiver = (...args) => {
-            const transceiver = add(...args);
-            transceiver.setCodecPreferences = codecs => { transceiver.codec = codecs[0].mimeType; };
-            return transceiver;
-        };
-        const control = app.VideoStreamControlForTab;
-        app.VideoStreamControlForTab = async (...args) => ({ ...await control(...args), codec: "h264", upload_active: true });
-        Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async () => {
-            const canvas = document.createElement("canvas");
-            canvas.width = 1920; canvas.height = 1080;
-            return canvas.captureStream(60);
-        } });
-    });
-    await page.locator("#voice-screen").click();
-    await chooseShareOption(page, "preset", "hdMotion");
-    await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.__noxa.state.shareVideoTransceiver?.sender.getParameters().encodings[0]?.active)).toBe(true);
-    const before = await page.evaluate(async () => {
-        const { queuePeerNegotiation } = await import("/src/video-negotiation.js");
-        const { pc, shareVideoTransceiver } = window.__noxa.state;
-        await queuePeerNegotiation(pc, async () => {});
-        const changes = [];
-        const observe = (target, name) => {
-            const original = target[name].bind(target);
-            target[name] = (...args) => { changes.push(name); return original(...args); };
-        };
-        observe(pc, "createOffer");
-        for (const sender of pc.getSenders()) {
-            observe(sender, "setParameters");
-            observe(sender, "replaceTrack");
-            if (sender.track) observe(sender.track, "applyConstraints");
-        }
-        Object.assign(window.__media, { viewerChanges: changes, originalScreenSender: shareVideoTransceiver.sender,
-            originalScreenTrack: shareVideoTransceiver.sender.track });
-        return shareVideoTransceiver.sender.getParameters();
-    });
-    expectLayeredScreenBudget(before.encodings, 8000000);
-    expect(before).toMatchObject({ degradationPreference: "maintain-framerate", encodings: [{ active: true, maxFramerate: 60 }] });
-    for (const viewer_count of [1, 2, 3, 2, 1]) {
-        const after = await page.evaluate(async viewer_count => {
-            const { publicationSnapshot, reconcilePublicationUploads } = await import("/src/stream-publication.js");
-            const { queuePeerNegotiation } = await import("/src/video-negotiation.js");
-            const { pc, shareVideoTransceiver } = window.__noxa.state;
-            const snapshot = publicationSnapshot();
-            reconcilePublicationUploads(snapshot, snapshot.map(({ publication, generation }) => ({
-                publisher_id: "self", slot: publication.slot, generation, viewer_count,
-                quality_mode: "source", upload_active: true, codec: "h264",
-            })));
-            // Drain publication callbacks and their queued sender work before
-            // checking for mutations, including writes of unchanged parameters.
-            await Promise.resolve();
-            await queuePeerNegotiation(pc, async () => {});
-            return { publications: snapshot.length, changes: [...window.__media.viewerChanges],
-                sameSender: shareVideoTransceiver.sender === window.__media.originalScreenSender,
-                sameTrack: shareVideoTransceiver.sender.track === window.__media.originalScreenTrack,
-                live: shareVideoTransceiver.sender.track.readyState, codec: shareVideoTransceiver.codec,
-                parameters: shareVideoTransceiver.sender.getParameters() };
-        }, viewer_count);
-        expect(after, `viewer count ${viewer_count}`).toEqual({ publications: 1, changes: [], sameSender: true,
-            sameTrack: true, live: "live", codec: "video/H264", parameters: before });
-    }
-});
-
-test("hardware screen codec follows common fallback without adding a sender", async ({ page }) => {
-    await page.evaluate(() => {
-        const app = window.go.main.App, pc = window.__noxa.state.pc;
-        app.SupportsStreamSourceQualityForTab = async () => true;
-        app.SupportsStreamCodecForTab = async () => true;
-        Object.defineProperty(navigator.mediaCapabilities, "encodingInfo", { configurable: true, value: async () => ({ supported: true, powerEfficient: true }) });
-        const add = pc.addTransceiver.bind(pc);
-        pc.addTransceiver = (...args) => {
-            const transceiver = add(...args);
-            transceiver.setCodecPreferences = codecs => { transceiver.codec = codecs[0].mimeType; };
-            return transceiver;
-        };
-        const control = app.VideoStreamControlForTab;
-        app.VideoStreamControlForTab = async (...args) => ({ ...await control(...args), codec: "h264", upload_active: true });
-    });
-    await page.locator("#voice-screen").click();
-    await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Start sharing", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.__noxa.state.screenSharing)).toBe(true);
-    const before = await page.evaluate(() => ({ senders: window.__noxa.state.pc.getSenders().length, offers: window.__media.offers.length }));
-    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.codec)).toBe("video/H264");
-    await page.evaluate(async () => {
-        const { publicationSnapshot, reconcilePublicationUploads } = await import("/src/stream-publication.js");
-        const snapshot = publicationSnapshot();
-        reconcilePublicationUploads(snapshot, snapshot.map(({ publication, generation }) => ({ publisher_id: "self", slot: publication.slot, generation, upload_active: true, codec: "vp8" })));
-    });
-    await expect.poll(() => page.evaluate(() => window.__media.offers.length)).toBe(before.offers + 1);
-    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.codec)).toBe("video/VP8");
-    expect(await page.evaluate(() => window.__noxa.state.pc.getSenders().length)).toBe(before.senders);
-    expect(await page.evaluate(() => window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings.length)).toBe(1);
-    expect(await page.evaluate(() => window.__media.errors)).toEqual([]);
 });
 
 for (const [preset, width, height] of [["qhd", 2560, 1440], ["uhd", 3840, 2160]]) {
@@ -1716,39 +1615,23 @@ async function installHEVCPublication(page, reject = false) {
     }, reject);
 }
 
-test("HEVC preference rejection falls back on the same captured source before publishing", async ({ page }) => {
-    await installHEVCPublication(page, true);
-    await page.locator("#voice-screen").click();
-    await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
-    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.__media.codecRequests.length)).toBe(1);
-    const result = await page.evaluate(() => ({ preferences: __media.codecPreferences, requests: __media.codecRequests,
-        captures: __media.displayTracks.length, errors: __media.errors, encodings: __noxa.state.shareVideoTransceiver.sender.getParameters().encodings.length,
-        source: __noxa.state.shareStream.getVideoTracks()[0] === __media.displayTracks[0] }));
-    expect(result.preferences[0].mime).toBe("video/H265"); expect(result.preferences[1].mime).toBe("video/H264");
-    expect(result.requests[0].codecs).toEqual(["h264", "vp8"]); expect(result.requests[0]).not.toHaveProperty("hevc_level_id");
-    expect(result.requests[0].codec_revision).toBe("1"); expect(result.captures).toBe(1); expect(result.encodings).toBe(1);
-    expect(result.source).toBe(true); expect(result.errors).toEqual([]);
-});
-
-test("HEVC same-family source replacement applies the new exact format on the reused sender", async ({ page }) => {
+// Encrypted channel media (Task 2) publishes VP8 only: hardware H.264/HEVC
+// is neither probed nor preferred nor declared, because only Opus/VP8 are
+// proven end-to-end encrypted through the SFU. (The former H.264/HEVC
+// selection tests covered a path that is unreachable while media is
+// encrypted.)
+test("encrypted channel media publishes the screen as VP8 even with hardware HEVC/H.264 available", async ({ page }) => {
     await installHEVCPublication(page);
     await page.locator("#voice-screen").click();
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__media.codecRequests.length)).toBe(1);
-    await page.evaluate(() => { __media.previousSender = __noxa.state.shareVideoTransceiver.sender; __media.hevcLevel = 120; });
-    await page.locator("#sharing-status").getByRole("button", { name: "Change source", exact: true }).click();
-    await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
-    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.__media.codecRequests.length)).toBe(2);
-    const result = await page.evaluate(() => ({ preferences: __media.codecPreferences, requests: __media.codecRequests,
-        sameSender: __media.previousSender === __noxa.state.shareVideoTransceiver.sender, errors: __media.errors }));
-    expect(result.preferences.filter(row => row.mime === "video/H265").map(row => row.fmtp)).toEqual([
-        "profile-id=1;tier-flag=0;level-id=153;tx-mode=SRST", "profile-id=1;tier-flag=0;level-id=120;tx-mode=SRST"]);
-    expect(result.requests.map(row => row.hevc_level_id)).toEqual([153, 120]); expect(result.sameSender).toBe(true); expect(result.errors).toEqual([]);
+    const result = await page.evaluate(() => ({ preferences: __media.codecPreferences, requests: __media.codecRequests, errors: __media.errors }));
+    expect(result.preferences.every(row => row.mime.toLowerCase() === "video/vp8")).toBe(true);
+    expect(result.requests[0].codecs).toEqual(["vp8"]);
+    expect(result.requests[0]).not.toHaveProperty("hevc_level_id");
+    expect(result.errors).toEqual([]);
 });
-
 
 test("pending HEVC withdrawal cannot prevent last-viewer upload pause or apply stale codec", async ({ page }) => {
     await installHEVCPublication(page);

@@ -68,6 +68,7 @@ import {
 import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget } from "./stream-controls.js";
 import { startRemoteMedia, reconcileRemoteMedia } from "./remote-media.js";
+import { startChannelMedia, stopChannelMedia, channelMedia, receiveMediaKey, mediaErrorText, mediaStatusText, onChannelMediaStatus } from "./channel-media.js";
 import { remoteTrackID } from "./media-track-id.js";
 import { createReceiverRegistry, attributeReceiver, releaseReceiver } from "./remote-receivers.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
@@ -1340,6 +1341,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     updateTalkBanner();
     recomputeDucking();
     renderTree();
+    syncChannelMedia();
 });
 
 // syncOwnChannel makes channel ownership independent of whether the snapshot
@@ -1847,6 +1849,29 @@ window.runtime.EventsOn("event", (json) => {
     window.__noxaNotify?.checkChannelWatch();
     renderTree();
     videoRefreshNames();
+    syncChannelMedia();
+});
+
+// Encrypted channel media (Task 2): the roster names each member's media
+// device; keys are only ever sent to, and accepted from, those devices.
+// A move of the same peer into another channel is a new key scope.
+function syncChannelMedia() {
+    const media = channelMedia();
+    if (!media) return;
+    if (state.myChannelID > 0 && media.identity && state.myChannelID !== media.identity.channelID) media.rescope(state.myChannelID);
+    media.setRoster(state.clients);
+}
+// Delivered media-key controls (authenticated ratchet controls; never chat,
+// activity, notifications or history).
+window.runtime.EventsOn("media_key", event => { receiveMediaKey(event); });
+onChannelMediaStatus(status => {
+    const element = $("voice-e2ee");
+    if (!element) return;
+    const text = mediaStatusText(status);
+    element.textContent = text;
+    element.hidden = !text;
+    element.dataset.state = status?.state || "off";
+    element.title = text ? t("e2ee.media.limits") : "";
 });
 
 // ---------------------------------------------------------------------------
@@ -2384,9 +2409,29 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         return false;
     }
     state.mediaLimits = mediaLimits;
-    const pc = iceServers && iceServers.length
-        ? new RTCPeerConnection({ iceServers })
-        : new RTCPeerConnection();
+    // Encryption first: without a working encrypted-media session no peer is
+    // created (explicit error, never plaintext channel media).
+    let media;
+    try {
+        media = await startChannelMedia({ tabID, channelID: state.myChannelID, roster: state.clients, onError: error => {
+            toast(mediaErrorText(error), "warn");
+            if (state.pc) resetVoiceSession();
+        } });
+    } catch (error) {
+        capturedStream.getTracks().forEach((track) => track.stop());
+        if (state.localStream === capturedStream) state.localStream = null;
+        if (current()) throw new Error(mediaErrorText(error));
+        return false;
+    }
+    if (!current()) {
+        stopChannelMedia();
+        capturedStream.getTracks().forEach((track) => track.stop());
+        if (state.localStream === capturedStream) state.localStream = null;
+        return false;
+    }
+    const pc = media.protectPeer(iceServers && iceServers.length
+        ? new RTCPeerConnection(media.peerConfig({ iceServers }))
+        : new RTCPeerConnection(media.peerConfig()));
     // A replacement peer owns a new ICE-restart ladder. Dispose the previous
     // current owner's timer before publishing the replacement; callbacks from
     // that old peer can never affect the new one.
@@ -2410,6 +2455,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         if (!current() || state.pc !== pc) {
             disposeMicrophoneGate(audioTrack);
             audioTrack.stop(); pc.close();
+            if (channelMedia() === media) stopChannelMedia();
             return false;
         }
         pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream], sendEncodings: [voiceSendEncoding()] });
@@ -2481,6 +2527,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
 
     if (expectedEpoch !== voiceSessionEpoch || state.pc !== pc || state.myChannelID <= 0) {
         pc.close();
+        if (channelMedia() === media) stopChannelMedia();
         return false;
     }
 
@@ -2721,6 +2768,8 @@ function teardownVoice() {
     state.shareStopping = false;
     detachRemoteAudio();
     if (state.pc) { state.pc.close(); state.pc = null; }
+    // The session's worker and every media key end with the peer.
+    stopChannelMedia();
     state.voiceTabID = "";
     syncTrayVoice();
     if (state.localStream) {

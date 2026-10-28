@@ -117,8 +117,8 @@ app:
   X25519 keys (NaCl box) and kept by the server for up to 24 hours, so it has
   no forward secrecy: someone who stores it and later obtains one of those
   long-term keys can read the copied history.
-- **Private-call signalling** still uses the static device keys (calls are
-  not end-to-end encrypted, see below).
+- **Private-call signalling** still uses the static device keys (private-call
+  media is not end-to-end encrypted, see below).
 - **Guests.** A guest that signs in with an identity key (desktop password-less
   logins, browser guests) uses the same protocol for direct messages: its key
   is its own account root and registers its device itself. A browser guest has
@@ -127,13 +127,41 @@ app:
   guest explicitly reviews and accepts the new fingerprint. Sessions without an
   identity key cannot send direct or group messages.
 
+**Channel voice, video and screen sharing (`noxa-media-e2ee-v1`).** On a
+server that advertises this capability, every channel microphone, camera,
+screen and screen-audio frame is encrypted on the sending device before it
+reaches the server's media relay (SFU), and decrypted only on the receiving
+device. The frame cipher is the maintained LiveKit FrameCryptor (AES-GCM,
+pinned `livekit-client` 2.23.0) run in a dedicated worker on both browser
+transform APIs (RTCRtpScriptTransform and the older encoded-streams API).
+Each publication slot gets a fresh random key per epoch; keys travel only as
+authenticated, expiring, single-device ratchet controls (the same
+`noxa-olm-v1` sessions as direct messages, never stored at rest and never
+shown as messages) to the devices the channel roster names. A new epoch starts
+on every join, leave, kick, device change, reconnect and publication change
+and every five minutes, so a newcomer cannot decrypt earlier media and a
+departed device cannot decrypt later media. There is no unencrypted fallback:
+an old client, a keyless guest session, a browser without encoded transforms
+or a server without the device directory gets an explicit message and no
+media. Only Opus and VP8 are used while media is encrypted (H.264/HEVC
+publication is off). The server cannot start recordings (an existing
+recording can still be stopped and keeps its files and retention), whisper is
+unavailable, stream previews are not uploaded (a stream shows its picture once
+watched), and the connection benchmark is unavailable. The echo test channel
+returns your own encrypted media, decrypted with your own key.
+Limits: the server still sees who is in a channel, packet sizes and timing,
+and the clear VP8 keyframe header (dimensions); every participant who receives
+the keys can record what they receive (the app has no call recorder, external
+recorders cannot be prevented); a key is shared by everyone in the channel, so
+receivers are authenticated as channel members, not individually per frame.
+Invisible sessions are not in the roster and therefore receive no keys.
+
 **What is not end-to-end encrypted (yet).** Channel and global chat, threads
 and forum bodies use server-managed scope keys: the server can decrypt them
-(it moderates at send time and stores history sealed). Voice channels,
-watching streams and private calls use WebRTC DTLS-SRTP to the server's media
-relay, so the server can access call media; media end-to-end encryption is
-planned (Task 2) and will use the targeted, expiring media controls described
-in `internal/e2ee/admission/README.md`.
+(it moderates at send time and stores history sealed). Private calls (direct
+or group calls outside channels) use WebRTC DTLS-SRTP to the server's media
+relay, so the server can access private-call media; they are labelled
+separately and are not covered by channel media encryption.
 
 **Endpoint limits.** Encryption protects messages in transit and on the
 server, not on a compromised device. Readable history is stored on each device
@@ -217,10 +245,10 @@ graph TD
 * **Screen-share audio choices**: In channel shares and private calls, choose **No audio**, **Shared application**, or **System audio**. Application audio requires a window and a supported capture runtime; enable audio in the system picker. It can include other windows of the same application. If application-only capture is unavailable or cannot be confirmed, video still starts without audio and a short notification explains the fallback. System audio is only shared when explicitly selected.
 * **Screen-share resolution**: The channel share dialog offers 720p, 1080p, 1440p, 4K, **Original source resolution**, and **Custom** dimensions (160–8192 pixels, 15/30/60 fps). The encoder has 50 Mbps of headroom instead of Chromium's implicit ~2.5 Mbps default; this is a ceiling, not a target or minimum. Screen-share presets preserve resolution while actual frame rate can adapt to network and encoder capacity, without an additional system-CPU-triggered 500 kbps cap. Server limits and explicit Low bandwidth mode still apply.
 * **Live share controls**: **Change quality** adjusts a running channel share's resolution and frame rate without reopening the capture picker or changing its source/audio. It updates the one encoding received by every viewer. Watched-stream details show measured resolution, decoded frames per second, codec and payload bitrate separately from the sender's selected settings.
-* **Shared video codec**: camera and screen publications use one sender encoding and upload. On a capable server, HEVC Main 8-bit is preferred when native hardware-support queries succeed and every active viewer supports the publisher's exact level. Otherwise the whole publication uses compatible H.264 Baseline or VP8; the SFU forwards without transcoding. Server recording and explicit server dimension bounds retain VP8 compatibility. Hardware predictions are checked against runtime encoder/decoder statistics, with bounded recovery and codec re-admission after a fallback.
+* **Shared video codec**: camera and screen publications use one sender encoding and upload. While channel media is end-to-end encrypted (see Encryption) every publication is VP8; the HEVC/H.264 selection below applies only to servers without that requirement. On a capable server, HEVC Main 8-bit is preferred when native hardware-support queries succeed and every active viewer supports the publisher's exact level. Otherwise the whole publication uses compatible H.264 Baseline or VP8; the SFU forwards without transcoding. Server recording and explicit server dimension bounds retain VP8 compatibility. Hardware predictions are checked against runtime encoder/decoder statistics, with bounded recovery and codec re-admission after a fallback.
 * **Stream diagnostics for viewers**: Any authorized viewer can compare sender capture/encoding/transmission, server ingress/forwarding and local reception/decoding in **Stream details**. A plain-language health summary explains the available evidence and suggests an action for the sender or viewer; live share controls show the sender's summary too. Bitrate, retransmission share, keyframes, frame size and processing delays help locate bottlenecks. Updated senders are required for sender measurements; missing or stale data stays unknown.
 * **Priority speaker**: Non-priority publishers in the current voice channel are ducked to 25% gain (about −12 dB) while a priority speaker talks.
-* **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries.
+* **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries. Unavailable while channel media is end-to-end encrypted (a whisper would leave the channel key scope).
 * **Microphone recovery**: If the selected microphone disconnects, receiving audio and video continues. Choose and apply a device in **Capture** settings, then select **Retry microphone**. A replacement microphone never starts automatically.
 * **Personal audio controls**: **Personal audio…** in a member's menu opens a compact popover with separate voice and screen-share volume/mute controls, percentage and actual gain in dB. Personal volume uses 100% as unity and reaches +20 dB at the 200% endpoint, with a limiter for loud peaks. Capture settings include push-to-talk, channel voice activation on the audio thread with 100 ms of local pre-roll and a 450 ms release hold, continuous transmission, and local microphone testing. Guided microphone calibration recommends thresholds in the same 0.1% steps as the manual control.
 * **Private calls**: Accepted direct/group calls carry voice, camera, and screen sharing without moving participants into a voice channel.

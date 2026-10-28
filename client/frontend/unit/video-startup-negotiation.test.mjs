@@ -4,6 +4,11 @@ import { registerHooks } from "node:module";
 
 registerHooks({ load(url, context, next) {
     if (url.endsWith("/remote-media.js")) return { format: "module", source: "export function reconcileRemoteMedia() {}", shortCircuit: true };
+    // Negotiation always runs with an encrypted-media session (Task 2); its
+    // sender/receiver binding is covered by media-session tests.
+    if (url.endsWith("/channel-media.js")) return { format: "module", shortCircuit: true, source:
+        "export const MEDIA_E2EE_VERSION = 'noxa-media-e2ee-v1'; export class MediaSessionError extends Error {};" +
+        "const session = { bindSenders: async () => {}, syncReceivers: async () => {} }; export function channelMedia() { return globalThis.__noMedia ? null : session; }" };
     return next(url, context);
 } });
 const { negotiateOffer, answerRemoteOffer } = await import("../src/video-negotiation.js");
@@ -49,7 +54,7 @@ function fixture({ native, nativeAnswer, rejectHint = false } = {}) {
     };
     const state = { pc, serverGeneration: 1, activeTabID: "tab" };
     globalThis.window = { __noxa: { state }, go: { main: { App: {
-        WebRTCOfferForTab: async (...args) => { sent.push(args); return await native?.() ?? answerSDP; },
+        WebRTCOfferSecureForTab: async (...args) => { sent.push(args); return await native?.() ?? answerSDP; },
         WebRTCAnswerForTab: async (...args) => { serverAnswers.push(args); await nativeAnswer?.(); },
     } } } };
     const plan = { mid: "2", payloadType: 102, bitrateKbps: 2000, expiresAt: rtcStatsEpochNow() + 1500,
@@ -396,4 +401,13 @@ test("a rolled-back foreign pending offer does not erase the old sanitation prov
     await f.incoming();
     assert.ok(f.writes.at(-1).sdp.includes("x-google-start-bitrate=2000"));
     assert.equal(f.serverAnswers.at(-1)[1].includes("x-google-start-bitrate"), false);
+});
+
+test("without an encrypted-media session no channel offer reaches the server", async t => {
+    globalThis.__noMedia = true;
+    t.after(() => { delete globalThis.__noMedia; });
+    const f = fixture();
+    await assert.rejects(f.ordinary());
+    assert.equal(f.sent.length, 0);
+    assert.equal(f.pc.signalingState, "stable", "the unsent local offer is rolled back");
 });

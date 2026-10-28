@@ -111,6 +111,10 @@ func (s *TCPServer) handleWebRTCOffer(ctx context.Context, client *Client, f *ne
 	if s.deps == nil || s.deps.Voice == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "voice backend unavailable")
 	}
+	// Refused before the voice backend sees the offer: no peer, no media.
+	if reason := s.mediaE2EEOfferRejection(client, msg); reason != "" {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, reason)
+	}
 	return s.roleChannelControl(ctx, client, authorization.Connect, true, func(ctx context.Context, _ int64) error {
 		s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
 		return s.applyWebRTCOffer(ctx, client, msg)
@@ -166,7 +170,11 @@ func (s *TCPServer) applyWebRTCOffer(ctx context.Context, client *Client, msg ne
 		}
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "webrtc offer failed")
 	}
-	return s.writeMessage(client, netproto.MsgWebRTCAnswer, netproto.WebRTCAnswer{SDP: answer})
+	if err := s.writeMessage(client, netproto.MsgWebRTCAnswer, netproto.WebRTCAnswer{SDP: answer}); err != nil {
+		return err
+	}
+	s.announceMediaDevice(client)
+	return nil
 }
 
 // handleWebRTCAnswer applies an SDP answer from the client (used when the
@@ -226,6 +234,12 @@ func (s *TCPServer) handleWhisperSet(ctx context.Context, client *Client, f *net
 	}
 	if s.deps == nil || s.deps.Voice == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "voice backend unavailable")
+	}
+	// A whisper routes the microphone to sessions outside the channel's key
+	// scope. Until a separate whisper key scope exists it is unavailable.
+	if msg.Active && s.mediaE2EERequired() {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, mediaE2EEError(netproto.MediaE2EEReasonWhisper,
+			"whisper is unavailable while channel media is end-to-end encrypted"))
 	}
 	return s.roleWhisperSet(ctx, client, msg)
 }
@@ -316,6 +330,12 @@ func (s *TCPServer) handleRecordingControl(ctx context.Context, client *Client, 
 func (s *TCPServer) recordingControlAllowed(ctx context.Context, client *Client, msg netproto.RecordingControl) error {
 	switch msg.Action {
 	case "start":
+		// Server recording would need media keys; the server never has them.
+		// Stopping a recording that predates the requirement stays allowed.
+		if s.mediaE2EERequired() {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, mediaE2EEError(netproto.MediaE2EEReasonRecording,
+				"server recording is disabled because channel media is end-to-end encrypted; local recording is still available"))
+		}
 		if s.deps.Channels == nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "channel backend unavailable")
 		}

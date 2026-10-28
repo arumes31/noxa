@@ -36,6 +36,10 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 	if msg.CodecRevision != 0 && msg.Action != "publish" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid codec revision scope")
 	}
+	if reason := s.mediaE2EEStreamRejection(msg); reason != "" {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, reason)
+	}
+	s.mediaE2EECodecs(&msg)
 	capability := authorization.Connect
 	switch msg.Action {
 	case "publish", "preview_upload":

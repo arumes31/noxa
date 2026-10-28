@@ -2,6 +2,7 @@ import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { t } from "./i18n.js";
 import { hevcReadmissionDelay } from "./video-hevc.js";
 import { publicationCodecSupport, publicationCodecQueryKey } from "./video-codecs.js";
+import { channelMedia } from "./channel-media.js";
 
 const V = () => window.__noxa;
 const publications = new Map();
@@ -24,10 +25,13 @@ export async function preparePublicationUpload(slot, track, onChange) {
     const scope = captureMediaScope(), pc = V().state.pc;
     const supported = await window.go.main.App.SupportsStreamSourceQualityForTab?.(scope.tabID) || false;
     const codecSupport = supported && await window.go.main.App.SupportsStreamCodecForTab?.(scope.tabID) || false;
-    const hevc = codecSupport && await window.go.main.App.SupportsStreamHEVCForTab?.(scope.tabID) === true;
-    const probe = codecSupport ? await publicationCodecSupport(track, hevc) : null;
+    // Encrypted channel media publishes VP8 only (the proven encrypted codec
+    // through the SFU); H.264/HEVC are neither probed nor offered.
+    const encrypted = !!channelMedia();
+    const hevc = !encrypted && codecSupport && await window.go.main.App.SupportsStreamHEVCForTab?.(scope.tabID) === true;
+    const probe = codecSupport ? (encrypted ? { codecs: ["vp8"], status: "unsupported", key: "e2ee-vp8" } : await publicationCodecSupport(track, hevc)) : null;
     const codecs = probe?.codecs;
-    const refreshSupported = codecSupport && await supportsCodecRefresh(scope.tabID);
+    const refreshSupported = !encrypted && codecSupport && await supportsCodecRefresh(scope.tabID);
     if (!mediaScopeIsCurrent(scope) || V().state.pc !== pc || track.readyState === "ended") return false;
     uploads.set(slot, { scope, pc, track, supported, codecs, hevc, codecRevision: hevc ? 1n : 0n, hevcLevel: probe?.hevc_level_id, hevcFormat: probe?.hevcFormat, codec: codecs?.[0], active: !supported, generation: "0", onChange,
         refresh: { supported: refreshSupported, done: hevc ? probe?.preferredAvailable === true : codecs?.includes("h264"), pending: false, key: probe?.key,
@@ -357,6 +361,8 @@ function previewJPEG(publication, canvas) {
 
 async function capturePreview(publication) {
     if (!valid(publication)) return;
+    // Never upload a plaintext preview of encrypted channel media.
+    if (channelMedia()) return;
     try {
         if (previewEncodingPending) return;
         const video = document.createElement("video");

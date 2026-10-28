@@ -145,6 +145,43 @@ export function onSecureControl(fn) {
     return () => { const i = controlHandlers.indexOf(fn); if (i >= 0) controlHandlers.splice(i, 1); };
 }
 
+// Encrypted channel media (Task 2): media-key controls go to the current
+// voice session only (never to chat, activity, notifications or history).
+onSecureControl(control => {
+    if (control?.kind === "media-key") app.voice?.receiveMediaKey(control);
+});
+
+const MEDIA_E2EE_CAPABILITY = "noxa-media-e2ee-v1";
+const SECURE_WAIT_MS = 15000;
+
+/**
+ * The encrypted-media adapter of one signed-in session: its identity and the
+ * authenticated control transport (RatchetConsumer.sendControl). Voice waits
+ * briefly for the secure session that starts right after sign-in.
+ */
+export function mediaAdapter(session) {
+    const current = () => app.session === session;
+    return {
+        async status() {
+            const caps = session.capabilities || new Set();
+            const base = { principal: session.uniqueID, device: session.deviceID, clientID: session.clientID };
+            if (!caps.has(MEDIA_E2EE_CAPABILITY) || !RATCHET_CAPABILITIES.every(c => caps.has(c))) return { ...base, supported: false, reason: "server_outdated" };
+            if (String(session.uniqueID || "").startsWith("guest:")) return { ...base, supported: true, reason: "keyless_guest" };
+            if (!session.deviceID) return { ...base, supported: true, reason: "no_device" };
+            const deadline = Date.now() + SECURE_WAIT_MS;
+            while (current() && !secureMessagingStatus().active && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 200));
+            const secure = current() && secureMessagingStatus().active;
+            return { ...base, supported: true, reason: secure ? "" : "secure_unavailable" };
+        },
+        async send({ logicalID, principal, device, body }) {
+            const owner = app.ratchet;
+            if (!current() || !owner || owner.consumer.closed) return { ok: false, code: "secure_unavailable" };
+            const { receipt } = await owner.consumer.sendControl({ logicalID, principal, device, body });
+            return { ok: receipt?.state === "accepted", code: receipt?.state || "unavailable" };
+        },
+    };
+}
+
 /** Test-only tuning: poll period and store/core factory injection. */
 export function configureRatchetForTests(options = null) {
     ratchetOptions = { pollMS: options?.pollMS || 5000, modules: options?.modules || null };
@@ -361,7 +398,9 @@ function pollRatchet(owner, session) {
         owner.dm?.showQuarantined(result?.quarantined || []).catch(() => {});
         owner.groups?.showQuarantined(result?.quarantined || []);
     }).catch(() => {}).finally(() => {
-        if (app.ratchet === owner && app.session === session && !owner.consumer.closed) owner.timer = setTimeout(tick, ratchetOptions.pollMS);
+        // In an encrypted voice session media-key controls (rekeys) must
+        // arrive within about a second: there is no push for ratchet copies.
+        if (app.ratchet === owner && app.session === session && !owner.consumer.closed) owner.timer = setTimeout(tick, app.voice?.active ? Math.min(1000, ratchetOptions.pollMS) : ratchetOptions.pollMS);
     });
     tick();
 }
@@ -476,7 +515,7 @@ export async function connect({ guest = null, fence } = {}) {
     const previousVoice = app.voice;
     previousVoice?.close();
     // Mute, deafen and the last whisperer carry over to the new session.
-    app.voice = new Voice(session, previousVoice);
+    app.voice = new Voice(session, previousVoice, { media: mediaAdapter(session) });
     watchVoice(app.voice);
     // A dropped connection ends the call; rejoin the same channel.
     if (rejoin) joinVoice(rejoin).catch(() => {});

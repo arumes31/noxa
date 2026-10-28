@@ -54,6 +54,7 @@ func TestStreamReadReplyDoesNotDiscardAuthorizedMedia(t *testing.T) {
 			sm.AddChannel(testChannel(1))
 			voice := &streamReadVoice{}
 			srv := New(&config.Config{}, zap.NewNop(), &Deps{Authority: authority, State: sm, Voice: voice})
+			srv.mediaE2EE = false // plaintext preview read/write semantics (pre-E2EE path)
 			conn := &streamReadBlockedConn{blockingTCPConn: newBlockingTCPConn(), entered: make(chan struct{}), release: make(chan struct{})}
 			reader := &Client{ID: "reader", Conn: conn}
 			other := &Client{ID: "other", Conn: newBlockingTCPConn()}
@@ -159,6 +160,7 @@ func TestStreamReadLeaseRejectsRevokedOrIneligibleSessions(t *testing.T) {
 				sm.AddChannel(testChannel(1))
 				voice := &streamReadVoice{}
 				srv := New(&config.Config{}, zap.NewNop(), &Deps{Authority: authority, State: sm, Voice: voice})
+				srv.mediaE2EE = false // plaintext preview read/write semantics (pre-E2EE path)
 				refreshes := voice.refreshes
 				conn := &sessionResponseConn{blockingTCPConn: newBlockingTCPConn()}
 				client := &Client{ID: "reader", Conn: conn}

@@ -1,3 +1,5 @@
+import { channelMedia, mediaErrorText, MediaSessionError } from "./channel-media.js";
+
 const V = () => window.__noxa;
 let whisperRequest = null;
 let whisperRouting = null;
@@ -20,6 +22,9 @@ export function mediaScopeIsCurrent(scope) {
 // Shared ownership prevents a hotkey completion from overwriting newer settings.
 export async function setWhisperRouting(config, scope = captureMediaScope()) {
     if (!scope.tabID || !scope.clientID || !mediaScopeIsCurrent(scope)) return null;
+    // A whisper routes the microphone outside the channel key scope: it is
+    // unavailable while channel media is end-to-end encrypted.
+    if (config.active && channelMedia()) return mediaErrorText(new MediaSessionError("whisper_unavailable"));
     const request = { scope, config: structuredClone(config) };
     whisperRequest = request;
     whisperRouting = { scope, status: "pending" };

@@ -1,6 +1,7 @@
 // voice.js — Voice room (09): join a channel, speaking tiles, mute,
 // deafen, push-to-talk, whisper, raised hands, priority speaker, the
 // channel's chat, audio output, data used and watching streams.
+import { mediaErrorText, mediaStatusText } from "./media-e2ee-text.js";
 import { app, leaveVoice } from "../app.js";
 import * as settings from "../core/settings.js";
 import { joinWithPassword, lockBadge } from "./server-tools.js";
@@ -32,7 +33,7 @@ function channelList(root, session) {
                 h("button", { class: "row", type: "button", style: `padding-left:${10 + c.depth * 14}px`, onclick: async event => {
                     const button = event.currentTarget;
                     button.disabled = true;
-                    try { await joinWithPassword(c); } catch (error) { toast(t("voice.joinFailed", { error: error.message }), "warn"); }
+                    try { await joinWithPassword(c); } catch (error) { toast(t("voice.joinFailed", { error: mediaErrorText(error) }), "warn"); }
                     button.disabled = false;
                 } },
                     icon("voice"),
@@ -102,6 +103,14 @@ export function renderVoice(root) {
     const notices = h("div", { class: "vc-notices", role: "status", "aria-live": "polite" });
     // Whether the microphone is sending right now (push-to-talk, voice activation, whisper).
     const micState = h("p", { class: "vc-mic-state" });
+    // Encryption state of this call (Task 2), with its stated limits.
+    const e2eeState = h("p", { class: "hint vc-e2ee", role: "status", title: t("e2ee.media.limits") });
+    const renderE2EE = () => {
+        const text = mediaStatusText(voice.mediaStatus);
+        e2eeState.textContent = text;
+        e2eeState.hidden = !text;
+        e2eeState.classList.toggle("warn", voice.mediaStatus?.state === "partial");
+    };
     const renderMicState = () => {
         const on = voice.transmitting;
         micState.classList.toggle("on", on);
@@ -131,7 +140,7 @@ export function renderVoice(root) {
     const selfView = h("video", { class: "self-view", autoplay: true, playsinline: true, muted: true, "aria-label": t("call.selfView"), hidden: true });
     const pttToggle = h("input", { type: "checkbox", role: "switch", checked: voice.pushToTalk, onchange: event => voice.setPushToTalk(event.target.checked) });
     const talk = holdButton(t("voice.holdToTalk"), "talk-button", () => voice.setTalking(true), () => voice.setTalking(false));
-    const whisperFailed = error => toast(t("vc.whisperFailed", { error: error.message }), "warn");
+    const whisperFailed = error => toast(t("vc.whisperFailed", { error: mediaErrorText(error) }), "warn");
     const whisper = holdButton(t("vc.holdToWhisper"), "talk-button vc-whisper", () => {
         const targets = voice.whisperTargets;
         if (!targets.uniqueIDs.length && !targets.channelIDs.length) {
@@ -250,6 +259,7 @@ export function renderVoice(root) {
             echoBar,
             notices,
             micState,
+            e2eeState,
             tiles,
             queueBox,
             streamsBox,
@@ -271,7 +281,8 @@ export function renderVoice(root) {
     renderOutputs();
     const onChange = () => render();
     const onTracks = () => render();
-    const listeners = [["state", onChange], ["speaking", onChange], ["stats", onChange], ["tracks", onTracks], ["whisper", onChange], ["transmit", renderMicState]];
+    renderE2EE();
+    const listeners = [["state", onChange], ["speaking", onChange], ["stats", onChange], ["tracks", onTracks], ["whisper", onChange], ["transmit", renderMicState], ["media-status", renderE2EE]];
     for (const [type, listener] of listeners) voice.addEventListener(type, listener);
     const onSnapshot = () => render();
     session.addEventListener("snapshot", onSnapshot);

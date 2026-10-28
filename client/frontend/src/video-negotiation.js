@@ -2,6 +2,7 @@
 import { SLOT_SCREEN, SLOT_SCREEN_AUDIO } from "./media-track-id.js";
 import { reconcileRemoteMedia } from "./remote-media.js";
 import { createStartupHintOwnership } from "./video-startup-ownership.js";
+import { channelMedia, MediaSessionError, MEDIA_E2EE_VERSION } from "./channel-media.js";
 const startupHints = createStartupHintOwnership();
 const V = () => window.__noxa;
 
@@ -112,6 +113,10 @@ async function applyPendingRemoteOffer(peerConnection, pending) {
                             if (!current()) throw new DOMException("server session changed", "AbortError");
                         });
                         if (!current()) return false;
+                        // Reused or new MIDs are bound to their CURRENT publisher
+                        // (former publishers' frames are dropped) before playback.
+                        await channelMedia()?.syncReceivers(peerConnection);
+                        if (!current()) return false;
                         pending.applied = true;
                         reconcileRemoteMedia(peerConnection);
                     }
@@ -160,9 +165,22 @@ export async function negotiateOffer(peerConnection, generation, offerOptions, s
         await peerConnection.setLocalDescription(offer);
         ensureCurrent();
         const serverOffer = startupHints.serverDescription(peerConnection, offer);
-        const answerSDP = await window.go.main.App.WebRTCOfferForTab(tabID, serverOffer.sdp, trackSlots(serverOffer.sdp));
+        const slots = trackSlots(serverOffer.sdp);
+        // Channel offers always declare the encrypted transform; every sender
+        // is bound to its slot key first. No session, no offer.
+        const media = channelMedia();
+        if (!media) throw new MediaSessionError("closed");
+        // Binding runs alongside the offer: an unbound sender drops every
+        // frame, so nothing leaves unencrypted meanwhile, and the offer must
+        // reach the server before this peer's trickled ICE candidates.
+        const binding = media.bindSenders(peerConnection, slots);
+        binding.catch(() => {});
+        const answerSDP = await window.go.main.App.WebRTCOfferSecureForTab(tabID, serverOffer.sdp, slots, MEDIA_E2EE_VERSION);
         ensureCurrent();
         await applyRemoteDescription(peerConnection, { type: "answer", sdp: answerSDP }, ensureCurrent, startupPlan);
+        ensureCurrent();
+        await binding;
+        await media.syncReceivers(peerConnection);
         ensureCurrent();
         reconcileRemoteMedia(peerConnection);
         return;

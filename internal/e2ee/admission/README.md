@@ -195,3 +195,20 @@ device. Errors are the usual coded ratchet errors, plus `invalid` (bad body,
 own device, expiry window) and `device_unavailable` (the device is not a
 current, published device of that principal). Task 2 checks `scope`/`epoch`
 against the current call/channel state before using `data`.
+
+### Task 2 consumer: channel media keys
+
+Encrypted channel media (`noxa-media-e2ee-v1`, client `media-keys.js`, shared
+by desktop and PWA) sends one control per recipient device and epoch:
+`kind: "media-key"`, `scope: {type: "channel-media", id: "<channel id>"}`,
+`epoch` = a per-device monotonic millisecond counter, `expires_at` = now +
+120 s, `data: {v: 1, client, session, kid, members, n, keys: {mic, cam,
+screen, screenaudio}}` (32-byte keys, base64). Each control has a fresh logical
+ID (a retry of the same epoch included). Receivers use a control only if its
+scope is the current voice channel, the roster names `data.client` with that
+principal and device, and its epoch is newer than every epoch already seen
+from that device; nothing older ever installs a key. Desktop relays delivered
+controls to the frontend as the tab's non-journaled `media_key` event
+(`client/media_e2ee.go`); the PWA routes `onSecureControl` to the voice
+session (`app.js`). While encrypted voice runs, both clients drain about every
+second so rekeys arrive before activation.

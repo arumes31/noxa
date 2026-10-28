@@ -856,6 +856,19 @@ func (m *Manager) SetServerVoiceState(clientID string, muted, deafened *bool) (*
 	return cloneClient(c), nil
 }
 
+// SetMediaDevice records the device that receives encrypted channel media
+// keys for this session. It reports whether the value changed.
+func (m *Manager) SetMediaDevice(clientID, device string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.clients[clientID]
+	if !ok || c.MediaDevice == device {
+		return false
+	}
+	c.MediaDevice = device
+	return true
+}
+
 // SetE2EPublicKey records the client's X25519 public key. It is a no-op for
 // unknown clients.
 func (m *Manager) SetE2EPublicKey(clientID, publicKey string) {

@@ -790,8 +790,11 @@ func (a *App) WebRTCOffer(sdp string, tracks []netproto.TrackSlot) (string, erro
 }
 
 func (cm *connManager) webRTCOffer(sdp string, tracks []netproto.TrackSlot) (string, error) {
-	f, err := cm.request(netproto.MsgWebRTCOffer, netproto.MsgWebRTCAnswer,
-		netproto.WebRTCOffer{SDP: sdp, Tracks: tracks}, 10*time.Second)
+	return cm.webRTCOfferWith(netproto.WebRTCOffer{SDP: sdp, Tracks: tracks})
+}
+
+func (cm *connManager) webRTCOfferWith(offer netproto.WebRTCOffer) (string, error) {
+	f, err := cm.request(netproto.MsgWebRTCOffer, netproto.MsgWebRTCAnswer, offer, 10*time.Second)
 	if err != nil {
 		return "", err
 	}

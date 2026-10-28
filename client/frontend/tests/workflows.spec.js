@@ -948,7 +948,7 @@ test.describe("tab-bound voice signaling", () => {
             const f = window.__voiceScope = { nativeTab: "server-b", calls: [], effects: [] };
             const app = window.go.main.App;
             window.go.main.App = new Proxy(app, { get(target, key) {
-                const method = key.replace(/ForTab$/, "");
+                const method = key.replace(/ForTab$/, "").replace(/^WebRTCOfferSecure$/, "WebRTCOffer");
                 if (!["GetICEServers", "GetMediaLimits", "WebRTCOffer", "WebRTCAnswer", "SendICECandidate"].includes(method)) return target[key];
                 return async (...args) => {
                     const tab = key.endsWith("ForTab") ? args.shift() : f.nativeTab;
@@ -987,6 +987,7 @@ test.describe("tab-bound voice signaling", () => {
                 setRemoteDescription: async () => {},
                 getSenders: () => [],
             };
+            (await import("/src/channel-media.js")).useChannelMediaSession(window.__standInMedia());
             try {
                 if (action === "offer") await video.renegotiate(pc);
                 else await video.answerRemoteOffer(pc, window.__noxa.state.serverGeneration, identity);
@@ -4425,6 +4426,7 @@ test("incoming voice resumes suspended playback and applies the selected output"
             close() { this.connectionState = "closed"; }
         }
         window.RTCPeerConnection = FakePeerConnection;
+        (await import("/src/channel-media.js")).useChannelMediaFactory(window.__standInMedia);
         const state = window.__noxa.state;
         state.myClientID = "listener";
         state.myChannelID = 42;
@@ -6052,6 +6054,19 @@ test.beforeEach(async ({ page }) => {
                     return parent ? api.SendChatReplyForTab(tab, scope, target, text, parent) : api.SendChatForTab(tab, scope, target, text);
                 };
                 if (nativeMethod === "ReconnectTab" && !window.__tabScopedReconnect) return undefined;
+                // Encrypted channel media (Task 2): the voice session runs the real
+                // worker; keys go nowhere (no peers), offers keep their per-suite mock.
+                if (nativeMethod === "WebRTCOfferSecureForTab") return async (tab, sdp, slots) => {
+                    (window.__secureOffers ||= []).push(slots);
+                    return window.go.main.App.WebRTCOfferForTab(tab, sdp, slots);
+                };
+                if (nativeMethod === "MediaE2EEStatusForTab") return async () => (window.__mediaE2EEStatus || { supported: true, principal: "self", device: "dev-self", client_id: window.__activeClient || "client-a" });
+                if (nativeMethod === "SendMediaKeyForTab") return async () => ({ state: "accepted" });
+                // UI tests with stand-in peer objects (no encoded transforms)
+                // install this session double through channel-media.js.
+                window.__standInMedia = () => ({ active: true, identity: { channelID: window.__noxa?.state?.myChannelID || 1 }, async start() { return this; }, stop() { this.active = false; },
+                    setRoster() {}, protectPeer: pc => pc, peerConfig: c => c, bindSenders: async () => {}, syncReceivers: async () => {}, rescope() {},
+                    publicationsChanged() {}, receive: () => ({ ok: false }), status: () => ({ state: "encrypted", recipients: 0 }) });
                 return async (...args) => {
                     let method = nativeMethod;
                     window.__calls[method] = (window.__calls[method] || 0) + 1;
@@ -6962,9 +6977,13 @@ test("disconnect immediately releases camera capture waiting for a negotiation",
 });
 
 async function installMediaUpdateFixture(page) {
-    await page.evaluate(() => {
+    await page.evaluate(async () => {
         const v = window.__noxa;
         v.showWorkspace(false);
+        // Stand-in peers carry no encoded transforms: use the session double.
+        const channelMedia = await import("/src/channel-media.js");
+        channelMedia.useChannelMediaFactory(window.__standInMedia);
+        channelMedia.useChannelMediaSession(window.__standInMedia());
         window.__mediaUpdate = { reads: 0, offers: [], limits: { video_max_width: 0, video_max_height: 0, video_max_bitrate: 1000000 } };
         class LimitPeer extends EventTarget {
             constructor() { super(); this.transceivers = []; this.signalingState = "stable"; }
@@ -9165,6 +9184,8 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
         v.showWorkspace(false);
         v.state.pc = new RTCPeerConnection();
         window.__shareRemote = new RTCPeerConnection();
+        // The in-page remote cannot decrypt; this test covers share labels only.
+        import("/src/channel-media.js").then(m => m.useChannelMediaSession(window.__standInMedia()));
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, key) {
             if (key !== "WebRTCOfferForTab") return target[key];

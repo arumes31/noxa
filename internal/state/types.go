@@ -53,7 +53,10 @@ type Client struct {
 	// bot badge instead of a normal presence entry.
 	IsBot bool
 	// OnMobile marks a session of the mobile web app.
-	OnMobile    bool
+	OnMobile bool
+	// MediaDevice is the session's signed device (Olm device ID) that
+	// receives encrypted channel media keys; empty for keyless sessions.
+	MediaDevice string
 	ConnectedAt time.Time
 	Conn        net.Conn // nullable for headless clients
 	Metadata    map[string]string

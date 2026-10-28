@@ -736,6 +736,10 @@ type WebRTCOffer struct {
 	// sends this field publishes exactly one microphone and one video track
 	// (70). Server -> client renegotiation offers never set it.
 	Tracks []TrackSlot `json:"tracks,omitempty"`
+	// MediaE2EE declares that every sender and receiver of this peer carries
+	// the encoded-frame encryption transform (MediaE2EEVersion). Servers that
+	// advertise CapabilityMediaE2EE refuse client offers without it.
+	MediaE2EE string `json:"media_e2ee,omitempty"`
 }
 
 // TrackSlot names the media slot one outbound track of a WebRTC offer

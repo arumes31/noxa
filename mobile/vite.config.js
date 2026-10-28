@@ -1,10 +1,11 @@
 // The server serves this bundle under /app/ (internal/web), from web/app.
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
+import { mediaE2EENoticePlugin } from "../tools/media-e2ee-notices.mjs";
 
 export default {
     base: "/app/",
-    plugins: [{
+    plugins: [mediaE2EENoticePlugin(fileURLToPath(new URL("./node_modules/", import.meta.url))), {
         name: "ratchet-dependency-notices",
         generateBundle() {
             const notices = ["curves", "hashes"].map(name => {

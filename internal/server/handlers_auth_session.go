@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -211,8 +212,15 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 			if s.olmAdmissionEnabled {
 				resp.Capabilities = append(resp.Capabilities, netproto.CapabilityOlmAdmission)
 			}
+			if s.mediaE2EEAvailable() {
+				resp.Capabilities = append(resp.Capabilities, netproto.CapabilityMediaE2EE)
+			}
 		}
 		resp.DeviceID = s.attachSessionDevice(ctx, client, id.uniqueID)
+	}
+	if s.mediaE2EERequired() {
+		// HEVC/H.264 publication is not offered while media is encrypted.
+		resp.Capabilities = slices.DeleteFunc(resp.Capabilities, func(c string) bool { return c == netproto.CapabilityStreamHEVC })
 	}
 	if s.deps.ICEServers != nil {
 		resp.ICEServers = s.deps.ICEServers(id.uniqueID)

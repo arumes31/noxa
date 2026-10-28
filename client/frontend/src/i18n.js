@@ -33,6 +33,7 @@ import { voiceDiagnosticsEnglish, voiceDiagnosticsGerman } from "./voice-diagnos
 import { quickWinEnglish, quickWinGerman } from "./quick-win-messages.js";
 import { uiPolishEnglish, uiPolishGerman } from "./ui-polish-messages.js";
 import { streamEnglish, streamGerman } from "./stream-messages.js";
+import { channelMediaEnglish, channelMediaGerman } from "./channel-media-messages.js";
 import { chatEnglish, chatGerman } from "./chat-messages.js";
 import { conversationEnglish, conversationGerman } from "./conversation-messages.js";
 import { callEnglish, callGerman } from "./call-messages.js";
@@ -88,6 +89,7 @@ const en = {
     ...conversationEnglish,
     ...chatEnglish,
     ...streamEnglish,
+    ...channelMediaEnglish,
     ...uiPolishEnglish,
     ...auditEnglish,
     ...activityEnglish,
@@ -209,6 +211,7 @@ const de = {
     ...conversationGerman,
     ...chatGerman,
     ...streamGerman,
+    ...channelMediaGerman,
     ...uiPolishGerman,
     ...auditGerman,
     ...activityGerman,

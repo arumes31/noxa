@@ -512,11 +512,14 @@ func run() (retErr error) {
 		return fmt.Errorf("loading persisted server configuration: %w", err)
 	}
 	videoBounds := webrtc.VideoBounds{Width: cfg.VideoMaxWidth, Height: cfg.VideoMaxHeight}
-	engine, err := webrtc.NewWithVideoBounds(logger, cfg.WebRTC.ICEServers, cfg.WebRTC.EnableAV1, webrtc.NetworkConfig{
+	// Channel media is end-to-end encrypted (Task 2): the SFU negotiates only
+	// the proven encrypted codecs (Opus, VP8). The TCP server refuses offers
+	// that do not declare the encryption transform.
+	engine, err := webrtc.NewWithMediaPolicy(logger, cfg.WebRTC.ICEServers, cfg.WebRTC.EnableAV1, webrtc.NetworkConfig{
 		Traffic: trafficCounter,
 		UDPAddr: cfg.WebRTC.UDPAddr, ExternalIPs: cfg.WebRTC.ExternalIPs,
 		AllowedRemoteCIDRs: cfg.WebRTC.AllowedRemoteCIDRs,
-	}, videoBounds)
+	}, videoBounds, webrtc.MediaPolicy{E2EE: true})
 	if err != nil {
 		return fmt.Errorf("initializing webrtc engine: %w", err)
 	}
