@@ -131,9 +131,11 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 	}
 	pwa := func(name, principal string) *nativeProductDevice {
 		pub, priv, _ := ed25519.GenerateKey(rand.Reader)
-		xpub, _ := x25519Pair()
+		xpub, xpriv := x25519Pair()
 		d := register(name, principal, store.DeviceKindWeb, pub, priv, xpub)
 		d.EdSecret = base64.StdEncoding.EncodeToString(priv)
+		// The PWA's device X25519 secret opens history copies sealed to it.
+		d.X25519Private = base64.StdEncoding.EncodeToString(xpriv[:])
 		return d
 	}
 	native("nalice-desk", "nalice")
@@ -166,6 +168,8 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 		}
 	}
 
+	// history copy rows the (hostile) server captured, per device name
+	historySnap := map[string][]store.HistoryChunk{}
 	drop := map[string]int{}  // device/action -> handled-but-lost responses
 	fail := map[string]int{}  // device/action -> refused before the handler
 	counts := map[string]int{}
@@ -173,14 +177,19 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 		conn := &sessionResponseConn{blockingTCPConn: newBlockingTCPConn()}
 		c.Conn = conn
 		f := &netproto.Frame{Type: typ, Payload: payload}
+		// As central dispatch: errors carry their request origin.
+		rctx := context.WithValue(ctx, requestOriginContextKey{}, netproto.MessageType(typ))
 		var e error
 		switch netproto.MessageType(typ) {
 		case netproto.MsgKeyRequest:
-			e = srv.handleKeyRequest(ctx, c, f)
+			e = srv.handleKeyRequest(rctx, c, f)
 		case netproto.MsgOlmDirectoryRequest:
-			e = srv.handleOlmDirectory(ctx, c, f)
+			e = srv.handleOlmDirectory(rctx, c, f)
 		case netproto.MsgOlmAdmissionRequest:
-			e = srv.handleOlmAdmission(ctx, c, f)
+			e = srv.handleOlmAdmission(rctx, c, f)
+		case netproto.MsgDeviceRequest:
+			// History copy (history_put/get/ack) through the real handler.
+			e = srv.handleDeviceRequest(rctx, c, f)
 		default:
 			return nil, fmt.Errorf("frame %d is outside this product slice", typ)
 		}
@@ -276,6 +285,34 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 				return counts, nil
 			case "link_unpublished":
 				return pwa(req.Device, req.Action), nil
+			case "history_rows":
+				d := devices[req.Device]
+				rows, e := db.HistoryChunks(ctx, d.Principal, d.Device, 0, 1000)
+				return len(rows), e
+			case "history_snapshot":
+				d := devices[req.Device]
+				rows, e := db.HistoryChunks(ctx, d.Principal, d.Device, 0, 1000)
+				historySnap[req.Device] = rows
+				return len(rows), e
+			case "history_replay":
+				// A hostile server re-serves exactly the chunks it served before.
+				d := devices[req.Device]
+				for _, c := range historySnap[req.Device] {
+					if e := db.PutHistoryChunk(ctx, d.Principal, c, netproto.MaxHistoryBytes); e != nil {
+						return nil, e
+					}
+				}
+				return len(historySnap[req.Device]), nil
+			case "history_reposition":
+				// A hostile server serves genuine chunks at a position other
+				// than the one the source device signed.
+				d := devices[req.Device]
+				r, e := db.DB().ExecContext(ctx, `UPDATE device_history_chunks SET total=total+1 WHERE device_id=$1`, d.Device)
+				if e != nil {
+					return nil, e
+				}
+				n, _ := r.RowsAffected()
+				return n, nil
 			case "revoke":
 				d := devices[req.Device]
 				_, e := db.RevokeDevice(ctx, d.Principal, d.Device, "user")

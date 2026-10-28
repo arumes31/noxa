@@ -96,9 +96,16 @@ type productEvents struct {
 	records []RatchetMessageEvent
 	quar    []RatchetQuarantine
 	trusts  [][2]string
+	history []historyCopyProgress
 }
 
 func (r *productEvents) Emit(name string, payload any) {
+	if p, ok := payload.(historyCopyProgress); ok && name == "device_history" {
+		r.mu.Lock()
+		r.history = append(r.history, p)
+		r.mu.Unlock()
+		return
+	}
 	s, ok := payload.(string)
 	if name != "event" || !ok {
 		return
@@ -902,6 +909,15 @@ func TestRatchetProductBridge(t *testing.T) {
 		t.Fatalf("native applies PWA delete: %+v", e)
 	}
 
+	// 16c. History transfer end to end: the desktop exporter seals signed
+	//      chunks to a newly linked PWA device; the real server stores them
+	//      on PostgreSQL; the PWA in Chromium imports readable records only
+	//      (transferred provenance, no ratchet state) and ACKs after its
+	//      durable write. A hostile server replaying or repositioning chunks
+	//      imports nothing.
+	step("16c history transfer desktop -> server -> PWA + hostile replay")
+	historyTransferProduct(t, b, A)
+
 	// 16b. P2-3: the new-protocol path reaches the identity confirmation, and an
 	//      explicit confirmation is a DURABLE ratchet reset (applied by the next
 	//      session even when none is live at confirmation time).
@@ -1025,4 +1041,209 @@ func (r *productEvents) trust(uid, state string) bool {
 		}
 	}
 	return false
+}
+
+// waitHistory waits for the copy to device to finish (the progress events of
+// the run started after the seen earlier events).
+func (r *productEvents) waitHistory(t *testing.T, device string, seen int) historyCopyProgress {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		events := append([]historyCopyProgress(nil), r.history...)
+		r.mu.Unlock()
+		for _, p := range events[min(seen, len(events)):] {
+			if p.DeviceID != device {
+				continue
+			}
+			switch p.State {
+			case "done":
+				return p
+			case "failed":
+				t.Fatalf("history copy failed: %s", p.Error)
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("history copy did not finish")
+	return historyCopyProgress{}
+}
+
+func (r *productEvents) historyCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.history)
+}
+
+type importedHistory struct {
+	N         int  `json:"n"`
+	OpsSame   bool `json:"opsSame"`
+	Persisted int  `json:"persisted"`
+	Unread    int  `json:"unread"`
+	Records   []struct {
+		Peer       string  `json:"peer"`
+		ID         string  `json:"id"`
+		From       string  `json:"from"`
+		Body       *string `json:"body"`
+		Protocol   string  `json:"protocol"`
+		Provenance string  `json:"provenance"`
+		Origin     string  `json:"origin"`
+		Source     string  `json:"source"`
+		Copied     bool    `json:"copied"`
+	} `json:"records"`
+}
+
+// importJS runs DirectMessages.importHistory in the PWA page and reports the
+// view, whether the ratchet core ran at all, and what a fresh instance loads
+// back from IndexedDB (the durable write the ACK waited for).
+const importJS = `
+const ops = JSON.stringify(T.stats.ops);
+const n = await T.dm.importHistory();
+const records = [...T.dm.conversations.values()].flatMap(c => c.messages.map(m => ({ peer: c.peer, id: m.id, from: m.from, body: m.body ?? null,
+    protocol: m.protocol || "", provenance: m.provenance || "", origin: m.origin?.provenance || "", source: m.source?.device || "", copied: !!m.copied })));
+const fresh = new T.dm.constructor(T.dm.session, {});
+await fresh.ready;
+const persisted = [...fresh.conversations.values()].reduce((a, c) => a + c.messages.length, 0);
+fresh.close();
+return { n, records, opsSame: ops === JSON.stringify(T.stats.ops), persisted, unread: T.stats.unread };`
+
+func historyTransferProduct(t *testing.T, b productBridge, A *nativeNode) {
+	t.Helper()
+	// A newly linked PWA device of nalice: it never received the earlier
+	// traffic, so everything it shows afterwards came from the transfer.
+	var tab productFixtureDevice
+	b.post(map[string]any{"op": "link_unpublished", "device": "nalice-tab", "action": "nalice"}, &tab)
+	if got := string(b.pwa("nalice-tab", `return (await T.consumer.ready()).epoch;`)); got != "1" {
+		t.Fatalf("new PWA device: %s", got)
+	}
+	rows := func() int {
+		var n int
+		b.post(map[string]any{"op": "history_rows", "device": "nalice-tab"}, &n)
+		return n
+	}
+	ratchetCalls := func(c map[string]int) int {
+		n := 0
+		for k, v := range c {
+			// Directory/admission actions; the key lookup (no action) that
+			// authorizes the source device is not ratchet traffic.
+			if action, ok := strings.CutPrefix(k, "nalice-tab/"); ok && action != "" && !strings.HasPrefix(action, "history_") {
+				n += v
+			}
+		}
+		return n
+	}
+	runImport := func() importedHistory {
+		before := b.counts()
+		var out importedHistory
+		if err := json.Unmarshal(b.pwa("nalice-tab", importJS), &out); err != nil {
+			t.Fatal(err)
+		}
+		after := b.counts()
+		if d := ratchetCalls(after) - ratchetCalls(before); d != 0 || !out.OpsSame {
+			t.Fatalf("history import touched the ratchet (requests %d, core unchanged %v)", d, out.OpsSame)
+		}
+		if after["nalice-tab/history_ack"] <= before["nalice-tab/history_ack"] {
+			t.Fatal("import must ACK what it consumed")
+		}
+		if n := rows(); n != 0 {
+			t.Fatalf("ACKed chunks still stored: %d", n)
+		}
+		if out.Persisted != len(out.Records) || out.Unread != 0 {
+			t.Fatalf("persisted %d of %d records, unread %d", out.Persisted, len(out.Records), out.Unread)
+		}
+		return out
+	}
+	copyTo := func() historyCopyProgress {
+		seen := A.events.historyCount()
+		if err := A.app.CopyHistoryToDeviceForTab(A.tab, tab.Device, -1); err != nil {
+			t.Fatal(err)
+		}
+		return A.events.waitHistory(t, tab.Device, seen)
+	}
+
+	// What the desktop exporter may transfer: its readable archive records.
+	dir, err := A.app.dmHistoryDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs, err := dmHistoryStoreForIdentity(dir, A.identity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := historyMessagesSince(hs, 0)
+	ratchetWant := 0
+	for _, m := range want {
+		if m.Protocol == ratchetProtocol {
+			ratchetWant++
+		}
+		if m.ClientMsgID == "q1" {
+			t.Fatal("a deleted record must never be exported")
+		}
+	}
+	if ratchetWant < 5 {
+		t.Fatalf("expected a populated authenticated archive, got %d records", ratchetWant)
+	}
+
+	progress := copyTo()
+	if progress.Messages != len(want) || progress.Total < 1 || rows() != progress.Total {
+		t.Fatalf("export: %+v, stored %d, want %d messages", progress, rows(), len(want))
+	}
+	b.post(map[string]any{"op": "history_snapshot", "device": "nalice-tab"}, nil)
+	first := runImport()
+	if first.N != len(want) || len(first.Records) != len(want) {
+		t.Fatalf("imported %d (%d shown), want %d", first.N, len(first.Records), len(want))
+	}
+	exported := map[string]netproto.HistoryMessage{}
+	for _, m := range want {
+		exported[m.Peer+"|"+m.From+"|"+m.ClientMsgID] = m
+	}
+	for _, r := range first.Records {
+		m, ok := exported[r.Peer+"|"+r.From+"|"+r.ID]
+		if !ok || r.Body == nil || *r.Body != m.Body || r.Protocol != m.Protocol {
+			t.Fatalf("imported record not exported as-is: %+v", r)
+		}
+		if r.Protocol == ratchetProtocol && (r.Provenance != "transferred" || r.Origin != "authenticated" || r.Source != A.dev.Device || !r.Copied) {
+			t.Fatalf("transferred record provenance: %+v", r)
+		}
+	}
+
+	// Hostile replay 1: the server re-serves exactly the chunks already
+	// imported and ACKed. Nothing is imported twice; the replay is ACKed.
+	var replayed int
+	b.post(map[string]any{"op": "history_replay", "device": "nalice-tab"}, &replayed)
+	if replayed != progress.Total || rows() != progress.Total {
+		t.Fatalf("replay staged %d of %d chunks", replayed, progress.Total)
+	}
+	if again := runImport(); again.N != 0 || len(again.Records) != len(want) {
+		t.Fatalf("replayed chunks imported %d (now %d records)", again.N, len(again.Records))
+	}
+
+	// Hostile replay 2: a genuine new copy (with one new record) served at a
+	// position other than the signed one imports nothing.
+	if e := A.app.SendChatForTab(A.tab, "direct", "nbob", "after the transfer"); e != "" {
+		t.Fatal(e)
+	}
+	copyTo()
+	var moved int
+	b.post(map[string]any{"op": "history_reposition", "device": "nalice-tab"}, &moved)
+	if moved < 1 {
+		t.Fatal("nothing repositioned")
+	}
+	shown := func(h importedHistory, body string) int {
+		n := 0
+		for _, r := range h.Records {
+			if r.Body != nil && *r.Body == body {
+				n++
+			}
+		}
+		return n
+	}
+	if got := runImport(); got.N != 0 || shown(got, "after the transfer") != 0 {
+		t.Fatalf("repositioned chunks imported %d", got.N)
+	}
+	// The honest copy then imports exactly the one record not yet held.
+	copyTo()
+	if honest := runImport(); honest.N != 1 || shown(honest, "after the transfer") != 1 || len(honest.Records) != len(want)+1 {
+		t.Fatalf("honest copy after hostile ones: imported %d, %d records", honest.N, len(honest.Records))
+	}
 }

@@ -69,7 +69,9 @@ async function boot({ entries, device, binding }) {
         },
     };
     const edSecret = Uint8Array.from(atob(device.edSecret), c => c.charCodeAt(0));
-    const session = Object.assign(new EventTarget(), { conn, identity: { edSecret }, uniqueID: device.principal, deviceID: device.device, nickname: device.principal, capabilities: new Set() });
+    const identity = { edSecret };
+    if (device.x25519_private) identity.xSecret = Uint8Array.from(atob(device.x25519_private), c => c.charCodeAt(0));
+    const session = Object.assign(new EventTarget(), { conn, identity, uniqueID: device.principal, deviceID: device.device, nickname: device.principal, capabilities: new Set() });
     const namespace = { server: binding, principal: device.principal, device: device.device };
     const stats = { unread: 0, incoming: 0, ops: {} };
     const store = await openRatchetStore(namespace), core = await createRatchetCore();
@@ -118,17 +120,23 @@ try {
     const fixture = await post({ op: "fixture" });
     browser = await chromium.launch();
     const pages = {};
-    for (const name of ["nalice-phone", "pbob-phone"]) {
+    const open = async (name, device) => {
         const page = await (await browser.newContext()).newPage();
         page.on("pageerror", e => console.error(name, e));
         await page.goto(`http://127.0.0.1:${server.address().port}/`);
-        assert.equal(await page.evaluate(boot, { entries, device: fixture.devices[name], binding: fixture.binding }), 1);
+        assert.equal(await page.evaluate(boot, { entries, device, binding: fixture.binding }), 1);
         pages[name] = page;
-    }
+    };
+    for (const name of ["nalice-phone", "pbob-phone"]) await open(name, fixture.devices[name]);
     for (;;) {
         const cmd = await post({ op: "pwa_next" });
         if (cmd.idle) continue;
         if (cmd.done) break;
+        // A PWA device linked during the run boots on its first step.
+        if (!pages[cmd.device]) {
+            const device = (await post({ op: "fixture" })).devices[cmd.device];
+            if (device?.edSecret) await open(cmd.device, device);
+        }
         const page = pages[cmd.device];
         const result = page ? await page.evaluate(step, cmd.js) : { error: `unknown PWA device ${cmd.device}` };
         steps++;
