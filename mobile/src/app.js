@@ -8,7 +8,8 @@ import { Voice } from "./core/voice.js";
 import { SavedMessages } from "./core/saved.js";
 import { Connection } from "./core/connection.js";
 import { Msg } from "./core/frame.js";
-import { serverBinding, signBundle } from "./core/olm-directory.js";
+import { signBundle } from "./core/olm-directory.js";
+import { verifyLinkBinding } from "./core/link-binding.js";
 import { RatchetConsumer, connectionTransport } from "./core/ratchet-consumer.js";
 import { generateIdentity } from "./core/crypto.js";
 import { signIn } from "./core/device.js";
@@ -121,23 +122,26 @@ export async function forgetDevice(fence) {
 
 // --- noxa-olm-v1 consumer (inactive in production) -----------------------
 //
-// No capability advertises admission yet and the PWA has no independently
-// verified certificate binding of its own; production activation stays OFF
-// until the final cutover supplies both. Only an explicitly enabled test
-// session constructs a consumer, and then every direct/group send uses it with
-// no legacy fallback.
+// No capability advertises admission yet; production activation stays OFF
+// until the final cutover. Only an explicitly enabled test session constructs
+// a consumer, and then every direct/group send uses it with no legacy
+// fallback. The server binding is never supplied here: it comes only from the
+// desktop-signed device-link statement stored with this device (link-binding.js).
 let ratchetTest = null;
 app.ratchet = null;
 export function enableRatchetTestSession(options = null) {
-    ratchetTest = options ? { serverBinding: serverBinding(options.serverBinding), pollMS: options.pollMS || 5000, modules: options.modules || null } : null;
+    ratchetTest = options ? { pollMS: options.pollMS || 5000, modules: options.modules || null } : null;
 }
 
-async function openRatchet(session, fence, isCurrent) {
+async function openRatchet(session, fence, isCurrent, meta) {
+    // Re-verified on every open against this device's keys and the signed-in
+    // account: missing or mismatching statements block secure messaging.
+    const binding = verifyLinkBinding(meta?.linkBinding, { identity: session.identity, principal: session.uniqueID, approverFingerprint: meta?.approverFingerprint || "" });
     // modules: test-only injection of the store/core factories (lifecycle tests).
     const [{ openRatchetStore }, { createRatchetCore }] = ratchetTest.modules
         ? await ratchetTest.modules()
         : await Promise.all([import("./core/ratchet-store.js"), import("./core/ratchet-core.js")]);
-    const namespace = { server: ratchetTest.serverBinding, principal: session.uniqueID, device: session.deviceID };
+    const namespace = { server: binding, principal: session.uniqueID, device: session.deviceID };
     const store = await openRatchetStore(namespace);
     const core = await createRatchetCore();
     const owner = { consumer: null, core, timer: 0, dm: null };
@@ -239,7 +243,7 @@ export async function connect({ guest = null, fence } = {}) {
         if (session.initializationError) throw session.initializationError;
         if (ratchetTest && !guest && !meta.guest) {
             let published = false;
-            ratchet = await openRatchet(session, fence, () => attempt === connectionGeneration && (!published || app.session === session) && session.conn.open !== false);
+            ratchet = await openRatchet(session, fence, () => attempt === connectionGeneration && (!published || app.session === session) && session.conn.open !== false, meta);
             ratchet.publish = () => { published = true; };
         }
         if (conn.open === false) throw new Error("connection closed during session initialization");

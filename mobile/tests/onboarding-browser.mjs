@@ -53,7 +53,7 @@ export const enqueue=()=>{},flush=async()=>{},showPending=async()=>{},waitingCou
 export const announceRead=()=>{},closeNotifications=()=>{},reportVisibility=()=>{},setBadge=()=>{},syncPush=async()=>({});
 export const addServer=()=>{};
 // Inactive noxa-olm-v1 consumer imports of app.js (never enabled here).
-export const Msg={},serverBinding=()=>'',signBundle=()=>({}),connectionTransport=()=>({});
+export const Msg={},signBundle=()=>({}),connectionTransport=()=>({}),verifyLinkBinding=()=>'',linkBindingFromStatus=()=>null;
 export class RatchetConsumer {}
 `;
 

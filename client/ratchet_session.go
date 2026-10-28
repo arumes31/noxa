@@ -163,21 +163,12 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 	if err := resolveRatchetTombstones(base, ratchetStoreKey(identity.PublicKey), ratchetLiveYes); err != nil {
 		return fmt.Errorf("secure message store: an interrupted deletion could not be restored yet: %w", err)
 	}
-	binding := cfg.Binding
-	if fingerprint != "" {
-		fp := strings.ToLower(strings.ReplaceAll(fingerprint, ":", ""))
-		b, err := olmdir.ServerBinding(fp)
-		if err != nil {
-			return err
-		}
-		binding = b
-	}
-	if binding == "" {
-		return errRatchetUnavailable
+	binding, err := ratchetBindingFor(fingerprint, cfg.Binding)
+	if err != nil {
+		return err
 	}
 	ns := durable.Namespace{Server: binding, Principal: uid, Device: device}
 	var handle *durable.Handle
-	var err error
 	if cfg.Protection != nil {
 		handle, err = durable.OpenShared(storeDir, ns, *cfg.Protection)
 	} else {
@@ -766,6 +757,31 @@ func (m *connManager) recentlyDeclined(uid string) bool {
 	}
 	v, ok := dmDeclined.Load(path + "\x00" + record.Fingerprint())
 	return ok && time.Since(v.(time.Time)) < 10*time.Minute
+}
+
+// ratchetBindingFor is the noxa-olm-v1 server binding of a connection: the
+// pinned TLS certificate fingerprint, or (tests without TLS) the configured
+// override.
+func ratchetBindingFor(fingerprint, override string) (string, error) {
+	if fingerprint != "" {
+		return olmdir.ServerBinding(strings.ToLower(strings.ReplaceAll(fingerprint, ":", "")))
+	}
+	if override == "" {
+		return "", errRatchetUnavailable
+	}
+	return override, nil
+}
+
+// ratchetServerBinding is this connection's binding (see ratchetBindingFor),
+// handed to devices this desktop links.
+func (m *connManager) ratchetServerBinding() (string, error) {
+	m.mu.Lock()
+	fingerprint, override := m.fingerprint, ""
+	if m.ratchetTest != nil {
+		override = m.ratchetTest.Binding
+	}
+	m.mu.Unlock()
+	return ratchetBindingFor(fingerprint, override)
 }
 
 // ratchetStoreDir is the protected store directory of one identity under a

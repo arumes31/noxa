@@ -69,6 +69,10 @@ type deviceLink struct {
 	claimX25519   string
 	claimPlatform string
 	claimVia      string
+
+	// Set on approval: the approver's signed server binding for the claimer.
+	binding    string
+	bindingSig []byte
 }
 
 // deviceLinks holds pending links in memory; they never outlive 2 TTLs.
@@ -668,12 +672,16 @@ func (s *TCPServer) handleLinkClaim(ctx context.Context, client *Client, r netpr
 func (s *TCPServer) handleLinkStatus(client *Client, r netproto.DeviceRequest) error {
 	s.links.mu.Lock()
 	s.links.sweepLocked(time.Now())
-	state := netproto.LinkStateExpired
+	result := netproto.DeviceResult{Action: r.Action, LinkID: r.LinkID, State: netproto.LinkStateExpired}
 	if link := s.links.byID[r.LinkID]; link != nil && link.claimKey == r.Ed25519PublicKey {
-		state = link.state
+		result.State = link.state
+		if link.state == netproto.LinkStateApproved && link.binding != "" {
+			result.ServerBinding, result.BindingSignature = link.binding, link.bindingSig
+			result.ApproverDeviceID, result.ApproverKey, result.Principal = link.creatorDeviceID, link.creatorKey, link.principal
+		}
 	}
 	s.links.mu.Unlock()
-	return s.writeMessage(client, netproto.MsgDeviceResult, netproto.DeviceResult{Action: r.Action, LinkID: r.LinkID, State: state})
+	return s.writeMessage(client, netproto.MsgDeviceResult, result)
 }
 
 func (s *TCPServer) handleLinkDecide(ctx context.Context, client *Client, r netproto.DeviceRequest) error {
@@ -701,6 +709,14 @@ func (s *TCPServer) handleLinkDecide(ctx context.Context, client *Client, r netp
 	if err := auth.VerifyChallenge(claim.creatorKey, transcript, r.Signature); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "approval signature does not match this device")
 	}
+	// The binding statement is optional (older desktops), but if present it
+	// must verify: the server never relays an unsigned or foreign binding.
+	if r.ServerBinding != "" || len(r.BindingSignature) > 0 {
+		bound := netproto.DeviceLinkBindingTranscript(claim.principal, claim.creatorDeviceID, claim.claimKey, claim.claimX25519, r.ServerBinding)
+		if r.ServerBinding == "" || auth.VerifyChallenge(claim.creatorKey, bound, r.BindingSignature) != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "server binding signature does not match this device")
+		}
+	}
 	name := "Phone"
 	if claim.claimPlatform != "" {
 		name = claim.claimPlatform
@@ -722,6 +738,7 @@ func (s *TCPServer) handleLinkDecide(ctx context.Context, client *Client, r netp
 	if current := s.links.byID[claim.id]; current != nil {
 		current.state = netproto.LinkStateApproved
 		current.expires = time.Now().Add(deviceLinkTTL)
+		current.binding, current.bindingSig = r.ServerBinding, r.BindingSignature
 	}
 	s.links.mu.Unlock()
 

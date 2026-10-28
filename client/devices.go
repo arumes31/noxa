@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -267,6 +268,12 @@ func (a *App) CreateDeviceLinkForTab(tabID string) (DeviceLinkView, error) {
 		result.LinkID: {secret: result.Secret, code: strings.ReplaceAll(result.Code, "-", "")},
 	}
 	cm.mu.Unlock()
+	// The QR (shown on this screen, scanned out of band) also names this
+	// desktop's key fingerprint, so the browser can refuse a link the server
+	// re-routed to another approver.
+	if id, err := cm.identity(); err == nil && strings.Contains(result.URL, "#") {
+		result.URL += "&a=" + url.QueryEscape(netproto.KeyFingerprint(id.PublicKey))
+	}
 	image, err := deviceLinkQR(result.URL)
 	if err != nil {
 		return DeviceLinkView{}, err
@@ -313,6 +320,15 @@ func (a *App) DecideDeviceLinkForTab(tabID, linkID string, approve bool, ed25519
 		transcript := netproto.DeviceApprovalTranscript(principal, deviceID, ed25519Public, x25519Public)
 		if request.Signature, err = auth.SignChallenge(id.PrivateKey, transcript); err != nil {
 			return netproto.DeviceResult{}, err
+		}
+		// Hand this desktop's pinned TLS binding to the linked browser,
+		// signed for exactly its keys (its only source of the binding).
+		if binding, err := cm.ratchetServerBinding(); err == nil {
+			request.ServerBinding = binding
+			bound := netproto.DeviceLinkBindingTranscript(principal, deviceID, ed25519Public, x25519Public, binding)
+			if request.BindingSignature, err = auth.SignChallenge(id.PrivateKey, bound); err != nil {
+				return netproto.DeviceResult{}, err
+			}
 		}
 	}
 	result, err := cm.deviceRequest(request)

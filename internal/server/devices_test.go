@@ -655,3 +655,51 @@ func TestFirstDeviceCanSignItselfOut(t *testing.T) {
 		t.Fatalf("self signout: %+v, %v", device, err)
 	}
 }
+
+// 1c-iii-a item 1: the approving desktop's pinned TLS binding reaches the
+// claiming browser only as a statement signed by the approver for exactly the
+// claimed keys; the server verifies it and relays it on approved link_status.
+func TestDeviceLinkRelaysSignedServerBinding(t *testing.T) {
+	env, devices := startDeviceTestEnv(t)
+	desktopKeys, phone := newLinkTestKeys(t), newLinkTestKeys(t)
+	desktop := desktopLogin(t, env.addr, desktopKeys)
+	defer func() { _ = desktop.Close() }()
+	created := deviceCall(t, desktop, netproto.DeviceRequest{Action: netproto.DeviceActionLinkCreate})
+	linkID, secret := linkSecret(t, created)
+	phoneConn := dialRetry(t, env.addr)
+	defer func() { _ = phoneConn.Close() }()
+	deviceCall(t, phoneConn, claimRequest(linkID, secret, phone))
+	_ = readOfType(t, desktop, netproto.MsgDeviceEvent)
+	creator, err := devices.DeviceByKey(t.Context(), desktopKeys.public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, _ := auth.SignChallenge(desktopKeys.private, netproto.DeviceApprovalTranscript("user-uid", creator.DeviceID, phone.public, phone.x25519))
+	binding := "tls-sha256:" + strings.Repeat("c0", 32)
+	// A statement for other keys (or another binding) is refused.
+	foreign, _ := auth.SignChallenge(desktopKeys.private, netproto.DeviceLinkBindingTranscript("user-uid", creator.DeviceID, phone.public, phone.x25519, "tls-sha256:"+strings.Repeat("d1", 32)))
+	if e := deviceCallError(t, desktop, netproto.DeviceRequest{Action: netproto.DeviceActionLinkDecide, LinkID: linkID, Approve: true, Signature: approval,
+		ServerBinding: binding, BindingSignature: foreign}); !strings.Contains(e.Message, "server binding signature") {
+		t.Fatalf("foreign binding statement = %+v", e)
+	}
+	if (netproto.DeviceRequest{Action: netproto.DeviceActionLinkDecide, LinkID: linkID, Approve: true, Signature: approval, ServerBinding: "tls-sha256:AB"}).Valid() {
+		t.Fatal("malformed binding must be invalid")
+	}
+	signed, _ := auth.SignChallenge(desktopKeys.private, netproto.DeviceLinkBindingTranscript("user-uid", creator.DeviceID, phone.public, phone.x25519, binding))
+	decided := deviceCall(t, desktop, netproto.DeviceRequest{Action: netproto.DeviceActionLinkDecide, LinkID: linkID, Approve: true, Signature: approval,
+		ServerBinding: binding, BindingSignature: signed})
+	if decided.State != netproto.LinkStateApproved {
+		t.Fatalf("decide = %+v", decided)
+	}
+	status := deviceCall(t, phoneConn, netproto.DeviceRequest{Action: netproto.DeviceActionLinkStatus, LinkID: linkID, Ed25519PublicKey: phone.public})
+	if status.State != netproto.LinkStateApproved || status.ServerBinding != binding || status.Principal != "user-uid" ||
+		status.ApproverDeviceID != creator.DeviceID || status.ApproverKey != desktopKeys.public ||
+		auth.VerifyChallenge(status.ApproverKey, netproto.DeviceLinkBindingTranscript(status.Principal, status.ApproverDeviceID, phone.public, phone.x25519, status.ServerBinding), status.BindingSignature) != nil {
+		t.Fatalf("approved status = %+v", status)
+	}
+	// Only the claiming key learns it.
+	other := deviceCall(t, phoneConn, netproto.DeviceRequest{Action: netproto.DeviceActionLinkStatus, LinkID: linkID, Ed25519PublicKey: newLinkTestKeys(t).public})
+	if other.ServerBinding != "" || other.State != netproto.LinkStateExpired {
+		t.Fatalf("other key status = %+v", other)
+	}
+}

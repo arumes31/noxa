@@ -4,6 +4,7 @@ import { app, connect, newIdentity, rememberLinkedIdentity } from "../app.js";
 import { beginIdentity } from "../core/identity-store.js";
 import { Connection } from "../core/connection.js";
 import { claimLink, LinkState, linkWithPasskey, passkeysSupported, waitForDecision } from "../core/device.js";
+import { linkBindingFromStatus, verifyLinkBinding } from "../core/link-binding.js";
 import { t } from "../i18n.js";
 import { h, toast } from "./dom.js";
 import { icon } from "./icons.js";
@@ -142,11 +143,17 @@ export async function runLink(root, link, { onSignedIn, fence }) {
                 h("p", { class: "hint mono" }, t("link.desktop", { fingerprint: claim.approverFingerprint })),
                 h("div", { style: "display:flex;gap:10px;align-items:center;justify-content:center;margin-top:8px" }, h("div", { class: "spinner" }), status)),
             cancel));
-        const state = await waitForDecision(identity, claim.linkID, { signal: abort.signal });
+        let decided = null;
+        const state = await waitForDecision(identity, claim.linkID, { signal: abort.signal, onDecided: result => { decided = result; } });
         if (abort.signal.aborted) return;
         if (state === LinkState.denied) return fail(t("link.denied"));
         if (state !== LinkState.approved) return fail(t("link.expired"));
-        const committed = await rememberLinkedIdentity(identity, { via: "link", approverFingerprint: claim.approverFingerprint }, fence);
+        // The desktop's signed server binding (its pinned TLS certificate):
+        // verified for this device's keys and the approver shown while
+        // linking. A statement that does not verify fails the link.
+        const linkBinding = linkBindingFromStatus(decided);
+        if (linkBinding) verifyLinkBinding(linkBinding, { identity, approverFingerprint: claim.approverFingerprint });
+        const committed = await rememberLinkedIdentity(identity, { via: "link", approverFingerprint: claim.approverFingerprint, ...(linkBinding ? { linkBinding } : {}) }, fence);
         await connect({ fence: committed });
         history.replaceState(null, "", "/app/#/home");
         onSignedIn({ offerPasskey: true });

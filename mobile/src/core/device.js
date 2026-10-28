@@ -13,7 +13,10 @@ import { signInError } from "./login-errors.js";
 
 export const LinkState = Object.freeze({ pending: "pending", claimed: "claimed", approved: "approved", denied: "denied", expired: "expired" });
 
-/** Reads #id=…&k=… from a link URL fragment, or null. */
+/**
+ * Reads #id=…&k=…[&a=…] from a link URL fragment, or null. a is the creating
+ * desktop's key fingerprint, put into the QR by that desktop itself.
+ */
 export function parseLinkFragment(hash) {
     const params = new URLSearchParams(hash.replace(/^#/, ""));
     const id = params.get("id");
@@ -21,7 +24,8 @@ export function parseLinkFragment(hash) {
     if (!id || !k) return null;
     try {
         const secret = fromBase64URL(k);
-        return secret.length === 32 ? { linkID: id, secret } : null;
+        const approver = params.get("a") || "";
+        return secret.length === 32 ? { linkID: id, secret, ...(approver ? { approver } : {}) } : null;
     } catch {
         return null;
     }
@@ -56,6 +60,11 @@ export async function claimLink(conn, identity, link) {
     }
     const result = await conn.request(Msg.DeviceRequest, request, Msg.DeviceResult, { accept: r => r.action === "link_claim" });
     if (result.state !== LinkState.claimed) return { linkID: result.link_id || "", state: result.state || LinkState.expired };
+    // The scanned QR names the desktop that showed it: a claim answered for
+    // any other approver is refused (the server re-routed the link).
+    if (link.approver && result.approver_fingerprint !== link.approver) {
+        throw Object.assign(new Error("this link was answered for a different desktop than the one that showed the QR code"), { code: "approver_mismatch" });
+    }
     return {
         linkID: result.link_id,
         state: result.state,
@@ -68,8 +77,10 @@ export async function claimLink(conn, identity, link) {
 /**
  * Polls link_status until the link is decided or expires. Pre-auth
  * connections close after a few seconds, so the poll reconnects as needed.
+ * onDecided receives the deciding result (an approval carries the desktop's
+ * signed server binding, see link-binding.js).
  */
-export async function waitForDecision(identity, linkID, { open = () => Connection.open(), interval = 2000, signal } = {}) {
+export async function waitForDecision(identity, linkID, { open = () => Connection.open(), interval = 2000, signal, onDecided = null } = {}) {
     const { pem } = devicePublicKeys(identity);
     let conn = null;
     try {
@@ -79,7 +90,10 @@ export async function waitForDecision(identity, linkID, { open = () => Connectio
             try {
                 const result = await conn.request(Msg.DeviceRequest, { action: "link_status", link_id: linkID, ed25519_public_key: pem },
                     Msg.DeviceResult, { accept: r => r.action === "link_status" });
-                if (result.state !== LinkState.claimed) return result.state;
+                if (result.state !== LinkState.claimed) {
+                    onDecided?.(result);
+                    return result.state;
+                }
             } catch (error) {
                 if (error instanceof ProtocolError) throw error;
                 conn = null;

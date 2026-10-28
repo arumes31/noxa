@@ -8,7 +8,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import vm from "node:vm";
 import { ChatSession } from "../src/core/chat-session.js";
-import { generateIdentity } from "../src/core/crypto.js";
+import { generateIdentity, keyFingerprint, publicKeyPEM, sign, toBase64 } from "../src/core/crypto.js";
+import { linkBindingTranscript, verifyLinkBinding } from "../src/core/link-binding.js";
+
+// The desktop-signed device-link statement (DeviceLinkBindingTranscript).
+const desktop = generateIdentity();
+export function statementFor(device, { principal = "alice", binding = "tls-sha256:" + "ab".repeat(32) } = {}) {
+    const transcript = linkBindingTranscript(principal, "desk", publicKeyPEM(device.edPublic), toBase64(device.xPublic), binding);
+    return { binding, signature: toBase64(sign(transcript, desktop.edSecret)), approverDeviceID: "desk", approverKey: publicKeyPEM(desktop.edPublic), principal };
+}
 
 class FakeConnection extends EventTarget {
     open = true;
@@ -45,7 +53,8 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
         "./core/chat-session.js": { ChatSession },
         "./core/direct.js": { DirectMessages }, "./core/calls.js": { Calls: Empty }, "./core/groups.js": { Groups }, "./core/voice.js": { Voice: Empty },
         "./core/connection.js": { Connection: { open: async () => new FakeConnection() } }, "./core/frame.js": { Msg: {} },
-        "./core/olm-directory.js": { serverBinding: v => "tls-sha256:" + v, signBundle: () => ({}) },
+        "./core/olm-directory.js": { signBundle: () => ({}) },
+        "./core/link-binding.js": { verifyLinkBinding },
         "./core/ratchet-consumer.js": { RatchetConsumer, connectionTransport: () => ({ admission: none, directory: none }) },
         "./core/crypto.js": { generateIdentity },
         "./core/device.js": { signIn: async () => ({ unique_id: "alice", device_id: "phone", client_id: "c1" }) },
@@ -77,9 +86,25 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
     assert.equal(app.ratchet, null);
 
     enableRatchetTestSession({
-        serverBinding: "ab".repeat(32), pollMS: 10,
+        pollMS: 10,
         modules: async () => [{ openRatchetStore: async ns => ({ ns }) }, { createRatchetCore: async () => { const core = { closed: false, close() { core.closed = true; } }; cores.push(core); return core; } }],
     });
+    // 1c-iii-a item 1: the binding comes only from the stored desktop-signed
+    // statement; without one, or with one that does not verify, secure
+    // messaging (and so this connect) is blocked.
+    app.identity = generateIdentity();
+    app.meta = {};
+    await assert.rejects(connect(), e => e.code === "server_binding_unavailable");
+    app.meta = { linkBinding: statementFor(generateIdentity()) };
+    await assert.rejects(connect(), e => e.code === "server_binding_mismatch", "a statement for another device's keys");
+    app.meta = { linkBinding: statementFor(app.identity, { principal: "mallory" }) };
+    await assert.rejects(connect(), e => e.code === "server_binding_mismatch", "a statement for another account");
+    app.meta = { linkBinding: statementFor(app.identity), approverFingerprint: "0000 0000 0000 0000" };
+    await assert.rejects(connect(), e => e.code === "server_binding_mismatch", "a statement from another approver than the one shown");
+    app.meta = { linkBinding: { ...statementFor(app.identity), binding: "tls-sha256:" + "cd".repeat(32) } };
+    await assert.rejects(connect(), e => e.code === "server_binding_mismatch", "a binding the desktop did not sign");
+    assert.equal(consumers.length, 0, "no consumer for a refused binding");
+    app.meta = { linkBinding: statementFor(app.identity), approverFingerprint: keyFingerprint(publicKeyPEM(desktop.edPublic)) };
     const first = await connect();
     const a = consumers[0];
     assert.equal(JSON.stringify(a.namespace), JSON.stringify({ server: "tls-sha256:" + "ab".repeat(32), principal: "alice", device: "phone" }));
