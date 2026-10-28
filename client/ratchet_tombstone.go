@@ -62,8 +62,9 @@ func (a *App) destroyRatchetNamespaces(id *identity) error {
 //
 //  1. resolve leftover tombstones, then fence new sessions and stop + await
 //     this process's live sessions;
-//  2. probe every store for a lock held by any other opener (all platforms);
-//     a held store fails the deletion with nothing changed;
+//  2. lock every store against any other opener (durable.LockForDestroy,
+//     held across the renames on POSIX); a held store fails the deletion
+//     with nothing changed;
 //  3. rename every store directory to a .deleted- tombstone;
 //  4. remove the identity file: the commit point;
 //  5. mark the tombstones .erasing- and erase them (the sweep retries).
@@ -125,14 +126,25 @@ func (a *App) deleteIdentityWithStores(id *identity, identityPath string) error 
 		return cause
 	}
 	// Our own sessions are stopped; any remaining lock belongs to another
-	// opener (another process): fail before anything is renamed.
+	// opener (another process): fail before anything is renamed. On POSIX the
+	// exclusive store locks are HELD across the renames (no other process can
+	// open a store between check and rename); on Windows an open handle makes
+	// the rename itself fail.
+	var releases []func()
+	defer func() {
+		for _, release := range releases {
+			release()
+		}
+	}()
 	for base := range bases {
-		if err := durable.ProbeUnlocked(ratchetStoreDir(base, id)); err != nil {
+		release, err := durable.LockForDestroy(ratchetStoreDir(base, id))
+		if err != nil {
 			if errors.Is(err, durable.ErrInUse) {
 				return rollback(fmt.Errorf("secure message store of this identity is in use by another noxa window or process: %w", err))
 			}
 			return rollback(fmt.Errorf("secure message store of this identity could not be checked: %w", err))
 		}
+		releases = append(releases, release)
 	}
 	for base := range bases {
 		dir := ratchetStoreDir(base, id)
