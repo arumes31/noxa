@@ -10,12 +10,14 @@ import { ed25519FromPEM, parseKeyRecord, trustedDevices } from "./dm-trust.js";
 import { Msg } from "./frame.js";
 import { ProtocolError } from "./connection.js";
 import { RATCHET_PROTOCOL } from "./ratchet-consumer.js";
-import { decodeHistoryChunk, isHistoryEnvelope } from "./history-envelope.js";
+import { decodeHistoryEnvelope, isHistoryEnvelope } from "./history-envelope.js";
 
 const MsgChatAccepted = 154;
 /** Durable record of imported history chunks (exact dedup), in Stores.device. */
 const HISTORY_IMPORTS = "history-imports";
 const MAX_HISTORY_DIGESTS = 4096;
+/** Completed transfer IDs remembered (a replay of a completed transfer imports nothing). */
+const MAX_HISTORY_TRANSFERS = 1024;
 const HISTORY_PROVENANCE = new Set(["authenticated", "transferred"]);
 
 async function chunkDigest(data) {
@@ -32,13 +34,17 @@ async function chunkDigest(data) {
  */
 export function historyRecord(m, ownUID, sourceDevice, n = 0) {
     if (!m || typeof m !== "object" || typeof m.peer !== "string" || !m.peer || typeof m.body !== "string" || typeof m.from !== "string") return null;
-    // A DM record is from its conversation's peer or from this account, and
-    // never future-dated (a burst could otherwise evict real records under
-    // the per-conversation cap).
-    if (m.from !== m.peer && m.from !== ownUID) return null;
+    // Older exporters left a legacy record's sender empty: an own record is
+    // from this account, any other is from the conversation's peer.
+    const from = m.from === "" && !m.protocol ? (m.self ? ownUID : m.peer) : m.from;
+    // A DM record is from its conversation's peer or from this account (and
+    // "self" says which), and never future-dated (a burst could otherwise
+    // evict real records under the per-conversation cap).
+    if (from !== m.peer && from !== ownUID) return null;
+    if (m.peer !== ownUID && !!m.self !== (from === ownUID)) return null;
     const sentAt = Number(m.sent_at);
     if (!Number.isFinite(sentAt) || sentAt <= 0 || sentAt > Date.now() / 1000 + 300) return null;
-    const base = { from: m.from, fromNickname: typeof m.from_nickname === "string" ? m.from_nickname : "", self: !!m.self, body: m.body, sentAt, copied: true };
+    const base = { from, fromNickname: typeof m.from_nickname === "string" ? m.from_nickname : "", self: from === ownUID, body: m.body, sentAt, copied: true };
     if (!m.protocol) return { ...base, id: m.client_msg_id || `history-${m.peer}-${m.sent_at}-${n}`, verified: true };
     if (m.protocol !== RATCHET_PROTOCOL || !HISTORY_PROVENANCE.has(m.provenance) || typeof m.client_msg_id !== "string" || !m.client_msg_id ||
         m.client_msg_id.length > 512 || !m.from || !m.body || (m.self && m.from !== ownUID)) return null;
@@ -734,9 +740,15 @@ export class DirectMessages extends EventTarget {
     async importHistory() {
         await this.ready;
         const own = await this.devicesOf(this.ownUID, { refresh: true });
-        const done = new Set((await getSealed(Stores.device, HISTORY_IMPORTS).catch(() => null))?.digests || []);
+        const state = (await getSealed(Stores.device, HISTORY_IMPORTS).catch(() => null)) || {};
+        const done = new Set(state.digests || []);
+        // Transfer binding: the chunks of one transfer import in order from
+        // seq 0 under one signed transfer ID; a chunk spliced from another
+        // transfer, or a replay of a completed transfer, imports nothing.
+        const completed = new Set(Array.isArray(state.completed) ? state.completed : []);
+        let current = state.current && typeof state.current.transfer === "string" ? state.current : null;
         let seq = 0;
-        let imported = 0;
+        let imported = 0, skipped = 0;
         for (;;) {
             const page = await this.conn.request(Msg.DeviceRequest, { action: "history_get", seq }, Msg.DeviceResult, { accept: r => r.action === "history_get" });
             const chunks = page.history || [];
@@ -750,11 +762,20 @@ export class DirectMessages extends EventTarget {
                 // Only a signed history envelope for exactly this transfer
                 // position and this device opens; a bare array or a replayed
                 // DM copy imports nothing.
-                const messages = plain ? decodeHistoryChunk(plain, { source: chunk.from_device_id, target: this.deviceID, seq: chunk.seq, total: chunk.total, signingKey: sender.signingKey }) : null;
-                if (messages) {
-                    for (const m of messages) {
+                const envelope = plain ? decodeHistoryEnvelope(plain, { source: chunk.from_device_id, target: this.deviceID, seq: chunk.seq, total: chunk.total, signingKey: sender.signingKey }) : null;
+                const h = envelope?.header;
+                if (h && !completed.has(h.transfer) && h.seq === 0) current = { transfer: h.transfer, source: h.source, next: 0 };
+                const inOrder = h && !completed.has(h.transfer) && current && current.transfer === h.transfer && current.source === h.source && current.next === h.seq;
+                if (envelope && inOrder) {
+                    current.next++;
+                    if (h.seq === h.total - 1) {
+                        completed.add(h.transfer);
+                        current = null;
+                    }
+                    for (const m of envelope.records) {
                         const message = historyRecord(m, this.ownUID, chunk.from_device_id, imported);
-                        if (!message) continue;
+                        // Never dropped silently: refused records are counted.
+                        if (!message) { skipped++; continue; }
                         // A transferred record never overwrites one this device holds.
                         if (message.protocol && this.conversations.get(m.peer)?.messages.some(x => DirectMessages.same(x, message))) continue;
                         if (this.#add(m.peer, typeof m.peer_nickname === "string" ? m.peer_nickname : "", message, { notify: false })) imported++;
@@ -763,7 +784,7 @@ export class DirectMessages extends EventTarget {
                     digests.push(digest);
                 }
                 seq = chunk.seq + 1;
-                this.#emit("history", { done: seq, total: chunk.total, imported });
+                this.#emit("history", { done: seq, total: chunk.total, imported, skipped });
             }
             // Persist the page (records, then chunk digests) BEFORE the ACK.
             for (const peer of touched) {
@@ -771,12 +792,12 @@ export class DirectMessages extends EventTarget {
                 this.#saveTimers.delete(peer);
                 await putSealed(Stores.dm, peer, this.conversations.get(peer));
             }
-            if (digests.length) {
-                for (const d of digests) done.add(d);
-                await putSealed(Stores.device, HISTORY_IMPORTS, { digests: [...done].slice(-MAX_HISTORY_DIGESTS) });
-            }
+            for (const d of digests) done.add(d);
+            await putSealed(Stores.device, HISTORY_IMPORTS, { digests: [...done].slice(-MAX_HISTORY_DIGESTS),
+                completed: [...completed].slice(-MAX_HISTORY_TRANSFERS), current });
             await this.conn.request(Msg.DeviceRequest, { action: "history_ack", seq: seq - 1 }, Msg.DeviceResult, { accept: r => r.action === "history_ack" });
         }
+        this.lastImport = { imported, skipped };
         return imported;
     }
 

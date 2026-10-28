@@ -45,3 +45,14 @@ test("gaps, other signers, independent pins and wrong endpoints never promote", 
     await refuse(pins[0], pins[3], ctx(noxa, [resets[0], signReset({ ...resets[1], device: "eve-phone" }, noxa.edSecret), ...resets.slice(2)]));
     await refuse(pins[0], pins[3], { ...ctx(noxa, resets), fetch: async () => ({ not: "a list" }) });
 });
+
+test("review P3-1: two different signed successors of one epoch are a fork; a duplicate is not", async () => {
+    const noxa = generateIdentity(), { pins, resets } = chain(noxa, 4);
+    const forkTo = keys();
+    const fork = signReset({ ...resets[1], transition_id: "fork", new_identity: forkTo.identity }, noxa.edSecret);
+    const sorted = list => [...list].sort((a, b) => a.old_epoch - b.old_epoch);
+    await assert.rejects(verifyResetChain(pins[0], pins[3], ctx(noxa, sorted([...resets, fork]))));
+    await assert.rejects(verifyResetChain(pins[0], { epoch: 3, identity: forkTo.identity, signing: pins[3].signing }, ctx(noxa, sorted([...resets, fork]))));
+    const { pin } = await verifyResetChain(pins[0], pins[3], ctx(noxa, sorted([...resets, resets[1]])));
+    assert.deepEqual(pin, pins[3]);
+});

@@ -232,7 +232,17 @@ export function securitySettings(settings) {
         const tabID = window.__noxa?.state?.activeTabID;
         await run(async () => { await checkError(app.RecoverSecureMessagingForTab(tabID || "")); return true; }, "security.recovered");
     });
-    recovery.append(recover);
+    // A recovery the server keeps refusing has an explicit exit: it is given
+    // up only when the server's record shows it was not applied (an applied
+    // one is completed instead).
+    const cancelRecovery = button("security.recoveryCancel", async () => {
+        if (!await ask("security.recoveryCancel", t("security.recoveryCancelAsk"), "security.recoveryCancelConfirm")) return;
+        const tabID = window.__noxa?.state?.activeTabID;
+        let outcome = "";
+        await run(async () => { outcome = await app.CancelSecureMessagingRecoveryForTab(tabID || ""); return true; },
+            () => t(outcome === "completed" ? "security.recovered" : "security.recoveryCancelled"));
+    });
+    recovery.append(recover, cancelRecovery, el("p", t("security.recoveryCancelHelp")));
     page.append(status, error, identities, progressArea, storage, recovery, connection);
     // Settings search builds detached pages: only load secrets for the visible page.
     setTimeout(async () => {

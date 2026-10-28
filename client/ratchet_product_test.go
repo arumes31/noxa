@@ -1170,7 +1170,7 @@ func historyTransferProduct(t *testing.T, b productBridge, A *nativeNode) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := historyMessagesSince(hs, 0)
+	want := historyMessagesSince(hs, 0, A.dev.Principal)
 	ratchetWant := 0
 	for _, m := range want {
 		if m.Protocol == ratchetProtocol {

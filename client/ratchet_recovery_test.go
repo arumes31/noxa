@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -26,11 +27,16 @@ type recoveryServer struct {
 	ownState *olmdir.Bundle
 	resets   []olmdir.Reset
 	calls    int
+	ownFail  int // own_state reads that fail (connection lost) before answering
 }
 
 func (s *recoveryServer) directory(_ context.Context, r netproto.OlmDirectoryRequest) (netproto.OlmDirectoryResult, error) {
 	if r.Action != "own_state" {
 		s.t.Fatalf("unexpected directory %s", r.Action)
+	}
+	if s.ownFail > 0 {
+		s.ownFail--
+		return netproto.OlmDirectoryResult{}, errors.New("connection lost")
 	}
 	b := s.state
 	if s.ownState != nil {
@@ -191,6 +197,145 @@ func TestRatchetRecoveryRefusesHostileOwnState(t *testing.T) {
 		}
 		if a := authorityOf(t, c); a.Epoch != 4 {
 			t.Fatalf("recovery after abandonment: %+v", a)
+		}
+	})
+}
+
+// Review P2-1 (adopted repro): the server applied the reset, the response was
+// lost, and the resume is refused by a code in the abandon list (a rules/role
+// gate or a hostile server). The intent must never be abandoned: the server's
+// own_state shows the recorded publication at the new epoch, which completes
+// the recovery.
+func TestRatchetRecoveryAppliedResponseLostResumeRefused(t *testing.T) {
+	c, srv, _ := recoveryConsumer(t)
+	c.sticky = rfail("recovery_required")
+	n := 0
+	c.d.Admission = func(_ context.Context, r netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+		n++
+		if n == 1 {
+			if _, err := srv.admission(r); err != nil {
+				t.Fatal(err)
+			}
+			// The response is lost, and so is the evidence read after it.
+			srv.ownFail = 1
+			return nil, errors.New("connection lost")
+		}
+		return nil, rfail("authority-required")
+	}
+	if err := c.recoverAccount("restored"); ratchetCode(err) != "recovery_pending" {
+		t.Fatalf("lost response without evidence must stay pending: %v", err)
+	}
+	if a := authorityOf(t, c); !a.Blocked || a.Epoch != 1 {
+		t.Fatalf("pending: %+v", a)
+	}
+	if err := c.recoverAccount("restored"); err != nil {
+		t.Fatalf("resume of an applied intent: %v", err)
+	}
+	if a := authorityOf(t, c); a.Blocked || a.Epoch != 4 || srv.state.AccountEpoch != 4 || len(srv.resets) != 1 || c.sticky != nil {
+		t.Fatalf("applied intent must be promoted, never abandoned: %+v server=%d resets=%d", a, srv.state.AccountEpoch, len(srv.resets))
+	}
+	latest, err := c.latestPublication(authorityOf(t, c))
+	if err != nil || latest == nil || latest.Identity != srv.state.Identity {
+		t.Fatalf("promoted publication: %+v %v", latest, err)
+	}
+}
+
+// The applied case with the evidence available right away completes in the
+// same call; a not-applied intent refused by a transient code stays pending.
+func TestRatchetRecoveryEvidenceDecides(t *testing.T) {
+	t.Run("applied, response lost", func(t *testing.T) {
+		c, srv, _ := recoveryConsumer(t)
+		c.d.Admission = func(_ context.Context, r netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+			if _, err := srv.admission(r); err != nil {
+				t.Fatal(err)
+			}
+			return nil, errors.New("connection lost")
+		}
+		if err := c.recoverAccount("restored"); err != nil {
+			t.Fatal(err)
+		}
+		if a := authorityOf(t, c); a.Blocked || a.Epoch != 4 {
+			t.Fatalf("%+v", a)
+		}
+	})
+	t.Run("not applied, transient refusal", func(t *testing.T) {
+		c, _, _ := recoveryConsumer(t)
+		c.d.Admission = func(context.Context, netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+			return nil, rfail("unavailable")
+		}
+		if err := c.recoverAccount("restored"); ratchetCode(err) != "recovery_pending" {
+			t.Fatalf("%v", err)
+		}
+		if a := authorityOf(t, c); !a.Blocked {
+			t.Fatalf("a transient refusal keeps the intent: %+v", a)
+		}
+	})
+}
+
+// Review P3-2: a pending intent the server keeps refusing has an explicit
+// user exit, which abandons only on positive not-applied evidence and
+// completes an applied one.
+func TestRatchetRecoveryCancel(t *testing.T) {
+	pending := func(t *testing.T) (*ratchetConsumer, *recoveryServer) {
+		c, srv, _ := recoveryConsumer(t)
+		c.d.Admission = func(context.Context, netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+			return nil, rfail("unavailable")
+		}
+		if err := c.recoverAccount("restored"); ratchetCode(err) != "recovery_pending" {
+			t.Fatalf("%v", err)
+		}
+		return c, srv
+	}
+	t.Run("nothing pending", func(t *testing.T) {
+		c, _, _ := recoveryConsumer(t)
+		if _, err := c.cancelRecovery(); ratchetCode(err) != "not_needed" {
+			t.Fatalf("%v", err)
+		}
+	})
+	t.Run("unknown evidence refuses", func(t *testing.T) {
+		c, srv := pending(t)
+		srv.ownFail = 1
+		if _, err := c.cancelRecovery(); ratchetCode(err) != "recovery_unknown" {
+			t.Fatalf("%v", err)
+		}
+		if a := authorityOf(t, c); !a.Blocked {
+			t.Fatalf("%+v", a)
+		}
+	})
+	t.Run("not applied cancels", func(t *testing.T) {
+		c, srv := pending(t)
+		outcome, err := c.cancelRecovery()
+		if err != nil || outcome != "cancelled" {
+			t.Fatal(outcome, err)
+		}
+		if a := authorityOf(t, c); a.Blocked || a.Epoch != 1 {
+			t.Fatalf("%+v", a)
+		}
+		// A later explicit recovery starts over.
+		c.d.Admission = func(_ context.Context, r netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+			return srv.admission(r)
+		}
+		if err := c.recoverAccount("restored"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("applied completes", func(t *testing.T) {
+		c, srv := pending(t)
+		s, _ := c.d.Store.Read()
+		tr, _, ok := c.pendingRecovery(s.Fence)
+		if !ok {
+			t.Fatal("no pending intent")
+		}
+		// The server applied it after all (e.g. a delayed request).
+		if _, err := srv.admission(netproto.OlmAdmissionRequest{Action: "reset", AccountEpoch: tr.Reset.OldEpoch, Reset: &tr.Reset, Bundle: &tr.Bundle}); err != nil {
+			t.Fatal(err)
+		}
+		outcome, err := c.cancelRecovery()
+		if err != nil || outcome != "completed" {
+			t.Fatal(outcome, err)
+		}
+		if a := authorityOf(t, c); a.Blocked || a.Epoch != 4 {
+			t.Fatalf("%+v", a)
 		}
 	})
 }

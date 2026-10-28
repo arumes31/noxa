@@ -101,3 +101,66 @@ test("import: authorized source only, never overwrites local records, exact chun
     // Nothing of the ratchet store is ever written by an import.
     assert.equal((await getSealed(Stores.ratchet, "control").catch(() => null)) ?? null, null);
 });
+
+// b2-review P3-3: the signed transfer ID binds the chunks of one import.
+test("import: chunks spliced across transfers and replays of completed transfers import nothing", async () => {
+    const own = "me-" + Math.random().toString(36).slice(2);
+    const dm = new DirectMessages(session(own), {});
+    await dm.ready;
+    dm.devicesOf = async () => ({ devices: [{ deviceID: "dsk", x25519: desktop.publicKey, signingKey: desk.edPublic }] });
+    const rec = (id, n) => ({ peer: "pat", from: "pat", body: "b" + id, sent_at: n, client_msg_id: id, protocol: "noxa-olm-v1", provenance: "authenticated" });
+    const chunkOf = (transfer, records, seq, total) => sealDM(encodeHistoryChunk({ source: "dsk", target: own + "-dev", transfer, seq, total }, JSON.stringify(records), desk.edSecret), me.publicKey, desktop.secretKey);
+    const serve = list => { let page = list; dm.conn.request = async (type, req) => { if (req.action === "history_get") { const p = page.filter(c => c.seq >= req.seq); page = []; return { history: p }; } return {}; }; };
+    const ids = () => (dm.conversations.get("pat")?.messages || []).map(m => m.id).sort().join(",");
+    // Transfer A seq 0 spliced with transfer B seq 1: only A's first chunk.
+    const a0 = chunkOf("A", [rec("A0", 1)], 0, 2), b1 = chunkOf("B", [rec("B1", 2)], 1, 2);
+    serve([{ seq: 0, total: 2, from_device_id: "dsk", data: a0 }, { seq: 1, total: 2, from_device_id: "dsk", data: b1 }]);
+    assert.equal(await dm.importHistory(), 1);
+    assert.equal(ids(), "A0");
+    // A later run continues transfer A in order (state is durable) and completes it.
+    const a1 = chunkOf("A", [rec("A1", 3)], 1, 2);
+    serve([{ seq: 1, total: 2, from_device_id: "dsk", data: a1 }]);
+    assert.equal(await dm.importHistory(), 1);
+    assert.equal(ids(), "A0,A1");
+    // A completed transfer replayed with fresh sealing (new digest) imports
+    // nothing, even after the user removed its records locally.
+    dm.conversations.get("pat").messages = [];
+    serve([{ seq: 0, total: 2, from_device_id: "dsk", data: chunkOf("A", [rec("A0", 1)], 0, 2) }, { seq: 1, total: 2, from_device_id: "dsk", data: chunkOf("A", [rec("A1", 3)], 1, 2) }]);
+    assert.equal(await dm.importHistory(), 0);
+    assert.equal(ids(), "");
+    // A new honest transfer imports.
+    serve([{ seq: 0, total: 1, from_device_id: "dsk", data: chunkOf("C", [rec("C0", 4)], 0, 1) }]);
+    assert.equal(await dm.importHistory(), 1);
+    assert.equal(ids(), "C0");
+});
+
+// b2-review P3-4 + CodeRabbit: own and peer legacy records are accepted
+// consistently, inconsistent ones are refused and counted, never silently.
+test("legacy records: empty sender normalized, self must match the sender, refusals counted", async () => {
+    const own = "me-" + Math.random().toString(36).slice(2);
+    const ok = (m, want) => { const r = historyRecord(m, own, "dsk"); assert.ok(r, JSON.stringify(m)); assert.deepEqual([r.from, r.self], want); };
+    ok({ peer: "quin", from: "", self: true, body: "mine", sent_at: 5 }, [own, true]);
+    ok({ peer: "quin", from: "", body: "theirs", sent_at: 5 }, ["quin", false]);
+    ok({ peer: "quin", from: own, self: true, body: "mine", sent_at: 5 }, [own, true]);
+    for (const bad of [
+        { peer: "quin", from: "quin", self: true, body: "spoofed own", sent_at: 5 },
+        { peer: "quin", from: own, body: "own without self", sent_at: 5 },
+        { peer: "quin", from: "", body: "x", sent_at: 5, client_msg_id: "R", protocol: "noxa-olm-v1", provenance: "authenticated" },
+    ]) assert.equal(historyRecord(bad, own, "dsk"), null, JSON.stringify(bad));
+    // The exporter fills the sender of own legacy records.
+    const out = historyMessagesSince([{ peer: "quin", messages: [{ id: "L", self: true, body: "mine", sentAt: 2, verified: true }, { id: "P", body: "theirs", sentAt: 1, verified: true }] }], 0, own);
+    assert.deepEqual(out.map(m => [m.client_msg_id, m.from]), [["L", own], ["P", "quin"]]);
+    // Refused records in an accepted chunk are counted and reported.
+    const dm = new DirectMessages(session(own), {});
+    await dm.ready;
+    dm.devicesOf = async () => ({ devices: [{ deviceID: "dsk", x25519: desktop.publicKey, signingKey: desk.edPublic }] });
+    const events = [];
+    dm.addEventListener("history", e => events.push(e.detail));
+    const data = sealDM(encodeHistoryChunk({ source: "dsk", target: own + "-dev", transfer: "L1", seq: 0, total: 1 },
+        JSON.stringify([{ peer: "quin", from: "", self: true, body: "mine", sent_at: 2 }, { peer: "quin", from: "quin", self: true, body: "spoofed", sent_at: 3 }]), desk.edSecret), me.publicKey, desktop.secretKey);
+    let page = [{ seq: 0, total: 1, from_device_id: "dsk", data }];
+    dm.conn.request = async (type, req) => { if (req.action === "history_get") { const p = page; page = []; return { history: p }; } return {}; };
+    assert.equal(await dm.importHistory(), 1);
+    assert.deepEqual(dm.lastImport, { imported: 1, skipped: 1 });
+    assert.equal(events.at(-1).skipped, 1);
+});

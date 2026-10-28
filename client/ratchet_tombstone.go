@@ -250,12 +250,12 @@ func movedPairs(moved []move) [][2]string {
 	return out
 }
 
-// eraseCommittedTombstone marks a tombstone of a committed deletion .erasing-
-// (so it can never be restored, even if the key is imported again) and erases
-// it. It reports whether nothing is left.
 // ratchetEraseDir erases a committed tombstone (a test seam).
 var ratchetEraseDir = os.RemoveAll
 
+// eraseCommittedTombstone marks a tombstone of a committed deletion .erasing-
+// (so it can never be restored, even if the key is imported again) and erases
+// it. It reports whether nothing is left.
 func eraseCommittedTombstone(tomb string) bool {
 	path := tomb
 	if strings.Contains(filepath.Base(tomb), ratchetTombstone) {

@@ -658,3 +658,14 @@ export async function recoverSecureMessaging() {
     if (!owner || owner.consumer.closed) throw Object.assign(new Error("secure messaging is not active"), { code: "unavailable" });
     return owner.consumer.recover("restored");
 }
+
+/**
+ * Explicit exit from a recovery that stays pending. Resolves "completed" (the
+ * server had applied it) or "cancelled" (it was not applied); rejects with
+ * recovery_unknown when the server's record shows neither.
+ */
+export async function cancelSecureMessagingRecovery() {
+    const owner = app.ratchet;
+    if (!owner || owner.consumer.closed) throw Object.assign(new Error("secure messaging is not active"), { code: "unavailable" });
+    return owner.consumer.cancelRecovery();
+}

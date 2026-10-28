@@ -241,13 +241,28 @@ func TestRatchetDMProjectionMixedLegacy(t *testing.T) {
 	cm.projectRatchet(RatchetRecord{Protocol: ratchetProtocol, Sender: "me", LogicalID: "p1", Key: ratchetSemanticKey("me", "p1"), Scope: "direct", Peer: "bob",
 		Purpose: "chat", Body: ratchetJSON(map[string]string{"text": "still pending"}), SentAt: 101, Self: true, Status: "pending"}, false, nil)
 	var exported []string
-	for _, m := range historyMessagesSince(mustStore(t, app, id), 0) {
+	for _, m := range historyMessagesSince(mustStore(t, app, id), 0, "me") {
 		exported = append(exported, strings.Join([]string{m.Protocol, m.Provenance, m.From, m.ClientMsgID, m.Body}, "|"))
 	}
 	sort.Strings(exported)
 	wantExport := []string{"noxa-olm-v1|authenticated|bob|m1|olm m1", "noxa-olm-v1|authenticated|me|n1|mine (edited)", "||bob|m1|", "||me|m2|legacy m2"}
 	if strings.Join(exported, "\n") != strings.Join(wantExport, "\n") {
 		t.Fatalf("history export:\n%s\nwant:\n%s", strings.Join(exported, "\n"), strings.Join(wantExport, "\n"))
+	}
+	// b2-review P3-4: legacy entries stored without a sender are exported
+	// with one (own -> this account, otherwise the peer), never as "".
+	hs := mustStore(t, app, id)
+	if err := hs.save(dmLog{Peer: "carl", Messages: []DMEntry{{Self: true, Body: "own legacy", SentAt: 49, ClientMsgID: "x1"}, {Body: "peer legacy", SentAt: 50, ClientMsgID: "x2"}}}); err != nil {
+		t.Fatal(err)
+	}
+	senders := map[string]string{}
+	for _, m := range historyMessagesSince(hs, 0, "me") {
+		if m.Peer == "carl" {
+			senders[m.ClientMsgID] = m.From
+		}
+	}
+	if senders["x1"] != "me" || senders["x2"] != "carl" {
+		t.Fatalf("legacy senders: %v", senders)
 	}
 	// Edit/delete routing picks the new-protocol own record.
 	if p, err := app.ownDirectMessageProtocol(cm, "bob", "n1"); err != nil || p != ratchetProtocol {

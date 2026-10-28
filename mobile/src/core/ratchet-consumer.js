@@ -20,6 +20,7 @@ import {
     jsonBytes,
     validateManifest,
     openPayload,
+    recoveryReceipt,
     sealPayload,
 } from "./olm-admission.js";
 import { verifyBundleEvidence, verifyReservedClaim, OLM_DIRECTORY_VERSION } from "./olm-directory.js";
@@ -440,16 +441,28 @@ export class RatchetConsumer {
         this.#check();
         return this.#finishRecovery({ account_id: accountID, reset, bundle }, transition);
     }
+    /**
+     * Submits the recorded reset; promotes on its exact receipt. A refusal
+     * alone never abandons the intent (the server may have applied it and the
+     * response was lost): own_state decides, as in client/ratchet_recovery.go.
+     */
     async #finishRecovery(t, id) {
         const r = t.reset;
         let receipt;
         try {
             receipt = await this.#call({ action: "reset", account_epoch: r.old_epoch, reset: r, bundle: t.bundle });
         } catch (e) {
-            if (["authority-required", "account-change-required", "conflict", "invalid", "limit"].includes(e.code))
+            const evidence = await this.#recoveryEvidence(r);
+            if (evidence === "applied") return this.#promoteRecovery(id, await recoveryReceipt(r));
+            if (evidence === "not_applied" && ["authority-required", "account-change-required", "conflict", "invalid", "limit"].includes(e.code)) {
                 await this.store.abandonRecoveryTransition(await this.store.read([["transition", id]]), id);
-            throw e;
+                throw e;
+            }
+            throw Object.assign(new Error(`recovery pending: ${e.code || e.message}`), { code: "recovery_pending", cause: e });
         }
+        return this.#promoteRecovery(id, receipt);
+    }
+    async #promoteRecovery(id, receipt) {
         this.#check();
         await this.store.promoteAccount(await this.store.read([["transition", id]]), id, receipt);
         this.#check();
@@ -457,6 +470,42 @@ export class RatchetConsumer {
         this.readiness = null;
         this.readyValue = null;
         return true;
+    }
+    /** "applied", "not_applied" or "unknown", from this device's own_state. */
+    async #recoveryEvidence(r) {
+        const ns = this.namespace;
+        try {
+            const own = await this.directory({ action: "own_state", request_id: crypto.randomUUID() });
+            const b = own?.bundle;
+            if (own?.error || !b) return "unknown";
+            verifyBundleEvidence(b, { trustedSigningKey: this.ownKey, server: ns.server, principal: ns.principal, deviceID: ns.device, accountEpoch: b.account_epoch, pinnedOlmIdentity: b.identity });
+            const { publicationDigest } = await import("./olm-reset.js");
+            const digest = await publicationDigest(b);
+            if (b.account_epoch === r.new_epoch && digest === r.publication_digest) return "applied";
+            if (b.account_epoch === r.old_epoch && digest !== r.publication_digest) return "not_applied";
+        } catch { /* unverifiable or unreachable: unknown */ }
+        return "unknown";
+    }
+    /**
+     * The user's explicit exit from a pending recovery: abandons only on
+     * positive not-applied evidence; an applied intent is completed instead.
+     * Resolves "completed" or "cancelled".
+     */
+    cancelRecovery() { return this.#serial(() => this.#cancelRecovery()); }
+    async #cancelRecovery() {
+        this.#check();
+        for (const ref of await this.#refs("transition")) {
+            const t = await this.store.accountTransitionRequest(await this.store.read([ref]), ref[1]).catch(() => null);
+            if (!t?.recovery || t.receipt || t.abandoned) continue;
+            const evidence = await this.#recoveryEvidence(t.reset);
+            if (evidence === "applied") { await this.#promoteRecovery(ref[1], await recoveryReceipt(t.reset)); return "completed"; }
+            if (evidence === "not_applied") {
+                await this.store.abandonRecoveryTransition(await this.store.read([["transition", ref[1]]]), ref[1]);
+                return "cancelled";
+            }
+            throw fail("recovery_unknown");
+        }
+        throw fail("not_needed");
     }
 
     // --- Trust ----------------------------------------------------------------

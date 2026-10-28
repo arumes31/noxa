@@ -22,10 +22,21 @@ package main
 // The old readable archive and receive-only state are kept. Copies sent to
 // the lost keys cannot be opened; they stay quarantined with a truthful
 // placeholder and are never acknowledged.
+//
+// Fork limit (no local state to compare against): a hostile server may
+// present an older, genuinely signed publication of this device as
+// own_state, and this device then signs a second successor of that old
+// epoch. The honest directory refuses it and peers pinned later reject it;
+// peers that see two different signed successors of one epoch in the chain
+// adopt neither (olmdir.VerifyResetChain) and require explicit confirmation.
+// A server that withholds the genuine successor can still steer peers pinned
+// at or before the old epoch onto the new branch, which carries this
+// device's own fresh keys (no key compromise).
 
 import (
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"noxa/internal/e2ee/admission"
@@ -150,31 +161,53 @@ func (c *ratchetConsumer) pendingRecovery(fence uint64) (durable.AccountTransiti
 }
 
 // finishRecovery submits the recorded reset and promotes on its exact receipt.
+//
+// A failed submission never gives the intent up on the refusal alone: the
+// server may already have applied it (the response was lost, and a replay is
+// refused by a rules/role gate or a hostile server). The server's own_state
+// decides: this intent's exact publication at the new epoch is proof it was
+// applied (promote); the unchanged pre-recovery epoch with another
+// publication is proof it was not (abandon on a deterministic refusal);
+// anything else keeps the intent pending for a later retry.
 func (c *ratchetConsumer) finishRecovery(local durable.AccountAuthority, t durable.AccountTransition, id string) error {
 	r, b := t.Reset, t.Bundle
 	var receipt olmdir.ResetReceipt
 	// The source epoch of the reset is the server's current one (r.OldEpoch),
 	// not the restored store's.
 	if err := c.call(netproto.OlmAdmissionRequest{Action: "reset", AccountEpoch: r.OldEpoch, Reset: &r, Bundle: &b}, &receipt); err != nil {
-		switch ratchetCode(err) {
-		case "authority-required", "account-change-required", "conflict", "invalid", "limit":
-			// A deterministic refusal (e.g. a reset built from a stale or
-			// forged own_state): give the intent up so sending authority is
-			// restored and a later explicit recovery can start over.
-			if s, e := c.read(durable.Ref{Kind: durable.Transition, ID: id}); e == nil {
-				if e = c.d.Store.AbandonRecoveryTransition(s, id); e != nil {
+		switch c.recoveryEvidence(r) {
+		case recoveryApplied:
+			return c.promoteRecovery(id, recoveryReceipt(r))
+		case recoveryNotApplied:
+			switch ratchetCode(err) {
+			case "authority-required", "account-change-required", "conflict", "invalid", "limit":
+				// A deterministic refusal of an intent the server positively
+				// did not apply: give it up so sending authority is restored
+				// and a later explicit recovery can start over.
+				if e := c.abandonRecovery(id); e != nil {
 					return e
 				}
+				return err
 			}
 		}
-		return err
+		return recoveryPending(err)
 	}
 	encoded, _ := json.Marshal(r)
 	digest, _ := olmdir.PublicationDigest(b)
 	if receipt.Server != r.Server || receipt.Device != r.Device || receipt.TransitionID != r.TransitionID || receipt.AccountEpoch != r.NewEpoch ||
 		receipt.PublicationDigest != digest || receipt.Digest != admission.Digest(encoded) {
-		return rfail("invalid")
+		return recoveryPending(rfail("invalid"))
 	}
+	return c.promoteRecovery(id, receipt)
+}
+
+// recoveryPending marks a failure that leaves the recovery intent pending
+// (sending stays paused until it completes or is cancelled).
+func recoveryPending(err error) error {
+	return &ratchetError{Code: "recovery_pending", Err: err}
+}
+
+func (c *ratchetConsumer) promoteRecovery(id string, receipt olmdir.ResetReceipt) error {
 	s, err := c.read(durable.Ref{Kind: durable.Transition, ID: id})
 	if err != nil {
 		return err
@@ -186,6 +219,85 @@ func (c *ratchetConsumer) finishRecovery(local durable.AccountAuthority, t durab
 	// operation publishes (idempotently) and refreshes normally.
 	c.sticky, c.ready = nil, nil
 	return c.check()
+}
+
+func (c *ratchetConsumer) abandonRecovery(id string) error {
+	s, err := c.read(durable.Ref{Kind: durable.Transition, ID: id})
+	if err != nil {
+		return err
+	}
+	return c.d.Store.AbandonRecoveryTransition(s, id)
+}
+
+// recoveryReceipt is the receipt the server returns for r. It carries no
+// server secret: every field is derived from the recorded reset, so the
+// server holding r's exact publication at the new epoch proves the same.
+func recoveryReceipt(r olmdir.Reset) olmdir.ResetReceipt {
+	encoded, _ := json.Marshal(r)
+	return olmdir.ResetReceipt{Server: r.Server, Device: r.Device, TransitionID: r.TransitionID, AccountEpoch: r.NewEpoch,
+		Digest: admission.Digest(encoded), PublicationDigest: r.PublicationDigest}
+}
+
+type recoveryState int
+
+const (
+	recoveryUnknown recoveryState = iota
+	recoveryApplied
+	recoveryNotApplied
+)
+
+// recoveryEvidence reads this device's own_state: applied when the server
+// holds exactly the recorded publication at the new epoch, not applied when
+// it still holds another publication at the pre-recovery epoch. Unverifiable
+// or other answers (and errors) are unknown.
+func (c *ratchetConsumer) recoveryEvidence(r olmdir.Reset) recoveryState {
+	own, err := c.directory(netproto.OlmDirectoryRequest{Action: "own_state", RequestID: newClientMsgID()})
+	if err != nil || own.Error != "" || own.Bundle == nil {
+		return recoveryUnknown
+	}
+	ns := c.d.Namespace
+	b := *own.Bundle
+	if b.VerifyEvidence(c.d.OwnKey, ns.Server, ns.Principal, ns.Device) != nil {
+		return recoveryUnknown
+	}
+	digest, err := olmdir.PublicationDigest(b)
+	if err != nil {
+		return recoveryUnknown
+	}
+	switch {
+	case b.AccountEpoch == r.NewEpoch && digest == r.PublicationDigest:
+		return recoveryApplied
+	case b.AccountEpoch == r.OldEpoch && digest != r.PublicationDigest:
+		return recoveryNotApplied
+	}
+	return recoveryUnknown
+}
+
+// cancelRecovery is the user's explicit exit from a pending recovery intent.
+// It abandons the intent only on positive evidence that the server did not
+// apply it; an applied intent is completed instead. It returns "completed"
+// or "cancelled".
+func (c *ratchetConsumer) cancelRecovery() (string, error) {
+	c.serial.Lock()
+	defer c.serial.Unlock()
+	if err := c.check(); err != nil {
+		return "", err
+	}
+	s, err := c.read()
+	if err != nil {
+		return "", err
+	}
+	t, id, ok := c.pendingRecovery(s.Fence)
+	if !ok {
+		return "", rfail("not_needed")
+	}
+	switch c.recoveryEvidence(t.Reset) {
+	case recoveryApplied:
+		return "completed", c.promoteRecovery(id, recoveryReceipt(t.Reset))
+	case recoveryNotApplied:
+		return "cancelled", c.abandonRecovery(id)
+	}
+	return "", rfail("recovery_unknown")
 }
 
 // RecoverSecureMessagingForTab is the explicit, user-initiated recovery
@@ -205,6 +317,26 @@ func (a *App) RecoverSecureMessagingForTab(tabID string) string {
 	return ""
 }
 
+// CancelSecureMessagingRecoveryForTab is the explicit exit from a recovery
+// that stays pending. It returns the outcome ("completed": the server had
+// applied it; "cancelled": it was not applied and was given up) or a
+// user-facing error.
+func (a *App) CancelSecureMessagingRecoveryForTab(tabID string) (string, error) {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return "", err
+	}
+	c, err := cm.ratchetConsumerOn(nil)
+	if err != nil {
+		return "", errors.New("secure messaging is not active on this connection")
+	}
+	outcome, err := c.cancelRecovery()
+	if err != nil {
+		return "", errors.New(recoveryFailureText(err))
+	}
+	return outcome, nil
+}
+
 // recoveryFailureText maps recovery failures to user-facing reasons.
 func recoveryFailureText(err error) string {
 	switch ratchetCode(err) {
@@ -216,6 +348,10 @@ func recoveryFailureText(err error) string {
 		return "the server refused the recovery; try again later or link this device again"
 	case "fenced":
 		return "another window is changing secure messaging on this device; try again"
+	case "recovery_pending":
+		return "the recovery is waiting for the server, so sending secure messages stays paused; try again later, or cancel the recovery"
+	case "recovery_unknown":
+		return "the server's record does not show whether the recovery was applied, so it cannot be cancelled safely yet; try again later"
 	}
 	return "secure messaging recovery failed: " + err.Error()
 }

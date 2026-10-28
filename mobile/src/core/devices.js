@@ -89,7 +89,7 @@ export async function endorseDevice(session, target) {
  * everything), newest first, capped at MAX_HISTORY_MESSAGES.
  * conversations: iterable of {peer, nickname, messages[]} (core/direct.js).
  */
-export function historyMessagesSince(conversations, since = 0) {
+export function historyMessagesSince(conversations, since = 0, ownUID = "") {
     const out = [];
     for (const conversation of conversations) {
         for (const m of conversation.messages || []) {
@@ -101,7 +101,9 @@ export function historyMessagesSince(conversations, since = 0) {
             const sentAt = Math.floor(Number(m.sentAt) || 0);
             if (sentAt < since) continue;
             out.push({
-                peer: conversation.peer, peer_nickname: conversation.nickname || undefined, from: m.from || "", from_nickname: m.fromNickname || undefined,
+                // A legacy record without a sender is from this account (self)
+                // or from the conversation's peer.
+                peer: conversation.peer, peer_nickname: conversation.nickname || undefined, from: m.from || (m.self ? ownUID : conversation.peer), from_nickname: m.fromNickname || undefined,
                 body: m.body, sent_at: sentAt, self: !!m.self || undefined, client_msg_id: m.id || undefined,
                 ...(m.protocol ? { protocol: m.protocol, provenance: m.provenance === "transferred" ? "transferred" : "authenticated" } : {}),
             });
@@ -174,7 +176,7 @@ export async function copyHistory(session, dm, deviceID, days, onProgress = () =
     const target = own.devices.find(d => d.deviceID === deviceID);
     if (!target) throw new Error("this device is not confirmed for direct messages");
     const since = days > 0 ? Math.floor(Date.now() / 1000) - days * 86400 : 0;
-    const { chunks, kept } = buildHistoryChunks(historyMessagesSince(dm.conversations.values(), since), target.x25519, session.identity.xSecret,
+    const { chunks, kept } = buildHistoryChunks(historyMessagesSince(dm.conversations.values(), since, session.uniqueID), target.x25519, session.identity.xSecret,
         { envelope: { source: session.deviceID, target: deviceID, transfer: crypto.randomUUID(), edSecret: session.identity.edSecret } });
     for (let seq = 0; seq < chunks.length; seq++) {
         await deviceRequest(session.conn, { action: "history_put", device_id: deviceID, history: { seq, total: chunks.length, data: chunks[seq] } }, 30000);

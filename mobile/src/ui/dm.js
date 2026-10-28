@@ -297,8 +297,8 @@ export function renderDM(root, peer) {
     const progress = h("div", { class: "history-progress", role: "status" });
     const onMessages = event => { if (event.detail.peer === peer) render(); };
     const onHistory = event => {
-        const { done, total } = event.detail;
-        progress.textContent = done < total ? t("dm.historyCopying", { done, total }) : "";
+        const { done, total, skipped } = event.detail;
+        progress.textContent = done < total ? t("dm.historyCopying", { done, total }) : skipped ? t("dm.historySkipped", { count: skipped }) : "";
         render();
     };
     let typingTimer = 0;

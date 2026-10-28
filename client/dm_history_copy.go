@@ -45,7 +45,10 @@ func sealHistoryChunk(plain []byte, recipientPub, senderPriv [32]byte) ([]byte, 
 
 // historyMessagesSince collects the stored conversations' messages sent at or
 // after since (zero: everything), newest first, capped at MaxHistoryMessages.
-func historyMessagesSince(store dmHistoryStore, since int64) []netproto.HistoryMessage {
+// ownUID fills the sender of own legacy entries stored without one (a peer's
+// legacy entry without a sender is from that peer), so importers accept own
+// and peer records consistently.
+func historyMessagesSince(store dmHistoryStore, since int64, ownUID string) []netproto.HistoryMessage {
 	var out []netproto.HistoryMessage
 	for _, peer := range store.peers() {
 		entries, err := store.messages(peer.UniqueID)
@@ -59,6 +62,12 @@ func historyMessagesSince(store dmHistoryStore, since int64) []netproto.HistoryM
 			m := netproto.HistoryMessage{
 				Peer: peer.UniqueID, PeerNickname: peer.Nickname, From: e.FromUniqueID, FromNickname: e.FromNickname,
 				Body: e.Body, SentAt: e.SentAt, Self: e.Self, ClientMsgID: e.ClientMsgID,
+			}
+			if m.From == "" && e.Protocol == "" {
+				m.From = peer.UniqueID
+				if e.Self {
+					m.From = ownUID
+				}
 			}
 			if e.Protocol != "" {
 				// Only readable, authenticated archive records travel (keyed by
@@ -241,7 +250,7 @@ func (a *App) CopyHistoryToDeviceForTab(tabID, deviceID string, days int) error 
 		}
 		env := historyChunkEnv{Source: selfDevice, Target: deviceID, Transfer: newClientMsgID(),
 			Sign: func(t []byte) ([]byte, error) { return auth.SignChallenge(id.PrivateKey, t) }}
-		chunks, kept, err := buildHistoryChunks(historyMessagesSince(store, since), recipient, priv, env)
+		chunks, kept, err := buildHistoryChunks(historyMessagesSince(store, since, ownUID), recipient, priv, env)
 		if err != nil {
 			fail(err)
 			return

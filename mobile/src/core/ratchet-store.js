@@ -8,6 +8,7 @@ import {
   equalJSON,
   checkEnvelope,
   expectedBinding,
+  resetDigest,
 } from "./olm-admission.js";
 // Candidate storage only: no wire migration or transport lives in this module.
 import {
@@ -1043,30 +1044,13 @@ class RatchetStore {
     if (!old.revision) throw fail("invalid");
     const t = json(old.data),
       r = t.reset;
-    const canonical = {
-      version: r.version,
-      server: r.server,
-      principal: r.principal,
-      device: r.device,
-      transition_id: r.transition_id,
-      old_epoch: r.old_epoch,
-      old_identity: r.old_identity,
-      old_signing: r.old_signing,
-      new_epoch: r.new_epoch,
-      new_identity: r.new_identity,
-      new_signing: r.new_signing,
-      generation: r.generation,
-      publication_digest: r.publication_digest,
-      reason: r.reason,
-      signature: r.signature,
-    };
     if (
       receipt.server !== r.server ||
       receipt.device !== r.device ||
       receipt.transition_id !== r.transition_id ||
       receipt.account_epoch !== r.new_epoch ||
       receipt.publication_digest !== r.publication_digest ||
-      receipt.digest !== (await digestBytes(jsonBytes(canonical)))
+      receipt.digest !== (await resetDigest(r))
     )
       throw fail("conflict");
     if (t.receipt) {

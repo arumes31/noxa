@@ -46,8 +46,12 @@ function harness({ ownState } = {}) {
     };
     let n = 0;
     const core = { async apply(r) { assert.equal(r.op, "new_account"); const k = keys(); return { account: "acct-" + ++n, bundle: { identity: k.identity, signing: k.signing, one_time_keys: [{ id: "AAAAAAAAAAE", key: k.otk }] } }; } };
-    const directory = async r => { assert.equal(r.action, "own_state"); return { request_id: r.request_id, action: r.action, bundle: ownState ? ownState(noxa, srv) : srv.state }; };
-    const admission = async r => {
+    const directory = async r => {
+        assert.equal(r.action, "own_state");
+        if (srv.ownFail > 0) { srv.ownFail--; throw new Error("connection lost"); }
+        return { request_id: r.request_id, action: r.action, bundle: ownState ? ownState(noxa, srv) : srv.state };
+    };
+    const apply = async r => {
         assert.equal(r.action, "reset");
         srv.calls++;
         const cur = srv.state;
@@ -59,6 +63,8 @@ function harness({ ownState } = {}) {
         srv.resets.push(r.reset);
         return { server, device: "a1", transition_id: r.reset.transition_id, account_epoch: r.reset.new_epoch, digest: "d", publication_digest: r.reset.publication_digest };
     };
+    // srv.override(r, apply) replaces the server's answer (lost responses, refusals).
+    const admission = r => srv.override ? srv.override(r, apply) : apply(r);
     const c = new RatchetConsumer({ store, core, namespace: { server, principal: "alice", device: "a1" }, admission, directory,
         deviceKey: async () => noxa.edPublic, signBundle: async b => signBundle(b, noxa.edSecret), assertCurrent: () => {},
         signReset: async r => signReset(r, noxa.edSecret), ownKey: noxa.edPublic });
@@ -95,4 +101,64 @@ test("hostile own_state: forged or regressed is refused before anything is signe
     assert.deepEqual(stale.log, ["prepare", "abandon"]);
     assert.equal(stale.authority.blocked, false, "sending authority restored");
     assert.equal(stale.srv.resets.length, 0);
+});
+
+const code = c => e => e.code === c;
+const refuse = c => async () => { throw Object.assign(new Error(c), { code: c }); };
+
+test("review P2-1: applied reset, response lost, resume refused -> promoted, never abandoned", async () => {
+    const { c, srv, log, authority } = harness();
+    let n = 0;
+    srv.override = async (r, apply) => {
+        if (++n === 1) { await apply(r); srv.ownFail = 1; throw new Error("connection lost"); }
+        return refuse("authority-required")();
+    };
+    await assert.rejects(c.recover("restored"), code("recovery_pending"));
+    assert.equal(authority.blocked, true);
+    assert.equal(await c.recover("restored"), true);
+    assert.deepEqual(log, ["prepare", "promote"]);
+    assert.equal(authority.epoch, 4);
+    assert.equal(srv.resets.length, 1);
+    assert.equal(c.sticky, null);
+});
+
+test("evidence decides: applied with lost response completes; not applied with a transient refusal stays pending", async () => {
+    const applied = harness();
+    applied.srv.override = async (r, apply) => { await apply(r); throw new Error("connection lost"); };
+    assert.equal(await applied.c.recover("restored"), true);
+    assert.equal(applied.authority.epoch, 4);
+
+    const pending = harness();
+    pending.srv.override = refuse("unavailable");
+    await assert.rejects(pending.c.recover("restored"), code("recovery_pending"));
+    assert.deepEqual(pending.log, ["prepare"]);
+    assert.equal(pending.authority.blocked, true);
+});
+
+test("review P3-2: explicit cancel abandons only on not-applied evidence, completes an applied intent", async () => {
+    const none = harness();
+    await assert.rejects(none.c.cancelRecovery(), code("not_needed"));
+
+    const pending = () => { const h = harness(); h.srv.override = refuse("unavailable"); return h; };
+    const unknown = pending();
+    await assert.rejects(unknown.c.recover("restored"), code("recovery_pending"));
+    unknown.srv.ownFail = 1;
+    await assert.rejects(unknown.c.cancelRecovery(), code("recovery_unknown"));
+    assert.equal(unknown.authority.blocked, true);
+
+    const notApplied = pending();
+    await assert.rejects(notApplied.c.recover("restored"), code("recovery_pending"));
+    assert.equal(await notApplied.c.cancelRecovery(), "cancelled");
+    assert.deepEqual(notApplied.log, ["prepare", "abandon"]);
+    assert.equal(notApplied.authority.blocked, false);
+
+    const applied = pending();
+    await assert.rejects(applied.c.recover("restored"), code("recovery_pending"));
+    // The server applied it after all (e.g. a delayed request).
+    const [ref] = await applied.c.store.pendingRefs("transition");
+    const intent = await applied.c.store.accountTransitionRequest(null, ref[1]);
+    applied.srv.state = intent.bundle;
+    assert.equal(await applied.c.cancelRecovery(), "completed");
+    assert.equal(applied.authority.epoch, 4);
+    assert.equal(applied.authority.blocked, false);
 });

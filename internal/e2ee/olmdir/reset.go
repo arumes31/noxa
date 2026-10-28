@@ -1,6 +1,7 @@
 package olmdir
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -109,6 +110,12 @@ func VerifyResetChain(from ResetPin, to ResetPin, key ed25519.PublicKey, server,
 		}
 		byOld := map[int64]Reset{}
 		for _, r := range page {
+			// Two different signed successors of one epoch are a fork (e.g. a
+			// recovery signed over stale server state next to the genuine
+			// reset): adopt neither; the user confirms explicitly.
+			if prev, ok := byOld[r.OldEpoch]; ok && !bytes.Equal(prev.Signature, r.Signature) {
+				return from, nil, ErrInvalid
+			}
 			byOld[r.OldEpoch] = r
 		}
 		start := cur.Epoch

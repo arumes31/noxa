@@ -96,4 +96,18 @@ func TestVerifyResetChain(t *testing.T) {
 	moved[1].Device = "eve-phone"
 	moved[1], _ = moved[1].Sign(noxa)
 	fail("another device's transition", pins[0], pins[3], pub, moved)
+	// Review P3-1: a second, differently signed successor of one epoch (e.g.
+	// a recovery signed over stale server state) is a fork: neither branch
+	// is adopted, whichever endpoint is asked for.
+	forkTo, _ := chainKeys(t)
+	fork := resets[1]
+	fork.TransitionID, fork.NewIdentity = "fork", forkTo
+	fork, _ = fork.Sign(noxa)
+	forked := append(append(append([]olmdir.Reset{}, resets[:2]...), fork), resets[2:]...)
+	fail("fork, genuine endpoint", pins[0], pins[3], pub, forked)
+	fail("fork, forked endpoint", pins[0], olmdir.ResetPin{Epoch: 3, Identity: forkTo, Signing: pins[3].Signing}, pub, forked)
+	// The exact same reset served twice is not a fork.
+	if _, _, err := olmdir.VerifyResetChain(pins[0], pins[3], pub, chainServer, "dave", "dave-phone", pager(append(append(append([]olmdir.Reset{}, resets[:2]...), resets[1]), resets[2:]...))); err != nil {
+		t.Fatalf("duplicate reset: %v", err)
+	}
 }

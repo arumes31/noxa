@@ -34,7 +34,12 @@ export function encodeHistoryChunk({ source, target, transfer, seq, total }, rec
  * anything else (a bare array, a DM copy, another target/source/position, a
  * wrong digest or signature).
  */
-export function decodeHistoryChunk(plain, { source, target, seq, total, signingKey }) {
+export function decodeHistoryChunk(plain, expected) {
+    return decodeHistoryEnvelope(plain, expected)?.records ?? null;
+}
+
+/** As decodeHistoryChunk, returning {header, records} (the signed header names the transfer). */
+export function decodeHistoryEnvelope(plain, { source, target, seq, total, signingKey }) {
     if (typeof plain !== "string" || !plain.startsWith(HISTORY_ENVELOPE_PREFIX)) return null;
     const i = plain.indexOf("\n");
     if (i < 0) return null;
@@ -44,7 +49,7 @@ export function decodeHistoryChunk(plain, { source, target, seq, total, signingK
         if (h.source !== source || h.target !== target || h.seq !== seq || h.total !== total || h.digest !== hex(sha256(utf8(records))) ||
             !verifySignature(fromBase64(h.sig), transcript, signingKey)) return null;
         const list = JSON.parse(records);
-        return Array.isArray(list) ? list : null;
+        return Array.isArray(list) ? { header: h, records: list } : null;
     } catch { return null; }
 }
 

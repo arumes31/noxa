@@ -98,7 +98,12 @@ export async function verifyResetChain(from, to, { server, principal, device, no
     const page = await fetch(cur.epoch);
     if (!Array.isArray(page)) throw fail();
     const byOld = new Map();
-    for (const r of page) if (r && Number.isSafeInteger(r.old_epoch)) byOld.set(r.old_epoch, r);
+    for (const r of page) {
+      if (!r || !Number.isSafeInteger(r.old_epoch)) continue;
+      // Two different signed successors of one epoch are a fork: adopt neither.
+      if (byOld.has(r.old_epoch) && byOld.get(r.old_epoch).signature !== r.signature) throw fail();
+      byOld.set(r.old_epoch, r);
+    }
     const start = cur.epoch;
     for (let r; cur.epoch < to.epoch && (r = byOld.get(cur.epoch)); ) {
       verifyReset(r, { server, principal, device, epoch: cur.epoch, identity: cur.identity, signing: cur.signing, noxaSigning });

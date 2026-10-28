@@ -327,3 +327,39 @@ export function checkEnvelope(m, c) {
   )
     throw fail();
 }
+
+// Reset receipt digest (store.ResetOlmAccount / durable PromoteAccount).
+const canonicalReset = (r) => ({
+  version: r.version,
+  server: r.server,
+  principal: r.principal,
+  device: r.device,
+  transition_id: r.transition_id,
+  old_epoch: r.old_epoch,
+  old_identity: r.old_identity,
+  old_signing: r.old_signing,
+  new_epoch: r.new_epoch,
+  new_identity: r.new_identity,
+  new_signing: r.new_signing,
+  generation: r.generation,
+  publication_digest: r.publication_digest,
+  reason: r.reason,
+  signature: r.signature,
+});
+export const resetDigest = (r) => digestBytes(jsonBytes(canonicalReset(r)));
+
+/**
+ * The receipt the server returns for reset r. Every field derives from the
+ * recorded reset (no server secret), so the server holding r's exact
+ * publication at the new epoch proves the same as the receipt.
+ */
+export async function recoveryReceipt(r) {
+  return {
+    server: r.server,
+    device: r.device,
+    transition_id: r.transition_id,
+    account_epoch: r.new_epoch,
+    digest: await resetDigest(r),
+    publication_digest: r.publication_digest,
+  };
+}
