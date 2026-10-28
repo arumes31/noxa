@@ -22,6 +22,10 @@ import (
 
 var dmTrustRootOverride string // isolated test storage
 var dmTrustMu sync.Mutex       // every tab/manager shares the same persistent pins
+// dmDeclined records explicit declines of a changed contact identity, keyed
+// by pin path + declined fingerprint (never transient lookup failures).
+var dmDeclined sync.Map
+
 var errDMIdentityChanged = errors.New("contact identity changed; confirm the new fingerprint before messaging or calling")
 
 type dmIdentityPin struct {
@@ -247,9 +251,14 @@ func (m *connManager) verifyPeerRecordAt(uid, encoded string, prompt bool, path,
 	}
 	expected := pin
 	dmTrustMu.Unlock()
-	if !prompt || m.confirmPeerChange == nil || pin.Pending != encoded || !m.confirmPeerChange(server, uid, pin.Fingerprint, fingerprint) {
+	if !prompt || m.confirmPeerChange == nil || pin.Pending != encoded {
 		return [32]byte{}, errDMIdentityChanged
 	}
+	if !m.confirmPeerChange(server, uid, pin.Fingerprint, fingerprint) {
+		dmDeclined.Store(path+"\x00"+fingerprint, time.Now())
+		return [32]byte{}, errDMIdentityChanged
+	}
+	dmDeclined.Delete(path + "\x00" + fingerprint)
 	dmTrustMu.Lock()
 	defer dmTrustMu.Unlock()
 	current, err := readDMPin(path)

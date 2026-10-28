@@ -133,9 +133,9 @@ type connManager struct {
 	// ratchetStartErr is the last session-start failure of the current
 	// connection (surfaced on waiting outbox entries); ratchetStartAt bounds
 	// background retries.
-	ratchetStartErr error
-	ratchetStartAt  time.Time
-	ratchetStarting bool
+	ratchetStartErr     error
+	ratchetStartAt      time.Time
+	ratchetStartingConn net.Conn // single-flight per connection
 
 	// debugFrames tees frame summaries to the "debug_frame" event (327 debug
 	// console) when enabled.
@@ -671,6 +671,8 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	m.closed = true
 	m.conn = nil
 	m.connEpoch++
+	// A start failure belongs to its connection only.
+	m.ratchetStartErr, m.ratchetStartAt = nil, time.Time{}
 	// The consumer is fenced by the epoch change; stopping awaits its
 	// in-flight operation (which takes m.mu), so it runs after unlocking.
 	if s := m.takeRatchetLocked(); s != nil {

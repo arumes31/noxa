@@ -733,7 +733,12 @@ func TestRatchetProductBridge(t *testing.T) {
 		t.Fatal("lost finalize must be uncertain")
 	}
 	A.reconnect()
-	reuse, err := A.app.SendConversationForTab(A.tab, g1, "GROUP CHANGED", "gref-2")
+	// Fix3 P3-4: a changed draft on the committed reference is NOT reported
+	// as sent; the original stays authoritative and resolves exactly.
+	if _, err := A.app.SendConversationForTab(A.tab, g1, "GROUP CHANGED", "gref-2"); err == nil || !strings.Contains(err.Error(), "different message") {
+		t.Fatalf("changed draft on a committed reference: %v", err)
+	}
+	reuse, err := A.app.SendConversationForTab(A.tab, g1, "group original", "gref-2")
 	if err != nil || !reuse.Reused || ratchetBodyText(reuse.Record.Body) != "group original" || reuse.Status != "accepted" {
 		t.Fatalf("draft reuse: %+v %v", reuse, err)
 	}

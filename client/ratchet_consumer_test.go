@@ -7,7 +7,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -365,5 +367,71 @@ func TestRatchetSameContent(t *testing.T) {
 		if ratchetSameContent(rec, in) {
 			t.Fatalf("%s change treated as the same content", name)
 		}
+	}
+}
+
+func TestRatchetStartGatePerConnection(t *testing.T) {
+	c1, c1b := net.Pipe()
+	c2, c2b := net.Pipe()
+	defer func() { c1.Close(); c1b.Close(); c2.Close(); c2b.Close() }()
+	m := &connManager{ratchetTest: &ratchetTestConfig{Dir: t.TempDir()}}
+	// conn1's start is still in flight when the client reconnects (conn2).
+	m.conn, m.ratchetStartingConn = c2, c1
+	m.startRatchetRecorded(c2)
+	if m.ratchetStartAt.IsZero() {
+		t.Fatal("the new connection's start must not be skipped")
+	}
+	// This manager has no identity, so the start fails: it is recorded and
+	// surfaced (never a silent wait).
+	if m.ratchetStartErr == nil || m.ratchetBlockedReason() == "" {
+		t.Fatal("start failure must be recorded and surfaced")
+	}
+	// A second start for the same connection while one runs is skipped.
+	m.ratchetStartingConn, m.ratchetStartAt = c2, time.Time{}
+	m.startRatchetRecorded(c2)
+	if !m.ratchetStartAt.IsZero() {
+		t.Fatal("same-connection start must be single-flight")
+	}
+	// A disconnect clears the previous connection's failure.
+	m.ratchetStartingConn = nil
+	m.mu.Lock()
+	m.detachLocked()
+	m.mu.Unlock()
+	if m.ratchetStartErr != nil {
+		t.Fatal("stale start failure carried across reconnect")
+	}
+}
+
+func TestRatchetTombstoneSweep(t *testing.T) {
+	old := identityRootOverride
+	identityRootOverride = t.TempDir()
+	t.Cleanup(func() { identityRootOverride = old })
+	a := &App{tabs: map[string]*tabState{}, hotkeys: map[string]*hotkeyReg{}, settingsPath: t.TempDir() + "/settings.json"}
+	if msg := a.CreateIdentity("kept"); msg != "" {
+		t.Fatal(msg)
+	}
+	path, _ := identityPathFor(a.ListIdentities()[0].ID)
+	kept, err := loadIdentityAtStrict(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, _ := defaultRatchetBase()
+	live := ratchetStoreDir(base, kept)
+	// Crash before the commit point: the identity still exists -> restore.
+	if err := os.MkdirAll(live+ratchetTombstone+"x", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(live+ratchetTombstone+"x", "a.db"), []byte("sealed"), 0o600)
+	// A deleted identity's leftover tombstone (erase failed) -> erase.
+	orphan := filepath.Join(base, strings.Repeat("ab", 16)+ratchetTombstone+"y")
+	if err := os.MkdirAll(orphan, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a.sweepRatchetStores()
+	if _, err := os.Stat(filepath.Join(live, "a.db")); err != nil {
+		t.Fatal("interrupted deletion of a surviving identity must be restored", err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatal("tombstone of a deleted identity must be erased", err)
 	}
 }

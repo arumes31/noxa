@@ -2,10 +2,12 @@ package durable
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -36,5 +38,24 @@ func TestSharedMissingDirectoryThroughLink(t *testing.T) {
 	defer b.Close()
 	if a.Store != b.Store {
 		t.Fatal("distinct shared handles")
+	}
+}
+
+func TestProbeUnlockedDetectsHeldStore(t *testing.T) {
+	dir := t.TempDir()
+	if e := ProbeUnlocked(filepath.Join(dir, "missing")); e != nil {
+		t.Fatal(e)
+	}
+	s, e := Open(dir, Namespace{"tls-sha256:" + strings.Repeat("a", 64), "p", "d"}, IdentityProtection(bytes.Repeat([]byte{5}, 32)), 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = ProbeUnlocked(dir); !errors.Is(e, ErrInUse) {
+		s.Close()
+		t.Fatal("a held store must be detected on every platform", e)
+	}
+	s.Close()
+	if e = ProbeUnlocked(dir); e != nil {
+		t.Fatal("a released store must probe clean", e)
 	}
 }

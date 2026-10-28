@@ -3404,9 +3404,10 @@ export async function sendMessage() {
         }
         if (text) {
             let err = "";
-            // Bound to this composer item: its draft revision and attachment set
-            // (a retry keeps both; a later identical text is a new operation).
-            const operationKey = JSON.stringify(["text", captured.tabID, scope, target, parentID, text, inputRevision, files.map(file => file.operationID || "")]);
+            // Bound to this composer item (its draft revision): a retry keeps it,
+            // even after some attachments were sent; a later identical text is a
+            // new operation.
+            const operationKey = JSON.stringify(["text", captured.tabID, scope, target, parentID, text, inputRevision]);
             try {
                 err = await sendChatOperation(captured.tabID, scope, target, text, parentID, operationIDFor(operationKey));
                 if (!err) sendOperations.delete(operationKey);

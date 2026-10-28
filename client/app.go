@@ -197,6 +197,8 @@ func (a *App) domReady(ctx context.Context) {
 // startup is called when the app starts.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// Finish identity deletions interrupted by a crash (restore or erase).
+	go guardCrash("ratchet store sweep", a.sweepRatchetStores)
 	if path, err := knownServersPath(); err == nil {
 		a.knownServers = loadKnownServersAt(path)
 	} else {

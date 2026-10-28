@@ -106,8 +106,9 @@ test("P2-7: explicit changed-identity confirmation resets the consumer trust rec
     dm.conn.request = async () => ({ unique_id: "bob", public_key: "", devices: [] });
     const consumer = consumerStub();
     await dm.attachRatchet(consumer);
-    await dm.trustNewIdentity("bob");
+    await dm.trustNewIdentity("bob", "f".repeat(64));
     assert.deepEqual(consumer.resets, ["bob"]);
+    await assert.rejects(dm.trustNewIdentity("bob"), /confirmed fingerprint/);
 });
 
 test("P2-8: the client refuses to edit or delete someone else's ratchet message", async () => {
@@ -139,7 +140,7 @@ test("Fix P2-3: an identity confirmation without a live consumer is stored durab
     const peer = "carol" + ++n;
     const dm = new DirectMessages(session("alice"), {});
     dm.conn.request = async () => ({ unique_id: peer, public_key: "", devices: [] });
-    await dm.trustNewIdentity(peer); // offline: no consumer attached
+    await dm.trustNewIdentity(peer, "c".repeat(64)); // offline: no consumer attached
     const token = (await getSealed(Stores.pins, peer)).ratchetReset;
     assert.match(token, /^[0-9a-f-]{36}$/, "intent persisted with the pin");
     assert.equal(await dm.ratchetResetPending(peer), "", "not applicable before the new key is pinned");
@@ -162,4 +163,19 @@ test("Fix P3-2: an own edit/delete is applied only once accepted", async () => {
     assert.equal(dm.conversations.get(peer).messages.find(m => m.id === "m").deleted, false, "an aborted delete is not shown");
     await consumer.projector(record({ sender: "alice", peer, logicalID: "d", purpose: "delete", reference: "m", referenceKey: "km", status: "accepted", body: {} }), { isNew: false });
     assert.equal(dm.conversations.get(peer).messages.find(m => m.id === "m").deleted, true);
+});
+
+test("Fix3 item 8: trustNewIdentity pins exactly the confirmed fingerprint", async () => {
+    const { readFileSync } = await import("node:fs");
+    const fixture = JSON.parse(readFileSync(new URL("./fixtures/interop.json", import.meta.url)));
+    const uid = fixture.unique_id;
+    const dm = new DirectMessages(session("alice"), {});
+    dm.conn.request = async () => ({ unique_id: uid, public_key: fixture.key_record, devices: [] });
+    // The server swapped the key after the user compared another fingerprint.
+    const swapped = await dm.trustNewIdentity(uid, "0".repeat(64));
+    assert.equal(swapped.trust, "changed", "an unconfirmed key is never pinned");
+    assert.equal((await getSealed(Stores.pins, uid)).signingKey, undefined);
+    const confirmed = await dm.trustNewIdentity(uid, swapped.fingerprint);
+    assert.equal(confirmed.trust, "ok");
+    assert.ok((await getSealed(Stores.pins, uid)).signingKey, "the confirmed identity is pinned");
 });

@@ -83,14 +83,15 @@ export function flush(session, dm, groups = null) {
                     continue;
                 }
                 try {
+                    let outcome = null;
                     for (let attempt = 0; ; attempt++) {
                         try {
                             if (entry.kind === "channel") {
                                 await session.send(entry.scope, entry.text, { clientMsgID: entry.id, sentAt: entry.sentAt, replyTo: entry.replyTo || 0 });
                             } else if (entry.kind === "conversation") {
-                                await groups.send(entry.conversation, entry.text, { reference: entry.id, sentAt: entry.sentAt });
+                                outcome = await groups.send(entry.conversation, entry.text, { reference: entry.id, sentAt: entry.sentAt });
                             } else {
-                                await dm.send(entry.peer, entry.text, entry.nickname || "", { id: entry.id, sentAt: entry.sentAt });
+                                outcome = await dm.send(entry.peer, entry.text, entry.nickname || "", { id: entry.id, sentAt: entry.sentAt });
                             }
                             break;
                         } catch (error) {
@@ -98,6 +99,11 @@ export function flush(session, dm, groups = null) {
                             if (!error.retryAfterMS || attempt >= 2 || !session.conn.open) throw error;
                             await new Promise(resolve => setTimeout(resolve, Math.min(error.retryAfterMS, 10000)));
                         }
+                    }
+                    if (outcome?.mismatch) {
+                        // The queued (changed) text was NOT sent: an earlier
+                        // operation with this ID was. Keep it, truthfully failed.
+                        throw Object.assign(new Error("logical_mismatch: a different message was already sent with this ID"), { code: "logical_mismatch" });
                     }
                     await remove(entry.id);
                     sent++;

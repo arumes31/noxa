@@ -933,12 +933,9 @@ func (a *App) DeleteIdentity(id string, confirmUnexported bool) string {
 		return "identity has never been exported; explicit confirmation is required"
 	}
 	// Identity deletion (only) destroys its noxa-olm-v1 namespaces and
-	// readable archive, fenced against live sessions, before the key goes.
-	if err := a.destroyRatchetNamespaces(loaded); err != nil {
-		return err.Error()
-	}
-	if err := os.Remove(path); err != nil {
-		restoreRatchetIdentity(loaded.PublicKey) // the identity survives
+	// readable archive together with the key (resumable, see
+	// deleteIdentityWithStores).
+	if err := a.deleteIdentityWithStores(loaded, path); err != nil {
 		return err.Error()
 	}
 	a.settingsMu.Lock()

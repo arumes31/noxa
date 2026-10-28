@@ -88,6 +88,9 @@ func (c *dmDeviceCache) forget(uids ...string) {
 	for _, uid := range uids {
 		delete(c.entries, uid)
 	}
+	// A fetch already in flight (verified against an older pin) must not
+	// repopulate the list after a forget.
+	c.epoch++
 }
 
 func (c *dmDeviceCache) clear() {

@@ -2,12 +2,14 @@ package durable
 
 import (
 	"bytes"
+	"errors"
 	bolt "go.etcd.io/bbolt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 type sharedEntry struct {
@@ -106,4 +108,34 @@ func (h *Handle) Close() error {
 		}
 	})
 	return h.err
+}
+
+// ProbeUnlocked reports ErrInUse when any store file in dir is locked by
+// another opener (any process, including this one). It never opens a file
+// for writing, so it is safe before a destructive operation; on every
+// platform a held store makes the probe fail (the bbolt file lock).
+func ProbeUnlocked(dir string) error {
+	entries, e := os.ReadDir(dir)
+	if os.IsNotExist(e) {
+		return nil
+	}
+	if e != nil {
+		return e
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".db") {
+			continue
+		}
+		db, e := bolt.Open(filepath.Join(dir, entry.Name()), 0600, &bolt.Options{Timeout: 150 * time.Millisecond, ReadOnly: true})
+		if errors.Is(e, bolt.ErrTimeout) {
+			return ErrInUse
+		}
+		if e != nil {
+			return e
+		}
+		if e = db.Close(); e != nil {
+			return e
+		}
+	}
+	return nil
 }

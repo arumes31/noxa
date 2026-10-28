@@ -253,7 +253,10 @@ export class DirectMessages extends EventTarget {
         if (signingKey) {
             const pinned = await this.#pin(uid);
             const signingB64 = toBase64(signingKey);
-            if (pinned?.signingKey && pinned.signingKey !== signingB64) {
+            const fingerprint = keyFingerprint(`-----BEGIN PUBLIC KEY-----\n${signingB64}\n-----END PUBLIC KEY-----\n`);
+            // After an explicit confirmation only the confirmed identity may be pinned.
+            const unconfirmed = !pinned?.signingKey && pinned?.confirmed && pinned.confirmed !== fingerprint;
+            if ((pinned?.signingKey && pinned.signingKey !== signingB64) || unconfirmed) {
                 entry.trust = Trust.changed;
                 // A changed identity is no longer the one the user verified.
                 if (pinned.verified) await putSealed(Stores.pins, uid, { ...pinned, verified: false }).catch(() => {});
@@ -329,12 +332,15 @@ export class DirectMessages extends EventTarget {
     }
 
     /** Accepts a contact's new identity after the user compared it. */
-    async trustNewIdentity(uid) {
+    async trustNewIdentity(uid, fingerprint) {
+        // Pin exactly the identity the user compared and confirmed, never
+        // whatever the server returns on the refresh below.
+        if (typeof fingerprint !== "string" || !fingerprint) throw new Error("the confirmed fingerprint is required");
         // The explicit confirmation is stored durably with the (now unpinned)
         // contact: the ratchet consumer applies the reset on its next trust
         // check even if no session is live now or the immediate reset fails.
         // A fresh token per confirmation: clearing is compare-and-clear.
-        await putSealed(Stores.pins, uid, { ratchetReset: crypto.randomUUID() });
+        await putSealed(Stores.pins, uid, { ratchetReset: crypto.randomUUID(), confirmed: fingerprint });
         this.directory.delete(uid);
         const entry = await this.devicesOf(uid, { refresh: true });
         // A live consumer drops the old pins now; the intent itself is cleared
@@ -636,7 +642,11 @@ export class DirectMessages extends EventTarget {
             this.#add(peer, nickname, { id, protocol: RATCHET_PROTOCOL, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, pending: true, queued: false });
         }
         try {
-            return await this.ratchet.send({ logicalID: id, scope: "direct", peer, body: { text, sentAt } });
+            const outcome = await this.ratchet.send({ logicalID: id, scope: "direct", peer, body: { text, sentAt } });
+            // A reused ID whose committed text differs: the ORIGINAL was sent,
+            // this text was not (the view shows the original).
+            if (outcome.reused && (outcome.record?.body?.text ?? "") !== text) outcome.mismatch = true;
+            return outcome;
         } catch (error) {
             const committed = error.committed;
             // An accepted receipt is success even if later housekeeping failed.

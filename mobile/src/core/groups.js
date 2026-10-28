@@ -511,7 +511,9 @@ export class Groups extends EventTarget {
         try {
             // Returns the typed {record, receipt, reused}; receipt.message_id
             // is an opaque transport UUID, NOT a legacy numeric message ID.
-            return await this.ratchet.send({ logicalID: reference, scope: "group", conversation: id, body: { text, sentAt } });
+            const outcome = await this.ratchet.send({ logicalID: reference, scope: "group", conversation: id, body: { text, sentAt } });
+            if (outcome.reused && (outcome.record?.body?.text ?? "") !== text) outcome.mismatch = true;
+            return outcome;
         } catch (error) {
             const original = error.committed;
             // An accepted receipt is success even if later housekeeping failed.

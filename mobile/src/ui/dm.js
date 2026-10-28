@@ -150,7 +150,7 @@ export function renderDM(root, peer) {
             if (contact.trust === Trust.changed) {
                 setNotice(t("dm.identityChanged", { name }), h("button", { class: "btn", onclick: async () => {
                     const ok = await sheet(t("dm.trustTitle"), t("dm.trustBody", { name }), [{ label: t("dm.trust"), value: true, primary: true }, { label: t("link.cancel"), value: false }]);
-                    if (ok) { await dm.trustNewIdentity(peer); checkTrust(); }
+                    if (ok) { await dm.trustNewIdentity(peer, contact.fingerprint); checkTrust(); }
                 } }, t("dm.trust")));
             } else if (!contact.devices.length) {
                 setNotice(t("dm.unavailable", { name }));

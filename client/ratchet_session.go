@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"noxa/internal/e2ee"
 	"os"
 	"path/filepath"
 	"strings"
@@ -448,10 +449,16 @@ func (m *connManager) sendRatchetGroup(groupID, reference, text string) (Convers
 	if err != nil {
 		return ConversationSendResult{}, err
 	}
-	out, err := c.send(ratchetIntent{LogicalID: reference, Scope: "group", Conversation: groupID, Purpose: "chat", Body: ratchetChatBody(text)})
+	intent := ratchetIntent{LogicalID: reference, Scope: "group", Conversation: groupID, Purpose: "chat", Body: ratchetChatBody(text)}
+	out, err := c.send(intent)
 	out, ok := ratchetSent(out, err)
 	if !ok {
 		return ConversationSendResult{}, ratchetFailure(err)
+	}
+	if out.Reused && !ratchetSameContent(out.Record, intent) {
+		// The committed original stays authoritative; the changed text was
+		// NOT sent under this reference.
+		return ConversationSendResult{}, ratchetFailure(&ratchetError{Code: "logical_mismatch", Committed: &out})
 	}
 	return ConversationSendResult{Protocol: ratchetProtocol, Transport: out.Receipt.MessageID, Key: out.Record.Key, LogicalID: out.Record.LogicalID,
 		Status: out.Receipt.State, Reused: out.Reused, Record: &out.Record}, nil
@@ -709,26 +716,45 @@ var ratchetPrompts sync.Map // manager+contact -> confirmation in flight
 // promptRatchetIdentity asks the user (once at a time per contact) to confirm
 // a changed contact identity that blocked a new-protocol operation. Only the
 // explicit confirmation pins the new key and stores the ratchet reset intent.
+// A change the user declined (that exact new fingerprint) is not re-prompted
+// for 10 minutes; a transient lookup failure is not a decline.
 func (m *connManager) promptRatchetIdentity(uid string) {
+	if m.recentlyDeclined(uid) {
+		m.emitRatchetTrust(uid, "blocked", nil)
+		return
+	}
 	key := fmt.Sprintf("%p\x00%s", m, uid)
-	if v, busy := ratchetPrompts.LoadOrStore(key, time.Time{}); busy {
-		// In flight, or declined recently: do not re-prompt on every
-		// reconnect or send; the notice stays truthful.
-		if at, ok := v.(time.Time); !ok || at.IsZero() || time.Since(at) < 10*time.Minute {
-			m.emitRatchetTrust(uid, "blocked", nil)
-			return
-		}
-		ratchetPrompts.Store(key, time.Time{})
+	if _, busy := ratchetPrompts.LoadOrStore(key, true); busy {
+		return
 	}
 	m.emitRatchetTrust(uid, "confirmation_required", nil)
 	go guardCrash("ratchet identity prompt", func() {
+		defer ratchetPrompts.Delete(key)
 		if _, result := m.lookupPeerPubKey(uid); result == peerKeyFound {
 			m.forgetDMDevices(uid)
-			ratchetPrompts.Delete(key)
-			return
 		}
-		ratchetPrompts.Store(key, time.Now()) // declined or unanswered
 	})
+}
+
+// recentlyDeclined reports whether the contact's currently pending new
+// identity was explicitly declined within the last 10 minutes.
+func (m *connManager) recentlyDeclined(uid string) bool {
+	path, _, err := m.peerPinPath(uid)
+	if err != nil {
+		return false
+	}
+	dmTrustMu.Lock()
+	pin, err := readDMPin(path)
+	dmTrustMu.Unlock()
+	if err != nil || pin.Pending == "" {
+		return false
+	}
+	record, err := e2ee.ParseKeyRecord(pin.Pending, uid)
+	if err != nil {
+		return false
+	}
+	v, ok := dmDeclined.Load(path + "\x00" + record.Fingerprint())
+	return ok && time.Since(v.(time.Time)) < 10*time.Minute
 }
 
 // ratchetStoreDir is the protected store directory of one identity under a
@@ -752,19 +778,33 @@ func defaultRatchetBase() (string, error) {
 // session may open them again in this process.
 var ratchetDeleted sync.Map
 
-// destroyRatchetNamespaces runs on IDENTITY DELETION only (a normal sign-out
-// or disconnect keeps the namespaces and readable archive). It fences new
-// sessions, stops and awaits every live session of the identity, then removes
-// its protected stores. A store still held (another process) fails the
-// deletion explicitly.
+// destroyRatchetNamespaces destroys an identity's stores without removing its
+// identity file (tests; DeleteIdentity uses deleteIdentityWithStores).
 func (a *App) destroyRatchetNamespaces(id *identity) error {
+	return a.deleteIdentityWithStores(id, "")
+}
+
+// deleteIdentityWithStores runs on IDENTITY DELETION only (a sign-out or
+// disconnect keeps the namespaces and readable archive). Steps, serialised
+// with every store open of this identity:
+//
+//  1. fence new sessions and stop + await this process's live sessions;
+//  2. probe every store for a lock held by any other opener (all platforms);
+//     a held store fails the deletion with nothing changed;
+//  3. rename every store directory to a tombstone (the pending-wipe record);
+//  4. remove the identity file — the commit point;
+//  5. erase the tombstones (retried by the sweep at startup and before the
+//     next deletion if erasing fails).
+//
+// A failure before the commit point rolls back (renames back, fence lifted,
+// sessions restarted). A crash before it leaves tombstones whose identity
+// still exists: the sweep restores them; after it, the sweep erases them.
+func (a *App) deleteIdentityWithStores(id *identity, identityPath string) error {
 	unlock := lockRatchetIdentity(id.PublicKey)
 	defer unlock()
+	bases := a.ratchetBases()
+	sweepRatchetTombstones(bases)
 	ratchetDeleted.Store(id.PublicKey, true)
-	bases := map[string]bool{}
-	if base, err := defaultRatchetBase(); err == nil {
-		bases[base] = true
-	}
 	a.tabsMu.Lock()
 	managers := make([]*connManager, 0, len(a.tabs))
 	for _, tab := range a.tabs {
@@ -773,70 +813,179 @@ func (a *App) destroyRatchetNamespaces(id *identity) error {
 		}
 	}
 	a.tabsMu.Unlock()
+	var stopped []*connManager
 	for _, cm := range managers {
 		cm.mu.Lock()
 		var s *ratchetSession
 		if cm.id != nil && cm.id.PublicKey == id.PublicKey {
 			s = cm.takeRatchetLocked()
 		}
-		if cm.ratchetTest != nil && cm.ratchetTest.Dir != "" {
-			bases[cm.ratchetTest.Dir] = true
-		}
 		cm.mu.Unlock()
 		if s != nil {
 			s.stop()
+			stopped = append(stopped, cm)
 		}
 	}
-	// All-or-nothing: rename every store directory to a tombstone first (a
-	// store held by another process makes the rename fail, nothing is lost
-	// and the identity stays usable), then delete the tombstones.
-	var moved []string
+	type move struct{ dir, tomb string }
+	var moved []move
+	rollback := func(cause error) error {
+		var lost []string
+		for _, mv := range moved {
+			if err := os.Rename(mv.tomb, mv.dir); err != nil {
+				lost = append(lost, mv.tomb)
+			}
+		}
+		restoreRatchetIdentity(id.PublicKey) // the identity survives
+		for _, cm := range stopped {
+			cm.mu.Lock()
+			conn := cm.conn
+			cm.mu.Unlock()
+			go guardCrash("ratchet restart", func() { cm.startRatchetRecorded(conn) })
+		}
+		if len(lost) > 0 {
+			return fmt.Errorf("%w; the store could not be restored yet and is restored at next start", cause)
+		}
+		return cause
+	}
+	// Our own sessions are stopped; any remaining lock belongs to another
+	// opener (another process): fail before anything is renamed.
+	for base := range bases {
+		if err := durable.ProbeUnlocked(ratchetStoreDir(base, id)); err != nil {
+			return rollback(fmt.Errorf("secure message store of this identity is in use: %w", err))
+		}
+	}
 	for base := range bases {
 		dir := ratchetStoreDir(base, id)
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			continue
 		}
-		tomb := dir + ".deleted-" + newClientMsgID()
+		tomb := dir + ratchetTombstone + newClientMsgID()
 		if err := os.Rename(dir, tomb); err != nil {
-			for _, t := range moved {
-				_ = os.Rename(t, t[:strings.LastIndex(t, ".deleted-")])
-			}
-			ratchetDeleted.Delete(id.PublicKey) // the identity survives
-			return fmt.Errorf("secure message store of this identity is in use: %w", err)
+			return rollback(fmt.Errorf("secure message store of this identity is in use: %w", err))
 		}
-		moved = append(moved, tomb)
+		moved = append(moved, move{dir, tomb})
 	}
-	for _, t := range moved {
-		if err := os.RemoveAll(t); err != nil {
-			log.Printf("ratchet: deleted store remains as an unreachable tombstone: %v", err)
+	if identityPath != "" {
+		if err := os.Remove(identityPath); err != nil {
+			return rollback(err)
+		}
+	}
+	for _, mv := range moved {
+		if err := os.RemoveAll(mv.tomb); err != nil {
+			log.Printf("ratchet: erasing a deleted store failed, retried at next start: %v", err)
+			go guardCrash("ratchet wipe retry", func() {
+				time.Sleep(30 * time.Second)
+				sweepRatchetTombstones(map[string]bool{filepath.Dir(mv.tomb): true})
+			})
 		}
 	}
 	return nil
+}
+
+const ratchetTombstone = ".deleted-"
+
+// ratchetBases lists the store bases in use (production + test overrides).
+func (a *App) ratchetBases() map[string]bool {
+	bases := map[string]bool{}
+	if base, err := defaultRatchetBase(); err == nil {
+		bases[base] = true
+	}
+	a.tabsMu.Lock()
+	for _, tab := range a.tabs {
+		if tab != nil && tab.cm != nil {
+			tab.cm.mu.Lock()
+			if cfg := tab.cm.ratchetTest; cfg != nil && cfg.Dir != "" {
+				bases[cfg.Dir] = true
+			}
+			tab.cm.mu.Unlock()
+		}
+	}
+	a.tabsMu.Unlock()
+	return bases
+}
+
+// sweepRatchetTombstones finishes interrupted deletions: a tombstone whose
+// identity still exists (crash before the commit point, or a failed
+// rollback) is restored when its live directory is absent; any other
+// tombstone is erased.
+func sweepRatchetTombstones(bases map[string]bool) {
+	live := map[string]bool{}
+	if dir, err := identitiesDir(); err == nil {
+		for _, id := range identityIDs(dir) {
+			if path, err := identityPathFor(id); err == nil {
+				if loaded, err := loadIdentityAtStrict(path); err == nil {
+					live[filepath.Base(ratchetStoreDir("", loaded))] = true
+				}
+			}
+		}
+	}
+	for base := range bases {
+		entries, err := os.ReadDir(base)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			i := strings.Index(name, ratchetTombstone)
+			if !e.IsDir() || i <= 0 {
+				continue
+			}
+			tomb, dir := filepath.Join(base, name), filepath.Join(base, name[:i])
+			if live[name[:i]] {
+				if _, err := os.Stat(dir); os.IsNotExist(err) {
+					if err := os.Rename(tomb, dir); err != nil {
+						log.Printf("ratchet: restoring an interrupted deletion failed: %v", err)
+					}
+					continue
+				}
+			}
+			if err := os.RemoveAll(tomb); err != nil {
+				log.Printf("ratchet: erasing a deleted store failed: %v", err)
+			}
+		}
+	}
+}
+
+// SweepRatchetStores runs once at startup.
+func (a *App) sweepRatchetStores() {
+	a.identityMu.Lock()
+	defer a.identityMu.Unlock()
+	sweepRatchetTombstones(a.ratchetBases())
 }
 
 // restoreRatchetIdentity lifts the deletion fence (deletion failed, or the
 // same identity was imported again).
 func restoreRatchetIdentity(publicKey string) { ratchetDeleted.Delete(publicKey) }
 
-// startRatchetRecorded starts the session and records a failure for the
-// outbox (truthful blocked state) and bounded background retries.
+// startRatchetRecorded starts the session of conn (single-flight per
+// connection) and records a failure for the outbox (truthful blocked state,
+// bounded background retries). A start that finishes for a replaced
+// connection kicks the start of the current one, so a reconnect during a slow
+// start never leaves the new connection without a session.
 func (m *connManager) startRatchetRecorded(conn net.Conn) {
 	m.mu.Lock()
-	if m.ratchetStarting || m.conn != conn {
+	if conn == nil || m.ratchetStartingConn == conn || m.conn != conn {
 		m.mu.Unlock()
 		return
 	}
-	m.ratchetStarting, m.ratchetStartAt = true, time.Now()
+	m.ratchetStartingConn, m.ratchetStartAt = conn, time.Now()
 	m.mu.Unlock()
 	err := m.startRatchet(conn)
 	m.mu.Lock()
-	m.ratchetStarting = false
-	if m.conn == conn {
+	if m.ratchetStartingConn == conn {
+		m.ratchetStartingConn = nil
+	}
+	current := m.conn
+	kick := current != nil && current != conn && m.ratchetSess == nil && m.ratchetStartingConn == nil && m.ratchetTest != nil
+	if current == conn {
 		m.ratchetStartErr = err
 	}
 	m.mu.Unlock()
-	if err != nil {
+	if err != nil && current == conn {
 		log.Printf("ratchet session unavailable: %v", err)
+	}
+	if kick {
+		go guardCrash("ratchet start", func() { m.startRatchetRecorded(current) })
 	}
 }
 
@@ -845,7 +994,7 @@ func (m *connManager) startRatchetRecorded(conn net.Conn) {
 func (m *connManager) ratchetBlockedReason() string {
 	m.mu.Lock()
 	err, conn := m.ratchetStartErr, m.conn
-	retry := err != nil && conn != nil && !m.ratchetStarting && time.Since(m.ratchetStartAt) > 30*time.Second
+	retry := err != nil && conn != nil && m.ratchetStartingConn == nil && time.Since(m.ratchetStartAt) > 30*time.Second
 	m.mu.Unlock()
 	if err == nil {
 		return ""
