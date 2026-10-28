@@ -32,7 +32,7 @@ for (const phase of ['identity validation', 'metadata update']) {
  const sources = {
   './core/chat-session.js': {ChatSession},
   './core/direct.js': {DirectMessages}, './core/calls.js': {Calls:Empty}, './core/groups.js':{Groups:Empty}, './core/voice.js':{Voice:Empty},
-  './core/connection.js':{Connection:{open:async()=>{if(opens++===0)return conn;const next=new FakeConnection();connections.push(next);return next}}}, './core/frame.js':{Msg:{}}, './core/olm-directory.js':{signBundle:()=>({})}, './core/olm-reset.js':{signReset:()=>({})}, './core/link-binding.js':{verifyLinkBinding:()=>''}, './core/ratchet-consumer.js':{RatchetConsumer:class{},connectionTransport:()=>({})}, './core/crypto.js':{generateIdentity},
+  './core/connection.js':{Connection:{open:async()=>{if(opens++===0)return conn;const next=new FakeConnection();connections.push(next);return next}}}, './core/frame.js':{Msg:{}}, './core/olm-directory.js':{signBundle:()=>({})}, './core/olm-reset.js':{signReset:()=>({})}, './core/link-binding.js':{verifyLinkBinding:()=>'',announcedBinding:()=>''}, './core/ratchet-consumer.js':{RatchetConsumer:class{},connectionTransport:()=>({})}, './core/crypto.js':{generateIdentity},
   './core/device.js':{signIn:async()=>({unique_id:'alice',device_id:'phone',client_id:'c1'})},
   './core/identity-store.js':{assertIdentityFence:async()=>{if(phase==='identity validation')await holdOnce()},beginIdentity:none,clearIdentity:none,loadIdentity:none,saveIdentity:none,updateMeta:async()=>{if(phase==='metadata update')await holdOnce()}},
   './core/outbox.js':{enqueue:none,flush:async()=>{},showPending:async()=>{},waitingCount:async()=>0},
@@ -98,7 +98,7 @@ for (const existingGuest of [false, true]) {
   const sources = {
    './core/chat-session.js': {ChatSession},
    './core/direct.js': {DirectMessages: class {}}, './core/calls.js': {Calls:class {}}, './core/groups.js': {Groups:class {}}, './core/voice.js': {Voice:class {}},
-   './core/connection.js': {Connection:{open:async()=>({close:none})}}, './core/frame.js':{Msg:{}}, './core/olm-directory.js':{signBundle:()=>({})}, './core/olm-reset.js':{signReset:()=>({})}, './core/link-binding.js':{verifyLinkBinding:()=>''}, './core/ratchet-consumer.js':{RatchetConsumer:class{},connectionTransport:()=>({})}, './core/crypto.js': {generateIdentity:()=>freshIdentity},
+   './core/connection.js': {Connection:{open:async()=>({close:none})}}, './core/frame.js':{Msg:{}}, './core/olm-directory.js':{signBundle:()=>({})}, './core/olm-reset.js':{signReset:()=>({})}, './core/link-binding.js':{verifyLinkBinding:()=>'',announcedBinding:()=>''}, './core/ratchet-consumer.js':{RatchetConsumer:class{},connectionTransport:()=>({})}, './core/crypto.js': {generateIdentity:()=>freshIdentity},
    './core/device.js': {signIn:async(conn,identity)=>{attempted=identity;throw new Error("invalid server password")}},
    './core/identity-store.js': {assertIdentityFence: none, beginIdentity: ()=>({generation:1,active:true}), clearIdentity:()=>writes.push("clear"),loadIdentity:none,saveIdentity:()=>writes.push("save"),updateMeta:()=>writes.push("update")},
    './core/outbox.js': {enqueue:none,flush:none,showPending:none,waitingCount:none},
@@ -139,7 +139,7 @@ test('guest snapshot received while saving identity subscribes to channels', asy
  const sources = {
   './core/chat-session.js': {ChatSession},
   './core/direct.js': {DirectMessages}, './core/calls.js': {Calls:Empty}, './core/groups.js':{Groups:Empty}, './core/voice.js':{Voice:Empty},
-  './core/connection.js':{Connection:{open:async()=>conn}}, './core/frame.js':{Msg:{}}, './core/olm-directory.js':{signBundle:()=>({})}, './core/olm-reset.js':{signReset:()=>({})}, './core/link-binding.js':{verifyLinkBinding:()=>''}, './core/ratchet-consumer.js':{RatchetConsumer:class{},connectionTransport:()=>({})}, './core/crypto.js':{generateIdentity},
+  './core/connection.js':{Connection:{open:async()=>conn}}, './core/frame.js':{Msg:{}}, './core/olm-directory.js':{signBundle:()=>({})}, './core/olm-reset.js':{signReset:()=>({})}, './core/link-binding.js':{verifyLinkBinding:()=>'',announcedBinding:()=>''}, './core/ratchet-consumer.js':{RatchetConsumer:class{},connectionTransport:()=>({})}, './core/crypto.js':{generateIdentity},
   './core/device.js':{signIn:async()=>({unique_id:'alice',device_id:'phone',client_id:'c1'})},
   './core/identity-store.js':{assertIdentityFence:none,beginIdentity:none,clearIdentity:none,loadIdentity:none,saveIdentity:async()=>{entered();await blocked},updateMeta:none},
   './core/outbox.js':{enqueue:none,flush:async()=>{},showPending:async()=>{},waitingCount:async()=>0},
@@ -167,7 +167,7 @@ test('foreground and restored-page events probe an apparently online session', a
  const sources={
   './core/chat-session.js':{ChatSession},'./core/direct.js':{DirectMessages:class{}},
   './core/calls.js':{Calls:class{}},'./core/groups.js':{Groups:class{}},'./core/voice.js':{Voice:class{}},
-  './core/connection.js':{Connection:class{}},'./core/frame.js':{Msg:{}}, './core/olm-directory.js':{signBundle:()=>({})}, './core/olm-reset.js':{signReset:()=>({})}, './core/link-binding.js':{verifyLinkBinding:()=>''}, './core/ratchet-consumer.js':{RatchetConsumer:class{},connectionTransport:()=>({})}, './core/crypto.js':{generateIdentity},'./core/device.js':{signIn:none},
+  './core/connection.js':{Connection:class{}},'./core/frame.js':{Msg:{}}, './core/olm-directory.js':{signBundle:()=>({})}, './core/olm-reset.js':{signReset:()=>({})}, './core/link-binding.js':{verifyLinkBinding:()=>'',announcedBinding:()=>''}, './core/ratchet-consumer.js':{RatchetConsumer:class{},connectionTransport:()=>({})}, './core/crypto.js':{generateIdentity},'./core/device.js':{signIn:none},
   './core/identity-store.js':{assertIdentityFence:none,beginIdentity:none,clearIdentity:none,loadIdentity:none,saveIdentity:none,updateMeta:none},
   './core/outbox.js':{enqueue:none,flush:none,showPending:none,waitingCount:none},
   './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:none},

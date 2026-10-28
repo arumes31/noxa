@@ -2,11 +2,11 @@
 // authenticated control connection and projects its authoritative archive into
 // the desktop's direct-message log and live events.
 //
-// Production activation is OFF: a session exists only when a test explicitly
-// sets connManager.ratchetTest (the native counterpart of the PWA's
-// enableRatchetTestSession). Once a session is configured there is no legacy
-// fallback for direct/group text, edits or deletes of new records: a missing
-// or failed consumer fails the operation explicitly.
+// Every authenticated session uses it (connManager.ratchetDefault, set at
+// authentication); ratchetCfg only overrides the configuration in tests.
+// There is no legacy fallback for direct/group text, edits or deletes: a
+// missing or failed consumer (old server, guest session, unbound store)
+// fails the operation explicitly. Legacy NaCl records stay readable.
 package main
 
 import (
@@ -33,8 +33,9 @@ import (
 	"noxa/internal/netproto"
 )
 
-// ratchetTestConfig explicitly enables the consumer for one connManager.
-type ratchetTestConfig struct {
+// ratchetConfig configures the consumer of one connManager; the zero value
+// is the production configuration.
+type ratchetConfig struct {
 	Dir string // protected store directory (one bbolt file per namespace)
 	// Binding overrides the server binding when the transport has no pinned
 	// TLS fingerprint (in-memory test transports). With TLS the binding is
@@ -90,6 +91,15 @@ func sharedRatchetEngine() (*ratchet.Engine, error) {
 
 var errRatchetUnavailable = errors.New("secure messaging (noxa-olm-v1) is not ready for this session; nothing was sent")
 
+// errRatchetServerOutdated: the server does not offer noxa-olm-v1.
+var errRatchetServerOutdated = errors.New("this server needs an update for secure messaging; direct and group messages cannot be sent until it is updated")
+
+// errRatchetGuest: a guest session has no device identity for secure messaging.
+var errRatchetGuest = errors.New("sign in with an identity to send direct and group messages")
+
+// errLegacyReadOnly: messages from before the upgrade stay readable only.
+var errLegacyReadOnly = errors.New("messages from before secure messaging was upgraded stay readable but can no longer be edited or deleted for others")
+
 var errRatchetIdentityDeleted = errors.New("secure messaging is unavailable: this identity's secure message store was deleted")
 
 var ratchetIdentityLocks sync.Map // store key (ratchetStoreKey) -> *sync.Mutex
@@ -113,7 +123,11 @@ func lockRatchetStore(key string) func() {
 func (m *connManager) ratchetConfigured() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.ratchetTest != nil
+	return m.ratchetConfiguredLocked()
+}
+
+func (m *connManager) ratchetConfiguredLocked() bool {
+	return m.ratchetCfg != nil || m.ratchetDefault
 }
 
 // ratchetConsumerOn returns the consumer of the CURRENT session bound to conn
@@ -134,12 +148,24 @@ func (m *connManager) ratchetConsumerOn(conn net.Conn) (*ratchetConsumer, error)
 // identity); a session started for a replaced connection stops itself.
 func (m *connManager) startRatchet(conn net.Conn) error {
 	m.mu.Lock()
-	cfg, epoch, identity := m.ratchetTest, m.connEpoch, m.id
+	cfg, epoch, identity := m.ratchetCfg, m.connEpoch, m.id
 	uid, device, fingerprint := m.uniqueID, m.deviceID, m.fingerprint
 	current := conn != nil && m.conn == conn && !m.closed
+	enabled, guest, supported := m.ratchetDefault, m.isGuest, m.supportsOlm
 	m.mu.Unlock()
 	if cfg == nil {
-		return nil
+		if !enabled {
+			return nil
+		}
+		// The production configuration; a test override skips the
+		// capability check (its in-memory transport has no handshake).
+		switch {
+		case guest:
+			return errRatchetGuest
+		case !supported:
+			return errRatchetServerOutdated
+		}
+		cfg = &ratchetConfig{}
 	}
 	if !current || identity == nil || uid == "" || device == "" {
 		return errRatchetUnavailable
@@ -415,8 +441,19 @@ func ratchetFailure(err error) error {
 	if errors.As(err, &r) && r.Committed != nil && r.Committed.Receipt == nil && r.Code != "clock_skew" {
 		return fmt.Errorf("secure delivery is not confirmed yet (%s); the original message stays queued and is resolved exactly", r.Code)
 	}
-	if code := ratchetCode(err); code != "" {
+	switch code := ratchetCode(err); code {
+	case "":
+	case "exhausted":
+		// A device of the conversation has no secure-messaging keys (an old
+		// app, or one that never signed in since the upgrade): never omitted.
+		return fmt.Errorf("secure send failed: %s — a device in this conversation does not support secure messaging yet; it needs an updated noXa app (and to sign in once) before messages can be sent. Nothing was sent", code)
+	case "device_unavailable":
+		return fmt.Errorf("secure send failed: %s — that device is not available for secure messaging", code)
+	default:
 		return fmt.Errorf("secure send failed: %s", code)
+	}
+	if errors.Is(err, errRatchetServerOutdated) || errors.Is(err, errRatchetGuest) {
+		return err
 	}
 	return fmt.Errorf("secure send failed: %w", err)
 }
@@ -785,8 +822,8 @@ func ratchetBindingFor(fingerprint, override string) (string, error) {
 func (m *connManager) ratchetServerBinding() (string, error) {
 	m.mu.Lock()
 	fingerprint, override := m.fingerprint, ""
-	if m.ratchetTest != nil {
-		override = m.ratchetTest.Binding
+	if m.ratchetCfg != nil {
+		override = m.ratchetCfg.Binding
 	}
 	m.mu.Unlock()
 	return ratchetBindingFor(fingerprint, override)
@@ -841,7 +878,7 @@ func (m *connManager) startRatchetRecorded(conn net.Conn) {
 		m.ratchetStartingConn = nil
 	}
 	current := m.conn
-	kick := current != nil && current != conn && m.ratchetSess == nil && m.ratchetStartingConn == nil && m.ratchetTest != nil
+	kick := current != nil && current != conn && m.ratchetSess == nil && m.ratchetStartingConn == nil && m.ratchetConfiguredLocked()
 	if current == conn {
 		m.ratchetStartErr = err
 	}

@@ -10,7 +10,7 @@ import { Connection } from "./core/connection.js";
 import { Msg } from "./core/frame.js";
 import { signBundle } from "./core/olm-directory.js";
 import { signReset } from "./core/olm-reset.js";
-import { verifyLinkBinding } from "./core/link-binding.js";
+import { announcedBinding, verifyLinkBinding } from "./core/link-binding.js";
 import { RatchetConsumer, connectionTransport } from "./core/ratchet-consumer.js";
 import { generateIdentity } from "./core/crypto.js";
 import { signIn } from "./core/device.js";
@@ -121,26 +121,36 @@ export async function forgetDevice(fence) {
     emit("signedout");
 }
 
-// --- noxa-olm-v1 consumer (inactive in production) -----------------------
+// --- noxa-olm-v1 consumer ------------------------------------------------
 //
-// No capability advertises admission yet; production activation stays OFF
-// until the final cutover. Only an explicitly enabled test session constructs
-// a consumer, and then every direct/group send uses it with no legacy
-// fallback. The server binding is never supplied here: it comes only from the
-// desktop-signed device-link statement stored with this device (link-binding.js).
-let ratchetTest = null;
+// Every signed-in (non-guest) session uses noxa-olm-v1 for direct and group
+// messages, with no legacy fallback: when it cannot run (old server, device
+// without a desktop-signed binding, changed server certificate, store
+// failure) sending is blocked with one explanation (app.ratchetError) and
+// legacy history stays readable. The server binding is never supplied here:
+// it comes only from the desktop-signed device-link statement stored with
+// this device (link-binding.js).
+const RATCHET_CAPABILITIES = ["noxa-olm-admission-v1", "noxa-olm-directory-v1"];
+let ratchetOptions = { pollMS: 5000, modules: null };
 app.ratchet = null;
-export function enableRatchetTestSession(options = null) {
-    ratchetTest = options ? { pollMS: options.pollMS || 5000, modules: options.modules || null } : null;
+app.ratchetError = null;
+/** Test-only tuning: poll period and store/core factory injection. */
+export function configureRatchetForTests(options = null) {
+    ratchetOptions = { pollMS: options?.pollMS || 5000, modules: options?.modules || null };
 }
 
-async function openRatchet(session, fence, isCurrent, meta) {
+async function openRatchet(session, fence, isCurrent, meta, auth = {}) {
     // Re-verified on every open against this device's keys and the signed-in
     // account: missing or mismatching statements block secure messaging.
     const binding = verifyLinkBinding(meta?.linkBinding, { identity: session.identity, principal: session.uniqueID, approverFingerprint: meta?.bindingAnchor || "" });
+    // A server certificate that changed since the desktop signed the binding
+    // (rotation) blocks too: the device must be linked again from a desktop
+    // that accepted the new certificate. The announced value only detects.
+    const announced = announcedBinding(auth?.tls_fingerprint);
+    if (announced && announced !== binding) throw Object.assign(new Error("the server's certificate changed since this device was linked"), { code: "server_binding_rotated" });
     // modules: test-only injection of the store/core factories (lifecycle tests).
-    const [{ openRatchetStore }, { createRatchetCore }] = ratchetTest.modules
-        ? await ratchetTest.modules()
+    const [{ openRatchetStore }, { createRatchetCore }] = ratchetOptions.modules
+        ? await ratchetOptions.modules()
         : await Promise.all([import("./core/ratchet-store.js"), import("./core/ratchet-core.js")]);
     const namespace = { server: binding, principal: session.uniqueID, device: session.deviceID };
     const store = await openRatchetStore(namespace);
@@ -199,7 +209,7 @@ function pollRatchet(owner, session) {
         owner.dm?.showQuarantined(result?.quarantined || []).catch(() => {});
         owner.groups?.showQuarantined(result?.quarantined || []);
     }).catch(() => {}).finally(() => {
-        if (app.ratchet === owner && app.session === session && !owner.consumer.closed) owner.timer = setTimeout(tick, ratchetTest?.pollMS || 5000);
+        if (app.ratchet === owner && app.session === session && !owner.consumer.closed) owner.timer = setTimeout(tick, ratchetOptions.pollMS);
     });
     tick();
 }
@@ -236,7 +246,7 @@ export async function connect({ guest = null, fence } = {}) {
     }
     const session = new ChatSession(conn, identity, auth, { deferIncoming: true });
     let activated = false;
-    let ratchet = null;
+    let ratchet = null, ratchetError = null;
     // Subscribing delivers a channel's chat and keys without joining it;
     // channels the user unsubscribed from in Servers stay unsubscribed.
     const subscribeMissing = () => {
@@ -256,10 +266,22 @@ export async function connect({ guest = null, fence } = {}) {
         }
         await assertIdentityFence(fence);
         if (session.initializationError) throw session.initializationError;
-        if (ratchetTest && !guest && !meta.guest) {
-            let published = false;
-            ratchet = await openRatchet(session, fence, () => attempt === connectionGeneration && (!published || app.session === session) && session.conn.open !== false, meta);
-            ratchet.publish = () => { published = true; };
+        if (!guest && !meta.guest) {
+            const capabilities = session.capabilities instanceof Set ? session.capabilities : new Set();
+            if (!RATCHET_CAPABILITIES.every(c => capabilities.has(c))) {
+                ratchetError = Object.assign(new Error("this server needs an update for secure messaging"), { code: "server_outdated" });
+            } else {
+                try {
+                    let published = false;
+                    ratchet = await openRatchet(session, fence, () => attempt === connectionGeneration && (!published || app.session === session) && session.conn.open !== false, meta, auth);
+                    ratchet.publish = () => { published = true; };
+                } catch (error) {
+                    // Blocks secure sending with an explanation; the session
+                    // (channels, legacy history) continues.
+                    checkAttempt();
+                    ratchetError = error.code ? error : Object.assign(error, { code: "secure_unavailable" });
+                }
+            }
         }
         if (conn.open === false) throw new Error("connection closed during session initialization");
         checkAttempt();
@@ -277,6 +299,9 @@ export async function connect({ guest = null, fence } = {}) {
         ratchet.publish();
         app.ratchet = ratchet;
     }
+    app.ratchetError = ratchetError;
+    // One in-app explanation of the upgrade (shown once by the UI).
+    if (!guest && !meta.guest) emit("secure-messaging", { active: !!ratchet, reason: ratchetError?.code || "" });
     app.identityFence = fence;
     app.meta = meta;
     activated = true;
@@ -298,6 +323,11 @@ export async function connect({ guest = null, fence } = {}) {
     app.dm?.close();
     const dm = new DirectMessages(session, app.meta);
     dm.shareActivity = activityShared;
+    // No legacy send for a signed-in session: without a consumer, sends fail
+    // with the blocking reason.
+    dm.secureRequired = guest || meta.guest
+        ? () => Object.assign(new Error("sign in with an identity to send direct and group messages"), { code: "guest_session" })
+        : () => app.ratchetError || Object.assign(new Error("secure messaging is not ready"), { code: "secure_unavailable" });
     if (ratchet) {
         // Attached before dm/groups are published, so no send can go legacy.
         ratchet.dm = dm;
@@ -312,6 +342,7 @@ export async function connect({ guest = null, fence } = {}) {
     app.groups?.close();
     app.groups = new Groups(session, dm);
     app.groups.shareActivity = activityShared;
+    app.groups.secureRequired = dm.secureRequired;
     if (ratchet) {
         ratchet.groups = app.groups;
         app.groups.attachRatchet(ratchet.consumer).catch(() => {});

@@ -283,7 +283,7 @@ func (a *App) ratchetBases() map[string]bool {
 	for _, tab := range a.tabs {
 		if tab != nil && tab.cm != nil {
 			tab.cm.mu.Lock()
-			if cfg := tab.cm.ratchetTest; cfg != nil && cfg.Dir != "" {
+			if cfg := tab.cm.ratchetCfg; cfg != nil && cfg.Dir != "" {
 				bases[cfg.Dir] = true
 			}
 			tab.cm.mu.Unlock()

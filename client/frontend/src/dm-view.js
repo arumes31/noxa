@@ -24,7 +24,7 @@ import { showCallHistory, startPrivateCall, startPrivateVideoCall } from "./priv
 import { encryptionBadge } from "./message-encryption.js";
 import { avatarColor } from "./workspace-ui.js";
 import { setSafeImage } from "./safe-media.js";
-import { promptDialog } from "./modal.js";
+import { confirmDialog, promptDialog } from "./modal.js";
 import { mountContextMenu, closeContextMenu } from "./context-menu.js";
 import {
     conversationEncryption, daySeparators, filterConversations, mergeDirect, presenceLine, presenceOf,
@@ -358,6 +358,7 @@ function renderThread() {
     const peerKey = group ? null : peerKeyState(selected.uid);
     // The header claim follows the connection's active secure path.
     const secure = secureState();
+    if (secure !== null) maybeSecureNotice();
     const encryption = conversationEncryption({ group, peerKey, last: entry?.last || null, secure });
     ui.pill.dataset.encryption = encryption.kind;
     ui.pill.innerHTML = icon(encryption.kind);
@@ -372,6 +373,19 @@ function renderThread() {
         typing.style.setProperty("--dm-typing-color", avatarColor(selected.uid));
     }
     observeDays();
+}
+
+// maybeSecureNotice explains the secure-messaging upgrade once (en/de), the
+// first time a conversation shows its encryption state.
+let secureNoticeOpen = false;
+function maybeSecureNotice() {
+    const settings = V().state.settings;
+    if (!settings || settings.secure_notice_seen || secureNoticeOpen) return;
+    secureNoticeOpen = true;
+    settings.secure_notice_seen = true;
+    Promise.resolve(app().SaveSettings(settings)).catch(() => {});
+    Promise.resolve(confirmDialog({ title: t("security.secureNoticeTitle"), message: t("security.secureNoticeBody"), confirmLabel: t("common.ok"), cancelLabel: t("common.close") }))
+        .catch(() => {}).finally(() => { secureNoticeOpen = false; });
 }
 
 // secureState: whether this connection's secure-messaging path (Olm) is

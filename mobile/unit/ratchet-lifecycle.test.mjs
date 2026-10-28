@@ -1,4 +1,4 @@
-// Review P2-8: the real app.js ratchet lifecycle (enableRatchetTestSession,
+// Review P2-8: the real app.js ratchet lifecycle (configureRatchetForTests,
 // openRatchet, attach-before-publish, pollRatchet, stopRatchet) with fenced
 // reconnect, disconnect and sign-out during an outbox flush. The consumer,
 // store and core are recording fakes; their production behaviour is covered
@@ -9,7 +9,7 @@ import fs from "node:fs/promises";
 import vm from "node:vm";
 import { ChatSession } from "../src/core/chat-session.js";
 import { generateIdentity, keyFingerprint, publicKeyPEM, sign, toBase64 } from "../src/core/crypto.js";
-import { linkBindingTranscript, verifyLinkBinding } from "../src/core/link-binding.js";
+import { announcedBinding, linkBindingTranscript, verifyLinkBinding } from "../src/core/link-binding.js";
 
 // The desktop-signed device-link statement (DeviceLinkBindingTranscript).
 const desktop = generateIdentity();
@@ -28,6 +28,7 @@ const tick = (ms = 30) => new Promise(r => setTimeout(r, ms));
 test("app lifecycle owns, polls and fences the ratchet consumer across reconnect, disconnect and sign-out", { timeout: 15000 }, async () => {
     const consumers = [], cores = [], attached = { dm: [], groups: [] }, quarantine = [];
     let flushGate = null, flushEntered = null, flushResult = null;
+    let capabilities = [], announced = "";
     class RatchetConsumer {
         constructor(options) { Object.assign(this, options); this.closed = false; this.drains = 0; this.sent = []; consumers.push(this); }
         async drain() { this.drains++; return { quarantined: [{ id: "q" + consumers.indexOf(this), scope: "direct" }] }; }
@@ -55,10 +56,10 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
         "./core/connection.js": { Connection: { open: async () => new FakeConnection() } }, "./core/frame.js": { Msg: {} },
         "./core/olm-directory.js": { signBundle: () => ({}) },
         "./core/olm-reset.js": { signReset: () => ({}) },
-        "./core/link-binding.js": { verifyLinkBinding },
+        "./core/link-binding.js": { verifyLinkBinding, announcedBinding },
         "./core/ratchet-consumer.js": { RatchetConsumer, connectionTransport: () => ({ admission: none, directory: none }) },
         "./core/crypto.js": { generateIdentity },
-        "./core/device.js": { signIn: async () => ({ unique_id: "alice", device_id: "phone", client_id: "c1" }) },
+        "./core/device.js": { signIn: async () => ({ unique_id: "alice", device_id: "phone", client_id: "c1", capabilities: [...capabilities], tls_fingerprint: announced }) },
         "./core/identity-store.js": { assertIdentityFence: async () => {}, beginIdentity: async () => ({ generation: 1, active: true }), clearIdentity: async () => {}, loadIdentity: none, saveIdentity: none, updateMeta: async () => {} },
         "./core/outbox.js": {
             enqueue: none, showPending: async () => {}, waitingCount: async () => 0,
@@ -79,33 +80,44 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
     const mod = new vm.SourceTextModule(await fs.readFile(new URL("../src/app.js", import.meta.url), "utf8"), { context });
     await mod.link(spec => new vm.SyntheticModule(Object.keys(sources[spec]), function () { for (const [k, v] of Object.entries(sources[spec])) this.setExport(k, v); }, { context }));
     await mod.evaluate();
-    const { app, connect, disconnect, forgetDevice, enableRatchetTestSession } = mod.namespace;
+    const { app, connect, disconnect, forgetDevice, configureRatchetForTests } = mod.namespace;
 
-    // Without explicit enablement nothing is constructed (production default).
-    await connect();
-    assert.equal(consumers.length, 0);
-    assert.equal(app.ratchet, null);
-
-    enableRatchetTestSession({
+    configureRatchetForTests({
         pollMS: 10,
         modules: async () => [{ openRatchetStore: async ns => ({ ns }) }, { createRatchetCore: async () => { const core = { closed: false, close() { core.closed = true; } }; cores.push(core); return core; } }],
     });
+    // 1c-iii-b item 5: secure messaging is ON by default for a signed-in
+    // session. A server without the capability blocks it with an explicit
+    // reason; the session itself (channels, legacy history) continues and
+    // nothing falls back to legacy sending.
+    app.identity = generateIdentity();
+    app.meta = { linkBinding: statementFor(app.identity), bindingAnchor: keyFingerprint(publicKeyPEM(desktop.edPublic)) };
+    await connect();
+    assert.equal(consumers.length, 0);
+    assert.equal(app.ratchet, null);
+    assert.equal(app.ratchetError?.code, "server_outdated");
+    capabilities = ["noxa-olm-admission-v1", "noxa-olm-directory-v1"];
     // 1c-iii-a item 1: the binding comes only from the stored desktop-signed
     // statement; without one, or with one that does not verify, secure
-    // messaging (and so this connect) is blocked.
-    app.identity = generateIdentity();
-    app.meta = {};
-    await assert.rejects(connect(), e => e.code === "server_binding_unavailable");
-    app.meta = { linkBinding: statementFor(app.identity) };
-    await assert.rejects(connect(), e => e.code === "server_binding_mismatch", "a statement without the QR anchor (typed code / empty fingerprint)");
-    app.meta = { linkBinding: statementFor(generateIdentity()), bindingAnchor: keyFingerprint(publicKeyPEM(desktop.edPublic)) };
-    await assert.rejects(connect(), e => e.code === "server_binding_mismatch", "a statement for another device's keys");
-    app.meta = { linkBinding: statementFor(app.identity, { principal: "mallory" }), bindingAnchor: keyFingerprint(publicKeyPEM(desktop.edPublic)) };
-    await assert.rejects(connect(), e => e.code === "server_binding_mismatch", "a statement for another account");
-    app.meta = { linkBinding: statementFor(app.identity), bindingAnchor: "0000 0000 0000 0000" };
-    await assert.rejects(connect(), e => e.code === "server_binding_mismatch", "a statement from another approver than the one shown");
-    app.meta = { linkBinding: { ...statementFor(app.identity), binding: "tls-sha256:" + "cd".repeat(32) }, bindingAnchor: keyFingerprint(publicKeyPEM(desktop.edPublic)) };
-    await assert.rejects(connect(), e => e.code === "server_binding_mismatch", "a binding the desktop did not sign");
+    // messaging is blocked (one explanation: link the device again).
+    const blocked = async (meta, code, note) => {
+        app.meta = meta;
+        await connect();
+        assert.equal(app.ratchet, null, note);
+        assert.equal(app.ratchetError?.code, code, note);
+    };
+    await blocked({}, "server_binding_unavailable", "no statement");
+    await blocked({ linkBinding: statementFor(app.identity) }, "server_binding_mismatch", "a statement without the QR anchor (typed code / empty fingerprint)");
+    const anchor = keyFingerprint(publicKeyPEM(desktop.edPublic));
+    await blocked({ linkBinding: statementFor(generateIdentity()), bindingAnchor: anchor }, "server_binding_mismatch", "a statement for another device's keys");
+    await blocked({ linkBinding: statementFor(app.identity, { principal: "mallory" }), bindingAnchor: anchor }, "server_binding_mismatch", "a statement for another account");
+    await blocked({ linkBinding: statementFor(app.identity), bindingAnchor: "0000 0000 0000 0000" }, "server_binding_mismatch", "a statement from another approver than the one shown");
+    await blocked({ linkBinding: { ...statementFor(app.identity), binding: "tls-sha256:" + "cd".repeat(32) }, bindingAnchor: anchor }, "server_binding_mismatch", "a binding the desktop did not sign");
+    // Server certificate rotation: the announced fingerprint differs from the
+    // signed binding -> blocked until the device is linked again.
+    announced = "cd:".repeat(31) + "cd";
+    await blocked({ linkBinding: statementFor(app.identity), bindingAnchor: anchor }, "server_binding_rotated", "a changed server certificate");
+    announced = "ab".repeat(32);
     assert.equal(consumers.length, 0, "no consumer for a refused binding");
     app.meta = { linkBinding: statementFor(app.identity), bindingAnchor: keyFingerprint(publicKeyPEM(desktop.edPublic)) };
     const first = await connect();
@@ -156,5 +168,5 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
     assert.equal(flushResult, "fenced");
     assert.equal(c.sent.length, 0);
     assert.equal(app.ratchet, null);
-    enableRatchetTestSession(null);
+    configureRatchetForTests(null);
 });

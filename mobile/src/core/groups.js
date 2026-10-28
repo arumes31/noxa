@@ -398,6 +398,11 @@ export class Groups extends EventTarget {
      */
     async send(id, text, { reference = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}, retried = false) {
         if (this.ratchet) return this.#sendRatchet(id, text, reference, sentAt);
+        // A signed-in session never sends legacy encryption (set by the app).
+        if (this.secureRequired) {
+            const reason = this.secureRequired();
+            throw Object.assign(new Error(reason?.message || "secure messaging is not available"), { code: reason?.code || "secure_unavailable", retryable: false });
+        }
         this.#local(id, { reference, text, sentAt, pending: true });
         try {
             const conversation = await this.get(id);

@@ -399,7 +399,7 @@ func TestRatchetStartGatePerConnection(t *testing.T) {
 	c1, c1b := net.Pipe()
 	c2, c2b := net.Pipe()
 	defer func() { c1.Close(); c1b.Close(); c2.Close(); c2b.Close() }()
-	m := &connManager{ratchetTest: &ratchetTestConfig{Dir: t.TempDir()}}
+	m := &connManager{ratchetCfg: &ratchetConfig{Dir: t.TempDir()}}
 	// conn1's start is still in flight when the client reconnects (conn2).
 	m.conn, m.ratchetStartingConn = c2, c1
 	m.startRatchetRecorded(c2)

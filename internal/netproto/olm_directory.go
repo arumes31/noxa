@@ -12,6 +12,10 @@ const (
 	MsgOlmDirectoryRequest MessageType = 200
 	MsgOlmDirectoryResult  MessageType = 201
 	CapabilityOlmDirectory             = olmdir.Version
+	// CapabilityOlmAdmission advertises the noxa-olm-v1 admission endpoint
+	// (frame 202). Updated clients send direct and group messages only through
+	// it and refuse to fall back to legacy encryption.
+	CapabilityOlmAdmission = "noxa-olm-admission-v1"
 )
 
 type OlmDirectoryRequest struct {

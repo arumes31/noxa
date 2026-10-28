@@ -15,7 +15,7 @@ import (
 func TestUncertainComposerSendBecomesOutboxEntry(t *testing.T) {
 	a, cm := outboxTestApp(t)
 	cm.mu.Lock()
-	cm.ratchetTest = &ratchetTestConfig{}
+	cm.ratchetCfg = &ratchetConfig{}
 	cm.mu.Unlock()
 	uncertain := &ratchetError{Code: "uncertain", Committed: &RatchetOutcome{}}
 	if !ratchetUncertain(uncertain) || ratchetUncertain(errRatchetUnavailable) || ratchetUncertain(&ratchetError{Code: "rejected", Committed: &RatchetOutcome{Receipt: &admission.Receipt{}}}) {
@@ -72,7 +72,7 @@ func TestUncertainComposerSendBecomesOutboxEntry(t *testing.T) {
 func TestUncertainComposerEntriesAreNeverSilentlyDropped(t *testing.T) {
 	a, cm := outboxTestApp(t)
 	cm.mu.Lock()
-	cm.ratchetTest = &ratchetTestConfig{}
+	cm.ratchetCfg = &ratchetConfig{}
 	cm.mu.Unlock()
 	store, err := a.outboxStore(cm)
 	if err != nil {

@@ -328,7 +328,8 @@ func (c *Client) takeChallenge(uniqueID string) ([]byte, string, bool) {
 
 // TCPServer accepts and serves control-channel connections.
 type TCPServer struct {
-	// Internal integration harness opt-in; no production activation before 1c-ii.
+	// noxa-olm-v1 admission (frame 202), ON by default and advertised as
+	// netproto.CapabilityOlmAdmission whenever the Olm directory is available.
 	olmAdmissionEnabled   bool
 	previewOnce           sync.Once
 	previewService        *linkpreview.Service
@@ -471,14 +472,15 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 		}
 	}
 	s := &TCPServer{
-		cfg:           cfg,
-		logger:        logger,
-		deps:          deps,
-		acceptedConns: make(map[net.Conn]struct{}),
-		links:         newDeviceLinks(),
-		push:          newPushState(),
-		preauth:       make(map[net.Conn]string),
-		preauthByIP:   make(map[string]int),
+		olmAdmissionEnabled: true,
+		cfg:                 cfg,
+		logger:              logger,
+		deps:                deps,
+		acceptedConns:       make(map[net.Conn]struct{}),
+		links:               newDeviceLinks(),
+		push:                newPushState(),
+		preauth:             make(map[net.Conn]string),
+		preauthByIP:         make(map[string]int),
 		listen: func(ctx context.Context, network, address string) (net.Listener, error) {
 			return (&net.ListenConfig{}).Listen(ctx, network, address)
 		},

@@ -238,6 +238,10 @@ func (a *App) changeDirectMessage(tabID, peer, ref, action, text string) error {
 		// logical ID, never a transport UUID.
 		return m.changeRatchetDirect(peer, ref, action, text)
 	}
+	if m.ratchetConfigured() {
+		// Legacy NaCl is read-only: never sent again, not even as a change.
+		return errLegacyReadOnly
+	}
 	if !m.dmDevicesActive() {
 		return errDMChangeUnsupported
 	}

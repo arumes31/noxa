@@ -229,7 +229,7 @@ func (n *nativeNode) connect() {
 	n.t.Helper()
 	client, server := net.Pipe()
 	n.cm.mu.Lock()
-	n.cm.ratchetTest = &ratchetTestConfig{Dir: filepath.Join(n.base, "ratchet"), Binding: n.binding, Poll: time.Hour, Protection: n.protection(), AttemptTTL: n.ttl}
+	n.cm.ratchetCfg = &ratchetConfig{Dir: filepath.Join(n.base, "ratchet"), Binding: n.binding, Poll: time.Hour, Protection: n.protection(), AttemptTTL: n.ttl}
 	n.cm.conn = client
 	n.cm.connEpoch++
 	n.cm.closed = false
@@ -256,7 +256,7 @@ func (n *nativeNode) connectTransport() {
 	n.t.Helper()
 	client, server := net.Pipe()
 	n.cm.mu.Lock()
-	n.cm.ratchetTest = &ratchetTestConfig{Dir: filepath.Join(n.base, "ratchet"), Binding: n.binding, Poll: time.Hour, Protection: n.protection(), AttemptTTL: n.ttl}
+	n.cm.ratchetCfg = &ratchetConfig{Dir: filepath.Join(n.base, "ratchet"), Binding: n.binding, Poll: time.Hour, Protection: n.protection(), AttemptTTL: n.ttl}
 	n.cm.conn = client
 	n.cm.connEpoch++
 	n.cm.closed = false

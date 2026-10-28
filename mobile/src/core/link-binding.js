@@ -17,6 +17,19 @@ export function linkBindingTranscript(principal, approverDeviceID, edPublicPEM, 
     return utf8(`noxa-device-link-binding-v1\n${principal}\n${approverDeviceID}\n${edPublicPEM}\n${xPublicB64}\n${serverBinding}`);
 }
 
+/**
+ * The binding a server-announced certificate fingerprint would give. Used
+ * ONLY to detect that the server's certificate changed since the desktop
+ * signed this device's statement (then the device must be linked again);
+ * never adopted as a binding.
+ */
+export function announcedBinding(fingerprint) {
+    if (typeof fingerprint !== "string") return "";
+    let f = fingerprint.toLowerCase();
+    if (/^(?:[0-9a-f]{2}:){31}[0-9a-f]{2}$/.test(f)) f = f.replaceAll(":", "");
+    return /^[0-9a-f]{64}$/.test(f) ? "tls-sha256:" + f : "";
+}
+
 function refuse(code, message) {
     return Object.assign(new Error(message), { code });
 }

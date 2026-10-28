@@ -737,6 +737,13 @@ fingerprint. Later changes fail closed. For a planned rotation:
 4. Reconnect once more and confirm the connection-security message reports the
    expected fingerprint. If verification fails, abort and restore the previous
    certificate and key; do not delete `known_servers.json` to bypass the check.
+5. Secure messaging is bound to the pinned certificate fingerprint, so plan a
+   rotation as a secure-messaging change too: readable history stays, but a
+   desktop may need **Settings → Security → Recover secure messaging**
+   afterwards. Each linked phone or browser holds a binding its desktop signed
+   for the old certificate: it detects the change, blocks secure messaging
+   and asks to be linked again. Link it again from a desktop that already
+   trusts the new fingerprint (**Connections → PWA / Mobile login**).
 
 <a id="mobile"></a>
 

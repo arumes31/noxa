@@ -1,13 +1,17 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"testing"
 	"testing/synctest"
 
 	"noxa/internal/auth"
 	"noxa/internal/config"
+	"noxa/internal/e2ee/olmdir"
 	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 // Test the actual key-proof path, not just visibility of the guest button.
@@ -73,5 +77,34 @@ func TestWebLoginCapabilityRequiresEnabledWeb(t *testing.T) {
 				t.Fatalf("enabled=%v: %+v", enabled, response)
 			}
 		})
+	}
+}
+
+// olmFakeDevices adds the Olm directory to the fake device store.
+type olmFakeDevices struct{ fakeDevices }
+
+func (*olmFakeDevices) PublishOlmBundle(context.Context, string, string, string, olmdir.Bundle) error {
+	return errors.New("unused")
+}
+func (*olmFakeDevices) ClaimOlmKey(context.Context, string, string, string, string, string, int64, string, ...int64) (store.OlmClaim, error) {
+	return store.OlmClaim{}, errors.New("unused")
+}
+func (*olmFakeDevices) ExpireOlmDirectory(context.Context) (int64, error) { return 0, nil }
+func (*olmFakeDevices) OwnOlmBundle(context.Context, string, string) (olmdir.Bundle, error) {
+	return olmdir.Bundle{}, errors.New("unused")
+}
+
+// 1c-iii-b item 5: with the Olm directory available, the admission endpoint
+// is ON by default and advertised, so updated clients use only noxa-olm-v1.
+func TestOlmAdmissionCapabilityDefaultOn(t *testing.T) {
+	env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.Devices = &olmFakeDevices{} })
+	t.Cleanup(env.stop)
+	conn, response := keyLogin(t, env.addr, newLinkTestKeys(t))
+	t.Cleanup(func() { _ = conn.Close() })
+	if !response.OK || !slices.Contains(response.Capabilities, netproto.CapabilityOlmDirectory) || !slices.Contains(response.Capabilities, netproto.CapabilityOlmAdmission) {
+		t.Fatalf("capabilities: %+v", response.Capabilities)
+	}
+	if !New(&config.Config{}, nil, &Deps{}).olmAdmissionEnabled {
+		t.Fatal("admission must be enabled by default")
 	}
 }

@@ -99,7 +99,9 @@ export function encryptionBadge(kind, message = null) {
  * ratchet session is active, otherwise why it is not (no static claim).
  */
 export function secureBanner(status) {
-    const text = status.active ? t("rich.secureActive") : t("rich.secureInactive", { reason: status.reason || "inactive" });
+    // One explanation per blocking reason (e.g. "link this device again").
+    const reason = status.reason && t(`dm.error.${status.reason}`) !== `dm.error.${status.reason}` ? t(`dm.error.${status.reason}`) : t("dm.error.secure_unavailable");
+    const text = status.active ? t("rich.secureActive") : t("rich.secureInactive", { reason });
     return h("div", { class: `e2e-banner${status.active ? "" : " warn"}`, role: "note" }, icon("lock"), " ", text);
 }
 

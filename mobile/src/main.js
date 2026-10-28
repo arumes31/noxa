@@ -6,10 +6,11 @@ import "./themes.css";
 import { installLogger } from "./core/log.js";
 import "./ui/appearance.js";
 import { app, connect, flushNow, loadDevice, loadInfo, markRead } from "./app.js";
+import { get as setting, set as setSettings } from "./core/settings.js";
 import { parseLinkFragment } from "./core/device.js";
 import { inviteFromLocation, setPendingInvite } from "./core/invite.js";
 import { t, lang } from "./i18n.js";
-import { h, toast } from "./ui/dom.js";
+import { h, sheet, toast } from "./ui/dom.js";
 import { afterRoute, onWideChange, screenRoot } from "./ui/layout.js";
 import "./ui/call-waiting.js";
 
@@ -207,6 +208,14 @@ navigator.serviceWorker?.addEventListener("message", event => {
     if (event.data?.type !== "open" || typeof event.data.url !== "string") return;
     const url = new URL(event.data.url, location.origin);
     if (url.origin === location.origin && url.pathname.startsWith("/app/")) location.hash = url.hash || "#/home";
+});
+// The secure-messaging upgrade is explained once per browser profile.
+app.addEventListener("secure-messaging", () => {
+    let seen = false;
+    try { seen = !!setting("secureMessagingNoticeSeen"); } catch { /* storage blocked: show it */ }
+    if (seen) return;
+    try { setSettings({ secureMessagingNoticeSeen: true }); } catch { /* best effort */ }
+    Promise.resolve(sheet(t("secure.noticeTitle"), t("secure.noticeBody"), [{ label: t("common.close"), value: null, primary: true }])).catch(() => {});
 });
 app.addEventListener("signedout", () => {
     toast(t("signin.revoked"), "warn");

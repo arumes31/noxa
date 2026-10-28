@@ -511,6 +511,7 @@ export class DirectMessages extends EventTarget {
     async send(peer, text, nickname = "", { id = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}) {
         await this.ready;
         if (this.ratchet) return this.#sendRatchet(peer, text, nickname, id, sentAt);
+        this.#refuseLegacySend();
         const message = { id, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, pending: true, queued: false };
         this.#add(peer, nickname, message);
         try {
@@ -561,6 +562,7 @@ export class DirectMessages extends EventTarget {
     async editMessage(peer, ref, text) {
         const message = this.#ownMessage(peer, ref);
         if (message.protocol === RATCHET_PROTOCOL) return this.#changeRatchet(peer, message, "edit", text);
+        if (this.secureRequired) throw Object.assign(new Error("messages from before secure messaging was upgraded stay readable but can no longer be edited or deleted"), { code: "legacy_read_only", retryable: false });
         await this.#sendCopies(peer, text, crypto.randomUUID(), false, { dm_action: "edit", ref_client_msg_id: ref });
         this.#add(peer, "", { ...message, body: text, edited: true });
     }
@@ -569,6 +571,7 @@ export class DirectMessages extends EventTarget {
     async deleteMessage(peer, ref) {
         const message = this.#ownMessage(peer, ref);
         if (message.protocol === RATCHET_PROTOCOL) return this.#changeRatchet(peer, message, "delete", "");
+        if (this.secureRequired) throw Object.assign(new Error("messages from before secure messaging was upgraded stay readable but can no longer be edited or deleted"), { code: "legacy_read_only", retryable: false });
         await this.#sendCopies(peer, "", crypto.randomUUID(), false, { dm_action: "delete", ref_client_msg_id: ref });
         this.#add(peer, "", { ...message, body: "", deleted: true, edited: false });
     }
@@ -713,6 +716,16 @@ export class DirectMessages extends EventTarget {
                 pending: false, failed: !retryable, queued: retryable });
             throw Object.assign(error, { retryable });
         }
+    }
+
+    /**
+     * A signed-in session never sends legacy encryption (secureRequired is set
+     * by the app): without a consumer the send fails with the blocking reason.
+     */
+    #refuseLegacySend() {
+        if (!this.secureRequired) return;
+        const reason = this.secureRequired();
+        throw Object.assign(new Error(reason?.message || "secure messaging is not available"), { code: reason?.code || "secure_unavailable", retryable: false });
     }
 
     async #changeRatchet(peer, message, action, text) {

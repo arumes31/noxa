@@ -6036,6 +6036,9 @@ test.beforeEach(async ({ page }) => {
         const app = new Proxy({}, {
             get(_target, nativeMethod) {
                 if (nativeMethod === "UploadChatAttachmentProgressForTab") return undefined;
+                // These send workflows model the SendChat/SendChatReply entries
+                // (the frontend's fallback); operation-ID sends have their own tests.
+                if (nativeMethod === "SendChatOperationForTab" && !window.__sendChatOperations) return undefined;
                 if (nativeMethod === "ReconnectTab" && !window.__tabScopedReconnect) return undefined;
                 return async (...args) => {
                     let method = nativeMethod;

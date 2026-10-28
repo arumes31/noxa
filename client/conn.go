@@ -121,10 +121,14 @@ type connManager struct {
 	// returns the conversation it belongs to; set once by the App for tab
 	// managers, nil otherwise.
 	dmChanges func(m *connManager, peer string, c dmChange) string
-	// ratchetTest explicitly enables the noxa-olm-v1 consumer (test sessions
-	// only; production activation is off). ratchetSess is the consumer of the
-	// current (conn, epoch); ratchetProject persists its records (App).
-	ratchetTest    *ratchetTestConfig
+	// ratchetCfg overrides the noxa-olm-v1 session configuration (tests:
+	// in-memory transports, store dir, protection). Every authenticated
+	// session uses the new protocol (ratchetDefault); supportsOlm records the
+	// server's capability. ratchetSess is the consumer of the current
+	// (conn, epoch); ratchetProject persists its records (App).
+	ratchetCfg     *ratchetConfig
+	ratchetDefault bool
+	supportsOlm    bool
 	ratchetSess    *ratchetSession
 	ratchetProject func(m *connManager, r RatchetRecord, isNew bool)
 	// ratchetControls receive delivered media controls (ratchet_control.go).
@@ -599,6 +603,11 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsWebLogin = slices.Contains(resp.Capabilities, netproto.CapabilityWebLogin)
 	m.supportsLinkPreview = slices.Contains(resp.Capabilities, netproto.CapabilityLinkPreview)
 	m.supportsDMDevices = m.supportsDevices && slices.Contains(resp.Capabilities, netproto.CapabilityDMDevices)
+	// Direct and private-group messages use noxa-olm-v1 only: there is no
+	// legacy send path for an authenticated session (an old server or a guest
+	// session gets an explicit "unavailable" instead).
+	m.supportsOlm = slices.Contains(resp.Capabilities, netproto.CapabilityOlmAdmission) && slices.Contains(resp.Capabilities, netproto.CapabilityOlmDirectory)
+	m.ratchetDefault = true
 	m.activityReportedAt = time.Time{}
 	m.deviceLinks = nil
 	m.nickname = resp.Nickname

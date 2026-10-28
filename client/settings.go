@@ -293,6 +293,9 @@ type Settings struct {
 	// (453/454) noXa Mobile hint: "" shows it until a phone is linked,
 	// "dismissed" hides it, "shown" shows it even with linked devices.
 	MobileHint string `json:"mobile_hint,omitempty"`
+	// SecureNoticeSeen: the one-time secure-messaging upgrade explanation
+	// (1c-iii-b item 5) was shown.
+	SecureNoticeSeen bool `json:"secure_notice_seen,omitempty"`
 }
 
 // DefaultSettings returns the defaults used when no settings file exists.
