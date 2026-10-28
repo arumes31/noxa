@@ -114,6 +114,12 @@ func (h *Handle) Close() error {
 // another opener (any process, including this one). It never opens a file
 // for writing, so it is safe before a destructive operation; on every
 // platform a held store makes the probe fail (the bbolt file lock).
+//
+// Only the lock timeout means "in use". A file that cannot be opened as a
+// store at all (0-byte after a crash during creation, corrupt, not bbolt)
+// is not held by any store opener: it is skipped, so deleting the identity,
+// the user's remedy for a broken store, still destroys it. An unreadable
+// directory is returned as is (not ErrInUse).
 func ProbeUnlocked(dir string) error {
 	entries, e := os.ReadDir(dir)
 	if os.IsNotExist(e) {
@@ -131,7 +137,7 @@ func ProbeUnlocked(dir string) error {
 			return ErrInUse
 		}
 		if e != nil {
-			return e
+			continue // unusable as a store: nobody can hold it as one
 		}
 		if e = db.Close(); e != nil {
 			return e

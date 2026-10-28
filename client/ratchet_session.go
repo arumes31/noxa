@@ -20,7 +20,6 @@ import (
 	"log"
 	"net"
 	"noxa/internal/e2ee"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -93,12 +92,18 @@ var errRatchetUnavailable = errors.New("secure messaging (noxa-olm-v1) is not re
 
 var errRatchetIdentityDeleted = errors.New("secure messaging is unavailable: this identity's secure message store was deleted")
 
-var ratchetIdentityLocks sync.Map // identity public key -> *sync.Mutex
+var ratchetIdentityLocks sync.Map // store key (ratchetStoreKey) -> *sync.Mutex
 
 // lockRatchetIdentity serialises opening and destroying one identity's stores,
 // so a deletion cannot race a store recreation.
 func lockRatchetIdentity(publicKey string) func() {
-	v, _ := ratchetIdentityLocks.LoadOrStore(publicKey, &sync.Mutex{})
+	return lockRatchetStore(ratchetStoreKey(publicKey))
+}
+
+// lockRatchetStore is lockRatchetIdentity keyed by the store directory name,
+// so the tombstone sweep can serialise with identities it cannot decode.
+func lockRatchetStore(key string) func() {
+	v, _ := ratchetIdentityLocks.LoadOrStore(key, &sync.Mutex{})
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
@@ -152,6 +157,12 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 		}
 	}
 	storeDir := ratchetStoreDir(base, identity)
+	// Finish this identity's interrupted deletions before the store is
+	// opened (opening creates a fresh directory): an uncommitted tombstone is
+	// restored, a committed one erased. Never opens over an unresolved one.
+	if err := resolveRatchetTombstones(base, ratchetStoreKey(identity.PublicKey), ratchetLiveYes); err != nil {
+		return fmt.Errorf("secure message store: an interrupted deletion could not be restored yet: %w", err)
+	}
 	binding := cfg.Binding
 	if fingerprint != "" {
 		fp := strings.ToLower(strings.ReplaceAll(fingerprint, ":", ""))
@@ -761,8 +772,13 @@ func (m *connManager) recentlyDeclined(uid string) bool {
 // base directory: every server/device namespace of that identity lives there,
 // so identity deletion destroys exactly its own namespaces.
 func ratchetStoreDir(base string, id *identity) string {
-	sum := sha256.Sum256([]byte("noxa-ratchet-identity-v1\x00" + id.PublicKey))
-	return filepath.Join(base, hex.EncodeToString(sum[:16]))
+	return filepath.Join(base, ratchetStoreKey(id.PublicKey))
+}
+
+// ratchetStoreKey is the store directory name of an identity public key.
+func ratchetStoreKey(publicKey string) string {
+	sum := sha256.Sum256([]byte("noxa-ratchet-identity-v1\x00" + publicKey))
+	return hex.EncodeToString(sum[:16])
 }
 
 // defaultRatchetBase is the production base (next to the identities).
@@ -777,181 +793,6 @@ func defaultRatchetBase() (string, error) {
 // ratchetDeleted fences identities whose namespaces were destroyed: no new
 // session may open them again in this process.
 var ratchetDeleted sync.Map
-
-// destroyRatchetNamespaces destroys an identity's stores without removing its
-// identity file (tests; DeleteIdentity uses deleteIdentityWithStores).
-func (a *App) destroyRatchetNamespaces(id *identity) error {
-	return a.deleteIdentityWithStores(id, "")
-}
-
-// deleteIdentityWithStores runs on IDENTITY DELETION only (a sign-out or
-// disconnect keeps the namespaces and readable archive). Steps, serialised
-// with every store open of this identity:
-//
-//  1. fence new sessions and stop + await this process's live sessions;
-//  2. probe every store for a lock held by any other opener (all platforms);
-//     a held store fails the deletion with nothing changed;
-//  3. rename every store directory to a tombstone (the pending-wipe record);
-//  4. remove the identity file — the commit point;
-//  5. erase the tombstones (retried by the sweep at startup and before the
-//     next deletion if erasing fails).
-//
-// A failure before the commit point rolls back (renames back, fence lifted,
-// sessions restarted). A crash before it leaves tombstones whose identity
-// still exists: the sweep restores them; after it, the sweep erases them.
-func (a *App) deleteIdentityWithStores(id *identity, identityPath string) error {
-	unlock := lockRatchetIdentity(id.PublicKey)
-	defer unlock()
-	bases := a.ratchetBases()
-	sweepRatchetTombstones(bases)
-	ratchetDeleted.Store(id.PublicKey, true)
-	a.tabsMu.Lock()
-	managers := make([]*connManager, 0, len(a.tabs))
-	for _, tab := range a.tabs {
-		if tab != nil && tab.cm != nil {
-			managers = append(managers, tab.cm)
-		}
-	}
-	a.tabsMu.Unlock()
-	var stopped []*connManager
-	for _, cm := range managers {
-		cm.mu.Lock()
-		var s *ratchetSession
-		if cm.id != nil && cm.id.PublicKey == id.PublicKey {
-			s = cm.takeRatchetLocked()
-		}
-		cm.mu.Unlock()
-		if s != nil {
-			s.stop()
-			stopped = append(stopped, cm)
-		}
-	}
-	type move struct{ dir, tomb string }
-	var moved []move
-	rollback := func(cause error) error {
-		var lost []string
-		for _, mv := range moved {
-			if err := os.Rename(mv.tomb, mv.dir); err != nil {
-				lost = append(lost, mv.tomb)
-			}
-		}
-		restoreRatchetIdentity(id.PublicKey) // the identity survives
-		for _, cm := range stopped {
-			cm.mu.Lock()
-			conn := cm.conn
-			cm.mu.Unlock()
-			go guardCrash("ratchet restart", func() { cm.startRatchetRecorded(conn) })
-		}
-		if len(lost) > 0 {
-			return fmt.Errorf("%w; the store could not be restored yet and is restored at next start", cause)
-		}
-		return cause
-	}
-	// Our own sessions are stopped; any remaining lock belongs to another
-	// opener (another process): fail before anything is renamed.
-	for base := range bases {
-		if err := durable.ProbeUnlocked(ratchetStoreDir(base, id)); err != nil {
-			return rollback(fmt.Errorf("secure message store of this identity is in use: %w", err))
-		}
-	}
-	for base := range bases {
-		dir := ratchetStoreDir(base, id)
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			continue
-		}
-		tomb := dir + ratchetTombstone + newClientMsgID()
-		if err := os.Rename(dir, tomb); err != nil {
-			return rollback(fmt.Errorf("secure message store of this identity is in use: %w", err))
-		}
-		moved = append(moved, move{dir, tomb})
-	}
-	if identityPath != "" {
-		if err := os.Remove(identityPath); err != nil {
-			return rollback(err)
-		}
-	}
-	for _, mv := range moved {
-		if err := os.RemoveAll(mv.tomb); err != nil {
-			log.Printf("ratchet: erasing a deleted store failed, retried at next start: %v", err)
-			go guardCrash("ratchet wipe retry", func() {
-				time.Sleep(30 * time.Second)
-				sweepRatchetTombstones(map[string]bool{filepath.Dir(mv.tomb): true})
-			})
-		}
-	}
-	return nil
-}
-
-const ratchetTombstone = ".deleted-"
-
-// ratchetBases lists the store bases in use (production + test overrides).
-func (a *App) ratchetBases() map[string]bool {
-	bases := map[string]bool{}
-	if base, err := defaultRatchetBase(); err == nil {
-		bases[base] = true
-	}
-	a.tabsMu.Lock()
-	for _, tab := range a.tabs {
-		if tab != nil && tab.cm != nil {
-			tab.cm.mu.Lock()
-			if cfg := tab.cm.ratchetTest; cfg != nil && cfg.Dir != "" {
-				bases[cfg.Dir] = true
-			}
-			tab.cm.mu.Unlock()
-		}
-	}
-	a.tabsMu.Unlock()
-	return bases
-}
-
-// sweepRatchetTombstones finishes interrupted deletions: a tombstone whose
-// identity still exists (crash before the commit point, or a failed
-// rollback) is restored when its live directory is absent; any other
-// tombstone is erased.
-func sweepRatchetTombstones(bases map[string]bool) {
-	live := map[string]bool{}
-	if dir, err := identitiesDir(); err == nil {
-		for _, id := range identityIDs(dir) {
-			if path, err := identityPathFor(id); err == nil {
-				if loaded, err := loadIdentityAtStrict(path); err == nil {
-					live[filepath.Base(ratchetStoreDir("", loaded))] = true
-				}
-			}
-		}
-	}
-	for base := range bases {
-		entries, err := os.ReadDir(base)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			name := e.Name()
-			i := strings.Index(name, ratchetTombstone)
-			if !e.IsDir() || i <= 0 {
-				continue
-			}
-			tomb, dir := filepath.Join(base, name), filepath.Join(base, name[:i])
-			if live[name[:i]] {
-				if _, err := os.Stat(dir); os.IsNotExist(err) {
-					if err := os.Rename(tomb, dir); err != nil {
-						log.Printf("ratchet: restoring an interrupted deletion failed: %v", err)
-					}
-					continue
-				}
-			}
-			if err := os.RemoveAll(tomb); err != nil {
-				log.Printf("ratchet: erasing a deleted store failed: %v", err)
-			}
-		}
-	}
-}
-
-// SweepRatchetStores runs once at startup.
-func (a *App) sweepRatchetStores() {
-	a.identityMu.Lock()
-	defer a.identityMu.Unlock()
-	sweepRatchetTombstones(a.ratchetBases())
-}
 
 // restoreRatchetIdentity lifts the deletion fence (deletion failed, or the
 // same identity was imported again).

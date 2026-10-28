@@ -179,3 +179,50 @@ test("Fix3 item 8: trustNewIdentity pins exactly the confirmed fingerprint", asy
     assert.equal(confirmed.trust, "ok");
     assert.ok((await getSealed(Stores.pins, uid)).signingKey, "the confirmed identity is pinned");
 });
+
+// fix3 review P3-4: the accepted-via-error branch (resolve threw after an
+// accepted receipt, e.g. fenced retirement) applies the same mismatch check
+// and paints the ORIGINAL committed text as sent, never the changed draft.
+const fencedAccepted = committed => Object.assign(new Error("ratchet: fenced"), { code: "fenced", committed: { record: committed, receipt: { state: "accepted" }, reused: true } });
+
+test("1c-iii-a: direct accepted-via-error branch flags a changed text as mismatch", async () => {
+    const peer = "erin" + ++n;
+    const dm = new DirectMessages(session("alice"), {});
+    const committed = record({ sender: "alice", logicalID: "R", key: "kr", peer, body: { text: "original", sentAt: 1 }, sentAt: 1, self: true });
+    const consumer = consumerStub({ async send() { throw fencedAccepted(committed); } });
+    await dm.attachRatchet(consumer);
+    const outcome = await dm.send(peer, "changed", "", { id: "R", sentAt: 1 });
+    assert.equal(outcome.mismatch, true, "a changed text on a committed ID is never reported as sent");
+    assert.deepEqual(dm.conversations.get(peer).messages.map(m => [m.id, m.body, !!m.pending, !!m.queued]), [["R", "original", false, false]]);
+    const same = await dm.send(peer, "original", "", { id: "R", sentAt: 1 });
+    assert.equal(same.mismatch, undefined, "the same text is plain success");
+});
+
+test("1c-iii-a: groups accepted-via-error branch flags mismatch and paints the original", async () => {
+    const groups = new Groups(session("alice"), {});
+    const committed = record({ scope: "group", conversation: "g", sender: "alice", logicalID: "R", key: "kr", body: { text: "original", sentAt: 1 }, sentAt: 1 });
+    const consumer = consumerStub({ async send() { throw fencedAccepted(committed); } });
+    await groups.attachRatchet(consumer);
+    const outcome = await groups.send("g", "changed", { reference: "R", sentAt: 1 });
+    assert.equal(outcome.mismatch, true);
+    const list = groups.messages.get("g");
+    assert.deepEqual(list.map(m => [m.text, !!m.pending, !!m.queued, !!m.failed]), [["original", false, false, false]]);
+    groups.close();
+});
+
+test("1c-iii-a: a changed group draft never repaints a committed pending record", async () => {
+    const groups = new Groups(session("alice"), {});
+    let resolve;
+    const consumer = consumerStub({ send: () => new Promise(r => { resolve = r; }) });
+    await groups.attachRatchet(consumer);
+    // The committed original is projected as own pending (local + key).
+    consumer.projector(record({ scope: "group", conversation: "g", sender: "alice", logicalID: "R", key: "kr", status: "pending", body: { text: "original" } }), { isNew: false });
+    assert.deepEqual(groups.messages.get("g").map(m => [m.text, !!m.pending]), [["original", true]]);
+    const sending = groups.send("g", "changed", { reference: "R", sentAt: 1 });
+    assert.deepEqual(groups.messages.get("g").map(m => m.text), ["original"], "the committed lookup includes pending projected records");
+    groups.showQueued("g", { reference: "R", text: "changed", sentAt: 1 });
+    assert.deepEqual(groups.messages.get("g").map(m => m.text), ["original"], "showQueued keeps the committed text");
+    resolve({ record: { body: { text: "original" } }, receipt: { state: "accepted" }, reused: true });
+    assert.equal((await sending).mismatch, true);
+    groups.close();
+});

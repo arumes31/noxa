@@ -641,8 +641,9 @@ export class DirectMessages extends EventTarget {
         if (!existing) {
             this.#add(peer, nickname, { id, protocol: RATCHET_PROTOCOL, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, pending: true, queued: false });
         }
+        const consumer = this.ratchet;
         try {
-            const outcome = await this.ratchet.send({ logicalID: id, scope: "direct", peer, body: { text, sentAt } });
+            const outcome = await consumer.send({ logicalID: id, scope: "direct", peer, body: { text, sentAt } });
             // A reused ID whose committed text differs: the ORIGINAL was sent,
             // this text was not (the view shows the original).
             if (outcome.reused && (outcome.record?.body?.text ?? "") !== text) outcome.mismatch = true;
@@ -650,7 +651,16 @@ export class DirectMessages extends EventTarget {
         } catch (error) {
             const committed = error.committed;
             // An accepted receipt is success even if later housekeeping failed.
-            if (committed?.receipt?.state === "accepted") return { record: committed.record, receipt: committed.receipt, reused: committed.reused };
+            if (committed?.receipt?.state === "accepted") {
+                const committedText = committed.record?.body?.text ?? "";
+                // The projection never ran: paint the ORIGINAL committed text
+                // as sent, never this (possibly changed) draft as pending.
+                if (this.ratchet === consumer && !consumer.closed) this.#add(peer, nickname, { id, protocol: RATCHET_PROTOCOL, from: this.ownUID, fromNickname: this.session.nickname, self: true,
+                    body: committedText, verified: true, sentAt: committed.record?.sentAt || sentAt, pending: false, queued: false, failed: false, receipt: existing?.receipt || "sent" });
+                const outcome = { record: committed.record, receipt: committed.receipt, reused: committed.reused };
+                if (committed.reused && committedText !== text) outcome.mismatch = true;
+                return outcome;
+            }
             // Without a terminal receipt a committed attempt is uncertain: keep
             // its ORIGINAL committed text queued for exact resolution.
             const retryable = ratchetRetryable(error);

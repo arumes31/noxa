@@ -367,7 +367,12 @@ export class Groups extends EventTarget {
 
     /** Adds or updates an own message that the server has not accepted yet. */
     #local(id, { reference, text, sentAt, ...state }) {
-        const list = (this.messages.get(id) || []).filter(m => !(m.local && m.reference === reference));
+        const prior = this.messages.get(id) || [];
+        // A projected own record (it has a key) is committed: a changed draft
+        // never replaces its text, even while it is still pending.
+        const committed = prior.find(m => m.local && m.key && m.reference === reference && m.from_unique_id === this.uid);
+        if (committed) text = committed.text;
+        const list = prior.filter(m => !(m.local && m.reference === reference));
         if (list.some(m => !m.local && m.reference === reference && m.from_unique_id === this.uid)) return;
         list.push({ id: `local:${reference}`, local: true, reference, conversation_id: id, from_unique_id: this.uid, text, created_at: sentAt,
             pending: false, queued: false, failed: false, ...state });
@@ -506,18 +511,29 @@ export class Groups extends EventTarget {
     #waiting = new Map();
 
     async #sendRatchet(id, text, reference, sentAt) {
-        const committed = (this.messages.get(id) || []).find(m => m.reference === reference && m.from_unique_id === this.uid && m.protocol === RATCHET_PROTOCOL && !m.local);
+        // Committed = any projected own record of this reference, including a
+        // still-pending one (local + key), never only a local draft placeholder.
+        const committed = (this.messages.get(id) || []).find(m => m.reference === reference && m.from_unique_id === this.uid && m.protocol === RATCHET_PROTOCOL && (m.key || !m.local));
         if (!committed) this.#local(id, { reference, text, sentAt, pending: true, protocol: RATCHET_PROTOCOL });
+        const consumer = this.ratchet;
         try {
             // Returns the typed {record, receipt, reused}; receipt.message_id
             // is an opaque transport UUID, NOT a legacy numeric message ID.
-            const outcome = await this.ratchet.send({ logicalID: reference, scope: "group", conversation: id, body: { text, sentAt } });
+            const outcome = await consumer.send({ logicalID: reference, scope: "group", conversation: id, body: { text, sentAt } });
             if (outcome.reused && (outcome.record?.body?.text ?? "") !== text) outcome.mismatch = true;
             return outcome;
         } catch (error) {
             const original = error.committed;
             // An accepted receipt is success even if later housekeeping failed.
-            if (original?.receipt?.state === "accepted") return { record: original.record, receipt: original.receipt, reused: original.reused };
+            if (original?.receipt?.state === "accepted") {
+                const committedText = original.record?.body?.text ?? "";
+                // The projection never ran: paint the ORIGINAL committed text
+                // as sent, never this (possibly changed) draft as pending.
+                if (this.ratchet === consumer && !consumer.closed) this.#local(id, { reference, text: committedText, sentAt: original.record?.sentAt || sentAt, protocol: RATCHET_PROTOCOL });
+                const outcome = { record: original.record, receipt: original.receipt, reused: original.reused };
+                if (original.reused && committedText !== text) outcome.mismatch = true;
+                return outcome;
+            }
             const retryable = ratchetRetryable(error);
             this.#local(id, { reference, text: original ? original.record.body?.text ?? "" : text, sentAt: original?.record.sentAt || sentAt,
                 queued: retryable, failed: !retryable, protocol: RATCHET_PROTOCOL });

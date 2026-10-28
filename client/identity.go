@@ -828,6 +828,10 @@ func (a *App) adoptImportedIdentityLocked(id *identity, fallbackName string) str
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err.Error()
 	}
+	// A deleted key imported again gets a fresh store, never the deleted one.
+	if err := a.finishRatchetDeletion(id.PublicKey); err != nil {
+		return err.Error()
+	}
 	if id.Name == "" {
 		id.Name = strings.TrimSuffix(fallbackName, ".json")
 	}
