@@ -129,6 +129,9 @@ export const chatEnglish = {
     "chat.safetyUnverified": "Safety number not verified",
     "chat.channelDiagnostics": "Channel-key diagnostics",
     "chat.cipher": "Cipher",
+    "chat.secureMessaging": "Secure messaging",
+    "chat.secureMessagingOlm": "Active: Olm (double ratchet, one session per device pair)",
+    "chat.secureMessagingInactive": "Not active on this connection: {reason}. New direct messages cannot be sent until it is.",
     "chat.cachedKeys": "Cached peer keys",
     "chat.channelGenerations": "Channel generations",
     "chat.missingKeys": "Missing/refused keys",
@@ -155,7 +158,7 @@ export const chatEnglish = {
     "chat.exportLimit": " — stopped at the export limit",
     "chat.announcement": "announcement: {message}",
     "chat.offlineBatch": "{count} offline messages from {name}",
-    "chat.encryptionHelp": "Channel and global messages are encrypted with a key the server holds, so it can apply moderation at send time but keeps no readable copy: history, pins and attachments are stored sealed. Direct messages and private groups are end-to-end encrypted (lock) and the server never holds their key; a direct message to someone whose end-to-end key is unavailable falls back to the server-held key and shows the shield instead. Plaintext messages are never sent or shown: anything unencrypted or unopened is blocked behind a warning. Search runs in this client over decrypted messages — the server cannot match on content. Attachments carry their own key inside the encrypted message body, so a file is exactly as private as the message that links it."
+    "chat.encryptionHelp": "Direct messages and private groups are end-to-end encrypted with Olm, the double ratchet as implemented by vodozemac, with one session for each pair of devices: every device of yours and of your contact gets its own copy, and keys move forward with every message, so a key stolen later cannot open earlier messages. Each message is authenticated with an HMAC-SHA-256 tag truncated to 64 bits, as Olm specifies. This is not the Signal protocol and it is not post-quantum. Messages from before this upgrade used older static-key encryption: they stay readable, but nothing new is sent that way. Channel and global messages, voice channels and private calls are not end-to-end encrypted yet: chat uses a key the server holds (shield), so it can moderate at send time and stores history sealed, and call media is encrypted only on the way to the server's media relay. End-to-end encryption protects messages in transit and on the server, not on a compromised device; the server still sees who talks to whom, when and how much. History copied to a new device is marked as copied: it was verified on the other device. Exports are plain text unless you choose a passphrase. Search runs on this device. Attachments carry their own key inside the encrypted message."
 };
 export const chatGerman = {
     "chat.tabsLabel": "Unterhaltungen",
@@ -288,6 +291,9 @@ export const chatGerman = {
     "chat.safetyUnverified": "Sicherheitsnummer nicht bestätigt",
     "chat.channelDiagnostics": "Kanalschlüssel-Diagnose",
     "chat.cipher": "Verschlüsselungsverfahren",
+    "chat.secureMessaging": "Sichere Nachrichten",
+    "chat.secureMessagingOlm": "Aktiv: Olm (Double Ratchet, eine Sitzung pro Gerätepaar)",
+    "chat.secureMessagingInactive": "Auf dieser Verbindung nicht aktiv: {reason}. Neue Direktnachrichten können erst danach gesendet werden.",
     "chat.cachedKeys": "Gespeicherte Kontaktschlüssel",
     "chat.channelGenerations": "Kanalgenerationen",
     "chat.missingKeys": "Fehlende/abgelehnte Schlüssel",
@@ -314,5 +320,5 @@ export const chatGerman = {
     "chat.exportLimit": " — am Exportlimit beendet",
     "chat.announcement": "Ankündigung: {message}",
     "chat.offlineBatch": "{count} Offline-Nachrichten von {name}",
-    "chat.encryptionHelp": "Kanal- und globale Nachrichten werden mit einem Schlüssel verschlüsselt, den der Server besitzt. Er kann Nachrichten beim Senden moderieren, speichert Verlauf, angeheftete Nachrichten und Anhänge jedoch verschlüsselt. Private Nachrichten und private Gruppen sind Ende-zu-Ende-verschlüsselt (Schloss); ihr Schlüssel liegt dem Server nie vor. Ist für eine private Nachricht kein Ende-zu-Ende-Schlüssel verfügbar, wird der Serverschlüssel verwendet und das Schild angezeigt. Klartextnachrichten werden nie gesendet oder angezeigt: Unverschlüsseltes oder nicht Geöffnetes wird hinter einer Warnung blockiert. Die Suche läuft lokal über entschlüsselte Nachrichten. Der Server kann nicht nach Inhalten suchen. Der Schlüssel eines Anhangs steht im verschlüsselten Nachrichtentext. Dadurch ist die Datei genauso privat wie die Nachricht, die sie verlinkt."
+    "chat.encryptionHelp": "Direktnachrichten und private Gruppen sind mit Olm Ende-zu-Ende-verschlüsselt, dem Double Ratchet in der Umsetzung von vodozemac, mit einer Sitzung pro Gerätepaar: Jedes deiner Geräte und jedes Gerät deines Kontakts erhält eine eigene Kopie, und die Schlüssel werden mit jeder Nachricht weitergeschaltet, sodass ein später gestohlener Schlüssel frühere Nachrichten nicht öffnet. Jede Nachricht ist mit einem auf 64 Bit gekürzten HMAC-SHA-256-Wert authentifiziert, wie Olm es vorsieht. Das ist nicht das Signal-Protokoll und nicht quantensicher. Nachrichten von vor diesem Update nutzten eine ältere Verschlüsselung mit festen Schlüsseln: Sie bleiben lesbar, aber nichts Neues wird so gesendet. Kanal- und globale Nachrichten, Sprachkanäle und private Anrufe sind noch nicht Ende-zu-Ende-verschlüsselt: Der Chat nutzt einen Schlüssel, den der Server besitzt (Schild), damit er beim Senden moderieren kann und den Verlauf verschlüsselt speichert; Anrufmedien sind nur auf dem Weg zum Medienrelais des Servers verschlüsselt. Ende-zu-Ende-Verschlüsselung schützt Nachrichten unterwegs und auf dem Server, nicht auf einem kompromittierten Gerät; der Server sieht weiterhin, wer wann wie viel mit wem schreibt. Auf ein neues Gerät kopierter Verlauf ist als kopiert markiert: Er wurde auf dem anderen Gerät geprüft. Exporte sind Klartext, außer du wählst eine Passphrase. Die Suche läuft auf diesem Gerät. Anhänge tragen ihren eigenen Schlüssel in der verschlüsselten Nachricht."
 };

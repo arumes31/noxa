@@ -356,7 +356,9 @@ function renderThread() {
         ui.headStatus.textContent = presenceLine(presenceOf(selected.uid, st.clients, st.channels));
     }
     const peerKey = group ? null : peerKeyState(selected.uid);
-    const encryption = conversationEncryption({ group, peerKey, last: entry?.last || null });
+    // The header claim follows the connection's active secure path.
+    const secure = secureState();
+    const encryption = conversationEncryption({ group, peerKey, last: entry?.last || null, secure });
     ui.pill.dataset.encryption = encryption.kind;
     ui.pill.innerHTML = icon(encryption.kind);
     ui.pill.append(node("span", "", t(encryption.labelKey)));
@@ -372,15 +374,23 @@ function renderThread() {
     observeDays();
 }
 
+// secureState: whether this connection's secure-messaging path (Olm) is
+// active, from the same diagnostics call (cached like peer keys).
+function secureState() {
+    peerKeyState("");
+    const cached = peerKeys.get("");
+    return cached?.active ?? null;
+}
+
 function peerKeyState(uid) {
     const cached = peerKeys.get(uid);
     if (cached && Date.now() - cached.at < 60000) return cached.value;
     if (!cached?.pending) {
         const requestScope = scope;
-        peerKeys.set(uid, { value: cached?.value ?? null, at: cached?.at || 0, pending: true });
+        peerKeys.set(uid, { value: cached?.value ?? null, active: cached?.active ?? null, at: cached?.at || 0, pending: true });
         Promise.resolve().then(() => app().E2EEDiagnostics(uid)).then(result => {
             if (requestScope !== scope) return;
-            peerKeys.set(uid, { value: !!result?.peer_key_available, at: Date.now(), pending: false });
+            peerKeys.set(uid, { value: !!result?.peer_key_available, active: typeof result?.active === "boolean" ? result.active : null, at: Date.now(), pending: false });
             scheduleRender();
         }).catch(() => {
             if (requestScope === scope) peerKeys.set(uid, { value: null, at: Date.now(), pending: false });

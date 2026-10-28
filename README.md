@@ -70,14 +70,64 @@ system permissions determine the available voice, camera and notification tools.
 </details>
 
 > [!NOTE]
-> **Encryption boundaries:** Desktop direct-message bodies use X25519 +
-> XSalsa20-Poly1305 (NaCl box); the server relays encrypted payloads, including
-> offline delivery. The current desktop DM path does not use the repository's
-> X3DH/Double Ratchet library, so it does not provide that library's per-message
-> forward secrecy. Channel/global messages and forum bodies use server-managed
-> scope keys and can be decrypted by the server. Channel audio/video uses
-> WebRTC DTLS-SRTP to the SFU; channel media E2EE is
-> not yet integrated.
+> **Encryption boundaries** (details in [Encryption](#encryption)): direct
+> messages and private groups are end-to-end encrypted with Olm (vodozemac).
+> Channel/global chat, forum bodies, voice channels and private calls are
+> **not** end-to-end encrypted yet.
+
+<a id="encryption"></a>
+
+### Encryption
+
+**What is end-to-end encrypted.** Direct messages and private-group messages,
+with their attachments, edits and deletes, between desktops and the mobile web
+app:
+
+- **Protocol.** Olm, the double ratchet as implemented by
+  [vodozemac](https://github.com/matrix-org/vodozemac), compiled to
+  WebAssembly and used by both clients (`noxa-olm-v1`). There is one Olm
+  session per pair of devices; every device of the sender and of the
+  recipients receives its own copy, and the conversation, sender, recipient
+  device and message ID are authenticated inside every message. Keys ratchet
+  forward with every message, so a key stolen later cannot open earlier
+  messages.
+- **Primitives.** X25519 for the Olm handshake, AES-256-CBC with
+  HMAC-SHA-256 for messages. The Olm MAC is **truncated to 64 bits**, as the
+  Olm specification defines. Olm accounts are published as bundles signed by
+  each device's Ed25519 noXa key; contacts verify devices against the
+  identity they pinned (the account's first desktop and the devices it
+  approved). Changed identities need explicit confirmation; account resets
+  are accepted only through a signed reset chain.
+- **Not claimed.** This is not the Signal protocol and is not wire-compatible
+  with Signal or Matrix; it is not post-quantum.
+- **Server role.** The server relays and stores ciphertext and enforces
+  admission (complete device fanout, limits, membership) without being able
+  to read messages. It still sees metadata: who talks to whom, when, message
+  sizes and device lists.
+- **Older history.** Direct messages from before this protocol used static
+  X25519 + XSalsa20-Poly1305 (NaCl box) keys without forward secrecy. Those
+  records stay readable; nothing new is sent that way. Clients that do not
+  support the new protocol are told to update instead of receiving a
+  weaker copy.
+- **New devices.** Copying history to a newly linked device transfers
+  readable records only (signed per transfer, never keys or sessions); copied
+  records are marked as verified on the other device, not on the new one.
+
+**What is not end-to-end encrypted (yet).** Channel and global chat, threads
+and forum bodies use server-managed scope keys: the server can decrypt them
+(it moderates at send time and stores history sealed). Voice channels,
+watching streams and private calls use WebRTC DTLS-SRTP to the server's media
+relay, so the server can access call media; media end-to-end encryption is
+planned (Task 2) and will use the targeted, expiring media controls described
+in `internal/e2ee/admission/README.md`.
+
+**Endpoint limits.** Encryption protects messages in transit and on the
+server, not on a compromised device. Readable history is stored on each device
+(desktop: in a protected local store tied to the identity, destroyed when the
+identity is deleted; mobile web app: in IndexedDB under a non-extractable
+WebCrypto key, deleted on sign-out). Chat exports are plain text unless you
+choose a passphrase; anything you copy, export or screenshot leaves this
+protection.
 
 ---
 
@@ -165,7 +215,7 @@ graph TD
 
 ### 💬 Messaging and collaboration
 
-* **Encrypted messages and attachments**: Direct messages use recipient keys; channel/global bodies use server-managed scope-key generations. Attachment keys travel inside their encrypted message bodies.
+* **Encrypted messages and attachments**: Direct messages and private groups are end-to-end encrypted with Olm (see [Encryption](#encryption)); channel/global bodies use server-managed scope-key generations. Attachment keys travel inside their encrypted message bodies.
 * **Message tools**: Emoji reactions, replies, pins, polls, voice messages, typing indicators, read receipts, and mentions. Inbox, history search, and saved messages are scoped to the current server; history search decrypts and matches bodies in the native client.
 * **Chat navigation**: Channel and direct-message tabs stay on one row, with an **All chats** menu for overflow. Right-click to pin or reorder, or drag within the pinned/unpinned section. Arrow keys move focus, Enter opens a chat, and Ctrl+Shift+Left/Right reorders it. Order and pins are saved locally, encrypted and separated by server and identity; closing a tab removes its pin. **Recently closed** in All chats and **Ctrl+Shift+T** reopen explicitly closed chats from the current session (up to ten); channel access is checked again. This list resets when the server or identity changes.
 * **Chat media**: Enlarging an attached video keeps the same player, playback position, volume, speed and pause state. Animated images and chat videos pause offscreen or after a minute without window focus; only visible media resumes, and manually paused videos stay paused.
@@ -844,17 +894,17 @@ clears its notification on Android and desktop browsers; iPhones clear it when
 the app next opens, because iOS ends subscriptions that receive pushes without
 a visible notification.
 
-**Direct messages, voice and calls.** Direct messages are sealed once for
-every confirmed device of both people, so they reach the desktop and the
-phone. Contacts verify each device against the identity they pinned: the
+**Direct messages, voice and calls.** Direct messages are end-to-end
+encrypted with Olm for every confirmed device of both people, so they reach
+the desktop and the phone (see [Encryption](#encryption)). Contacts verify each device against the identity they pinned: the
 account's first desktop, and devices it approved. After passkey sign-in, a connected trusted desktop automatically confirms the
 new device for direct messages after verifying the server's passkey proof.
 If no trusted desktop is online, that endorsement waits until one connects;
 manual confirmation remains available in **Connections → PWA / Mobile login**. When you approve a phone, the desktop can copy
 recent direct-message history to it (90 days by default; up to 10,000
 messages and 50 MB, deleted from the server when the phone has it or after
-24 hours). Desktops older than this release are asked to update before they
-can message someone who has a phone.
+24 hours). Copied records are marked as copied history. Clients older than
+this release are asked to update before they can send direct messages.
 
 Voice channels, watching streams and private calls use WebRTC in the
 browser. Private calls are relay-only, so they need TURN (`turn.managed`);

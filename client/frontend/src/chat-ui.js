@@ -1893,7 +1893,8 @@ async function openE2EEDiagnostics() {
         <h3>${t("chat.e2ee")}</h3>
         <div class="e2ee-status ${changed ? "warn" : verified ? "ok" : ""}">${changed ? t("chat.safetyChanged") : verified ? t("chat.safetyVerifiedStatus") : peer ? t("chat.safetyUnverified") : t("chat.channelDiagnostics")}</div>
         <dl>
-            <dt>${t("chat.cipher")}</dt><dd>${escapeHTML(d.cipher || t("chat.unknown"))}</dd>
+            <dt>${t("chat.secureMessaging")}</dt><dd>${d.active ? t("chat.secureMessagingOlm") : escapeHTML(t("chat.secureMessagingInactive", { reason: d.unavailable || t("chat.unknown") }))}</dd>
+            ${d.active ? `<dt>${t("chat.cipher")}</dt><dd>${escapeHTML(d.cipher)}</dd>` : ""}
             <dt>${t("chat.cachedKeys")}</dt><dd>${d.cached_peers || 0}</dd>
             <dt>${t("chat.channelGenerations")}</dt><dd>${d.scope_keys || 0}</dd>
             <dt>${t("chat.missingKeys")}</dt><dd>${d.refused_keys || 0}</dd>

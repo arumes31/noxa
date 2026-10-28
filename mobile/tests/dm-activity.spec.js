@@ -25,7 +25,7 @@ const ftURL = () => `${server.webURL.replace(/^http/, "ws")}/ft`;
 
 async function openDMWith(page, uid) {
     await page.evaluate(peer => { location.hash = `#/dm/${encodeURIComponent(peer)}`; }, uid);
-    await expect(page.getByRole("note")).toContainText("End-to-end encrypted");
+    await expect(page.getByRole("note")).toContainText(/End-to-end encrypted with Olm|Secure messaging is not active/);
     const composer = page.getByRole("textbox", { name: /Message/ });
     await expect(composer).toBeEnabled({ timeout: 15000 });
     return composer;

@@ -171,6 +171,17 @@ async function openRatchet(session, fence, isCurrent, meta) {
     return owner;
 }
 
+/**
+ * The active secure-messaging path of this session, for labels and
+ * diagnostics (never a static claim): {active, reason}. reason is a code
+ * (e.g. "binding_missing", "recovery_required", "inactive").
+ */
+export function secureMessagingStatus() {
+    const owner = app.ratchet;
+    if (owner && !owner.consumer.closed && !owner.consumer.sticky) return { active: true, reason: "" };
+    return { active: false, reason: owner?.consumer.sticky?.code || app.ratchetError?.code || "inactive" };
+}
+
 function stopRatchet() {
     const owner = app.ratchet;
     app.ratchet = null;

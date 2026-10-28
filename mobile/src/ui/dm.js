@@ -2,7 +2,7 @@
 // attachments, voice messages, typing, receipts and the header tools.
 // Bodies render as rich text; attachments upload to the server-wide scope
 // (as the desktop does for direct messages).
-import { app, queueMessage, startCall } from "../app.js";
+import { app, queueMessage, secureMessagingStatus, startCall } from "../app.js";
 import { callLog, callsWith } from "../core/call-log.js";
 import { isMuted, setMuted } from "../core/conversation-prefs.js";
 import { Trust } from "../core/direct.js";
@@ -20,7 +20,7 @@ import { voiceNoteButton } from "./voice-note.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
 import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage, shareText } from "./chat-actions.js";
-import { aboutEncryption, encryptionBadge, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
+import { aboutEncryption, encryptionBadge, secureBanner, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 import { dmEntry } from "../core/search.js";
 import { chatSearch } from "./chat-search.js";
 
@@ -31,7 +31,7 @@ export function renderDM(root, peer) {
     const nickname = () => dm.conversations.get(peer)?.nickname || session.clients().find(c => c.unique_id === peer)?.nickname || t("dm.someone");
     const name = nickname();
     const log = h("div", { class: "chat-log", role: "log", "aria-live": "polite", "aria-label": name });
-    const banner = h("div", { class: "e2e-banner", role: "note" }, icon("lock"), " ", t("dm.encrypted"));
+    const banner = secureBanner(secureMessagingStatus());
     const notice = h("div");
     const deviceNotice = h("div");
     const typing = h("div", { class: "typing", role: "status" });
@@ -79,7 +79,7 @@ export function renderDM(root, peer) {
             avatar(from, "sm", message.self ? session.uniqueID : peer),
             h("div", { class: "msg-body" },
                 h("span", { class: "msg-from" }, from),
-                message.deleted ? null : encryptionBadge("e2e"),
+                message.deleted ? null : encryptionBadge("e2e", message),
                 body,
                 message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
                 // Transferred history: shown as copied from another device of this

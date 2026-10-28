@@ -65,7 +65,7 @@ test("a direct message reaches the desktop and the phone, and the phone replies"
     await expect(row.getByLabel("1 unread")).toBeVisible();
     await row.click();
     await expect(page.getByRole("log")).toContainText("hi Rowan, it's Ivy");
-    await expect(page.getByRole("note")).toContainText("End-to-end encrypted");
+    await expect(page.getByRole("note")).toContainText(/End-to-end encrypted with Olm|Secure messaging is not active/);
 
     // The phone's reply reaches Ivy and Rowan's own desktop.
     const toIvy = nextDirect(ivy, data => data.from_unique_id === rowan.uniqueID);

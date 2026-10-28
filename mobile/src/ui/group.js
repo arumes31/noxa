@@ -1,6 +1,6 @@
 // group.js — a private group: encrypted history, sending (with the outbox),
 // attachments, voice messages, typing, "Seen by" and the group sheet.
-import { app, queueMessage, startGroupCall } from "../app.js";
+import { app, queueMessage, secureMessagingStatus, startGroupCall } from "../app.js";
 import { isMuted } from "../core/conversation-prefs.js";
 import { uploadAttachment } from "../core/files.js";
 import { legacyID, seenMarkers } from "../core/groups.js";
@@ -16,7 +16,7 @@ import { richBody, watchCustomEmoji } from "./rich-text.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
 import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage, shareText } from "./chat-actions.js";
-import { aboutEncryption, blockedLine, encryptionBadge, isBlockedUser, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
+import { aboutEncryption, blockedLine, encryptionBadge, secureBanner, isBlockedUser, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 import { groupEntry } from "../core/search.js";
 import { chatSearch } from "./chat-search.js";
 
@@ -107,7 +107,7 @@ export function renderGroup(root, id) {
         const el = h("div", { class: classes, dataset: { id: String(message.id ?? "") }, ...props },
             timeNode(message.created_at),
             avatar(from, "sm", message.from_unique_id),
-            h("div", { class: "msg-body" }, h("span", { class: "msg-from" }, from), message.deleted ? null : encryptionBadge("e2e"), body,
+            h("div", { class: "msg-body" }, h("span", { class: "msg-from" }, from), message.deleted ? null : encryptionBadge("e2e", message), body,
                 own ? sendState(message) : null,
                 seen?.length ? h("div", { class: "msg-seen" }, t("conv.seenBy", { names: seen.map(memberName).join(", ") })) : null));
         el.noxaMessage = message.deleted || message.failed ? null : message;
@@ -220,7 +220,7 @@ export function renderGroup(root, id) {
     }
     root.replaceChildren(h("section", { class: "screen chat" },
         top,
-        h("div", { class: "e2e-banner", role: "note" }, icon("lock"), " ", t("dm.encrypted")),
+        secureBanner(secureMessagingStatus()),
         announcementBanner(app.session), notice, search.bar, log, typing, form));
     const rerender = () => { line.clear(); render(); };
     const stops = [watchCustomEmoji(app.session, rerender), watchDisplaySettings(rerender), relativeTicker(log), search.stop];

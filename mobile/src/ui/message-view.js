@@ -79,10 +79,28 @@ export function withDays(messages, timeOf, line) {
     return out;
 }
 
-/** A small lock (end-to-end) or shield (channel key) after the sender. */
-export function encryptionBadge(kind) {
-    const label = kind === "e2e" ? t("dm.encrypted") : t("rich.channelEncrypted");
-    return h("span", { class: `enc-badge enc-${kind}`, role: "img", title: label, "aria-label": label }, icon(kind === "e2e" ? "lock" : "shield"));
+/**
+ * A small lock (end-to-end) or shield (channel key) after the sender. An
+ * end-to-end message is labelled from the protocol it actually arrived with:
+ * Olm (noxa-olm-v1), or the legacy static-key encryption of older history.
+ */
+export function encryptionBadge(kind, message = null) {
+    if (kind !== "e2e") {
+        const label = t("rich.channelEncrypted");
+        return h("span", { class: "enc-badge enc-channel", role: "img", title: label, "aria-label": label }, icon("shield"));
+    }
+    const olm = message?.protocol === "noxa-olm-v1";
+    const label = t(olm ? "rich.encOlm" : "rich.encLegacy");
+    return h("span", { class: `enc-badge enc-e2e${olm ? "" : " enc-legacy"}`, role: "img", title: label, "aria-label": label }, icon("lock"));
+}
+
+/**
+ * The conversation banner from the active secure-messaging path: Olm when a
+ * ratchet session is active, otherwise why it is not (no static claim).
+ */
+export function secureBanner(status) {
+    const text = status.active ? t("rich.secureActive") : t("rich.secureInactive", { reason: status.reason || "inactive" });
+    return h("div", { class: `e2e-banner${status.active ? "" : " warn"}`, role: "note" }, icon("lock"), " ", text);
 }
 
 /** A blocked sender's message, folded; Show calls onShow. */

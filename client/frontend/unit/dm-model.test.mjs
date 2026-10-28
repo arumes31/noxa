@@ -126,6 +126,10 @@ describe("times and day separators", () => {
 describe("thread encryption claim", () => {
     it("is end-to-end only while the peer key resolves, and warns that nothing can be sent without it", () => {
         assert.deepEqual(conversationEncryption({ peerKey: true }), { kind: "lock", labelKey: "dm.encryption.e2e", helpKey: "chat.directHelp" });
+        // 1c-iii-b item 4: no lock is claimed while no secure path is active.
+        for (const args of [{ peerKey: true, secure: false }, { group: true, secure: false }])
+            assert.deepEqual(conversationEncryption(args), { kind: "warning", labelKey: "dm.encryption.inactive", helpKey: "dm.encryption.inactiveHelp" });
+        assert.equal(conversationEncryption({ peerKey: true, secure: true }).kind, "lock");
         assert.deepEqual(conversationEncryption({ peerKey: false, last: e2e("x") }), { kind: "warning", labelKey: "dm.encryption.noKey", helpKey: "dm.encryption.noKeyHelp" });
     });
 

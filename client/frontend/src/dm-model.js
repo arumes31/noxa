@@ -159,7 +159,10 @@ export function daySeparators(stamps, now = Date.now()) {
 // sent, which is said plainly. When the probe is unavailable the newest
 // message is the evidence; a DM that drew a shield would be server-readable,
 // so it reads as a warning. Private groups are always sealed per member.
-export function conversationEncryption({ group = false, peerKey = null, last = null } = {}) {
+// secure is the active secure-messaging path of this connection (false:
+// none is active, so nothing new can be sent end to end; null: unknown).
+export function conversationEncryption({ group = false, peerKey = null, last = null, secure = null } = {}) {
+    if (secure === false) return { kind: "warning", labelKey: "dm.encryption.inactive", helpKey: "dm.encryption.inactiveHelp" };
     if (group) return { kind: "lock", labelKey: "dm.encryption.e2e", helpKey: "dm.encryption.groupHelp" };
     if (peerKey === true) return { kind: "lock", labelKey: "dm.encryption.e2e", helpKey: "chat.directHelp" };
     if (peerKey === false) return { kind: "warning", labelKey: "dm.encryption.noKey", helpKey: "dm.encryption.noKeyHelp" };
