@@ -35,21 +35,23 @@ export function linkBindingFromStatus(result) {
 
 /**
  * Verifies a stored or freshly relayed statement against this device's own
- * keys and returns the binding. principal (the signed-in account) and
- * approverFingerprint (shown while linking / named by the scanned QR) are
- * checked when given. Throws {code: "server_binding_unavailable"} without a
+ * keys and returns the binding. approverFingerprint is REQUIRED: the
+ * fingerprint the desktop wrote into the scanned QR (never a server value);
+ * principal (the signed-in account) is checked when given. Throws {code: "server_binding_unavailable"} without a
  * statement and {code: "server_binding_mismatch"} for anything that does not
  * verify.
  */
 export function verifyLinkBinding(statement, { identity, principal = "", approverFingerprint = "" } = {}) {
-    if (!statement?.binding) throw refuse("server_binding_unavailable", "secure messaging needs this device to be linked from a desktop again (no confirmed server identity)");
+    if (!statement?.binding) throw refuse("server_binding_unavailable", "secure messaging needs this device to be linked again from a desktop by scanning its QR code (no confirmed server identity)");
     const mismatch = () => refuse("server_binding_mismatch", "the server identity confirmed by your desktop does not match; secure messaging is blocked until this device is linked again");
     const s = statement;
     if (!BINDING.test(s.binding) || !s.approverDeviceID || !s.principal || typeof s.approverKey !== "string") throw mismatch();
     const approver = ed25519FromPEM(s.approverKey);
     if (!approver) throw mismatch();
     if (principal && s.principal !== principal) throw mismatch();
-    if (approverFingerprint && keyFingerprint(s.approverKey) !== approverFingerprint) throw mismatch();
+    // The anchor is the approver fingerprint the desktop itself put into the
+    // scanned QR; without one the statement is never trusted.
+    if (!approverFingerprint || keyFingerprint(s.approverKey) !== approverFingerprint) throw mismatch();
     let signature;
     try { signature = fromBase64(s.signature); } catch { throw mismatch(); }
     const transcript = linkBindingTranscript(s.principal, s.approverDeviceID, publicKeyPEM(identity.edPublic), toBase64(identity.xPublic), s.binding);

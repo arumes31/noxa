@@ -101,7 +101,6 @@ func (a *App) deleteIdentityWithStores(id *identity, identityPath string) error 
 			stopped = append(stopped, cm)
 		}
 	}
-	type move struct{ dir, tomb string }
 	var moved []move
 	rollback := func(cause error) error {
 		var lost []string
@@ -157,14 +156,41 @@ func (a *App) deleteIdentityWithStores(id *identity, identityPath string) error 
 		}
 		moved = append(moved, move{dir, tomb})
 	}
+	// Another noxa process may have restored a tombstone meanwhile (the
+	// identity locks are per process): never commit over that.
+	ratchetDeletionHook("before-commit", movedPairs(moved))
+	for _, mv := range moved {
+		if _, err := os.Lstat(mv.tomb); err != nil {
+			return rollback(errors.New("secure message store of this identity was reopened by another noxa window or process; close it and try again"))
+		}
+	}
 	if identityPath != "" {
 		if err := os.Remove(identityPath); err != nil {
 			return rollback(err)
 		}
 	}
+	ratchetDeletionHook("after-commit", movedPairs(moved))
 	retry := false
+	var reopened error
 	for _, mv := range moved {
+		if _, err := os.Lstat(mv.tomb); err != nil {
+			// Restored between the check and the commit: take it again.
+			if err := os.Rename(mv.dir, mv.tomb); err != nil {
+				// Still open elsewhere: leave a committed marker so the sweep
+				// erases the store once it can (never restored).
+				_ = os.MkdirAll(erasingName(mv.tomb), 0o700)
+				reopened = errRatchetErasedLater
+				retry = true
+				continue
+			}
+		}
 		if !eraseCommittedTombstone(mv.tomb) {
+			retry = true
+		}
+	}
+	// Stores kept aside (.conflict-) belong to this identity too.
+	for base := range bases {
+		if !eraseRatchetConflicts(base, ratchetStoreKey(id.PublicKey)) {
 			retry = true
 		}
 	}
@@ -174,19 +200,63 @@ func (a *App) deleteIdentityWithStores(id *identity, identityPath string) error 
 			a.sweepRatchetStoresIn(bases)
 		})
 	}
-	return nil
+	return reopened
+}
+
+// errRatchetErasedLater: the deletion COMMITTED (identity gone) but another
+// process still holds the store; it is erased by a later sweep.
+var errRatchetErasedLater = errors.New("the identity was deleted, but another noxa window or process still has its secure message store open; it is erased once that window closes")
+
+// erasingName is the committed-deletion name of a .deleted- tombstone.
+func erasingName(tomb string) string {
+	base := filepath.Base(tomb)
+	if i := strings.LastIndex(base, ratchetTombstone); i > 0 {
+		return filepath.Join(filepath.Dir(tomb), base[:i]+ratchetErasing+base[i+len(ratchetTombstone):])
+	}
+	return tomb + ratchetErasing + "x"
+}
+
+// eraseRatchetConflicts erases the .conflict- stores of a deleted key; it
+// reports whether none is left.
+func eraseRatchetConflicts(base, key string) bool {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	ok := true
+	for _, e := range entries {
+		if k, marker, isTomb := splitRatchetTombstone(e); isTomb && k == key && marker == ratchetConflict {
+			if err := os.RemoveAll(filepath.Join(base, e.Name())); err != nil {
+				log.Printf("ratchet: erasing a deleted identity's kept-aside store failed: %v", err)
+				ok = false
+			}
+		}
+	}
+	return ok
 }
 
 var ratchetWipeRetryDelay = 30 * time.Second
+
+// ratchetDeletionHook lets tests act as a second process at the commit point.
+var ratchetDeletionHook = func(stage string, moved [][2]string) {}
+
+type move struct{ dir, tomb string }
+
+func movedPairs(moved []move) [][2]string {
+	out := make([][2]string, len(moved))
+	for i, mv := range moved {
+		out[i] = [2]string{mv.dir, mv.tomb}
+	}
+	return out
+}
 
 // eraseCommittedTombstone marks a tombstone of a committed deletion .erasing-
 // (so it can never be restored, even if the key is imported again) and erases
 // it. It reports whether nothing is left.
 func eraseCommittedTombstone(tomb string) bool {
 	path := tomb
-	if i := strings.LastIndex(filepath.Base(tomb), ratchetTombstone); i > 0 {
-		base := filepath.Base(tomb)
-		erasing := filepath.Join(filepath.Dir(tomb), base[:i]+ratchetErasing+base[i+len(ratchetTombstone):])
+	if strings.Contains(filepath.Base(tomb), ratchetTombstone) {
+		erasing := erasingName(tomb)
 		if err := os.Rename(tomb, erasing); err == nil {
 			path = erasing
 		} else {
@@ -294,7 +364,7 @@ func splitRatchetTombstone(e os.DirEntry) (key, marker string, ok bool) {
 		return "", "", false
 	}
 	name := e.Name()
-	for _, m := range []string{ratchetTombstone, ratchetErasing} {
+	for _, m := range []string{ratchetTombstone, ratchetErasing, ratchetConflict} {
 		if i := strings.Index(name, m); i > 0 {
 			return name[:i], m, true
 		}
@@ -326,7 +396,23 @@ func resolveRatchetTombstones(base, key string, state ratchetLiveness) error {
 		}
 		tomb := filepath.Join(base, e.Name())
 		switch {
+		case marker == ratchetConflict:
+			// A kept-aside store: erased only once its identity is known gone.
+			if state == ratchetLiveNo {
+				if err := os.RemoveAll(tomb); err != nil {
+					log.Printf("ratchet: erasing a deleted identity's kept-aside store failed: %v", err)
+				}
+			}
 		case marker == ratchetErasing:
+			// A committed deletion. A live directory next to it (reopened by
+			// another process during the deletion) is that deleted store:
+			// erased first, and the marker only once it is gone.
+			if state != ratchetLiveYes {
+				if err := os.RemoveAll(dir); err != nil {
+					log.Printf("ratchet: erasing a deleted store failed: %v", err)
+					continue
+				}
+			}
 			if err := os.RemoveAll(tomb); err != nil {
 				log.Printf("ratchet: erasing a deleted store failed: %v", err)
 			}
@@ -375,10 +461,12 @@ func (a *App) sweepRatchetStoresIn(bases map[string]bool) {
 // is erased (or at least marked .erasing-), so the import never resurrects
 // the deleted store.
 func (a *App) finishRatchetDeletion(publicKey string) error {
-	live, complete := liveRatchetKeys()
+	// The caller established this key is not stored; only a readable stored
+	// copy (global completeness is irrelevant here) keeps its tombstones.
+	live, _ := liveRatchetKeys()
 	key := ratchetStoreKey(publicKey)
-	if live[key] || !complete {
-		return nil // stored (or unknown): its tombstones are resolved at start
+	if live[key] {
+		return nil // stored: its tombstones are resolved at start
 	}
 	unlock := lockRatchetStore(key)
 	defer unlock()
@@ -388,13 +476,29 @@ func (a *App) finishRatchetDeletion(publicKey string) error {
 			continue
 		}
 		for _, e := range entries {
-			if k, marker, ok := splitRatchetTombstone(e); ok && k == key && marker == ratchetTombstone {
-				tomb := filepath.Join(base, e.Name())
-				if !eraseCommittedTombstone(tomb) {
-					if _, err := os.Lstat(tomb); err == nil {
-						return errors.New("an earlier deletion of this identity's secure message store is still being finished; try the import again shortly")
-					}
+			k, marker, ok := splitRatchetTombstone(e)
+			if !ok || k != key {
+				continue
+			}
+			tomb := filepath.Join(base, e.Name())
+			if marker == ratchetTombstone {
+				eraseCommittedTombstone(tomb)
+				if _, err := os.Lstat(tomb); err == nil {
+					return errors.New("an earlier deletion of this identity's secure message store is still being finished; try the import again shortly")
 				}
+				continue
+			}
+			// Committed markers and kept-aside stores of the deleted key go too,
+			// so nothing of it can come back for the re-imported key. Next to
+			// a committed marker, a live directory is the deleted store that
+			// another process reopened: it is erased first.
+			if marker == ratchetErasing {
+				if err := os.RemoveAll(filepath.Join(base, key)); err != nil {
+					return errors.New("an earlier deletion of this identity's secure message store is still being finished; try the import again shortly")
+				}
+			}
+			if err := os.RemoveAll(tomb); err != nil {
+				return errors.New("an earlier deletion of this identity's secure message store is still being finished; try the import again shortly")
 			}
 		}
 	}

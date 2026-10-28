@@ -151,9 +151,12 @@ export async function runLink(root, link, { onSignedIn, fence }) {
         // The desktop's signed server binding (its pinned TLS certificate):
         // verified for this device's keys and the approver shown while
         // linking. A statement that does not verify fails the link.
-        const linkBinding = linkBindingFromStatus(decided);
-        if (linkBinding) verifyLinkBinding(linkBinding, { identity, approverFingerprint: claim.approverFingerprint });
-        const committed = await rememberLinkedIdentity(identity, { via: "link", approverFingerprint: claim.approverFingerprint, ...(linkBinding ? { linkBinding } : {}) }, fence);
+        // Anchored only by the desktop's own fingerprint in the scanned QR: a
+        // typed-code link (no anchor) stores no binding, so secure messaging
+        // stays blocked until the device is linked by QR.
+        const linkBinding = link.approver ? linkBindingFromStatus(decided) : null;
+        if (linkBinding) verifyLinkBinding(linkBinding, { identity, approverFingerprint: link.approver });
+        const committed = await rememberLinkedIdentity(identity, { via: "link", approverFingerprint: claim.approverFingerprint, ...(linkBinding ? { linkBinding, bindingAnchor: link.approver } : {}) }, fence);
         await connect({ fence: committed });
         history.replaceState(null, "", "/app/#/home");
         onSignedIn({ offerPasskey: true });

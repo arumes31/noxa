@@ -374,8 +374,10 @@ export class Groups extends EventTarget {
         if (committed) text = committed.text;
         const list = prior.filter(m => !(m.local && m.reference === reference));
         if (list.some(m => !m.local && m.reference === reference && m.from_unique_id === this.uid)) return;
+        // The replacement keeps the committed record's key, so a later changed
+        // draft still finds it committed (never painted as pending).
         list.push({ id: `local:${reference}`, local: true, reference, conversation_id: id, from_unique_id: this.uid, text, created_at: sentAt,
-            pending: false, queued: false, failed: false, ...state });
+            pending: false, queued: false, failed: false, ...state, ...(committed ? { key: committed.key, protocol: committed.protocol } : {}) });
         this.#put(id, list);
     }
 

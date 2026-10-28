@@ -38,8 +38,12 @@ func LockForDestroy(dir string) (release func(), err error) {
 			continue
 		}
 		f, e := os.Open(filepath.Join(dir, entry.Name()))
+		if os.IsNotExist(e) {
+			continue
+		}
 		if e != nil {
-			continue // unreadable: no store opener can hold it either
+			release()
+			return nil, e // never treat an unopenable file as unused
 		}
 		deadline := time.Now().Add(150 * time.Millisecond)
 		for {

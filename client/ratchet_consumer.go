@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -1584,7 +1585,10 @@ func ratchetTerminal(state string) bool {
 // resolves: the OLDEST window first (an unresolved old attempt is a gap that
 // keeps the retired-through watermark and so admission backpressure stuck;
 // never strand it behind newer ones) plus the newest window, each at most
-// window long, in sequence order without duplicates.
+// window long, in sequence order without duplicates. Callers pass only
+// attempts not yet retired (durably or in this session). Reach is
+// conditional: attempts in the middle are reached as the oldest window
+// retires; an old attempt whose retirement fails permanently keeps its slot.
 func ratchetResolveOrder(ids []string, window int) []string {
 	sorted := append([]string(nil), ids...)
 	sort.Slice(sorted, func(i, j int) bool { return ratchetAttemptSeq(sorted[i]) < ratchetAttemptSeq(sorted[j]) })
@@ -1866,14 +1870,23 @@ func (c *ratchetConsumer) drain() ([]RatchetQuarantine, error) {
 			recent = append(recent, r.ID)
 		}
 	}
-	for _, id := range ratchetResolveOrder(recent, ratchetRetireWin) {
-		if c.retired[id] {
-			continue
+	// Session-retired attempts never take a window slot.
+	unretired := recent[:0:0]
+	for _, id := range recent {
+		if !c.retired[id] {
+			unretired = append(unretired, id)
 		}
+	}
+	for _, id := range ratchetResolveOrder(unretired, ratchetRetireWin) {
 		if _, err := c.resolve(id, a, true); err != nil {
-			var r *ratchetError
-			if ratchetCode(err) == "fenced" || !errors.As(err, &r) || r.Committed == nil {
+			if ratchetCode(err) == "fenced" {
 				return nil, err
+			}
+			// One attempt that cannot be resolved now (even a deterministic
+			// local failure) never stops the drain from paging deliveries.
+			var r *ratchetError
+			if !errors.As(err, &r) || r.Committed == nil {
+				log.Printf("ratchet: attempt %s not resolved: %v", id, err)
 			}
 		}
 	}

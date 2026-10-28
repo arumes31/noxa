@@ -236,3 +236,102 @@ func TestRatchetCorruptStoreDoesNotBlockDeletion(t *testing.T) {
 		})
 	}
 }
+
+// Adopted review repro (P3-1): a deleted key re-imported while another
+// identity file is unreadable (liveness incomplete) never gets its deleted
+// store back.
+func TestRatchetReimportNeverResurrectsWhenLivenessIncomplete(t *testing.T) {
+	a, id, idName, live := tombSetup(t)
+	writeTomb(t, live, "a.db", "store")
+	if msg := a.DeleteIdentity(idName, true); msg != "" {
+		t.Fatal(msg)
+	}
+	plain := live + ratchetTombstone + "y"
+	writeTomb(t, plain, "a.db", "deleted-secret")
+	committed := live + ratchetErasing + "z"
+	writeTomb(t, committed, "a.db", "deleted")
+	writeTomb(t, live, "a.db", "reopened-deleted") // a deleted store another process reopened
+	dir, _ := identitiesDir()
+	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if msg := a.adoptImportedIdentity(id, "back.json"); msg != "" {
+		t.Fatal(msg)
+	}
+	if exists(plain) || exists(committed) || exists(live) {
+		t.Fatal("import must finish the deleted key's tombstones, markers and reopened store")
+	}
+	unlock := lockRatchetIdentity(id.PublicKey)
+	_ = resolveRatchetTombstones(filepath.Dir(live), ratchetStoreKey(id.PublicKey), ratchetLiveYes)
+	unlock()
+	if b, e := os.ReadFile(filepath.Join(live, "a.db")); e == nil {
+		t.Fatalf("RESURRECTED deleted identity's store on re-import: %q", b)
+	}
+}
+
+// Adopted review repro (P3-2): kept-aside stores are destroyed with the identity.
+func TestRatchetConflictDirErasedOnDeletion(t *testing.T) {
+	a, _, idName, live := tombSetup(t)
+	writeTomb(t, live+ratchetTombstone+"x", "old.db", "authoritative")
+	writeTomb(t, live, "fresh.db", "fresh-secret")
+	a.sweepRatchetStores()
+	if len(conflictDirs(t, live)) != 1 {
+		t.Fatal("precondition")
+	}
+	if msg := a.DeleteIdentity(idName, true); msg != "" {
+		t.Fatal(msg)
+	}
+	if left := conflictDirs(t, live); len(left) > 0 {
+		t.Fatalf("store data of the deleted identity survives deletion: %v", left)
+	}
+	// A conflict dir of a known-absent key left by an older build is swept.
+	orphan := filepath.Join(filepath.Dir(live), strings.Repeat("ef", 16)+ratchetConflict+"q")
+	writeTomb(t, orphan, "a.db", "x")
+	a.sweepRatchetStores()
+	if exists(orphan) {
+		t.Fatal("kept-aside store of an absent identity must be swept")
+	}
+}
+
+// Review P3-3: a second process restoring the tombstone during a deletion.
+func TestRatchetDeletionDetectsReopenedStore(t *testing.T) {
+	t.Run("before the commit: rolls back, identity kept", func(t *testing.T) {
+		a, _, idName, live := tombSetup(t)
+		writeTomb(t, live, "a.db", "store")
+		old := ratchetDeletionHook
+		t.Cleanup(func() { ratchetDeletionHook = old })
+		ratchetDeletionHook = func(stage string, moved [][2]string) {
+			if stage == "before-commit" {
+				for _, mv := range moved {
+					_ = os.Rename(mv[1], mv[0]) // the other process restores it
+				}
+			}
+		}
+		if msg := a.DeleteIdentity(idName, true); !strings.Contains(msg, "reopened") {
+			t.Fatalf("deletion must fail: %q", msg)
+		}
+		p, _ := identityPathFor(idName)
+		if !exists(p) || !exists(filepath.Join(live, "a.db")) {
+			t.Fatal("identity and store must survive a refused deletion")
+		}
+	})
+	t.Run("after the commit: the store is taken again and erased", func(t *testing.T) {
+		a, _, idName, live := tombSetup(t)
+		writeTomb(t, live, "a.db", "store")
+		old := ratchetDeletionHook
+		t.Cleanup(func() { ratchetDeletionHook = old })
+		ratchetDeletionHook = func(stage string, moved [][2]string) {
+			if stage == "after-commit" {
+				for _, mv := range moved {
+					_ = os.Rename(mv[1], mv[0])
+				}
+			}
+		}
+		if msg := a.DeleteIdentity(idName, true); msg != "" {
+			t.Fatal(msg)
+		}
+		if exists(live) {
+			t.Fatal("a store reopened after the commit must still be erased")
+		}
+	})
+}

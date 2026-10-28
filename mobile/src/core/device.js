@@ -19,6 +19,13 @@ export const LinkState = Object.freeze({ pending: "pending", claimed: "claimed",
  */
 export function parseLinkFragment(hash) {
     const params = new URLSearchParams(hash.replace(/^#/, ""));
+    // Exactly the keys the desktop writes, each at most once: a duplicate
+    // (e.g. a server-injected second a=) or unknown key rejects the link.
+    const seen = new Set();
+    for (const key of params.keys()) {
+        if (!["id", "k", "a"].includes(key) || seen.has(key)) return null;
+        seen.add(key);
+    }
     const id = params.get("id");
     const k = params.get("k");
     if (!id || !k) return null;
@@ -105,6 +112,27 @@ export async function waitForDecision(identity, linkID, { open = () => Connectio
     }
 }
 
+/** auth.LoginChallengeSize / auth.LoginChallengeDomain (internal/auth). */
+export const LOGIN_CHALLENGE_SIZE = 32;
+export const LOGIN_CHALLENGE_DOMAIN = "noxa-auth-challenge-v1\n";
+
+/**
+ * What a login signature covers: LOGIN_CHALLENGE_DOMAIN || challenge. Refuses
+ * anything but exactly LOGIN_CHALLENGE_SIZE bytes not starting with "noxa-",
+ * so a server can never obtain this device's signature over a transcript of
+ * its choosing (device approvals, passkey delegations, Olm bundles...).
+ */
+export function loginChallengeMessage(challenge) {
+    const prefix = utf8("noxa-");
+    if (!(challenge instanceof Uint8Array) || challenge.length !== LOGIN_CHALLENGE_SIZE || prefix.every((b, i) => challenge[i] === b)) {
+        throw Object.assign(new Error("the server sent an invalid login challenge; refusing to sign it"), { code: "unsafe_challenge" });
+    }
+    const domain = utf8(LOGIN_CHALLENGE_DOMAIN), out = new Uint8Array(domain.length + challenge.length);
+    out.set(domain);
+    out.set(challenge, domain.length);
+    return out;
+}
+
 /**
  * Signs in with this device's key. Resolves with the AuthResponse; rejects
  * with the server's reason, e.g. a revoked device, classified in error.kind
@@ -118,7 +146,7 @@ export async function signIn(conn, identity, { version, nickname = "", serverPas
         nickname, server_password: serverPassword, x25519_public_key: x25519,
     }, [Msg.AuthChallenge, Msg.AuthResponse], { timeout: 10000 });
     if (!first.challenge) throw signInError(first.reason);
-    const signature = sign(Uint8Array.from(atob(first.challenge), c => c.charCodeAt(0)), identity.edSecret);
+    const signature = sign(loginChallengeMessage(Uint8Array.from(atob(first.challenge), c => c.charCodeAt(0))), identity.edSecret);
     const response = await conn.request(Msg.AuthSignature, {
         unique_id: "", public_key: publicKeyPEM(identity.edPublic), signature: toBase64(signature), x25519_public_key: x25519,
     }, Msg.AuthResponse);

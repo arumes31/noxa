@@ -432,10 +432,17 @@ func (m *connManager) connectNamed(addr, nickname, displayName, password, server
 		Nickname:        nickname,
 		ServerPassword:  serverPassword,
 		X25519PublicKey: encPub,
-	}, func(challenge []byte) ([]byte, string, error) {
-		sig, err := auth.SignChallenge(id.PrivateKey, challenge)
+	}, loginSigner(id))
+}
+
+// loginSigner answers a login challenge: domain-separated and fixed-size
+// only, so a server can never obtain a signature over a transcript of its
+// choosing (a device approval or link binding statement).
+func loginSigner(id *identity) challengeSigner {
+	return func(challenge []byte) ([]byte, string, error) {
+		sig, err := auth.SignLoginChallenge(id.PrivateKey, challenge)
 		return sig, id.PublicKey, err
-	})
+	}
 }
 
 // challengeSigner signs a server challenge and returns the signature and

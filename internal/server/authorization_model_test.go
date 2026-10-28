@@ -105,7 +105,7 @@ func TestAuthorizationModelBindsChallengeAndRejectsDowngrade(t *testing.T) {
 				if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
 					t.Fatal(err)
 				}
-				signature, err := auth.SignChallenge(private, challenge.Challenge)
+				signature, err := auth.SignLoginChallenge(private, challenge.Challenge) // updated clients: domain-separated
 				if err != nil {
 					t.Fatal(err)
 				}

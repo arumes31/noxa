@@ -816,11 +816,10 @@ func (a *App) adoptImportedIdentityLocked(id *identity, fallbackName string) str
 		return err.Error()
 	}
 	migrateLegacyIdentity(dir)
-	// Importing a key again lifts an earlier deletion fence of its stores.
-	restoreRatchetIdentity(id.PublicKey)
 	for _, existing := range identityIDs(dir) {
 		if e := entryFor(dir, existing, ""); e.UniqueID != "" {
 			if uid, err := id.uniqueID(); err == nil && uid == e.UniqueID {
+				restoreRatchetIdentity(id.PublicKey)
 				return a.switchIdentityLocked(existing)
 			}
 		}
@@ -828,10 +827,12 @@ func (a *App) adoptImportedIdentityLocked(id *identity, fallbackName string) str
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err.Error()
 	}
-	// A deleted key imported again gets a fresh store, never the deleted one.
+	// A deleted key imported again gets a fresh store, never the deleted one;
+	// only then the in-process deletion fence is lifted.
 	if err := a.finishRatchetDeletion(id.PublicKey); err != nil {
 		return err.Error()
 	}
+	restoreRatchetIdentity(id.PublicKey)
 	if id.Name == "" {
 		id.Name = strings.TrimSuffix(fallbackName, ".json")
 	}
@@ -939,7 +940,10 @@ func (a *App) DeleteIdentity(id string, confirmUnexported bool) string {
 	// Identity deletion (only) destroys its noxa-olm-v1 namespaces and
 	// readable archive together with the key (resumable, see
 	// deleteIdentityWithStores).
-	if err := a.deleteIdentityWithStores(loaded, path); err != nil {
+	notice := ""
+	if err := a.deleteIdentityWithStores(loaded, path); errors.Is(err, errRatchetErasedLater) {
+		notice = err.Error() // committed: finish the deletion, then tell the user
+	} else if err != nil {
 		return err.Error()
 	}
 	a.settingsMu.Lock()
@@ -959,7 +963,7 @@ func (a *App) DeleteIdentity(id string, confirmUnexported bool) string {
 		a.invalidateIdentityContexts()
 	}
 	a.emitSettingsUpdate()
-	return ""
+	return notice
 }
 
 // ImproveIdentityLevel searches for a counter that raises the identity's

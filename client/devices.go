@@ -268,12 +268,20 @@ func (a *App) CreateDeviceLinkForTab(tabID string) (DeviceLinkView, error) {
 		result.LinkID: {secret: result.Secret, code: strings.ReplaceAll(result.Code, "-", "")},
 	}
 	cm.mu.Unlock()
-	// The QR (shown on this screen, scanned out of band) also names this
-	// desktop's key fingerprint, so the browser can refuse a link the server
+	// The desktop builds the fragment itself (never appends to the
+	// server's): link ID, secret and this desktop's own key fingerprint, so
+	// the browser that scans this screen can refuse a link the server
 	// re-routed to another approver.
-	if id, err := cm.identity(); err == nil && strings.Contains(result.URL, "#") {
-		result.URL += "&a=" + url.QueryEscape(netproto.KeyFingerprint(id.PublicKey))
+	id, err := cm.identity()
+	if err != nil {
+		return DeviceLinkView{}, err
 	}
+	base, _, _ := strings.Cut(result.URL, "#")
+	if u, err := url.Parse(base); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return DeviceLinkView{}, errors.New("invalid device link response")
+	}
+	fragment := url.Values{"id": {result.LinkID}, "k": {base64.RawURLEncoding.EncodeToString(result.Secret)}, "a": {netproto.KeyFingerprint(id.PublicKey)}}
+	result.URL = base + "#" + fragment.Encode()
 	image, err := deviceLinkQR(result.URL)
 	if err != nil {
 		return DeviceLinkView{}, err

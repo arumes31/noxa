@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"net/url"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 		case netproto.DeviceActionLinkCreate:
 			return netproto.MsgDeviceResult, netproto.DeviceResult{
 				Action: r.Action, LinkID: "link-1", Secret: secret, Code: "K7QM-4XPA",
-				URL: "https://chat.example/link#id=link-1&k=x", ExpiresAt: 1, State: netproto.LinkStatePending,
+				URL: "https://chat.example/link#id=evil&k=x&a=0000+0000+0000+0000&zz=1", ExpiresAt: 1, State: netproto.LinkStatePending,
 			}, true
 		case netproto.DeviceActionLinkDecide:
 			approval, binding, bindingSig = r.Signature, r.ServerBinding, r.BindingSignature
@@ -56,8 +57,13 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 	if err != nil || link.LinkID != "link-1" || link.Code != "K7QM-4XPA" {
 		t.Fatalf("create = %+v, %v", link, err)
 	}
-	// The QR names this desktop's key fingerprint (out of band).
-	if own, _ := cm.identity(); !strings.HasSuffix(link.URL, "&a="+url.QueryEscape(netproto.KeyFingerprint(own.PublicKey))) {
+	// The QR names this desktop's key fingerprint (out of band), in a
+	// fragment the desktop builds itself: the server's injected a= is gone.
+	own, _ := cm.identity()
+	base, frag, _ := strings.Cut(link.URL, "#")
+	values, err := url.ParseQuery(frag)
+	if base != "https://chat.example/link" || err != nil || len(values) != 3 || len(values["a"]) != 1 || values.Get("a") != netproto.KeyFingerprint(own.PublicKey) ||
+		values.Get("id") != "link-1" || values.Get("k") != base64.RawURLEncoding.EncodeToString(secret) {
 		t.Fatalf("link URL = %q", link.URL)
 	}
 

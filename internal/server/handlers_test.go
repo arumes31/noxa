@@ -111,7 +111,7 @@ func (f *fakeAuth) AuthenticateChallenge(_ context.Context, uniqueID string, cha
 	if !ok {
 		return false, auth.ErrUserNotFound
 	}
-	if err := auth.VerifyChallenge(pub, challenge, signature); err != nil {
+	if err := auth.VerifyLoginChallenge(pub, challenge, signature); err != nil { // mirrors AuthService
 		return false, nil
 	}
 	return true, nil

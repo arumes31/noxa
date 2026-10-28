@@ -49,20 +49,23 @@ export function checkFanout(scope, targets) {
 }
 
 /**
- * Archive replay keeps only the newest attempt per logical ID, ordered by
- * numeric attempt sequence (a reseal after abort/reject supersedes it).
- */
-/**
  * The unretired committed attempts one drain resolves: the OLDEST window first
  * (an unresolved old attempt is a gap that keeps the retired-through watermark,
  * and so admission backpressure, stuck: it is never stranded behind newer
- * ones) plus the newest window, in sequence order without duplicates.
+ * ones) plus the newest window, in sequence order without duplicates. Callers
+ * pass only attempts not yet retired (durably or in this session). Reach is
+ * conditional: attempts in the middle are reached as the oldest window
+ * retires; an old attempt whose retirement fails permanently keeps its slot.
  */
 export function resolveOrder(ids, window) {
     const sorted = [...ids].sort((x, y) => Number(x.split(":")[1]) - Number(y.split(":")[1]));
     return sorted.length <= 2 * window ? sorted : [...sorted.slice(0, window), ...sorted.slice(-window)];
 }
 
+/**
+ * Archive replay keeps only the newest attempt per logical ID, ordered by
+ * numeric attempt sequence (a reseal after abort/reject supersedes it).
+ */
 export function latestAttempts(entries) {
     const order = id => String(id).split(":").map(Number);
     const cmp = (x, y) => { const [ex, sx] = order(x.id), [ey, sy] = order(y.id); return ex - ey || sx - sy; };
@@ -762,11 +765,16 @@ export class RatchetConsumer {
     async #drain() {
         const a = await this.#authority();
         // Resolve recent committed attempts first: uncertainty never reseals.
-        const unretired = (await this.#refs("outbox")).map(r => r[1]).filter(id => id.startsWith(a.epoch + ":") && !retiredIn(a, id));
+        // Session-retired attempts never take a window slot.
+        const unretired = (await this.#refs("outbox")).map(r => r[1]).filter(id => id.startsWith(a.epoch + ":") && !retiredIn(a, id) && !this.retired.has(id));
         for (const id of resolveOrder(unretired, Limits.retireWindow)) {
-            if (this.retired.has(id)) continue;
             try { await this.#resolve(id, a, true); }
-            catch (e) { if (e.code === "fenced" || !e.committed) throw e; }
+            catch (e) {
+                if (e.code === "fenced") throw e;
+                // One attempt that cannot be resolved now (even a deterministic
+                // local failure) never stops the drain from paging deliveries.
+                if (!e.committed) console.warn(`ratchet: attempt ${id} not resolved: ${e.code || e.message}`);
+            }
         }
         let after = "";
         for (let pages = 0; pages < 4096; pages++) {

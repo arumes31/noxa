@@ -136,7 +136,7 @@ export function enableRatchetTestSession(options = null) {
 async function openRatchet(session, fence, isCurrent, meta) {
     // Re-verified on every open against this device's keys and the signed-in
     // account: missing or mismatching statements block secure messaging.
-    const binding = verifyLinkBinding(meta?.linkBinding, { identity: session.identity, principal: session.uniqueID, approverFingerprint: meta?.approverFingerprint || "" });
+    const binding = verifyLinkBinding(meta?.linkBinding, { identity: session.identity, principal: session.uniqueID, approverFingerprint: meta?.bindingAnchor || "" });
     // modules: test-only injection of the store/core factories (lifecycle tests).
     const [{ openRatchetStore }, { createRatchetCore }] = ratchetTest.modules
         ? await ratchetTest.modules()

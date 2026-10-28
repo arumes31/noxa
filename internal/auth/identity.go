@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // GenerateIdentityKeyPair generates a new Ed25519 key pair and returns the
@@ -94,6 +95,52 @@ func SignChallenge(privateKeyPEM string, challenge []byte) ([]byte, error) {
 		return nil, errors.New("challenge must not be empty")
 	}
 	return ed25519.Sign(priv, challenge), nil
+}
+
+// LoginChallengeSize is the exact length of a server login challenge.
+const LoginChallengeSize = 32
+
+// LoginChallengeDomain separates login signatures from every other message
+// an identity key signs (device approvals, link binding statements, passkey
+// delegations, Olm bundles and resets all carry their own "noxa-…" domain or
+// a length-prefixed format), so a server can never turn a login into a
+// signature over a transcript of its choosing.
+const LoginChallengeDomain = "noxa-auth-challenge-v1\n"
+
+// ErrUnsafeChallenge: a challenge an updated client refuses to sign.
+var ErrUnsafeChallenge = errors.New("the server sent an invalid login challenge; refusing to sign it")
+
+// LoginChallengeMessage is what a login signature covers.
+func LoginChallengeMessage(challenge []byte) []byte {
+	return append([]byte(LoginChallengeDomain), challenge...)
+}
+
+// SignLoginChallenge signs a server login challenge. It refuses anything but
+// exactly LoginChallengeSize bytes that do not start with "noxa-", and it
+// never signs the raw bytes: only LoginChallengeDomain || challenge.
+func SignLoginChallenge(privateKeyPEM string, challenge []byte) ([]byte, error) {
+	if len(challenge) != LoginChallengeSize || strings.HasPrefix(string(challenge), "noxa-") {
+		return nil, ErrUnsafeChallenge
+	}
+	return SignChallenge(privateKeyPEM, LoginChallengeMessage(challenge))
+}
+
+// VerifyLoginChallenge accepts the domain-separated login signature and, for
+// clients released before it, the legacy raw signature over the challenge.
+// (Accepting the legacy form does not let anyone obtain signatures; only
+// signing raw server bytes did, and updated clients never do.)
+func VerifyLoginChallenge(publicKeyPEM string, challenge, signature []byte) error {
+	if len(challenge) == 0 {
+		return errors.New("challenge must not be empty")
+	}
+	err := VerifyChallenge(publicKeyPEM, LoginChallengeMessage(challenge), signature)
+	if err == nil {
+		return nil
+	}
+	if legacy := VerifyChallenge(publicKeyPEM, challenge, signature); legacy == nil {
+		return nil
+	}
+	return err
 }
 
 // VerifyChallenge verifies an Ed25519 signature over the given challenge using

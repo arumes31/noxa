@@ -293,7 +293,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	}
 	defer attempt.Cancel()
 
-	if err := auth.VerifyChallenge(msg.PublicKey, challenge, msg.Signature); err != nil {
+	if err := auth.VerifyLoginChallenge(msg.PublicKey, challenge, msg.Signature); err != nil {
 		attempt.Fail()
 		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid credentials"})

@@ -110,16 +110,22 @@ func (h *Handle) Close() error {
 	return h.err
 }
 
+// unusableStore reports a positive "this file is not a valid store" signal.
+func unusableStore(e error) bool {
+	return errors.Is(e, bolt.ErrInvalid) || errors.Is(e, bolt.ErrVersionMismatch) || errors.Is(e, bolt.ErrChecksum)
+}
+
 // ProbeUnlocked reports ErrInUse when any store file in dir is locked by
 // another opener (any process, including this one). It never opens a file
 // for writing, so it is safe before a destructive operation; on every
 // platform a held store makes the probe fail (the bbolt file lock).
 //
-// Only the lock timeout means "in use". A file that cannot be opened as a
-// store at all (0-byte after a crash during creation, corrupt, not bbolt)
-// is not held by any store opener: it is skipped, so deleting the identity,
-// the user's remedy for a broken store, still destroys it. An unreadable
-// directory is returned as is (not ErrInUse).
+// Only the lock timeout means "in use". A file that positively is not a
+// store (0-byte after a crash during creation, invalid/corrupt bbolt) is not
+// held by any store opener: it is skipped, so deleting the identity, the
+// user's remedy for a broken store, still destroys it. Any other failure
+// (permissions, descriptors, sharing violations, an unreadable directory) is
+// returned as is: never treated as "unused", never as ErrInUse.
 func ProbeUnlocked(dir string) error {
 	entries, e := os.ReadDir(dir)
 	if os.IsNotExist(e) {
@@ -132,12 +138,19 @@ func ProbeUnlocked(dir string) error {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".db") {
 			continue
 		}
-		db, e := bolt.Open(filepath.Join(dir, entry.Name()), 0600, &bolt.Options{Timeout: 150 * time.Millisecond, ReadOnly: true})
+		path := filepath.Join(dir, entry.Name())
+		if info, e := os.Stat(path); e == nil && info.Size() == 0 {
+			continue // crash during creation: never a usable store
+		}
+		db, e := bolt.Open(path, 0600, &bolt.Options{Timeout: 150 * time.Millisecond, ReadOnly: true})
 		if errors.Is(e, bolt.ErrTimeout) {
 			return ErrInUse
 		}
+		if unusableStore(e) {
+			continue // not a valid store: nobody can hold it as one
+		}
 		if e != nil {
-			continue // unusable as a store: nobody can hold it as one
+			return e // permissions, descriptors, sharing violations: never "unused"
 		}
 		if e = db.Close(); e != nil {
 			return e

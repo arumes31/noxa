@@ -26,21 +26,27 @@ test("a Go-signed device-link statement verifies in the PWA (interop)", () => {
 
 test("every mismatch blocks: other keys, account, approver, binding, signature", () => {
     const mismatch = e => e.code === "server_binding_mismatch";
-    assert.throws(() => verifyLinkBinding(goStatement, { identity: generateIdentity() }), mismatch);
-    assert.throws(() => verifyLinkBinding(goStatement, { identity: goDevice, principal: "bob" }), mismatch);
+    assert.throws(() => verifyLinkBinding(goStatement, { identity: generateIdentity(), approverFingerprint: keyFingerprint(GO.approverKey) }), mismatch);
+    assert.throws(() => verifyLinkBinding(goStatement, { identity: goDevice, principal: "bob", approverFingerprint: keyFingerprint(GO.approverKey) }), mismatch);
     assert.throws(() => verifyLinkBinding(goStatement, { identity: goDevice, approverFingerprint: "0000 0000 0000 0000" }), mismatch);
-    assert.throws(() => verifyLinkBinding({ ...goStatement, binding: "tls-sha256:" + "cd".repeat(32) }, { identity: goDevice }), mismatch);
-    assert.throws(() => verifyLinkBinding({ ...goStatement, binding: "tls-sha256:" + "AB".repeat(32) }, { identity: goDevice }), mismatch);
-    assert.throws(() => verifyLinkBinding({ ...goStatement, approverDeviceID: "other" }, { identity: goDevice }), mismatch);
-    assert.throws(() => verifyLinkBinding({ ...goStatement, signature: "!!" }, { identity: goDevice }), mismatch);
+    const anchor = keyFingerprint(GO.approverKey);
+    assert.throws(() => verifyLinkBinding(goStatement, { identity: goDevice }), mismatch, "no anchor (typed code / empty fingerprint) is a mismatch");
+    assert.throws(() => verifyLinkBinding(goStatement, { identity: goDevice, approverFingerprint: "" }), mismatch);
+    assert.throws(() => verifyLinkBinding({ ...goStatement, binding: "tls-sha256:" + "cd".repeat(32) }, { identity: goDevice, approverFingerprint: anchor }), mismatch);
+    assert.throws(() => verifyLinkBinding({ ...goStatement, binding: "tls-sha256:" + "AB".repeat(32) }, { identity: goDevice, approverFingerprint: keyFingerprint(GO.approverKey) }), mismatch);
+    assert.throws(() => verifyLinkBinding({ ...goStatement, approverDeviceID: "other" }, { identity: goDevice, approverFingerprint: keyFingerprint(GO.approverKey) }), mismatch);
+    assert.throws(() => verifyLinkBinding({ ...goStatement, signature: "!!" }, { identity: goDevice, approverFingerprint: keyFingerprint(GO.approverKey) }), mismatch);
     const forger = generateIdentity();
     const forged = toBase64(sign(linkBindingTranscript("alice", "desk", publicKeyPEM(goDevice.edPublic), toBase64(goDevice.xPublic), GO.binding), forger.edSecret));
-    assert.throws(() => verifyLinkBinding({ ...goStatement, signature: forged }, { identity: goDevice }), mismatch, "signed by a key other than the stated approver");
+    assert.throws(() => verifyLinkBinding({ ...goStatement, signature: forged }, { identity: goDevice, approverFingerprint: keyFingerprint(GO.approverKey) }), mismatch, "signed by a key other than the stated approver");
     assert.throws(() => verifyLinkBinding(null, { identity: goDevice }), e => e.code === "server_binding_unavailable");
 });
 
-test("the QR fragment carries the desktop's own fingerprint", () => {
+test("the QR fragment carries the desktop's own fingerprint; duplicate or unknown keys reject it", () => {
     const k = "A".repeat(43);
+    assert.equal(parseLinkFragment(`#id=L&k=${k}&a=1111+1111+1111+1111&a=2222+2222+2222+2222`), null, "a second a= (server injection) is refused");
+    assert.equal(parseLinkFragment(`#id=L&k=${k}&k=${k}`), null);
+    assert.equal(parseLinkFragment(`#id=L&k=${k}&x=1`), null, "unexpected key");
     assert.deepEqual(parseLinkFragment(`#id=L&k=${k}&a=abcd+ef01+2345+6789`), { linkID: "L", secret: new Uint8Array(32), approver: "abcd ef01 2345 6789" });
     assert.deepEqual(parseLinkFragment(`#id=L&k=${k}`), { linkID: "L", secret: new Uint8Array(32) });
 });

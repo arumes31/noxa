@@ -226,3 +226,21 @@ test("1c-iii-a: a changed group draft never repaints a committed pending record"
     assert.equal((await sending).mismatch, true);
     groups.close();
 });
+
+test("1c-iii-a review P3-5: a queued placeholder keeps the committed key, so a changed draft is never painted", async () => {
+    const groups = new Groups(session("alice"), {});
+    let mode = "uncertain";
+    const committedRecord = record({ scope: "group", conversation: "g", sender: "alice", logicalID: "R", key: "kr", status: "pending", body: { text: "original" } });
+    const consumer = consumerStub({ async send() {
+        if (mode === "uncertain") throw Object.assign(new Error("ratchet: uncertain"), { code: "uncertain", committed: { record: committedRecord, receipt: null, reused: true } });
+        return new Promise(() => {});
+    } });
+    await groups.attachRatchet(consumer);
+    consumer.projector(committedRecord, { isNew: false });
+    await groups.send("g", "original", { reference: "R", sentAt: 1 }).catch(() => {});
+    assert.equal(groups.messages.get("g")[0].key, "kr", "the queued placeholder keeps the committed key");
+    mode = "hang";
+    groups.send("g", "changed", { reference: "R", sentAt: 1 });
+    assert.deepEqual(groups.messages.get("g").map(m => m.text), ["original"], "a changed draft is not painted over the committed operation");
+    groups.close();
+});
