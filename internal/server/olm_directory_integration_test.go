@@ -97,6 +97,16 @@ func TestIntegrationOlmDirectorySessionAuthority(t *testing.T) {
 	if out := call(recipient, pub); out.Error != "" {
 		t.Fatalf("signed UserID0 guest publication: %+v", out)
 	}
+	// 1c-iii-b item 2: own_state returns only the requesting device's own
+	// signed publication; a device without one gets "absent".
+	own := netproto.OlmDirectoryRequest{RequestID: "own", Action: "own_state"}
+	if out := call(recipient, own); out.Error != "" || out.Bundle == nil || out.Bundle.DeviceID != recipient.deviceID || out.Bundle.Principal != recipient.UniqueID ||
+		out.Bundle.VerifyEvidence(secret.Public().(ed25519.PublicKey), b.Server, b.Principal, b.DeviceID) != nil {
+		t.Fatalf("own_state: %+v", out)
+	}
+	if out := call(sender, own); out.Error != "absent" || out.Bundle != nil {
+		t.Fatalf("own_state of a device without a publication leaked data: %+v", out)
+	}
 	query := netproto.OlmDirectoryRequest{RequestID: "claim", ClaimUntil: b.ExpiresAt, Action: "claim", AccountEpoch: 1, Principal: b.Principal, DeviceID: b.DeviceID}
 	if out := call(sender, query); out.Error != "" || out.Bundle == nil || out.KeyID == "" {
 		t.Fatalf("claim: %+v", out)

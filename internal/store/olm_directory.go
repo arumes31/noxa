@@ -261,3 +261,24 @@ func (s *Store) ExpireOlmDirectory(ctx context.Context) (int64, error) {
 	}
 	return r.RowsAffected()
 }
+
+// OwnOlmBundle returns the requesting device's own latest signed publication
+// (read-only). principal/id MUST come from the authenticated session; no
+// other device's or account's data is ever returned. It is input for an
+// explicit account recovery: the client verifies the signature under its own
+// noXa key, and peers still verify the signed reset chain.
+func (s *Store) OwnOlmBundle(ctx context.Context, principal, id string) (olmdir.Bundle, error) {
+	var b olmdir.Bundle
+	var raw []byte
+	e := s.db.QueryRowContext(ctx, `SELECT st.last_bundle FROM olm_directory_state st JOIN user_devices d ON d.device_id=st.device_id WHERE d.principal=$1 AND st.device_id=$2`, principal, id).Scan(&raw)
+	if errors.Is(e, sql.ErrNoRows) {
+		return b, sql.ErrNoRows
+	}
+	if e != nil {
+		return b, e
+	}
+	if e = json.Unmarshal(raw, &b); e != nil || b.Principal != principal || b.DeviceID != id {
+		return olmdir.Bundle{}, ErrOlmAuthority
+	}
+	return b, nil
+}

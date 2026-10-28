@@ -734,6 +734,10 @@ export function ReconnectTab(arg1, arg2, arg3) {
   return window['go']['main']['App']['ReconnectTab'](arg1, arg2, arg3);
 }
 
+export function RecoverSecureMessagingForTab(arg1) {
+  return window['go']['main']['App']['RecoverSecureMessagingForTab'](arg1);
+}
+
 export function RecordRecent(arg1, arg2) {
   return window['go']['main']['App']['RecordRecent'](arg1, arg2);
 }

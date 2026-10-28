@@ -214,6 +214,13 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 			}
 			return b.Sign(signing)
 		},
+		SignReset: func(r olmdir.Reset) (olmdir.Reset, error) {
+			if err := assertCurrent(); err != nil {
+				return olmdir.Reset{}, err
+			}
+			return r.Sign(signing)
+		},
+		OwnKey:        signing.Public().(ed25519.PublicKey),
 		AssertCurrent: assertCurrent, AttemptTTL: cfg.AttemptTTL,
 		TrustReset: m.ratchetResetPending, TrustResetDone: m.clearRatchetReset,
 	})

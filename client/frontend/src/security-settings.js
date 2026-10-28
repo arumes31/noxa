@@ -222,7 +222,18 @@ export function securitySettings(settings) {
     plaintext.onchange = () => { settings.allow_plaintext = plaintext.checked; plainWarning.hidden = !plaintext.checked; };
     plainLabel.append(plaintext, document.createTextNode(t("security.plaintext")));
     developer.append(plainLabel, el("p", t("settings.timing.saved"))); connection.append(plainWarning, developer);
-    page.append(status, error, identities, progressArea, storage, connection);
+    // Explicit secure-messaging recovery after restoring a backup or losing
+    // this device's message store: a fresh signed account epoch; old readable
+    // history stays, messages sent to the lost keys stay unreadable.
+    const recovery = el("section", "", "security-section");
+    recovery.append(el("h4", t("security.recovery")), el("p", t("security.recoveryHelp")));
+    const recover = button("security.recover", async () => {
+        if (!await ask("security.recover", t("security.recoverAsk"), "security.recoverConfirm")) return;
+        const tabID = window.__noxa?.state?.activeTabID;
+        await run(async () => { await checkError(app.RecoverSecureMessagingForTab(tabID || "")); return true; }, "security.recovered");
+    });
+    recovery.append(recover);
+    page.append(status, error, identities, progressArea, storage, recovery, connection);
     // Settings search builds detached pages: only load secrets for the visible page.
     setTimeout(async () => {
         if (!current()) return;

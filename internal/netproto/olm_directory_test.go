@@ -36,3 +36,15 @@ func TestOlmDirectoryCanonicalWireNames(t *testing.T) {
 		})
 	}
 }
+
+func TestOlmDirectoryOwnStateCarriesNoTarget(t *testing.T) {
+	ok := []byte(`{"request_id":"own-1","action":"own_state"}`)
+	if r, e := DecodeOlmDirectoryRequest(&Frame{Payload: ok}); e != nil || r.Action != "own_state" {
+		t.Fatalf("own_state: %+v %v", r, e)
+	}
+	for _, bad := range []string{`{"request_id":"a","action":"own_state","principal":"bob"}`, `{"request_id":"a","action":"own_state","device_id":"d"}`, `{"request_id":"a","action":"own_state","account_epoch":1}`} {
+		if _, e := DecodeOlmDirectoryRequest(&Frame{Payload: []byte(bad)}); e == nil {
+			t.Fatalf("accepted %s", bad)
+		}
+	}
+}

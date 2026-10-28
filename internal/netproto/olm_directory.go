@@ -101,6 +101,11 @@ func DecodeOlmDirectoryRequest(f *Frame) (OlmDirectoryRequest, error) {
 		if r.AccountEpoch != 0 || r.ClaimUntil != 0 || r.Bundle == nil || r.Principal != "" || r.DeviceID != "" {
 			return r, olmdir.ErrInvalid
 		}
+	case "own_state":
+		// The requesting device's own latest signed publication (recovery input).
+		if r.AccountEpoch != 0 || r.ClaimUntil != 0 || r.Bundle != nil || r.Principal != "" || r.DeviceID != "" {
+			return r, olmdir.ErrInvalid
+		}
 	case "claim":
 		if r.AccountEpoch < 1 || r.AccountEpoch > 9007199254740991 || r.ClaimUntil < 1 || r.ClaimUntil > 9007199254740991 || r.Bundle != nil || !olmdir.ValidText(r.Principal) || !olmdir.ValidText(r.DeviceID) {
 			return r, olmdir.ErrInvalid

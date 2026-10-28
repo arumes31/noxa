@@ -371,6 +371,8 @@ export function ReadyForCloseNotifications():Promise<void>;
 
 export function ReconnectTab(arg1:string,arg2:string,arg3:string):Promise<main.ConnectTabResult>;
 
+export function RecoverSecureMessagingForTab(arg1:string):Promise<string>;
+
 export function RecordRecent(arg1:string,arg2:string):Promise<void>;
 
 export function RegenerateIdentity():Promise<string>;

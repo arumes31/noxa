@@ -1065,6 +1065,14 @@ export function onRatchetTrust(d) {
 // onRatchetQuarantine shows truthful locked placeholders for new-protocol
 // copies that could not be opened. They are never unread and disappear once
 // the copy opens or is no longer quarantined.
+// quarantineText is the truthful placeholder: a copy sent to keys this device
+// no longer has (fenced_copy, e.g. after a recovery) or whose key is gone
+// (lost_key) can never be opened; anything else failed verification.
+export function quarantineText(code) {
+    if (code === "fenced_copy") return t("quarantine.previousKeys");
+    if (code === "lost_key") return t("quarantine.lostKey");
+    return t("quarantine.unverified");
+}
 export function onRatchetQuarantine(d) {
     const list = Array.isArray(d?.placeholders) ? d.placeholders : [];
     const current = new Set();
@@ -1075,7 +1083,7 @@ export function onRatchetQuarantine(d) {
         const st = getStore("dm:" + q.peer);
         if (st.msgs.some((x) => x.clientMsgID === id)) continue;
         pushMsg("dm:" + q.peer, { id: 0, localSeq: 0, protocol: RATCHET_PROTOCOL, from: knownPeerName(q.sender, "") || q.sender || "?", fromUID: q.sender || "",
-            text: "[encrypted message — key unavailable]", ts: Math.round((Number(q.seen_at) || Date.now() / 1000) * 1000), edited: false, deleted: false,
+            text: quarantineText(q.code), ts: Math.round((Number(q.seen_at) || Date.now() / 1000) * 1000), edited: false, deleted: false,
             reactions: null, mentions: [], e2e: false, direct: true, enc: false, encVerified: false, encMode: "", quarantined: q.code || "",
             offline: false, clientMsgID: id, channelID: null, self: false, mentioned: false });
     }

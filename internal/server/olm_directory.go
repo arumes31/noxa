@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"noxa/internal/auth"
 	"noxa/internal/authorization"
@@ -16,6 +17,7 @@ type olmDirectoryStore interface {
 	PublishOlmBundle(context.Context, string, string, string, olmdir.Bundle) error
 	ClaimOlmKey(context.Context, string, string, string, string, string, int64, string, ...int64) (store.OlmClaim, error)
 	ExpireOlmDirectory(context.Context) (int64, error)
+	OwnOlmBundle(context.Context, string, string) (olmdir.Bundle, error)
 }
 
 func (s *TCPServer) olmDirectory() (olmDirectoryStore, string, bool) {
@@ -73,6 +75,14 @@ func (s *TCPServer) handleOlmDirectory(ctx context.Context, client *Client, f *n
 		}
 		if r.Action == "publish" {
 			e = db.PublishOlmBundle(opCtx, principal, id, binding, *r.Bundle)
+		} else if r.Action == "own_state" {
+			// Read-only, only the authenticated principal/device's own row.
+			var own olmdir.Bundle
+			if own, e = db.OwnOlmBundle(opCtx, principal, id); e == nil {
+				response.Bundle = &own
+			} else if errors.Is(e, sql.ErrNoRows) {
+				return reply("absent")
+			}
 		} else {
 			// Unique-ID DMs have no additional contact/block ACL in this server.
 			// rolePolicyRead, rules and active-device gates match direct-message entry;

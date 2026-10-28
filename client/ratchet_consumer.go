@@ -325,13 +325,18 @@ type ratchetCore interface {
 }
 
 type ratchetDeps struct {
-	Store         *durable.Store
-	Core          ratchetCore
-	Namespace     durable.Namespace
-	Admission     func(context.Context, netproto.OlmAdmissionRequest) (json.RawMessage, error)
-	Directory     func(context.Context, netproto.OlmDirectoryRequest) (netproto.OlmDirectoryResult, error)
-	DeviceKey     func(ctx context.Context, principal, device string) (ed25519.PublicKey, error)
-	SignBundle    func(olmdir.Bundle) (olmdir.Bundle, error)
+	Store      *durable.Store
+	Core       ratchetCore
+	Namespace  durable.Namespace
+	Admission  func(context.Context, netproto.OlmAdmissionRequest) (json.RawMessage, error)
+	Directory  func(context.Context, netproto.OlmDirectoryRequest) (netproto.OlmDirectoryResult, error)
+	DeviceKey  func(ctx context.Context, principal, device string) (ed25519.PublicKey, error)
+	SignBundle func(olmdir.Bundle) (olmdir.Bundle, error)
+	// SignReset signs an explicit recovery transition with the noXa key, and
+	// OwnKey is that key's public half (recovery verifies the server's
+	// own_state against it). Both optional: without them recovery is unavailable.
+	SignReset     func(olmdir.Reset) (olmdir.Reset, error)
+	OwnKey        ed25519.PublicKey
 	AssertCurrent func() error
 	// TrustReset reports a durable, explicitly confirmed identity change of
 	// principal whose ratchet reset is not applied yet; TrustResetDone clears
