@@ -276,3 +276,37 @@ func TestMediaE2EERefusesAFullEncryptedChannel(t *testing.T) {
 		t.Fatalf("full channel: %+v", e)
 	}
 }
+
+// A member that holds a seat keeps renegotiating (camera, screen, ICE restart)
+// even when strays counted with a media device fill the channel past the cap:
+// one extra joiner can never lock every seated member out.
+func TestMediaE2EESeatedMemberRenegotiatesInAFullChannel(t *testing.T) {
+	env := startMediaE2EEEnv(t, true)
+	env.voice.answerSDP = "server-answer"
+	conn, userID := dialAuthed(t, env.addr, "user-uid")
+	t.Cleanup(func() { _ = conn.Close() })
+	placeVoiceTestClients(t, env, 1, userID)
+	client, _ := env.srv.clientByID(userID)
+	client.setDeviceID("dev-1")
+	send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "secure-offer", MediaE2EE: netproto.MediaE2EEVersion})
+	readOfType(t, conn, netproto.MsgWebRTCAnswer)
+	waitFor(t, "seat recorded", func() bool { return client.mediaSeat.Load() == 1 })
+	for i := 0; i <= MediaE2EEMaxVoice; i++ {
+		id := fmt.Sprintf("member-%d", i)
+		env.state.AddClient(&state.Client{ClientID: id, UniqueID: id, MediaDevice: "dev-" + id})
+		if err := env.state.MoveClient(id, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "renegotiate", MediaE2EE: netproto.MediaE2EEVersion})
+	var answer netproto.WebRTCAnswer
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgWebRTCAnswer), &answer); err != nil || answer.SDP != "server-answer" {
+		t.Fatalf("seated renegotiation refused: %+v %v", answer, err)
+	}
+	// A seat in another channel does not carry over.
+	client.mediaSeat.Store(2)
+	send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "secure-offer", MediaE2EE: netproto.MediaE2EEVersion})
+	if e := protocolError(t, conn); !strings.HasPrefix(e.Message, netproto.MediaE2EEReasonChannelFull+": ") {
+		t.Fatalf("seat from another channel: %+v", e)
+	}
+}

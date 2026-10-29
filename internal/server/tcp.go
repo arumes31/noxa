@@ -61,6 +61,10 @@ type Client struct {
 	// talkDecision caches the last uncontended Speak evaluation (canTalk).
 	talkDecision atomic.Pointer[talkDecision]
 
+	// mediaSeat is the channel whose encrypted voice accepted this session's
+	// offer; a seated session may always renegotiate there (channel-full cap).
+	mediaSeat atomic.Int64
+
 	mu                 sync.RWMutex
 	lastOwnChannelMove *broadcast.OwnChannelMove // recipient-only cause, protected by mu
 	authRequests       int
