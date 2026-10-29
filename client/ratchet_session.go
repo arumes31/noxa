@@ -339,7 +339,8 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 			select {
 			case <-s.quit:
 				return
-			case <-time.After(m.ratchetPoll(poll)):
+			case <-m.ratchetWake:
+			case <-time.After(poll):
 			}
 		}
 	})

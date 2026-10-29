@@ -36,6 +36,7 @@ export const SEND_TIMEOUT_MS = 20_000;
 export const RETRY_FAILED_MS = 10_000;
 export const CONTROL_TTL_S = 120;
 export const PENDING_MS = 15_000;
+export const MEMBERSHIP_SETTLE_MS = 5_000;
 const MAX_PENDING = 64;
 const MAX_RETRIES = 5;
 const CONCURRENCY = 6;
@@ -53,21 +54,46 @@ export function senderPid(slot) { return `self|${slotOf(slot)}`; }
 
 // Recipient devices of my publications: every other session in my channel
 // that announces a media device (its Olm device). Sorted and de-duplicated.
+// The roster MUST be exactly the member list the voice UI renders for the
+// channel (desktop: the channel tree's strict channel_id match; PWA: the
+// channel node's clients). Only entries whose channel_id is the integer
+// channel count; aliases, strings and other shapes never receive keys, so
+// nobody the user cannot see gets the keys (review 2a-A P2-1).
+export function inChannel(entry, channelID) {
+    return typeof entry?.channel_id === "number" && Number.isInteger(entry.channel_id) && entry.channel_id === Number(channelID);
+}
+
 export function recipientsOf(roster, self) {
     const seen = new Map();
     for (const c of roster || []) {
-        const channel = Number(c.channel_id ?? c.channelID ?? 0);
-        const device = String(c.media_device || "");
-        const principal = String(c.unique_id || "");
+        const device = typeof c.media_device === "string" ? c.media_device : "";
+        const principal = typeof c.unique_id === "string" ? c.unique_id : "";
         const clientID = String(c.client_id ?? "");
-        if (channel !== Number(self.channelID) || !device || !principal || !clientID) continue;
+        if (!inChannel(c, self.channelID) || !device || !principal || !clientID) continue;
         if (clientID === String(self.clientID) || device === self.device) continue;
         if (!ID_RE.test(device) || !ID_RE.test(principal)) continue;
-        seen.set(`${principal}\n${device}`, { principal, device, clientID });
+        seen.set(`${principal}\n${device}`, { principal, device, clientID, nickname: typeof c.nickname === "string" ? c.nickname : "" });
     }
     const order = r => `${r.principal}\n${r.device}`;
     return [...seen.values()].sort((a, b) => (order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0));
 }
+
+// Every media device in the channel (sender included): what a publisher's
+// `members` digest should cover, as seen from here.
+export function channelDevices(roster, channelID) {
+    const seen = new Map();
+    for (const c of roster || []) {
+        if (!inChannel(c, channelID) || typeof c.media_device !== "string" || !c.media_device || typeof c.unique_id !== "string") continue;
+        seen.set(`${c.unique_id}\n${c.media_device}`, { principal: c.unique_id, device: c.media_device });
+    }
+    return [...seen.values()];
+}
+
+// The highest epoch issued or accepted per device in this page, across
+// engines (rescope, reconnect): a new engine never goes below it, even if the
+// wall clock stepped back (review 2a-A P3-3 / B P3-4).
+const issuedEpochs = new Map();   // principal\ndevice -> last epoch I issued
+const acceptedEpochs = new Map(); // principal\ndevice -> last epoch I accepted
 
 export async function membershipDigest(entries) {
     const lines = [...new Set(entries.map(e => `${e.principal}\n${e.device}\n`))].sort().join("");
@@ -116,7 +142,7 @@ export class MediaKeyEngine {
     #epoch = 0; #kid = 15; #keys = null; #members = ""; #sentTo = new Map();
     #busy = false; #again = false; #debounce = 0; #renew = 0; #retry = 0; #busyOrPending = false;
     #publishers = new Map(); #pending = []; #failed = new Map(); #reason = "";
-    #lastReceived = new Map();
+    #removed = new Set(); #rosterAt = 0; #settle = 0; #mismatch = [];
 
     constructor({ media, send, onStatus = () => {}, now = () => Date.now(), timers = globalThis, random = n => crypto.getRandomValues(new Uint8Array(n)), uuid = () => crypto.randomUUID(), sendTimeoutMs = SEND_TIMEOUT_MS }) {
         this.media = media; this.send = send; this.onStatus = onStatus; this.now = now;
@@ -132,6 +158,7 @@ export class MediaKeyEngine {
         if (this.running) throw new Error("media key session already running");
         if (!channelID || !clientID || !principal || !device) throw new Error("encrypted media needs a signed-in device");
         this.self = { channelID: Number(channelID), clientID: String(clientID), principal: String(principal), device: String(device) };
+        this.#epoch = issuedEpochs.get(`${this.self.principal}\n${this.self.device}`) || 0;
         this.session = b64url(this.random(16));
         const gen = ++this.#gen;
         this.#renew = this.timers.setInterval(() => { if (gen === this.#gen) this.#schedule("renewal", 0); }, RENEW_MS);
@@ -142,7 +169,7 @@ export class MediaKeyEngine {
     stop() {
         if (!this.running) return;
         this.#gen++;
-        this.timers.clearTimeout(this.#debounce); this.timers.clearInterval(this.#renew); this.timers.clearTimeout(this.#retry);
+        this.timers.clearTimeout(this.#debounce); this.timers.clearInterval(this.#renew); this.timers.clearTimeout(this.#retry); this.timers.clearTimeout(this.#settle);
         const pids = [...SLOTS.map(senderPid), ...[...this.#publishers.keys()].flatMap(c => SLOTS.map(s => publicationPid(c, s))), ...SLOTS.map(s => publicationPid(this.self.clientID, s))];
         this.self = null; this.#keys = null; this.#publishers.clear(); this.#pending = []; this.#failed.clear(); this.#sentTo.clear();
         for (const pid of pids) this.media.forget(pid).catch(() => {});
@@ -153,12 +180,18 @@ export class MediaKeyEngine {
     setRoster(clients) {
         this.#roster = Array.isArray(clients) ? clients.slice() : [];
         if (!this.running) return;
+        // An invisible session is not in the others' roster: it would hear
+        // nothing and leak its presence through key controls. Encrypted
+        // voice is refused while invisible (parent ruling on review 2a-A P2-2).
+        if (this.#invisible()) { this.onInvisible?.(); return; }
+        this.#rosterAt = this.now();
+        this.#scheduleMembershipCheck();
         const recipients = recipientsOf(this.#roster, this.self);
         const key = recipients.map(r => `${r.principal}\n${r.device}`).join("\n");
         // Publishers that left (or whose device/channel changed) lose their keys.
         for (const [client, state] of this.#publishers) {
             const entry = this.#roster.find(c => String(c.client_id) === client);
-            if (!entry || Number(entry.channel_id) !== this.self.channelID || entry.unique_id !== state.principal || entry.media_device !== state.device) {
+            if (!entry || !inChannel(entry, this.self.channelID) || entry.unique_id !== state.principal || entry.media_device !== state.device) {
                 this.#publishers.delete(client);
                 for (const slot of SLOTS) this.media.forget(publicationPid(client, slot)).catch(() => {});
             }
@@ -166,7 +199,9 @@ export class MediaKeyEngine {
         this.#drainPending();
         if (key !== this.#recipientKey) {
             const current = new Set(recipients.map(r => `${r.principal}\n${r.device}`));
-            const removal = this.#recipients.some(r => !current.has(`${r.principal}\n${r.device}`));
+            const gone = this.#recipients.filter(r => !current.has(`${r.principal}\n${r.device}`));
+            for (const r of gone) this.#removed.add(`${r.principal}\n${r.device}`);
+            const removal = gone.length > 0;
             this.#recipientKey = key; this.#recipients = recipients;
             this.#schedule(removal ? "removal" : "membership", DEBOUNCE_MS);
         }
@@ -199,13 +234,18 @@ export class MediaKeyEngine {
         const self = this.self;
         const urgent = this.#reason === "removal";
         this.#reason = ""; this.#busyOrPending = false;
-        const previous = this.#epoch;
-        const epoch = Math.max(previous + 1, this.now());
+        const previous = this.activeEpoch || 0;
+        if (this.#invisible()) { this.onInvisible?.(); return; }
+        const selfKey = `${self.principal}\n${self.device}`;
+        const epoch = Math.max(this.#epoch + 1, (issuedEpochs.get(selfKey) || 0) + 1, this.now());
+        issuedEpochs.set(selfKey, epoch);
         const kid = (this.#kid + 1) % 16;
         const keys = Object.fromEntries(SLOTS.map(slot => [slot, this.random(32)]));
         const recipients = this.#recipients = recipientsOf(this.#roster, self);
+        this.#removed.clear();
         const members = await membershipDigest([...recipients, self]);
         for (const slot of SLOTS) {
+            if (gen !== this.#gen) return; // a stale rekey never installs into a newer engine's worker
             await this.media.setKey(senderPid(slot), epoch, kid, keys[slot]);
             // Encrypted self-echo (echo test channel): my own publication
             // arrives under my client ID and decrypts with my own key.
@@ -219,6 +259,15 @@ export class MediaKeyEngine {
         if (gen !== this.#gen || this.#epoch !== epoch) return;
         await new Promise(resolve => this.timers.setTimeout(resolve, urgent ? REMOVAL_ACTIVATE_DELAY_MS : ACTIVATE_DELAY_MS));
         if (gen !== this.#gen || this.#epoch !== epoch) return;
+        // A device removed while this epoch was being distributed already
+        // holds its keys: never activate it; the queued rekey excludes it
+        // (review 2a-A P3-1).
+        if (recipients.some(r => this.#removed.has(`${r.principal}\n${r.device}`))) {
+            for (const slot of SLOTS) { this.media.retire(senderPid(slot), epoch).catch(() => {}); this.media.retire(publicationPid(self.clientID, slot), epoch).catch(() => {}); }
+            this.#epoch = previous || epoch;
+            this.#again = true;
+            return;
+        }
         for (const slot of SLOTS) await this.media.activate(senderPid(slot), epoch);
         this.activeEpoch = epoch;
         if (previous) {
@@ -281,7 +330,7 @@ export class MediaKeyEngine {
 
     #bound(control, value) {
         const entry = this.#roster.find(c => String(c.client_id) === value.client);
-        return !!entry && Number(entry.channel_id) === this.self.channelID && entry.unique_id === control.sender && entry.media_device === control.senderDevice;
+        return !!entry && inChannel(entry, this.self.channelID) && entry.unique_id === control.sender && entry.media_device === control.senderDevice;
     }
 
     #drainPending() {
@@ -297,15 +346,17 @@ export class MediaKeyEngine {
         const gen = this.#gen;
         // One monotonic epoch line per sending device: replays, expired
         // retries and reordered older controls never install a key.
-        const last = this.#lastReceived.get(control.senderDevice) || 0;
+        const line = `${control.sender}\n${control.senderDevice}`;
+        const last = acceptedEpochs.get(line) || 0;
         if (control.epoch <= last) return this.#ignore("stale");
-        this.#lastReceived.set(control.senderDevice, control.epoch);
+        acceptedEpochs.set(line, control.epoch);
         let state = this.#publishers.get(value.client);
         if (!state || state.device !== control.senderDevice) {
             state = { principal: control.sender, device: control.senderDevice, epochs: [], members: value.members, n: value.n };
             this.#publishers.set(value.client, state);
         }
         state.members = value.members; state.n = value.n; state.session = value.session;
+        this.#scheduleMembershipCheck();
         const install = (async () => {
             for (const slot of SLOTS) await this.media.setKey(publicationPid(value.client, slot), control.epoch, value.kid, value.keys[slot]);
         })();
@@ -329,6 +380,27 @@ export class MediaKeyEngine {
         return { ok: true, epoch: control.epoch };
     }
 
+    // A publisher's authenticated membership digest that still differs from
+    // what this device sees after the roster settled is shown as a warning
+    // (never a decrypt gate: rosters legitimately race). Review 2a-A P3-2.
+    #invisible() {
+        return this.#roster.find(c => String(c.client_id) === this.self?.clientID)?.status === "invisible";
+    }
+
+    #scheduleMembershipCheck() {
+        this.timers.clearTimeout(this.#settle);
+        const gen = this.#gen;
+        this.#settle = this.timers.setTimeout(() => { if (gen === this.#gen) void this.#checkMembership(gen); }, MEMBERSHIP_SETTLE_MS);
+    }
+
+    async #checkMembership(gen) {
+        if (!this.running || this.now() - this.#rosterAt < MEMBERSHIP_SETTLE_MS - 50) return;
+        const own = await membershipDigest(channelDevices(this.#roster, this.self.channelID));
+        if (gen !== this.#gen) return;
+        const mismatch = [...this.#publishers.entries()].filter(([, s]) => s.members && s.members !== own).map(([clientID, s]) => ({ clientID, principal: s.principal }));
+        if (JSON.stringify(mismatch) !== JSON.stringify(this.#mismatch)) { this.#mismatch = mismatch; this.#status(); }
+    }
+
     #ignore(reason) { this.counters.ignored[reason] = (this.counters.ignored[reason] || 0) + 1; return { ok: false, reason }; }
 
     publisherStatus(clientID) {
@@ -344,6 +416,10 @@ export class MediaKeyEngine {
             recipients: this.#recipients.length,
             delivered: [...this.#sentTo.values()].filter(e => e === this.#epoch).length,
             failed: [...this.#failed.values()].map(({ principal, device, clientID, reason }) => ({ principal, device, clientID, reason })),
+            // Exactly who holds my current keys (shown in the voice UI).
+            keyHolders: this.#recipients.filter(r => this.#sentTo.get(`${r.principal}\n${r.device}`) === this.#epoch)
+                .map(({ principal, device, clientID, nickname }) => ({ principal, device, clientID, nickname })),
+            membershipMismatch: this.#mismatch,
             members: this.#members,
             publishers: this.#publishers.size,
             error: this.lastError || "",

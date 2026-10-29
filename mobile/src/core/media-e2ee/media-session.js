@@ -27,12 +27,13 @@ const SERVER_REASONS = {
     media_e2ee_keyless_guest: "keyless_guest",
     media_e2ee_unavailable: "unavailable",
     media_e2ee_codec_unsupported: "codec",
+    media_e2ee_invisible: "invisible",
     server_recording_disabled_e2ee: "recording",
     whisper_unavailable_e2ee: "whisper_unavailable",
     stream_preview_disabled_e2ee: "preview",
 };
 export const MEDIA_REASONS = Object.freeze(["server_outdated", "client_outdated", "keyless_guest", "no_device", "secure_unavailable",
-    "unsupported_runtime", "worker", "unavailable", "codec", "recording", "whisper_unavailable", "preview", "closed"]);
+    "unsupported_runtime", "worker", "unavailable", "codec", "recording", "whisper_unavailable", "preview", "closed", "invisible"]);
 export function mediaErrorReason(error) {
     if (error instanceof MediaSessionError || (error?.name === "MediaSessionError" && error.reason)) return MEDIA_REASONS.includes(error.reason) ? error.reason : "unavailable";
     const text = String(error?.message ?? error ?? "");
@@ -85,6 +86,7 @@ export class MediaSession {
         if (!status?.supported) throw new MediaSessionError(status?.reason || "server_outdated");
         if (status.reason) throw new MediaSessionError(status.reason);
         if (!status.principal || !status.device || !status.clientID) throw new MediaSessionError("no_device");
+        if (this.roster?.find?.(c => String(c.client_id) === String(status.clientID))?.status === "invisible") throw new MediaSessionError("invisible");
         try {
             this.media = new MediaE2EE({ api: this.api, workerURL: this.workerURL, scope: this.scope, onError: error => this.#fail(error) });
         } catch (error) {
@@ -103,6 +105,7 @@ export class MediaSession {
             send: control => this.adapter.send(control),
             onStatus: s => this.onStatus({ ...s, api: this.media?.api }),
         });
+        this.engine.onInvisible = () => this.#fail(new MediaSessionError("invisible"));
         if (this.roster) this.engine.setRoster(this.roster);
         this.engine.start(this.identity);
     }

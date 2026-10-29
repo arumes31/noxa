@@ -89,14 +89,26 @@ func TestMediaE2EEStatusExplainsWhyMediaCannotStart(t *testing.T) {
 	}
 }
 
-func TestMediaKeyPriorityShortensTheRatchetDrain(t *testing.T) {
-	m := newConnManager(nil)
-	if got := m.ratchetPoll(5 * time.Second); got != 5*time.Second {
-		t.Fatalf("idle poll %v", got)
+// The server's content-free doorbell wakes the drain loop; it is never
+// forwarded as an event, and ringing never blocks.
+func TestOlmDoorbellWakesTheDrainWithoutForwarding(t *testing.T) {
+	if !isOlmDoorbell([]byte(`{"type":"olm_pending","data":{}}`)) || isOlmDoorbell([]byte(`{"type":"chat"}`)) {
+		t.Fatal("doorbell detection")
 	}
-	m.mediaKeyPriority.Store(true)
-	if got := m.ratchetPoll(5 * time.Second); got != mediaKeyPoll {
-		t.Fatalf("voice poll %v", got)
+	rec := &eventRecorder{}
+	m := newConnManager(nil)
+	m.sink = rec
+	m.dispatch(&netproto.Frame{Type: uint16(netproto.MsgEvent), Payload: []byte(`{"type":"olm_pending","data":{}}`)})
+	m.ringRatchet() // a second ring while one is pending does not block
+	select {
+	case <-m.ratchetWake:
+	default:
+		t.Fatal("drain not woken")
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.events) != 0 {
+		t.Fatalf("doorbell forwarded: %+v", rec.events)
 	}
 }
 

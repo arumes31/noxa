@@ -391,16 +391,27 @@ function stopRatchet() {
 
 function pollRatchet(owner, session) {
     const current = () => app.ratchet === owner && app.session === session && !owner.consumer.closed;
-    const tick = () => owner.consumer.drain().then(result => {
+    let draining = false, again = false;
+    const tick = () => {
+        clearTimeout(owner.timer);
+        if (draining) { again = true; return; }
+        draining = true;
+        return drain().finally(() => { draining = false; if (again && current()) { again = false; tick(); } });
+    };
+    // The server's content-free "olm_pending" doorbell (Task 2a review A):
+    // drain now instead of polling fast; the poll below is only a fallback.
+    const onEvent = event => { if (event.detail?.type === "olm_pending" && current()) tick(); };
+    session.addEventListener("server-event", onEvent);
+    owner.stopDoorbell = () => session.removeEventListener("server-event", onEvent);
+    const drain = () => owner.consumer.drain().then(result => {
         // Unreadable authenticated-protocol copies stay pending on the server
         // and are shown as locked placeholders, never dropped or ACKed.
         if (!current()) return;
         owner.dm?.showQuarantined(result?.quarantined || []).catch(() => {});
         owner.groups?.showQuarantined(result?.quarantined || []);
     }).catch(() => {}).finally(() => {
-        // In an encrypted voice session media-key controls (rekeys) must
-        // arrive within about a second: there is no push for ratchet copies.
-        if (app.ratchet === owner && app.session === session && !owner.consumer.closed) owner.timer = setTimeout(tick, app.voice?.active ? Math.min(1000, ratchetOptions.pollMS) : ratchetOptions.pollMS);
+        if (current()) owner.timer = setTimeout(tick, ratchetOptions.pollMS);
+        else owner.stopDoorbell?.();
     });
     tick();
 }

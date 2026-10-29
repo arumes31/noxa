@@ -152,9 +152,18 @@ returns your own encrypted media, decrypted with your own key.
 Limits: the server still sees who is in a channel, packet sizes and timing,
 and the clear VP8 keyframe header (dimensions); every participant who receives
 the keys can record what they receive (the app has no call recorder, external
-recorders cannot be prevented); a key is shared by everyone in the channel, so
-receivers are authenticated as channel members, not individually per frame.
-Invisible sessions are not in the roster and therefore receive no keys.
+recorders cannot be prevented); a key is shared by everyone in the channel, so frames prove channel
+membership, not which member sent them: with the server's help, any
+participant could forge another participant's audio or video. Keys go only to
+the members the voice room shows (the status line names who holds them and
+warns when another member's view of the channel differs). Encrypted voice is
+unavailable while you are invisible (invisible sessions are not in the other
+members' roster).
+
+**Upgrade note.** Encrypted channel voice needs the signed device directory
+and secure-messaging admission (both on by default). A server whose device
+directory is unavailable refuses channel voice with an explicit message, so
+make sure it is enabled before upgrading.
 
 **What is not end-to-end encrypted (yet).** Channel and global chat, threads
 and forum bodies use server-managed scope keys: the server can decrypt them

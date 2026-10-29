@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net"
 	"slices"
 	"strings"
@@ -179,5 +180,71 @@ func TestMediaE2EEKeepsOnlyVP8InStreamCodecDeclarations(t *testing.T) {
 	s.mediaE2EECodecs(&msg)
 	if !slices.Equal(msg.Codecs, []string{"VP8"}) || msg.HEVCLevelID != 0 {
 		t.Fatalf("codecs %+v level %d", msg.Codecs, msg.HEVCLevelID)
+	}
+}
+
+// Parent ruling on review 2a-A P2-2: invisible sessions cannot join
+// encrypted voice (others never see them, so they would get no keys and
+// their keys would reveal them).
+func TestMediaE2EERefusesInvisibleSessions(t *testing.T) {
+	env := startMediaE2EEEnv(t, true)
+	conn, userID := dialAuthed(t, env.addr, "user-uid")
+	t.Cleanup(func() { _ = conn.Close() })
+	placeVoiceTestClients(t, env, 1, userID)
+	client, _ := env.srv.clientByID(userID)
+	client.setDeviceID("dev-1")
+	env.state.SetStatus(userID, "invisible", "")
+	send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "secure-offer", MediaE2EE: netproto.MediaE2EEVersion})
+	if e := protocolError(t, conn); !strings.HasPrefix(e.Message, netproto.MediaE2EEReasonInvisible+": ") {
+		t.Fatalf("invisible: %+v", e)
+	}
+}
+
+// Review 2a-A P3-6: a key-identity guest (a device, no "guest:" principal)
+// joins encrypted voice like a member.
+func TestMediaE2EEKeyIdentityGuestIsAnswered(t *testing.T) {
+	env := startMediaE2EEEnv(t, true)
+	env.voice.answerSDP = "guest-answer"
+	conn, response := keyLogin(t, env.addr, newLinkTestKeys(t))
+	t.Cleanup(func() { _ = conn.Close() })
+	if !response.OK || strings.HasPrefix(response.UniqueID, "guest:") {
+		t.Fatalf("key login: %+v", response)
+	}
+	placeVoiceTestClients(t, env, 1, response.ClientID)
+	client, _ := env.srv.clientByID(response.ClientID)
+	if client.currentDeviceID() == "" {
+		client.setDeviceID("guest-device")
+	}
+	send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "guest-offer", MediaE2EE: netproto.MediaE2EEVersion})
+	var answer netproto.WebRTCAnswer
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgWebRTCAnswer), &answer); err != nil || answer.SDP != "guest-answer" {
+		t.Fatalf("key-identity guest: %+v %v (guest=%v)", answer, err, response.Guest)
+	}
+}
+
+// Review 2a-A P3-6: a recording that was running before the requirement took
+// effect is stopped and finalized through the ordinary path.
+func TestMediaE2EEStopsARecordingThatPredatesTheRequirement(t *testing.T) {
+	env := startMediaE2EEEnv(t, true)
+	admin, _ := dialAuthed(t, env.addr, "admin-uid")
+	t.Cleanup(func() { _ = admin.Close() })
+	env.state.AddChannel(testChannel(1))
+	// A session running from before the requirement (started below the
+	// gate, as the previous server version would have).
+	if _, err := env.deps.Recorder.Start(context.Background(), 1, env.deps.Voice); err != nil {
+		t.Fatal(err)
+	}
+	send(t, admin, netproto.MsgRecordingControl, netproto.RecordingControl{ChannelID: 1, Action: "start"})
+	if e := protocolError(t, admin); !strings.HasPrefix(e.Message, netproto.MediaE2EEReasonRecording) {
+		t.Fatalf("second start: %+v", e)
+	}
+	send(t, admin, netproto.MsgRecordingControl, netproto.RecordingControl{ChannelID: 1, Action: "stop"})
+	waitFor(t, "running recording stopped and finalized", func() bool {
+		env.recorder.mu.Lock()
+		defer env.recorder.mu.Unlock()
+		return len(env.recorder.stopped) == 1 && env.recorder.stopped[0] == 1
+	})
+	if got := env.recorder.startedCount(); got != 1 {
+		t.Fatalf("recordings started %d", got)
 	}
 }

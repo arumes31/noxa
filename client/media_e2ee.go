@@ -22,7 +22,6 @@ import (
 	"errors"
 	"slices"
 	"strings"
-	"time"
 
 	"noxa/internal/e2ee/admission"
 	"noxa/internal/netproto"
@@ -141,29 +140,26 @@ func (m *connManager) mediaE2EEStatus() MediaE2EEStatus {
 	return st
 }
 
-// mediaKeyPoll bounds how long a media-key control waits in the server
-// queue while this connection is in an encrypted voice session (there is no
-// delivery push for ratchet copies; the drain loop polls).
-const mediaKeyPoll = time.Second
+// olmPendingEvent is the server's content-free "deliveries pending" doorbell
+// (internal/server/olm_rate.go): it wakes the ratchet drain immediately, so
+// media-key controls (rekeys) and messages are fetched when they exist
+// instead of by fast polling. It is never shown or forwarded.
+const olmPendingEvent = "olm_pending"
 
-// SetMediaKeyPriorityForTab marks whether the tab is in an encrypted voice
-// session: its ratchet drain then polls every mediaKeyPoll so media-key
-// controls (rekeys on join/leave/renewal) arrive within about a second.
-func (a *App) SetMediaKeyPriorityForTab(tabID string, active bool) error {
-	cm, err := a.requireTabCM(tabID)
-	if err != nil {
-		return err
+// isOlmDoorbell reports whether an event frame is the doorbell.
+func isOlmDoorbell(payload []byte) bool {
+	var env struct {
+		Type string `json:"type"`
 	}
-	cm.mediaKeyPriority.Store(active)
-	return nil
+	return json.Unmarshal(payload, &env) == nil && env.Type == olmPendingEvent
 }
 
-// ratchetPoll is the drain loop's next wait.
-func (m *connManager) ratchetPoll(base time.Duration) time.Duration {
-	if m.mediaKeyPriority.Load() && base > mediaKeyPoll {
-		return mediaKeyPoll
+// ringRatchet wakes the drain loop (never blocks; one pending wake is enough).
+func (m *connManager) ringRatchet() {
+	select {
+	case m.ratchetWake <- struct{}{}:
+	default:
 	}
-	return base
 }
 
 // mediaE2EESupported records the server's capability at authentication.

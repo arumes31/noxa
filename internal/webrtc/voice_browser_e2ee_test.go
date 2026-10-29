@@ -98,7 +98,9 @@ func TestBrowserE2EEChannelMediaThroughSFU(t *testing.T) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	t.Logf("tap: audio packets %d (encrypted %d), video frames %d (encrypted %d)", h.tapAudio, h.tapAudioEncrypted, h.tapVideoFrames, h.tapVideoEncrypted)
-	if h.tapAudio == 0 || h.tapAudio != h.tapAudioEncrypted || h.tapVideoFrames != h.tapVideoEncrypted {
+	// Statistical plaintext detector (a plaintext frame ends in [12, <16] with
+	// probability ~2^-12); real decrypt failure without keys is shown in phase 3.
+	if h.tapAudio == 0 || h.tapVideoFrames == 0 || h.tapAudio != h.tapAudioEncrypted || h.tapVideoFrames != h.tapVideoEncrypted {
 		t.Fatalf("tap saw non-encrypted media: audio %d/%d video %d/%d", h.tapAudioEncrypted, h.tapAudio, h.tapVideoEncrypted, h.tapVideoFrames)
 	}
 	for _, answer := range h.answers {

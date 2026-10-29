@@ -63,6 +63,11 @@ func (s *TCPServer) mediaE2EEOfferRejection(client *Client, msg netproto.WebRTCO
 	if msg.MediaE2EE != netproto.MediaE2EEVersion {
 		return mediaE2EEError(netproto.MediaE2EEReasonClientOutdated, "channel voice is end-to-end encrypted; update noXa to join voice")
 	}
+	if s.deps != nil && s.deps.State != nil {
+		if c, ok := s.deps.State.GetClient(client.ID); ok && c.Status == "invisible" {
+			return mediaE2EEError(netproto.MediaE2EEReasonInvisible, "encrypted voice is unavailable while you are invisible; become visible to join voice")
+		}
+	}
 	if client.currentDeviceID() == "" {
 		if strings.HasPrefix(client.uniqueID(), "guest:") {
 			return mediaE2EEError(netproto.MediaE2EEReasonKeylessGuest, "channel voice is end-to-end encrypted; guest sessions without a key identity cannot join voice")

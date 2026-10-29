@@ -160,7 +160,8 @@ receive/ACK as chat. Wire rules (`control.go`, JS mirror in
   `ControlPendingTTL` (24 h) after its manifest deadline is cleared by server
   maintenance (`ExpirePendingOlmControls`), unless it opened a device-pair
   session (its initial-session obligation is kept). Edits/deletes can never reference a
-  control. No delivery notification exists for any Olm copy.
+  control. The only delivery notification for Olm copies is the
+  content-free `olm_pending` doorbell (see the Task 2 consumer section).
 - Body (inside the ciphertext): `{kind, scope: {type, id}, epoch, expires_at,
   data?}` with lowercase word `kind`/`scope.type`, exactly these
   (case-sensitive, unique) member names, `epoch`/`expires_at` plain JSON
@@ -210,5 +211,8 @@ principal and device, and its epoch is newer than every epoch already seen
 from that device; nothing older ever installs a key. Desktop relays delivered
 controls to the frontend as the tab's non-journaled `media_key` event
 (`client/media_e2ee.go`); the PWA routes `onSecureControl` to the voice
-session (`app.js`). While encrypted voice runs, both clients drain about every
-second so rekeys arrive before activation.
+session (`app.js`). After a successful `finalize` the server rings a
+content-free `olm_pending` event on every live session of each non-local
+target device (`internal/server/olm_rate.go`); clients drain on it, with the
+slow poll as fallback. Control begins, other admission actions and drains
+have per-device budgets separate from the chat-send bucket.

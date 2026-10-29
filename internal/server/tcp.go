@@ -333,7 +333,12 @@ type TCPServer struct {
 	olmAdmissionEnabled bool
 	// mediaE2EE requires end-to-end encrypted channel media (Task 2), ON by
 	// default; advertised as netproto.CapabilityMediaE2EE when available.
-	mediaE2EE             bool
+	mediaE2EE bool
+	// Per-device noxa-olm-v1 budgets separate from chat sends (olm_rate.go).
+	olmControlRate        *chatRateLimiter
+	olmAdmissionRate      *chatRateLimiter
+	olmDrainRate          *chatRateLimiter
+	olmAttempts           olmAttemptMemo
 	previewOnce           sync.Once
 	previewService        *linkpreview.Service
 	spoolDelivery         [64]sync.Mutex
@@ -477,6 +482,9 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 	s := &TCPServer{
 		olmAdmissionEnabled: true,
 		mediaE2EE:           true,
+		olmControlRate:      newChatRateLimiter(olmControlBegins, olmBudgetWindow),
+		olmAdmissionRate:    newChatRateLimiter(olmAdmissionFrames, olmBudgetWindow),
+		olmDrainRate:        newChatRateLimiter(olmDrainFrames, olmBudgetWindow),
 		cfg:                 cfg,
 		logger:              logger,
 		deps:                deps,

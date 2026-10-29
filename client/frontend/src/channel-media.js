@@ -61,16 +61,10 @@ export async function startChannelMedia({ tabID, channelID, roster = [], adapter
         throw error;
     }
     if (current !== session) { session.stop(); throw new MediaSessionError("closed"); }
-    priority(tabID, true);
     session.tabID = tabID;
     return session;
 }
 
-// While encrypted voice runs, the native ratchet drain polls about every
-// second, so rekey controls arrive before the sender activates them.
-function priority(tabID, active) {
-    Promise.resolve().then(() => window.go?.main?.App?.SetMediaKeyPriorityForTab?.(tabID, active)).catch(() => {});
-}
 
 export function channelMedia() { return current?.active ? current : null; }
 
@@ -84,7 +78,6 @@ export function useChannelMediaSession(session) {
 export function stopChannelMedia() {
     const session = current;
     current = null;
-    if (session?.tabID) priority(session.tabID, false);
     session?.stop();
     publish({ state: "off" });
 }
@@ -113,8 +106,19 @@ export function mediaErrorText(error) {
 export function mediaStatusText(status = lastStatus) {
     switch (status?.state) {
         case "keying": return t("e2ee.media.keying");
-        case "encrypted": return status.recipients ? t("e2ee.media.encrypted", { count: status.delivered ?? status.recipients }) : t("e2ee.media.alone");
-        case "partial": return t("e2ee.media.partial", { failed: status.failed?.length || 0 });
+        case "encrypted": return withWarning(status, status.recipients ? t("e2ee.media.encrypted", { names: holderNames(status) }) : t("e2ee.media.alone"));
+        case "partial": return withWarning(status, t("e2ee.media.partial", { failed: status.failed?.length || 0 }));
         default: return "";
     }
+}
+
+// Who holds my current keys: nickname with the verified account (principal).
+function holderNames(status) {
+    const names = (status.keyHolders || []).map(h => (h.nickname && h.nickname !== h.principal ? `${h.nickname} (${h.principal})` : h.principal));
+    return names.length > 4 ? t("e2ee.media.more", { names: names.slice(0, 4).join(", "), count: names.length - 4 }) : names.join(", ");
+}
+
+function withWarning(status, text) {
+    const mismatch = status.membershipMismatch || [];
+    return mismatch.length ? `${text} · ${t("e2ee.media.mismatch", { names: mismatch.map(m => m.principal).join(", ") })}` : text;
 }

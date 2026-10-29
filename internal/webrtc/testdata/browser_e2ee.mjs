@@ -132,6 +132,9 @@ window.e2ee = {
     channelMedia().publicationsChanged();
   },
   rekey() { channelMedia().publicationsChanged(); },
+  // Transforms belong to the sender: replaceTrack keeps encryption.
+  async replaceMic() { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); const tr = state.pc.getTransceivers().find(t => t.sender.track?.kind === "audio" && t !== state.shareAudioSender); await tr.sender.replaceTrack(s.getAudioTracks()[0]); },
+  async restartCamera() { const cam = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 360 } }); const tr = state.pc.getTransceivers().find(t => t.sender.track?.kind === "video" && t !== state.shareVideoTransceiver); tr.sender.track.stop(); await tr.sender.replaceTrack(cam.getVideoTracks()[0]); },
   status() { return channelMedia()?.status() || { state: "off" }; },
   epoch() { return channelMedia()?.engine?.activeEpoch || 0; },
   async leave() { stopChannelMedia(); state.pc?.close(); state.pc = null; await post("/close", { ID }); },
@@ -149,7 +152,7 @@ let roster = [];
 const handlers = {};
 const session = Object.assign(new EventTarget(), {
   clientID: ID, deviceID: "dev-" + ID, uniqueID: "u-" + ID, capabilities: new Set(), mediaLimits: null, iceServers: [],
-  relayServers: async () => [], onRelayRenewal: () => () => {}, clients: () => roster, self: () => roster.find(c => c.client_id === ID) || null, channels: () => [],
+  relayServers: async () => [], onRelayRenewal: () => () => {}, clients: () => roster, self: () => roster.find(c => c.client_id === ID) || null, channels: () => [{ id: 1, clients: roster }, { id: 2, clients: roster }],
   conn: { open: true, on(type, fn) { handlers[type] = fn; return () => {}; },
     send(type, data) {
       if (type === Msg.WebRTCAnswer) post("/answer", { ID, SDP: data.sdp });
@@ -176,6 +179,7 @@ eventLoop(async e => {
 window.e2ee = {
   async join() { await voice.join(1); return voice.mediaStatus?.api; },
   async camera() { await voice.startCamera(); },
+  async flip() { try { await voice.flipCamera(); return "flipped"; } catch (e) { return "flip unavailable: " + e.message; } },
   async tryJoin() { try { await voice.join(1); return "joined"; } catch (error) { return String(error?.reason || error?.message || error); } },
   status() { return voice.mediaStatus; },
   epoch() { return voice.mediaStatus?.epoch || 0; },
@@ -245,6 +249,17 @@ try {
     }
     log("phase 1: desktop<->pwa mic/camera/screen/screen-audio decrypted through the SFU");
 
+    // 1b. replaceTrack (new microphone), an ended + restarted camera capture
+    // and a PWA camera flip keep encryption through the SFU.
+    await call("A", "replaceMic");
+    await growing("B", "A|mic", "B hears A after replaceTrack of the microphone");
+    await call("A", "restartCamera");
+    await growing("B", "A|cam", "B sees A after the camera capture restarted", { video: true, min: 10 });
+    log("PWA flip:", await call("B", "flip"));
+    await growing("A", "B|cam", "A sees B after the camera flip", { video: true, min: 10 });
+    for (const id of ["A", "B"]) for (const [pid, s] of Object.entries((await report(id)).senders)) if ((s.dropped.unencrypted || 0) > 0) throw new Error(`${id} ${pid} produced unencrypted output after track changes`);
+    log("phase 1b: replaceTrack, capture restart and camera flip stayed encrypted");
+
     // 2. A joiner (desktop C, createEncodedStreams) gets only new epochs.
     const epochBefore = await call("A", "epoch");
     await open("C", "desktop", "streams");
@@ -268,6 +283,10 @@ try {
     const gained = (after.receivers["A|mic"]?.frames || 0) - (cut.receivers["A|mic"]?.frames || 0);
     const nokey = (after.receivers["A|mic"]?.dropped?.nokey || 0) - (cut.receivers["A|mic"]?.dropped?.nokey || 0);
     const lateToC = (await api("/controls")).filter(c => c.to === "dev-C" && c.from === "dev-A" && c.epoch > (toC.at(-1)?.epoch || 0));
+    const bytesGained = (after.receivers["A|mic"]?.bytes || 0) - (cut.receivers["A|mic"]?.bytes || 0);
+    // The SFU still delivers A's packets to C (bytes grow), but without the
+    // new key not one frame decrypts: the media is really encrypted.
+    if (bytesGained <= 0) throw new Error("removed device received no packets; the decrypt check would be vacuous");
     if (gained > 0 || nokey < 20 || lateToC.length) throw new Error(`removed device still decrypts: gained ${gained} nokey ${nokey} late ${JSON.stringify(lateToC)}`);
     await growing("B", "A|mic", "B still hears A after the removal rekey");
     log(`phase 3: removed-but-served device decrypted 0 new frames (${nokey} dropped without key) ${Date.now() - hideAt}ms`);

@@ -14,7 +14,7 @@ type requestBucket struct {
 }
 type sessionRequestBudget struct {
 	mu      sync.Mutex
-	buckets [4]requestBucket
+	buckets [5]requestBucket
 }
 
 func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) bool {
@@ -23,8 +23,12 @@ func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) boo
 	}
 	class, burst, rate := 0, 120.0, 60.0
 	switch mt {
-	case netproto.MsgLinkPreviewRequest, netproto.MsgOlmDirectoryRequest, netproto.MsgOlmAdmissionRequest:
+	case netproto.MsgLinkPreviewRequest, netproto.MsgOlmDirectoryRequest:
 		class, burst, rate = 3, 12, 2
+	case netproto.MsgOlmAdmissionRequest:
+		// Admission has its own per-device budgets (olm_rate.go); this bound
+		// only caps one session's database work. A 12-member rekey is ~55 frames.
+		class, burst, rate = 4, 160, 16
 	case netproto.MsgChatHistory, netproto.MsgFileList, netproto.MsgFileTransferInit, netproto.MsgJoinChannel:
 		class, burst, rate = 1, 24, 4
 	case netproto.MsgICECandidate, netproto.MsgWebRTCOffer, netproto.MsgWebRTCAnswer:

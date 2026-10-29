@@ -184,3 +184,94 @@ test("a removal activates its new epoch sooner than other rekeys", async () => {
     assert.ok(delays.includes(1000) && !delays.includes(2500), `removal is urgent: ${delays}`);
     e.stop();
 });
+
+// Review 2a-A P2-1 repro: ghost entries outside what the voice UI renders
+// (string channel ids, alias fields) never receive keys.
+test("only strict integer channel members receive keys (no ghost recipients)", () => {
+    const roster = [member("c1", "u1", "d1"), { client_id: "g1", unique_id: "u-ghostA", media_device: "dA", channel_id: "5" },
+        { client_id: "g2", unique_id: "u-ghostB", media_device: "dB", channelID: 5 }, { client_id: "g3", unique_id: "u-ghostC", media_device: "dC", channel_id: 5.5 }];
+    assert.deepEqual(recipientsOf(roster, me).map(r => r.principal), ["u1"]);
+});
+
+test("a removal during distribution aborts that epoch and rekeys without the removed device", async () => {
+    let release;
+    const gate = new Promise(r => { release = r; });
+    const sent = [];
+    const media = fakeMedia();
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, send: async c => { sent.push(c); if (sent.length <= 2) await gate; return { ok: true }; } });
+    e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2")]);
+    e.start({ ...me, principal: "u-me-abort", device: "d-me-abort" });
+    await flush();
+    const first = sent[0].body.epoch;
+    e.setRoster([member("c1", "u1", "d1")]); // d2 kicked while the first epoch is in flight
+    release();
+    await flush(80);
+    const activated = media.log.filter(([op]) => op === "activate").map(([, , epoch]) => epoch);
+    assert.ok(!activated.includes(first), `the epoch known to the removed device is never activated: ${activated}`);
+    const later = sent.filter(c => c.body.epoch > first);
+    assert.ok(later.length && later.every(c => c.device !== "d2"), "the new epoch excludes the removed device");
+    assert.ok(activated.some(epoch => epoch > first));
+    e.stop();
+});
+
+test("a membership digest that differs after the roster settled is a warning, not a gate", async () => {
+    const states = [];
+    const media = fakeMedia();
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, onStatus: s => states.push(s), send: async () => ({ ok: true }) });
+    e.setRoster([member("c-me", "u-me", "d-me"), member("cm", "u-m", "d-m")]);
+    e.start(me);
+    await flush();
+    e.receive({ ...control(5_000_000_000_000, { client: "cm", sender: "u-m", device: "d-m" }), data: { ...control(5_000_000_000_000).data, client: "cm", members: "x".repeat(43) } });
+    await flush(60);
+    assert.ok(media.keys.has("cm|mic#5000000000000"), "the key is still installed");
+    assert.deepEqual(e.status().membershipMismatch.map(m => m.principal), ["u-m"]);
+    e.stop();
+});
+
+test("epochs never go backwards across engines, even when the clock steps back", async () => {
+    const id = { channelID: 5, clientID: "c-mono", principal: "u-mono", device: "d-mono" };
+    let clock = 2_000_000_000_000;
+    const sent = [];
+    const mk = () => new MediaKeyEngine({ media: fakeMedia(), timers: fastTimers, sendTimeoutMs: Infinity, now: () => clock, send: async c => { sent.push(c); return { ok: true }; } });
+    const a = mk(); a.setRoster([member("c1", "u1", "d1")]); a.start(id); await flush();
+    const first = sent.at(-1).body.epoch;
+    a.stop();
+    clock -= 3_600_000; // the wall clock steps back an hour
+    const b = mk(); b.setRoster([member("c1", "u1", "d1")]); b.start(id); await flush();
+    assert.ok(sent.at(-1).body.epoch > first);
+    b.stop();
+});
+
+test("the epoch line is per (principal, device): another principal on the same device id is separate", async () => {
+    const { e, media } = engine();
+    e.setRoster([member("c1", "u-line1", "d-shared"), member("c2", "u-line2", "d-shared")]);
+    e.start(me);
+    await flush();
+    assert.equal(e.receive(control(7_000_000_000_000, { client: "c1", sender: "u-line1", device: "d-shared" })).ok, true);
+    assert.equal(e.receive(control(6_000_000_000_000, { client: "c2", sender: "u-line2", device: "d-shared" })).ok, true);
+    await flush();
+    assert.ok(media.keys.has("c2|mic#6000000000000"));
+    e.stop();
+});
+
+test("an invisible session sends no key controls and stops", async () => {
+    let invisible = 0;
+    const { e, sent } = engine();
+    e.onInvisible = () => { invisible++; };
+    e.setRoster([member("c1", "u1", "d1"), { ...member("c-me", "u-me", "d-me"), status: "invisible" }]);
+    e.start(me);
+    e.setRoster([member("c1", "u1", "d1"), { ...member("c-me", "u-me", "d-me"), status: "invisible" }]);
+    await flush();
+    assert.ok(invisible >= 1);
+    e.stop();
+    assert.equal(sent.length, 0, "no key control leaves an invisible session");
+});
+
+test("the status names exactly who holds the current keys", async () => {
+    const { e } = engine();
+    e.setRoster([{ ...member("c1", "u1", "d1"), nickname: "Alice" }, member("c2", "u2", "d2")]);
+    e.start(me);
+    await flush();
+    assert.deepEqual(e.status().keyHolders.map(k => k.nickname || k.principal).sort(), ["Alice", "u2"]);
+    e.stop();
+});

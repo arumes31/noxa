@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -94,9 +93,8 @@ type connManager struct {
 	// supportsMediaE2EE: the server requires end-to-end encrypted channel
 	// media and supports its key transport (Task 2).
 	supportsMediaE2EE bool
-	// mediaKeyPriority: an encrypted voice session is active on this
-	// connection (faster ratchet drain for media-key controls).
-	mediaKeyPriority   atomic.Bool
+	// ratchetWake: the server's olm_pending doorbell wakes the drain loop.
+	ratchetWake        chan struct{}
 	authorizationModel string
 	closed             bool
 	reconnectTerminal  bool // authenticated rejection or trust failure; guarded by mu
@@ -237,6 +235,7 @@ func newConnManager(wailsCtx context.Context) *connManager {
 		pubKeys:             newPubKeyCache(),
 		scopeKeys:           newScopeKeyStore(),
 		decryptSem:          make(chan struct{}, maxAsyncDecrypts),
+		ratchetWake:         make(chan struct{}, 1),
 	}
 	// Media keys are relayed to the frontend from the first session on.
 	m.ratchetControls = append(m.ratchetControls, m.relayMediaKey)
@@ -1229,6 +1228,10 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		m.mu.Unlock()
 		m.emit("snapshot", string(f.Payload))
 	case netproto.MsgEvent:
+		if isOlmDoorbell(f.Payload) {
+			m.ringRatchet()
+			return
+		}
 		// Sealed payloads (chat bodies, edits, announcements) are opened in
 		// the backend; DMs decrypt asynchronously and re-emit, which is what
 		// the empty return means.

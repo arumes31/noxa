@@ -25,4 +25,7 @@ const (
 	MediaE2EEReasonWhisper          = "whisper_unavailable_e2ee"
 	MediaE2EEReasonPreview          = "stream_preview_disabled_e2ee"
 	MediaE2EEReasonCodecUnsupported = "media_e2ee_codec_unsupported"
+	// An invisible session is not in the other members' roster, so nobody
+	// would give it keys and its own keys would reveal it: refused.
+	MediaE2EEReasonInvisible = "media_e2ee_invisible"
 )

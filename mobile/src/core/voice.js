@@ -268,7 +268,7 @@ export class Voice extends EventTarget {
                 onError: error => { this.#emit("media-error", error); this.leave().catch(() => {}); },
             });
             this.#media = media;
-            media.setRoster(this.session.clients?.() || []);
+            media.setRoster(this.#voiceRoster());
             try {
                 await Promise.race([media.start(this.channelID), cancelled]);
             } catch (error) {
@@ -829,7 +829,7 @@ export class Voice extends EventTarget {
 
     #snapshot() {
         // Track keys map to members only once the tree knows them.
-        this.#media?.setRoster(this.session.clients?.() || []);
+        this.#media?.setRoster(this.#voiceRoster());
         this.#applyVolumes();
         const called = !!this.session.self?.()?.hand_called;
         if (called && !this.#wasCalled && this.active) this.#emit("called");
@@ -906,6 +906,15 @@ export class Voice extends EventTarget {
         this.whispering = false;
         this.#applyMic();
         if (was && this.conn.open && this.active) await this.#whisperRequest(false, { uniqueIDs: [], channelIDs: [] }).catch(() => {});
+    }
+
+    /**
+     * Exactly the members the voice room renders (the channel node's
+     * clients): the only devices that may receive this session's media keys.
+     */
+    #voiceRoster() {
+        const channel = this.session.channels?.().find(c => c.id === this.channelID);
+        return channel?.clients || [];
     }
 
     /** Hands a delivered media-key control (app.js onSecureControl) to the session. */

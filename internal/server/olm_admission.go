@@ -45,14 +45,8 @@ func (s *TCPServer) handleOlmAdmission(ctx context.Context, client *Client, f *n
 		if a.Device == "" || a.Principal == "" {
 			return reply("authority-required")
 		}
-		if s.chatRate != nil {
-			if r.Action == "begin" || r.Action == "finalize" {
-				if !s.chatRate.allowLimit(a.Principal, time.Now(), s.chatActionLimit(ctx, client)) {
-					return reply("rate-limit")
-				}
-			} else if !s.chatRate.allow(a.Principal+":olm-admission", time.Now()) {
-				return reply("rate-limit")
-			}
+		if !s.allowOlmAdmission(ctx, client, a, r) {
+			return reply("rate-limit")
 		}
 		opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -62,10 +56,16 @@ func (s *TCPServer) handleOlmAdmission(ctx context.Context, client *Client, f *n
 			data, e = db.OlmSnapshot(opCtx, a, r.Scope, r.Peer, r.Conversation)
 		case "begin":
 			data, e = db.BeginOlmAttempt(opCtx, a, *r.Manifest)
+			if e == nil {
+				s.olmAttempts.note(a.Principal, a.Device, *r.Manifest)
+			}
 		case "put_part":
 			e = db.PutOlmPart(opCtx, a, r.AttemptID, r.Part, r.Data)
 		case "finalize":
 			data, e = db.FinalizeOlmAttempt(opCtx, a, r.AttemptID)
+			if e == nil {
+				defer s.ringOlmDoorbells(a.Principal, a.Device, r.AttemptID)
+			}
 		case "status":
 			data, e = db.OlmAttemptStatus(opCtx, a, r.AttemptID)
 		case "abort":
