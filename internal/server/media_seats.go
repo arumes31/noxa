@@ -87,6 +87,10 @@ func (m *mediaSeats) putLocked(ch int64, client string, id mediaSeatID) {
 func (m *mediaSeats) take(ch int64, client string, id mediaSeatID, limit int) (func(), bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.takeLocked(ch, client, id, limit)
+}
+
+func (m *mediaSeats) takeLocked(ch int64, client string, id mediaSeatID, limit int) (func(), bool) {
 	prev, had := m.byClient[client]
 	if had && prev == ch {
 		m.byChannel[ch][client] = id
@@ -119,18 +123,16 @@ func (m *mediaSeats) take(ch int64, client string, id mediaSeatID, limit int) (f
 
 // carry moves a seated client's seat to ch (see take); an unseated client
 // carries nothing.
+// The read and the transfer share one critical section, so a concurrent
+// release can never be undone by a move.
 func (m *mediaSeats) carry(ch int64, client string, limit int) (func(), bool) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	prev, had := m.byClient[client]
-	var id mediaSeatID
-	if had {
-		id = m.byChannel[prev][client]
-	}
-	m.mu.Unlock()
 	if !had {
 		return func() {}, true
 	}
-	return m.take(ch, client, id, limit)
+	return m.takeLocked(ch, client, m.byChannel[prev][client], limit)
 }
 
 // park keeps a seated client seated in no channel (it left its channel but

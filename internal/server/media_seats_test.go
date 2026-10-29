@@ -301,3 +301,21 @@ func TestChatRateLimiterLimitGrowsWithinTheWindow(t *testing.T) {
 		t.Fatal("a smaller limit must not add tokens")
 	}
 }
+
+// A move racing a release never recreates the released seat (CodeRabbit).
+func TestMediaSeatsCarryNeverRecreatesAReleasedSeat(t *testing.T) {
+	var m mediaSeats
+	m.take(1, "a", mediaSeatID{"u", "d"}, 64)
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 1000; i++ {
+			m.carry(int64(2+i%2), "a", 64)
+		}
+		close(done)
+	}()
+	m.release("a")
+	<-done
+	if got := m.seat("a"); got != 0 {
+		t.Fatalf("released seat recreated in channel %d", got)
+	}
+}

@@ -1410,6 +1410,9 @@ func (s *TCPServer) onDisconnect(client *Client) {
 		}
 		client.markDisconnectCleaned()
 	}()
+	// Released again outside the membership section: a seat taken by a request
+	// that raced the cleanup (no Authority locks) never outlives the session.
+	s.mediaSeats.release(client.ID)
 	if alreadyCleaned {
 		return
 	}
