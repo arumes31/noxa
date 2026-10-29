@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -256,6 +257,7 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		ID, Principal, Device, SDP, Candidate, Mid, To, Hide, Publisher, Slot string
+		Generation                                                            string // of the publication an inactive /publish ends
 		Index                                                                 uint16
 		Slots                                                                 []map[string]string
 		Body                                                                  json.RawMessage
@@ -436,7 +438,13 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(map[string]any{"ok": true})
 	case "/publish":
-		gen, err := h.v.PublishVideoWithCodecs(body.ID, body.Slot, 0, body.Active, "", []string{"vp8"})
+		// Like the server: a new publication gets its generation from the
+		// router; ending one names the generation it ends.
+		var generation uint64
+		if !body.Active {
+			generation, _ = strconv.ParseUint(body.Generation, 10, 64)
+		}
+		gen, err := h.v.PublishVideoWithCodecs(body.ID, body.Slot, generation, body.Active, "", []string{"vp8"})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return

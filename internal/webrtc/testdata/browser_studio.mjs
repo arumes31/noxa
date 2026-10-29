@@ -47,7 +47,7 @@ window.go = { main: { App: {
   WebRTCOfferSecureForTab: async (_tab, sdp, slots, version) => { if (version !== "noxa-media-e2ee-v1") throw new Error("undeclared"); window.offers = (window.offers || 0) + 1; return (await post("/offer", { ID, SDP: sdp, Slots: slots })).sdp; },
   WebRTCAnswerForTab: async (_tab, sdp) => post("/answer", { ID, SDP: sdp }),
   VideoStreamControlForTab: async (_tab, msg) => {
-    if (msg.action === "publish") { const r = await post("/publish", { ID, Slot: msg.slot, Active: msg.active }); return { ...msg, generation: String(r.generation), streams: [] }; }
+    if (msg.action === "publish") { const r = await post("/publish", { ID, Slot: msg.slot, Active: msg.active, Generation: String(msg.generation ?? "") }); return { ...msg, generation: String(r.generation), streams: [] }; }
     if (msg.action === "keyframe") return post("/keyframe", { ID, Publisher: msg.publisher_id, Slot: msg.slot });
     return { ...msg, streams: [] };
   },

@@ -193,7 +193,7 @@ const session = Object.assign(new EventTarget(), {
       if (type === Msg.JoinChannel) { if (data.channel_id) await post("/join", { ID }); return { channel_id: data.channel_id }; }
       if (type === Msg.WebRTCOffer) { if (data.media_e2ee !== "noxa-media-e2ee-v1") throw new Error("undeclared"); window.offers++; return { sdp: (await post("/offer", { ID, SDP: data.sdp, Slots: data.tracks })).sdp }; }
       if (type === Msg.VideoStreamControl && data.action === "keyframe") { window.keyframeRequests = (window.keyframeRequests || 0) + 1; await post("/keyframe", { ID, Publisher: data.publisher_id, Slot: data.slot }); return { action: "keyframe" }; }
-      if (type === Msg.VideoStreamControl) { const r = await post("/publish", { ID, Slot: data.slot, Active: data.active }); return { action: "publish", generation: String(r.generation) }; }
+      if (type === Msg.VideoStreamControl) { const r = await post("/publish", { ID, Slot: data.slot, Active: data.active, Generation: String(data.generation ?? "") }); return { action: "publish", generation: String(r.generation) }; }
       return {};
     } },
 });
