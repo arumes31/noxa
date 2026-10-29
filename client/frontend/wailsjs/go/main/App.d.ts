@@ -207,6 +207,8 @@ export function DownloadPath(arg1:string):Promise<string>;
 
 export function E2EEDiagnostics(arg1:string):Promise<main.E2EEDiagnostics>;
 
+export function E2EEDiagnosticsForTab(arg1:string,arg2:string):Promise<main.E2EEDiagnostics>;
+
 export function EmojiDelete(arg1:string):Promise<string>;
 
 export function EmojiDeleteForTab(arg1:string,arg2:string):Promise<string>;

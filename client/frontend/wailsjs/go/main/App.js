@@ -406,6 +406,10 @@ export function E2EEDiagnostics(arg1) {
   return window['go']['main']['App']['E2EEDiagnostics'](arg1);
 }
 
+export function E2EEDiagnosticsForTab(arg1, arg2) {
+  return window['go']['main']['App']['E2EEDiagnosticsForTab'](arg1, arg2);
+}
+
 export function EmojiDelete(arg1) {
   return window['go']['main']['App']['EmojiDelete'](arg1);
 }

@@ -33,6 +33,13 @@ body.compact #sidebar-resize { display: none; }
 #voice-bar .voice-summary .status-icon[hidden] { display: none; }
 #voice-bar .status-icon .ui-icon { display: block; width: 16px; height: 16px; flex: none; margin: 0; }
 .status-icon-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+#conn-lock { position: relative; cursor: help; }
+#conn-lock .ui-icon { width: 16px; height: 16px; display: block; }
+#conn-lock:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+#voice-e2ee { cursor: help; color: var(--accent); }
+#voice-e2ee[data-state="keying"], #voice-e2ee[data-state="partial"], #voice-e2ee[data-state="paused"] { color: var(--warn); }
+.encryption-tooltip { position: fixed; z-index: 30000; box-sizing: border-box; width: min(480px, calc(100vw - 16px)); padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel, #0b141b); color: var(--text); box-shadow: 0 8px 30px #0008; font-size: 12px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; overflow-y: auto; overscroll-behavior: contain; }
+.encryption-tooltip[hidden] { display: none; }
 #voice-bar .status-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 #workspace-connection-status[data-state="connected"] { color: var(--arc-ok, #75d6a6); }
 #voice-bar #voice-status[data-whisper="true"] { color: var(--warn); }

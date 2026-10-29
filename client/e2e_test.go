@@ -106,6 +106,29 @@ func TestE2EEDiagnostics(t *testing.T) {
 	}
 }
 
+func TestE2EEDiagnosticsForTabRejectsNativeSwitch(t *testing.T) {
+	t.Parallel()
+	first, second := newConnManager(context.Background()), newConnManager(context.Background())
+	first.scopeKeys.put(7, 1, [32]byte{1})
+	app := &App{activeID: "a", tabs: map[string]*tabState{"a": {cm: first}, "b": {cm: second}}}
+	app.cmStore(first)
+	if got, err := app.E2EEDiagnosticsForTab("a", ""); err != nil || got.ScopeKeys != 1 {
+		t.Fatalf("original tab: %+v, %v", got, err)
+	}
+	app.tabsMu.Lock()
+	app.activeID = "b"
+	app.cmStore(second)
+	app.tabsMu.Unlock()
+	for _, tab := range []string{"", "a", "missing"} {
+		if _, err := app.E2EEDiagnosticsForTab(tab, ""); err == nil {
+			t.Fatalf("stale tab %q accepted", tab)
+		}
+	}
+	if got, err := app.E2EEDiagnosticsForTab("b", ""); err != nil || got.ScopeKeys != 0 {
+		t.Fatalf("new tab: %+v, %v", got, err)
+	}
+}
+
 func TestPubKeyCache(t *testing.T) {
 	t.Parallel()
 
