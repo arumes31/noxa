@@ -88,3 +88,53 @@ test("persistent rekey throws past a removal's deadline silence the sender until
     assert.notEqual(W.e.status().state, "paused");
     assert.ok(!W.sends.some(s => s.device === "d0" && s.at > tD), "d0 received something after its removal");
 });
+
+// CodeRabbit (fix4) 1: a covering epoch that is installed but whose
+// activation rejects or stalls never keeps the sender on the removed
+// device's epoch past its deadline.
+test("a covering epoch whose activation rejects or stalls never extends the exposure", async () => {
+    const { REMOVAL_BOUND_MS } = await import("../src/media-keys.js");
+    for (const mode of ["reject", "stall"]) {
+        const W = world(); await W.start(); W.stall(() => true);
+        const held = W.e.activeEpoch;
+        let armed = true;
+        W.hooks.activate = async (pid, ep) => {
+            if (!armed || pid !== "self|mic" || ep === held) return;
+            armed = false;
+            if (mode === "reject") throw new Error("activate failed");
+            await new Promise(() => {});
+        };
+        W.remove(0); const tD = W.now;
+        await W.advance(REMOVAL_BOUND_MS + 50);
+        const retired = W.retired.find(r => r.kind === "one" && r.pid === "self|mic" && r.epoch === held);
+        assert.ok(retired && retired.at - tD <= REMOVAL_BOUND_MS, `${mode}: held epoch not retired by the deadline`);
+        await W.advance(10_000);
+        assert.ok(!W.active.some(([t, ep]) => t > tD && ep === held), `${mode}: held epoch active again`);
+        if (mode === "reject") assert.notEqual(W.e.status().state, "paused", "reject: a later safe epoch resumes media");
+        else assert.equal(W.e.status().state, "paused", "stall: stays paused while activation is stuck");
+    }
+});
+
+// CodeRabbit (fix4) 2: a paused sender never resumes on an epoch whose
+// recipient snapshot predates a removal whose deadline has passed.
+test("an epoch that a later-removed device received never resumes sending after that device's deadline", async () => {
+    const { REMOVAL_BOUND_MS } = await import("../src/media-keys.js");
+    const W = world(); await W.start();
+    W.stall(d => d !== "d1"); // d1 receives the removal epoch quickly; others stall
+    let stallUntil = 0;
+    W.hooks.activate = async (pid, ep) => { if (pid === "self|mic" && stallUntil) { const until = stallUntil; stallUntil = 0; await new Promise(r => W.timers.setTimeout(r, until - W.now)); } };
+    W.remove(0); const t0 = W.now;
+    await W.advance(500);                       // E1 (excludes d0) installed and sent to d1
+    const e1 = W.sends.find(s => s.device === "d1" && s.at > t0)?.epoch;
+    assert.ok(e1, "d1 received the removal epoch");
+    stallUntil = t0 + 3_000;                    // E1's activation stalls past d1's deadline
+    W.remove(1); const t1 = W.now;
+    await W.advance(10_000);
+    // After d1's deadline the sender never encrypts under E1 (which d1 holds).
+    const activeAt = t => { let ep = 0; for (const [time, epoch] of W.active) if (time <= t) ep = epoch; return ep; };
+    const e1Retired = W.retired.some(r => r.kind === "one" && r.pid === "self|mic" && r.epoch === e1);
+    for (const [t, ep] of W.active) if (t >= t1 + REMOVAL_BOUND_MS && ep === e1) assert.ok(e1Retired, "E1 became the sending epoch after d1's deadline without being retired");
+    assert.notEqual(activeAt(W.now), e1, "E1 is the final sending epoch");
+    assert.notEqual(W.e.status().state, "paused", "a safe epoch resumed media");
+    assert.ok(!W.sends.some(s => s.device === "d1" && s.at > t1), "d1 received something after its removal");
+});
