@@ -8,7 +8,7 @@ permissions:
 jobs:
   ratchet-core:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:18
@@ -55,3 +55,19 @@ jobs:
           NOXA_TEST_DATABASE_URL: postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable
       - name: Browser loader failure checks
         run: node --test mobile/unit/ratchet-core.test.mjs
+      - name: Install Linux desktop client dependencies
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/ci-apt-setup.sh"
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxtst-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev xvfb
+      - name: Prepare embedded desktop frontend
+        run: |
+          mkdir -p client/frontend/dist
+          echo '<!doctype html><title>noXa</title>' > client/frontend/dist/index.html
+      - name: Ratchet product tests (native desktop + PWA) on real PostgreSQL
+        run: >-
+          xvfb-run -a go test -tags integration -count=1 -timeout=20m ./internal/server -v
+          -run '^(TestIntegrationRatchetProduct(Native|PWA)|TestOlmDoorbellNeverRingsForRejectedOrRepeatedFinalize)$'
+        env:
+          NOXA_BROWSER_INTEGRATION: "1"
+          NOXA_TEST_DATABASE_URL: postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable
