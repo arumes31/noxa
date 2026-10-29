@@ -158,7 +158,11 @@ participant could forge another participant's audio or video. Keys go only to
 the members the voice room shows (the status line names who holds them and
 warns when another member's view of the channel differs). Encrypted voice is
 unavailable while you are invisible (invisible sessions are not in the other
-members' roster).
+members' roster). An encrypted voice channel holds at most 64 participants;
+a join or move beyond that is refused ("this encrypted voice channel is full").
+Like the channel member limit, the count includes invisible members, so a full
+channel can hint that an invisible member is present. A second live session of
+the same device counts as its own participant.
 
 **Upgrade note.** Encrypted channel voice needs the signed device directory
 and secure-messaging admission (both on by default). A server whose device

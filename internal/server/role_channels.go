@@ -62,6 +62,8 @@ func (s *TCPServer) detachRoleDeletedChannels(deleted channels.DeleteResult) err
 		s.deps.State.SetSpeaking(member.ClientID, false)
 		s.deps.State.SetPrioritySpeaker(member.ClientID, false)
 		s.deps.State.SetSharing(member.ClientID, false)
+		// Seats in a deleted channel are parked (fix4 review P3-1).
+		s.mediaSeats.park(member.ClientID)
 	}
 	// Keep the old channel in state if cleanup fails, so recovery can retry
 	// the same IDs before the tree mirror discards them.

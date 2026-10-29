@@ -226,6 +226,8 @@ func (s *Server) integrationError(sess *session, err error) bool {
 		return s.write(sess, errorLine(errRoleConflict, "permissions changed; refresh before saving"))
 	case errors.Is(err, authorization.ErrRoleInvalid):
 		return s.write(sess, errorLine(errInvalidParameter, "invalid role operation"))
+	case errors.Is(err, netproto.ErrMediaE2EEChannelFull):
+		return s.write(sess, errorLine(errChannelFull, netproto.ErrMediaE2EEChannelFull.Error()))
 	default:
 		s.logger.Warn("query integration operation failed", zap.Error(err))
 		return s.write(sess, errorLine(errServerError, "integration authorization unavailable"))

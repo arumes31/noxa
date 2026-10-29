@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"context"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -69,7 +70,7 @@ func (b *roleVoiceGRPCBackend) MoveIntegrationMember(_ context.Context, _ auth.I
 
 func TestRoleGRPCMemberMove(t *testing.T) {
 	var calls atomic.Int32
-	var conflict atomic.Bool
+	var conflict, full atomic.Bool
 	b := &roleVoiceGRPCBackend{roleGRPCBackend: &roleGRPCBackend{authenticate: func(context.Context, string, string, string) (auth.IntegrationPrincipal, error) {
 		return auth.IntegrationPrincipal{}, nil
 	}}}
@@ -77,6 +78,9 @@ func TestRoleGRPCMemberMove(t *testing.T) {
 		calls.Add(1)
 		if conflict.Load() {
 			return authorization.ErrRoleConflict
+		}
+		if full.Load() {
+			return netproto.ErrMediaE2EEChannelFull
 		}
 		if request.ClientID != "target" || request.ChannelID != 2 {
 			return authorization.ErrRoleInvalid
@@ -93,10 +97,17 @@ func TestRoleGRPCMemberMove(t *testing.T) {
 	if _, err := c.MoveMember(roleAuthCtx(t, "integration", "pw"), request); status.Code(err) != codes.Aborted {
 		t.Fatal(err)
 	}
+	// A full encrypted voice channel is precise and not retryable (fix4
+	// review P3-2), never "authorization unavailable".
+	conflict.Store(false)
+	full.Store(true)
+	if _, err := c.MoveMember(roleAuthCtx(t, "integration", "pw"), request); status.Code(err) != codes.ResourceExhausted || !strings.HasPrefix(status.Convert(err).Message(), netproto.MediaE2EEReasonChannelFull+": ") {
+		t.Fatalf("full encrypted channel: %v", err)
+	}
 	if _, err := c.MoveMember(roleAuthCtx(t, "integration", "pw"), &noxav1.MoveMemberRequest{ClientId: "target"}); status.Code(err) != codes.InvalidArgument {
 		t.Fatal(err)
 	}
-	if calls.Load() != 2 {
+	if calls.Load() != 3 {
 		t.Fatal("invalid destination reached backend")
 	}
 	legacy := noxav1.NewControlClient(dialGRPC(t, startGRPC(t, &stubBackend{}, nil)))

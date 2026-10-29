@@ -20,7 +20,7 @@ import (
 // seatForTest seats a session in a channel regardless of the cap.
 func seatForTest(t *testing.T, srv *TCPServer, ch int64, client, principal, device string) {
 	t.Helper()
-	if _, ok := srv.mediaSeats.take(ch, client, mediaSeatID{principal: principal, device: device}, 1<<30); !ok {
+	if _, _, ok := srv.mediaSeats.take(ch, client, mediaSeatID{principal: principal, device: device}, 1<<30, nil); !ok {
 		t.Fatalf("seat %s in %d", client, ch)
 	}
 }
@@ -181,13 +181,13 @@ func TestMediaE2EEReconnectReplacesItsStaleSeat(t *testing.T) {
 // A different device of the same account is a separate seat and is counted.
 func TestMediaSeatsCountOtherDevicesOfTheSameAccount(t *testing.T) {
 	var m mediaSeats
-	if _, ok := m.take(1, "a", mediaSeatID{"u", "d1"}, 1); !ok {
+	if _, _, ok := m.take(1, "a", mediaSeatID{"u", "d1"}, 1, nil); !ok {
 		t.Fatal("first seat")
 	}
-	if _, ok := m.take(1, "b", mediaSeatID{"u", "d2"}, 1); ok {
+	if _, _, ok := m.take(1, "b", mediaSeatID{"u", "d2"}, 1, nil); ok {
 		t.Fatal("second device of the account passed a cap of 1")
 	}
-	undo, ok := m.take(2, "a", mediaSeatID{"u", "d1"}, 1)
+	undo, _, ok := m.take(2, "a", mediaSeatID{"u", "d1"}, 1, nil)
 	if !ok || m.seat("a") != 2 {
 		t.Fatal("move")
 	}
@@ -305,11 +305,11 @@ func TestChatRateLimiterLimitGrowsWithinTheWindow(t *testing.T) {
 // A move racing a release never recreates the released seat (CodeRabbit).
 func TestMediaSeatsCarryNeverRecreatesAReleasedSeat(t *testing.T) {
 	var m mediaSeats
-	m.take(1, "a", mediaSeatID{"u", "d"}, 64)
+	m.take(1, "a", mediaSeatID{"u", "d"}, 64, nil)
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 1000; i++ {
-			m.carry(int64(2+i%2), "a", 64)
+			m.carry(int64(2+i%2), "a", nil, 64, nil)
 		}
 		close(done)
 	}()

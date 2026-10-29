@@ -140,7 +140,9 @@ func (l *chatRateLimiter) chargeLocked(uid string, now time.Time, limit int, ski
 }
 
 // Limiter map bounds: expired buckets are swept from chatLimiterSweepAt keys
-// on; at chatLimiterMaxKeys live keys new keys are refused until some expire.
+// on; at chatLimiterMaxKeys live keys a new key is refused by allow, and
+// admitted without a bucket by allowOrSkip (secondary caps), until some
+// expire.
 const (
 	chatLimiterSweepAt = 4096
 	chatLimiterMaxKeys = 200000

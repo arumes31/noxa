@@ -162,6 +162,9 @@ func roleStatus(err error) error {
 		return status.Error(codes.Aborted, "permissions changed; refresh before saving")
 	case errors.Is(err, authorization.ErrRoleInvalid):
 		return status.Error(codes.InvalidArgument, "invalid role operation")
+	case errors.Is(err, netproto.ErrMediaE2EEChannelFull):
+		// Not retryable until a member leaves; the reason code is kept.
+		return status.Error(codes.ResourceExhausted, netproto.ErrMediaE2EEChannelFull.Error())
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return status.FromContextError(err).Err()
 	default:

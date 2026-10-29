@@ -1,5 +1,7 @@
 package netproto
 
+import "errors"
+
 // Mandatory channel media end-to-end encryption (Task 2).
 //
 // A server that requires encrypted channel media advertises
@@ -31,3 +33,9 @@ const (
 	// The encrypted voice channel is at its supported size.
 	MediaE2EEReasonChannelFull = "media_e2ee_channel_full"
 )
+
+// ErrMediaE2EEChannelFull refuses a join or move of encrypted voice into a
+// channel that already has the supported number of members. It is not
+// retryable until a member leaves; transports map it to their "resource
+// exhausted" status and keep the reason code in the message.
+var ErrMediaE2EEChannelFull = errors.New(MediaE2EEReasonChannelFull + ": this encrypted voice channel is full")

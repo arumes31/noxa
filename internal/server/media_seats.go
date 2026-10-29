@@ -15,15 +15,21 @@ package server
 //   - leaving the channel parks the seat (the voice peer lives on, so the
 //     next join meets the cap); it is released when the session's voice
 //     ends: the session is removed or disconnects;
-//   - seats held in the destination by other sessions of the same principal
-//     and device (a reconnect whose old session is not reaped yet) are not
-//     counted and are replaced.
+//   - a seat held in the destination by a DEAD session of the same principal
+//     and device (a reconnect whose old session is not reaped yet) is not
+//     counted and is replaced, and that session's voice is ended; a live
+//     second session of the same device holds a seat of its own;
+//   - a move of a session with a media device (a live voice peer) but no
+//     seat takes a seat with the cap: a missing seat is never a free pass;
+//   - a permission eviction and a channel deletion park the seat.
+//
+// Invariant: the sessions with a voice peer routed into an encrypted channel
+// hold its seats, and a channel never has more than MediaE2EEMaxVoice seats.
 //
 // Counting is O(1) per admission frame (no roster copy); the cap check walks
 // at most one channel's seats.
 
 import (
-	"errors"
 	"sync"
 
 	"noxa/internal/netproto"
@@ -32,7 +38,7 @@ import (
 // errMediaE2EEChannelFull refuses a join or move of encrypted voice into a
 // full channel; its text starts with the netproto reason code the clients
 // localize.
-var errMediaE2EEChannelFull = errors.New(mediaE2EEError(netproto.MediaE2EEReasonChannelFull, "this encrypted voice channel is full"))
+var errMediaE2EEChannelFull = netproto.ErrMediaE2EEChannelFull
 
 type mediaSeatID struct{ principal, device string }
 
@@ -42,14 +48,31 @@ type mediaSeats struct {
 	byClient  map[string]int64
 }
 
-// othersLocked counts the seats in ch held by other sessions, not counting
-// stale sessions of the same identity.
-func (m *mediaSeats) othersLocked(ch int64, client string, id mediaSeatID) int {
+// seatLive reports whether a session is still live (registered, not
+// revoked, not disconnect-cleaned). A nil seatLive treats every session as
+// live (nothing is ever replaced).
+type seatLive func(client string) bool
+
+func (l seatLive) alive(client string) bool { return l == nil || l(client) }
+
+// replacedSeat is a dead session's seat that a take replaced.
+type replacedSeat struct {
+	client string
+	ch     int64
+	id     mediaSeatID
+}
+
+// othersLocked counts the seats in ch held by other sessions. Only a DEAD
+// session of the same identity (a reconnect whose old session is not reaped
+// yet) is not counted: a live second session of the same device holds a
+// seat of its own (fix4 review P2-1).
+func (m *mediaSeats) othersLocked(ch int64, client string, id mediaSeatID, live seatLive) int {
 	n := 0
 	for c, sid := range m.byChannel[ch] {
-		if c != client && (id.device == "" || sid != id) {
-			n++
+		if c == client || (id.device != "" && sid == id && !live.alive(c)) {
+			continue
 		}
+		n++
 	}
 	return n
 }
@@ -82,57 +105,72 @@ func (m *mediaSeats) putLocked(ch int64, client string, id mediaSeatID) {
 }
 
 // take seats client in ch unless ch already has limit other seats. A session
-// seated in ch keeps its seat. It returns an undo that restores the previous
-// seat (replaced stale sessions are not restored).
-func (m *mediaSeats) take(ch int64, client string, id mediaSeatID, limit int) (func(), bool) {
+// seated in ch keeps its seat. Seats of dead sessions of the same identity
+// are replaced and returned (the caller ends their voice). The undo restores
+// the previous seat, and every replaced seat whose session is live again.
+func (m *mediaSeats) take(ch int64, client string, id mediaSeatID, limit int, live seatLive) (func(), []string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.takeLocked(ch, client, id, limit)
+	return m.takeLocked(ch, client, id, limit, live)
 }
 
-func (m *mediaSeats) takeLocked(ch int64, client string, id mediaSeatID, limit int) (func(), bool) {
+func (m *mediaSeats) takeLocked(ch int64, client string, id mediaSeatID, limit int, live seatLive) (func(), []string, bool) {
 	prev, had := m.byClient[client]
 	if had && prev == ch {
 		m.byChannel[ch][client] = id
-		return func() {}, true
+		return func() {}, nil, true
 	}
-	if m.othersLocked(ch, client, id) >= limit {
-		return nil, false
+	if m.othersLocked(ch, client, id, live) >= limit {
+		return nil, nil, false
 	}
+	var replaced []replacedSeat
 	if id.device != "" {
 		for c, sid := range m.byChannel[ch] {
-			if c != client && sid == id {
+			if c != client && sid == id && !live.alive(c) {
+				replaced = append(replaced, replacedSeat{client: c, ch: ch, id: sid})
 				m.removeLocked(c)
 			}
 		}
 	}
 	m.putLocked(ch, client, id)
+	ids := make([]string, len(replaced))
+	for i, r := range replaced {
+		ids[i] = r.client
+	}
 	return func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		if cur, ok := m.byClient[client]; !ok || cur != ch {
-			return // released or moved meanwhile
+		if cur, ok := m.byClient[client]; ok && cur == ch {
+			if had {
+				m.putLocked(prev, client, id)
+			} else {
+				m.removeLocked(client)
+			}
 		}
-		if had {
-			m.putLocked(prev, client, id)
-		} else {
-			m.removeLocked(client)
+		for _, r := range replaced {
+			if _, seated := m.byClient[r.client]; !seated && live.alive(r.client) {
+				m.putLocked(r.ch, r.client, r.id)
+			}
 		}
-	}, true
+	}, ids, true
 }
 
-// carry moves a seated client's seat to ch (see take); an unseated client
-// carries nothing.
-// The read and the transfer share one critical section, so a concurrent
-// release can never be undone by a move.
-func (m *mediaSeats) carry(ch int64, client string, limit int) (func(), bool) {
+// carry moves a client's seat to ch (see take). A client without a seat but
+// with encrypted voice (fallback: a media device, so a live peer) takes a
+// seat with the cap: a missing seat is never a free pass. A client without
+// either carries nothing. The read and the transfer share one critical
+// section, so a concurrent release can never be undone by a move.
+func (m *mediaSeats) carry(ch int64, client string, fallback *mediaSeatID, limit int, live seatLive) (func(), []string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	prev, had := m.byClient[client]
-	if !had {
-		return func() {}, true
+	if had {
+		return m.takeLocked(ch, client, m.byChannel[prev][client], limit, live)
 	}
-	return m.takeLocked(ch, client, m.byChannel[prev][client], limit)
+	if fallback != nil {
+		return m.takeLocked(ch, client, *fallback, limit, live)
+	}
+	return func() {}, nil, true
 }
 
 // park keeps a seated client seated in no channel (it left its channel but
@@ -171,24 +209,54 @@ func (m *mediaSeats) others(ch int64, client string) int {
 	return n
 }
 
+// mediaSessionLive reports whether the session is registered, authenticated
+// and neither revoked nor cleaned up.
+func (s *TCPServer) mediaSessionLive(id string) bool {
+	c, ok := s.clientByID(id)
+	return ok && c.needsDisconnectCleanup() && !c.sessionRevoked()
+}
+
+// endReplacedVoice ends the channel voice of sessions whose seat was replaced
+// (they are dead; the peer and media device must not outlive the seat).
+func (s *TCPServer) endReplacedVoice(ids []string) {
+	for _, id := range ids {
+		if s.deps != nil && s.deps.Voice != nil {
+			_ = s.deps.Voice.ClosePeer(id)
+		}
+		if s.deps != nil && s.deps.State != nil && s.deps.State.SetMediaDevice(id, "") {
+			s.broadcastEvent(eventMediaDeviceChanged, mediaDeviceEvent{ClientID: id})
+		}
+	}
+}
+
 // takeMediaSeat seats client in channel for an encrypted offer. ok is false
 // when the channel is full.
 func (s *TCPServer) takeMediaSeat(client *Client, channel int64) (undo func(), ok bool) {
 	if !s.mediaE2EERequired() || channel <= 0 {
 		return func() {}, true
 	}
-	return s.mediaSeats.take(channel, client.ID, mediaSeatID{principal: client.uniqueID(), device: client.currentDeviceID()}, MediaE2EEMaxVoice)
+	undo, replaced, ok := s.mediaSeats.take(channel, client.ID, mediaSeatID{principal: client.uniqueID(), device: client.currentDeviceID()}, MediaE2EEMaxVoice, s.mediaSessionLive)
+	s.endReplacedVoice(replaced)
+	return undo, ok
 }
 
-// carryMediaSeat moves a seated session's seat with a channel move; a full
-// destination refuses the move with errMediaE2EEChannelFull.
+// carryMediaSeat moves a session's seat with a channel move; a session with
+// a media device but no seat takes one. A full destination refuses the move
+// with errMediaE2EEChannelFull.
 func (s *TCPServer) carryMediaSeat(clientID string, channel int64) (func(), error) {
 	if !s.mediaE2EERequired() {
 		return func() {}, nil
 	}
-	undo, ok := s.mediaSeats.carry(channel, clientID, MediaE2EEMaxVoice)
+	var fallback *mediaSeatID
+	if s.deps != nil && s.deps.State != nil {
+		if c, ok := s.deps.State.GetClient(clientID); ok && c.MediaDevice != "" {
+			fallback = &mediaSeatID{principal: c.UniqueID, device: c.MediaDevice}
+		}
+	}
+	undo, replaced, ok := s.mediaSeats.carry(channel, clientID, fallback, MediaE2EEMaxVoice, s.mediaSessionLive)
 	if !ok {
 		return nil, errMediaE2EEChannelFull
 	}
+	s.endReplacedVoice(replaced)
 	return undo, nil
 }

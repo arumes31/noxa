@@ -133,6 +133,13 @@ func TestRoleQueryMemberMove(t *testing.T) {
 	if got := lastErr(t, sendCmd(t, conn, reader, command)); !strings.HasPrefix(got, "error id=521 ") {
 		t.Fatal(got)
 	}
+	// A full encrypted voice channel keeps its reason code (fix4 review P3-2).
+	b.mu.Lock()
+	b.moveErr = netproto.ErrMediaE2EEChannelFull
+	b.mu.Unlock()
+	if got := lastErr(t, sendCmd(t, conn, reader, command)); !strings.HasPrefix(got, "error id=779 ") || !strings.Contains(got, netproto.MediaE2EEReasonChannelFull) {
+		t.Fatal(got)
+	}
 	if got := lastErr(t, sendCmd(t, conn, reader, `membermove data={"client_id":"target","channel_id":0}`)); !strings.HasPrefix(got, "error id=512 ") {
 		t.Fatal(got)
 	}
