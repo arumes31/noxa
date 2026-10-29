@@ -164,6 +164,34 @@ Like the channel member limit, the count includes invisible members, so a full
 channel can hint that an invisible member is present. A second live session of
 the same device counts as its own participant.
 
+**What stays off while channel media is encrypted, and why.**
+* *Whisper* stays unavailable. A whisper would need its own key scope for an
+  authorized recipient set that is not the channel, verified like channel keys;
+  until that scope is built and proven, whisper is refused rather than sent
+  under the channel key or in plaintext.
+* *Stream previews (thumbnails)* are made locally on each device that watches
+  a stream; nothing is uploaded, so the server never holds a picture.
+* *Video codecs* are VP8 (and Opus for audio) only. H.264/HEVC need encrypted
+  packetization through the SFU that has not been demonstrated end to end, so
+  they are not offered.
+* *The connection benchmark* stays declined: it would send unencrypted test
+  media through the SFU.
+* *Key controls already handed to the secure-messaging transport* are not
+  cancelled when a recipient is removed. Once the server accepted a control it
+  owns the delivery, so a retraction could never be enforced against the
+  server, and an honest server stops routing the channel's media to a removed
+  member anyway. Exposure is bounded instead: the removal starts a new epoch
+  within about a second, the removed device never receives it, a late control
+  is refused by the recipient after its two-minute expiry, and an older epoch
+  can never be reinstalled.
+
+Receivers get their encryption transform before the answer that adds them is
+sent, so the SFU can never route a frame to a receiver without one; a receiver
+that cannot be protected aborts the negotiation. Video receivers on the older
+encoded-streams path ask the SFU for a keyframe after their first decrypted
+frame. Voice and video tiles show the account whose verified device delivered
+the keys for that participant.
+
 **Upgrade note.** Encrypted channel voice needs the signed device directory
 and secure-messaging admission (both on by default). A server whose device
 directory is unavailable refuses channel voice with an explicit message, so

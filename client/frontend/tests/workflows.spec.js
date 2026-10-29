@@ -12983,3 +12983,28 @@ test("a server offer is never answered without an encrypted media session (fail 
     });
     expect(result).toEqual({ answers: 0, local: 0, bridged: 0 });
 });
+
+// Task 2b (unsupported version/runtime UI): every refusal before a peer
+// exists is one localized explanation, and no peer connection is created.
+test("unsupported server, keyless guest and missing device refuse voice with a localized reason and no peer", async ({ page }) => {
+    const results = await page.evaluate(async () => {
+        const v = window.__noxa;
+        const out = {};
+        for (const [reason, status] of [["keyless_guest", { supported: true, reason: "keyless_guest" }], ["no_device", { supported: true, principal: "", device: "", client_id: "client-a" }], ["server_outdated", { supported: false, reason: "server_outdated" }]]) {
+            window.__mediaE2EEStatus = status;
+            navigator.mediaDevices.getUserMedia = async () => document.createElement("canvas").captureStream(1);
+            v.state.pc = null;
+            v.state.myChannelID = 42;
+            v.state.channels = [{ ChannelID: 42, Name: "Lobby" }];
+            const started = await v.ensureVoiceForChannel();
+            // The refusal is shown as the localized reason (system message).
+            const texts = { server_outdated: "This server does not support end-to-end encrypted voice yet. The server needs an update.",
+                keyless_guest: "Voice is end-to-end encrypted. Guest sessions without a key identity cannot join voice.",
+                no_device: "This session has no secure device yet, so encryption keys cannot be exchanged." };
+            out[reason] = { started, shown: (document.getElementById("chat-log")?.textContent || "").includes(texts[reason]), peer: !!v.state.pc };
+        }
+        window.__mediaE2EEStatus = null;
+        return out;
+    });
+    for (const reason of ["server_outdated", "keyless_guest", "no_device"]) expect(results[reason], reason).toEqual({ started: false, shown: true, peer: false });
+});
