@@ -39,3 +39,5 @@ f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory
 f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1106
 f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1128
 f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1132
+# The comment above (commit db4dc5ff) itself matched the generic rule.
+db4dc5ffbf444d7af421662f3ddb6c877d1ff511:.gitleaksignore:generic-api-key:16
