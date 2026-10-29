@@ -946,7 +946,8 @@ class RatchetStore {
       throw fail("invalid");
     return this.prepareAccountTransition(s, accountID, account, reset, bundle, otks, true);
   }
-  // Mirror of Go AbandonRecoveryTransition.
+  // Mirror of Go AbandonRecoveryTransition. The caller must have positive
+  // not-applied evidence; a refusal or timeout alone never releases keys.
   async abandonRecoveryTransition(s, id) {
     const ref = ["transition", id],
       old = this.require(s, ref);
@@ -955,9 +956,34 @@ class RatchetStore {
     if (!t.recovery || t.receipt) throw fail("invalid");
     if (t.abandoned) return;
     const c = json(this.require(s, ctl).data);
-    if (c.accountEpoch !== t.from_epoch || !c.sendingBlocked) throw fail("fenced");
+    if (c.accountEpoch !== t.from_epoch || !c.sendingBlocked || c.accountID === t.account_id) throw fail("fenced");
+    // IDs are caller-selected. Select only this unpublished candidate's
+    // obligations, then validate and close them with the abandonment commit.
+    const refs = [];
+    for (let after = ""; ;) {
+      const page = await this.pendingRefs("obligation", after, 200);
+      const records = await this.read(page);
+      for (const r of page) {
+        if (json(this.require(records, r).data).account_id === t.account_id) refs.push(r);
+      }
+      if (page.length < 200) break;
+      after = page.at(-1)[1];
+    }
+    const fresh = await this.extended(s, refs);
+    this.compare(s, fresh);
+    const keys = new Map(t.bundle.one_time_keys.map(k => [k.id, k.key]));
+    const changes = {};
+    for (const r of refs) {
+      const o = json(this.require(fresh, r).data);
+      if (o.account_id !== t.account_id || o.publication_id !== id || o.account_epoch !== t.reset.new_epoch ||
+          !o.public_key || keys.get(o.key_id) !== o.public_key || o.consumed) throw fail("conflict");
+      keys.delete(o.key_id);
+      if (!o.closed) changes[key(r)] = bytes({ ...o, closed: true, closure_proof: "abandoned-recovery:" + id });
+    }
+    if (keys.size) throw fail("conflict");
     t.abandoned = true;
-    await this.#commit(s, { [key(ref)]: bytes(t) }, { sendingBlocked: false });
+    changes[key(ref)] = bytes(t);
+    await this.#commit(fresh, changes, { sendingBlocked: false });
   }
   async prepareAccountTransition(s, accountID, account, reset, bundle, otks, recovery = false) {
     const [server, principal, device] = JSON.parse(this.namespace);

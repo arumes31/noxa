@@ -324,7 +324,7 @@ async function signedIn(work = async () => true) {
         const auth = await signIn(conn, stored.identity, { version: info.version || "0.0.0" });
         const session = new ChatSession(conn, stored.identity, auth);
         // Offline DMs are replayed immediately after authentication.
-        const dm = new DirectMessages(session, stored.meta);
+        const dm = new DirectMessages(session, stored.meta, { fence: stored.fence });
         const groups = new Groups(session, dm);
         try {
             if (!await work(session)) return;

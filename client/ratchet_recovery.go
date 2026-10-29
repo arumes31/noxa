@@ -100,9 +100,12 @@ func (c *ratchetConsumer) recoverAccount(reason string) error {
 	}
 	cur := *own.Bundle
 	// Hostile-server guards: the server's claim about this device must be a
-	// publication this device's own noXa key signed, for this server and
-	// device, and never older than what the local store already holds.
-	if cur.VerifyEvidence(c.d.OwnKey, ns.Server, ns.Principal, ns.Device) != nil || cur.AccountEpoch < 1 || cur.Generation < 1 ||
+	// publication this device's independently held noXa key signed for this
+	// principal/device, and never older than the local store. Its signed
+	// historical server binding may precede an explicitly accepted TLS change.
+	// This exception is only recovery evidence: the new reset and publication
+	// remain bound to ns.Server, and no old namespace or peer trust is imported.
+	if cur.VerifyEvidence(c.d.OwnKey, cur.Server, ns.Principal, ns.Device) != nil || cur.AccountEpoch < 1 || cur.Generation < 1 ||
 		cur.AccountEpoch < local.Epoch || cur.AccountEpoch >= 9007199254740991 {
 		return rfail("invalid_evidence")
 	}
@@ -264,7 +267,8 @@ func (c *ratchetConsumer) recoveryEvidence(r olmdir.Reset) recoveryState {
 	}
 	ns := c.d.Namespace
 	b := *own.Bundle
-	if b.VerifyEvidence(c.d.OwnKey, ns.Server, ns.Principal, ns.Device) != nil {
+	// The unchanged old publication may retain the previous TLS binding.
+	if b.VerifyEvidence(c.d.OwnKey, b.Server, ns.Principal, ns.Device) != nil {
 		return recoveryUnknown
 	}
 	digest, err := olmdir.PublicationDigest(b)
@@ -272,7 +276,7 @@ func (c *ratchetConsumer) recoveryEvidence(r olmdir.Reset) recoveryState {
 		return recoveryUnknown
 	}
 	switch {
-	case b.AccountEpoch == r.NewEpoch && digest == r.PublicationDigest:
+	case b.Server == ns.Server && b.AccountEpoch == r.NewEpoch && digest == r.PublicationDigest:
 		return recoveryApplied
 	case b.AccountEpoch == r.OldEpoch && digest != r.PublicationDigest:
 		return recoveryNotApplied

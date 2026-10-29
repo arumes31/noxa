@@ -123,10 +123,18 @@ export function createAssetStore({ indexedDB = globalThis.indexedDB, name = "nox
     // from a prune that raced the add (the source is committed right after).
     const fresh = new Set();
     let db = null;
+    let opening = null;
     let disposed = false;
     const database = async () => {
-        if (!indexedDB) return null;
-        try { db ||= await openStore(indexedDB, name); } catch { db = null; }
+        if (!indexedDB || disposed) return null;
+        if (!db) {
+            opening ||= openStore(indexedDB, name).then(handle => {
+                if (disposed) { handle.close(); return null; }
+                db = handle;
+                return handle;
+            }).catch(() => null).finally(() => { opening = null; });
+            await opening;
+        }
         return db;
     };
     async function stored() {
@@ -140,9 +148,11 @@ export function createAssetStore({ indexedDB = globalThis.indexedDB, name = "nox
         const handle = await database();
         if (!handle) return false;
         const keys = await stored();
+        if (disposed) return false;
         let total = 0;
         const tx = handle.transaction("assets", "readonly");
         const values = await complete(tx.objectStore("assets").getAll());
+        if (disposed) return false;
         for (const value of values) total += value?.bytes?.byteLength || 0;
         if (!keys.includes(id) && (keys.length >= MAX_STORED_ASSETS || total + bytes.byteLength > MAX_STORED_BYTES)) throw new StudioImageError("image_storage_full");
         const write = handle.transaction("assets", "readwrite");
@@ -164,7 +174,9 @@ export function createAssetStore({ indexedDB = globalThis.indexedDB, name = "nox
                     decoded.bitmap.close?.();
                     throw error;
                 });
-                loaded.set(id, { ...decoded, bytes: bytes.byteLength });
+                if (disposed) { decoded.bitmap.close?.(); throw new StudioImageError("image_invalid"); }
+                if (loaded.has(id)) decoded.bitmap.close?.();
+                else loaded.set(id, { ...decoded, bytes: bytes.byteLength });
             }
             fresh.add(id);
             const entry = loaded.get(id);
@@ -184,7 +196,8 @@ export function createAssetStore({ indexedDB = globalThis.indexedDB, name = "nox
                     if (await assetID(bytes) !== id) continue;
                     const decoded = await decodeImage(bytes, { createBitmap });
                     if (disposed) { decoded.bitmap.close?.(); return; }
-                    loaded.set(id, { ...decoded, bytes: bytes.byteLength });
+                    if (loaded.has(id)) decoded.bitmap.close?.();
+                    else loaded.set(id, { ...decoded, bytes: bytes.byteLength });
                 } catch { /* An invalid stored asset stays neutral. */ }
             }
         },

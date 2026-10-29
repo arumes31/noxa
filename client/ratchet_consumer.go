@@ -1359,6 +1359,9 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 		return RatchetOutcome{}, rfail("invalid")
 	}
 	req := netproto.OlmAdmissionRequest{Action: "snapshot", Scope: in.Scope}
+	if control {
+		req.TargetDevice = in.Device
+	}
 	if in.Scope == "direct" {
 		req.Peer = in.Peer
 	} else {
@@ -1641,7 +1644,10 @@ func (c *ratchetConsumer) seal(a durable.AccountAuthority, in ratchetIntent, reu
 		}
 	}
 	if err = c.check(); err != nil {
-		return RatchetOutcome{}, err
+		pending := record
+		pending.Body = append(json.RawMessage(nil), record.Body...)
+		pending.Transport, pending.Status = RatchetTransport{Attempt: durable.AttemptID(m)}, "pending"
+		return RatchetOutcome{}, withCommitted(err, RatchetOutcome{Record: pending, Reused: reused})
 	}
 	for _, p := range packets {
 		sessions[p.Context] = p.SessionID

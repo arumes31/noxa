@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { RatchetConsumer } from "../src/core/ratchet-consumer.js";
 import { generateIdentity, toBase64 } from "../src/core/crypto.js";
-import { signBundle, OLM_DIRECTORY_VERSION } from "../src/core/olm-directory.js";
+import { signBundle, verifyBundleEvidence, OLM_DIRECTORY_VERSION } from "../src/core/olm-directory.js";
 import { signReset, verifyReset, verifyResetChain } from "../src/core/olm-reset.js";
 
 const server = "tls-sha256:" + "c".repeat(64);
@@ -14,15 +14,14 @@ const raw = b => toBase64(b).replace(/=+$/, "");
 const keys = () => { const i = generateIdentity(); return { identity: raw(i.xPublic), signing: raw(i.edPublic), otk: raw(generateIdentity().xPublic) }; };
 const nowS = () => Math.floor(Date.now() / 1000);
 
-function bundleAt(noxa, epoch, generation) {
+function bundleAt(noxa, epoch, generation, binding = server) {
     const k = keys();
-    return signBundle({ version: OLM_DIRECTORY_VERSION, protocol: "noxa-olm-v1", server, principal: "alice", device_id: "a1", account_epoch: epoch, generation,
+    return signBundle({ version: OLM_DIRECTORY_VERSION, protocol: "noxa-olm-v1", server: binding, principal: "alice", device_id: "a1", account_epoch: epoch, generation,
         issued_at: nowS() - 30 * 86400, expires_at: nowS() - 25 * 86400, identity: k.identity, signing: k.signing, one_time_keys: [{ id: "AAAAAAAAAAE", key: k.otk }] }, noxa.edSecret);
 }
 
-function harness({ ownState } = {}) {
-    const noxa = generateIdentity();
-    const srv = { state: bundleAt(noxa, 3, 5), resets: [], calls: 0 };
+function harness({ ownState, noxa = generateIdentity(), acceptedServer = server, initialState } = {}) {
+    const srv = { state: initialState || bundleAt(noxa, 3, 5), resets: [], calls: 0 };
     const log = [];
     const authority = { accountID: "local", epoch: 1, blocked: false, nextAttempt: 0, fence: 1, retired: { through: 0, above: [] } };
     const transitions = new Map();
@@ -57,15 +56,16 @@ function harness({ ownState } = {}) {
         const cur = srv.state;
         try {
             if (r.account_epoch !== cur.account_epoch || r.reset.generation !== cur.generation + 1) throw new Error();
-            verifyReset(r.reset, { server, principal: "alice", device: "a1", epoch: cur.account_epoch, identity: cur.identity, signing: cur.signing, noxaSigning: noxa.edPublic });
+            verifyReset(r.reset, { server: acceptedServer, principal: "alice", device: "a1", epoch: cur.account_epoch, identity: cur.identity, signing: cur.signing, noxaSigning: noxa.edPublic });
+            verifyBundleEvidence(r.bundle, { trustedSigningKey: noxa.edPublic, server: acceptedServer, principal: "alice", deviceID: "a1", accountEpoch: r.reset.new_epoch, pinnedOlmIdentity: r.reset.new_identity });
         } catch { throw Object.assign(new Error("authority-required"), { code: "authority-required" }); }
         srv.state = r.bundle;
         srv.resets.push(r.reset);
-        return { server, device: "a1", transition_id: r.reset.transition_id, account_epoch: r.reset.new_epoch, digest: "d", publication_digest: r.reset.publication_digest };
+        return { server: acceptedServer, device: "a1", transition_id: r.reset.transition_id, account_epoch: r.reset.new_epoch, digest: "d", publication_digest: r.reset.publication_digest };
     };
     // srv.override(r, apply) replaces the server's answer (lost responses, refusals).
     const admission = r => srv.override ? srv.override(r, apply) : apply(r);
-    const c = new RatchetConsumer({ store, core, namespace: { server, principal: "alice", device: "a1" }, admission, directory,
+    const c = new RatchetConsumer({ store, core, namespace: { server: acceptedServer, principal: "alice", device: "a1" }, admission, directory,
         deviceKey: async () => noxa.edPublic, signBundle: async b => signBundle(b, noxa.edSecret), assertCurrent: () => {},
         signReset: async r => signReset(r, noxa.edSecret), ownKey: noxa.edPublic });
     c.sticky = Object.assign(new Error("recovery_required"), { code: "recovery_required" });
@@ -105,6 +105,67 @@ test("hostile own_state: forged or regressed is refused before anything is signe
 
 const code = c => e => e.code === c;
 const refuse = c => async () => { throw Object.assign(new Error(c), { code: c }); };
+
+const acceptedNewServer = "tls-sha256:" + "d".repeat(64);
+async function rotatedHarness() {
+    const old = harness();
+    await old.c.recover("restored");
+    const next = harness({ noxa: old.noxa, acceptedServer: acceptedNewServer, initialState: old.srv.state });
+    return { old, next };
+}
+
+test("accepted certificate rotation explicitly recovers from authentic historical own_state into the new namespace", async () => {
+    const { old, next } = await rotatedHarness();
+    const before = structuredClone(old.srv.state);
+    const oldAuthority = { ...old.authority };
+    assert.equal(next.authority.epoch, 1, "new certificate starts a fresh namespace");
+    assert.deepEqual(next.log, [], "constructing the new consumer cannot silently reset");
+    assert.equal(next.srv.calls, 0);
+    assert.throws(() => verifyBundleEvidence(before, { trustedSigningKey: next.noxa.edPublic, server: acceptedNewServer, principal: "alice", deviceID: "a1", accountEpoch: before.account_epoch, pinnedOlmIdentity: before.identity }), "normal verification remains bound to the current server");
+    assert.equal(await next.c.recover("restored"), true);
+    assert.equal(next.authority.epoch, 5);
+    assert.equal(next.srv.state.server, acceptedNewServer);
+    const reset = next.srv.resets[0];
+    assert.equal(reset.server, acceptedNewServer);
+    assert.equal(reset.old_identity, before.identity);
+    assert.notEqual(reset.new_identity, before.identity);
+    const pin = { epoch: 4, identity: before.identity, signing: before.signing };
+    const target = { epoch: 5, identity: next.srv.state.identity, signing: next.srv.state.signing };
+    assert.equal((await verifyResetChain(pin, target, { server: acceptedNewServer, principal: "alice", device: "a1", noxaSigning: next.noxa.edPublic, fetch: async () => next.srv.resets })).pin.epoch, 5);
+    await assert.rejects(verifyResetChain(pin, target, { server, principal: "alice", device: "a1", noxaSigning: next.noxa.edPublic, fetch: async () => next.srv.resets }), "peer must accept the new server binding separately");
+    assert.deepEqual(old.authority, oldAuthority, "old namespace authority is preserved");
+    assert.deepEqual(old.srv.state, before);
+});
+
+test("rotation recovery still refuses foreign keys, principals, devices and tampered historical bindings", async () => {
+    for (const attack of ["key", "principal", "device", "binding"]) {
+        const h = harness({ acceptedServer: acceptedNewServer, ownState(noxa, srv) {
+            const b = { ...srv.state };
+            if (attack === "principal") b.principal = "mallory";
+            if (attack === "device") b.device_id = "other-device";
+            const signed = signBundle(b, attack === "key" ? generateIdentity().edSecret : noxa.edSecret);
+            if (attack === "binding") signed.server = acceptedNewServer;
+            return signed;
+        } });
+        await assert.rejects(h.c.recover("restored"), code("invalid_evidence"), attack);
+        assert.deepEqual(h.log, [], attack);
+        assert.equal(h.srv.calls, 0, attack);
+    }
+});
+
+test("rotation recovery cancels on unchanged old-bound evidence and completes a lost new-bound receipt", async () => {
+    const { next: pending } = await rotatedHarness();
+    pending.srv.override = refuse("unavailable");
+    await assert.rejects(pending.c.recover("restored"), code("recovery_pending"));
+    assert.equal(await pending.c.cancelRecovery(), "cancelled");
+    assert.equal(pending.authority.blocked, false);
+    assert.equal(pending.authority.epoch, 1);
+    const { next: applied } = await rotatedHarness();
+    applied.srv.override = async (r, apply) => { await apply(r); throw new Error("response lost"); };
+    assert.equal(await applied.c.recover("restored"), true);
+    assert.equal(applied.authority.epoch, 5);
+    assert.equal(applied.authority.blocked, false);
+});
 
 test("review P2-1: applied reset, response lost, resume refused -> promoted, never abandoned", async () => {
     const { c, srv, log, authority } = harness();

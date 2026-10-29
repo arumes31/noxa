@@ -49,6 +49,25 @@ const consumer = (store, admission = async () => ({ deliveries: [], has_more: fa
 });
 const ready = c => { c.readyValue = { identity: "id", epoch: 1, expiresAt: Math.floor(Date.now() / 1000) + 86400 }; c.readiness = Promise.resolve(c.readyValue); c.readyAt = Date.now(); };
 
+test("controls request only their named device while chat keeps full roster snapshots", async () => {
+    const requests = [];
+    const store = fakeStore();
+    store.read = async (refs = []) => ({ records: Object.fromEntries(refs.map(ref => [JSON.stringify(ref), { revision: 0, data: null }])) });
+    const c = consumer(store, async r => { requests.push(r); throw coded("unavailable"); });
+    ready(c);
+    await assert.rejects(c.sendControl({ logicalID: "ctl", principal: "bob", device: "b1", body: {
+        kind: "media-key", scope: { type: "channel", id: "7" }, epoch: 1, expires_at: Math.floor(Date.now() / 1000) + 120,
+    } }), e => e.code === "unavailable");
+    await assert.rejects(c.send({ logicalID: "chat", scope: "direct", peer: "bob", body: { text: "hi" } }), e => e.code === "unavailable");
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].action, "snapshot");
+    assert.equal(requests[0].scope, "direct");
+    assert.equal(requests[0].peer, "bob");
+    assert.equal(requests[0].target_device, "b1");
+    assert.equal(requests[0].conversation, undefined);
+    assert.equal(requests[1].target_device, undefined);
+});
+
 test("N1/F6: malformed deliveries become coded invalid placeholders and never abort the drain", async () => {
     let pages = 0;
     const page = { deliveries: [{ manifest: {} }, { id: "bad\u0000id", manifest: null }, null, { id: "x".repeat(600), copy: {} }], after: "", has_more: false };

@@ -27,8 +27,10 @@ type OlmAdmissionRequest struct {
 	Keys         []string            `json:"keys,omitempty"`
 	Reset        *olmdir.Reset       `json:"reset,omitempty"`
 	Bundle       *olmdir.Bundle      `json:"bundle,omitempty"`
-	TargetDevice string              `json:"target_device,omitempty"`
-	AfterEpoch   int64               `json:"after_epoch,omitempty"`
+	// TargetDevice selects one control recipient for a direct snapshot; it
+	// also names the device whose signed reset chain is requested.
+	TargetDevice string `json:"target_device,omitempty"`
+	AfterEpoch   int64  `json:"after_epoch,omitempty"`
 }
 type OlmAdmissionResult struct {
 	RequestID string `json:"request_id"`
@@ -63,6 +65,9 @@ func DecodeOlmAdmissionRequest(f *Frame) (OlmAdmissionRequest, error) {
 		}
 	case "snapshot":
 		if r.Scope != "direct" && r.Scope != "group" {
+			return r, admission.ErrInvalid
+		}
+		if r.TargetDevice != "" && (r.Scope != "direct" || r.Conversation != "" || !olmdir.ValidText(r.Peer) || !olmdir.ValidText(r.TargetDevice)) {
 			return r, admission.ErrInvalid
 		}
 	case "receive_ack":
