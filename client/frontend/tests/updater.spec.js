@@ -272,6 +272,35 @@ test("verification and installation show distinct stages and cannot be cancelled
     expect(await page.evaluate(() => window.__events.update_phase.length)).toBe(0);
 });
 
+test("waiting music has a compact mute control and stops before verification", async ({ page }) => {
+    await boot(page, { downloadPending: true });
+    await page.getByRole("button", { name: "Update now" }).click();
+    const button = page.locator(".upd-music");
+    const playing = () => page.evaluate(async () => [...(await import('/src/sounds.js')).soundEngine.active].some(entry => entry.name === 'update_waiting_music'));
+    await expect(button).toBeVisible();
+    await expect.poll(playing).toBe(true);
+    expect(await button.evaluate(element => element.getBoundingClientRect().width)).toBeLessThanOrEqual(34);
+    await button.click(); await expect(button).toHaveAccessibleName("Play waiting music");
+    await expect(button).toHaveAttribute("aria-pressed", "true"); await expect.poll(playing).toBe(false);
+    await button.click(); await expect.poll(playing).toBe(true);
+    await page.evaluate(() => window.__events.update_phase.forEach(cb => cb('verifying')));
+    await expect(button).toBeHidden(); await expect.poll(playing).toBe(false);
+    await page.evaluate(() => window.__finishDownload());
+    await expect(page.getByRole("button", { name: "Restart now" })).toBeVisible();
+});
+
+for (const outcome of ["cancel", "failure"]) {
+    test(`waiting music stops on download ${outcome}`, async ({ page }) => {
+        await boot(page, { downloadPending: true, downloadThrows: outcome === "failure" });
+        await page.getByRole("button", { name: "Update now" }).click();
+        await expect(page.locator('.upd-music')).toBeVisible();
+        if (outcome === "cancel") await page.getByRole("button", { name: "Cancel download", exact: true }).click();
+        else await page.evaluate(() => window.__finishDownload());
+        await expect(page.locator('.upd-music')).toBeHidden();
+        expect(await page.evaluate(async () => [...(await import('/src/sounds.js')).soundEngine.active].some(entry => entry.name === 'update_waiting_music'))).toBe(false);
+    });
+}
+
 test("a restored failed startup offers a fresh update check", async ({ page }) => {
     await boot(page, { restartError: "Previous version restored after startup failed", restored: true });
     await page.getByRole("button", { name: "Update now" }).click();

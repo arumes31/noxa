@@ -64,6 +64,8 @@
 .dlg.dlg-wide.update-dlg .dlg-buttons > .upd-update { color: var(--upd-on); background: var(--upd-accent); border-color: var(--upd-accent); font-weight: 600; }
 .update-dlg button:focus-visible { outline: 2px solid var(--upd-accent); outline-offset: 3px; }
 .update-dlg button:disabled { opacity: .55; }
+.update-dlg button.upd-music { width: 32px; min-width: 32px; height: 32px; min-height: 32px; padding: 6px; align-self: center; }
+.update-dlg .upd-music .ui-icon { width: 17px; height: 17px; }
 .update-dlg .upd-countdown { text-align: center; margin-top: 17px; color: var(--upd-accent); font-size: 14px; }
 .update-dlg .hidden { display: none !important; }
 
