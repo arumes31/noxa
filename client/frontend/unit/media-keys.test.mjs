@@ -484,3 +484,36 @@ test("removal bound holds under removal churn every 1.9 s with all deliveries st
     } });
     assert.equal(result.removed, 35);
 });
+
+// CodeRabbit (fix2): every control of an epoch carries that epoch's own key
+// material, also for retries and after a removal preempted a newer epoch.
+test("controls of an epoch always carry that epoch's own keys (retries, preemption)", async () => {
+    let failD2 = true;
+    let release;
+    const gate = new Promise(r => { release = r; });
+    const sent = [];
+    const media = fakeMedia();
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, send: async c => {
+        sent.push(c);
+        if (c.device === "d2" && failD2) return { ok: false, error: { code: "busy" } };
+        if (sent.length > 3 && c.device === "d1") await gate; // the publication epoch stalls
+        return { ok: true };
+    } });
+    e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2"), member("c3", "u3", "d3")]);
+    e.start({ ...me, principal: "u-mat", device: "d-mat" });
+    await flush(40);
+    e.publicationsChanged(); await flush(10);   // a newer epoch starts and stalls
+    failD2 = false;
+    e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2")]); // d3 removed: preempts it
+    await flush(80);
+    release(); await flush(80);
+    const byEpoch = new Map();
+    for (const c of sent) {
+        const sig = JSON.stringify([c.body.data.kid, c.body.data.keys, c.body.data.n]);
+        if (!byEpoch.has(c.body.epoch)) byEpoch.set(c.body.epoch, sig);
+        assert.equal(sig, byEpoch.get(c.body.epoch), `epoch ${c.body.epoch} was sent with another epoch's material`);
+    }
+    assert.ok(byEpoch.size >= 2);
+    assert.ok(sent.every(c => c.device !== "d3" || c.body.epoch < e.activeEpoch), "the removed device never gets the newest epoch");
+    e.stop();
+});

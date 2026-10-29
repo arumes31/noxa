@@ -397,6 +397,7 @@ try {
     // deliver the same encrypted frame twice, and the replay window drops
     // the repeat (its IV was already accepted: a duplicate, never a new
     // frame). Video must keep decrypting.
+    if (!reordered) throw new Error("no SRTP datagram was reordered");
     const delta = (pid, k) => (afterReorder[pid]?.dropped?.[k] || 0) - (beforeReorder[pid]?.dropped?.[k] || 0);
     const micReplays = delta("A|mic", "replay"), camDuplicates = delta(cam, "replay");
     if (micReplays) throw new Error(`reordered audio frames rejected as replays: ${micReplays}`);

@@ -299,7 +299,9 @@ export class MediaKeyEngine {
         this.#epoch = epoch; this.#kid = kid; this.#keys = keys; this.#members = members;
         this.counters.epochs++;
         this.#failed.clear(); this.#sentTo.clear();
-        this.#deliveries.set(epoch, { ok: new Set(), failed: new Set() });
+        // Per-epoch material: a retry of an older epoch always sends that
+        // epoch's own keys (never a newer, preempted epoch's).
+        this.#deliveries.set(epoch, { ok: new Set(), failed: new Set(), kid, keys, members, count: recipients.length + 1 });
         const distribution = this.#distribute(gen, recipients, epoch);
         const delay = ms => new Promise(resolve => this.timers.setTimeout(resolve, ms));
         // The removals this epoch covers: detected before it was created
@@ -318,7 +320,13 @@ export class MediaKeyEngine {
                 // Never activated: its keys leave the worker; the previous
                 // active epoch stays live until the removal epoch activates.
                 for (const slot of SLOTS) { this.media.retireOne(senderPid(slot), epoch).catch(() => {}); this.media.retireOne(publicationPid(self.clientID, slot), epoch).catch(() => {}); }
-                if (this.#epoch === epoch) { this.#epoch = previous || epoch; this.#sentTo.clear(); }
+                if (this.#epoch === epoch) {
+                    this.#epoch = previous || epoch;
+                    this.#sentTo.clear(); this.#failed.clear();
+                    this.timers.clearTimeout(this.#retry); // the removal epoch follows at once
+                    const restored = this.#deliveries.get(this.#epoch);
+                    if (restored) { this.#kid = restored.kid; this.#keys = restored.keys; this.#members = restored.members; }
+                }
                 this.#deliveries.delete(epoch);
                 this.#again = true;
             };
@@ -364,8 +372,10 @@ export class MediaKeyEngine {
 
     async #distribute(gen, recipients, epoch = this.#epoch) {
         const self = this.self;
+        const material = this.#deliveries.get(epoch);
+        if (!material) return; // an epoch that is gone sends nothing
         const body = buildMediaKeyBody({ channelID: self.channelID, epoch, nowSeconds: Math.floor(this.now() / 1000), client: self.clientID,
-            session: this.session, kid: this.#kid, members: this.#members, count: recipients.length + 1, keys: this.#keys });
+            session: this.session, kid: material.kid, members: material.members, count: material.count, keys: material.keys });
         // Each result is recorded as it settles, per epoch (the active epoch's
         // waiting count stays exact while a newer epoch distributes).
         const record = (r, result) => {
