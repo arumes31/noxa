@@ -333,3 +333,29 @@ func TestDeleteIdentityErasesOwnedPinsAndFencesPinWrites(t *testing.T) {
 	}
 	requireGone(t, []string{groupOnly}, "a late pin write")
 }
+
+// A pin found both through a DM log peer and through its owner tag is moved
+// once (the native product test hit the duplicate).
+func TestDeleteIdentityPinFoundTwiceMovesOnce(t *testing.T) {
+	a, id, idName, _, mine, _ := localDataSetup(t)
+	local, err := auth.LoadPublicKey(id.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := canonicalServerDestination(localTestServer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := dmPinPathFor(local, canonical, "peer-a") // the DM log's peer
+	if err != nil {
+		t.Fatal(err)
+	}
+	dmPinOwners.Store(path, dmPinOwner{tag: dmPinOwnerTag(local), publicKey: id.PublicKey})
+	if err := writeDMPin(path, dmIdentityPin{Version: 1, Fingerprint: strings.Repeat("ab", 32)}); err != nil {
+		t.Fatal(err)
+	}
+	if msg := a.DeleteIdentity(idName, true); msg != "" {
+		t.Fatal(msg)
+	}
+	requireGone(t, append(mine.all(), path), "deleted identity's data")
+}

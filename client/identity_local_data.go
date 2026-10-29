@@ -193,7 +193,12 @@ type localTomb struct {
 
 func (t *localTomb) move(kind string, paths []string) error {
 	var batch []localTombEntry
+	seen := map[string]bool{}
 	for _, p := range paths {
+		if seen[p] {
+			continue // a pin found both by its DM peer and by its owner tag
+		}
+		seen[p] = true
 		if _, err := os.Lstat(p); err == nil {
 			batch = append(batch, localTombEntry{Kind: kind, Path: p, Name: fmt.Sprintf("%04d", len(t.manifest.Entries)+len(batch))})
 		}
