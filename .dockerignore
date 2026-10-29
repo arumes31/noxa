@@ -17,6 +17,8 @@ mobile/test-results/
 web/
 docs/
 tools/
+# The PWA build (vite.config.js) imports the encrypted-media notice plugin.
+!tools/media-e2ee-notices.mjs
 
 # Environment / secrets
 .env
