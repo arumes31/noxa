@@ -111,7 +111,7 @@ func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *net
 	// A rekey of encrypted channel media looks up every recipient device's
 	// keys at once (Task 2a review A P1-1), so lookups have their own
 	// per-principal budget instead of the 5-per-3 s chat window.
-	if s.chatRate != nil && s.keyLookupRate != nil {
+	if s.keyLookupRate != nil {
 		allowed, retry := s.keyLookupRate.allowWithRetry(client.UniqueID+":key", time.Now(), s.keyLookupRate.max)
 		if !allowed {
 			return s.writeMessage(client, netproto.MsgError, netproto.Error{

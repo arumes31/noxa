@@ -2489,6 +2489,10 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     stopRemoteMedia();
     startStreamSession(pc, videoTrackAdded, videoTrackRemoved);
     stopRemoteMedia = startRemoteMedia(pc, () => current() && state.pc === pc, (track, trackID) => {
+        // Presentation gate (encrypted media): a new or rebound receiver is
+        // neither attached nor enabled until its first authenticated frame.
+        const gate = channelMedia()?.media;
+        if (gate && gate.authenticated(track) === false) { gate.onAuthenticated(track, () => reconcileRemoteMedia(pc)); return; }
         const { clientID, slot } = parseTrackID(trackID);
         const publisher = state.clients.find((c) => String(c.client_id) === clientID) || null;
         // Attribution follows the negotiated publisher track ID, not track.id.
@@ -2521,7 +2525,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
             voiceRemoteAudioTracks.delete(track);
             syncVoiceLinkMedia();
         }
-    }, (track, trackID) => track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID));
+    }, (track, trackID) => channelMedia()?.media?.authenticated(track) !== false && (track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID)));
 
     await renegotiate(pc, state.serverGeneration, undefined, () => expectedEpoch === voiceSessionEpoch);
 

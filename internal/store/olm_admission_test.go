@@ -56,15 +56,19 @@ func TestOlmAdmissionAtomicRetryACK(t *testing.T) {
 	if e = s.PutOlmPart(t.Context(), a, m.AttemptID, 0, []byte("changed")); !errors.Is(e, ErrOlmConflict) {
 		t.Fatal(e)
 	}
-	r, e = s.FinalizeOlmAttempt(t.Context(), a, m.AttemptID)
+	r, delivered, e := s.FinalizeOlmAttemptDelivered(t.Context(), a, m.AttemptID)
 	if e != nil || r.State != "accepted" {
 		t.Fatal(r, e)
 	}
+	// The doorbell list: exactly the inserted copies, only on this transition.
+	if len(delivered) != 1 || delivered[0].Principal != b.Principal || delivered[0].Device != b.Device {
+		t.Fatalf("delivered %+v", delivered)
+	}
 	// A new device invalidates fresh fanout, but cannot mutate the committed receipt.
 	olmFixture(t, s, "bob")
-	same, e := s.FinalizeOlmAttempt(t.Context(), a, m.AttemptID)
-	if e != nil || same != r {
-		t.Fatal(same, e)
+	same, again, e := s.FinalizeOlmAttemptDelivered(t.Context(), a, m.AttemptID)
+	if e != nil || same != r || len(again) != 0 {
+		t.Fatal(same, again, e)
 	}
 	var deliveries []OlmDelivery
 	e = s.WithOlmDeliveries(t.Context(), b, "", func(ds OlmDeliveryPage) error { deliveries = ds.Deliveries; return nil })

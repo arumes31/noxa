@@ -438,58 +438,80 @@ func equalCoverage(m admission.Manifest, snap OlmRosterSnapshot) bool {
 	}
 	return true
 }
+
+// OlmDeliveredDevice is a device that received a copy in a finalize call.
+type OlmDeliveredDevice struct{ Principal, Device string }
+
 func (s *Store) FinalizeOlmAttempt(ctx context.Context, a OlmSource, id string) (admission.Receipt, error) {
+	r, _, e := s.FinalizeOlmAttemptDelivered(ctx, a, id)
+	return r, e
+}
+
+// FinalizeOlmAttemptDelivered is FinalizeOlmAttempt that also reports the
+// devices whose copies THIS call inserted: non-empty only when this call moved
+// the attempt from staging to accepted (never for rejected, repeated or
+// retired finalizes). The server rings its delivery doorbell from this list.
+func (s *Store) FinalizeOlmAttemptDelivered(ctx context.Context, a OlmSource, id string) (admission.Receipt, []OlmDeliveredDevice, error) {
+	r, delivered, e := s.finalizeOlmAttempt(ctx, a, id)
+	if e != nil || r.State != "accepted" {
+		delivered = nil
+	}
+	return r, delivered, e
+}
+
+func (s *Store) finalizeOlmAttempt(ctx context.Context, a OlmSource, id string) (admission.Receipt, []OlmDeliveredDevice, error) {
+	var delivered []OlmDeliveredDevice
 	var empty admission.Receipt
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
-		return empty, e
+		return empty, nil, e
 	}
 	defer tx.Rollback()
 	if e = admissionBudget(ctx, tx); e != nil {
-		return empty, e
+		return empty, nil, e
 	}
 	m, r, e := loadAttempt(ctx, tx, a, id)
 	if errors.Is(e, ErrOlmRetired) {
 		if e = sourceLock(ctx, tx, a, true); e != nil {
-			return empty, e
+			return empty, nil, e
 		}
-		return r, tx.Commit()
+		return r, nil, tx.Commit()
 	}
 	if e != nil {
-		return empty, e
+		return empty, nil, e
 	}
 	// Terminal retry authenticates the source before returning the immutable result;
 	// current target roster/membership cannot rewrite acceptance.
 	if r.State != "staging" {
 		if e = sourceLock(ctx, tx, a, true); e != nil {
-			return empty, e
+			return empty, nil, e
 		}
-		return r, tx.Commit()
+		return r, nil, tx.Commit()
 	}
-	reject := func(reason string) (admission.Receipt, error) {
+	reject := func(reason string) (admission.Receipt, []OlmDeliveredDevice, error) {
 		r.State = "rejected"
 		r.Reason = reason
 		if e := saveReceipt(ctx, tx, a, r); e != nil {
-			return empty, e
+			return empty, nil, e
 		}
-		return r, tx.Commit()
+		return r, nil, tx.Commit()
 	}
 	ps, e := admissionPrincipals(ctx, tx, a, m.Scope, m.Peer, m.Conversation, m.Revision, m.Epoch)
 	if e != nil {
 		if ae := sourceLock(ctx, tx, a, true); ae != nil {
-			return empty, ae
+			return empty, nil, ae
 		}
 		if errors.Is(e, ErrOlmConflict) || errors.Is(e, ErrOlmAuthority) || errors.Is(e, sql.ErrNoRows) {
 			return reject("membership")
 		}
-		return empty, e
+		return empty, nil, e
 	}
 	snap, e := readOlmRoster(ctx, tx, ps, a.Device)
 	if e != nil {
-		return empty, e
+		return empty, nil, e
 	}
 	if e = sourceAuthority(ctx, tx, a, true); e != nil {
-		return empty, e
+		return empty, nil, e
 	}
 	if m.Deadline <= time.Now().Unix() {
 		return reject("deadline")
@@ -500,29 +522,29 @@ func (s *Store) FinalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 	parts := make([][]byte, len(m.Parts))
 	rows, e := tx.QueryContext(ctx, `SELECT part_number,data FROM olm_parts WHERE server=$1 AND device_id=$2 AND account_epoch=$3 AND attempt_id=$4 ORDER BY part_number`, a.Server, a.Device, a.AccountEpoch, id)
 	if e != nil {
-		return empty, e
+		return empty, nil, e
 	}
 	for rows.Next() {
 		var n int
 		var p []byte
 		if e = rows.Scan(&n, &p); e != nil {
 			rows.Close()
-			return empty, e
+			return empty, nil, e
 		}
 		if n < 0 || n >= len(parts) {
 			rows.Close()
-			return empty, admission.ErrInvalid
+			return empty, nil, admission.ErrInvalid
 		}
 		parts[n] = p
 	}
 	e = rows.Err()
 	rows.Close()
 	if e != nil {
-		return empty, e
+		return empty, nil, e
 	}
 	for _, p := range parts {
 		if p == nil {
-			return empty, ErrOlmIncomplete
+			return empty, nil, ErrOlmIncomplete
 		}
 	}
 	copies, e := admission.Open(m, parts)
@@ -536,7 +558,7 @@ func (s *Store) FinalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 	}
 	var exists bool
 	if e = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM olm_messages WHERE server=$1 AND sender=$2 AND logical_id=$3)`, a.Server, a.Principal, m.LogicalID).Scan(&exists); e != nil {
-		return empty, e
+		return empty, nil, e
 	}
 	if exists {
 		return reject("logical-accepted")
@@ -548,11 +570,11 @@ func (s *Store) FinalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 			return reject("reference")
 		}
 		if e != nil {
-			return empty, e
+			return empty, nil, e
 		}
 		var old admission.Manifest
 		if e = json.Unmarshal(original, &old); e != nil {
-			return empty, e
+			return empty, nil, e
 		}
 		if old.Purpose != "chat" || old.Scope != m.Scope || old.Peer != m.Peer || old.Conversation != m.Conversation {
 			return reject("reference")
@@ -561,19 +583,19 @@ func (s *Store) FinalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 	// All quota checks precede inserts. Pending data is never evicted for capacity.
 	var global int64
 	if e = tx.QueryRowContext(ctx, `SELECT COALESCE(sum(octet_length(copy)),0) FROM olm_deliveries WHERE state='pending'`).Scan(&global); e != nil {
-		return empty, e
+		return empty, nil, e
 	}
 	if global+admission.MaxWireBytes > 1<<30 {
-		return empty, ErrOlmLimit
+		return empty, nil, ErrOlmLimit
 	}
 	for _, c := range copies {
 		var count int
 		var size int64
 		if e = tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(octet_length(copy)),0) FROM olm_deliveries WHERE device_id=$1 AND state='pending'`, c.Device).Scan(&count, &size); e != nil {
-			return empty, e
+			return empty, nil, e
 		}
 		if count >= 4096 || size+int64(len(c.Envelope))+1024 > 64<<20 {
-			return empty, ErrOlmLimit
+			return empty, nil, ErrOlmLimit
 		}
 		if m.Purpose == "control" {
 			// Controls are bounded separately (and are never a fanout).
@@ -585,10 +607,10 @@ func (s *Store) FinalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 			var controls int
 			if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM olm_deliveries d JOIN olm_messages o ON o.id=d.message_id
 				WHERE d.device_id=$1 AND o.device_id=$2 AND d.state='pending' AND convert_from(o.manifest,'UTF8')::jsonb->>'purpose'='control'`, c.Device, a.Device).Scan(&controls); e != nil {
-				return empty, e
+				return empty, nil, e
 			}
 			if controls >= admission.MaxPendingControls {
-				return empty, ErrOlmLimit
+				return empty, nil, ErrOlmLimit
 			}
 		}
 	}
@@ -598,7 +620,7 @@ func (s *Store) FinalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 	messageID := uuid.NewString()
 	manifest, _ := m.Bytes()
 	if _, e = tx.ExecContext(ctx, `INSERT INTO olm_messages(id,server,sender,device_id,account_epoch,logical_id,manifest) VALUES($1,$2,$3,$4,$5,$6,$7)`, messageID, a.Server, a.Principal, a.Device, a.AccountEpoch, m.LogicalID, manifest); e != nil {
-		return empty, e
+		return empty, nil, e
 	}
 	for _, c := range copies {
 		deliveryID := uuid.NewString()
@@ -606,47 +628,48 @@ func (s *Store) FinalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 		var sessionClaim string
 		e = tx.QueryRowContext(ctx, `SELECT claim_id FROM olm_sessions WHERE server=$1 AND ((source_device=$2 AND source_epoch=$3 AND target_device=$4 AND target_epoch=$5) OR (target_device=$2 AND target_epoch=$3 AND source_device=$4 AND source_epoch=$5)) AND session_id=$6`, a.Server, a.Device, a.AccountEpoch, c.Device, c.AccountEpoch, c.SessionID).Scan(&sessionClaim)
 		if e != nil && !errors.Is(e, sql.ErrNoRows) {
-			return empty, e
+			return empty, nil, e
 		}
 		if e == nil {
 			if c.ClaimID != "" && c.ClaimID != sessionClaim {
-				return empty, ErrOlmConflict
+				return empty, nil, ErrOlmConflict
 			}
 		} else {
 			if c.ClaimID == "" {
-				return empty, ErrOlmConflict
+				return empty, nil, ErrOlmConflict
 			}
 			var state, claimSource, claimPrincipal, server, keyID string
 			var targetBundle, sourceBundle []byte
 			var sourceEpoch, deadline int64
 			e = tx.QueryRowContext(ctx, `SELECT lifecycle,claimed_device,claimed_by,claimed_epoch,claim_until,server,key_id,bundle FROM olm_directory_keys WHERE device_id=$1 AND account_epoch=$2 AND request_id=$3 AND claimed_by=$4 AND claimed_device=$5 AND claimed_epoch=$6 AND server=$7 FOR UPDATE`, c.Device, c.AccountEpoch, c.ClaimID, a.Principal, a.Device, a.AccountEpoch, a.Server).Scan(&state, &claimSource, &claimPrincipal, &sourceEpoch, &deadline, &server, &keyID, &targetBundle)
 			if errors.Is(e, sql.ErrNoRows) {
-				return empty, ErrOlmConflict
+				return empty, nil, ErrOlmConflict
 			}
 			if e != nil {
-				return empty, e
+				return empty, nil, e
 			}
 			if state != "reserved" || claimSource != a.Device || claimPrincipal != a.Principal || sourceEpoch != a.AccountEpoch || server != a.Server || deadline < m.Deadline || deadline <= time.Now().Unix() {
-				return empty, ErrOlmConflict
+				return empty, nil, ErrOlmConflict
 			}
 			if _, e = tx.ExecContext(ctx, `UPDATE olm_directory_keys SET lifecycle='admitted' WHERE device_id=$1 AND account_epoch=$2 AND key_id=$3`, c.Device, c.AccountEpoch, keyID); e != nil {
-				return empty, e
+				return empty, nil, e
 			}
 			if e = tx.QueryRowContext(ctx, `SELECT last_bundle FROM olm_directory_state WHERE device_id=$1`, a.Device).Scan(&sourceBundle); e != nil {
-				return empty, e
+				return empty, nil, e
 			}
 			if _, e = tx.ExecContext(ctx, `INSERT INTO olm_sessions(server,source_device,source_epoch,target_device,target_epoch,session_id,claim_id,initial_delivery,source_bundle,target_bundle) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, a.Server, a.Device, a.AccountEpoch, c.Device, c.AccountEpoch, c.SessionID, c.ClaimID, deliveryID, sourceBundle, targetBundle); e != nil {
-				return empty, e
+				return empty, nil, e
 			}
 		}
 		if _, e = tx.ExecContext(ctx, `INSERT INTO olm_deliveries(id,message_id,principal,device_id,account_epoch,copy,digest) VALUES($1,$2,$3,$4,$5,$6,$7)`, deliveryID, messageID, c.Principal, c.Device, c.AccountEpoch, data, admission.Digest(data)); e != nil {
-			return empty, e
+			return empty, nil, e
 		}
+		delivered = append(delivered, OlmDeliveredDevice{Principal: c.Principal, Device: c.Device})
 	}
 	r.State = "accepted"
 	r.MessageID = messageID
 	if e = saveReceipt(ctx, tx, a, r); e != nil {
-		return empty, e
+		return empty, nil, e
 	}
-	return r, tx.Commit()
+	return r, delivered, tx.Commit()
 }

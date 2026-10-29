@@ -275,7 +275,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		if !s.presenceSignalVisible(client, e, envelope.Data) {
 			return nil, nil
 		}
-	case eventEmojiAdded, eventEmojiRemoved, eventEmojiRenamed, eventServerBannerChanged:
+	case eventEmojiAdded, eventEmojiRemoved, eventEmojiRenamed, eventServerBannerChanged, eventOlmPending:
 		// Direct or server-wide events. Channel typing uses the guarded envelope.
 	default:
 		// Retired permission/group events and new event types need an explicit

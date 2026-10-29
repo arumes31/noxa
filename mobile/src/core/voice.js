@@ -219,8 +219,9 @@ export class Voice extends EventTarget {
             acknowledged = true;
             this.channelID = joined.channel_id ?? channelID;
             if (this.echo && this.channelID !== this.echo.channel) this.echo = null;
-            // Same peer, new channel: a new key scope before any new media.
-            if (this.pc && this.#media) this.#media.rescope(this.channelID);
+            // Same peer, new channel: a new key scope before any new media,
+            // and never with the previous channel's roster.
+            if (this.pc && this.#media) { this.#media.setRoster([]); this.#media.rescope(this.channelID); }
             if (!this.pc && !await this.#start(generation)) return false;
             if (generation !== this.#joinGeneration) return false;
             if (this.muted || this.deafened) this.#announce();
@@ -675,6 +676,9 @@ export class Voice extends EventTarget {
             const track = transceiver.receiver.track;
             const trackID = ids.get(transceiver.mid);
             if (!track || !trackID || transceiver.currentDirection === "inactive" || transceiver.currentDirection === "sendonly") continue;
+            // Presentation gate: no sink until the first authenticated frame.
+            const gate = this.#media?.media;
+            if (gate && gate.authenticated(transceiver.receiver) === false) { gate.onAuthenticated(transceiver.receiver, () => this.#reconcile()); continue; }
             const { clientID, slot } = parseTrackID(trackID);
             if (!clientID || clientID === this.session.clientID) continue;
             if (track.kind === "audio") audio.set(slot === "mic" ? clientID : `${clientID}|${slot}`, track);

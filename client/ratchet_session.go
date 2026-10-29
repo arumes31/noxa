@@ -340,6 +340,14 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 			case <-s.quit:
 				return
 			case <-m.ratchetWake:
+				// Doorbell-triggered drains are spaced (at most one per
+				// doorbellDrainInterval) so rings can never use up this
+				// session's own admission budget.
+				select {
+				case <-s.quit:
+					return
+				case <-time.After(doorbellDrainInterval):
+				}
 			case <-time.After(poll):
 			}
 		}

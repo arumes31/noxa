@@ -106,16 +106,16 @@ export function mediaErrorText(error) {
 export function mediaStatusText(status = lastStatus) {
     switch (status?.state) {
         case "keying": return t("e2ee.media.keying");
-        case "encrypted": return withWarning(status, status.recipients ? t("e2ee.media.encrypted", { names: holderNames(status) }) : t("e2ee.media.alone"));
+        case "encrypted": return withWarning(status, !status.recipients ? t("e2ee.media.alone") : status.keyHolders?.length ? t("e2ee.media.encrypted", { count: status.keyHolders.length, names: holderNames(status) }) : t("e2ee.media.keying"));
         case "partial": return withWarning(status, t("e2ee.media.partial", { failed: status.failed?.length || 0 }));
         default: return "";
     }
 }
 
-// Who holds my current keys: nickname with the verified account (principal).
+// Who holds my current keys: every device, by nickname with the verified
+// account (never truncated: the list is the defence against hidden members).
 function holderNames(status) {
-    const names = (status.keyHolders || []).map(h => (h.nickname && h.nickname !== h.principal ? `${h.nickname} (${h.principal})` : h.principal));
-    return names.length > 4 ? t("e2ee.media.more", { names: names.slice(0, 4).join(", "), count: names.length - 4 }) : names.join(", ");
+    return (status.keyHolders || []).map(h => (h.nickname && h.nickname !== h.principal ? `${h.nickname} (${h.principal})` : h.principal)).join(", ");
 }
 
 function withWarning(status, text) {

@@ -51,21 +51,17 @@ func (s *TCPServer) handleOlmAdmission(ctx context.Context, client *Client, f *n
 		opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		var data any
+		var delivered []store.OlmDeliveredDevice
+		defer func() { s.ringOlmDoorbells(delivered) }() // queued, never written here
 		switch r.Action {
 		case "snapshot":
 			data, e = db.OlmSnapshot(opCtx, a, r.Scope, r.Peer, r.Conversation)
 		case "begin":
 			data, e = db.BeginOlmAttempt(opCtx, a, *r.Manifest)
-			if e == nil {
-				s.olmAttempts.note(a.Principal, a.Device, *r.Manifest)
-			}
 		case "put_part":
 			e = db.PutOlmPart(opCtx, a, r.AttemptID, r.Part, r.Data)
 		case "finalize":
-			data, e = db.FinalizeOlmAttempt(opCtx, a, r.AttemptID)
-			if e == nil {
-				defer s.ringOlmDoorbells(a.Principal, a.Device, r.AttemptID)
-			}
+			data, delivered, e = db.FinalizeOlmAttemptDelivered(opCtx, a, r.AttemptID)
 		case "status":
 			data, e = db.OlmAttemptStatus(opCtx, a, r.AttemptID)
 		case "abort":

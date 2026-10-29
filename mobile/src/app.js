@@ -386,8 +386,11 @@ function stopRatchet() {
     app.ratchet = null;
     if (!owner) return;
     clearTimeout(owner.timer);
+    owner.stopDoorbell?.();
     owner.consumer.close().finally(() => owner.core.close());
 }
+
+const DOORBELL_DRAIN_MS = 250;
 
 function pollRatchet(owner, session) {
     const current = () => app.ratchet === owner && app.session === session && !owner.consumer.closed;
@@ -400,9 +403,16 @@ function pollRatchet(owner, session) {
     };
     // The server's content-free "olm_pending" doorbell (Task 2a review A):
     // drain now instead of polling fast; the poll below is only a fallback.
-    const onEvent = event => { if (event.detail?.type === "olm_pending" && current()) tick(); };
+    // Doorbell drains are spaced so rings can never use up this session's
+    // own admission budget.
+    let lastRing = 0, ringTimer = 0;
+    const onEvent = event => {
+        if (event.detail?.type !== "olm_pending" || !current() || ringTimer) return;
+        const wait = Math.max(0, lastRing + DOORBELL_DRAIN_MS - Date.now());
+        ringTimer = setTimeout(() => { ringTimer = 0; lastRing = Date.now(); if (current()) tick(); }, wait);
+    };
     session.addEventListener("server-event", onEvent);
-    owner.stopDoorbell = () => session.removeEventListener("server-event", onEvent);
+    owner.stopDoorbell = () => { clearTimeout(ringTimer); session.removeEventListener("server-event", onEvent); };
     const drain = () => owner.consumer.drain().then(result => {
         // Unreadable authenticated-protocol copies stay pending on the server
         // and are shown as locked placeholders, never dropped or ACKed.

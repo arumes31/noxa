@@ -134,11 +134,11 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
         return installed;
     }
 
-    function attach(id, operation, kind, readable, writable) {
+    function attach(id, operation, kind, readable, writable, transformer = null) {
         if (typeof id !== "string" || !ENDPOINT_RE.test(id) || (operation !== "encode" && operation !== "decode") || (kind !== "audio" && kind !== "video")) throw new Error("invalid media endpoint");
         if (endpoints.has(id)) throw new Error("media endpoint already attached");
         if (endpoints.size >= MAX_ENDPOINTS) throw new Error("media endpoint capacity reached");
-        const ep = { id, operation, kind, lk: `ep:${id}`, pid: "", gen: 0, ready: false, kids: new Map(), dropped: {}, frames: 0 };
+        const ep = { id, operation, kind, lk: `ep:${id}`, pid: "", gen: 0, ready: false, kids: new Map(), dropped: {}, frames: 0, authenticated: false, transformer };
         endpoints.set(id, ep);
         if (pendingBinds.has(id)) {
             const pid = pendingBinds.get(id);
@@ -166,7 +166,8 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                 // A receive epoch older than MAX_RECEIVE_EPOCH_AGE is stale: keys
                 // renew every 5 minutes, and the replay window assumes an epoch
                 // never lives near half the RTP timestamp range.
-                if (Date.now() - pids.get(ep.pid).epochs.get(epoch).at > MAX_RECEIVE_EPOCH_AGE) return drop(ep, "stale");
+                // Monotonic clock: a wall-clock step never expires keys early.
+                if (performance.now() - pids.get(ep.pid).epochs.get(epoch).at > MAX_RECEIVE_EPOCH_AGE) return drop(ep, "stale");
                 inputs.set(frame, { gen: ep.gen, pid: ep.pid, epoch, n, iv: bytes.slice(n - 2 - IV_LENGTH, n - 2) });
                 controller.enqueue(frame);
             },
@@ -192,6 +193,15 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                 if (!window) { window = new MediaReplayWindow(); windows.set(key, window); }
                 if (!window.accept(input.iv)) return drop(ep, "replay");
                 stats.decrypted++; ep.frames++;
+                // The page keeps a new or rebound receiver's track disabled and
+                // unattached until this first authenticated frame of its binding
+                // (nothing decoded before the transform existed reaches a sink);
+                // a keyframe request then refreshes the picture.
+                if (!ep.authenticated) {
+                    ep.authenticated = true;
+                    send({ event: "first-frame", id: ep.id, gen: ep.gen });
+                    if (ep.kind === "video") { try { ep.transformer?.sendKeyFrameRequest?.()?.catch?.(() => {}); } catch { /* not all runtimes */ } }
+                }
                 controller.enqueue(frame);
             },
         });
@@ -224,7 +234,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
             }
             if (ep.pid === pid && ep.ready) return { gen: ep.gen };
             const changed = ep.pid !== pid;
-            ep.ready = false; ep.gen++; ep.pid = pid;
+            ep.ready = false; ep.gen++; ep.pid = pid; ep.authenticated = false;
             const gen = ep.gen;
             // Key slots are only meaningful within one publication: on any pid
             // change every slot is scrubbed, so a colliding (kid, epoch) of the
@@ -263,7 +273,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
             for (const [old, entry] of state.epochs) if (entry.kid === kid && old > epoch) throw new Error("a newer media epoch holds this key slot");
             for (const [old, entry] of [...state.epochs]) if (entry.kid === kid) await retireEpoch(pid, old);
             while (state.epochs.size >= MAX_LIVE_EPOCHS) await retireEpoch(pid, Math.min(...state.epochs.keys()));
-            state.epochs.set(epoch, { kid, key: material, fp, at: Date.now() });
+            state.epochs.set(epoch, { kid, key: material, fp, at: performance.now() });
             const waiting = [];
             for (const ep of endpoints.values()) {
                 if (ep.pid !== pid) continue;
@@ -291,6 +301,13 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
             for (const epoch of [...(state?.epochs.keys() || [])]) if (epoch <= through) await retireEpoch(pid, epoch);
             if (through > 0) mark(pid, through);
             if (state) state.retired = Math.max(state.retired, through);
+            await fence();
+            return {};
+        },
+        // Retires exactly one epoch (older live epochs stay usable).
+        async retireOne({ pid, epoch }) {
+            if (!validPid(pid) || !validEpoch(epoch)) throw new Error("invalid media retirement");
+            await retireEpoch(pid, epoch);
             await fence();
             return {};
         },
@@ -326,7 +343,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
     scope.onrtctransform = event => {
         const { transformer } = event;
         const { id, operation, kind } = transformer?.options || {};
-        try { attach(id, operation, kind, transformer.readable, transformer.writable); }
+        try { attach(id, operation, kind, transformer.readable, transformer.writable, transformer); }
         catch (error) { send({ event: "attach-failed", id, error: String(error?.message || error) }); }
     };
     return { stats, endpoints, pids };

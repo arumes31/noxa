@@ -242,9 +242,10 @@ test("a receive epoch older than the maximum age stops decrypting", async () => 
     await call("bind", { id: rx.id, pid: "aged|mic" });
     rx.push(clone(tx.out[0])); await settle();
     assert.equal(rx.out.length, 1);
-    const realNow = Date.now;
-    Date.now = () => realNow() + 13 * 60 * 1000;
-    try { rx.push(clone(tx.out[1])); await settle(); } finally { Date.now = realNow; }
+    const realNow = performance.now.bind(performance), realDate = Date.now;
+    performance.now = () => realNow() + 13 * 60 * 1000;
+    Date.now = () => realDate() - 60 * 60 * 1000; // a backwards wall-clock step changes nothing
+    try { rx.push(clone(tx.out[1])); await settle(); } finally { performance.now = realNow; Date.now = realDate; }
     assert.equal(rx.out.length, 1);
     assert.ok((await call("stats", { id: rx.id })).endpoint.dropped.stale >= 1);
 });

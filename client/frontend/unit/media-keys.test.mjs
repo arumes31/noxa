@@ -18,6 +18,7 @@ function fakeMedia() {
         },
         async activate(pid, epoch) { log.push(["activate", pid, epoch]); },
         async retire(pid, through) { retired.set(pid, Math.max(retired.get(pid) || 0, through)); log.push(["retire", pid, through]); },
+        async retireOne(pid, epoch) { log.push(["retireOne", pid, epoch]); },
         async forget(pid) { log.push(["forget", pid]); },
     };
 }
@@ -274,4 +275,28 @@ test("the status names exactly who holds the current keys", async () => {
     await flush();
     assert.deepEqual(e.status().keyHolders.map(k => k.nickname || k.principal).sort(), ["Alice", "u2"]);
     e.stop();
+});
+
+test("the abort path retires only the aborted epoch; the previous one stays live", async () => {
+    let release;
+    const gate = new Promise(r => { release = r; });
+    const sent = [];
+    const media = fakeMedia();
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, send: async c => { sent.push(c); if (sent.length > 2 && sent.length <= 4) await gate; return { ok: true }; } });
+    e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2")]);
+    e.start({ ...me, principal: "u-keep", device: "d-keep" });
+    await flush(40);
+    const live = e.status().epoch;
+    e.publicationsChanged(); await flush(10);
+    const aborted = sent.at(-1).body.epoch;
+    e.setRoster([member("c1", "u1", "d1")]);
+    release(); await flush(80);
+    assert.ok(media.log.some(([op, , ep]) => op === "retireOne" && ep === aborted));
+    assert.ok(!media.log.some(([op, pid, through]) => op === "retire" && pid === "self|mic" && through >= aborted && through < live), "no range retirement of the live epoch");
+    e.stop();
+});
+
+test("invisible entries neither receive keys nor count in the membership digest", () => {
+    const roster = [member("c1", "u1", "d1"), { ...member("c2", "u2", "d2"), status: "invisible" }];
+    assert.deepEqual(recipientsOf(roster, me).map(r => r.principal), ["u1"]);
 });

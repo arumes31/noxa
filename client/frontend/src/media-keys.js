@@ -69,7 +69,8 @@ export function recipientsOf(roster, self) {
         const device = typeof c.media_device === "string" ? c.media_device : "";
         const principal = typeof c.unique_id === "string" ? c.unique_id : "";
         const clientID = String(c.client_id ?? "");
-        if (!inChannel(c, self.channelID) || !device || !principal || !clientID) continue;
+        // Invisible sessions are not in other members' roster: no keys, no digest.
+        if (!inChannel(c, self.channelID) || c.status === "invisible" || !device || !principal || !clientID) continue;
         if (clientID === String(self.clientID) || device === self.device) continue;
         if (!ID_RE.test(device) || !ID_RE.test(principal)) continue;
         seen.set(`${principal}\n${device}`, { principal, device, clientID, nickname: typeof c.nickname === "string" ? c.nickname : "" });
@@ -83,7 +84,7 @@ export function recipientsOf(roster, self) {
 export function channelDevices(roster, channelID) {
     const seen = new Map();
     for (const c of roster || []) {
-        if (!inChannel(c, channelID) || typeof c.media_device !== "string" || !c.media_device || typeof c.unique_id !== "string") continue;
+        if (!inChannel(c, channelID) || c.status === "invisible" || typeof c.media_device !== "string" || !c.media_device || typeof c.unique_id !== "string") continue;
         seen.set(`${c.unique_id}\n${c.media_device}`, { principal: c.unique_id, device: c.media_device });
     }
     return [...seen.values()];
@@ -263,8 +264,13 @@ export class MediaKeyEngine {
         // holds its keys: never activate it; the queued rekey excludes it
         // (review 2a-A P3-1).
         if (recipients.some(r => this.#removed.has(`${r.principal}\n${r.device}`))) {
-            for (const slot of SLOTS) { this.media.retire(senderPid(slot), epoch).catch(() => {}); this.media.retire(publicationPid(self.clientID, slot), epoch).catch(() => {}); }
+            // Only the aborted epoch is retired: the previous active epoch stays
+            // live (the removed device knew it already) until the next epoch
+            // activates, so the sender keeps sending and the status stays true.
+            for (const slot of SLOTS) { this.media.retireOne(senderPid(slot), epoch).catch(() => {}); this.media.retireOne(publicationPid(self.clientID, slot), epoch).catch(() => {}); }
             this.#epoch = previous || epoch;
+            this.#sentTo.clear();
+            this.#status();
             this.#again = true;
             return;
         }
@@ -288,6 +294,8 @@ export class MediaKeyEngine {
         const body = buildMediaKeyBody({ channelID: self.channelID, epoch: this.#epoch, nowSeconds: Math.floor(this.now() / 1000), client: self.clientID,
             session: this.session, kid: this.#kid, members: this.#members, count: recipients.length + 1, keys: this.#keys });
         const results = await pool(recipients, CONCURRENCY, async recipient => {
+            // Going invisible (or stopping) mid-distribution stops the remaining sends.
+            if (gen !== this.#gen || this.#invisible()) return { ok: false, reason: "stopped" };
             let timer;
             const timeout = new Promise((_, reject) => { if (Number.isFinite(this.sendTimeoutMs)) timer = this.timers.setTimeout(() => reject(Object.assign(new Error("timed out"), { code: "timeout" })), this.sendTimeoutMs); });
             try { return await Promise.race([this.send({ logicalID: this.uuid(), principal: recipient.principal, device: recipient.device, body }), timeout]); }
@@ -420,6 +428,7 @@ export class MediaKeyEngine {
             keyHolders: this.#recipients.filter(r => this.#sentTo.get(`${r.principal}\n${r.device}`) === this.#epoch)
                 .map(({ principal, device, clientID, nickname }) => ({ principal, device, clientID, nickname })),
             membershipMismatch: this.#mismatch,
+            devices: this.#recipients.length,
             members: this.#members,
             publishers: this.#publishers.size,
             error: this.lastError || "",

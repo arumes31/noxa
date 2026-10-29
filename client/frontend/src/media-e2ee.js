@@ -30,6 +30,9 @@ export class MediaE2EE {
         const support = mediaE2EESupport(scope);
         if (!support.ok) throw new MediaE2EEUnsupported(support.reason);
         if (api && api !== support.api && !(api === "streams" && typeof scope.RTCRtpSender?.prototype?.createEncodedStreams === "function")) throw new MediaE2EEUnsupported(api);
+        // An injected scope must bring its own worker URL: the default worker
+        // is built for (and constructed in) the page's global scope only.
+        if (scope !== globalThis && !workerURL) throw new MediaE2EEUnsupported("worker");
         this.api = api || support.api;
         this.scope = scope;
         this.onError = onError;
@@ -44,8 +47,11 @@ export class MediaE2EE {
         this.worker = workerURL
             ? new scope.Worker(workerURL, { type: "module" })
             : new Worker(new URL("./media-e2ee.worker.js", import.meta.url), { type: "module" });
+        this.byTrack = new WeakMap();   // receiver track -> receiver
+        this.byId = new Map();          // endpoint id -> receiver
         this.worker.onmessage = ({ data }) => {
             if (data?.event === "attach-failed") { this.onError(new Error(`Encrypted media transform failed: ${data.error}`)); return; }
+            if (data?.event === "first-frame") { this.#authenticate(data.id, data.gen); return; }
             const pending = this.pending.get(data?.seq);
             if (!pending) return;
             this.pending.delete(data.seq); clearTimeout(pending.timer);
@@ -87,8 +93,40 @@ export class MediaE2EE {
             const { readable, writable } = endpoint.createEncodedStreams();
             this.worker.postMessage({ op: "attach", id, operation, kind, readable, writable }, [readable, writable]);
         }
-        this.endpoints.set(endpoint, { id, pid: "", operation, kind });
+        this.endpoints.set(endpoint, { id, pid: "", operation, kind, gen: 0, authenticated: false, waiters: [] });
+        if (operation === "decode") {
+            // Presentation gate: no output until the first authenticated frame.
+            if (endpoint.track) { endpoint.track.enabled = false; this.byTrack.set(endpoint.track, endpoint); }
+            this.byId.set(id, endpoint);
+        }
         return id;
+    }
+
+    #authenticate(id, gen) {
+        const receiver = this.byId.get(id);
+        const entry = receiver && this.endpoints.get(receiver);
+        if (!entry || entry.authenticated || (entry.gen && gen !== entry.gen)) return;
+        entry.authenticated = true;
+        if (receiver.track) receiver.track.enabled = true;
+        for (const fn of entry.waiters.splice(0)) { try { fn(); } catch { /* listener errors never break media */ } }
+    }
+
+    #receiverOf(trackOrReceiver) { return this.endpoints.has(trackOrReceiver) ? trackOrReceiver : this.byTrack.get(trackOrReceiver); }
+
+    // Whether a receiver (or its track) has output its first authenticated
+    // frame for its current binding. Unknown endpoints are not channel media.
+    authenticated(trackOrReceiver) {
+        const receiver = this.#receiverOf(trackOrReceiver);
+        const entry = receiver && this.endpoints.get(receiver);
+        return entry ? entry.authenticated : undefined;
+    }
+
+    // Calls fn once the receiver is authenticated (immediately if it is).
+    onAuthenticated(trackOrReceiver, fn) {
+        const receiver = this.#receiverOf(trackOrReceiver);
+        const entry = receiver && this.endpoints.get(receiver);
+        if (!entry || entry.authenticated) { fn(); return; }
+        if (entry.waiters.length < 16) entry.waiters.push(fn);
     }
 
     protectSender(sender, kind) { return this.#attach(sender, "encode", kind || sender.track?.kind); }
@@ -144,11 +182,15 @@ export class MediaE2EE {
         if (entry.pid === pid && !entry.binding) return;
         // Recorded only once the worker accepted it: a failed or timed-out
         // bind is retried by the next bind instead of being skipped forever.
+        if (entry.operation === "decode" && entry.pid !== pid) {
+            entry.authenticated = false;
+            if (endpoint.track) endpoint.track.enabled = false;
+        }
         const binding = this.request("bind", { id: entry.id, pid });
         entry.binding = binding;
         try {
-            await binding;
-            if (entry.binding === binding) entry.pid = pid;
+            const result = await binding;
+            if (entry.binding === binding) { entry.pid = pid; entry.gen = result?.gen || 0; }
         } catch (error) {
             if (entry.binding === binding) entry.pid = "";
             throw error;
@@ -164,6 +206,7 @@ export class MediaE2EE {
     }
     activate(pid, epoch) { return this.request("activate", { pid, epoch }); }
     retire(pid, through) { return this.request("retire", { pid, through }); }
+    retireOne(pid, epoch) { return this.request("retireOne", { pid, epoch }); }
     forget(pid) { return this.request("forget", { pid }); }
     stats(endpoint) { return this.request("stats", { id: endpoint ? this.endpointID(endpoint) : undefined }); }
 

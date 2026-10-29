@@ -45,18 +45,23 @@ for (const [senderAPI, receiverAPI] of [["script", "script"], ["streams", "strea
         await expect.poll(() => page.evaluate(() => window.__pcs.map(pc => pc.connectionState))).toEqual(["connected", "connected"]);
         const stats = () => page.evaluate(async () => {
             const [tx, rx] = window.__sessions;
-            const out = { width: document.querySelector("video")?.videoWidth || 0 };
+            const out = { width: document.querySelector("video")?.videoWidth || 0, enabled: window.__receivers.map(r => r.track.enabled), authenticated: window.__receivers.map(r => rx.authenticated(r)) };
             for (const r of window.__receivers) out[r.track.kind] = (await rx.stats(r)).endpoint;
             out.sent = (await tx.stats()).encrypted; out.unencrypted = (await tx.stats()).dropped.unencrypted;
             return out;
         });
         // Packets arrive, but nothing decrypts or decodes without the keys.
         await expect.poll(async () => (await stats()).video?.dropped?.nokey || 0).toBeGreaterThan(5);
-        expect((await stats()).width).toBe(0);
+        // A disabled (gated) track renders only black placeholder frames.
+        expect((await stats()).width).toBeLessThan(160);
         expect((await stats()).audio.frames).toBe(0);
+        // Presentation gate: unauthenticated receivers stay disabled.
+        expect((await stats()).enabled).toEqual([false, false]);
         await page.evaluate(async () => { const rx = window.__sessions[1]; await rx.setKey("pub|cam", 100, 0, window.__keys.cam); await rx.setKey("pub|mic", 100, 0, window.__keys.mic); });
         await expect.poll(async () => (await stats()).width, { timeout: 10000 }).toBe(160);
         await expect.poll(async () => (await stats()).audio.frames).toBeGreaterThan(20);
+        expect((await stats()).enabled).toEqual([true, true]);
+        expect((await stats()).authenticated).toEqual([true, true]);
         // Rotate to a new epoch at the next key slot: decryption continues.
         await page.evaluate(async () => {
             const [tx, rx] = window.__sessions;

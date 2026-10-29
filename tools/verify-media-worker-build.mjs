@@ -33,34 +33,42 @@ export async function verifyMediaWorkerBuild(dist, packageDir) {
         res.end(readFileSync(file));
     }).listen(0, "127.0.0.1");
     await new Promise(r => server.once("listening", r));
-    const browser = await chromium.launch({ headless: true });
+    let browser;
     try {
+        browser = await chromium.launch({ headless: true });
         const page = await browser.newPage();
         await page.goto(`http://127.0.0.1:${server.address().port}/`);
-        return await page.evaluate(async url => {
+        const results = {};
+        for (const api of ["streams", "script"]) results[api] = await page.evaluate(async ([url, api]) => {
             const w = new Worker(url, { type: "module" });
             let seq = 0; const pending = new Map();
             const failed = new Promise((_, reject) => { w.onerror = e => reject(new Error(`worker error: ${e.message || "load failed"}`)); });
             w.onmessage = ({ data }) => { const p = pending.get(data.seq); if (p) { pending.delete(data.seq); data.ok ? p.resolve(data.value) : p.reject(new Error(data.value)); } };
-            const rpc = (op, data = {}, transfer = []) => Promise.race([failed, new Promise((resolve, reject) => { const id = ++seq; pending.set(id, { resolve, reject }); w.postMessage({ op, seq: id, ...data }, transfer); })]);
+            const rpc = (op, data = {}, transfer = []) => Promise.race([failed, new Promise((resolve, reject) => {
+                const id = ++seq;
+                const timer = setTimeout(() => { pending.delete(id); reject(new Error(`worker did not answer ${op}`)); }, 10000);
+                pending.set(id, { resolve: v => { clearTimeout(timer); resolve(v); }, reject: e => { clearTimeout(timer); reject(e); } });
+                w.postMessage({ op, seq: id, ...data }, transfer);
+            })]);
             await rpc("init");
             const canvas = document.createElement("canvas"); canvas.width = 160; canvas.height = 90; const ctx = canvas.getContext("2d"); let n = 0;
             const paint = setInterval(() => { ctx.fillStyle = ++n % 2 ? "#1fd288" : "#4455dd"; ctx.fillRect(0, 0, 160, 90); }, 50);
             const track = canvas.captureStream(15).getVideoTracks()[0];
-            const a = new RTCPeerConnection({ encodedInsertableStreams: true }), b = new RTCPeerConnection({ encodedInsertableStreams: true });
+            const config = api === "streams" ? { encodedInsertableStreams: true } : {};
+            const a = new RTCPeerConnection(config), b = new RTCPeerConnection(config);
             a.onicecandidate = e => e.candidate && b.addIceCandidate(e.candidate); b.onicecandidate = e => e.candidate && a.addIceCandidate(e.candidate);
             const tr = a.addTransceiver(track, { direction: "sendonly" });
             tr.setCodecPreferences(RTCRtpSender.getCapabilities("video").codecs.filter(c => /vp8|rtx/i.test(c.mimeType)));
-            const tx = tr.sender.createEncodedStreams();
-            await rpc("attach", { id: "tx:build", operation: "encode", kind: "video", readable: tx.readable, writable: tx.writable }, [tx.readable, tx.writable]);
+            if (api === "script") tr.sender.transform = new RTCRtpScriptTransform(w, { id: "tx:build", operation: "encode", kind: "video" });
+            else { const tx = tr.sender.createEncodedStreams(); await rpc("attach", { id: "tx:build", operation: "encode", kind: "video", readable: tx.readable, writable: tx.writable }, [tx.readable, tx.writable]); }
             const key = crypto.getRandomValues(new Uint8Array(32));
             await rpc("bind", { id: "tx:build", pid: "self|cam" });
             await rpc("key", { pid: "self|cam", epoch: 1, kid: 0, key });
             await rpc("activate", { pid: "self|cam", epoch: 1 });
             const video = document.createElement("video"); video.muted = true; video.autoplay = true; document.body.append(video);
             b.ontrack = async e => {
-                const rx = e.receiver.createEncodedStreams();
-                await rpc("attach", { id: "rx:build", operation: "decode", kind: "video", readable: rx.readable, writable: rx.writable }, [rx.readable, rx.writable]);
+                if (api === "script") e.receiver.transform = new RTCRtpScriptTransform(w, { id: "rx:build", operation: "decode", kind: "video" });
+                else { const rx = e.receiver.createEncodedStreams(); await rpc("attach", { id: "rx:build", operation: "decode", kind: "video", readable: rx.readable, writable: rx.writable }, [rx.readable, rx.writable]); }
                 await rpc("bind", { id: "rx:build", pid: "pub|cam" });
                 await rpc("key", { pid: "pub|cam", epoch: 1, kid: 0, key });
                 video.srcObject = new MediaStream([e.track]);
@@ -77,9 +85,10 @@ export async function verifyMediaWorkerBuild(dist, packageDir) {
                 if (Date.now() > deadline) throw new Error(`no decrypted video through the built worker: ${JSON.stringify(st)}`);
                 await new Promise(r => setTimeout(r, 200));
             }
-        }, `/assets/${worker}`);
+        }, [`/assets/${worker}`, api]);
+        return results;
     } finally {
-        await browser.close();
+        await browser?.close();
         server.close();
     }
 }

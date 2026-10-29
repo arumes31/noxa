@@ -255,7 +255,8 @@ try {
     await growing("B", "A|mic", "B hears A after replaceTrack of the microphone");
     await call("A", "restartCamera");
     await growing("B", "A|cam", "B sees A after the camera capture restarted", { video: true, min: 10 });
-    log("PWA flip:", await call("B", "flip"));
+    const flipped = await call("B", "flip");
+    if (flipped !== "flipped") throw new Error(`camera flip failed: ${flipped}`);
     await growing("A", "B|cam", "A sees B after the camera flip", { video: true, min: 10 });
     for (const id of ["A", "B"]) for (const [pid, s] of Object.entries((await report(id)).senders)) if ((s.dropped.unencrypted || 0) > 0) throw new Error(`${id} ${pid} produced unencrypted output after track changes`);
     log("phase 1b: replaceTrack, capture restart and camera flip stayed encrypted");

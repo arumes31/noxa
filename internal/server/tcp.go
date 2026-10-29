@@ -335,10 +335,8 @@ type TCPServer struct {
 	// default; advertised as netproto.CapabilityMediaE2EE when available.
 	mediaE2EE bool
 	// Per-device noxa-olm-v1 budgets separate from chat sends (olm_rate.go).
-	olmControlRate        *chatRateLimiter
-	olmAdmissionRate      *chatRateLimiter
-	olmDrainRate          *chatRateLimiter
-	olmAttempts           olmAttemptMemo
+	olmBudget             *olmBudgets
+	olmDoorbell           olmDoorbells
 	keyLookupRate         *chatRateLimiter
 	previewOnce           sync.Once
 	previewService        *linkpreview.Service
@@ -483,9 +481,7 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 	s := &TCPServer{
 		olmAdmissionEnabled: true,
 		mediaE2EE:           true,
-		olmControlRate:      newChatRateLimiter(olmControlBegins, olmBudgetWindow),
-		olmAdmissionRate:    newChatRateLimiter(olmAdmissionFrames, olmBudgetWindow),
-		olmDrainRate:        newChatRateLimiter(olmDrainFrames, olmBudgetWindow),
+		olmBudget:           newOlmBudgets(),
 		keyLookupRate:       newChatRateLimiter(keyLookups, olmBudgetWindow),
 		cfg:                 cfg,
 		logger:              logger,

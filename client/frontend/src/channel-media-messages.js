@@ -3,8 +3,7 @@
 export const channelMediaEnglish = {
 
     "e2ee.media.keying": "Setting up end-to-end encryption…",
-    "e2ee.media.encrypted": "End-to-end encrypted · keys held by {names}",
-        "e2ee.media.more": "{names} and {count} more",
+    "e2ee.media.encrypted": "End-to-end encrypted · keys held by {count} device(s): {names}",
         "e2ee.media.mismatch": "Warning: {names} sees different channel members than you. Someone may be receiving keys you cannot see.",
         "e2ee.reason.invisible": "Encrypted voice is unavailable while you are invisible. Become visible to join voice.",
     "e2ee.media.alone": "End-to-end encrypted · nobody else is here yet",
@@ -30,8 +29,7 @@ export const channelMediaEnglish = {
 export const channelMediaGerman = {
 
     "e2ee.media.keying": "Ende-zu-Ende-Verschlüsselung wird eingerichtet…",
-    "e2ee.media.encrypted": "Ende-zu-Ende-verschlüsselt · Schlüssel bei {names}",
-        "e2ee.media.more": "{names} und {count} weitere",
+    "e2ee.media.encrypted": "Ende-zu-Ende-verschlüsselt · Schlüssel bei {count} Gerät(en): {names}",
         "e2ee.media.mismatch": "Warnung: {names} sieht andere Kanalmitglieder als du. Möglicherweise erhält jemand Schlüssel, den du nicht siehst.",
         "e2ee.reason.invisible": "Verschlüsselte Sprache ist nicht verfügbar, solange du unsichtbar bist. Werde sichtbar, um beizutreten.",
     "e2ee.media.alone": "Ende-zu-Ende-verschlüsselt · noch niemand sonst hier",

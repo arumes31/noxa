@@ -22,6 +22,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"noxa/internal/e2ee/admission"
 	"noxa/internal/netproto"
@@ -145,6 +146,9 @@ func (m *connManager) mediaE2EEStatus() MediaE2EEStatus {
 // media-key controls (rekeys) and messages are fetched when they exist
 // instead of by fast polling. It is never shown or forwarded.
 const olmPendingEvent = "olm_pending"
+
+// doorbellDrainInterval spaces doorbell-triggered drains.
+const doorbellDrainInterval = 250 * time.Millisecond
 
 // isOlmDoorbell reports whether an event frame is the doorbell.
 func isOlmDoorbell(payload []byte) bool {

@@ -7,8 +7,7 @@ import { mediaErrorReason } from "../core/media-e2ee/media-session.js";
 addStrings({
     en: {
         "e2ee.media.keying": "Setting up end-to-end encryption…",
-        "e2ee.media.encrypted": "End-to-end encrypted · keys held by {names}",
-        "e2ee.media.more": "{names} and {count} more",
+        "e2ee.media.encrypted": "End-to-end encrypted · keys held by {count} device(s): {names}",
         "e2ee.media.mismatch": "Warning: {names} sees different channel members than you. Someone may be receiving keys you cannot see.",
         "e2ee.reason.invisible": "Encrypted voice is unavailable while you are invisible. Become visible to join voice.",
         "e2ee.media.alone": "End-to-end encrypted · nobody else is here yet",
@@ -30,8 +29,7 @@ addStrings({
     },
     de: {
         "e2ee.media.keying": "Ende-zu-Ende-Verschlüsselung wird eingerichtet…",
-        "e2ee.media.encrypted": "Ende-zu-Ende-verschlüsselt · Schlüssel bei {names}",
-        "e2ee.media.more": "{names} und {count} weitere",
+        "e2ee.media.encrypted": "Ende-zu-Ende-verschlüsselt · Schlüssel bei {count} Gerät(en): {names}",
         "e2ee.media.mismatch": "Warnung: {names} sieht andere Kanalmitglieder als du. Möglicherweise erhält jemand Schlüssel, den du nicht siehst.",
         "e2ee.reason.invisible": "Verschlüsselte Sprache ist nicht verfügbar, solange du unsichtbar bist. Werde sichtbar, um beizutreten.",
         "e2ee.media.alone": "Ende-zu-Ende-verschlüsselt · noch niemand sonst hier",
@@ -63,16 +61,16 @@ export function mediaErrorText(error) {
 export function mediaStatusText(status) {
     switch (status?.state) {
         case "keying": return t("e2ee.media.keying");
-        case "encrypted": return withWarning(status, status.recipients ? t("e2ee.media.encrypted", { names: holderNames(status) }) : t("e2ee.media.alone"));
+        case "encrypted": return withWarning(status, !status.recipients ? t("e2ee.media.alone") : status.keyHolders?.length ? t("e2ee.media.encrypted", { count: status.keyHolders.length, names: holderNames(status) }) : t("e2ee.media.keying"));
         case "partial": return withWarning(status, t("e2ee.media.partial", { failed: status.failed?.length || 0 }));
         default: return "";
     }
 }
 
-// Who holds my current keys: nickname with the verified account (principal).
+// Who holds my current keys: every device, by nickname with the verified
+// account (never truncated: the list is the defence against hidden members).
 function holderNames(status) {
-    const names = (status.keyHolders || []).map(h => (h.nickname && h.nickname !== h.principal ? `${h.nickname} (${h.principal})` : h.principal));
-    return names.length > 4 ? t("e2ee.media.more", { names: names.slice(0, 4).join(", "), count: names.length - 4 }) : names.join(", ");
+    return (status.keyHolders || []).map(h => (h.nickname && h.nickname !== h.principal ? `${h.nickname} (${h.principal})` : h.principal)).join(", ");
 }
 
 function withWarning(status, text) {
