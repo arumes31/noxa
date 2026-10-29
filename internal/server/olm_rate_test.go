@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,7 +13,10 @@ import (
 	"noxa/internal/config"
 	"noxa/internal/e2ee/admission"
 	"noxa/internal/netproto"
+	"noxa/internal/state"
 	"noxa/internal/store"
+
+	"go.uber.org/zap"
 )
 
 // Task 2a review A P1-1: with the REAL production limiters (chat 5 per 3 s,
@@ -182,5 +187,92 @@ func readReplyFrame(r io.Reader) (*netproto.Frame, error) {
 		if err != nil || f.Type != uint16(netproto.MsgEvent) || string(f.Payload) != `{"type":"olm_pending","data":{}}` {
 			return f, err
 		}
+	}
+}
+
+// Review 2a-fix2 P3-4: the control and admission budgets scale with the
+// sender's encrypted voice channel, so a 50-member and a maximum-size
+// (MediaE2EEMaxVoice) channel rekey completes at once with the real limiters
+// and the per-session frame budget: every member sends one control to every
+// other device and drains its own.
+func TestOlmBudgetsAdmitLargeChannelRekeys(t *testing.T) {
+	for _, members := range []int{50, MediaE2EEMaxVoice} {
+		sm := state.New(zap.NewNop())
+		sm.AddChannel(&state.Channel{ChannelID: 9, Name: "big"})
+		srv := New(&config.Config{ChatRateMsgs: 5, ChatRateWindowSeconds: 3}, nil, &Deps{State: sm})
+		clients := make([]*Client, members)
+		for i := range clients {
+			id := fmt.Sprintf("c%d", i)
+			clients[i] = &Client{ID: id}
+			sm.AddClient(&state.Client{ClientID: id, UniqueID: fmt.Sprintf("u%d", i), MediaDevice: fmt.Sprintf("d%d", i)})
+			if err := sm.MoveClient(id, 9); err != nil {
+				t.Fatal(err)
+			}
+		}
+		start := time.Now()
+		refused := 0
+		for i, c := range clients {
+			var budget sessionRequestBudget
+			src := store.OlmSource{Principal: fmt.Sprintf("u%d", i), Device: fmt.Sprintf("d%d", i)}
+			admit := func(r netproto.OlmAdmissionRequest) {
+				if !budget.allow(netproto.MsgOlmAdmissionRequest, time.Now()) || !srv.allowOlmAdmission(context.Background(), c, src, r) {
+					refused++
+				}
+			}
+			for j := 0; j < members; j++ {
+				if j == i {
+					continue
+				}
+				admit(netproto.OlmAdmissionRequest{Action: "snapshot"})
+				admit(netproto.OlmAdmissionRequest{Action: "begin", Manifest: &admission.Manifest{Purpose: "control", Targets: []admission.Target{{Local: true}, {Principal: fmt.Sprintf("u%d", j), Device: fmt.Sprintf("d%d", j)}}}})
+				admit(netproto.OlmAdmissionRequest{Action: "put_part"})
+				admit(netproto.OlmAdmissionRequest{Action: "finalize"})
+				admit(netproto.OlmAdmissionRequest{Action: "retire_receipt"})
+				admit(netproto.OlmAdmissionRequest{Action: "receive_ack"})
+			}
+		}
+		t.Logf("%d-member channel: whole rekey admitted in %v, %d refusals", members, time.Since(start).Round(time.Millisecond), refused)
+		if refused != 0 {
+			t.Fatalf("%d-member rekey: %d admission requests refused", members, refused)
+		}
+	}
+}
+
+// Review 2a-fix2 P3-5: a device refused by its own cap never consumes the
+// account token its siblings share.
+func TestOlmDeviceCapRefusalKeepsTheAccountToken(t *testing.T) {
+	device, account := newChatRateLimiter(1, time.Hour), newChatRateLimiter(2, time.Hour)
+	now := time.Now()
+	if !both(device, account, "d1", "acct", now, 1, 2) {
+		t.Fatal("first request")
+	}
+	for i := 0; i < 5; i++ {
+		if both(device, account, "d1", "acct", now, 1, 2) {
+			t.Fatal("device cap must refuse")
+		}
+	}
+	if !both(device, account, "d2", "acct", now, 1, 2) {
+		t.Fatal("a sibling device lost the account token to refused requests")
+	}
+}
+
+// Encrypted voice channels are capped at MediaE2EEMaxVoice members.
+func TestMediaE2EERefusesAFullEncryptedChannel(t *testing.T) {
+	env := startMediaE2EEEnv(t, true)
+	conn, userID := dialAuthed(t, env.addr, "user-uid")
+	t.Cleanup(func() { _ = conn.Close() })
+	placeVoiceTestClients(t, env, 1, userID)
+	client, _ := env.srv.clientByID(userID)
+	client.setDeviceID("dev-1")
+	for i := 0; i < MediaE2EEMaxVoice; i++ {
+		id := fmt.Sprintf("member-%d", i)
+		env.state.AddClient(&state.Client{ClientID: id, UniqueID: id, MediaDevice: "dev-" + id})
+		if err := env.state.MoveClient(id, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "secure-offer", MediaE2EE: netproto.MediaE2EEVersion})
+	if e := protocolError(t, conn); !strings.HasPrefix(e.Message, netproto.MediaE2EEReasonChannelFull+": ") {
+		t.Fatalf("full channel: %+v", e)
 	}
 }

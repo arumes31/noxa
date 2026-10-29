@@ -28,4 +28,6 @@ const (
 	// An invisible session is not in the other members' roster, so nobody
 	// would give it keys and its own keys would reveal it: refused.
 	MediaE2EEReasonInvisible = "media_e2ee_invisible"
+	// The encrypted voice channel is at its supported size.
+	MediaE2EEReasonChannelFull = "media_e2ee_channel_full"
 )

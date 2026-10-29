@@ -292,7 +292,10 @@ test("the abort path retires only the aborted epoch; the previous one stays live
     e.setRoster([member("c1", "u1", "d1")]);
     release(); await flush(80);
     assert.ok(media.log.some(([op, , ep]) => op === "retireOne" && ep === aborted));
-    assert.ok(!media.log.some(([op, pid, through]) => op === "retire" && pid === "self|mic" && through >= aborted && through < live), "no range retirement of the live epoch");
+    // Until a newer epoch activates, nothing retires the live epoch.
+    const next = media.log.findIndex(([op, pid, ep]) => op === "activate" && pid === "self|mic" && ep > aborted);
+    assert.ok(next > 0, "a newer epoch activates");
+    assert.ok(!media.log.slice(0, next).some(([op, pid, through]) => op === "retire" && pid === "self|mic" && through >= live), "the live epoch stays usable until then");
     e.stop();
 });
 

@@ -45,6 +45,10 @@ func (s *TCPServer) handleOlmAdmission(ctx context.Context, client *Client, f *n
 		if a.Device == "" || a.Principal == "" {
 			return reply("authority-required")
 		}
+		// Not a rate decision: an invisible session never sends controls.
+		if r.Action == "begin" && r.Manifest != nil && r.Manifest.Purpose == "control" && s.clientInvisible(client) {
+			return reply("invisible")
+		}
 		if !s.allowOlmAdmission(ctx, client, a, r) {
 			return reply("rate-limit")
 		}

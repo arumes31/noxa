@@ -48,6 +48,7 @@ export class MediaE2EE {
             ? new scope.Worker(workerURL, { type: "module" })
             : new Worker(new URL("./media-e2ee.worker.js", import.meta.url), { type: "module" });
         this.byTrack = new WeakMap();   // receiver track -> receiver
+        this.early = new WeakMap();     // receiver or track -> waiters before protection
         this.byId = new Map();          // endpoint id -> receiver
         this.worker.onmessage = ({ data }) => {
             if (data?.event === "attach-failed") { this.onError(new Error(`Encrypted media transform failed: ${data.error}`)); return; }
@@ -93,7 +94,9 @@ export class MediaE2EE {
             const { readable, writable } = endpoint.createEncodedStreams();
             this.worker.postMessage({ op: "attach", id, operation, kind, readable, writable }, [readable, writable]);
         }
-        this.endpoints.set(endpoint, { id, pid: "", operation, kind, gen: 0, authenticated: false, waiters: [] });
+        const early = [...(this.early.get(endpoint) || []), ...(endpoint.track ? this.early.get(endpoint.track) || [] : [])];
+        this.early.delete(endpoint); if (endpoint.track) this.early.delete(endpoint.track);
+        this.endpoints.set(endpoint, { id, pid: "", operation, kind, gen: 0, authenticated: false, waiters: early.slice(0, 16) });
         if (operation === "decode") {
             // Presentation gate: no output until the first authenticated frame.
             if (endpoint.track) { endpoint.track.enabled = false; this.byTrack.set(endpoint.track, endpoint); }
@@ -107,7 +110,8 @@ export class MediaE2EE {
         const entry = receiver && this.endpoints.get(receiver);
         if (!entry || entry.authenticated || (entry.gen && gen !== entry.gen)) return;
         entry.authenticated = true;
-        if (receiver.track) receiver.track.enabled = true;
+        // The owner decides whether to enable the track (e.g. only watched
+        // streams); the gate only reports authentication (review P3-3).
         for (const fn of entry.waiters.splice(0)) { try { fn(); } catch { /* listener errors never break media */ } }
     }
 
@@ -115,18 +119,25 @@ export class MediaE2EE {
 
     // Whether a receiver (or its track) has output its first authenticated
     // frame for its current binding. Unknown endpoints are not channel media.
+    // Fail closed (review P2-3, parent ruling): a receiver the gate has not
+    // seen yet (its own track event comes later in the same dispatch) is NOT
+    // authenticated. Callers gate on `!== true`.
     authenticated(trackOrReceiver) {
         const receiver = this.#receiverOf(trackOrReceiver);
         const entry = receiver && this.endpoints.get(receiver);
-        return entry ? entry.authenticated : undefined;
+        return entry?.authenticated === true;
     }
 
-    // Calls fn once the receiver is authenticated (immediately if it is).
+    // Calls fn once the receiver is authenticated (immediately if it is). A
+    // receiver not protected yet keeps the waiter until it is.
     onAuthenticated(trackOrReceiver, fn) {
         const receiver = this.#receiverOf(trackOrReceiver);
         const entry = receiver && this.endpoints.get(receiver);
-        if (!entry || entry.authenticated) { fn(); return; }
-        if (entry.waiters.length < 16) entry.waiters.push(fn);
+        if (entry?.authenticated) { fn(); return; }
+        if (entry) { if (entry.waiters.length < 16) entry.waiters.push(fn); return; }
+        const list = this.early.get(trackOrReceiver) || [];
+        if (list.length < 16) list.push(fn);
+        this.early.set(trackOrReceiver, list);
     }
 
     protectSender(sender, kind) { return this.#attach(sender, "encode", kind || sender.track?.kind); }
@@ -190,7 +201,10 @@ export class MediaE2EE {
         entry.binding = binding;
         try {
             const result = await binding;
-            if (entry.binding === binding) { entry.pid = pid; entry.gen = result?.gen || 0; }
+            if (entry.binding === binding) {
+                entry.pid = pid; entry.gen = result?.gen || 0;
+                if (result?.authenticated && entry.operation === "decode") this.#authenticate(entry.id, entry.gen);
+            }
         } catch (error) {
             if (entry.binding === binding) entry.pid = "";
             throw error;

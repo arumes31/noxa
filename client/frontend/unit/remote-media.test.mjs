@@ -119,3 +119,19 @@ test("publisher swaps release all old controls before attaching any new receiver
     assert.deepEqual([...playback], [["bob|screenaudio", "first"], ["alice|screenaudio", "second"]]);
     stop(); assert.equal(playback.size, 0);
 });
+
+// Encrypted-media presentation gate: an owner that declines a track (returns
+// false) gets it offered again on the next reconcile, and is never told to
+// remove something it did not attach.
+test("a gated track is not recorded and is offered again after authentication", () => {
+    const f = fixture(); f.stop();
+    let authenticated = false;
+    const changes = [];
+    const stop = startRemoteMedia(f.pc, () => true, (track, id) => { if (!authenticated) return false; changes.push(["add", id]); }, (track, id) => changes.push(["remove", id]));
+    f.pc.ontrack({ track: f.track, transceiver: f.transceiver });
+    assert.deepEqual(changes, []);
+    authenticated = true;
+    reconcileRemoteMedia(f.pc);
+    assert.deepEqual(changes, [["add", "alice|screen"]]);
+    stop();
+});

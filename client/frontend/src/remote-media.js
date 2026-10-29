@@ -27,7 +27,13 @@ export function startRemoteMedia(pc, current, onTrack, onRemoved, attached = () 
         bindings.set(receiver, binding);
         track.addEventListener("ended", binding.ended);
         track.addEventListener("unmute", binding.unmute);
-        onTrack(track, id);
+        // false: the owner did not attach it (e.g. the encrypted-media gate);
+        // nothing is recorded, so a later reconcile binds it afresh.
+        if (onTrack(track, id) === false) {
+            bindings.delete(receiver);
+            track.removeEventListener("ended", binding.ended);
+            track.removeEventListener("unmute", binding.unmute);
+        }
     };
     const reconcile = () => {
         if (!active || !current()) return;

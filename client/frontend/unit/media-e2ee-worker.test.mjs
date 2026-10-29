@@ -249,3 +249,16 @@ test("a receive epoch older than the maximum age stops decrypting", async () => 
     assert.equal(rx.out.length, 1);
     assert.ok((await call("stats", { id: rx.id })).endpoint.dropped.stale >= 1);
 });
+
+test("retireOne removes only that epoch; an older live epoch keeps decrypting", async () => {
+    const tx = await sender("tx|one", 30, 0, key(0x71));
+    tx.push(audio(30, 960)); await settle();
+    const rx = endpoint("decode", "audio");
+    await call("key", { pid: "one|mic", epoch: 30, kid: 0, key: key(0x71) });
+    await call("key", { pid: "one|mic", epoch: 31, kid: 1, key: key(0x72) });
+    await call("bind", { id: rx.id, pid: "one|mic" });
+    await call("retireOne", { pid: "one|mic", epoch: 31 });
+    rx.push(clone(tx.out[0])); await settle();
+    assert.equal(rx.out.length, 1, "epoch 30 still decrypts");
+    await assert.rejects(call("key", { pid: "one|mic", epoch: 31, kid: 1, key: key(0x72) }), /retired/);
+});

@@ -27,8 +27,8 @@ func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) boo
 		class, burst, rate = 3, 12, 2
 	case netproto.MsgOlmAdmissionRequest:
 		// Admission has its own per-device budgets (olm_rate.go); this bound
-		// only caps one session's database work. A 12-member rekey is ~55 frames.
-		class, burst, rate = 4, 160, 16
+		// only caps one session's database work. A 64-member rekey is ~315 frames.
+		class, burst, rate = 4, 400, 16
 	case netproto.MsgChatHistory, netproto.MsgFileList, netproto.MsgFileTransferInit, netproto.MsgJoinChannel:
 		class, burst, rate = 1, 24, 4
 	case netproto.MsgICECandidate, netproto.MsgWebRTCOffer, netproto.MsgWebRTCAnswer:

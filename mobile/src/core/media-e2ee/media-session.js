@@ -28,12 +28,13 @@ const SERVER_REASONS = {
     media_e2ee_unavailable: "unavailable",
     media_e2ee_codec_unsupported: "codec",
     media_e2ee_invisible: "invisible",
+    media_e2ee_channel_full: "channel_full",
     server_recording_disabled_e2ee: "recording",
     whisper_unavailable_e2ee: "whisper_unavailable",
     stream_preview_disabled_e2ee: "preview",
 };
 export const MEDIA_REASONS = Object.freeze(["server_outdated", "client_outdated", "keyless_guest", "no_device", "secure_unavailable",
-    "unsupported_runtime", "worker", "unavailable", "codec", "recording", "whisper_unavailable", "preview", "closed", "invisible"]);
+    "unsupported_runtime", "worker", "unavailable", "codec", "recording", "whisper_unavailable", "preview", "closed", "invisible", "channel_full"]);
 export function mediaErrorReason(error) {
     if (error instanceof MediaSessionError || (error?.name === "MediaSessionError" && error.reason)) return MEDIA_REASONS.includes(error.reason) ? error.reason : "unavailable";
     const text = String(error?.message ?? error ?? "");

@@ -124,6 +124,24 @@ func TestOlmDoorbellNeverRingsForRejectedOrRepeatedFinalize(t *testing.T) {
 			break
 		}
 	}
+	// Review 2a-fix2 P3-6: an invisible sender's control begin gets the
+	// distinct non-retryable code "invisible", not "rate-limit".
+	env.state.SetStatus(attackerID, "invisible", "")
+	control := m
+	control.AttemptID, control.LogicalID, control.Purpose = "2", "x2", "control"
+	send(t, attacker, netproto.MsgOlmAdmissionRequest, netproto.OlmAdmissionRequest{RequestID: "inv", AccountEpoch: 1, Action: "begin", Manifest: &control})
+	_ = attacker.SetReadDeadline(time.Time{})
+	for {
+		var r netproto.OlmAdmissionResult
+		_ = json.Unmarshal(readOfType(t, attacker, netproto.MsgOlmAdmissionResult).Payload, &r)
+		if r.RequestID != "inv" {
+			continue // replies to the earlier burst
+		}
+		if r.Error != "invisible" {
+			t.Fatalf("invisible control begin: %+v", r)
+		}
+		break
+	}
 }
 
 func countDoorbellsIntegration(c net.Conn, d time.Duration) int {

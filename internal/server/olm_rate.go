@@ -8,10 +8,18 @@ package server
 //     before; every `finalize` and other admission action is charged to the
 //     admission budget, drains (`deliveries`, `receive_ack`) to the drain
 //     budget, and a control `begin` to the control budget;
-//   - each of those budgets exists per device AND per account (an account
-//     with ten devices does not get ten times the budget);
+//   - control and admission budgets exist per device AND per account (ten
+//     devices do not get ten times the budget) and scale with the sender's
+//     encrypted voice channel (one rekey = one control per recipient device,
+//     up to MediaE2EEMaxVoice members);
+//   - drains are per device only: their volume is driven by other users'
+//     sends to every device of the account (a per-account cap starved
+//     multi-device recipients);
 //   - a control `begin` is additionally capped per (sender account, target
-//     device), and refused while the sender is invisible. A control can only
+//     device), charged only after the device and account caps passed (the
+//     target is client-chosen; limiter maps are swept). Invisible senders are
+//     refused before any budget with the non-retryable code "invisible". A
+//     control can only
 //     reach one device, stays pending at most MaxPendingControls per pair and
 //     is never shown as a message, so the control budget cannot carry chat.
 //
@@ -19,7 +27,9 @@ package server
 // rings, and only the devices whose copies the store inserted in that call.
 // Rings are queued through the per-client broadcaster (never written on the
 // sender's goroutine) and coalesced per target device to at most one per
-// olmDoorbellInterval. The event carries no sender, purpose or count.
+// olmDoorbellInterval. The event carries no sender, purpose or count. When a
+// slow reader's 16-slot queue is full the ring is dropped; that is harmless:
+// the client's fallback poll (5 s) drains the same deliveries.
 
 import (
 	"context"
@@ -40,34 +50,45 @@ const (
 	// Per account per window (2.5x one device).
 	olmAccountControlBegins   = 120
 	olmAccountAdmissionFrames = 300
-	olmAccountDrainFrames     = 300
 	// Control begins per (sender account, target device) per window.
 	olmControlsPerTarget = 12
-	keyLookups           = 60 // public key lookups per principal per window
-	olmDoorbellInterval  = 250 * time.Millisecond
-	eventOlmPending      = "olm_pending"
+	// MediaE2EEMaxVoice bounds an encrypted voice channel: each member rekeys
+	// with one control per other member device, so the cost grows with n^2.
+	MediaE2EEMaxVoice   = 64
+	keyLookups          = 60 // public key lookups per principal per window
+	olmDoorbellInterval = 250 * time.Millisecond
+	eventOlmPending     = "olm_pending"
 )
 
 // olmBudgets are the admission limiters of one server.
 type olmBudgets struct {
-	control, admission, drain                      *chatRateLimiter
-	accountControl, accountAdmission, accountDrain *chatRateLimiter
-	perTarget                                      *chatRateLimiter
+	control, admission, drain        *chatRateLimiter
+	accountControl, accountAdmission *chatRateLimiter
+	perTarget                        *chatRateLimiter
 }
 
 func newOlmBudgets() *olmBudgets {
 	return &olmBudgets{
 		control: newChatRateLimiter(olmControlBegins, olmBudgetWindow), admission: newChatRateLimiter(olmAdmissionFrames, olmBudgetWindow),
 		drain: newChatRateLimiter(olmDrainFrames, olmBudgetWindow), accountControl: newChatRateLimiter(olmAccountControlBegins, olmBudgetWindow),
-		accountAdmission: newChatRateLimiter(olmAccountAdmissionFrames, olmBudgetWindow), accountDrain: newChatRateLimiter(olmAccountDrainFrames, olmBudgetWindow),
-		perTarget: newChatRateLimiter(olmControlsPerTarget, olmBudgetWindow),
+		accountAdmission: newChatRateLimiter(olmAccountAdmissionFrames, olmBudgetWindow),
+		perTarget:        newChatRateLimiter(olmControlsPerTarget, olmBudgetWindow),
 	}
 }
 
 // both charges the device and the account budget (the account first, so a
 // refused account does not consume a device token).
-func both(device, account *chatRateLimiter, deviceKey, accountKey string, now time.Time) bool {
-	return account.allow(accountKey, now) && device.allow(deviceKey, now)
+func both(device, account *chatRateLimiter, deviceKey, accountKey string, now time.Time, deviceLimit, accountLimit int) bool {
+	// The device first: a device beyond its own cap never consumes the
+	// account (its siblings, e.g. the voice device, keep their share).
+	if !device.allowLimit(deviceKey, now, deviceLimit) {
+		return false
+	}
+	if !account.allowLimit(accountKey, now, accountLimit) {
+		device.refund(deviceKey, now)
+		return false
+	}
+	return true
 }
 
 // controlTarget is the single non-local target of a control manifest.
@@ -88,20 +109,48 @@ func (s *TCPServer) allowOlmAdmission(ctx context.Context, client *Client, a sto
 	b := s.olmBudget
 	now := time.Now()
 	device := a.Principal + "\x00" + a.Device
+	n := s.voiceRecipients(client)
+	controls := max(olmControlBegins, 2*n)
+	frames := max(olmAdmissionFrames, 6*n)
 	switch r.Action {
 	case "begin":
 		if r.Manifest != nil && r.Manifest.Purpose == "control" {
-			if s.clientInvisible(client) {
+			if !both(b.control, b.accountControl, device, a.Principal, now, controls, controls*5/2) {
 				return false
 			}
-			return b.perTarget.allow(a.Principal+"\x00"+controlTarget(r.Manifest), now) && both(b.control, b.accountControl, device, a.Principal, now)
+			// The client-chosen target is charged only after the caps passed.
+			if !b.perTarget.allow(a.Principal+"\x00"+controlTarget(r.Manifest), now) {
+				b.control.refund(device, now)
+				b.accountControl.refund(a.Principal, now)
+				return false
+			}
+			return true
 		}
 		return s.chatRate.allowLimit(a.Principal, now, s.chatActionLimit(ctx, client))
 	case "deliveries", "receive_ack":
-		return both(b.drain, b.accountDrain, device, a.Principal, now)
+		return b.drain.allow(device, now)
 	default:
-		return both(b.admission, b.accountAdmission, device, a.Principal, now)
+		return both(b.admission, b.accountAdmission, device, a.Principal, now, frames, frames*5/2)
 	}
+}
+
+// voiceRecipients is the number of other media devices in the client's
+// channel (the recipients of one rekey), bounded by MediaE2EEMaxVoice.
+func (s *TCPServer) voiceRecipients(client *Client) int {
+	if s.deps == nil || s.deps.State == nil || client == nil {
+		return 0
+	}
+	c, ok := s.deps.State.GetClient(client.ID)
+	if !ok || c.ChannelID <= 0 {
+		return 0
+	}
+	n := 0
+	for _, m := range s.deps.State.ChannelMembers(c.ChannelID) {
+		if m.ClientID != client.ID && m.MediaDevice != "" {
+			n++
+		}
+	}
+	return min(n, MediaE2EEMaxVoice)
 }
 
 func (s *TCPServer) clientInvisible(client *Client) bool {

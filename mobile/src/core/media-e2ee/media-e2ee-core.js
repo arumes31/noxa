@@ -232,7 +232,10 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                 pendingBinds.set(id, pid);
                 return { pending: true };
             }
-            if (ep.pid === pid && ep.ready) return { gen: ep.gen };
+            // A repeated bind reports the binding's state, so a page that lost
+            // the previous reply (timeout) adopts it instead of waiting for a
+            // first-frame event that was already sent (review P3-1).
+            if (ep.pid === pid && ep.ready) return { gen: ep.gen, authenticated: ep.authenticated };
             const changed = ep.pid !== pid;
             ep.ready = false; ep.gen++; ep.pid = pid; ep.authenticated = false;
             const gen = ep.gen;

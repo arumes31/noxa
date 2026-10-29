@@ -40,6 +40,8 @@ for (const [senderAPI, receiverAPI] of [["script", "script"], ["streams", "strea
             await source.setLocalDescription(await source.createOffer()); await sink.setRemoteDescription(source.localDescription);
             window.__receivers = sink.getTransceivers().map(t => t.receiver);
             for (const r of window.__receivers) await rx.bind(r, r.track.kind === "video" ? "pub|cam" : "pub|mic");
+            // The app (owner) enables output once the gate reports authentication.
+            for (const r of window.__receivers) rx.onAuthenticated(r, () => { r.track.enabled = true; });
             await sink.setLocalDescription(await sink.createAnswer()); await source.setRemoteDescription(sink.localDescription);
         }, [senderAPI, receiverAPI]);
         await expect.poll(() => page.evaluate(() => window.__pcs.map(pc => pc.connectionState))).toEqual(["connected", "connected"]);

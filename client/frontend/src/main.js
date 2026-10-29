@@ -2271,6 +2271,9 @@ function ensureVoiceForChannel() {
                 const track = receiver.track;
                 const trackID = remoteTrackID(state.pc, track);
                 if (!trackID) continue;
+                // Same gate as remote-media: nothing unauthenticated is attached.
+                const gate = channelMedia()?.media;
+                if (gate && !gate.authenticated(receiver)) { const pc = state.pc; gate.onAuthenticated(receiver, () => reconcileRemoteMedia(pc)); continue; }
                 const parsed = parseTrackID(trackID);
                 const publisher = state.clients.find(c => String(c.client_id) === parsed.clientID);
                 if (track.kind === "video") receiveStreamTrack(track, publisher, trackID);
@@ -2492,7 +2495,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         // Presentation gate (encrypted media): a new or rebound receiver is
         // neither attached nor enabled until its first authenticated frame.
         const gate = channelMedia()?.media;
-        if (gate && gate.authenticated(track) === false) { gate.onAuthenticated(track, () => reconcileRemoteMedia(pc)); return; }
+        if (gate && !gate.authenticated(track)) { gate.onAuthenticated(track, () => reconcileRemoteMedia(pc)); return false; }
         const { clientID, slot } = parseTrackID(trackID);
         const publisher = state.clients.find((c) => String(c.client_id) === clientID) || null;
         // Attribution follows the negotiated publisher track ID, not track.id.
@@ -2525,7 +2528,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
             voiceRemoteAudioTracks.delete(track);
             syncVoiceLinkMedia();
         }
-    }, (track, trackID) => channelMedia()?.media?.authenticated(track) !== false && (track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID)));
+    }, (track, trackID) => { const gate = channelMedia()?.media; return (!gate || gate.authenticated(track)) && (track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID)); });
 
     await renegotiate(pc, state.serverGeneration, undefined, () => expectedEpoch === voiceSessionEpoch);
 
