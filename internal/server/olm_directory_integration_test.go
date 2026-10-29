@@ -68,7 +68,7 @@ func TestIntegrationOlmDirectorySessionAuthority(t *testing.T) {
 		if e := srv.handleOlmDirectory(t.Context(), c, &netproto.Frame{Payload: raw}); e != nil {
 			t.Fatal(e)
 		}
-		f, e := netproto.ReadFrame(&conn.output)
+		f, e := readReplyFrame(&conn.output)
 		if e != nil {
 			t.Fatal(e)
 		}

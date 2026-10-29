@@ -270,7 +270,7 @@ func TestIntegrationRatchetProductNative(t *testing.T) {
 		if e != nil {
 			return nil, e
 		}
-		out, e := netproto.ReadFrame(&conn.output)
+		out, e := readReplyFrame(&conn.output)
 		if e != nil {
 			return nil, e
 		}

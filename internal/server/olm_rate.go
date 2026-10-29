@@ -37,6 +37,7 @@ const (
 	olmControlBegins   = 96  // control begins per window
 	olmAdmissionFrames = 240 // other admission actions per window
 	olmDrainFrames     = 120 // deliveries + receive_ack per window
+	keyLookups         = 60  // public key lookups per principal per window
 	olmBudgetWindow    = 10 * time.Second
 	olmAttemptMemory   = 4096
 	olmAttemptTTL      = 10 * time.Minute

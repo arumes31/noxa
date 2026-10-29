@@ -181,7 +181,7 @@ func TestIntegrationRatchetProductPWA(t *testing.T) {
 		if e = srv.handleOlmDirectory(ctx, d.client, &netproto.Frame{Type: uint16(netproto.MsgOlmDirectoryRequest), Payload: payload}); e != nil {
 			return e
 		}
-		f, e := netproto.ReadFrame(&conn.output)
+		f, e := readReplyFrame(&conn.output)
 		if e != nil {
 			return e
 		}
@@ -214,7 +214,7 @@ func TestIntegrationRatchetProductPWA(t *testing.T) {
 		if e != nil {
 			return nil, e
 		}
-		out, e := netproto.ReadFrame(&conn.output)
+		out, e := readReplyFrame(&conn.output)
 		if e != nil {
 			return nil, e
 		}

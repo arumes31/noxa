@@ -339,6 +339,7 @@ type TCPServer struct {
 	olmAdmissionRate      *chatRateLimiter
 	olmDrainRate          *chatRateLimiter
 	olmAttempts           olmAttemptMemo
+	keyLookupRate         *chatRateLimiter
 	previewOnce           sync.Once
 	previewService        *linkpreview.Service
 	spoolDelivery         [64]sync.Mutex
@@ -485,6 +486,7 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 		olmControlRate:      newChatRateLimiter(olmControlBegins, olmBudgetWindow),
 		olmAdmissionRate:    newChatRateLimiter(olmAdmissionFrames, olmBudgetWindow),
 		olmDrainRate:        newChatRateLimiter(olmDrainFrames, olmBudgetWindow),
+		keyLookupRate:       newChatRateLimiter(keyLookups, olmBudgetWindow),
 		cfg:                 cfg,
 		logger:              logger,
 		deps:                deps,

@@ -111,7 +111,7 @@ func TestIntegrationOlmAdmissionBrowser(t *testing.T) {
 		if e := srv.handleOlmAdmission(ctx, c, &netproto.Frame{Payload: encode(r)}); e != nil {
 			return netproto.OlmAdmissionResult{}, e
 		}
-		frame, e := netproto.ReadFrame(&conn.output)
+		frame, e := readReplyFrame(&conn.output)
 		if e != nil {
 			return netproto.OlmAdmissionResult{}, e
 		}
@@ -134,7 +134,7 @@ func TestIntegrationOlmAdmissionBrowser(t *testing.T) {
 		if e := srv.handleOlmDirectory(ctx, c, &netproto.Frame{Payload: encode(r)}); e != nil {
 			return e
 		}
-		f, e := netproto.ReadFrame(&conn.output)
+		f, e := readReplyFrame(&conn.output)
 		if e != nil {
 			return e
 		}

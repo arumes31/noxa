@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -139,4 +140,16 @@ func TestOlmDoorbellRingsOnlyTargetDevices(t *testing.T) {
 	}
 	// An unknown attempt rings nobody.
 	env.srv.ringOlmDoorbells("admin-uid", "dev-other", "nope")
+}
+
+// readReplyFrame reads a request's reply from a test connection, skipping
+// the content-free olm_pending doorbell that may be interleaved (production
+// readers dispatch frames by type; test bridges read the next frame).
+func readReplyFrame(r io.Reader) (*netproto.Frame, error) {
+	for {
+		f, err := netproto.ReadFrame(r)
+		if err != nil || f.Type != uint16(netproto.MsgEvent) || string(f.Payload) != `{"type":"olm_pending","data":{}}` {
+			return f, err
+		}
+	}
 }

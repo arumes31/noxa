@@ -439,10 +439,10 @@ try {
     const f1Claims = (await counts())["alice-phone/claim"] || 0;
     const f1Parked = await run("alice-phone", async () => {
         T.consumer.attemptTTL = 40; // expires (minus the 30 s margin) after ~10 s
-        try { return await T.dm.send("bob", "first contact parked", "", { id: "f1-abort" }).then(() => "sent", e => e.retryable); }
+        try { return await T.dm.send("bob", "first contact parked", "", { id: "f1-abort" }).then(() => "sent", e => (e.retryable === true ? true : `${e.code}: ${e.message}`)); }
         finally { T.consumer.attemptTTL = 300; }
     });
-    assert.equal(f1Parked, true);
+    assert.equal(f1Parked, true, String(f1Parked));
     assert.equal(((await counts())["alice-phone/claim"] || 0) - f1Claims, 1, "one claim for the new device");
     await new Promise(r => setTimeout(r, 11000));
     const f1 = await run("alice-phone", async () => {
