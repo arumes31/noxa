@@ -4,7 +4,7 @@
 ALTER TABLE olm_deliveries ADD COLUMN sender TEXT;
 ALTER TABLE olm_deliveries ADD COLUMN control BOOLEAN NOT NULL DEFAULT FALSE;
 UPDATE olm_deliveries d SET sender=m.sender,
-  control=(convert_from(m.manifest,'UTF8')::jsonb->>'purpose'='control')
+  control=COALESCE(convert_from(m.manifest,'UTF8')::jsonb->>'purpose'='control', FALSE)
   FROM olm_messages m WHERE m.id=d.message_id;
 CREATE INDEX olm_delivery_pending_recipient ON olm_deliveries(principal) WHERE state='pending';
 CREATE INDEX olm_delivery_pending_sender ON olm_deliveries(sender) WHERE state='pending';

@@ -88,7 +88,8 @@ export async function requestBackgroundSync() {
  * connection never swallows a new session's flush.
  */
 const flushing = new WeakMap();
-let heldTimer = 0;
+/** The Undo-hold re-flush timer per session (an old flush never clears a new session's). */
+const heldTimers = new WeakMap();
 
 /**
  * Writes an entry's new state back only while it is still queued: a flush of
@@ -215,8 +216,9 @@ export function flush(session, dm, groups = null) {
         } finally {
             flushing.delete(key);
         }
-        clearTimeout(heldTimer);
-        if (nextHeld < Infinity && session.conn?.open) heldTimer = setTimeout(() => flush(session, dm, groups).catch(() => {}), Math.max(50, nextHeld - Date.now() + 50));
+        clearTimeout(heldTimers.get(key));
+        heldTimers.delete(key);
+        if (nextHeld < Infinity && session.conn?.open) heldTimers.set(key, setTimeout(() => flush(session, dm, groups).catch(() => {}), Math.max(50, nextHeld - Date.now() + 50)));
         return sent;
     })();
     flushing.set(key, run);
