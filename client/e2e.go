@@ -115,6 +115,21 @@ func (a *App) E2EEDiagnostics(peerUniqueID string) (E2EEDiagnostics, error) {
 	if m == nil {
 		return E2EEDiagnostics{}, errors.New("not connected")
 	}
+	return m.e2eeDiagnostics(peerUniqueID)
+}
+
+// E2EEDiagnosticsForTab never resolves through the active-tab pointer. The
+// encryption tooltip may still be awaiting data while native tab activation
+// has already happened but its frontend reset event has not arrived yet.
+func (a *App) E2EEDiagnosticsForTab(tabID, peerUniqueID string) (E2EEDiagnostics, error) {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return E2EEDiagnostics{}, err
+	}
+	return m.e2eeDiagnostics(peerUniqueID)
+}
+
+func (m *connManager) e2eeDiagnostics(peerUniqueID string) (E2EEDiagnostics, error) {
 	d := E2EEDiagnostics{PeerUniqueID: peerUniqueID}
 	// Reported from the active path, never a static label.
 	if c, err := m.ratchetConsumerOn(nil); err == nil && c.stickyCode() == "" {

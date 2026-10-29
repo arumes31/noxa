@@ -150,7 +150,7 @@ test("actual poor playback appears separately from a healthy server ping and cle
     const badge = page.locator("#voice-playback-quality");
     await expect(badge).not.toHaveAttribute("title");
     await badge.focus();
-    const tooltip = page.getByRole("tooltip", { includeHidden: true });
+    const tooltip = page.locator("#voice-playback-tooltip");
     await expect(tooltip).toBeVisible();
     await expect(badge).toHaveAttribute("aria-describedby", await tooltip.getAttribute("id"));
     await expect(tooltip).toContainText("UDP · relay → host · TURN tcp");
@@ -201,7 +201,7 @@ test("voice tooltip preserves unknown measurements and fits a narrow German foot
     const badge = page.locator("#voice-playback-quality");
     await expect(badge).toHaveText("Sprache: Messung läuft");
     await badge.focus();
-    const tooltip = page.getByRole("tooltip", { includeHidden: true });
+    const tooltip = page.locator("#voice-playback-tooltip");
     await expect(tooltip).toBeVisible();
     await expect(tooltip).toContainText("Fehlende Messwerte bleiben unbekannt");
     await expect(tooltip).not.toContainText("UDP");

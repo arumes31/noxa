@@ -2,6 +2,7 @@ import { initMobileAnnouncement } from "./mobile-announcement.js";
 import { initReadSync } from "./read-sync.js";
 import { initWindowControls } from "./window-controls.js";
 import { setStatusIcon } from "./icons.js";
+import { createEncryptionTooltip } from "./encryption-tooltip.js";
 import { maintainRelay } from "./relay-renewal.js";
 import { manageAvatarPlayback } from "./avatar-playback.js";
 import { closeContextMenu } from "./context-menu.js";
@@ -1865,16 +1866,25 @@ function syncChannelMedia() {
 // Delivered media-key controls (authenticated ratchet controls; never chat,
 // activity, notifications or history).
 window.runtime.EventsOn("media_key", event => { receiveMediaKey(event); });
-onChannelMediaStatus(status => {
+const encryptionContext = () => ({ tabID: state.activeTabID, generation: state.serverGeneration, sessionGeneration: state.sessionGeneration });
+const connectionEncryptionTooltip = createEncryptionTooltip($("conn-lock"), { context: encryptionContext });
+const voiceEncryptionTooltip = createEncryptionTooltip($("voice-e2ee"), { context: encryptionContext, voiceOnly: true });
+for (const event of ["tab_reset", "disconnected", "tab_disconnected"]) window.runtime.EventsOn(event, () => {
+    connectionEncryptionTooltip.close();
+    voiceEncryptionTooltip.close();
+});
+export function renderVoiceEncryptionStatus(status) {
     const element = $("voice-e2ee");
     if (!element) return;
     const text = mediaStatusText(status);
-    element.textContent = text;
+    setStatusIcon(element, "lock", text || t("security.details.title"));
     element.hidden = !text;
     element.dataset.state = status?.state || "off";
-    element.title = text ? t("e2ee.media.limits") : "";
+    connectionEncryptionTooltip.update();
+    voiceEncryptionTooltip.update();
     videoRefreshNames(); // tiles follow the verified key accounts
-});
+}
+onChannelMediaStatus(renderVoiceEncryptionStatus);
 
 // ---------------------------------------------------------------------------
 // Channel tree
