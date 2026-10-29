@@ -114,8 +114,14 @@ export function mergeGroupMessages(legacy = [], rows = []) {
     return out;
 }
 
-/** Locked placeholder rows for quarantined copies of one conversation. */
+/**
+ * Locked placeholder rows for quarantined copies of one conversation. The
+ * placeholder's sender, peer and conversation come from the unauthenticated
+ * manifest (the copy could not be opened), so a row never names a sender:
+ * callers label it neutrally and show it only in a conversation that already
+ * exists.
+ */
 export function quarantineRows(placeholders = [], { scope, peer = "", conversation = "" }) {
     return placeholders.filter(q => q?.scope === scope && (scope === "direct" ? q.peer === peer : q.conversation === conversation))
-        .map(q => ({ id: "quarantine:" + text(q.id), protocol: RATCHET_PROTOCOL, fromUID: text(q.sender), code: text(q.code), ts: Math.round((Number(q.seen_at) || 0) * 1000) }));
+        .map(q => ({ id: "quarantine:" + text(q.id), protocol: RATCHET_PROTOCOL, code: text(q.code), ts: Math.round((Number(q.seen_at) || 0) * 1000) }));
 }

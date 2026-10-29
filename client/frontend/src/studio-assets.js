@@ -101,7 +101,11 @@ function openStore(indexedDB, name) {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(name, 1);
         request.onupgradeneeded = () => request.result.createObjectStore("assets");
-        request.onsuccess = () => resolve(request.result);
+        request.onsuccess = () => {
+            // A deletion (identity deletion wipes the store) is never blocked.
+            request.result.onversionchange = () => request.result.close();
+            resolve(request.result);
+        };
         request.onerror = () => reject(request.error);
     });
 }

@@ -7,6 +7,15 @@ async function source(path) {
 }
 
 describe("Batch 7C frontend hardening contracts", () => {
+    // Review task 4 P3-4: the page never connects to another host itself (the
+    // native side owns every network connection), so injected script cannot
+    // exfiltrate media keys or messages with fetch/WebSocket.
+    it("restricts connect-src to the app itself", async () => {
+        const html = await source("../index.html");
+        const connect = html.match(/connect-src ([^;]*);/)?.[1] || "";
+        assert.equal(connect, "'self' blob: data:");
+        assert.doesNotMatch(connect, /https:|wss:|ws:|http:|\*/);
+    });
     it("opens About links externally and makes late version updates harmless", async () => {
         const menu = await source("../src/menu.js");
         assert.match(menu, /https:\/\/github\.com\/arumes31\/noxa/);

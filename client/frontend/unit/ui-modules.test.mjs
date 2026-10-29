@@ -351,6 +351,44 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal(chat.qsScore("zzz", "Alpha"), -1);
     });
 
+    // P3-7: a locked placeholder's sender/peer/conversation come from the
+    // unauthenticated manifest: it is labelled neutrally, never names the
+    // claimed sender and never creates a conversation.
+    await t.test("chat quarantine placeholders are neutral and never create a conversation", async (t) => {
+        const events = [];
+        replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } }, dispatchEvent: event => events.push(event.type) });
+        const chat = await import("../src/chat-ui.js");
+        const q = { id: "d1", sender: "ceo", code: "invalid", scope: "direct", peer: "mallory", seen_at: 5 };
+        const row = chat.quarantinePlaceholder(q);
+        assert.equal(row.fromUID, "");
+        assert.equal(row.from, "Unverified sender");
+        assert.doesNotMatch(JSON.stringify(row), /ceo|mallory/);
+        chat.onRatchetQuarantine({ placeholders: [q] });
+        assert.equal(chat.directStoreForTest("mallory"), null, "no conversation is created from a placeholder");
+        assert.deepEqual(events, ["noxa-ratchet-quarantine"]);
+        // An existing conversation with that peer shows the neutral row.
+        chat.directStoreForTest("bob", true).msgs.push({ id: 0, clientMsgID: "m1", fromUID: "bob", text: "hi" });
+        chat.onRatchetQuarantine({ placeholders: [{ ...q, peer: "bob" }] });
+        const shown = chat.directStoreForTest("bob").msgs.filter(m => m.quarantined);
+        assert.equal(shown.length, 1);
+        assert.equal(shown[0].fromUID, "");
+        assert.equal(shown[0].from, "Unverified sender");
+        // Malformed or non-direct placeholders are ignored; codes keep their text.
+        chat.onRatchetQuarantine({ placeholders: [{ ...q, peer: "bob" }, { ...q, id: "" , peer: "bob" }, { ...q, id: "g1", scope: "group", conversation: "g" },
+            { ...q, id: "x1", peer: 7 }, null, { ...q, id: "d2", peer: "bob", code: "fenced_copy", seen_at: undefined }, { ...q, id: "d3", peer: "bob", code: "lost_key", seen_at: 0 }] });
+        const locked = chat.directStoreForTest("bob").msgs.filter(m => m.quarantined);
+        assert.deepEqual(locked.map(m => m.clientMsgID).sort(), ["quarantine:d1", "quarantine:d2", "quarantine:d3"]);
+        assert.equal(locked.find(m => m.clientMsgID === "quarantine:d2").text, chat.quarantineText("fenced_copy"));
+        assert.equal(locked.find(m => m.clientMsgID === "quarantine:d3").text, chat.quarantineText("lost_key"));
+        assert.ok(locked.every(m => m.ts > 0 && m.fromUID === ""));
+        chat.onRatchetQuarantine(null);
+        assert.equal(chat.directStoreForTest("bob").msgs.some(m => m.quarantined), false);
+        chat.onRatchetQuarantine({ placeholders: [{ ...q, peer: "bob" }] });
+        // Gone from the list: the row disappears.
+        chat.onRatchetQuarantine({ placeholders: [] });
+        assert.equal(chat.directStoreForTest("bob").msgs.some(m => m.quarantined), false);
+    });
+
     await t.test("chat notifications never carry attachment keys or unopened bodies", async (t) => {
         replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });
         const chat = await import("../src/chat-ui.js");

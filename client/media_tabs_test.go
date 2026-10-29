@@ -55,7 +55,7 @@ func TestVoiceOfferRetainsCapturedTab(t *testing.T) {
 	defer unblock()
 	app, cm := newPipedApp(t, func(f *netproto.Frame) (netproto.MessageType, any, bool) {
 		var offer netproto.WebRTCOffer
-		if err := netproto.Decode(f, &offer); err != nil || offer.SDP != "original offer" || len(offer.Tracks) != 1 || offer.Tracks[0].Slot != "mic" {
+		if err := netproto.Decode(f, &offer); err != nil || offer.SDP != "original offer" || len(offer.Tracks) != 1 || offer.Tracks[0].Slot != "mic" || offer.MediaE2EE != netproto.MediaE2EEVersion {
 			t.Errorf("offer = %+v, %v", offer, err)
 		}
 		close(entered)
@@ -70,7 +70,7 @@ func TestVoiceOfferRetainsCapturedTab(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		sdp, err := app.WebRTCOfferForTab("a", "original offer", []netproto.TrackSlot{{TrackID: "audio", Slot: "mic"}})
+		sdp, err := app.WebRTCOfferSecureForTab("a", "original offer", []netproto.TrackSlot{{TrackID: "audio", Slot: "mic"}}, netproto.MediaE2EEVersion)
 		done <- result{sdp, err}
 	}()
 	select {

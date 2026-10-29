@@ -54,7 +54,7 @@ test.beforeEach(async ({ page }) => {
             myClientID: "self", clients: [{ client_id: "peer", channel_id: 1 }] },
             $: id => document.getElementById(id), sysMsg: message => window.__media.errors.push(message),
             toast: message => window.__media.notices.push(message) };
-        window.go = { main: { App: { WebRTCOfferForTab: async (tab, _sdp, slots) => {
+        window.go = { main: { App: { ChannelOfferMockForTab: async (tab, _sdp, slots) => {
             if (tab !== "media-tab") throw new Error("wrong server tab");
             if (window.__media.failOffer) throw new Error("offer rejected");
             window.__media.offers.push(slots);
@@ -94,7 +94,7 @@ test.beforeEach(async ({ page }) => {
         // Encrypted channel media (Task 2): these stand-in peers carry no
         // encoded transforms, so negotiation runs with the session double;
         // offers go through the secure binding.
-        window.go.main.App.WebRTCOfferSecureForTab = (tab, sdp, slots) => window.go.main.App.WebRTCOfferForTab(tab, sdp, slots);
+        window.go.main.App.WebRTCOfferSecureForTab = (tab, sdp, slots) => window.go.main.App.ChannelOfferMockForTab(tab, sdp, slots);
         const channelMedia = await import("/src/channel-media.js");
         const standIn = () => ({ active: true, media: { authenticated: () => true, onAuthenticated() {} }, identity: { channelID: 1 }, async start() { return this; }, stop() { this.active = false; }, setRoster() {}, protectPeer: pc => pc,
             peerConfig: c => c, bindSenders: async () => {}, syncReceivers: async () => {}, rescope() {}, publicationsChanged() {}, receive: () => ({ ok: false }), status: () => ({ state: "encrypted" }) });
@@ -665,7 +665,7 @@ test("offer collision answers the pending server offer before retrying the same 
         pc.setLocalDescription = async description => { calls.push(description.type === "offer" ? "local-offer" : description.type); };
         pc.setRemoteDescription = async description => { calls.push(`remote-${description.type}`); };
         let attempt = 0;
-        window.go.main.App.WebRTCOfferForTab = async () => {
+        window.go.main.App.ChannelOfferMockForTab = async () => {
             calls.push("offer-write");
             if (++attempt === 1) {
                 window.__media.pendingAnswer = video.answerRemoteOffer(pc, 1, identity);

@@ -775,24 +775,14 @@ func (a *App) WhisperSet(uniqueIDs []string, channelIDs []int64, active bool) st
 	return cm.mediaControl(netproto.MediaControlSaved{Operation: netproto.MsgWhisperSet, UniqueIDs: uniqueIDs, ChannelIDs: channelIDs, Active: active})
 }
 
-// WebRTCOffer sends the browser's SDP offer and returns the server's answer.
-// tracks declares which slot every outbound track occupies (70): the router
-// carries one source per slot, so an undeclared second audio track would
-// contend with the microphone for the default slot and one of them would be
-// dropped. The declaration REPLACES the previous one, so every offer must
-// carry the complete list.
-func (a *App) WebRTCOffer(sdp string, tracks []netproto.TrackSlot) (string, error) {
-	cm, err := a.requireCM()
-	if err != nil {
-		return "", err
-	}
-	return cm.webRTCOffer(sdp, tracks)
-}
-
-func (cm *connManager) webRTCOffer(sdp string, tracks []netproto.TrackSlot) (string, error) {
-	return cm.webRTCOfferWith(netproto.WebRTCOffer{SDP: sdp, Tracks: tracks})
-}
-
+// webRTCOfferWith sends the browser's SDP offer and returns the server's
+// answer. The offer's tracks declare which slot every outbound track occupies
+// (70): the router carries one source per slot, so an undeclared second audio
+// track would contend with the microphone for the default slot and one of
+// them would be dropped. The declaration REPLACES the previous one, so every
+// offer must carry the complete list. Channel media is end-to-end encrypted
+// only: the one bridge is WebRTCOfferSecureForTab (media_e2ee.go); there is
+// no plaintext offer method.
 func (cm *connManager) webRTCOfferWith(offer netproto.WebRTCOffer) (string, error) {
 	f, err := cm.request(netproto.MsgWebRTCOffer, netproto.MsgWebRTCAnswer, offer, 10*time.Second)
 	if err != nil {

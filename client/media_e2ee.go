@@ -83,6 +83,10 @@ func (m *connManager) sendMediaKey(req MediaKeyRequest) (MediaKeyResult, error) 
 	if req.Kind != mediaKeyControlKind || len(req.Data) == 0 {
 		return MediaKeyResult{Code: "invalid"}, errors.New("invalid")
 	}
+	// Only to a current media device of this session's own voice channel.
+	if err := m.checkMediaKeyTarget(req); err != nil {
+		return MediaKeyResult{Code: "not_recipient"}, err
+	}
 	out, err := m.SendRatchetControl(RatchetControlIntent{LogicalID: req.LogicalID, Principal: req.Principal, Device: req.Device,
 		Body: admission.ControlBody{Kind: req.Kind, Scope: req.Scope, Epoch: req.Epoch, ExpiresAt: req.ExpiresAt, Data: req.Data}})
 	if err != nil {

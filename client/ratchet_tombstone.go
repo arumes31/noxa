@@ -77,6 +77,7 @@ func (a *App) destroyRatchetNamespaces(id *identity) error {
 func (a *App) deleteIdentityWithStores(id *identity, identityPath string) error {
 	bases := a.ratchetBases()
 	sweepRatchetTombstones(bases)
+	a.sweepIdentityLocalTombs()
 	unlock := lockRatchetIdentity(id.PublicKey)
 	defer unlock()
 	ratchetDeleted.Store(id.PublicKey, true)
@@ -102,11 +103,19 @@ func (a *App) deleteIdentityWithStores(id *identity, identityPath string) error 
 		}
 	}
 	var moved []move
+	localTomb := "" // the identity's local data (identity_local_data.go)
 	rollback := func(cause error) error {
 		var lost []string
 		for _, mv := range moved {
 			if err := os.Rename(mv.tomb, mv.dir); err != nil {
 				lost = append(lost, mv.tomb)
+			}
+		}
+		// Moved back before the write fence is lifted; a failure leaves the
+		// .deleted- tombstone, which the next sweep restores (identity live).
+		if localTomb != "" {
+			if err := a.restoreLocalTomb(localTomb); err != nil {
+				lost = append(lost, localTomb)
 			}
 		}
 		restoreRatchetIdentity(id.PublicKey) // the identity survives
@@ -156,12 +165,23 @@ func (a *App) deleteIdentityWithStores(id *identity, identityPath string) error 
 		}
 		moved = append(moved, move{dir, tomb})
 	}
+	// The identity's DM history, outbox and other local data join the same
+	// commit point (their writers are fenced by ratchetDeleted).
+	var localErr error
+	if localTomb, localErr = a.tombstoneIdentityLocalData(id); localErr != nil {
+		return rollback(fmt.Errorf("local data of this identity could not be moved for deletion: %w", localErr))
+	}
 	// Another noxa process may have restored a tombstone meanwhile (the
 	// identity locks are per process): never commit over that.
 	ratchetDeletionHook("before-commit", movedPairs(moved))
 	for _, mv := range moved {
 		if _, err := os.Lstat(mv.tomb); err != nil {
 			return rollback(errors.New("secure message store of this identity was reopened by another noxa window or process; close it and try again"))
+		}
+	}
+	if localTomb != "" {
+		if _, err := os.Lstat(localTomb); err != nil {
+			return rollback(errors.New("local data of this identity was restored by another noxa window or process; close it and try again"))
 		}
 	}
 	if identityPath != "" {
@@ -187,6 +207,9 @@ func (a *App) deleteIdentityWithStores(id *identity, identityPath string) error 
 		if !eraseCommittedTombstone(mv.tomb) {
 			retry = true
 		}
+	}
+	if localTomb != "" && !eraseLocalTomb(localTomb) {
+		retry = true
 	}
 	// Stores kept aside (.conflict-) belong to this identity too.
 	for base := range bases {
@@ -471,6 +494,7 @@ func (a *App) sweepRatchetStoresIn(bases map[string]bool) {
 	a.identityMu.Lock()
 	defer a.identityMu.Unlock()
 	sweepRatchetTombstones(bases)
+	a.sweepIdentityLocalTombs()
 }
 
 // finishRatchetDeletion runs before a key that is not stored is imported
@@ -490,6 +514,11 @@ func (a *App) finishRatchetDeletion(publicKey string) error {
 	key := ratchetStoreKey(publicKey)
 	if live[key] {
 		return nil
+	}
+	// The deleted key's DM history, outbox and other local data never come
+	// back either.
+	if err := a.finishIdentityLocalDeletion(publicKey, complete); err != nil {
+		return err
 	}
 	unlock := lockRatchetStore(key)
 	defer unlock()

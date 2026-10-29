@@ -6062,7 +6062,7 @@ test.beforeEach(async ({ page }) => {
                 // worker; keys go nowhere (no peers), offers keep their per-suite mock.
                 if (nativeMethod === "WebRTCOfferSecureForTab") return async (tab, sdp, slots) => {
                     (window.__secureOffers ||= []).push(slots);
-                    return window.go.main.App.WebRTCOfferForTab(tab, sdp, slots);
+                    return window.go.main.App.ChannelOfferMockForTab(tab, sdp, slots);
                 };
                 if (nativeMethod === "MediaE2EEStatusForTab") return async () => (window.__mediaE2EEStatus || { supported: true, principal: "self", device: "dev-self", client_id: window.__activeClient || "client-a" });
                 if (nativeMethod === "SendMediaKeyForTab") return async () => ({ state: "accepted" });
@@ -6633,7 +6633,7 @@ test("server recovery restores real voice when ICE arrives before its answer", a
             if (key === "SendICECandidateForTab") return async (_tab, candidate, sdpMid, sdpMLineIndex) => {
                 await remote.addIceCandidate({ candidate, sdpMid, sdpMLineIndex });
             };
-            if (key !== "WebRTCOfferForTab") return target[key];
+            if (key !== "ChannelOfferMockForTab") return target[key];
             return async (_tab, sdp) => {
                 remote = new originalPeer();
                 window.__recoveryRemote = remote;
@@ -6817,7 +6817,7 @@ test("retries a missing or disconnected microphone without interrupting video or
         sharing: window.__noxa.state.screenSharing,
         shareTracksStopped: window.__shareTracksStopped,
         unpublishedShare: window.__calls.SetScreenShareForTab || 0,
-        slots: window.__callArgs.WebRTCOfferForTab.at(-1)[2].map(({ slot }) => slot),
+        slots: window.__callArgs.ChannelOfferMockForTab.at(-1)[2].map(({ slot }) => slot),
     }))).toEqual({
         samePeerConnection: true,
         audioTracks: 1,
@@ -6874,7 +6874,7 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
         window.__cameraRemote = new RTCPeerConnection();
         window.go.main.App = new Proxy(app, {
             get(target, key) {
-                if (key !== "WebRTCOfferForTab") return target[key];
+                if (key !== "ChannelOfferMockForTab") return target[key];
                 return async (_tab, sdp) => {
                     await window.__cameraRemote.setRemoteDescription({ type: "offer", sdp });
                     const answer = await window.__cameraRemote.createAnswer();
@@ -7028,7 +7028,7 @@ async function installMediaUpdateFixture(page) {
                 if (fixture.holdRead) return await new Promise(resolve => { fixture.finishRead = resolve; });
                 return { ...fixture.limits };
             };
-            if (key === "WebRTCOfferForTab") return async tab => {
+            if (key === "ChannelOfferMockForTab") return async tab => {
                 if (tab !== "limit-tab") throw new Error("wrong offer tab");
                 if (window.__mediaUpdate.failOffer) throw new Error("offer failure");
                 if (window.__mediaUpdate.holdOffer) await new Promise(resolve => { window.__mediaUpdate.finishOffer = resolve; });
@@ -9195,7 +9195,7 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
         import("/src/channel-media.js").then(m => m.useChannelMediaSession(window.__standInMedia()));
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, key) {
-            if (key !== "WebRTCOfferForTab") return target[key];
+            if (key !== "ChannelOfferMockForTab") return target[key];
             return async (_tab, sdp) => {
                 await window.__shareRemote.setRemoteDescription({ type: "offer", sdp });
                 const answer = await window.__shareRemote.createAnswer();

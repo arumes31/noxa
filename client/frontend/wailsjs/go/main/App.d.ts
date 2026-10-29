@@ -599,10 +599,6 @@ export function WebRTCAnswer(arg1:string):Promise<void>;
 
 export function WebRTCAnswerForTab(arg1:string,arg2:string):Promise<void>;
 
-export function WebRTCOffer(arg1:string,arg2:Array<netproto.TrackSlot>):Promise<string>;
-
-export function WebRTCOfferForTab(arg1:string,arg2:string,arg3:Array<netproto.TrackSlot>):Promise<string>;
-
 export function WebhookForTab(arg1:string,arg2:netproto.WebhookRequest):Promise<netproto.WebhookResult>;
 
 export function WhatsNew():Promise<string>;

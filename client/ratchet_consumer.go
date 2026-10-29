@@ -100,6 +100,9 @@ type RatchetOutcome struct {
 
 // RatchetQuarantine is a truthful placeholder for a copy that could not be
 // opened. It is never ACKed and never decoded as legacy.
+// Sender, Peer and Conversation are the UNAUTHENTICATED manifest claim (the
+// copy could not be opened): the UI never names the sender from them and
+// never creates a conversation for a placeholder.
 type RatchetQuarantine struct {
 	ID           string  `json:"id"`
 	Sender       string  `json:"sender"`

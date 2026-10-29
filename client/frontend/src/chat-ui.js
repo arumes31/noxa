@@ -1076,25 +1076,42 @@ export function quarantineText(code) {
     if (code === "lost_key") return t("quarantine.lostKey");
     return t("quarantine.unverified");
 }
-export function onRatchetQuarantine(d) {
-    const list = Array.isArray(d?.placeholders) ? d.placeholders : [];
+// A placeholder's sender, peer and conversation are unauthenticated manifest
+// metadata (the copy could not be opened): a placeholder is labelled
+// neutrally, never attributed to a sender, and only shown in a direct
+// conversation that already exists (an open tab or loaded messages); it never
+// creates one.
+let ratchetPlaceholders = [];
+export function quarantinePlaceholder(q) {
+    return { id: 0, localSeq: 0, protocol: RATCHET_PROTOCOL, from: t("quarantine.sender"), fromUID: "",
+        text: quarantineText(q.code), ts: Math.round((Number(q.seen_at) || Date.now() / 1000) * 1000), edited: false, deleted: false,
+        reactions: null, mentions: [], e2e: false, direct: true, enc: false, encVerified: false, encMode: "", quarantined: q.code || "",
+        offline: false, clientMsgID: "quarantine:" + q.id, channelID: null, self: false, mentioned: false };
+}
+function applyQuarantinePlaceholders() {
     const current = new Set();
-    for (const q of list) {
-        if (q?.scope !== "direct" || !q.peer || !q.id) continue;
+    for (const q of ratchetPlaceholders) {
+        if (q?.scope !== "direct" || typeof q.peer !== "string" || !q.peer || !q.id) continue;
+        const key = "dm:" + q.peer;
+        // No conversation with this peer yet: a placeholder never creates one.
+        if (!pmTabs.has(q.peer) && !store.get(key)?.msgs.some((x) => !x.quarantined)) continue;
         const id = "quarantine:" + q.id;
         current.add(id);
-        const st = getStore("dm:" + q.peer);
-        if (st.msgs.some((x) => x.clientMsgID === id)) continue;
-        pushMsg("dm:" + q.peer, { id: 0, localSeq: 0, protocol: RATCHET_PROTOCOL, from: knownPeerName(q.sender, "") || q.sender || "?", fromUID: q.sender || "",
-            text: quarantineText(q.code), ts: Math.round((Number(q.seen_at) || Date.now() / 1000) * 1000), edited: false, deleted: false,
-            reactions: null, mentions: [], e2e: false, direct: true, enc: false, encVerified: false, encMode: "", quarantined: q.code || "",
-            offline: false, clientMsgID: id, channelID: null, self: false, mentioned: false });
+        if (!getStore(key).msgs.some((x) => x.clientMsgID === id)) pushMsg(key, quarantinePlaceholder(q));
     }
     for (const [key, st] of store) {
         if (!key.startsWith("dm:")) continue;
         const keep = st.msgs.filter((x) => !x.quarantined || current.has(x.clientMsgID));
         if (keep.length !== st.msgs.length) st.msgs = keep;
     }
+}
+// Test view of one direct conversation's in-memory store (create: start an
+// empty one, as an opened conversation would).
+export function directStoreForTest(uid, create = false) { return create ? getStore("dm:" + uid) : store.get("dm:" + uid) || null; }
+export function onRatchetQuarantine(d) {
+    const list = Array.isArray(d?.placeholders) ? d.placeholders : [];
+    ratchetPlaceholders = list;
+    applyQuarantinePlaceholders();
     if (view.kind === "dm") renderView();
     window.dispatchEvent(new CustomEvent("noxa-ratchet-quarantine", { detail: list }));
 }
@@ -2388,6 +2405,8 @@ async function ensureDMHistory(uid) {
         const older = (rows || []).map((e) => dmMsg(e, nick))
             .filter((m) => !m.clientMsgID || !live.has(liveKey(m)));
         st.msgs = older.concat(st.msgs);
+        // The conversation exists now: its locked placeholders may show.
+        applyQuarantinePlaceholders();
         const tab = pmTabs.get(uid);
         if (tab) tab.nick = knownPeerName(uid);
         renderTabs();

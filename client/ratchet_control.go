@@ -138,7 +138,9 @@ func (m *connManager) OnRatchetControl(fn func(RatchetControl)) {
 func (m *connManager) dispatchRatchetControl(ctl RatchetControl) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.ratchetControls) == 0 {
+	// No handler, or the connection it arrived on is gone (detachLocked
+	// dropped its queue): not delivered.
+	if len(m.ratchetControls) == 0 || m.conn == nil || m.closed {
 		return
 	}
 	m.controlQueue = append(m.controlQueue, ctl)

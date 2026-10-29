@@ -124,6 +124,8 @@ type dmHistoryStore struct {
 	dir       string
 	publicKey [32]byte
 	key       [32]byte
+	// identityKey fences writes once the identity is deleted.
+	identityKey string
 }
 
 func (a *App) captureDMHistory() (dmHistoryStore, error) {
@@ -147,7 +149,7 @@ func dmHistoryStoreForIdentity(dir string, id *identity) (dmHistoryStore, error)
 	if err != nil {
 		return dmHistoryStore{}, err
 	}
-	return dmHistoryStore{dir: dir, publicKey: pub, key: key}, nil
+	return dmHistoryStore{dir: dir, publicKey: pub, key: key, identityKey: id.PublicKey}, nil
 }
 
 // dmHistoryPath names a peer's log from a hash of (own public key, peer), so
@@ -204,6 +206,9 @@ func (s dmHistoryStore) open(blob []byte) (dmLog, error) {
 // save seals and writes a peer's log, trimming it to the newest
 // dmHistoryMax messages.
 func (s dmHistoryStore) save(l dmLog) error {
+	if identityDeleted(s.identityKey) {
+		return errIdentityDeleted
+	}
 	if n := len(l.Messages); n > dmHistoryMax {
 		l.Messages = append([]DMEntry(nil), l.Messages[n-dmHistoryMax:]...)
 	}

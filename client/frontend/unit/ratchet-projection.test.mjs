@@ -59,6 +59,8 @@ test("quarantine placeholders are locked rows scoped to their conversation", () 
     assert.deepEqual(quarantineRows(q, { scope: "direct", peer: "bob" }).map(r => [r.id, r.code]), [["quarantine:d1", "lost_key"]]);
     assert.deepEqual(quarantineRows(q, { scope: "group", conversation: "g" }).map(r => r.id), ["quarantine:d2"]);
     assert.deepEqual(quarantineRows(q, { scope: "direct", peer: "carol" }), []);
+    // The claimed sender is unauthenticated: never carried into a row (P3-7).
+    assert.equal(quarantineRows(q, { scope: "group", conversation: "g" }).some(r => "fromUID" in r || JSON.stringify(r).includes("carol")), false);
 });
 
 test("own group changes apply only once accepted", () => {

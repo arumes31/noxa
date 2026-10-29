@@ -71,15 +71,15 @@ test.beforeEach(async ({ page }) => {
         };
         const localStream = new MediaStream();
         window.__noxa = { state: { pc, localStream, serverGeneration: 1, activeTabID: "studio-tab", settings: {}, myChannelID: 1,
-            myClientID: "self", clients: [{ client_id: "peer", channel_id: 1 }], mediaLimits: { video_max_width: 1280, video_max_height: 720, video_max_bitrate: 0 } },
+            myClientID: "self", myUniqueID: "uid-a", clients: [{ client_id: "peer", channel_id: 1 }], mediaLimits: { video_max_width: 1280, video_max_height: 720, video_max_bitrate: 0 } },
         $: id => document.getElementById(id), sysMsg: message => window.__pub.controls.push(["sys", message]), toast: message => window.__pub.controls.push(["toast", message]) };
         window.go = { main: { App: {
-            WebRTCOfferForTab: async (tab, _sdp, slots) => { window.__pub.offers.push(slots); return "answer"; },
+            ChannelOfferMockForTab: async (tab, _sdp, slots) => { window.__pub.offers.push(slots); return "answer"; },
             VideoStreamControlForTab: async (tab, msg) => { window.__pub.controls.push(["control", msg.action, msg.slot, msg.active]); return { ...msg, generation: "1", streams: [] }; },
             SetVideoQualityForTab: async () => "",
             AcquireDisplayCaptureLease: async () => "lease", RefreshDisplayCaptureLease: async () => {}, ReleaseDisplayCaptureLease: async () => {},
         } } };
-        window.go.main.App.WebRTCOfferSecureForTab = (tab, sdp, slots) => window.go.main.App.WebRTCOfferForTab(tab, sdp, slots);
+        window.go.main.App.WebRTCOfferSecureForTab = (tab, sdp, slots) => window.go.main.App.ChannelOfferMockForTab(tab, sdp, slots);
         const channelMedia = await import("/src/channel-media.js");
         const standIn = () => ({ active: true, media: { authenticated: () => true, onAuthenticated() {} }, identity: { channelID: 1 }, async start() { return this; }, stop() { this.active = false; }, setRoster() {}, protectPeer: p => p,
             peerConfig: c => c, bindSenders: async () => {}, syncReceivers: async () => {}, rescope() {}, publicationsChanged() {}, receive: () => ({ ok: false }), status: () => ({ state: "encrypted" }) });
@@ -549,8 +549,39 @@ test("images: PNG renders from local bytes, SVG and oversize files are refused",
     await open(page);
     await expectPixel(page, "preview", BLUE);
     expect(await page.evaluate(() => window.__captures.displayCalls + window.__captures.cameraCalls)).toBe(0);
-    const stored = await page.evaluate(() => localStorage.getItem("noxa.studio.v1"));
+    const stored = await page.evaluate(() => localStorage.getItem("noxa.studio.v1:uid-a"));
     expect(stored).not.toContain("capture");
+});
+
+// P3-5: the layout and images belong to one identity: another identity on
+// this device starts empty, identity deletion wipes them, and the unscoped
+// layout of older builds is dropped rather than handed to whoever opens next.
+test("the Studio layout and images are scoped per identity and wiped on identity deletion", async ({ page }) => {
+    await page.evaluate(() => localStorage.setItem("noxa.studio.v1", JSON.stringify({ legacy: true })));
+    let studio = await open(page);
+    await studio.getByRole("button", { name: "Add scene" }).click();
+    const png = await page.evaluate(async () => {
+        const canvas = new OffscreenCanvas(16, 9); canvas.getContext("2d").fillRect(0, 0, 16, 9);
+        return [...new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer())];
+    });
+    await studio.locator(".studio-image-file").setInputFiles({ name: "mine.png", mimeType: "image/png", buffer: Buffer.from(png) });
+    await expect(studio.locator(".studio-source-name-label")).toHaveText("mine.png");
+    const databases = () => page.evaluate(async () => (await indexedDB.databases()).map(d => d.name).filter(n => n.startsWith("noxa-studio")).sort());
+    await expect.poll(databases).toEqual(["noxa-studio:uid-a"]);
+    expect(await page.evaluate(() => localStorage.getItem("noxa.studio.v1"))).toBe(null);
+    expect(await page.evaluate(() => localStorage.getItem("noxa.studio.v1:uid-a"))).toContain("mine.png");
+    // Another identity sees nothing of it.
+    await page.evaluate(() => { window.__studio.disposeStudio(); window.__noxa.state.myUniqueID = "uid-b"; });
+    studio = await open(page);
+    await expect(studio.locator(".studio-source-name-label")).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem("noxa.studio.v1:uid-b") ?? "")).not.toContain("mine.png");
+    // Deleting identity A wipes its layout and images; B keeps its own.
+    await page.evaluate(() => { window.__studio.disposeStudio(); window.__noxa.state.myUniqueID = "uid-a"; });
+    await open(page);
+    await page.evaluate(async () => { (await import("/src/security-settings.js")).forgetIdentityStudio("uid-a"); });
+    await expect.poll(() => page.evaluate(() => !!window.__studio.studioSessionForTest())).toBe(false);
+    await expect.poll(databases).not.toContain("noxa-studio:uid-a");
+    expect(await page.evaluate(() => localStorage.getItem("noxa.studio.v1:uid-a"))).toBe(null);
 });
 
 test("keyboard, accessibility and compact layout", async ({ page }) => {
@@ -691,7 +722,7 @@ test("an image added and removed in the same session is pruned from local storag
         return [...new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer())];
     });
     const keys = () => page.evaluate(() => new Promise(resolve => {
-        const request = indexedDB.open("noxa-studio", 1);
+        const request = indexedDB.open("noxa-studio:uid-a", 1);
         request.onupgradeneeded = () => request.result.createObjectStore("assets");
         request.onsuccess = () => { const db = request.result; const r = db.transaction("assets").objectStore("assets").getAllKeys(); r.onsuccess = () => { db.close(); resolve(r.result.length); }; };
     }));

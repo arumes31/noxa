@@ -3,13 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -148,16 +146,14 @@ func (m *connManager) peerPinPath(uid string) (string, string, error) {
 	if err != nil || server == "" {
 		return "", "", errors.New("server identity unavailable")
 	}
-	root, err := identityRoot()
-	if dmTrustRootOverride != "" {
-		root, err = dmTrustRootOverride, nil
+	if identityDeleted(id.PublicKey) {
+		return "", "", errIdentityDeleted
 	}
+	path, err := dmPinPathFor(local, server, uid)
 	if err != nil {
 		return "", "", err
 	}
-	binding, _ := json.Marshal([]string{hex.EncodeToString(local), server, uid})
-	hash := sha256.Sum256(binding)
-	return filepath.Join(root, "dm-identities", hex.EncodeToString(hash[:])+".json"), server, nil
+	return path, server, nil
 }
 func readDMPin(path string) (dmIdentityPin, error) {
 	var pin dmIdentityPin

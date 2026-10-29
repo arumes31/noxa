@@ -142,6 +142,10 @@ type connManager struct {
 	// ratchetControls receive delivered media controls (ratchet_control.go).
 	ratchetControls []func(RatchetControl)
 	controlQueue    []RatchetControl
+	// mediaRoster is the roster media keys may be sent to (media_roster.go):
+	// client ID -> session; mediaRosterLast the channels of sessions that left.
+	mediaRoster     map[string]mediaRosterEntry
+	mediaRosterLast map[string]int64
 	controlRunning  bool
 	// ratchetEdits maps an uncertain edit operation (peer, ref, text) to its
 	// logical ID until it is accepted, so a retry resolves it.
@@ -745,6 +749,11 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	m.connEpoch++
 	// A start failure belongs to its connection only.
 	m.ratchetStartErr, m.ratchetStartAt = nil, time.Time{}
+	// Controls are fenced to their connection: one queued before a reconnect
+	// is never emitted afterwards.
+	m.controlQueue = nil
+	// The media-key roster belongs to its connection too.
+	m.mediaRoster, m.mediaRosterLast = nil, nil
 	// The consumer is fenced by the epoch change; stopping awaits its
 	// in-flight operation (which takes m.mu), so it runs after unlocking.
 	if s := m.takeRatchetLocked(); s != nil {
@@ -1226,11 +1235,15 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		m.mu.Lock()
 		m.lastSnapshot = string(f.Payload)
 		m.mu.Unlock()
+		m.noteRosterSnapshot(f.Payload)
 		m.emit("snapshot", string(f.Payload))
 	case netproto.MsgEvent:
 		if isOlmDoorbell(f.Payload) {
 			m.ringRatchet()
 			return
+		}
+		if isRosterEvent(f.Payload) {
+			m.noteRosterEvent(string(f.Payload))
 		}
 		// Sealed payloads (chat bodies, edits, announcements) are opened in
 		// the backend; DMs decrypt asynchronously and re-emit, which is what

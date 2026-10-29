@@ -211,6 +211,11 @@ func (a *App) ConfirmDeviceForTab(tabID, deviceID string) (netproto.DeviceInfo, 
 	if _, ok := parseDeviceX25519(target.X25519Public); !ok {
 		return netproto.DeviceInfo{}, errors.New("the device has no valid encryption key")
 	}
+	// The same claimed-key validation as a device link: no relayed key
+	// field can smuggle a line into the signed transcript.
+	if !validClaimedDeviceKeys(signingKey, target.X25519Public) {
+		return netproto.DeviceInfo{}, errors.New("the device's keys are not in the expected format")
+	}
 	id, err := cm.identity()
 	if err != nil {
 		return netproto.DeviceInfo{}, err
@@ -498,6 +503,9 @@ func (m *connManager) approvePasskeyDevices(conn net.Conn) {
 	}
 	for _, target := range list.Devices {
 		if target.Kind != "web" || target.DeviceID == self || known[target.DeviceID] || target.FirstDevice || target.RevokedAt != 0 || len(target.PasskeyProof) == 0 {
+			continue
+		}
+		if !validClaimedDeviceKeys(target.Ed25519Public, target.X25519Public) {
 			continue
 		}
 		if deviceproof.Verify(principal, pinned, target.Ed25519Public, target.X25519Public, target.PasskeyProof) != nil {

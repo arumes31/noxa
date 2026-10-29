@@ -19,12 +19,13 @@ import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 import { cameraConstraints } from "./camera-capture.js";
 import { startStudioShare, studioShareActive, stopShare } from "./video.js";
 import {
-    MAX_SCENES, MAX_SOURCES, TRANSITION_MIN_MS, TRANSITION_MAX_MS, STUDIO_STORAGE_KEY, StudioStateError,
+    MAX_SCENES, MAX_SOURCES, TRANSITION_MIN_MS, TRANSITION_MAX_MS, StudioStateError,
     parseStudio, serializeStudio, selectedScene, addScene, renameScene, removeScene, selectScene, setTransition,
     addSource, updateSource, removeSource, moveSource, take, assetRefs, captureRefs,
 } from "./studio-state.js";
 import { createCaptureRegistry } from "./studio-captures.js";
 import { createAssetStore, MAX_IMAGE_BYTES, StudioImageError } from "./studio-assets.js";
+import { studioLayoutKey, studioAssetDB, dropLegacyStudio } from "./studio-storage.js";
 import { createStudioAudio } from "./studio-audio.js";
 import { StudioEngine, outputSize, STUDIO_FPS } from "./studio-compositor.js";
 import "./studio.css";
@@ -39,13 +40,20 @@ function storage() {
     try { return globalThis.localStorage; } catch { return null; }
 }
 
-function loadStudio() {
-    try { return parseStudio(storage()?.getItem(STUDIO_STORAGE_KEY) || ""); } catch { return parseStudio(""); }
+// The layout and images belong to the identity the Studio runs for
+// (studio-storage.js); without a known identity nothing is persisted.
+function loadStudio(uid) {
+    const key = studioLayoutKey(uid);
+    try { return parseStudio(key ? storage()?.getItem(key) || "" : ""); } catch { return parseStudio(""); }
 }
 
-function saveStudio(studio) {
-    try { storage()?.setItem(STUDIO_STORAGE_KEY, serializeStudio(studio)); } catch { /* storage is optional */ }
+function saveStudio(uid, studio) {
+    const key = studioLayoutKey(uid);
+    if (!key) return;
+    try { storage()?.setItem(key, serializeStudio(studio)); } catch { /* storage is optional */ }
 }
+
+let legacyDropped = false;
 
 function errorText(error) {
     const code = error instanceof StudioStateError || error instanceof StudioImageError ? error.code : "";
@@ -58,12 +66,15 @@ function createSession() {
         onChange: () => { if (session?.id === id) { session.engine?.renderProgram(performance.now()); syncAudio(); schedule(); } },
         onRelease: stream => releaseDisplayCapture(stream),
     });
-    const assets = createAssetStore();
+    const uid = String(V()?.state?.myUniqueID || "");
+    if (!legacyDropped) { legacyDropped = true; void dropLegacyStudio(); }
+    const assetDB = studioAssetDB(uid);
+    const assets = assetDB ? createAssetStore({ name: assetDB }) : createAssetStore({ indexedDB: null });
     const { width, height } = outputSize(V()?.state?.mediaLimits);
     const engine = new StudioEngine({ registry, assets, width, height, fps: STUDIO_FPS,
         label: source => source.kind === "image" ? t("studio.sourceUnavailable") : t(`studio.state.${registry.state(source.capture)}`) });
-    const studio = loadStudio();
-    session = { id, registry, assets, engine, audio: null, studio, live: false, starting: false,
+    const studio = loadStudio(uid);
+    session = { id, uid, registry, assets, engine, audio: null, studio, live: false, starting: false,
         selectedSource: "", width, height, meterTimer: null, restored: studio.scenes.some(scene => scene.sources.some(source => source.kind === "display" || source.kind === "camera")) };
     engine.setDraft(selectedScene(studio), studio.scenes);
     void assets.load(assetRefs(studio)).then(() => { if (session?.id === id) { engine.renderPreview(); schedule(); } });
@@ -115,7 +126,7 @@ function disposeSession() {
 function commit(next, { prune = false } = {}) {
     if (!session) return;
     session.studio = next;
-    saveStudio(next);
+    saveStudio(session.uid, next);
     session.engine.setDraft(selectedScene(next), next.scenes);
     // Draft edits never touch audio routing (see programAudio).
     if (prune) { const owner = session; void owner.assets.prune(() => assetRefs(owner.studio, [owner.engine.live, owner.engine.outgoing])); }
@@ -627,6 +638,12 @@ export function disposeStudio() {
 export function studioActive() {
     return !!session;
 }
+
+// A deleted identity's open Studio ends (security-settings.js wipes its
+// stored layout and images); nothing of it is saved again.
+globalThis.addEventListener?.("noxa-identity-deleted", event => {
+    if (session && event?.detail?.uid && session.uid === event.detail.uid) disposeStudio();
+});
 
 export function initStudio() {
     const bar = document.querySelector("#voice-bar .voice-buttons");

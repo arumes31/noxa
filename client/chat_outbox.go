@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -73,6 +72,8 @@ func (m *connManager) rememberOutboxServer() {
 type chatOutboxStore struct {
 	path string
 	key  [32]byte
+	// identityKey fences writes once the identity is deleted.
+	identityKey string
 }
 
 var outboxMu sync.Mutex
@@ -114,9 +115,9 @@ func (a *App) outboxStore(cm *connManager) (chatOutboxStore, error) {
 	if err != nil || canonical == "" {
 		return chatOutboxStore{}, errors.New("server identity unavailable")
 	}
-	owner := sha256.Sum256([]byte(fmt.Sprintf("%x\x00%s\x00%s", pub, canonical, fingerprint)))
+	owner := localServerOwner(pub, canonical, fingerprint)
 	key := sha256.Sum256(append(append([]byte("noxa/chat-outbox/v1|"), priv[:]...), owner[:]...))
-	return chatOutboxStore{path: filepath.Join(filepath.Dir(base), "outbox", hex.EncodeToString(owner[:])+".sealed"), key: key}, nil
+	return chatOutboxStore{path: filepath.Join(filepath.Dir(base), "outbox", hex.EncodeToString(owner[:])+".sealed"), key: key, identityKey: identity.PublicKey}, nil
 }
 
 func (s chatOutboxStore) load() ([]ChatOutboxEntry, error) {
@@ -147,6 +148,9 @@ func (s chatOutboxStore) load() ([]ChatOutboxEntry, error) {
 	return entries, nil
 }
 func (s chatOutboxStore) save(entries []ChatOutboxEntry) error {
+	if identityDeleted(s.identityKey) {
+		return errIdentityDeleted
+	}
 	raw, err := json.Marshal(entries)
 	if err != nil {
 		return err

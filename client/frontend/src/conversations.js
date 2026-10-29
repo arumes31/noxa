@@ -649,7 +649,8 @@ export function initConversations() {
             stamp.append(el("span", "group-time-full", sent.toLocaleString()), el("span", "group-time-short", sent.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
             const lock = window.__noxaChat?.encryptionBadgeElement?.(badge);
             if (lock) stamp.append(lock);
-            row.append(el("strong", "", label(message.from_unique_id)), stamp, body);
+            // A locked row's sender is unauthenticated: never named.
+            row.append(el("strong", "", message.quarantined ? t("quarantine.sender") : label(message.from_unique_id)), stamp, body);
             return row;
         };
         const history = async () => {
@@ -722,7 +723,7 @@ export function initConversations() {
                     try { records = await app().RatchetConversationHistoryForTab(tabID, group.id) || []; } catch { records = []; }
                     if (!current() || token !== generation) return;
                     const rows = [...groupRatchetRows(records), ...quarantineRows(ratchetQuarantine, { scope: "group", conversation: group.id })
-                        .map(q => ({ id: q.id, from_unique_id: q.fromUID, created_at: q.ts / 1000, quarantined: q.code }))];
+                        .map(q => ({ id: q.id, from_unique_id: "", created_at: q.ts / 1000, quarantined: q.code }))];
                     for (const row of rows.sort((a, b) => a.created_at - b.created_at)) {
                         const element = ratchetRow(row);
                         const after = [...messages.querySelectorAll(".group-message[data-legacy]")].find(node => Number(node.dataset.ts) > row.created_at * 1000);

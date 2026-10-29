@@ -1190,14 +1190,6 @@ export function WebRTCAnswerForTab(arg1, arg2) {
   return window['go']['main']['App']['WebRTCAnswerForTab'](arg1, arg2);
 }
 
-export function WebRTCOffer(arg1, arg2) {
-  return window['go']['main']['App']['WebRTCOffer'](arg1, arg2);
-}
-
-export function WebRTCOfferForTab(arg1, arg2, arg3) {
-  return window['go']['main']['App']['WebRTCOfferForTab'](arg1, arg2, arg3);
-}
-
 export function WebhookForTab(arg1, arg2) {
   return window['go']['main']['App']['WebhookForTab'](arg1, arg2);
 }

@@ -1,6 +1,7 @@
 import { currentLanguage, t } from "./i18n.js";
 import { canFocusTarget, confirmDialog, promptDialog } from "./modal.js";
 import { copyToClipboard } from "./clipboard.js";
+import { wipeStudioIdentity } from "./studio-storage.js";
 import "./security-settings.css";
 
 const el = (tag, text = "", cls = "") => {
@@ -23,6 +24,13 @@ const details = key => {
 const checkError = async promise => { const error = await promise; if (error) throw new Error(error); };
 // Go errRatchetErasedLater: the identity IS deleted; only its store is erased later.
 export const isDeletionNotice = text => String(text).startsWith("the identity was deleted, but ");
+// Identity deletion also erases the identity's Studio layout and images and
+// ends its open Studio (studio-ui.js listens); a sign-out keeps them.
+export function forgetIdentityStudio(uid, { wipe = wipeStudioIdentity, target = globalThis } = {}) {
+    if (!uid) return Promise.resolve(false);
+    try { target.dispatchEvent?.(new CustomEvent("noxa-identity-deleted", { detail: { uid } })); } catch { /* best effort */ }
+    return wipe(uid);
+}
 const exportDate = value => {
     const date = new Date(value.replace(" ", "T"));
     return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(currentLanguage(), { dateStyle: "medium", timeStyle: "short" }).format(date);
@@ -179,8 +187,11 @@ export function securitySettings(settings) {
                         const result = await app.DeleteIdentity(entry.id, true);
                         // Committed deletion whose store another window still holds:
                         // a success with a notice, never a failure.
-                        if (result && isDeletionNotice(result)) { notice = result; return true; }
-                        if (result) throw new Error(result);
+                        if (result && !isDeletionNotice(result)) throw new Error(result);
+                        if (result) notice = result;
+                        // The native side erased the identity's stores; its Studio
+                        // layout and images (webview storage) go too.
+                        forgetIdentityStudio(entry.unique_id);
                         return true;
                     }, () => notice ? t("security.deletedLater") : t("security.deleted"));
                 }

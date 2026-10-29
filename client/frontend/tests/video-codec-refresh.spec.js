@@ -46,7 +46,7 @@ for (const supported of [true, false]) test(`encrypted live publication keeps VP
             SupportsStreamSourceQualityForTab: async () => true,
             SupportsStreamCodecForTab: async () => true,
             SupportsStreamCodecRefreshForTab: async () => supported,
-            WebRTCOfferForTab: async () => {
+            ChannelOfferMockForTab: async () => {
                 fixture.offers++;
                 await gather(pc);
                 await receiver.setRemoteDescription(pc.localDescription);
@@ -61,7 +61,7 @@ for (const supported of [true, false]) test(`encrypted live publication keeps VP
                 return { generation: "42", upload_active: true, codec: fixture.selected };
             },
         } } };
-        window.go.main.App.WebRTCOfferSecureForTab = () => window.go.main.App.WebRTCOfferForTab();
+        window.go.main.App.WebRTCOfferSecureForTab = () => window.go.main.App.ChannelOfferMockForTab();
         // The in-page receiver has no transform: the session double stands in.
         const channelMedia = await import("/src/channel-media.js");
         channelMedia.useChannelMediaSession({ active: true, identity: { channelID: 1 }, stop() {}, setRoster() {}, bindSenders: async () => {}, syncReceivers: async () => {}, publicationsChanged() {} });
