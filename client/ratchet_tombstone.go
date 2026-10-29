@@ -218,8 +218,9 @@ func (a *App) deleteIdentityWithStores(id *identity, identityPath string) error 
 		}
 	}
 	if retry {
+		delay := ratchetWipeRetryDelay // read once, before the goroutine (tests change it)
 		go guardCrash("ratchet wipe retry", func() {
-			time.Sleep(ratchetWipeRetryDelay)
+			time.Sleep(delay)
 			a.sweepRatchetStoresIn(bases)
 		})
 	}
