@@ -33,7 +33,8 @@
     "poke": "You were poked.",
     "buddy_online": "A watched contact is online.",
     "channel_watch": "The requested channel user count has been reached.",
-    "stream_watch_started": "Someone is watching your stream."
+    "stream_watch_started": "Someone is watching your stream.",
+    "client_updating": "Updating. Automatically reconnecting after the update."
   },
   "de": {
     "microphone_muted": "Mikrofon stummgeschaltet.",
@@ -70,6 +71,7 @@
     "poke": "Du wurdest angestupst.",
     "buddy_online": "Ein beobachteter Kontakt ist online.",
     "channel_watch": "Die gewünschte Benutzerzahl im Channel ist erreicht.",
-    "stream_watch_started": "Jemand schaut deinem Stream zu."
+    "stream_watch_started": "Jemand schaut deinem Stream zu.",
+    "client_updating": "Update startet. Danach verbinde ich dich automatisch wieder."
   }
 }

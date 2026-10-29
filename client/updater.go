@@ -531,6 +531,8 @@ func (a *App) ApplyAndRestart() string {
 		return err.Error()
 	}
 	// Only the updater supervisor/child inherits the protected connection.
+	restoreWindowEnvironment := prepareUpdateWindow()
+	defer restoreWindowEnvironment()
 	previous, hadPrevious := os.LookupEnv(updateReconnectEnv)
 	if resume != "" {
 		if err := os.Setenv(updateReconnectEnv, resume); err != nil {

@@ -20,6 +20,7 @@ import { t as tLabel } from "./i18n.js";
 import { rememberVideoSenderProfile } from "./video-sender-stats.js";
 import { hardwareVideoEncodeAvailable, videoSenderCaptureSample } from "./video-sender-hardware-recovery.js";
 import { sampleSenderStats } from "./peer-stats.js";
+import { createScreenResolutionController } from "./screen-resolution.js";
 import { createScreenStartupAttempt } from "./video-startup-plan.js";
 import { renegotiate, negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
 const V = () => window.__noxa;
@@ -46,8 +47,64 @@ export function createVideoPublication({ policy }) {
     const pendingVideoSenders = new WeakMap();
     const videoLimitUpdates = new WeakMap();
     const capturePreferences = new WeakMap();
+    const screenResolutions = new WeakMap();
     const codecSelections = new WeakMap();
     const startupAttempt = createScreenStartupAttempt();
+
+    function screenResolution(sender, track) {
+        const settings = track.getSettings(), profile = capturePreferences.get(track);
+        // A bitrate-only preference edit preserves adaptation, just as the
+        // ceiling-only update path does. Sources, sessions and geometry do not.
+        const key = JSON.stringify([captureMediaScope(), settings.width, settings.height,
+            profile?.width, profile?.height, profile?.fps, track.contentHint, !!policy.lowBandwidth]);
+        let entry = screenResolutions.get(sender);
+        if (!entry || entry.track !== track || entry.key !== key) {
+            entry = { track, key, scale: 1, update: createScreenResolutionController() };
+            screenResolutions.set(sender, entry);
+        }
+        return entry;
+    }
+
+    function adaptScreenResolution(pc, stats) {
+        const { state } = V(), scope = captureMediaScope();
+        const transceiver = state.shareVideoTransceiver, sender = transceiver?.sender;
+        const track = state.shareStream?.getVideoTracks()[0], received = performance.now();
+        const current = () => state.pc === pc && mediaScopeIsCurrent(scope) && pc.connectionState === "connected" &&
+            pc.signalingState === "stable" && state.shareVideoTransceiver === transceiver && !transceiver.stopped &&
+            state.shareStream?.getVideoTracks()[0] === track && sender.track === track && track.readyState === "live" &&
+            track.enabled && !state.shareQualityUpdating && !policy.lowBandwidth && publicationUploadActive("screen", track) !== false;
+        if (!pc || !sender || !track || !current()) {
+            screenResolutions.get(sender)?.update({ sample: null });
+            return Promise.resolve();
+        }
+        const entry = screenResolution(sender, track);
+        return queuePeerNegotiation(pc, () => {
+            const pending = (capUpdates.get(pc) || Promise.resolve()).catch(() => {}).then(async () => {
+                if (!current() || performance.now() - received > 1500 || screenResolution(sender, track) !== entry) return;
+                const parameters = sender.getParameters();
+                if (parameters.encodings?.length !== 1 || parameters.encodings[0].active === false) return;
+                const rows = [...stats.values()].filter(row => row.type === "outbound-rtp" && !row.isRemote &&
+                    (row.kind || row.mediaType) === "video" && (row.mid != null ? row.mid === transceiver.mid :
+                        stats.get(row.mediaSourceId)?.trackIdentifier === track.id));
+                const row = rows.length === 1 ? rows[0] : null;
+                const capture = row && videoSenderCaptureSample(stats, row, track);
+                const sample = capture && { id: `${row.id}:${capture.id}`, time: row.timestamp, captureTime: capture.timestamp,
+                    captured: capture.frames, encoded: row.framesEncoded, reason: row.qualityLimitationReason };
+                const settings = track.getSettings();
+                const scale = entry.update({ sample, scale: entry.scale, width: settings.width, height: settings.height,
+                    fps: capturePreferences.get(track)?.fps || settings.frameRate || 60 });
+                if (Math.abs(scale - (parameters.encodings[0].scaleResolutionDownBy ?? 1)) < 0.001) return;
+                parameters.encodings[0].scaleResolutionDownBy = scale;
+                parameters.degradationPreference = "maintain-resolution";
+                // Retain negotiated bitrate, priority, codec and activation. A
+                // rejected parameter update is retried on a later fresh sample.
+                await sender.setParameters(parameters);
+                if (current() && screenResolution(sender, track) === entry) entry.scale = scale;
+            });
+            capUpdates.set(pc, pending);
+            return pending;
+        });
+    }
 
     function selectCodec(slot, track, transceiver) {
         const codec = publicationCodec(slot, track);
@@ -218,9 +275,10 @@ export function createVideoPublication({ policy }) {
                     sender === pendingVideoSenders.get(pc)?.sender || (sender.track && sender.track.readyState !== "ended"))).map(sender => {
                 const parameters = sender.getParameters();
                 if (sender === screenSender) {
-                    // Motion must be able to trade pixels for frames under CPU or
-                    // network pressure. Only explicit text/detail shares keep pixels.
-                    parameters.degradationPreference = ["text", "detail"].includes(screenTrack?.contentHint) ? "maintain-resolution" : "maintain-framerate";
+                    // Keep the selected screen/Studio resolution through LTE jitter
+                    // and short loss bursts. WebRTC still controls bitrate and may
+                    // reduce frame rate; do not force a minimum bitrate or reset BWE.
+                    parameters.degradationPreference = "maintain-resolution";
                 }
                 for (const encoding of parameters.encodings || []) {
                     encoding.priority = sender === screenSender ? "high" : "medium";
@@ -239,6 +297,10 @@ export function createVideoPublication({ policy }) {
             capVideoEncodings(sources, state.mediaLimits, policy.lowBandwidth ? policy.lowBandwidthBitrate : 0);
             for (const { sender, parameters, encodings } of sources) {
                 if (!current()) return;
+                if (sender === screenSender && screenTrack) {
+                    const scale = screenResolution(sender, screenTrack).scale;
+                    for (const encoding of encodings) encoding.scaleResolutionDownBy = Math.max(encoding.scaleResolutionDownBy || 1, scale);
+                }
                 if (encodings.length) await sender.setParameters(parameters);
             }
             const audioSender = state.shareAudioTransceiver?.sender;
@@ -1247,5 +1309,5 @@ export function createVideoPublication({ policy }) {
         }
     }
 
-    return { applyVideoLimits, shareToggle, resetCameraState, cameraToggle, applySendCaps, retryVideoHardware, syncCameraButton, syncShareButton, startStudioShare, studioShareActive, stopShare: doStopShare };
+    return { applyVideoLimits, shareToggle, resetCameraState, cameraToggle, applySendCaps, adaptScreenResolution, retryVideoHardware, syncCameraButton, syncShareButton, startStudioShare, studioShareActive, stopShare: doStopShare };
 }

@@ -41,9 +41,13 @@ export function allocateReceiveQuality(streams, { availableBitrate, focusedID, c
     return new Map(streams.map(stream => [stream.key, result.get(stream.key)]));
 }
 
-export function settleAutoQuality(previous, next, immediate = false) {
+export function settleAutoQuality(previous, next, immediate = false, now = performance.now()) {
     if (!previous?.applied || immediate || next === previous.applied) return { applied: next };
-    const count = previous.candidate === next ? previous.count + 1 : 1;
-    const required = levels.indexOf(next) < levels.indexOf(previous.applied) ? 2 : 3;
-    return count >= required ? { applied: next } : { applied: previous.applied, candidate: next, count };
+    const descending = levels.indexOf(next) < levels.indexOf(previous.applied);
+    const since = previous.candidate === next && Number.isFinite(previous.since) ? previous.since : now;
+    // Sampling normally happens every 3 seconds, but UI refreshes can sample
+    // more often. Use elapsed time so those refreshes cannot accelerate a drop.
+    if (now - since < (descending ? 18000 : 3000)) return { applied: previous.applied, candidate: next, since };
+    // Down one level at a time; recover directly to the affordable quality.
+    return { applied: descending ? levels[levels.indexOf(previous.applied) - 1] : next };
 }

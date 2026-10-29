@@ -6,6 +6,7 @@ export const SPEECH_EVENTS = {
     sound_muted: { priority: 3, category: "audio", family: "deafen", effect: "deafen_on", cooldown: 0 },
     sound_unmuted: { priority: 3, category: "audio", family: "deafen", effect: "deafen_off", cooldown: 0 },
     client_closing: { priority: 8, category: "application" },
+    client_updating: { priority: 8, category: "application" },
     banned: { priority: 7, category: "admin", effect: "ban", matrix: "kick" },
     kicked: { priority: 6, category: "admin", effect: "kick", matrix: "kick" },
     kicked_channel: { priority: 6, category: "admin", effect: "kick", matrix: "kick" },

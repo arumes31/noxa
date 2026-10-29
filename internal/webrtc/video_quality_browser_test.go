@@ -5,12 +5,14 @@ package webrtc
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +47,12 @@ func runBrowserScreenSingleSource(t *testing.T, width, height, fps int) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = engine.Close() })
+	var stopLTE func()
+	t.Cleanup(func() {
+		if stopLTE != nil {
+			stopLTE()
+		}
+	})
 	router := NewRouter(nil)
 	for _, id := range []string{"a", "b", "viewer", "viewer2"} {
 		router.JoinChannel(1, id)
@@ -79,6 +87,18 @@ func runBrowserScreenSingleSource(t *testing.T, width, height, fps int) {
 		var result any = struct{}{}
 		var requestErr error
 		switch r.URL.Path {
+		case "/lte":
+			if os.Getenv("NOXA_BROWSER_MEDIA_LTE") != "1" {
+				http.NotFound(w, r)
+				return
+			}
+			if stopLTE != nil {
+				stopLTE()
+				stopLTE = nil
+			}
+			if body.Active {
+				stopLTE = browserLTEEgress()
+			}
 		case "/offer":
 			slots := make(map[string]string)
 			for _, track := range body.Tracks {
@@ -172,5 +192,57 @@ func runBrowserScreenSingleSource(t *testing.T, width, height, fps int) {
 	t.Logf("real browser media results:\n%s", output)
 	if err != nil {
 		t.Fatalf("browser media integration: %v", err)
+	}
+}
+
+// Exercise real UDP, including RTCP feedback: browser DevTools network rules
+// do not reliably affect WebRTC on every platform. This test-only shaper adds
+// 250ms delay, deterministic 2% loss and a 10Mbps per-destination ceiling.
+func browserLTEEgress() func() {
+	var mu sync.Mutex
+	var pending sync.WaitGroup
+	active := true
+	counts := map[string]uint64{}
+	next := map[string]time.Time{}
+	shape := func(packet []byte, addr net.Addr, write func([]byte) error) error {
+		mu.Lock()
+		if !active {
+			mu.Unlock()
+			return write(packet)
+		}
+		key := addr.String()
+		counts[key]++
+		if counts[key]%50 == 0 {
+			mu.Unlock()
+			return nil
+		}
+		now := time.Now()
+		due := next[key]
+		if due.Before(now) {
+			due = now
+		}
+		// Bound the delay queue even if a faulty publisher exceeds the ceiling.
+		if due.Sub(now) > time.Second {
+			mu.Unlock()
+			return nil
+		}
+		due = due.Add(time.Duration(len(packet)) * time.Second / 1250000)
+		next[key] = due
+		copyOfPacket := append([]byte(nil), packet...)
+		pending.Add(1)
+		time.AfterFunc(time.Until(due.Add(250*time.Millisecond)), func() {
+			defer pending.Done()
+			_ = write(copyOfPacket)
+		})
+		mu.Unlock()
+		return nil
+	}
+	mediaSocketShape.Store(&shape)
+	return func() {
+		mediaSocketShape.Store(nil)
+		mu.Lock()
+		active = false
+		mu.Unlock()
+		pending.Wait()
 	}
 }

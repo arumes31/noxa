@@ -65,7 +65,7 @@ import {
     initVideo, videoTrackAdded, videoTrackRemoved, videoSpeaking,
     videoRefreshNames, clearVideoGrid, shareToggle, setLowBandwidth, isLowBandwidth,
     parseTrackID, SLOT_SCREEN_AUDIO, cameraToggle, resetCameraState,
-    renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits, retryVideoHardware, videoPresentationDiagnostics,
+    renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits, adaptScreenResolution, retryVideoHardware, videoPresentationDiagnostics,
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget } from "./stream-controls.js";
@@ -216,7 +216,8 @@ startVoiceDiagnostics({
     state,
     recover: async (pc, stats) => {
         await recoverVoice(pc, stats);
-        await Promise.all([recoverVideoSender(pc, stats), recoverVideoReceiver(pc, stats)]);
+        await Promise.all([adaptScreenResolution(pc, stats).catch(() => {}),
+            recoverVideoSender(pc, stats), recoverVideoReceiver(pc, stats)]);
     },
     output: () => ({ state: remoteChain.ctx?.state || "unavailable", latencyMS: Number.isFinite(remoteChain.ctx?.outputLatency) ? remoteChain.ctx.outputLatency * 1000 : null }),
     bridge: (tabID, report) => window.go?.main?.App.ReportVoiceDiagnosticsForTab?.(tabID, report),

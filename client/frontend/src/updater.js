@@ -5,6 +5,8 @@ import { formatBytes } from "./connection-stats.js";
 import { createUpdateCountdown } from "./update-countdown.js";
 import { measuredUpdateProgress } from "./update-core.js";
 import { createUpdateLogo } from "./update-logo.js";
+import { announceConnectedUpdate } from "./update-announcement.js";
+import { playUpdateAnnouncement } from "./sounds.js";
 import "./updater.css";
 
 const V = () => window.__noxa;
@@ -347,6 +349,8 @@ async function restartUpdate(m) {
     status.textContent = t("updater.starting");
     try {
         const app = window.go.main.App;
+        await announceConnectedUpdate({ getState: () => V()?.state,
+            sessionInfo: tab => app.SessionInfoForTab(tab), play: playUpdateAnnouncement });
         if (typeof app.PrepareUpdateReconnect === "function") {
             const audio = window.__noxa.updateReconnectAudio();
             const preparationError = await app.PrepareUpdateReconnect(audio.muted, audio.deafened, audio.mutedBeforeDeafen);

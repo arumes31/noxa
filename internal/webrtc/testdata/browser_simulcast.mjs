@@ -81,6 +81,7 @@ try {
                 bindSenders: async () => {}, syncReceivers: async () => {}, publicationsChanged() {} });
             const { createVideoPublication } = await import("/src/video-publication.js");
             const publication = createVideoPublication({ policy: { lowBandwidth: false } });
+            window.adaptScreenResolution = async () => publication.adaptScreenResolution(pc, await pc.getStats());
             (await import("/src/modal.js")).initModalSystem();
             document.getElementById("voice-screen").onclick = () => publication.shareToggle();
         }, { id, width, height, fps });
@@ -96,8 +97,11 @@ try {
     }
     const outbound = page => page.evaluate(async () => {
         const sender = window.__noxa.state.shareVideoTransceiver.sender;
+        const stats = [...(await sender.getStats()).values()];
         return { encodings: sender.getParameters().encodings,
-            rows: [...(await sender.getStats()).values()].filter(row => row.type === "outbound-rtp" && row.kind === "video")
+            network: stats.filter(row => row.type === "remote-inbound-rtp").map(row => ({
+                rtt: row.roundTripTime, packetsLost: row.packetsLost, fractionLost: row.fractionLost })),
+            rows: stats.filter(row => row.type === "outbound-rtp" && row.kind === "video")
                 .map(row => ({ rid: row.rid || "", width: row.frameWidth, height: row.frameHeight,
                     encoded: row.framesEncoded || 0, sent: row.framesSent || 0, bytes: row.bytesSent || 0, fps: row.framesPerSecond,
                     targetBitrate: row.targetBitrate, reason: row.qualityLimitationReason, encodeSeconds: row.totalEncodeTime })) };
@@ -232,6 +236,43 @@ try {
     await decoded([viewer, viewer2], "both viewers receive the reduced source rendition", [[width / 2, height / 2], [width, height]]);
     await scaleSource(1);
     await decoded([viewer, viewer2], "both viewers follow restored source scaling");
+    // Verify that a non-tier scale actually reaches both real decoders, rather
+    // than merely being accepted by setParameters or a mocked sender.
+    await scaleSource(1.08);
+    await expect.poll(async () => {
+        const source = (await outbound(publishers[0])).rows[0];
+        return Math.abs(source.width - width / 1.08) <= 4 && Math.abs(source.height - height / 1.08) <= 4;
+    }, { timeout: 15000 }).toBe(true);
+    await decoded([viewer, viewer2], "fractional resolution reaches both viewers");
+    await scaleSource(1);
+    await decoded([viewer, viewer2], "fractional resolution returns to source size");
+    // Optional repeatable LTE experiment using the SFU's real UDP test shaper.
+    if (process.env.NOXA_BROWSER_MEDIA_LTE === "1") {
+        try {
+            await publishers[0].evaluate(() => window.request("lte", { id: "a", active: true }));
+            const before = (await outbound(publishers[0])).rows[0];
+            for (let i = 0; i < 7; i++) {
+                await publishers[0].waitForTimeout(5000);
+                await publishers[0].evaluate(() => window.adaptScreenResolution());
+                const sent = await outbound(publishers[0]);
+                samples.push({ stage: "LTE 250ms / 2% loss / 10Mbps", sent });
+                assert.ok(sent.rows[0].height >= Math.min(height, 540) - 4, "LTE does not collapse to 180p");
+            }
+            const after = (await outbound(publishers[0])).rows[0];
+            assert.ok(after.sent > before.sent + 30, "frames continue under LTE impairment");
+            assert.ok(samples.filter(sample => sample.stage.startsWith("LTE ")).some(sample =>
+                sample.sent.network.some(row => row.rtt >= 0.15)), "measured RTP RTT confirms the LTE impairment reached WebRTC");
+        } finally {
+            await publishers[0].evaluate(() => window.request("lte", { id: "a", active: false }));
+        }
+        for (let i = 0; i < 4; i++) {
+            await publishers[0].waitForTimeout(5000);
+            await publishers[0].evaluate(() => window.adaptScreenResolution());
+        }
+        await decoded([viewer, viewer2], "LTE recovery keeps a single source for both viewers");
+        const scale = (await outbound(publishers[0])).encodings[0].scaleResolutionDownBy;
+        assert.equal(scale, 1, "resolution promptly returns to the selected source size");
+    }
     async function watch(viewerID, active) {
         await viewer.evaluate(args => window.request("watch", { id: "a", ...args }), { viewer: viewerID, active });
         await refreshUploads();

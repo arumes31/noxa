@@ -54,7 +54,13 @@
       "endpoint_fade_ms": 6,
       "source_sample_rate": 44100,
       "sample_rate": 24000,
-      "review": "Whisper small transcript must match every intended word; re-render a clip that does not. Listening review is separate."
+      "review": "Whisper small transcript must match every intended word; re-render a clip that does not. Listening review is separate.",
+      "clip_voices": {
+        "client_updating": {
+          "voice": "TROLL1",
+          "definition": "tools/voices/TROLL1.json"
+        }
+      }
     },
     "de": {
       "voice": "ST13",
@@ -77,6 +83,10 @@
           "voice": "F1",
           "definition": "tools/voices/F1.json",
           "audition": "N30"
+        },
+        "client_updating": {
+          "voice": "TROLL1",
+          "definition": "tools/voices/TROLL1.json"
         }
       }
     }

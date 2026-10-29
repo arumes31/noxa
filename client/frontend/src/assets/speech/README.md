@@ -1,6 +1,6 @@
 # Fixed noXa spoken announcements
 
-These 34 English and 35 German WAVs are rendered during development. The shipped
+These 35 English and 36 German WAVs are rendered during development. The shipped
 client only plays bundled recordings. No model, TTS engine, dynamic text or
 network TTS is packaged. Canonical text: tools/speech-lines.json.
 
@@ -83,7 +83,7 @@ respellings and masters each clip with the shared contract in
 generate-speech.py. review transcribes every clip with Whisper and accepts it
 only when the transcript matches the intended text within one letter (spacing
 and punctuation may differ; the edit count is recorded). Re-render rejected clips with `render --events ...` and review again;
-publish refuses unless all 69 clips are accepted, either by the content check or, for a misheard name only, by a recorded listening approval. Synthesis is not
+publish refuses unless all 71 clips are accepted, either by the content check or, for a misheard name only, by a recorded listening approval. Synthesis is not
 bit-reproducible, so the shipped hashes identify the accepted recordings.
 st13-content-review.json binds each accepted check to its WAV hash. ASR checks
 completeness, not listening comfort, timbre or accent.
@@ -95,10 +95,23 @@ use 24 kHz mono PCM16, 40/60 ms leading/trailing padding and 6 ms fades,
 targeting -31 dBFS RMS subject to the existing 0.115 peak ceiling. Every phrase
 is 0.5–6 seconds with zero endpoints, absolute DC below 0.0001 and a unique hash.
 Malformed, silent, clipped and overlong audio is rejected.
-No pitch shifting, time stretch or repeated sample substitution is applied.
+Only the two TROLL1 update clips use the documented offline pitch/growl treatment; other recordings remain unprocessed in pitch and timing. No repeated sample substitution is applied.
 metrics.json records text, render text, duration, rate, RMS, peak and source/output hashes.
 
 German UI/system locale selects German; English and unsupported locales select
 English. The speech-language preference can override that choice. Missing selected
 audio is logged once and omitted. Disabled, zero-volume or unavailable speech
 stays silent under the existing notification gates, with no generated fallback.
+
+### Update announcement
+
+`client_updating` uses the synthetic **TROLL1 Höhlentroll** voice in both
+languages: the ST13 preset blend, pitch ratio 0.86 and mild 35 Hz amplitude
+modulation (10% depth). The treatment runs only during offline authoring and
+is recorded in tools/voices/TROLL1.json and each clip's metrics. Final output
+uses the same quiet mastering contract. No actor or existing character is imitated.
+
+Playback occurs only immediately before an update restart with a confirmed
+active server session. Offline startup, mute/deafen, DND and disabled speech
+remain silent. Playback completion is bounded so missing audio hardware cannot
+block an update. The client still reconnects using its protected native handoff.

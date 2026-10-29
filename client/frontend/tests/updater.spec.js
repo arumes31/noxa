@@ -736,6 +736,60 @@ test("handoff failure keeps the current client running", async ({ page }) => {
     expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
 });
 
+for (const scenario of [{ connected: true }, { connected: false }, { connected: true, muted: true }, { connected: true, speechOff: true }]) {
+    test(`update speech only for an unmuted connected client ${JSON.stringify(scenario)}`, async ({ page }) => {
+        await boot(page, { disconnected: !scenario.connected });
+        await page.evaluate(async scenario => {
+            const state = window.__noxa.state;
+            state.activeTabID = "update-test";
+            state.serverGeneration = 1;
+            state.muted = !!scenario.muted;
+            state.settings.spoken_messages = !scenario.speechOff;
+            const { soundEngine } = await import("/src/sounds.js");
+            soundEngine.allowed = () => true;
+            soundEngine.preload = soundEngine.resume = soundEngine.setOutput = async () => {};
+            window.__updateSpeech = [];
+            soundEngine.play = (id, options) => {
+                window.__updateSpeech.push(id);
+                window.__finishUpdateSpeech = options.onEnded;
+                return true;
+            };
+        }, scenario);
+        await page.getByRole("button", { name: "Update now", exact: true }).click();
+        await page.getByRole("button", { name: "Restart now", exact: true }).click();
+        const speaks = scenario.connected && !scenario.muted && !scenario.speechOff;
+        if (speaks) {
+            await expect.poll(() => page.evaluate(() => window.__updateSpeech)).toEqual(["speech_en_client_updating"]);
+            expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
+            await page.evaluate(() => window.__finishUpdateSpeech());
+        }
+        await expect.poll(() => page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
+        expect(await page.evaluate(() => window.__updateSpeech.length)).toBe(speaks ? 1 : 0);
+    });
+}
+
+test("an audio preload timeout cannot delay restart or play after it", async ({ page }) => {
+    await boot(page);
+    await page.evaluate(async () => {
+        window.__noxa.state.activeTabID = "update-test";
+        const { soundEngine } = await import("/src/sounds.js");
+        soundEngine.allowed = () => true;
+        soundEngine.preload = () => new Promise(resolve => { window.__finishUpdatePreload = resolve; });
+        soundEngine.resume = soundEngine.setOutput = async () => {};
+        window.__lateUpdateSpeech = 0;
+        soundEngine.play = () => { window.__lateUpdateSpeech++; return false; };
+    });
+    await page.getByRole("button", { name: "Update now", exact: true }).click();
+    await page.clock.install();
+    await page.getByRole("button", { name: "Restart now", exact: true }).click();
+    await page.waitForFunction(() => !!window.__finishUpdatePreload);
+    await page.clock.runFor(7500);
+    await expect.poll(() => page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
+    await page.evaluate(() => window.__finishUpdatePreload());
+    await page.clock.runFor(1000);
+    expect(await page.evaluate(() => window.__lateUpdateSpeech)).toBe(0);
+});
+
 for (const mutedBeforeDeafen of [false, true]) {
     test(`restore privacy before replay and retain original microphone state (${mutedBeforeDeafen})`, async ({ page }) => {
         await boot(page, { enabled: false, afterUpdate: true, restoreAudio: { muted: true, deafened: true, muted_before_deafen: mutedBeforeDeafen }, restoreResult: { attempted: true, error: "test server unavailable" },

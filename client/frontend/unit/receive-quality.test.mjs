@@ -38,18 +38,27 @@ test("single-layer publishers reserve measured traffic even when Low was request
     assert.deepEqual([...allocateReceiveQuality(streams, { availableBitrate: 5500000 }).values()], ["low", "low"]);
 });
 
-test("automatic changes require sustained samples while explicit user changes apply immediately", () => {
+test("Auto ignores short LTE dips, descends one level at a time and recovers quickly", () => {
     let state = { applied: "high" };
-    state = settleAutoQuality(state, "low");
-    assert.equal(state.applied, "high");
-    state = settleAutoQuality(state, "high");
-    state = settleAutoQuality(state, "low");
-    assert.equal(state.applied, "high");
-    state = settleAutoQuality(state, "low");
+    for (let now = 0; now < 18000; now += 100) {
+        state = settleAutoQuality(state, "low", false, now);
+        assert.equal(state.applied, "high", "extra UI refreshes cannot accelerate downgrade");
+    }
+    state = settleAutoQuality(state, "low", false, 18000);
+    assert.equal(state.applied, "mid", "never jump directly from high to low");
+    state = settleAutoQuality(state, "low", false, 21000);
+    assert.equal(settleAutoQuality(state, "low", false, 38000).applied, "mid");
+    state = settleAutoQuality(state, "low", false, 39000);
     assert.equal(state.applied, "low");
-    state = settleAutoQuality(state, "high");
-    state = settleAutoQuality(state, "high");
-    assert.equal(state.applied, "low");
-    assert.equal(settleAutoQuality(state, "high").applied, "high");
-    assert.equal(settleAutoQuality(state, "mid", true).applied, "mid");
+    state = settleAutoQuality(state, "high", false, 40000);
+    assert.equal(settleAutoQuality(state, "high", false, 42999).applied, "low");
+    assert.equal(settleAutoQuality(state, "high", false, 43000).applied, "high");
+});
+
+test("recovery cancels a pending drop and manual/CPU/low-bandwidth changes stay immediate", () => {
+    let state = settleAutoQuality({ applied: "high" }, "low", false, 0);
+    state = settleAutoQuality(state, "high", false, 17000);
+    state = settleAutoQuality(state, "low", false, 18000);
+    assert.equal(settleAutoQuality(state, "low", false, 35000).applied, "high");
+    assert.equal(settleAutoQuality(state, "low", true, 35000).applied, "low");
 });
