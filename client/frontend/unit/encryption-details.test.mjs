@@ -5,7 +5,7 @@ import { setLanguage } from '../src/i18n.js';
 
 test('offline and unavailable diagnostics never claim an encrypted connection',()=>{
  setLanguage('en');const text=encryptionDetails({session:{connected:false}});
- assert.match(text,/not connected/);assert.match(text,/status unknown/);assert.match(text,/not active/);
+ assert.match(text,/not connected/);assert.match(text,/status unknown/);assert.doesNotMatch(text,/E2EE active/);
  assert.match(text,/Channel chat & private calls: no E2EE/);
  assert.doesNotMatch(encryptionDetails(),/not connected/,'a failed lookup is unknown, not a confirmed disconnect');
 });
@@ -27,7 +27,24 @@ test('German status and blocked secure messaging remain explicit',()=>{
 
 test('transport shows encryption only for an observed TLS connection',()=>{
  setLanguage('en');
- assert.match(encryptionDetails({session:{connected:true,security:'TLS (fingerprint xyz)'}}),/You ↔ server: encrypted/);
+ assert.match(encryptionDetails({session:{connected:true,security:'TLS (fingerprint xyz)'}}),/You ↔ server: TLS encrypted/);
  assert.match(encryptionDetails({session:{connected:true,security:'PLAINTEXT — traffic is NOT encrypted'}}),/You ↔ server: not encrypted/);
  assert.match(encryptionDetails({session:{connected:true,security:'unexpected'}}),/You ↔ server: status unknown/);
+});
+
+test('media distinguishes available encryption from the current session',()=>{
+ setLanguage('en');
+ const base={session:{connected:true},capability:{supported:true},media:{state:'off'}};
+ const idle=encryptionDetails(base);
+ assert.match(idle,/Voice, camera & streams: E2EE available/);
+ assert.match(idle,/Currently used for media: none · no media session/);
+ assert.doesNotMatch(idle,/not active|E2EE active/);
+ const active=encryptionDetails({...base,media:{state:'encrypted',recipients:1,keyHolders:[{}]}});
+ assert.match(active,/Currently used for media: E2EE active/);
+ assert.match(encryptionDetails({...base,media:{state:'encrypted',recipients:0}}),/E2EE ready · alone in channel/);
+ assert.match(encryptionDetails({...base,capability:{supported:false,reason:'server_outdated'}}),/E2EE unavailable/);
+ assert.match(encryptionDetails({...base,capability:{supported:true,reason:'no_device'}}),/E2EE unavailable/);
+ assert.match(encryptionDetails({...base,capability:undefined}),/Voice, camera & streams: status unknown/);
+ assert.match(encryptionDetails({...base,media:{}}),/Currently used for media: status unknown/);
+ assert.doesNotMatch(encryptionDetails({...base,session:{connected:false},media:{state:'encrypted',recipients:1,keyHolders:[{}]}}),/E2EE active/);
 });

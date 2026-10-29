@@ -4,7 +4,7 @@ export function compactMediaEncryptionStatus(media = {}) {
     let status;
     switch (media.state) {
         case "encrypted": status = !media.recipients ? t("security.compact.ready")
-            : media.keyHolders?.length ? "E2EE" : t("security.compact.preparing"); break;
+            : media.keyHolders?.length ? t("security.compact.active") : t("security.compact.preparing"); break;
         case "keying": status = t("security.compact.preparing"); break;
         case "partial": status = t("security.compact.partial"); break;
         case "paused": status = t("security.compact.paused"); break;
@@ -28,9 +28,15 @@ export function encryptionDetails({ session, diagnostics, media = {}, capability
         const messages = diagnostics ? diagnostics.active ? "E2EE" : t("security.compact.blocked") : t("security.compact.unknown");
         rows.push(`${t("security.compact.users")}: ${messages} (${t("security.compact.messages")})`);
     }
-    const status = compactMediaEncryptionStatus(media) || t("security.compact.off");
-    rows.push(voiceOnly ? `${t("security.compact.media")}\n${t("security.compact.users")}: ${status}`
-        : `${t("security.compact.media")}: ${status}`);
+    const active = session?.connected === false ? "" : compactMediaEncryptionStatus(media);
+    const available = capability?.supported === true && !capability.reason
+        ? t("security.compact.available")
+        : capability?.supported === false || capability?.reason ? t("security.compact.unavailableShort")
+            : active ? t("security.compact.available") : t("security.compact.unknown");
+    const status = session?.connected === false ? t("security.compact.disconnected")
+        : active || (media.state === "off" ? t("security.compact.idle") : t("security.compact.unknown"));
+    rows.push(`${t("security.compact.media")}: ${available}`);
+    rows.push(`${t("security.compact.current")}: ${status}`);
     if (capability?.reason) rows.push(t(["server_outdated", "keyless_guest", "no_device", "secure_unavailable"].includes(capability.reason)
         ? `security.compact.${capability.reason}` : "security.compact.unavailable"));
     if (!voiceOnly) rows.push(t("security.compact.exceptions"));

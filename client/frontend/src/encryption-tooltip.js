@@ -1,6 +1,7 @@
 import { t } from "./i18n.js";
 import { setStatusIcon } from "./icons.js";
 import { channelMediaStatus } from "./channel-media.js";
+import { mediaE2EESupport } from "./media-e2ee.js";
 import { encryptionDetails, compactMediaEncryptionStatus } from "./encryption-details.js";
 
 // Compact hover with a plain-language footer, also available by keyboard.
@@ -47,7 +48,11 @@ export function createEncryptionTooltip(trigger, { context, voiceOnly = false })
         ]);
         if (!matches()) return;
         const value = result => result.status === "fulfilled" ? result.value : undefined;
-        const text = encryptionDetails({ session: value(session), diagnostics: value(diagnostics), capability: value(capability), media: channelMediaStatus(), voiceOnly });
+        let mediaCapability = value(capability);
+        if (mediaCapability?.supported && !mediaCapability.reason && !mediaE2EESupport().ok) {
+            mediaCapability = { ...mediaCapability, reason: "unsupported_runtime" };
+        }
+        const text = encryptionDetails({ session: value(session), diagnostics: value(diagnostics), capability: mediaCapability, media: channelMediaStatus(), voiceOnly });
         if (tip.dataset.value !== text) {
             const split = text.lastIndexOf("\n\n");
             const body = document.createElement("div"), footer = document.createElement("div");
