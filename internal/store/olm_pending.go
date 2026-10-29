@@ -20,6 +20,11 @@ var (
 	// account's outstanding chat copies. Neither applies to controls.
 	OlmPendingAccountBytes int64 = 128 << 20
 	OlmPendingSenderBytes  int64 = 128 << 20
+	// OlmPendingSenderControlBytes and OlmPendingAccountControlBytes are the
+	// separate control budgets per sender account and per recipient account.
+	// A rekey of a 64-member channel is 63 copies of about 3.5 KiB.
+	OlmPendingSenderControlBytes  int64 = 4 << 20
+	OlmPendingAccountControlBytes int64 = 4 << 20
 	// OlmPendingDeviceBytes and OlmPendingDeviceCopies bound one device queue.
 	OlmPendingDeviceBytes  int64 = 64 << 20
 	OlmPendingDeviceCopies       = 4096

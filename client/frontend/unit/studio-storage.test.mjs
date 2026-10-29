@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { studioLayoutKey, studioAssetDB, wipeStudioIdentity, dropLegacyStudio, LEGACY_STUDIO_DB } from "../src/studio-storage.js";
+import { studioLayoutKey, studioAssetDB, wipeStudioIdentity, dropLegacyStudio, sweepOrphanStudio, LEGACY_STUDIO_DB } from "../src/studio-storage.js";
 import { STUDIO_STORAGE_KEY } from "../src/studio-state.js";
 
 function fakes() {
@@ -54,4 +54,24 @@ test("a blocked or failing storage never throws", async () => {
     const failingDB = { deleteDatabase() { throw new Error("denied"); } };
     assert.equal(await wipeStudioIdentity("uid-a", { storage: throwing, indexedDB: failingDB }), false);
     await dropLegacyStudio({ storage: null, indexedDB: null });
+});
+
+// Task 4 fix review P3-3: a deletion whose webview wipe was cut off is
+// completed at the next start; nothing is removed while any identity is
+// unreadable or unnamed.
+test("startup sweep removes Studio data of identities that no longer exist", async () => {
+    const f = fakes();
+    for (const uid of ["live", "gone"]) f.items.set(studioLayoutKey(uid), "{}");
+    f.items.set("other-key", "x");
+    f.storage.key = i => [...f.items.keys()][i] ?? null;
+    Object.defineProperty(f.storage, "length", { get: () => f.items.size });
+    f.indexedDB.databases = async () => [{ name: studioAssetDB("live") }, { name: studioAssetDB("gone") }, { name: "noxa-other" }];
+    assert.deepEqual(await sweepOrphanStudio([{ unique_id: "live" }, { unique_id: "x", error: "unreadable" }], f), []);
+    assert.deepEqual(await sweepOrphanStudio([], f), []);
+    assert.equal(f.deleted.length, 0);
+    assert.deepEqual(await sweepOrphanStudio([{ unique_id: "live" }], f), ["gone"]);
+    assert.equal(f.items.has(studioLayoutKey("gone")), false);
+    assert.equal(f.items.has(studioLayoutKey("live")), true);
+    assert.equal(f.items.has("other-key"), true);
+    assert.deepEqual(f.deleted, [studioAssetDB("gone")]);
 });

@@ -363,3 +363,28 @@ func TestOlmDoorbellUsesDeviceIndex(t *testing.T) {
 		t.Fatalf("unregistered session still indexed: %v", got)
 	}
 }
+
+// Task 4 fix review P3-4: device changes racing a detach never leave a stale
+// index entry (run under -race).
+func TestDeviceIndexConcurrentMovesAndDetach(t *testing.T) {
+	index := newDeviceSessionIndex()
+	for i := 0; i < 50; i++ {
+		c := &Client{ID: "c"}
+		c.attachDeviceIndex(index)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for j := 0; j < 20; j++ {
+				c.setDeviceID([]string{"dev-a", "dev-b"}[j%2])
+			}
+		}()
+		c.detachDeviceIndex()
+		<-done
+		c.setDeviceID("dev-c") // after detach: not indexed
+		for _, d := range []string{"dev-a", "dev-b", "dev-c"} {
+			if got := index.of(d); len(got) != 0 {
+				t.Fatalf("round %d: stale index entry under %s", i, d)
+			}
+		}
+	}
+}

@@ -33,6 +33,13 @@ const MaxControlTTL = 300
 // MaxControlData bounds a control's opaque data.
 const MaxControlData = 4096
 
+// MaxControlEnvelopeBytes bounds one control copy's envelope on the server. The
+// encrypted body cannot be inspected, so without this a "control" label could
+// carry chat-sized ciphertext outside the chat budgets. It fits the largest
+// valid control (all text fields at their limit, MaxControlData of data, sealed
+// as a pre-key Olm message): TestMaxControlEnvelopeFitsCap.
+const MaxControlEnvelopeBytes = 12 << 10
+
 // MaxPendingControls bounds pending (unacknowledged) controls per sender
 // device and target device, so one sender's unreadable controls can never
 // block other senders' controls to that device.

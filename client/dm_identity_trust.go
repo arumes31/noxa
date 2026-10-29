@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,10 @@ type dmIdentityPin struct {
 	// durable reset intent: the consumer applies it on the next trust check
 	// (only while this fingerprint is still the pinned one) and clears it.
 	RatchetReset string `json:"ratchet_reset,omitempty"`
+	// Owner tags the pin with its local identity (dmPinOwnerTag), so deleting
+	// that identity finds every pin it wrote, including group-only contacts
+	// and servers the device no longer knows. Pins from older builds have none.
+	Owner string `json:"owner,omitempty"`
 }
 
 // ContactIdentityChange is the payload of the "contact_identity_changed"
@@ -153,7 +158,21 @@ func (m *connManager) peerPinPath(uid string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
+	dmPinOwners.Store(path, dmPinOwner{tag: dmPinOwnerTag(local), publicKey: id.PublicKey})
 	return path, server, nil
+}
+
+// dmPinOwner is the local identity that a contact pin path belongs to.
+type dmPinOwner struct{ tag, publicKey string }
+
+// dmPinOwners maps pin paths (named by peerPinPath) to their identity, so a
+// pin write can tag the file and refuse once that identity is being deleted.
+var dmPinOwners sync.Map
+
+// dmPinOwnerTag names an identity inside its pin files without storing its key.
+func dmPinOwnerTag(local []byte) string {
+	sum := sha256.Sum256(append([]byte("noxa-dm-pin-owner-v1\n"), local...))
+	return hex.EncodeToString(sum[:])
 }
 func readDMPin(path string) (dmIdentityPin, error) {
 	var pin dmIdentityPin
@@ -190,7 +209,20 @@ func readDMPin(path string) (dmIdentityPin, error) {
 	}
 	return pin, nil
 }
+
+// writeDMPin writes under contactPinMoveMu and re-checks the owner's deletion
+// fence there, so a write can never land after an identity deletion moved
+// that identity's pins away (no orphan pin).
 func writeDMPin(path string, pin dmIdentityPin) error {
+	contactPinMoveMu.Lock()
+	defer contactPinMoveMu.Unlock()
+	if v, ok := dmPinOwners.Load(path); ok {
+		owner := v.(dmPinOwner)
+		if identityDeleted(owner.publicKey) {
+			return errIdentityDeleted
+		}
+		pin.Owner = owner.tag
+	}
 	raw, err := json.Marshal(pin)
 	if err != nil {
 		return err

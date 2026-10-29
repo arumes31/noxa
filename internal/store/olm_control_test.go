@@ -137,7 +137,9 @@ func TestOlmControlSingleTargetAdmission(t *testing.T) {
 }
 
 // Review b7 P3-6: pending controls are cleared ControlPendingTTL after their
-// deadline, except a copy that opened a device-pair session.
+// deadline. Task 4 fix review P2-A: so is a copy that opened a device-pair
+// session; its one-time key moves from admitted to received (the delivery
+// obligation ended, as on an acknowledgement).
 func TestOlmPendingControlsExpire(t *testing.T) {
 	s, a, b, _, _ := admissionFixture(t)
 	snap, e := s.OlmSnapshot(t.Context(), a, "direct", "bob", "")
@@ -166,7 +168,20 @@ func TestOlmPendingControlsExpire(t *testing.T) {
 		time.Now().Unix()-admission.ControlPendingTTL-1); e != nil {
 		t.Fatal(e)
 	}
-	if n, e := s.ExpirePendingOlmControls(t.Context()); e != nil || n != 1 || pending() != 1 {
+	keyState := func() string {
+		var state string
+		if e := s.db.QueryRowContext(context.Background(), `SELECT lifecycle FROM olm_directory_keys WHERE device_id=$1 AND request_id='claim'`, b.Device).Scan(&state); e != nil {
+			t.Fatal(e)
+		}
+		return state
+	}
+	if st := keyState(); st != "admitted" {
+		t.Fatalf("opening control's key before the sweep: %s", st)
+	}
+	if n, e := s.ExpirePendingOlmControls(t.Context()); e != nil || n != 2 || pending() != 0 {
 		t.Fatalf("stale control sweep: %d %v (%d pending)", n, e, pending())
+	}
+	if st := keyState(); st != "received" {
+		t.Fatalf("opening control's key after the sweep: %s, want received", st)
 	}
 }

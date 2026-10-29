@@ -186,7 +186,7 @@ func Freeze(m *Manifest, copies []Copy) ([][]byte, error) {
 	var parts [][]byte
 	batch := []Copy{}
 	for _, c := range copies {
-		if len(c.Envelope) > MaxEnvelopeBytes {
+		if len(c.Envelope) > envelopeLimit(m) {
 			return nil, ErrInvalid
 		}
 		next := append(append([]Copy{}, batch...), c)
@@ -237,7 +237,7 @@ func Open(m Manifest, parts [][]byte) ([]Copy, error) {
 		}
 		for _, c := range cs {
 			t, ok := targets[c.Device]
-			if !ok || t.Principal != c.Principal || t.AccountEpoch != c.AccountEpoch || !olmdir.ValidText(c.SessionID) || len(c.Envelope) < 2 || len(c.Envelope) > MaxEnvelopeBytes || !json.Valid(c.Envelope) || c.ClaimID != "" && !olmdir.ValidText(c.ClaimID) {
+			if !ok || t.Principal != c.Principal || t.AccountEpoch != c.AccountEpoch || !olmdir.ValidText(c.SessionID) || len(c.Envelope) < 2 || len(c.Envelope) > envelopeLimit(&m) || !json.Valid(c.Envelope) || c.ClaimID != "" && !olmdir.ValidText(c.ClaimID) {
 				return nil, ErrInvalid
 			}
 			delete(targets, c.Device)
@@ -312,4 +312,13 @@ func Decode(b []byte, out any, max int) error {
 		return ErrInvalid
 	}
 	return nil
+}
+
+// envelopeLimit is the largest copy envelope for this manifest: controls are
+// limited to MaxControlEnvelopeBytes (the server cannot see their bodies).
+func envelopeLimit(m *Manifest) int {
+	if m.Purpose == "control" {
+		return MaxControlEnvelopeBytes
+	}
+	return MaxEnvelopeBytes
 }

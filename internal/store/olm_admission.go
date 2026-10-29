@@ -633,6 +633,27 @@ func (s *Store) finalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 				return empty, nil, ErrOlmLimit
 			}
 		}
+	} else {
+		// Controls have their own, small per-account budgets: the server
+		// cannot see a control's body, so a "control" label must not carry
+		// chat-sized backlog past the chat caps (Task 4 fix review P2-A).
+		// A full rekey of the largest encrypted channel is a few hundred KiB.
+		var sent int64
+		if e = tx.QueryRowContext(ctx, `SELECT COALESCE(sum(octet_length(copy)),0) FROM olm_deliveries WHERE sender=$1 AND state='pending' AND control`, a.Principal).Scan(&sent); e != nil {
+			return empty, nil, e
+		}
+		if sent+incoming > OlmPendingSenderControlBytes {
+			return empty, nil, ErrOlmLimit
+		}
+		for p, n := range perAccount { // a control has exactly one target
+			var held int64
+			if e = tx.QueryRowContext(ctx, `SELECT COALESCE(sum(octet_length(copy)),0) FROM olm_deliveries WHERE principal=$1 AND state='pending' AND control`, p).Scan(&held); e != nil {
+				return empty, nil, e
+			}
+			if held+n > OlmPendingAccountControlBytes {
+				return empty, nil, ErrOlmLimit
+			}
+		}
 	}
 	for _, c := range copies {
 		var count int

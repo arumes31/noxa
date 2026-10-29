@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"noxa/internal/e2ee/admission"
+	"noxa/internal/e2ee/ratchet"
 )
 
 // sendFixture admits the fixture's single alice -> bob copy.
@@ -56,8 +59,12 @@ func pendingBytes(t *testing.T, s *Store, where string, args ...any) int64 {
 func scaleBudgets(t *testing.T, global, account, sender int64) {
 	t.Helper()
 	g, a, s := OlmPendingGlobalBytes, OlmPendingAccountBytes, OlmPendingSenderBytes
+	sc, ac := OlmPendingSenderControlBytes, OlmPendingAccountControlBytes
 	OlmPendingGlobalBytes, OlmPendingAccountBytes, OlmPendingSenderBytes = global, account, sender
-	t.Cleanup(func() { OlmPendingGlobalBytes, OlmPendingAccountBytes, OlmPendingSenderBytes = g, a, s })
+	t.Cleanup(func() {
+		OlmPendingGlobalBytes, OlmPendingAccountBytes, OlmPendingSenderBytes = g, a, s
+		OlmPendingSenderControlBytes, OlmPendingAccountControlBytes = sc, ac
+	})
 }
 
 // Review P2-1 repro, now inverted: every way a device ends (revocation,
@@ -274,5 +281,92 @@ func TestOlmDeliveriesHoldNoLocksDuringWrite(t *testing.T) {
 	})
 	if err != nil || delivered != 1 {
 		t.Fatalf("delivered %d, lock still held during the write: %v", delivered, err)
+	}
+}
+
+// controlWithEnvelope admits one control to target whose copy envelope is n
+// bytes (opaque to the server, like any control body).
+func controlWithEnvelope(t *testing.T, s *Store, a OlmSource, snap OlmRosterSnapshot, target OlmSource, attempt string, n int, deadline int64) (admission.Receipt, error) {
+	t.Helper()
+	var targets []admission.Target
+	for _, tg := range snap.Targets {
+		if tg.Local || tg.Device == target.Device {
+			targets = append(targets, tg)
+		}
+	}
+	m := admission.Manifest{Version: admission.Version, Server: a.Server, Sender: a.Principal, Device: a.Device, AccountEpoch: 1, AttemptID: attempt, LogicalID: "ctl-" + attempt,
+		Purpose: "control", Scope: "direct", Peer: target.Principal, Deadline: deadline, Rosters: snap.Rosters, Targets: targets}
+	build := func(body int) []byte {
+		env, _ := json.Marshal(ratchet.Envelope{Version: ratchet.Version, SessionID: "session",
+			Binding: admission.ExpectedBinding(m, admission.Target{Principal: target.Principal, Device: target.Device, AccountEpoch: target.AccountEpoch}),
+			Message: json.RawMessage(`{"type":0,"body":"` + strings.Repeat("A", body) + `"}`)})
+		return env
+	}
+	envelope := build(n - len(build(0)))
+	parts, err := admission.Freeze(&m, []admission.Copy{{Principal: target.Principal, Device: target.Device, AccountEpoch: 1, SessionID: "session", Envelope: envelope}})
+	if err != nil {
+		return admission.Receipt{}, err
+	}
+	if _, err = s.BeginOlmAttempt(t.Context(), a, m); err != nil {
+		return admission.Receipt{}, err
+	}
+	for i, p := range parts {
+		if err = s.PutOlmPart(t.Context(), a, m.AttemptID, i, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s.FinalizeOlmAttempt(t.Context(), a, m.AttemptID)
+}
+
+// Task 4 fix review P2-A (repro adopted): a "control" label no longer escapes
+// the per-account budgets. A control copy is capped at
+// MaxControlEnvelopeBytes, and controls are charged to their own per-sender
+// and per-recipient account budgets, so a sender over its chat cap, sending to
+// a recipient over its account cap, gets only that small control budget.
+func TestOlmControlLabelCannotBypassAccountCaps(t *testing.T) {
+	scaleBudgets(t, 64<<20, 1<<20, 1<<20)
+	OlmPendingSenderControlBytes, OlmPendingAccountControlBytes = 64<<10, 64<<10
+	s, a, b, m, parts := admissionFixture(t)
+	if r, err := sendFixture(t, s, a, m, parts); err != nil || r.State != "accepted" {
+		t.Fatal(r, err)
+	}
+	seedPending(t, s, "self", a.Principal, a.Principal, a.Device, 33)
+	seedPending(t, s, "tobob", "other", b.Principal, "bob-other-dev", 33)
+	snap, err := s.OlmSnapshot(t.Context(), a, "direct", "bob", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Unix() + 120
+	// A chat-sized body labelled control is refused outright.
+	if _, err := controlWithEnvelope(t, s, a, snap, b, "100", 22<<10, deadline); !errors.Is(err, admission.ErrInvalid) {
+		t.Fatalf("22 KiB control envelope: %v", err)
+	}
+	before := pendingBytes(t, s, "sender=$1", a.Principal)
+	accepted := 0
+	for i := 0; i < admission.MaxPendingControls; i++ {
+		r, err := controlWithEnvelope(t, s, a, snap, b, strconv.Itoa(200+i), admission.MaxControlEnvelopeBytes, deadline)
+		if err != nil || r.State != "accepted" {
+			if !errors.Is(err, ErrOlmLimit) {
+				t.Fatalf("control %d: %+v %v", i, r, err)
+			}
+			break
+		}
+		accepted++
+	}
+	extra := pendingBytes(t, s, "sender=$1", a.Principal) - before
+	if extra > OlmPendingSenderControlBytes || accepted >= admission.MaxPendingControls {
+		t.Fatalf("controls accepted past the control budget: %d (%d bytes)", accepted, extra)
+	}
+	t.Logf("controls admitted within the %d-byte control budget: %d (%d bytes)", OlmPendingSenderControlBytes, accepted, extra)
+}
+
+// The control budgets leave room for real rekeys at the largest encrypted
+// channel: several outstanding full rekeys (63 recipients) even if every copy
+// were a maximum-size control, and far more with real media-key controls.
+func TestOlmControlBudgetsFitMaxChannelRekeys(t *testing.T) {
+	const recipients = 63 // netproto.MediaE2EEMaxVoice - 1
+	fullRekey := int64(recipients * admission.MaxControlEnvelopeBytes)
+	if OlmPendingSenderControlBytes < 4*fullRekey/3 || OlmPendingAccountControlBytes < 4*fullRekey/3 {
+		t.Fatalf("control budgets %d/%d below a worst-case rekey of %d", OlmPendingSenderControlBytes, OlmPendingAccountControlBytes, fullRekey)
 	}
 }

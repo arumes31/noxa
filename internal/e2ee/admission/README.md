@@ -62,7 +62,12 @@ per recipient device (4,096 copies / 64 MiB), per recipient account (128 MiB ove
 all its devices), per sender account (128 MiB of outstanding chat) and globally
 (1 GiB). Chat stops 1/16 short of the device, account and global limits (and 256
 copies short per device); only controls (media rekeys) may use that reserve, so
-a chat backlog cannot block key distribution. The server logs a warning when
+a chat backlog cannot block key distribution. Controls have their own budgets
+instead of the chat account caps: 4 MiB of pending controls per sender account
+and 4 MiB per recipient account, and a control copy's envelope is at most
+`MaxControlEnvelopeBytes` (12 KiB; the largest valid control is about 10.6 KiB,
+a real media-key control about 3.4 KiB), because the server cannot see a
+control's body. The server logs a warning when
 the global budget is 80% used. Pending data is never evicted for capacity. It is
 closed (state `received`, payload emptied, digest kept) only when it can no
 longer be read: in the same transaction that revokes, signs out, resets or
@@ -169,8 +174,12 @@ receive/ACK as chat. Wire rules (`control.go`, JS mirror in
   sender can only block its own controls (control copies still count
   towards the recipient's shared pending queue of 4,096 copies / 64 MiB). A control copy still pending
   `ControlPendingTTL` (24 h) after its manifest deadline is cleared by server
-  maintenance (`ExpirePendingOlmControls`), unless it opened a device-pair
-  session (its initial-session obligation is kept). Edits/deletes can never reference a
+  maintenance (`ExpirePendingOlmControls`). If it opened a device-pair session,
+  its one-time key moves from admitted to received in the same statement: the
+  server's delivery obligation for the opening message ends as on an
+  acknowledgement, and the key stops counting toward the target's unresolved
+  keys. The target device keeps the private key until its own closure, so later
+  pre-key messages of that session still open. Edits/deletes can never reference a
   control. The only delivery notification for Olm copies is the
   content-free `olm_pending` doorbell (see the Task 2 consumer section).
 - Body (inside the ciphertext): `{kind, scope: {type, id}, epoch, expires_at,

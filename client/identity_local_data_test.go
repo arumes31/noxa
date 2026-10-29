@@ -289,3 +289,47 @@ func TestIdentityLocalImportRefusedWhenLivenessUnknown(t *testing.T) {
 		t.Fatal("the tombstone must be kept")
 	}
 }
+
+// Task 4 fix review P3-1/P3-2: pins carry an owner tag, so deletion also
+// removes pins of group-only contacts (no DM log) and of servers the device
+// no longer knows; and a pin write that races a deletion never lands after
+// the move.
+func TestDeleteIdentityErasesOwnedPinsAndFencesPinWrites(t *testing.T) {
+	a, id, idName, other, _, _ := localDataSetup(t)
+	local, err := auth.LoadPublicKey(id.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirLocal, err := auth.LoadPublicKey(other.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(owner *identity, key []byte, server, uid string) string {
+		t.Helper()
+		path, err := dmPinPathFor(key, server, uid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dmPinOwners.Store(path, dmPinOwner{tag: dmPinOwnerTag(key), publicKey: owner.PublicKey})
+		if err := writeDMPin(path, dmIdentityPin{Version: 1, Fingerprint: strings.Repeat("ab", 32)}); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	groupOnly := write(id, local, "noxa.example:9987", "group-member")
+	forgotten := write(id, local, "forgotten.example:9987", "someone")
+	theirs := write(other, theirLocal, "noxa.example:9987", "group-member")
+	if pin, err := readDMPin(groupOnly); err != nil || pin.Owner != dmPinOwnerTag(local) {
+		t.Fatalf("pin not tagged with its owner: %+v %v", pin, err)
+	}
+	if msg := a.DeleteIdentity(idName, true); msg != "" {
+		t.Fatal(msg)
+	}
+	requireGone(t, []string{groupOnly, forgotten}, "deleted identity's group-only and forgotten-server pins")
+	requireKept(t, []string{theirs}, "another identity's pin")
+	// A write that reaches the pin store after the deletion started is refused.
+	if err := writeDMPin(groupOnly, dmIdentityPin{Version: 1, Fingerprint: strings.Repeat("cd", 32)}); !errors.Is(err, errIdentityDeleted) {
+		t.Fatalf("late pin write: %v", err)
+	}
+	requireGone(t, []string{groupOnly}, "a late pin write")
+}

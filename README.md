@@ -1073,6 +1073,17 @@ direct messages only with end-to-end encryption; older apps can still send
 legacy direct messages to a contact with a single desktop, and are asked to
 update when the contact has several devices or uses the web app.
 
+A linked phone or browser trusts its own account only through the desktop
+statement it was linked with: its account root is the key of the desktop that
+approved the link, never a key the server reports. Every desktop of an account
+signs in with the account's one identity key, so any of them can link. If the
+account's key changes (for example, a desktop with a different key signs in
+with the password and rebinds the account), phones and browsers linked
+earlier stop sending secure messages and ask to be linked again from a
+desktop that has the current key. A typed link code, a passkey sign-in without
+a link statement, or a backup from before this release also asks for a new
+link.
+
 Voice channels, watching streams and private calls use WebRTC in the
 browser. Private calls are relay-only, so they need TURN (`turn.managed`);
 on mobile networks that block UDP, offer TURN over TLS on port 443 as well

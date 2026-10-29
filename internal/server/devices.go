@@ -188,13 +188,16 @@ func (c *Client) sessionKey() string {
 	return c.verifiedGuestKey
 }
 
+// The device index is updated while c.mu is held (lock order c.mu ->
+// deviceSessionIndex.mu, never the reverse), so concurrent device changes and
+// detaches cannot leave a stale index entry.
 func (c *Client) setDeviceID(id string) {
 	c.mu.Lock()
-	old, index := c.deviceID, c.deviceIndex
+	defer c.mu.Unlock()
+	old := c.deviceID
 	c.deviceID = id
-	c.mu.Unlock()
-	if index != nil && old != id {
-		index.move(c, old, id)
+	if c.deviceIndex != nil && old != id {
+		c.deviceIndex.move(c, old, id)
 	}
 }
 
@@ -204,23 +207,21 @@ func (c *Client) attachDeviceIndex(index *deviceSessionIndex) {
 		return
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.deviceIndex = index
-	id := c.deviceID
-	c.mu.Unlock()
-	if id != "" {
-		index.move(c, "", id)
+	if c.deviceID != "" {
+		index.move(c, "", c.deviceID)
 	}
 }
 
 // detachDeviceIndex removes an unregistered session from the device index.
 func (c *Client) detachDeviceIndex() {
 	c.mu.Lock()
-	index, id := c.deviceIndex, c.deviceID
-	c.deviceIndex = nil
-	c.mu.Unlock()
-	if index != nil && id != "" {
-		index.move(c, id, "")
+	defer c.mu.Unlock()
+	if c.deviceIndex != nil && c.deviceID != "" {
+		c.deviceIndex.move(c, c.deviceID, "")
 	}
+	c.deviceIndex = nil
 }
 
 // deviceSessionIndex maps a linked device ID to its live sessions, so a

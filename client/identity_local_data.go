@@ -323,7 +323,7 @@ func (a *App) tombstoneIdentityLocalData(id *identity) (string, error) {
 			}
 		}
 	}
-	if local, err := auth.LoadPublicKey(id.PublicKey); err == nil && len(peers) > 0 {
+	if local, err := auth.LoadPublicKey(id.PublicKey); err == nil {
 		servers := map[string]bool{}
 		for _, s := range scopes {
 			servers[s.canonical] = true
@@ -336,7 +336,12 @@ func (a *App) tombstoneIdentityLocalData(id *identity) (string, error) {
 				}
 			}
 		}
-		if err := run(localKindContactPin, func() []string { return pins }); err != nil {
+		if err := run(localKindContactPin, func() []string {
+			// Every pin tagged with this identity (group-only contacts,
+			// forgotten servers); untagged pins of older builds are found
+			// only through the DM peers above.
+			return append(pins, ownedDMPins(local)...)
+		}); err != nil {
 			return moved(), err
 		}
 	}
@@ -512,4 +517,29 @@ func (a *App) finishIdentityLocalDeletion(publicKey string, complete bool) error
 		}
 	}
 	return nil
+}
+
+// ownedDMPins lists the contact pin files tagged with local's owner tag.
+func ownedDMPins(local []byte) []string {
+	probe, err := dmPinPathFor(local, "-", "-")
+	if err != nil {
+		return nil
+	}
+	dir := filepath.Dir(probe)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	tag := dmPinOwnerTag(local)
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if pin, err := readDMPin(path); err == nil && pin.Owner == tag {
+			out = append(out, path)
+		}
+	}
+	return out
 }
