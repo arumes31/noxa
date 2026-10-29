@@ -2,12 +2,15 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"testing"
 
 	"noxa/internal/authorization"
 	"noxa/internal/channels"
 	"noxa/internal/netproto"
+	"noxa/internal/state"
 )
 
 // assertEncryptedVoiceInvariant checks, for channel ch, that every live
@@ -136,9 +139,8 @@ func TestMediaE2EEUnseatedVoiceSessionMeetsTheCap(t *testing.T) {
 	assertEncryptedVoiceInvariant(t, env, 3)
 }
 
-// A dead session's seat that a reconnect replaced has its voice ended, and a
-// failed move restores replaced seats whose session is live again.
-func TestMediaSeatsReplacementEndsVoiceAndUndoRestoresLiveSeats(t *testing.T) {
+// A dead session's seat that a reconnect replaced has its voice ended.
+func TestMediaSeatsReplacementEndsVoiceAndUndoRestoresOnlyTheTaker(t *testing.T) {
 	env := startMediaE2EEEnv(t, true)
 	_, userID := seatedVoiceMember(t, env)
 	waitFor(t, "media device", func() bool { c, _ := env.state.GetClient(userID); return c.MediaDevice == "dev-1" })
@@ -160,18 +162,17 @@ func TestMediaSeatsReplacementEndsVoiceAndUndoRestoresLiveSeats(t *testing.T) {
 		t.Fatal("replaced session's peer was not closed")
 	}
 
+	// Undo restores the taker only: a replaced session is dead for good and
+	// its voice was ended, so its seat is never restored.
 	var m mediaSeats
-	alive := map[string]bool{}
-	live := func(c string) bool { return alive[c] }
 	m.take(5, "old", mediaSeatID{"u", "d"}, 64, nil)
-	undo, replaced, ok := m.take(5, "new", mediaSeatID{"u", "d"}, 64, live)
+	undo, replaced, ok := m.take(5, "new", mediaSeatID{"u", "d"}, 64, func(string) bool { return false })
 	if !ok || len(replaced) != 1 || m.seat("old") != 0 {
 		t.Fatal("dead seat not replaced")
 	}
-	alive["old"] = true
 	undo()
-	if m.seat("old") != 5 || m.seat("new") != 0 {
-		t.Fatalf("undo: old=%d new=%d", m.seat("old"), m.seat("new"))
+	if m.seat("old") != 0 || m.seat("new") != 0 || m.others(5, "") != 0 {
+		t.Fatalf("undo: old=%d new=%d seats=%d", m.seat("old"), m.seat("new"), m.others(5, ""))
 	}
 }
 
@@ -224,4 +225,54 @@ func parkedForTest(srv *TCPServer, client string) bool {
 	defer srv.mediaSeats.mu.Unlock()
 	ch, ok := srv.mediaSeats.byClient[client]
 	return ok && ch == 0
+}
+
+type failingTombstoneFT struct{ *fakeFileTransfer }
+
+func (f failingTombstoneFT) TombstoneChannelData(int64) error { return errors.New("disk busy") }
+
+// Fix5 review P3-1 (repro adopted): a role-channel deletion whose detach hook
+// fails is not committed; members stay in the channel and keep their seats,
+// so the channel admits no extra seats.
+func TestMediaSeatsFailedRoleDeletionKeepsSeats(t *testing.T) {
+	env := startMediaE2EEEnv(t, true)
+	env.srv.deps.FileTransfer = failingTombstoneFT{&fakeFileTransfer{}}
+	env.state.AddChannel(testChannel(1))
+	var members []channels.DeletedMember
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("stay-%d", i)
+		env.state.AddClient(&state.Client{ClientID: id, UniqueID: id, MediaDevice: "dev-" + id})
+		if err := env.state.MoveClient(id, 1); err != nil {
+			t.Fatal(err)
+		}
+		seatForTest(t, env.srv, 1, id, id, "dev-"+id)
+		members = append(members, channels.DeletedMember{ClientID: id, ChannelID: 1})
+	}
+	if err := env.srv.detachRoleDeletedChannels(channels.DeleteResult{ChannelIDs: []int64{1}, Members: members}); err == nil {
+		t.Fatal("hook did not fail")
+	}
+	if got := env.srv.mediaSeats.others(1, ""); got != 10 {
+		t.Fatalf("failed deletion left %d seats in channel 1, want 10", got)
+	}
+	admitted := 0
+	for i := 0; i < MediaE2EEMaxVoice; i++ {
+		id := fmt.Sprintf("new-%d", i)
+		if _, _, ok := env.srv.mediaSeats.take(1, id, mediaSeatID{id, "dev-" + id}, MediaE2EEMaxVoice, nil); ok {
+			admitted++
+		}
+	}
+	if admitted != MediaE2EEMaxVoice-10 {
+		t.Fatalf("admitted %d newcomers, want %d", admitted, MediaE2EEMaxVoice-10)
+	}
+}
+
+// Fix5 review P3-2 (repro adopted): an explicit or automatic channel deletion
+// (ApplyChannelDeletion) parks the members' seats too.
+func TestMediaSeatsExplicitDeletionParks(t *testing.T) {
+	env := startMediaE2EEEnv(t, true)
+	seatForTest(t, env.srv, 9, "m9", "u9", "d9")
+	env.srv.ApplyChannelDeletion(channels.DeleteResult{RootID: 9, ChannelIDs: []int64{9}, Members: []channels.DeletedMember{{ClientID: "m9", ChannelID: 9}}}, "deleted")
+	if env.srv.mediaSeats.others(9, "") != 0 || !parkedForTest(env.srv, "m9") {
+		t.Fatalf("explicit deletion: seat %d, seats in 9: %d", env.srv.mediaSeats.seat("m9"), env.srv.mediaSeats.others(9, ""))
+	}
 }

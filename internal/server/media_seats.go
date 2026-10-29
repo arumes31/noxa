@@ -55,13 +55,6 @@ type seatLive func(client string) bool
 
 func (l seatLive) alive(client string) bool { return l == nil || l(client) }
 
-// replacedSeat is a dead session's seat that a take replaced.
-type replacedSeat struct {
-	client string
-	ch     int64
-	id     mediaSeatID
-}
-
 // othersLocked counts the seats in ch held by other sessions. Only a DEAD
 // session of the same identity (a reconnect whose old session is not reaped
 // yet) is not counted: a live second session of the same device holds a
@@ -107,7 +100,8 @@ func (m *mediaSeats) putLocked(ch int64, client string, id mediaSeatID) {
 // take seats client in ch unless ch already has limit other seats. A session
 // seated in ch keeps its seat. Seats of dead sessions of the same identity
 // are replaced and returned (the caller ends their voice). The undo restores
-// the previous seat, and every replaced seat whose session is live again.
+// the previous seat; replaced seats are not restored: their sessions are dead
+// (dead is monotonic) and their voice was ended.
 func (m *mediaSeats) take(ch int64, client string, id mediaSeatID, limit int, live seatLive) (func(), []string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -123,20 +117,16 @@ func (m *mediaSeats) takeLocked(ch int64, client string, id mediaSeatID, limit i
 	if m.othersLocked(ch, client, id, live) >= limit {
 		return nil, nil, false
 	}
-	var replaced []replacedSeat
+	var replaced []string
 	if id.device != "" {
 		for c, sid := range m.byChannel[ch] {
 			if c != client && sid == id && !live.alive(c) {
-				replaced = append(replaced, replacedSeat{client: c, ch: ch, id: sid})
+				replaced = append(replaced, c)
 				m.removeLocked(c)
 			}
 		}
 	}
 	m.putLocked(ch, client, id)
-	ids := make([]string, len(replaced))
-	for i, r := range replaced {
-		ids[i] = r.client
-	}
 	return func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -147,12 +137,7 @@ func (m *mediaSeats) takeLocked(ch int64, client string, id mediaSeatID, limit i
 				m.removeLocked(client)
 			}
 		}
-		for _, r := range replaced {
-			if _, seated := m.byClient[r.client]; !seated && live.alive(r.client) {
-				m.putLocked(r.ch, r.client, r.id)
-			}
-		}
-	}, ids, true
+	}, replaced, true
 }
 
 // carry moves a client's seat to ch (see take). A client without a seat but
@@ -250,7 +235,11 @@ func (s *TCPServer) carryMediaSeat(clientID string, channel int64) (func(), erro
 	var fallback *mediaSeatID
 	if s.deps != nil && s.deps.State != nil {
 		if c, ok := s.deps.State.GetClient(clientID); ok && c.MediaDevice != "" {
+			// The identity comes from the session, like an offer's seat.
 			fallback = &mediaSeatID{principal: c.UniqueID, device: c.MediaDevice}
+			if session, ok := s.clientByID(clientID); ok {
+				fallback = &mediaSeatID{principal: session.uniqueID(), device: session.currentDeviceID()}
+			}
 		}
 	}
 	undo, replaced, ok := s.mediaSeats.carry(channel, clientID, fallback, MediaE2EEMaxVoice, s.mediaSessionLive)

@@ -52,6 +52,11 @@ func (s *TCPServer) ApplyChannelDeletion(result channels.DeleteResult, reason st
 			s.deps.Voice.LeaveChannel(member.ClientID, member.ChannelID)
 		}
 	}
+	// The deletion is committed: members' encrypted voice seats are parked
+	// (their peers live on; the next join meets the cap).
+	for _, member := range result.Members {
+		s.mediaSeats.park(member.ClientID)
+	}
 	// State-facing consequences must not sit behind filesystem cleanup. A file
 	// mutation can legitimately hold its lifecycle read lock while finishing a
 	// database/blob move; clients, metrics, and recorders still need to observe

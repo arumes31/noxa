@@ -137,7 +137,7 @@ func TestRoleQueryMemberMove(t *testing.T) {
 	b.mu.Lock()
 	b.moveErr = netproto.ErrMediaE2EEChannelFull
 	b.mu.Unlock()
-	if got := lastErr(t, sendCmd(t, conn, reader, command)); !strings.HasPrefix(got, "error id=779 ") || !strings.Contains(got, netproto.MediaE2EEReasonChannelFull) {
+	if got := lastErr(t, sendCmd(t, conn, reader, command)); !strings.HasPrefix(got, "error id=777 ") || !strings.Contains(got, netproto.MediaE2EEReasonChannelFull) {
 		t.Fatal(got)
 	}
 	if got := lastErr(t, sendCmd(t, conn, reader, `membermove data={"client_id":"target","channel_id":0}`)); !strings.HasPrefix(got, "error id=512 ") {

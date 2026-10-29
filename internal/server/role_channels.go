@@ -62,14 +62,21 @@ func (s *TCPServer) detachRoleDeletedChannels(deleted channels.DeleteResult) err
 		s.deps.State.SetSpeaking(member.ClientID, false)
 		s.deps.State.SetPrioritySpeaker(member.ClientID, false)
 		s.deps.State.SetSharing(member.ClientID, false)
-		// Seats in a deleted channel are parked (fix4 review P3-1).
-		s.mediaSeats.park(member.ClientID)
 	}
 	// Keep the old channel in state if cleanup fails, so recovery can retry
 	// the same IDs before the tree mirror discards them.
 	for _, id := range deleted.ChannelIDs {
 		if _, err := s.assets().removeImage("icons", strconv.FormatInt(id, 10)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			revokeErr = errors.Join(revokeErr, fmt.Errorf("removing channel %d icon: %w", id, err))
+		}
+	}
+	if revokeErr == nil {
+		// The deletion commits after this hook (the rest cannot fail): only
+		// then are the members' seats parked. A failed hook aborts the
+		// deletion and the members keep their seats where they stay (fix5
+		// review P3-1).
+		for _, member := range deleted.Members {
+			s.mediaSeats.park(member.ClientID)
 		}
 	}
 	return revokeErr
