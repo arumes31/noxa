@@ -454,20 +454,26 @@ export class Groups extends EventTarget {
         }
     }
 
-    /** Truthful locked placeholders for unopenable group copies (never ACKed). */
+    /**
+     * Truthful locked placeholders for unopenable group copies (never ACKed).
+     * Their sender and conversation come from the server's unauthenticated
+     * manifest: never attributed to a sender, and shown only in a group this
+     * device already lists.
+     */
     showQuarantined(list = []) {
         const current = new Set();
         for (const q of list) {
             if (q.scope !== "group" || !q.conversation) continue;
+            if (!this.list.has(q.conversation) && !this.messages.get(q.conversation)?.some(m => !m.quarantined)) continue;
             const id = "quarantine:" + q.id;
             current.add(id);
             const messages = this.messages.get(q.conversation) || [];
-            if (messages.some(m => m.id === id)) continue;
-            this.#put(q.conversation, [...messages, { id, protocol: RATCHET_PROTOCOL, conversation_id: q.conversation, from_unique_id: q.sender,
+            if (messages.some(m => m.id === id && m.unattributed)) continue;
+            this.#put(q.conversation, [...messages, { id, protocol: RATCHET_PROTOCOL, conversation_id: q.conversation, from_unique_id: "", unattributed: true,
                 text: null, quarantined: q.code, created_at: q.seenAt || Date.now() / 1000 }]);
         }
         for (const [id, messages] of this.messages) {
-            const keep = messages.filter(m => !m.quarantined || current.has(m.id));
+            const keep = messages.filter(m => !m.quarantined || (current.has(m.id) && m.unattributed));
             if (keep.length !== messages.length) this.#put(id, keep);
         }
     }

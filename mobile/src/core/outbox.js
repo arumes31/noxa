@@ -83,8 +83,21 @@ export async function requestBackgroundSync() {
     }
 }
 
-let flushing = null;
+/**
+ * The running flush per session: a flush stuck on an old session's dead
+ * connection never swallows a new session's flush.
+ */
+const flushing = new WeakMap();
 let heldTimer = 0;
+
+/**
+ * Writes an entry's new state back only while it is still queued: a flush of
+ * an older session that wakes up late never resurrects an entry that another
+ * flush already sent and removed.
+ */
+function keepQueued(fence, entry) {
+    return updateSealed(Stores.outbox, entry.id, cur => (cur ? entry : undefined), fence);
+}
 
 const sameFence = (a, b) => a.generation === b.generation && a.active && b.active;
 
@@ -95,8 +108,10 @@ const sameFence = (a, b) => a.generation === b.generation && a.active && b.activ
  * number sent.
  */
 export function flush(session, dm, groups = null) {
-    if (flushing) return flushing;
-    flushing = (async () => {
+    const key = session && typeof session === "object" ? session : flushing;
+    const running = flushing.get(key);
+    if (running) return running;
+    const run = (async () => {
         let sent = 0;
         let nextHeld = Infinity;
         // Destinations whose earlier entry stayed queued: later entries to
@@ -179,7 +194,7 @@ export function flush(session, dm, groups = null) {
                     // no secure messaging). Only a lost connection or a
                     // rate limit (it covers the whole connection) stops it.
                     if (error.blocked) {
-                        await putSealedIn(fence, Stores.outbox, current.id, { ...current, error: error.message }).catch(() => {});
+                        await keepQueued(fence, { ...current, error: error.message }).catch(() => {});
                         show(session, dm, { ...current, error: error.message }, groups);
                         waiting.add(destination(current));
                         continue;
@@ -188,23 +203,24 @@ export function flush(session, dm, groups = null) {
                         // Kept with its committed state; any other retryable
                         // failure (e.g. a server backend "unavailable") skips
                         // only this entry, so later ones are not starved.
-                        if (current !== entry) await putSealedIn(fence, Stores.outbox, current.id, current).catch(() => {});
+                        if (current !== entry) await keepQueued(fence, current).catch(() => {});
                         if (stopsFlush(session, error)) break;
                         waiting.add(destination(current));
                         continue;
                     }
                     console.warn(`outbox: ${current.kind} message ${current.id} refused: ${error.message}`);
-                    await putSealedIn(fence, Stores.outbox, current.id, { ...current, failed: true, error: error.message }).catch(() => {});
+                    await keepQueued(fence, { ...current, failed: true, error: error.message }).catch(() => {});
                 }
             }
         } finally {
-            flushing = null;
+            flushing.delete(key);
         }
         clearTimeout(heldTimer);
         if (nextHeld < Infinity && session.conn?.open) heldTimer = setTimeout(() => flush(session, dm, groups).catch(() => {}), Math.max(50, nextHeld - Date.now() + 50));
         return sent;
     })();
-    return flushing;
+    flushing.set(key, run);
+    return run;
 }
 
 /** The ordering key of an entry: one peer, conversation or channel. */

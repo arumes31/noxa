@@ -100,7 +100,8 @@ export function renderGroup(root, id) {
         const body = message.deleted ? h("span", { class: "msg-deleted" }, t("chat.deleted"))
             : message.text === null || message.text === undefined ? h("span", { class: "msg-locked" }, t("group.locked"))
                 : richBody(message.text, { conversation: "group", session: app.session, conn: app.session.conn, channelID: folder });
-        const from = memberName(message.from_unique_id);
+        // A locked placeholder's sender is unauthenticated: never attributed.
+        const from = message.unattributed ? t("chat.lockedSender") : memberName(message.from_unique_id);
         const classes = ["msg", own ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
         // Not sent: tapping offers Retry or Delete; otherwise the action sheet (bindMessageTaps).
         const props = message.failed ? retryProps(message, retryActions(message)) : { tabindex: message.deleted ? null : "0", "aria-haspopup": message.deleted ? null : "dialog" };

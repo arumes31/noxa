@@ -9,6 +9,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
+import { ownLinkMeta } from "./own-link-meta.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const bridge = process.env.NOXA_PRODUCT_BRIDGE;
@@ -49,7 +50,7 @@ const server = createServer(async (req, res) => {
 
 // Runs inside a device page: product classes over a frame-level bridge conn
 // (same construction as ratchet-product-browser.mjs).
-async function boot({ entries, device, binding }) {
+async function boot({ entries, device, binding, own }) {
     const [{ createRatchetCore }, { openRatchetStore }, consumerAPI, dirAPI, { DirectMessages }, { Groups }] = await Promise.all([
         import(`/app/assets/${entries.core}`), import(`/app/assets/${entries.store}`), import(`/app/assets/${entries.consumer}`),
         import(`/app/assets/${entries.directory}`), import(`/app/assets/${entries.direct}`), import(`/app/assets/${entries.groups}`)]);
@@ -69,14 +70,15 @@ async function boot({ entries, device, binding }) {
         },
     };
     const edSecret = Uint8Array.from(atob(device.edSecret), c => c.charCodeAt(0));
-    const identity = { edSecret };
+    // This account's own root comes from the desktop-signed link statement (own-link-meta.mjs).
+    const identity = { edSecret, edPublic: edSecret.slice(32), xPublic: Uint8Array.from(atob(own.xPublic), c => c.charCodeAt(0)) };
     if (device.x25519_private) identity.xSecret = Uint8Array.from(atob(device.x25519_private), c => c.charCodeAt(0));
     const session = Object.assign(new EventTarget(), { conn, identity, uniqueID: device.principal, deviceID: device.device, nickname: device.principal, capabilities: new Set() });
     const namespace = { server: binding, principal: device.principal, device: device.device };
     const stats = { unread: 0, incoming: 0, ops: {} };
     const store = await openRatchetStore(namespace), core = await createRatchetCore();
     const counted = { apply: (r, o) => { stats.ops[r.op] = (stats.ops[r.op] || 0) + 1; return core.apply(r, o); }, close: () => core.close() };
-    const dm = new DirectMessages(session, {});
+    const dm = new DirectMessages(session, { linkBinding: own.linkBinding, bindingAnchor: own.bindingAnchor });
     const groups = new Groups(session, dm);
     dm.addEventListener("messages", e => { const { message, isNew } = e.detail; if (isNew && message && !message.self && !message.copied) stats.unread++; });
     groups.addEventListener("incoming", () => stats.incoming++);
@@ -120,11 +122,11 @@ try {
     const fixture = await post({ op: "fixture" });
     browser = await chromium.launch();
     const pages = {};
-    const open = async (name, device) => {
+    const open = async (name, device, devices = fixture.devices) => {
         const page = await (await browser.newContext()).newPage();
         page.on("pageerror", e => console.error(name, e));
         await page.goto(`http://127.0.0.1:${server.address().port}/`);
-        assert.equal(await page.evaluate(boot, { entries, device, binding: fixture.binding }), 1);
+        assert.equal(await page.evaluate(boot, { entries, device, binding: fixture.binding, own: await ownLinkMeta(devices, device) }), 1);
         pages[name] = page;
     };
     for (const name of ["nalice-phone", "pbob-phone"]) await open(name, fixture.devices[name]);
@@ -190,8 +192,8 @@ try {
         }
         // A PWA device linked during the run boots on its first step.
         if (!pages[cmd.device]) {
-            const device = (await post({ op: "fixture" })).devices[cmd.device];
-            if (device?.edSecret) await open(cmd.device, device);
+            const devices = (await post({ op: "fixture" })).devices, device = devices[cmd.device];
+            if (device?.edSecret) await open(cmd.device, device, devices);
         }
         const page = pages[cmd.device];
         const result = page ? await page.evaluate(step, cmd.js) : { error: `unknown PWA device ${cmd.device}` };

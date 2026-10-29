@@ -11,6 +11,7 @@ import { Msg } from "./frame.js";
 import { ProtocolError } from "./connection.js";
 import { RATCHET_PROTOCOL } from "./ratchet-consumer.js";
 import { decodeHistoryEnvelope, isHistoryEnvelope } from "./history-envelope.js";
+import { verifyLinkBinding } from "./link-binding.js";
 
 const MsgChatAccepted = 154;
 /** Durable record of imported history chunks (exact dedup), in Stores.device. */
@@ -109,6 +110,27 @@ export function exportConversation(conversation, { selfName = "", peerName = "",
         lines.push(`[${format(new Date(message.sentAt * 1000))}] ${name}: ${body}${message.edited ? " (edited)" : ""}`);
     }
     return lines.join("\n") + (lines.length ? "\n" : "");
+}
+
+function equalBytes(a, b) {
+    return a instanceof Uint8Array && b instanceof Uint8Array && a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/** The server's key for this account does not chain to the desktop that linked this device. */
+function ownRootMismatch() {
+    return Object.assign(new Error("the server's key for your account does not match the desktop that linked this device; secure messaging is blocked until this device is linked again"), { code: "server_binding_mismatch" });
+}
+
+/**
+ * The approving desktop's key from this device's own verified link statement
+ * ({key, deviceID}), or null. The anchor is the fingerprint from the scanned
+ * QR (or the encrypted backup that carried it), never a server-relayed value.
+ */
+export function ownAnchor(meta, identity, principal) {
+    if (!meta?.bindingAnchor || !meta.linkBinding || !identity?.edPublic || !identity?.xPublic) return null;
+    try { verifyLinkBinding(meta.linkBinding, { identity, principal, approverFingerprint: meta.bindingAnchor }); } catch { return null; }
+    const key = ed25519FromPEM(meta.linkBinding.approverKey);
+    return key ? { key, deviceID: meta.linkBinding.approverDeviceID } : null;
 }
 
 /** Trust states of a contact's device list. */
@@ -281,31 +303,40 @@ export class DirectMessages extends EventTarget {
         const record = parseKeyRecord(response.public_key, uid);
         const devices = response.devices || [];
         let signingKey = record?.signingKey || null;
+        let encryptionKey = record?.encryptionKey || null;
+        // This account's own root comes from local evidence only (#ownRoot),
+        // never from the server's self-signed record.
+        let own = null;
         if (uid === this.ownUID) {
-            // This account's identity is the desktop that approved the link.
-            // The QR-pinned anchor (written by that desktop itself) wins over
-            // the server-relayed claim fingerprint whenever it exists.
-            const first = devices.find(d => d.first_device);
-            const anchor = this.meta.bindingAnchor || this.meta.approverFingerprint;
-            if (first && anchor && keyFingerprint(first.ed25519_public_key) === anchor) {
-                signingKey = ed25519FromPEM(first.ed25519_public_key);
-            }
+            own = this.#ownRoot(record);
+            ({ signingKey, encryptionKey } = own);
         }
         const entry = { at: Date.now(), trust: Trust.unavailable, devices: [], fingerprint: "", verified: false, newDevices: [] };
+        // block: this account's own root is not trusted; secure messaging is
+        // blocked with the re-link explanation (app.js).
+        if (own?.block) entry.block = own.block;
         if (signingKey) {
-            const pinned = await this.#pin(uid);
+            let pinned = await this.#pin(uid);
             const signingB64 = toBase64(signingKey);
             const fingerprint = keyFingerprint(`-----BEGIN PUBLIC KEY-----\n${signingB64}\n-----END PUBLIC KEY-----\n`);
+            if (own?.anchored && pinned?.signingKey && pinned.signingKey !== signingB64) {
+                // A stale own pin (an earlier root, or one a server planted
+                // before the anchor was enforced) never outranks the root this
+                // device holds from its own link evidence.
+                pinned = { ...pinned, signingKey: signingB64, devices: undefined, verified: false };
+                await putSealed(Stores.pins, uid, pinned).catch(() => {});
+            }
             // After an explicit confirmation only the confirmed identity may be pinned.
             const unconfirmed = !pinned?.signingKey && pinned?.confirmed && pinned.confirmed !== fingerprint;
             if ((pinned?.signingKey && pinned.signingKey !== signingB64) || unconfirmed) {
                 entry.trust = Trust.changed;
+                if (own) entry.block = ownRootMismatch();
                 // A changed identity is no longer the one the user verified.
                 if (pinned.verified) await putSealed(Stores.pins, uid, { ...pinned, verified: false }).catch(() => {});
             } else {
                 entry.trust = Trust.ok;
                 entry.signingKey = signingKey;
-                entry.encryptionKey = record && toBase64(record.signingKey) === signingB64 ? record.encryptionKey : null;
+                entry.encryptionKey = encryptionKey;
                 entry.devices = trustedDevices(uid, devices, signingKey, entry.encryptionKey);
                 const ids = entry.devices.map(d => d.deviceID);
                 if (!pinned || !Array.isArray(pinned.devices)) {
@@ -317,10 +348,48 @@ export class DirectMessages extends EventTarget {
                     entry.newDevices = entry.devices.filter(d => !pinned.devices.includes(d.deviceID));
                 }
             }
-            entry.fingerprint = keyFingerprint(`-----BEGIN PUBLIC KEY-----\n${signingB64}\n-----END PUBLIC KEY-----\n`);
+            entry.fingerprint = fingerprint;
         }
         this.directory.set(uid, entry);
         return entry;
+    }
+
+    /**
+     * This account's own root key, from local evidence only, never from the
+     * server's (merely self-signed) key record alone. Returns {signingKey,
+     * encryptionKey, anchored, block}; a null signingKey is untrusted.
+     *
+     * - A guest is self-rooted: its root is its own local identity.
+     * - A linked member's root is the approver key of its verified desktop
+     *   link statement (meta.linkBinding, anchored by meta.bindingAnchor from
+     *   the scanned QR or the encrypted backup). The server's record adds only
+     *   the root's encryption key, and only when that key signed it; a record
+     *   signed by any other key blocks secure messaging (link again).
+     * - Without a verified statement (typed-code or passkey link, a restore
+     *   of an older backup) nothing is trusted: such a device must be linked
+     *   again by QR for secure messaging anyway.
+     */
+    #ownRoot(record) {
+        if (this.meta.guest) {
+            const { edPublic, xPublic } = this.identity || {};
+            if (!(edPublic instanceof Uint8Array) || !(xPublic instanceof Uint8Array)) return { signingKey: null, encryptionKey: null };
+            return { signingKey: edPublic, encryptionKey: xPublic, anchored: true };
+        }
+        const anchor = ownAnchor(this.meta, this.identity, this.ownUID);
+        if (!anchor) {
+            return { signingKey: null, encryptionKey: null,
+                block: Object.assign(new Error("this device has no confirmed account key; link it again by scanning the QR code on your desktop"), { code: "server_binding_unavailable" }) };
+        }
+        if (!record || equalBytes(record.signingKey, anchor.key)) {
+            return { signingKey: anchor.key, encryptionKey: record ? record.encryptionKey : null, anchored: true };
+        }
+        // Any other root is refused, even one the approving desktop "chains"
+        // to: the server can always list the real approver as a device its
+        // own root approved (it holds that root's private key), so such a
+        // chain proves nothing. A desktop signs in with the account's identity
+        // key (the principal is derived from it), so every desktop of the
+        // account, first or secondary, approves with the root key itself.
+        return { signingKey: null, encryptionKey: null, block: ownRootMismatch() };
     }
 
     /** Verifies a historical group sender without trusting it for new traffic. */
@@ -642,6 +711,9 @@ export class DirectMessages extends EventTarget {
             id: record.logicalID, key: record.key, protocol: RATCHET_PROTOCOL, from: record.sender, fromNickname: prior?.fromNickname || "",
             self: own, copied: own && !!record.copied, body: prior?.deleted ? "" : prior?.edited ? prior.body : text,
             edited: !!prior?.edited, deleted: !!prior?.deleted, verified: true, sentAt: record.sentAt, transport: record.transport || {},
+            // Received authenticated on this device: no longer only a
+            // transferred copy (the merge in #add would keep that label).
+            provenance: "authenticated", origin: undefined, source: undefined,
             pending: own && status === "pending", queued: false, failed: own && (status === "rejected" || status === "aborted"),
             ...(own && status === "accepted" ? { receipt: prior?.receipt || "sent" } : {}),
         };
@@ -655,20 +727,28 @@ export class DirectMessages extends EventTarget {
      * Truthful placeholders for authenticated-protocol copies that could not
      * be opened (lost key, failed authentication, untrusted sender). They are
      * never ACKed or decoded as legacy and never count as unread.
+     *
+     * Their sender, peer and conversation come only from the server's
+     * unauthenticated manifest: a placeholder is never attributed to a sender
+     * (neutral label) and is shown only in a conversation this device already
+     * has, never creating one.
      */
     async showQuarantined(list = []) {
         await this.ready;
         const current = new Set();
         for (const q of list) {
             if (q.scope !== "direct" || !q.peer) continue;
+            const conversation = this.conversations.get(q.peer);
+            if (!conversation?.messages.some(m => !m.quarantined)) continue;
             const id = "quarantine:" + q.id;
             current.add(id);
-            if (this.conversations.get(q.peer)?.messages.some(m => m.id === id)) continue;
-            this.#add(q.peer, "", { id, protocol: RATCHET_PROTOCOL, from: q.sender, self: q.sender === this.ownUID, copied: q.sender === this.ownUID,
+            if (conversation.messages.some(m => m.id === id && m.unattributed)) continue;
+            this.#add(q.peer, "", { id, protocol: RATCHET_PROTOCOL, from: "", self: false, unattributed: true,
                 body: null, verified: false, quarantined: q.code, sentAt: q.seenAt || Date.now() / 1000 }, { notify: false });
         }
         for (const conversation of this.conversations.values()) {
-            const keep = conversation.messages.filter(m => !m.quarantined || current.has(m.id));
+            // An older, attributed placeholder is replaced by the neutral one.
+            const keep = conversation.messages.filter(m => !m.quarantined || (current.has(m.id) && m.unattributed));
             if (keep.length !== conversation.messages.length) {
                 conversation.messages = keep;
                 this.#write(conversation.peer);

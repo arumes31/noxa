@@ -20,7 +20,7 @@ import { voiceNoteButton } from "./voice-note.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
 import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage, shareText } from "./chat-actions.js";
-import { aboutEncryption, encryptionBadge, secureBanner, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
+import { aboutEncryption, confirmIdentityChange, encryptionBadge, secureBanner, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 import { dmEntry } from "../core/search.js";
 import { chatSearch } from "./chat-search.js";
 
@@ -71,12 +71,13 @@ export function renderDM(root, peer) {
             : message.body === null || message.body === undefined
                 ? h("span", { class: "msg-locked" }, t(message.quarantined === "fenced_copy" ? "chat.lockedPreviousKeys" : "chat.locked"))
                 : richBody(message.body, { conversation: "direct", session, conn: session.conn, channelID: 0 });
-        const from = message.self ? session.nickname : (message.fromNickname || name);
+        // A locked placeholder's sender is unauthenticated: never attributed.
+        const from = message.unattributed ? t("chat.lockedSender") : message.self ? session.nickname : (message.fromNickname || name);
         // Not sent: tapping offers Retry or Delete; otherwise the action sheet (bindMessageTaps).
         const retry = message.failed ? retryProps(message, retryActions(message)) : { tabindex: message.deleted ? null : "0", "aria-haspopup": message.deleted ? null : "dialog" };
         const el = h("div", { class: classes, dataset: { id: String(message.id ?? "") }, ...retry },
             timeNode(message.sentAt),
-            avatar(from, "sm", message.self ? session.uniqueID : peer),
+            avatar(from, "sm", message.unattributed ? "" : message.self ? session.uniqueID : peer),
             h("div", { class: "msg-body" },
                 h("span", { class: "msg-from" }, from),
                 message.deleted ? null : encryptionBadge("e2e", message),
@@ -155,11 +156,15 @@ export function renderDM(root, peer) {
             let blocked = true;
             if (contact.trust === Trust.changed) {
                 setNotice(t("dm.identityChanged", { name }), h("button", { class: "btn", onclick: async () => {
-                    const ok = await sheet(t("dm.trustTitle"), t("dm.trustBody", { name }), [{ label: t("dm.trust"), value: true, primary: true }, { label: t("link.cancel"), value: false }]);
-                    if (ok) { await dm.trustNewIdentity(peer, contact.fingerprint); checkTrust(); }
+                    // The sheet shows exactly the fingerprint that is pinned on confirm.
+                    const fingerprint = contact.fingerprint;
+                    if (await confirmIdentityChange(name, fingerprint)) { await dm.trustNewIdentity(peer, fingerprint); checkTrust(); }
                 } }, t("dm.trust")));
             } else if (!contact.devices.length) {
                 setNotice(t("dm.unavailable", { name }));
+            } else if (own.block) {
+                // This account's own key is not the one the linking desktop vouched for.
+                setNotice(t(`dm.error.${own.block.code}`));
             } else if (!own.devices.some(d => d.deviceID === session.deviceID)) {
                 setNotice(t("dm.unconfirmed"));
             } else {

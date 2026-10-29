@@ -85,18 +85,28 @@ test("P2-7: quarantined copies show as locked placeholders, never unread, and cl
     dm.addEventListener("messages", ev => { if (ev.detail.isNew && ev.detail.message && !ev.detail.message.self) unread++; });
     const consumer = consumerStub();
     await dm.attachRatchet(consumer);
-    await dm.showQuarantined([{ id: "d1", sender: "mallory", peer: "mallory", scope: "direct", code: "lost_key", seenAt: 5 }]);
-    assert.deepEqual(dm.conversations.get("mallory").messages.map(m => [m.id, m.body, m.quarantined]), [["quarantine:d1", null, "lost_key"]]);
+    // Task 4 review P3-7: manifest metadata is unauthenticated, so a
+    // placeholder never creates a conversation and is never attributed.
+    await consumer.projector(record({ sender: "mallory", peer: "mallory", logicalID: "hello", key: "k0", body: { text: "hi" } }), { isNew: true });
+    unread = 0;
+    await dm.showQuarantined([{ id: "d1", sender: "mallory", peer: "mallory", scope: "direct", code: "lost_key", seenAt: 5 },
+        { id: "d2", sender: "mallory", peer: "stranger", scope: "direct", code: "lost_key", seenAt: 5 }]);
+    assert.deepEqual(dm.conversations.get("mallory").messages.filter(m => m.quarantined).map(m => [m.id, m.body, m.quarantined, m.from, m.self, m.unattributed]),
+        [["quarantine:d1", null, "lost_key", "", false, true]]);
+    assert.equal(dm.conversations.has("stranger"), false, "no conversation is created from unauthenticated metadata");
     assert.equal(unread, 0);
     await consumer.projector(record({ sender: "mallory", peer: "mallory", logicalID: "m", key: "k", body: { text: "readable now" }, transport: { delivery: "d1" } }), { isNew: true });
-    assert.deepEqual(dm.conversations.get("mallory").messages.map(m => m.body), ["readable now"]);
+    assert.deepEqual(dm.conversations.get("mallory").messages.map(m => m.body), ["hi", "readable now"]);
     await dm.showQuarantined([]);
-    assert.equal(dm.conversations.get("mallory").messages.length, 1);
+    assert.equal(dm.conversations.get("mallory").messages.length, 2);
 
     const groups = new Groups(session("alice"), dm);
     await groups.attachRatchet(consumerStub());
-    groups.showQuarantined([{ id: "g1", sender: "mallory", scope: "group", conversation: "c1", code: "invalid", seenAt: 6 }]);
-    assert.deepEqual(groups.messages.get("c1").map(m => [m.id, m.text, m.quarantined]), [["quarantine:g1", null, "invalid"]]);
+    groups.list.set("c1", { id: "c1", name: "Team" });
+    groups.showQuarantined([{ id: "g1", sender: "mallory", scope: "group", conversation: "c1", code: "invalid", seenAt: 6 },
+        { id: "g2", sender: "mallory", scope: "group", conversation: "unknown", code: "invalid", seenAt: 6 }]);
+    assert.deepEqual(groups.messages.get("c1").map(m => [m.id, m.text, m.quarantined, m.from_unique_id, m.unattributed]), [["quarantine:g1", null, "invalid", "", true]]);
+    assert.equal(groups.messages.has("unknown"), false, "no group view is created from unauthenticated metadata");
     groups.showQuarantined([]);
     assert.equal(groups.messages.get("c1").length, 0);
 });
@@ -243,4 +253,20 @@ test("1c-iii-a review P3-5: a queued placeholder keeps the committed key, so a c
     groups.send("g", "changed", { reference: "R", sentAt: 1 });
     assert.deepEqual(groups.messages.get("g").map(m => m.text), ["original"], "a changed draft is not painted over the committed operation");
     groups.close();
+});
+
+test("Task 4 P3-9: a transferred copy becomes authenticated once the same record is received authenticated", async () => {
+    const peer = "frank" + ++n;
+    await putSealed(Stores.dm, peer, { peer, nickname: "Frank", messages: [{ id: "t1", from: peer, self: false, body: "hello", sentAt: 3, copied: true,
+        protocol: "noxa-olm-v1", verified: true, provenance: "transferred", origin: { provenance: "authenticated" }, source: { device: "desk" } }] });
+    const dm = new DirectMessages(session("alice"), {});
+    const consumer = consumerStub();
+    await dm.attachRatchet(consumer);
+    assert.equal(dm.conversations.get(peer).messages[0].provenance, "transferred");
+    await consumer.projector(record({ sender: peer, peer, logicalID: "t1", key: "k", body: { text: "hello" } }), { isNew: false });
+    const message = dm.conversations.get(peer).messages[0];
+    assert.equal(dm.conversations.get(peer).messages.length, 1);
+    assert.equal(message.provenance, "authenticated");
+    assert.equal(message.origin, undefined);
+    assert.equal(message.source, undefined);
 });

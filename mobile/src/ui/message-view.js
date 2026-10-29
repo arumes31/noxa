@@ -130,6 +130,15 @@ export async function reviewCertificateChange(status) {
     }
 }
 
+/**
+ * Asks to trust a contact's changed identity, showing the exact fingerprint
+ * a confirmation pins (dm.trustNewIdentity). Resolves true to trust.
+ */
+export async function confirmIdentityChange(name, fingerprint) {
+    const body = [t("dm.trustBody", { name }), h("br"), h("span", { class: "mono trust-fingerprint" }, t("dm.trustFingerprint", { fingerprint }))];
+    return (await sheet(t("dm.trustTitle"), body, [{ label: t("dm.trust"), value: true, primary: true }, { label: t("link.cancel"), value: false }])) === true;
+}
+
 /** A blocked sender's message, folded; Show calls onShow. */
 export function blockedLine(message, timeAt, onShow) {
     return h("div", { class: "msg msg-blocked", dataset: { id: String(message.id ?? message.clientMsgID ?? "") } },

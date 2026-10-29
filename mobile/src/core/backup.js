@@ -13,10 +13,17 @@
 // key = PBKDF2-HMAC-SHA256(UTF-8 passphrase, salt, iter, 32 bytes). The
 // plaintext is JSON: {server, server_name, device_id, unique_id, nickname,
 // approver_fingerprint, via, ed25519_public, ed25519_secret, x25519_public,
-// x25519_secret} with the keys in standard base64. The server only signs a
+// x25519_secret, link_binding, binding_anchor} with the keys in standard
+// base64. link_binding is the desktop-signed server-binding statement and
+// binding_anchor the approver fingerprint from the scanned QR: both are
+// re-verified offline against the restored keys, so a restored device keeps
+// secure messaging (and its own account root) without trusting the server;
+// an older backup without them restores, and secure messaging then asks to
+// link the device again. The server only signs a
 // device in while its device record exists; a backup cannot bring back a
 // device that was signed out.
 import { fromBase64, toBase64 } from "./crypto.js";
+import { verifyLinkBinding } from "./link-binding.js";
 
 export const BACKUP_TYPE = "noxa-device-backup";
 export const BACKUP_ITERATIONS = 600000;
@@ -46,6 +53,7 @@ export async function exportBackup(identity, meta, passphrase, { iterations = BA
     const plain = encoder.encode(JSON.stringify({
         server, server_name: serverName, device_id: meta.deviceID || "", unique_id: meta.uniqueID || "", nickname: meta.nickname || "",
         approver_fingerprint: meta.approverFingerprint || "", via: meta.via || "",
+        ...(meta.linkBinding && meta.bindingAnchor ? { link_binding: meta.linkBinding, binding_anchor: meta.bindingAnchor } : {}),
         ed25519_public: toBase64(identity.edPublic), ed25519_secret: toBase64(identity.edSecret),
         x25519_public: toBase64(identity.xPublic), x25519_secret: toBase64(identity.xSecret),
     }));
@@ -101,7 +109,25 @@ export async function importBackup(text, passphrase) {
     if (body.unique_id) meta.uniqueID = String(body.unique_id);
     if (body.nickname) meta.nickname = String(body.nickname);
     if (body.approver_fingerprint) meta.approverFingerprint = String(body.approver_fingerprint);
+    const statement = linkStatement(body.link_binding);
+    if (statement && typeof body.binding_anchor === "string" && body.binding_anchor) {
+        // Only a statement that still verifies for exactly these keys (and
+        // its own anchor) is restored; anything else restores without it.
+        try {
+            verifyLinkBinding(statement, { identity, principal: meta.uniqueID || "", approverFingerprint: body.binding_anchor });
+            meta.linkBinding = statement;
+            meta.bindingAnchor = body.binding_anchor;
+        } catch { /* restored without secure messaging: link again */ }
+    }
     return { identity, meta, server: String(body.server || ""), serverName: String(body.server_name || "") };
+}
+
+/** The statement fields of a backed-up link binding, or null. */
+function linkStatement(value) {
+    if (!value || typeof value !== "object") return null;
+    const fields = ["binding", "signature", "approverDeviceID", "approverKey", "principal"];
+    if (!fields.every(f => typeof value[f] === "string")) return null;
+    return Object.fromEntries(fields.map(f => [f, value[f]]));
 }
 
 /** A file name for the backup download. */

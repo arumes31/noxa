@@ -85,13 +85,50 @@ export function newIdentity() {
     return generateIdentity();
 }
 
+/**
+ * The account whose data this browser holds: the stored identity's account,
+ * or, for an identity linked but not signed in yet, the account it replaced
+ * (priorPrincipal). "" when nothing is stored.
+ */
+async function storedPrincipal() {
+    let meta = app.meta || {};
+    try { meta = (await loadIdentity())?.meta || {}; } catch { /* keep the in-memory view */ }
+    return meta.uniqueID || meta.priorPrincipal || "";
+}
+
+/**
+ * Keeps a newly linked or restored identity. Linking or restoring a different
+ * account replaces ALL of the old account's data (conversations, pins,
+ * activity, history-import state, outbox, ratchet stores, settings) in the
+ * same transaction, so nothing of it is shown or sent as the new account.
+ * The new account is known here from the desktop-signed link statement or the
+ * backup; otherwise (typed code, passkey) the old account is remembered as
+ * priorPrincipal and connect() replaces its data before the new session
+ * loads or sends anything. Re-linking the same account keeps its data.
+ */
 export async function rememberLinkedIdentity(identity, meta, fence) {
-    const committed = await saveIdentity(identity, { ...meta, linked: true }, { onboarding: true, fence });
+    const previous = await storedPrincipal();
+    const next = meta.uniqueID || meta.linkBinding?.principal || "";
+    const replaceAccount = !!previous && !!next && previous !== next;
+    const stored = { ...meta, linked: true, ...(previous && !next ? { priorPrincipal: previous } : {}) };
+    const committed = await saveIdentity(identity, stored, { onboarding: true, fence, replaceAccount });
     connectionGeneration++;
     app.identity = identity;
     app.identityFence = committed;
-    app.meta = { ...meta, linked: true };
+    app.meta = stored;
+    if (replaceAccount) await resetAccountMemory();
     return committed;
+}
+
+/** Drops the in-memory state of a replaced account (its stores are already cleared). */
+async function resetAccountMemory() {
+    clearReminders();
+    await resetCallLog();
+    await app.saved?.clear();
+    app.unread.clear();
+    unreadChanged();
+    app.viewing = null;
+    emit("account-replaced");
 }
 
 export async function forgetDevice(fence) {
@@ -286,6 +323,12 @@ async function openRatchet(session, fence, isCurrent, meta, auth = {}) {
         deviceKey: async (principal, device) => {
             for (const refresh of [false, true]) {
                 const entry = await owner.dm.devicesOf(principal, { refresh });
+                // This account's own root is not the one the linking desktop
+                // vouched for: block secure messaging (re-link), no own fanout.
+                if (principal === session.uniqueID && entry.block) {
+                    blockOwnRoot(owner, entry.block);
+                    throw fenced();
+                }
                 if (entry.trust === "changed") throw Object.assign(new Error("identity changed"), { code: "identity_changed" });
                 const found = entry.devices.find(d => d.deviceID === device);
                 if (found) return found.signingKey;
@@ -356,6 +399,7 @@ function retryRatchet(session, fence, meta, auth, n, delay = RATCHET_RETRY_MS[n]
         owner.groups = app.groups;
         app.groups?.attachRatchet(owner.consumer).catch(() => {});
         pollRatchet(owner, session);
+        guardOwnRoot(owner, session);
         emit("secure-messaging", { active: true, reason: "" });
         flushNow().catch(() => {});
     }, delay);
@@ -378,6 +422,28 @@ export async function confirmGuestCertificateChange(expected) {
     app.ratchetError = Object.assign(new Error("secure messaging is starting"), { code: "secure_unavailable" });
     retryRatchet(ctx.session, ctx.fence, ctx.meta, ctx.auth, 0, 0);
     return true;
+}
+
+/**
+ * Blocks secure messaging of this session when the server's key for this
+ * account does not chain to the desktop that linked this device (direct.js
+ * #ownRoot): nothing is sealed for the account's devices; sends stay queued
+ * with the re-link explanation until the device is linked again.
+ */
+function blockOwnRoot(owner, error) {
+    if (app.ratchet !== owner) return;
+    stopRatchet();
+    app.ratchetError = error;
+    if (owner.dm?.ratchet === owner.consumer) owner.dm.ratchet = null;
+    if (owner.groups?.ratchet === owner.consumer) owner.groups.ratchet = null;
+    emit("secure-messaging", { active: false, reason: error.code });
+}
+
+/** Checks this account's own root as soon as a secure session starts. */
+function guardOwnRoot(owner, session) {
+    Promise.resolve().then(() => owner.dm?.devicesOf(session.uniqueID)).then(entry => {
+        if (entry?.block && app.session === session) blockOwnRoot(owner, entry.block);
+    }).catch(() => {});
 }
 
 function stopRatchet() {
@@ -478,6 +544,18 @@ export async function connect({ guest = null, fence } = {}) {
             // Retain early channel frames locally. Replacement and its original
             // flow generation check commit atomically before publishing a session.
             fence = await saveIdentity(identity, meta, { onboarding: !reuseGuest, replaceAccount: !reuseGuest, fence });
+        } else if (meta.priorPrincipal) {
+            // Linked without knowing the account (typed code, passkey): if it
+            // is not the account whose data is stored, that data is replaced
+            // before this session loads, shows or sends any of it.
+            const replaceAccount = meta.priorPrincipal !== auth.unique_id;
+            delete meta.priorPrincipal;
+            if (replaceAccount) {
+                fence = await saveIdentity(identity, meta, { onboarding: true, replaceAccount: true, fence });
+                if (attempt === connectionGeneration) { app.identityFence = fence; app.meta = { ...meta }; }
+                await resetAccountMemory();
+                checkAttempt();
+            }
         }
         await assertIdentityFence(fence);
         if (session.initializationError) throw session.initializationError;
@@ -565,6 +643,7 @@ export async function connect({ guest = null, fence } = {}) {
         ratchet.groups = app.groups;
         app.groups.attachRatchet(ratchet.consumer).catch(() => {});
         pollRatchet(ratchet, session);
+        guardOwnRoot(ratchet, session);
     } else if (ratchetError && RATCHET_RETRYABLE.has(ratchetError.code)) {
         retryRatchet(session, fence, meta, auth, 0);
     }
@@ -614,7 +693,7 @@ export async function connect({ guest = null, fence } = {}) {
     // Register every incoming handler before IndexedDB can yield to replayed DMs.
     try {
         session.activateIncoming();
-        await updateMeta({ deviceID: session.deviceID || auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname }, fence);
+        await updateMeta({ deviceID: session.deviceID || auth.device_id, uniqueID: auth.unique_id, nickname: auth.nickname, priorPrincipal: undefined }, fence);
         checkAttempt();
     } catch (error) {
         if (app.session === session) disconnect();
