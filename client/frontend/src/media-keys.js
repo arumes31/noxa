@@ -37,6 +37,7 @@ export const REMOVAL_ACTIVATE_DELAY_MS = 1000;
 // delivery completes (a brief gap for them, shown in the status).
 export const REMOVAL_ACTIVATE_DEADLINE_MS = 2000;
 const STATUS_THROTTLE_MS = 250;
+const RETRY_REKEY_MAX_MS = 2_000;
 export const RECEIVE_GRACE_MS = 10_000;
 export const SENDER_RETIRE_MS = 1_500;
 export const DEBOUNCE_MS = 200;
@@ -154,7 +155,7 @@ export class MediaKeyEngine {
     #gen = 0; #roster = []; #recipients = []; #recipientKey = "";
     #epoch = 0; #kid = 15; #keys = null; #members = ""; #sentTo = new Map();
     #busy = false; #again = false; #debounce = 0; #renew = 0; #retry = 0; #busyOrPending = false;
-    #publishers = new Map(); #pending = []; #failed = new Map(); #reason = ""; #pendingRemovals = []; #interrupt = null; #activeRecipients = []; #deliveries = new Map(); #statusTimer = 0;
+    #publishers = new Map(); #pending = []; #failed = new Map(); #reason = ""; #pendingRemovals = []; #seq = 0; #removalDebounce = false; #runFailures = 0; #interrupt = null; #activeRecipients = []; #deliveries = new Map(); #statusTimer = 0;
     #rosterAt = 0; #settle = 0; #mismatch = [];
 
     constructor({ media, send, onStatus = () => {}, now = () => Date.now(), timers = globalThis, random = n => crypto.getRandomValues(new Uint8Array(n)), uuid = () => crypto.randomUUID(), sendTimeoutMs = SEND_TIMEOUT_MS }) {
@@ -185,7 +186,8 @@ export class MediaKeyEngine {
         this.timers.clearTimeout(this.#debounce); this.timers.clearInterval(this.#renew); this.timers.clearTimeout(this.#retry); this.timers.clearTimeout(this.#settle);
         const pids = [...SLOTS.map(senderPid), ...[...this.#publishers.keys()].flatMap(c => SLOTS.map(s => publicationPid(c, s))), ...SLOTS.map(s => publicationPid(this.self.clientID, s))];
         this.self = null; this.#keys = null; this.#publishers.clear(); this.#pending = []; this.#failed.clear(); this.#sentTo.clear();
-        this.#pendingRemovals = []; this.#deliveries.clear(); this.#activeRecipients = []; this.timers.clearTimeout(this.#statusTimer); this.#statusTimer = 0;
+        for (const r of this.#pendingRemovals) this.timers.clearTimeout(r.timer);
+        this.#pendingRemovals = []; this.#removalDebounce = false; this.#deliveries.clear(); this.#activeRecipients = []; this.timers.clearTimeout(this.#statusTimer); this.#statusTimer = 0;
         const waiter = this.#interrupt; this.#interrupt = null; waiter?.resolve();
         for (const pid of pids) this.media.forget(pid).catch(() => {});
         this.#status();
@@ -229,9 +231,14 @@ export class MediaKeyEngine {
         // A pending removal stays urgent even if a join lands in the same window.
         if (this.#reason !== "removal" || !this.#busyOrPending) this.#reason = reason;
         this.#busyOrPending = true;
+        // Debounce starvation guard (review 2b fix2 P2-1): once a removal armed
+        // the coalescing timer, later roster changes never push it later; it
+        // fires at most DEBOUNCE_MS after the first pending removal.
+        if (this.#removalDebounce) return;
+        this.#removalDebounce = reason === "removal";
         this.timers.clearTimeout(this.#debounce);
         const gen = this.#gen;
-        this.#debounce = this.timers.setTimeout(() => { if (gen === this.#gen) void this.#run(); }, delay);
+        this.#debounce = this.timers.setTimeout(() => { if (gen === this.#gen) { this.#removalDebounce = false; void this.#run(); } }, delay);
     }
 
     async #run() {
@@ -240,8 +247,17 @@ export class MediaKeyEngine {
         const gen = this.#gen;
         try {
             do { this.#again = false; await this.#rekey(gen); } while (this.#again && gen === this.#gen);
+            this.#runFailures = 0;
         } catch (error) {
-            if (gen === this.#gen) { this.lastError = String(error?.message || error); this.#status(); }
+            if (gen === this.#gen) {
+                this.lastError = String(error?.message || error); this.#status();
+                // Pending removals are retried promptly (review 2b fix2 P3-1):
+                // 100, 200, 400 … ms, at most RETRY_REKEY_MAX_MS apart.
+                if (this.#pendingRemovals.length) {
+                    const wait = Math.min(RETRY_REKEY_MAX_MS, 100 * 2 ** Math.min(this.#runFailures++, 10));
+                    this.timers.setTimeout(() => { if (gen === this.#gen) void this.#run(); }, wait);
+                }
+            }
         } finally { this.#busy = false; }
     }
 
@@ -258,8 +274,15 @@ export class MediaKeyEngine {
     //     epoch still activates (it excludes every earlier removed device)
     //     and the next epoch, created right after, covers the later removal
     //     within its own bound.
+    // Removals and epochs are ordered by a monotonic sequence number (review
+    // 2b fix2 P2-2), never by wall-clock time; each removal's deadline is a
+    // timer armed at the removal (timers are monotonic).
     #noteRemoval() {
-        this.#pendingRemovals.push(this.now());
+        const gen = this.#gen;
+        const removal = { seq: ++this.#seq, due: false, wake: null };
+        removal.reached = new Promise(resolve => { removal.wake = resolve; });
+        removal.timer = this.timers.setTimeout(() => { if (gen !== this.#gen) return; removal.due = true; removal.wake(); }, REMOVAL_BOUND_MS);
+        this.#pendingRemovals.push(removal);
         const waiter = this.#interrupt;
         this.#interrupt = null;
         waiter?.resolve();
@@ -276,7 +299,9 @@ export class MediaKeyEngine {
 
     async #rekey(gen) {
         const self = this.self;
-        const created = this.now();
+        // The epoch's place in the removal order: taken synchronously with its
+        // recipient snapshot below; removals with a lower sequence are excluded.
+        const created = ++this.#seq;
         const urgent = this.#pendingRemovals.length > 0;
         this.#reason = ""; this.#busyOrPending = false;
         const previous = this.activeEpoch || 0;
@@ -306,13 +331,14 @@ export class MediaKeyEngine {
         const delay = ms => new Promise(resolve => this.timers.setTimeout(resolve, ms));
         // The removals this epoch covers: detected before it was created
         // (recipientsOf already excludes those devices).
-        const covered = this.#pendingRemovals.filter(t => t <= created);
+        const covered = this.#pendingRemovals.filter(r => r.seq < created);
         if (urgent && covered.length) {
             // Activate after the deliveries plus a short delay, or at the
             // earliest covered removal's deadline, whichever comes first.
             // Late deliveries keep running and are recorded as they settle.
-            const deadline = Math.min(...covered) + REMOVAL_BOUND_MS - this.now();
-            await Promise.race([distribution.then(() => delay(REMOVAL_ACTIVATE_DELAY_MS)), delay(Math.max(0, deadline))]);
+            // The earliest covered removal's own deadline timer (armed at that
+            // removal, so it already includes the coalescing debounce).
+            await Promise.race([distribution.then(() => delay(REMOVAL_ACTIVATE_DELAY_MS)), ...covered.map(r => r.reached)]);
         } else {
             // A removal preempts this wait at once: its own epoch follows
             // immediately; the previous active epoch stays until then.
@@ -330,7 +356,7 @@ export class MediaKeyEngine {
                 this.#deliveries.delete(epoch);
                 this.#again = true;
             };
-            if (this.#pendingRemovals.some(t => t > created)) { preempted(); return; }
+            if (this.#pendingRemovals.some(r => r.seq > created)) { preempted(); return; }
             const interrupted = this.#interrupted();
             const done = await Promise.race([distribution.then(() => delay(ACTIVATE_DELAY_MS)).then(() => true), interrupted.then(() => false)]);
             if (!done) { if (gen === this.#gen) preempted(); return; }
@@ -343,7 +369,8 @@ export class MediaKeyEngine {
         for (const old of [...this.#deliveries.keys()]) if (old < epoch) this.#deliveries.delete(old);
         // Removals detected before this epoch was created are satisfied; a
         // later one is covered by the next epoch, created right away.
-        this.#pendingRemovals = this.#pendingRemovals.filter(t => t > created);
+        for (const r of this.#pendingRemovals) if (r.seq < created) this.timers.clearTimeout(r.timer);
+        this.#pendingRemovals = this.#pendingRemovals.filter(r => r.seq > created);
         if (this.#pendingRemovals.length) this.#again = true;
         if (previous) {
             this.timers.setTimeout(() => {
@@ -521,22 +548,24 @@ export class MediaKeyEngine {
         return state ? { device: state.device, epoch: state.epochs.at(-1) || 0, members: state.members, n: state.n } : null;
     }
 
+    // Every per-recipient field refers to the ACTIVE epoch, the one my media
+    // is encrypted with (review 2b fix2 P3-3): who holds it, who is still
+    // waiting for it, and whose delivery of it failed.
     status() {
         if (!this.running) return { state: "off" };
+        const tally = this.#deliveries.get(this.activeEpoch);
+        const current = this.#activeRecipients.filter(r => this.#isRecipient(r));
+        const holders = tally ? current.filter(r => tally.ok.has(`${r.principal}\n${r.device}`)) : [];
+        const failed = tally ? current.filter(r => tally.failed.has(`${r.principal}\n${r.device}`)) : [];
         return {
-            state: !this.activeEpoch ? "keying" : this.#failed.size ? "partial" : "encrypted",
+            state: !this.activeEpoch ? "keying" : failed.length ? "partial" : "encrypted",
             epoch: this.activeEpoch || 0,
             recipients: this.#recipients.length,
-            delivered: [...this.#sentTo.values()].filter(e => e === this.#epoch).length,
-            // Recipients of the active epoch whose delivery is still running
-            // (after a deadline activation): they hear me once it arrives.
-            // Recipients of the ACTIVE epoch (still current) whose delivery has
-            // not settled: they hear me once it arrives. Joiners never count.
+            delivered: holders.length,
             waiting: this.#waiting(),
-            failed: [...this.#failed.values()].map(({ principal, device, clientID, reason }) => ({ principal, device, clientID, reason })),
-            // Exactly who holds my current keys (shown in the voice UI).
-            keyHolders: this.#recipients.filter(r => this.#sentTo.get(`${r.principal}\n${r.device}`) === this.#epoch)
-                .map(({ principal, device, clientID, nickname }) => ({ principal, device, clientID, nickname })),
+            failed: failed.map(r => ({ principal: r.principal, device: r.device, clientID: r.clientID, reason: this.#failed.get(`${r.principal}\n${r.device}`)?.reason || "failed" })),
+            // Exactly who holds the keys my media is encrypted with (voice UI).
+            keyHolders: holders.map(({ principal, device, clientID, nickname }) => ({ principal, device, clientID, nickname })),
             membershipMismatch: this.#mismatch,
             devices: this.#recipients.length,
             members: this.#members,

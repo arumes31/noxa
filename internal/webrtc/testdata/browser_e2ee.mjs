@@ -399,10 +399,13 @@ try {
     // frame). Video must keep decrypting.
     if (!reordered) throw new Error("no SRTP datagram was reordered");
     const delta = (pid, k) => (afterReorder[pid]?.dropped?.[k] || 0) - (beforeReorder[pid]?.dropped?.[k] || 0);
-    const micReplays = delta("A|mic", "replay"), camDuplicates = delta(cam, "replay");
+    const micReplays = delta("A|mic", "replay") + delta("A|mic", "replay-old") + delta("A|mic", "replay-full"), camDuplicates = delta(cam, "replay");
     if (micReplays) throw new Error(`reordered audio frames rejected as replays: ${micReplays}`);
+    // Camera drops must be exact duplicates of accepted frames, never new ones.
+    const camRejected = delta(cam, "replay-old") + delta(cam, "replay-full");
+    if (camRejected) throw new Error(`reordered video frames rejected as too old or window full: ${camRejected}`);
     if (afterReorder[cam].frames - beforeReorder[cam].frames < 20) throw new Error("video stopped decrypting under reordering");
-    log("phase 6d: per-stream reordering", JSON.stringify({ reordered, mic: afterReorder["A|mic"].frames - beforeReorder["A|mic"].frames, micReplays, cam, camFrames: afterReorder[cam].frames - beforeReorder[cam].frames, camDuplicatesDropped: camDuplicates }));
+    log("phase 6d: per-stream reordering", JSON.stringify({ reordered, mic: afterReorder["A|mic"].frames - beforeReorder["A|mic"].frames, micReplays, cam, camFrames: afterReorder[cam].frames - beforeReorder[cam].frames, camDuplicatesDropped: camDuplicates, camRejected }));
 
     // 7. Optional long session beyond the old 10-minute hard close.
     if (longMinutes > 0) {

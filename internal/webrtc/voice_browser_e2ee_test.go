@@ -344,10 +344,12 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// 7th SRTP datagram of a stream (destination and SSRC) is held back and
 		// written after the next datagram of the same stream (a real swap
 		// within that stream at its receiver).
-		// Switching it off flushes held datagrams. The receiver's jitter
-		// buffer reorders packets before the frame transform sees them, so
-		// this shows the stack tolerates packet reordering; frame-level
-		// reordering is covered by unit/media-replay.test.mjs.
+		// Switching it off flushes held datagrams. Audio frames reach the
+		// frame transform per packet (before the jitter buffer), so they
+		// arrive reordered there and must all be accepted; video frames are
+		// reassembled first, and a retransmission can deliver an accepted
+		// frame twice (dropped as an exact duplicate). Frame-level reordering
+		// is also covered by unit/media-replay.test.mjs.
 		h.reorderMu.Lock()
 		if !body.Active {
 			mediaSocketShape.Store(nil)

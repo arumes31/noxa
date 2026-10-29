@@ -39,7 +39,9 @@ const FENCE = "noxa-fence";
 export const MAX_RECEIVE_EPOCH_AGE = 12 * 60 * 1000;
 const PID_RE = /^[\x21-\x7e]{1,160}$/;
 const ENDPOINT_RE = /^[a-z]+:[A-Za-z0-9_-]{1,64}$/;
-const DROP_REASONS = ["unbound", "empty", "plaintext", "nokey", "codec", "stale", "unauthenticated", "replay", "unencrypted"];
+// "replay" is an exact duplicate of an accepted frame; "replay-old" a frame
+// older than the replay window; "replay-full" a full window (or source table).
+const DROP_REASONS = ["unbound", "empty", "plaintext", "nokey", "codec", "stale", "unauthenticated", "replay", "replay-old", "replay-full", "unencrypted"];
 
 export function validPid(pid) { return typeof pid === "string" && PID_RE.test(pid); }
 export function validEpoch(epoch) { return Number.isSafeInteger(epoch) && epoch > 0; }
@@ -191,7 +193,8 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                 const key = `${input.pid}#${input.epoch}`;
                 let window = windows.get(key);
                 if (!window) { window = new MediaReplayWindow(); windows.set(key, window); }
-                if (!window.accept(input.iv)) return drop(ep, "replay");
+                const verdict = window.check(input.iv);
+                if (verdict !== "ok") return drop(ep, verdict === "duplicate" ? "replay" : verdict === "old" ? "replay-old" : "replay-full");
                 stats.decrypted++; ep.frames++;
                 // The page keeps a new or rebound receiver's track disabled and
                 // unattached until this first authenticated frame of its binding

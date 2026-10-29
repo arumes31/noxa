@@ -35,3 +35,18 @@ test("invalid and exhausted windows fail closed", () => {
     assert.equal(window.accept(iv(1, 2000000)), true, "old entries expire by age");
     assert.equal(window.accept(iv(1, 100)), false);
 });
+
+test("replay verdicts distinguish duplicates, too-old frames and a full window", async () => {
+    const { MediaReplayWindow } = await import("../src/media-replay.js");
+    const iv = (ssrc, ts, n) => { const b = new Uint8Array(12); const v = new DataView(b.buffer); v.setUint32(0, ssrc); v.setUint32(4, ts); v.setUint32(8, n); return b; };
+    const w = new MediaReplayWindow({ maxSources: 1, maxFrames: 3, timestampWindow: 1000 });
+    assert.equal(w.check(iv(1, 5000, 1)), "ok");
+    assert.equal(w.check(iv(1, 5000, 1)), "duplicate");
+    assert.equal(w.check(iv(1, 3000, 2)), "old");
+    assert.equal(w.check(iv(2, 5000, 1)), "full", "source table full");
+    assert.equal(w.check(iv(1, 5100, 3)), "ok");
+    assert.equal(w.check(iv(1, 5200, 4)), "ok");
+    assert.equal(w.check(iv(1, 5300, 5)), "full", "frame window full");
+    assert.equal(w.check(new Uint8Array(3)), "invalid");
+    assert.equal(w.accept(iv(1, 5000, 1)), false);
+});
