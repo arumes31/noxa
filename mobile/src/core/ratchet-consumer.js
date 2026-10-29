@@ -415,7 +415,11 @@ export class RatchetConsumer {
         const cur = own?.bundle;
         if (own?.error || !cur) throw fail("unavailable");
         try {
-            verifyBundleEvidence(cur, { trustedSigningKey: this.ownKey, server: ns.server, principal: ns.principal, deviceID: ns.device, accountEpoch: cur.account_epoch, pinnedOlmIdentity: cur.identity });
+            // Explicit recovery may use our own signed historical TLS binding.
+            // The independently held device key and exact principal/device are
+            // mandatory; the new reset/publication still use accepted ns.server.
+            // No old namespace or peer trust is imported.
+            verifyBundleEvidence(cur, { trustedSigningKey: this.ownKey, server: cur.server, principal: ns.principal, deviceID: ns.device, accountEpoch: cur.account_epoch, pinnedOlmIdentity: cur.identity });
         } catch { throw fail("invalid_evidence"); }
         if (!Number.isSafeInteger(cur.account_epoch) || cur.account_epoch < 1 || cur.account_epoch < local.epoch || !Number.isSafeInteger(cur.generation) || cur.generation < 1)
             throw fail("invalid_evidence");
@@ -486,10 +490,10 @@ export class RatchetConsumer {
             const own = await this.directory({ action: "own_state", request_id: crypto.randomUUID() });
             const b = own?.bundle;
             if (own?.error || !b) return "unknown";
-            verifyBundleEvidence(b, { trustedSigningKey: this.ownKey, server: ns.server, principal: ns.principal, deviceID: ns.device, accountEpoch: b.account_epoch, pinnedOlmIdentity: b.identity });
+            verifyBundleEvidence(b, { trustedSigningKey: this.ownKey, server: b.server, principal: ns.principal, deviceID: ns.device, accountEpoch: b.account_epoch, pinnedOlmIdentity: b.identity });
             const { publicationDigest } = await import("./olm-reset.js");
             const digest = await publicationDigest(b);
-            if (b.account_epoch === r.new_epoch && digest === r.publication_digest) return "applied";
+            if (b.server === ns.server && b.account_epoch === r.new_epoch && digest === r.publication_digest) return "applied";
             if (b.account_epoch === r.old_epoch && digest !== r.publication_digest) return "not_applied";
         } catch { /* unverifiable or unreachable: unknown */ }
         return "unknown";
@@ -753,7 +757,7 @@ export class RatchetConsumer {
             if (deadline - now() < DEADLINE_MARGIN + 5) throw fail("invalid");
         } else if (device) throw fail("invalid");
         let roster;
-        try { roster = await this.#handoff(a, { action: "snapshot", scope, ...(scope === "direct" ? { peer } : { conversation }) }); }
+        try { roster = await this.#handoff(a, { action: "snapshot", scope, ...(scope === "direct" ? { peer } : { conversation }), ...(control ? { target_device: device } : {}) }); }
         catch (e) {
             // The server's roster holds a device without an Olm publication
             // (distinct from this device's own store exhaustion).

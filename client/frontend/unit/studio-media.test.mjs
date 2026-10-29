@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { inspectImageBytes, decodeImage, MAX_IMAGE_BYTES, StudioImageError } from "../src/studio-assets.js";
+import { inspectImageBytes, decodeImage, createAssetStore, MAX_IMAGE_BYTES, StudioImageError } from "../src/studio-assets.js";
 import { createCaptureRegistry } from "../src/studio-captures.js";
 import { createStudioAudio } from "../src/studio-audio.js";
 import { outputSize, fitRect, StudioEngine, WEAK_PREVIEW_FPS, PREVIEW_FPS } from "../src/studio-compositor.js";
@@ -23,6 +23,39 @@ function jpeg(width, height) {
 }
 
 describe("studio images", () => {
+    for (const pause of ["open", "write"]) it(`disposal during asset ${pause} closes late resources`, async () => {
+        let reached, release, bitmapCloses = 0, dbCloses = 0;
+        const waiting = new Promise(resolve => { reached = resolve; });
+        const handle = {
+            close() { dbCloses++; },
+            transaction(_, mode) {
+                const tx = { objectStore() { return {
+                    getAllKeys() { const r = { result: [] }; queueMicrotask(() => r.onsuccess()); return r; },
+                    getAll() { const r = { result: [] }; queueMicrotask(() => r.onsuccess()); return r; },
+                    put() { assert.equal(mode, "readwrite"); if (pause === "write") { release = () => tx.oncomplete(); reached(); } else queueMicrotask(() => tx.oncomplete()); },
+                }; } };
+                return tx;
+            },
+        };
+        const indexedDB = { open() {
+            const request = { result: handle };
+            if (pause === "open") { release = () => request.onsuccess(); reached(); }
+            else queueMicrotask(() => request.onsuccess());
+            return request;
+        } };
+        const store = createAssetStore({ indexedDB, createBitmap: async () => ({ width: 64, height: 64, close() { bitmapCloses++; } }) });
+        const adding = store.add(png(64, 64));
+        const rejected = assert.rejects(adding, code("image_invalid"));
+        await waiting;
+        store.dispose();
+        release();
+        await rejected;
+        assert.equal(store.loadedCount(), 0);
+        assert.equal(bitmapCloses, 1);
+        assert.equal(dbCloses, 1);
+        store.dispose();
+        assert.equal(dbCloses, 1);
+    });
     it("accepts PNG and JPEG by content and bounds declared dimensions", () => {
         assert.deepEqual(inspectImageBytes(png(640, 360)), { type: "image/png", width: 640, height: 360 });
         assert.deepEqual(inspectImageBytes(jpeg(1920, 1080)), { type: "image/jpeg", width: 1920, height: 1080 });
@@ -205,6 +238,33 @@ function fakeDocument(draws) {
 }
 
 describe("studio engine", () => {
+    it("keeps a draft-removed capture alive through fades and an interrupted fade", () => {
+        let clock = 0;
+        const registry = createCaptureRegistry({ createVideo: fakeVideo });
+        const engine = new StudioEngine({ registry, width: 64, height: 36, document: fakeDocument([]), now: () => clock, setTimer: () => 1, clearTimer() {} });
+        const scene = capture => Object.freeze({ id: capture, sources: [Object.freeze({ id: capture, kind: "display", capture, visible: true, x: 0, y: 0, w: 1, h: 1, crop: { l: 0, t: 0, r: 0, b: 0 } })] });
+        const tracks = [new FakeTrack("video"), new FakeTrack("video"), new FakeTrack("video")];
+        const a = scene(registry.add(new FakeStream([tracks[0]]), { kind: "display" }));
+        engine.setDraft(a);
+        engine.take(a);
+        const b = scene(registry.add(new FakeStream([tracks[1]]), { kind: "display" }));
+        engine.setDraft(b);
+        engine.take(b, { kind: "fade", ms: 300 });
+        assert.equal(tracks[0].readyState, "live", "outgoing A survives losing its draft and live holders");
+        clock = 100;
+        const c = scene(registry.add(new FakeStream([tracks[2]]), { kind: "display" }));
+        engine.setDraft(c);
+        engine.take(c, { kind: "fade", ms: 300 });
+        assert.equal(tracks[0].readyState, "ended", "interrupted outgoing A is released");
+        assert.equal(tracks[1].readyState, "live", "B remains the next outgoing picture");
+        clock = 400;
+        engine.tick();
+        assert.equal(tracks[1].readyState, "ended");
+        assert.equal(tracks[2].readyState, "live");
+        engine.dispose();
+        assert.equal(tracks[2].readyState, "ended");
+    });
+
     it("slows only the preview on a weak device; the program rate stays fixed", () => {
         let clock = 0, step = 0;
         const registry = { setHolder() {}, drawable: () => null, state: () => "missing", dispose() {} };

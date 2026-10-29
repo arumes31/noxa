@@ -205,7 +205,7 @@ window.voice = voice;
 eventLoop(async e => {
   if (e.type === "offer") handlers[Msg.WebRTCOffer]?.({ sdp: e.sdp });
   else if (e.type === "candidate") console.log("pwa candidate rd=" + !!voice.pc?.remoteDescription), handlers[Msg.ICECandidate]?.({ candidate: e.candidate, sdp_mid: e.mid, sdp_mline_index: e.index });
-  else if (e.type === "roster") { roster = e.clients; session.dispatchEvent(new Event("snapshot")); }
+  else if (e.type === "roster") { roster = Array.isArray(e.clients) ? e.clients : []; session.dispatchEvent(new Event("snapshot")); }
   else if (e.type === "control") voice.receiveMediaKey({ sender: e.sender, senderDevice: e.senderDevice, ...e.body, expiresAt: e.body.expires_at });
 });
 window.e2ee = {
@@ -226,13 +226,14 @@ window.ready = true;
 </script>`;
 
 const pages = {};
+const pageErrors = [];
 async function open(id, kind, transformAPI) {
     // No permission grant: like the desktop listener test, Chromium keeps
     // mDNS host candidates, which reach the loopback SFU on every platform.
     const context = await browser.newContext();
     const page = await context.newPage();
     page.on("console", m => { const text = m.text(); if (!/^\[vite\]/.test(text)) log(`[${id}] ${text}`); });
-    page.on("pageerror", e => log(`[${id} error] ${e}`));
+    page.on("pageerror", e => { pageErrors.push(`[${id}] ${e}`); log(`[${id} error] ${e}`); });
     const path = `/__e2ee__/${id}`;
     await page.route(origin + path, route => route.fulfill({ contentType: "text/html", body: kind === "desktop" ? desktopPage(id, transformAPI) : pwaPage(id, transformAPI) }));
     await page.goto(origin + path);
@@ -473,6 +474,7 @@ try {
     log(`phase 8: transforms attached before every local description (${descriptions} descriptions, ${answers} answers to server offers, 0 violations)`);
 
     log("tap", JSON.stringify(await api("/tap")));
+    if (pageErrors.length) throw new Error("unexpected browser errors: " + pageErrors.join("; "));
     log("E2EE SCENARIO PASSED");
     await browser.close();
     await vite.close();

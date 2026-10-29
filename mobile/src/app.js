@@ -619,7 +619,7 @@ export async function connect({ guest = null, fence } = {}) {
     // A dropped connection ends the call; rejoin the same channel.
     if (rejoin) joinVoice(rejoin).catch(() => {});
     app.dm?.close();
-    const dm = new DirectMessages(session, app.meta);
+    const dm = new DirectMessages(session, app.meta, { fence });
     dm.shareActivity = activityShared;
     // No legacy send for a signed-in session: without a consumer, sends fail
     // with the blocking reason.

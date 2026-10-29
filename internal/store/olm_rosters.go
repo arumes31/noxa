@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"github.com/lib/pq"
 	"noxa/internal/e2ee/admission"
+	"noxa/internal/e2ee/olmdir"
 	"sort"
 	"strconv"
 )
@@ -74,6 +75,36 @@ type OlmRosterSnapshot struct {
 }
 
 func readOlmRoster(ctx context.Context, tx *sql.Tx, ps []string, source string) (OlmRosterSnapshot, error) {
+	return readOlmRosterDevices(ctx, tx, ps, source, nil)
+}
+
+// Controls need only the source and the named recipient device to be ready.
+// Keep both principals' roster locks/versions, and the same active-device and
+// publication checks as complete chat fanout, without requiring idle siblings.
+func readOlmControlRoster(ctx context.Context, tx *sql.Tx, a OlmSource, peer, target string) (OlmRosterSnapshot, error) {
+	if !olmdir.ValidText(peer) || !olmdir.ValidText(target) || target == a.Device {
+		return OlmRosterSnapshot{}, admission.ErrInvalid
+	}
+	ps := []string{a.Principal}
+	if peer != a.Principal {
+		ps = append(ps, peer)
+	}
+	out, err := readOlmRosterDevices(ctx, tx, ps, a.Device, []string{a.Device, target})
+	if err != nil {
+		return out, err
+	}
+	if len(out.Targets) != 2 {
+		return out, ErrOlmAuthority
+	}
+	for _, t := range out.Targets {
+		if t.Local && t.Principal != a.Principal || !t.Local && (t.Device != target || t.Principal != peer) {
+			return out, ErrOlmAuthority
+		}
+	}
+	return out, nil
+}
+
+func readOlmRosterDevices(ctx context.Context, tx *sql.Tx, ps []string, source string, devices []string) (OlmRosterSnapshot, error) {
 	var out OlmRosterSnapshot
 	versions, e := lockOlmRosters(ctx, tx, ps)
 	if e != nil {
@@ -83,7 +114,7 @@ func readOlmRoster(ctx context.Context, tx *sql.Tx, ps []string, source string) 
 	for _, p := range ps {
 		out.Rosters = append(out.Rosters, admission.Roster{Principal: p, Version: versions[p]})
 	}
-	rows, e := tx.QueryContext(ctx, `SELECT d.principal,d.device_id,COALESCE(a.account_epoch,0),COALESCE(a.identity,'') FROM user_devices d LEFT JOIN olm_directory_state a USING(device_id) WHERE d.principal=ANY($1) AND d.revoked_at IS NULL AND (d.first_device OR octet_length(d.approval_signature)>0) ORDER BY d.device_id COLLATE "C" FOR UPDATE OF d`, pq.Array(ps))
+	rows, e := tx.QueryContext(ctx, `SELECT d.principal,d.device_id,COALESCE(a.account_epoch,0),COALESCE(a.identity,'') FROM user_devices d LEFT JOIN olm_directory_state a USING(device_id) WHERE d.principal=ANY($1) AND ($2 OR d.device_id=ANY($3)) AND d.revoked_at IS NULL AND (d.first_device OR octet_length(d.approval_signature)>0) ORDER BY d.device_id COLLATE "C" FOR UPDATE OF d`, pq.Array(ps), len(devices) == 0, pq.Array(devices))
 	if e != nil {
 		return out, e
 	}

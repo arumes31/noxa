@@ -141,8 +141,10 @@ export class StudioEngine {
             this.outgoing = previous;
             this.transition = { start: this.now(), ms: transition.ms };
         }
-        this.registry.setHolder("live", captureRefs([this.live]));
+        // Retain the old program before dropping its live holder. It may
+        // already have been removed from every draft scene.
         this.registry.setHolder("outgoing", captureRefs([this.outgoing]));
+        this.registry.setHolder("live", captureRefs([this.live]));
         this.renderProgram(this.now());
     }
 

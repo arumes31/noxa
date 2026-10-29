@@ -238,10 +238,11 @@ func (s *Store) PromoteAccount(snap Snapshot, id string, receipt olmdir.ResetRec
 }
 
 // AbandonRecoveryTransition gives up a prepared, unpromoted RECOVERY intent
-// that the server deterministically refused (for example a reset built from
-// a stale or forged own_state): sending authority returns to its previous
-// state and a later explicit recovery may build a new intent. An ordinary
-// transition or one with a receipt can never be abandoned.
+// that the caller positively established was not applied. A refusal alone
+// is not sufficient evidence. Its unpublished candidate keys are closed in
+// the same transaction, returning their outstanding-key quota; old accounts
+// and their delayed-receive obligations are preserved. An ordinary transition
+// or one with a receipt can never be abandoned.
 func (s *Store) AbandonRecoveryTransition(snap Snapshot, id string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		c, e := s.fence(tx, snap)
@@ -263,12 +264,55 @@ func (s *Store) AbandonRecoveryTransition(snap Snapshot, id string) error {
 		if t.Abandoned {
 			return nil
 		}
-		if c.AccountEpoch != t.FromEpoch || !c.SendingBlocked {
+		if c.AccountEpoch != t.FromEpoch || !c.SendingBlocked || c.AccountID == t.AccountID {
 			return ErrFenced
 		}
+		// Obligation IDs are caller-selected, so find them by the exact
+		// candidate account/publication instead of guessing their names.
+		changes := map[Ref][]byte{}
+		reads := make(map[Ref]Record, len(snap.Records)+len(t.Bundle.OneTimeKeys))
+		for ref, record := range snap.Records {
+			reads[ref] = record
+		}
+		keys := make(map[string]string, len(t.Bundle.OneTimeKeys))
+		for _, k := range t.Bundle.OneTimeKeys {
+			keys[k.ID] = k.Key
+		}
+		prefix := []byte(`{"Kind":"obligation","ID":`)
+		cursor := tx.Bucket(bucket).Cursor()
+		for key, _ := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, _ = cursor.Next() {
+			var ref Ref
+			if json.Unmarshal(key, &ref) != nil {
+				return ErrCorrupt
+			}
+			record, err := s.get(tx, ref)
+			if err != nil {
+				return err
+			}
+			var o OTKObligation
+			if json.Unmarshal(record.Data, &o) != nil {
+				return ErrCorrupt
+			}
+			if o.AccountID != t.AccountID {
+				continue
+			}
+			if o.PublicationID != id || o.AccountEpoch != t.Reset.NewEpoch || keys[o.KeyID] != o.PublicKey || o.PublicKey == "" || o.Consumed {
+				return ErrConflict
+			}
+			delete(keys, o.KeyID)
+			if !o.Closed {
+				o.Closed, o.ClosureProof = true, "abandoned-recovery:"+id
+				reads[ref], changes[ref] = record, encode(o)
+			}
+		}
+		if len(keys) != 0 || len(reads) > MaxReads {
+			return ErrConflict
+		}
+		snap.Records = reads
 		t.Abandoned = true
 		c.SendingBlocked = false
-		return s.changes(tx, c, snap, map[Ref][]byte{ref: encode(t)})
+		changes[ref] = encode(t)
+		return s.changes(tx, c, snap, changes)
 	})
 }
 

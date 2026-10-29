@@ -97,6 +97,20 @@ func admissionPrincipals(ctx context.Context, tx *sql.Tx, a OlmSource, scope, pe
 	return ps, nil
 }
 func (s *Store) OlmSnapshot(ctx context.Context, a OlmSource, scope, peer, conversation string) (OlmRosterSnapshot, error) {
+	return s.olmSnapshot(ctx, a, scope, peer, conversation, "")
+}
+
+// OlmControlSnapshot returns exactly the local device and one current target.
+// It never authorizes partial chat fanout: finalize derives coverage from the
+// manifest purpose independently of how the sender obtained its snapshot.
+func (s *Store) OlmControlSnapshot(ctx context.Context, a OlmSource, peer, target string) (OlmRosterSnapshot, error) {
+	if !olmdir.ValidText(target) {
+		return OlmRosterSnapshot{}, admission.ErrInvalid
+	}
+	return s.olmSnapshot(ctx, a, "direct", peer, "", target)
+}
+
+func (s *Store) olmSnapshot(ctx context.Context, a OlmSource, scope, peer, conversation, target string) (OlmRosterSnapshot, error) {
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return OlmRosterSnapshot{}, e
@@ -112,7 +126,12 @@ func (s *Store) OlmSnapshot(ctx context.Context, a OlmSource, scope, peer, conve
 	if e != nil {
 		return OlmRosterSnapshot{}, e
 	}
-	snap, e := readOlmRoster(ctx, tx, ps, a.Device)
+	var snap OlmRosterSnapshot
+	if target != "" {
+		snap, e = readOlmControlRoster(ctx, tx, a, peer, target)
+	} else {
+		snap, e = readOlmRoster(ctx, tx, ps, a.Device)
+	}
 	if e != nil {
 		return snap, e
 	}
@@ -512,7 +531,16 @@ func (s *Store) finalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 		}
 		return empty, nil, e
 	}
-	snap, e := readOlmRoster(ctx, tx, ps, a.Device)
+	var snap OlmRosterSnapshot
+	if m.Purpose == "control" {
+		target, ok := admission.ControlTarget(m)
+		if !ok {
+			return empty, nil, admission.ErrInvalid
+		}
+		snap, e = readOlmControlRoster(ctx, tx, a, m.Peer, target.Device)
+	} else {
+		snap, e = readOlmRoster(ctx, tx, ps, a.Device)
+	}
 	if e != nil {
 		return empty, nil, e
 	}

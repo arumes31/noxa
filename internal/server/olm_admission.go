@@ -59,7 +59,11 @@ func (s *TCPServer) handleOlmAdmission(ctx context.Context, client *Client, f *n
 		defer func() { s.ringOlmDoorbells(delivered) }() // queued, never written here
 		switch r.Action {
 		case "snapshot":
-			data, e = db.OlmSnapshot(opCtx, a, r.Scope, r.Peer, r.Conversation)
+			if r.TargetDevice != "" {
+				data, e = db.OlmControlSnapshot(opCtx, a, r.Peer, r.TargetDevice)
+			} else {
+				data, e = db.OlmSnapshot(opCtx, a, r.Scope, r.Peer, r.Conversation)
+			}
 		case "begin":
 			data, e = db.BeginOlmAttempt(opCtx, a, *r.Manifest)
 		case "put_part":

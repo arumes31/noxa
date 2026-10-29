@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,199 @@ import (
 	"noxa/internal/e2ee/ratchet"
 	"noxa/internal/netproto"
 )
+
+// Accepted TLS changes select another durable namespace; explicit recovery
+// authenticates the old publication with the independently retained device key.
+func rotatedRecoveryConsumer(t *testing.T) (*ratchetConsumer, *ratchetConsumer, *recoveryServer, ed25519.PrivateKey) {
+	t.Helper()
+	old, srv, secret := recoveryConsumer(t)
+	root := t.TempDir()
+	open := func(ns durable.Namespace) *durable.Store {
+		s, err := durable.Open(root, ns, durable.IdentityProtection(bytes.Repeat([]byte{9}, 32)), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		return s
+	}
+	old.d.Store = open(old.d.Namespace)
+	if err := old.recoverAccount("restored"); err != nil {
+		t.Fatal(err)
+	}
+	d := old.d
+	d.Namespace.Server = "tls-sha256:" + strings.Repeat("f", 64)
+	d.Store = open(d.Namespace)
+	next, err := newRatchetConsumer(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.ns = d.Namespace // the connection's explicitly accepted new TLS pin
+	return old, next, srv, secret
+}
+
+func TestRatchetRecoveryAcceptedCertificateRotation(t *testing.T) {
+	old, next, srv, _ := rotatedRecoveryConsumer(t)
+	oldBundle := srv.state
+	if oldBundle.VerifyEvidence(srv.key, next.d.Namespace.Server, srv.ns.Principal, srv.ns.Device) == nil {
+		t.Fatal("ordinary new-server verification accepted historical evidence")
+	}
+	// Retain readable history and trust in the old namespace, without importing
+	// either into the fresh namespace selected by the accepted certificate.
+	trust := durable.Ref{Kind: durable.Trust, ID: "bob"}
+	session := durable.Ref{Kind: durable.Session, ID: "bob-session"}
+	s, _ := old.d.Store.Read(trust, session)
+	if err := old.d.Store.SetTrust(s, trust.ID, []byte("old peer trust"), false); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = old.d.Store.Read(trust, session)
+	a := authorityOf(t, old)
+	saved, err := old.d.Store.CommitSend(s, "old-message", []durable.SendCandidate{{SessionID: session.ID, TrustID: trust.ID, State: []byte("old session"), Envelope: []byte("old ciphertext"), Context: durable.SessionContext{LocalAccountID: a.AccountID, LocalEpoch: a.Epoch, PeerEpoch: 1, PeerPrincipal: "bob", PeerDevice: "b1", PeerIdentity: "old-peer-key", Scope: durable.DevicePairScope, Protocol: ratchetProtocol}}}, []byte("original readable history"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := durable.Ref{Kind: durable.Outbox, ID: "old-message"}
+	oldRecords, err := old.d.Store.Read(archive, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := authorityOf(t, next); a.Epoch != 1 || a.Blocked {
+		t.Fatalf("new namespace: %+v", a)
+	}
+	if srv.calls != 1 {
+		t.Fatal("new namespace silently recovered")
+	}
+	if err = next.recoverAccount("restored"); err != nil {
+		t.Fatal(err)
+	}
+	if a := authorityOf(t, next); a.Epoch != 5 || a.Blocked {
+		t.Fatalf("recovery: %+v", a)
+	}
+	r := srv.resets[len(srv.resets)-1]
+	if r.Server != next.d.Namespace.Server || srv.state.Server != next.d.Namespace.Server || r.OldIdentity != oldBundle.Identity || r.NewIdentity == oldBundle.Identity {
+		t.Fatalf("rotation reset: %+v", r)
+	}
+	if err = r.Verify(srv.key, next.d.Namespace.Server, srv.ns.Principal, srv.ns.Device, oldBundle.AccountEpoch, oldBundle.Identity, oldBundle.Signing); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Verify(srv.key, old.d.Namespace.Server, srv.ns.Principal, srv.ns.Device, oldBundle.AccountEpoch, oldBundle.Identity, oldBundle.Signing); err == nil {
+		t.Fatal("peer could adopt new-bound reset without accepting new server")
+	}
+	before, _ := old.d.Store.Read(archive, trust)
+	if !bytes.Equal(before.Records[archive].Data, saved.Data) || !bytes.Equal(before.Records[trust].Data, oldRecords.Records[trust].Data) {
+		t.Fatal("old archive/trust changed")
+	}
+	fresh, _ := next.d.Store.Read(archive, trust)
+	if fresh.Records[archive].Revision != 0 || fresh.Records[trust].Revision != 0 {
+		t.Fatal("silently imported old namespace")
+	}
+}
+
+func TestRatchetRecoveryRotationRejectsUnauthenticatedHistory(t *testing.T) {
+	for _, attack := range []string{"foreign key", "principal", "device", "tampered binding"} {
+		t.Run(attack, func(t *testing.T) {
+			_, next, srv, secret := rotatedRecoveryConsumer(t)
+			b := srv.state
+			switch attack {
+			case "foreign key":
+				_, secret, _ = ed25519.GenerateKey(rand.Reader)
+			case "principal":
+				b.Principal = "mallory"
+			case "device":
+				b.DeviceID = "another-device"
+			}
+			b, err := b.Sign(secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if attack == "tampered binding" {
+				b.Server = next.d.Namespace.Server
+			}
+			srv.ownState = &b
+			calls := srv.calls
+			if err = next.recoverAccount("restored"); ratchetCode(err) != "invalid_evidence" {
+				t.Fatalf("evidence: %v", err)
+			}
+			if a := authorityOf(t, next); a.Blocked || a.Epoch != 1 || srv.calls != calls {
+				t.Fatalf("unauthenticated recovery changed state: %+v", a)
+			}
+		})
+	}
+}
+
+func TestRatchetRecoveryRotationEvidenceAfterRefusal(t *testing.T) {
+	t.Run("cancel unchanged old-bound evidence", func(t *testing.T) {
+		_, next, _, _ := rotatedRecoveryConsumer(t)
+		next.d.Admission = func(context.Context, netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+			return nil, rfail("unavailable")
+		}
+		if err := next.recoverAccount("restored"); ratchetCode(err) != "recovery_pending" {
+			t.Fatal(err)
+		}
+		if result, err := next.cancelRecovery(); err != nil || result != "cancelled" {
+			t.Fatalf("cancel: %q %v", result, err)
+		}
+		if a := authorityOf(t, next); a.Blocked || a.Epoch != 1 {
+			t.Fatalf("cancel: %+v", a)
+		}
+	})
+	t.Run("lost new-bound receipt", func(t *testing.T) {
+		_, next, srv, _ := rotatedRecoveryConsumer(t)
+		next.d.Admission = func(_ context.Context, r netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+			if _, err := srv.admission(r); err != nil {
+				return nil, err
+			}
+			return nil, errors.New("response lost")
+		}
+		if err := next.recoverAccount("restored"); err != nil {
+			t.Fatal(err)
+		}
+		if a := authorityOf(t, next); a.Blocked || a.Epoch != 5 {
+			t.Fatalf("applied: %+v", a)
+		}
+	})
+}
+
+func TestRatchetFenceAfterCommitKeepsImmutableOutcome(t *testing.T) {
+	c, srv, _ := recoveryConsumer(t)
+	if err := c.recoverAccount("restored"); err != nil {
+		t.Fatal(err)
+	}
+	a := authorityOf(t, c)
+	c.identity = srv.state.Identity
+	c.d.Admission = func(_ context.Context, r netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+		if r.Action != "snapshot" {
+			t.Fatalf("postcommit network handoff: %s", r.Action)
+		}
+		return json.Marshal(ratchetRoster{Rosters: []admission.Roster{{Principal: srv.ns.Principal, Version: 1}}, Targets: []admission.Target{{Principal: srv.ns.Principal, Device: srv.ns.Device, AccountEpoch: a.Epoch, Identity: c.identity, Local: true}}})
+	}
+	attempt := durable.Ref{Kind: durable.Outbox, ID: "4:1"}
+	c.d.AssertCurrent = func() error {
+		s, err := c.d.Store.Read(attempt)
+		if err != nil {
+			return err
+		}
+		if s.Records[attempt].Revision != 0 {
+			return rfail("fenced")
+		}
+		return nil
+	}
+	body := json.RawMessage(`{"text":"original"}`)
+	_, err := c.seal(a, ratchetIntent{LogicalID: "postcommit", Scope: "direct", Peer: srv.ns.Principal, Body: body}, false)
+	var failure *ratchetError
+	if !errors.As(err, &failure) || failure.Code != "fenced" || failure.Committed == nil {
+		t.Fatalf("committed result lost: %v", err)
+	}
+	copy(body, []byte(`{"text":"changed!"}`))
+	out := failure.Committed
+	if out.Record.Transport.Attempt != attempt.ID || out.Record.Status != "pending" || string(out.Record.Body) != `{"text":"original"}` || out.Record.LogicalID != "postcommit" {
+		t.Fatalf("immutable outcome: %+v", out)
+	}
+	s, _ := c.d.Store.Read(attempt)
+	var persisted durable.OutboundRecord
+	if json.Unmarshal(s.Records[attempt].Data, &persisted) != nil || !bytes.Contains(persisted.Archive, []byte("original")) {
+		t.Fatal("original attempt was not committed")
+	}
+}
 
 // recoveryServer mirrors store.ResetOlmAccount's rules: the reset must verify
 // under the device's noXa key against the server's CURRENT state, carry the

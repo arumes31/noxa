@@ -4,7 +4,7 @@
 // this account (dm_devices_v1, internal/netproto/dm_devices.go). Copies for
 // this device arrive live or from the server's per-device spool. History
 // is kept in IndexedDB, encrypted with the database key.
-import { Stores, deleteKey, getSealed, keys, putSealed } from "./db.js";
+import { Stores, currentFence, deleteKeyIn, getSealed, keys, putSealedIn } from "./db.js";
 import { keyFingerprint, openDM, sealDM, toBase64 } from "./crypto.js";
 import { ed25519FromPEM, parseKeyRecord, trustedDevices } from "./dm-trust.js";
 import { Msg } from "./frame.js";
@@ -146,8 +146,11 @@ export class DirectMessages extends EventTarget {
     /**
      * session: the ChatSession; meta: link metadata (approverFingerprint).
      */
-    constructor(session, meta = {}) {
+    constructor(session, meta = {}, { fence } = {}) {
         super();
+        // Ownership belongs to the session that created this object, never to
+        // whichever account happens to be current when an async write resumes.
+        this.#fence = fence ? Promise.resolve({ ...fence }) : currentFence().catch(() => null);
         this.session = session;
         this.conn = session.conn;
         this.identity = session.identity;
@@ -166,14 +169,14 @@ export class DirectMessages extends EventTarget {
         this.shareActivity = () => false;
         this.#onDirect = event => { this.#receive(event.detail).catch(() => {}); };
         session.addEventListener("direct", this.#onDirect);
-        this.#onReceipt = event => { this.ready.then(() => this.#receipt(event.detail)).catch(() => {}); };
+        this.#onReceipt = event => { this.ready.then(() => this.#assertActive()).then(() => this.#receipt(event.detail)).catch(() => {}); };
         session.addEventListener("receipt", this.#onReceipt);
-        this.#onTyping = event => {
+        this.#onTyping = event => { this.#assertActive().then(() => {
             const { uid, nickname } = event.detail || {};
             if (!uid) return;
             this.typing.set(uid, { nickname, until: Date.now() + TYPING_TTL_MS });
             this.#emit("typing", { peer: uid });
-        };
+        }).catch(() => {}); };
         session.addEventListener("typing-direct", this.#onTyping);
         // Write pending history before the page is frozen or unloaded.
         this.#onHide = () => { if (document.visibilityState === "hidden") this.flush(); };
@@ -182,6 +185,53 @@ export class DirectMessages extends EventTarget {
     }
 
     #onHide;
+    #fence;
+    #closed = false;
+    #writes = new Map();
+
+    #enqueue(store, key, work) {
+        const id = JSON.stringify([store, key]);
+        const pending = (this.#writes.get(id) || Promise.resolve()).catch(() => {}).then(work);
+        this.#writes.set(id, pending);
+        const clean = () => { if (this.#writes.get(id) === pending) this.#writes.delete(id); };
+        pending.then(clean, clean);
+        return pending;
+    }
+
+    #assertOpen() {
+        if (this.#closed) throw Object.assign(new Error("direct messages session retired"), { code: "fenced" });
+    }
+
+    async #assertActive() {
+        this.#assertOpen();
+        const expected = await this.#fence;
+        if (expected) {
+            const actual = await currentFence();
+            if (!actual.active || actual.generation !== expected.generation) {
+                this.close();
+                throw Object.assign(new Error("direct messages identity changed"), { code: "fenced" });
+            }
+        }
+        this.#assertOpen();
+    }
+
+    async #put(store, key, value) {
+        this.#assertOpen();
+        // Snapshot now: close() may flush immediately before retiring us.
+        const snapshot = structuredClone(value);
+        await this.#enqueue(store, key, async () => {
+            const expected = await this.#fence;
+            if (!expected) throw new Error("identity storage unavailable");
+            await putSealedIn(expected, store, key, snapshot);
+        });
+    }
+
+    async #read(store, key) {
+        await this.#assertActive();
+        const value = await getSealed(store, key);
+        await this.#assertActive();
+        return value;
+    }
 
     #saveTimers;
     #onDirect;
@@ -190,13 +240,15 @@ export class DirectMessages extends EventTarget {
     #typingSent = new Map();
 
     #emit(type, detail) {
+        if (this.#closed) return;
         this.dispatchEvent(new CustomEvent(type, { detail }));
     }
 
     async #load() {
         try {
+            await this.#assertActive();
             for (const peer of await keys(Stores.dm)) {
-                const stored = await getSealed(Stores.dm, peer);
+                const stored = await this.#read(Stores.dm, peer);
                 if (stored?.peer) this.conversations.set(stored.peer, stored);
             }
         } catch {
@@ -206,15 +258,17 @@ export class DirectMessages extends EventTarget {
     }
 
     #save(peer) {
+        if (this.#closed) return;
         clearTimeout(this.#saveTimers.get(peer));
         this.#saveTimers.set(peer, setTimeout(() => this.#write(peer), 50));
     }
 
     #write(peer) {
+        if (this.#closed) return;
         clearTimeout(this.#saveTimers.get(peer));
         this.#saveTimers.delete(peer);
         const conversation = this.conversations.get(peer);
-        if (conversation) putSealed(Stores.dm, peer, conversation).catch(() => {});
+        if (conversation) this.#put(Stores.dm, peer, conversation).catch(() => {});
     }
 
     /** Writes every conversation with unsaved changes now. */
@@ -245,6 +299,7 @@ export class DirectMessages extends EventTarget {
     }
 
     #add(peer, nickname, message, { notify = null } = {}) {
+        if (this.#closed) return false;
         const conversation = this.conversation(peer, nickname);
         const existing = conversation.messages.findIndex(m => DirectMessages.same(m, message));
         if (existing >= 0) {
@@ -274,8 +329,9 @@ export class DirectMessages extends EventTarget {
 
     async #pin(uid) {
         try {
-            return await getSealed(Stores.pins, uid);
-        } catch {
+            return await this.#read(Stores.pins, uid);
+        } catch (error) {
+            if (error?.code === "fenced") throw error;
             return undefined;
         }
     }
@@ -285,6 +341,7 @@ export class DirectMessages extends EventTarget {
      * devices ({deviceID, x25519, x25519B64}).
      */
     async devicesOf(uid, { refresh = false } = {}) {
+        await this.#assertActive();
         const cached = this.directory.get(uid);
         if (cached && !refresh && Date.now() - cached.at < DIRECTORY_TTL) return cached;
         // Concurrent lookups share one request; the server rate-limits them.
@@ -300,6 +357,7 @@ export class DirectMessages extends EventTarget {
     async #lookup(uid) {
         const response = await this.conn.request(Msg.KeyRequest, { unique_id: uid, devices: true }, Msg.KeyResponse,
             { accept: r => r.unique_id === uid });
+        await this.#assertActive();
         const record = parseKeyRecord(response.public_key, uid);
         const devices = response.devices || [];
         let signingKey = record?.signingKey || null;
@@ -324,7 +382,7 @@ export class DirectMessages extends EventTarget {
                 // before the anchor was enforced) never outranks the root this
                 // device holds from its own link evidence.
                 pinned = { ...pinned, signingKey: signingB64, devices: undefined, verified: false };
-                await putSealed(Stores.pins, uid, pinned).catch(() => {});
+                await this.#put(Stores.pins, uid, pinned).catch(() => {});
             }
             // After an explicit confirmation only the confirmed identity may be pinned.
             const unconfirmed = !pinned?.signingKey && pinned?.confirmed && pinned.confirmed !== fingerprint;
@@ -332,7 +390,7 @@ export class DirectMessages extends EventTarget {
                 entry.trust = Trust.changed;
                 if (own) entry.block = ownRootMismatch();
                 // A changed identity is no longer the one the user verified.
-                if (pinned.verified) await putSealed(Stores.pins, uid, { ...pinned, verified: false }).catch(() => {});
+                if (pinned.verified) await this.#put(Stores.pins, uid, { ...pinned, verified: false }).catch(() => {});
             } else {
                 entry.trust = Trust.ok;
                 entry.signingKey = signingKey;
@@ -341,7 +399,7 @@ export class DirectMessages extends EventTarget {
                 const ids = entry.devices.map(d => d.deviceID);
                 if (!pinned || !Array.isArray(pinned.devices)) {
                     // First contact (or a pin from before device tracking): remember the list.
-                    await putSealed(Stores.pins, uid, { ...pinned, signingKey: signingB64, at: pinned?.at || Date.now(), devices: ids }).catch(() => {});
+                    await this.#put(Stores.pins, uid, { ...pinned, signingKey: signingB64, at: pinned?.at || Date.now(), devices: ids }).catch(() => {});
                     entry.verified = !!pinned?.verified;
                 } else {
                     entry.verified = !!pinned.verified;
@@ -350,6 +408,7 @@ export class DirectMessages extends EventTarget {
             }
             entry.fingerprint = fingerprint;
         }
+        await this.#assertActive();
         this.directory.set(uid, entry);
         return entry;
     }
@@ -428,7 +487,7 @@ export class DirectMessages extends EventTarget {
     async setVerified(uid, verified) {
         const pinned = await this.#pin(uid);
         if (!pinned?.signingKey) throw new Error("no identity to verify");
-        await putSealed(Stores.pins, uid, { ...pinned, verified: !!verified });
+        await this.#put(Stores.pins, uid, { ...pinned, verified: !!verified });
         const cached = this.directory.get(uid);
         if (cached && cached.trust === Trust.ok) cached.verified = !!verified;
     }
@@ -438,7 +497,7 @@ export class DirectMessages extends EventTarget {
         const cached = this.directory.get(uid);
         const pinned = await this.#pin(uid);
         if (!cached || cached.trust !== Trust.ok || !pinned?.signingKey) return;
-        await putSealed(Stores.pins, uid, { ...pinned, devices: cached.devices.map(d => d.deviceID) });
+        await this.#put(Stores.pins, uid, { ...pinned, devices: cached.devices.map(d => d.deviceID) });
         cached.newDevices = [];
     }
 
@@ -451,7 +510,7 @@ export class DirectMessages extends EventTarget {
         // contact: the ratchet consumer applies the reset on its next trust
         // check even if no session is live now or the immediate reset fails.
         // A fresh token per confirmation: clearing is compare-and-clear.
-        await putSealed(Stores.pins, uid, { ratchetReset: crypto.randomUUID(), confirmed: fingerprint });
+        await this.#put(Stores.pins, uid, { ratchetReset: crypto.randomUUID(), confirmed: fingerprint });
         this.directory.delete(uid);
         const entry = await this.devicesOf(uid, { refresh: true });
         // A live consumer drops the old pins now; the intent itself is cleared
@@ -472,7 +531,7 @@ export class DirectMessages extends EventTarget {
     /** Clears exactly this token (a newer confirmation keeps its own). */
     async clearRatchetReset(uid, token) {
         const pinned = await this.#pin(uid);
-        if (token && pinned?.ratchetReset === token) await putSealed(Stores.pins, uid, { ...pinned, ratchetReset: "" });
+        if (token && pinned?.ratchetReset === token) await this.#put(Stores.pins, uid, { ...pinned, ratchetReset: "" });
     }
 
     /** Whether this device may send: the account's desktop confirmed it. */
@@ -486,11 +545,13 @@ export class DirectMessages extends EventTarget {
     async #receive(data) {
         if (!data?.recipient_device_id || data.recipient_device_id !== this.deviceID) return;
         await this.ready;
+        await this.#assertActive();
         const from = data.from_unique_id;
         const peer = from === this.ownUID ? data.to_unique_id : from;
         if (!peer) return;
         let sender = await this.#senderDevice(from, data);
         if (!sender) sender = await this.#senderDevice(from, data, true);
+        await this.#assertActive();
         let text = sender ? openDM(data.text, sender.x25519, this.identity.xSecret) : null;
         // A history chunk replayed as a DM copy is never shown.
         if (isHistoryEnvelope(text)) text = null;
@@ -513,6 +574,7 @@ export class DirectMessages extends EventTarget {
 
     /** A contact's delivery or read receipt for one of this account's messages. */
     #receipt({ kind, from, clientMsgID }) {
+        if (this.#closed) return;
         const conversation = from && this.conversations.get(from);
         if (!conversation || !clientMsgID) return;
         if (applyReceipt(conversation.messages, kind, clientMsgID)) {
@@ -526,6 +588,7 @@ export class DirectMessages extends EventTarget {
      * shown, unless activity is private. Called by the open conversation.
      */
     markRead(peer) {
+        if (this.#closed) return false;
         const conversation = this.conversations.get(peer);
         if (!conversation || !this.shareActivity() || !this.conn.open) return false;
         const newest = conversation.messages.filter(m => !m.self && !m.copied && m.id && !m.deleted).at(-1);
@@ -538,6 +601,7 @@ export class DirectMessages extends EventTarget {
 
     /** Announces typing to peer, at most every 3 s, unless activity is private. */
     sendTyping(peer, now = Date.now()) {
+        if (this.#closed) return false;
         if (!this.shareActivity() || (this.#typingSent.has(peer) && now - this.#typingSent.get(peer) < TYPING_PING_MS)) return false;
         this.#typingSent.set(peer, now);
         this.session.sendTypingDirect(peer);
@@ -555,6 +619,7 @@ export class DirectMessages extends EventTarget {
      * arrives before its message (spool order) waits on the conversation.
      */
     #applyChange(peer, change) {
+        if (this.#closed) return;
         const conversation = this.conversation(peer);
         // Authenticated changes address the original sender's logical ID within
         // the same protocol; a legacy change never edits a ratcheted record.
@@ -579,12 +644,14 @@ export class DirectMessages extends EventTarget {
     /** Sends text to peer, sealed for every trusted device. */
     async send(peer, text, nickname = "", { id = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}) {
         await this.ready;
+        await this.#assertActive();
         if (this.ratchet) return this.#sendRatchet(peer, text, nickname, id, sentAt);
         this.#refuseLegacySend();
         const message = { id, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, pending: true, queued: false };
         this.#add(peer, nickname, message);
         try {
             await this.#sendCopies(peer, text, id, false);
+            await this.#assertActive();
             const current = this.conversations.get(peer)?.messages.find(m => m.id === id);
             // A receipt may already have overtaken the acceptance.
             this.#add(peer, nickname, { ...message, pending: false, receipt: current?.receipt || "sent" });
@@ -612,6 +679,7 @@ export class DirectMessages extends EventTarget {
 
     /** Removes a message that never reached the server from this device. */
     discardLocal(peer, id) {
+        if (this.#closed) return;
         const conversation = this.conversations.get(peer);
         if (!conversation) return;
         conversation.messages = conversation.messages.filter(m => m.id !== id || !(m.queued || m.failed));
@@ -621,16 +689,25 @@ export class DirectMessages extends EventTarget {
 
     /** Deletes the history with peer on this device only. */
     async deleteHistory(peer) {
+        this.#assertOpen();
         clearTimeout(this.#saveTimers.get(peer));
         this.#saveTimers.delete(peer);
         this.conversations.delete(peer);
-        await deleteKey(Stores.dm, peer).catch(() => {});
+        // Serialize after already-started cache writes; later messages may
+        // create a new conversation, ordered after this deletion.
+        await this.#enqueue(Stores.dm, peer, async () => {
+            const expected = await this.#fence;
+            if (!expected) throw new Error("identity storage unavailable");
+            await deleteKeyIn(expected, Stores.dm, peer);
+        });
+        await this.#assertActive();
         this.#emit("messages", { peer, message: null, isNew: false });
         this.#emit("conversations");
     }
 
     /** Edits one of this account's messages on every device. */
     async editMessage(peer, ref, text) {
+        await this.#assertActive();
         const message = this.#ownMessage(peer, ref);
         if (message.protocol === RATCHET_PROTOCOL) return this.#changeRatchet(peer, message, "edit", text);
         if (this.secureRequired) throw Object.assign(new Error("messages from before secure messaging was upgraded stay readable but can no longer be edited or deleted"), { code: "legacy_read_only", retryable: false });
@@ -640,6 +717,7 @@ export class DirectMessages extends EventTarget {
 
     /** Deletes one of this account's messages on every device. */
     async deleteMessage(peer, ref) {
+        await this.#assertActive();
         const message = this.#ownMessage(peer, ref);
         if (message.protocol === RATCHET_PROTOCOL) return this.#changeRatchet(peer, message, "delete", "");
         if (this.secureRequired) throw Object.assign(new Error("messages from before secure messaging was upgraded stay readable but can no longer be edited or deleted"), { code: "legacy_read_only", retryable: false });
@@ -661,6 +739,7 @@ export class DirectMessages extends EventTarget {
         const targets = new Map();
         for (const device of [...own.devices, ...recipient.devices]) targets.set(device.deviceID, device);
         const copies = [...targets.values()].map(device => ({ device_id: device.deviceID, text: sealDM(text, device.x25519, this.identity.xSecret) }));
+        await this.#assertActive();
         try {
             await this.conn.request(Msg.ChatSend, { to_unique_id: peer, enc: true, ack_requested: true, client_msg_id: id, copies, ...change },
                 MsgChatAccepted, { accept: r => r.client_msg_id === id });
@@ -678,10 +757,12 @@ export class DirectMessages extends EventTarget {
      * new-protocol failures never fall back to legacy sending or decoding.
      */
     async attachRatchet(consumer) {
+        this.#assertOpen();
         this.ratchet = consumer;
-        const owned = () => this.ratchet === consumer && !consumer.closed;
+        const owned = () => !this.#closed && this.ratchet === consumer && !consumer.closed;
         consumer.project((record, { isNew }) => this.#project(record, isNew, owned));
         await this.ready;
+        if (!owned()) return;
         // The protected archive is authoritative: restore views it holds.
         const history = await consumer.history();
         for (const record of history) {
@@ -695,6 +776,8 @@ export class DirectMessages extends EventTarget {
         // Never project into (and persist over) a conversation before cached
         // history is loaded, nor after this consumer lost ownership.
         await this.ready;
+        if (!owned()) return;
+        try { await this.#assertActive(); } catch (error) { if (error?.code === "fenced") return; throw error; }
         if (!owned()) return;
         const body = record.body && typeof record.body === "object" ? record.body : {};
         const text = typeof body.text === "string" ? body.text : "";
@@ -720,7 +803,7 @@ export class DirectMessages extends EventTarget {
         if (!own && this.typing.delete(record.peer)) this.#emit("typing", { peer: record.peer });
         this.#add(record.peer, "", message, { notify: isNew && !own });
         this.#unquarantine(record.peer, record.transport?.delivery);
-        if (!prior && owned()) await putSealed(Stores.dm, record.peer, this.conversations.get(record.peer)).catch(() => {});
+        if (!prior && owned()) await this.#put(Stores.dm, record.peer, this.conversations.get(record.peer)).catch(() => {});
     }
 
     /**
@@ -735,6 +818,7 @@ export class DirectMessages extends EventTarget {
      */
     async showQuarantined(list = []) {
         await this.ready;
+        await this.#assertActive();
         const current = new Set();
         for (const q of list) {
             if (q.scope !== "direct" || !q.peer) continue;
@@ -779,6 +863,9 @@ export class DirectMessages extends EventTarget {
             return outcome;
         } catch (error) {
             const committed = error.committed;
+            // Keep the truthful transport outcome, but retire stale UI/cache
+            // work before either success or failure can project a message.
+            try { await this.#assertActive(); } catch { /* persistence still uses the original fence */ }
             // An accepted receipt is success even if later housekeeping failed.
             if (committed?.receipt?.state === "accepted") {
                 const committedText = committed.record?.body?.text ?? "";
@@ -836,8 +923,9 @@ export class DirectMessages extends EventTarget {
      */
     async importHistory() {
         await this.ready;
+        await this.#assertActive();
         const own = await this.devicesOf(this.ownUID, { refresh: true });
-        const state = (await getSealed(Stores.device, HISTORY_IMPORTS).catch(() => null)) || {};
+        const state = (await this.#read(Stores.device, HISTORY_IMPORTS)) || {};
         const done = new Set(state.digests || []);
         // Transfer binding: the chunks of one transfer import in order from
         // seq 0 under one signed transfer ID; a chunk spliced from another
@@ -851,11 +939,13 @@ export class DirectMessages extends EventTarget {
         let imported = 0, skipped = 0;
         for (;;) {
             const page = await this.conn.request(Msg.DeviceRequest, { action: "history_get", seq }, Msg.DeviceResult, { accept: r => r.action === "history_get" });
+            await this.#assertActive();
             const chunks = page.history || [];
             if (!chunks.length) break;
             const touched = new Set(), digests = [];
             for (const chunk of chunks) {
                 const digest = typeof chunk.data === "string" && chunk.data ? await chunkDigest(chunk.data) : "";
+                await this.#assertActive();
                 const sender = own.devices.find(d => d.deviceID === chunk.from_device_id);
                 // Data is nonce||box, which JSON carries as standard base64.
                 const plain = digest && !done.has(digest) && sender ? openDM(chunk.data, sender.x25519, this.identity.xSecret) : null;
@@ -893,11 +983,12 @@ export class DirectMessages extends EventTarget {
             for (const peer of touched) {
                 clearTimeout(this.#saveTimers.get(peer));
                 this.#saveTimers.delete(peer);
-                await putSealed(Stores.dm, peer, this.conversations.get(peer));
+                await this.#put(Stores.dm, peer, this.conversations.get(peer));
             }
             for (const d of digests) done.add(d);
-            await putSealed(Stores.device, HISTORY_IMPORTS, { digests: [...done].slice(-MAX_HISTORY_DIGESTS),
+            await this.#put(Stores.device, HISTORY_IMPORTS, { digests: [...done].slice(-MAX_HISTORY_DIGESTS),
                 completed: [...completed].slice(-MAX_HISTORY_TRANSFERS), started: [...started].slice(-MAX_HISTORY_TRANSFERS), current });
+            await this.#assertActive();
             await this.conn.request(Msg.DeviceRequest, { action: "history_ack", seq: seq - 1 }, Msg.DeviceResult, { accept: r => r.action === "history_ack" });
         }
         this.lastImport = { imported, skipped };
@@ -905,11 +996,13 @@ export class DirectMessages extends EventTarget {
     }
 
     close() {
+        if (this.#closed) return;
         this.session.removeEventListener("direct", this.#onDirect);
         this.session.removeEventListener("receipt", this.#onReceipt);
         this.session.removeEventListener("typing-direct", this.#onTyping);
         globalThis.removeEventListener?.("pagehide", this.#onHide);
         globalThis.document?.removeEventListener("visibilitychange", this.#onHide);
         this.flush();
+        this.#closed = true;
     }
 }

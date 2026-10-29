@@ -92,3 +92,30 @@ func TestRatchetControlSealValidation(t *testing.T) {
 		t.Fatalf("network calls before validation: %d", calls)
 	}
 }
+
+func TestRatchetControlRequestsTargetedSnapshot(t *testing.T) {
+	var requests []netproto.OlmAdmissionRequest
+	c, err := newTestRatchetConsumer(t, func(r netproto.OlmAdmissionRequest) (json.RawMessage, error) {
+		requests = append(requests, r)
+		return nil, rfail("unavailable")
+	}, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := c.authority()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := json.RawMessage(fmt.Sprintf(`{"kind":"media-key","scope":{"type":"channel","id":"7"},"epoch":1,"expires_at":%d}`, c.now()+120))
+	for _, in := range []ratchetIntent{
+		{LogicalID: "control", Scope: "direct", Peer: "bob", Device: "b1", Purpose: "control", Body: body},
+		{LogicalID: "chat", Scope: "direct", Peer: "bob", Purpose: "chat", Body: json.RawMessage(`{"text":"hi"}`)},
+	} {
+		if _, err = c.seal(a, in, false); ratchetCode(err) != "unavailable" {
+			t.Fatalf("snapshot refusal: %v", err)
+		}
+	}
+	if len(requests) != 2 || requests[0].Action != "snapshot" || requests[0].Scope != "direct" || requests[0].Peer != "bob" || requests[0].TargetDevice != "b1" || requests[0].Conversation != "" || requests[1].TargetDevice != "" {
+		t.Fatalf("snapshot requests: %+v", requests)
+	}
+}
