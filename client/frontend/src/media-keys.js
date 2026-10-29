@@ -36,9 +36,14 @@ export const REMOVAL_ACTIVATE_DELAY_MS = 1000;
 // server delays deliveries. Recipients still waiting get the key when their
 // delivery completes (a brief gap for them, shown in the status).
 export const REMOVAL_ACTIVATE_DEADLINE_MS = 2000;
+const STATUS_THROTTLE_MS = 250;
 export const RECEIVE_GRACE_MS = 10_000;
 export const SENDER_RETIRE_MS = 1_500;
 export const DEBOUNCE_MS = 200;
+// The removal bound: the sender encrypts only under an epoch never sent to a
+// removed device at most this long after the removal was seen in the roster
+// (the debounce that coalesces roster changes plus the activation deadline).
+export const REMOVAL_BOUND_MS = DEBOUNCE_MS + REMOVAL_ACTIVATE_DEADLINE_MS;
 export const SEND_TIMEOUT_MS = 20_000;
 export const RETRY_FAILED_MS = 10_000;
 export const CONTROL_TTL_S = 120;
@@ -149,8 +154,8 @@ export class MediaKeyEngine {
     #gen = 0; #roster = []; #recipients = []; #recipientKey = "";
     #epoch = 0; #kid = 15; #keys = null; #members = ""; #sentTo = new Map();
     #busy = false; #again = false; #debounce = 0; #renew = 0; #retry = 0; #busyOrPending = false;
-    #publishers = new Map(); #pending = []; #failed = new Map(); #reason = ""; #delivering = null;
-    #removed = new Set(); #rosterAt = 0; #settle = 0; #mismatch = [];
+    #publishers = new Map(); #pending = []; #failed = new Map(); #reason = ""; #pendingRemovals = []; #interrupt = null; #activeRecipients = []; #deliveries = new Map(); #statusTimer = 0;
+    #rosterAt = 0; #settle = 0; #mismatch = [];
 
     constructor({ media, send, onStatus = () => {}, now = () => Date.now(), timers = globalThis, random = n => crypto.getRandomValues(new Uint8Array(n)), uuid = () => crypto.randomUUID(), sendTimeoutMs = SEND_TIMEOUT_MS }) {
         this.media = media; this.send = send; this.onStatus = onStatus; this.now = now;
@@ -180,6 +185,8 @@ export class MediaKeyEngine {
         this.timers.clearTimeout(this.#debounce); this.timers.clearInterval(this.#renew); this.timers.clearTimeout(this.#retry); this.timers.clearTimeout(this.#settle);
         const pids = [...SLOTS.map(senderPid), ...[...this.#publishers.keys()].flatMap(c => SLOTS.map(s => publicationPid(c, s))), ...SLOTS.map(s => publicationPid(this.self.clientID, s))];
         this.self = null; this.#keys = null; this.#publishers.clear(); this.#pending = []; this.#failed.clear(); this.#sentTo.clear();
+        this.#pendingRemovals = []; this.#deliveries.clear(); this.#activeRecipients = []; this.timers.clearTimeout(this.#statusTimer); this.#statusTimer = 0;
+        const waiter = this.#interrupt; this.#interrupt = null; waiter?.resolve();
         for (const pid of pids) this.media.forget(pid).catch(() => {});
         this.#status();
     }
@@ -208,8 +215,8 @@ export class MediaKeyEngine {
         if (key !== this.#recipientKey) {
             const current = new Set(recipients.map(r => `${r.principal}\n${r.device}`));
             const gone = this.#recipients.filter(r => !current.has(`${r.principal}\n${r.device}`));
-            for (const r of gone) this.#removed.add(`${r.principal}\n${r.device}`);
             const removal = gone.length > 0;
+            if (removal) this.#noteRemoval();
             this.#recipientKey = key; this.#recipients = recipients;
             this.#schedule(removal ? "removal" : "membership", DEBOUNCE_MS);
         }
@@ -238,9 +245,39 @@ export class MediaKeyEngine {
         } finally { this.#busy = false; }
     }
 
+    // A removal (Task 2b fix 2, parent ruling): every removed device D,
+    // removed at tD, is excluded from every epoch created after tD, and the
+    // sender encrypts only under such an epoch no later than tD +
+    // REMOVAL_BOUND_MS, whatever the server stalls, however other rekeys
+    // (join, publication, renewal) or later removals interleave:
+    //   - the removal preempts the wait of a non-removal rekey in flight;
+    //   - an epoch created after tD activates at the latest at the deadline
+    //     of the earliest removal it covers (anchored at that removal's own
+    //     time, never reset by later removals);
+    //   - a later removal never aborts an epoch back to an older one: the
+    //     epoch still activates (it excludes every earlier removed device)
+    //     and the next epoch, created right after, covers the later removal
+    //     within its own bound.
+    #noteRemoval() {
+        this.#pendingRemovals.push(this.now());
+        const waiter = this.#interrupt;
+        this.#interrupt = null;
+        waiter?.resolve();
+    }
+
+    #interrupted() {
+        if (!this.#interrupt) {
+            let resolve;
+            const promise = new Promise(r => { resolve = r; });
+            this.#interrupt = { promise, resolve };
+        }
+        return this.#interrupt.promise;
+    }
+
     async #rekey(gen) {
         const self = this.self;
-        const urgent = this.#reason === "removal";
+        const created = this.now();
+        const urgent = this.#pendingRemovals.length > 0;
         this.#reason = ""; this.#busyOrPending = false;
         const previous = this.activeEpoch || 0;
         if (this.#invisible()) { this.onInvisible?.(); return; }
@@ -250,7 +287,6 @@ export class MediaKeyEngine {
         const kid = (this.#kid + 1) % 16;
         const keys = Object.fromEntries(SLOTS.map(slot => [slot, this.random(32)]));
         const recipients = this.#recipients = recipientsOf(this.#roster, self);
-        this.#removed.clear();
         const members = await membershipDigest([...recipients, self]);
         for (const slot of SLOTS) {
             if (gen !== this.#gen) return; // a stale rekey never installs into a newer engine's worker
@@ -263,43 +299,44 @@ export class MediaKeyEngine {
         this.#epoch = epoch; this.#kid = kid; this.#keys = keys; this.#members = members;
         this.counters.epochs++;
         this.#failed.clear(); this.#sentTo.clear();
-        const distribution = this.#distribute(gen, recipients);
+        this.#deliveries.set(epoch, { ok: new Set(), failed: new Set() });
+        const distribution = this.#distribute(gen, recipients, epoch);
         const delay = ms => new Promise(resolve => this.timers.setTimeout(resolve, ms));
-        if (urgent) {
-            // Bounded: activate after the deliveries plus the short delay, or at
-            // the deadline, whichever comes first. Late deliveries keep running.
-            const token = {};
-            this.#delivering = token;
-            await Promise.race([distribution.then(() => delay(REMOVAL_ACTIVATE_DELAY_MS)), delay(REMOVAL_ACTIVATE_DEADLINE_MS)]);
-            distribution.then(() => {
-                if (this.#delivering === token) this.#delivering = null;
-                if (gen !== this.#gen || this.#epoch !== epoch || this.activeEpoch !== epoch) return;
-                this.#status();
-                this.#scheduleRetry(gen, epoch);
-            });
+        // The removals this epoch covers: detected before it was created
+        // (recipientsOf already excludes those devices).
+        const covered = this.#pendingRemovals.filter(t => t <= created);
+        if (urgent && covered.length) {
+            // Activate after the deliveries plus a short delay, or at the
+            // earliest covered removal's deadline, whichever comes first.
+            // Late deliveries keep running and are recorded as they settle.
+            const deadline = Math.min(...covered) + REMOVAL_BOUND_MS - this.now();
+            await Promise.race([distribution.then(() => delay(REMOVAL_ACTIVATE_DELAY_MS)), delay(Math.max(0, deadline))]);
         } else {
-            this.#delivering = null;
-            await distribution;
-            if (gen !== this.#gen || this.#epoch !== epoch) return;
-            await delay(ACTIVATE_DELAY_MS);
+            // A removal preempts this wait at once: its own epoch follows
+            // immediately; the previous active epoch stays until then.
+            const preempted = () => {
+                // Never activated: its keys leave the worker; the previous
+                // active epoch stays live until the removal epoch activates.
+                for (const slot of SLOTS) { this.media.retireOne(senderPid(slot), epoch).catch(() => {}); this.media.retireOne(publicationPid(self.clientID, slot), epoch).catch(() => {}); }
+                if (this.#epoch === epoch) { this.#epoch = previous || epoch; this.#sentTo.clear(); }
+                this.#deliveries.delete(epoch);
+                this.#again = true;
+            };
+            if (this.#pendingRemovals.some(t => t > created)) { preempted(); return; }
+            const interrupted = this.#interrupted();
+            const done = await Promise.race([distribution.then(() => delay(ACTIVATE_DELAY_MS)).then(() => true), interrupted.then(() => false)]);
+            if (!done) { if (gen === this.#gen) preempted(); return; }
         }
         if (gen !== this.#gen || this.#epoch !== epoch) return;
-        // A device removed while this epoch was being distributed already
-        // holds its keys: never activate it; the queued rekey excludes it
-        // (review 2a-A P3-1).
-        if (recipients.some(r => this.#removed.has(`${r.principal}\n${r.device}`))) {
-            // Only the aborted epoch is retired: the previous active epoch stays
-            // live (the removed device knew it already) until the next epoch
-            // activates, so the sender keeps sending and the status stays true.
-            for (const slot of SLOTS) { this.media.retireOne(senderPid(slot), epoch).catch(() => {}); this.media.retireOne(publicationPid(self.clientID, slot), epoch).catch(() => {}); }
-            this.#epoch = previous || epoch;
-            this.#sentTo.clear();
-            this.#status();
-            this.#again = true;
-            return;
-        }
         for (const slot of SLOTS) await this.media.activate(senderPid(slot), epoch);
+        if (gen !== this.#gen) return;
         this.activeEpoch = epoch;
+        this.#activeRecipients = recipients;
+        for (const old of [...this.#deliveries.keys()]) if (old < epoch) this.#deliveries.delete(old);
+        // Removals detected before this epoch was created are satisfied; a
+        // later one is covered by the next epoch, created right away.
+        this.#pendingRemovals = this.#pendingRemovals.filter(t => t > created);
+        if (this.#pendingRemovals.length) this.#again = true;
         if (previous) {
             this.timers.setTimeout(() => {
                 if (gen !== this.#gen) return;
@@ -307,7 +344,7 @@ export class MediaKeyEngine {
             }, SENDER_RETIRE_MS);
         }
         this.#status();
-        this.#scheduleRetry(gen, epoch);
+        distribution.then(() => { if (gen === this.#gen && this.#epoch === epoch) { this.#status(); this.#scheduleRetry(gen, epoch); } });
     }
 
     #scheduleRetry(gen, epoch) {
@@ -316,23 +353,37 @@ export class MediaKeyEngine {
         this.#retry = this.timers.setTimeout(() => { if (gen === this.#gen && this.#epoch === epoch) void this.#retryFailed(gen, epoch); }, RETRY_FAILED_MS);
     }
 
-    async #distribute(gen, recipients) {
+    #isRecipient(r) { return this.#recipients.some(c => c.principal === r.principal && c.device === r.device); }
+
+    // Status pushes while deliveries settle, at most one per STATUS_THROTTLE_MS.
+    #statusSoon() {
+        if (this.#statusTimer) return;
+        const gen = this.#gen;
+        this.#statusTimer = this.timers.setTimeout(() => { this.#statusTimer = 0; if (gen === this.#gen) this.#status(); }, STATUS_THROTTLE_MS);
+    }
+
+    async #distribute(gen, recipients, epoch = this.#epoch) {
         const self = this.self;
-        const epoch = this.#epoch;
-        const body = buildMediaKeyBody({ channelID: self.channelID, epoch: this.#epoch, nowSeconds: Math.floor(this.now() / 1000), client: self.clientID,
+        const body = buildMediaKeyBody({ channelID: self.channelID, epoch, nowSeconds: Math.floor(this.now() / 1000), client: self.clientID,
             session: this.session, kid: this.#kid, members: this.#members, count: recipients.length + 1, keys: this.#keys });
-        // Each result is recorded as it settles (a deadline-activated removal
-        // epoch shows exactly who is still waiting). Results of an older
-        // epoch's distribution (still running after a newer rekey) never count.
+        // Each result is recorded as it settles, per epoch (the active epoch's
+        // waiting count stays exact while a newer epoch distributes).
         const record = (r, result) => {
-            if (gen !== this.#gen || this.#epoch !== epoch) return;
+            if (gen !== this.#gen) return;
             const id = `${r.principal}\n${r.device}`;
-            if (result?.ok) { this.counters.sent++; this.#sentTo.set(id, epoch); this.#failed.delete(id); }
-            else { this.counters.failed++; this.#failed.set(id, { ...r, reason: String(result?.error?.code || result?.error?.message || result?.reason || "failed") }); }
+            const tally = this.#deliveries.get(epoch);
+            if (tally) { if (result?.ok) { tally.ok.add(id); tally.failed.delete(id); } else tally.failed.add(id); }
+            if (this.#epoch === epoch) {
+                if (result?.ok) { this.counters.sent++; this.#sentTo.set(id, epoch); this.#failed.delete(id); }
+                else { this.counters.failed++; this.#failed.set(id, { ...r, reason: String(result?.error?.code || result?.error?.message || result?.reason || "failed") }); }
+            }
+            this.#statusSoon();
         };
         await pool(recipients, CONCURRENCY, async recipient => {
             // Going invisible (or stopping) mid-distribution stops the remaining sends.
             if (gen !== this.#gen || this.#invisible()) { record(recipient, { ok: false, reason: "stopped" }); return; }
+            // A device removed since this epoch was created gets nothing more.
+            if (!this.#isRecipient(recipient)) return;
             let timer;
             const timeout = new Promise((_, reject) => { if (Number.isFinite(this.sendTimeoutMs)) timer = this.timers.setTimeout(() => reject(Object.assign(new Error("timed out"), { code: "timeout" })), this.sendTimeoutMs); });
             let result;
@@ -347,7 +398,7 @@ export class MediaKeyEngine {
         const current = new Set(this.#recipients.map(r => `${r.principal}\n${r.device}`));
         const again = [...this.#failed.values()].filter(r => current.has(`${r.principal}\n${r.device}`));
         if (!again.length) return;
-        await this.#distribute(gen, again);
+        await this.#distribute(gen, again, epoch);
         if (gen !== this.#gen || this.#epoch !== epoch) return;
         this.#status();
         // Bounded: later epochs (membership, publication, renewal) retry anyway.
@@ -469,8 +520,9 @@ export class MediaKeyEngine {
             delivered: [...this.#sentTo.values()].filter(e => e === this.#epoch).length,
             // Recipients of the active epoch whose delivery is still running
             // (after a deadline activation): they hear me once it arrives.
-            waiting: this.activeEpoch === this.#epoch && this.#delivering !== null
-                ? this.#recipients.filter(r => this.#sentTo.get(`${r.principal}\n${r.device}`) !== this.#epoch && !this.#failed.has(`${r.principal}\n${r.device}`)).length : 0,
+            // Recipients of the ACTIVE epoch (still current) whose delivery has
+            // not settled: they hear me once it arrives. Joiners never count.
+            waiting: this.#waiting(),
             failed: [...this.#failed.values()].map(({ principal, device, clientID, reason }) => ({ principal, device, clientID, reason })),
             // Exactly who holds my current keys (shown in the voice UI).
             keyHolders: this.#recipients.filter(r => this.#sentTo.get(`${r.principal}\n${r.device}`) === this.#epoch)
@@ -481,6 +533,12 @@ export class MediaKeyEngine {
             publishers: this.#publishers.size,
             error: this.lastError || "",
         };
+    }
+
+    #waiting() {
+        const tally = this.#deliveries.get(this.activeEpoch);
+        if (!tally) return 0;
+        return this.#activeRecipients.filter(r => { const id = `${r.principal}\n${r.device}`; return this.#isRecipient(r) && !tally.ok.has(id) && !tally.failed.has(id); }).length;
     }
 
     #status() { try { this.onStatus(this.status()); } catch { /* status listeners never break keying */ } }

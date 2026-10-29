@@ -657,7 +657,11 @@ export class Voice extends EventTarget {
             if (!this.#media) throw new MediaSessionError("closed");
             await this.#media.syncReceivers(pc);
         } catch (error) {
-            if (this.pc === pc) await pc.setRemoteDescription({ type: "rollback" }).catch(() => {});
+            // A refused offer of a peer already replaced (leave and rejoin
+            // meanwhile) never touches the new session.
+            if (this.pc !== pc) return;
+            await pc.setRemoteDescription({ type: "rollback" }).catch(() => {});
+            if (this.pc !== pc) return;
             this.#emit("media-error", error instanceof MediaSessionError ? error : new MediaSessionError("unavailable", String(error?.message || error)));
             await this.leave().catch(() => {});
             return;

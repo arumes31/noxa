@@ -180,12 +180,18 @@ the same device counts as its own participant.
   cancelled when a recipient is removed. Once the server accepted a control it
   owns the delivery, so a retraction could never be enforced against the
   server, and an honest server stops routing the channel's media to a removed
-  member anyway. Exposure is bounded instead: every sender switches to a new
-  epoch at most about 2.2 seconds after a removal (leave, kick, move or device
-  revocation), even if the server delays the key deliveries; the removed device
-  never receives that epoch. Remaining members whose new key is still in
-  transit get it when it arrives and cannot hear the sender until then (the
-  voice status says so). A late control is refused by the recipient after its
+  member anyway. Exposure is bounded instead. When a sender's roster drops a
+  device (leave, kick, move or device revocation), the sender encrypts only
+  under an epoch that device never received no later than 2.2 seconds
+  (200 ms to coalesce roster changes plus a 2-second activation deadline) after
+  the roster update reached it. This holds however long the server delays key
+  deliveries, while other rekeys (joins, publication changes, the five-minute
+  renewal) are running, and under repeated removals; a removed device never
+  receives an epoch created after its removal. The bound starts when the
+  roster update arrives: the server decides when it tells clients that
+  someone left. Remaining members whose new key is still in transit get it
+  when it arrives and cannot hear the sender until then (the voice status
+  says so). A late control is refused by the recipient after its
   two-minute expiry, and an older epoch can never be reinstalled.
 
 Receivers get their encryption transform before the answer that adds them is

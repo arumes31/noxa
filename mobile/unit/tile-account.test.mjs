@@ -10,7 +10,7 @@ test("tile account label names the key source, with the caveat, in fingerprint b
     assert.equal(accountBlocks(account), "AbCd EfGh IjKl MnOp QrSt UvWx …");
     assert.equal(accountBlocks(account, Infinity), "AbCd EfGh IjKl MnOp QrSt UvWx Yz01 2345");
     const label = tileAccount(account);
-    assert.match(label.label, /^keys from AbCd EfGh IjKl MnOp QrSt UvWx … · not proof of who is speaking$/);
+    assert.match(label.label, /^keys from account ID AbCd EfGh IjKl MnOp QrSt UvWx … · not proof of who is speaking$/);
     assert.match(label.title, /Yz01 2345/);
     assert.equal(tileAccount(""), null);
 });

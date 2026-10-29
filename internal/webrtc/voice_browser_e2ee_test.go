@@ -340,9 +340,10 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(map[string]any{"served": h.keyframesServed, "refused": h.keyframesRefused})
 		h.mu.Unlock()
 	case "/reorder":
-		// SRTP-level reordering on the SFU's egress socket, per destination:
-		// every 7th SRTP datagram to a peer is held back and written after the
-		// next SRTP datagram to the same peer (a real swap at that receiver).
+		// SRTP-level reordering on the SFU's egress socket, per stream: every
+		// 7th SRTP datagram of a stream (destination and SSRC) is held back and
+		// written after the next datagram of the same stream (a real swap
+		// within that stream at its receiver).
 		// Switching it off flushes held datagrams. The receiver's jitter
 		// buffer reorders packets before the frame transform sees them, so
 		// this shows the stack tolerates packet reordering; frame-level
@@ -367,6 +368,9 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return write(datagram)
 				}
 				key := addr.String()
+				if len(datagram) >= 12 {
+					key += "/" + string(datagram[8:12]) // the SSRC (SRTP headers are clear)
+				}
 				counts[key]++
 				held := h.reorderHeld[key]
 				if held == nil && counts[key]%7 == 0 {

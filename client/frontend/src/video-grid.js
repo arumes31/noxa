@@ -333,10 +333,11 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         // the account is shown in the app's 4-character fingerprint blocks.
         const blocks = groupFingerprint(account);
         const shortAccount = blocks.slice(0, 6).join(" ") + (blocks.length > 6 ? " …" : "");
-        accountEl.textContent = account ? "🔒 " + tLabel("e2ee.media.tileKeys", { account: shortAccount }) : "";
+        const label = account ? tLabel("e2ee.media.tileKeys", { account: shortAccount }) : "";
+        accountEl.textContent = account ? "🔒 " + label : "";
         accountEl.classList.toggle("hidden", !account);
         accountEl.title = account ? tLabel("e2ee.media.tileAccount", { account: blocks.join(" ") }) : "";
-        if (account) accountEl.setAttribute("aria-label", accountEl.textContent.slice(2) + ". " + accountEl.title); else accountEl.removeAttribute("aria-label");
+        if (account) accountEl.setAttribute("aria-label", label + ". " + accountEl.title); else accountEl.removeAttribute("aria-label");
         t.el.dataset.account = account;
         t.el.title = name + " — " + t.kindEl.textContent + (account ? " — " + accountEl.title : "");
         const full = t.el.querySelector(".vtile-fullscreen");

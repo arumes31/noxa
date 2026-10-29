@@ -182,7 +182,7 @@ test("a removal activates its new epoch sooner than other rekeys", async () => {
     delays.length = 0;
     e.setRoster([member("c1", "u1", "d1")]);
     await flush();
-    assert.ok(delays.includes(1000) && delays.includes(2000) && !delays.includes(2500), `removal is urgent (1 s after delivery, 2 s deadline): ${delays}`);
+    assert.ok(delays.includes(1000) && delays.some(d => d > 1000 && d <= 2200) && !delays.includes(2500), `removal is urgent (1 s after delivery, deadline 2.2 s after the removal): ${delays}`);
     e.stop();
 });
 
@@ -277,7 +277,7 @@ test("the status names exactly who holds the current keys", async () => {
     e.stop();
 });
 
-test("the abort path retires only the aborted epoch; the previous one stays live", async () => {
+test("a removal preempts an in-flight rekey: its epoch is retired, the previous one stays live", async () => {
     let release;
     const gate = new Promise(r => { release = r; });
     const sent = [];
@@ -380,11 +380,107 @@ test("a removal epoch activates on a short deadline even when deliveries stall",
         assert.ok(e.activeEpoch > oldEpoch, `${label}: still encrypting under the removed device's epoch`);
         const waiting = label === "none" ? 0 : label === "one" ? 1 : 63;
         assert.equal(lastStatus.waiting, waiting, `${label}: waiting recipients shown`);
+        // A joiner was never sent the active epoch: it is not counted as waiting.
+        e.setRoster([...roster.filter(r => r.client_id !== "rl-c0"), m("rl-cj", `rl-uj-${label}`, `rl-dj-${label}`)]);
+        assert.equal(e.status().waiting, waiting, `${label}: a joiner is not waiting for the active epoch`);
         // Late deliveries complete: nobody waits any more.
         stallOn = false;
         for (let wave = 0; wave < 20 && (releases.length || e.status().waiting); wave++) { for (const release of releases.splice(0)) release(); await advance(50); }
+        await advance(300);
+        // Pushed as deliveries settle (throttled), not only read on demand.
+        assert.equal(lastStatus.waiting, 0, `${label}: late deliveries pushed`);
         assert.equal(e.status().waiting, 0, `${label}: late deliveries counted`);
-        assert.equal(e.status().keyHolders.length, 63, `${label}: every remaining device holds the new key`);
+        assert.ok(e.status().keyHolders.length >= 63, `${label}: every remaining device holds the new key`);
         e.stop();
     }
+});
+
+// Review 2b fix P2-A/P2-B, parent ruling: for every removed device D (removed
+// at tD), the sender encrypts only under an epoch never sent to D no later than
+// tD + REMOVAL_BOUND_MS, whatever the server stalls, concurrent rekeys (join,
+// publication, renewal) or repeated removals; and D never receives an epoch
+// created after its removal. Real engine, virtual clock.
+async function removalScenario(name, { members = 20, script }) {
+    const { REMOVAL_BOUND_MS } = await import("../src/media-keys.js");
+    let now = 1_900_000_000_000 + Math.floor(Math.random() * 1e9);
+    const queue = [];
+    const timers = {
+        setTimeout(fn, ms) { const t = { at: now + ms, fn }; queue.push(t); return t; },
+        clearTimeout(t) { const i = queue.indexOf(t); if (i >= 0) queue.splice(i, 1); },
+        setInterval(fn, ms) { const t = { at: now + ms, fn: () => { t.at = now + ms; queue.push(t); fn(); }, interval: true }; queue.push(t); return t; },
+        clearInterval(t) { const i = queue.indexOf(t); if (i >= 0) queue.splice(i, 1); },
+    };
+    const tick = () => new Promise(r => setImmediate(r));
+    const advance = async total => {
+        const end = now + total;
+        for (;;) {
+            for (let i = 0; i < 10; i++) await tick();
+            await new Promise(r => setTimeout(r, 1));
+            for (let i = 0; i < 10; i++) await tick();
+            queue.sort((a, b) => a.at - b.at);
+            const next = queue[0];
+            if (!next || next.at > end) { now = end; return; }
+            queue.shift(); now = Math.max(now, next.at); next.fn();
+        }
+    };
+    const active = []; // [time, epoch]
+    const sends = [];  // { at, device, epoch }
+    const media = { async setKey() {}, async activate(pid, e) { if (pid === "self|mic") active.push([now, e]); }, async retire() {}, async retireOne() {}, async forget() {} };
+    let stall = () => false;
+    const tag = name.replace(/\W+/g, "-");
+    const e = new MediaKeyEngine({ media, timers, now: () => now, sendTimeoutMs: 20_000,
+        send: c => { sends.push({ at: now, device: c.device, epoch: c.body.epoch }); return stall(c.device) ? new Promise(() => {}) : Promise.resolve({ ok: true }); } });
+    const m = i => ({ client_id: `${tag}-c${i}`, unique_id: `${tag}-u${i}`, media_device: `${tag}-d${i}`, channel_id: 5 });
+    let roster = [{ client_id: `${tag}-me`, unique_id: `${tag}-u-me`, media_device: `${tag}-d-me`, channel_id: 5 }, ...Array.from({ length: members }, (_, i) => m(i))];
+    e.setRoster(roster);
+    e.start({ channelID: 5, clientID: `${tag}-me`, principal: `${tag}-u-me`, device: `${tag}-d-me` });
+    await advance(10_000);
+    const removed = []; // { device, at }
+    const ctl = {
+        advance, get now() { return now; },
+        stall: fn => { stall = fn; },
+        join: i => { roster = [...roster, m(i)]; e.setRoster(roster); },
+        publish: () => e.publicationsChanged(),
+        remove: i => { removed.push({ device: `${tag}-d${i}`, at: now }); roster = roster.filter(r => r.client_id !== `${tag}-c${i}`); e.setRoster(roster); },
+    };
+    await script(ctl);
+    await advance(REMOVAL_BOUND_MS + 500);
+    for (const { device, at } of removed) {
+        const held = new Set(sends.filter(s => s.device === device).map(s => s.epoch));
+        // The active epoch at time t is the last activation at or before t.
+        const activeAt = t => { let ep = 0; for (const [time, epoch] of active) if (time <= t) ep = epoch; return ep; };
+        const safeFrom = active.find(([time, epoch]) => time >= at && !held.has(epoch));
+        assert.ok(safeFrom, `${name}: ${device} — the sender never left its epochs`);
+        assert.ok(safeFrom[0] - at <= REMOVAL_BOUND_MS, `${name}: ${device} — off its epochs ${safeFrom[0] - at} ms after its removal (bound ${REMOVAL_BOUND_MS})`);
+        for (const [time] of active.filter(([time]) => time >= safeFrom[0])) assert.ok(!held.has(activeAt(time)), `${name}: ${device} — an epoch it holds became active again`);
+        assert.ok(!held.has(activeAt(now)), `${name}: ${device} holds the final active epoch`);
+        const late = sends.filter(s => s.device === device && s.epoch >= at);
+        assert.equal(late.length, 0, `${name}: ${device} received an epoch created after its removal`);
+    }
+    e.stop();
+    return { removed: removed.length, activations: active.length };
+}
+
+test("removal bound: idle, during a stalled join rekey (21 and 63 members), during renewal, and in quick succession", async () => {
+    // Idle engine, all deliveries stalled.
+    await removalScenario("idle", { script: async c => { c.stall(() => true); c.remove(0); } });
+    // A join rekey whose deliveries the server stalls is in flight.
+    for (const members of [21, 63]) await removalScenario(`join-${members}`, { members, script: async c => { c.stall(() => true); c.join(900); await c.advance(1000); c.remove(0); } });
+    // A join rekey in its activation delay (no stalls).
+    await removalScenario("join-delay", { script: async c => { c.join(900); await c.advance(400); c.remove(0); } });
+    // A publication rekey in flight, deliveries stalled.
+    await removalScenario("publication", { script: async c => { c.stall(() => true); c.publish(); await c.advance(700); c.remove(1); } });
+    // The 5-minute renewal is distributing (stalled) when the removal lands.
+    await removalScenario("renewal", { script: async c => { await c.advance(5 * 60_000 - 10_000 + 50); c.stall(() => true); await c.advance(300); c.remove(2); } });
+    // Several devices removed in quick succession (100 ms apart), stalled.
+    await removalScenario("burst", { script: async c => { c.stall(() => true); for (let i = 0; i < 6; i++) { c.remove(i); await c.advance(100); } } });
+});
+
+test("removal bound holds under removal churn every 1.9 s with all deliveries stalled (long run)", async () => {
+    const result = await removalScenario("flapstall", { members: 40, script: async c => {
+        await c.advance(4000);
+        c.stall(() => true);
+        for (let i = 0; i < 35; i++) { c.remove(i); await c.advance(1900); }
+    } });
+    assert.equal(result.removed, 35);
 });

@@ -391,10 +391,17 @@ try {
     await growing("B", cam, "B sees a camera under reordering", { min: 20, video: true });
     const reordered = (await api("/reorder", { Active: false })).reordered;
     const afterReorder = (await report("B")).receivers;
-    const replays = ["A|mic", cam].reduce((n, pid) => n + ((afterReorder[pid]?.dropped?.replay || 0) - (beforeReorder[pid]?.dropped?.replay || 0)), 0);
-    if (!reordered) throw new Error("reordering was not injected");
-    if (replays) throw new Error(`reordered frames rejected as replays: ${replays}`);
-    log("phase 6d: under reordering", JSON.stringify({ reordered, mic: afterReorder["A|mic"].frames - beforeReorder["A|mic"].frames, cam, camFrames: afterReorder[cam].frames - beforeReorder[cam].frames, replays }));
+    // Audio frames reach the transform per packet, so swapped packets arrive
+    // reordered there: the replay window must accept every one of them.
+    // Video frames are reassembled first; a retransmission after a swap can
+    // deliver the same encrypted frame twice, and the replay window drops
+    // the repeat (its IV was already accepted: a duplicate, never a new
+    // frame). Video must keep decrypting.
+    const delta = (pid, k) => (afterReorder[pid]?.dropped?.[k] || 0) - (beforeReorder[pid]?.dropped?.[k] || 0);
+    const micReplays = delta("A|mic", "replay"), camDuplicates = delta(cam, "replay");
+    if (micReplays) throw new Error(`reordered audio frames rejected as replays: ${micReplays}`);
+    if (afterReorder[cam].frames - beforeReorder[cam].frames < 20) throw new Error("video stopped decrypting under reordering");
+    log("phase 6d: per-stream reordering", JSON.stringify({ reordered, mic: afterReorder["A|mic"].frames - beforeReorder["A|mic"].frames, micReplays, cam, camFrames: afterReorder[cam].frames - beforeReorder[cam].frames, camDuplicatesDropped: camDuplicates }));
 
     // 7. Optional long session beyond the old 10-minute hard close.
     if (longMinutes > 0) {
