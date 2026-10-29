@@ -48,3 +48,43 @@ test("a throwing rekey with a pending removal is retried promptly", async () => 
     let n = 0; W.hooks.setKey = async () => { if (++n === 1) throw new Error("worker busy"); };
     W.remove(0); await W.advance(60_000); ok(W, "one transient setKey failure");
 });
+
+// Review 2b fix3 P3-A: one stored retry handle; persistent throws plus
+// roster churn cannot multiply retry chains.
+test("persistent rekey throws under roster churn keep a bounded rekey rate", async () => {
+    const W = world(); await W.start();
+    let calls = 0; W.hooks.setKey = async () => { calls++; throw new Error("worker rejects"); };
+    W.remove(0);
+    const marks = [];
+    for (let i = 0; i < 300; i++) {
+        await W.advance(200);
+        W.join(500 + (i % 2)); if (i % 2) W.remove(19 - (i % 3)); else W.join(19 - (i % 3));
+        if (i % 50 === 49) marks.push(calls);
+    }
+    const rates = marks.map((c, i) => c - (marks[i - 1] || 0));
+    assert.ok(rates.every(r => r <= 60), `setKey calls per 10 s: ${rates}`);
+});
+
+// Review 2b fix3 P3-B (parent ruling, confidentiality first): while rekeys
+// keep failing, the active sender epoch (held by the removed device) is
+// retired at tD + REMOVAL_BOUND_MS: nothing is encrypted under it afterwards,
+// the status says "paused", and a safe epoch resumes media once keys work.
+test("persistent rekey throws past a removal's deadline silence the sender until a safe epoch", async () => {
+    const { REMOVAL_BOUND_MS } = await import("../src/media-keys.js");
+    const W = world(); await W.start();
+    let failing = true; W.hooks.setKey = async () => { if (failing) throw new Error("worker rejects"); };
+    const held = W.e.activeEpoch;
+    W.remove(0);
+    const tD = W.now;
+    await W.advance(30_000);
+    const retired = W.retired.find(r => r.kind === "one" && r.pid === "self|mic" && r.epoch === held);
+    assert.ok(retired, "the removed device's epoch was never retired");
+    assert.ok(retired.at - tD <= REMOVAL_BOUND_MS, `retired ${retired.at - tD} ms after the removal`);
+    assert.equal(W.e.status().state, "paused");
+    assert.ok(!W.active.some(([t, ep]) => t > tD && ep === held), "the retired epoch was activated again");
+    failing = false;
+    await W.advance(10_000);
+    assert.notEqual(W.e.activeEpoch, held);
+    assert.notEqual(W.e.status().state, "paused");
+    assert.ok(!W.sends.some(s => s.device === "d0" && s.at > tD), "d0 received something after its removal");
+});

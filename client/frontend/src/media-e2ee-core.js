@@ -41,7 +41,7 @@ const PID_RE = /^[\x21-\x7e]{1,160}$/;
 const ENDPOINT_RE = /^[a-z]+:[A-Za-z0-9_-]{1,64}$/;
 // "replay" is an exact duplicate of an accepted frame; "replay-old" a frame
 // older than the replay window; "replay-full" a full window (or source table).
-const DROP_REASONS = ["unbound", "empty", "plaintext", "nokey", "codec", "stale", "unauthenticated", "replay", "replay-old", "replay-full", "unencrypted"];
+const DROP_REASONS = ["unbound", "empty", "plaintext", "nokey", "codec", "stale", "unauthenticated", "replay", "replay-old", "replay-full", "replay-invalid", "unencrypted"];
 
 export function validPid(pid) { return typeof pid === "string" && PID_RE.test(pid); }
 export function validEpoch(epoch) { return Number.isSafeInteger(epoch) && epoch > 0; }
@@ -194,7 +194,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                 let window = windows.get(key);
                 if (!window) { window = new MediaReplayWindow(); windows.set(key, window); }
                 const verdict = window.check(input.iv);
-                if (verdict !== "ok") return drop(ep, verdict === "duplicate" ? "replay" : verdict === "old" ? "replay-old" : "replay-full");
+                if (verdict !== "ok") return drop(ep, verdict === "duplicate" ? "replay" : verdict === "old" ? "replay-old" : verdict === "full" ? "replay-full" : "replay-invalid");
                 stats.decrypted++; ep.frames++;
                 // The page keeps a new or rebound receiver's track disabled and
                 // unattached until this first authenticated frame of its binding

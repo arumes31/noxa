@@ -189,7 +189,10 @@ the same device counts as its own participant.
   renewal) are running, under repeated removals or a stream of other roster
   changes, and if the wall clock is changed (the deadline is a timer started
   at the removal); a removed device never receives an epoch created after its
-  removal. The bound starts when the
+  removal. If new keys cannot be set up in time (for example, the encryption
+  worker keeps failing), the sender's audio and video are paused at the
+  deadline instead of continuing under the old keys, and the voice status
+  says so until new keys are ready. The bound starts when the
   roster update arrives: the server decides when it tells clients that
   someone left. Remaining members whose new key is still in transit get it
   when it arrives and cannot hear the sender until then (the voice status

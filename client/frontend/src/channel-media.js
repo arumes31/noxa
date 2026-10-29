@@ -115,6 +115,7 @@ export function mediaStatusText(status = lastStatus) {
         case "keying": return t("e2ee.media.keying");
         case "encrypted": return withWarning(status, !status.recipients ? t("e2ee.media.alone") : status.keyHolders?.length ? t("e2ee.media.encrypted", { count: status.keyHolders.length, names: holderNames(status) }) : t("e2ee.media.keying"));
         case "partial": return withWarning(status, t("e2ee.media.partial", { failed: status.failed?.length || 0 }));
+        case "paused": return t("e2ee.media.paused");
         default: return "";
     }
 }

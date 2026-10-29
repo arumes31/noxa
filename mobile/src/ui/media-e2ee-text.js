@@ -13,6 +13,7 @@ addStrings({
         "e2ee.reason.channel_full": "This encrypted voice channel is full (at most 64 participants).",
         "e2ee.media.tileAccount": "Encryption keys for this participant came from a verified device of account ID {account} (the account's ID, not a key fingerprint). Frames prove channel membership, not which member sent them.",
         "e2ee.media.waiting": "{count} device(s) are still receiving the new keys and cannot hear or see you yet",
+        "e2ee.media.paused": "Your audio and video are paused: new encryption keys could not be set up after someone left. They resume as soon as the keys are ready.",
         "e2ee.media.tileKeys": "keys from account ID {account} · not proof of who is speaking",
         "e2ee.media.alone": "End-to-end encrypted · nobody else is here yet",
         "e2ee.media.partial": "End-to-end encrypted · {failed} device(s) could not receive the keys and cannot hear or see you",
@@ -39,6 +40,7 @@ addStrings({
         "e2ee.reason.channel_full": "Dieser verschlüsselte Sprachkanal ist voll (höchstens 64 Teilnehmende).",
         "e2ee.media.tileAccount": "Die Schlüssel dieser Person stammen von einem verifizierten Gerät des Kontos mit der ID {account} (die Konto-ID, kein Schlüssel-Fingerabdruck). Frames belegen die Kanalmitgliedschaft, nicht welches Mitglied sie sendete.",
         "e2ee.media.waiting": "{count} Gerät(e) erhalten die neuen Schlüssel noch und hören/sehen dich noch nicht",
+        "e2ee.media.paused": "Dein Ton und Video sind pausiert: Nach dem Verlassen eines Mitglieds konnten keine neuen Schlüssel eingerichtet werden. Sie laufen weiter, sobald die Schlüssel bereit sind.",
         "e2ee.media.tileKeys": "Schlüssel von Konto-ID {account} · kein Beweis, wer spricht",
         "e2ee.media.alone": "Ende-zu-Ende-verschlüsselt · noch niemand sonst hier",
         "e2ee.media.partial": "Ende-zu-Ende-verschlüsselt · {failed} Gerät(e) konnten die Schlüssel nicht erhalten und hören/sehen dich nicht",
@@ -85,6 +87,7 @@ export function mediaStatusText(status) {
         case "keying": return t("e2ee.media.keying");
         case "encrypted": return withWarning(status, !status.recipients ? t("e2ee.media.alone") : status.keyHolders?.length ? t("e2ee.media.encrypted", { count: status.keyHolders.length, names: holderNames(status) }) : t("e2ee.media.keying"));
         case "partial": return withWarning(status, t("e2ee.media.partial", { failed: status.failed?.length || 0 }));
+        case "paused": return t("e2ee.media.paused");
         default: return "";
     }
 }
