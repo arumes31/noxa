@@ -153,7 +153,7 @@ func TestOlmDoorbellsAreCoalescedPerDevice(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
 	victim, victimID := dialAuthed(t, env.addr, "user-uid")
-	defer victim.Close()
+	defer func() { _ = victim.Close() }()
 	vc, _ := env.srv.clientByID(victimID)
 	vc.setDeviceID("dev-victim")
 	for i := 0; i < 200; i++ {
@@ -181,6 +181,8 @@ func countOlmDoorbells(c net.Conn, d time.Duration) int {
 // readReplyFrame reads a request's reply from a test connection, skipping
 // the content-free olm_pending doorbell that may be interleaved (production
 // readers dispatch frames by type; test bridges read the next frame).
+//
+//nolint:unused // used by the integration-tagged PostgreSQL/browser tests
 func readReplyFrame(r io.Reader) (*netproto.Frame, error) {
 	for {
 		f, err := netproto.ReadFrame(r)

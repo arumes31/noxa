@@ -169,7 +169,7 @@ func (b Bundle) VerifyClaim(key ed25519.PublicKey, server, principal, device, pi
 		return Key{}, e
 	}
 	if pinnedIdentity != "" && pinnedIdentity != b.Identity {
-		return Key{}, errors.New("Olm account identity changed; explicit approval required")
+		return Key{}, errors.New("Olm account identity changed; explicit approval required") //nolint:staticcheck // ST1005: "Olm" is a proper noun
 	}
 	for _, k := range b.OneTimeKeys {
 		if k.ID == claimedID {

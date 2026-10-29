@@ -20,12 +20,12 @@ func TestAccountTransitionFencesAndPromotesExactReceipt(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	core, e := ratchet.New(t.Context())
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer core.Close(context.Background())
+	defer func() { _ = core.Close(context.Background()) }()
 	old := applyTest(t, core, ratchet.Request{Op: ratchet.NewAccount, Key: s.CoreKey(), Count: 1})
 	fresh := applyTest(t, core, ratchet.Request{Op: ratchet.NewAccount, Key: s.CoreKey(), Count: 1})
 	_, secret, _ := ed25519.GenerateKey(rand.Reader)

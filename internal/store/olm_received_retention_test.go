@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"noxa/internal/e2ee/admission"
 	"testing"
@@ -37,7 +38,7 @@ func TestOlmReceivedRetentionPreservesPendingAndReplayFences(t *testing.T) {
 	s, a, b, m, receipt, delivery := receivedRetentionFixture(t)
 	ctx := t.Context()
 	var first time.Time
-	if err := s.db.QueryRow(`SELECT received_at FROM olm_deliveries WHERE id=$1`, delivery.ID).Scan(&first); err != nil {
+	if err := s.db.QueryRowContext(context.Background(), `SELECT received_at FROM olm_deliveries WHERE id=$1`, delivery.ID).Scan(&first); err != nil {
 		t.Fatal(err)
 	}
 	if first.IsZero() {
@@ -47,19 +48,19 @@ func TestOlmReceivedRetentionPreservesPendingAndReplayFences(t *testing.T) {
 		t.Fatal(err)
 	}
 	var again time.Time
-	if err := s.db.QueryRow(`SELECT received_at FROM olm_deliveries WHERE id=$1`, delivery.ID).Scan(&again); err != nil || !first.Equal(again) {
+	if err := s.db.QueryRowContext(context.Background(), `SELECT received_at FROM olm_deliveries WHERE id=$1`, delivery.ID).Scan(&again); err != nil || !first.Equal(again) {
 		t.Fatal("duplicate ACK moved retention deadline", first, again, err)
 	}
 	// Preserve actual admitted bytes in a retained pending fixture and a recent ACK.
 	for _, id := range []string{"retention-pending", "retention-recent"} {
-		if _, err := s.db.Exec(`INSERT INTO olm_messages(id,server,sender,device_id,account_epoch,logical_id,manifest) SELECT $1,server,sender,device_id,account_epoch,$1,manifest FROM olm_messages WHERE id=$2`, id, receipt.MessageID); err != nil {
+		if _, err := s.db.ExecContext(context.Background(), `INSERT INTO olm_messages(id,server,sender,device_id,account_epoch,logical_id,manifest) SELECT $1,server,sender,device_id,account_epoch,$1,manifest FROM olm_messages WHERE id=$2`, id, receipt.MessageID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.db.Exec(`INSERT INTO olm_deliveries(id,message_id,principal,device_id,account_epoch,copy,digest,state,received_at) SELECT $1,$1,principal,device_id,account_epoch,copy,digest,CASE WHEN $1='retention-pending' THEN 'pending' ELSE 'received' END,CASE WHEN $1='retention-pending' THEN now()-interval '60 days' ELSE now()-interval '29 days' END FROM olm_deliveries WHERE id=$2`, id, delivery.ID); err != nil {
+		if _, err := s.db.ExecContext(context.Background(), `INSERT INTO olm_deliveries(id,message_id,principal,device_id,account_epoch,copy,digest,state,received_at) SELECT $1,$1,principal,device_id,account_epoch,copy,digest,CASE WHEN $1='retention-pending' THEN 'pending' ELSE 'received' END,CASE WHEN $1='retention-pending' THEN now()-interval '60 days' ELSE now()-interval '29 days' END FROM olm_deliveries WHERE id=$2`, id, delivery.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.db.Exec(`UPDATE olm_deliveries SET received_at=now()-interval '31 days' WHERE id=$1`, delivery.ID); err != nil {
+	if _, err := s.db.ExecContext(context.Background(), `UPDATE olm_deliveries SET received_at=now()-interval '31 days' WHERE id=$1`, delivery.ID); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := s.ExpireReceivedOlm(ctx); err != nil || n != 1 {
@@ -69,11 +70,11 @@ func TestOlmReceivedRetentionPreservesPendingAndReplayFences(t *testing.T) {
 		t.Fatal("non-idempotent sweep", n, err)
 	}
 	var size int
-	if err := s.db.QueryRow(`SELECT octet_length(copy) FROM olm_deliveries WHERE id=$1`, delivery.ID).Scan(&size); err != nil || size != 0 {
+	if err := s.db.QueryRowContext(context.Background(), `SELECT octet_length(copy) FROM olm_deliveries WHERE id=$1`, delivery.ID).Scan(&size); err != nil || size != 0 {
 		t.Fatal(size, err)
 	}
 	for _, id := range []string{"retention-pending", "retention-recent"} {
-		if err := s.db.QueryRow(`SELECT octet_length(copy) FROM olm_deliveries WHERE id=$1`, id).Scan(&size); err != nil || size == 0 {
+		if err := s.db.QueryRowContext(context.Background(), `SELECT octet_length(copy) FROM olm_deliveries WHERE id=$1`, id).Scan(&size); err != nil || size == 0 {
 			t.Fatal("protected ciphertext cleared", id, size, err)
 		}
 	}
@@ -100,7 +101,7 @@ func TestOlmReceivedRetentionPreservesPendingAndReplayFences(t *testing.T) {
 		t.Fatal("retired attempt resurrected", prior, err)
 	}
 	var logical int
-	if err := s.db.QueryRow(`SELECT count(*) FROM olm_messages WHERE server=$1 AND sender=$2 AND logical_id=$3`, a.Server, a.Principal, m.LogicalID).Scan(&logical); err != nil || logical != 1 {
+	if err := s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM olm_messages WHERE server=$1 AND sender=$2 AND logical_id=$3`, a.Server, a.Principal, m.LogicalID).Scan(&logical); err != nil || logical != 1 {
 		t.Fatal("logical replay fence lost", logical, err)
 	}
 }
@@ -108,13 +109,13 @@ func TestOlmReceivedRetentionPreservesPendingAndReplayFences(t *testing.T) {
 func TestOlmReceivedRetentionSweepIsBounded(t *testing.T) {
 	s, _, _, _, receipt, delivery := receivedRetentionFixture(t)
 	ctx := t.Context()
-	if _, err := s.db.Exec(`INSERT INTO olm_messages(id,server,sender,device_id,account_epoch,logical_id,manifest) SELECT 'retention-batch-'||n,server,sender,device_id,account_epoch,'retention-batch-'||n,manifest FROM olm_messages CROSS JOIN generate_series(1,200) n WHERE id=$1`, receipt.MessageID); err != nil {
+	if _, err := s.db.ExecContext(context.Background(), `INSERT INTO olm_messages(id,server,sender,device_id,account_epoch,logical_id,manifest) SELECT 'retention-batch-'||n,server,sender,device_id,account_epoch,'retention-batch-'||n,manifest FROM olm_messages CROSS JOIN generate_series(1,200) n WHERE id=$1`, receipt.MessageID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO olm_deliveries(id,message_id,principal,device_id,account_epoch,copy,digest,state,received_at) SELECT 'retention-batch-'||n,'retention-batch-'||n,principal,device_id,account_epoch,copy,digest,'received',now()-interval '31 days' FROM olm_deliveries CROSS JOIN generate_series(1,200) n WHERE id=$1`, delivery.ID); err != nil {
+	if _, err := s.db.ExecContext(context.Background(), `INSERT INTO olm_deliveries(id,message_id,principal,device_id,account_epoch,copy,digest,state,received_at) SELECT 'retention-batch-'||n,'retention-batch-'||n,principal,device_id,account_epoch,copy,digest,'received',now()-interval '31 days' FROM olm_deliveries CROSS JOIN generate_series(1,200) n WHERE id=$1`, delivery.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`UPDATE olm_deliveries SET received_at=now()-interval '31 days' WHERE id=$1`, delivery.ID); err != nil {
+	if _, err := s.db.ExecContext(context.Background(), `UPDATE olm_deliveries SET received_at=now()-interval '31 days' WHERE id=$1`, delivery.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []int64{200, 1, 0} {

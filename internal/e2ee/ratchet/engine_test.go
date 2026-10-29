@@ -21,7 +21,7 @@ func TestHandshakeAndAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer e.Close(ctx)
+	defer func() { _ = e.Close(ctx) }()
 	key := make([]byte, 32)
 	key[0] = 42
 	call := func(r Request) Response {
@@ -63,7 +63,7 @@ func TestInputLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer e.Close(ctx)
+	defer func() { _ = e.Close(ctx) }()
 	for _, r := range []Request{{Op: NewAccount}, {Op: NewAccount, Key: make([]byte, 32), Count: 101}, {Op: NewAccount, Key: make([]byte, 32), Count: 0}, {Op: "unsupported", Key: make([]byte, 32)}} {
 		if _, err := e.Apply(ctx, r); err == nil {
 			t.Fatal("accepted invalid request")
@@ -77,7 +77,7 @@ func TestProtectedSnapshotsAndFailureIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer e.Close(ctx)
+	defer func() { _ = e.Close(ctx) }()
 	key := make([]byte, 32)
 	a, err := e.Apply(ctx, Request{Op: NewAccount, Key: key, Count: 100})
 	if err != nil {
@@ -112,7 +112,7 @@ func TestDeterministicInteropVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer e.Close(ctx)
+	defer func() { _ = e.Close(ctx) }()
 	// Deterministic entropy is confined to this test, never exported by the API.
 	var counter uint64
 	e.entropy = func(p []byte) (int, error) {
@@ -187,12 +187,12 @@ func TestRuntimeMemoryAndWorkBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer e.Close(ctx)
+	defer func() { _ = e.Close(ctx) }()
 	m, err := e.runtime.InstantiateModule(ctx, e.compiled, wazero.NewModuleConfig().WithName(""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer m.Close(ctx)
+	defer func() { _ = m.Close(ctx) }()
 	if _, ok := m.Memory().Grow(1024); ok {
 		t.Fatal("WASM exceeded 64 MiB cap")
 	}

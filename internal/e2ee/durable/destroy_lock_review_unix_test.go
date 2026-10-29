@@ -25,13 +25,13 @@ func TestLockForDestroyBlocksLateNamespaceAndStaleOpener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+	_ = s.Close()
 	release, err := LockForDestroy(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s2, err := Open(dir, nsB, p, 200*time.Millisecond); err == nil {
-		s2.Close()
+		_ = s2.Close()
 		release()
 		t.Fatal("a second-namespace store got in while the destroy lock was held")
 	} else if !errors.Is(err, ErrInUse) {
@@ -45,7 +45,7 @@ func TestLockForDestroyBlocksLateNamespaceAndStaleOpener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+	_ = s.Close()
 	release, err = LockForDestroy(dir2)
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +54,7 @@ func TestLockForDestroyBlocksLateNamespaceAndStaleOpener(t *testing.T) {
 	go func() {
 		st, e := Open(dir2, nsA, p, 2*time.Second)
 		if st != nil {
-			st.Close()
+			_ = st.Close()
 		}
 		done <- e
 	}()
@@ -73,7 +73,7 @@ func TestLockForDestroyBlocksLateNamespaceAndStaleOpener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if _, err := LockForDestroy(dir3); !errors.Is(err, ErrInUse) {
 		t.Fatal("held store must refuse the destroy lock", err)
 	}

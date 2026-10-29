@@ -181,14 +181,14 @@ func (e *Engine) Apply(ctx context.Context, r Request) (Response, error) {
 	if err != nil || len(p) != 1 || p[0] == 0 {
 		return Response{}, errors.New("ratchet allocation failed")
 	}
-	if !m.Memory().Write(uint32(p[0]), encoded) {
+	if !m.Memory().Write(uint32(p[0]), encoded) { // #nosec G115 -- wasm32 pointers fit in 32 bits; Write rejects out-of-bounds offsets.
 		return Response{}, errors.New("ratchet memory bounds")
 	}
 	result, err := m.ExportedFunction("run").Call(ctx, p[0], uint64(len(encoded)))
 	if err != nil || len(result) != 1 || result[0] == 0 {
 		return Response{}, errors.New("ratchet operation failed")
 	}
-	ptr, n := uint32(result[0]), uint32(result[0]>>32)
+	ptr, n := uint32(result[0]), uint32(result[0]>>32) // #nosec G115 -- run packs two uint32 halves (pointer, length) into one uint64.
 	if n > MaxOutput {
 		return Response{}, errors.New("ratchet response too large")
 	}

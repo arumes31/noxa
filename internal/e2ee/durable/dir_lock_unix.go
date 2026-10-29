@@ -16,7 +16,7 @@ import (
 // afterwards: if the directory was renamed (a deletion tombstone), it fails
 // instead of opening the deleted store.
 func lockStoreDir(dir string, exclusive bool, timeout time.Duration) (func(), error) {
-	f, err := os.Open(dir)
+	f, err := os.Open(dir) // #nosec G304 -- dir is the application-owned store directory, never peer input.
 	if err != nil {
 		return nil, err
 	}

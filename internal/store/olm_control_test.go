@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"testing"
@@ -43,7 +44,7 @@ func TestOlmControlSingleTargetAdmission(t *testing.T) {
 	s, a, b, chat, _ := admissionFixture(t)
 	b2dev, _, b2bundle := olmFixture(t, s, "bob")
 	// A linked (approved) second device of bob.
-	if _, e := s.db.Exec(`UPDATE user_devices SET approved_by=$1, approval_signature='' WHERE device_id=$2`, b.Device, b2dev.DeviceID); e != nil {
+	if _, e := s.db.ExecContext(context.Background(), `UPDATE user_devices SET approved_by=$1, approval_signature='`+"\x01"+`' WHERE device_id=$2`, b.Device, b2dev.DeviceID); e != nil {
 		t.Fatal(e)
 	}
 	if e := s.PublishOlmBundle(t.Context(), "bob", b2dev.DeviceID, b2bundle.Server, b2bundle); e != nil {
@@ -161,7 +162,7 @@ func TestOlmPendingControlsExpire(t *testing.T) {
 		t.Fatalf("fresh controls expired: %d %v (%d pending)", n, e, pending())
 	}
 	// Age both manifests past deadline + ControlPendingTTL.
-	if _, e = s.db.Exec(`UPDATE olm_messages SET manifest=convert_to(jsonb_set(convert_from(manifest,'UTF8')::jsonb,'{deadline}',to_jsonb(($1)::bigint))::text,'UTF8') WHERE logical_id IN ('ctl-initial','ctl-plain')`,
+	if _, e = s.db.ExecContext(context.Background(), `UPDATE olm_messages SET manifest=convert_to(jsonb_set(convert_from(manifest,'UTF8')::jsonb,'{deadline}',to_jsonb(($1)::bigint))::text,'UTF8') WHERE logical_id IN ('ctl-initial','ctl-plain')`,
 		time.Now().Unix()-admission.ControlPendingTTL-1); e != nil {
 		t.Fatal(e)
 	}

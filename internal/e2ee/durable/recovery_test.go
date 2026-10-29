@@ -24,12 +24,12 @@ func TestRecoveryTransitionFromOlderLocalEpoch(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	core, e := ratchet.New(t.Context())
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer core.Close(context.Background())
+	defer func() { _ = core.Close(context.Background()) }()
 	lost := applyTest(t, core, ratchet.Request{Op: ratchet.NewAccount, Key: s.CoreKey(), Count: 1}) // the server's epoch-3 account
 	fresh := applyTest(t, core, ratchet.Request{Op: ratchet.NewAccount, Key: s.CoreKey(), Count: 1})
 	_, secret, _ := ed25519.GenerateKey(rand.Reader)

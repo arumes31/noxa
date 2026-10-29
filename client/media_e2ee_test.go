@@ -14,7 +14,7 @@ import (
 // of their tab; every other control kind is not media and is not relayed.
 func TestRelayMediaKeyForwardsOnlyMediaKeys(t *testing.T) {
 	rec := &eventRecorder{}
-	m := newConnManager(nil)
+	m := newConnManager(nil) //nolint:staticcheck // a nil Wails context deliberately disables frontend events
 	m.sink = rec
 	m.relayMediaKey(RatchetControl{Kind: "other", Data: json.RawMessage(`{"x":1}`)})
 	m.relayMediaKey(RatchetControl{Kind: mediaKeyControlKind})
@@ -59,7 +59,7 @@ func TestMediaKeyRequestBuildsAnAdmissibleControl(t *testing.T) {
 }
 
 func TestSendMediaKeyRefusesOtherKindsAndEmptyData(t *testing.T) {
-	m := newConnManager(nil)
+	m := newConnManager(nil) //nolint:staticcheck // a nil Wails context deliberately disables frontend events
 	for _, req := range []MediaKeyRequest{{Kind: "chat", Data: json.RawMessage(`{}`)}, {Kind: mediaKeyControlKind}} {
 		if out, err := m.sendMediaKey(req); err == nil || out.Code != "invalid" {
 			t.Fatalf("%+v: %+v %v", req, out, err)
@@ -68,7 +68,7 @@ func TestSendMediaKeyRefusesOtherKindsAndEmptyData(t *testing.T) {
 }
 
 func TestMediaE2EEStatusExplainsWhyMediaCannotStart(t *testing.T) {
-	m := newConnManager(nil)
+	m := newConnManager(nil) //nolint:staticcheck // a nil Wails context deliberately disables frontend events
 	if st := m.mediaE2EEStatus(); st.Supported || st.Reason != "server_outdated" {
 		t.Fatalf("old server: %+v", st)
 	}
@@ -96,7 +96,7 @@ func TestOlmDoorbellWakesTheDrainWithoutForwarding(t *testing.T) {
 		t.Fatal("doorbell detection")
 	}
 	rec := &eventRecorder{}
-	m := newConnManager(nil)
+	m := newConnManager(nil) //nolint:staticcheck // a nil Wails context deliberately disables frontend events
 	m.sink = rec
 	m.dispatch(&netproto.Frame{Type: uint16(netproto.MsgEvent), Payload: []byte(`{"type":"olm_pending","data":{}}`)})
 	m.ringRatchet() // a second ring while one is pending does not block

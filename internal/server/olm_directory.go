@@ -73,9 +73,10 @@ func (s *TCPServer) handleOlmDirectory(ctx context.Context, client *Client, f *n
 		if e != nil || !bytes.Equal(signed, registered) {
 			return reply("authority-required")
 		}
-		if r.Action == "publish" {
+		switch r.Action {
+		case "publish":
 			e = db.PublishOlmBundle(opCtx, principal, id, binding, *r.Bundle)
-		} else if r.Action == "own_state" {
+		case "own_state":
 			// Read-only, only the authenticated principal/device's own row.
 			var own olmdir.Bundle
 			if own, e = db.OwnOlmBundle(opCtx, principal, id); e == nil {
@@ -83,7 +84,7 @@ func (s *TCPServer) handleOlmDirectory(ctx context.Context, client *Client, f *n
 			} else if errors.Is(e, sql.ErrNoRows) {
 				return reply("absent")
 			}
-		} else {
+		default:
 			// Unique-ID DMs have no additional contact/block ACL in this server.
 			// rolePolicyRead, rules and active-device gates match direct-message entry;
 			// recipient current trust must independently be checked by the caller.

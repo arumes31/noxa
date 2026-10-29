@@ -265,7 +265,7 @@ func (s *Store) SignOutDevice(ctx context.Context, principal, deviceID string) (
 	if err != nil {
 		return Device{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = lockOlmRosters(ctx, tx, []string{principal}); err != nil {
 		return Device{}, err
 	}
@@ -292,7 +292,7 @@ func (s *Store) RevokeDevice(ctx context.Context, principal, deviceID, reason st
 	if err != nil {
 		return Device{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = lockOlmRosters(ctx, tx, []string{principal}); err != nil {
 		return Device{}, err
 	}
@@ -325,12 +325,13 @@ func (s *Store) updateLockedDevices(ctx context.Context, predicate string, selec
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	principals, err := lockMutationPrincipals(ctx, tx, predicate, selectionArgs)
 	if err != nil {
 		return nil, err
 	}
 	selectionArgs = append(append([]any(nil), selectionArgs...), pq.Array(principals))
+	// #nosec G202 -- predicate is a fixed SQL fragment from internal callers; values are bound parameters.
 	rows, err := tx.QueryContext(ctx, `SELECT device_id FROM user_devices WHERE (`+predicate+`) AND principal=ANY($`+strconv.Itoa(len(selectionArgs))+`) ORDER BY device_id COLLATE "C" FOR UPDATE`, selectionArgs...)
 	if err != nil {
 		return nil, err
@@ -339,13 +340,13 @@ func (s *Store) updateLockedDevices(ctx context.Context, predicate string, selec
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		ids = append(ids, id)
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -361,13 +362,13 @@ func (s *Store) updateLockedDevices(ctx context.Context, predicate string, selec
 	for rows.Next() {
 		d, err := scanDevice(rows)
 		if err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, err
 		}
 		out = append(out, d)
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return nil, err
 	}

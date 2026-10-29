@@ -14,7 +14,7 @@ func (s *Store) RetireOlmReceipt(ctx context.Context, a OlmSource, id, digest st
 	if e != nil {
 		return 0, e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if e = admissionBudget(ctx, tx); e != nil {
 		return 0, e
 	}

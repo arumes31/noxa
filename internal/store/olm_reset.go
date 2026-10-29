@@ -21,7 +21,7 @@ func (s *Store) ResetOlmAccount(ctx context.Context, a OlmSource, r olmdir.Reset
 	if e != nil {
 		return out, e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if e = sourceLock(ctx, tx, a, false); e != nil {
 		return out, e
 	}
@@ -107,7 +107,7 @@ func (s *Store) OlmResetChain(ctx context.Context, a OlmSource, target string, a
 	if e != nil {
 		return nil, e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if e = sourceLock(ctx, tx, a, false); e != nil {
 		return nil, e
 	}
@@ -115,7 +115,7 @@ func (s *Store) OlmResetChain(ctx context.Context, a OlmSource, target string, a
 	if e != nil {
 		return nil, e
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []olmdir.Reset{}
 	for rows.Next() {
 		var b []byte
@@ -133,6 +133,6 @@ func (s *Store) OlmResetChain(ctx context.Context, a OlmSource, target string, a
 	if e = rows.Err(); e != nil {
 		return nil, e
 	}
-	rows.Close()
+	_ = rows.Close()
 	return out, tx.Commit()
 }

@@ -86,7 +86,7 @@ func TestRatchetPureRules(t *testing.T) {
 			t.Fatalf("%q: %v", bad, err)
 		}
 	}
-	if !ratchetValidDeliveryID("d-1") || ratchetValidDeliveryID("") || ratchetValidDeliveryID("bad\x00id") || ratchetValidDeliveryID(strings.Repeat("x", 600)) || ratchetValidDeliveryID("a​b") {
+	if !ratchetValidDeliveryID("d-1") || ratchetValidDeliveryID("") || ratchetValidDeliveryID("bad\x00id") || ratchetValidDeliveryID(strings.Repeat("x", 600)) || ratchetValidDeliveryID("a\u200bb") {
 		t.Fatal("delivery ID shape")
 	}
 	if f := ratchetBodySentAt(json.RawMessage(`{"text":"x","sentAt":12.5}`), 1); f != 12.5 {
@@ -110,7 +110,7 @@ func newTestRatchetConsumer(t *testing.T, admissionFn func(netproto.OlmAdmission
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return newRatchetConsumer(ratchetDeps{Store: s, Core: ratchetFakeCore{}, Namespace: ns, AttemptTTL: ttl,
 		Admission: func(_ context.Context, r netproto.OlmAdmissionRequest) (json.RawMessage, error) {
 			return admissionFn(r)
@@ -336,7 +336,7 @@ func TestIdentityDeletionDestroysOnlyItsRatchetNamespaces(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s.Close()
+		_ = s.Close()
 	}
 	victim, keep := list[1], list[0]
 	// Fix2 P3-F: a store held by another process fails the deletion as a
@@ -348,7 +348,7 @@ func TestIdentityDeletionDestroysOnlyItsRatchetNamespaces(t *testing.T) {
 	if msg := a.DeleteIdentity(victim.ID, true); msg == "" {
 		t.Fatal("deletion with a held store must fail")
 	}
-	held.Close()
+	_ = held.Close()
 	if _, err := os.Stat(ratchetStoreDir(base, ids[victim.ID])); err != nil {
 		t.Fatal("a failed deletion must keep the stores", err)
 	}
@@ -398,7 +398,7 @@ func TestRatchetSameContent(t *testing.T) {
 func TestRatchetStartGatePerConnection(t *testing.T) {
 	c1, c1b := net.Pipe()
 	c2, c2b := net.Pipe()
-	defer func() { c1.Close(); c1b.Close(); c2.Close(); c2b.Close() }()
+	defer func() { _ = c1.Close(); _ = c1b.Close(); _ = c2.Close(); _ = c2b.Close() }()
 	m := &connManager{ratchetCfg: &ratchetConfig{Dir: t.TempDir()}}
 	// conn1's start is still in flight when the client reconnects (conn2).
 	m.conn, m.ratchetStartingConn = c2, c1
@@ -446,7 +446,7 @@ func TestRatchetTombstoneSweep(t *testing.T) {
 	if err := os.MkdirAll(live+ratchetTombstone+"x", 0o700); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(live+ratchetTombstone+"x", "a.db"), []byte("sealed"), 0o600)
+	_ = os.WriteFile(filepath.Join(live+ratchetTombstone+"x", "a.db"), []byte("sealed"), 0o600)
 	// A deleted identity's leftover tombstone (erase failed) -> erase.
 	orphan := filepath.Join(base, strings.Repeat("ab", 16)+ratchetTombstone+"y")
 	if err := os.MkdirAll(orphan, 0o700); err != nil {

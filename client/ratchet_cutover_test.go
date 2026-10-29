@@ -16,7 +16,7 @@ import (
 // blocked reason), never a legacy send; legacy records stay read-only.
 func TestRatchetCutoverGates(t *testing.T) {
 	c, peer := net.Pipe()
-	defer func() { c.Close(); peer.Close() }()
+	defer func() { _ = c.Close(); _ = peer.Close() }()
 	for name, tc := range map[string]struct {
 		keyless, supported bool
 		want               error
@@ -102,7 +102,7 @@ func TestLegacyDirectChangeIsReadOnly(t *testing.T) {
 // recovery_required is not reported as an active Olm path.
 func TestDiagnosticsNotActiveWhileRecoveryRequired(t *testing.T) {
 	c, peer := net.Pipe()
-	defer func() { c.Close(); peer.Close() }()
+	defer func() { _ = c.Close(); _ = peer.Close() }()
 	cons, err := newTestRatchetConsumer(t, func(netproto.OlmAdmissionRequest) (json.RawMessage, error) { return nil, nil }, 300)
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestDiagnosticsNotActiveWhileRecoveryRequired(t *testing.T) {
 // "not ready".
 func TestRatchetBlockedSendReportsReason(t *testing.T) {
 	c, peer := net.Pipe()
-	defer func() { c.Close(); peer.Close() }()
+	defer func() { _ = c.Close(); _ = peer.Close() }()
 	m := &connManager{}
 	m.conn, m.ratchetDefault, m.supportsOlm = c, true, false
 	m.id = mustTempIdentity(t)
@@ -145,7 +145,7 @@ func TestRatchetBlockedSendReportsReason(t *testing.T) {
 // the recorded reason) keeps its outbox entry queued, never "uncertain".
 func TestOutboxNeverStartedStaysQueued(t *testing.T) {
 	c, peer := net.Pipe()
-	defer func() { c.Close(); peer.Close() }()
+	defer func() { _ = c.Close(); _ = peer.Close() }()
 	cm := newConnManager(t.Context())
 	cm.id = mustTempIdentity(t)
 	cm.conn, cm.ratchetDefault, cm.supportsOlm = c, true, false
@@ -162,7 +162,7 @@ func TestOutboxNeverStartedStaysQueued(t *testing.T) {
 	}
 	// Another connection's start error never explains this connection's send.
 	other, otherPeer := net.Pipe()
-	defer func() { other.Close(); otherPeer.Close() }()
+	defer func() { _ = other.Close(); _ = otherPeer.Close() }()
 	if _, err := cm.ratchetSendConsumer(other); err == nil || errors.Is(err, errRatchetServerOutdated) {
 		t.Fatalf("foreign connection got this connection's start error: %v", err)
 	}

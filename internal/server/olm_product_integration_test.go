@@ -15,17 +15,17 @@ import (
 	"noxa/internal/authorization"
 	"noxa/internal/config"
 	"noxa/internal/e2ee"
-	"noxa/internal/netproto"
 	"noxa/internal/e2ee/olmdir"
 	"noxa/internal/e2ee/ratchet"
+	"noxa/internal/netproto"
 	"noxa/internal/store"
-	"time"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"golang.org/x/crypto/curve25519"
@@ -193,8 +193,8 @@ func TestIntegrationRatchetProductPWA(t *testing.T) {
 		return nil
 	}
 	corrupt := map[string]int{} // device -> deliveries pages to tamper with
-	drop := map[string]int{} // device/action -> handled-but-lost responses
-	fail := map[string]int{} // device/action -> refused before the handler
+	drop := map[string]int{}    // device/action -> handled-but-lost responses
+	fail := map[string]int{}    // device/action -> refused before the handler
 	counts := map[string]int{}
 	dispatch := func(c *Client, typ uint16, payload json.RawMessage) (map[string]any, error) {
 		conn := &sessionResponseConn{blockingTCPConn: newBlockingTCPConn()}

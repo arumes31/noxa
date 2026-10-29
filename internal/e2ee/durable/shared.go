@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	bolt "go.etcd.io/bbolt"
+	berrors "go.etcd.io/bbolt/errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -112,7 +113,7 @@ func (h *Handle) Close() error {
 
 // unusableStore reports a positive "this file is not a valid store" signal.
 func unusableStore(e error) bool {
-	return errors.Is(e, bolt.ErrInvalid) || errors.Is(e, bolt.ErrVersionMismatch) || errors.Is(e, bolt.ErrChecksum)
+	return errors.Is(e, berrors.ErrInvalid) || errors.Is(e, berrors.ErrVersionMismatch) || errors.Is(e, berrors.ErrChecksum)
 }
 
 // ProbeUnlocked reports ErrInUse when any store file in dir is locked by
@@ -146,7 +147,7 @@ func ProbeUnlocked(dir string) error {
 			continue
 		}
 		db, e := bolt.Open(path, 0600, &bolt.Options{Timeout: 150 * time.Millisecond, ReadOnly: true})
-		if errors.Is(e, bolt.ErrTimeout) {
+		if errors.Is(e, berrors.ErrTimeout) {
 			return ErrInUse
 		}
 		if unusableStore(e) {

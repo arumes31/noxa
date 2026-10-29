@@ -101,7 +101,7 @@ func TestOlmDirectoryAuthorityAndSpentKeys(t *testing.T) {
 		t.Fatal("exact retry", e)
 	}
 	var available int
-	s.db.QueryRow(`SELECT count(*) FROM olm_directory_keys WHERE claimed_by IS NULL`).Scan(&available)
+	_ = s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM olm_directory_keys WHERE claimed_by IS NULL`).Scan(&available)
 	if available != 9 {
 		t.Fatalf("spent key resurrected: %d", available)
 	}
@@ -234,7 +234,7 @@ func TestOlmDirectoryConcurrentClaimsAndReplenishment(t *testing.T) {
 		t.Fatalf("cross-device retry: %v", e)
 	}
 	// The retained, monotonic watermark rejects reuse even after payload cleanup.
-	if _, e = s.db.Exec(`UPDATE olm_directory_publications SET expires_at=now()-interval '25 hours'`); e != nil {
+	if _, e = s.db.ExecContext(context.Background(), `UPDATE olm_directory_publications SET expires_at=now()-interval '25 hours'`); e != nil {
 		t.Fatal(e)
 	}
 	if n, e := s.ExpireOlmDirectory(ctx); e != nil || n != 2 {
@@ -250,10 +250,10 @@ func TestOlmDirectoryConcurrentClaimsAndReplenishment(t *testing.T) {
 	}
 	// Public cleanup retains all private-key obligations. Explicit closure,
 	// serialized with admission, is required before their capacity can be reused.
-	if _, e = s.db.Exec(`UPDATE olm_directory_keys SET claim_until=1 WHERE device_id=$1 AND lifecycle='reserved'`, d.DeviceID); e != nil {
+	if _, e = s.db.ExecContext(context.Background(), `UPDATE olm_directory_keys SET claim_until=1 WHERE device_id=$1 AND lifecycle='reserved'`, d.DeviceID); e != nil {
 		t.Fatal(e)
 	}
-	rows, e := s.db.Query(`SELECT key_id FROM olm_directory_keys WHERE device_id=$1`, d.DeviceID)
+	rows, e := s.db.QueryContext(context.Background(), `SELECT key_id FROM olm_directory_keys WHERE device_id=$1`, d.DeviceID)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -265,7 +265,7 @@ func TestOlmDirectoryConcurrentClaimsAndReplenishment(t *testing.T) {
 		}
 		ids = append(ids, id)
 	}
-	rows.Close()
+	_ = rows.Close()
 	closed, e := s.CloseOlmKeys(ctx, OlmSource{Server: b.Server, Principal: d.Principal, Device: d.DeviceID, Signing: d.Ed25519Public, AccountEpoch: 1}, ids)
 	if e != nil {
 		t.Fatal(e)
@@ -298,7 +298,7 @@ func TestOlmDirectoryExpiryAndRevokeRace(t *testing.T) {
 	if e := s.PublishOlmBundle(ctx, d.Principal, d.DeviceID, b.Server, b); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := s.db.Exec(`UPDATE olm_directory_publications SET expires_at=now()-interval '1 second'`); e != nil {
+	if _, e := s.db.ExecContext(context.Background(), `UPDATE olm_directory_publications SET expires_at=now()-interval '1 second'`); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := s.ClaimOlmKey(ctx, a.Principal, a.DeviceID, d.Principal, d.DeviceID, "expired", b.ExpiresAt, b.Server); !errors.Is(e, ErrOlmExhausted) {
@@ -310,8 +310,8 @@ func TestOlmDirectoryExpiryAndRevokeRace(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer tx.Rollback()
-	if _, e = tx.Exec(`UPDATE user_devices SET revoked_at=now() WHERE device_id=$1`, d.DeviceID); e != nil {
+	defer func() { _ = tx.Rollback() }()
+	if _, e = tx.ExecContext(context.Background(), `UPDATE user_devices SET revoked_at=now() WHERE device_id=$1`, d.DeviceID); e != nil {
 		t.Fatal(e)
 	}
 	b.Generation++
@@ -327,7 +327,7 @@ func TestOlmDirectoryExpiryAndRevokeRace(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		var waiting int
-		if e = s.db.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM user_devices WHERE principal=%FOR UPDATE'`).Scan(&waiting); e != nil {
+		if e = s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM user_devices WHERE principal=%FOR UPDATE'`).Scan(&waiting); e != nil {
 			t.Fatal(e)
 		}
 		if waiting > 0 {
@@ -347,7 +347,7 @@ func TestOlmDirectoryExpiryAndRevokeRace(t *testing.T) {
 		}
 	}
 	// Sweep work stays bounded even with a large expired historical backlog.
-	if _, e = s.db.Exec(`INSERT INTO olm_directory_publications(device_id,generation,bundle,expires_at,server) SELECT $1,n,'{}'::bytea,now()-interval '25 hours',$2 FROM generate_series(100,356) n`, d.DeviceID, b.Server); e != nil {
+	if _, e = s.db.ExecContext(context.Background(), `INSERT INTO olm_directory_publications(device_id,generation,bundle,expires_at,server) SELECT $1,n,'{}'::bytea,now()-interval '25 hours',$2 FROM generate_series(100,356) n`, d.DeviceID, b.Server); e != nil {
 		t.Fatal(e)
 	}
 	if n, e := s.ExpireOlmDirectory(ctx); e != nil || n != 256 {
@@ -391,7 +391,7 @@ func TestOlmDirectoryCrossedClaimsAndQuotaScope(t *testing.T) {
 		t.Fatal(e)
 	}
 	// Seed only synthetic consumed obligations to hit the exact peer budget.
-	if _, e := s.db.Exec(`INSERT INTO olm_directory_keys(device_id,generation,key_id,claimed_by,claimed_at,claimed_device,request_id,claim_until,principal,server,bundle,account_epoch,claimed_epoch,lifecycle) SELECT $1,1,'budget-'||n,$2,now(),$3,'budget-'||n,$4,$5,$6,$7,1,1,'received' FROM generate_series(1,23)n`, b.DeviceID, a.Principal, a.DeviceID, ba.ExpiresAt, b.Principal, bb.Server, mustOlmJSON(bb)); e != nil {
+	if _, e := s.db.ExecContext(context.Background(), `INSERT INTO olm_directory_keys(device_id,generation,key_id,claimed_by,claimed_at,claimed_device,request_id,claim_until,principal,server,bundle,account_epoch,claimed_epoch,lifecycle) SELECT $1,1,'budget-'||n,$2,now(),$3,'budget-'||n,$4,$5,$6,$7,1,1,'received' FROM generate_series(1,23)n`, b.DeviceID, a.Principal, a.DeviceID, ba.ExpiresAt, b.Principal, bb.Server, mustOlmJSON(bb)); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := s.ClaimOlmKey(ctx, a.Principal, a.DeviceID, b.Principal, b.DeviceID, "blocked-peer", ba.ExpiresAt, ba.Server); !errors.Is(e, ErrOlmLimit) {
@@ -414,7 +414,7 @@ func TestOlmDirectoryDefaultMultiDeviceFanout(t *testing.T) {
 		for i := 0; i < n; i++ {
 			d, key, b := olmFixture(t, s, principal)
 			if !d.FirstDevice { // Simulate a completed existing noXa device endorsement.
-				if _, e := s.db.Exec(`UPDATE user_devices SET approved_by=$2,approval_signature=$3 WHERE device_id=$1`, d.DeviceID, devices[0].DeviceID, make([]byte, 64)); e != nil {
+				if _, e := s.db.ExecContext(context.Background(), `UPDATE user_devices SET approved_by=$2,approval_signature=$3 WHERE device_id=$1`, d.DeviceID, devices[0].DeviceID, make([]byte, 64)); e != nil {
 					t.Fatal(e)
 				}
 			}
@@ -509,7 +509,7 @@ func TestOlmDirectoryBulkDeviceLockOrder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer blocker.Rollback()
+			defer func() { _ = blocker.Rollback() }()
 			if _, err = blocker.ExecContext(ctx, `SELECT device_id FROM user_devices WHERE device_id=$1 FOR UPDATE`, low.DeviceID); err != nil {
 				t.Fatal(err)
 			}

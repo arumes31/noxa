@@ -157,8 +157,8 @@ func TestRatchetSweepUnknownLivenessNeverErases(t *testing.T) {
 	}
 	// Once liveness is known again (identities readable, key absent), the
 	// orphan is erased.
-	os.Remove(dir)
-	os.MkdirAll(dir, 0o700)
+	_ = os.Remove(dir)
+	_ = os.MkdirAll(dir, 0o700)
 	a.sweepRatchetStores()
 	if exists(orphan) {
 		t.Fatal("known-absent identity's tombstone must be erased")
@@ -400,7 +400,7 @@ func TestRatchetSweepKeepsLiveDirNextToMarkerWhenLivenessUnknown(t *testing.T) {
 	if !exists(filepath.Join(liveOther, "a.db")) || !exists(marker) {
 		t.Fatal("unknown liveness must never erase")
 	}
-	os.Remove(filepath.Join(dir, "broken.json"))
+	_ = os.Remove(filepath.Join(dir, "broken.json"))
 	a.sweepRatchetStores()
 	if exists(liveOther) || exists(marker) {
 		t.Fatal("a reopened store of a known-gone key must be erased with its marker")

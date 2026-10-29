@@ -45,7 +45,7 @@ func LockForDestroy(dir string) (release func(), err error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".db") {
 			continue
 		}
-		f, e := os.Open(filepath.Join(dir, entry.Name()))
+		f, e := os.Open(filepath.Join(dir, entry.Name())) // #nosec G304 -- a store file listed from the application-owned store directory.
 		if os.IsNotExist(e) {
 			continue
 		}

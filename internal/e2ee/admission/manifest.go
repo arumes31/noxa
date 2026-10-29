@@ -279,7 +279,7 @@ func Decode(b []byte, out any, max int) error {
 					return ErrInvalid
 				}
 				for _, c := range s {
-					if !(c >= 'a' && c <= 'z' || c == '_' || c >= '0' && c <= '9') {
+					if (c < 'a' || c > 'z') && c != '_' && (c < '0' || c > '9') {
 						return ErrInvalid
 					}
 				}

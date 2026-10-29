@@ -78,7 +78,7 @@ func TestOlmInlineExpiryReleasesPersistedParts(t *testing.T) {
 			}
 		}
 	}
-	if _, e := s.db.Exec(`UPDATE olm_attempts SET deadline=0 WHERE device_id=$1`, a.Device); e != nil {
+	if _, e := s.db.ExecContext(context.Background(), `UPDATE olm_attempts SET deadline=0 WHERE device_id=$1`, a.Device); e != nil {
 		t.Fatal(e)
 	}
 	m.AttemptID = "5"
@@ -87,7 +87,7 @@ func TestOlmInlineExpiryReleasesPersistedParts(t *testing.T) {
 		t.Fatal("expired local quota remains", e)
 	}
 	var count int
-	if e := s.db.QueryRow(`SELECT count(*) FROM olm_parts WHERE device_id=$1`, a.Device).Scan(&count); e != nil || count != 0 {
+	if e := s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM olm_parts WHERE device_id=$1`, a.Device).Scan(&count); e != nil || count != 0 {
 		t.Fatal("expired persisted parts", count, e)
 	}
 	for i := 1; i <= 4; i++ {
@@ -154,7 +154,7 @@ func TestOlmSlowDeliveryDoesNotHoldGlobalAdmission(t *testing.T) {
 	}
 	// No acceptance/rejection was persisted for the transaction that timed out.
 	var state string
-	if e := s.db.QueryRow(`SELECT state FROM olm_attempts WHERE device_id=$1`, a.Device).Scan(&state); e != nil || state != "staging" {
+	if e := s.db.QueryRowContext(context.Background(), `SELECT state FROM olm_attempts WHERE device_id=$1`, a.Device).Scan(&state); e != nil || state != "staging" {
 		t.Fatal(state, e)
 	}
 }
@@ -175,13 +175,13 @@ func TestOlmInlineGlobalExpiryBoundPreservesAccepted(t *testing.T) {
 	}
 	// Seed 201 abandoned attempts from other devices, below the global budget.
 	// One begin must retire only its bounded 200-row global batch.
-	if _, e := s.db.Exec(`INSERT INTO olm_attempts(server,sender,device_id,account_epoch,attempt_id,logical_id,manifest,digest,deadline,state,receipt)
+	if _, e := s.db.ExecContext(context.Background(), `INSERT INTO olm_attempts(server,sender,device_id,account_epoch,attempt_id,logical_id,manifest,digest,deadline,state,receipt)
 	 SELECT server,sender,'expired-global',account_epoch,g::text,'expired-'||g,manifest,digest,0,'staging',
 	 convert_to((convert_from(receipt,'UTF8')::jsonb || jsonb_build_object('attempt_id',g::text,'state','staging'))::text,'UTF8')
 	 FROM olm_attempts CROSS JOIN generate_series(1,201) g WHERE device_id=$1`, a.Device); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := s.db.Exec(`INSERT INTO olm_parts(server,device_id,account_epoch,attempt_id,part_number,data)
+	if _, e := s.db.ExecContext(context.Background(), `INSERT INTO olm_parts(server,device_id,account_epoch,attempt_id,part_number,data)
 	 SELECT server,device_id,account_epoch,attempt_id,0,'unsubmitted'::bytea FROM olm_attempts WHERE device_id='expired-global'`); e != nil {
 		t.Fatal(e)
 	}
@@ -190,10 +190,10 @@ func TestOlmInlineGlobalExpiryBoundPreservesAccepted(t *testing.T) {
 		t.Fatal(e)
 	}
 	var rejected, staging, remainingParts, pending int
-	if e := s.db.QueryRow(`SELECT count(*) FILTER(WHERE state='rejected'),count(*) FILTER(WHERE state='staging') FROM olm_attempts WHERE device_id='expired-global'`).Scan(&rejected, &staging); e != nil {
+	if e := s.db.QueryRowContext(context.Background(), `SELECT count(*) FILTER(WHERE state='rejected'),count(*) FILTER(WHERE state='staging') FROM olm_attempts WHERE device_id='expired-global'`).Scan(&rejected, &staging); e != nil {
 		t.Fatal(e)
 	}
-	if e := s.db.QueryRow(`SELECT count(*) FROM olm_parts WHERE device_id='expired-global'`).Scan(&remainingParts); e != nil {
+	if e := s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM olm_parts WHERE device_id='expired-global'`).Scan(&remainingParts); e != nil {
 		t.Fatal(e)
 	}
 	if rejected != 200 || staging != 1 || remainingParts != 1 {
@@ -202,7 +202,7 @@ func TestOlmInlineGlobalExpiryBoundPreservesAccepted(t *testing.T) {
 	if r, e := s.OlmAttemptStatus(ctx, a, "1"); e != nil || r.State != "accepted" {
 		t.Fatal("accepted receipt changed", r, e)
 	}
-	if e := s.db.QueryRow(`SELECT count(*) FROM olm_deliveries WHERE state='pending' AND octet_length(copy)>0`).Scan(&pending); e != nil || pending != 1 {
+	if e := s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM olm_deliveries WHERE state='pending' AND octet_length(copy)>0`).Scan(&pending); e != nil || pending != 1 {
 		t.Fatal("pending delivery changed", pending, e)
 	}
 }

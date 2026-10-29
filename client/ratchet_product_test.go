@@ -48,14 +48,24 @@ type productBridge struct {
 	url string
 }
 
+// postJSON posts a bridge request; the bridge is a local test server.
+func postJSON(url string, raw []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return http.DefaultClient.Do(req)
+}
+
 func (b productBridge) post(body map[string]any, out any) {
 	b.t.Helper()
 	raw, _ := json.Marshal(body)
-	resp, err := http.Post(b.url, "application/json", bytes.NewReader(raw))
+	resp, err := postJSON(b.url, raw)
 	if err != nil {
 		b.t.Fatalf("bridge %v: %v", body["op"], err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var data bytes.Buffer
 	_, _ = data.ReadFrom(resp.Body)
 	if out != nil {
@@ -290,14 +300,14 @@ func (n *nativeNode) startSession() {
 // a "lost" response models a dropped connection after (or before) handling.
 func (n *nativeNode) pump(server net.Conn, done chan struct{}) {
 	defer close(done)
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	for {
 		f, err := netproto.ReadFrame(server)
 		if err != nil {
 			return
 		}
 		raw, _ := json.Marshal(map[string]any{"op": "request", "device": n.dev.Name, "type": f.Type, "payload": json.RawMessage(f.Payload)})
-		resp, err := http.Post(n.b.url, "application/json", bytes.NewReader(raw))
+		resp, err := postJSON(n.b.url, raw)
 		if err != nil {
 			return
 		}
@@ -308,7 +318,7 @@ func (n *nativeNode) pump(server net.Conn, done chan struct{}) {
 			Payload json.RawMessage `json:"payload"`
 		}
 		err = json.NewDecoder(resp.Body).Decode(&out)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if err != nil || out.Lost || out.Error != "" {
 			return
 		}
@@ -612,7 +622,7 @@ func TestRatchetProductBridge(t *testing.T) {
 	if e, ok := A.outboxEntry(oid); !ok || e.State != "queued" || !strings.Contains(e.Error, "secure messaging unavailable") {
 		t.Fatalf("blocked session must be surfaced: %+v", e)
 	}
-	held.Close()
+	_ = held.Close()
 	A.startSession()
 	A.app.pumpChatOutbox(A.cm)
 	if e, ok := A.outboxEntry(oid); ok {
@@ -817,7 +827,7 @@ func TestRatchetProductBridge(t *testing.T) {
 	ns := durable.Namespace{Server: fixture.Binding, Principal: "nalice", Device: A.dev.Device}
 	if s, err := durable.Open(ratchetStoreDir(filepath.Join(A.base, "ratchet"), A.identity()), ns, *A.protection(), 100*time.Millisecond); !errors.Is(err, durable.ErrInUse) {
 		if s != nil {
-			s.Close()
+			_ = s.Close()
 		}
 		t.Fatalf("independent open must fail explicitly: %v", err)
 	}
@@ -1121,7 +1131,7 @@ const persisted = [...fresh.conversations.values()].reduce((a, c) => a + c.messa
 fresh.close();
 return { n, records, opsSame: ops === JSON.stringify(T.stats.ops), persisted, unread: T.stats.unread };`
 
-func historyTransferProduct(t *testing.T, b productBridge, A *nativeNode) {
+func historyTransferProduct(t *testing.T, b productBridge, A *nativeNode) { //nolint:gocritic // A names scenario device A, like the PWA steps
 	t.Helper()
 	// A newly linked PWA device of nalice: it never received the earlier
 	// traffic, so everything it shows afterwards came from the transfer.
@@ -1262,7 +1272,7 @@ func historyTransferProduct(t *testing.T, b productBridge, A *nativeNode) {
 	}
 }
 
-func controlProduct(t *testing.T, b productBridge, A *nativeNode, devices map[string]productFixtureDevice) {
+func controlProduct(t *testing.T, b productBridge, A *nativeNode, devices map[string]productFixtureDevice) { //nolint:gocritic // A names scenario device A, like the PWA steps
 	t.Helper()
 	pending := func(name string) int {
 		var n int
@@ -1404,7 +1414,7 @@ return T.controls.length;`
 	}
 }
 
-func keyIdentitiesProduct(t *testing.T, b productBridge, devices map[string]productFixtureDevice, realAddr, root string, A *nativeNode) {
+func keyIdentitiesProduct(t *testing.T, b productBridge, devices map[string]productFixtureDevice, realAddr, root string, A *nativeNode) { //nolint:gocritic // A names scenario device A, like the PWA steps
 	t.Helper()
 	// Production path end to end: App/connManager.connect -> connectWith over
 	// TLS (first-use pin of the live server's certificate) -> framed key login

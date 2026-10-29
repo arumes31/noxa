@@ -298,7 +298,7 @@ func (s *Store) RetireUnsubmittedKeys(snap Snapshot, accountID string, account [
 		return ErrInvalid
 	}
 	var ns Namespace
-	json.Unmarshal([]byte(s.ns), &ns)
+	_ = json.Unmarshal([]byte(s.ns), &ns)
 	return s.db.Update(func(tx *bolt.Tx) error {
 		c, e := s.fence(tx, snap)
 		if e != nil {
@@ -349,7 +349,7 @@ func (s *Store) RetirePeerSessions(snap Snapshot, trustID string, r olmdir.Reset
 		return ErrInvalid
 	}
 	var ns Namespace
-	json.Unmarshal([]byte(s.ns), &ns)
+	_ = json.Unmarshal([]byte(s.ns), &ns)
 	if r.Server != ns.Server {
 		return ErrInvalid
 	}

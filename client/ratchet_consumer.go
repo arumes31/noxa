@@ -1773,7 +1773,7 @@ func (c *ratchetConsumer) settle(id string, a durable.AccountAuthority) error {
 		abort := func() error {
 			return c.call(netproto.OlmAdmissionRequest{Action: "abort", AccountEpoch: m.AccountEpoch, Manifest: &m}, &result)
 		}
-		if wire != nil && m.AccountEpoch == a.Epoch && !(expired && result.State == "absent") {
+		if wire != nil && m.AccountEpoch == a.Epoch && (!expired || result.State != "absent") {
 			err = c.handoff(a, netproto.OlmAdmissionRequest{Action: "begin", Manifest: &wire.Manifest}, &result)
 			if ratchetCode(err) == "invalid" {
 				// The server refuses an unexpired deadline (client clock skew):

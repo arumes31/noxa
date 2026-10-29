@@ -252,13 +252,6 @@ func (a *App) changeDirectMessage(tabID, peer, ref, action, text string) error {
 	return m.sendChatWithKeyRetry(msg, text)
 }
 
-// requireOwnDirectMessage checks the local log: only a message this account
-// sent, and that is not deleted, may be changed.
-func (a *App) requireOwnDirectMessage(m *connManager, peer, ref string) error {
-	_, err := a.ownDirectMessageProtocol(m, peer, ref)
-	return err
-}
-
 // ownDirectMessageProtocol returns the protocol of this account's own,
 // undeleted message ref in peer's log ("" = legacy). A new-protocol entry is
 // preferred: its reference is sender-qualified and cannot collide.

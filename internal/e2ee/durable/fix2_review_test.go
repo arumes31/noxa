@@ -20,7 +20,7 @@ func TestTruncatedStoreDoesNotBlockProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+	_ = s.Close()
 	entries, _ := os.ReadDir(dir)
 	var db string
 	for _, e := range entries {
@@ -47,7 +47,7 @@ func TestOpenFailureReleasesDirLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
+	_ = s.Close()
 	if _, err := Open(dir, ns, wrong, 0); err == nil {
 		t.Fatal("expected corrupt")
 	}

@@ -54,16 +54,16 @@ func contextFor(peer string) SessionContext {
 }
 func TestRealCoreAtomicFanoutReceive(t *testing.T) {
 	a := openTest(t, t.TempDir())
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	b := openTest(t, t.TempDir())
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 	trusted(t, a, "bob")
 	trusted(t, b, "alice")
 	core, err := ratchet.New(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.Close(context.Background())
+	defer func() { _ = core.Close(context.Background()) }()
 	alice := applyTest(t, core, ratchet.Request{Op: ratchet.NewAccount, Key: a.CoreKey(), Count: 1})
 	bob := applyTest(t, core, ratchet.Request{Op: ratchet.NewAccount, Key: b.CoreKey(), Count: 1})
 	for _, v := range []struct {
@@ -183,7 +183,7 @@ func TestCorruptionAndBackendCapacityFailure(t *testing.T) {
 		t.Fatalf("corruption accepted %v", err)
 	}
 	file := s.db.Path()
-	s.Close()
+	_ = s.Close()
 	raw, _ := os.ReadFile(file)
 	if bytes.Contains(raw, []byte("independently verified peer")) {
 		t.Fatal("plaintext on disk")
@@ -194,7 +194,7 @@ func TestCorruptionAndBackendCapacityFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error { return tx.Bucket(keyBucket).Put([]byte("master"), []byte("broken")) })
-	db.Close()
+	_ = db.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestCorruptionAndBackendCapacityFailure(t *testing.T) {
 }
 func TestPrivateOTKObligationsNeverExpire(t *testing.T) {
 	s := openTest(t, t.TempDir())
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	otks := map[string]OTKObligation{}
 	for i := 0; i < 100; i++ {
 		otks[fmt.Sprint(i)] = OTKObligation{PublicationID: "pub", ExpiresAt: 1}
@@ -250,14 +250,14 @@ func TestStoreSubprocess(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	snap := readTest(t, s, Ref{Trust, "bob"}, Ref{Session, "bob"})
 	if mode == "before" {
 		tx, e := s.db.Begin(true)
 		if e != nil {
 			t.Fatal(e)
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 		if e = s.put(tx, Ref{Session, "bob"}, Record{1, []byte("uncommitted state")}); e != nil {
 			t.Fatal(e)
 		}
@@ -286,14 +286,14 @@ func TestActualProcessLockAndKill(t *testing.T) {
 			if mode != "initialize" {
 				s = openTest(t, dir)
 				trusted(t, s, "bob")
-				cmd = exec.Command(os.Args[0], "-test.run=^TestStoreSubprocess$")
+				cmd = exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestStoreSubprocess$")
 				cmd.Env = append(os.Environ(), "NOXA_STORE_HELPER=lock", "NOXA_STORE_DIR="+dir)
 				if output, e := cmd.CombinedOutput(); e != nil {
 					t.Fatalf("lock child: %s %v", output, e)
 				}
-				s.Close()
+				_ = s.Close()
 			}
-			cmd = exec.Command(os.Args[0], "-test.run=^TestStoreSubprocess$")
+			cmd = exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestStoreSubprocess$")
 			cmd.Env = append(os.Environ(), "NOXA_STORE_HELPER="+mode, "NOXA_STORE_DIR="+dir)
 			var output bytes.Buffer
 			cmd.Stdout = &output
@@ -307,8 +307,8 @@ func TestActualProcessLockAndKill(t *testing.T) {
 					break
 				}
 				if time.Now().After(deadline) {
-					cmd.Process.Kill()
-					cmd.Wait()
+					_ = cmd.Process.Kill()
+					_ = cmd.Wait()
 					t.Fatalf("helper not ready: %s", output.String())
 				}
 				time.Sleep(10 * time.Millisecond)
@@ -318,7 +318,7 @@ func TestActualProcessLockAndKill(t *testing.T) {
 			}
 			_ = cmd.Wait()
 			s = openTest(t, dir)
-			defer s.Close()
+			defer func() { _ = s.Close() }()
 			got := readTest(t, s, Ref{Session, "bob"}, Ref{Outbox, "crash"})
 			for _, v := range got.Records {
 				if mode != "after" && v.Revision != 0 {
@@ -339,13 +339,13 @@ func TestActualProcessLockAndKill(t *testing.T) {
 }
 func TestNamespaceReplacementRecoveryAndBounds(t *testing.T) {
 	s := openTest(t, t.TempDir())
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	trusted(t, s, "peer")
 	other, err := Open(t.TempDir(), Namespace{"other-server", "alice", "local-device"}, IdentityProtection(bytes.Repeat([]byte{7}, 32)), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer other.Close()
+	defer func() { _ = other.Close() }()
 	snap := readTest(t, s, Ref{Trust, "peer"}, Ref{Session, "old"})
 	if err = other.SetTrust(snap, "peer", []byte("must not cross namespace"), false); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("cross namespace accepted %v", err)
@@ -415,7 +415,7 @@ func TestInitializationDoesNotResetPartialOrUnknownState(t *testing.T) {
 			dir := t.TempDir()
 			s := openTest(t, dir)
 			file := s.db.Path()
-			s.Close()
+			_ = s.Close()
 			db, err := bolt.Open(file, 0600, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -445,7 +445,7 @@ func TestInitializationDoesNotResetPartialOrUnknownState(t *testing.T) {
 				}
 				return nil
 			})
-			db.Close()
+			_ = db.Close()
 			if err != nil {
 				t.Fatal(err)
 			}

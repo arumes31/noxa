@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,15 +18,15 @@ func TestOlmAdmissionComplete160AndLastClaimRollback(t *testing.T) {
 	var a OlmSource
 	devices := []OlmSource{}
 	const group = "00000000-0000-4000-8000-000000000160"
-	if _, e := s.db.Exec(`INSERT INTO private_conversations(id,name,owner_uid) VALUES($1,'160 device group','member-00')`, group); e != nil {
+	if _, e := s.db.ExecContext(context.Background(), `INSERT INTO private_conversations(id,name,owner_uid) VALUES($1,'160 device group','member-00')`, group); e != nil {
 		t.Fatal(e)
 	}
 	for i := 0; i < 16; i++ {
 		p := fmt.Sprintf("member-%02d", i)
-		if _, e := s.db.Exec(`INSERT INTO users(unique_id,nickname) VALUES($1,$1)`, p); e != nil {
+		if _, e := s.db.ExecContext(context.Background(), `INSERT INTO users(unique_id,nickname) VALUES($1,$1)`, p); e != nil {
 			t.Fatal(e)
 		}
-		if _, e := s.db.Exec(`INSERT INTO private_conversation_members(conversation_id,unique_id,pending,joined_epoch) VALUES($1,$2,FALSE,1)`, group, p); e != nil {
+		if _, e := s.db.ExecContext(context.Background(), `INSERT INTO private_conversation_members(conversation_id,unique_id,pending,joined_epoch) VALUES($1,$2,FALSE,1)`, group, p); e != nil {
 			t.Fatal(e)
 		}
 		var first string
@@ -96,10 +97,10 @@ func TestOlmAdmissionComplete160AndLastClaimRollback(t *testing.T) {
 		t.Fatal("invalid final claim", e)
 	}
 	var n int
-	if e = s.db.QueryRow(`SELECT count(*) FROM olm_deliveries`).Scan(&n); e != nil || n != 0 {
+	if e = s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM olm_deliveries`).Scan(&n); e != nil || n != 0 {
 		t.Fatal("partial delivery", n, e)
 	}
-	if e = s.db.QueryRow(`SELECT count(*) FROM olm_directory_keys WHERE lifecycle='admitted'`).Scan(&n); e != nil || n != 0 {
+	if e = s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM olm_directory_keys WHERE lifecycle='admitted'`).Scan(&n); e != nil || n != 0 {
 		t.Fatal("partial OTK admission", n, e)
 	}
 	if _, e = s.AbortOlmAttempt(ctx, a, m); e != nil {
@@ -111,7 +112,7 @@ func TestOlmAdmissionComplete160AndLastClaimRollback(t *testing.T) {
 	if e != nil || r.State != "accepted" {
 		t.Fatal(r, e)
 	}
-	if e = s.db.QueryRow(`SELECT count(*) FROM olm_deliveries`).Scan(&n); e != nil || n != 159 {
+	if e = s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM olm_deliveries`).Scan(&n); e != nil || n != 159 {
 		t.Fatal(n, e)
 	}
 }
@@ -141,10 +142,10 @@ func TestOlmAdmissionFilteredDeliveryPageAdvances(t *testing.T) {
 	raw, _ := json.Marshal(m)
 	for i := 0; i < 2; i++ {
 		id := fmt.Sprintf("000%d", i)
-		if _, e = s.db.Exec(`INSERT INTO olm_messages(id,server,sender,device_id,account_epoch,logical_id,manifest) VALUES($1,$2,$3,$4,1,$1,$5)`, id, a.Server, a.Principal, a.Device, raw); e != nil {
+		if _, e = s.db.ExecContext(context.Background(), `INSERT INTO olm_messages(id,server,sender,device_id,account_epoch,logical_id,manifest) VALUES($1,$2,$3,$4,1,$1,$5)`, id, a.Server, a.Principal, a.Device, raw); e != nil {
 			t.Fatal(e)
 		}
-		if _, e = s.db.Exec(`INSERT INTO olm_deliveries(id,message_id,principal,device_id,account_epoch,copy,digest) SELECT $1,$1,principal,device_id,account_epoch,copy,digest FROM olm_deliveries WHERE message_id=$2`, id, r.MessageID); e != nil {
+		if _, e = s.db.ExecContext(context.Background(), `INSERT INTO olm_deliveries(id,message_id,principal,device_id,account_epoch,copy,digest) SELECT $1,$1,principal,device_id,account_epoch,copy,digest FROM olm_deliveries WHERE message_id=$2`, id, r.MessageID); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -159,7 +160,7 @@ func TestOlmAdmissionFilteredDeliveryPageAdvances(t *testing.T) {
 		t.Fatal(page, e)
 	}
 	var pending int
-	if e = s.db.QueryRow(`SELECT count(*) FROM olm_deliveries WHERE state='pending'`).Scan(&pending); e != nil || pending != 3 {
+	if e = s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM olm_deliveries WHERE state='pending'`).Scan(&pending); e != nil || pending != 3 {
 		t.Fatal("filtered pending data removed", pending, e)
 	}
 }

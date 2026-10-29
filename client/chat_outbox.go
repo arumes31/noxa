@@ -396,11 +396,12 @@ func (a *App) pumpChatOutbox(cm *connManager) {
 		if entries[i].ID != entry.ID {
 			continue
 		}
-		if failure == "" {
+		switch failure {
+		case "":
 			entries = append(entries[:i], entries[i+1:]...)
-		} else if failure == outboxStayQueued {
+		case outboxStayQueued:
 			entries[i].State = previousState // nothing was committed or sent
-		} else {
+		default:
 			entries[i].State = "uncertain"
 			entries[i].Error = failure
 		}

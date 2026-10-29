@@ -294,7 +294,8 @@ func TestChatRateLimiterLimitGrowsWithinTheWindow(t *testing.T) {
 	if l.allowLimit("k", now, 2) {
 		t.Fatal("cap of 2")
 	}
-	if !l.allowLimit("k", now, 4) || !l.allowLimit("k", now, 4) || l.allowLimit("k", now, 4) {
+	first, second, third := l.allowLimit("k", now, 4), l.allowLimit("k", now, 4), l.allowLimit("k", now, 4)
+	if !first || !second || third {
 		t.Fatal("grown limit must add exactly 2 tokens")
 	}
 	if l.allowLimit("k", now, 1) {

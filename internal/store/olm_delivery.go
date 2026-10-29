@@ -40,12 +40,12 @@ func (s *Store) WithOlmDeliveries(ctx context.Context, a OlmSource, after string
 		var id string
 		var b []byte
 		if e = rows.Scan(&id, &b); e != nil {
-			rows.Close()
+			_ = rows.Close()
 			return e
 		}
 		var m admission.Manifest
 		if e = json.Unmarshal(b, &m); e != nil {
-			rows.Close()
+			_ = rows.Close()
 			return e
 		}
 		ids = append(ids, id)
@@ -54,7 +54,7 @@ func (s *Store) WithOlmDeliveries(ctx context.Context, a OlmSource, after string
 		}
 	}
 	e = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if e != nil {
 		return e
 	}
@@ -62,12 +62,12 @@ func (s *Store) WithOlmDeliveries(ctx context.Context, a OlmSource, after string
 	if e != nil {
 		return e
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	tx, e := conn.BeginTx(context.WithoutCancel(ctx), nil)
 	if e != nil {
 		return e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	gs := []string{}
 	for g := range groups {
 		gs = append(gs, g)
@@ -99,15 +99,15 @@ func (s *Store) WithOlmDeliveries(ctx context.Context, a OlmSource, after string
 		var d OlmDelivery
 		var mb, cb []byte
 		if e = rows.Scan(&d.ID, &d.Digest, &mb, &cb); e != nil {
-			rows.Close()
+			_ = rows.Close()
 			return e
 		}
 		if e = json.Unmarshal(mb, &d.Manifest); e != nil {
-			rows.Close()
+			_ = rows.Close()
 			return e
 		}
 		if e = json.Unmarshal(cb, &d.Copy); e != nil {
-			rows.Close()
+			_ = rows.Close()
 			return e
 		}
 		if d.Manifest.Scope == "group" {
@@ -119,7 +119,7 @@ func (s *Store) WithOlmDeliveries(ctx context.Context, a OlmSource, after string
 		out = append(out, d)
 	}
 	e = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if e != nil {
 		return e
 	}
@@ -158,7 +158,7 @@ func (s *Store) AckOlmDelivery(ctx context.Context, a OlmSource, id, digest stri
 	if e != nil {
 		return e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if e = sourceLock(ctx, tx, a, false); e != nil {
 		return e
 	}
@@ -204,7 +204,7 @@ func (s *Store) CloseOlmKeys(ctx context.Context, a OlmSource, keys []string) ([
 	if e != nil {
 		return nil, e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if e = sourceLock(ctx, tx, a, false); e != nil {
 		return nil, e
 	}

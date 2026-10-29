@@ -27,10 +27,10 @@ func TestLockForDestroy(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := LockForDestroy(dir); !errors.Is(err, ErrInUse) {
-		s.Close()
+		_ = s.Close()
 		t.Fatal("a held store must refuse the destroy lock", err)
 	}
-	s.Close()
+	_ = s.Close()
 	release, err := LockForDestroy(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestLockForDestroy(t *testing.T) {
 		// While held, no opener gets in (the check-then-act gap is closed),
 		// and the lock survives renaming the directory.
 		if db, err := bolt.Open(file, 0600, &bolt.Options{Timeout: 100 * time.Millisecond}); err == nil {
-			db.Close()
+			_ = db.Close()
 			release()
 			t.Fatal("an opener got in while the destroy lock was held")
 		}
@@ -57,7 +57,7 @@ func TestLockForDestroy(t *testing.T) {
 		}
 		movedFile := filepath.Join(moved, filepath.Base(file))
 		if db, err := bolt.Open(movedFile, 0600, &bolt.Options{Timeout: 100 * time.Millisecond}); err == nil {
-			db.Close()
+			_ = db.Close()
 			release()
 			t.Fatal("the lock must survive the rename")
 		}
@@ -68,5 +68,5 @@ func TestLockForDestroy(t *testing.T) {
 	if err != nil {
 		t.Fatal("released lock must let openers in", err)
 	}
-	db.Close()
+	_ = db.Close()
 }

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"noxa/internal/e2ee/admission"
@@ -86,7 +87,7 @@ func TestOlmAdmissionAtomicRetryACK(t *testing.T) {
 		t.Fatal("retry", e)
 	}
 	var state string
-	if e = s.db.QueryRow(`SELECT lifecycle FROM olm_directory_keys WHERE request_id='claim'`).Scan(&state); e != nil || state != "received" {
+	if e = s.db.QueryRowContext(context.Background(), `SELECT lifecycle FROM olm_directory_keys WHERE request_id='claim'`).Scan(&state); e != nil || state != "received" {
 		t.Fatal(state, e)
 	}
 }
@@ -135,7 +136,7 @@ func TestOlmAdmissionAbortRaceAndImmutable(t *testing.T) {
 }
 func TestOlmClaimSurvivesPublicCleanup(t *testing.T) {
 	s, a, _, m, parts := admissionFixture(t)
-	if _, e := s.db.Exec(`UPDATE olm_directory_publications SET expires_at=now()-interval '2 days'`); e != nil {
+	if _, e := s.db.ExecContext(context.Background(), `UPDATE olm_directory_publications SET expires_at=now()-interval '2 days'`); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := s.ExpireOlmDirectory(t.Context()); e != nil {
@@ -161,7 +162,7 @@ func fixtureEnvelope(m admission.Manifest, b OlmSource) json.RawMessage {
 func TestOlmAdmissionRejectsRoutingSubstitution(t *testing.T) {
 	s, a, b, m, _ := admissionFixture(t)
 	var env ratchet.Envelope
-	json.Unmarshal(fixtureEnvelope(m, b), &env)
+	_ = json.Unmarshal(fixtureEnvelope(m, b), &env)
 	env.Binding.MessageID = "different"
 	raw, _ := json.Marshal(env)
 	parts, e := admission.Freeze(&m, []admission.Copy{{Principal: b.Principal, Device: b.Device, AccountEpoch: 1, SessionID: "session", ClaimID: "claim", Envelope: raw}})

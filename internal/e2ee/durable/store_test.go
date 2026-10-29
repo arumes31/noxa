@@ -11,7 +11,7 @@ func TestCommitAtomicRetryAndFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	snap, _ := s.Read(Ref{Trust, "bob"}, Ref{Session, "bob"})
 	if err := s.SetTrust(snap, "bob", []byte("verified identity"), false); err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestInterruptedFirstInitializationRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retry after rolled-back initialization: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if _, err := s.Read(); err != nil {
 		t.Fatal(err)
 	}

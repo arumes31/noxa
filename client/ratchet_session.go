@@ -596,7 +596,7 @@ func (m *connManager) changeRatchetDirect(peer, reference, action, text string) 
 	out, err := c.send(ratchetIntent{LogicalID: id, Scope: "direct", Peer: peer, Purpose: action, Reference: reference, Body: body})
 	if _, ok := ratchetSent(out, err); !ok {
 		var r *ratchetError
-		if key != "" && !(errors.As(err, &r) && r.Committed != nil && r.Committed.Receipt == nil) {
+		if key != "" && (!errors.As(err, &r) || r.Committed == nil || r.Committed.Receipt != nil) {
 			m.ratchetEdits.Delete(key) // nothing uncertain left to resolve
 		}
 		return ratchetFailure(err)

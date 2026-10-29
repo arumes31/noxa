@@ -32,6 +32,7 @@ func bumpOlmRoster(ctx context.Context, tx *sql.Tx, p string) error {
 	return e
 }
 func lockMutationPrincipals(ctx context.Context, tx *sql.Tx, predicate string, args []any) ([]string, error) {
+	// #nosec G202 -- predicate is a fixed SQL fragment from internal callers; values are bound parameters.
 	rows, e := tx.QueryContext(ctx, `SELECT DISTINCT principal FROM user_devices WHERE `+predicate, args...)
 	if e != nil {
 		return nil, e
@@ -40,13 +41,13 @@ func lockMutationPrincipals(ctx context.Context, tx *sql.Tx, predicate string, a
 	for rows.Next() {
 		var p string
 		if e = rows.Scan(&p); e != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, e
 		}
 		ps = append(ps, p)
 	}
 	e = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if e != nil {
 		return nil, e
 	}
@@ -79,7 +80,7 @@ func readOlmRoster(ctx context.Context, tx *sql.Tx, ps []string, source string) 
 	if e != nil {
 		return out, e
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	counts := map[string]int{}
 	for rows.Next() {
 		var t admission.Target

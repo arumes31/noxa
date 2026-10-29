@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-var ErrOlmRetired = errors.New("Olm attempt retired")
-var ErrOlmIncomplete = errors.New("Olm attempt incomplete")
+var ErrOlmRetired = errors.New("Olm attempt retired")       //nolint:staticcheck // ST1005: "Olm" is a proper noun
+var ErrOlmIncomplete = errors.New("Olm attempt incomplete") //nolint:staticcheck // ST1005: "Olm" is a proper noun
 
 type OlmSource struct {
 	Server, Principal, Device, Signing string
@@ -101,7 +101,7 @@ func (s *Store) OlmSnapshot(ctx context.Context, a OlmSource, scope, peer, conve
 	if e != nil {
 		return OlmRosterSnapshot{}, e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	ps, e := admissionPrincipals(ctx, tx, a, scope, peer, conversation, 0, 0)
 	if e != nil {
 		return OlmRosterSnapshot{}, e
@@ -216,7 +216,7 @@ func (s *Store) BeginOlmAttempt(ctx context.Context, a OlmSource, m admission.Ma
 	if e != nil {
 		return empty, e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if e = admissionBudget(ctx, tx); e != nil {
 		return empty, e
 	}
@@ -261,7 +261,7 @@ func (s *Store) PutOlmPart(ctx context.Context, a OlmSource, id string, index in
 	if e != nil {
 		return e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if e = admissionBudget(ctx, tx); e != nil {
 		return e
 	}
@@ -314,7 +314,7 @@ func (s *Store) OlmAttemptStatus(ctx context.Context, a OlmSource, id string) (a
 	if e != nil {
 		return empty, e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	_, r, e := loadAttempt(ctx, tx, a, id)
 	if errors.Is(e, ErrOlmRetired) {
 		if e = sourceLock(ctx, tx, a, false); e != nil {
@@ -346,7 +346,7 @@ func (s *Store) AbortOlmAttempt(ctx context.Context, a OlmSource, m admission.Ma
 	if e != nil {
 		return empty, e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if e = admissionBudget(ctx, tx); e != nil {
 		return empty, e
 	}
@@ -466,7 +466,7 @@ func (s *Store) finalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 	if e != nil {
 		return empty, nil, e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if e = admissionBudget(ctx, tx); e != nil {
 		return empty, nil, e
 	}
@@ -528,17 +528,17 @@ func (s *Store) finalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 		var n int
 		var p []byte
 		if e = rows.Scan(&n, &p); e != nil {
-			rows.Close()
+			_ = rows.Close()
 			return empty, nil, e
 		}
 		if n < 0 || n >= len(parts) {
-			rows.Close()
+			_ = rows.Close()
 			return empty, nil, admission.ErrInvalid
 		}
 		parts[n] = p
 	}
 	e = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if e != nil {
 		return empty, nil, e
 	}

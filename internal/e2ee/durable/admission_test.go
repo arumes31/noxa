@@ -13,17 +13,17 @@ import (
 
 func TestAttemptReceiptAndHistoricalResolution(t *testing.T) {
 	s := openTest(t, t.TempDir())
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	trusted(t, s, "bob")
 	m := admission.Manifest{Version: admission.Version, Server: "tls-sha256:" + strings.Repeat("a", 64), Sender: "alice", Device: "local-device", AccountEpoch: 1, AttemptID: "1", LogicalID: "logical", Purpose: "chat", Scope: "direct", Peer: "bob", Deadline: 1900000000, Rosters: []admission.Roster{{Principal: "alice", Version: 1}, {Principal: "bob", Version: 1}}, Targets: []admission.Target{{Principal: "alice", Device: "local-device", AccountEpoch: 1, Identity: "alice-key", Local: true}, {Principal: "bob", Device: "bob-device", AccountEpoch: 1, Identity: "bob-olm"}}}
 	// Namespace equality is enforced by the attempt adapter.
-	s.Close()
+	_ = s.Close()
 	var e error
 	s, e = Open(t.TempDir(), Namespace{m.Server, "alice", "local-device"}, IdentityProtection(bytes.Repeat([]byte{7}, 32)), 0)
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	trusted(t, s, "bob")
 	target := m.Targets[1]
 	bind := admission.ExpectedBinding(m, target)
@@ -100,7 +100,7 @@ func TestSharedStoreReferences(t *testing.T) {
 		t.Fatal(e)
 	}
 	if wrong, e := OpenShared(dir, testNS, IdentityProtection(bytes.Repeat([]byte{9}, 32))); e == nil {
-		wrong.Close()
+		_ = wrong.Close()
 		t.Fatal("shared handle bypassed identity protection")
 	}
 	if a.Store != b.Store {
@@ -125,7 +125,7 @@ func TestDevicePairSessionAcrossConversations(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	trusted(t, s, "bob")
 	base := admission.Manifest{Version: admission.Version, Server: server, Sender: "alice", Device: "local-device", AccountEpoch: 1, Purpose: "chat", Deadline: 1900000000,
 		Rosters: []admission.Roster{{Principal: "alice", Version: 1}, {Principal: "bob", Version: 1}},
@@ -168,7 +168,7 @@ func TestPendingFirstContactSessionClaim(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	trusted(t, s, "bob")
 	claim := &SessionClaim{ClaimID: "claim-1", ClaimUntil: 1900000000}
 	seq := 0
@@ -206,7 +206,7 @@ func TestPendingFirstContactSessionClaim(t *testing.T) {
 	}
 	pending := func() *SessionClaim {
 		var st SessionState
-		json.Unmarshal(readTest(t, s, Ref{Session, "olm:pair"}).Records[Ref{Session, "olm:pair"}].Data, &st)
+		_ = json.Unmarshal(readTest(t, s, Ref{Session, "olm:pair"}).Records[Ref{Session, "olm:pair"}].Data, &st)
 		return st.Pending
 	}
 	m1, e := commit("first", claim)
@@ -245,7 +245,7 @@ func TestAttemptBindingAndPendingReplacement(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	trusted(t, s, "bob")
 	seq := 0
 	commit := func(logical, sessionRef, coreID, copyClaim string, c *SessionClaim, replaces string) (admission.Manifest, error) {
@@ -294,7 +294,7 @@ func TestAttemptBindingAndPendingReplacement(t *testing.T) {
 	}
 	read := func(id string) SessionState {
 		var st SessionState
-		json.Unmarshal(readTest(t, s, Ref{Session, id}).Records[Ref{Session, id}].Data, &st)
+		_ = json.Unmarshal(readTest(t, s, Ref{Session, id}).Records[Ref{Session, id}].Data, &st)
 		return st
 	}
 	if old, next := read("olm:s1"), read("olm:s2"); !old.Retired || next.Retired || next.Pending == nil || *next.Pending != *c2 {

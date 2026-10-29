@@ -18,7 +18,7 @@ func (s *Store) EndorseDevice(ctx context.Context, principal, deviceID, approver
 	if err != nil {
 		return Device{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = lockOlmRosters(ctx, tx, []string{principal}); err != nil {
 		return Device{}, err
 	}

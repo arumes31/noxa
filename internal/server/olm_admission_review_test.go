@@ -13,8 +13,8 @@ import (
 
 func TestOlmAdmissionDefaultOff(t *testing.T) {
 	server, peer := net.Pipe()
-	defer server.Close()
-	defer peer.Close()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = peer.Close() }()
 	s := &TCPServer{logger: zap.NewNop()}
 	c := &Client{Conn: server}
 	done := make(chan error, 1)
@@ -37,8 +37,8 @@ func TestOlmAdmissionAuthorizationReplyBoundAndCorrelated(t *testing.T) {
 		for _, queued := range []bool{false, true} {
 			t.Run(name+map[bool]string{false: "/reply", true: "/queued"}[queued], func(t *testing.T) {
 				server, peer := net.Pipe()
-				defer server.Close()
-				defer peer.Close()
+				defer func() { _ = server.Close() }()
+				defer func() { _ = peer.Close() }()
 				s := &TCPServer{logger: zap.NewNop(), olmAdmissionEnabled: true}
 				c := &Client{Conn: server}
 				want := "unavailable"
@@ -103,8 +103,8 @@ func TestOlmAdmissionWriteDeadlineLegacyAndQueued(t *testing.T) {
 	for _, queued := range []bool{false, true} {
 		t.Run(map[bool]string{false: "socket", true: "mutex"}[queued], func(t *testing.T) {
 			server, peer := net.Pipe()
-			defer server.Close()
-			defer peer.Close()
+			defer func() { _ = server.Close() }()
+			defer func() { _ = peer.Close() }()
 			s := &TCPServer{logger: zap.NewNop(), olmAdmissionEnabled: true}
 			c := &Client{Conn: server}
 			if queued {

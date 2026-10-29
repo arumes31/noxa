@@ -14,7 +14,7 @@ func (s *Store) ExpireOlmAttempts(ctx context.Context) (int, error) {
 	if e != nil {
 		return 0, e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if e = admissionBudget(ctx, tx); e != nil {
 		return 0, e
 	}
@@ -39,17 +39,17 @@ func expireOlmAttempts(ctx context.Context, tx *sql.Tx, limit int, device string
 		var v item
 		var b []byte
 		if e = rows.Scan(&v.source.Server, &v.source.Principal, &v.source.Device, &v.source.AccountEpoch, &b); e != nil {
-			rows.Close()
+			_ = rows.Close()
 			return 0, e
 		}
 		if e = json.Unmarshal(b, &v.receipt); e != nil {
-			rows.Close()
+			_ = rows.Close()
 			return 0, e
 		}
 		items = append(items, v)
 	}
 	e = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if e != nil {
 		return 0, e
 	}

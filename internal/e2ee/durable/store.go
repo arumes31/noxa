@@ -23,6 +23,7 @@ import (
 	"unicode"
 
 	bolt "go.etcd.io/bbolt"
+	berrors "go.etcd.io/bbolt/errors"
 )
 
 var (
@@ -169,7 +170,7 @@ func Open(dir string, ns Namespace, protection Protection, timeout time.Duration
 		return nil, e
 	}
 	db, e := bolt.Open(file, 0600, &bolt.Options{Timeout: timeout})
-	if errors.Is(e, bolt.ErrTimeout) {
+	if errors.Is(e, berrors.ErrTimeout) {
 		unlockDir()
 		return nil, ErrInUse
 	}

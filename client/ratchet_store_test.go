@@ -23,7 +23,7 @@ func TestDurableRatchetPlatformProtection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if !bytes.Equal(key, s.CoreKey()) {
 		t.Fatal("platform protection changed master key")
 	}

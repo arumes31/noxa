@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// "Olm" is a proper noun (the protocol name), so these messages start capitalized.
+//
+//nolint:staticcheck // ST1005: proper noun
 var (
 	ErrOlmAuthority      = errors.New("Olm device authority required")
 	ErrOlmConflict       = errors.New("Olm publication conflict")
@@ -48,7 +51,7 @@ func (s *Store) PublishOlmBundle(ctx context.Context, principal, id, server stri
 	if e != nil {
 		return e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, e = lockOlmRosters(ctx, tx, []string{principal}); e != nil {
 		return e
 	}
@@ -166,7 +169,7 @@ func (s *Store) ClaimOlmKey(ctx context.Context, principal, id, target, targetID
 	if e != nil {
 		return out, e
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('olm_claim:'||$1,0))`, principal); e != nil {
 		return out, e
 	}

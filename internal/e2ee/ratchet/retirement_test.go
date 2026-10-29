@@ -11,7 +11,7 @@ func TestRetirePublishedUnsubmittedKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer e.Close(ctx)
+	defer func() { _ = e.Close(ctx) }()
 	key := make([]byte, 32)
 	a, err := e.Apply(ctx, Request{Op: NewAccount, Key: key, Count: 100})
 	if err != nil {
