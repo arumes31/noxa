@@ -1,12 +1,45 @@
 package main
 
 import (
+	"os"
 	"runtime"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+func TestUpdateWindowNativeSupervisorAndRestore(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	hwnd, destroy := createLookupTestWindow(t, "wailsWindow")
+	defer destroy()
+	want := updateWindowPlacement{Left: 240, Top: 160, Right: 1240, Bottom: 860}
+	if err := applyUpdateWindowHandle(hwnd, want); err != nil {
+		t.Fatal(err)
+	}
+	source, err := captureUpdateWindowHandle(hwnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(updateWindowEnv, "")
+	inheritSupervisorUpdateWindow(uint32(os.Getpid())) // #nosec G115 -- Windows process IDs fit DWORD.
+	saved, err := decodeUpdateWindow(os.Getenv(updateWindowEnv), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyUpdateWindowHandle(hwnd, updateWindowPlacement{Left: 50, Top: 50, Right: 650, Bottom: 450}); err != nil {
+		t.Fatal(err)
+	}
+	if err := platformApplyUpdateWindow(*saved); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := platformCaptureUpdateWindow()
+	if err != nil || restored == nil || *restored != *source {
+		t.Fatalf("supervisor/lookup restore: %+v -> %+v (%v)", source, restored, err)
+	}
+}
 
 func TestUpdateWindowNativePlacementRoundtrip(t *testing.T) {
 	runtime.LockOSThread()

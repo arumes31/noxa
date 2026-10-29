@@ -66,3 +66,13 @@ test("intermittent recovery restarts the full downgrade grace period", () => {
     for (let i = 0; i < 3; i++) assert.equal(f.tick(), 1);
     assert.equal(f.tick(), 1.08);
 });
+
+test("a downscaled moving share restores sharp text when capture becomes static", () => {
+    for (const captureFPS of [0, 1, 5]) {
+        const f = fixture();
+        for (let i = 0; i < 20; i++) f.tick();
+        assert.equal(f.tick(), 2);
+        for (let i = 0; i < 4; i++) f.tick({ captureFPS, encodeFPS: captureFPS });
+        assert.equal(f.tick({ captureFPS, encodeFPS: captureFPS }), 1);
+    }
+});

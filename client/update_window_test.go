@@ -5,9 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 	"time"
 )
+
+func TestUpdateWindowSurvivesChildEnvironment(t *testing.T) {
+	entry := updateWindowEnv + "=encoded-placement"
+	env := updateChildEnvironment([]string{entry, updateReadyNonceEnv + "=old"}, "127.0.0.1:1234", "new")
+	if !slices.Contains(env, entry) || !slices.Contains(env, updateReadyNonceEnv+"=new") || slices.Contains(env, updateReadyNonceEnv+"=old") {
+		t.Fatal("child environment lost placement or retained old readiness")
+	}
+}
 
 func TestUpdateWindowPassedToRestartAndParentRestoredOnFailure(t *testing.T) {
 	oldCapture, oldLaunch := captureUpdateWindow, restartLaunch
@@ -81,6 +90,8 @@ func TestUpdateWindowRejectsExpiredAndInvalidBounds(t *testing.T) {
 		func(p *updateWindowPlacement) { p.Right = p.Left },
 		func(p *updateWindowPlacement) { p.Bottom = -100 },
 		func(p *updateWindowPlacement) { p.Left = -2147483648; p.Right = 2147483647 },
+		func(p *updateWindowPlacement) { p.Left = -132000; p.Right = -131000 },
+		func(p *updateWindowPlacement) { p.Left = 131000; p.Right = 132000 },
 		func(p *updateWindowPlacement) { p.Version = 2 },
 	} {
 		p := valid

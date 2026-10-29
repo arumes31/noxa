@@ -181,7 +181,11 @@ func runBrowserScreenSingleSource(t *testing.T, width, height, fps int) {
 		_ = json.NewEncoder(w).Encode(result)
 	}))
 	t.Cleanup(server.Close)
-	ctx, cancel := context.WithTimeout(t.Context(), 110*time.Second)
+	timeout := 110 * time.Second
+	if os.Getenv("NOXA_BROWSER_MEDIA_LTE") == "1" {
+		timeout += 70 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
 	defer cancel()
 	script, err := filepath.Abs("testdata/browser_simulcast.mjs")
 	if err != nil {

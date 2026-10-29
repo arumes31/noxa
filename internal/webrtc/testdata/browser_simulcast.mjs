@@ -245,8 +245,15 @@ try {
     }, { timeout: 15000 }).toBe(true);
     await decoded([viewer, viewer2], "fractional resolution reaches both viewers");
     await scaleSource(1);
+    await expect.poll(async () => {
+        const source = (await outbound(publishers[0])).rows[0];
+        return Math.abs(source.width - width) <= 4 && Math.abs(source.height - height) <= 4;
+    }, { timeout: 15000 }).toBe(true);
     await decoded([viewer, viewer2], "fractional resolution returns to source size");
     // Optional repeatable LTE experiment using the SFU's real UDP test shaper.
+    // It exercises stability despite latency/loss with ample bandwidth, not a
+    // forced downgrade. Sustained encode deficits and static recovery are unit
+    // tested; fractional encoding/decoding is verified above with real peers.
     if (process.env.NOXA_BROWSER_MEDIA_LTE === "1") {
         try {
             await publishers[0].evaluate(() => window.request("lte", { id: "a", active: true }));
@@ -271,7 +278,7 @@ try {
         }
         await decoded([viewer, viewer2], "LTE recovery keeps a single source for both viewers");
         const scale = (await outbound(publishers[0])).encodings[0].scaleResolutionDownBy;
-        assert.equal(scale, 1, "resolution promptly returns to the selected source size");
+        assert.equal(scale, 1, "full source scale is available after the LTE stability phase");
     }
     async function watch(viewerID, active) {
         await viewer.evaluate(args => window.request("watch", { id: "a", ...args }), { viewer: viewerID, active });

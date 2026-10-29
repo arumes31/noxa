@@ -28,7 +28,9 @@ export function createScreenResolutionController() {
         // Static desktops do not supply enough changing frames to diagnose loss
         // of encoder throughput. CPU pressure belongs to hardware recovery.
         const pressured = sample.reason === "bandwidth" && expectedFPS >= 8 && encodeFPS < expectedFPS * 0.85;
-        const healthy = ["none", "bandwidth"].includes(sample.reason) && expectedFPS >= 8 && encodeFPS >= expectedFPS * 0.95;
+        // A still desktop may emit zero frames; lack of new motion must never
+        // strand text at the reduced size of a previous scrolling/video phase.
+        const healthy = ["none", "bandwidth"].includes(sample.reason) && encodeFPS >= expectedFPS * 0.95;
         pressureMS = pressured ? pressureMS + elapsed : 0;
         healthyMS = healthy ? healthyMS + elapsed : 0;
         // Preserve at least the source's short side or 540 pixels, whichever is
