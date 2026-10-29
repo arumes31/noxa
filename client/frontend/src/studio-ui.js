@@ -25,7 +25,7 @@ import {
 } from "./studio-state.js";
 import { createCaptureRegistry } from "./studio-captures.js";
 import { createAssetStore, MAX_IMAGE_BYTES, StudioImageError } from "./studio-assets.js";
-import { studioLayoutKey, studioAssetDB, dropLegacyStudio, sweepOrphanStudio } from "./studio-storage.js";
+import { studioLayoutKey, studioAssetDB, dropLegacyStudio, sweepOrphanStudio, studioStoredIdentities } from "./studio-storage.js";
 import { createStudioAudio } from "./studio-audio.js";
 import { StudioEngine, outputSize, STUDIO_FPS } from "./studio-compositor.js";
 import "./studio.css";
@@ -648,7 +648,8 @@ globalThis.addEventListener?.("noxa-identity-deleted", event => {
 export function initStudio() {
     // Finish a Studio wipe that an identity deletion could not complete
     // (the webview closed after the native deletion committed).
-    void Promise.resolve().then(() => window.go?.main?.App?.ListIdentities?.()).then(entries => sweepOrphanStudio(entries)).catch(() => {});
+    // Identities are listed only when some Studio data is stored at all.
+    void studioStoredIdentities().then(owners => owners.length ? window.go?.main?.App?.ListIdentities?.() : null).then(entries => entries && sweepOrphanStudio(entries)).catch(() => {});
     const bar = document.querySelector("#voice-bar .voice-buttons");
     if (!bar || document.getElementById("voice-studio")) return;
     const button = element("button", { type: "button", id: "voice-studio", class: "voice-control", onclick: () => openStudio() });

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { studioLayoutKey, studioAssetDB, wipeStudioIdentity, dropLegacyStudio, sweepOrphanStudio, LEGACY_STUDIO_DB } from "../src/studio-storage.js";
+import { studioLayoutKey, studioAssetDB, wipeStudioIdentity, dropLegacyStudio, sweepOrphanStudio, studioStoredIdentities, LEGACY_STUDIO_DB } from "../src/studio-storage.js";
 import { STUDIO_STORAGE_KEY } from "../src/studio-state.js";
 
 function fakes() {
@@ -74,4 +74,19 @@ test("startup sweep removes Studio data of identities that no longer exist", asy
     assert.equal(f.items.has(studioLayoutKey("live")), true);
     assert.equal(f.items.has("other-key"), true);
     assert.deepEqual(f.deleted, [studioAssetDB("gone")]);
+});
+
+// Startup lists identities only when some Studio data is stored, so a device
+// without Studio data never calls App.ListIdentities at launch.
+test("stored Studio owners come from layouts and image databases only", async () => {
+    const f = fakes();
+    f.storage.key = i => [...f.items.keys()][i] ?? null;
+    Object.defineProperty(f.storage, "length", { get: () => f.items.size });
+    f.indexedDB.databases = async () => [{ name: "noxa-other" }];
+    f.items.set("other-key", "x");
+    assert.deepEqual(await studioStoredIdentities(f), []);
+    f.items.set(studioLayoutKey("a"), "{}");
+    f.indexedDB.databases = async () => [{ name: studioAssetDB("b") }, { name: "noxa-other" }];
+    assert.deepEqual((await studioStoredIdentities(f)).sort(), ["a", "b"]);
+    assert.deepEqual(await studioStoredIdentities({ storage: null, indexedDB: null }), []);
 });

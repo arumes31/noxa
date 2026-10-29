@@ -52,6 +52,26 @@ export async function wipeStudioIdentity(uid, { storage, indexedDB = globalThis.
     return deleteDB(indexedDB, studioAssetDB(uid));
 }
 
+/** Identity IDs that own a stored Studio layout or image database. */
+export async function studioStoredIdentities({ storage, indexedDB = globalThis.indexedDB } = {}) {
+    const owners = new Set();
+    const store = localStore(storage);
+    const prefix = `${STUDIO_STORAGE_KEY}:`;
+    try {
+        for (let i = 0; store && i < store.length; i++) {
+            const key = store.key(i);
+            if (key?.startsWith(prefix)) owners.add(key.slice(prefix.length));
+        }
+    } catch { /* storage is optional */ }
+    try {
+        for (const db of (await indexedDB?.databases?.()) || []) {
+            const name = String(db?.name || "");
+            if (name.startsWith(`${LEGACY_STUDIO_DB}:`)) owners.add(name.slice(LEGACY_STUDIO_DB.length + 1));
+        }
+    } catch { /* databases() is optional */ }
+    return [...owners];
+}
+
 /**
  * Removes Studio layouts and image databases of identities that no longer
  * exist on this device. It completes a deletion whose webview wipe was cut
