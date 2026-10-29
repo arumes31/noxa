@@ -1,6 +1,7 @@
 import { currentLanguage, t } from "./i18n.js";
 import { canFocusTarget, confirmDialog, promptDialog } from "./modal.js";
 import { copyToClipboard } from "./clipboard.js";
+import { wipeStudioIdentity } from "./studio-storage.js";
 import "./security-settings.css";
 
 const el = (tag, text = "", cls = "") => {
@@ -21,6 +22,15 @@ const details = key => {
     return node;
 };
 const checkError = async promise => { const error = await promise; if (error) throw new Error(error); };
+// Go errRatchetErasedLater: the identity IS deleted; only its store is erased later.
+export const isDeletionNotice = text => String(text).startsWith("the identity was deleted, but ");
+// Identity deletion also erases the identity's Studio layout and images and
+// ends its open Studio (studio-ui.js listens); a sign-out keeps them.
+export function forgetIdentityStudio(uid, { wipe = wipeStudioIdentity, target = globalThis } = {}) {
+    if (!uid) return Promise.resolve(false);
+    try { target.dispatchEvent?.(new CustomEvent("noxa-identity-deleted", { detail: { uid } })); } catch { /* best effort */ }
+    return wipe(uid);
+}
 const exportDate = value => {
     const date = new Date(value.replace(" ", "T"));
     return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(currentLanguage(), { dateStyle: "medium", timeStyle: "short" }).format(date);
@@ -172,7 +182,18 @@ export function securitySettings(settings) {
             }, "danger-btn");
             const remove = button("security.delete", async () => {
                 if (await ask("security.delete", t("security.deleteAsk", { name: entry.name }), "security.deleteConfirm", true) && current()) {
-                    await run(() => checkError(app.DeleteIdentity(entry.id, true)), "security.deleted");
+                    let notice = "";
+                    await run(async () => {
+                        const result = await app.DeleteIdentity(entry.id, true);
+                        // Committed deletion whose store another window still holds:
+                        // a success with a notice, never a failure.
+                        if (result && !isDeletionNotice(result)) throw new Error(result);
+                        if (result) notice = result;
+                        // The native side erased the identity's stores; its Studio
+                        // layout and images (webview storage) go too.
+                        forgetIdentityStudio(entry.unique_id);
+                        return true;
+                    }, () => notice ? t("security.deletedLater") : t("security.deleted"));
                 }
             }, "danger-btn");
             reset.disabled = !!entry.error; remove.disabled = !!entry.error || entries.length < 2;
@@ -212,7 +233,28 @@ export function securitySettings(settings) {
     plaintext.onchange = () => { settings.allow_plaintext = plaintext.checked; plainWarning.hidden = !plaintext.checked; };
     plainLabel.append(plaintext, document.createTextNode(t("security.plaintext")));
     developer.append(plainLabel, el("p", t("settings.timing.saved"))); connection.append(plainWarning, developer);
-    page.append(status, error, identities, progressArea, storage, connection);
+    // Explicit secure-messaging recovery after restoring a backup or losing
+    // this device's message store: a fresh signed account epoch; old readable
+    // history stays, messages sent to the lost keys stay unreadable.
+    const recovery = el("section", "", "security-section");
+    recovery.append(el("h4", t("security.recovery")), el("p", t("security.recoveryHelp")));
+    const recover = button("security.recover", async () => {
+        if (!await ask("security.recover", t("security.recoverAsk"), "security.recoverConfirm")) return;
+        const tabID = window.__noxa?.state?.activeTabID;
+        await run(async () => { await checkError(app.RecoverSecureMessagingForTab(tabID || "")); return true; }, "security.recovered");
+    });
+    // A recovery the server keeps refusing has an explicit exit: it is given
+    // up only when the server's record shows it was not applied (an applied
+    // one is completed instead).
+    const cancelRecovery = button("security.recoveryCancel", async () => {
+        if (!await ask("security.recoveryCancel", t("security.recoveryCancelAsk"), "security.recoveryCancelConfirm")) return;
+        const tabID = window.__noxa?.state?.activeTabID;
+        let outcome = "";
+        await run(async () => { outcome = await app.CancelSecureMessagingRecoveryForTab(tabID || ""); return true; },
+            () => t(outcome === "completed" ? "security.recovered" : "security.recoveryCancelled"));
+    });
+    recovery.append(recover, cancelRecovery, el("p", t("security.recoveryCancelHelp")));
+    page.append(status, error, identities, progressArea, storage, recovery, connection);
     // Settings search builds detached pages: only load secrets for the visible page.
     setTimeout(async () => {
         if (!current()) return;

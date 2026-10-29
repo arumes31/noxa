@@ -251,7 +251,7 @@ export function renderThread(root, arg) {
             message.deleted ? null : encryptionBadge("channel"),
             message.deleted ? h("span", { class: "msg-deleted" }, t("chat.deleted"))
                 : message.text === null || message.text === undefined ? h("span", { class: "msg-locked" }, t("chat.locked"))
-                    : richBody(message.text, { session, conn: session.conn, channelID }),
+                    : richBody(message.text, { conversation: "channel", session, conn: session.conn, channelID }),
             !message.deleted && canModerate() ? h("button", { class: "link-btn", type: "button", onclick: () => removeMessage(message) }, t("threads.deleteMessage")) : null)));
 
     function renderLog() {

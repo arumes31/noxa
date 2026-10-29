@@ -113,11 +113,12 @@ type Client struct {
 	x25519Key string
 	// Retained only after successful guest proof, for explicit role enrollment.
 	verifiedGuestKey string
-	authSigningKey   string      // bound to the successful authentication attempt
-	deviceID         string      // linked device of this session, if registered
-	webTransport     atomic.Bool // connected through the mobile web app
-	inputAt          time.Time   // last input a desktop reported (activity)
-	webHidden        bool        // the web app reported it is in the background
+	authSigningKey   string              // bound to the successful authentication attempt
+	deviceID         string              // linked device of this session, if registered
+	deviceIndex      *deviceSessionIndex // set by register; keeps the device -> sessions index current
+	webTransport     atomic.Bool         // connected through the mobile web app
+	inputAt          time.Time           // last input a desktop reported (activity)
+	webHidden        bool                // the web app reported it is in the background
 	passkey          *passkeyCeremony
 	dmKeyRecord      string // signed directory record; never used for scope-key sealing
 
@@ -328,6 +329,17 @@ func (c *Client) takeChallenge(uniqueID string) ([]byte, string, bool) {
 
 // TCPServer accepts and serves control-channel connections.
 type TCPServer struct {
+	// noxa-olm-v1 admission (frame 202), ON by default and advertised as
+	// netproto.CapabilityOlmAdmission whenever the Olm directory is available.
+	olmAdmissionEnabled bool
+	// mediaE2EE requires end-to-end encrypted channel media (Task 2), ON by
+	// default; advertised as netproto.CapabilityMediaE2EE when available.
+	mediaE2EE bool
+	// Per-device noxa-olm-v1 budgets separate from chat sends (olm_rate.go).
+	olmBudget             *olmBudgets
+	mediaSeats            mediaSeats // encrypted voice seats (media_seats.go)
+	olmDoorbell           olmDoorbells
+	keyLookupRate         *chatRateLimiter
 	previewOnce           sync.Once
 	previewService        *linkpreview.Service
 	spoolDelivery         [64]sync.Mutex
@@ -425,6 +437,8 @@ type TCPServer struct {
 
 	mu      sync.RWMutex
 	clients map[string]*Client
+	// deviceSessions indexes live sessions by linked device (doorbells).
+	deviceSessions *deviceSessionIndex
 
 	// startedAt feeds the public server-info uptime (313).
 	startedAt time.Time
@@ -469,14 +483,18 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 		}
 	}
 	s := &TCPServer{
-		cfg:           cfg,
-		logger:        logger,
-		deps:          deps,
-		acceptedConns: make(map[net.Conn]struct{}),
-		links:         newDeviceLinks(),
-		push:          newPushState(),
-		preauth:       make(map[net.Conn]string),
-		preauthByIP:   make(map[string]int),
+		olmAdmissionEnabled: true,
+		mediaE2EE:           true,
+		olmBudget:           newOlmBudgets(),
+		keyLookupRate:       newChatRateLimiter(keyLookups, olmBudgetWindow),
+		cfg:                 cfg,
+		logger:              logger,
+		deps:                deps,
+		acceptedConns:       make(map[net.Conn]struct{}),
+		links:               newDeviceLinks(),
+		push:                newPushState(),
+		preauth:             make(map[net.Conn]string),
+		preauthByIP:         make(map[string]int),
 		listen: func(ctx context.Context, network, address string) (net.Listener, error) {
 			return (&net.ListenConfig{}).Listen(ctx, network, address)
 		},
@@ -484,13 +502,14 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 			return tlscert.Ensure(cfg.TLSDir, cfg.TLSCertFile, cfg.TLSKeyFile,
 				[]string{"localhost", cfg.ServerName})
 		},
-		shutdownDone: make(chan struct{}),
-		started:      make(chan struct{}),
-		clients:      make(map[string]*Client),
-		stopCh:       make(chan struct{}),
-		startedAt:    time.Now(),
-		chatKeys:     newChatKeyManager(scopeKeys, kek, logger, chatCryptoFailure),
-		rotPending:   make(map[int64]bool),
+		shutdownDone:   make(chan struct{}),
+		started:        make(chan struct{}),
+		clients:        make(map[string]*Client),
+		deviceSessions: newDeviceSessionIndex(),
+		stopCh:         make(chan struct{}),
+		startedAt:      time.Now(),
+		chatKeys:       newChatKeyManager(scopeKeys, kek, logger, chatCryptoFailure),
+		rotPending:     make(map[int64]bool),
 		rotationAfter: func(delay time.Duration, callback func()) {
 			time.AfterFunc(delay, callback)
 		},
@@ -1071,7 +1090,7 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.sendErrorFor(client, mt, errCodeNotAuthenticated, "not authenticated")
 	}
 	if client.isAuthed() && !client.requestBudget.allow(mt, time.Now()) {
-		return s.sendErrorFor(client, mt, errCodeMalformed, "request rate limit exceeded; retry shortly")
+		return s.sendErrorFor(client, mt, errCodeMalformed, netproto.RequestRateLimitMessage)
 	}
 	if client.rulesBlocked() && !allowedWhileRulesPending[mt] {
 		return s.sendErrorFor(client, mt, errCodePermissionDenied, "accept the server rules before continuing")
@@ -1185,6 +1204,10 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		return s.handleComplaint(ctx, client, f)
 	case netproto.MsgScreenShare:
 		return s.handleScreenShare(ctx, client, f)
+	case netproto.MsgOlmAdmissionRequest:
+		return s.handleOlmAdmission(ctx, client, f)
+	case netproto.MsgOlmDirectoryRequest:
+		return s.handleOlmDirectory(ctx, client, f)
 	case netproto.MsgKeyPublish:
 		return s.handleKeyPublish(ctx, client, f)
 	case netproto.MsgKeyRequest:
@@ -1383,6 +1406,7 @@ func (s *TCPServer) onDisconnect(client *Client) {
 		}
 		// Remove voice metadata in the same membership critical section. Key
 		// rotation below acquires Authority and must run after releasing it.
+		s.mediaSeats.release(client.ID)
 		if s.deps.Voice != nil {
 			if err := s.deps.Voice.ClosePeer(client.ID); err != nil {
 				s.logger.Warn("voice session teardown failed", zap.String("client_id", client.ID), zap.Error(err))
@@ -1390,6 +1414,9 @@ func (s *TCPServer) onDisconnect(client *Client) {
 		}
 		client.markDisconnectCleaned()
 	}()
+	// Released again outside the membership section: a seat taken by a request
+	// that raced the cleanup (no Authority locks) never outlives the session.
+	s.mediaSeats.release(client.ID)
 	if alreadyCleaned {
 		return
 	}
@@ -1508,13 +1535,18 @@ func (s *TCPServer) register(c *Client) {
 	s.mu.Lock()
 	s.clients[c.ID] = c
 	s.mu.Unlock()
+	c.attachDeviceIndex(s.deviceSessions)
 }
 
 // unregister removes a client from the registry.
 func (s *TCPServer) unregister(id string) {
 	s.mu.Lock()
+	c := s.clients[id]
 	delete(s.clients, id)
 	s.mu.Unlock()
+	if c != nil {
+		c.detachDeviceIndex()
+	}
 }
 
 // clientCount returns the number of registered connections (217).

@@ -127,7 +127,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
 		}
 		client.setChallenge(msg.Username, msg.Nickname, challenge, time.Now().Add(authChallengeTTL))
-		return s.writeMessage(client, netproto.MsgAuthChallenge, netproto.AuthChallenge{Challenge: challenge})
+		return s.writeMessage(client, netproto.MsgAuthChallenge, netproto.AuthChallenge{Challenge: challenge, Scheme: netproto.AuthChallengeSchemeV1})
 	}
 
 	attempt, allowed := s.loginLimiter.Reserve(accountSourceScope, principalScope)
@@ -293,7 +293,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	}
 	defer attempt.Cancel()
 
-	if err := auth.VerifyChallenge(msg.PublicKey, challenge, msg.Signature); err != nil {
+	if err := auth.VerifyLoginChallenge(msg.PublicKey, challenge, msg.Signature); err != nil {
 		attempt.Fail()
 		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid credentials"})

@@ -29,17 +29,29 @@ function devices({ signature = fixture.approval_signature, x = fixture.x25519_pu
 
 test("devices chain to the pinned identity through approval signatures", () => {
     const pinned = ed25519FromPEM(fixture.public_key_pem);
-    const trusted = trustedDevices(fixture.approval_principal, devices(), pinned);
+    const trusted = trustedDevices(fixture.approval_principal, devices(), pinned, fromBase64(fixture.peer_x25519_public));
     assert.deepEqual(trusted.map(d => d.deviceID), ["dev-desktop", "dev-phone"]);
     assert.equal(trusted[1].x25519B64, fixture.x25519_public);
 
     // A forged approval, a changed key or an unknown approver is dropped.
     const forged = toBase64(new Uint8Array(64).fill(1));
-    assert.deepEqual(trustedDevices(fixture.approval_principal, devices({ signature: forged }), pinned).map(d => d.deviceID), ["dev-desktop"]);
-    assert.deepEqual(trustedDevices(fixture.approval_principal, devices({ x: fixture.peer_x25519_public }), pinned).map(d => d.deviceID), ["dev-desktop"]);
-    assert.deepEqual(trustedDevices(fixture.approval_principal, devices({ approver: "dev-ghost" }), pinned).map(d => d.deviceID), ["dev-desktop"]);
+    assert.deepEqual(trustedDevices(fixture.approval_principal, devices({ signature: forged }), pinned, fromBase64(fixture.peer_x25519_public)).map(d => d.deviceID), ["dev-desktop"]);
+    assert.deepEqual(trustedDevices(fixture.approval_principal, devices({ x: fixture.peer_x25519_public }), pinned, fromBase64(fixture.peer_x25519_public)).map(d => d.deviceID), ["dev-desktop"]);
+    assert.deepEqual(trustedDevices(fixture.approval_principal, devices({ approver: "dev-ghost" }), pinned, fromBase64(fixture.peer_x25519_public)).map(d => d.deviceID), ["dev-desktop"]);
     // Another principal's transcript does not verify.
-    assert.deepEqual(trustedDevices("other-uid", devices(), pinned).map(d => d.deviceID), ["dev-desktop"]);
+    assert.deepEqual(trustedDevices("other-uid", devices(), pinned, fromBase64(fixture.peer_x25519_public)).map(d => d.deviceID), ["dev-desktop"]);
     // A first device that is not the pinned identity trusts nothing.
     assert.deepEqual(trustedDevices(fixture.approval_principal, devices(), new Uint8Array(32)), []);
+});
+
+test("a self-rooted (guest) identity signs a key record that verifies", async () => {
+    const { signKeyRecord, parseKeyRecord } = await import("../src/core/dm-trust.js");
+    const { generateIdentity } = await import("../src/core/crypto.js");
+    const id = generateIdentity();
+    const record = signKeyRecord("guest-uid", id.xPublic, id.edSecret);
+    const parsed = parseKeyRecord(record, "guest-uid");
+    assert.ok(parsed, "verifies");
+    assert.deepEqual([...parsed.signingKey], [...id.edPublic]);
+    assert.deepEqual([...parsed.encryptionKey], [...id.xPublic]);
+    assert.equal(parseKeyRecord(record, "someone-else"), null);
 });

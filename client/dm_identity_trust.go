@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -22,6 +21,10 @@ import (
 
 var dmTrustRootOverride string // isolated test storage
 var dmTrustMu sync.Mutex       // every tab/manager shares the same persistent pins
+// dmDeclined records explicit declines of a changed contact identity, keyed
+// by pin path + declined fingerprint (never transient lookup failures).
+var dmDeclined sync.Map
+
 var errDMIdentityChanged = errors.New("contact identity changed; confirm the new fingerprint before messaging or calling")
 
 type dmIdentityPin struct {
@@ -29,6 +32,15 @@ type dmIdentityPin struct {
 	Fingerprint string   `json:"fingerprint"`
 	Pending     string   `json:"pending,omitempty"`
 	Retired     []string `json:"retired,omitempty"`
+	// RatchetReset is the fingerprint the user explicitly confirmed while the
+	// noxa-olm-v1 trust records still pin the previous noXa keys. It is the
+	// durable reset intent: the consumer applies it on the next trust check
+	// (only while this fingerprint is still the pinned one) and clears it.
+	RatchetReset string `json:"ratchet_reset,omitempty"`
+	// Owner tags the pin with its local identity (dmPinOwnerTag), so deleting
+	// that identity finds every pin it wrote, including group-only contacts
+	// and servers the device no longer knows. Pins from older builds have none.
+	Owner string `json:"owner,omitempty"`
 }
 
 // ContactIdentityChange is the payload of the "contact_identity_changed"
@@ -139,16 +151,28 @@ func (m *connManager) peerPinPath(uid string) (string, string, error) {
 	if err != nil || server == "" {
 		return "", "", errors.New("server identity unavailable")
 	}
-	root, err := identityRoot()
-	if dmTrustRootOverride != "" {
-		root, err = dmTrustRootOverride, nil
+	if identityDeleted(id.PublicKey) {
+		return "", "", errIdentityDeleted
 	}
+	path, err := dmPinPathFor(local, server, uid)
 	if err != nil {
 		return "", "", err
 	}
-	binding, _ := json.Marshal([]string{hex.EncodeToString(local), server, uid})
-	hash := sha256.Sum256(binding)
-	return filepath.Join(root, "dm-identities", hex.EncodeToString(hash[:])+".json"), server, nil
+	dmPinOwners.Store(path, dmPinOwner{tag: dmPinOwnerTag(local), publicKey: id.PublicKey})
+	return path, server, nil
+}
+
+// dmPinOwner is the local identity that a contact pin path belongs to.
+type dmPinOwner struct{ tag, publicKey string }
+
+// dmPinOwners maps pin paths (named by peerPinPath) to their identity, so a
+// pin write can tag the file and refuse once that identity is being deleted.
+var dmPinOwners sync.Map
+
+// dmPinOwnerTag names an identity inside its pin files without storing its key.
+func dmPinOwnerTag(local []byte) string {
+	sum := sha256.Sum256(append([]byte("noxa-dm-pin-owner-v1\n"), local...))
+	return hex.EncodeToString(sum[:])
 }
 func readDMPin(path string) (dmIdentityPin, error) {
 	var pin dmIdentityPin
@@ -185,7 +209,20 @@ func readDMPin(path string) (dmIdentityPin, error) {
 	}
 	return pin, nil
 }
+
+// writeDMPin writes under contactPinMoveMu and re-checks the owner's deletion
+// fence there, so a write can never land after an identity deletion moved
+// that identity's pins away (no orphan pin).
 func writeDMPin(path string, pin dmIdentityPin) error {
+	contactPinMoveMu.Lock()
+	defer contactPinMoveMu.Unlock()
+	if v, ok := dmPinOwners.Load(path); ok {
+		owner := v.(dmPinOwner)
+		if identityDeleted(owner.publicKey) {
+			return errIdentityDeleted
+		}
+		pin.Owner = owner.tag
+	}
 	raw, err := json.Marshal(pin)
 	if err != nil {
 		return err
@@ -242,9 +279,14 @@ func (m *connManager) verifyPeerRecordAt(uid, encoded string, prompt bool, path,
 	}
 	expected := pin
 	dmTrustMu.Unlock()
-	if !prompt || m.confirmPeerChange == nil || pin.Pending != encoded || !m.confirmPeerChange(server, uid, pin.Fingerprint, fingerprint) {
+	if !prompt || m.confirmPeerChange == nil || pin.Pending != encoded {
 		return [32]byte{}, errDMIdentityChanged
 	}
+	if !m.confirmPeerChange(server, uid, pin.Fingerprint, fingerprint) {
+		dmDeclined.Store(path+"\x00"+fingerprint, time.Now())
+		return [32]byte{}, errDMIdentityChanged
+	}
+	dmDeclined.Delete(path + "\x00" + fingerprint)
 	dmTrustMu.Lock()
 	defer dmTrustMu.Unlock()
 	current, err := readDMPin(path)
@@ -261,9 +303,15 @@ func (m *connManager) verifyPeerRecordAt(uid, encoded string, prompt bool, path,
 		}
 		retired = append(retired, current.Fingerprint)
 	}
-	if err := writeDMPin(path, dmIdentityPin{Version: 1, Fingerprint: fingerprint, Retired: retired}); err != nil {
+	// The same explicit confirmation is the durable ratchet reset intent:
+	// stored with the new pin, applied (and cleared) by the consumer. Cached
+	// pre-change device lists must never be re-pinned.
+	m.forgetDMDevices(uid)
+	if err := writeDMPin(path, dmIdentityPin{Version: 1, Fingerprint: fingerprint, Retired: retired, RatchetReset: fingerprint}); err != nil {
 		return [32]byte{}, err
 	}
+	m.forgetDMDevices(uid)
+	go m.applyRatchetTrustReset(uid)
 	return record.PublicKey(), nil
 }
 func (m *connManager) verifyMessageKey(uid, encoded, ownUID string, ownPub [32]byte) ([32]byte, error) {
@@ -308,4 +356,40 @@ func (m *connManager) verifiedCachedPeer(uid string, key [32]byte) bool {
 		m.pubKeys.forgetKey(uid, key)
 	}
 	return trusted
+}
+
+// ratchetResetPending reports whether the user explicitly confirmed uid's
+// current pinned identity and its ratchet trust reset is not yet applied.
+func (m *connManager) ratchetResetPending(uid string) (string, error) {
+	path, _, err := m.peerPinPath(uid)
+	if err != nil {
+		return "", err
+	}
+	dmTrustMu.Lock()
+	defer dmTrustMu.Unlock()
+	pin, err := readDMPin(path)
+	if err != nil {
+		return "", err
+	}
+	if pin.Version == 1 && pin.Pending == "" && pin.RatchetReset != "" && pin.RatchetReset == pin.Fingerprint {
+		return pin.RatchetReset, nil
+	}
+	return "", nil
+}
+
+// clearRatchetReset removes the applied intent only if it is still exactly
+// token and token is still the pinned fingerprint (compare-and-clear).
+func (m *connManager) clearRatchetReset(uid, token string) error {
+	path, _, err := m.peerPinPath(uid)
+	if err != nil {
+		return err
+	}
+	dmTrustMu.Lock()
+	defer dmTrustMu.Unlock()
+	pin, err := readDMPin(path)
+	if err != nil || pin.Version != 1 || pin.RatchetReset == "" || pin.RatchetReset != token || pin.Fingerprint != token {
+		return err
+	}
+	pin.RatchetReset = ""
+	return writeDMPin(path, pin)
 }

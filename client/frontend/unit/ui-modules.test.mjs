@@ -351,6 +351,44 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal(chat.qsScore("zzz", "Alpha"), -1);
     });
 
+    // P3-7: a locked placeholder's sender/peer/conversation come from the
+    // unauthenticated manifest: it is labelled neutrally, never names the
+    // claimed sender and never creates a conversation.
+    await t.test("chat quarantine placeholders are neutral and never create a conversation", async (t) => {
+        const events = [];
+        replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } }, dispatchEvent: event => events.push(event.type) });
+        const chat = await import("../src/chat-ui.js");
+        const q = { id: "d1", sender: "ceo", code: "invalid", scope: "direct", peer: "mallory", seen_at: 5 };
+        const row = chat.quarantinePlaceholder(q);
+        assert.equal(row.fromUID, "");
+        assert.equal(row.from, "Unverified sender");
+        assert.doesNotMatch(JSON.stringify(row), /ceo|mallory/);
+        chat.onRatchetQuarantine({ placeholders: [q] });
+        assert.equal(chat.directStoreForTest("mallory"), null, "no conversation is created from a placeholder");
+        assert.deepEqual(events, ["noxa-ratchet-quarantine"]);
+        // An existing conversation with that peer shows the neutral row.
+        chat.directStoreForTest("bob", true).msgs.push({ id: 0, clientMsgID: "m1", fromUID: "bob", text: "hi" });
+        chat.onRatchetQuarantine({ placeholders: [{ ...q, peer: "bob" }] });
+        const shown = chat.directStoreForTest("bob").msgs.filter(m => m.quarantined);
+        assert.equal(shown.length, 1);
+        assert.equal(shown[0].fromUID, "");
+        assert.equal(shown[0].from, "Unverified sender");
+        // Malformed or non-direct placeholders are ignored; codes keep their text.
+        chat.onRatchetQuarantine({ placeholders: [{ ...q, peer: "bob" }, { ...q, id: "" , peer: "bob" }, { ...q, id: "g1", scope: "group", conversation: "g" },
+            { ...q, id: "x1", peer: 7 }, null, { ...q, id: "d2", peer: "bob", code: "fenced_copy", seen_at: undefined }, { ...q, id: "d3", peer: "bob", code: "lost_key", seen_at: 0 }] });
+        const locked = chat.directStoreForTest("bob").msgs.filter(m => m.quarantined);
+        assert.deepEqual(locked.map(m => m.clientMsgID).sort(), ["quarantine:d1", "quarantine:d2", "quarantine:d3"]);
+        assert.equal(locked.find(m => m.clientMsgID === "quarantine:d2").text, chat.quarantineText("fenced_copy"));
+        assert.equal(locked.find(m => m.clientMsgID === "quarantine:d3").text, chat.quarantineText("lost_key"));
+        assert.ok(locked.every(m => m.ts > 0 && m.fromUID === ""));
+        chat.onRatchetQuarantine(null);
+        assert.equal(chat.directStoreForTest("bob").msgs.some(m => m.quarantined), false);
+        chat.onRatchetQuarantine({ placeholders: [{ ...q, peer: "bob" }] });
+        // Gone from the list: the row disappears.
+        chat.onRatchetQuarantine({ placeholders: [] });
+        assert.equal(chat.directStoreForTest("bob").msgs.some(m => m.quarantined), false);
+    });
+
     await t.test("chat notifications never carry attachment keys or unopened bodies", async (t) => {
         replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });
         const chat = await import("../src/chat-ui.js");
@@ -423,7 +461,8 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         const retired = chat.directMessageFromEntry({ from_unique_id: "u-mia", body: "old", sent_at: 6, enc_verified: true, enc_mode: "server" });
         assert.deepEqual([retired.encVerified, retired.enc, retired.encMode, encryptionBadge(retired).kind], [false, false, "downgraded", "warning"]);
         const legacy = chat.directMessageFromEntry({ from_unique_id: "u-mia", body: "old", sent_at: 6, enc_verified: true });
-        assert.deepEqual([legacy.encVerified, legacy.encMode, encryptionBadge(legacy).kind], [true, "e2e", "lock"]);
+        // A verified legacy (static-key) record gets the legacy badge, never the Olm lock.
+        assert.deepEqual([legacy.encVerified, legacy.encMode, encryptionBadge(legacy).kind], [true, "e2e", "legacy"]);
         const bogus = chat.directMessageFromEntry({ from_unique_id: "u-mia", body: "old", sent_at: 6, enc_verified: true, enc_mode: "bogus" });
         assert.deepEqual([bogus.encVerified, bogus.encMode, encryptionBadge(bogus).label], [false, "", "chat.unverifiedHelp"]);
         // A live DM in "server" mode is a warning too; channels keep the shield.
@@ -434,7 +473,8 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.match(source, /enc_mode: m\.encVerified \? m\.encMode : encModeFrom\(false, m\.encMode\)/);
         assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_mode: "downgraded" }, true).label, "chat.downgradedHelp");
         assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_verified: true, enc_mode: "server" }, true).kind, "warning");
-        assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_verified: true, enc_mode: "e2e" }, true).kind, "lock");
+        assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_verified: true, enc_mode: "e2e" }, true).kind, "legacy");
+        assert.equal(chat.searchEncryptionBadge({ body: "raid", enc_verified: true, enc_mode: "e2e", protocol: "noxa-olm-v1" }, true).kind, "lock");
     });
 
     await t.test("channel edit offers no new password on a text channel", async (t) => {

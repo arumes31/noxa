@@ -11,10 +11,12 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
 
+	"noxa/internal/auth"
 	"noxa/internal/netproto"
 )
 
@@ -43,7 +45,10 @@ func sealHistoryChunk(plain []byte, recipientPub, senderPriv [32]byte) ([]byte, 
 
 // historyMessagesSince collects the stored conversations' messages sent at or
 // after since (zero: everything), newest first, capped at MaxHistoryMessages.
-func historyMessagesSince(store dmHistoryStore, since int64) []netproto.HistoryMessage {
+// ownUID fills the sender of own legacy entries stored without one (a peer's
+// legacy entry without a sender is from that peer), so importers accept own
+// and peer records consistently.
+func historyMessagesSince(store dmHistoryStore, since int64, ownUID string) []netproto.HistoryMessage {
 	var out []netproto.HistoryMessage
 	for _, peer := range store.peers() {
 		entries, err := store.messages(peer.UniqueID)
@@ -54,10 +59,25 @@ func historyMessagesSince(store dmHistoryStore, since int64) []netproto.HistoryM
 			if e.SentAt < since || !openedChatText(e.Body) {
 				continue
 			}
-			out = append(out, netproto.HistoryMessage{
+			m := netproto.HistoryMessage{
 				Peer: peer.UniqueID, PeerNickname: peer.Nickname, From: e.FromUniqueID, FromNickname: e.FromNickname,
 				Body: e.Body, SentAt: e.SentAt, Self: e.Self, ClientMsgID: e.ClientMsgID,
-			})
+			}
+			if m.From == "" && e.Protocol == "" {
+				m.From = peer.UniqueID
+				if e.Self {
+					m.From = ownUID
+				}
+			}
+			if e.Protocol != "" {
+				// Only readable, authenticated archive records travel (keyed by
+				// the sender's logical ID); never ratchet state, keys or trust.
+				if !transferableRatchetEntry(e) {
+					continue
+				}
+				m.Protocol, m.Provenance = e.Protocol, netproto.HistoryProvenanceAuthenticated
+			}
+			out = append(out, m)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].SentAt > out[j].SentAt })
@@ -67,13 +87,38 @@ func historyMessagesSince(store dmHistoryStore, since int64) []netproto.HistoryM
 	return out
 }
 
+// transferableRatchetEntry: a readable record of the authenticated archive,
+// i.e. received, or an own message accepted by the server (a linked copy of
+// an own send carries no status: it was accepted on the sending device).
+// Pending, uncertain or failed sends, deleted records and placeholders stay.
+func transferableRatchetEntry(e DMEntry) bool {
+	if e.Protocol != ratchetProtocol || e.Deleted || !e.EncVerified || e.ClientMsgID == "" || e.FromUniqueID == "" || strings.TrimSpace(e.Body) == "" {
+		return false
+	}
+	switch e.Status {
+	case "received", "accepted":
+		return true
+	case "":
+		return e.Self
+	}
+	return false
+}
+
 // buildHistoryChunks packs messages (newest first) into sealed chunks, each
 // at most MaxHistoryChunk bytes sealed, at most MaxHistoryChunks chunks and
 // MaxHistoryBytes in all; the oldest messages are left out when the limits
 // are reached. Chunks come out oldest first, each holding its messages
 // oldest first. It returns the chunks' sealed data and the messages kept.
-func buildHistoryChunks(messages []netproto.HistoryMessage, recipientPub, senderPriv [32]byte) ([][]byte, int, error) {
-	const maxPlain = netproto.MaxHistoryChunk - historySealOverhead
+// historyChunkEnv binds each chunk to its transfer (netproto history
+// envelope): source and target device, transfer ID, and the source device's
+// noXa signature.
+type historyChunkEnv struct {
+	Source, Target, Transfer string
+	Sign                     func([]byte) ([]byte, error)
+}
+
+func buildHistoryChunks(messages []netproto.HistoryMessage, recipientPub, senderPriv [32]byte, env historyChunkEnv) ([][]byte, int, error) {
+	const maxPlain = netproto.MaxHistoryChunk - historySealOverhead - netproto.HistoryEnvelopeReserve
 	var groups [][]json.RawMessage
 	var current []json.RawMessage
 	size, total, kept := 2, 0, 0 // "[]"
@@ -118,7 +163,12 @@ func buildHistoryChunks(messages []netproto.HistoryMessage, recipientPub, sender
 		for j := range group {
 			ordered[len(group)-1-j] = group[j]
 		}
-		plain, err := json.Marshal(ordered)
+		records, err := json.Marshal(ordered)
+		if err != nil {
+			return nil, 0, err
+		}
+		plain, err := netproto.EncodeHistoryChunk(netproto.HistoryHeader{Source: env.Source, Target: env.Target, Transfer: env.Transfer,
+			Seq: len(groups) - 1 - i, Total: len(groups)}, records, env.Sign)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -198,7 +248,9 @@ func (a *App) CopyHistoryToDeviceForTab(tabID, deviceID string, days int) error 
 			progress.State, progress.Error = "failed", err.Error()
 			cm.emit("device_history", progress)
 		}
-		chunks, kept, err := buildHistoryChunks(historyMessagesSince(store, since), recipient, priv)
+		env := historyChunkEnv{Source: selfDevice, Target: deviceID, Transfer: newClientMsgID(),
+			Sign: func(t []byte) ([]byte, error) { return auth.SignChallenge(id.PrivateKey, t) }}
+		chunks, kept, err := buildHistoryChunks(historyMessagesSince(store, since, ownUID), recipient, priv, env)
 		if err != nil {
 			fail(err)
 			return

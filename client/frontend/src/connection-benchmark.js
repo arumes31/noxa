@@ -69,7 +69,10 @@ export function createConnectionBenchmark() {
             if (!current()) { await cancelOwned(); return; }
             cancel.hidden = false; cancel.disabled = false;
             await poll();
-        } catch { if (current()) finish({ phase: "failed" }); }
+        } catch (error) {
+            // Encrypted channel media: an explicit "unavailable", not a failure.
+            if (current()) finish({ phase: String(error?.message ?? error).startsWith("connection_benchmark_unavailable_e2ee") ? "unavailableE2EE" : "failed" });
+        }
     };
     cancel.onclick = async () => { cancel.disabled = true; await cancelOwned(); };
     copy.onclick = () => { if (current() && result) void copyToClipboard(JSON.stringify(result, null, 2), { isCurrent: current }); };

@@ -110,7 +110,7 @@ func TestClientMinimumChallengeCannotBypassFinalAdmission(t *testing.T) {
 			if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
 				t.Fatal(err)
 			}
-			signature, err := auth.SignChallenge(private, challenge.Challenge)
+			signature, err := auth.SignChallenge(private, challenge.Challenge) // legacy (pre-domain) client: raw form still accepted
 			if err != nil {
 				t.Fatal(err)
 			}

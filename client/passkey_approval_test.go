@@ -14,11 +14,8 @@ import (
 )
 
 func TestPasskeyAutoApprovalRequiresLocallyVerifiedProof(t *testing.T) {
-	for _, valid := range []bool{true, false} {
-		name := "valid"
-		if !valid {
-			name = "forged"
-		}
+	for _, name := range []string{"valid", "forged", "smuggled line"} {
+		valid := name == "valid"
 		t.Run(name, func(t *testing.T) {
 			var directory netproto.KeyResponse
 			var target netproto.DeviceInfo
@@ -79,6 +76,11 @@ func TestPasskeyAutoApprovalRequiresLocallyVerifiedProof(t *testing.T) {
 				t.Fatal(err)
 			}
 			target = netproto.DeviceInfo{DeviceID: "phone", Kind: "web", Ed25519Public: targetKey, X25519Public: first.X25519Public}
+			if name == "smuggled line" {
+				// P3-6: a correctly proven claim whose key carries a line
+				// break (base64 decoding skips it) is never signed.
+				target.X25519Public = first.X25519Public[:20] + "\r\n" + first.X25519Public[20:]
+			}
 			nonce := make([]byte, 32)
 			b64 := base64.RawURLEncoding.EncodeToString
 			cd, _ := json.Marshal(map[string]any{"type": "webauthn.get", "origin": cert.Origin, "challenge": b64(netproto.PasskeyDeviceChallenge(nonce, target.Ed25519Public, target.X25519Public))})
@@ -86,7 +88,7 @@ func TestPasskeyAutoApprovalRequiresLocallyVerifiedProof(t *testing.T) {
 			ad := append(append([]byte{}, rp[:]...), 5, 0, 0, 0, 1)
 			hash := sha256.Sum256(cd)
 			sig := ed25519.Sign(private, append(append([]byte{}, ad...), hash[:]...))
-			if !valid {
+			if name == "forged" {
 				sig[0] ^= 1
 			}
 			assertion, _ := json.Marshal(map[string]any{"type": "public-key", "rawId": cert.CredentialID, "response": map[string]string{"clientDataJSON": b64(cd), "authenticatorData": b64(ad), "signature": b64(sig)}})

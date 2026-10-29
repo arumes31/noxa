@@ -21,6 +21,10 @@ type ConnectionBenchmarkStatus struct {
 	Error          string                      `json:"error,omitempty"`
 }
 
+// errConnectionBenchmarkE2EE: the synthetic benchmark is unavailable while
+// channel media is end-to-end encrypted.
+var errConnectionBenchmarkE2EE = errors.New("connection_benchmark_unavailable_e2ee: the connection benchmark is unavailable while channel media is end-to-end encrypted")
+
 type connectionBenchmarkOperation struct {
 	mu     sync.Mutex
 	tabID  string
@@ -42,6 +46,13 @@ func (a *App) StartConnectionBenchmark(tabID string) (ConnectionBenchmarkStatus,
 	if cm.conn == nil || cm.closed || !cm.tlsUsed || cm.fingerprint == "" {
 		cm.mu.Unlock()
 		return ConnectionBenchmarkStatus{}, errors.New("a connected, trusted TLS server tab is required")
+	}
+	// The benchmark is an anonymous plaintext RTP session; a server with
+	// end-to-end encrypted channel media refuses it, so decline clearly
+	// instead of offering an unencrypted exception (Task 2).
+	if cm.supportsMediaE2EE {
+		cm.mu.Unlock()
+		return ConnectionBenchmarkStatus{}, errConnectionBenchmarkE2EE
 	}
 	opts := connectionbenchmark.Options{Address: cm.conn.RemoteAddr().String(), Fingerprint: cm.fingerprint}
 	epoch := cm.connEpoch

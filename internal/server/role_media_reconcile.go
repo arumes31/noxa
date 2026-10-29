@@ -38,6 +38,9 @@ func (s *TCPServer) reconcileRoleMedia(ctx context.Context, _ *authorization.Rol
 			if s.deps.Voice != nil {
 				s.deps.Voice.LeaveChannel(client.ID, member.ChannelID)
 			}
+			// The peer lives on in the lobby: the seat is parked (counted
+			// nowhere) and its next join meets the cap (fix4 review P3-1).
+			s.mediaSeats.park(client.ID)
 		}
 		if !after.Evaluate(client.userID(), member.ChannelID, authorization.Speak).Allowed {
 			s.deps.State.SetSpeaking(client.ID, false)

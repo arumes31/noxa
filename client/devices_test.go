@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
+	"net/url"
+	"strings"
 	"testing"
 
 	"noxa/internal/auth"
@@ -22,7 +25,9 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var approval []byte
+	phoneX := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
+	var approval, bindingSig []byte
+	var binding string
 	app, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
 		var r netproto.DeviceRequest
 		if err := netproto.Decode(frame, &r); err != nil {
@@ -32,10 +37,10 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 		case netproto.DeviceActionLinkCreate:
 			return netproto.MsgDeviceResult, netproto.DeviceResult{
 				Action: r.Action, LinkID: "link-1", Secret: secret, Code: "K7QM-4XPA",
-				URL: "https://chat.example/link#id=link-1&k=x", ExpiresAt: 1, State: netproto.LinkStatePending,
+				URL: "https://chat.example/link#id=evil&k=x&a=0000+0000+0000+0000&zz=1", ExpiresAt: 1, State: netproto.LinkStatePending,
 			}, true
 		case netproto.DeviceActionLinkDecide:
-			approval = r.Signature
+			approval, binding, bindingSig = r.Signature, r.ServerBinding, r.BindingSignature
 			return netproto.MsgDeviceResult, netproto.DeviceResult{Action: r.Action, LinkID: r.LinkID, State: netproto.LinkStateApproved}, true
 		}
 		return 0, nil, false
@@ -44,6 +49,7 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 	app.activeID = "a"
 	cm.mu.Lock()
 	cm.supportsDevices, cm.uniqueID, cm.deviceID = true, "user-uid", "dev-desktop"
+	cm.fingerprint = strings.TrimSuffix(strings.Repeat("AB:", 32), ":") // pinned TLS certificate
 	cm.mu.Unlock()
 	capture := &deviceEventCapture{}
 	cm.sink = capture
@@ -52,10 +58,31 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 	if err != nil || link.LinkID != "link-1" || link.Code != "K7QM-4XPA" {
 		t.Fatalf("create = %+v, %v", link, err)
 	}
+	// The QR names this desktop's key fingerprint (out of band), in a
+	// fragment the desktop builds itself: the server's injected a= is gone.
+	own, _ := cm.identity()
+	base, frag, _ := strings.Cut(link.URL, "#")
+	values, err := url.ParseQuery(frag)
+	if base != "https://chat.example/link" || err != nil || len(values) != 3 || len(values["a"]) != 1 || values.Get("a") != netproto.KeyFingerprint(own.PublicKey) ||
+		values.Get("id") != "link-1" || values.Get("k") != base64.RawURLEncoding.EncodeToString(secret) {
+		t.Fatalf("link URL = %q", link.URL)
+	}
+	// Item 0: the QR host is compared with the connected server's host.
+	if link.LinkHost != "chat.example" || link.ServerHost != "test.invalid" || !link.HostMismatch {
+		t.Fatalf("host comparison = %q vs %q mismatch=%v", link.LinkHost, link.ServerHost, link.HostMismatch)
+	}
+	for _, c := range []struct {
+		a, b string
+		same bool
+	}{{"Chat.Example.", "chat.example", true}, {"[::1]", "::1", true}, {"chat.example", "evil.example", false}, {"", "", false}} {
+		if sameHost(c.a, c.b) != c.same || connectedHost("chat.example:9000") != "chat.example" {
+			t.Fatalf("sameHost(%q, %q) != %v", c.a, c.b, c.same)
+		}
+	}
 
 	claim := func(linkID, via string) {
 		frame, err := netproto.Encode(netproto.MsgDeviceEvent, netproto.DeviceEvent{
-			Event: netproto.DeviceEventLinkClaimed, LinkID: linkID, Ed25519PublicKey: phonePublic, X25519PublicKey: "x", Via: via,
+			Event: netproto.DeviceEventLinkClaimed, LinkID: linkID, Ed25519PublicKey: phonePublic, X25519PublicKey: phoneX, Via: via,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -66,7 +93,7 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 	if len(capture.views) != 0 {
 		t.Fatal("claim of a foreign link reached the webview")
 	}
-	transcript := netproto.LinkClaimTranscript("link-1", phonePublic, "x")
+	transcript := netproto.LinkClaimTranscript("link-1", phonePublic, phoneX)
 	claim("link-1", "qr")
 	claim("link-1", "code")
 	if len(capture.views) != 2 {
@@ -79,7 +106,14 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 		t.Fatalf("fingerprint = %q", capture.views[0].Fingerprint)
 	}
 
-	result, err := app.DecideDeviceLinkForTab("a", "link-1", true, phonePublic, "x")
+	// Claimed keys are validated before anything is signed (no newline can
+	// be smuggled into the newline-joined transcripts).
+	for _, bad := range [][2]string{{phonePublic, phoneX + "\nextra"}, {phonePublic + "x", phoneX}, {phonePublic, "short"}} {
+		if _, err := app.DecideDeviceLinkForTab("a", "link-1", true, bad[0], bad[1]); err == nil || approval != nil {
+			t.Fatalf("invalid claimed keys signed: %q", bad)
+		}
+	}
+	result, err := app.DecideDeviceLinkForTab("a", "link-1", true, phonePublic, phoneX)
 	if err != nil || result.State != netproto.LinkStateApproved {
 		t.Fatalf("decide = %+v, %v", result, err)
 	}
@@ -87,10 +121,15 @@ func TestDeviceLinkDesktopDerivesSASAndSignsApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := auth.VerifyChallenge(id.PublicKey, netproto.DeviceApprovalTranscript("user-uid", "dev-desktop", phonePublic, "x"), approval); err != nil {
+	if err := auth.VerifyChallenge(id.PublicKey, netproto.DeviceApprovalTranscript("user-uid", "dev-desktop", phonePublic, phoneX), approval); err != nil {
 		t.Fatalf("approval signature: %v", err)
 	}
-	if _, err := app.DecideDeviceLinkForTab("a", "link-1", true, phonePublic, "x"); err == nil {
+	// 1c-iii-a item 1: the pinned TLS binding, signed for exactly these keys.
+	if binding != "tls-sha256:"+strings.Repeat("ab", 32) ||
+		auth.VerifyChallenge(id.PublicKey, netproto.DeviceLinkBindingTranscript("user-uid", "dev-desktop", phonePublic, phoneX, binding), bindingSig) != nil {
+		t.Fatalf("binding statement %q not signed for the claimed keys", binding)
+	}
+	if _, err := app.DecideDeviceLinkForTab("a", "link-1", true, phonePublic, phoneX); err == nil {
 		t.Fatal("a decided link was decided twice")
 	}
 }

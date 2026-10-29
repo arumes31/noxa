@@ -714,6 +714,14 @@ export function Quit() {
   return window['go']['main']['App']['Quit']();
 }
 
+export function SendChatOperationForTab(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['SendChatOperationForTab'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+export function RatchetConversationHistoryForTab(arg1, arg2) {
+  return window['go']['main']['App']['RatchetConversationHistoryForTab'](arg1, arg2);
+}
+
 export function ReadPositionalInput() {
   return window['go']['main']['App']['ReadPositionalInput']();
 }
@@ -724,6 +732,14 @@ export function ReadyForCloseNotifications() {
 
 export function ReconnectTab(arg1, arg2, arg3) {
   return window['go']['main']['App']['ReconnectTab'](arg1, arg2, arg3);
+}
+
+export function CancelSecureMessagingRecoveryForTab(arg1) {
+  return window['go']['main']['App']['CancelSecureMessagingRecoveryForTab'](arg1);
+}
+
+export function RecoverSecureMessagingForTab(arg1) {
+  return window['go']['main']['App']['RecoverSecureMessagingForTab'](arg1);
 }
 
 export function RecordRecent(arg1, arg2) {
@@ -1172,14 +1188,6 @@ export function WebRTCAnswer(arg1) {
 
 export function WebRTCAnswerForTab(arg1, arg2) {
   return window['go']['main']['App']['WebRTCAnswerForTab'](arg1, arg2);
-}
-
-export function WebRTCOffer(arg1, arg2) {
-  return window['go']['main']['App']['WebRTCOffer'](arg1, arg2);
-}
-
-export function WebRTCOfferForTab(arg1, arg2, arg3) {
-  return window['go']['main']['App']['WebRTCOfferForTab'](arg1, arg2, arg3);
 }
 
 export function WebhookForTab(arg1, arg2) {

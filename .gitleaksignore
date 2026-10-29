@@ -10,3 +10,34 @@ d8660890e4eaf9b062edc2d8453344c03c2f1164:client/frontend/unit/attachment-meta.te
 7e88bff37b5b2123482b36995a27698cae46f7a6:client/identity_settings_test.go:generic-api-key:39
 bf1bb255e2a4ef1798a60848e70388c181c5ceef:internal/eventbus/ws_security_test.go:generic-api-key:239
 86b9b08fcf2c01fc477bd6e5734b736ddccb97ec:internal/server/e2e_test.go:generic-api-key:169
+
+# Reviewed E2EE program false positives: public Curve25519 one-time keys in the
+# deterministic Olm directory fixture (scripts/generate-olm-directory-fixtures.mjs)
+# and a source comment ("lost key, legacy/mismatched session").
+dad3a02bb73d584ddd55d7557ffb501c8e730027:mobile/src/core/ratchet-consumer.js:generic-api-key:60
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:38
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:42
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:868
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:872
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:894
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:898
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:920
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:924
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:946
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:950
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:972
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:976
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:998
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1002
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1024
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1028
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1050
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1054
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1076
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1080
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1102
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1106
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1128
+f97b4f2f847aa6e5d8c86a6c7e04087a8eb8438f:internal/e2ee/olmdir/testdata/directory-v1.json:generic-api-key:1132
+# The comment above (commit db4dc5ff) itself matched the generic rule.
+db4dc5ffbf444d7af421662f3ddb6c877d1ff511:.gitleaksignore:generic-api-key:16

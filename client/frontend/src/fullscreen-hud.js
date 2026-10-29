@@ -240,6 +240,8 @@ export function createFullscreenHud(stage) {
         hud.querySelector(".fs-quick-close").onclick = () => closeQuick(true);
         hud.querySelector(".fs-quick-form").onsubmit = event => { event.preventDefault(); void sendQuick(); };
         parts.input.addEventListener("focus", () => quick.engage(true));
+        // Editing the quick reply starts a new operation (retry = resend unedited).
+        parts.input.addEventListener("input", () => Object.assign(quickOperation, { key: "", id: "" }));
         parts.input.addEventListener("blur", () => quick.engage(!!parts.input.value.trim()));
         parts.unread.onclick = () => replyLatest(true);
         // Hovering or focusing the interactive HUD keeps it on screen.
@@ -687,7 +689,7 @@ export function createFullscreenHud(stage) {
             text.textContent = message.text;
             li.append(text);
             if (message.badge?.kind) {
-                const badge = el("span", "fs-bubble-encryption", svg(message.badge.kind));
+                const badge = el("span", "fs-bubble-encryption", svg(message.badge.kind === "legacy" ? "key" : message.badge.kind));
                 badge.dataset.kind = message.badge.kind;
                 badge.setAttribute("role", "img");
                 setLabel(badge, t(message.badge.label));
@@ -799,6 +801,7 @@ export function createFullscreenHud(stage) {
         parts.input.focus({ preventScroll: true });
     }
 
+    const quickOperation = { key: "", id: "" };
     async function sendQuick() {
         syncChatScope();
         const snap = quick.state;
@@ -806,8 +809,15 @@ export function createFullscreenHud(stage) {
         const error = hud.querySelector(".fs-quick-error");
         if (!snap.open || !text || sending) return;
         const state = V()?.state || {};
-        const send = app()?.SendChatForTab;
-        if (typeof send !== "function") return;
+        const api = app();
+        const legacySend = api?.SendChatForTab;
+        if (typeof legacySend !== "function") return;
+        // One stable operation per (target, text): a retry resolves the same op.
+        const operationKey = JSON.stringify([state.activeTabID, snap.target, text]);
+        if (quickOperation.key !== operationKey) Object.assign(quickOperation, { key: operationKey, id: crypto.randomUUID() });
+        const send = typeof api.SendChatOperationForTab === "function"
+            ? (tabID, scopeName, target, body) => api.SendChatOperationForTab(tabID, scopeName, target, body, 0, quickOperation.id)
+            : legacySend;
         const request = {};
         sending = request;
         const scope = chatScope;
@@ -818,6 +828,9 @@ export function createFullscreenHud(stage) {
             const result = snap.target.kind === "dm"
                 ? await send(state.activeTabID, "direct", snap.target.uid, text)
                 : await send(state.activeTabID, "channel", String(snap.target.id), text);
+            // A delivered send never leaves its ID for the next identical text,
+            // even if the target changed while it was in flight.
+            if (!result) Object.assign(quickOperation, { key: "", id: "" });
             if (!stillCurrent()) return;
             if (result) throw new Error(String(result));
             // encryptChat rejects DMs without an E2E key; successful native

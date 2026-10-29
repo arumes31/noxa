@@ -718,3 +718,62 @@ test("another session of my account has session controls but cannot call its own
     await page.getByRole('button', { name: 'Team', exact: true }).click();
     expect(await page.evaluate(() => window.__moves)).toEqual([["one", "self-phone", 2]]);
 });
+
+
+for (const channelID of [0, 3]) {
+    test(`lobby member ${channelID} has no move action or destinations`, async ({ page }) => {
+        await page.evaluate(channelID => {
+            const v = window.__noxa;
+            v.state.channels.push({ ChannelID: 3, Name: "Waiting room", SystemKind: "home" });
+            v.state.clients.find(c => c.client_id === "alice").channel_id = channelID;
+            v.renderTree();
+        }, channelID);
+        await page.evaluate(async () => {
+            const { openMemberMove } = await import("/src/member-move.js");
+            openMemberMove(window.__noxa.state.clients.find(c => c.client_id === "alice"));
+        });
+        await expect(page.locator(".member-move-list button")).toHaveCount(0);
+        await expect(page.locator(".dlg .role-error")).toHaveText("Members in the lobby must join voice themselves.");
+        await page.getByRole("button", { name: "Close", exact: true }).click();
+        // The card resolves the live session independently of tree placement.
+        await page.evaluate(() => window.__noxa.setDetailsOpen(true));
+        await page.locator(".card-nick").click({ button: "right" });
+        await expect(page.getByRole("menu")).toBeVisible();
+        await expect(page.getByRole("menuitem", { name: "Move to channel…", exact: true })).toHaveCount(0);
+        expect(await page.evaluate(() => window.__moves)).toEqual([]);
+    });
+}
+
+test("member move dialog rechecks a member who returned to the lobby", async ({ page }) => {
+    await page.locator('.client[data-clid="alice"]').click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Move to channel…", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Team", exact: true })).toBeVisible();
+    await page.evaluate(() => { window.__noxa.state.clients.find(c => c.client_id === "alice").channel_id = 0; });
+    await page.getByRole("button", { name: "Team", exact: true }).click();
+    await expect(page.locator(".member-move-list button")).toHaveCount(0);
+    await expect(page.locator(".dlg .role-error")).toHaveText("Members in the lobby must join voice themselves.");
+    expect(await page.evaluate(() => window.__moves)).toEqual([]);
+});
+
+test("lobby drag blocks member moves while preserving voluntary joins and identity dragging", async ({ page }) => {
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        v.state.channels.push({ ChannelID: 3, Name: "Waiting room", SystemKind: "home" });
+        for (const member of v.state.clients) member.channel_id = 0;
+        v.state.myChannelID = 0;
+        v.renderTree();
+    });
+    const drag = async clientID => page.evaluate(clientID => {
+        const transfer = new DataTransfer();
+        document.querySelector(`#channel-tree .client[data-clid="${clientID}"]`).dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: transfer }));
+        const identity = transfer.getData("text/noxa-uid");
+        document.querySelector('#channel-tree .channel[data-chid="2"]').dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+        return identity;
+    }, clientID);
+    expect(await drag("alice")).toBe("alice-uid");
+    expect(await page.evaluate(() => window.__moves)).toEqual([]);
+    await expect(page.getByText("Members in the lobby must join voice themselves.", { exact: true })).toBeVisible();
+    expect(await drag("self")).toBe("me");
+    await expect.poll(() => page.evaluate(() => window.__joins)).toEqual([["one", 2]]);
+    expect(await page.evaluate(() => window.__moves)).toEqual([]);
+});

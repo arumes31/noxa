@@ -66,10 +66,19 @@ try {
                     await window.gather(pc);
                     return (await window.request("offer", { id, sdp: pc.localDescription.sdp, tracks })).sdp;
                 },
+                // Channel offers always go through the encrypted-media path;
+                // this quality harness measures the codec, so a pass-through
+                // stand-in session (below) replaces the frame encryption.
+                WebRTCOfferSecureForTab: async (_tab, _sdp, tracks) => {
+                    await window.gather(pc);
+                    return (await window.request("offer", { id, sdp: pc.localDescription.sdp, tracks })).sdp;
+                },
                 VideoStreamControlForTab: async (_tab, body) => body.action === "publish"
                     ? window.request("publication", { id, ...body }) : {},
             } } };
             Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { value: async () => canvas.captureStream(fps) });
+            (await import("/src/channel-media.js")).useChannelMediaSession({ active: true, identity: { channelID: 1 }, stop() {}, setRoster() {},
+                bindSenders: async () => {}, syncReceivers: async () => {}, publicationsChanged() {} });
             const { createVideoPublication } = await import("/src/video-publication.js");
             const publication = createVideoPublication({ policy: { lowBandwidth: false } });
             (await import("/src/modal.js")).initModalSystem();

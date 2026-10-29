@@ -58,10 +58,12 @@ type chatRateLimiter struct {
 	max     int
 	window  time.Duration
 	buckets map[string]*chatBucket
+	swept   time.Time
 }
 
 type chatBucket struct {
 	tokens int
+	limit  int // the largest limit charged in this window
 	reset  time.Time
 }
 
@@ -88,19 +90,72 @@ func (l *chatRateLimiter) allowLimit(uid string, now time.Time, limit int) bool 
 func (l *chatRateLimiter) allowWithRetry(uid string, now time.Time, limit int) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.chargeLocked(uid, now, limit, false)
+}
+
+// allowOrSkip is allow for a secondary cap: when the map is at capacity a
+// new key is admitted without a bucket instead of refused, so keys chosen by
+// many accounts can never refuse everyone else (fix3 review P3-1).
+func (l *chatRateLimiter) allowOrSkip(uid string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	ok, _ := l.chargeLocked(uid, now, l.max, true)
+	return ok
+}
+
+func (l *chatRateLimiter) chargeLocked(uid string, now time.Time, limit int, skipAtCap bool) (bool, time.Duration) {
 	if limit <= 0 {
 		limit = l.max
 	}
 	b, ok := l.buckets[uid]
 	if !ok || now.After(b.reset) {
-		b = &chatBucket{tokens: limit, reset: now.Add(l.window)}
+		// Expired buckets carry no state: sweep them before the map grows,
+		// so keys an attacker can choose never accumulate (review P2-1).
+		if !ok && len(l.buckets) >= chatLimiterSweepAt && now.Sub(l.swept) > time.Second {
+			l.swept = now
+			for k, old := range l.buckets {
+				if now.After(old.reset) {
+					delete(l.buckets, k)
+				}
+			}
+		}
+		if !ok && len(l.buckets) >= chatLimiterSweepAt {
+			if len(l.buckets) >= chatLimiterMaxKeys {
+				return skipAtCap, l.window
+			}
+		}
+		b = &chatBucket{tokens: limit, limit: limit, reset: now.Add(l.window)}
 		l.buckets[uid] = b
+	} else if limit > b.limit {
+		// A limit that grew within the window (a channel filling up) raises
+		// the remaining tokens by the difference (fix3 review P3-2).
+		b.tokens += limit - b.limit
+		b.limit = limit
 	}
 	if b.tokens <= 0 {
 		return false, b.reset.Sub(now)
 	}
 	b.tokens--
 	return true, 0
+}
+
+// Limiter map bounds: expired buckets are swept from chatLimiterSweepAt keys
+// on; at chatLimiterMaxKeys live keys a new key is refused by allow, and
+// admitted without a bucket by allowOrSkip (secondary caps), until some
+// expire.
+const (
+	chatLimiterSweepAt = 4096
+	chatLimiterMaxKeys = 200000
+)
+
+// refund returns one token taken in the current window (a later check of
+// the same request failed).
+func (l *chatRateLimiter) refund(uid string, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b, ok := l.buckets[uid]; ok && !now.After(b.reset) {
+		b.tokens++
+	}
 }
 
 func (s *TCPServer) chatActionLimit(context.Context, *Client) int {

@@ -85,9 +85,10 @@ export function startShareStatus(options) {
 function render(s) {
     if (!current(s)) return;
     const settings = s.track.getSettings();
-    const surface = s.surface === "region" ? "region" : settings.displaySurface || s.surface;
-    const kind = t(surface === "window" ? "polish.window" : surface === "browser" ? "share.tab" : surface === "region" ? "polish.region" : "polish.monitor");
-    const source = s.track.label ? `${kind} · ${s.track.label}` : kind;
+    const surface = s.surface === "region" || s.surface === "studio" ? s.surface : settings.displaySurface || s.surface;
+    const kind = t(surface === "window" ? "polish.window" : surface === "browser" ? "share.tab" : surface === "region" ? "polish.region" : surface === "studio" ? "studio.title" : "polish.monitor");
+    // A Studio program track label is a browser-internal canvas ID.
+    const source = s.track.label && surface !== "studio" ? `${kind} · ${s.track.label}` : kind;
     s.root.setAttribute("aria-label", t("share.status"));
     s.root.querySelector(".sharing-source").textContent = t("share.source", { source });
     s.root.querySelector(".sharing-source").title = source;

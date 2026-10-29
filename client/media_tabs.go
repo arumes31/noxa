@@ -65,15 +65,6 @@ func (a *App) GetMediaLimitsForTab(tabID string) (netproto.MediaLimits, error) {
 	return cm.mediaLimitsSnapshot(), nil
 }
 
-// WebRTCOfferForTab keeps a negotiation on its originating control connection.
-func (a *App) WebRTCOfferForTab(tabID, sdp string, tracks []netproto.TrackSlot) (string, error) {
-	cm, err := a.requireTabCM(tabID)
-	if err != nil {
-		return "", err
-	}
-	return cm.webRTCOffer(sdp, tracks)
-}
-
 // WebRTCAnswerForTab rejects answers belonging to another server's peer.
 func (a *App) WebRTCAnswerForTab(tabID, sdp string) error {
 	cm, err := a.requireTabCM(tabID)

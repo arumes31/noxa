@@ -49,6 +49,7 @@ import { updateLocalSettings } from "./settings-store.js";
 import { initSettingsUI } from "./settings-ui.js";
 import { initGamingOverlay, noteOverlayChat } from "./gaming-overlay.js";
 import { initChannelUndocking } from "./call-undocking.js";
+import { initStudio, disposeStudio } from "./studio-ui.js";
 import { refreshVoicePlayback } from "./voice-messages.js";
 import { discussionChanged } from "./discussions.js";
 import { initClientInfo } from "./clientinfo.js";
@@ -67,7 +68,8 @@ import {
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget } from "./stream-controls.js";
-import { startRemoteMedia, reconcileRemoteMedia } from "./remote-media.js";
+import { startRemoteMedia, reconcileRemoteMedia, gatePresents } from "./remote-media.js";
+import { startChannelMedia, stopChannelMedia, channelMedia, receiveMediaKey, mediaErrorText, mediaStatusText, onChannelMediaStatus } from "./channel-media.js";
 import { remoteTrackID } from "./media-track-id.js";
 import { createReceiverRegistry, attributeReceiver, releaseReceiver } from "./remote-receivers.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
@@ -1340,6 +1342,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     updateTalkBanner();
     recomputeDucking();
     renderTree();
+    syncChannelMedia();
 });
 
 // syncOwnChannel makes channel ownership independent of whether the snapshot
@@ -1716,6 +1719,16 @@ window.runtime.EventsOn("event", (json) => {
         case "dm_changed":
             chatUI.onDMChanged(d);
             return;
+        // noxa-olm-v1 archive projections (test-enabled sessions only).
+        case "ratchet_message":
+            chatUI.onRatchetMessage(d);
+            return;
+        case "ratchet_quarantine":
+            chatUI.onRatchetQuarantine(d);
+            return;
+        case "ratchet_trust":
+            chatUI.onRatchetTrust(d);
+            return;
         case "chat_pinned":
             chatUI.onChatPinned(d, true);
             return;
@@ -1837,6 +1850,30 @@ window.runtime.EventsOn("event", (json) => {
     window.__noxaNotify?.checkChannelWatch();
     renderTree();
     videoRefreshNames();
+    syncChannelMedia();
+});
+
+// Encrypted channel media (Task 2): the roster names each member's media
+// device; keys are only ever sent to, and accepted from, those devices.
+// A move of the same peer into another channel is a new key scope.
+function syncChannelMedia() {
+    const media = channelMedia();
+    if (!media) return;
+    if (state.myChannelID > 0 && media.identity && state.myChannelID !== media.identity.channelID) media.rescope(state.myChannelID);
+    media.setRoster(state.clients);
+}
+// Delivered media-key controls (authenticated ratchet controls; never chat,
+// activity, notifications or history).
+window.runtime.EventsOn("media_key", event => { receiveMediaKey(event); });
+onChannelMediaStatus(status => {
+    const element = $("voice-e2ee");
+    if (!element) return;
+    const text = mediaStatusText(status);
+    element.textContent = text;
+    element.hidden = !text;
+    element.dataset.state = status?.state || "off";
+    element.title = text ? t("e2ee.media.limits") : "";
+    videoRefreshNames(); // tiles follow the verified key accounts
 });
 
 // ---------------------------------------------------------------------------
@@ -2230,12 +2267,21 @@ function ensureVoiceForChannel() {
             state.screenSharing = false;
             state.shareStarting = null;
             state.shareStopping = false;
+            // The Studio's captures and program belong to the channel too.
+            // After screenSharing=false: the move owns the share teardown, so
+            // the Studio must not start a stop/renegotiation of its own.
+            disposeStudio();
             resetCameraState();
             startStreamSession(state.pc, videoTrackAdded, videoTrackRemoved);
             for (const receiver of state.pc.getReceivers()) {
                 const track = receiver.track;
                 const trackID = remoteTrackID(state.pc, track);
                 if (!trackID) continue;
+                // Same gate as remote-media: nothing unauthenticated is attached.
+                const gate = channelMedia()?.media;
+                // Fail closed: a channel peer without a media session (stopped
+                // or failed) presents nothing.
+                if (!gatePresents(gate, receiver)) { const pc = state.pc; gate?.onAuthenticated(receiver, () => reconcileRemoteMedia(pc)); continue; }
                 const parsed = parseTrackID(trackID);
                 const publisher = state.clients.find(c => String(c.client_id) === parsed.clientID);
                 if (track.kind === "video") receiveStreamTrack(track, publisher, trackID);
@@ -2374,9 +2420,29 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         return false;
     }
     state.mediaLimits = mediaLimits;
-    const pc = iceServers && iceServers.length
-        ? new RTCPeerConnection({ iceServers })
-        : new RTCPeerConnection();
+    // Encryption first: without a working encrypted-media session no peer is
+    // created (explicit error, never plaintext channel media).
+    let media;
+    try {
+        media = await startChannelMedia({ tabID, channelID: state.myChannelID, roster: state.clients, onError: error => {
+            toast(mediaErrorText(error), "warn");
+            if (state.pc) resetVoiceSession();
+        } });
+    } catch (error) {
+        capturedStream.getTracks().forEach((track) => track.stop());
+        if (state.localStream === capturedStream) state.localStream = null;
+        if (current()) throw new Error(mediaErrorText(error));
+        return false;
+    }
+    if (!current()) {
+        stopChannelMedia();
+        capturedStream.getTracks().forEach((track) => track.stop());
+        if (state.localStream === capturedStream) state.localStream = null;
+        return false;
+    }
+    const pc = media.protectPeer(iceServers && iceServers.length
+        ? new RTCPeerConnection(media.peerConfig({ iceServers }))
+        : new RTCPeerConnection(media.peerConfig()));
     // A replacement peer owns a new ICE-restart ladder. Dispose the previous
     // current owner's timer before publishing the replacement; callbacks from
     // that old peer can never affect the new one.
@@ -2400,6 +2466,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         if (!current() || state.pc !== pc) {
             disposeMicrophoneGate(audioTrack);
             audioTrack.stop(); pc.close();
+            if (channelMedia() === media) stopChannelMedia();
             return false;
         }
         pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream], sendEncodings: [voiceSendEncoding()] });
@@ -2433,6 +2500,11 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     stopRemoteMedia();
     startStreamSession(pc, videoTrackAdded, videoTrackRemoved);
     stopRemoteMedia = startRemoteMedia(pc, () => current() && state.pc === pc, (track, trackID) => {
+        // Presentation gate (encrypted media): a new or rebound receiver is
+        // neither attached nor enabled until its first authenticated frame.
+        const gate = channelMedia()?.media;
+        // Fail closed: no media session (stopped or failed) means no output.
+        if (!gatePresents(gate, track)) { gate?.onAuthenticated(track, () => reconcileRemoteMedia(pc)); return false; }
         const { clientID, slot } = parseTrackID(trackID);
         const publisher = state.clients.find((c) => String(c.client_id) === clientID) || null;
         // Attribution follows the negotiated publisher track ID, not track.id.
@@ -2465,12 +2537,13 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
             voiceRemoteAudioTracks.delete(track);
             syncVoiceLinkMedia();
         }
-    }, (track, trackID) => track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID));
+    }, (track, trackID) => { const gate = channelMedia()?.media; return gatePresents(gate, track) && (track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID)); });
 
     await renegotiate(pc, state.serverGeneration, undefined, () => expectedEpoch === voiceSessionEpoch);
 
     if (expectedEpoch !== voiceSessionEpoch || state.pc !== pc || state.myChannelID <= 0) {
         pc.close();
+        if (channelMedia() === media) stopChannelMedia();
         return false;
     }
 
@@ -2709,8 +2782,13 @@ function teardownVoice() {
     state.shareVideoTransceiver = null;
     state.shareStarting = null;
     state.shareStopping = false;
+    // Studio captures, audio graph, timers and canvases end with the session
+    // (its published clone was stopped with the share stream above).
+    disposeStudio();
     detachRemoteAudio();
     if (state.pc) { state.pc.close(); state.pc = null; }
+    // The session's worker and every media key end with the peer.
+    stopChannelMedia();
     state.voiceTabID = "";
     syncTrayVoice();
     if (state.localStream) {
@@ -3449,6 +3527,7 @@ window.__noxa = {
     connectFromLogin, renderTree, setChannelExpanded, setDetailsOpen, setDirectTargetVisible,
     trayUnread, syncTrayUnread,
     clientName, initials, fetchAvatar,
+    verifiedMediaAccount: clientID => channelMedia()?.verifiedAccount?.(clientID) || "",
     applyAppearance, toggleCompact, recentChannels, syncOwnChannel,
     playConnectionCue: (event = "connection_connected") => playEvent(event),
     startQualitySampler, stopQualitySampler,
@@ -3495,6 +3574,7 @@ initMenu();
 initSettingsUI();
 void initGamingOverlay();
 initChannelUndocking();
+initStudio();
 initClientInfo();
 initVideo();
 initUpdater();

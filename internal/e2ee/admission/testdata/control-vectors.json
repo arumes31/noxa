@@ -1,0 +1,182 @@
+[
+ {
+  "name": "delivered",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "delivered"
+ },
+ {
+  "name": "delivered with data",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100,\"data\":{\"key\":\"k\"}}",
+  "now": 1000,
+  "want": "delivered"
+ },
+ {
+  "name": "expired",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1000}",
+  "now": 1000,
+  "want": "expired"
+ },
+ {
+  "name": "expiry too far ahead",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1601}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "expiry at the bound",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1600}",
+  "now": 1000,
+  "want": "delivered"
+ },
+ {
+  "name": "duplicate kind",
+  "body": "{\"kind\":\"media-key\",\"kind\":\"x\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "duplicate scope id",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\",\"id\":\"d\"},\"epoch\":1,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "epoch 1.0",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1.0,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "epoch 1e2",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1e2,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "epoch null",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":null,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "epoch string",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":\"1\",\"expires_at\":1100}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "epoch -0",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":-0,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "delivered"
+ },
+ {
+  "name": "epoch negative",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":-1,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "epoch 2^53-1",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":9007199254740991,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "delivered"
+ },
+ {
+  "name": "epoch 2^53",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":9007199254740992,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "expires_at 1100.0",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100.0}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "capitalised member",
+  "body": "{\"Kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "unknown member",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100,\"x\":1}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "missing scope",
+  "body": "{\"kind\":\"media-key\",\"epoch\":1,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "kind number",
+  "body": "{\"kind\":5,\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "not an object",
+  "body": "[1]",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "data escaped 1000x \\u00e9 (6000 compact bytes)",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100,\"data\":\"\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\"}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "data literal 1000x e-acute (2000 bytes)",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100,\"data\":\"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\"}",
+  "now": 1000,
+  "want": "delivered"
+ },
+ {
+  "name": "data whitespace not counted",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100,\"data\":{\"k\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"     }}",
+  "now": 1000,
+  "want": "delivered"
+ },
+ {
+  "name": "data over 4096 compact",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100,\"data\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "duplicate inside data is the sender's own data",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100,\"data\":{\"a\":1,\"a\":2}}",
+  "now": 1000,
+  "want": "delivered"
+ },
+ {
+  "name": "data null",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100,\"data\":null}",
+  "now": 1000,
+  "want": "delivered"
+ },
+ {
+  "name": "epoch 1e9",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1e9,\"expires_at\":1100}",
+  "now": 1000,
+  "want": "invalid"
+ },
+ {
+  "name": "data with exponent literals within the raw bound",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100,\"data\":[1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9,1e9]}",
+  "now": 1000,
+  "want": "delivered"
+ },
+ {
+  "name": "data with a large exponent literal",
+  "body": "{\"kind\":\"media-key\",\"scope\":{\"type\":\"call\",\"id\":\"c\"},\"epoch\":1,\"expires_at\":1100,\"data\":[1e21,-2.5E-3]}",
+  "now": 1000,
+  "want": "delivered"
+ }
+]

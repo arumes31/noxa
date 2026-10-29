@@ -12,8 +12,9 @@ export function xPost(value) {
     } catch { return null; }
 }
 
-export function renderXPostPreviews(container, { enabled, scope, isCurrent }) {
-    if (!enabled) return;
+export function renderXPostPreviews(container, { enabled, scope, isCurrent, conversation }) {
+    if (!enabled || conversation !== "channel") return;
+    scope = { ...scope, conversation };
     const seen = new Set();
     for (const link of container.querySelectorAll(".md-link[data-url]")) {
         const post = xPost(link.dataset.url);

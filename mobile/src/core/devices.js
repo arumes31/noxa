@@ -8,7 +8,8 @@
 // client/dm_history_copy.go: messages newest first, packed into chunks of at
 // most MaxHistoryChunk sealed bytes, each chunk a JSON array (oldest first)
 // sealed as nacl/box nonce||box from this device to the target device.
-import { keyFingerprint, sealDM, sign, utf8 } from "./crypto.js";
+import { fromBase64, keyFingerprint, publicKeyPEM, sealDM, sign, toBase64, utf8 } from "./crypto.js";
+import { HISTORY_ENVELOPE_RESERVE, encodeHistoryChunk } from "./history-envelope.js";
 import { Msg } from "./frame.js";
 
 // internal/netproto/dm_devices.go
@@ -46,6 +47,26 @@ export function approvalTranscript(principal, approverDeviceID, ed25519PEM, x255
 }
 
 /**
+ * Mirrors client validClaimedDeviceKeys: before signing the newline-joined
+ * approval transcript, the Ed25519 key must be the canonical single-key PEM
+ * (benign CRLF / missing final newline aside) and the X25519 key canonical
+ * standard base64 of a non-zero 32-byte key, so no field can smuggle a line.
+ */
+export function validDeviceKeys(ed25519PEM, x25519B64) {
+    if (typeof ed25519PEM !== "string" || typeof x25519B64 !== "string") return false;
+    let benign = ed25519PEM.replaceAll("\r\n", "\n");
+    if (!benign.endsWith("\n")) benign += "\n";
+    const m = /^-----BEGIN PUBLIC KEY-----\n([A-Za-z0-9+/=]+)\n-----END PUBLIC KEY-----\n$/.exec(benign);
+    try {
+        if (!m) return false;
+        const ed = fromBase64(m[1]);
+        if (ed.length !== 32 || publicKeyPEM(ed) !== benign) return false;
+        const x = fromBase64(x25519B64);
+        return x.length === 32 && x.some(b => b !== 0) && toBase64(x) === x25519B64;
+    } catch { return false; }
+}
+
+/**
  * Confirms another device of the account for direct messages. The target's
  * keys come from the server's list and must match its fingerprint, which
  * the user compares with the one the other device shows.
@@ -55,6 +76,7 @@ export async function endorseDevice(session, target) {
     if (!target || target.device_id === session.deviceID || target.first_device || target.revoked_at) throw new Error("this device can no longer be confirmed");
     if (!target.ed25519_public_key || !target.x25519_public_key) throw new Error("the server does not share this device's keys");
     if (keyFingerprint(target.ed25519_public_key) !== target.fingerprint) throw new Error("the device's key does not match its fingerprint");
+    if (!validDeviceKeys(target.ed25519_public_key, target.x25519_public_key)) throw new Error("the device's keys are invalid");
     const signature = sign(approvalTranscript(session.uniqueID, session.deviceID, target.ed25519_public_key, target.x25519_public_key), session.identity.edSecret);
     let binary = "";
     for (const byte of signature) binary += String.fromCharCode(byte);
@@ -67,16 +89,23 @@ export async function endorseDevice(session, target) {
  * everything), newest first, capped at MAX_HISTORY_MESSAGES.
  * conversations: iterable of {peer, nickname, messages[]} (core/direct.js).
  */
-export function historyMessagesSince(conversations, since = 0) {
+export function historyMessagesSince(conversations, since = 0, ownUID = "") {
     const out = [];
     for (const conversation of conversations) {
         for (const m of conversation.messages || []) {
             if (typeof m.body !== "string" || !m.body || m.deleted || m.failed || m.queued || m.pending || m.verified === false) continue;
+            // A new-protocol record travels only as a readable record of the
+            // authenticated archive (or one already transferred), with its
+            // provenance; placeholders and unknown protocols never do.
+            if (m.protocol && (m.protocol !== "noxa-olm-v1" || m.quarantined)) continue;
             const sentAt = Math.floor(Number(m.sentAt) || 0);
             if (sentAt < since) continue;
             out.push({
-                peer: conversation.peer, peer_nickname: conversation.nickname || undefined, from: m.from || "", from_nickname: m.fromNickname || undefined,
+                // A legacy record without a sender is from this account (self)
+                // or from the conversation's peer.
+                peer: conversation.peer, peer_nickname: conversation.nickname || undefined, from: m.from || (m.self ? ownUID : conversation.peer), from_nickname: m.fromNickname || undefined,
                 body: m.body, sent_at: sentAt, self: !!m.self || undefined, client_msg_id: m.id || undefined,
+                ...(m.protocol ? { protocol: m.protocol, provenance: m.provenance === "transferred" ? "transferred" : "authenticated" } : {}),
             });
         }
     }
@@ -89,8 +118,11 @@ export function historyMessagesSince(conversations, since = 0) {
  * holding its messages oldest first. Returns {chunks: [base64 nonce||box],
  * kept}. Limits as in client/dm_history_copy.go buildHistoryChunks.
  */
-export function buildHistoryChunks(messages, recipientX25519, senderXSecret, { maxChunk = MAX_HISTORY_CHUNK } = {}) {
-    const maxPlain = maxChunk - SEAL_OVERHEAD;
+// envelope {source, target, transfer, edSecret}: every chunk is a signed
+// history envelope (history-envelope.js) bound to this transfer.
+export function buildHistoryChunks(messages, recipientX25519, senderXSecret, { maxChunk = MAX_HISTORY_CHUNK, envelope } = {}) {
+    if (!envelope) throw new Error("history chunks need a transfer envelope");
+    const maxPlain = maxChunk - SEAL_OVERHEAD - HISTORY_ENVELOPE_RESERVE;
     const encoder = new TextEncoder();
     const groups = [];
     let current = [];
@@ -123,7 +155,8 @@ export function buildHistoryChunks(messages, recipientX25519, senderXSecret, { m
     flush();
     const chunks = [];
     for (let i = groups.length - 1; i >= 0; i--) {
-        const plain = `[${[...groups[i]].reverse().join(",")}]`;
+        const records = `[${[...groups[i]].reverse().join(",")}]`;
+        const plain = encodeHistoryChunk({ source: envelope.source, target: envelope.target, transfer: envelope.transfer, seq: groups.length - 1 - i, total: groups.length }, records, envelope.edSecret);
         chunks.push(sealDM(plain, recipientX25519, senderXSecret));
     }
     return { chunks, kept };
@@ -143,7 +176,8 @@ export async function copyHistory(session, dm, deviceID, days, onProgress = () =
     const target = own.devices.find(d => d.deviceID === deviceID);
     if (!target) throw new Error("this device is not confirmed for direct messages");
     const since = days > 0 ? Math.floor(Date.now() / 1000) - days * 86400 : 0;
-    const { chunks, kept } = buildHistoryChunks(historyMessagesSince(dm.conversations.values(), since), target.x25519, session.identity.xSecret);
+    const { chunks, kept } = buildHistoryChunks(historyMessagesSince(dm.conversations.values(), since, session.uniqueID), target.x25519, session.identity.xSecret,
+        { envelope: { source: session.deviceID, target: deviceID, transfer: crypto.randomUUID(), edSecret: session.identity.edSecret } });
     for (let seq = 0; seq < chunks.length; seq++) {
         await deviceRequest(session.conn, { action: "history_put", device_id: deviceID, history: { seq, total: chunks.length, data: chunks[seq] } }, 30000);
         onProgress({ sent: seq + 1, total: chunks.length, messages: kept });

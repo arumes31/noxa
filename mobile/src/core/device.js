@@ -13,15 +13,26 @@ import { signInError } from "./login-errors.js";
 
 export const LinkState = Object.freeze({ pending: "pending", claimed: "claimed", approved: "approved", denied: "denied", expired: "expired" });
 
-/** Reads #id=…&k=… from a link URL fragment, or null. */
+/**
+ * Reads #id=…&k=…[&a=…] from a link URL fragment, or null. a is the creating
+ * desktop's key fingerprint, put into the QR by that desktop itself.
+ */
 export function parseLinkFragment(hash) {
     const params = new URLSearchParams(hash.replace(/^#/, ""));
+    // Exactly the keys the desktop writes, each at most once: a duplicate
+    // (e.g. a server-injected second a=) or unknown key rejects the link.
+    const seen = new Set();
+    for (const key of params.keys()) {
+        if (!["id", "k", "a"].includes(key) || seen.has(key)) return null;
+        seen.add(key);
+    }
     const id = params.get("id");
     const k = params.get("k");
     if (!id || !k) return null;
     try {
         const secret = fromBase64URL(k);
-        return secret.length === 32 ? { linkID: id, secret } : null;
+        const approver = params.get("a") || "";
+        return secret.length === 32 ? { linkID: id, secret, ...(approver ? { approver } : {}) } : null;
     } catch {
         return null;
     }
@@ -56,6 +67,11 @@ export async function claimLink(conn, identity, link) {
     }
     const result = await conn.request(Msg.DeviceRequest, request, Msg.DeviceResult, { accept: r => r.action === "link_claim" });
     if (result.state !== LinkState.claimed) return { linkID: result.link_id || "", state: result.state || LinkState.expired };
+    // The scanned QR names the desktop that showed it: a claim answered for
+    // any other approver is refused (the server re-routed the link).
+    if (link.approver && result.approver_fingerprint !== link.approver) {
+        throw Object.assign(new Error("this link was answered for a different desktop than the one that showed the QR code"), { code: "approver_mismatch" });
+    }
     return {
         linkID: result.link_id,
         state: result.state,
@@ -68,8 +84,10 @@ export async function claimLink(conn, identity, link) {
 /**
  * Polls link_status until the link is decided or expires. Pre-auth
  * connections close after a few seconds, so the poll reconnects as needed.
+ * onDecided receives the deciding result (an approval carries the desktop's
+ * signed server binding, see link-binding.js).
  */
-export async function waitForDecision(identity, linkID, { open = () => Connection.open(), interval = 2000, signal } = {}) {
+export async function waitForDecision(identity, linkID, { open = () => Connection.open(), interval = 2000, signal, onDecided = null } = {}) {
     const { pem } = devicePublicKeys(identity);
     let conn = null;
     try {
@@ -79,7 +97,10 @@ export async function waitForDecision(identity, linkID, { open = () => Connectio
             try {
                 const result = await conn.request(Msg.DeviceRequest, { action: "link_status", link_id: linkID, ed25519_public_key: pem },
                     Msg.DeviceResult, { accept: r => r.action === "link_status" });
-                if (result.state !== LinkState.claimed) return result.state;
+                if (result.state !== LinkState.claimed) {
+                    onDecided?.(result);
+                    return result.state;
+                }
             } catch (error) {
                 if (error instanceof ProtocolError) throw error;
                 conn = null;
@@ -89,6 +110,29 @@ export async function waitForDecision(identity, linkID, { open = () => Connectio
     } finally {
         conn?.close();
     }
+}
+
+/** auth.LoginChallengeSize / auth.LoginChallengeDomain (internal/auth). */
+export const LOGIN_CHALLENGE_SIZE = 32;
+export const LOGIN_CHALLENGE_SCHEME = "noxa-auth-challenge-v1";
+export const SERVER_LOGIN_OUTDATED = "this server needs an update: it does not support secure sign-in; ask the administrator to update the server";
+export const LOGIN_CHALLENGE_DOMAIN = "noxa-auth-challenge-v1\n";
+
+/**
+ * What a login signature covers: LOGIN_CHALLENGE_DOMAIN || challenge. Refuses
+ * anything but exactly LOGIN_CHALLENGE_SIZE bytes not starting with "noxa-",
+ * so a server can never obtain this device's signature over a transcript of
+ * its choosing (device approvals, passkey delegations, Olm bundles...).
+ */
+export function loginChallengeMessage(challenge) {
+    const prefix = utf8("noxa-");
+    if (!(challenge instanceof Uint8Array) || challenge.length !== LOGIN_CHALLENGE_SIZE || prefix.every((b, i) => challenge[i] === b)) {
+        throw Object.assign(new Error("the server sent an invalid login challenge; refusing to sign it"), { code: "unsafe_challenge" });
+    }
+    const domain = utf8(LOGIN_CHALLENGE_DOMAIN), out = new Uint8Array(domain.length + challenge.length);
+    out.set(domain);
+    out.set(challenge, domain.length);
+    return out;
 }
 
 /**
@@ -104,7 +148,13 @@ export async function signIn(conn, identity, { version, nickname = "", serverPas
         nickname, server_password: serverPassword, x25519_public_key: x25519,
     }, [Msg.AuthChallenge, Msg.AuthResponse], { timeout: 10000 });
     if (!first.challenge) throw signInError(first.reason);
-    const signature = sign(Uint8Array.from(atob(first.challenge), c => c.charCodeAt(0)), identity.edSecret);
+    // Strict: sign only the advertised domain-separated scheme; an older
+    // server gets no signature (never a raw fallback).
+    if (first.scheme !== LOGIN_CHALLENGE_SCHEME) {
+        conn.close?.();
+        throw signInError(SERVER_LOGIN_OUTDATED);
+    }
+    const signature = sign(loginChallengeMessage(Uint8Array.from(atob(first.challenge), c => c.charCodeAt(0))), identity.edSecret);
     const response = await conn.request(Msg.AuthSignature, {
         unique_id: "", public_key: publicKeyPEM(identity.edPublic), signature: toBase64(signature), x25519_public_key: x25519,
     }, Msg.AuthResponse);

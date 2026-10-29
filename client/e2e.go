@@ -42,7 +42,13 @@ import (
 )
 
 type E2EEDiagnostics struct {
+	// Cipher describes the active secure-messaging path of this connection
+	// (empty when none is active); Protocol is its wire name and Unavailable
+	// the reason no path is active.
 	Cipher           string `json:"cipher"`
+	Protocol         string `json:"protocol,omitempty"`
+	Active           bool   `json:"active"`
+	Unavailable      string `json:"unavailable,omitempty"`
 	PeerUniqueID     string `json:"peer_unique_id,omitempty"`
 	SafetyNumber     string `json:"safety_number,omitempty"`
 	PeerKeyAvailable bool   `json:"peer_key_available"`
@@ -68,6 +74,11 @@ const (
 	// decryptFailedText is PERMANENT: key is available but payload decryption failed.
 	decryptFailedText = "[encrypted message — decryption failed]"
 )
+
+// ratchetCipherDescription is the technical description of the Olm path
+// (noxa-olm-v1). Olm authenticates each message with HMAC-SHA-256 truncated
+// to 64 bits; it is not the Signal protocol and is not post-quantum.
+const ratchetCipherDescription = "Olm double ratchet (vodozemac): X25519 sessions per device pair, AES-256-CBC with HMAC-SHA-256 truncated to 64 bits, Ed25519-signed device keys"
 
 // maxKeyRequest caps one MsgChatKeyRequest; the server caps the answer at the
 // same number and reports Truncated when it could not serve them all.
@@ -104,7 +115,18 @@ func (a *App) E2EEDiagnostics(peerUniqueID string) (E2EEDiagnostics, error) {
 	if m == nil {
 		return E2EEDiagnostics{}, errors.New("not connected")
 	}
-	d := E2EEDiagnostics{Cipher: "X25519 + XSalsa20-Poly1305 (static keys; no forward secrecy)", PeerUniqueID: peerUniqueID}
+	d := E2EEDiagnostics{PeerUniqueID: peerUniqueID}
+	// Reported from the active path, never a static label.
+	if c, err := m.ratchetConsumerOn(nil); err == nil && c.stickyCode() == "" {
+		d.Cipher, d.Protocol, d.Active = ratchetCipherDescription, ratchetProtocol, true
+	} else if err == nil {
+		// A session exists but refuses every operation (e.g. recovery_required).
+		d.Unavailable = "secure messaging needs recovery: Settings → Security → Recover secure messaging (" + c.stickyCode() + ")"
+	} else if reason := m.ratchetBlockedReason(); reason != "" {
+		d.Unavailable = reason
+	} else {
+		d.Unavailable = "secure messaging is not active on this connection"
+	}
 	m.pubKeys.mu.Lock()
 	d.CachedPeers = len(m.pubKeys.keys)
 	m.pubKeys.mu.Unlock()

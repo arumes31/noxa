@@ -4,6 +4,11 @@ export function onlineMemberCount(clients) {
         c.unique_id ? `identity:${c.unique_id}` : `session:${c.client_id}`)).size;
 }
 
+// Lobby members choose when to enter voice; channel names are only labels.
+export function memberIsInLobby(client, channels) {
+    return !(client?.channel_id > 0) || channels.some(channel => channel.ChannelID === client.channel_id && channel.SystemKind === "home");
+}
+
 export function visibleInChannelTree(client) {
     return !(client.on_mobile && !client.channel_id);
 }

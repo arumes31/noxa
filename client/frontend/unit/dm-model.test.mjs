@@ -126,11 +126,17 @@ describe("times and day separators", () => {
 describe("thread encryption claim", () => {
     it("is end-to-end only while the peer key resolves, and warns that nothing can be sent without it", () => {
         assert.deepEqual(conversationEncryption({ peerKey: true }), { kind: "lock", labelKey: "dm.encryption.e2e", helpKey: "chat.directHelp" });
+        // 1c-iii-b item 4: no lock is claimed while no secure path is active.
+        for (const args of [{ peerKey: true, secure: false }, { group: true, secure: false }])
+            assert.deepEqual(conversationEncryption(args), { kind: "warning", labelKey: "dm.encryption.inactive", helpKey: "dm.encryption.inactiveHelp" });
+        assert.equal(conversationEncryption({ peerKey: true, secure: true }).kind, "lock");
         assert.deepEqual(conversationEncryption({ peerKey: false, last: e2e("x") }), { kind: "warning", labelKey: "dm.encryption.noKey", helpKey: "dm.encryption.noKeyHelp" });
     });
 
     it("falls back to the newest message when the key could not be checked", () => {
-        assert.equal(conversationEncryption({ last: e2e("x") }).kind, "lock");
+        assert.equal(conversationEncryption({ last: { ...e2e("x"), protocol: "noxa-olm-v1" } }).kind, "lock");
+        // A legacy (static-key) newest message is labelled legacy, not Olm.
+        assert.equal(conversationEncryption({ last: e2e("x") }).kind, e2e("x").protocol ? "lock" : "legacy");
         // A server-mode DM is never shielded.
         assert.deepEqual(conversationEncryption({ last: { text: "x", direct: true, enc: true, encVerified: true, encMode: "server" } }),
             { kind: "warning", labelKey: "dm.encryption.unverified", helpKey: "chat.downgradedHelp" });

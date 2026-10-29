@@ -216,14 +216,30 @@ func openConversation(message netproto.ConversationMessage, uid string, pub, pri
 	return envelope.Text, nil
 }
 
-func (a *App) SendConversationForTab(tabID, groupID, text, reference string) (int64, error) {
+// SendConversationForTab returns a typed result: a legacy send carries its
+// numeric server message ID, a new-protocol send its opaque transport ID and
+// semantic key (never coerced into int64). reference is the stable logical ID.
+func (a *App) SendConversationForTab(tabID, groupID, text, reference string) (ConversationSendResult, error) {
 	if strings.TrimSpace(text) == "" || len(text) > 8192 || reference == "" || len(reference) > 128 {
-		return 0, errors.New("invalid group message")
+		return ConversationSendResult{}, errors.New("invalid group message")
 	}
 	m, err := a.requireTabCM(tabID)
 	if err != nil {
-		return 0, err
+		return ConversationSendResult{}, err
 	}
+	if m.ratchetConfigured() {
+		// The server snapshot enforces current accepted membership and the
+		// complete device fanout; no legacy fallback.
+		return m.sendRatchetGroup(groupID, reference, text)
+	}
+	id, err := a.sendLegacyConversation(m, groupID, text, reference)
+	if err != nil {
+		return ConversationSendResult{}, err
+	}
+	return ConversationSendResult{Protocol: "legacy", MessageID: id}, nil
+}
+
+func (a *App) sendLegacyConversation(m *connManager, groupID, text, reference string) (int64, error) {
 	result, err := m.conversationRequest(netproto.ConversationRequest{Action: "get", ID: groupID})
 	if err != nil {
 		return 0, err

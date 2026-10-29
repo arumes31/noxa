@@ -26,6 +26,7 @@ export function loginFailure(error, request = {}) {
     if (/\bno such host\b|\bserver misbehaving\b|^lookup [^:]+: |: lookup [^:]+: /.test(reason)) return { kind: "dns", field: "login-addr", invalid: true };
     if (/^(dial (tcp|udp)|read (tcp|udp)|write (tcp|udp)|lookup )/.test(reason) || /^(context deadline exceeded|i\/o timeout|connection refused|network is unreachable)$/.test(reason)) return { kind: "network", field: "login-addr" };
     if (reason === "unsupported server authorization model; upgrade noxa") return { kind: "version" };
+    if (reason.startsWith("this server needs an update: it does not support secure sign-in")) return { kind: "serverOutdated" };
     // Authorization (a known identity lacking a right) is not authentication.
     if (/^(permission denied|forbidden|not authorized|unauthorized|access denied|insufficient permission|registration required|guests are not allowed|guest access is disabled|invite required|invitation required)\b/.test(reason)) return { kind: "permission" };
     return { kind: "unknown" };
@@ -36,7 +37,7 @@ export function loginFailure(error, request = {}) {
 const FAILURE_CATEGORIES = {
     dns: "dns", certificate: "tls", network: "network", permission: "permission",
     serverPassword: "authentication", account: "authentication", authentication: "authentication", banned: "authentication", rateLimit: "authentication", savedPassword: "authentication",
-    minimumVersion: "version", version: "version",
+    minimumVersion: "version", version: "version", serverOutdated: "version",
     addressRequired: "input", nameRequired: "input", displayName: "input",
 };
 export function connectFailureCategory(failure) {

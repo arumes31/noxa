@@ -1,3 +1,4 @@
+import { previewReferenceConversation } from "./preview-privacy.js";
 import { previewImage } from "./preview-image.js";
 import { mountSnoozeControls } from "./notification-snooze.js";
 import { currentLanguage, t } from "./i18n.js";
@@ -96,8 +97,8 @@ export function initActivityWorkspace(notifications) {
         void jumpMessageReference(reference, { continueConversation: true, isCurrent: () => captured === scope() })
             .catch(() => { if (captured === scope()) window.__noxa.toast(t("activity.failed"), "warn"); });
     };
-    function thumbnail(row, preview) {
-        if (!preview || state().settings?.link_previews === false) return;
+    function thumbnail(row, preview, conversation) {
+        if (conversation !== "channel" || !preview || state().settings?.link_previews === false) return;
         const captured = openedScope;
         const valid = () => row.isConnected && current(captured) && state().settings?.link_previews !== false;
         const attach = url => {
@@ -108,12 +109,12 @@ export function initActivityWorkspace(notifications) {
         queueMicrotask(() => {
             if (!valid()) return;
             if (preview.provider === "youtube") {
-                const owner = { tabID: state().activeTabID, generation: state().serverGeneration };
+                const owner = { tabID: state().activeTabID, generation: state().serverGeneration, conversation };
                 void loadPreviewMetadata("youtube", preview.id, owner, valid,
                     () => window.go.main.App.YouTubePreviewForTab(owner.tabID, preview.id))
                     .then(result => attach(result?.thumbnail));
             } else if (preview.provider !== "x") {
-                const owner = { tabID: state().activeTabID, generation: state().serverGeneration };
+                const owner = { tabID: state().activeTabID, generation: state().serverGeneration, conversation };
                 void loadPreviewMetadata(`portal:${preview.provider}`, preview.id, owner, valid,
                     () => window.go.main.App.VideoPortalPreviewForTab(owner.tabID, preview.provider, preview.id))
                     .then(result => attach(portalThumbnail(preview.provider, result?.thumbnail)));
@@ -140,7 +141,7 @@ export function initActivityWorkspace(notifications) {
         if (preview) {
             const context = el("span", "activity-context", `${preview.label} · ${entry?.name || ""}`);
             body.append(context);
-            thumbnail(row, preview);
+            thumbnail(row, preview, previewReferenceConversation(reference));
         }
         row.prepend(face, body); return row;
     };
@@ -212,7 +213,7 @@ export function initActivityWorkspace(notifications) {
         if (compact) {
             const copy = el("div", "activity-row-copy"); copy.append(header, body, context);
             const actions = el("div", "activity-row-actions"); actions.append(action);
-            if (!m.mentioned) thumbnail(actions, media(m.text));
+            if (!m.mentioned) thumbnail(actions, media(m.text), previewReferenceConversation(entry.reference));
             card.append(face, copy, actions);
         } else {
             footer.append(context, action); card.append(header, body, footer);

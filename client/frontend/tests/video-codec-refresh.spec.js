@@ -3,7 +3,9 @@ import { test, expect, chooseShareOption } from "./fixtures.js";
 // Native control replies and capability evidence are synthetic. The publication
 // lifecycle, negotiation callback, RTP sender, encoders and receiver are real.
 // A powerEfficient capability stub is not evidence of actual GPU execution.
-for (const supported of [true, false]) test(`live publication ${supported ? "recovers H264" : "keeps VP8 on an older server"} after a transient capability failure`, async ({ page }) => {
+// Encrypted channel media (Task 2) publishes VP8 only: even a server that
+// supports codec refresh never moves an encrypted publication to H.264.
+for (const supported of [true, false]) test(`encrypted live publication keeps VP8 ${supported ? "although the server offers H264 refresh" : "on a server without refresh"}`, async ({ page }) => {
     await page.route("**/codec-refresh-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html>
         <button id="voice-screen">Share</button><button id="voice-video">Camera</button>
         <video id="local-video"></video><div id="mic-status"></div><button id="ptt-btn">Talk</button>
@@ -44,7 +46,7 @@ for (const supported of [true, false]) test(`live publication ${supported ? "rec
             SupportsStreamSourceQualityForTab: async () => true,
             SupportsStreamCodecForTab: async () => true,
             SupportsStreamCodecRefreshForTab: async () => supported,
-            WebRTCOfferForTab: async () => {
+            ChannelOfferMockForTab: async () => {
                 fixture.offers++;
                 await gather(pc);
                 await receiver.setRemoteDescription(pc.localDescription);
@@ -59,6 +61,10 @@ for (const supported of [true, false]) test(`live publication ${supported ? "rec
                 return { generation: "42", upload_active: true, codec: fixture.selected };
             },
         } } };
+        window.go.main.App.WebRTCOfferSecureForTab = () => window.go.main.App.ChannelOfferMockForTab();
+        // The in-page receiver has no transform: the session double stands in.
+        const channelMedia = await import("/src/channel-media.js");
+        channelMedia.useChannelMediaSession({ active: true, identity: { channelID: 1 }, stop() {}, setRoster() {}, bindSenders: async () => {}, syncReceivers: async () => {}, publicationsChanged() {} });
         const { createVideoPublication } = await import("/src/video-publication.js");
         const publication = createVideoPublication({ policy: { lowBandwidth: false } });
         const { publicationSnapshot, reconcilePublicationUploads, stopPublications } = await import("/src/stream-publication.js");
@@ -97,23 +103,15 @@ for (const supported of [true, false]) test(`live publication ${supported ? "rec
         });
         expect(before.audioPackets).toBeGreaterThan(0);
         expect(before.audioEmitted).toBeGreaterThan(0);
-        expect(before.queries).toBe(1);
+        expect(before.queries).toBe(0); // encrypted media never probes H.264/HEVC hardware
         expect(before.requests).toHaveLength(1);
         expect(before.requests[0]).toMatchObject({ generation: "0", codecs: ["vp8"], quality_mode: "source" });
         await page.evaluate(() => codecFixture.advance());
-        if (supported) {
-            await expect.poll(() => page.evaluate(() => codecFixture.requests.length)).toBe(2);
-            // Capability acknowledgement does not select the codec itself.
-            expect(await page.evaluate(() => codecFixture.offers)).toBe(before.offers);
-            await page.evaluate(() => codecFixture.refresh());
-            await expect.poll(() => page.evaluate(async () => (await codecFixture.read()).h264)).toBeGreaterThan(20);
-            expect(await page.evaluate(() => codecFixture.requests[1])).toMatchObject({ generation: "42", active: true, codecs: ["h264", "vp8"], quality_mode: "source" });
-            expect(await page.evaluate(() => codecFixture.offers)).toBe(before.offers + 1);
-        } else {
-            await expect.poll(() => page.evaluate(async () => (await codecFixture.read()).vp8)).toBeGreaterThan(before.vp8 + 20);
-            expect(await page.evaluate(() => ({ queries: codecFixture.queries, requests: codecFixture.requests.length, offers: codecFixture.offers })))
-                .toEqual({ queries: 1, requests: 1, offers: before.offers });
-        }
+        await page.evaluate(() => codecFixture.refresh());
+        await expect.poll(() => page.evaluate(async () => (await codecFixture.read()).vp8)).toBeGreaterThan(before.vp8 + 20);
+        expect(await page.evaluate(async () => (await codecFixture.read()).h264)).toBe(0);
+        expect(await page.evaluate(() => ({ requests: codecFixture.requests.length, offers: codecFixture.offers })))
+            .toEqual({ requests: 1, offers: before.offers });
         const after = await page.evaluate(async () => {
             const state = __noxa.state, original = codecFixture.original, transceiver = state.shareVideoTransceiver;
             return { ...await codecFixture.read(), same: state.pc === original.pc && transceiver === original.transceiver && transceiver.sender === original.sender &&

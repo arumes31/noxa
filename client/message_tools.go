@@ -1,11 +1,9 @@
 package main
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -121,7 +119,7 @@ func (a *App) SavedMessagesForTab(tabID string, request SavedMessageRequest) (Sa
 	if err != nil {
 		return result, err
 	}
-	owner := sha256.Sum256([]byte(fmt.Sprintf("%x\x00%s\x00%s", pub, canonical, fingerprint)))
+	owner := localServerOwner(pub, canonical, fingerprint)
 	dir := filepath.Join(filepath.Dir(base), "saved-messages")
 	path := filepath.Join(dir, hex.EncodeToString(owner[:])+".json")
 	savedMessagesMu.Lock()
@@ -173,6 +171,9 @@ func (a *App) SavedMessagesForTab(tabID string, request SavedMessageRequest) (Sa
 	}
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		return result, err
+	}
+	if identityDeleted(identity.PublicKey) {
+		return result, errIdentityDeleted
 	}
 	if err = writePrivateFileAtomic(path, raw); err != nil {
 		return result, err

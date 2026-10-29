@@ -1,9 +1,9 @@
 // group.js — a private group: encrypted history, sending (with the outbox),
 // attachments, voice messages, typing, "Seen by" and the group sheet.
-import { app, queueMessage, startGroupCall } from "../app.js";
+import { app, queueMessage, secureMessagingStatus, startGroupCall } from "../app.js";
 import { isMuted } from "../core/conversation-prefs.js";
 import { uploadAttachment } from "../core/files.js";
-import { seenMarkers } from "../core/groups.js";
+import { legacyID, seenMarkers } from "../core/groups.js";
 import { remove as removeQueued } from "../core/outbox.js";
 import { t } from "../i18n.js";
 import { avatar, h, sheet, toast } from "./dom.js";
@@ -16,7 +16,7 @@ import { richBody, watchCustomEmoji } from "./rich-text.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
 import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage, shareText } from "./chat-actions.js";
-import { aboutEncryption, blockedLine, encryptionBadge, isBlockedUser, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
+import { aboutEncryption, blockedLine, encryptionBadge, secureBanner, isBlockedUser, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 import { groupEntry } from "../core/search.js";
 import { chatSearch } from "./chat-search.js";
 
@@ -70,13 +70,15 @@ export function renderGroup(root, id) {
     async function messageActions(message) {
         const hasText = typeof message.text === "string" && !!message.text;
         // Only the owner may delete messages in a group (netproto.ChangeConversation).
-        const deletable = !message.local && !message.deleted && conversation()?.owner === app.session.uniqueID;
+        // Ratcheted records are deleted only by their authenticated sender.
+        const deletable = !message.local && !message.deleted && (message.protocol ? message.from_unique_id === app.session.uniqueID : conversation()?.owner === app.session.uniqueID);
         const choice = await actionSheet({
             title: t("act.messageFrom", { name: memberName(message.from_unique_id) }), subtitle: excerpt(message.text, 160),
             actions: [
                 hasText ? { label: t("act.copy"), value: "copy" } : null,
                 hasText && canShare() ? { label: t("act.share"), value: "share" } : null,
-                message.id ? { label: t("act.save"), value: "save" } : null,
+                // Saved items resolve legacy numeric history only.
+                legacyID(message) ? { label: t("act.save"), value: "save" } : null,
                 deletable ? { label: t("dm.delete"), value: "delete", danger: true } : null,
             ].filter(Boolean),
         });
@@ -97,15 +99,16 @@ export function renderGroup(root, id) {
         }
         const body = message.deleted ? h("span", { class: "msg-deleted" }, t("chat.deleted"))
             : message.text === null || message.text === undefined ? h("span", { class: "msg-locked" }, t("group.locked"))
-                : richBody(message.text, { session: app.session, conn: app.session.conn, channelID: folder });
-        const from = memberName(message.from_unique_id);
+                : richBody(message.text, { conversation: "group", session: app.session, conn: app.session.conn, channelID: folder });
+        // A locked placeholder's sender is unauthenticated: never attributed.
+        const from = message.unattributed ? t("chat.lockedSender") : memberName(message.from_unique_id);
         const classes = ["msg", own ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
         // Not sent: tapping offers Retry or Delete; otherwise the action sheet (bindMessageTaps).
         const props = message.failed ? retryProps(message, retryActions(message)) : { tabindex: message.deleted ? null : "0", "aria-haspopup": message.deleted ? null : "dialog" };
         const el = h("div", { class: classes, dataset: { id: String(message.id ?? "") }, ...props },
             timeNode(message.created_at),
             avatar(from, "sm", message.from_unique_id),
-            h("div", { class: "msg-body" }, h("span", { class: "msg-from" }, from), message.deleted ? null : encryptionBadge("e2e"), body,
+            h("div", { class: "msg-body" }, h("span", { class: "msg-from" }, from), message.deleted ? null : encryptionBadge("e2e", message), body,
                 own ? sendState(message) : null,
                 seen?.length ? h("div", { class: "msg-seen" }, t("conv.seenBy", { names: seen.map(memberName).join(", ") })) : null));
         el.noxaMessage = message.deleted || message.failed ? null : message;
@@ -218,7 +221,7 @@ export function renderGroup(root, id) {
     }
     root.replaceChildren(h("section", { class: "screen chat" },
         top,
-        h("div", { class: "e2e-banner", role: "note" }, icon("lock"), " ", t("dm.encrypted")),
+        secureBanner(secureMessagingStatus()),
         announcementBanner(app.session), notice, search.bar, log, typing, form));
     const rerender = () => { line.clear(); render(); };
     const stops = [watchCustomEmoji(app.session, rerender), watchDisplaySettings(rerender), relativeTicker(log), search.stop];

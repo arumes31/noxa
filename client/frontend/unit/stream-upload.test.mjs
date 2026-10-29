@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { preparePublicationUpload, publicationUploadActive, startPublication, stopPublication,
     publicationSnapshot, reconcilePublicationUploads, publicationCodec } from "../src/stream-publication.js";
+import { useChannelMediaSession } from "../src/channel-media.js";
 
 function setup(t, supported = true) {
     const requests = [], changes = [], track = { id: "capture", readyState: "live", stop() { this.readyState = "ended"; } };
@@ -20,126 +21,61 @@ function setup(t, supported = true) {
 
 const settle = async () => { for (let n = 0; n < 12; n++) await Promise.resolve(); };
 
-function previewFixture(t, { pendingRead = false } = {}) {
+function screenFixture(t) {
     t.mock.timers.enable({ apis: ["setTimeout"] });
-    const requests = [], encodes = [], readers = [], videos = [], messages = [];
+    const requests = [], created = [];
     const state = { pc: {}, activeTabID: "one", serverGeneration: 1, sessionGeneration: 1, myChannelID: 1, myClientID: "self" };
     let generation = 0;
-    globalThis.window = { __noxa: { state, sysMsg: text => messages.push(text) }, go: { main: { App: {
+    globalThis.window = { __noxa: { state, sysMsg: () => {} }, go: { main: { App: {
         VideoStreamControlForTab: async (tab, body) => {
             requests.push({ tab, ...body });
             return { ...body, generation: body.action === "publish" && body.active ? String(++generation) : body.generation };
         },
     } } } };
-    globalThis.MediaStream = class { constructor(tracks) { this.tracks = tracks; } };
-    globalThis.document = { createElement: type => {
-        if (type === "video") {
-            const video = { videoWidth: 1920, videoHeight: 1080, play: async () => {}, pause() { this.paused = true; } };
-            videos.push(video); return video;
-        }
-        assert.equal(type, "canvas");
-        const canvas = { getContext: () => ({ drawImage() {} }),
-            toDataURL() { throw new Error("synchronous JPEG encoding is forbidden"); },
-            toBlob(callback, type, quality) { encodes.push({ callback, type, quality, width: canvas.width, height: canvas.height }); },
-        };
-        return canvas;
-    } };
-    globalThis.FileReader = class {
-        constructor() { this.readyState = 0; readers.push(this); }
-        readAsDataURL(blob) {
-            this.readyState = 1;
-            this.complete = () => { this.readyState = 2; this.result = `data:image/jpeg;base64,${blob.base64 || "YWJj"}`; this.onload?.(); };
-            if (!pendingRead) queueMicrotask(this.complete);
-        }
-        abort() { this.aborted = true; this.readyState = 2; this.onabort?.(); }
-    };
+    globalThis.document = { createElement: type => { created.push(type); return {}; } };
     t.after(async () => {
-        await stopPublication("screen");
-        for (const encode of encodes) encode.callback(null); // Release a deliberately hung native callback.
+        await stopPublication("screen"); await stopPublication("cam");
+        useChannelMediaSession(null);
+        for (const key of ["window", "document"]) delete globalThis[key];
+    });
+    const track = id => Object.assign(new EventTarget(), { id, readyState: "live", stop() { this.readyState = "ended"; } });
+    return { state, requests, created, track };
+}
+
+// P3-3: previews are local-only under mandatory media E2EE. A screen
+// publication never captures a frame or uploads a preview, with or without a
+// live media session, and schedules no preview refresh.
+for (const session of [false, true]) {
+    test(`screen publication never captures or uploads a preview (media session ${session ? "live" : "absent"})`, async t => {
+        const f = screenFixture(t);
+        if (session) useChannelMediaSession({ active: true, publicationsChanged() {}, stop() {} });
+        assert.equal(await startPublication("screen", f.track("screen-1")), true);
         await settle();
-        for (const key of ["window", "document", "MediaStream", "FileReader"]) delete globalThis[key];
+        t.mock.timers.tick(10 * 60 * 1000); await settle();
+        assert.deepEqual(f.requests.map(r => r.action), ["publish"]);
+        assert.equal(f.requests.some(r => r.action === "preview_upload" || "jpeg" in r), false);
+        assert.deepEqual(f.created, [], "no video or canvas is created for a preview");
     });
-    const start = async () => {
-        const track = Object.assign(new EventTarget(), { id: `screen-${generation + 1}`, readyState: "live",
-            stop() { this.readyState = "ended"; },
-        });
-        await startPublication("screen", track); await settle(); return track;
-    };
-    return { state, requests, encodes, readers, videos, messages, start,
-        uploads: () => requests.filter(r => r.action === "preview_upload") };
 }
 
-test("screen preview asynchronously uploads the bounded JPEG for the exact publication and repeats after two minutes", async t => {
-    const f = previewFixture(t);
-    await f.start();
-    assert.equal(f.uploads().length, 0);
-    assert.deepEqual({ ...f.encodes[0], callback: undefined }, { callback: undefined, type: "image/jpeg", quality: 0.55, width: 640, height: 360 });
-    f.encodes[0].callback({ type: "image/jpeg", size: 49152, base64: "A".repeat(65536) });
-    await settle();
-    assert.deepEqual(f.uploads().map(({ tab, slot, generation, jpeg }) => ({ tab, slot, generation, bytes: jpeg.length })),
-        [{ tab: "one", slot: "screen", generation: "1", bytes: 65536 }]);
-    assert.equal(f.videos[0].srcObject, null);
-    t.mock.timers.tick(119999); await settle(); assert.equal(f.encodes.length, 1);
-    t.mock.timers.tick(1); await settle(); assert.equal(f.encodes.length, 2);
+// P3-1: starting or stopping a local camera, screen or Studio (screen slot)
+// publication rekeys the encrypted channel media, as the PWA does.
+test("publication start and stop notify the media session", async t => {
+    const f = screenFixture(t);
+    const changes = [];
+    useChannelMediaSession({ active: true, publicationsChanged() { changes.push("changed"); }, stop() {} });
+    const screen = f.track("screen-1"), cam = f.track("cam-1");
+    assert.equal(await startPublication("screen", screen), true);
+    assert.equal(changes.length, 1, "screen start");
+    assert.equal(await startPublication("cam", cam), true);
+    assert.equal(changes.length, 2, "camera start");
+    await stopPublication("cam", cam);
+    assert.equal(changes.length, 3, "camera stop");
+    await stopPublication("screen");
+    assert.equal(changes.length, 4, "screen stop");
+    await stopPublication("screen");
+    assert.equal(changes.length, 4, "stopping nothing does not rekey");
 });
-
-for (const invalid of [null, { type: "image/jpeg", size: 49153 }, { type: "image/png", size: 3 }, { type: "image/jpeg", size: 0 }]) {
-    test(`invalid preview blob never reaches conversion or upload: ${JSON.stringify(invalid)}`, async t => {
-        const f = previewFixture(t); await f.start();
-        f.encodes[0].callback(invalid); await settle();
-        assert.equal(f.readers.length, 0); assert.equal(f.uploads().length, 0);
-        assert.equal(f.videos[0].srcObject, null);
-    });
-}
-
-for (const cancel of ["stop", "ended", "scope"]) {
-    test(`preview encoding pending across ${cancel} cannot upload stale source bytes`, async t => {
-        const f = previewFixture(t); const track = await f.start();
-        if (cancel === "stop") await stopPublication("screen", track);
-        if (cancel === "ended") { track.readyState = "ended"; track.dispatchEvent(new Event("ended")); }
-        if (cancel === "scope") f.state.sessionGeneration++;
-        f.encodes[0].callback({ type: "image/jpeg", size: 3 }); await settle();
-        assert.equal(f.readers.length, 0); assert.equal(f.uploads().length, 0);
-        assert.equal(f.videos[0].srcObject, null);
-    });
-}
-
-test("replacing a preview source cannot start overlapping native JPEG encodes or upload the old result", async t => {
-    const f = previewFixture(t); await f.start(); await f.start();
-    assert.equal(f.encodes.length, 1);
-    f.encodes[0].callback({ type: "image/jpeg", size: 3 }); await settle();
-    assert.equal(f.uploads().length, 0);
-    t.mock.timers.tick(120000); await settle();
-    assert.equal(f.encodes.length, 2);
-    f.encodes[1].callback({ type: "image/jpeg", size: 3 }); await settle();
-    assert.deepEqual(f.uploads().map(r => r.generation), ["2"]);
-});
-
-test("a missing encode callback times out without stacking native encodes and a late callback permits later previews", async t => {
-    const f = previewFixture(t); await f.start();
-    t.mock.timers.tick(5000); await settle();
-    assert.equal(f.videos[0].srcObject, null);
-    t.mock.timers.tick(120000); await settle();
-    assert.equal(f.encodes.length, 1); assert.equal(f.uploads().length, 0);
-    f.encodes[0].callback({ type: "image/jpeg", size: 3 }); await settle();
-    assert.equal(f.readers.length, 0);
-    t.mock.timers.tick(120000); await settle();
-    assert.equal(f.encodes.length, 2);
-});
-
-for (const cancel of ["stop", "timeout", "scope"]) {
-    test(`pending JPEG conversion is retired on ${cancel} without uploading its late result`, async t => {
-        const f = previewFixture(t, { pendingRead: true }); const track = await f.start();
-        f.encodes[0].callback({ type: "image/jpeg", size: 3 }); await settle();
-        assert.equal(f.readers.length, 1);
-        if (cancel === "stop") await stopPublication("screen", track);
-        if (cancel === "timeout") t.mock.timers.tick(5000);
-        if (cancel === "scope") f.state.serverGeneration++;
-        f.readers[0].complete(); await settle();
-        assert.equal(f.uploads().length, 0); assert.equal(f.videos[0].srcObject, null);
-        if (cancel !== "scope") assert.equal(f.readers[0].aborted, true);
-    });
-}
 
 test("codec-only catalog changes reconfigure one current publication and ignore stale generations", async t => {
     const fixture = setup(t);

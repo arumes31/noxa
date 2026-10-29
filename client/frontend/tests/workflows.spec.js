@@ -948,7 +948,7 @@ test.describe("tab-bound voice signaling", () => {
             const f = window.__voiceScope = { nativeTab: "server-b", calls: [], effects: [] };
             const app = window.go.main.App;
             window.go.main.App = new Proxy(app, { get(target, key) {
-                const method = key.replace(/ForTab$/, "");
+                const method = key.replace(/ForTab$/, "").replace(/^WebRTCOfferSecure$/, "WebRTCOffer");
                 if (!["GetICEServers", "GetMediaLimits", "WebRTCOffer", "WebRTCAnswer", "SendICECandidate"].includes(method)) return target[key];
                 return async (...args) => {
                     const tab = key.endsWith("ForTab") ? args.shift() : f.nativeTab;
@@ -987,6 +987,7 @@ test.describe("tab-bound voice signaling", () => {
                 setRemoteDescription: async () => {},
                 getSenders: () => [],
             };
+            (await import("/src/channel-media.js")).useChannelMediaSession(window.__standInMedia());
             try {
                 if (action === "offer") await video.renegotiate(pc);
                 else await video.answerRemoteOffer(pc, window.__noxa.state.serverGeneration, identity);
@@ -996,6 +997,10 @@ test.describe("tab-bound voice signaling", () => {
         expect(await page.evaluate(() => window.__voiceScope.calls.map(call => call.slice(0, 2)))).toEqual([[action === "offer" ? "WebRTCOffer" : "WebRTCAnswer", "server-a"]]);
     });
     for (const slot of ["mic", "cam", "screenaudio"]) test(`ending a replaced ${slot} track preserves its successor`, async ({ page }) => {
+        // Synthetic tracks without receivers: the fail-closed encryption gate
+        // would (correctly) hold them back, so this ownership test uses the
+        // session double.
+        await page.evaluate(async () => (await import("/src/channel-media.js")).useChannelMediaFactory(window.__standInMedia));
         await page.evaluate(() => {
             window.__voiceScope.nativeTab = "server-a";
             window.__voiceScope.holdOffer = true;
@@ -2609,6 +2614,28 @@ test.describe("tab-bound chat search and export", () => {
         await page.evaluate(() => { window.__noxa.state.myChannelID = 2; window.__noxaChat.onMyChannelChanged(); });
         await expect(page.locator(".search-results")).toHaveCount(0);
     });
+    test("DM search and context preserve private preview policy without relying on stored encryption labels", async ({ page }) => {
+        await page.evaluate(() => {
+            const app = window.go.main.App;
+            window.__searchPreviewRequests = [];
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (["YouTubePreviewForTab", "XPostPreviewForTab", "VideoPortalPreviewForTab", "LinkPreviewForTab"].includes(key)) return async (...args) => {
+                    window.__searchPreviewRequests.push([key, ...args]); return { title: "Unexpected preview" };
+                };
+                return target[key];
+            } });
+            window.__scanScope.hold = true; window.__noxa.openPM("peer-a", "Peer A");
+        });
+        await search(page);
+        await expect.poll(() => page.evaluate(() => window.__scanScope.pending.length)).toBe(1);
+        await page.evaluate(() => window.__scanScope.pending[0].resolve({ messages: [{ id: 5, body: "https://youtu.be/dQw4w9WgXcQ https://search-private.example/secret" }], scanned: 1 }));
+        await expect(page.locator(".search-preview-message .md-link")).toHaveCount(2);
+        await page.locator(".search-preview-message .md-link").last().hover();
+        await page.waitForTimeout(450);
+        expect(await page.evaluate(() => window.__searchPreviewRequests)).toEqual([]);
+        await expect(page.locator(".search-preview-message .youtube-preview")).toHaveCount(0);
+    });
+
     test("a local DM search cannot reopen after switching peers and returning", async ({ page }) => {
         await page.evaluate(() => { window.__scanScope.hold = true; window.__noxa.openPM("peer-a", "Peer A"); });
         await search(page);
@@ -4403,6 +4430,7 @@ test("incoming voice resumes suspended playback and applies the selected output"
             close() { this.connectionState = "closed"; }
         }
         window.RTCPeerConnection = FakePeerConnection;
+        (await import("/src/channel-media.js")).useChannelMediaFactory(window.__standInMedia);
         const state = window.__noxa.state;
         state.myClientID = "listener";
         state.myChannelID = 42;
@@ -5425,6 +5453,13 @@ test("selected quick wins retry only the unchanged failed draft", async ({ page 
     await page.evaluate(() => window.__resolveRetry("offline again"));
     await page.locator("#chat-retry").click();
     await expect.poll(() => page.evaluate(() => window.__retryPayloads)).toEqual(["first draft", "new draft", "new draft"]);
+    // Production path: every send carries an operation ID; retrying the
+    // unchanged failed draft reuses it, a new draft gets a new one.
+    const ops = await page.evaluate(() => (window.__sendOperations || []).map(o => o.operationID));
+    expect(ops).toHaveLength(3);
+    expect(ops.every(id => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(ops[1]).not.toBe(ops[0]);
+    expect(ops[2]).toBe(ops[1]);
     await page.evaluate(() => window.__resolveRetry(""));
     await expect(page.locator("#chat-text")).toHaveValue("");
     await expect(page.locator("#chat-send-error")).toBeHidden();
@@ -6014,7 +6049,28 @@ test.beforeEach(async ({ page }) => {
         const app = new Proxy({}, {
             get(_target, nativeMethod) {
                 if (nativeMethod === "UploadChatAttachmentProgressForTab") return undefined;
+                // The production send entry: routed through window.go.main.App to
+                // the SendChat/SendChatReply handlers (so per-suite proxies see
+                // it), recording the stable operation ID of every call.
+                if (nativeMethod === "SendChatOperationForTab") return async (tab, scope, target, text, parent, operationID) => {
+                    (window.__sendOperations ||= []).push({ tab, scope, target, text, parent: parent || 0, operationID });
+                    const api = window.go.main.App;
+                    return parent ? api.SendChatReplyForTab(tab, scope, target, text, parent) : api.SendChatForTab(tab, scope, target, text);
+                };
                 if (nativeMethod === "ReconnectTab" && !window.__tabScopedReconnect) return undefined;
+                // Encrypted channel media (Task 2): the voice session runs the real
+                // worker; keys go nowhere (no peers), offers keep their per-suite mock.
+                if (nativeMethod === "WebRTCOfferSecureForTab") return async (tab, sdp, slots) => {
+                    (window.__secureOffers ||= []).push(slots);
+                    return window.go.main.App.ChannelOfferMockForTab(tab, sdp, slots);
+                };
+                if (nativeMethod === "MediaE2EEStatusForTab") return async () => (window.__mediaE2EEStatus || { supported: true, principal: "self", device: "dev-self", client_id: window.__activeClient || "client-a" });
+                if (nativeMethod === "SendMediaKeyForTab") return async () => ({ state: "accepted" });
+                // UI tests with stand-in peer objects (no encoded transforms)
+                // install this session double through channel-media.js.
+                window.__standInMedia = () => ({ active: true, media: { authenticated: () => true, onAuthenticated() {} }, identity: { channelID: window.__noxa?.state?.myChannelID || 1 }, async start() { return this; }, stop() { this.active = false; },
+                    setRoster() {}, protectPeer: pc => pc, peerConfig: c => c, bindSenders: async () => {}, syncReceivers: async () => {}, rescope() {},
+                    publicationsChanged() {}, receive: () => ({ ok: false }), status: () => ({ state: "encrypted", recipients: 0 }) });
                 return async (...args) => {
                     let method = nativeMethod;
                     window.__calls[method] = (window.__calls[method] || 0) + 1;
@@ -6577,7 +6633,7 @@ test("server recovery restores real voice when ICE arrives before its answer", a
             if (key === "SendICECandidateForTab") return async (_tab, candidate, sdpMid, sdpMLineIndex) => {
                 await remote.addIceCandidate({ candidate, sdpMid, sdpMLineIndex });
             };
-            if (key !== "WebRTCOfferForTab") return target[key];
+            if (key !== "ChannelOfferMockForTab") return target[key];
             return async (_tab, sdp) => {
                 remote = new originalPeer();
                 window.__recoveryRemote = remote;
@@ -6761,7 +6817,7 @@ test("retries a missing or disconnected microphone without interrupting video or
         sharing: window.__noxa.state.screenSharing,
         shareTracksStopped: window.__shareTracksStopped,
         unpublishedShare: window.__calls.SetScreenShareForTab || 0,
-        slots: window.__callArgs.WebRTCOfferForTab.at(-1)[2].map(({ slot }) => slot),
+        slots: window.__callArgs.ChannelOfferMockForTab.at(-1)[2].map(({ slot }) => slot),
     }))).toEqual({
         samePeerConnection: true,
         audioTracks: 1,
@@ -6818,7 +6874,7 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
         window.__cameraRemote = new RTCPeerConnection();
         window.go.main.App = new Proxy(app, {
             get(target, key) {
-                if (key !== "WebRTCOfferForTab") return target[key];
+                if (key !== "ChannelOfferMockForTab") return target[key];
                 return async (_tab, sdp) => {
                     await window.__cameraRemote.setRemoteDescription({ type: "offer", sdp });
                     const answer = await window.__cameraRemote.createAnswer();
@@ -6867,6 +6923,9 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
 });
 
 for (const action of ["local", "native"]) test(`${action} disconnect intent retires pending voice recovery before the backend settles`, async ({ page }) => {
+    // Answers need an encrypted media session (fail closed); this recovery
+    // test uses the session double.
+    await page.evaluate(async () => (await import("/src/channel-media.js")).useChannelMediaSession(window.__standInMedia()));
     await page.evaluate(() => {
         const v = window.__noxa;
         v.state.myChannelID = 42;
@@ -6925,9 +6984,13 @@ test("disconnect immediately releases camera capture waiting for a negotiation",
 });
 
 async function installMediaUpdateFixture(page) {
-    await page.evaluate(() => {
+    await page.evaluate(async () => {
         const v = window.__noxa;
         v.showWorkspace(false);
+        // Stand-in peers carry no encoded transforms: use the session double.
+        const channelMedia = await import("/src/channel-media.js");
+        channelMedia.useChannelMediaFactory(window.__standInMedia);
+        channelMedia.useChannelMediaSession(window.__standInMedia());
         window.__mediaUpdate = { reads: 0, offers: [], limits: { video_max_width: 0, video_max_height: 0, video_max_bitrate: 1000000 } };
         class LimitPeer extends EventTarget {
             constructor() { super(); this.transceivers = []; this.signalingState = "stable"; }
@@ -6965,7 +7028,7 @@ async function installMediaUpdateFixture(page) {
                 if (fixture.holdRead) return await new Promise(resolve => { fixture.finishRead = resolve; });
                 return { ...fixture.limits };
             };
-            if (key === "WebRTCOfferForTab") return async tab => {
+            if (key === "ChannelOfferMockForTab") return async tab => {
                 if (tab !== "limit-tab") throw new Error("wrong offer tab");
                 if (window.__mediaUpdate.failOffer) throw new Error("offer failure");
                 if (window.__mediaUpdate.holdOffer) await new Promise(resolve => { window.__mediaUpdate.finishOffer = resolve; });
@@ -7801,8 +7864,10 @@ test("routes decrypted direct messages and echoes without mixing global chat or 
     await bravoTab.click();
     await expect(page.locator("#chat-log")).toContainText("private Grüße 🌿");
     await expect(page.locator("#chat-log .msg-tag")).toHaveText("Direct message");
-    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("title", /end-to-end encrypted/);
-    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("aria-label", /end-to-end encrypted/);
+    // A legacy (static-key) DM: its own badge, never the Olm lock (review b46 P2-2).
+    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("data-encryption", "legacy");
+    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("title", /Legacy static-key encryption/);
+    await expect(page.locator("#chat-log .msg-lock")).toHaveAttribute("aria-label", /Legacy static-key encryption/);
 
     await page.evaluate(() => {
         window.__noxaChat.openPM("charlie", "CHARLIE");
@@ -7841,10 +7906,11 @@ test("restores DM history without claiming legacy or plaintext records were veri
     // Every message carries a badge: only the verified record gets the lock,
     // the legacy and plaintext records keep their text under a warning.
     await expect(page.locator("#chat-log .msg-lock")).toHaveCount(3);
-    const lock = page.locator('#chat-log .msg-lock[data-encryption="lock"]');
+    // The verified record is legacy (static-key): its own badge, not the Olm lock.
+    const lock = page.locator('#chat-log .msg-lock[data-encryption="legacy"]');
     await expect(lock).toHaveCount(1);
-    await expect(lock).toHaveAttribute("title", /end-to-end encrypted/);
-    await expect(lock).toHaveAttribute("aria-label", /end-to-end encrypted/);
+    await expect(lock).toHaveAttribute("title", /Legacy static-key encryption/);
+    await expect(lock).toHaveAttribute("aria-label", /Legacy static-key encryption/);
     await expect(page.locator('#chat-log .msg-lock[data-encryption="warning"]')).toHaveCount(2);
     await expect(page.locator('#chat-log .msg-lock[data-encryption="warning"]').first()).not.toHaveAttribute("title", /end-to-end encrypted/);
 });
@@ -9125,9 +9191,11 @@ test("labels screen-share controls and explains low-bandwidth data use", async (
         v.showWorkspace(false);
         v.state.pc = new RTCPeerConnection();
         window.__shareRemote = new RTCPeerConnection();
+        // The in-page remote cannot decrypt; this test covers share labels only.
+        import("/src/channel-media.js").then(m => m.useChannelMediaSession(window.__standInMedia()));
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, key) {
-            if (key !== "WebRTCOfferForTab") return target[key];
+            if (key !== "ChannelOfferMockForTab") return target[key];
             return async (_tab, sdp) => {
                 await window.__shareRemote.setRemoteDescription({ type: "offer", sdp });
                 const answer = await window.__shareRemote.createAnswer();
@@ -10766,6 +10834,8 @@ test("does not export a different channel after its passphrase dialog is left op
 });
 
 test("runtime boundaries ignore malformed payloads and never answer a stale offer", async ({ page }) => {
+    // Answers need an encrypted media session (fail closed): session double.
+    await page.evaluate(async () => (await import("/src/channel-media.js")).useChannelMediaSession(window.__standInMedia()));
     const result = await page.evaluate(async () => {
         const errors = [];
         const onUnhandled = (event) => {
@@ -12266,6 +12336,41 @@ test.describe("link hover lifecycle", () => {
         await expect(page.locator('#chat-log .md-link[data-url="https://hover.example/first"]')).toBeVisible();
     });
 
+    test("encrypted and unknown shared bodies never request provider or hover metadata", async ({ page }) => {
+        await page.evaluate(async () => {
+            const chat = await import("/src/chat-ui.js");
+            const app = window.go.main.App;
+            window.__privatePreviewRequests = [];
+            window.go.main.App = new Proxy(app, { get(target, key) {
+                if (["YouTubePreviewForTab", "XPostPreviewForTab", "VideoPortalPreviewForTab", "LinkPreviewForTab"].includes(key)) return async (...args) => {
+                    window.__privatePreviewRequests.push([key, ...args]); return { title: "Unexpected preview" };
+                };
+                return target[key];
+            } });
+            const text = "https://private.example/secret https://youtu.be/dQw4w9WgXcQ https://x.com/alex/status/123 https://www.twitch.tv/twitch";
+            const root = document.createElement("section"); root.id = "private-preview-test";
+            document.getElementById("chat-log").replaceChildren(root);
+            chat.bindSharedLinks(root);
+            for (const kind of ["dm", "group"]) {
+                const body = document.createElement("p"); body.dataset.kind = kind;
+                chat.renderActivityMessage(body, { reference: { kind, group_id: "group-one" }, message: { text, channelID: 2 } });
+                root.append(body);
+            }
+            const unknown = document.createElement("p"); unknown.dataset.kind = "unknown";
+            chat.renderSharedRichText(unknown, text, {}); root.append(unknown);
+            // Settings refresh cannot authorize private messages through an active channel.
+            window.__noxa.state.settings.link_previews = false; chat.applyChatPrefs();
+            window.__noxa.state.settings.link_previews = true; chat.applyChatPrefs();
+        });
+        for (const kind of ["dm", "group", "unknown"]) {
+            await page.locator(`#private-preview-test [data-kind="${kind}"] .md-link`).first().hover();
+            await page.waitForTimeout(450);
+        }
+        expect(await page.evaluate(() => window.__privatePreviewRequests)).toEqual([]);
+        await expect(page.locator("#private-preview-test .youtube-preview, #private-preview-test .x-post-preview, #private-preview-test .video-portal-preview, .link-card")).toHaveCount(0);
+        await expect(page.locator("#private-preview-test .md-link")).toHaveCount(12);
+    });
+
     test("disabled link previews do not start requests", async ({ page }) => {
         await page.clock.install();
         await page.evaluate(() => { window.__noxa.state.settings.link_previews = false; });
@@ -12285,11 +12390,13 @@ test.describe("link hover lifecycle", () => {
 
     for (const surface of ["channel", "shared"]) test(`${surface} out-of-order previews leave only the currently hovered card`, async ({ page }) => {
         if (surface === "shared") await page.evaluate(() => {
-            // Private-group message surfaces bind the same exported link policy.
+            // A shared channel surface receives explicit context through its renderer.
             const old = document.getElementById("chat-log");
             const root = old.cloneNode(true);
             old.replaceWith(root);
             window.__noxaChat.bindSharedLinks(root);
+            const body = root.querySelector(".msg-text");
+            window.__noxaChat.renderActivityMessage(body, { reference: { kind: "channel" }, message: { channelID: 2, text: "https://hover.example/first https://hover.example/second" } });
         });
         const links = page.locator('#chat-log .md-link');
         await links.first().hover();
@@ -12809,4 +12916,95 @@ test.describe("compact Activity workspace", () => {
         await page.evaluate(() => { window.__noxa.state.channels = window.__noxa.state.channels.filter(channel => channel.ChannelID !== 2); for (const cb of window.__events.subscriptions || []) cb({ channel_ids: [] }); });
         await expect(page.locator(".activity-message")).toHaveCount(0);
     });
+});
+
+
+test("outer Activity notification and compact private rows never request metadata", async ({ page }) => {
+    await showB3Workspace(page);
+    await page.evaluate(async () => {
+        window.__dmStorageIdentity = "self";
+        const state = window.__noxa.state;
+        Object.assign(state, { activeTabID: "outer-privacy", myUniqueID: "self", myClientID: "self", channels: [], clients: [] });
+        state.settings.link_previews = true;
+        const base = window.go.main.App;
+        window.__outerPreviewCalls = [];
+        window.go.main.App = new Proxy(base, { get(target, key) {
+            if (["YouTubePreviewForTab", "VideoPortalPreviewForTab", "XPostPreviewForTab", "LinkPreviewForTab"].includes(key)) return async (...args) => {
+                window.__outerPreviewCalls.push([key, ...args]); return { thumbnail: document.createElement("canvas").toDataURL("image/jpeg") };
+            };
+            if (key === "DMHistoryPeersForContext") return async () => [{ unique_id: "private-peer", nickname: "Private peer" }];
+            if (key === "DMHistoryLoadForContext") return async () => [{ seq: 1, client_msg_id: "compact-dm", from_unique_id: "private-peer", from_nickname: "Private peer", body: "Compact DM https://youtu.be/dQw4w9WgXcQ", sent_at: 1000, enc_verified: true, enc_mode: "e2e" }];
+            if (key === "ChatHistoryForTab") return async () => ({ messages: [] });
+            if (key === "ConversationForTab") return async (_tab, command) => command.action === "list"
+                ? { conversations: [{ id: "private-group", name: "Private group", members: [{ unique_id: "self", pending: false }] }] }
+                : { messages: [{ id: 1, from_unique_id: "private-peer", body: "Compact group https://www.twitch.tv/privategroup", created_at: 1000, enc_verified: true }] };
+            return target[key];
+        } });
+        const notifications = [
+            { kind: "dm", text: "DM notification https://youtu.be/Fvr-SJPAh7o", destination: { reference: { kind: "dm", peer_id: "other" } } },
+            { kind: "mention", text: "Group notification https://www.twitch.tv/privatealert", destination: { reference: { kind: "group", group_id: "other" } } },
+            { kind: "unknown", text: "Unknown notification https://youtu.be/ZZZZZZZZZZZ", destination: null },
+        ].map((n, i) => ({ ...n, at: Date.now() + i }));
+        window.__outerNotifications = notifications;
+        const { initActivityWorkspace } = await import("/src/activity-ui.js");
+        initActivityWorkspace({ entries: () => window.__outerNotifications, subscribe: callback => { window.__refreshOuterNotifications = callback; }, open: () => {}, markRead: () => {} });
+        window.__noxaActivity.open("activity");
+    });
+    const root = page.locator("#activity-workspace");
+    await expect(root.locator(".activity-notifications .activity-notification")).toHaveCount(3);
+    await expect(root.locator(".activity-feed-row")).toHaveCount(2);
+    await expect(root.getByText("Loading…", { exact: true })).toHaveCount(0);
+    expect(await page.evaluate(() => window.__outerPreviewCalls)).toEqual([]);
+    await expect(root.locator(".activity-thumbnail")).toHaveCount(0);
+    // Explicit global channel context still enables one cached server request across outer rows.
+    await page.evaluate(() => {
+        window.__outerNotifications.push({ kind: "channel_message", text: "Global preview https://youtu.be/CCCCCCCCCCC", at: Date.now(), destination: { reference: { kind: "channel", channel_id: 0 } } });
+        window.__refreshOuterNotifications();
+    });
+    await expect.poll(() => page.evaluate(() => window.__outerPreviewCalls.length)).toBe(1);
+    expect(await page.evaluate(() => window.__outerPreviewCalls[0])).toEqual(["YouTubePreviewForTab", "outer-privacy", "CCCCCCCCCCC"]);
+    await expect(root.locator(".activity-notifications .activity-thumbnail")).toHaveCount(1);
+});
+
+test("a server offer is never answered without an encrypted media session (fail closed)", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        (await import("/src/channel-media.js")).useChannelMediaSession(null);
+        const state = window.__noxa.state;
+        state.serverGeneration = 77;
+        const sdp = "a=ice-ufrag:x\r\na=ice-pwd:x-secret";
+        const peer = { remoteDescription: { sdp }, answers: 0, local: 0, addIceCandidate: async () => {},
+            setRemoteDescription: async () => {}, createAnswer: async () => { peer.answers++; return { type: "answer", sdp: "a" }; },
+            setLocalDescription: async () => { peer.local++; } };
+        state.pc = peer;
+        const before = window.__calls.WebRTCAnswerForTab || 0;
+        for (const callback of window.__events.offer) callback(JSON.stringify({ sdp }));
+        await new Promise(resolve => setTimeout(resolve, 200));
+        return { answers: peer.answers, local: peer.local, bridged: (window.__calls.WebRTCAnswerForTab || 0) - before };
+    });
+    expect(result).toEqual({ answers: 0, local: 0, bridged: 0 });
+});
+
+// Task 2b (unsupported version/runtime UI): every refusal before a peer
+// exists is one localized explanation, and no peer connection is created.
+test("unsupported server, keyless guest and missing device refuse voice with a localized reason and no peer", async ({ page }) => {
+    const results = await page.evaluate(async () => {
+        const v = window.__noxa;
+        const out = {};
+        for (const [reason, status] of [["keyless_guest", { supported: true, reason: "keyless_guest" }], ["no_device", { supported: true, principal: "", device: "", client_id: "client-a" }], ["server_outdated", { supported: false, reason: "server_outdated" }]]) {
+            window.__mediaE2EEStatus = status;
+            navigator.mediaDevices.getUserMedia = async () => document.createElement("canvas").captureStream(1);
+            v.state.pc = null;
+            v.state.myChannelID = 42;
+            v.state.channels = [{ ChannelID: 42, Name: "Lobby" }];
+            const started = await v.ensureVoiceForChannel();
+            // The refusal is shown as the localized reason (system message).
+            const texts = { server_outdated: "This server does not support end-to-end encrypted voice yet. The server needs an update.",
+                keyless_guest: "Voice is end-to-end encrypted. Guest sessions without a key identity cannot join voice.",
+                no_device: "This session has no secure device yet, so encryption keys cannot be exchanged." };
+            out[reason] = { started, shown: (document.getElementById("chat-log")?.textContent || "").includes(texts[reason]), peer: !!v.state.pc };
+        }
+        window.__mediaE2EEStatus = null;
+        return out;
+    });
+    for (const reason of ["server_outdated", "keyless_guest", "no_device"]) expect(results[reason], reason).toEqual({ started: false, shown: true, peer: false });
 });

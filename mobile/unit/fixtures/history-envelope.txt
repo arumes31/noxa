@@ -1,0 +1,2 @@
+{"v":"noxa-history-v1","source":"desk","target":"phone","transfer":"t1","seq":0,"total":1,"digest":"36d016d91092a824edc63012cb9367dbb1bc565a517ef9d3cbf159b52ecff8ef","sig":"iOmf04upCDApU8sQyfVfDtdyWAJq4f7GNgTQoNZdAYrcZcq634p1i3j9HjyRrnQdjSy7TfU4qmcaSC075xUWCQ=="}
+[{"peer":"bob","from":"bob","body":"hi","sent_at":5,"client_msg_id":"R1","protocol":"noxa-olm-v1","provenance":"authenticated"}]

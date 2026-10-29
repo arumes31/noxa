@@ -20,6 +20,7 @@ const (
 	errServerError             = 1024
 	errInsufficientPermissions = 2568
 	errTooManyConnections      = 1539
+	errChannelFull             = 777 // TS3 ERROR_channel_maxclients_reached (0x0309)
 )
 
 // escapeReplacer maps the special characters to their TS3-style escapes.

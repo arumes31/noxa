@@ -36,7 +36,7 @@ func (e *Engine) prepareVideoBoundsLocked(bounds VideoBounds) (*webrtc.API, erro
 	if e.videoBounds == bounds {
 		return e.api, nil
 	}
-	media, interceptors, err := newEngineMediaObserved(e.enableAV1, bounds, e.egress, e.upstreamFeedback)
+	media, interceptors, err := newEngineMediaPolicy(e.enableAV1, bounds, e.policy, e.egress, e.upstreamFeedback)
 	if err != nil {
 		return nil, err
 	}
@@ -66,8 +66,12 @@ func newEngineMedia(enableAV1 bool, bounds VideoBounds, egress *mediaEgressRegis
 // innermost factories (tests only) sit next to the transport, inside every
 // production interceptor.
 func newEngineMediaObserved(enableAV1 bool, bounds VideoBounds, egress *mediaEgressRegistry, feedback *upstreamFeedbackRegistry, innermost ...interceptor.Factory) (*webrtc.MediaEngine, *interceptor.Registry, error) {
+	return newEngineMediaPolicy(enableAV1, bounds, MediaPolicy{}, egress, feedback, innermost...)
+}
+
+func newEngineMediaPolicy(enableAV1 bool, bounds VideoBounds, policy MediaPolicy, egress *mediaEgressRegistry, feedback *upstreamFeedbackRegistry, innermost ...interceptor.Factory) (*webrtc.MediaEngine, *interceptor.Registry, error) {
 	media := &webrtc.MediaEngine{}
-	if err := registerCodecsWithVideoBounds(media, enableAV1, bounds); err != nil {
+	if err := registerCodecsWithPolicy(media, enableAV1, bounds, policy); err != nil {
 		return nil, nil, fmt.Errorf("webrtc: registering codecs: %w", err)
 	}
 	registry := &interceptor.Registry{}

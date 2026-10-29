@@ -2,6 +2,11 @@ import { remoteTrackID, remoteTrackIDs } from "./media-track-id.js";
 
 const sessions = new WeakMap();
 
+// Presentation gate of encrypted channel media, failing closed: a receiver is
+// presented only when a media session exists and reports its first
+// authenticated frame (no session — stopped or failed — presents nothing).
+export function gatePresents(gate, trackOrReceiver) { return gate?.authenticated(trackOrReceiver) === true; }
+
 export function reconcileRemoteMedia(pc) { sessions.get(pc)?.(); }
 
 // Reconcile track events and completed SDP exchanges. Browser receiver identity
@@ -27,7 +32,13 @@ export function startRemoteMedia(pc, current, onTrack, onRemoved, attached = () 
         bindings.set(receiver, binding);
         track.addEventListener("ended", binding.ended);
         track.addEventListener("unmute", binding.unmute);
-        onTrack(track, id);
+        // false: the owner did not attach it (e.g. the encrypted-media gate);
+        // nothing is recorded, so a later reconcile binds it afresh.
+        if (onTrack(track, id) === false) {
+            bindings.delete(receiver);
+            track.removeEventListener("ended", binding.ended);
+            track.removeEventListener("unmute", binding.unmute);
+        }
     };
     const reconcile = () => {
         if (!active || !current()) return;

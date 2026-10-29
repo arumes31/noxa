@@ -156,7 +156,11 @@ export function openDeviceLinkDialog({ quickGuide = false, fromHelp = false } = 
         timer.setAttribute("aria-live", "off");
         const status = el("p", "device-link-status", t("devices.waiting"));
         status.setAttribute("aria-live", "polite");
-        linkPane.replaceChildren(intro, image, codeRow, timer, status);
+        const parts = [intro, image, codeRow, timer, status];
+        // The QR opens the server's configured web address; warn when that is
+        // not the server this desktop is connected to.
+        if (link.host_mismatch) parts.splice(1, 0, el("p", "dlg-error device-link-host-warning", t("devices.hostMismatch", { link: link.link_host, server: link.server_host })));
+        linkPane.replaceChildren(...parts);
         const tick = () => {
             const seconds = Math.max(0, Math.round(link.expires_at - Date.now() / 1000));
             timer.textContent = t("devices.expiresIn", { seconds });

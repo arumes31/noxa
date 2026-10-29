@@ -69,6 +69,10 @@ type deviceLink struct {
 	claimX25519   string
 	claimPlatform string
 	claimVia      string
+
+	// Set on approval: the approver's signed server binding for the claimer.
+	binding    string
+	bindingSig []byte
 }
 
 // deviceLinks holds pending links in memory; they never outlive 2 TTLs.
@@ -184,10 +188,81 @@ func (c *Client) sessionKey() string {
 	return c.verifiedGuestKey
 }
 
+// The device index is updated while c.mu is held (lock order c.mu ->
+// deviceSessionIndex.mu, never the reverse), so concurrent device changes and
+// detaches cannot leave a stale index entry.
 func (c *Client) setDeviceID(id string) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	old := c.deviceID
 	c.deviceID = id
-	c.mu.Unlock()
+	if c.deviceIndex != nil && old != id {
+		c.deviceIndex.move(c, old, id)
+	}
+}
+
+// attachDeviceIndex enrolls a registered session in the device index.
+func (c *Client) attachDeviceIndex(index *deviceSessionIndex) {
+	if index == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deviceIndex = index
+	if c.deviceID != "" {
+		index.move(c, "", c.deviceID)
+	}
+}
+
+// detachDeviceIndex removes an unregistered session from the device index.
+func (c *Client) detachDeviceIndex() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.deviceIndex != nil && c.deviceID != "" {
+		c.deviceIndex.move(c, c.deviceID, "")
+	}
+	c.deviceIndex = nil
+}
+
+// deviceSessionIndex maps a linked device ID to its live sessions, so a
+// doorbell reaches them without scanning every client (O(sessions of the
+// device), not O(all clients)).
+type deviceSessionIndex struct {
+	mu       sync.Mutex
+	sessions map[string]map[*Client]struct{}
+}
+
+func newDeviceSessionIndex() *deviceSessionIndex {
+	return &deviceSessionIndex{sessions: map[string]map[*Client]struct{}{}}
+}
+
+func (x *deviceSessionIndex) move(c *Client, from, to string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if set := x.sessions[from]; from != "" && set != nil {
+		delete(set, c)
+		if len(set) == 0 {
+			delete(x.sessions, from)
+		}
+	}
+	if to != "" {
+		set := x.sessions[to]
+		if set == nil {
+			set = map[*Client]struct{}{}
+			x.sessions[to] = set
+		}
+		set[c] = struct{}{}
+	}
+}
+
+func (x *deviceSessionIndex) of(device string) []*Client {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	out := make([]*Client, 0, len(x.sessions[device]))
+	for c := range x.sessions[device] {
+		out = append(out, c)
+	}
+	return out
 }
 
 func (c *Client) currentDeviceID() string {
@@ -255,20 +330,31 @@ func (s *TCPServer) attachSessionDevice(ctx context.Context, client *Client, pri
 }
 
 // ensureDesktopDevice registers a desktop session's identity key as a device
-// the first time it manages devices. Web sessions are only ever linked.
+// the first time it manages devices. Web sessions are linked, except a
+// self-rooted key identity (a guest whose principal is derived from its own
+// session key): its key is its account root, so it registers itself as its
+// first web device and can use secure messaging like a desktop guest.
 func (s *TCPServer) ensureDesktopDevice(ctx context.Context, client *Client) (store.Device, error) {
 	if id := client.currentDeviceID(); id != "" {
 		return s.deps.Devices.DeviceByID(ctx, client.uniqueID(), id)
 	}
 	key := client.sessionKey()
-	if key == "" || client.isWebTransport() {
+	if key == "" {
 		return store.Device{}, store.ErrDeviceNotFound
+	}
+	kind, name := store.DeviceKindDesktop, "Desktop"
+	if client.isWebTransport() {
+		derived, err := auth.UniqueIDFromPublicKey(key)
+		if err != nil || derived != client.uniqueID() || client.userID() > 0 {
+			return store.Device{}, store.ErrDeviceNotFound
+		}
+		kind, name = store.DeviceKindWeb, "Browser"
 	}
 	d, err := s.deps.Devices.AddDevice(ctx, store.NewDevice{
 		Principal:     client.uniqueID(),
 		UserID:        client.userID(),
-		Kind:          store.DeviceKindDesktop,
-		Name:          "Desktop",
+		Kind:          kind,
+		Name:          name,
 		Ed25519Public: key,
 		X25519Public:  client.x25519(),
 	}, s.cfg.Web.DeviceLimit())
@@ -668,12 +754,16 @@ func (s *TCPServer) handleLinkClaim(ctx context.Context, client *Client, r netpr
 func (s *TCPServer) handleLinkStatus(client *Client, r netproto.DeviceRequest) error {
 	s.links.mu.Lock()
 	s.links.sweepLocked(time.Now())
-	state := netproto.LinkStateExpired
+	result := netproto.DeviceResult{Action: r.Action, LinkID: r.LinkID, State: netproto.LinkStateExpired}
 	if link := s.links.byID[r.LinkID]; link != nil && link.claimKey == r.Ed25519PublicKey {
-		state = link.state
+		result.State = link.state
+		if link.state == netproto.LinkStateApproved && link.binding != "" {
+			result.ServerBinding, result.BindingSignature = link.binding, link.bindingSig
+			result.ApproverDeviceID, result.ApproverKey, result.Principal = link.creatorDeviceID, link.creatorKey, link.principal
+		}
 	}
 	s.links.mu.Unlock()
-	return s.writeMessage(client, netproto.MsgDeviceResult, netproto.DeviceResult{Action: r.Action, LinkID: r.LinkID, State: state})
+	return s.writeMessage(client, netproto.MsgDeviceResult, result)
 }
 
 func (s *TCPServer) handleLinkDecide(ctx context.Context, client *Client, r netproto.DeviceRequest) error {
@@ -701,6 +791,14 @@ func (s *TCPServer) handleLinkDecide(ctx context.Context, client *Client, r netp
 	if err := auth.VerifyChallenge(claim.creatorKey, transcript, r.Signature); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "approval signature does not match this device")
 	}
+	// The binding statement is optional (older desktops), but if present it
+	// must verify: the server never relays an unsigned or foreign binding.
+	if r.ServerBinding != "" || len(r.BindingSignature) > 0 {
+		bound := netproto.DeviceLinkBindingTranscript(claim.principal, claim.creatorDeviceID, claim.claimKey, claim.claimX25519, r.ServerBinding)
+		if r.ServerBinding == "" || auth.VerifyChallenge(claim.creatorKey, bound, r.BindingSignature) != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "server binding signature does not match this device")
+		}
+	}
 	name := "Phone"
 	if claim.claimPlatform != "" {
 		name = claim.claimPlatform
@@ -722,6 +820,7 @@ func (s *TCPServer) handleLinkDecide(ctx context.Context, client *Client, r netp
 	if current := s.links.byID[claim.id]; current != nil {
 		current.state = netproto.LinkStateApproved
 		current.expires = time.Now().Add(deviceLinkTTL)
+		current.binding, current.bindingSig = r.ServerBinding, r.BindingSignature
 	}
 	s.links.mu.Unlock()
 

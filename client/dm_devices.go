@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"noxa/internal/auth"
+	"noxa/internal/devicetrust"
 	"noxa/internal/e2ee"
 	"noxa/internal/netproto"
 )
@@ -36,6 +37,7 @@ type dmTrustedDevice struct {
 	DeviceID string
 	Kind     string
 	X25519   [32]byte
+	Signing  ed25519.PublicKey
 	// First marks the account's first device, which opens what is sealed to
 	// the account key (private groups need no device envelope for it).
 	First bool
@@ -86,6 +88,9 @@ func (c *dmDeviceCache) forget(uids ...string) {
 	for _, uid := range uids {
 		delete(c.entries, uid)
 	}
+	// A fetch already in flight (verified against an older pin) must not
+	// repopulate the list after a forget.
+	c.epoch++
 }
 
 func (c *dmDeviceCache) clear() {
@@ -102,83 +107,13 @@ func (c *dmDeviceCache) clear() {
 // an approval signature by a trusted device over DeviceApprovalTranscript;
 // forged, dangling or cyclic approvals leave the device out.
 func verifyDMDevices(principal string, signing ed25519.PublicKey, encryption [32]byte, devices []netproto.DMDevice) ([]dmTrustedDevice, error) {
-	if len(devices) == 0 {
-		return nil, nil
-	}
-	byID := make(map[string]netproto.DMDevice, len(devices))
-	var first *netproto.DMDevice
-	for i := range devices {
-		d := devices[i]
-		if d.DeviceID == "" {
-			continue
-		}
-		if _, dup := byID[d.DeviceID]; dup {
-			return nil, errDMDevicesUnverified
-		}
-		byID[d.DeviceID] = d
-		if d.FirstDevice {
-			if first != nil {
-				return nil, errDMDevicesUnverified
-			}
-			first = &devices[i]
-		}
-	}
-	if first == nil {
+	verified, err := devicetrust.Verify(principal, signing, encryption, devices)
+	if err != nil {
 		return nil, errDMDevicesUnverified
 	}
-	firstKey, err := auth.LoadPublicKey(first.Ed25519Public)
-	if err != nil || len(signing) != ed25519.PublicKeySize || !bytes.Equal(firstKey, signing) {
-		return nil, errDMDevicesUnverified
-	}
-	if x, ok := parseDeviceX25519(first.X25519Public); !ok || x != encryption {
-		// The first device's encryption key is the account record's; a
-		// directory that disagrees cannot vouch for anything else.
-		log.Printf("dm devices: first device of %s lists another encryption key; using the signed record only", principal)
-		return []dmTrustedDevice{{DeviceID: first.DeviceID, Kind: first.Kind, X25519: encryption, First: true}}, nil
-	}
-
-	const (
-		unknown = iota
-		visiting
-		trusted
-		untrusted
-	)
-	state := make(map[string]int, len(byID))
-	state[first.DeviceID] = trusted
-	var resolve func(id string) bool
-	resolve = func(id string) bool {
-		switch state[id] {
-		case trusted:
-			return true
-		case untrusted, visiting: // visiting again is a cycle
-			return false
-		}
-		state[id] = visiting
-		d := byID[id]
-		ok := false
-		if approver, known := byID[d.ApprovedBy]; known && d.ApprovedBy != id && len(d.ApprovalSignature) == ed25519.SignatureSize && resolve(d.ApprovedBy) {
-			if key, err := auth.LoadPublicKey(approver.Ed25519Public); err == nil {
-				transcript := netproto.DeviceApprovalTranscript(principal, d.ApprovedBy, d.Ed25519Public, d.X25519Public)
-				ok = ed25519.Verify(key, transcript, d.ApprovalSignature)
-			}
-		}
-		if _, valid := parseDeviceX25519(d.X25519Public); !valid {
-			ok = false
-		}
-		if ok {
-			state[id] = trusted
-		} else {
-			state[id] = untrusted
-		}
-		return ok
-	}
-	out := []dmTrustedDevice{{DeviceID: first.DeviceID, Kind: first.Kind, X25519: encryption, First: true}}
-	for _, d := range devices {
-		if d.DeviceID == "" || d.DeviceID == first.DeviceID || !resolve(d.DeviceID) {
-			continue
-		}
-		x, _ := parseDeviceX25519(d.X25519Public)
-		out = append(out, dmTrustedDevice{DeviceID: d.DeviceID, Kind: d.Kind, X25519: x})
+	out := make([]dmTrustedDevice, 0, len(verified))
+	for _, d := range verified {
+		out = append(out, dmTrustedDevice{DeviceID: d.ID, Kind: d.Kind, X25519: d.Encryption, Signing: d.Signing, First: d.First})
 	}
 	return out, nil
 }
@@ -414,7 +349,9 @@ func (m *connManager) openDeviceCopy(chat netproto.ChatBroadcast, pub, priv [32]
 		return "", false
 	}
 	plain, err := openDM(chat.Text, senderKey, priv)
-	if err != nil {
+	// A history chunk replayed as a DM copy is never shown (same box keys,
+	// different purpose: netproto history envelope).
+	if err != nil || netproto.IsHistoryEnvelope(plain) {
 		return "", false
 	}
 	return plain, true
@@ -425,7 +362,9 @@ func (m *connManager) openDeviceCopy(chat netproto.ChatBroadcast, pub, priv [32]
 // session's device id.
 func (m *connManager) ensureDeviceRegistered(conn net.Conn) {
 	m.mu.Lock()
-	due := m.supportsDevices && !m.isGuest && m.deviceID == "" && m.conn == conn
+	// Key-identity guests register their device too (secure messaging needs
+	// one); only a keyless session cannot.
+	due := m.supportsDevices && !m.keyless && m.deviceID == "" && m.conn == conn
 	m.mu.Unlock()
 	if !due {
 		return

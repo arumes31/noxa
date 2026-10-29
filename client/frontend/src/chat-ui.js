@@ -1,3 +1,4 @@
+import { previewConversation, previewConversationFor, setPreviewConversation } from "./preview-privacy.js";
 import { createActivityHistory } from "./activity-history.js";
 import { blockedPreviewPlaceholder, resolvePreviewImage } from "./preview-source-policy.js";
 // chat-ui.js — wave-5b rich chat UI: markdown messages (91-93), link preview
@@ -31,6 +32,7 @@ import { mergeReadMarker } from "./read-markers.js";
 import { QUICK_SWITCH_SETTINGS } from "./shell-model.js";
 import { createChatDelivery } from "./chat-delivery.js";
 import { sessionUserID } from "./session-identity.js";
+import { RATCHET_PROTOCOL, ratchetDMMessage, ratchetIsIncoming, sameDMMessage } from "./ratchet-projection.js";
 import { DOWNGRADED, encModeFrom, encryptionBadge, UNOPENED_BODIES } from "./message-encryption.js";
 import { chatEnglish } from "./chat-messages.js";
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
@@ -694,7 +696,8 @@ export function encryptionBadgeElement(badge) {
     const lock = document.createElement("span");
     lock.className = "msg-lock";
     lock.dataset.encryption = badge.kind;
-    lock.innerHTML = icon(badge.kind);
+    // Legacy static-key encryption draws a key, never the Olm lock.
+    lock.innerHTML = icon(badge.kind === "legacy" ? "key" : badge.kind);
     lock.setAttribute("role", "img");
     lock.setAttribute("aria-label", t(badge.label));
     lock.title = t(badge.label);
@@ -857,6 +860,8 @@ function renderDMActions(m, peer) {
         };
         acts.appendChild(b);
     };
+    // Legacy records are read-only: only Olm messages can be changed.
+    if (m.protocol !== RATCHET_PROTOCOL) return acts;
     // Attachments and voice messages carry tokens that an edit would break.
     if (!encryptionBadge(m).bodyKey && !/\[(file|voice):/.test(m.text || "")) mk("edit", t("chat.action.edit"), () => startDMEdit(m, peer));
     mk("trash", t("chat.action.delete"), () => deleteDM(m, peer));
@@ -949,7 +954,7 @@ export function onDMChanged(d) {
     const ref = d?.ref_client_msg_id || "";
     if (!peer || !ref || !d.from_unique_id) return;
     const st = store.get("dm:" + peer);
-    const m = st?.msgs.find((x) => x.clientMsgID === ref && x.fromUID === d.from_unique_id);
+    const m = st?.msgs.find((x) => x.clientMsgID === ref && x.fromUID === d.from_unique_id && !x.protocol);
     if (!m) {
         const now = Date.now();
         for (const [key, waiting] of pendingDMChanges) if (waiting.at + DM_CHANGE_WAIT_MS < now) pendingDMChanges.delete(key);
@@ -961,6 +966,154 @@ export function onDMChanged(d) {
     if (!applyDMChange(m, d)) return;
     if (view.kind === "dm" && view.uid === peer) refreshDMEl(m);
     window.dispatchEvent(new CustomEvent("noxa-direct-changed"));
+}
+
+// onRatchetMessage projects one authoritative noxa-olm-v1 record (Go
+// "ratchet_message"). Go already merged it into the sealed DM log, so nothing
+// is re-recorded here and legacy receipts are not sent. Only a durable NEW
+// receive (is_new, not own, not a linked copy) counts as unread or notifies.
+// One stable operation ID per user operation (attachment, text sent with
+// attachments, voice message): a retry after an uncertain new-protocol send
+// passes the SAME ID, so the original resolves instead of a second send.
+const sendOperations = new Map();
+// An uncertain send survives a restart as an "uncertain" outbox entry under
+// the same operation ID (backend); its explicit Retry resolves the original.
+function operationIDFor(key) {
+    let id = sendOperations.get(key);
+    if (!id) {
+        // Bounded FIFO: only the oldest operation is forgotten, never all.
+        if (sendOperations.size >= 512) sendOperations.delete(sendOperations.keys().next().value);
+        id = crypto.randomUUID();
+        sendOperations.set(key, id);
+    }
+    return id;
+}
+function sendChatOperation(tabID, scope, target, text, parent, operationID) {
+    const api = app();
+    if (typeof api.SendChatOperationForTab === "function") return api.SendChatOperationForTab(tabID, scope, target, text, parent || 0, operationID);
+    return parent ? api.SendChatReplyForTab(tabID, scope, target, text, parent) : api.SendChatForTab(tabID, scope, target, text);
+}
+
+export function onRatchetMessage(d) {
+    if (!d || d.protocol !== RATCHET_PROTOCOL) return false;
+    if (d.scope === "group") {
+        window.dispatchEvent(new CustomEvent("noxa-ratchet-group", { detail: d }));
+        return false;
+    }
+    const peer = d.peer || "";
+    if (d.scope !== "direct" || !peer) return false;
+    const key = "dm:" + peer;
+    const st = getStore(key);
+    if (d.purpose === "edit" || d.purpose === "delete") {
+        // An own change shows only once accepted; a linked copy carries no status.
+        if (d.self && d.status && d.status !== "accepted") return false;
+        const change = { action: d.purpose, from_unique_id: d.sender, body: d.body?.text ?? "", peer, ref_client_msg_id: d.reference };
+        const target = st.msgs.find((x) => x.protocol === RATCHET_PROTOCOL && x.fromUID === d.sender && x.clientMsgID === d.reference);
+        if (!target) {
+            const waitKey = peer + "|olm|" + d.reference;
+            if (pendingDMChanges.size >= 256) pendingDMChanges.clear();
+            pendingDMChanges.set(waitKey, { at: Date.now(), changes: [...(pendingDMChanges.get(waitKey)?.changes || []), change] });
+            return false;
+        }
+        if (applyDMChange(target, change) && view.kind === "dm" && view.uid === peer) refreshDMEl(target);
+        window.dispatchEvent(new CustomEvent("noxa-direct-changed"));
+        return false;
+    }
+    if (d.purpose !== "chat") return false;
+    const tab = pmTabs.get(peer) || { uid: peer, nick: knownPeerName(peer, ""), unread: 0, offline: false, pendingRead: "" };
+    if (!pmTabs.has(peer)) pmTabs.set(peer, tab);
+    const m = ratchetDMMessage(d, d.self ? V().state.myNickname : knownPeerName(peer, ""));
+    st.msgs = st.msgs.filter((x) => x.clientMsgID !== "quarantine:" + (d.transport?.delivery_id || ""));
+    const existing = st.msgs.find((x) => sameDMMessage(x, m));
+    if (existing) {
+        // The committed original is authoritative: only its status moves.
+        Object.assign(existing, { pending: m.pending, failed: m.failed });
+        if (view.kind === "dm" && view.uid === peer) refreshDMEl(existing);
+        return false;
+    }
+    if (pushMsg(key, m) === "duplicate") return false;
+    const waitKey = peer + "|olm|" + m.clientMsgID;
+    for (const change of pendingDMChanges.get(waitKey)?.changes || []) applyDMChange(m, change);
+    pendingDMChanges.delete(waitKey);
+    const incoming = ratchetIsIncoming(d);
+    if (incoming) {
+        window.__noxaNotify?.notify("dm", (m.from || "someone") + ": " + previewLine(m),
+            { uid: peer, className: "messages", kind: "info", announce: false,
+                reference: { kind: "dm", peer_id: peer, client_message_id: m.clientMsgID, local_seq: 0 } });
+    }
+    const live = key === activeKey() && !isPrivateGroupActive();
+    if (live) appendLive(m);
+    else if (incoming) {
+        tab.unread++;
+        if (!V().state.replayingTabID) tab.unreadAt = Date.now();
+    }
+    renderTabs();
+    return true;
+}
+
+// onRatchetTrust tells the user why secure messaging with a contact is held:
+// a changed identity needs explicit confirmation, or a confirmed change is
+// still being applied. Nothing is adopted without that confirmation.
+const ratchetTrustNoticeAt = new Map();
+export function onRatchetTrust(d) {
+    const contact = d?.contact || "";
+    const key = { confirmation_required: "chat.secureConfirmIdentity", blocked: "chat.secureIdentityBlocked", pending: "chat.secureResetPending" }[d?.state];
+    if (!contact || !key) return;
+    const noticeKey = contact + "|" + d.state;
+    if (Date.now() - (ratchetTrustNoticeAt.get(noticeKey) || 0) < 60000) return;
+    ratchetTrustNoticeAt.set(noticeKey, Date.now());
+    V().toast(t(key, { name: knownPeerName(contact, "") || contact }), "warn");
+}
+
+// onRatchetQuarantine shows truthful locked placeholders for new-protocol
+// copies that could not be opened. They are never unread and disappear once
+// the copy opens or is no longer quarantined.
+// quarantineText is the truthful placeholder: a copy sent to keys this device
+// no longer has (fenced_copy, e.g. after a recovery) or whose key is gone
+// (lost_key) can never be opened; anything else failed verification.
+export function quarantineText(code) {
+    if (code === "fenced_copy") return t("quarantine.previousKeys");
+    if (code === "lost_key") return t("quarantine.lostKey");
+    return t("quarantine.unverified");
+}
+// A placeholder's sender, peer and conversation are unauthenticated manifest
+// metadata (the copy could not be opened): a placeholder is labelled
+// neutrally, never attributed to a sender, and only shown in a direct
+// conversation that already exists (an open tab or loaded messages); it never
+// creates one.
+let ratchetPlaceholders = [];
+export function quarantinePlaceholder(q) {
+    return { id: 0, localSeq: 0, protocol: RATCHET_PROTOCOL, from: t("quarantine.sender"), fromUID: "",
+        text: quarantineText(q.code), ts: Math.round((Number(q.seen_at) || Date.now() / 1000) * 1000), edited: false, deleted: false,
+        reactions: null, mentions: [], e2e: false, direct: true, enc: false, encVerified: false, encMode: "", quarantined: q.code || "",
+        offline: false, clientMsgID: "quarantine:" + q.id, channelID: null, self: false, mentioned: false };
+}
+function applyQuarantinePlaceholders() {
+    const current = new Set();
+    for (const q of ratchetPlaceholders) {
+        if (q?.scope !== "direct" || typeof q.peer !== "string" || !q.peer || !q.id) continue;
+        const key = "dm:" + q.peer;
+        // No conversation with this peer yet: a placeholder never creates one.
+        if (!pmTabs.has(q.peer) && !store.get(key)?.msgs.some((x) => !x.quarantined)) continue;
+        const id = "quarantine:" + q.id;
+        current.add(id);
+        if (!getStore(key).msgs.some((x) => x.clientMsgID === id)) pushMsg(key, quarantinePlaceholder(q));
+    }
+    for (const [key, st] of store) {
+        if (!key.startsWith("dm:")) continue;
+        const keep = st.msgs.filter((x) => !x.quarantined || current.has(x.clientMsgID));
+        if (keep.length !== st.msgs.length) st.msgs = keep;
+    }
+}
+// Test view of one direct conversation's in-memory store (create: start an
+// empty one, as an opened conversation would).
+export function directStoreForTest(uid, create = false) { return create ? getStore("dm:" + uid) : store.get("dm:" + uid) || null; }
+export function onRatchetQuarantine(d) {
+    const list = Array.isArray(d?.placeholders) ? d.placeholders : [];
+    ratchetPlaceholders = list;
+    applyQuarantinePlaceholders();
+    if (view.kind === "dm") renderView();
+    window.dispatchEvent(new CustomEvent("noxa-ratchet-quarantine", { detail: list }));
 }
 
 function applyPendingDMChanges(peer, m) {
@@ -978,6 +1131,8 @@ function applyPendingDMChanges(peer, m) {
 // renderMarkdown (which escapes first); file names only ever go into
 // textContent or DOM properties, never raw HTML.
 function renderBody(container, m) {
+    const conversation = previewConversation(m);
+    setPreviewConversation(container, conversation);
     const voiceScope = captureScope(() => readInlineAttachmentScope(m.isDM ? 0 : Number(m.channelID) || 0));
     if (!m.deleted && renderVoiceMessage(container, m.text, { tabID: voiceScope.tabID, channelID: voiceScope.channelID, isCurrent: () => inlineAttachmentScopeIsCurrent(voiceScope, container) })) return;
     if (renderPoll(container, m)) return;
@@ -998,6 +1153,7 @@ function renderBody(container, m) {
     for (let i = 1; i < parts.length; i += 2) attachFileRef(container, m, parts[i]);
     const previewScope = captureScope(readExportScope);
     const previewOptions = {
+        conversation,
         enabled: V().state.settings?.link_previews !== false,
         scope: previewScope,
         isCurrent: () => exportScopeIsCurrent(previewScope) && V().state.settings?.link_previews !== false,
@@ -1116,6 +1272,7 @@ function chatAttachmentSource(chID) {
 // embeds, server emoji, mentions and encrypted [file:...] attachments with
 // inline image/GIF/video previews. Callers handle voice messages first.
 export function renderSharedRichText(container, text, source) {
+    setPreviewConversation(container, "private");
     const parts = String(text ?? "").split(/\[file:([^\]]+)\]/);
     let html = "";
     for (let i = 0; i < parts.length; i += 2) html += renderMarkdown(parts[i]);
@@ -1756,7 +1913,8 @@ async function openE2EEDiagnostics() {
         <h3>${t("chat.e2ee")}</h3>
         <div class="e2ee-status ${changed ? "warn" : verified ? "ok" : ""}">${changed ? t("chat.safetyChanged") : verified ? t("chat.safetyVerifiedStatus") : peer ? t("chat.safetyUnverified") : t("chat.channelDiagnostics")}</div>
         <dl>
-            <dt>${t("chat.cipher")}</dt><dd>${escapeHTML(d.cipher || t("chat.unknown"))}</dd>
+            <dt>${t("chat.secureMessaging")}</dt><dd>${d.active ? t("chat.secureMessagingOlm") : escapeHTML(t("chat.secureMessagingInactive", { reason: d.unavailable || t("chat.unknown") }))}</dd>
+            ${d.active ? `<dt>${t("chat.cipher")}</dt><dd>${escapeHTML(d.cipher)}</dd>` : ""}
             <dt>${t("chat.cachedKeys")}</dt><dd>${d.cached_peers || 0}</dd>
             <dt>${t("chat.channelGenerations")}</dt><dd>${d.scope_keys || 0}</dd>
             <dt>${t("chat.missingKeys")}</dt><dd>${d.refused_keys || 0}</dd>
@@ -2199,6 +2357,12 @@ function dmMsg(e, peerNick) {
         localUnverified: !verified,
         offline: !!e.offline,
         clientMsgID: e.client_msg_id || "",
+        // A noxa-olm-v1 record (projected by Go from the protected archive)
+        // is identified by protocol + sender + logical ID, never by number.
+        protocol: e.protocol || "",
+        ratchetKey: e.key || "",
+        pending: !!e.protocol && self && e.status === "pending",
+        failed: !!e.protocol && self && (e.status === "rejected" || e.status === "aborted"),
         channelID: null,
         self,
         mentioned: false,
@@ -2236,10 +2400,13 @@ async function ensureDMHistory(uid) {
         if (st.dmClearPending) await st.dmClearPending;
         if (!current()) return false;
         const nick = peerName(uid);
-        const live = new Set(st.msgs.map((m) => m.clientMsgID).filter(Boolean));
+        const liveKey = (m) => m.clientMsgID ? JSON.stringify([m.protocol || "", m.protocol ? m.fromUID : "", m.clientMsgID]) : "";
+        const live = new Set(st.msgs.map(liveKey).filter(Boolean));
         const older = (rows || []).map((e) => dmMsg(e, nick))
-            .filter((m) => !m.clientMsgID || !live.has(m.clientMsgID));
+            .filter((m) => !m.clientMsgID || !live.has(liveKey(m)));
         st.msgs = older.concat(st.msgs);
+        // The conversation exists now: its locked placeholders may show.
+        applyQuarantinePlaceholders();
         const tab = pmTabs.get(uid);
         if (tab) tab.nick = knownPeerName(uid);
         renderTabs();
@@ -2714,7 +2881,8 @@ export function addChat(d) {
 function pushMsg(key, m) {
     const st = getStore(key);
     const duplicate = st.msgs.find((existing) => (m.id && existing.id === m.id) ||
-        (m.clientMsgID && existing.clientMsgID === m.clientMsgID && existing.self === m.self));
+        (m.clientMsgID && existing.clientMsgID === m.clientMsgID && existing.self === m.self &&
+            (existing.protocol || "") === (m.protocol || "") && (!m.protocol || existing.fromUID === m.fromUID)));
     if (duplicate) {
         upgradeEncryption(duplicate, m);
         return "duplicate";
@@ -3183,7 +3351,8 @@ export async function sendMessage() {
         try {
             const token = await attachmentQueue.upload(job, captured.sendScope === "channel" ? captured.channelID : 0, retryCurrent);
             if (!token || !retryCurrent()) return;
-            const error = await app().SendChatForTab(captured.tabID, captured.sendScope, captured.target, token);
+            file.operationID ||= crypto.randomUUID();
+            const error = await sendChatOperation(captured.tabID, captured.sendScope, captured.target, token, 0, file.operationID);
             if (!retryCurrent()) return;
             attachmentQueue.finish(job, error);
             if (!error) { pendingFiles = pendingFiles.filter(entry => entry !== file); renderFilePreview(); }
@@ -3249,7 +3418,8 @@ export async function sendMessage() {
             }
             if (!current()) return;
             try {
-                const err = await app().SendChatForTab(captured.tabID, scope, target, token);
+                f.operationID ||= crypto.randomUUID();
+                const err = await sendChatOperation(captured.tabID, scope, target, token, 0, f.operationID);
                 if (!current()) return;
                 attachmentQueue.finish(job, err);
                 if (err) { failure = err; retryFiles.push(f); }
@@ -3267,10 +3437,13 @@ export async function sendMessage() {
         }
         if (text) {
             let err = "";
+            // Bound to this composer item (its draft revision): a retry keeps it,
+            // even after some attachments were sent; a later identical text is a
+            // new operation.
+            const operationKey = JSON.stringify(["text", captured.tabID, scope, target, parentID, text, inputRevision]);
             try {
-                err = parentID
-                    ? await app().SendChatReplyForTab(captured.tabID, scope, target, text, parentID)
-                    : await app().SendChatForTab(captured.tabID, scope, target, text);
+                err = await sendChatOperation(captured.tabID, scope, target, text, parentID, operationIDFor(operationKey));
+                if (!err) sendOperations.delete(operationKey);
             } catch (e) {
                 failure = e;
                 return;
@@ -3608,7 +3781,7 @@ function initLinkCardDismissal() {
 function scheduleLinkCard(linkEl) {
     closeLinkCard();
     const settings = V().state.settings || {};
-    if (settings.link_previews === false) return;
+    if (settings.link_previews === false || previewConversationFor(linkEl) !== "channel") return;
     const url = linkEl.getAttribute("data-url");
     if (!url || youtubeVideo(url)) return;
     const video = videoPortal(url);
@@ -3629,6 +3802,7 @@ function scheduleLinkCard(linkEl) {
     }
     linkCardTimer = setTimeout(async () => {
         linkCardTimer = null;
+        if (previewConversationFor(linkEl) !== "channel") return;
         const controller = new AbortController();
         linkCardRequest = controller;
         let domain = url;
@@ -3936,7 +4110,7 @@ async function searchAll() {
 
 export function searchEncryptionBadge(message, direct = false) {
     const verified = !!message.enc_verified;
-    return encryptionBadge({ text: message.body, direct, enc: verified, encVerified: verified, encMode: encModeFrom(verified, message.enc_mode) });
+    return encryptionBadge({ text: message.body, direct, enc: verified, encVerified: verified, encMode: encModeFrom(verified, message.enc_mode), protocol: message.protocol || "" });
 }
 
 function showSearchResults(q, response, scope) {
@@ -3961,7 +4135,7 @@ function showSearchResults(q, response, scope) {
         },
         renderBadge: message => encryptionBadgeElement(searchEncryptionBadge(message, scope.kind === "dm")),
         onAdvanced: scope.kind !== "dm" ? openHistorySearch : null,
-        renderBody: (container, message) => renderBody(container, normalize(message, Number(message.channel_id ?? scope.channelID))),
+        renderBody: (container, message) => renderBody(container, { ...normalize(message, Number(message.channel_id ?? scope.channelID)), isDM: scope.kind === "dm" }),
         onSearch: (query, channel) => { $("chat-search").value = query; searchChannel = channel; searchQ = query; applySearchFilter(); void searchAll(); },
         onOpen: (message, panel) => {
             closeDialog(panel);
@@ -4495,14 +4669,14 @@ export function applyChatPrefs() {
     const previewsEnabled = s.link_previews !== false;
     if (linkPreviewPreference !== previewsEnabled) {
         linkPreviewPreference = previewsEnabled;
-        if (!previewsEnabled) { closeLinkCard(); document.querySelectorAll(".youtube-preview, .x-post-preview").forEach(card => card.remove()); }
+        if (!previewsEnabled) { closeLinkCard(); document.querySelectorAll(".youtube-preview, .x-post-preview, .video-portal-preview").forEach(card => card.remove()); }
         else {
             const scope = captureScope(readExportScope);
             for (const message of getStore(activeKey()).msgs) {
                 const body = log.querySelector(`[data-scroll-key="${CSS.escape(message.renderKey || "")}"] .msg-text`);
-                if (body && !body.querySelector(".youtube-preview")) renderYouTubePreviews(body, { enabled: true, scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
-                if (body && !body.querySelector(".x-post-preview")) renderXPostPreviews(body, { enabled: true, scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
-                if (body && !body.querySelector(".video-portal-preview")) renderVideoPortalPreviews(body, { enabled: true, scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
+                if (body && !body.querySelector(".youtube-preview")) renderYouTubePreviews(body, { enabled: true, conversation: previewConversation(message), scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
+                if (body && !body.querySelector(".x-post-preview")) renderXPostPreviews(body, { enabled: true, conversation: previewConversation(message), scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
+                if (body && !body.querySelector(".video-portal-preview")) renderVideoPortalPreviews(body, { enabled: true, conversation: previewConversation(message), scope, isCurrent: () => exportScopeIsCurrent(scope) && V().state.settings?.link_previews !== false });
             }
         }
     }
@@ -5021,9 +5195,13 @@ export function initChat() {
         return {
             tabID: scope.tabID, channelID: scope.sendScope === "channel" ? scope.channelID : 0,
             isCurrent: () => scopeIsCurrent(scope, readSendScope),
-            send: token => parent
-                ? app().SendChatReplyForTab(scope.tabID, scope.sendScope, scope.target, token, parent)
-                : app().SendChatForTab(scope.tabID, scope.sendScope, scope.target, token),
+            send: async token => {
+                // The recording keeps its uploaded token across retries.
+                const key = JSON.stringify(["voice", scope.tabID, scope.target, token]);
+                const error = await sendChatOperation(scope.tabID, scope.sendScope, scope.target, token, parent, operationIDFor(key));
+                if (!error) sendOperations.delete(key);
+                return error;
+            },
         };
     }));
     $("chat-file").addEventListener("change", (e) => {

@@ -22,6 +22,7 @@ const MaxDMCopies = 24
 
 // DMDevice is one device of an account as the key directory lists it.
 type DMDevice struct {
+	RevokedAt     int64  `json:"revoked_at,omitempty"`
 	DeviceID      string `json:"device_id"`
 	Kind          string `json:"kind"`
 	Ed25519Public string `json:"ed25519_public_key"`
@@ -111,4 +112,18 @@ type HistoryMessage struct {
 	SentAt       int64  `json:"sent_at"`
 	Self         bool   `json:"self,omitempty"`
 	ClientMsgID  string `json:"client_msg_id,omitempty"`
+	// Protocol is "noxa-olm-v1" for a readable record of the authenticated
+	// ratchet archive (empty = legacy); ClientMsgID is then the original
+	// sender's logical ID. Provenance is the record's provenance on the
+	// SOURCE device ("authenticated", or "transferred" when it was itself
+	// copied). The importing device keeps it separately from the source
+	// device's authorization and never imports keys, ratchets or trust.
+	Protocol   string `json:"protocol,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
 }
+
+// History transfer provenance values.
+const (
+	HistoryProvenanceAuthenticated = "authenticated"
+	HistoryProvenanceTransferred   = "transferred"
+)

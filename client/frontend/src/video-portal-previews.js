@@ -50,8 +50,9 @@ export function portalThumbnail(_provider, value) {
     return resolvePreviewImage(value).src;
 }
 
-export function renderVideoPortalPreviews(container, { enabled, scope, isCurrent }) {
-    if (!enabled) return;
+export function renderVideoPortalPreviews(container, { enabled, scope, isCurrent, conversation }) {
+    if (!enabled || conversation !== "channel") return;
+    scope = { ...scope, conversation };
     const seen = new Set();
     for (const link of container.querySelectorAll(".md-link[data-url]")) {
         const video = videoPortal(link.dataset.url);

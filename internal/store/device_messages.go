@@ -14,7 +14,15 @@ var ErrHistoryLimit = errors.New("history copy is too large")
 // EndorseDevice records a trusted device's approval signature for a device
 // that has none yet (a device linked with a passkey).
 func (s *Store) EndorseDevice(ctx context.Context, principal, deviceID, approverID string, signature []byte) (Device, error) {
-	d, err := scanDevice(s.db.QueryRowContext(ctx, `UPDATE user_devices SET approved_by=$3, approval_signature=$4
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Device{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = lockOlmRosters(ctx, tx, []string{principal}); err != nil {
+		return Device{}, err
+	}
+	d, err := scanDevice(tx.QueryRowContext(ctx, `UPDATE user_devices SET approved_by=$3, approval_signature=$4
 		WHERE principal=$1 AND device_id=$2 AND revoked_at IS NULL AND NOT first_device
 			AND (approval_signature IS NULL OR length(approval_signature) = 0)
 		RETURNING `+deviceColumns, principal, deviceID, approverID, signature))
@@ -23,6 +31,12 @@ func (s *Store) EndorseDevice(ctx context.Context, principal, deviceID, approver
 	}
 	if err != nil {
 		return Device{}, fmt.Errorf("endorsing device: %w", err)
+	}
+	if err = bumpOlmRoster(ctx, tx, principal); err != nil {
+		return Device{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return Device{}, err
 	}
 	return d, nil
 }

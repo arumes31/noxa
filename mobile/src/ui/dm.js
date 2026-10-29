@@ -2,7 +2,7 @@
 // attachments, voice messages, typing, receipts and the header tools.
 // Bodies render as rich text; attachments upload to the server-wide scope
 // (as the desktop does for direct messages).
-import { app, queueMessage, startCall } from "../app.js";
+import { app, queueMessage, secureMessagingStatus, startCall } from "../app.js";
 import { callLog, callsWith } from "../core/call-log.js";
 import { isMuted, setMuted } from "../core/conversation-prefs.js";
 import { Trust } from "../core/direct.js";
@@ -20,7 +20,7 @@ import { voiceNoteButton } from "./voice-note.js";
 import { announcementBanner } from "./announcement.js";
 import { attachControls, emojiButton } from "./composer-extras.js";
 import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage, shareText } from "./chat-actions.js";
-import { aboutEncryption, encryptionBadge, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
+import { aboutEncryption, confirmIdentityChange, encryptionBadge, secureBanner, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 import { dmEntry } from "../core/search.js";
 import { chatSearch } from "./chat-search.js";
 
@@ -31,7 +31,7 @@ export function renderDM(root, peer) {
     const nickname = () => dm.conversations.get(peer)?.nickname || session.clients().find(c => c.unique_id === peer)?.nickname || t("dm.someone");
     const name = nickname();
     const log = h("div", { class: "chat-log", role: "log", "aria-live": "polite", "aria-label": name });
-    const banner = h("div", { class: "e2e-banner", role: "note" }, icon("lock"), " ", t("dm.encrypted"));
+    const banner = secureBanner(secureMessagingStatus());
     const notice = h("div");
     const deviceNotice = h("div");
     const typing = h("div", { class: "typing", role: "status" });
@@ -69,19 +69,23 @@ export function renderDM(root, peer) {
         const classes = ["msg", message.self ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
         const body = message.deleted ? h("span", { class: "msg-deleted" }, t("chat.deleted"))
             : message.body === null || message.body === undefined
-                ? h("span", { class: "msg-locked" }, t("chat.locked"))
-                : richBody(message.body, { session, conn: session.conn, channelID: 0 });
-        const from = message.self ? session.nickname : (message.fromNickname || name);
+                ? h("span", { class: "msg-locked" }, t(message.quarantined === "fenced_copy" ? "chat.lockedPreviousKeys" : "chat.locked"))
+                : richBody(message.body, { conversation: "direct", session, conn: session.conn, channelID: 0 });
+        // A locked placeholder's sender is unauthenticated: never attributed.
+        const from = message.unattributed ? t("chat.lockedSender") : message.self ? session.nickname : (message.fromNickname || name);
         // Not sent: tapping offers Retry or Delete; otherwise the action sheet (bindMessageTaps).
         const retry = message.failed ? retryProps(message, retryActions(message)) : { tabindex: message.deleted ? null : "0", "aria-haspopup": message.deleted ? null : "dialog" };
         const el = h("div", { class: classes, dataset: { id: String(message.id ?? "") }, ...retry },
             timeNode(message.sentAt),
-            avatar(from, "sm", message.self ? session.uniqueID : peer),
+            avatar(from, "sm", message.unattributed ? "" : message.self ? session.uniqueID : peer),
             h("div", { class: "msg-body" },
                 h("span", { class: "msg-from" }, from),
-                message.deleted ? null : encryptionBadge("e2e"),
+                message.deleted ? null : encryptionBadge("e2e", message),
                 body,
                 message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
+                // Transferred history: shown as copied from another device of this
+                // account, never as authenticated on this device.
+                message.provenance === "transferred" ? h("span", { class: "msg-edited", title: t(message.origin?.provenance === "transferred" ? "chat.transferredCopyHint" : "chat.transferredHint") }, t("chat.transferred")) : null,
                 message.self && !message.deleted ? receiptTicks(message.receipt) : null,
                 sendState(message)));
         el.noxaMessage = message.deleted || message.failed ? null : message;
@@ -121,6 +125,9 @@ export function renderDM(root, peer) {
     }
 
     function paintBanner(contact) {
+        // No end-to-end claim while no secure path is active: keep the
+        // explanation secureBanner() painted (CodeRabbit b46 finding 4).
+        if (!secureMessagingStatus().active) return;
         const verified = contact.trust === Trust.ok && contact.verified;
         banner.replaceChildren(icon(verified ? "shield" : "lock"), " ",
             contact.fingerprint ? t("dm.encryptedWith", { fingerprint: contact.fingerprint }) : t("dm.encrypted"),
@@ -149,11 +156,15 @@ export function renderDM(root, peer) {
             let blocked = true;
             if (contact.trust === Trust.changed) {
                 setNotice(t("dm.identityChanged", { name }), h("button", { class: "btn", onclick: async () => {
-                    const ok = await sheet(t("dm.trustTitle"), t("dm.trustBody", { name }), [{ label: t("dm.trust"), value: true, primary: true }, { label: t("link.cancel"), value: false }]);
-                    if (ok) { await dm.trustNewIdentity(peer); checkTrust(); }
+                    // The sheet shows exactly the fingerprint that is pinned on confirm.
+                    const fingerprint = contact.fingerprint;
+                    if (await confirmIdentityChange(name, fingerprint)) { await dm.trustNewIdentity(peer, fingerprint); checkTrust(); }
                 } }, t("dm.trust")));
             } else if (!contact.devices.length) {
                 setNotice(t("dm.unavailable", { name }));
+            } else if (own.block) {
+                // This account's own key is not the one the linking desktop vouched for.
+                setNotice(t(`dm.error.${own.block.code}`));
             } else if (!own.devices.some(d => d.deviceID === session.deviceID)) {
                 setNotice(t("dm.unconfirmed"));
             } else {
@@ -176,7 +187,8 @@ export function renderDM(root, peer) {
         input.value = "";
     }
     async function messageActions(message) {
-        const changeable = message.self && !message.deleted && !message.pending && !message.queued && !message.failed;
+        // Legacy records are read-only: only Olm messages can be changed.
+        const changeable = message.self && message.protocol === "noxa-olm-v1" && !message.deleted && !message.pending && !message.queued && !message.failed;
         const hasText = typeof message.body === "string" && !!message.body;
         const sent = !message.pending && !message.queued && !message.failed;
         const actions = [
@@ -294,8 +306,8 @@ export function renderDM(root, peer) {
     const progress = h("div", { class: "history-progress", role: "status" });
     const onMessages = event => { if (event.detail.peer === peer) render(); };
     const onHistory = event => {
-        const { done, total } = event.detail;
-        progress.textContent = done < total ? t("dm.historyCopying", { done, total }) : "";
+        const { done, total, skipped } = event.detail;
+        progress.textContent = done < total ? t("dm.historyCopying", { done, total }) : skipped ? t("dm.historySkipped", { count: skipped }) : "";
         render();
     };
     let typingTimer = 0;

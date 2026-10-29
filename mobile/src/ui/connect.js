@@ -1,8 +1,10 @@
 // connect.js — screen 01: sign in with a passkey, or link from the desktop
 // by QR link (#id=…&k=…) or hidden code, then compare the two-digit code.
 import { app, connect, newIdentity, rememberLinkedIdentity } from "../app.js";
+import { beginIdentity } from "../core/identity-store.js";
 import { Connection } from "../core/connection.js";
 import { claimLink, LinkState, linkWithPasskey, passkeysSupported, waitForDecision } from "../core/device.js";
+import { linkBindingFromStatus, verifyLinkBinding } from "../core/link-binding.js";
 import { t } from "../i18n.js";
 import { h, toast } from "./dom.js";
 import { icon } from "./icons.js";
@@ -28,8 +30,9 @@ export function renderConnect(root, { onSignedIn }) {
     const scanner = new AbortController();
     scanners.set(root, scanner);
     const scan = h("button", { class: "btn btn-block", type: "button", onclick: async () => {
+        const fence = await beginIdentity();
         const link = await scanPairingQR({ signal: scanner.signal });
-        if (link && !scanner.signal.aborted && root.isConnected) runLink(root, link, { onSignedIn });
+        if (link && !scanner.signal.aborted && root.isConnected) runLink(root, link, { onSignedIn, fence });
     } }, icon("camera"), t("connect.scan"));
     const error = h("p", { class: "error", role: "alert" });
     const code = h("input", {
@@ -46,6 +49,7 @@ export function renderConnect(root, { onSignedIn }) {
         error.textContent = "";
         passkey.disabled = true;
         try {
+            const fence = await beginIdentity();
             const identity = newIdentity();
             const conn = await Connection.open();
             try {
@@ -54,8 +58,8 @@ export function renderConnect(root, { onSignedIn }) {
             } finally {
                 conn.close();
             }
-            await rememberLinkedIdentity(identity, { via: "passkey" });
-            await connect();
+            const committed = await rememberLinkedIdentity(identity, { via: "passkey" }, fence);
+            await connect({ fence: committed });
             onSignedIn({ offerPasskey: false });
         } catch (err) {
             if (err?.name !== "NotAllowedError") error.textContent = signInMessage(err);
@@ -115,7 +119,7 @@ export function renderConnect(root, { onSignedIn }) {
 }
 
 /** Claims a link and waits for the desktop's decision. */
-export async function runLink(root, link, { onSignedIn }) {
+export async function runLink(root, link, { onSignedIn, fence }) {
     scanners.get(root)?.abort();
     const identity = newIdentity();
     const status = h("p", { class: "hint", role: "status" }, t("link.waiting"));
@@ -124,6 +128,7 @@ export async function runLink(root, link, { onSignedIn }) {
     root.replaceChildren(h("main", { class: "connect" }, brand(), h("div", { class: "card" }, h("div", { class: "spinner", role: "progressbar", "aria-label": t("link.waiting") })), cancel));
     let conn;
     try {
+        fence = fence || await beginIdentity();
         conn = await Connection.open();
         const claim = await claimLink(conn, identity, link);
         conn.close();
@@ -138,11 +143,21 @@ export async function runLink(root, link, { onSignedIn }) {
                 h("p", { class: "hint mono" }, t("link.desktop", { fingerprint: claim.approverFingerprint })),
                 h("div", { style: "display:flex;gap:10px;align-items:center;justify-content:center;margin-top:8px" }, h("div", { class: "spinner" }), status)),
             cancel));
-        const state = await waitForDecision(identity, claim.linkID, { signal: abort.signal });
+        let decided = null;
+        const state = await waitForDecision(identity, claim.linkID, { signal: abort.signal, onDecided: result => { decided = result; } });
+        if (abort.signal.aborted) return;
         if (state === LinkState.denied) return fail(t("link.denied"));
         if (state !== LinkState.approved) return fail(t("link.expired"));
-        await rememberLinkedIdentity(identity, { via: "link", approverFingerprint: claim.approverFingerprint });
-        await connect();
+        // The desktop's signed server binding (its pinned TLS certificate):
+        // verified for this device's keys and the approver shown while
+        // linking. A statement that does not verify fails the link.
+        // Anchored only by the desktop's own fingerprint in the scanned QR: a
+        // typed-code link (no anchor) stores no binding, so secure messaging
+        // stays blocked until the device is linked by QR.
+        const linkBinding = link.approver ? linkBindingFromStatus(decided) : null;
+        if (linkBinding) verifyLinkBinding(linkBinding, { identity, approverFingerprint: link.approver });
+        const committed = await rememberLinkedIdentity(identity, { via: "link", approverFingerprint: claim.approverFingerprint, ...(linkBinding ? { linkBinding, bindingAnchor: link.approver } : {}) }, fence);
+        await connect({ fence: committed });
         history.replaceState(null, "", "/app/#/home");
         onSignedIn({ offerPasskey: true });
     } catch (error) {

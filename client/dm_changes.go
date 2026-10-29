@@ -20,6 +20,10 @@ import (
 // the server or the contact runs a noXa without them.
 var errDMChangeUnsupported = errors.New("editing needs an updated noXa on both sides")
 
+// errDMChangeNotDelivered refuses a change to an own new-protocol message
+// whose delivery is still pending or failed.
+var errDMChangeNotDelivered = errors.New("this message is not delivered yet; it can be changed once it is sent")
+
 // errDMChangeNotOwn refuses a change to a message this account did not send.
 var errDMChangeNotOwn = errors.New("only your own messages can be edited or deleted")
 
@@ -137,7 +141,9 @@ func (a *App) dmHistoryApplyChangeWith(store dmHistoryStore, peer string, c dmCh
 	known := false
 	for i := range l.Messages {
 		e := &l.Messages[i]
-		if e.ClientMsgID != c.Ref {
+		// A legacy change never touches a new-protocol record: those are
+		// changed only by an authenticated noxa-olm-v1 edit/delete.
+		if e.ClientMsgID != c.Ref || e.Protocol != "" {
 			continue
 		}
 		known = true
@@ -223,11 +229,21 @@ func (a *App) changeDirectMessage(tabID, peer, ref, action, text string) error {
 	if err != nil {
 		return err
 	}
+	protocol, err := a.ownDirectMessageProtocol(m, peer, ref)
+	if err != nil {
+		return err
+	}
+	if protocol == ratchetProtocol {
+		// Authenticated new-protocol change: the reference is this sender's
+		// logical ID, never a transport UUID.
+		return m.changeRatchetDirect(peer, ref, action, text)
+	}
+	if m.ratchetConfigured() {
+		// Legacy NaCl is read-only: never sent again, not even as a change.
+		return errLegacyReadOnly
+	}
 	if !m.dmDevicesActive() {
 		return errDMChangeUnsupported
-	}
-	if err := a.requireOwnDirectMessage(m, peer, ref); err != nil {
-		return err
 	}
 	msg, err := m.encryptDirectChange(peer, ref, action, text)
 	if err != nil {
@@ -236,34 +252,50 @@ func (a *App) changeDirectMessage(tabID, peer, ref, action, text string) error {
 	return m.sendChatWithKeyRetry(msg, text)
 }
 
-// requireOwnDirectMessage checks the local log: only a message this account
-// sent, and that is not deleted, may be changed.
-func (a *App) requireOwnDirectMessage(m *connManager, peer, ref string) error {
+// ownDirectMessageProtocol returns the protocol of this account's own,
+// undeleted message ref in peer's log ("" = legacy). A new-protocol entry is
+// preferred: its reference is sender-qualified and cannot collide.
+func (a *App) ownDirectMessageProtocol(m *connManager, peer, ref string) (string, error) {
 	dir, err := a.dmHistoryDir()
 	if err != nil {
-		return err
+		return "", err
 	}
 	id, err := m.identity()
 	if err != nil {
-		return err
+		return "", err
 	}
 	store, err := dmHistoryStoreForIdentity(dir, id)
 	if err != nil {
-		return err
+		return "", err
 	}
 	entries, err := store.messages(peer)
 	if err != nil {
-		return err
+		return "", err
 	}
 	m.mu.Lock()
 	own := m.uniqueID
 	m.mu.Unlock()
+	found, protocol := false, ""
 	for _, e := range entries {
-		if e.ClientMsgID == ref && e.Self && !e.Deleted && (e.FromUniqueID == own || e.FromUniqueID == "") {
-			return nil
+		if e.ClientMsgID == ref && e.Self && !e.Deleted && (e.FromUniqueID == own || e.FromUniqueID == "" && e.Protocol == "") {
+			if !found || e.Protocol == ratchetProtocol {
+				found, protocol = true, e.Protocol
+			}
 		}
 	}
-	return errDMChangeNotOwn
+	if !found {
+		return "", errDMChangeNotOwn
+	}
+	if protocol == ratchetProtocol {
+		// As the PWA: only a delivered own message can be changed; a pending
+		// or failed one may never reach the contact.
+		for _, e := range entries {
+			if e.Protocol == ratchetProtocol && e.ClientMsgID == ref && e.FromUniqueID == own && e.Status != "" && e.Status != "accepted" {
+				return "", errDMChangeNotDelivered
+			}
+		}
+	}
+	return protocol, nil
 }
 
 // encryptDirectChange seals a change exactly like a per-device message: one

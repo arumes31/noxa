@@ -5,6 +5,7 @@
 import "./account-strings.js";
 import "./account.css";
 import { app, connect, disconnect, forgetDevice, rememberLinkedIdentity } from "../app.js";
+import { beginIdentity } from "../core/identity-store.js";
 import { BackupError, importBackup } from "../core/backup.js";
 import { isForThisServer, parseInviteLink, pendingInvite, resolveInvite, setPendingInvite, webInviteURL } from "../core/invite.js";
 import { classifySignIn } from "../core/login-errors.js";
@@ -80,6 +81,7 @@ export function signInMessage(error) {
 // --- Connect screen ------------------------------------------------------------
 
 async function restoreFromBackup(values, { onSignedIn, error }) {
+    const fence = await beginIdentity();
     const text = await values.file.text();
     let restored;
     try {
@@ -93,14 +95,13 @@ async function restoreFromBackup(values, { onSignedIn, error }) {
             { label: t("acct.restoreAnyway"), value: true, primary: true }, { label: t("acct.cancel"), value: false }]);
         if (!ok) return;
     }
-    await rememberLinkedIdentity(restored.identity, restored.meta);
     try {
-        await connect();
+        const committed = await rememberLinkedIdentity(restored.identity, restored.meta, fence);
+        await connect({ fence: committed });
         onSignedIn({ offerPasskey: false });
     } catch (err) {
         // Only a device the server no longer knows is forgotten again; a server
         // that is unreachable or full keeps the restored keys for the next try.
-        if (err.revoked) await forgetDevice().catch(() => {});
         error.textContent = signInMessage(err);
     }
 }

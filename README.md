@@ -70,14 +70,186 @@ system permissions determine the available voice, camera and notification tools.
 </details>
 
 > [!NOTE]
-> **Encryption boundaries:** Desktop direct-message bodies use X25519 +
-> XSalsa20-Poly1305 (NaCl box); the server relays encrypted payloads, including
-> offline delivery. The current desktop DM path does not use the repository's
-> X3DH/Double Ratchet library, so it does not provide that library's per-message
-> forward secrecy. Channel/global messages and forum bodies use server-managed
-> scope keys and can be decrypted by the server. Channel audio/video uses
-> WebRTC DTLS-SRTP to the SFU; channel media E2EE is
-> not yet integrated.
+> **Encryption boundaries** (details in [Encryption](#encryption)): direct
+> messages and private groups are end-to-end encrypted with Olm (vodozemac),
+> and channel voice, video and screen sharing are end-to-end encrypted with a
+> key shared by the channel's members. Channel/global chat, forum bodies and
+> private calls are **not** end-to-end encrypted yet. Upgrading? Deploy the
+> server before or together with the clients: see
+> [Upgrading to end-to-end encryption](#e2ee-upgrade).
+
+<a id="encryption"></a>
+
+### Encryption
+
+**What is end-to-end encrypted.** Direct messages and private-group messages,
+with their attachments, edits and deletes, between desktops and the mobile web
+app:
+
+- **Protocol.** Olm, the double ratchet as implemented by
+  [vodozemac](https://github.com/matrix-org/vodozemac), compiled to
+  WebAssembly and used by both clients (`noxa-olm-v1`). There is one Olm
+  session per pair of devices; every device of the sender and of the
+  recipients receives its own copy, and the conversation, sender, recipient
+  device and message ID are authenticated inside every message. Keys ratchet
+  forward with every message, so a session key stolen later cannot open
+  earlier messages (copied history is the exception, see "New devices").
+- **Primitives.** X25519 for the Olm handshake, AES-256-CBC with
+  HMAC-SHA-256 for messages. The Olm MAC is **truncated to 64 bits**, as the
+  Olm specification defines. Olm accounts are published as bundles signed by
+  each device's Ed25519 noXa key; contacts verify devices against the
+  identity they pinned (the account's first desktop and the devices it
+  approved). Changed identities need explicit confirmation; account resets
+  are accepted only through a signed reset chain.
+- **Not claimed.** This is not the Signal protocol and is not wire-compatible
+  with Signal or Matrix; it is not post-quantum.
+- **Server role.** The server relays and stores ciphertext and enforces
+  admission (complete device fanout, limits, membership) without being able
+  to read messages. It still sees metadata: who talks to whom, when, message
+  sizes and device lists.
+- **Older history and older apps.** Direct messages from before this protocol
+  used static X25519 + XSalsa20-Poly1305 (NaCl box) keys without forward
+  secrecy. Updated apps never send that way. Older apps still can, and
+  updated apps still show such messages, labelled as legacy encryption
+  (readable, not editable). An updated app never falls back to the weaker
+  encryption: if a contact has no end-to-end key yet, it does not send and
+  says that the contact needs to update.
+- **New devices.** Copying history to a newly linked device transfers
+  readable records only (signed per transfer by the source device, never keys
+  or sessions); copied records are marked as verified on the other device,
+  not on the new one. The copy is sealed with the two devices' long-term
+  X25519 keys (NaCl box) and kept by the server for up to 24 hours, so it has
+  no forward secrecy: someone who stores it and later obtains one of those
+  long-term keys can read the copied history.
+- **Private-call signalling** still uses the static device keys (private-call
+  media is not end-to-end encrypted, see below).
+- **Guests.** A guest that signs in with an identity key (desktop password-less
+  logins, browser guests) uses the same protocol for direct messages: its key
+  is its own account root and registers its device itself. A browser guest has
+  no desktop to vouch for the server, so it pins the server's certificate on
+  first use; if the certificate changes, secure messaging pauses until the
+  guest explicitly reviews and accepts the new fingerprint. Sessions without an
+  identity key cannot send direct or group messages.
+
+**Channel voice, video and screen sharing (`noxa-media-e2ee-v1`).** On a
+server that advertises this capability, every channel microphone, camera,
+screen and screen-audio frame is encrypted on the sending device before it
+reaches the server's media relay (SFU), and decrypted only on the receiving
+device. The frame cipher is the maintained LiveKit FrameCryptor (AES-GCM,
+pinned `livekit-client` 2.23.0) run in a dedicated worker on both browser
+transform APIs (RTCRtpScriptTransform and the older encoded-streams API).
+Each publication slot gets a fresh random key per epoch; keys travel only as
+authenticated, expiring, single-device ratchet controls (the same
+`noxa-olm-v1` sessions as direct messages, never stored at rest and never
+shown as messages) to the devices the channel roster names. A new epoch starts
+on every join, leave, kick, device change, reconnect and publication change
+and every five minutes, so a newcomer cannot decrypt earlier media and a
+departed device cannot decrypt later media. There is no unencrypted fallback:
+an old client, a keyless guest session, a browser without encoded transforms
+or a server without the device directory gets an explicit message and no
+media. Only Opus and VP8 are used while media is encrypted (H.264/HEVC
+publication is off). The server cannot start recordings (an existing
+recording can still be stopped and keeps its files and retention), whisper is
+unavailable, stream previews are not uploaded (a stream shows its picture once
+watched), and the connection benchmark is unavailable. The echo test channel
+returns your own encrypted media, decrypted with your own key.
+Limits: the server still sees who is in a channel, packet sizes and timing,
+and the clear VP8 keyframe header (dimensions); every participant who receives
+the keys can record what they receive (the app has no call recorder, external
+recorders cannot be prevented); a key is shared by everyone in the channel, so frames prove channel
+membership, not which member sent them: with the server's help, any
+participant could forge another participant's audio or video. Keys go only to
+the members the voice room shows (the status line names who holds them and
+warns when another member's view of the channel differs). Encrypted voice is
+unavailable while you are invisible (invisible sessions are not in the other
+members' roster). An encrypted voice channel holds at most 64 participants;
+a join or move beyond that is refused ("this encrypted voice channel is full").
+Like the channel member limit, the count includes invisible members, so a full
+channel can hint that an invisible member is present. A second live session of
+the same device counts as its own participant.
+
+**What stays off while channel media is encrypted, and why.**
+* *Whisper* stays unavailable. A whisper would need its own key scope for an
+  authorized recipient set that is not the channel, verified like channel keys;
+  until that scope is built and proven, whisper is refused rather than sent
+  under the channel key or in plaintext.
+* *Stream previews (thumbnails)* are made locally on each device that watches
+  a stream; nothing is uploaded, so the server never holds a picture.
+* *Video codecs* are VP8 (and Opus for audio) only. H.264/HEVC need encrypted
+  packetization through the SFU that has not been demonstrated end to end, so
+  they are not offered.
+* *The connection benchmark* stays declined: it would send unencrypted test
+  media through the SFU.
+* *Key controls already handed to the secure-messaging transport* are not
+  cancelled when a recipient is removed. Once the server accepted a control it
+  owns the delivery, so a retraction could never be enforced against the
+  server, and an honest server stops routing the channel's media to a removed
+  member anyway. Exposure is bounded instead. When a sender's roster drops a
+  device (leave, kick, move or device revocation), the sender encrypts only
+  under an epoch that device never received no later than 2.2 seconds
+  (200 ms to coalesce roster changes plus a 2-second activation deadline) after
+  the roster update reached it. This holds however long the server delays key
+  deliveries, while other rekeys (joins, publication changes, the five-minute
+  renewal) are running, under repeated removals or a stream of other roster
+  changes, and if the wall clock is changed (the deadline is a timer started
+  at the removal); a removed device never receives an epoch created after its
+  removal. If new keys cannot be set up in time (for example, the encryption
+  worker keeps failing), the sender's audio and video are paused at the
+  deadline instead of continuing under the old keys, and the voice status
+  says so until new keys are ready. The bound starts when the
+  roster update arrives: the server decides when it tells clients that
+  someone left. Remaining members whose new key is still in transit get it
+  when it arrives and cannot hear the sender until then (the voice status
+  says so). A late control is refused by the recipient after its
+  two-minute expiry, and an older epoch can never be reinstalled.
+
+Receivers get their encryption transform before the answer that adds them is
+sent, so the SFU can never route a frame to a receiver without one; a receiver
+that cannot be protected aborts the negotiation. Video receivers on the older
+encoded-streams path ask the SFU for a keyframe after their first decrypted
+frame. Voice and video tiles show the account whose verified device delivered
+the keys for that participant.
+
+<a id="e2ee-upgrade"></a>
+
+**Upgrading to end-to-end encryption.**
+
+- **Deploy the server first (or together with the clients).** Updated
+  desktops and mobile web apps sign in only with the domain-separated login
+  challenge that updated servers offer. Against an older server they refuse
+  to sign in with "this server needs an update" and do not fall back. Older
+  clients can still sign in to an updated server, but they cannot join voice
+  channels (they are asked to update), cannot use end-to-end encrypted direct
+  or group messages, and can send legacy direct messages only to contacts
+  with a single desktop device.
+- **Secure messaging and encrypted channel voice are always on.** There is no
+  setting to turn them off. They need the server's database (the signed device
+  directory and admission live there) and control-channel TLS (keys are bound
+  to the server's certificate fingerprint). A server without either refuses
+  direct and group messages and channel voice with an explicit message, and
+  logs a startup warning. **A server with `tls_enabled: false` cannot offer
+  channel voice at all.**
+- **Server recording cannot be started** while channel media is encrypted;
+  an existing recording can still be stopped and keeps its files and
+  retention. Whisper, uploaded stream previews, H.264/HEVC publication and
+  the connection benchmark are unavailable (see above).
+- Plan certificate rotations as a secure-messaging change too (see
+  [Certificate trust and rotation](#certificate-rotation)).
+
+**What is not end-to-end encrypted (yet).** Channel and global chat, threads
+and forum bodies use server-managed scope keys: the server can decrypt them
+(it moderates at send time and stores history sealed). Private calls (direct
+or group calls outside channels) use WebRTC DTLS-SRTP to the server's media
+relay, so the server can access private-call media; they are labelled
+separately and are not covered by channel media encryption.
+
+**Endpoint limits.** Encryption protects messages in transit and on the
+server, not on a compromised device. Readable history is stored on each device
+(desktop: in a protected local store tied to the identity, destroyed when the
+identity is deleted; mobile web app: in IndexedDB under a non-extractable
+WebCrypto key, deleted on sign-out). Chat exports are plain text unless you
+choose a passphrase; anything you copy, export or screenshot leaves this
+protection.
 
 ---
 
@@ -153,19 +325,20 @@ graph TD
 * **Screen-share audio choices**: In channel shares and private calls, choose **No audio**, **Shared application**, or **System audio**. Application audio requires a window and a supported capture runtime; enable audio in the system picker. It can include other windows of the same application. If application-only capture is unavailable or cannot be confirmed, video still starts without audio and a short notification explains the fallback. System audio is only shared when explicitly selected.
 * **Screen-share resolution**: The channel share dialog offers 720p, 1080p, 1440p, 4K, **Original source resolution**, and **Custom** dimensions (160–8192 pixels, 15/30/60 fps). The encoder has 50 Mbps of headroom instead of Chromium's implicit ~2.5 Mbps default; this is a ceiling, not a target or minimum. Screen-share presets preserve resolution while actual frame rate can adapt to network and encoder capacity, without an additional system-CPU-triggered 500 kbps cap. Server limits and explicit Low bandwidth mode still apply.
 * **Live share controls**: **Change quality** adjusts a running channel share's resolution and frame rate without reopening the capture picker or changing its source/audio. It updates the one encoding received by every viewer. Watched-stream details show measured resolution, decoded frames per second, codec and payload bitrate separately from the sender's selected settings.
-* **Shared video codec**: camera and screen publications use one sender encoding and upload. On a capable server, HEVC Main 8-bit is preferred when native hardware-support queries succeed and every active viewer supports the publisher's exact level. Otherwise the whole publication uses compatible H.264 Baseline or VP8; the SFU forwards without transcoding. Server recording and explicit server dimension bounds retain VP8 compatibility. Hardware predictions are checked against runtime encoder/decoder statistics, with bounded recovery and codec re-admission after a fallback.
+* **Shared video codec**: camera and screen publications use one sender encoding and upload. Channel media is always end-to-end encrypted on this release (see Encryption), so every channel publication is VP8 today; the HEVC/H.264 selection described next is not used while that is the case. On a capable server, HEVC Main 8-bit is preferred when native hardware-support queries succeed and every active viewer supports the publisher's exact level. Otherwise the whole publication uses compatible H.264 Baseline or VP8; the SFU forwards without transcoding. Server recording and explicit server dimension bounds retain VP8 compatibility. Hardware predictions are checked against runtime encoder/decoder statistics, with bounded recovery and codec re-admission after a fallback.
 * **Stream diagnostics for viewers**: Any authorized viewer can compare sender capture/encoding/transmission, server ingress/forwarding and local reception/decoding in **Stream details**. A plain-language health summary explains the available evidence and suggests an action for the sender or viewer; live share controls show the sender's summary too. Bitrate, retransmission share, keyframes, frame size and processing delays help locate bottlenecks. Updated senders are required for sender measurements; missing or stale data stays unknown.
 * **Priority speaker**: Non-priority publishers in the current voice channel are ducked to 25% gain (about −12 dB) while a priority speaker talks.
-* **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries.
+* **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries. Unavailable while channel media is end-to-end encrypted (a whisper would leave the channel key scope).
 * **Microphone recovery**: If the selected microphone disconnects, receiving audio and video continues. Choose and apply a device in **Capture** settings, then select **Retry microphone**. A replacement microphone never starts automatically.
 * **Personal audio controls**: **Personal audio…** in a member's menu opens a compact popover with separate voice and screen-share volume/mute controls, percentage and actual gain in dB. Personal volume uses 100% as unity and reaches +20 dB at the 200% endpoint, with a limiter for loud peaks. Capture settings include push-to-talk, channel voice activation on the audio thread with 100 ms of local pre-roll and a 450 ms release hold, continuous transmission, and local microphone testing. Guided microphone calibration recommends thresholds in the same 0.1% steps as the manual control.
 * **Private calls**: Accepted direct/group calls carry voice, camera, and screen sharing without moving participants into a voice channel.
+* **Studio (desktop)**: compose a live picture from several sources and publish it to your voice channel as your screen share. See [Studio](#studio).
 * **Network echo test**: In **Capture** settings, explicitly join the server's echo channel to hear your microphone through the normal voice connection. Only you hear your microphone: other participants cannot hear you and you cannot hear them. Echo media is excluded from whispers, cross-participant video, and channel recordings. Mute and push-to-talk still apply; wear headphones. The return button restores your previous channel while the test remains active on that server tab. Each server automatically creates `Echo Test` on startup after role setup, granting admitted users permission to view, join and speak only in that channel. Existing channels with the configured name retain their access rules, custom metadata and history; startup updates only the known old system-created echo topic. Set Docker environment variable `NOXA_ECHO_CHANNEL_ENABLED=false` and recreate the server container to disable creation and loopback; existing channels and history are retained. Configure the name with `NOXA_ECHO_CHANNEL_NAME` or `echo_channel_name` in YAML.
-* **Connection benchmark**: A separate, explicitly started test in **Capture** sends synthetic Opus packets for 20 seconds through the server's actual WebRTC endpoint and private Echo Test. It uses a temporary guest with the current server's pinned certificate, without microphone/speaker access or moving your existing voice connection. Results include round-trip timing, arrival gaps and unmatched packets after a short drain period; Cancel, tab disconnect and application shutdown clean up the guest. Guest admission and private echo support are required. This measures packet delivery, not perceived audio quality or maximum video throughput.
+* **Connection benchmark**: A separate, explicitly started test in **Capture** sends synthetic Opus packets for 20 seconds through the server's actual WebRTC endpoint and private Echo Test. It uses a temporary guest with the current server's pinned certificate, without microphone/speaker access or moving your existing voice connection. Results include round-trip timing, arrival gaps and unmatched packets after a short drain period; Cancel, tab disconnect and application shutdown clean up the guest. Guest admission and private echo support are required. This measures packet delivery, not perceived audio quality or maximum video throughput. Unavailable while channel media is end-to-end encrypted (it would send unencrypted test media).
 
 ### 💬 Messaging and collaboration
 
-* **Encrypted messages and attachments**: Direct messages use recipient keys; channel/global bodies use server-managed scope-key generations. Attachment keys travel inside their encrypted message bodies.
+* **Encrypted messages and attachments**: Direct messages and private groups are end-to-end encrypted with Olm (see [Encryption](#encryption)); channel/global bodies use server-managed scope-key generations. Attachment keys travel inside their encrypted message bodies.
 * **Message tools**: Emoji reactions, replies, pins, polls, voice messages, typing indicators, read receipts, and mentions. Inbox, history search, and saved messages are scoped to the current server; history search decrypts and matches bodies in the native client.
 * **Chat navigation**: Channel and direct-message tabs stay on one row, with an **All chats** menu for overflow. Right-click to pin or reorder, or drag within the pinned/unpinned section. Arrow keys move focus, Enter opens a chat, and Ctrl+Shift+Left/Right reorders it. Order and pins are saved locally, encrypted and separated by server and identity; closing a tab removes its pin. **Recently closed** in All chats and **Ctrl+Shift+T** reopen explicitly closed chats from the current session (up to ten); channel access is checked again. This list resets when the server or identity changes.
 * **Chat media**: Enlarging an attached video keeps the same player, playback position, volume, speed and pause state. Animated images and chat videos pause offscreen or after a minute without window focus; only visible media resumes, and manually paused videos stay paused.
@@ -180,6 +353,37 @@ graph TD
 * **Windows overlay**: Individual active speakers with avatars and animation over the desktop or windowed/borderless games. Configure it in **Settings → Overlay**; local mute/deafen hides it. Exclusive-fullscreen games may cover the overlay.
 * **Notifications**: Per-event controls, volume and previews, with bundled English/German spoken announcements. Notification history links to the originating conversation and message when available, with server and identity checks. Same-server navigation leaves voice membership unchanged; opening another server asks first when switching would interrupt active voice, a call or a share. Events with speech use that recording without a duplicate beep. Playback follows the selected audio output device; no network TTS service is required.
 * **Diagnostics**: A playback-health badge evaluates recent voice buffering, concealment and loss separately from ping. Client Info exposes visible members' ping and reported client version; owners and administrators can inspect recent voice history and correlated sender/SFU/receiver measurements. See [Operations](#operations).
+
+<a id="studio"></a>
+
+### 🎬 Studio (desktop)
+
+Studio composes several sources into one live picture and publishes it to
+your voice channel through the normal screen-share path, so it is end-to-end
+encrypted like every channel stream (VP8). It is part of the desktop app
+only.
+
+* **Open it** from the voice bar (**More → Studio**) while connected to a
+  voice channel. Opening Studio captures nothing.
+* **Sources**: screen or window, camera (video only), image (PNG or JPEG, at
+  most 8 MB and 4096×4096) and text (up to 280 characters, system fonts), or
+  reuse a capture that is already running. Up to 8 scenes with up to 8
+  sources each; position, size, crop and layer order per source.
+* **Preview and program**: you edit the draft in **Preview**. **Take**
+  (Ctrl+Enter) puts the selected scene on **Program** with a cut or a
+  crossfade (100–1500 ms); nothing reaches the program any other way. Keys
+  1–8 select a scene, Alt+↑/↓ moves the selected source.
+* **Go live** publishes the program (1280×720 at 30 fps, reduced to the
+  server's video limits); **Stop** ends it. Closing the panel while live keeps
+  the program on air. Studio cannot go live while another screen share is
+  running.
+* **Audio**: only screen-capture audio of sources that are visible on the
+  program, with audio enabled, is sent, and the routing changes only with
+  **Take**. The microphone is never mixed in.
+* **Stored on this device**: the layout (in local storage) and up to 16
+  images / 32 MB (in IndexedDB); unused images are removed. Captures are never
+  restored, so each screen or camera source must be captured again after a
+  restart. Switching channel, server or account ends Studio.
 
 <a id="permissions"></a>
 
@@ -669,6 +873,8 @@ Production logging uses Zap sampling: for each repeated message in a sampling
 tick, it writes the first 100 entries and then every 10th entry thereafter.
 Development logging keeps Zap's unsampled development configuration.
 
+<a id="certificate-rotation"></a>
+
 ### Certificate trust and rotation
 
 The generated certificate under `NOXA_TLS_DIR` is the server's persistent
@@ -687,6 +893,15 @@ fingerprint. Later changes fail closed. For a planned rotation:
 4. Reconnect once more and confirm the connection-security message reports the
    expected fingerprint. If verification fails, abort and restore the previous
    certificate and key; do not delete `known_servers.json` to bypass the check.
+5. Secure messaging is bound to the pinned certificate fingerprint, so plan a
+   rotation as a secure-messaging change too: readable history stays, but a
+   desktop may need **Settings → Security → Recover secure messaging**
+   afterwards. Each linked phone or browser holds a binding its desktop signed
+   for the old certificate: it detects the change, blocks secure messaging
+   and asks to be linked again. Link it again from a desktop that already
+   trusts the new fingerprint (**Connections → PWA / Mobile login**). A browser
+   guest instead shows the old and new fingerprints and continues only after
+   its user explicitly accepts the change.
 
 <a id="mobile"></a>
 
@@ -844,17 +1059,30 @@ clears its notification on Android and desktop browsers; iPhones clear it when
 the app next opens, because iOS ends subscriptions that receive pushes without
 a visible notification.
 
-**Direct messages, voice and calls.** Direct messages are sealed once for
-every confirmed device of both people, so they reach the desktop and the
-phone. Contacts verify each device against the identity they pinned: the
+**Direct messages, voice and calls.** Direct messages are end-to-end
+encrypted with Olm for every confirmed device of both people, so they reach
+the desktop and the phone (see [Encryption](#encryption)). Contacts verify each device against the identity they pinned: the
 account's first desktop, and devices it approved. After passkey sign-in, a connected trusted desktop automatically confirms the
 new device for direct messages after verifying the server's passkey proof.
 If no trusted desktop is online, that endorsement waits until one connects;
 manual confirmation remains available in **Connections → PWA / Mobile login**. When you approve a phone, the desktop can copy
 recent direct-message history to it (90 days by default; up to 10,000
 messages and 50 MB, deleted from the server when the phone has it or after
-24 hours). Desktops older than this release are asked to update before they
-can message someone who has a phone.
+24 hours). Copied records are marked as copied history. Updated apps send
+direct messages only with end-to-end encryption; older apps can still send
+legacy direct messages to a contact with a single desktop, and are asked to
+update when the contact has several devices or uses the web app.
+
+A linked phone or browser trusts its own account only through the desktop
+statement it was linked with: its account root is the key of the desktop that
+approved the link, never a key the server reports. Every desktop of an account
+signs in with the account's one identity key, so any of them can link. If the
+account's key changes (for example, a desktop with a different key signs in
+with the password and rebinds the account), phones and browsers linked
+earlier stop sending secure messages and ask to be linked again from a
+desktop that has the current key. A typed link code, a passkey sign-in without
+a link statement, or a backup from before this release also asks for a new
+link.
 
 Voice channels, watching streams and private calls use WebRTC in the
 browser. Private calls are relay-only, so they need TURN (`turn.managed`);

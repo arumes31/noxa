@@ -363,6 +363,7 @@ func (a *App) newTabManager(id string, identity *identity) *connManager {
 	cm.tabID = id
 	cm.sink = tabSink{app: a, tabID: id, owner: cm}
 	cm.dmChanges = a.recordDMChange
+	cm.ratchetProject = a.projectRatchetRecord
 	cm.allowPlaintext = allowPlaintext
 	if a.knownServers != nil {
 		cm.knownServers = a.knownServers

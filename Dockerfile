@@ -21,6 +21,10 @@ WORKDIR /src/mobile
 COPY mobile/package.json mobile/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY mobile/ ./
+# Shared, hash-checked protocol core used by the standalone PWA adapter.
+COPY internal/e2ee/ratchet/core.wasm internal/e2ee/ratchet/THIRD_PARTY_LICENSES.txt /src/internal/e2ee/ratchet/
+# Third-party notices of the encrypted-media worker (vite.config.js).
+COPY tools/media-e2ee-notices.mjs /src/tools/
 RUN npx vite build --outDir /out/web/app && npx vite build -c vite.sw.config.js --outDir /out/web/app
 
 # -----------------------------------------------------------------------------

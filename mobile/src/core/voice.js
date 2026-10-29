@@ -21,6 +21,7 @@ import { CameraSource, capSender, preferReceiveCodecs, watchCodecNames, wireQual
 import * as settings from "./settings.js";
 import { LevelMeter, Mixer, installAudioUnlock } from "./voice-audio.js";
 import { MutedTalkingWarning, PushToTalkLatch, VoiceGate, parseKeyKind, playbackGain } from "./voice-gate.js";
+import { MEDIA_E2EE_VERSION, MediaSession, MediaSessionError } from "./media-e2ee/media-session.js";
 
 const MsgChannelJoined = 158;
 const STATS_INTERVAL = 2000;
@@ -84,10 +85,17 @@ export async function openMicrophone(s = settings.all()) {
 }
 
 export class Voice extends EventTarget {
-    /** previous: the Voice of a dropped connection; mute, deafen and the last whisperer carry over. */
-    constructor(session, previous = null) {
+    /**
+     * previous: the Voice of a dropped connection; mute, deafen and the last whisperer carry over.
+     * media: the encrypted-media adapter {status(), send(control)} (Task 2); without it
+     * channel media cannot start (there is no plaintext mode).
+     */
+    constructor(session, previous = null, { media = null } = {}) {
         super();
         this.session = session;
+        this.mediaAdapter = media;
+        /** Encrypted media status for labels: {state: off|keying|encrypted|partial, ...}. */
+        this.mediaStatus = { state: "off" };
         this.conn = session.conn;
         this.channelID = 0;
         this.pc = null;
@@ -154,6 +162,7 @@ export class Voice extends EventTarget {
     #levelTimer = 0;
     #mutedWarning = new MutedTalkingWarning();
     #micTransceiver = null;
+    #media = null;
     #wasCalled = false;
     #whisperSeq = 0;
 
@@ -210,6 +219,9 @@ export class Voice extends EventTarget {
             acknowledged = true;
             this.channelID = joined.channel_id ?? channelID;
             if (this.echo && this.channelID !== this.echo.channel) this.echo = null;
+            // Same peer, new channel: a new key scope before any new media,
+            // and never with the previous channel's roster.
+            if (this.pc && this.#media) { this.#media.setRoster([]); this.#media.rescope(this.channelID); }
             if (!this.pc && !await this.#start(generation)) return false;
             if (generation !== this.#joinGeneration) return false;
             if (this.muted || this.deafened) this.#announce();
@@ -249,10 +261,36 @@ export class Voice extends EventTarget {
                 this.session.relayServers().catch(() => this.session.iceServers), cancelled,
             ]);
             if (generation !== this.#joinGeneration) return false;
+            // Encryption first: no peer exists unless every frame can be
+            // encrypted (explicit error otherwise, never plaintext).
+            const media = new MediaSession({
+                adapter: this.mediaAdapter || { status: async () => ({ supported: false, reason: "server_outdated" }) },
+                onStatus: status => { this.mediaStatus = status; this.#emit("media-status", status); },
+                onError: error => { this.#emit("media-error", error); this.leave().catch(() => {}); },
+                // Encoded-streams receivers ask the SFU for a keyframe after
+                // their first authenticated frame (best effort).
+                onKeyframeNeeded: ({ publisher, slot }) => {
+                    if (this.#media !== media || !this.conn.open) return;
+                    this.conn.request(Msg.VideoStreamControl, { action: "keyframe", publisher_id: publisher, slot, generation: "0", revision: "0", session: "0", active: true },
+                        Msg.VideoStreamResult, { accept: r => r.action === "keyframe" }).catch(() => {});
+                },
+            });
+            this.#media = media;
+            media.setRoster(this.#voiceRoster());
+            try {
+                await Promise.race([media.start(this.channelID), cancelled]);
+            } catch (error) {
+                media.stop();
+                if (this.#media === media) this.#media = null;
+                // join() reports it (one explicit message, voice stays off).
+                if (generation === this.#joinGeneration) throw error;
+                return false;
+            }
+            if (generation !== this.#joinGeneration || this.#media !== media) { media.stop(); return false; }
             // Ownership moves to teardown only after all cancellable lookups finish.
             this.mic = mic;
             mic = null;
-            const pc = new RTCPeerConnection({ iceServers });
+            const pc = media.protectPeer(new RTCPeerConnection(media.peerConfig({ iceServers })));
             // Renewed TURN credentials keep a long session's relay alive.
             this.#stopRenewal = this.session.onRelayRenewal(servers => {
                 if (this.pc !== pc) return;
@@ -313,6 +351,9 @@ export class Voice extends EventTarget {
         this.whisperers.clear();
         this.echo = null;
         this.#micTransceiver = null;
+        this.#media?.stop();
+        this.#media = null;
+        this.mediaStatus = { state: "off" };
         this.#stopRenewal?.();
         this.#stopRenewal = null;
         clearInterval(this.#statsTimer);
@@ -510,6 +551,7 @@ export class Voice extends EventTarget {
             const vp8 = globalThis.RTCRtpSender?.getCapabilities?.("video")?.codecs.filter(c => /vp8|rtx/i.test(c.mimeType)) || [];
             if (vp8.length && this.#cameraTransceiver.setCodecPreferences) this.#cameraTransceiver.setCodecPreferences(vp8);
             await this.#enqueue(() => this.#offer());
+            this.#media?.publicationsChanged();
             await capSender(this.#cameraTransceiver.sender, this.session.mediaLimits);
             const result = await this.conn.request(Msg.VideoStreamControl, { action: "publish", slot: "cam", generation: "0", revision: "0", session: "0", active: true, codecs: ["vp8"] },
                 Msg.VideoStreamResult, { accept: r => r.action === "publish" });
@@ -567,6 +609,7 @@ export class Voice extends EventTarget {
             await this.#cameraTransceiver.sender.replaceTrack(null).catch(() => {});
             this.#cameraTransceiver.direction = "inactive";
             await this.#enqueue(() => this.#offer()).catch(() => {});
+            this.#media?.publicationsChanged();
         }
         this.#emit("state");
     }
@@ -574,12 +617,22 @@ export class Voice extends EventTarget {
     async #offer(options) {
         const pc = this.pc;
         if (!pc) return;
+        const media = this.#media;
+        if (!media) throw new MediaSessionError("closed");
         const offer = await pc.createOffer(options);
         await pc.setLocalDescription(offer);
         try {
-            const answer = await this.conn.request(Msg.WebRTCOffer, { sdp: pc.localDescription.sdp, tracks: this.#trackSlots() }, Msg.WebRTCAnswer);
+            const tracks = this.#trackSlots();
+            // Binding runs alongside the offer: an unbound sender drops every
+            // frame (never plaintext), and the offer must reach the server
+            // before this peer's trickled ICE candidates.
+            const binding = media.bindSenders(pc, tracks);
+            binding.catch(() => {});
+            const answer = await this.conn.request(Msg.WebRTCOffer, { sdp: pc.localDescription.sdp, tracks, media_e2ee: MEDIA_E2EE_VERSION }, Msg.WebRTCAnswer);
             if (this.pc !== pc) return;
             await pc.setRemoteDescription({ type: "answer", sdp: answer.sdp });
+            await binding;
+            await media.syncReceivers(pc);
             await this.#flushCandidates();
             this.#reconcile();
         } catch (error) {
@@ -595,6 +648,24 @@ export class Voice extends EventTarget {
         const pc = this.pc;
         if (!pc) return;
         await pc.setRemoteDescription({ type: "offer", sdp });
+        // Reused or new MIDs are bound to their current publisher first.
+        // Fail closed: no encrypted media session (or a receiver that could
+        // not be protected), no answer. The offer is rolled back and voice
+        // ends with the localized reason instead of hanging silently
+        // (review 2b P3-2).
+        try {
+            if (!this.#media) throw new MediaSessionError("closed");
+            await this.#media.syncReceivers(pc);
+        } catch (error) {
+            // A refused offer of a peer already replaced (leave and rejoin
+            // meanwhile) never touches the new session.
+            if (this.pc !== pc) return;
+            await pc.setRemoteDescription({ type: "rollback" }).catch(() => {});
+            if (this.pc !== pc) return;
+            this.#emit("media-error", error instanceof MediaSessionError ? error : new MediaSessionError("unavailable", String(error?.message || error)));
+            await this.leave().catch(() => {});
+            return;
+        }
         await this.#flushCandidates();
         preferReceiveCodecs(pc);
         const answer = await pc.createAnswer();
@@ -628,6 +699,12 @@ export class Voice extends EventTarget {
             const track = transceiver.receiver.track;
             const trackID = ids.get(transceiver.mid);
             if (!track || !trackID || transceiver.currentDirection === "inactive" || transceiver.currentDirection === "sendonly") continue;
+            // Presentation gate: no sink until the first authenticated frame.
+            const gate = this.#media?.media;
+            // Fail closed: without a media session (stopped or failed) nothing is presented.
+            if (!gate?.authenticated(transceiver.receiver)) { gate?.onAuthenticated(transceiver.receiver, () => this.#reconcile()); continue; }
+            // The gate only reports authentication; this owner enables output.
+            track.enabled = true;
             const { clientID, slot } = parseTrackID(trackID);
             if (!clientID || clientID === this.session.clientID) continue;
             if (track.kind === "audio") audio.set(slot === "mic" ? clientID : `${clientID}|${slot}`, track);
@@ -782,6 +859,7 @@ export class Voice extends EventTarget {
 
     #snapshot() {
         // Track keys map to members only once the tree knows them.
+        this.#media?.setRoster(this.#voiceRoster());
         this.#applyVolumes();
         const called = !!this.session.self?.()?.hand_called;
         if (called && !this.#wasCalled && this.active) this.#emit("called");
@@ -834,6 +912,13 @@ export class Voice extends EventTarget {
     /** Whispers to targets (default: the saved ones) until stopWhisper. */
     async startWhisper(targets = this.whisperTargets) {
         if (!this.active) return;
+        // A whisper would route the microphone outside the channel's key
+        // scope. Unavailable until a separate whisper key scope exists.
+        if (this.#media) {
+            const error = new MediaSessionError("whisper_unavailable");
+            this.#emit("media-error", error);
+            throw error;
+        }
         const seq = ++this.#whisperSeq;
         await this.#whisperRequest(true, targets);
         // Released before the server confirmed: undo the activation.
@@ -852,6 +937,28 @@ export class Voice extends EventTarget {
         this.#applyMic();
         if (was && this.conn.open && this.active) await this.#whisperRequest(false, { uniqueIDs: [], channelIDs: [] }).catch(() => {});
     }
+
+    /**
+     * Exactly the members the voice room renders (the channel node's
+     * clients): the only devices that may receive this session's media keys.
+     */
+    #voiceRoster() {
+        const channel = this.session.channels?.().find(c => c.id === this.channelID);
+        return channel?.clients || [];
+    }
+
+    /** Hands a delivered media-key control (app.js onSecureControl) to the session. */
+    receiveMediaKey(control) {
+        return this.#media ? this.#media.receive(control) : { ok: false, reason: "inactive" };
+    }
+
+    /** Encoded-transform statistics of this session or one endpoint (diagnostics, tests). */
+    mediaStats(endpoint) { return this.#media ? this.#media.stats(endpoint) : Promise.resolve(null); }
+
+    /** The publication key an endpoint is bound to ("" = unbound: drops everything). */
+    /** The verified account whose keys a member's media decrypts with ("" when none). */
+    verifiedAccount(clientID) { return this.#media?.verifiedAccount?.(clientID) || ""; }
+    mediaBinding(endpoint) { return this.#media?.media?.boundPid(endpoint) || ""; }
 
     /** Whispers back to whoever whispered here last. */
     replyWhisper() {

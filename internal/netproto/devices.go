@@ -217,6 +217,11 @@ type DeviceRequest struct {
 	// Signature is the approving device's Ed25519 signature over
 	// DeviceApprovalTranscript.
 	Signature []byte `json:"signature,omitempty"`
+	// ServerBinding is the approving desktop's pinned TLS binding
+	// ("tls-sha256:<hex>") and BindingSignature its Ed25519 signature over
+	// DeviceLinkBindingTranscript, relayed to the claiming device.
+	ServerBinding    string `json:"server_binding,omitempty"`
+	BindingSignature []byte `json:"binding_signature,omitempty"`
 
 	// Claiming device.
 	Ed25519PublicKey string `json:"ed25519_public_key,omitempty"`
@@ -245,6 +250,7 @@ type DeviceRequest struct {
 func (r DeviceRequest) Valid() bool {
 	if len(r.Name) > 256 || len(r.Platform) > 128 || len(r.Code) > 16 || len(r.LinkID) > 64 ||
 		len(r.DeviceID) > 64 || len(r.Proof) > 64 || len(r.Signature) > 128 ||
+		len(r.BindingSignature) > 128 || (r.ServerBinding != "" && !ValidServerBinding(r.ServerBinding)) ||
 		len(r.Ed25519PublicKey) > 512 || len(r.X25519PublicKey) > 128 ||
 		len(r.DMCertificate) > MaxPasskeyProof || len(r.WebAuthn) > MaxWebAuthnPayload || len(r.PasskeyID) > 1400 {
 		return false
@@ -353,6 +359,13 @@ type DeviceResult struct {
 	State     string `json:"state,omitempty"`
 	// ApproverFingerprint lets the claiming device compare the approver.
 	ApproverFingerprint string `json:"approver_fingerprint,omitempty"`
+	// Approved link_status only (to the claiming key): the approver's signed
+	// server binding (DeviceLinkBindingTranscript) and what verifies it.
+	ServerBinding    string `json:"server_binding,omitempty"`
+	BindingSignature []byte `json:"binding_signature,omitempty"`
+	ApproverDeviceID string `json:"approver_device_id,omitempty"`
+	ApproverKey      string `json:"approver_key,omitempty"`
+	Principal        string `json:"principal,omitempty"`
 
 	// Push: the server's VAPID public key (base64url) and this device's
 	// preferences. An empty key means the server does not send pushes.
@@ -405,6 +418,28 @@ func LinkClaimTranscript(linkID, ed25519Public, x25519Public string) []byte {
 // approved it.
 func DeviceApprovalTranscript(principal, approverDeviceID, ed25519Public, x25519Public string) []byte {
 	return []byte("noxa-device-approval-v1\n" + principal + "\n" + approverDeviceID + "\n" + ed25519Public + "\n" + x25519Public)
+}
+
+// DeviceLinkBindingTranscript is what an approving desktop signs to hand its
+// pinned TLS server binding to the device it links. A browser cannot see the
+// certificate, so this signed statement (bound to the claimed device keys) is
+// the only source of its noxa-olm-v1 server binding; the server only relays it.
+func DeviceLinkBindingTranscript(principal, approverDeviceID, ed25519Public, x25519Public, serverBinding string) []byte {
+	return []byte("noxa-device-link-binding-v1\n" + principal + "\n" + approverDeviceID + "\n" + ed25519Public + "\n" + x25519Public + "\n" + serverBinding)
+}
+
+// ValidServerBinding reports whether b is "tls-sha256:" + 64 lowercase hex.
+func ValidServerBinding(b string) bool {
+	const prefix = "tls-sha256:"
+	if len(b) != len(prefix)+64 || !strings.HasPrefix(b, prefix) {
+		return false
+	}
+	for _, c := range b[len(prefix):] {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // LinkSAS is the two-digit code both linking screens show. Each side derives

@@ -361,11 +361,19 @@ export function PublishPositionForTab(arg1:string,arg2:netproto.PositionUpdate):
 
 export function Quit():Promise<void>;
 
+export function SendChatOperationForTab(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number,arg6:string):Promise<string>;
+
+export function RatchetConversationHistoryForTab(arg1:string,arg2:string):Promise<Array<main.RatchetRecord>>;
+
 export function ReadPositionalInput():Promise<main.PositionalInput>;
 
 export function ReadyForCloseNotifications():Promise<void>;
 
 export function ReconnectTab(arg1:string,arg2:string,arg3:string):Promise<main.ConnectTabResult>;
+
+export function CancelSecureMessagingRecoveryForTab(arg1:string):Promise<string>;
+
+export function RecoverSecureMessagingForTab(arg1:string):Promise<string>;
 
 export function RecordRecent(arg1:string,arg2:string):Promise<void>;
 
@@ -427,7 +435,7 @@ export function SendChatReplyForTab(arg1:string,arg2:string,arg3:string,arg4:str
 
 export function SendConversationTypingForTab(arg1:string,arg2:string):Promise<string>;
 
-export function SendConversationForTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<number>;
+export function SendConversationForTab(arg1:string,arg2:string,arg3:string,arg4:string):Promise<main.ConversationSendResult>;
 
 export function SendICECandidate(arg1:string,arg2:string,arg3:number):Promise<void>;
 
@@ -590,10 +598,6 @@ export function VideoStreamControlForTab(arg1:string,arg2:netproto.VideoStreamCo
 export function WebRTCAnswer(arg1:string):Promise<void>;
 
 export function WebRTCAnswerForTab(arg1:string,arg2:string):Promise<void>;
-
-export function WebRTCOffer(arg1:string,arg2:Array<netproto.TrackSlot>):Promise<string>;
-
-export function WebRTCOfferForTab(arg1:string,arg2:string,arg3:Array<netproto.TrackSlot>):Promise<string>;
 
 export function WebhookForTab(arg1:string,arg2:netproto.WebhookRequest):Promise<netproto.WebhookResult>;
 

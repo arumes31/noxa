@@ -104,6 +104,8 @@ func TestKeyRequestRateLimitUsesDedicatedNamespace(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
 	env.srv.chatRate = newChatRateLimiter(1, time.Hour)
+	// Key lookups have their own budget (separate from chat sends).
+	env.srv.keyLookupRate = newChatRateLimiter(1, time.Hour)
 	if !env.srv.chatRate.allow("user-uid", time.Now()) {
 		t.Fatal("could not consume the ordinary chat namespace")
 	}

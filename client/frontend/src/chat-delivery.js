@@ -1,6 +1,6 @@
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
-import { closeDialog, mountServerDialog } from "./modal.js";
+import { closeDialog, confirmDialog, mountServerDialog } from "./modal.js";
 import "./chat-delivery.css";
 
 const node = (tag, className, text) => { const element = document.createElement(tag); element.className = className; if (text !== undefined) element.textContent = text; return element; };
@@ -77,16 +77,27 @@ export function createChatDelivery({ app, state, readScope, restore }) {
    loadError = ""; entries = Array.isArray(result?.entries) ? result.entries : []; render();
   } catch (error) { if (scope === scopeKey()) { loadError = String(error); render(); } }
  }
- async function act(action, entry, editing = false) {
+ async function act(action, entry, editing = false, acknowledge = false) {
   const scope = scopeKey(), tabID = state().activeTabID;
   if (owner !== scope || !entries.some(item => item.id === entry.id)) return;
   try {
-   const result = await app().ChatOutboxForTab(tabID, { action, id: entry.id });
+   const result = await app().ChatOutboxForTab(tabID, { action, id: entry.id, ...(acknowledge ? { acknowledge_undelivered: true } : {}) });
    if (scope !== scopeKey()) return;
    entries = result.entries || []; render();
    if (editing && currentEntry(entry)) restore(entry);
    if (action === "send" || action === "retry") void pump();
-  } catch (error) { if (scope === scopeKey()) window.__noxa.toast(t("delivery.failed", { error: String(error) }), "warn"); }
+  } catch (error) {
+   if (scope !== scopeKey()) return;
+   // An attempted secure message may still be delivered: removing it needs an
+   // explicit acknowledgement (never a silent drop, never an undo + resend).
+   if (action === "cancel" && !acknowledge && /may still (be delivered|arrive)/.test(String(error))) {
+    const ok = await confirmDialog({ title: t("delivery.removeAnywayTitle"), message: t("delivery.removeAnyway"), danger: true,
+     confirmLabel: t("delivery.removeAnywayConfirm"), cancelLabel: t("delivery.close"), serverScoped: true });
+    if (ok && scope === scopeKey()) void act(action, entry, false, true);
+    return;
+   }
+   window.__noxa.toast(t("delivery.failed", { error: String(error) }), "warn");
+  }
  }
  async function pump() {
   if (busy || !await ready) return;

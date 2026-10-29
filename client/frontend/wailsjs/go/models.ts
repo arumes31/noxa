@@ -548,6 +548,80 @@ export namespace connectionbenchmark {
 }
 
 export namespace main {
+	
+	export class RatchetTransport {
+	    message_id?: string;
+	    attempt_id?: string;
+	    delivery_id?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new RatchetTransport(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.message_id = source["message_id"];
+	        this.attempt_id = source["attempt_id"];
+	        this.delivery_id = source["delivery_id"];
+	    }
+	}
+	export class RatchetRecord {
+	    protocol: string;
+	    provenance: string;
+	    sender: string;
+	    sender_device: string;
+	    logical_id: string;
+	    key: string;
+	    scope: string;
+	    peer?: string;
+	    conversation?: string;
+	    purpose: string;
+	    reference?: string;
+	    reference_key?: string;
+	    body: any;
+	    sent_at: number;
+	    self: boolean;
+	    copied: boolean;
+	    transport: RatchetTransport;
+	    status?: string;
+	    reason?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new RatchetRecord(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        Object.assign(this, source);
+	        this.transport = new RatchetTransport(source["transport"] || {});
+	    }
+	}
+	export class ConversationSendResult {
+	    protocol: string;
+	    message_id?: number;
+	    transport?: string;
+	    key?: string;
+	    logical_id?: string;
+	    status?: string;
+	    reused?: boolean;
+	    record?: RatchetRecord;
+
+	    static createFrom(source: any = {}) {
+	        return new ConversationSendResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.protocol = source["protocol"];
+	        this.message_id = source["message_id"];
+	        this.transport = source["transport"];
+	        this.key = source["key"];
+	        this.logical_id = source["logical_id"];
+	        this.status = source["status"];
+	        this.reused = source["reused"];
+	        this.record = source["record"] ? new RatchetRecord(source["record"]) : undefined;
+	    }
+	}
 
 	export class Bookmark {
 	    name: string;
@@ -829,6 +903,9 @@ export namespace main {
 	}
 	export class E2EEDiagnostics {
 	    cipher: string;
+	    protocol?: string;
+	    active: boolean;
+	    unavailable?: string;
 	    peer_unique_id?: string;
 	    safety_number?: string;
 	    peer_key_available: boolean;
@@ -844,6 +921,9 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.cipher = source["cipher"];
+	        this.protocol = source["protocol"];
+	        this.active = source["active"];
+	        this.unavailable = source["unavailable"];
 	        this.peer_unique_id = source["peer_unique_id"];
 	        this.safety_number = source["safety_number"];
 	        this.peer_key_available = source["peer_key_available"];

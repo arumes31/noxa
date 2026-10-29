@@ -15,6 +15,7 @@ import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-me
 import { memberAudioControls } from "./member-audio-ui.js";
 import { primarySessionLabel, resolveAccountTarget } from "./account-identity.js";
 import { openMemberMove } from "./member-move.js";
+import { memberIsInLobby } from "./member-presence.js";
 import { escapeHTML } from "./markdown.js";
 import { sessionUserID } from "./session-identity.js";
 import { renderReceiverDiagnostics } from "./voice-diagnostics-ui.js";
@@ -217,7 +218,7 @@ function openContextMenu(x, y, client, trigger) {
         closeMenu();
         banDialog(client, tabID);
     };
-    if (client.client_id && client.client_id !== V().state.myClientID) {
+    if (client.client_id && client.client_id !== V().state.myClientID && !memberIsInLobby(client, V().state.channels)) {
         const move = document.createElement("button"); move.type = "button"; move.className = "ctx-action"; move.dataset.act = "move";
         move.textContent = t("context.move"); move.onclick = () => { closeMenu(); openMemberMove(client); };
         menuEl.append(move);

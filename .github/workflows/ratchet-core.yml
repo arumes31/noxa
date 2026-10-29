@@ -1,0 +1,73 @@
+name: Shared DM ratchet core
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  ratchet-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: noxa
+          POSTGRES_PASSWORD: noxa
+          POSTGRES_DB: noxa
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U noxa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Rebuild and check source, binary hash and dependency notices
+        run: node scripts/build-ratchet-core.mjs --container --check
+      - name: Native core and deterministic vectors
+        run: go test -count=1 ./internal/e2ee/ratchet ./internal/e2ee/durable
+      - run: npm ci --prefix mobile --no-audit --no-fund
+      - name: Install browser
+        working-directory: mobile
+        run: npx playwright install --with-deps chromium
+      - name: Build standalone PWA adapter
+        run: npm --prefix mobile run build
+      - name: Packaged browser and native interoperability
+        run: npm --prefix mobile run test:ratchet
+      - name: Real IndexedDB multi-tab durability
+        run: npm --prefix mobile run test:storage
+      - name: Real PostgreSQL admission with native and browser durable adapters
+        run: go test -tags integration -count=1 -timeout=3m ./internal/server -run '^TestIntegrationOlmAdmissionBrowser$' -v
+        env:
+          NOXA_BROWSER_INTEGRATION: "1"
+          NOXA_TEST_DATABASE_URL: postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable
+      - name: Browser loader failure checks
+        run: node --test mobile/unit/ratchet-core.test.mjs
+      - name: Install Linux desktop client dependencies
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/ci-apt-setup.sh"
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxtst-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev xvfb
+      - name: Prepare embedded desktop frontend
+        run: |
+          mkdir -p client/frontend/dist
+          echo '<!doctype html><title>noXa</title>' > client/frontend/dist/index.html
+      - name: Ratchet product tests (native desktop + PWA) on real PostgreSQL
+        run: >-
+          xvfb-run -a go test -tags integration -count=1 -timeout=20m ./internal/server -v
+          -run '^(TestIntegrationRatchetProduct(Native|PWA)|TestOlmDoorbellNeverRingsForRejectedOrRepeatedFinalize)$'
+        env:
+          NOXA_BROWSER_INTEGRATION: "1"
+          NOXA_TEST_DATABASE_URL: postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable

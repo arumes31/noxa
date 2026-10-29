@@ -70,5 +70,14 @@ func (s *TCPServer) detachRoleDeletedChannels(deleted channels.DeleteResult) err
 			revokeErr = errors.Join(revokeErr, fmt.Errorf("removing channel %d icon: %w", id, err))
 		}
 	}
+	if revokeErr == nil {
+		// The deletion commits after this hook (the rest cannot fail): only
+		// then are the members' seats parked. A failed hook aborts the
+		// deletion and the members keep their seats where they stay (fix5
+		// review P3-1).
+		for _, member := range deleted.Members {
+			s.mediaSeats.parkFrom(member.ClientID, member.ChannelID)
+		}
+	}
 	return revokeErr
 }

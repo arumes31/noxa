@@ -1,9 +1,12 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -29,6 +32,12 @@ type DeviceLinkView struct {
 	Code      string `json:"code"`
 	ExpiresAt int64  `json:"expires_at"`
 	QR        string `json:"qr"` // PNG data URL of URL
+	// LinkHost is the host the QR opens (the server's configured web address);
+	// HostMismatch is set when it is not the host this desktop is connected
+	// to, so the UI can warn before the user scans it.
+	LinkHost     string `json:"link_host"`
+	ServerHost   string `json:"server_host"`
+	HostMismatch bool   `json:"host_mismatch"`
 }
 
 // deviceEventView is a DeviceEvent plus the locally derived SAS.
@@ -202,6 +211,11 @@ func (a *App) ConfirmDeviceForTab(tabID, deviceID string) (netproto.DeviceInfo, 
 	if _, ok := parseDeviceX25519(target.X25519Public); !ok {
 		return netproto.DeviceInfo{}, errors.New("the device has no valid encryption key")
 	}
+	// The same claimed-key validation as a device link: no relayed key
+	// field can smuggle a line into the signed transcript.
+	if !validClaimedDeviceKeys(signingKey, target.X25519Public) {
+		return netproto.DeviceInfo{}, errors.New("the device's keys are not in the expected format")
+	}
 	id, err := cm.identity()
 	if err != nil {
 		return netproto.DeviceInfo{}, err
@@ -267,11 +281,44 @@ func (a *App) CreateDeviceLinkForTab(tabID string) (DeviceLinkView, error) {
 		result.LinkID: {secret: result.Secret, code: strings.ReplaceAll(result.Code, "-", "")},
 	}
 	cm.mu.Unlock()
+	// The desktop builds the fragment itself (never appends to the
+	// server's): link ID, secret and this desktop's own key fingerprint, so
+	// the browser that scans this screen can refuse a link the server
+	// re-routed to another approver.
+	id, err := cm.identity()
+	if err != nil {
+		return DeviceLinkView{}, err
+	}
+	base, _, _ := strings.Cut(result.URL, "#")
+	u, err := url.Parse(base)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" {
+		return DeviceLinkView{}, errors.New("invalid device link response")
+	}
+	cm.mu.Lock()
+	serverHost := connectedHost(cm.addr)
+	cm.mu.Unlock()
+	fragment := url.Values{"id": {result.LinkID}, "k": {base64.RawURLEncoding.EncodeToString(result.Secret)}, "a": {netproto.KeyFingerprint(id.PublicKey)}}
+	result.URL = base + "#" + fragment.Encode()
 	image, err := deviceLinkQR(result.URL)
 	if err != nil {
 		return DeviceLinkView{}, err
 	}
-	return DeviceLinkView{LinkID: result.LinkID, URL: result.URL, Code: result.Code, ExpiresAt: result.ExpiresAt, QR: image}, nil
+	return DeviceLinkView{LinkID: result.LinkID, URL: result.URL, Code: result.Code, ExpiresAt: result.ExpiresAt, QR: image,
+		LinkHost: u.Hostname(), ServerHost: serverHost, HostMismatch: !sameHost(u.Hostname(), serverHost)}, nil
+}
+
+// connectedHost is the host part of a "host:port" connect address.
+func connectedHost(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
+
+// sameHost compares host names case-insensitively, ignoring a trailing dot.
+func sameHost(a, b string) bool {
+	norm := func(h string) string { return strings.TrimSuffix(strings.ToLower(strings.Trim(h, "[]")), ".") }
+	return a != "" && norm(a) == norm(b)
 }
 
 // CancelDeviceLinkForTab withdraws a pending link.
@@ -302,6 +349,9 @@ func (a *App) DecideDeviceLinkForTab(tabID, linkID string, approve bool, ed25519
 		return netproto.DeviceResult{}, errors.New("this link is no longer pending")
 	}
 	request := netproto.DeviceRequest{Action: netproto.DeviceActionLinkDecide, LinkID: linkID, Approve: approve}
+	if approve && !validClaimedDeviceKeys(ed25519Public, x25519Public) {
+		return netproto.DeviceResult{}, errors.New("the claiming device's keys are invalid")
+	}
 	if approve {
 		if deviceID == "" {
 			return netproto.DeviceResult{}, errors.New("this desktop is not registered as a device yet")
@@ -313,6 +363,15 @@ func (a *App) DecideDeviceLinkForTab(tabID, linkID string, approve bool, ed25519
 		transcript := netproto.DeviceApprovalTranscript(principal, deviceID, ed25519Public, x25519Public)
 		if request.Signature, err = auth.SignChallenge(id.PrivateKey, transcript); err != nil {
 			return netproto.DeviceResult{}, err
+		}
+		// Hand this desktop's pinned TLS binding to the linked browser,
+		// signed for exactly its keys (its only source of the binding).
+		if binding, err := cm.ratchetServerBinding(); err == nil {
+			request.ServerBinding = binding
+			bound := netproto.DeviceLinkBindingTranscript(principal, deviceID, ed25519Public, x25519Public, binding)
+			if request.BindingSignature, err = auth.SignChallenge(id.PrivateKey, bound); err != nil {
+				return netproto.DeviceResult{}, err
+			}
 		}
 	}
 	result, err := cm.deviceRequest(request)
@@ -446,6 +505,9 @@ func (m *connManager) approvePasskeyDevices(conn net.Conn) {
 		if target.Kind != "web" || target.DeviceID == self || known[target.DeviceID] || target.FirstDevice || target.RevokedAt != 0 || len(target.PasskeyProof) == 0 {
 			continue
 		}
+		if !validClaimedDeviceKeys(target.Ed25519Public, target.X25519Public) {
+			continue
+		}
 		if deviceproof.Verify(principal, pinned, target.Ed25519Public, target.X25519Public, target.PasskeyProof) != nil {
 			continue
 		}
@@ -459,4 +521,35 @@ func (m *connManager) approvePasskeyDevices(conn net.Conn) {
 		}
 		m.forgetDMDevices(principal)
 	}
+}
+
+// validClaimedDeviceKeys checks relayed claim keys before the desktop signs
+// a transcript over them, so no field can smuggle an extra line into the
+// newline-joined approval or binding transcripts. The Ed25519 key is
+// canonicalized first and then validated: the PEM must be exactly the
+// canonical single-key encoding (what the PWA's publicKeyPEM and Go's
+// pem.EncodeToMemory both produce, pinned by mobile/unit/fixtures/interop.json)
+// up to benign line-ending formatting (CRLF line breaks, a missing final
+// newline). The relayed string itself stays the signed value, because the
+// server and every later verifier check the signature over exactly that
+// string. The X25519 key must be canonical standard base64 of a non-zero
+// 32-byte key.
+func validClaimedDeviceKeys(ed25519Public, x25519Public string) bool {
+	key, err := auth.LoadPublicKey(ed25519Public)
+	if err != nil || len(key) != ed25519.PublicKeySize {
+		return false
+	}
+	canonical := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: key}))
+	benign := strings.ReplaceAll(ed25519Public, "\r\n", "\n")
+	if !strings.HasSuffix(benign, "\n") {
+		benign += "\n"
+	}
+	if benign != canonical {
+		return false
+	}
+	x, ok := parseDeviceX25519(x25519Public)
+	if !ok || strings.ContainsAny(x25519Public, "\r\n") || base64.StdEncoding.EncodeToString(x[:]) != x25519Public {
+		return false
+	}
+	return true
 }

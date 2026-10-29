@@ -1,0 +1,1151 @@
+{
+  "server": "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "principal": "fixture-üser",
+  "device_id": "phone",
+  "root_signing": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+  "root_encryption": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk=",
+  "devices": [
+    {
+      "device_id": "root",
+      "kind": "desktop",
+      "first_device": true,
+      "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+      "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+    },
+    {
+      "device_id": "phone",
+      "kind": "web",
+      "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+      "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+      "approved_by": "root",
+      "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+    }
+  ],
+  "bundle": {
+    "version": "noxa-olm-directory-v1",
+    "protocol": "noxa-olm-v1",
+    "server": "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "principal": "fixture-üser",
+    "device_id": "phone",
+    "account_epoch": 1,
+    "generation": 1,
+    "issued_at": 1799999990,
+    "expires_at": 1800003600,
+    "identity": "Xf7dO2vUf2+ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI",
+    "signing": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E",
+    "one_time_keys": [
+      {
+        "id": "AAAAAAAAAAE",
+        "key": "rAGyIJ6GNU+4UyN7XeD0+rE8f8v0M6YcAZNpYX/s8Qs"
+      },
+      {
+        "id": "AAAAAAAAAAI",
+        "key": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0"
+      }
+    ],
+    "signature": "58AOI7jMMKKW+IOz5YNQWkSefY5rDGLtMXe/686d/GvCWlrX2FXLOwvKCh4dZH1Tg/0c6+4L3LsNRg5UTrNVBQ=="
+  },
+  "key_id": "AAAAAAAAAAE",
+  "now": 1800000000,
+  "transcript": "MjE6bm94YS1vbG0tZGlyZWN0b3J5LXYxMTE6bm94YS1vbG0tdjE3NTp0bHMtc2hhMjU2OmFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWExMzpmaXh0dXJlLcO8c2VyNTpwaG9uZTE6MTE6MTEwOjE3OTk5OTk5OTAxMDoxODAwMDAzNjAwNDM6WGY3ZE8ydlVmMitpanVGZGxwMWJzT3BUZDAxSWk5cjUzeHh1QVNTejd5STQzOjdVa294aWpSd3NicTZRTTRrRm1WWVNsWkp6cGNZL2syTnNGR0ZLeUhOOUUxOjIxMTpBQUFBQUFBQUFBRTQzOnJBR3lJSjZHTlUrNFV5TjdYZUQwK3JFOGY4djBNNlljQVpOcFlYL3M4UXMxMTpBQUFBQUFBQUFBSTQzOlVLWVVDYkhkMERKZW14YTNBT2NaNlhjc0J3QUxHOWQ0YnBCOFpUMGdTVjA=",
+  "chain_cases": [
+    {
+      "name": "valid",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": true,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        }
+      ],
+      "ids": [
+        "root",
+        "phone"
+      ]
+    },
+    {
+      "name": "duplicate",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": true,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        }
+      ],
+      "ids": []
+    },
+    {
+      "name": "two-roots",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": true,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ==",
+          "first_device": true
+        }
+      ],
+      "ids": []
+    },
+    {
+      "name": "changed-root-x",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": true,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "V9tLNZ8jrl4Ubk4lEgVnBHIlBjSMFQwUdT0Mkz0E1CE="
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        }
+      ],
+      "ids": []
+    },
+    {
+      "name": "revoked-root",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": true,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk=",
+          "revoked_at": 1800000000
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        }
+      ],
+      "ids": []
+    },
+    {
+      "name": "revoked-child",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": true,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ==",
+          "revoked_at": 1800000000
+        }
+      ],
+      "ids": [
+        "root"
+      ]
+    },
+    {
+      "name": "dangling",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": true,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "unknown",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        }
+      ],
+      "ids": [
+        "root"
+      ]
+    },
+    {
+      "name": "cycle",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": true,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "phone",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        }
+      ],
+      "ids": [
+        "root"
+      ]
+    },
+    {
+      "name": "empty-id",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": true,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+        },
+        {
+          "device_id": "",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        }
+      ],
+      "ids": []
+    },
+    {
+      "name": "bad-child-key",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": true,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        }
+      ],
+      "ids": [
+        "root"
+      ]
+    },
+    {
+      "name": "untrusted-root",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": true,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\n7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        }
+      ],
+      "ids": []
+    },
+    {
+      "name": "missing-root",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": false,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        }
+      ],
+      "ids": []
+    },
+    {
+      "name": "oversized-list",
+      "devices": [
+        {
+          "device_id": "root",
+          "kind": "desktop",
+          "first_device": true,
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\niojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "pOCSkrZRwni5dyxWn1+puxPZBrRqtoyd+dwrRAn4ogk="
+        },
+        {
+          "device_id": "phone",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-2",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-3",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-4",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-5",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-6",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-7",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-8",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-9",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-10",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-11",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-12",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-13",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-14",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-15",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-16",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-17",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-18",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-19",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-20",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-21",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-22",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-23",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-24",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-25",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-26",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-27",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-28",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-29",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-30",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-31",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-32",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-33",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-34",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-35",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-36",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-37",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-38",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-39",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-40",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-41",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-42",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-43",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-44",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-45",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-46",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-47",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-48",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-49",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-50",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-51",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-52",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-53",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-54",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-55",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-56",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-57",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-58",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-59",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-60",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-61",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-62",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-63",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        },
+        {
+          "device_id": "extra-64",
+          "kind": "web",
+          "ed25519_public_key": "-----BEGIN PUBLIC KEY-----\ngTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5Q=\n-----END PUBLIC KEY-----\n",
+          "x25519_public_key": "zo060cy2M+x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk=",
+          "approved_by": "root",
+          "approval_signature": "+5VlhPom76nEPxbIRY5ne3Q9zi4TsRB+PpNkfBjiQmmE/PrFcaI26JQ9FWxnUeizfq3Dsmwp+vEOVukwBTJdCQ=="
+        }
+      ],
+      "ids": []
+    }
+  ],
+  "bundle_cases": [
+    {
+      "name": "wrong-server",
+      "bundle": {
+        "version": "noxa-olm-directory-v1",
+        "protocol": "noxa-olm-v1",
+        "server": "tls-sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "principal": "fixture-üser",
+        "device_id": "phone",
+        "account_epoch": 1,
+        "generation": 1,
+        "issued_at": 1799999990,
+        "expires_at": 1800003600,
+        "identity": "Xf7dO2vUf2+ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI",
+        "signing": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E",
+        "one_time_keys": [
+          {
+            "id": "AAAAAAAAAAE",
+            "key": "rAGyIJ6GNU+4UyN7XeD0+rE8f8v0M6YcAZNpYX/s8Qs"
+          },
+          {
+            "id": "AAAAAAAAAAI",
+            "key": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0"
+          }
+        ],
+        "signature": "58AOI7jMMKKW+IOz5YNQWkSefY5rDGLtMXe/686d/GvCWlrX2FXLOwvKCh4dZH1Tg/0c6+4L3LsNRg5UTrNVBQ=="
+      }
+    },
+    {
+      "name": "wrong-principal",
+      "bundle": {
+        "version": "noxa-olm-directory-v1",
+        "protocol": "noxa-olm-v1",
+        "server": "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "principal": "other",
+        "device_id": "phone",
+        "account_epoch": 1,
+        "generation": 1,
+        "issued_at": 1799999990,
+        "expires_at": 1800003600,
+        "identity": "Xf7dO2vUf2+ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI",
+        "signing": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E",
+        "one_time_keys": [
+          {
+            "id": "AAAAAAAAAAE",
+            "key": "rAGyIJ6GNU+4UyN7XeD0+rE8f8v0M6YcAZNpYX/s8Qs"
+          },
+          {
+            "id": "AAAAAAAAAAI",
+            "key": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0"
+          }
+        ],
+        "signature": "58AOI7jMMKKW+IOz5YNQWkSefY5rDGLtMXe/686d/GvCWlrX2FXLOwvKCh4dZH1Tg/0c6+4L3LsNRg5UTrNVBQ=="
+      }
+    },
+    {
+      "name": "wrong-device",
+      "bundle": {
+        "version": "noxa-olm-directory-v1",
+        "protocol": "noxa-olm-v1",
+        "server": "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "principal": "fixture-üser",
+        "device_id": "root",
+        "account_epoch": 1,
+        "generation": 1,
+        "issued_at": 1799999990,
+        "expires_at": 1800003600,
+        "identity": "Xf7dO2vUf2+ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI",
+        "signing": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E",
+        "one_time_keys": [
+          {
+            "id": "AAAAAAAAAAE",
+            "key": "rAGyIJ6GNU+4UyN7XeD0+rE8f8v0M6YcAZNpYX/s8Qs"
+          },
+          {
+            "id": "AAAAAAAAAAI",
+            "key": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0"
+          }
+        ],
+        "signature": "58AOI7jMMKKW+IOz5YNQWkSefY5rDGLtMXe/686d/GvCWlrX2FXLOwvKCh4dZH1Tg/0c6+4L3LsNRg5UTrNVBQ=="
+      }
+    },
+    {
+      "name": "tampered-key",
+      "bundle": {
+        "version": "noxa-olm-directory-v1",
+        "protocol": "noxa-olm-v1",
+        "server": "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "principal": "fixture-üser",
+        "device_id": "phone",
+        "account_epoch": 1,
+        "generation": 1,
+        "issued_at": 1799999990,
+        "expires_at": 1800003600,
+        "identity": "Xf7dO2vUf2+ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI",
+        "signing": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E",
+        "one_time_keys": [
+          {
+            "id": "AAAAAAAAAAE",
+            "key": "9bLW5g+Ud+MQwpgtqqbJE2wQihd3xZR+RI+jfWgXRVc"
+          },
+          {
+            "id": "AAAAAAAAAAI",
+            "key": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0"
+          }
+        ],
+        "signature": "58AOI7jMMKKW+IOz5YNQWkSefY5rDGLtMXe/686d/GvCWlrX2FXLOwvKCh4dZH1Tg/0c6+4L3LsNRg5UTrNVBQ=="
+      }
+    },
+    {
+      "name": "duplicate-id",
+      "bundle": {
+        "version": "noxa-olm-directory-v1",
+        "protocol": "noxa-olm-v1",
+        "server": "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "principal": "fixture-üser",
+        "device_id": "phone",
+        "account_epoch": 1,
+        "generation": 1,
+        "issued_at": 1799999990,
+        "expires_at": 1800003600,
+        "identity": "Xf7dO2vUf2+ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI",
+        "signing": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E",
+        "one_time_keys": [
+          {
+            "id": "AAAAAAAAAAE",
+            "key": "rAGyIJ6GNU+4UyN7XeD0+rE8f8v0M6YcAZNpYX/s8Qs"
+          },
+          {
+            "id": "AAAAAAAAAAE",
+            "key": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0"
+          }
+        ],
+        "signature": "58AOI7jMMKKW+IOz5YNQWkSefY5rDGLtMXe/686d/GvCWlrX2FXLOwvKCh4dZH1Tg/0c6+4L3LsNRg5UTrNVBQ=="
+      }
+    },
+    {
+      "name": "unsafe-generation",
+      "bundle": {
+        "version": "noxa-olm-directory-v1",
+        "protocol": "noxa-olm-v1",
+        "server": "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "principal": "fixture-üser",
+        "device_id": "phone",
+        "account_epoch": 1,
+        "generation": 9007199254740992,
+        "issued_at": 1799999990,
+        "expires_at": 1800003600,
+        "identity": "Xf7dO2vUf2+ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI",
+        "signing": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E",
+        "one_time_keys": [
+          {
+            "id": "AAAAAAAAAAE",
+            "key": "rAGyIJ6GNU+4UyN7XeD0+rE8f8v0M6YcAZNpYX/s8Qs"
+          },
+          {
+            "id": "AAAAAAAAAAI",
+            "key": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0"
+          }
+        ],
+        "signature": "58AOI7jMMKKW+IOz5YNQWkSefY5rDGLtMXe/686d/GvCWlrX2FXLOwvKCh4dZH1Tg/0c6+4L3LsNRg5UTrNVBQ=="
+      }
+    },
+    {
+      "name": "noncanonical-base64",
+      "bundle": {
+        "version": "noxa-olm-directory-v1",
+        "protocol": "noxa-olm-v1",
+        "server": "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "principal": "fixture-üser",
+        "device_id": "phone",
+        "account_epoch": 1,
+        "generation": 1,
+        "issued_at": 1799999990,
+        "expires_at": 1800003600,
+        "identity": "Xf7dO2vUf2+ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI=",
+        "signing": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E",
+        "one_time_keys": [
+          {
+            "id": "AAAAAAAAAAE",
+            "key": "rAGyIJ6GNU+4UyN7XeD0+rE8f8v0M6YcAZNpYX/s8Qs"
+          },
+          {
+            "id": "AAAAAAAAAAI",
+            "key": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0"
+          }
+        ],
+        "signature": "58AOI7jMMKKW+IOz5YNQWkSefY5rDGLtMXe/686d/GvCWlrX2FXLOwvKCh4dZH1Tg/0c6+4L3LsNRg5UTrNVBQ=="
+      }
+    },
+    {
+      "name": "zero-curve",
+      "bundle": {
+        "version": "noxa-olm-directory-v1",
+        "protocol": "noxa-olm-v1",
+        "server": "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "principal": "fixture-üser",
+        "device_id": "phone",
+        "account_epoch": 1,
+        "generation": 1,
+        "issued_at": 1799999990,
+        "expires_at": 1800003600,
+        "identity": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "signing": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E",
+        "one_time_keys": [
+          {
+            "id": "AAAAAAAAAAE",
+            "key": "rAGyIJ6GNU+4UyN7XeD0+rE8f8v0M6YcAZNpYX/s8Qs"
+          },
+          {
+            "id": "AAAAAAAAAAI",
+            "key": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0"
+          }
+        ],
+        "signature": "58AOI7jMMKKW+IOz5YNQWkSefY5rDGLtMXe/686d/GvCWlrX2FXLOwvKCh4dZH1Tg/0c6+4L3LsNRg5UTrNVBQ=="
+      }
+    },
+    {
+      "name": "small-order-signing",
+      "bundle": {
+        "version": "noxa-olm-directory-v1",
+        "protocol": "noxa-olm-v1",
+        "server": "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "principal": "fixture-üser",
+        "device_id": "phone",
+        "account_epoch": 1,
+        "generation": 1,
+        "issued_at": 1799999990,
+        "expires_at": 1800003600,
+        "identity": "Xf7dO2vUf2+ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI",
+        "signing": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "one_time_keys": [
+          {
+            "id": "AAAAAAAAAAE",
+            "key": "rAGyIJ6GNU+4UyN7XeD0+rE8f8v0M6YcAZNpYX/s8Qs"
+          },
+          {
+            "id": "AAAAAAAAAAI",
+            "key": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0"
+          }
+        ],
+        "signature": "58AOI7jMMKKW+IOz5YNQWkSefY5rDGLtMXe/686d/GvCWlrX2FXLOwvKCh4dZH1Tg/0c6+4L3LsNRg5UTrNVBQ=="
+      }
+    },
+    {
+      "name": "expired",
+      "bundle": {
+        "version": "noxa-olm-directory-v1",
+        "protocol": "noxa-olm-v1",
+        "server": "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "principal": "fixture-üser",
+        "device_id": "phone",
+        "account_epoch": 1,
+        "generation": 1,
+        "issued_at": 1799999990,
+        "expires_at": 1799999999,
+        "identity": "Xf7dO2vUf2+ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI",
+        "signing": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E",
+        "one_time_keys": [
+          {
+            "id": "AAAAAAAAAAE",
+            "key": "rAGyIJ6GNU+4UyN7XeD0+rE8f8v0M6YcAZNpYX/s8Qs"
+          },
+          {
+            "id": "AAAAAAAAAAI",
+            "key": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0"
+          }
+        ],
+        "signature": "58AOI7jMMKKW+IOz5YNQWkSefY5rDGLtMXe/686d/GvCWlrX2FXLOwvKCh4dZH1Tg/0c6+4L3LsNRg5UTrNVBQ=="
+      }
+    },
+    {
+      "name": "self-signed-olm",
+      "bundle": {
+        "version": "noxa-olm-directory-v1",
+        "protocol": "noxa-olm-v1",
+        "server": "tls-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "principal": "fixture-üser",
+        "device_id": "phone",
+        "account_epoch": 1,
+        "generation": 1,
+        "issued_at": 1799999990,
+        "expires_at": 1800003600,
+        "identity": "Xf7dO2vUf2+ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI",
+        "signing": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9E",
+        "one_time_keys": [
+          {
+            "id": "AAAAAAAAAAE",
+            "key": "rAGyIJ6GNU+4UyN7XeD0+rE8f8v0M6YcAZNpYX/s8Qs"
+          },
+          {
+            "id": "AAAAAAAAAAI",
+            "key": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0"
+          }
+        ],
+        "signature": "/0TnEnOtqEhoxtQ/VKpodEWSDzmSwSewqm5xaYxN4SreXetEzCWPOvaSjtfsZAy2uFIdubByM6QHpCDZwgzjDQ=="
+      }
+    }
+  ]
+}

@@ -79,6 +79,11 @@ func TestE2EEDiagnostics(t *testing.T) {
 	if !d.PeerKeyAvailable || d.PeerUniqueID != "peer" {
 		t.Fatalf("peer diagnostics = %+v", d)
 	}
+	// 1c-iii-b item 4: the cipher comes from the active path; without a
+	// ratchet session nothing is claimed (no static NaCl label).
+	if d.Active || d.Protocol != "" || d.Cipher != "" || d.Unavailable == "" || strings.Contains(strings.ToLower(d.Cipher+d.Unavailable), "xsalsa") {
+		t.Fatalf("inactive path diagnostics = %+v", d)
+	}
 	if d.CachedPeers != 1 || d.ScopeKeys != 2 || d.RefusedKeys != 2 || d.PendingKeyPulls != 1 {
 		t.Fatalf("diagnostic counts = %+v", d)
 	}

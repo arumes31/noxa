@@ -63,6 +63,8 @@ class Notifier {
         app.addEventListener("groups", () => this.#groups());
         app.addEventListener("push", () => this.syncFilters());
         app.addEventListener("signedout", () => { this.away?.stop(); this.sounds.stopAll(); this.activity.clear(); });
+        // Another account was linked or restored: the old account's log goes.
+        app.addEventListener("account-replaced", () => this.activity.clear());
         settings.onChange(({ changed }) => {
             if (changed.some(name => FILTER_SETTINGS.includes(name))) this.#scheduleFilters();
             if (changed.includes("autoAwayMinutes")) this.away?.activity();

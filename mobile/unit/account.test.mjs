@@ -8,6 +8,10 @@ import { isForThisServer, parseInviteLink, pendingInvite, setPendingInvite, webI
 import { classifySignIn } from "../src/core/login-errors.js";
 import { addServer, listServers, normalizeServer, removeServer } from "../src/core/servers.js";
 import nacl from "tweetnacl";
+import { decodeHistoryChunk } from "../src/core/history-envelope.js";
+const chunkKey = generateIdentity();
+const envelope = { source: "phone", target: "dev-2", transfer: "t1", edSecret: chunkKey.edSecret };
+const openChunk = (c, sender, target, seq, total) => decodeHistoryChunk(openDM(c, sender.publicKey, target.secretKey), { source: "phone", target: "dev-2", seq, total, signingKey: chunkKey.edPublic });
 
 class MemoryStorage {
     #items = new Map();
@@ -155,22 +159,22 @@ describe("history copy chunks", () => {
 
     it("seals chunks the receiving device opens, oldest first", () => {
         const messages = historyMessagesSince(conversations, 0);
-        const { chunks, kept } = buildHistoryChunks(messages, target.publicKey, sender.secretKey);
+        const { chunks, kept } = buildHistoryChunks(messages, target.publicKey, sender.secretKey, { envelope });
         assert.equal(kept, 3);
         assert.equal(chunks.length, 1);
         // The receiving side as in core/direct.js importHistory.
-        const plain = JSON.parse(openDM(chunks[0], sender.publicKey, target.secretKey));
+        const plain = openChunk(chunks[0], sender, target, 0, 1);
         assert.deepEqual(plain.map(m => m.client_msg_id), ["m1", "i1", "m2"]);
         assert.equal(openDM(chunks[0], sender.publicKey, nacl.box.keyPair().secretKey), null);
     });
 
     it("splits into several chunks under the size limit", () => {
         const messages = Array.from({ length: 30 }, (_, i) => ({ peer: "p", from: "p", body: "x".repeat(100), sent_at: 1000 - i }));
-        const { chunks, kept } = buildHistoryChunks(messages, target.publicKey, sender.secretKey, { maxChunk: 600 });
+        const { chunks, kept } = buildHistoryChunks(messages, target.publicKey, sender.secretKey, { maxChunk: 1700, envelope });
         assert.equal(kept, 30);
         assert.ok(chunks.length > 5);
-        const opened = chunks.map(c => JSON.parse(openDM(c, sender.publicKey, target.secretKey)));
-        for (const chunk of chunks) assert.ok(fromBase64(chunk).length <= 600);
+        const opened = chunks.map((c, i) => openChunk(c, sender, target, i, chunks.length));
+        for (const chunk of chunks) assert.ok(fromBase64(chunk).length <= 1700);
         // Oldest chunk first, messages oldest first inside each chunk.
         const order = opened.flat().map(m => m.sent_at);
         assert.deepEqual(order, [...order].sort((a, b) => a - b));
@@ -197,6 +201,12 @@ describe("device confirmation", () => {
         const transcript = approvalTranscript("uid-1", "dev-1", pem, target.x25519_public_key);
         assert.ok(nacl.sign.detached.verify(transcript, fromBase64(sent.signature), me.edPublic));
         await assert.rejects(endorseDevice(session, { ...target, fingerprint: "0000 0000 0000 0000" }));
+        // 1c-iii-b item 0: the X25519 key is validated before anything is signed.
+        sent = null;
+        for (const x of [target.x25519_public_key + "\nextra", "short", "A".repeat(43) + "=", " " + target.x25519_public_key])
+            await assert.rejects(endorseDevice(session, { ...target, x25519_public_key: x }), /invalid/);
+        assert.equal(sent, null, "nothing signed or sent for invalid keys");
+        await assert.rejects(endorseDevice(session, { ...target, ed25519_public_key: pem + "x: y\n", fingerprint: keyFingerprint(pem + "x: y\n") }), /invalid/);
     });
 });
 

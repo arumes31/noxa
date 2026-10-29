@@ -24,7 +24,7 @@ import { showCallHistory, startPrivateCall, startPrivateVideoCall } from "./priv
 import { encryptionBadge } from "./message-encryption.js";
 import { avatarColor } from "./workspace-ui.js";
 import { setSafeImage } from "./safe-media.js";
-import { promptDialog } from "./modal.js";
+import { confirmDialog, promptDialog } from "./modal.js";
 import { mountContextMenu, closeContextMenu } from "./context-menu.js";
 import {
     conversationEncryption, daySeparators, filterConversations, mergeDirect, presenceLine, presenceOf,
@@ -356,9 +356,12 @@ function renderThread() {
         ui.headStatus.textContent = presenceLine(presenceOf(selected.uid, st.clients, st.channels));
     }
     const peerKey = group ? null : peerKeyState(selected.uid);
-    const encryption = conversationEncryption({ group, peerKey, last: entry?.last || null });
+    // The header claim follows the connection's active secure path.
+    const secure = secureState();
+    if (secure !== null) maybeSecureNotice();
+    const encryption = conversationEncryption({ group, peerKey, last: entry?.last || null, secure });
     ui.pill.dataset.encryption = encryption.kind;
-    ui.pill.innerHTML = icon(encryption.kind);
+    ui.pill.innerHTML = icon(encryption.kind === "legacy" ? "key" : encryption.kind);
     ui.pill.append(node("span", "", t(encryption.labelKey)));
     ui.pill.title = t(encryption.helpKey);
     ui.pill.setAttribute("aria-label", `${t(encryption.labelKey)}. ${t(encryption.helpKey)}`);
@@ -372,15 +375,36 @@ function renderThread() {
     observeDays();
 }
 
+// maybeSecureNotice explains the secure-messaging upgrade once (en/de), the
+// first time a conversation shows its encryption state.
+let secureNoticeOpen = false;
+function maybeSecureNotice() {
+    const settings = V().state.settings;
+    if (!settings || settings.secure_notice_seen || secureNoticeOpen) return;
+    secureNoticeOpen = true;
+    settings.secure_notice_seen = true;
+    Promise.resolve(app().SaveSettings(settings)).catch(() => {});
+    Promise.resolve(confirmDialog({ title: t("security.secureNoticeTitle"), message: t("security.secureNoticeBody"), confirmLabel: t("common.ok"), cancelLabel: t("common.close") }))
+        .catch(() => {}).finally(() => { secureNoticeOpen = false; });
+}
+
+// secureState: whether this connection's secure-messaging path (Olm) is
+// active, from the same diagnostics call (cached like peer keys).
+function secureState() {
+    peerKeyState("");
+    const cached = peerKeys.get("");
+    return cached?.active ?? null;
+}
+
 function peerKeyState(uid) {
     const cached = peerKeys.get(uid);
     if (cached && Date.now() - cached.at < 60000) return cached.value;
     if (!cached?.pending) {
         const requestScope = scope;
-        peerKeys.set(uid, { value: cached?.value ?? null, at: cached?.at || 0, pending: true });
+        peerKeys.set(uid, { value: cached?.value ?? null, active: cached?.active ?? null, at: cached?.at || 0, pending: true });
         Promise.resolve().then(() => app().E2EEDiagnostics(uid)).then(result => {
             if (requestScope !== scope) return;
-            peerKeys.set(uid, { value: !!result?.peer_key_available, at: Date.now(), pending: false });
+            peerKeys.set(uid, { value: !!result?.peer_key_available, active: typeof result?.active === "boolean" ? result.active : null, at: Date.now(), pending: false });
             scheduleRender();
         }).catch(() => {
             if (requestScope === scope) peerKeys.set(uid, { value: null, at: Date.now(), pending: false });

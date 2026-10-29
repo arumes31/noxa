@@ -52,6 +52,11 @@ func (s *TCPServer) ApplyChannelDeletion(result channels.DeleteResult, reason st
 			s.deps.Voice.LeaveChannel(member.ClientID, member.ChannelID)
 		}
 	}
+	// The deletion is committed: members' encrypted voice seats are parked
+	// (their peers live on; the next join meets the cap).
+	for _, member := range result.Members {
+		s.mediaSeats.parkFrom(member.ClientID, member.ChannelID)
+	}
 	// State-facing consequences must not sit behind filesystem cleanup. A file
 	// mutation can legitimately hold its lifecycle read lock while finishing a
 	// database/blob move; clients, metrics, and recorders still need to observe
@@ -237,6 +242,9 @@ func (s *TCPServer) joinChannelAllowed(ctx context.Context, client *Client, msg 
 	}
 
 	if err := s.moveClient(ctx, client.ID, msg.ChannelID, client.ID); err != nil {
+		if errors.Is(err, errMediaE2EEChannelFull) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
+		}
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, err.Error())
 	}
 	return s.acknowledgeJoin(client, msg)
@@ -264,6 +272,9 @@ func (s *TCPServer) leaveOwnChannelInContext(ctx context.Context, client *Client
 		}
 	}
 	s.deps.State.SetPrioritySpeaker(client.ID, false)
+	// The voice peer outlives the channel: the seat is parked (counted
+	// nowhere) so the next join still meets the destination's cap.
+	s.mediaSeats.park(client.ID)
 	client.rememberOwnChannelMove(previousChannelID, 0, false)
 	s.deps.State.SetSharing(client.ID, false)
 	if previousChannelID != 0 {
@@ -295,6 +306,9 @@ func (s *TCPServer) handleMoveClient(ctx context.Context, client *Client, f *net
 		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
 		return s.moveRoleMember(ctx, e, client.userID(), client.uniqueID(), client.ID, msg)
 	})
+	if errors.Is(err, errMediaE2EEChannelFull) {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
+	}
 	if err != nil {
 		return s.roleError(ctx, client, err)
 	}
@@ -364,21 +378,34 @@ func (s *TCPServer) moveClientWithCause(ctx context.Context, clientID string, ch
 			ByClientID:    movedBy,
 		})
 	}
+	// A seated session keeps its voice peer across the move, so the move is
+	// a join of the destination's encrypted voice: its seat moves first and a
+	// full destination refuses the move (fix3 review P2-1). Callers hold the
+	// session's channel-control lock, which offers take as well.
+	undoSeat, err := s.carryMediaSeat(clientID, channelID)
+	if err != nil {
+		return err
+	}
 	if s.deps.Channels != nil {
 		backend, ok := s.deps.Channels.(interface {
 			MoveClientWithinCapacity(string, int64, func(int64)) (int64, error)
 		})
 		if !ok {
+			undoSeat()
 			return authorization.ErrAuthorizationUnavailable
 		}
-		_, err := backend.MoveClientWithinCapacity(clientID, channelID, afterMove)
-		return err
+		if _, err := backend.MoveClientWithinCapacity(clientID, channelID, afterMove); err != nil {
+			undoSeat()
+			return err
+		}
+		return nil
 	}
 	var oldChannelID int64
 	if sc, ok := s.deps.State.GetClient(clientID); ok {
 		oldChannelID = sc.ChannelID
 	}
 	if err := s.deps.State.MoveClientWithinCapacity(clientID, channelID); err != nil {
+		undoSeat()
 		return err
 	}
 	afterMove(oldChannelID)

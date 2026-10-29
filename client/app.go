@@ -197,6 +197,8 @@ func (a *App) domReady(ctx context.Context) {
 // startup is called when the app starts.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// Finish identity deletions interrupted by a crash (restore or erase).
+	go guardCrash("ratchet store sweep", a.sweepRatchetStores)
 	if path, err := knownServersPath(); err == nil {
 		a.knownServers = loadKnownServersAt(path)
 	} else {
@@ -668,21 +670,100 @@ func (a *App) sendChat(scope, target, text string, replyToID int64) string {
 	return sendChatWith(cm, scope, target, text, replyToID)
 }
 
+// SendChatOperationForTab is SendChatReplyForTab with the caller's stable
+// operation ID: the composer mints it once per user operation (attachment,
+// voice, quick DM, retry of the same item) and passes the same ID on every
+// retry, so an uncertain new-protocol send resolves its original operation
+// instead of sealing a second one. Legacy sends ignore it.
+func (a *App) SendChatOperationForTab(tabID, scope, target, text string, replyToID int64, operationID string) string {
+	cm, err := a.requireTabCM(tabID)
+	if err != nil {
+		return err.Error()
+	}
+	// The outbox namespace (identity + server + certificate) is captured
+	// BEFORE the send: an uncertain entry never lands in another server's
+	// outbox after a reconnect during the send.
+	tracked := scope == "direct" && cm.ratchetConfigured() && validOperationID(operationID)
+	store, storeErr := chatOutboxStore{}, error(nil)
+	if tracked {
+		store, storeErr = a.outboxStore(cm)
+	}
+	result, err := sendChatOperationErr(cm, scope, target, text, replyToID, operationID)
+	// An uncertain new-protocol send becomes an "uncertain" outbox entry under
+	// the SAME operation ID: it survives a restart, and only an explicit Retry
+	// of that entry resolves the original (a new identical message is a new
+	// operation). Success forgets it. Failing to keep it is reported, never
+	// silent.
+	if tracked {
+		if result == "" {
+			if storeErr == nil {
+				a.forgetOutboxOperation(cm, store, operationID)
+			}
+		} else if ratchetUncertain(err) {
+			if storeErr == nil {
+				storeErr = a.keepOutboxOperation(cm, store, scope, target, text, operationID, result)
+			}
+			if storeErr != nil {
+				result += " (it could not be kept in the outbox for a later retry: " + storeErr.Error() + ")"
+			}
+		}
+	}
+	return result
+}
+
 func sendChatWith(cm *connManager, scope, target, text string, replyToID int64) string {
+	return sendChatOperation(cm, scope, target, text, replyToID, "")
+}
+
+func sendChatOperation(cm *connManager, scope, target, text string, replyToID int64, operationID string) string {
+	result, _ := sendChatOperationErr(cm, scope, target, text, replyToID, operationID)
+	return result
+}
+
+// sendChatOperationErr also returns the new-protocol error, so the caller can
+// tell an uncertain committed attempt from a send that never started.
+func sendChatOperationErr(cm *connManager, scope, target, text string, replyToID int64, operationID string) (string, error) {
 	if text == "" {
-		return "empty message"
+		return "empty message", nil
+	}
+	if scope == "direct" && cm.ratchetConfigured() {
+		// One durable operation per user intent; without a caller ID the
+		// intent is this single call. No legacy fallback once configured.
+		if operationID == "" {
+			operationID = newClientMsgID()
+		}
+		if !validOperationID(operationID) {
+			return "invalid message operation", nil
+		}
+		if _, err := cm.sendRatchetDirect(nil, operationID, target, text); err != nil {
+			return ratchetFailure(err).Error(), err
+		}
+		return "", nil
 	}
 	msg, err := cm.encryptChat(scope, target, text)
 	if err != nil {
-		return encryptFailure(err).Error()
+		return encryptFailure(err).Error(), nil
 	}
 	if scope != "direct" {
 		msg.ReplyToID = replyToID
 	}
 	if err := cm.sendChatWithKeyRetry(msg, text); err != nil {
-		return err.Error()
+		return err.Error(), nil
 	}
-	return ""
+	return "", nil
+}
+
+// validOperationID accepts the composer's UUIDs (and other short safe IDs).
+func validOperationID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_' && r != ':' {
+			return false
+		}
+	}
+	return true
 }
 
 // WhisperSet configures the whisper list and mode.
@@ -694,23 +775,16 @@ func (a *App) WhisperSet(uniqueIDs []string, channelIDs []int64, active bool) st
 	return cm.mediaControl(netproto.MediaControlSaved{Operation: netproto.MsgWhisperSet, UniqueIDs: uniqueIDs, ChannelIDs: channelIDs, Active: active})
 }
 
-// WebRTCOffer sends the browser's SDP offer and returns the server's answer.
-// tracks declares which slot every outbound track occupies (70): the router
-// carries one source per slot, so an undeclared second audio track would
-// contend with the microphone for the default slot and one of them would be
-// dropped. The declaration REPLACES the previous one, so every offer must
-// carry the complete list.
-func (a *App) WebRTCOffer(sdp string, tracks []netproto.TrackSlot) (string, error) {
-	cm, err := a.requireCM()
-	if err != nil {
-		return "", err
-	}
-	return cm.webRTCOffer(sdp, tracks)
-}
-
-func (cm *connManager) webRTCOffer(sdp string, tracks []netproto.TrackSlot) (string, error) {
-	f, err := cm.request(netproto.MsgWebRTCOffer, netproto.MsgWebRTCAnswer,
-		netproto.WebRTCOffer{SDP: sdp, Tracks: tracks}, 10*time.Second)
+// webRTCOfferWith sends the browser's SDP offer and returns the server's
+// answer. The offer's tracks declare which slot every outbound track occupies
+// (70): the router carries one source per slot, so an undeclared second audio
+// track would contend with the microphone for the default slot and one of
+// them would be dropped. The declaration REPLACES the previous one, so every
+// offer must carry the complete list. Channel media is end-to-end encrypted
+// only: the one bridge is WebRTCOfferSecureForTab (media_e2ee.go); there is
+// no plaintext offer method.
+func (cm *connManager) webRTCOfferWith(offer netproto.WebRTCOffer) (string, error) {
+	f, err := cm.request(netproto.MsgWebRTCOffer, netproto.MsgWebRTCAnswer, offer, 10*time.Second)
 	if err != nil {
 		return "", err
 	}

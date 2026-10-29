@@ -36,6 +36,10 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 	if msg.CodecRevision != 0 && msg.Action != "publish" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid codec revision scope")
 	}
+	if reason := s.mediaE2EEStreamRejection(msg); reason != "" {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, reason)
+	}
+	s.mediaE2EECodecs(&msg)
 	capability := authorization.Connect
 	switch msg.Action {
 	case "publish", "preview_upload":
@@ -57,6 +61,13 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 			msg.Generation == 0 || msg.Session == 0 || !msg.Active || msg.Revision == 0 || len(msg.JPEG) != 0 {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid receiver recovery scope")
 		}
+	case "keyframe":
+		// An encrypted receiver's explicit keyframe request (Task 2b): only a
+		// publication the requester currently receives (checked by the router).
+		if len(frame.Payload) > 4096 || msg.PublisherID == "" || msg.PublisherID == client.ID || (msg.Slot != webrtc.SlotCam && msg.Slot != webrtc.SlotScreen) ||
+			!msg.Active || len(msg.JPEG) != 0 {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid keyframe request scope")
+		}
 	case "diagnostics":
 		if len(frame.Payload) > 4096 || msg.PublisherID == "" || (msg.Slot != webrtc.SlotCam && msg.Slot != webrtc.SlotScreen) ||
 			msg.Generation == 0 || msg.Session == 0 || msg.Active || msg.Revision != 0 || len(msg.JPEG) != 0 {
@@ -69,7 +80,7 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 	// Updating the bounded preview cache changes neither publisher permission nor
 	// membership/watch consent. Its JPEG validation and TCP reply must not exclude
 	// authorized packet writes; SetVideoPreview owns its cache/generation locks.
-	sharedLease := msg.Action == "list" || msg.Action == "preview" || msg.Action == "diagnostics" || msg.Action == "preview_upload"
+	sharedLease := msg.Action == "list" || msg.Action == "preview" || msg.Action == "diagnostics" || msg.Action == "preview_upload" || msg.Action == "keyframe"
 	lease := s.roleChannelControl
 	if sharedLease {
 		lease = s.roleChannelRead
@@ -110,6 +121,12 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 				err = recovery.ResetStreamReceiver(client.ID, msg.PublisherID, msg.Slot, msg.Generation, msg.Session, msg.Revision)
 			} else {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "receiver recovery is unavailable")
+			}
+		case "keyframe":
+			if requester, ok := voice.(interface {
+				RequestViewerKeyframe(string, string, string) bool
+			}); !ok || !requester.RequestViewerKeyframe(client.ID, msg.PublisherID, msg.Slot) {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "no such received publication")
 			}
 		case "preview_upload":
 			err = voice.SetVideoPreview(client.ID, msg.Slot, msg.Generation, msg.JPEG)

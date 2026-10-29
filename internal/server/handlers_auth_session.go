@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -194,6 +195,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		ClientID:           client.ID,
 		UniqueID:           id.uniqueID,
 		Nickname:           id.nickname,
+		Guest:              id.guest,
 		TLSFingerprint:     s.tlsFingerprint,
 		Capabilities:       []string{netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity},
 	}
@@ -205,7 +207,20 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 			resp.Capabilities = append(resp.Capabilities, netproto.CapabilityWebLogin)
 		}
 		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityDevices, netproto.CapabilityDMDevices)
+		if _, _, ok := s.olmDirectory(); ok {
+			resp.Capabilities = append(resp.Capabilities, netproto.CapabilityOlmDirectory)
+			if s.olmAdmissionEnabled {
+				resp.Capabilities = append(resp.Capabilities, netproto.CapabilityOlmAdmission)
+			}
+			if s.mediaE2EEAvailable() {
+				resp.Capabilities = append(resp.Capabilities, netproto.CapabilityMediaE2EE)
+			}
+		}
 		resp.DeviceID = s.attachSessionDevice(ctx, client, id.uniqueID)
+	}
+	if s.mediaE2EERequired() {
+		// HEVC/H.264 publication is not offered while media is encrypted.
+		resp.Capabilities = slices.DeleteFunc(resp.Capabilities, func(c string) bool { return c == netproto.CapabilityStreamHEVC })
 	}
 	if s.deps.ICEServers != nil {
 		resp.ICEServers = s.deps.ICEServers(id.uniqueID)

@@ -42,6 +42,7 @@ type Engine struct {
 	// enableAV1 retains the operator preference while bounds temporarily limit
 	// negotiation to VP8, so removing bounds can restore the configured codecs.
 	enableAV1   bool
+	policy      MediaPolicy
 	certificate webrtc.Certificate
 	fingerprint string
 
@@ -76,6 +77,18 @@ func NewWithNetwork(logger *zap.Logger, iceServers []string, enableAV1 bool, net
 // NewWithVideoBounds restricts negotiated video to VP8 when dimension limits
 // are enabled. The router must enforce the same bounds on encoded packets.
 func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool, network NetworkConfig, bounds VideoBounds) (*Engine, error) {
+	return NewWithMediaPolicy(logger, iceServers, enableAV1, network, bounds, MediaPolicy{})
+}
+
+// MediaPolicy selects what the SFU negotiates. With E2EE (mandatory channel
+// media encryption) only Opus and VP8 are registered: their encrypted
+// frames keep the clear header the router's packetization, keyframe and
+// dimension admission rely on (VP8 keyframes keep 10 clear bytes). H.264 and
+// HEVC are not offered until encrypted packet/codec admission is proven.
+type MediaPolicy struct{ E2EE bool }
+
+// NewWithMediaPolicy is NewWithVideoBounds with an explicit codec policy.
+func NewWithMediaPolicy(logger *zap.Logger, iceServers []string, enableAV1 bool, network NetworkConfig, bounds VideoBounds, policy MediaPolicy) (*Engine, error) {
 	if err := bounds.validate(); err != nil {
 		return nil, err
 	}
@@ -107,7 +120,7 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 
 	egress := &mediaEgressRegistry{}
 	feedback := &upstreamFeedbackRegistry{}
-	mediaEngine, interceptorRegistry, err := newEngineMediaObserved(enableAV1, bounds, egress, feedback)
+	mediaEngine, interceptorRegistry, err := newEngineMediaPolicy(enableAV1, bounds, policy, egress, feedback)
 	if err != nil {
 		return nil, err
 	}
@@ -195,6 +208,7 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 		api:              api,
 		iceServers:       parsedICE,
 		enableAV1:        enableAV1,
+		policy:           policy,
 		certificate:      *certificate,
 		fingerprint:      fingerprints[0].Value,
 		peers:            make(map[string]*PeerConnectionWrapper),
@@ -359,6 +373,10 @@ func registerCodecs(m *webrtc.MediaEngine, enableAV1 bool) error {
 }
 
 func registerCodecsWithVideoBounds(m *webrtc.MediaEngine, enableAV1 bool, bounds VideoBounds) error {
+	return registerCodecsWithPolicy(m, enableAV1, bounds, MediaPolicy{})
+}
+
+func registerCodecsWithPolicy(m *webrtc.MediaEngine, enableAV1 bool, bounds VideoBounds, policy MediaPolicy) error {
 	// Audio: Opus (preferred) and G.722 as a fallback.
 	opus := webrtc.RTPCodecCapability{
 		MimeType:    webrtc.MimeTypeOpus,
@@ -410,7 +428,7 @@ func registerCodecsWithVideoBounds(m *webrtc.MediaEngine, enableAV1 bool, bounds
 	if err := registerVideo(vp8); err != nil {
 		return fmt.Errorf("vp8: %w", err)
 	}
-	if bounds != (VideoBounds{}) {
+	if bounds != (VideoBounds{}) || policy.E2EE {
 		return nil
 	}
 

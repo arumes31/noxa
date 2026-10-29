@@ -14,7 +14,7 @@ test("X previews reject arbitrary hosts, credentials, malformed IDs and non-post
 test("metadata cache separates providers and connection generations", async () => {
     let calls = 0;
     const request = () => ++calls;
-    const scope = { tabID: "cache", generation: 1 };
+    const scope = { conversation: "channel", tabID: "cache", generation: 1 };
     assert.deepEqual(await Promise.all([loadPreviewMetadata("x", "20", scope, () => true, request), loadPreviewMetadata("x", "20", scope, () => true, request)]), [1, 1]);
     assert.equal(await loadPreviewMetadata("youtube", "20", scope, () => true, request), 2);
     assert.equal(await loadPreviewMetadata("x", "20", { ...scope, generation: 2 }, () => true, request), 3);
@@ -23,19 +23,19 @@ test("metadata cache separates providers and connection generations", async () =
 test("providers share a four-request limit and skip stale queued work", async () => {
     const release = [];
     let calls = 0, current = true;
-    const jobs = Array.from({ length: 6 }, (_, i) => loadPreviewMetadata(i % 2 ? "x" : "youtube", String(i), { tabID: "queue", generation: 1 }, () => i < 4 || current, () => { calls++; return new Promise(resolve => release.push(resolve)); }));
+    const jobs = Array.from({ length: 6 }, (_, i) => loadPreviewMetadata(i % 2 ? "x" : "youtube", String(i), { conversation: "channel", tabID: "queue", generation: 1 }, () => i < 4 || current, () => { calls++; return new Promise(resolve => release.push(resolve)); }));
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(calls, 4);
     current = false;
     for (const resolve of release) resolve("loaded");
     assert.deepEqual(await Promise.all(jobs), ["loaded", "loaded", "loaded", "loaded", null, null]);
     assert.equal(calls, 4);
-    assert.equal(await loadPreviewMetadata("x", "5", { tabID: "queue", generation: 1 }, () => true, () => "retried"), "retried");
+    assert.equal(await loadPreviewMetadata("x", "5", { conversation: "channel", tabID: "queue", generation: 1 }, () => true, () => "retried"), "retried");
 });
 
 test("a current card retries a shared job skipped for an earlier detached card", async () => {
     const release = [];
-    const scope = { tabID: "shared-skip", generation: 1 };
+    const scope = { conversation: "channel", tabID: "shared-skip", generation: 1 };
     const blockers = Array.from({ length: 4 }, (_, i) => loadPreviewMetadata("youtube", String(i), scope, () => true, () => new Promise(resolve => release.push(resolve))));
     await new Promise(resolve => setTimeout(resolve, 0));
     let originalCurrent = true, oldCalls = 0, currentCalls = 0;
@@ -54,7 +54,7 @@ test("a current card retries a shared job skipped for an earlier detached card",
 test("transient preview failures expire for every provider", async t => {
     t.mock.timers.enable({ apis: ["Date"], now: 100000 });
     for (const provider of ["youtube", "x", "portal:twitch"]) {
-        const scope = { tabID: "failure-expiry", generation: 1 };
+        const scope = { conversation: "channel", tabID: "failure-expiry", generation: 1 };
         let calls = 0;
         const request = () => { calls++; if (calls === 1) throw Error("rate limited"); return { title: "Recovered" }; };
         assert.equal(await loadPreviewMetadata(provider, "retry", scope, () => true, request), null);
@@ -64,4 +64,35 @@ test("transient preview failures expire for every provider", async t => {
         assert.deepEqual(await loadPreviewMetadata(provider, "retry", scope, () => true, request), { title: "Recovered" });
         assert.equal(calls, 2);
     }
+});
+
+
+test("metadata boundary rejects private and unknown context before cache and requests", async () => {
+    let calls = 0;
+    const owner = { tabID: "privacy-boundary", generation: 1 };
+    const request = () => { calls++; return "channel metadata"; };
+    for (const conversation of [undefined, "direct", "group", "private", "unknown"]) {
+        assert.equal(await loadPreviewMetadata("youtube", "private-first", { ...owner, conversation }, () => true, request), null);
+    }
+    assert.equal(calls, 0);
+    assert.equal(await loadPreviewMetadata("youtube", "private-first", { ...owner, conversation: "channel" }, () => true, request), "channel metadata");
+    assert.equal(calls, 1);
+    assert.equal(await loadPreviewMetadata("youtube", "private-first", owner, () => true, request), null);
+    assert.equal(calls, 1);
+});
+
+
+test("queued metadata rechecks conversation authority immediately before native request", async () => {
+    const release = [];
+    const scope = { tabID: "privacy-delayed", generation: 1, conversation: "channel" };
+    const blockers = Array.from({ length: 4 }, (_, i) => loadPreviewMetadata("youtube", String(i), scope, () => true, () => new Promise(resolve => release.push(resolve))));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    let calls = 0;
+    const delayedScope = { ...scope };
+    const delayed = loadPreviewMetadata("youtube", "private-now", delayedScope, () => true, () => { calls++; return "leak"; });
+    delayedScope.conversation = "private";
+    release.forEach(resolve => resolve("done"));
+    await Promise.all(blockers);
+    assert.equal(await delayed, null);
+    assert.equal(calls, 0);
 });

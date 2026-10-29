@@ -17,6 +17,8 @@ mobile/test-results/
 web/
 docs/
 tools/
+# The PWA build (vite.config.js) imports the encrypted-media notice plugin.
+!tools/media-e2ee-notices.mjs
 
 # Environment / secrets
 .env
@@ -83,3 +85,6 @@ config.yaml
 # Review artifacts and automated work notes
 output/
 .jules/
+
+# Local Rust rebuild cache; the committed core.wasm is the shipped asset.
+internal/e2ee/ratchet/rust/target/

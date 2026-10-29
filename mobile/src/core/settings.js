@@ -25,6 +25,7 @@ export const DEFAULTS = Object.freeze({
     keywords: [], // highlighted words
     blockedUsers: [], // unique IDs
     hideChatActivity: false, // no typing or read receipts
+    secureMessagingNoticeSeen: false, // the one-time secure-messaging upgrade explanation
     // Voice
     microphoneID: "",
     echoCancellation: true,

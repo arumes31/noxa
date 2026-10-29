@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lib/pq"
@@ -52,6 +53,8 @@ type Store struct {
 	// migrationLockWaitHook is a test seam invoked after an advisory-lock
 	// attempt observes the lock held by another session.
 	migrationLockWaitHook func()
+	// pendingWarnedAt rate-limits Olm pending-budget warnings (unix seconds).
+	pendingWarnedAt atomic.Int64
 }
 
 // SetPIICipher installs the process-local field cipher used by PII methods.

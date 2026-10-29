@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -162,7 +163,7 @@ func (a *AuthService) AuthenticateIdentityChallenge(ctx context.Context, uniqueI
 	}
 	verify := a.verifyChallenge
 	if verify == nil {
-		verify = VerifyChallenge
+		verify = VerifyLoginChallenge
 	}
 	verificationErr := verify(verificationKey, challenge, signature)
 	if missing {
@@ -430,11 +431,16 @@ func (a *AuthService) GetE2EPublicKey(ctx context.Context, uniqueID string) (str
 // GenerateChallenge returns 32 cryptographically random bytes for use in
 // challenge-response authentication.
 func GenerateChallenge() ([]byte, error) {
-	c := make([]byte, 32)
-	if _, err := rand.Read(c); err != nil {
-		return nil, fmt.Errorf("generating challenge: %w", err)
+	c := make([]byte, LoginChallengeSize)
+	for {
+		if _, err := rand.Read(c); err != nil {
+			return nil, fmt.Errorf("generating challenge: %w", err)
+		}
+		// Updated clients refuse "noxa-"-prefixed challenges (domain safety).
+		if !bytes.HasPrefix(c, []byte("noxa-")) {
+			return c, nil
+		}
 	}
-	return c, nil
 }
 
 // isUniqueViolation reports whether err is a PostgreSQL unique-constraint

@@ -5,7 +5,7 @@
 import { dayKey, daysBetween, relativeTime } from "../core/message-format.js";
 import * as settings from "../core/settings.js";
 import { lang, t } from "../i18n.js";
-import { clock, h, sheet } from "./dom.js";
+import { clock, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import "./rich-strings.js";
 import "./rich-text.css";
@@ -79,10 +79,64 @@ export function withDays(messages, timeOf, line) {
     return out;
 }
 
-/** A small lock (end-to-end) or shield (channel key) after the sender. */
-export function encryptionBadge(kind) {
-    const label = kind === "e2e" ? t("dm.encrypted") : t("rich.channelEncrypted");
-    return h("span", { class: `enc-badge enc-${kind}`, role: "img", title: label, "aria-label": label }, icon(kind === "e2e" ? "lock" : "shield"));
+/**
+ * A small lock (end-to-end) or shield (channel key) after the sender. An
+ * end-to-end message is labelled from the protocol it actually arrived with:
+ * Olm (noxa-olm-v1), or the legacy static-key encryption of older history.
+ */
+export function encryptionBadge(kind, message = null) {
+    if (kind !== "e2e") {
+        const label = t("rich.channelEncrypted");
+        return h("span", { class: "enc-badge enc-channel", role: "img", title: label, "aria-label": label }, icon("shield"));
+    }
+    const olm = message?.protocol === "noxa-olm-v1";
+    const label = t(olm ? "rich.encOlm" : "rich.encLegacy");
+    return h("span", { class: `enc-badge enc-e2e${olm ? "" : " enc-legacy"}`, role: "img", title: label, "aria-label": label }, icon("lock"));
+}
+
+/**
+ * The conversation banner from the active secure-messaging path: Olm when a
+ * ratchet session is active, otherwise why it is not (no static claim).
+ */
+export function secureBanner(status) {
+    // One explanation per blocking reason (e.g. "link this device again").
+    const reason = status.reason && t(`dm.error.${status.reason}`) !== `dm.error.${status.reason}` ? t(`dm.error.${status.reason}`) : t("dm.error.secure_unavailable");
+    const text = status.active ? t("rich.secureActive") : t("rich.secureInactive", { reason });
+    const review = status.rotation && status.confirm
+        ? h("button", { class: "link-btn", type: "button", onclick: () => reviewCertificateChange(status) }, t("guest.reviewCertificate"))
+        : null;
+    return h("div", { class: `e2e-banner${status.active ? "" : " warn"}`, role: "note" }, icon("lock"), " ", text, review ? " " : null, review);
+}
+
+const fingerprintOf = binding => (String(binding || "").replace(/^tls-sha256:/, "").match(/.{1,2}/g) || []).join(":").toUpperCase();
+
+/**
+ * The guest's explicit review of a changed server certificate: both
+ * fingerprints and the risk. Only an explicit confirmation re-pins.
+ */
+export async function reviewCertificateChange(status) {
+    const body = t("guest.certificateBody", { previous: fingerprintOf(status.rotation.previous), announced: fingerprintOf(status.rotation.announced) });
+    const choice = await sheet(t("guest.certificateTitle"), body, [
+        { label: t("guest.certificateAccept"), value: true, danger: true },
+        { label: t("link.cancel"), value: false, primary: true },
+    ]);
+    if (choice !== true) return false;
+    // A failed save keeps the old pin (fail closed); say so instead of
+    // leaving an unhandled rejection behind an unchanged banner.
+    try { return await status.confirm(); }
+    catch {
+        toast(t("guest.certificateSaveFailed"), "error");
+        return false;
+    }
+}
+
+/**
+ * Asks to trust a contact's changed identity, showing the exact fingerprint
+ * a confirmation pins (dm.trustNewIdentity). Resolves true to trust.
+ */
+export async function confirmIdentityChange(name, fingerprint) {
+    const body = [t("dm.trustBody", { name }), h("br"), h("span", { class: "mono trust-fingerprint" }, t("dm.trustFingerprint", { fingerprint }))];
+    return (await sheet(t("dm.trustTitle"), body, [{ label: t("dm.trust"), value: true, primary: true }, { label: t("link.cancel"), value: false }])) === true;
 }
 
 /** A blocked sender's message, folded; Show calls onShow. */

@@ -87,9 +87,17 @@ type connManager struct {
 	nickname                     string
 	displayName                  string // requested public name; separate from the account login
 	isGuest                      bool
-	authorizationModel           string
-	closed                       bool
-	reconnectTerminal            bool // authenticated rejection or trust failure; guarded by mu
+	// keyless: an ephemeral "guest:" session without an identity key (only a
+	// third-party client can get one: the desktop always signs in with its key).
+	keyless bool
+	// supportsMediaE2EE: the server requires end-to-end encrypted channel
+	// media and supports its key transport (Task 2).
+	supportsMediaE2EE bool
+	// ratchetWake: the server's olm_pending doorbell wakes the drain loop.
+	ratchetWake        chan struct{}
+	authorizationModel string
+	closed             bool
+	reconnectTerminal  bool // authenticated rejection or trust failure; guarded by mu
 	// The latest snapshot is replayed when a tab becomes active.
 	lastSnapshot string
 	// lastSubscriptions is the newest authoritative subscription set (312).
@@ -121,6 +129,33 @@ type connManager struct {
 	// returns the conversation it belongs to; set once by the App for tab
 	// managers, nil otherwise.
 	dmChanges func(m *connManager, peer string, c dmChange) string
+	// ratchetCfg overrides the noxa-olm-v1 session configuration (tests:
+	// in-memory transports, store dir, protection). Every authenticated
+	// session uses the new protocol (ratchetDefault); supportsOlm records the
+	// server's capability. ratchetSess is the consumer of the current
+	// (conn, epoch); ratchetProject persists its records (App).
+	ratchetCfg     *ratchetConfig
+	ratchetDefault bool
+	supportsOlm    bool
+	ratchetSess    *ratchetSession
+	ratchetProject func(m *connManager, r RatchetRecord, isNew bool)
+	// ratchetControls receive delivered media controls (ratchet_control.go).
+	ratchetControls []func(RatchetControl)
+	controlQueue    []RatchetControl
+	// mediaRoster is the roster media keys may be sent to (media_roster.go):
+	// client ID -> session; mediaRosterLast the channels of sessions that left.
+	mediaRoster     map[string]mediaRosterEntry
+	mediaRosterLast map[string]int64
+	controlRunning  bool
+	// ratchetEdits maps an uncertain edit operation (peer, ref, text) to its
+	// logical ID until it is accepted, so a retry resolves it.
+	ratchetEdits sync.Map
+	// ratchetStartErr is the last session-start failure of the current
+	// connection (surfaced on waiting outbox entries); ratchetStartAt bounds
+	// background retries.
+	ratchetStartErr     error
+	ratchetStartAt      time.Time
+	ratchetStartingConn net.Conn // single-flight per connection
 
 	// debugFrames tees frame summaries to the "debug_frame" event (327 debug
 	// console) when enabled.
@@ -192,7 +227,7 @@ const (
 )
 
 func newConnManager(wailsCtx context.Context) *connManager {
-	return &connManager{
+	m := &connManager{
 		sink:                wailsSink{ctx: wailsCtx},
 		confirmPeerChange:   frontendPeerConfirmation(wailsCtx),
 		pending:             make(map[netproto.MessageType]pendingRequest),
@@ -204,7 +239,11 @@ func newConnManager(wailsCtx context.Context) *connManager {
 		pubKeys:             newPubKeyCache(),
 		scopeKeys:           newScopeKeyStore(),
 		decryptSem:          make(chan struct{}, maxAsyncDecrypts),
+		ratchetWake:         make(chan struct{}, 1),
 	}
+	// Media keys are relayed to the frontend from the first session on.
+	m.ratchetControls = append(m.ratchetControls, m.relayMediaKey)
+	return m
 }
 
 // identity returns the client's key pair, loading or generating it lazily.
@@ -417,10 +456,42 @@ func (m *connManager) connectNamed(addr, nickname, displayName, password, server
 		Nickname:        nickname,
 		ServerPassword:  serverPassword,
 		X25519PublicKey: encPub,
-	}, func(challenge []byte) ([]byte, string, error) {
-		sig, err := auth.SignChallenge(id.PrivateKey, challenge)
+	}, loginSigner(id))
+}
+
+// loginSigner answers a login challenge: domain-separated and fixed-size
+// only, so a server can never obtain a signature over a transcript of its
+// choosing (a device approval or link binding statement).
+func loginSigner(id *identity) challengeSigner {
+	return func(challenge []byte) ([]byte, string, error) {
+		sig, err := auth.SignLoginChallenge(id.PrivateKey, challenge)
 		return sig, id.PublicKey, err
-	})
+	}
+}
+
+// errServerLoginOutdated: the server does not advertise the domain-separated
+// login scheme, so this client refuses to sign its challenge.
+const errServerLoginOutdated = "this server needs an update: it does not support secure sign-in; ask the administrator to update the server"
+
+// answerChallenge signs a login challenge only under the advertised
+// domain-separated scheme. An older server gets no signature at all (never a
+// raw fallback); the reason is errServerLoginOutdated.
+func answerChallenge(ch netproto.AuthChallenge, signer challengeSigner) ([]byte, string, string) {
+	if ch.Scheme != netproto.AuthChallengeSchemeV1 {
+		return nil, "", errServerLoginOutdated
+	}
+	sig, pub, err := signer(ch.Challenge)
+	if err != nil {
+		return nil, "", err.Error()
+	}
+	return sig, pub, ""
+}
+
+// loginReasonTerminal reports login refusals that retrying cannot fix: an
+// outdated server, or a challenge this client refuses to sign (a malicious
+// or broken server must not keep the desktop retrying).
+func loginReasonTerminal(reason string) bool {
+	return reason == errServerLoginOutdated || reason == auth.ErrUnsafeChallenge.Error()
 }
 
 // challengeSigner signs a server challenge and returns the signature and
@@ -469,10 +540,13 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 				_ = conn.Close()
 				return err.Error()
 			}
-			sig, pub, err := signer(ch.Challenge)
-			if err != nil {
+			sig, pub, reason := answerChallenge(ch, signer)
+			if reason != "" {
 				_ = conn.Close()
-				return err.Error()
+				if loginReasonTerminal(reason) {
+					m.markReconnectTerminal() // no reconnect loop: an update or another server is needed
+				}
+				return reason
 			}
 			if err := m.writeConn(conn, netproto.MsgAuthSignature, netproto.AuthSignature{
 				UniqueID:        authMsg.Username,
@@ -547,6 +621,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsWebLogin = slices.Contains(resp.Capabilities, netproto.CapabilityWebLogin)
 	m.supportsLinkPreview = slices.Contains(resp.Capabilities, netproto.CapabilityLinkPreview)
 	m.supportsDMDevices = m.supportsDevices && slices.Contains(resp.Capabilities, netproto.CapabilityDMDevices)
+	m.applySecureAuthLocked(resp, authMsg.Anonymous)
 	m.activityReportedAt = time.Time{}
 	m.deviceLinks = nil
 	m.nickname = resp.Nickname
@@ -562,7 +637,6 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsStreamCodecRefresh = slices.Contains(resp.Capabilities, netproto.CapabilityStreamCodecRefresh)
 	m.supportsStreamReceiverRecovery = slices.Contains(resp.Capabilities, netproto.CapabilityStreamReceiverRecovery)
 	m.supportsConversationActivity = slices.Contains(resp.Capabilities, netproto.CapabilityConversationActivity)
-	m.isGuest = authMsg.Anonymous
 	m.iceServers = resp.ICEServers
 	m.managedRelay = slices.Contains(resp.Capabilities, netproto.CapabilityManagedRelay)
 	m.relayLease = netproto.RelayResponse{}
@@ -595,8 +669,29 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	})
 	go guardCrash("heartbeat", func() { m.heartbeatLoop(conn) })
 	go guardCrash("relay renewal", func() { m.relayRenewalLoop(conn) })
-	go guardCrash("device registration", func() { m.ensureDeviceRegistered(conn); m.approvePasskeyDevices(conn) })
+	go guardCrash("device registration", func() {
+		m.ensureDeviceRegistered(conn)
+		m.approvePasskeyDevices(conn)
+		m.startRatchetRecorded(conn)
+	})
 	return ""
+}
+
+// applySecureAuthLocked records what an authentication result means for
+// secure messaging (m.mu held). Direct and private-group messages use
+// noxa-olm-v1 only: every authenticated session has no legacy send path (an
+// old server or a keyless session gets an explicit "unavailable" instead).
+// The server resolves the session kind; an updated server reports it, since
+// every password-less key login sends Anonymous, members included.
+func (m *connManager) applySecureAuthLocked(resp netproto.AuthResponse, anonymous bool) {
+	m.supportsOlm = slices.Contains(resp.Capabilities, netproto.CapabilityOlmAdmission) && slices.Contains(resp.Capabilities, netproto.CapabilityOlmDirectory)
+	m.supportsMediaE2EE = m.supportsOlm && mediaE2EESupported(resp.Capabilities)
+	m.ratchetDefault = true
+	m.isGuest = anonymous
+	if slices.Contains(resp.Capabilities, netproto.CapabilityOlmAdmission) {
+		m.isGuest = resp.Guest
+	}
+	m.keyless = strings.HasPrefix(resp.UniqueID, "guest:")
 }
 
 // openMOTD unseals the AuthResponse MOTD with the global generation that came
@@ -652,6 +747,18 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	m.closed = true
 	m.conn = nil
 	m.connEpoch++
+	// A start failure belongs to its connection only.
+	m.ratchetStartErr, m.ratchetStartAt = nil, time.Time{}
+	// Controls are fenced to their connection: one queued before a reconnect
+	// is never emitted afterwards.
+	m.controlQueue = nil
+	// The media-key roster belongs to its connection too.
+	m.mediaRoster, m.mediaRosterLast = nil, nil
+	// The consumer is fenced by the epoch change; stopping awaits its
+	// in-flight operation (which takes m.mu), so it runs after unlocking.
+	if s := m.takeRatchetLocked(); s != nil {
+		go s.stop()
+	}
 	m.acceptingTransfers = false
 	m.transferEpoch++
 	transferConns := m.detachTransfersLocked()
@@ -1128,8 +1235,16 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		m.mu.Lock()
 		m.lastSnapshot = string(f.Payload)
 		m.mu.Unlock()
+		m.noteRosterSnapshot(f.Payload)
 		m.emit("snapshot", string(f.Payload))
 	case netproto.MsgEvent:
+		if isOlmDoorbell(f.Payload) {
+			m.ringRatchet()
+			return
+		}
+		if isRosterEvent(f.Payload) {
+			m.noteRosterEvent(string(f.Payload))
+		}
 		// Sealed payloads (chat bodies, edits, announcements) are opened in
 		// the backend; DMs decrypt asynchronously and re-emit, which is what
 		// the empty return means.

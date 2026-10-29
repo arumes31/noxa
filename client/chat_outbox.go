@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,6 +25,9 @@ type ChatOutboxEntry struct {
 	DueAt     int64  `json:"due_at"`
 	State     string `json:"state"`
 	Error     string `json:"error,omitempty"`
+	// Attempted: a new-protocol send was started for this ID, so a committed
+	// operation may exist and may still be delivered.
+	Attempted bool `json:"attempted,omitempty"`
 }
 type ChatOutboxRequest struct {
 	Action       string `json:"action"`
@@ -35,6 +37,9 @@ type ChatOutboxRequest struct {
 	Text         string `json:"text,omitempty"`
 	ReplyToID    int64  `json:"reply_to_id,omitempty"`
 	QueueOffline bool   `json:"queue_offline,omitempty"`
+	// AcknowledgeUndelivered removes an attempted new-protocol entry although
+	// it cannot be resolved now; the user accepts it may still be delivered.
+	AcknowledgeUndelivered bool `json:"acknowledge_undelivered,omitempty"`
 }
 type ChatOutboxResult struct {
 	Available bool              `json:"available"`
@@ -67,6 +72,8 @@ func (m *connManager) rememberOutboxServer() {
 type chatOutboxStore struct {
 	path string
 	key  [32]byte
+	// identityKey fences writes once the identity is deleted.
+	identityKey string
 }
 
 var outboxMu sync.Mutex
@@ -108,9 +115,9 @@ func (a *App) outboxStore(cm *connManager) (chatOutboxStore, error) {
 	if err != nil || canonical == "" {
 		return chatOutboxStore{}, errors.New("server identity unavailable")
 	}
-	owner := sha256.Sum256([]byte(fmt.Sprintf("%x\x00%s\x00%s", pub, canonical, fingerprint)))
+	owner := localServerOwner(pub, canonical, fingerprint)
 	key := sha256.Sum256(append(append([]byte("noxa/chat-outbox/v1|"), priv[:]...), owner[:]...))
-	return chatOutboxStore{path: filepath.Join(filepath.Dir(base), "outbox", hex.EncodeToString(owner[:])+".sealed"), key: key}, nil
+	return chatOutboxStore{path: filepath.Join(filepath.Dir(base), "outbox", hex.EncodeToString(owner[:])+".sealed"), key: key, identityKey: identity.PublicKey}, nil
 }
 
 func (s chatOutboxStore) load() ([]ChatOutboxEntry, error) {
@@ -129,7 +136,7 @@ func (s chatOutboxStore) load() ([]ChatOutboxEntry, error) {
 		return nil, errors.New("cannot decrypt this outbox")
 	}
 	var entries []ChatOutboxEntry
-	if json.Unmarshal([]byte(plain), &entries) != nil || len(entries) > 100 {
+	if json.Unmarshal([]byte(plain), &entries) != nil || len(entries) > outboxUncertainCap {
 		return nil, errors.New("invalid outbox file")
 	}
 	for i := range entries {
@@ -141,6 +148,9 @@ func (s chatOutboxStore) load() ([]ChatOutboxEntry, error) {
 	return entries, nil
 }
 func (s chatOutboxStore) save(entries []ChatOutboxEntry) error {
+	if identityDeleted(s.identityKey) {
+		return errIdentityDeleted
+	}
 	raw, err := json.Marshal(entries)
 	if err != nil {
 		return err
@@ -185,6 +195,22 @@ func (a *App) ChatOutboxForTab(tabID string, request ChatOutboxRequest) (ChatOut
 	store, err := a.outboxStore(cm)
 	if err != nil {
 		return result, err
+	}
+	// The new-protocol cancel check waits on the consumer: never while the
+	// app-wide outbox lock is held. The decision is re-validated below.
+	var cancelChecked *ChatOutboxEntry
+	if request.Action == "cancel" && !request.AcknowledgeUndelivered {
+		if pre, err := store.load(); err == nil {
+			for _, e := range pre {
+				if e.ID == request.ID {
+					if err := cm.ratchetOutboxCancelable(e); err != nil {
+						return result, err
+					}
+					checked := e
+					cancelChecked = &checked
+				}
+			}
+		}
 	}
 	outboxMu.Lock()
 	defer outboxMu.Unlock()
@@ -251,6 +277,10 @@ func (a *App) ChatOutboxForTab(tabID string, request ChatOutboxRequest) (ChatOut
 			return result, errors.New("sending has started; check history")
 		}
 		if request.Action == "cancel" {
+			e := entries[index]
+			if e.Attempted && !request.AcknowledgeUndelivered && (cancelChecked == nil || cancelChecked.State != e.State || !cancelChecked.Attempted) {
+				return result, errors.New("this message changed while checking; try again")
+			}
 			entries = append(entries[:index], entries[index+1:]...)
 		} else {
 			entries[index].State = "queued"
@@ -306,11 +336,33 @@ func (a *App) pumpChatOutbox(cm *connManager) {
 		outboxMu.Unlock()
 		return
 	}
+	// New-protocol direct entries wait for this connection's ratchet session
+	// instead of failing while it is still starting (store/core warm-up).
+	_, ratchetErr := cm.ratchetConsumerOn(nil)
+	ratchetWaiting := cm.ratchetConfigured() && ratchetErr != nil
+	if ratchetWaiting {
+		// A session that cannot attach is surfaced truthfully on the waiting
+		// entries (and retried in the background), never a silent wait.
+		if reason := cm.ratchetBlockedReason(); reason != "" {
+			changed := false
+			for i := range entries {
+				if entries[i].Scope == "direct" && (entries[i].State == "held" || entries[i].State == "queued") && entries[i].Error != reason {
+					entries[i].Error, changed = reason, true
+				}
+			}
+			if changed {
+				_ = store.save(entries)
+			}
+		}
+	}
 	index := -1
 	for i, entry := range entries {
 		if outboxSending[store.path+"|"+entry.ID] {
 			outboxMu.Unlock()
 			return
+		}
+		if ratchetWaiting && entry.Scope == "direct" {
+			continue
 		}
 		if (entry.State == "held" || entry.State == "queued") && entry.DueAt <= time.Now().UnixMilli() {
 			index = i
@@ -322,8 +374,13 @@ func (a *App) pumpChatOutbox(cm *connManager) {
 		return
 	}
 	entry := entries[index]
+	previousState := entry.State
 	key := store.path + "|" + entry.ID
 	entries[index].State = "sending"
+	entries[index].Error = ""
+	if entry.Scope == "direct" && cm.ratchetConfigured() {
+		entries[index].Attempted = true
+	}
 	if store.save(entries) != nil {
 		outboxMu.Unlock()
 		return
@@ -343,9 +400,12 @@ func (a *App) pumpChatOutbox(cm *connManager) {
 		if entries[i].ID != entry.ID {
 			continue
 		}
-		if failure == "" {
+		switch failure {
+		case "":
 			entries = append(entries[:i], entries[i+1:]...)
-		} else {
+		case outboxStayQueued:
+			entries[i].State = previousState // nothing was committed or sent
+		default:
 			entries[i].State = "uncertain"
 			entries[i].Error = failure
 		}
@@ -361,6 +421,30 @@ func (a *App) sendOutboxEntry(cm *connManager, store chatOutboxStore, entry Chat
 	cm.mu.Lock()
 	conn, epoch, identity := cm.conn, cm.connEpoch, cm.id
 	cm.mu.Unlock()
+	if entry.Scope == "direct" && cm.ratchetConfigured() {
+		// Same binding guard as the legacy path: the queued text belongs to
+		// this outbox (identity + server) and the captured connection only.
+		currentStore, err := a.outboxStore(cm)
+		cm.mu.Lock()
+		current := conn != nil && cm.conn == conn && cm.connEpoch == epoch && cm.id == identity
+		cm.mu.Unlock()
+		if err != nil || currentStore.path != store.path || !current {
+			return "connection or identity changed; check history before retrying"
+		}
+		// The queued entry ID is the stable logical ID: a retry after an
+		// uncertain attempt resolves that original operation, never reseals
+		// changed text. The consumer is pinned to this connection.
+		if _, err := cm.sendRatchetDirect(conn, entry.ID, entry.Target, entry.Text); err != nil {
+			// No session attached: nothing was committed or sent, so the
+			// entry stays queued (never "uncertain"), whatever the reason.
+			var notStarted *ratchetNotStarted
+			if errors.Is(err, errRatchetUnavailable) || errors.As(err, &notStarted) {
+				return outboxStayQueued
+			}
+			return ratchetFailure(err).Error()
+		}
+		return ""
+	}
 	msg, err := cm.encryptChat(entry.Scope, entry.Target, entry.Text)
 	if err != nil {
 		return encryptFailure(err).Error()
@@ -379,4 +463,89 @@ func (a *App) sendOutboxEntry(cm *connManager, store chatOutboxStore, entry Chat
 		return err.Error()
 	}
 	return ""
+}
+
+// outboxStayQueued: the session was not ready and nothing was committed, so
+// the entry returns to its queue and is pumped again automatically.
+const outboxStayQueued = "\x00stay-queued"
+
+// ratchetOutboxCancelable refuses to drop an uncertain new-protocol entry
+// whose committed attempt may still be delivered: undo + resend would then
+// duplicate it. Retry resolves it first (accepted, or aborted/rejected).
+func (m *connManager) ratchetOutboxCancelable(e ChatOutboxEntry) error {
+	// Any attempted entry (uncertain, or retried back to queued) may have a
+	// committed operation; a never-attempted one stays cancellable offline.
+	if e.Scope != "direct" || !e.Attempted || !m.ratchetConfigured() {
+		return nil
+	}
+	c, err := m.ratchetConsumerOn(nil)
+	if err != nil {
+		return errors.New("this message may still be delivered: connect to resolve it first, or remove it acknowledging that it may still arrive")
+	}
+	state, err := c.logicalState(e.ID)
+	if err != nil {
+		return err
+	}
+	if state == "pending" {
+		return errors.New("this message may still be delivered; retry to resolve it, or remove it acknowledging that it may still arrive")
+	}
+	return nil
+}
+
+// ratchetUncertain: a committed new-protocol attempt without a terminal
+// receipt (it may still be delivered).
+func ratchetUncertain(err error) bool {
+	var r *ratchetError
+	return errors.As(err, &r) && r.Committed != nil && r.Committed.Receipt == nil
+}
+
+// outboxUncertainCap bounds the outbox only for uncertain composer entries,
+// above the regular 100: they are never dropped for capacity below it.
+const outboxUncertainCap = 200
+
+// keepOutboxOperation records an uncertain composer send as an "uncertain"
+// outbox entry under its operation ID, in the outbox store captured before
+// the send (refused if this tab's outbox binding changed meanwhile).
+func (a *App) keepOutboxOperation(cm *connManager, store chatOutboxStore, scope, target, text, operationID, reason string) error {
+	if current, err := a.outboxStore(cm); err != nil || current.path != store.path {
+		return errors.New("connection or identity changed during the send")
+	}
+	outboxMu.Lock()
+	defer outboxMu.Unlock()
+	entries, err := store.load()
+	if err != nil {
+		return err
+	}
+	now := time.Now().UnixMilli()
+	for i := range entries {
+		if entries[i].ID == operationID {
+			entries[i].State, entries[i].Error, entries[i].Attempted = "uncertain", reason, true
+			return store.save(entries)
+		}
+	}
+	if len(entries) >= outboxUncertainCap {
+		return errors.New("outbox full")
+	}
+	entries = append(entries, ChatOutboxEntry{ID: operationID, Scope: scope, Target: target, Text: text, CreatedAt: now, DueAt: now,
+		State: "uncertain", Error: reason, Attempted: true})
+	return store.save(entries)
+}
+
+// forgetOutboxOperation drops the entry of an operation that is now sent.
+func (a *App) forgetOutboxOperation(cm *connManager, store chatOutboxStore, operationID string) {
+	outboxMu.Lock()
+	defer outboxMu.Unlock()
+	if outboxSending[store.path+"|"+operationID] {
+		return
+	}
+	entries, err := store.load()
+	if err != nil {
+		return
+	}
+	for i := range entries {
+		if entries[i].ID == operationID {
+			_ = store.save(append(entries[:i], entries[i+1:]...))
+			return
+		}
+	}
 }

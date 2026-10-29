@@ -95,6 +95,8 @@ func validChatTabKey(key string) bool {
 type chatTabLayoutStore struct {
 	path string
 	key  [32]byte
+	// identityKey fences writes once the identity is deleted.
+	identityKey string
 }
 
 // Only disk transactions share this lock; identity/activation/connection locks
@@ -110,6 +112,9 @@ func (a *App) chatTabLayoutStore(owner DMHistoryContext) (chatTabLayoutStore, er
 	history, err := a.dmHistoryForContext(owner)
 	if err != nil {
 		return empty, err
+	}
+	if identityDeleted(history.identityKey) {
+		return empty, errIdentityDeleted
 	}
 	cm.mu.Lock()
 	addr, fingerprint := cm.addr, cm.fingerprint
@@ -131,15 +136,16 @@ func (a *App) chatTabLayoutStore(owner DMHistoryContext) (chatTabLayoutStore, er
 	if err != nil || current != cm {
 		return empty, errDMHistoryContextChanged
 	}
-	scope := fmt.Sprintf("%x\x00%s\x00%s", history.publicKey, canonical, fingerprint)
-	name := sha256.Sum256([]byte(chatTabLayoutLabel + "|name|" + scope))
+	scope := localServerScope(history.publicKey, canonical, fingerprint)
+	name := chatTabLayoutName(history.publicKey, canonical, fingerprint)
 	mac := hmac.New(sha256.New, history.key[:])
 	_, _ = mac.Write([]byte(chatTabLayoutLabel + "|key|" + scope))
 	var key [32]byte
 	copy(key[:], mac.Sum(nil))
 	return chatTabLayoutStore{
-		path: filepath.Join(filepath.Dir(history.dir), "chat-tab-layout", hex.EncodeToString(name[:])+".sealed"),
-		key:  key,
+		path:        filepath.Join(filepath.Dir(history.dir), "chat-tab-layout", hex.EncodeToString(name[:])+".sealed"),
+		key:         key,
+		identityKey: history.identityKey,
 	}, nil
 }
 
@@ -183,6 +189,11 @@ func (a *App) SaveChatTabLayoutForContext(owner DMHistoryContext, layout ChatTab
 	sealed, err := sealFile(raw, store.key)
 	if err != nil {
 		return err.Error()
+	}
+	// Rechecked under chatTabLayoutMu: identity deletion moves the file under
+	// the same lock, so a save that raced it never recreates the layout.
+	if identityDeleted(store.identityKey) {
+		return errIdentityDeleted.Error()
 	}
 	if err := writePrivateFileAtomic(store.path, sealed); err != nil {
 		return err.Error()

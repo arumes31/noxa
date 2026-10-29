@@ -332,6 +332,10 @@ func (m MessageType) String() string {
 		return "ClientInfoResponse"
 	case MsgPrioritySpeaker:
 		return "PrioritySpeaker"
+	case MsgOlmDirectoryRequest:
+		return "OlmDirectoryRequest"
+	case MsgOlmDirectoryResult:
+		return "OlmDirectoryResult"
 	case MsgKeyPublish:
 		return "KeyPublish"
 	case MsgKeyRequest:
@@ -505,7 +509,12 @@ type AuthResponse struct {
 	// Zero/absent is the startup/legacy baseline; subsequent updates are positive.
 	MediaLimitsRevision uint64 `json:"media_limits_revision,string,omitempty"`
 
-	OK       bool   `json:"ok"`
+	OK bool `json:"ok"`
+	// Guest reports the resolved session kind: true for a guest (a key-derived
+	// principal without an account, or an ephemeral "guest:" session), false
+	// for a member. Clients use it instead of their own Anonymous flag, which
+	// is set by every password-less key login.
+	Guest    bool   `json:"guest,omitempty"`
 	ClientID string `json:"client_id,omitempty"`
 	// DeviceID names the linked device this session signed in with.
 	DeviceID string `json:"device_id,omitempty"`
@@ -546,7 +555,15 @@ type ICEServer struct {
 // private key and reply with an AuthSignature.
 type AuthChallenge struct {
 	Challenge []byte `json:"challenge"`
+	// Scheme advertises how the challenge must be signed. Servers that verify
+	// the domain-separated login signature set AuthChallengeSchemeV1; updated
+	// clients sign only then and refuse older servers (never raw signing).
+	Scheme string `json:"scheme,omitempty"`
 }
+
+// AuthChallengeSchemeV1: sign "noxa-auth-challenge-v1\n" || challenge
+// (auth.SignLoginChallenge).
+const AuthChallengeSchemeV1 = "noxa-auth-challenge-v1"
 
 // AuthSignature is the client's reply to an AuthChallenge, completing the
 // challenge-response handshake. PublicKey (PEM) is optional: registered
@@ -719,6 +736,10 @@ type WebRTCOffer struct {
 	// sends this field publishes exactly one microphone and one video track
 	// (70). Server -> client renegotiation offers never set it.
 	Tracks []TrackSlot `json:"tracks,omitempty"`
+	// MediaE2EE declares that every sender and receiver of this peer carries
+	// the encoded-frame encryption transform (MediaE2EEVersion). Servers that
+	// advertise CapabilityMediaE2EE refuse client offers without it.
+	MediaE2EE string `json:"media_e2ee,omitempty"`
 }
 
 // TrackSlot names the media slot one outbound track of a WebRTC offer
@@ -1203,6 +1224,9 @@ type ChatHistoryEntry struct {
 	// EncMode is set by the CLIENT next to EncVerified ("server" for a scope
 	// body, "e2e" for a local end-to-end DM record); never by a server.
 	EncMode string `json:"enc_mode,omitempty"`
+	// Protocol is set by the CLIENT for a local direct-message search hit
+	// ("noxa-olm-v1", or empty for legacy encryption); servers never send it.
+	Protocol string `json:"protocol,omitempty"`
 
 	SentAt    int64          `json:"sent_at"` // unix seconds
 	EditedAt  int64          `json:"edited_at,omitempty"`

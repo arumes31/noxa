@@ -6,6 +6,7 @@ import { streamRecovery } from "./stream-recovery.js";
 import { receiverVideoCodecs } from "./video-codecs.js";
 import { receiverHEVCSupport, hevcReadmissionDelay } from "./video-hevc.js";
 import { createReceiverRegistry } from "./remote-receivers.js";
+import { channelMedia } from "./channel-media.js";
 
 const V = () => window.__noxa;
 let session = null;
@@ -393,7 +394,9 @@ async function poll(s) {
             if (revision > entry.revision) entry.revision = revision;
             entry.pollError = "";
             refreshWatchHEVC(s, entry);
-            if (stream.preview_at && stream.preview_at !== entry.previewAt) {
+            // Encrypted channel media: the server holds no previews (they would be
+            // plaintext); a stream shows its picture only once watched.
+            if (stream.preview_at && stream.preview_at !== entry.previewAt && !channelMedia()) {
                 const preview = await streamRequest(s.scope, { action: "preview", publisher_id: stream.publisher_id, slot: stream.slot, generation: stream.generation });
                 if (!current(s)) return;
                 if (s.streams.get(id) !== entry) continue;

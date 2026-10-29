@@ -18,9 +18,9 @@ func TestRoleBindingsRejectTabSwitchBeforeFrontendReset(t *testing.T) {
 		call              func(*App, string) (any, error)
 	}{
 		{name: "WebRTCOffer", send: netproto.MsgWebRTCOffer, reply: netproto.MsgWebRTCAnswer,
-			request: netproto.WebRTCOffer{SDP: "offer", Tracks: []netproto.TrackSlot{{TrackID: "audio", Slot: "mic"}}}, response: netproto.WebRTCAnswer{SDP: "answer"},
+			request: netproto.WebRTCOffer{SDP: "offer", Tracks: []netproto.TrackSlot{{TrackID: "audio", Slot: "mic"}}, MediaE2EE: netproto.MediaE2EEVersion}, response: netproto.WebRTCAnswer{SDP: "answer"},
 			call: func(a *App, tabID string) (any, error) {
-				sdp, err := a.WebRTCOfferForTab(tabID, "offer", []netproto.TrackSlot{{TrackID: "audio", Slot: "mic"}})
+				sdp, err := a.WebRTCOfferSecureForTab(tabID, "offer", []netproto.TrackSlot{{TrackID: "audio", Slot: "mic"}}, netproto.MediaE2EEVersion)
 				return netproto.WebRTCAnswer{SDP: sdp}, err
 			}},
 		{name: "FileList", send: netproto.MsgFileList, reply: netproto.MsgFileListResponse,

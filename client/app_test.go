@@ -218,8 +218,6 @@ func TestAppConnectedBindings(t *testing.T) {
 	app, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
 		frames <- frame
 		switch netproto.MessageType(frame.Type) {
-		case netproto.MsgWebRTCOffer:
-			return netproto.MsgWebRTCAnswer, netproto.WebRTCAnswer{SDP: "answer-sdp"}, true
 		case netproto.MsgAvatarGet:
 			return netproto.MsgAvatarData, netproto.AvatarData{
 				UniqueID: "alice", DataBase64: "cG5n", ContentType: "image/png",
@@ -329,16 +327,6 @@ func TestAppConnectedBindings(t *testing.T) {
 	if err := netproto.Decode(nextFrame(t, frames, netproto.MsgWhisperSet), &whisper); err != nil ||
 		!whisper.Active || len(whisper.UniqueIDs) != 1 || whisper.UniqueIDs[0] != "u1" || len(whisper.ChannelIDs) != 2 {
 		t.Fatalf("WhisperSet payload = %+v, %v", whisper, err)
-	}
-
-	tracks := []netproto.TrackSlot{{TrackID: "mic-track", Slot: "mic"}}
-	answer, err := app.WebRTCOffer("offer-sdp", tracks)
-	if err != nil || answer != "answer-sdp" {
-		t.Fatalf("WebRTCOffer = %q, %v", answer, err)
-	}
-	var offer netproto.WebRTCOffer
-	if err := netproto.Decode(nextFrame(t, frames, netproto.MsgWebRTCOffer), &offer); err != nil || offer.SDP != "offer-sdp" || len(offer.Tracks) != 1 {
-		t.Fatalf("WebRTCOffer payload = %+v, %v", offer, err)
 	}
 
 	app.WebRTCAnswer("client-answer")

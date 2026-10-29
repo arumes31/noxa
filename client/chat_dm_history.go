@@ -55,6 +55,13 @@ type DMEntry struct {
 	Edited   bool  `json:"edited,omitempty"`
 	EditedAt int64 `json:"edited_at,omitempty"`
 	Deleted  bool  `json:"deleted,omitempty"`
+	// Protocol is "noxa-olm-v1" for a record projected from the protected
+	// ratchet archive (empty = legacy). Such entries are keyed by (protocol,
+	// sender, ClientMsgID = sender logical ID); Key is the semantic key and
+	// Status the own-send receipt state or "received".
+	Protocol string `json:"protocol,omitempty"`
+	Key      string `json:"key,omitempty"`
+	Status   string `json:"status,omitempty"`
 }
 
 // DMPeer summarises one stored conversation, so PM tabs can be restored on
@@ -117,6 +124,8 @@ type dmHistoryStore struct {
 	dir       string
 	publicKey [32]byte
 	key       [32]byte
+	// identityKey fences writes once the identity is deleted.
+	identityKey string
 }
 
 func (a *App) captureDMHistory() (dmHistoryStore, error) {
@@ -140,7 +149,7 @@ func dmHistoryStoreForIdentity(dir string, id *identity) (dmHistoryStore, error)
 	if err != nil {
 		return dmHistoryStore{}, err
 	}
-	return dmHistoryStore{dir: dir, publicKey: pub, key: key}, nil
+	return dmHistoryStore{dir: dir, publicKey: pub, key: key, identityKey: id.PublicKey}, nil
 }
 
 // dmHistoryPath names a peer's log from a hash of (own public key, peer), so
@@ -197,6 +206,9 @@ func (s dmHistoryStore) open(blob []byte) (dmLog, error) {
 // save seals and writes a peer's log, trimming it to the newest
 // dmHistoryMax messages.
 func (s dmHistoryStore) save(l dmLog) error {
+	if identityDeleted(s.identityKey) {
+		return errIdentityDeleted
+	}
 	if n := len(l.Messages); n > dmHistoryMax {
 		l.Messages = append([]DMEntry(nil), l.Messages[n-dmHistoryMax:]...)
 	}
@@ -319,7 +331,7 @@ func (a *App) dmHistoryAppendWith(store dmHistoryStore, peer, nickname string, e
 		// Re-delivery of the same message (a reconnect replaying an offline
 		// spool) must not duplicate the log.
 		for _, old := range l.Messages {
-			if old.ClientMsgID == e.ClientMsgID && old.Self == e.Self {
+			if old.ClientMsgID == e.ClientMsgID && old.Self == e.Self && old.Protocol == e.Protocol {
 				return ""
 			}
 		}
@@ -467,6 +479,7 @@ func (s dmHistoryStore) search(peer, query string, maxMessages int) ChatSearchRe
 				SentAt:       m.SentAt,
 			}
 			entry.EncVerified, entry.EncMode = dmEncState(m)
+			entry.Protocol = m.Protocol
 			res.Messages = append(res.Messages, entry)
 		}
 	}

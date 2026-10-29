@@ -2,6 +2,7 @@
 // The server confirms the token and the user's access; the link never
 // bypasses the channel's permissions or password. Text channels open their
 // chat; voice channels are offered to join.
+import { mediaErrorText } from "./media-e2ee-text.js";
 import { app, joinVoice } from "../app.js";
 import { adminFor, parseInvite } from "../core/admin.js";
 import { addStrings, t } from "../i18n.js";
@@ -34,7 +35,7 @@ export function renderInvite(root, arg) {
                 if (await joinVoice(invite.channelID) === false) { join.disabled = false; return; }
                 location.replace("#/voice");
             } catch (error) {
-                toast(t("voice.joinFailed", { error: error.message }), "warn");
+                toast(t("voice.joinFailed", { error: mediaErrorText(error) }), "warn");
                 join.disabled = false;
             }
         } }, t("invite.join", { name }));

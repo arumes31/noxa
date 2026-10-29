@@ -111,7 +111,7 @@ func (f *fakeAuth) AuthenticateChallenge(_ context.Context, uniqueID string, cha
 	if !ok {
 		return false, auth.ErrUserNotFound
 	}
-	if err := auth.VerifyChallenge(pub, challenge, signature); err != nil {
+	if err := auth.VerifyLoginChallenge(pub, challenge, signature); err != nil { // mirrors AuthService
 		return false, nil
 	}
 	return true, nil
@@ -987,6 +987,10 @@ func startTestEnvLogger(t *testing.T, _ any, mutateCfg func(*config.Config), mut
 		mutateCfg(cfg)
 	}
 	srv := New(cfg, logger, deps)
+	// The shared fixtures exercise SFU/control semantics with fake voice
+	// backends and no device directory. Encrypted channel media (the
+	// production default) is covered by media_e2ee_test.go, which keeps it on.
+	srv.mediaE2EE = false
 	for _, configure := range beforeStart {
 		configure(srv)
 	}

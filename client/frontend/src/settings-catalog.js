@@ -86,6 +86,7 @@ export const SETTINGS_OUTSIDE_DIALOG = Object.freeze({
     channel_notify: "channel notification menu",
     alpha_dismissed: "alpha notice",
     mobile_hint: "noXa Mobile sidebar hint (device dialog / Help menu)",
+    secure_notice_seen: "secure messaging upgrade notice",
 });
 
 // Lists and maps the user curates by hand survive "Reset to default".

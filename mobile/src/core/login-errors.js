@@ -15,6 +15,7 @@ export function classifySignIn(error) {
     if (reason === "server is full") return { kind: "full" };
     if (reason === "guest login is disabled on this server") return { kind: "guestDisabled" };
     if (reason.startsWith("unsupported authorization model") || reason.startsWith("unsupported server authorization model")) return { kind: "version" };
+    if (reason.startsWith("this server needs an update: it does not support secure sign-in")) return { kind: "serverOutdated" };
     if (reason === "could not reach the server" || reason === "connection closed" || reason === "the server did not answer in time" || reason === "not connected") return { kind: "network" };
     if (reason === "invalid credentials" || reason === "invalid public key" || reason === "no pending challenge") return { kind: "authentication" };
     return { kind: "unknown" };

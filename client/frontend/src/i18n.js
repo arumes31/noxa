@@ -33,6 +33,7 @@ import { voiceDiagnosticsEnglish, voiceDiagnosticsGerman } from "./voice-diagnos
 import { quickWinEnglish, quickWinGerman } from "./quick-win-messages.js";
 import { uiPolishEnglish, uiPolishGerman } from "./ui-polish-messages.js";
 import { streamEnglish, streamGerman } from "./stream-messages.js";
+import { channelMediaEnglish, channelMediaGerman } from "./channel-media-messages.js";
 import { chatEnglish, chatGerman } from "./chat-messages.js";
 import { conversationEnglish, conversationGerman } from "./conversation-messages.js";
 import { callEnglish, callGerman } from "./call-messages.js";
@@ -59,6 +60,7 @@ import { uploadStageEnglish, uploadStageGerman } from "./upload-stage-messages.j
 import { accountIdentityEnglish, accountIdentityGerman } from "./account-identity-messages.js";
 import { statusExpiryEnglish, statusExpiryGerman } from "./status-expiry-messages.js";
 import { hardeningEnglish, hardeningGerman } from "./hardening-messages.js";
+import { studioEnglish, studioGerman } from "./studio-messages.js";
 
 const en = {
  ...overviewEnglish,
@@ -72,6 +74,7 @@ const en = {
     ...accountIdentityEnglish,
     ...statusExpiryEnglish,
     ...hardeningEnglish,
+    ...studioEnglish,
     ...midnightEnglish,
     ...loginErrorEnglish, ...streamHealthEnglish,
     ...voiceDiagnosticsEnglish,
@@ -88,6 +91,7 @@ const en = {
     ...conversationEnglish,
     ...chatEnglish,
     ...streamEnglish,
+    ...channelMediaEnglish,
     ...uiPolishEnglish,
     ...auditEnglish,
     ...activityEnglish,
@@ -193,6 +197,7 @@ const de = {
     ...accountIdentityGerman,
     ...statusExpiryGerman,
     ...hardeningGerman,
+    ...studioGerman,
     ...midnightGerman,
     ...loginErrorGerman, ...streamHealthGerman,
     ...voiceDiagnosticsGerman,
@@ -209,6 +214,7 @@ const de = {
     ...conversationGerman,
     ...chatGerman,
     ...streamGerman,
+    ...channelMediaGerman,
     ...uiPolishGerman,
     ...auditGerman,
     ...activityGerman,

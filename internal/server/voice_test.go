@@ -86,6 +86,9 @@ func (f *fakeVoice) VideoPublications(subscriber string) []webrtc.VideoPublicati
 	return f.videoRouter().VideoPublications(subscriber)
 }
 func (f *fakeVoice) RevokeVideo(publisher, slot string) { f.videoRouter().RevokeVideo(publisher, slot) }
+func (f *fakeVoice) RequestViewerKeyframe(subscriber, publisher, slot string) bool {
+	return f.videoRouter().RequestViewerKeyframe(subscriber, publisher, slot)
+}
 func (f *fakeVoice) SetVideoPreview(publisher, slot string, generation uint64, data []byte) error {
 	return f.videoRouter().SetVideoPreview(publisher, slot, generation, data)
 }

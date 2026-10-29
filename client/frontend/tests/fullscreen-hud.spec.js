@@ -301,7 +301,8 @@ test("downgraded direct messages retain their warning in fullscreen", async ({ p
     // A later verified DM must not relabel the downgraded message.
     await page.evaluate(() => window.__fs.dm("bob", "private-message"));
     await expect(warning).toHaveCount(1);
-    await expect(page.locator('.fs-bubble-encryption[data-kind="lock"]')).toHaveCount(1);
+    // That verified DM is legacy (static-key): its own badge, not the Olm lock.
+    await expect(page.locator('.fs-bubble-encryption[data-kind="legacy"]')).toHaveCount(1);
 });
 
 for (const generation of ["serverGeneration", "sessionGeneration"]) {
