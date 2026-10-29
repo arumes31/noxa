@@ -6,6 +6,7 @@ import (
 	"github.com/lib/pq"
 	"noxa/internal/e2ee/admission"
 	"sort"
+	"strconv"
 )
 
 func lockOlmRosters(ctx context.Context, tx *sql.Tx, principals []string) (map[string]int64, error) {
@@ -32,8 +33,18 @@ func bumpOlmRoster(ctx context.Context, tx *sql.Tx, p string) error {
 	return e
 }
 func lockMutationPrincipals(ctx context.Context, tx *sql.Tx, predicate string, args []any) ([]string, error) {
+	return lockMutationPrincipalsLimited(ctx, tx, predicate, args, 0)
+}
+
+// lockMutationPrincipalsLimited locks the rosters of the principals selected by
+// predicate, at most limit of them in principal order (0 = all).
+func lockMutationPrincipalsLimited(ctx context.Context, tx *sql.Tx, predicate string, args []any, limit int) ([]string, error) {
+	query := `SELECT DISTINCT principal FROM user_devices WHERE ` + predicate
+	if limit > 0 {
+		query += ` ORDER BY principal LIMIT ` + strconv.Itoa(limit)
+	}
 	// #nosec G202 -- predicate is a fixed SQL fragment from internal callers; values are bound parameters.
-	rows, e := tx.QueryContext(ctx, `SELECT DISTINCT principal FROM user_devices WHERE `+predicate, args...)
+	rows, e := tx.QueryContext(ctx, query, args...)
 	if e != nil {
 		return nil, e
 	}

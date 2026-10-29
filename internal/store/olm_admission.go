@@ -102,6 +102,12 @@ func (s *Store) OlmSnapshot(ctx context.Context, a OlmSource, scope, peer, conve
 		return OlmRosterSnapshot{}, e
 	}
 	defer func() { _ = tx.Rollback() }()
+	// A snapshot shares the admission lock order (conversation, rosters,
+	// devices) but must never queue behind a long writer: a bounded wait
+	// fails as retryable instead of holding a pool connection for seconds.
+	if _, e = tx.ExecContext(ctx, `SET LOCAL lock_timeout = '1s'`); e != nil {
+		return OlmRosterSnapshot{}, e
+	}
 	ps, e := admissionPrincipals(ctx, tx, a, scope, peer, conversation, 0, 0)
 	if e != nil {
 		return OlmRosterSnapshot{}, e
@@ -580,13 +586,53 @@ func (s *Store) finalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 			return reject("reference")
 		}
 	}
-	// All quota checks precede inserts. Pending data is never evicted for capacity.
+	// All quota checks precede inserts. Pending data is never evicted for
+	// capacity; it is reclaimed only when it can no longer be read (the target
+	// device ended, or its account epoch was abandoned): see endingDevices and
+	// ExpireAbandonedOlmDeliveries. Chat stops short of every limit by a
+	// reserve that only controls (media rekeys) may use, so a chat backlog can
+	// never starve key distribution.
+	control := m.Purpose == "control"
+	var incoming int64
+	perAccount := map[string]int64{}
+	for _, c := range copies {
+		incoming += int64(len(c.Envelope))
+		perAccount[c.Principal] += int64(len(c.Envelope))
+	}
 	var global int64
 	if e = tx.QueryRowContext(ctx, `SELECT COALESCE(sum(octet_length(copy)),0) FROM olm_deliveries WHERE state='pending'`).Scan(&global); e != nil {
 		return empty, nil, e
 	}
-	if global+admission.MaxWireBytes > 1<<30 {
+	s.notePendingUsage(global)
+	if global+incoming > pendingLimit(OlmPendingGlobalBytes, control) {
+		s.notePendingRefusal("global", global)
 		return empty, nil, ErrOlmLimit
+	}
+	if !control {
+		// One account cannot hold the server budget hostage, whether as
+		// a sender that is never acknowledged or as a recipient that never
+		// reads (a self-send fans out to all of its own devices).
+		var sent int64
+		if e = tx.QueryRowContext(ctx, `SELECT COALESCE(sum(octet_length(copy)),0) FROM olm_deliveries WHERE sender=$1 AND state='pending' AND NOT control`, a.Principal).Scan(&sent); e != nil {
+			return empty, nil, e
+		}
+		if sent+incoming > OlmPendingSenderBytes {
+			return empty, nil, ErrOlmLimit
+		}
+		principals := make([]string, 0, len(perAccount))
+		for p := range perAccount {
+			principals = append(principals, p)
+		}
+		sort.Strings(principals)
+		for _, p := range principals {
+			var held int64
+			if e = tx.QueryRowContext(ctx, `SELECT COALESCE(sum(octet_length(copy)),0) FROM olm_deliveries WHERE principal=$1 AND state='pending'`, p).Scan(&held); e != nil {
+				return empty, nil, e
+			}
+			if held+perAccount[p] > pendingLimit(OlmPendingAccountBytes, false) {
+				return empty, nil, ErrOlmLimit
+			}
+		}
 	}
 	for _, c := range copies {
 		var count int
@@ -594,10 +640,14 @@ func (s *Store) finalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 		if e = tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(octet_length(copy)),0) FROM olm_deliveries WHERE device_id=$1 AND state='pending'`, c.Device).Scan(&count, &size); e != nil {
 			return empty, nil, e
 		}
-		if count >= 4096 || size+int64(len(c.Envelope))+1024 > 64<<20 {
+		copyLimit := OlmPendingDeviceCopies
+		if !control {
+			copyLimit -= olmPendingDeviceControlCopies
+		}
+		if count >= copyLimit || size+int64(len(c.Envelope))+1024 > pendingLimit(OlmPendingDeviceBytes, control) {
 			return empty, nil, ErrOlmLimit
 		}
-		if m.Purpose == "control" {
+		if control {
 			// Controls are bounded separately (and are never a fanout).
 			// Per sender device and target device: one sender's unreadable
 			// (never acknowledged) controls cannot block another sender's
@@ -606,7 +656,7 @@ func (s *Store) finalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 			// ControlPendingTTL after their deadline (ExpirePendingOlmControls).
 			var controls int
 			if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM olm_deliveries d JOIN olm_messages o ON o.id=d.message_id
-				WHERE d.device_id=$1 AND o.device_id=$2 AND d.state='pending' AND convert_from(o.manifest,'UTF8')::jsonb->>'purpose'='control'`, c.Device, a.Device).Scan(&controls); e != nil {
+				WHERE d.device_id=$1 AND o.device_id=$2 AND d.state='pending' AND d.control`, c.Device, a.Device).Scan(&controls); e != nil {
 				return empty, nil, e
 			}
 			if controls >= admission.MaxPendingControls {
@@ -661,7 +711,7 @@ func (s *Store) finalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 				return empty, nil, e
 			}
 		}
-		if _, e = tx.ExecContext(ctx, `INSERT INTO olm_deliveries(id,message_id,principal,device_id,account_epoch,copy,digest) VALUES($1,$2,$3,$4,$5,$6,$7)`, deliveryID, messageID, c.Principal, c.Device, c.AccountEpoch, data, admission.Digest(data)); e != nil {
+		if _, e = tx.ExecContext(ctx, `INSERT INTO olm_deliveries(id,message_id,principal,device_id,account_epoch,copy,digest,sender,control) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, deliveryID, messageID, c.Principal, c.Device, c.AccountEpoch, data, admission.Digest(data), a.Principal, control); e != nil {
 			return empty, nil, e
 		}
 		delivered = append(delivered, OlmDeliveredDevice{Principal: c.Principal, Device: c.Device})

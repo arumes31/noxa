@@ -57,9 +57,17 @@ from older clients (see the top-level README's upgrade notes).
 
 Sequences are positive canonical JS-safe decimal integers, per source account.
 Each source device has four open attempts and 10,000 retained details; admission has 1,024
-open attempts globally and a 128 MiB manifest budget. Recipient pending queues
-are bounded to 4,096 copies/64 MiB and globally 1 GiB. Pending data is never evicted
-for capacity. Account reset does not bypass device-wide limits. Expired staging
+open attempts globally and a 128 MiB manifest budget. Pending copies are bounded
+per recipient device (4,096 copies / 64 MiB), per recipient account (128 MiB over
+all its devices), per sender account (128 MiB of outstanding chat) and globally
+(1 GiB). Chat stops 1/16 short of the device, account and global limits (and 256
+copies short per device); only controls (media rekeys) may use that reserve, so
+a chat backlog cannot block key distribution. The server logs a warning when
+the global budget is 80% used. Pending data is never evicted for capacity. It is
+closed (state `received`, payload emptied, digest kept) only when it can no
+longer be read: in the same transaction that revokes, signs out, resets or
+idle-expires the target device, and by maintenance for deleted devices and for
+copies to an account epoch a reset replaced more than 7 days ago. Account reset does not bypass device-wide limits. Expired staging
 is terminally rejected in bounded maintenance; accepted pending data has no TTL.
 
 ## Receive, evidence and account lifecycle

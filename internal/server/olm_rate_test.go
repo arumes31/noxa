@@ -324,3 +324,42 @@ func TestMediaE2EESeatedMemberRenegotiatesInAFullChannel(t *testing.T) {
 		t.Fatalf("a refused offer moved the seat to %d", got)
 	}
 }
+
+// Review P3-6: doorbells use the device -> sessions index (no scan of every
+// client). Only the ringing device's live sessions get one; a session that
+// moves to another device, or disconnects, leaves the index.
+func TestOlmDoorbellUsesDeviceIndex(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+	victim, victimID := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = victim.Close() }()
+	other, otherID := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = other.Close() }()
+	vc, _ := env.srv.clientByID(victimID)
+	oc, _ := env.srv.clientByID(otherID)
+	vc.setDeviceID("dev-a")
+	oc.setDeviceID("dev-b")
+	if got := env.srv.deviceSessions.of("dev-a"); len(got) != 1 || got[0] != vc {
+		t.Fatalf("index for dev-a: %v", got)
+	}
+	env.srv.deliverOlmDoorbell("user-uid\x00dev-a")
+	if n := countOlmDoorbells(victim, 300*time.Millisecond); n != 1 {
+		t.Fatalf("ringing device got %d doorbells", n)
+	}
+	if n := countOlmDoorbells(other, 300*time.Millisecond); n != 0 {
+		t.Fatalf("another device's session got %d doorbells", n)
+	}
+	// A wrong principal for the same device ID never rings.
+	env.srv.deliverOlmDoorbell("someone-else\x00dev-a")
+	if n := countOlmDoorbells(victim, 300*time.Millisecond); n != 0 {
+		t.Fatalf("principal mismatch rang %d", n)
+	}
+	oc.setDeviceID("dev-a")
+	if got := env.srv.deviceSessions.of("dev-b"); len(got) != 0 {
+		t.Fatalf("moved session still indexed under dev-b: %v", got)
+	}
+	env.srv.unregister(victimID)
+	if got := env.srv.deviceSessions.of("dev-a"); len(got) != 1 || got[0] != oc {
+		t.Fatalf("unregistered session still indexed: %v", got)
+	}
+}

@@ -26,8 +26,13 @@ type OlmDeliveryPage struct {
 	HasMore    bool          `json:"has_more"`
 }
 
-// WithOlmDeliveries holds membership and current device locks through a bounded
-// write. Returning from the callback NEVER acknowledges reception.
+// WithOlmDeliveries loads one page under the membership and current device
+// locks, ends that transaction, and only then hands the page to deliver: no
+// database connection or row lock is held across the network write (a client
+// that stops reading cannot pin pool connections or block group finalizes).
+// The page reflects membership and device state at load time, like any copy
+// delivered just before a later removal. Returning from the callback NEVER
+// acknowledges reception.
 func (s *Store) WithOlmDeliveries(ctx context.Context, a OlmSource, after string, deliver func(OlmDeliveryPage) error) error {
 	// At most two copies plus manifests fit comfortably below the 1 MiB frame.
 	rows, e := s.db.QueryContext(ctx, `SELECT d.id,m.manifest FROM olm_deliveries d JOIN olm_messages m ON m.id=d.message_id WHERE d.principal=$1 AND d.device_id=$2 AND d.account_epoch=$3 AND m.server=$4 AND d.state='pending' AND d.id>$5 ORDER BY d.id LIMIT 2`, a.Principal, a.Device, a.AccountEpoch, a.Server, after)
@@ -58,12 +63,7 @@ func (s *Store) WithOlmDeliveries(ctx context.Context, a OlmSource, after string
 	if e != nil {
 		return e
 	}
-	conn, e := s.db.Conn(ctx)
-	if e != nil {
-		return e
-	}
-	defer func() { _ = conn.Close() }()
-	tx, e := conn.BeginTx(context.WithoutCancel(ctx), nil)
+	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return e
 	}
@@ -148,10 +148,10 @@ func (s *Store) WithOlmDeliveries(ctx context.Context, a OlmSource, after string
 	if len(encoded) > 768<<10 {
 		return ErrOlmLimit
 	}
-	if e = deliver(page); e != nil {
+	if e = tx.Commit(); e != nil {
 		return e
 	}
-	return tx.Commit()
+	return deliver(page)
 }
 func (s *Store) AckOlmDelivery(ctx context.Context, a OlmSource, id, digest string) error {
 	tx, e := s.db.BeginTx(ctx, nil)

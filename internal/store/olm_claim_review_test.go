@@ -142,20 +142,18 @@ func TestOlmSlowDeliveryDoesNotHoldGlobalAdmission(t *testing.T) {
 	}
 	op, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
+	// Task 4 review P3-1: the drain no longer holds the recipient's locks
+	// across its write, so even an admission to that very recipient proceeds
+	// at once while the write is stalled.
 	started := time.Now()
-	if r, e := s.FinalizeOlmAttempt(op, a, m.AttemptID); e == nil || r.State != "" {
-		t.Fatalf("lock contention must remain retryable: %+v %v", r, e)
+	if r, e := s.FinalizeOlmAttempt(op, a, m.AttemptID); e != nil || r.State != "accepted" {
+		t.Fatalf("admission to a recipient whose drain write is stalled: %+v %v", r, e)
 	}
 	if time.Since(started) > 750*time.Millisecond {
 		t.Fatal("global admission blocked behind slow recipient")
 	}
 	if _, e := s.BeginOlmAttempt(op, other, otherM); e != nil {
 		t.Fatal("unrelated admission blocked", e)
-	}
-	// No acceptance/rejection was persisted for the transaction that timed out.
-	var state string
-	if e := s.db.QueryRowContext(context.Background(), `SELECT state FROM olm_attempts WHERE device_id=$1`, a.Device).Scan(&state); e != nil || state != "staging" {
-		t.Fatal(state, e)
 	}
 }
 

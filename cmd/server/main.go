@@ -833,6 +833,7 @@ func run() (retErr error) {
 	if cfg.TLSEnabled {
 		tcpServer.UseTLSMaterial(tlsCert, tlsFP)
 	}
+	tcpServer.ReportE2EEAvailability()
 
 	// The global generation is minted eagerly: it is a fixed known scope, and
 	// minting it here removes the only legitimate lazy mint from a hot path.

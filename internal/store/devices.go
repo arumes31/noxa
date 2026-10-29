@@ -254,6 +254,7 @@ func endingDevices(update string, removePasskeys bool) string {
 	return `WITH revoked AS (` + update + `),
 		` + drop + `
 		unsubscribed AS (DELETE FROM push_subscriptions p USING revoked WHERE p.device_id = revoked.device_id),
+		closed AS (` + closeEndedDeviceDeliveries + `),
 		forgotten AS (DELETE FROM device_history_chunks h USING revoked WHERE h.device_id = revoked.device_id)
 		SELECT ` + deviceColumns + ` FROM revoked ORDER BY created_at, id`
 }
@@ -321,64 +322,76 @@ func (s *Store) RevokeDevice(ctx context.Context, principal, deviceID, reason st
 // update must use $1 for those IDs and return deviceColumns (possibly through
 // revokingDevices, retaining its atomic dependent-data cleanup).
 func (s *Store) updateLockedDevices(ctx context.Context, predicate string, selectionArgs []any, update string, updateArgs ...any) ([]Device, error) {
+	out, _, err := s.updateLockedDevicesBatch(ctx, 0, predicate, selectionArgs, update, updateArgs...)
+	return out, err
+}
+
+// idleExpiryBatch bounds how many accounts one idle-expiry transaction locks
+// (a variable only so tests can exercise several batches).
+var idleExpiryBatch = 100
+
+// updateLockedDevicesBatch is updateLockedDevices limited to the first limit
+// principals (0 = all) in principal order; more reports that the limit was
+// reached, so the caller may run another batch.
+func (s *Store) updateLockedDevicesBatch(ctx context.Context, limit int, predicate string, selectionArgs []any, update string, updateArgs ...any) (out []Device, more bool, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	principals, err := lockMutationPrincipals(ctx, tx, predicate, selectionArgs)
+	principals, err := lockMutationPrincipalsLimited(ctx, tx, predicate, selectionArgs, limit)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	more = limit > 0 && len(principals) == limit
 	selectionArgs = append(append([]any(nil), selectionArgs...), pq.Array(principals))
 	// #nosec G202 -- predicate is a fixed SQL fragment from internal callers; values are bound parameters.
 	rows, err := tx.QueryContext(ctx, `SELECT device_id FROM user_devices WHERE (`+predicate+`) AND principal=ANY($`+strconv.Itoa(len(selectionArgs))+`) ORDER BY device_id COLLATE "C" FOR UPDATE`, selectionArgs...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			_ = rows.Close()
-			return nil, err
+			return nil, false, err
 		}
 		ids = append(ids, id)
 	}
 	err = rows.Err()
 	_ = rows.Close()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(ids) == 0 {
-		return nil, nil
+		return nil, false, nil // nothing locked: no progress to repeat
 	}
 	args := append([]any{pq.Array(ids)}, updateArgs...)
 	rows, err = tx.QueryContext(ctx, update, args...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	var out []Device
 	for rows.Next() {
 		d, err := scanDevice(rows)
 		if err != nil {
 			_ = rows.Close()
-			return nil, err
+			return nil, false, err
 		}
 		out = append(out, d)
 	}
 	err = rows.Err()
 	_ = rows.Close()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err = bumpMutationPrincipals(ctx, tx, ids); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err = tx.Commit(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return out, nil
+	return out, more, nil
 }
 
 // ResetDevices revokes every active device of the principal except keep
@@ -400,17 +413,27 @@ func (s *Store) ResetDevices(ctx context.Context, principal, keep, reason string
 // newly warned and the revoked devices. Each phase commits separately, as before,
 // releasing all ordered row locks before the next phase selects its own set.
 func (s *Store) ExpireIdleDevices(ctx context.Context, warnBefore, revokeBefore time.Time) (warned, revoked []Device, err error) {
-	revoked, err = s.updateLockedDevices(ctx,
-		`revoked_at IS NULL AND NOT first_device AND last_seen_at < $1`, []any{revokeBefore},
-		revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason='idle' WHERE device_id=ANY($1) RETURNING *`))
-	if err != nil {
-		return nil, nil, fmt.Errorf("revoking idle devices: %w", err)
+	// Bounded batches of accounts: a first pass on a large server never holds
+	// thousands of roster locks in one transaction.
+	for more := true; more; {
+		var batch []Device
+		batch, more, err = s.updateLockedDevicesBatch(ctx, idleExpiryBatch,
+			`revoked_at IS NULL AND NOT first_device AND last_seen_at < $1`, []any{revokeBefore},
+			revokingDevices(`UPDATE user_devices SET revoked_at=now(), revoked_reason='idle' WHERE device_id=ANY($1) RETURNING *`))
+		if err != nil {
+			return nil, revoked, fmt.Errorf("revoking idle devices: %w", err)
+		}
+		revoked = append(revoked, batch...)
 	}
-	warned, err = s.updateLockedDevices(ctx,
-		`revoked_at IS NULL AND NOT first_device AND expiry_warned_at IS NULL AND last_seen_at < $1`, []any{warnBefore},
-		`UPDATE user_devices SET expiry_warned_at=now() WHERE device_id=ANY($1) RETURNING `+deviceColumns)
-	if err != nil {
-		return nil, revoked, fmt.Errorf("warning idle devices: %w", err)
+	for more := true; more; {
+		var batch []Device
+		batch, more, err = s.updateLockedDevicesBatch(ctx, idleExpiryBatch,
+			`revoked_at IS NULL AND NOT first_device AND expiry_warned_at IS NULL AND last_seen_at < $1`, []any{warnBefore},
+			`UPDATE user_devices SET expiry_warned_at=now() WHERE device_id=ANY($1) RETURNING `+deviceColumns)
+		if err != nil {
+			return warned, revoked, fmt.Errorf("warning idle devices: %w", err)
+		}
+		warned = append(warned, batch...)
 	}
 	return warned, revoked, nil
 }

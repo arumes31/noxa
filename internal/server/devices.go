@@ -190,8 +190,78 @@ func (c *Client) sessionKey() string {
 
 func (c *Client) setDeviceID(id string) {
 	c.mu.Lock()
+	old, index := c.deviceID, c.deviceIndex
 	c.deviceID = id
 	c.mu.Unlock()
+	if index != nil && old != id {
+		index.move(c, old, id)
+	}
+}
+
+// attachDeviceIndex enrolls a registered session in the device index.
+func (c *Client) attachDeviceIndex(index *deviceSessionIndex) {
+	if index == nil {
+		return
+	}
+	c.mu.Lock()
+	c.deviceIndex = index
+	id := c.deviceID
+	c.mu.Unlock()
+	if id != "" {
+		index.move(c, "", id)
+	}
+}
+
+// detachDeviceIndex removes an unregistered session from the device index.
+func (c *Client) detachDeviceIndex() {
+	c.mu.Lock()
+	index, id := c.deviceIndex, c.deviceID
+	c.deviceIndex = nil
+	c.mu.Unlock()
+	if index != nil && id != "" {
+		index.move(c, id, "")
+	}
+}
+
+// deviceSessionIndex maps a linked device ID to its live sessions, so a
+// doorbell reaches them without scanning every client (O(sessions of the
+// device), not O(all clients)).
+type deviceSessionIndex struct {
+	mu       sync.Mutex
+	sessions map[string]map[*Client]struct{}
+}
+
+func newDeviceSessionIndex() *deviceSessionIndex {
+	return &deviceSessionIndex{sessions: map[string]map[*Client]struct{}{}}
+}
+
+func (x *deviceSessionIndex) move(c *Client, from, to string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if set := x.sessions[from]; from != "" && set != nil {
+		delete(set, c)
+		if len(set) == 0 {
+			delete(x.sessions, from)
+		}
+	}
+	if to != "" {
+		set := x.sessions[to]
+		if set == nil {
+			set = map[*Client]struct{}{}
+			x.sessions[to] = set
+		}
+		set[c] = struct{}{}
+	}
+}
+
+func (x *deviceSessionIndex) of(device string) []*Client {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	out := make([]*Client, 0, len(x.sessions[device]))
+	for c := range x.sessions[device] {
+		out = append(out, c)
+	}
+	return out
 }
 
 func (c *Client) currentDeviceID() string {

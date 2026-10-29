@@ -113,11 +113,12 @@ type Client struct {
 	x25519Key string
 	// Retained only after successful guest proof, for explicit role enrollment.
 	verifiedGuestKey string
-	authSigningKey   string      // bound to the successful authentication attempt
-	deviceID         string      // linked device of this session, if registered
-	webTransport     atomic.Bool // connected through the mobile web app
-	inputAt          time.Time   // last input a desktop reported (activity)
-	webHidden        bool        // the web app reported it is in the background
+	authSigningKey   string              // bound to the successful authentication attempt
+	deviceID         string              // linked device of this session, if registered
+	deviceIndex      *deviceSessionIndex // set by register; keeps the device -> sessions index current
+	webTransport     atomic.Bool         // connected through the mobile web app
+	inputAt          time.Time           // last input a desktop reported (activity)
+	webHidden        bool                // the web app reported it is in the background
 	passkey          *passkeyCeremony
 	dmKeyRecord      string // signed directory record; never used for scope-key sealing
 
@@ -436,6 +437,8 @@ type TCPServer struct {
 
 	mu      sync.RWMutex
 	clients map[string]*Client
+	// deviceSessions indexes live sessions by linked device (doorbells).
+	deviceSessions *deviceSessionIndex
 
 	// startedAt feeds the public server-info uptime (313).
 	startedAt time.Time
@@ -499,13 +502,14 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 			return tlscert.Ensure(cfg.TLSDir, cfg.TLSCertFile, cfg.TLSKeyFile,
 				[]string{"localhost", cfg.ServerName})
 		},
-		shutdownDone: make(chan struct{}),
-		started:      make(chan struct{}),
-		clients:      make(map[string]*Client),
-		stopCh:       make(chan struct{}),
-		startedAt:    time.Now(),
-		chatKeys:     newChatKeyManager(scopeKeys, kek, logger, chatCryptoFailure),
-		rotPending:   make(map[int64]bool),
+		shutdownDone:   make(chan struct{}),
+		started:        make(chan struct{}),
+		clients:        make(map[string]*Client),
+		deviceSessions: newDeviceSessionIndex(),
+		stopCh:         make(chan struct{}),
+		startedAt:      time.Now(),
+		chatKeys:       newChatKeyManager(scopeKeys, kek, logger, chatCryptoFailure),
+		rotPending:     make(map[int64]bool),
 		rotationAfter: func(delay time.Duration, callback func()) {
 			time.AfterFunc(delay, callback)
 		},
@@ -1531,13 +1535,18 @@ func (s *TCPServer) register(c *Client) {
 	s.mu.Lock()
 	s.clients[c.ID] = c
 	s.mu.Unlock()
+	c.attachDeviceIndex(s.deviceSessions)
 }
 
 // unregister removes a client from the registry.
 func (s *TCPServer) unregister(id string) {
 	s.mu.Lock()
+	c := s.clients[id]
 	delete(s.clients, id)
 	s.mu.Unlock()
+	if c != nil {
+		c.detachDeviceIndex()
+	}
 }
 
 // clientCount returns the number of registered connections (217).

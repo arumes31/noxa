@@ -2,10 +2,14 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"slices"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"noxa/internal/config"
 	"noxa/internal/netproto"
@@ -246,5 +250,18 @@ func TestMediaE2EEStopsARecordingThatPredatesTheRequirement(t *testing.T) {
 	})
 	if got := env.recorder.startedCount(); got != 1 {
 		t.Fatalf("recordings started %d", got)
+	}
+}
+
+// Review P3-5: a server that cannot offer end-to-end encryption (here: no TLS
+// material, so no certificate binding) says so at startup, because mandatory
+// channel media encryption turns that into a voice outage.
+func TestReportE2EEAvailabilityWarnsWithoutTLS(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	srv := New(&config.Config{}, zap.New(core), &Deps{})
+	srv.ReportE2EEAvailability()
+	all := logs.All()
+	if len(all) != 1 || !strings.Contains(all[0].Message, "UNAVAILABLE") || !strings.Contains(fmt.Sprint(all[0].ContextMap()["reason"]), "tls_enabled") {
+		t.Fatalf("startup warning: %+v", all)
 	}
 }

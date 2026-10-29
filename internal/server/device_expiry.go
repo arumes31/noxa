@@ -69,6 +69,7 @@ func (s *TCPServer) MaintainDeviceExpiry(ctx context.Context) {
 			if _, err := db.ExpireOlmDirectory(ctx); err != nil {
 				s.logger.Warn("Olm directory sweep failed", zap.Error(err))
 			}
+			s.maintainOlmPending(ctx, db)
 		}
 		select {
 		case <-ctx.Done():
@@ -105,4 +106,55 @@ func (s *TCPServer) expireIdleDevices(ctx context.Context, now time.Time) {
 	for principal, devices := range byPrincipal {
 		s.afterDevicesRevoked(ctx, principal, devices, store.DeviceRevokedIdle, "system")
 	}
+}
+
+// maintainOlmPending closes pending copies that can no longer be read (ended
+// devices, account epochs abandoned by a reset) and warns when the server-wide
+// pending budget is nearly used.
+func (s *TCPServer) maintainOlmPending(ctx context.Context, db any) {
+	if abandoned, ok := db.(interface {
+		ExpireAbandonedOlmDeliveries(context.Context) (int64, error)
+	}); ok {
+		sweepCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		for batch := 0; batch < 100; batch++ {
+			closed, err := abandoned.ExpireAbandonedOlmDeliveries(sweepCtx)
+			if err != nil {
+				s.logger.Warn("Olm abandoned delivery sweep failed", zap.Error(err))
+				break
+			}
+			if closed < 1000 {
+				break
+			}
+		}
+		cancel()
+	}
+	if usage, ok := db.(interface {
+		OlmPendingUsage(context.Context) (int64, int64, error)
+	}); ok {
+		used, limit, err := usage.OlmPendingUsage(ctx)
+		switch {
+		case err != nil:
+			s.logger.Warn("Olm pending usage check failed", zap.Error(err))
+		case limit > 0 && used*10 >= limit*8:
+			s.logger.Warn("Olm pending ciphertext budget nearly exhausted: encrypted messages and voice key updates will be refused when it is full",
+				zap.Int64("pending_bytes", used), zap.Int64("limit_bytes", limit))
+		}
+	}
+}
+
+// ReportE2EEAvailability logs, at startup, when this server cannot offer
+// end-to-end encryption: channel media must be end-to-end encrypted, so such a
+// server refuses channel voice as well as secure direct and group messages.
+func (s *TCPServer) ReportE2EEAvailability() {
+	if s.mediaE2EEAvailable() {
+		return
+	}
+	reason := "the signed device directory is unavailable"
+	if s.TLSFingerprint() == "" {
+		reason = "tls_enabled is false (keys are bound to the server's TLS certificate)"
+	} else if s.deps == nil || s.deps.Devices == nil {
+		reason = "the device store (database) is unavailable"
+	}
+	s.logger.Warn("end-to-end encryption is UNAVAILABLE on this server: channel voice and secure direct/group messages will be refused",
+		zap.String("reason", reason))
 }

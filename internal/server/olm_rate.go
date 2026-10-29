@@ -36,6 +36,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -219,14 +220,16 @@ func (s *TCPServer) deliverOlmDoorbell(key string) {
 	if err != nil {
 		return
 	}
-	s.mu.RLock()
+	principal, device, ok := strings.Cut(key, "\x00")
+	if !ok || device == "" || s.deviceSessions == nil {
+		return
+	}
 	var ids []string
-	for id, c := range s.clients {
-		if c.isAuthed() && c.uniqueID()+"\x00"+c.currentDeviceID() == key {
-			ids = append(ids, id)
+	for _, c := range s.deviceSessions.of(device) {
+		if c.isAuthed() && c.uniqueID() == principal && c.currentDeviceID() == device {
+			ids = append(ids, c.ID)
 		}
 	}
-	s.mu.RUnlock()
 	for _, id := range ids {
 		_ = s.deps.Broadcast.BroadcastToClient(id, payload)
 	}

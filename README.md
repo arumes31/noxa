@@ -226,7 +226,9 @@ the keys for that participant.
   setting to turn them off. They need the server's database (the signed device
   directory and admission live there) and control-channel TLS (keys are bound
   to the server's certificate fingerprint). A server without either refuses
-  direct and group messages and channel voice with an explicit message.
+  direct and group messages and channel voice with an explicit message, and
+  logs a startup warning. **A server with `tls_enabled: false` cannot offer
+  channel voice at all.**
 - **Server recording cannot be started** while channel media is encrypted;
   an existing recording can still be stopped and keeps its files and
   retention. Whisper, uploaded stream previews, H.264/HEVC publication and
