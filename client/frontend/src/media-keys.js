@@ -155,7 +155,7 @@ export class MediaKeyEngine {
     #gen = 0; #roster = []; #recipients = []; #recipientKey = "";
     #epoch = 0; #kid = 15; #keys = null; #members = ""; #sentTo = new Map();
     #busy = false; #again = false; #debounce = 0; #renew = 0; #retry = 0; #busyOrPending = false;
-    #publishers = new Map(); #pending = []; #failed = new Map(); #reason = ""; #pendingRemovals = []; #seq = 0; #removalDebounce = false; #runFailures = 0; #runRetry = 0; #paused = false; #interrupt = null; #activeRecipients = []; #deliveries = new Map(); #statusTimer = 0;
+    #publishers = new Map(); #pending = []; #failed = new Map(); #reason = ""; #pendingRemovals = []; #seq = 0; #removalDebounce = false; #runFailures = 0; #runRetry = 0; #paused = false; #activating = []; #interrupt = null; #activeRecipients = []; #deliveries = new Map(); #statusTimer = 0;
     #rosterAt = 0; #settle = 0; #mismatch = [];
 
     constructor({ media, send, onStatus = () => {}, now = () => Date.now(), timers = globalThis, random = n => crypto.getRandomValues(new Uint8Array(n)), uuid = () => crypto.randomUUID(), sendTimeoutMs = SEND_TIMEOUT_MS }) {
@@ -187,7 +187,7 @@ export class MediaKeyEngine {
         const pids = [...SLOTS.map(senderPid), ...[...this.#publishers.keys()].flatMap(c => SLOTS.map(s => publicationPid(c, s))), ...SLOTS.map(s => publicationPid(this.self.clientID, s))];
         this.self = null; this.#keys = null; this.#publishers.clear(); this.#pending = []; this.#failed.clear(); this.#sentTo.clear();
         for (const r of this.#pendingRemovals) this.timers.clearTimeout(r.timer);
-        this.timers.clearTimeout(this.#runRetry); this.#runRetry = 0; this.#paused = false;
+        this.timers.clearTimeout(this.#runRetry); this.#runRetry = 0; this.#paused = false; this.#activating = [];
         this.#pendingRemovals = []; this.#removalDebounce = false; this.#deliveries.clear(); this.#activeRecipients = []; this.timers.clearTimeout(this.#statusTimer); this.#statusTimer = 0;
         const waiter = this.#interrupt; this.#interrupt = null; waiter?.resolve();
         for (const pid of pids) this.media.forget(pid).catch(() => {});
@@ -296,9 +296,18 @@ export class MediaKeyEngine {
             // (frames drop) until a safe epoch activates, and the status says
             // so. When the covering epoch activates right away the gap is a
             // few milliseconds.
-            if (!this.#pendingRemovals.includes(removal) || !this.activeEpoch || this.#paused) return;
+            if (!this.#pendingRemovals.includes(removal)) return;
+            const retire = ep => { for (const slot of SLOTS) { this.media.retireOne(senderPid(slot), ep).catch(() => {}); this.media.retireOne(publicationPid(this.self.clientID, slot), ep).catch(() => {}); } };
+            // An epoch whose activation started but did not complete (a later
+            // slot's activate rejected) may already encrypt on some slots in the
+            // worker: retire it too when it predates this removal, whatever the
+            // paused state (review 2b fix5 P3-1).
+            const partial = this.#activating.filter(a => a.created < removal.seq);
+            this.#activating = this.#activating.filter(a => a.created >= removal.seq);
+            for (const a of partial) retire(a.epoch);
+            if ((!this.activeEpoch || this.#paused) && !partial.length) return;
+            if (this.activeEpoch && !this.#paused) retire(this.activeEpoch);
             this.#paused = true;
-            for (const slot of SLOTS) { this.media.retireOne(senderPid(slot), this.activeEpoch).catch(() => {}); this.media.retireOne(publicationPid(this.self.clientID, slot), this.activeEpoch).catch(() => {}); }
             this.#status();
         }, REMOVAL_BOUND_MS);
         this.#pendingRemovals.push(removal);
@@ -387,12 +396,24 @@ export class MediaKeyEngine {
         // (review 2b fix4 CodeRabbit). The sender stays paused meanwhile.
         if (this.#pendingRemovals.some(r => r.due && r.seq > created)) {
             for (const slot of SLOTS) { this.media.retireOne(senderPid(slot), epoch).catch(() => {}); this.media.retireOne(publicationPid(self.clientID, slot), epoch).catch(() => {}); }
-            if (this.#epoch === epoch) { this.#sentTo.clear(); this.#failed.clear(); }
+            if (this.#epoch === epoch) {
+                // A retired epoch never stays "current" for the counters
+                // (review 2b fix5 P3-3): back to the previous epoch's material.
+                this.#epoch = previous || epoch;
+                this.#sentTo.clear(); this.#failed.clear();
+                const restored = this.#deliveries.get(this.#epoch);
+                if (restored) { this.#kid = restored.kid; this.#keys = restored.keys; this.#members = restored.members; }
+            }
             this.#deliveries.delete(epoch);
             this.#again = true;
             return;
         }
+        // In flight until every slot activated: a deadline meanwhile (or after a
+        // partial failure) retires it if it predates that removal.
+        const activating = { epoch, created };
+        this.#activating.push(activating);
         for (const slot of SLOTS) await this.media.activate(senderPid(slot), epoch);
+        this.#activating = this.#activating.filter(a => a !== activating && a.epoch > epoch);
         if (gen !== this.#gen) return;
         this.activeEpoch = epoch;
         this.#activeRecipients = recipients;

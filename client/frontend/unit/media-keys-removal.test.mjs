@@ -102,6 +102,10 @@ test("a covering epoch whose activation rejects or stalls never extends the expo
             if (!armed || pid !== "self|mic" || ep === held) return;
             armed = false;
             if (mode === "reject") throw new Error("activate failed");
+            // "stall" never settles: it pins the engine busy for good. In
+            // production every worker request times out after 10 s
+            // (MediaE2EE.request), which turns a stuck activate into the
+            // "reject" case; activate must never be awaited without a timeout.
             await new Promise(() => {});
         };
         W.remove(0); const tD = W.now;
@@ -137,4 +141,24 @@ test("an epoch that a later-removed device received never resumes sending after 
     assert.notEqual(activeAt(W.now), e1, "E1 is the final sending epoch");
     assert.notEqual(W.e.status().state, "paused", "a safe epoch resumed media");
     assert.ok(!W.sends.some(s => s.device === "d1" && s.at > t1), "d1 received something after its removal");
+});
+
+// Review 2b fix5 P3-1 (repros A/A2/A3 adopted, POSTED mode): a partially
+// failed activation (mic switched to E2, cam rejects) must not leave the
+// worker encrypting under an epoch a later-removed device holds past its
+// deadline; the deadline retires in-flight/partial epochs created before the
+// removal, whatever the paused state.
+test("a partially activated epoch is retired at a later removal's deadline", async () => {
+    const { world: wworld, checkPosted, availability } = await import("./media-keys-worker-harness.mjs");
+    for (const [name, fail, gap] of [["persist", 20_000, 500], ["short", 3_000, 300], ["recover", 0, 500]]) {
+        const W = wworld(); await W.start();
+        let failUntil = 0, camRejected = false;
+        W.fault = (op, pid, e) => {
+            if (op === "activate" && pid === "self|cam" && !camRejected && e !== W.e.activeEpoch) { camRejected = true; failUntil = W.mono + fail; return { rejectBefore: true }; }
+            if (op === "setKey" && W.mono < failUntil) return { rejectBefore: true };
+            return null;
+        };
+        W.remove(0); await W.advance(gap); W.remove(1); await W.advance(40_000);
+        assert.deepEqual([...checkPosted(W), ...availability(W)], [], name);
+    }
 });
