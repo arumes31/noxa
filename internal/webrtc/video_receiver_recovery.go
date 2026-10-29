@@ -100,6 +100,12 @@ func (r *Router) resetStreamReceiverLocked(peer *PeerConnectionWrapper, subscrib
 	return true, r.onRenegotiate, nil
 }
 
+// RequestViewerKeyframe asks the publisher of a publication the subscriber
+// currently receives for a keyframe (see Router.RequestViewerKeyframe).
+func (v *Voice) RequestViewerKeyframe(subscriber, publisher, slot string) bool {
+	return v.router.RequestViewerKeyframe(subscriber, publisher, slot)
+}
+
 func (v *Voice) ResetStreamReceiver(subscriber, publisher, slot string, generation, session, revision uint64) error {
 	return v.router.ResetStreamReceiver(subscriber, publisher, slot, generation, session, revision)
 }

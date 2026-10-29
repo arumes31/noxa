@@ -42,6 +42,13 @@ export function mediaErrorReason(error) {
     return code && SERVER_REASONS[code] ? SERVER_REASONS[code] : "";
 }
 
+// Publisher and video slot a keyframe request names for a receiver binding
+// ("<client>|cam" or "<client>|screen"), or null.
+export function keyframeTarget(pid) {
+    const [publisher, slot] = String(pid || "").split("|");
+    return publisher && (slot === "cam" || slot === "screen") ? { publisher, slot } : null;
+}
+
 // Publisher and slot of a negotiated remote track ID ("<client>" for the
 // microphone, "<client>|<slot>" otherwise).
 export function trackPid(trackID) {
@@ -72,8 +79,8 @@ export function remoteTrackIDsByMid(sdp = "") {
 }
 
 export class MediaSession {
-    constructor({ adapter, onStatus = () => {}, onError = () => {}, api, workerURL, scope = globalThis }) {
-        this.adapter = adapter; this.onStatus = onStatus; this.onError = onError;
+    constructor({ adapter, onStatus = () => {}, onError = () => {}, onKeyframeNeeded = () => {}, api, workerURL, scope = globalThis }) {
+        this.adapter = adapter; this.onStatus = onStatus; this.onError = onError; this.onKeyframeNeeded = onKeyframeNeeded;
         this.api = api; this.workerURL = workerURL; this.scope = scope;
         this.media = null; this.engine = null; this.identity = null; this.closed = false;
     }
@@ -89,7 +96,8 @@ export class MediaSession {
         if (!status.principal || !status.device || !status.clientID) throw new MediaSessionError("no_device");
         if (this.roster?.find?.(c => String(c.client_id) === String(status.clientID))?.status === "invisible") throw new MediaSessionError("invisible");
         try {
-            this.media = new MediaE2EE({ api: this.api, workerURL: this.workerURL, scope: this.scope, onError: error => this.#fail(error) });
+            this.media = new MediaE2EE({ api: this.api, workerURL: this.workerURL, scope: this.scope, onError: error => this.#fail(error),
+                onKeyframeNeeded: (receiver, pid) => { const target = keyframeTarget(pid); if (target) this.onKeyframeNeeded(target, receiver); } });
         } catch (error) {
             throw new MediaSessionError(error instanceof MediaE2EEUnsupported ? "unsupported_runtime" : "worker", String(error?.message || error));
         }

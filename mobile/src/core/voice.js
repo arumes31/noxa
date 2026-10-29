@@ -267,6 +267,13 @@ export class Voice extends EventTarget {
                 adapter: this.mediaAdapter || { status: async () => ({ supported: false, reason: "server_outdated" }) },
                 onStatus: status => { this.mediaStatus = status; this.#emit("media-status", status); },
                 onError: error => { this.#emit("media-error", error); this.leave().catch(() => {}); },
+                // Encoded-streams receivers ask the SFU for a keyframe after
+                // their first authenticated frame (best effort).
+                onKeyframeNeeded: ({ publisher, slot }) => {
+                    if (this.#media !== media || !this.conn.open) return;
+                    this.conn.request(Msg.VideoStreamControl, { action: "keyframe", publisher_id: publisher, slot, generation: "0", revision: "0", session: "0", active: true },
+                        Msg.VideoStreamResult, { accept: r => r.action === "keyframe" }).catch(() => {});
+                },
             });
             this.#media = media;
             media.setRoster(this.#voiceRoster());

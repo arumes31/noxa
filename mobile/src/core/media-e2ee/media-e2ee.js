@@ -26,7 +26,7 @@ let endpointCounter = 0;
 const nextEndpointID = prefix => `${prefix}:${(++endpointCounter).toString(36)}${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`;
 
 export class MediaE2EE {
-    constructor({ api, onError = () => {}, workerURL, scope = globalThis } = {}) {
+    constructor({ api, onError = () => {}, onKeyframeNeeded = () => {}, workerURL, scope = globalThis } = {}) {
         const support = mediaE2EESupport(scope);
         if (!support.ok) throw new MediaE2EEUnsupported(support.reason);
         if (api && api !== support.api && !(api === "streams" && typeof scope.RTCRtpSender?.prototype?.createEncodedStreams === "function")) throw new MediaE2EEUnsupported(api);
@@ -36,6 +36,7 @@ export class MediaE2EE {
         this.api = api || support.api;
         this.scope = scope;
         this.onError = onError;
+        this.onKeyframeNeeded = onKeyframeNeeded;
         this.closed = false;
         this.seq = 0;
         this.pending = new Map();
@@ -110,6 +111,10 @@ export class MediaE2EE {
         const entry = receiver && this.endpoints.get(receiver);
         if (!entry || entry.authenticated || (entry.gen && gen !== entry.gen)) return;
         entry.authenticated = true;
+        // Keyframe after the first authenticated video frame: the script API
+        // asks from the worker (sendKeyFrameRequest); the encoded-streams API
+        // has no RTCP request of its own, so the owner asks through signaling.
+        if (this.api === "streams" && entry.kind === "video") { try { this.onKeyframeNeeded(receiver, entry.pid); } catch { /* best effort */ } }
         // The owner decides whether to enable the track (e.g. only watched
         // streams); the gate only reports authentication (review P3-3).
         for (const fn of entry.waiters.splice(0)) { try { fn(); } catch { /* listener errors never break media */ } }

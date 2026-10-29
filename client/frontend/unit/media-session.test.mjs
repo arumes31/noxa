@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MediaSession, MediaSessionError, mediaErrorReason, remoteTrackIDsByMid, trackPid } from "../src/media-session.js";
+import { MediaSession, MediaSessionError, mediaErrorReason, remoteTrackIDsByMid, trackPid, keyframeTarget } from "../src/media-session.js";
 import { mediaE2EESupport } from "../src/media-e2ee.js";
 
 test("remote track IDs map to publication pids per MID; inactive sections bind nothing", () => {
@@ -51,4 +51,10 @@ test("attach-before-answer: a receiver without a transform aborts the negotiatio
     session.media.endpointID = () => "rx-1";
     await session.syncReceivers(pc);
     assert.deepEqual(bound, [""]);
+});
+
+test("keyframe requests name only a video publication of a receiver binding", () => {
+    assert.deepEqual(keyframeTarget("c1|cam"), { publisher: "c1", slot: "cam" });
+    assert.deepEqual(keyframeTarget("c1|screen"), { publisher: "c1", slot: "screen" });
+    for (const pid of ["", "c1", "c1|mic", "c1|screenaudio", "|cam"]) assert.equal(keyframeTarget(pid), null, pid);
 });

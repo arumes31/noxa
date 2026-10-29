@@ -194,3 +194,34 @@ func TestVideoStreamControlRequiresScopedConsent(t *testing.T) {
 		t.Fatal("catalog escaped source channel")
 	}
 }
+
+// Task 2b: an encrypted receiver's explicit keyframe request is validated and
+// requests nothing for a publication the requester does not receive (the
+// router checks the forwarding binding; the received case runs through the
+// real SFU in TestBrowserE2EEChannelMediaThroughSFU).
+func TestVideoStreamKeyframeRequestScope(t *testing.T) {
+	voice := &fakeVoice{}
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Voice = voice })
+	defer env.stop()
+	env.state.AddChannel(testChannel(1))
+	sub, subID := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = sub.Close() }()
+	if err := env.state.MoveClient(subID, 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []netproto.VideoStreamControl{
+		{Action: "keyframe", Slot: webrtc.SlotCam, Active: true},
+		{Action: "keyframe", PublisherID: subID, Slot: webrtc.SlotCam, Active: true},
+		{Action: "keyframe", PublisherID: "pub", Slot: webrtc.SlotMic, Active: true},
+		{Action: "keyframe", PublisherID: "pub", Slot: webrtc.SlotCam},
+	} {
+		send(t, sub, netproto.MsgVideoStreamControl, bad)
+		if e := protocolError(t, sub); e.Code != errCodeMalformed {
+			t.Fatalf("%+v: %+v", bad, e)
+		}
+	}
+	send(t, sub, netproto.MsgVideoStreamControl, netproto.VideoStreamControl{Action: "keyframe", PublisherID: "pub", Slot: webrtc.SlotCam, Active: true})
+	if e := protocolError(t, sub); e.Code != errCodeNotFound {
+		t.Fatalf("keyframe for a publication not received: %+v", e)
+	}
+}

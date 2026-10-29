@@ -50,6 +50,13 @@ export async function startChannelMedia({ tabID, channelID, roster = [], adapter
         adapter: adapter || desktopMediaAdapter(tabID),
         onStatus: status => { if (current === session || status.state === "off") publish(status); },
         onError: error => { if (current === session) onError(error); },
+        // Encoded-streams receivers ask the SFU for a keyframe after their
+        // first authenticated frame (best effort; the server checks the
+        // requester receives that publication).
+        onKeyframeNeeded: ({ publisher, slot }) => {
+            if (current !== session) return;
+            void window.go?.main?.App?.VideoStreamControlForTab?.(tabID, { action: "keyframe", publisher_id: publisher, slot, generation: "0", revision: "0", session: "0", active: true })?.catch?.(() => {});
+        },
     });
     current = session;
     session.setRoster(roster);

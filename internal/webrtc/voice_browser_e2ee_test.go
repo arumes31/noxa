@@ -137,6 +137,7 @@ type e2eeHarness struct {
 	answers                           []string
 	candidatesIn, candidatesOut       map[string]int
 	reordered                         int
+	keyframesServed, keyframesRefused int
 	tapAudio, tapAudioEncrypted       int
 	tapVideoFrames, tapVideoEncrypted int
 }
@@ -319,6 +320,22 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.t.Cleanup(func() { mediaSocketFault.Store(nil) })
 		}
 		reply(map[string]any{"ok": true})
+	case "/keyframe":
+		// An encoded-streams receiver's keyframe request (server action
+		// "keyframe"): served only for a publication the viewer receives.
+		ok := h.v.RequestViewerKeyframe(body.ID, body.Publisher, body.Slot)
+		h.mu.Lock()
+		if ok {
+			h.keyframesServed++
+		} else {
+			h.keyframesRefused++
+		}
+		h.mu.Unlock()
+		reply(map[string]any{"ok": ok})
+	case "/keyframes":
+		h.mu.Lock()
+		reply(map[string]any{"served": h.keyframesServed, "refused": h.keyframesRefused})
+		h.mu.Unlock()
 	case "/reorder":
 		// Reordering on the SFU's egress socket (SRTP only): every 7th
 		// datagram is held back and written after the next one.

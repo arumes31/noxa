@@ -115,6 +115,7 @@ window.go = { main: { App: {
   SendMediaKeyForTab: async (_tab, req) => post("/control", { ID, To: req.device, Body: { kind: req.kind, scope: req.scope, epoch: req.epoch, expires_at: req.expires_at, data: req.data } }),
   WebRTCOfferSecureForTab: async (_tab, sdp, slots, version) => { if (version !== "noxa-media-e2ee-v1") throw new Error("undeclared"); window.offers++; return (await post("/offer", { ID, SDP: sdp, Slots: slots })).sdp; },
   WebRTCAnswerForTab: async (_tab, sdp) => post("/answer", { ID, SDP: sdp }),
+  VideoStreamControlForTab: async (_tab, msg) => { if (msg.action !== "keyframe") throw new Error("unexpected stream control " + msg.action); window.keyframeRequests = (window.keyframeRequests || 0) + 1; return post("/keyframe", { ID, Publisher: msg.publisher_id, Slot: msg.slot }); },
 } } };
 const { startChannelMedia, channelMedia, receiveMediaKey, stopChannelMedia } = await import("/src/channel-media.js");
 const { renegotiate, answerRemoteOffer, queuePeerNegotiation } = await import("/src/video-negotiation.js");
@@ -186,6 +187,7 @@ const session = Object.assign(new EventTarget(), {
     async request(type, data) {
       if (type === Msg.JoinChannel) { if (data.channel_id) await post("/join", { ID }); return { channel_id: data.channel_id }; }
       if (type === Msg.WebRTCOffer) { if (data.media_e2ee !== "noxa-media-e2ee-v1") throw new Error("undeclared"); window.offers++; return { sdp: (await post("/offer", { ID, SDP: data.sdp, Slots: data.tracks })).sdp }; }
+      if (type === Msg.VideoStreamControl && data.action === "keyframe") { window.keyframeRequests = (window.keyframeRequests || 0) + 1; await post("/keyframe", { ID, Publisher: data.publisher_id, Slot: data.slot }); return { action: "keyframe" }; }
       if (type === Msg.VideoStreamControl) { const r = await post("/publish", { ID, Slot: data.slot, Active: data.active }); return { action: "publish", generation: String(r.generation) }; }
       return {};
     } },
@@ -423,6 +425,14 @@ try {
         answers += audit.answers; descriptions += audit.descriptions;
     }
     if (!answers) throw new Error("attach audit saw no answers");
+    // 9. Keyframe requests: encoded-streams receivers (B, C) asked the SFU for
+    // a keyframe after their first authenticated video frame; script-API
+    // pages ask from the worker and never through signaling.
+    const kf = await api("/keyframes");
+    const byPage = Object.fromEntries(await Promise.all(Object.keys(pages).map(async id => [id, await pages[id].evaluate(() => window.keyframeRequests || 0).catch(() => 0)])));
+    if (!kf.served || !byPage.B) throw new Error(`no streams-API keyframe request was served: ${JSON.stringify({ kf, byPage })}`);
+    if (byPage.A || byPage.D || byPage.E) throw new Error(`script-API pages asked through signaling: ${JSON.stringify(byPage)}`);
+    log(`phase 9: streams-API keyframe requests after the first authenticated frame: ${JSON.stringify({ ...kf, byPage })}`);
     log(`phase 8: transforms attached before every local description (${descriptions} descriptions, ${answers} answers to server offers, 0 violations)`);
 
     log("tap", JSON.stringify(await api("/tap")));

@@ -2619,6 +2619,29 @@ func (r *Router) rtcpRelayLoop(clientID string, sender *webrtc.RTPSender) {
 	}
 }
 
+// RequestViewerKeyframe is a viewer's explicit picture-loss report for one
+// publication it currently receives: the encoded-streams transform API has no
+// RTCP keyframe request of its own, so an encrypted receiver whose first
+// authenticated frame was not a keyframe asks through signaling (Task 2b). It
+// takes exactly the viewer-feedback path of an RTCP PLI (GOP-cache refill
+// first, feedback gate, coalescing). A publication the viewer does not
+// receive requests nothing.
+func (r *Router) RequestViewerKeyframe(subscriberID, publisherID, slot string) bool {
+	r.mu.RLock()
+	var sender *webrtc.RTPSender
+	if tracks := r.pubTracks[subscriberID][publisherID]; tracks != nil {
+		if output := tracks.video[slot]; output != nil {
+			sender = output.sender
+		}
+	}
+	r.mu.RUnlock()
+	if sender == nil {
+		return false
+	}
+	r.relayKeyframeRequest(subscriberID, sender)
+	return true
+}
+
 // Pion demultiplexes feedback to the subscriber's sender SSRC, which differs
 // from the source SSRC. Resolve that active binding before selecting the
 // publisher's current simulcast layer. Removed bindings cannot request frames.
