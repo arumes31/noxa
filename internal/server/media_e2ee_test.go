@@ -135,7 +135,7 @@ func TestMediaE2EERefusesServerRecordingButStopsAnExistingOne(t *testing.T) {
 	t.Cleanup(func() { _ = admin.Close() })
 	env.state.AddChannel(testChannel(1))
 	send(t, admin, netproto.MsgRecordingControl, netproto.RecordingControl{ChannelID: 1, Action: "start"})
-	if e := protocolError(t, admin); !strings.HasPrefix(e.Message, netproto.MediaE2EEReasonRecording+": ") || !strings.Contains(e.Message, "local recording") {
+	if e := protocolError(t, admin); !strings.HasPrefix(e.Message, netproto.MediaE2EEReasonRecording+": ") || !strings.Contains(e.Message, "end-to-end encrypted") {
 		t.Fatalf("recording start: %+v", e)
 	}
 	if got := env.recorder.startedCount(); got != 0 {

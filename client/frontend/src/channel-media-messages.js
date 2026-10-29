@@ -23,12 +23,11 @@ export const channelMediaEnglish = {
     "e2ee.reason.worker": "The encryption worker could not start. Voice stays off.",
     "e2ee.reason.unavailable": "End-to-end encrypted voice is unavailable on this server right now.",
     "e2ee.reason.codec": "This video format cannot be end-to-end encrypted yet.",
-    "e2ee.reason.recording": "Server recording is off because voice is end-to-end encrypted. Local recording still works.",
+    "e2ee.reason.recording": "Server recording is off because voice is end-to-end encrypted.",
     "e2ee.reason.whisper_unavailable": "Whisper is unavailable while voice is end-to-end encrypted.",
     "e2ee.reason.preview": "Stream previews are made on your device while media is end-to-end encrypted.",
     "e2ee.reason.closed": "The encrypted voice session ended.",
     "e2ee.media.voiceOff": "Voice stays off: {reason}",
-    "e2ee.media.recordingLocal": "Local recordings contain the decrypted media you receive; the recording indicator stays visible to others.",
 };
 
 export const channelMediaGerman = {
@@ -54,11 +53,10 @@ export const channelMediaGerman = {
     "e2ee.reason.worker": "Der Verschlüsselungs-Worker konnte nicht starten. Sprache bleibt aus.",
     "e2ee.reason.unavailable": "Ende-zu-Ende-verschlüsselte Sprache ist auf diesem Server gerade nicht verfügbar.",
     "e2ee.reason.codec": "Dieses Videoformat kann noch nicht Ende-zu-Ende-verschlüsselt werden.",
-    "e2ee.reason.recording": "Serveraufnahme ist aus, weil Sprache Ende-zu-Ende-verschlüsselt ist. Lokale Aufnahme funktioniert weiter.",
+    "e2ee.reason.recording": "Serveraufnahme ist aus, weil Sprache Ende-zu-Ende-verschlüsselt ist.",
     "e2ee.reason.whisper_unavailable": "Flüstern ist nicht verfügbar, solange Sprache Ende-zu-Ende-verschlüsselt ist.",
     "e2ee.reason.preview": "Stream-Vorschauen entstehen auf deinem Gerät, solange Medien Ende-zu-Ende-verschlüsselt sind.",
     "e2ee.reason.closed": "Die verschlüsselte Sprachsitzung wurde beendet.",
     "e2ee.media.voiceOff": "Sprache bleibt aus: {reason}",
-    "e2ee.media.recordingLocal": "Lokale Aufnahmen enthalten die entschlüsselten Medien, die du empfängst; die Aufnahmeanzeige bleibt für andere sichtbar.",
 };
 

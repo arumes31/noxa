@@ -347,7 +347,7 @@ func (s *TCPServer) recordingControlAllowed(ctx context.Context, client *Client,
 		// Stopping a recording that predates the requirement stays allowed.
 		if s.mediaE2EERequired() {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, mediaE2EEError(netproto.MediaE2EEReasonRecording,
-				"server recording is disabled because channel media is end-to-end encrypted; local recording is still available"))
+				"server recording is disabled because channel media is end-to-end encrypted"))
 		}
 		if s.deps.Channels == nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "channel backend unavailable")

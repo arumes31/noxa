@@ -1,11 +1,14 @@
-# Inactive admission contract (Task 1c-i)
+# Admission contract (`noxa-olm-admission-v1`)
 
-This is the final unreleased `noxa-olm-admission-v1` contract. Directory signatures
-also bind `account_epoch`; there is no reader for intermediate unshipped Olm
-signatures. TCP request/result frames are 202/203. No capability advertises this
-path. Frame 202 is disabled by default through an internal server gate, enabled
-only by the integration harness. Existing live NaCl consumers remain in place
-until Task 1c-ii.
+This is the `noxa-olm-admission-v1` contract used by every direct/group message,
+edit/delete and media-key control. Directory signatures also bind
+`account_epoch`; there is no reader for intermediate unshipped Olm signatures.
+TCP request/result frames are 202/203. Admission is always enabled on servers
+that have their database store and control-channel TLS, and they advertise
+`CapabilityOlmAdmission` at sign-in; a server without either does not advertise
+it, and updated clients then refuse to send direct or group messages. Updated
+clients never send legacy NaCl direct messages; the server still accepts them
+from older clients (see the top-level README's upgrade notes).
 
 ## Send and resolution
 
@@ -53,7 +56,7 @@ until Task 1c-ii.
    `accountAuthority().retired`), so a later session never repeats it.
 
 Sequences are positive canonical JS-safe decimal integers, per source account.
-The source has four open attempts and 10,000 retained details; admission has 1,024
+Each source device has four open attempts and 10,000 retained details; admission has 1,024
 open attempts globally and a 128 MiB manifest budget. Recipient pending queues
 are bounded to 4,096 copies/64 MiB and globally 1 GiB. Pending data is never evicted
 for capacity. Account reset does not bypass device-wide limits. Expired staging
@@ -101,19 +104,18 @@ must cancel/await operations before releasing its handle. Browser IndexedDB CAS
 and identity fences coordinate tabs. Check account authority immediately before
 network handoff; the server also fences old epochs.
 
-## Deliberate next boundary
+## Integration notes
 
-Task 1c-ii must integrate every direct/group send, edit/delete, attachment-key,
-history/read/control path; mandatory capability negotiation and cutover; durable
-receive-before-ACK and background retry/draining; account reset UI/peer transition
-verification. Approved 30-day ACKed server ciphertext retention is already
-implemented; pending ciphertext remains retained. Automatic link
+The native and PWA clients route every direct/group send, edit/delete,
+attachment key, history, read and control path through this contract, with
+mandatory capability negotiation, durable receive-before-ACK, background
+retry/draining and account-reset transitions. ACKed server ciphertext is
+retained for 30 days; pending ciphertext is retained until delivered. Automatic link
 previews are disabled now in native/PWA encrypted direct/group bodies, provider
 cards, hover and shared activity/search renderers. Renderers pass explicit channel
 context to permit server metadata requests; unknown destinations stay private.
 Explicit links retain their existing external navigation. Channel previews accept
-only server-transcoded/proxied raster bytes, with no direct HTTP fallback. This
-privacy checkpoint does not activate admission or complete the live migration.
+only server-transcoded/proxied raster bytes, with no direct HTTP fallback. 
 Short-lived targeted control/archive-import traffic needs a separate authenticated
 purpose/schema and authorization path. It may not relax complete chat fanout.
 There is no chat `media-key` escape hatch in this manifest.
@@ -156,7 +158,8 @@ receive/ACK as chat. Wire rules (`control.go`, JS mirror in
   fanout is required, and none is possible); deadline at most `MaxControlTTL`
   (300 s); at most `MaxPendingControls` (64) unacknowledged controls per
   sender device and target device, counted apart from messages, so one
-  sender can only block its own controls. A control copy still pending
+  sender can only block its own controls (control copies still count
+  towards the recipient's shared pending queue of 4,096 copies / 64 MiB). A control copy still pending
   `ControlPendingTTL` (24 h) after its manifest deadline is cleared by server
   maintenance (`ExpirePendingOlmControls`), unless it opened a device-pair
   session (its initial-session obligation is kept). Edits/deletes can never reference a
