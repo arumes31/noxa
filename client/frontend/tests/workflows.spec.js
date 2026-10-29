@@ -997,6 +997,10 @@ test.describe("tab-bound voice signaling", () => {
         expect(await page.evaluate(() => window.__voiceScope.calls.map(call => call.slice(0, 2)))).toEqual([[action === "offer" ? "WebRTCOffer" : "WebRTCAnswer", "server-a"]]);
     });
     for (const slot of ["mic", "cam", "screenaudio"]) test(`ending a replaced ${slot} track preserves its successor`, async ({ page }) => {
+        // Synthetic tracks without receivers: the fail-closed encryption gate
+        // would (correctly) hold them back, so this ownership test uses the
+        // session double.
+        await page.evaluate(async () => (await import("/src/channel-media.js")).useChannelMediaFactory(window.__standInMedia));
         await page.evaluate(() => {
             window.__voiceScope.nativeTab = "server-a";
             window.__voiceScope.holdOffer = true;
