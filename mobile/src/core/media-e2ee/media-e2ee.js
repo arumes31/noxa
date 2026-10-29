@@ -38,7 +38,12 @@ export class MediaE2EE {
         this.pending = new Map();
         this.endpoints = new WeakMap();
         this.peers = new WeakSet();
-        this.worker = new scope.Worker(workerURL || new URL("./media-e2ee.worker.js", import.meta.url), { type: "module" });
+        // The literal `new Worker(new URL(...), ...)` form is what makes the
+        // bundler emit the worker as a real bundle (a regression test loads the
+        // built worker); workerURL is a test/harness override only.
+        this.worker = workerURL
+            ? new scope.Worker(workerURL, { type: "module" })
+            : new Worker(new URL("./media-e2ee.worker.js", import.meta.url), { type: "module" });
         this.worker.onmessage = ({ data }) => {
             if (data?.event === "attach-failed") { this.onError(new Error(`Encrypted media transform failed: ${data.error}`)); return; }
             const pending = this.pending.get(data?.seq);
@@ -136,9 +141,20 @@ export class MediaE2EE {
     async bind(endpoint, pid) {
         const entry = this.endpoints.get(endpoint);
         if (!entry || (pid !== "" && !validPid(pid))) throw new Error("Invalid encrypted media binding");
-        if (entry.pid === pid) return;
-        entry.pid = pid;
-        await this.request("bind", { id: entry.id, pid });
+        if (entry.pid === pid && !entry.binding) return;
+        // Recorded only once the worker accepted it: a failed or timed-out
+        // bind is retried by the next bind instead of being skipped forever.
+        const binding = this.request("bind", { id: entry.id, pid });
+        entry.binding = binding;
+        try {
+            await binding;
+            if (entry.binding === binding) entry.pid = pid;
+        } catch (error) {
+            if (entry.binding === binding) entry.pid = "";
+            throw error;
+        } finally {
+            if (entry.binding === binding) entry.binding = null;
+        }
     }
 
     async setKey(pid, epoch, kid, key) {

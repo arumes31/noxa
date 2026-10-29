@@ -35,6 +35,8 @@ const MAX_PIDS = 512;
 const MAX_ENDPOINTS = 512;
 const MAX_RETIRED_MARKERS = 4096;
 const FENCE = "noxa-fence";
+// 2 x the 5-minute renewal plus grace.
+export const MAX_RECEIVE_EPOCH_AGE = 12 * 60 * 1000;
 const PID_RE = /^[\x21-\x7e]{1,160}$/;
 const ENDPOINT_RE = /^[a-z]+:[A-Za-z0-9_-]{1,64}$/;
 const DROP_REASONS = ["unbound", "empty", "plaintext", "nokey", "codec", "stale", "unauthenticated", "replay", "unencrypted"];
@@ -79,6 +81,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
     const retiredMarks = new Map(); // pid -> highest retired epoch, survives forget
     const endpoints = new Map(); // id -> endpoint
     const windows = new Map();   // pid#epoch -> MediaReplayWindow
+    const pendingBinds = new Map(); // endpoint id -> pid, bound before its rtctransform event
     let queue = Promise.resolve();
     const serial = task => { const run = queue.then(task); queue = run.catch(() => {}); return run; };
     const drop = (ep, reason) => { stats.dropped[reason]++; if (ep) ep.dropped[reason] = (ep.dropped[reason] || 0) + 1; };
@@ -137,6 +140,11 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
         if (endpoints.size >= MAX_ENDPOINTS) throw new Error("media endpoint capacity reached");
         const ep = { id, operation, kind, lk: `ep:${id}`, pid: "", gen: 0, ready: false, kids: new Map(), dropped: {}, frames: 0 };
         endpoints.set(id, ep);
+        if (pendingBinds.has(id)) {
+            const pid = pendingBinds.get(id);
+            pendingBinds.delete(id);
+            serial(() => ops.bind({ id, pid })).catch(error => send({ event: "attach-failed", id, error: String(error?.message || error) }));
+        }
         lk("enable", { participantIdentity: ep.lk, enabled: true });
         const inputs = new WeakMap();
         const pre = new TransformStream({
@@ -155,6 +163,10 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                 const kid = bytes[n - 1];
                 const epoch = ep.kids.get(kid);
                 if (!epoch || !liveEpoch(ep.pid, epoch)) return drop(ep, "nokey");
+                // A receive epoch older than MAX_RECEIVE_EPOCH_AGE is stale: keys
+                // renew every 5 minutes, and the replay window assumes an epoch
+                // never lives near half the RTP timestamp range.
+                if (Date.now() - pids.get(ep.pid).epochs.get(epoch).at > MAX_RECEIVE_EPOCH_AGE) return drop(ep, "stale");
                 inputs.set(frame, { gen: ep.gen, pid: ep.pid, epoch, n, iv: bytes.slice(n - 2 - IV_LENGTH, n - 2) });
                 controller.enqueue(frame);
             },
@@ -200,11 +212,27 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
         },
         attach({ id, operation, kind, readable, writable }) { attach(id, operation, kind, readable, writable); return {}; },
         async bind({ id, pid }) {
+            if (typeof id !== "string" || !ENDPOINT_RE.test(id) || (pid !== "" && !validPid(pid))) throw new Error("invalid media binding");
             const ep = endpoints.get(id);
-            if (!ep || (pid !== "" && !validPid(pid))) throw new Error("invalid media binding");
+            if (!ep) {
+                // RTCRtpScriptTransform attaches on the worker's rtctransform
+                // event, which may arrive after this message: keep the binding
+                // and apply it the moment the endpoint attaches.
+                if (!pendingBinds.has(id) && pendingBinds.size >= MAX_ENDPOINTS) throw new Error("media endpoint capacity reached");
+                pendingBinds.set(id, pid);
+                return { pending: true };
+            }
             if (ep.pid === pid && ep.ready) return { gen: ep.gen };
+            const changed = ep.pid !== pid;
             ep.ready = false; ep.gen++; ep.pid = pid;
             const gen = ep.gen;
+            // Key slots are only meaningful within one publication: on any pid
+            // change every slot is scrubbed, so a colliding (kid, epoch) of the
+            // former publication can never be mistaken for the new one.
+            if (changed) {
+                ep.kids.clear();
+                for (let kid = 0; kid < KEYRING; kid++) lk("setKey", { participantIdentity: ep.lk, key: await junk(), keyIndex: kid, updateCurrentKeyIndex: false });
+            }
             if (!pid) { await installInto(ep); return { gen }; }
             const installed = await installInto(ep);
             await fence();
@@ -231,9 +259,11 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
             const material = await crypto.subtle.importKey("raw", key, "HKDF", false, ["deriveBits", "deriveKey"]);
             if (epoch <= retiredThrough(pid) || state.epochs.has(epoch)) throw new Error("retired media epoch");
             // A key slot is reused only by a newer epoch; whatever held it retires.
+            // A key slot is only ever taken over by a NEWER epoch.
+            for (const [old, entry] of state.epochs) if (entry.kid === kid && old > epoch) throw new Error("a newer media epoch holds this key slot");
             for (const [old, entry] of [...state.epochs]) if (entry.kid === kid) await retireEpoch(pid, old);
             while (state.epochs.size >= MAX_LIVE_EPOCHS) await retireEpoch(pid, Math.min(...state.epochs.keys()));
-            state.epochs.set(epoch, { kid, key: material, fp });
+            state.epochs.set(epoch, { kid, key: material, fp, at: Date.now() });
             const waiting = [];
             for (const ep of endpoints.values()) {
                 if (ep.pid !== pid) continue;

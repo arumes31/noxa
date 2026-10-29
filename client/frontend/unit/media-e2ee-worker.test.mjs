@@ -189,3 +189,62 @@ test("invalid operations are refused and an endpoint attaches once", async () =>
     globalThis.onmessage({ data: { op: "attach", seq: id, id: ep.id, operation: "decode", kind: "audio", readable: new ReadableStream(), writable: new WritableStream() } });
     assert.match(replies.find(r => r.seq === id).value, /already attached/);
 });
+
+// Review 2a-B P1-2: equal (kid, epoch) across publications must never keep
+// the former publication's key after a rebind.
+test("rebinding with a colliding (kid, epoch) outputs only the new publication", async () => {
+    for (const [from, to] of [["pa2|mic", "pb2|mic"], ["px|screen", "px|cam"]]) {
+        const kind = from.endsWith("mic") ? "audio" : "video";
+        const a = await sender(`tx|${from}`, 7, 0, key(0x41), kind);
+        const b = await sender(`tx|${to}`, 7, 0, key(0x42), kind);
+        const frameA = kind === "audio" ? audio(20, 960) : new Frame(Array.from({ length: 200 }, (_, j) => j & 255), { kind, timestamp: 3000 });
+        const frameB = kind === "audio" ? audio(21, 1000) : new Frame(Array.from({ length: 220 }, (_, j) => (j * 3) & 255), { kind, timestamp: 3000 });
+        a.push(clone(frameA)); b.push(clone(frameB)); await settle();
+        const rx = endpoint("decode", kind);
+        await call("key", { pid: from, epoch: 7, kid: 0, key: key(0x41) });
+        await call("key", { pid: to, epoch: 7, kid: 0, key: key(0x42) });
+        await call("bind", { id: rx.id, pid: from });
+        rx.push(clone(a.out[0])); await settle();
+        assert.equal(rx.out.length, 1);
+        await call("bind", { id: rx.id, pid: to });
+        rx.push(clone(a.out[0])); rx.push(clone(b.out[0])); await settle();
+        assert.equal(rx.out.length, 2, `${from} -> ${to}: exactly one frame after rebind`);
+        assert.deepEqual([...new Uint8Array(rx.out[1].data)], [...new Uint8Array(frameB.data)], "and it is the new publication's");
+    }
+});
+
+test("an older epoch can never evict a newer live key in the same slot", async () => {
+    await call("key", { pid: "ev|mic", epoch: 50, kid: 4, key: key(50) });
+    await assert.rejects(call("key", { pid: "ev|mic", epoch: 40, kid: 4, key: key(40) }), /newer media epoch/);
+    const st = await call("stats");
+    assert.ok(st.pids > 0);
+});
+
+test("a script-API bind that arrives before the endpoint attaches is applied on attach", async () => {
+    const id = "rx:early1";
+    const tx = await sender("tx|early", 9, 0, key(0x51));
+    tx.push(audio(30, 960)); await settle();
+    await call("key", { pid: "early|mic", epoch: 9, kid: 0, key: key(0x51) });
+    assert.deepEqual(await call("bind", { id, pid: "early|mic" }), { pending: true });
+    let push; const out = [];
+    globalThis.onrtctransform({ transformer: { options: { id, operation: "decode", kind: "audio" },
+        readable: new ReadableStream({ start(c) { push = c; } }), writable: new WritableStream({ write(f) { out.push(f); } }) } });
+    await settle();
+    push.enqueue(clone(tx.out[0])); await settle();
+    assert.equal(out.length, 1);
+});
+
+test("a receive epoch older than the maximum age stops decrypting", async () => {
+    const tx = await sender("tx|aged", 11, 0, key(0x61));
+    tx.push(audio(30, 960)); tx.push(audio(31, 1920)); await settle();
+    const rx = endpoint("decode", "audio");
+    await call("key", { pid: "aged|mic", epoch: 11, kid: 0, key: key(0x61) });
+    await call("bind", { id: rx.id, pid: "aged|mic" });
+    rx.push(clone(tx.out[0])); await settle();
+    assert.equal(rx.out.length, 1);
+    const realNow = Date.now;
+    Date.now = () => realNow() + 13 * 60 * 1000;
+    try { rx.push(clone(tx.out[1])); await settle(); } finally { Date.now = realNow; }
+    assert.equal(rx.out.length, 1);
+    assert.ok((await call("stats", { id: rx.id })).endpoint.dropped.stale >= 1);
+});
