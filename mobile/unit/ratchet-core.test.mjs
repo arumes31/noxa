@@ -41,3 +41,25 @@ for (const stage of ["digest", "compile"]) {
         await assert.rejects(createRatchetCore({ bytes, signal: controller.signal }), { name: "AbortError" });
     });
 }
+
+// PR #212 review: a runtime failure inside the worker (e.g. WebAssembly
+// instantiation) is environmental and must stay retryable (core_unavailable);
+// only a refusal by the core itself is deterministic.
+for (const [name, reply, code] of [
+    ["runtime failure", { error: "ratchet runtime failed" }, "core_unavailable"],
+    ["core refusal", { error: "ratchet operation rejected", core: true }, undefined],
+]) {
+    test(`ratchet worker ${name} is classified correctly`, async t => {
+        const bytes = await readFile(new URL("../../internal/e2ee/ratchet/core.wasm", import.meta.url));
+        const core = await createRatchetCore({ bytes });
+        const original = globalThis.Worker;
+        globalThis.Worker = class {
+            postMessage() { queueMicrotask(() => this.onmessage?.({ data: reply })); }
+            terminate() {}
+        };
+        t.after(() => { globalThis.Worker = original; core.close(); });
+        const error = await core.apply({ op: "new_account", key: new Uint8Array(32) }).catch(e => e);
+        assert.ok(error instanceof Error);
+        assert.equal(error.code, code);
+    });
+}

@@ -82,7 +82,9 @@ export async function createRatchetCore({ bytes, signal } = {}) {
                 const timer = setTimeout(() => finish("ratchet operation timed out"), TIMEOUT);
                 active.add(cancel);
                 signal?.addEventListener("abort", aborted, { once: true });
-                worker.onmessage = event => finish(event.data.error, event.data.response, false);
+                // Only a refusal by the core is deterministic; a runtime failure
+                // inside the worker is reported as unavailable (retryable).
+                worker.onmessage = event => finish(event.data.error, event.data.response, !event.data.core);
                 worker.onerror = () => finish("ratchet worker failed");
                 try { worker.postMessage({ module, request }); }
                 catch { finish("invalid ratchet request"); }

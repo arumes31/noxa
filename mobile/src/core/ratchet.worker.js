@@ -23,12 +23,18 @@ self.onmessage = async ({ data: { module, request } }) => {
         const outputPtr = Number(result & 0xffffffffn), length = Number(result >> 32n);
         if (!result || length > MAX_OUTPUT) throw new Error("invalid ratchet response");
         const response = JSON.parse(new TextDecoder().decode(new Uint8Array(core.memory.buffer, outputPtr, length)));
-        if (response.error) throw new Error(response.error);
+        if (response.error) {
+            // A refusal by the core itself (bad input, authentication):
+            // deterministic, never retried.
+            self.postMessage({ error: "ratchet operation rejected", core: true });
+            return;
+        }
         self.postMessage({ response });
     } catch (error) {
-        // Core errors are fixed strings. Runtime errors may contain paths or
-        // implementation data, so only expose a bounded generic failure here.
-        self.postMessage({ error: "ratchet operation rejected" });
+        // Runtime failures (WebAssembly instantiation, allocation, a broken
+        // response) are environmental and stay retryable. Their messages may
+        // contain paths or implementation data, so only a generic one leaves.
+        self.postMessage({ error: "ratchet runtime failed" });
     } finally {
         input?.fill(0);
         if (instance) new Uint8Array(instance.exports.memory.buffer).fill(0);
