@@ -38,8 +38,9 @@ body.compact #sidebar-resize { display: none; }
 #conn-lock:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 #voice-e2ee { cursor: help; color: var(--accent); }
 #voice-e2ee[data-state="keying"], #voice-e2ee[data-state="partial"], #voice-e2ee[data-state="paused"] { color: var(--warn); }
-.encryption-tooltip { position: fixed; z-index: 30000; box-sizing: border-box; width: min(480px, calc(100vw - 16px)); padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel, #0b141b); color: var(--text); box-shadow: 0 8px 30px #0008; font-size: 12px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; overflow-y: auto; overscroll-behavior: contain; }
+.encryption-tooltip { position: fixed; z-index: 30000; box-sizing: border-box; width: min(380px, calc(100vw - 16px)); padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel, #0b141b); color: var(--text); box-shadow: 0 8px 30px #0008; font-size: 12px; line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; overflow-y: auto; overscroll-behavior: contain; }
 .encryption-tooltip[hidden] { display: none; }
+.encryption-tooltip-footer { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 11px; line-height: 1.45; white-space: normal; }
 #voice-bar .status-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 #workspace-connection-status[data-state="connected"] { color: var(--arc-ok, #75d6a6); }
 #voice-bar #voice-status[data-whisper="true"] { color: var(--warn); }

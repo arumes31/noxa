@@ -3,6 +3,7 @@ import { initReadSync } from "./read-sync.js";
 import { initWindowControls } from "./window-controls.js";
 import { setStatusIcon } from "./icons.js";
 import { createEncryptionTooltip } from "./encryption-tooltip.js";
+import { compactMediaEncryptionStatus } from "./encryption-details.js";
 import { maintainRelay } from "./relay-renewal.js";
 import { manageAvatarPlayback } from "./avatar-playback.js";
 import { closeContextMenu } from "./context-menu.js";
@@ -70,7 +71,7 @@ import {
 import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget } from "./stream-controls.js";
 import { startRemoteMedia, reconcileRemoteMedia, gatePresents } from "./remote-media.js";
-import { startChannelMedia, stopChannelMedia, channelMedia, receiveMediaKey, mediaErrorText, mediaStatusText, onChannelMediaStatus } from "./channel-media.js";
+import { startChannelMedia, stopChannelMedia, channelMedia, receiveMediaKey, mediaErrorText, onChannelMediaStatus } from "./channel-media.js";
 import { remoteTrackID } from "./media-track-id.js";
 import { createReceiverRegistry, attributeReceiver, releaseReceiver } from "./remote-receivers.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
@@ -1877,7 +1878,7 @@ for (const event of ["tab_reset", "disconnected", "tab_disconnected"]) window.ru
 export function renderVoiceEncryptionStatus(status) {
     const element = $("voice-e2ee");
     if (!element) return;
-    const text = mediaStatusText(status);
+    const text = compactMediaEncryptionStatus(status);
     setStatusIcon(element, "lock", text || t("security.details.title"));
     element.hidden = !text;
     element.dataset.state = status?.state || "off";
