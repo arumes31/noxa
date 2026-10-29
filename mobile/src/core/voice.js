@@ -642,7 +642,9 @@ export class Voice extends EventTarget {
         if (!pc) return;
         await pc.setRemoteDescription({ type: "offer", sdp });
         // Reused or new MIDs are bound to their current publisher first.
-        await this.#media?.syncReceivers(pc);
+        // Fail closed: no encrypted media session, no answer.
+        if (!this.#media) throw new Error("encrypted media session ended");
+        await this.#media.syncReceivers(pc);
         await this.#flushCandidates();
         preferReceiveCodecs(pc);
         const answer = await pc.createAnswer();

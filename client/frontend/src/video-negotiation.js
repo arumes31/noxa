@@ -115,7 +115,10 @@ async function applyPendingRemoteOffer(peerConnection, pending) {
                         if (!current()) return false;
                         // Reused or new MIDs are bound to their CURRENT publisher
                         // (former publishers' frames are dropped) before playback.
-                        await channelMedia()?.syncReceivers(peerConnection);
+                        // Fail closed: no encrypted media session, no answer.
+                        const media = channelMedia();
+                        if (!media) throw new DOMException("encrypted media session ended", "AbortError");
+                        await media.syncReceivers(peerConnection);
                         if (!current()) return false;
                         pending.applied = true;
                         reconcileRemoteMedia(peerConnection);

@@ -6923,6 +6923,9 @@ test("camera stays off on joins and reconnects, and discards a late enable reque
 });
 
 for (const action of ["local", "native"]) test(`${action} disconnect intent retires pending voice recovery before the backend settles`, async ({ page }) => {
+    // Answers need an encrypted media session (fail closed); this recovery
+    // test uses the session double.
+    await page.evaluate(async () => (await import("/src/channel-media.js")).useChannelMediaSession(window.__standInMedia()));
     await page.evaluate(() => {
         const v = window.__noxa;
         v.state.myChannelID = 42;
@@ -10831,6 +10834,8 @@ test("does not export a different channel after its passphrase dialog is left op
 });
 
 test("runtime boundaries ignore malformed payloads and never answer a stale offer", async ({ page }) => {
+    // Answers need an encrypted media session (fail closed): session double.
+    await page.evaluate(async () => (await import("/src/channel-media.js")).useChannelMediaSession(window.__standInMedia()));
     const result = await page.evaluate(async () => {
         const errors = [];
         const onUnhandled = (event) => {
@@ -12959,4 +12964,22 @@ test("outer Activity notification and compact private rows never request metadat
     await expect.poll(() => page.evaluate(() => window.__outerPreviewCalls.length)).toBe(1);
     expect(await page.evaluate(() => window.__outerPreviewCalls[0])).toEqual(["YouTubePreviewForTab", "outer-privacy", "CCCCCCCCCCC"]);
     await expect(root.locator(".activity-notifications .activity-thumbnail")).toHaveCount(1);
+});
+
+test("a server offer is never answered without an encrypted media session (fail closed)", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        (await import("/src/channel-media.js")).useChannelMediaSession(null);
+        const state = window.__noxa.state;
+        state.serverGeneration = 77;
+        const sdp = "a=ice-ufrag:x\r\na=ice-pwd:x-secret";
+        const peer = { remoteDescription: { sdp }, answers: 0, local: 0, addIceCandidate: async () => {},
+            setRemoteDescription: async () => {}, createAnswer: async () => { peer.answers++; return { type: "answer", sdp: "a" }; },
+            setLocalDescription: async () => { peer.local++; } };
+        state.pc = peer;
+        const before = window.__calls.WebRTCAnswerForTab || 0;
+        for (const callback of window.__events.offer) callback(JSON.stringify({ sdp }));
+        await new Promise(resolve => setTimeout(resolve, 200));
+        return { answers: peer.answers, local: peer.local, bridged: (window.__calls.WebRTCAnswerForTab || 0) - before };
+    });
+    expect(result).toEqual({ answers: 0, local: 0, bridged: 0 });
 });

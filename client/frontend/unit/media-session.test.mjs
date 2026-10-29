@@ -39,3 +39,16 @@ test("a session refuses to start without server support, a device or a secure se
     const session = new MediaSession({ adapter: { status: async () => ({ supported: true, principal: "u", device: "d", clientID: "c" }), send: async () => ({ ok: true }) }, scope: { crypto: { subtle: {} } } });
     await assert.rejects(session.start(1), error => error.reason === "unsupported_runtime");
 });
+
+test("attach-before-answer: a receiver without a transform aborts the negotiation (fail closed)", async () => {
+    const session = new MediaSession({ adapter: { status: async () => ({}), send: async () => ({ ok: true }) } });
+    const pc = { remoteDescription: { sdp: "" }, getTransceivers: () => [{ mid: "0", receiver: { track: { kind: "audio", readyState: "live" } } }] };
+    await assert.rejects(session.syncReceivers(pc), e => e instanceof MediaSessionError && e.reason === "closed");
+    const bound = [];
+    session.media = { syncPeer() {}, endpointID: () => "", bind: async (r, pid) => bound.push(pid) };
+    await assert.rejects(session.syncReceivers(pc), e => e instanceof MediaSessionError && e.reason === "unavailable");
+    assert.deepEqual(bound, [], "nothing is bound or answered after an unprotected receiver");
+    session.media.endpointID = () => "rx-1";
+    await session.syncReceivers(pc);
+    assert.deepEqual(bound, [""]);
+});

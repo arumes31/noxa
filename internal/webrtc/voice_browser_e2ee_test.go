@@ -136,6 +136,7 @@ type e2eeHarness struct {
 	watchRevision                     map[string]uint64
 	answers                           []string
 	candidatesIn, candidatesOut       map[string]int
+	reordered                         int
 	tapAudio, tapAudioEncrypted       int
 	tapVideoFrames, tapVideoEncrypted int
 }
@@ -318,6 +319,44 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.t.Cleanup(func() { mediaSocketFault.Store(nil) })
 		}
 		reply(map[string]any{"ok": true})
+	case "/reorder":
+		// Reordering on the SFU's egress socket (SRTP only): every 7th
+		// datagram is held back and written after the next one.
+		if !body.Active {
+			mediaSocketShape.Store(nil)
+		} else {
+			var mu sync.Mutex
+			var n uint64
+			var held func() error
+			shape := func(datagram []byte, write func([]byte) error) error {
+				if !isSRTPDatagram(datagram) {
+					return write(datagram)
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				n++
+				if held == nil && n%7 == 0 {
+					d := append([]byte(nil), datagram...)
+					held = func() error { return write(d) }
+					h.mu.Lock()
+					h.reordered++
+					h.mu.Unlock()
+					return nil
+				}
+				err := write(datagram)
+				if held != nil {
+					_ = held()
+					held = nil
+				}
+				return err
+			}
+			mediaSocketShape.Store(&shape)
+			h.t.Cleanup(func() { mediaSocketShape.Store(nil) })
+		}
+		h.mu.Lock()
+		reordered := h.reordered
+		h.mu.Unlock()
+		reply(map[string]any{"ok": true, "reordered": reordered})
 	case "/offer":
 		slots := map[string]string{}
 		for _, s := range body.Slots {

@@ -163,13 +163,20 @@ export class MediaSession {
     // Protects new transceivers and binds every receiver to the publisher
     // the CURRENT remote description names for its MID. A reused MID is
     // rebound (old publisher frames are dropped before the new key is used).
+    //
+    // Attach-before-answer invariant (Task 2b): callers run this after
+    // applying a remote offer and before creating the answer, so every
+    // receiver the offer added carries its transform before the SFU can route
+    // a frame to it. A receiver that could not be protected aborts the
+    // negotiation (fail closed) instead of being answered.
     async syncReceivers(pc) {
-        if (!this.media) return;
+        if (!this.media) throw new MediaSessionError("closed");
         this.media.syncPeer(pc);
         const ids = remoteTrackIDsByMid(pc.remoteDescription?.sdp);
         const work = [];
         for (const transceiver of pc.getTransceivers()) {
             const receiver = transceiver.receiver;
+            if (receiver?.track && !this.media.endpointID(receiver)) throw new MediaSessionError("unavailable", "a receiver has no encryption transform");
             if (!receiver || !this.media.endpointID(receiver)) continue;
             const id = receiver.track?.readyState === "ended" ? "" : ids.get(transceiver.mid) || "";
             work.push(this.media.bind(receiver, trackPid(id)));

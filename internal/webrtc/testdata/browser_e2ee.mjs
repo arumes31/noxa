@@ -51,6 +51,30 @@ ${transformAPI === "streams" ? "delete window.RTCRtpScriptTransform;" : ""}
 ${transformAPI === "none" ? "delete window.RTCRtpScriptTransform; delete RTCRtpSender.prototype.createEncodedStreams; delete RTCRtpReceiver.prototype.createEncodedStreams;" : ""}
 window.post = async (path, body) => { const r = await fetch(BRIDGE + path, { method: "POST", body: JSON.stringify(body) }); if (!r.ok) throw new Error(path + ": " + await r.text()); return r.json(); };
 window.offers = 0;
+// Attach audit (structural close of the attach window): when a local
+// description is set (an answer to a server offer adds receivers), every
+// receiver must already carry its transform, so no frame can reach it
+// untransformed. Script API: receiver.transform; streams API: its encoded
+// streams were taken.
+window.attachAudit = { descriptions: 0, answers: 0, receivers: 0, violations: [] };
+{
+  const streamed = new WeakSet();
+  const ces = RTCRtpReceiver.prototype.createEncodedStreams;
+  if (ces) RTCRtpReceiver.prototype.createEncodedStreams = function () { streamed.add(this); return ces.call(this); };
+  const sld = RTCPeerConnection.prototype.setLocalDescription;
+  RTCPeerConnection.prototype.setLocalDescription = function (description) {
+    const type = description?.type || (this.signalingState === "have-remote-offer" ? "answer" : "offer");
+    window.attachAudit.descriptions++;
+    if (type === "answer") window.attachAudit.answers++;
+    for (const t of this.getTransceivers()) {
+      const r = t.receiver;
+      if (!r?.track) continue;
+      window.attachAudit.receivers++;
+      if (!(r.transform || streamed.has(r))) window.attachAudit.violations.push(type + ":" + t.mid + ":" + r.track.kind);
+    }
+    return sld.apply(this, arguments);
+  };
+}
 window.fakeScreen = () => {
   const canvas = document.createElement("canvas"); canvas.width = 640; canvas.height = 360; const ctx = canvas.getContext("2d"); let n = 0;
   window.__paint = setInterval(() => { ctx.fillStyle = "hsl(" + (n++ * 7 % 360) + ",70%,50%)"; ctx.fillRect(0, 0, 640, 360); ctx.fillStyle = "#fff"; ctx.fillText("screen " + ID + " " + n, 20, 40); }, 66);
@@ -140,6 +164,7 @@ window.e2ee = {
   async leave() { stopChannelMedia(); state.pc?.close(); state.pc = null; await post("/close", { ID }); },
   report() { return metrics(state.pc, r => channelMedia()?.media?.boundPid(r) || "", e => channelMedia().stats(e)); },
   offers() { return window.offers; },
+  audit() { return window.attachAudit; },
 };
 window.ready = true;
 </script>`;
@@ -186,6 +211,7 @@ window.e2ee = {
   async leave() { await voice.leave(); await post("/close", { ID }); },
   report() { return metrics(voice.pc, r => voice.mediaBinding(r), e => voice.mediaStats(e)); },
   offers() { return window.offers; },
+  audit() { return window.attachAudit; },
   pc() { return !!voice.pc; },
 };
 window.ready = true;
@@ -343,6 +369,25 @@ try {
     if (echoControls.length) throw new Error(`self-echo sent keys: ${JSON.stringify(echoControls)}`);
     log("phase 6c: encrypted self-echo decrypted with the sender's own key, no key control sent");
 
+    // 6d. Reordering on the SFU egress (every 7th SRTP datagram swapped with
+    // the next): decryption continues, nothing is rejected as a replay, and
+    // camera video keeps decoding.
+    // A (re-joined in phase 4 with only its microphone) publishes its camera again.
+    await call("A", "camera");
+    await api("/watch", { ID: "B", Publisher: "A", Slot: "cam" }).catch(() => {});
+    const cam = "A|cam";
+    await growing("B", cam, "B sees A's camera before reordering", { video: true, min: 10 });
+    const beforeReorder = (await report("B")).receivers;
+    await api("/reorder", { Active: true });
+    await growing("B", "A|mic", "B hears A under reordering", { min: 50 });
+    await growing("B", cam, "B sees a camera under reordering", { min: 20, video: true });
+    const reordered = (await api("/reorder", { Active: false })).reordered;
+    const afterReorder = (await report("B")).receivers;
+    const replays = ["A|mic", cam].reduce((n, pid) => n + ((afterReorder[pid]?.dropped?.replay || 0) - (beforeReorder[pid]?.dropped?.replay || 0)), 0);
+    if (!reordered) throw new Error("reordering was not injected");
+    if (replays) throw new Error(`reordered frames rejected as replays: ${replays}`);
+    log("phase 6d: under reordering", JSON.stringify({ reordered, mic: afterReorder["A|mic"].frames - beforeReorder["A|mic"].frames, cam, camFrames: afterReorder[cam].frames - beforeReorder[cam].frames, replays }));
+
     // 7. Optional long session beyond the old 10-minute hard close.
     if (longMinutes > 0) {
         const until = Date.now() + longMinutes * 60000;
@@ -358,6 +403,27 @@ try {
         }
         log(`phase 7: ${longMinutes} min continuous decrypted media across ${epochs.size} epochs`);
     }
+
+    // 8. Attach audit: on every page, every receiver had its transform
+    // before any local description (in particular every answer that added
+    // receivers) was applied, i.e. before the SFU could route a frame to it.
+    // The audit is not vacuous: an unprotected peer is reported.
+    const detected = await pages.B.evaluate(async () => {
+        const before = window.attachAudit.violations.length;
+        const pc = new RTCPeerConnection(); pc.addTransceiver("audio");
+        await pc.setLocalDescription(await pc.createOffer()); pc.close();
+        return window.attachAudit.violations.splice(before).length;
+    });
+    if (detected !== 1) throw new Error(`attach audit missed an unprotected receiver (${detected})`);
+    let answers = 0, descriptions = 0;
+    for (const id of Object.keys(pages)) {
+        const audit = await call(id, "audit").catch(() => null);
+        if (!audit) continue;
+        if (audit.violations.length) throw new Error(`${id}: receivers without a transform at setLocalDescription: ${audit.violations.join(",")}`);
+        answers += audit.answers; descriptions += audit.descriptions;
+    }
+    if (!answers) throw new Error("attach audit saw no answers");
+    log(`phase 8: transforms attached before every local description (${descriptions} descriptions, ${answers} answers to server offers, 0 violations)`);
 
     log("tap", JSON.stringify(await api("/tap")));
     log("E2EE SCENARIO PASSED");
