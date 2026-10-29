@@ -1873,7 +1873,7 @@ for (const event of ["tab_reset", "disconnected", "tab_disconnected"]) window.ru
     connectionEncryptionTooltip.close();
     voiceEncryptionTooltip.close();
 });
-onChannelMediaStatus(status => {
+export function renderVoiceEncryptionStatus(status) {
     const element = $("voice-e2ee");
     if (!element) return;
     const text = mediaStatusText(status);
@@ -1883,7 +1883,8 @@ onChannelMediaStatus(status => {
     connectionEncryptionTooltip.update();
     voiceEncryptionTooltip.update();
     videoRefreshNames(); // tiles follow the verified key accounts
-});
+}
+onChannelMediaStatus(renderVoiceEncryptionStatus);
 
 // ---------------------------------------------------------------------------
 // Channel tree

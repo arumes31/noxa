@@ -44,13 +44,16 @@ test('top lock opens details on focus and hover, fits viewport and escapes marku
 
 test('long encryption status remains a small lock inside narrow voice card',async({page})=>{
  await page.evaluate(async()=>{
-  const {setStatusIcon}=await import('/src/icons.js');
-  const el=document.querySelector('#voice-e2ee');el.hidden=false;el.dataset.state='partial';
-  setStatusIcon(el,'lock','Keys held by '+('A very long account identity '.repeat(100)));
+  const {renderVoiceEncryptionStatus}=await import('/src/main.js');
+  renderVoiceEncryptionStatus({state:'encrypted',recipients:1,keyHolders:[{principal:'A very long account identity '.repeat(100)}]});
   document.querySelector('#sidebar').style.width='220px';
  });
  const lock=page.locator('#voice-e2ee');await expect(lock.locator('svg')).toBeVisible();
+ await expect(lock).toHaveAttribute('data-state','encrypted');
+ await expect(lock).toHaveAttribute('aria-label',/A very long account identity/);
  expect(await lock.evaluate(e=>e.getBoundingClientRect().width)).toBeLessThanOrEqual(24);
  expect(await lock.evaluate(e=>{const r=e.getBoundingClientRect(),c=document.querySelector('#voice-bar').getBoundingClientRect();return r.left>=c.left&&r.right<=c.right;})).toBe(true);
  await lock.focus();await expect(page.locator('#voice-e2ee-details')).toContainText('Frames prove channel membership');
+ await page.evaluate(async()=>{(await import('/src/main.js')).renderVoiceEncryptionStatus({state:'off'});});
+ await expect(lock).toBeHidden();
 });
