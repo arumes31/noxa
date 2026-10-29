@@ -4,9 +4,10 @@ import { encryptionDetails } from '../src/encryption-details.js';
 import { setLanguage } from '../src/i18n.js';
 
 test('offline and unavailable diagnostics never claim an encrypted connection',()=>{
- setLanguage('en');const text=encryptionDetails();
+ setLanguage('en');const text=encryptionDetails({session:{connected:false}});
  assert.match(text,/Not connected/);assert.match(text,/could not be verified/);assert.match(text,/No active encrypted channel-media/);
  assert.match(text,/Channel and global messages and private calls are not end-to-end encrypted/);
+ assert.doesNotMatch(encryptionDetails(),/Not connected/,'a failed status lookup is unknown, not a confirmed disconnect');
 });
 test('live details preserve complete key-holder identities and partial/paused warnings',()=>{
  setLanguage('en');const principal='untruncated-account-identity-'.repeat(20);

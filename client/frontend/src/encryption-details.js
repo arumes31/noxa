@@ -7,7 +7,7 @@ export function encryptionDetails({ session, diagnostics, media = { state: "off"
     const parts = [];
     if (!voiceOnly) {
         parts.push(t("security.details.transport"), session?.connected
-            ? (session.security || t("security.details.unknown")) : t("security.details.disconnected"));
+            ? (session.security || t("security.details.unknown")) : t(session?.connected === false ? "security.details.disconnected" : "security.details.unknown"));
         parts.push(t("security.details.messages"), diagnostics
             ? (diagnostics.active ? `${t("security.details.active")}\n${diagnostics.protocol || ""}\n${diagnostics.cipher || ""}` : `${t("security.details.inactive")}\n${diagnostics.unavailable || ""}`)
             : t("security.details.unknown"));
