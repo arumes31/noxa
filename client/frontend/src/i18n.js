@@ -60,6 +60,7 @@ import { uploadStageEnglish, uploadStageGerman } from "./upload-stage-messages.j
 import { accountIdentityEnglish, accountIdentityGerman } from "./account-identity-messages.js";
 import { statusExpiryEnglish, statusExpiryGerman } from "./status-expiry-messages.js";
 import { hardeningEnglish, hardeningGerman } from "./hardening-messages.js";
+import { studioEnglish, studioGerman } from "./studio-messages.js";
 
 const en = {
  ...overviewEnglish,
@@ -73,6 +74,7 @@ const en = {
     ...accountIdentityEnglish,
     ...statusExpiryEnglish,
     ...hardeningEnglish,
+    ...studioEnglish,
     ...midnightEnglish,
     ...loginErrorEnglish, ...streamHealthEnglish,
     ...voiceDiagnosticsEnglish,
@@ -195,6 +197,7 @@ const de = {
     ...accountIdentityGerman,
     ...statusExpiryGerman,
     ...hardeningGerman,
+    ...studioGerman,
     ...midnightGerman,
     ...loginErrorGerman, ...streamHealthGerman,
     ...voiceDiagnosticsGerman,

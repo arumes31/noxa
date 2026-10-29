@@ -461,6 +461,8 @@ export function createVideoPublication({ policy }) {
     const regionSupported = regionCropSupported();
 
     let shareDialogID = 0;
+    // The Studio program currently published on the screen slot, if any.
+    let studioShare = null;
 
     function syncShareButton() {
         const btn = V().$("voice-screen");
@@ -621,7 +623,7 @@ export function createVideoPublication({ policy }) {
     // picker ultimately decides what is shareable), publishes a dedicated screen
     // track independently of the camera, optionally merges display
     // audio (70), and applies the quality preset (72).
-    async function startShare({ surface, preset, custom, bitrateCeiling = 0, audioMode, replacing = false, selectedDisplay = null }) {
+    async function startShare({ surface, preset, custom, bitrateCeiling = 0, audioMode, replacing = false, selectedDisplay = null, studio = null }) {
         const requestedAudioMode = audioMode;
         const { state } = V();
         const generation = state.serverGeneration;
@@ -843,6 +845,7 @@ export function createVideoPublication({ policy }) {
             await doStopShare();
             return;
         }
+        studioShare = studio ? { stream: display, onEnded: studio.onEnded } : null;
         syncShareButton();
         if (requestedAudioMode !== "none" && audioMode === "none") {
             V().toast(tLabel(requestedAudioMode === "application" ? "share.applicationUnavailable" : "share.audioNotSelected"), "warn");
@@ -850,10 +853,36 @@ export function createVideoPublication({ policy }) {
         startShareStatus({ stream: display, pc: peerConnection, scope: shareScope, preset: p, surface, audioMode,
             generation: publicationSnapshot().find(p => p.publication.slot === "screen")?.generation,
             stop: () => { V().$("voice-screen").focus(); void doStopShare(); },
-            change: () => openShareDialog(true, selection.preset, audioMode, surface, selection.custom, selection.bitrateCeiling),
+            change: () => studio ? studio.change() : openShareDialog(true, selection.preset, audioMode, surface, selection.custom, selection.bitrateCeiling),
             changeQuality: () => openLiveShareQuality(display, peerConnection, shareScope, p, selection),
             reduction: () => policy.lowBandwidth ? "share.lowBandwidth" : "" });
         return true;
+    }
+
+    // startStudioShare publishes the Studio's stable program stream through
+    // the same guarded screen publication as an ordinary share: the media
+    // session attached the encrypted transform to the share transceiver, so
+    // encryption happens after encode; capture limits, caps, codec policy and
+    // stop handling are the ordinary ones. The Studio never touches a sender.
+    // A scene change later changes pixels only, never this track.
+    async function startStudioShare(stream, { width, height, fps, onEnded = () => {}, change = () => {} }) {
+        const { state } = V();
+        if (updateStartupBlocked()) return false;
+        if (!state.pc || state.pc.connectionState === "closed" || state.pc.connectionState === "failed") throw new Error(tLabel("share.connectionRequired"));
+        if (state.shareStarting || state.shareStopping || state.screenSharing) throw new Error(tLabel("studio.shareBusy"));
+        const request = {};
+        state.shareStarting = request;
+        syncShareButton();
+        try {
+            return !!await startShare({ surface: "studio", preset: "custom", custom: { width, height, fps }, bitrateCeiling: 0,
+                audioMode: stream.getAudioTracks().length ? "system" : "none", selectedDisplay: stream, studio: { onEnded, change } });
+        } finally {
+            if (state.shareStarting === request) { state.shareStarting = null; syncShareButton(); }
+        }
+    }
+
+    function studioShareActive(stream) {
+        return !!studioShare && V().state.screenSharing && (!stream || studioShare.stream === stream);
     }
 
     function openLiveShareQuality(stream, pc, scope, profile, selection) {
@@ -1018,6 +1047,8 @@ export function createVideoPublication({ policy }) {
         const generation = state.serverGeneration;
         const tabID = state.activeTabID;
         const current = () => state.pc === pc && state.serverGeneration === generation && state.activeTabID === tabID;
+        const studio = studioShare;
+        studioShare = null;
         state.shareStopping = true;
         state.screenSharing = false;
         syncShareButton();
@@ -1036,6 +1067,8 @@ export function createVideoPublication({ policy }) {
         }
         applySendCaps();
         syncCameraButton();
+        // The Studio owns its captures: a stopped program ends the Studio.
+        try { studio?.onEnded(); } catch { /* the share stop proceeds */ }
         try {
             await stopPublication("screen");
             if (pc && current()) await renegotiate(pc, generation);
@@ -1080,6 +1113,7 @@ export function createVideoPublication({ policy }) {
 
     // resetCameraState clears the toggle for a fresh (or ended) voice session.
     function resetCameraState() {
+        studioShare = null;
         stopShareStatus();
         cameraOff = true;
         cameraRequest?.controller?.abort();
@@ -1208,5 +1242,5 @@ export function createVideoPublication({ policy }) {
         }
     }
 
-    return { applyVideoLimits, shareToggle, resetCameraState, cameraToggle, applySendCaps, retryVideoHardware, syncCameraButton, syncShareButton };
+    return { applyVideoLimits, shareToggle, resetCameraState, cameraToggle, applySendCaps, retryVideoHardware, syncCameraButton, syncShareButton, startStudioShare, studioShareActive, stopShare: doStopShare };
 }

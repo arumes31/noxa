@@ -49,6 +49,7 @@ import { updateLocalSettings } from "./settings-store.js";
 import { initSettingsUI } from "./settings-ui.js";
 import { initGamingOverlay, noteOverlayChat } from "./gaming-overlay.js";
 import { initChannelUndocking } from "./call-undocking.js";
+import { initStudio, disposeStudio } from "./studio-ui.js";
 import { refreshVoicePlayback } from "./voice-messages.js";
 import { discussionChanged } from "./discussions.js";
 import { initClientInfo } from "./clientinfo.js";
@@ -2263,6 +2264,8 @@ function ensureVoiceForChannel() {
             for (const track of state.localStream?.getVideoTracks() || []) { track.stop(); state.localStream.removeTrack(track); }
             stopDisplayCapture(state.shareStream);
             state.shareStream = null;
+            // The Studio's captures and program belong to the channel too.
+            disposeStudio();
             state.screenSharing = false;
             state.shareStarting = null;
             state.shareStopping = false;
@@ -2777,6 +2780,9 @@ function teardownVoice() {
     state.shareVideoTransceiver = null;
     state.shareStarting = null;
     state.shareStopping = false;
+    // Studio captures, audio graph, timers and canvases end with the session
+    // (its published clone was stopped with the share stream above).
+    disposeStudio();
     detachRemoteAudio();
     if (state.pc) { state.pc.close(); state.pc = null; }
     // The session's worker and every media key end with the peer.
@@ -3566,6 +3572,7 @@ initMenu();
 initSettingsUI();
 void initGamingOverlay();
 initChannelUndocking();
+initStudio();
 initClientInfo();
 initVideo();
 initUpdater();
