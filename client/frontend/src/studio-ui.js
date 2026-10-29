@@ -80,15 +80,16 @@ function audioGraph() {
 //   (source.audio). Editing it, capturing with audio or recapturing changes
 //   only the draft and never the published audio.
 // - The routed set is computed from the PROGRAM snapshot only: a capture's
-//   app/system audio is routed iff a source of the live program references
-//   it with audio enabled and its audio track is live; once per capture,
-//   however many sources reference it.
+//   app/system audio is routed iff a VISIBLE source of the live program
+//   references it with audio enabled and its audio track is live; once per
+//   capture, however many sources reference it. Hiding a source takes its
+//   audio off too (privacy first) - at the next Take, like the picture.
 // - It changes only at Take (and when a routed track ends or a capture is
 //   released). During a crossfade only the incoming program counts: the
 //   outgoing scene's audio stops at Take and a fade never adds audio.
 function programAudio(owner) {
     const ids = new Set();
-    for (const source of owner.engine.live?.sources || []) if (source.kind === "display" && source.audio && source.capture) ids.add(source.capture);
+    for (const source of owner.engine.live?.sources || []) if (source.kind === "display" && source.visible && source.audio && source.capture) ids.add(source.capture);
     return ids;
 }
 
@@ -222,6 +223,10 @@ async function addImage(file) {
             owner.selectedSource = added.source.id;
             return added.studio;
         });
+        // The add committed (or failed): the asset is no longer protected as
+        // in-flight, so a later removal (or this failure) prunes it now.
+        owner.assets.settle(asset.id);
+        if (session === owner) void owner.assets.prune(() => assetRefs(owner.studio, [owner.engine.live, owner.engine.outgoing]));
     } catch (error) { if (session === owner) showError(errorText(error)); }
 }
 

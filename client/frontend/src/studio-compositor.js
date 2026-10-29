@@ -21,9 +21,13 @@ export function studioClock(fn, period) {
     try {
         // Literal form so the bundler emits the worker (see media-e2ee.js).
         const worker = new Worker(new URL("./studio-clock.worker.js", import.meta.url), { type: "module" });
+        let fallback = null;
         worker.onmessage = () => fn();
+        // A script that fails to load or run reports asynchronously: fall
+        // back to the page timer so the program never freezes.
+        worker.onerror = () => { worker.terminate(); if (fallback === null) fallback = setInterval(fn, period); };
         worker.postMessage({ period });
-        return () => worker.terminate();
+        return () => { worker.terminate(); clearInterval(fallback); fallback = -1; };
     } catch {
         const id = setInterval(fn, period);
         return () => clearInterval(id);

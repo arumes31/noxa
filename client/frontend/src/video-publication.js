@@ -839,6 +839,9 @@ export function createVideoPublication({ policy }) {
             if (state.shareStream?.getVideoTracks()[0] === screenTrack) void doStopShare();
         })) shareErr = "capture ended"; }
         catch (error) { shareErr = String(error); }
+        // A publication that never started is a failed start, not a Stop: the
+        // Studio keeps its session and reports the failure itself.
+        if ((!current() || shareErr) && studioShare?.stream === display) studioShare = null;
         if (!current()) {
             discardDisplay(display);
             return;

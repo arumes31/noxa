@@ -626,3 +626,103 @@ test("the program clock runs in a worker: renders continue when page timers are 
     await page.evaluate(() => window.__studio.disposeStudio());
     expect(await page.evaluate(() => window.__studio.studioActive())).toBe(false);
 });
+
+test("a failed Go live keeps the Studio session (captures, draft, program) and shows the error; a retry works", async ({ page }) => {
+    const studio = await open(page);
+    await addDisplay(page, RED);
+    await studio.locator(".studio-transition").selectOption("cut");
+    await page.keyboard.press("Control+Enter");
+    await page.evaluate(() => {
+        const control = window.go.main.App.VideoStreamControlForTab;
+        window.__restoreControl = () => { window.go.main.App.VideoStreamControlForTab = control; };
+        window.go.main.App.VideoStreamControlForTab = async (tab, msg) => {
+            if (msg.action === "publish" && msg.active) throw new Error("publish refused");
+            return control(tab, msg);
+        };
+    });
+    await studio.getByRole("button", { name: "Go live" }).click();
+    await expect(studio.locator(".studio-error")).toContainText("Could not go live");
+    const after = await page.evaluate(() => ({ d: window.__studio.studioDiagnostics(), sharing: window.__noxa.state.screenSharing,
+        capture: window.__captures.display[0].getVideoTracks()[0].readyState }));
+    expect(after.sharing).toBe(false);
+    expect(after.capture).toBe("live");
+    expect(after.d).toMatchObject({ live: false, program: "sc1", captures: [{ id: "c1", refs: 2, state: "live" }] });
+    await expect(studio.locator(".studio-air")).toHaveText("Off air");
+    await expectPixel(page, "program", RED);
+    // Retry after the server accepts again.
+    await page.evaluate(() => window.__restoreControl());
+    await studio.getByRole("button", { name: "Go live" }).click();
+    await expect(studio.locator(".studio-air")).toHaveText("Live");
+    expect(await page.evaluate(() => window.__video.studioShareActive())).toBe(true);
+});
+
+for (const failure of ["async", "sync"]) {
+    test(`the program clock falls back to a page timer when the clock worker fails (${failure})`, async ({ page }) => {
+        await page.evaluate(mode => {
+            window.__workerFailures = 0;
+            window.Worker = class extends EventTarget {
+                constructor() {
+                    super();
+                    if (mode === "sync") { window.__workerFailures++; throw new Error("worker blocked"); }
+                    setTimeout(() => { window.__workerFailures++; this.onerror?.(new Event("error")); }, 20);
+                }
+                postMessage() {}
+                terminate() { this.terminated = true; }
+            };
+        }, failure);
+        const studio = await open(page);
+        await addDisplay(page, RED);
+        await studio.locator(".studio-transition").selectOption("cut");
+        await page.keyboard.press("Control+Enter");
+        await studio.getByRole("button", { name: "Add scene" }).click();
+        await addDisplay(page, BLUE);
+        await studio.locator(".studio-transition").selectOption("fade");
+        await page.keyboard.press("Control+Enter");
+        await expectPixel(page, "program", BLUE);
+        await expect.poll(async () => (await diagnostics(page)).transitioning, { timeout: 3000 }).toBe(false);
+        expect(await page.evaluate(() => window.__workerFailures)).toBeGreaterThan(0);
+    });
+}
+
+test("an image added and removed in the same session is pruned from local storage at once", async ({ page }) => {
+    const studio = await open(page);
+    const png = await page.evaluate(async () => {
+        const canvas = new OffscreenCanvas(16, 9); canvas.getContext("2d").fillRect(0, 0, 16, 9);
+        return [...new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer())];
+    });
+    const keys = () => page.evaluate(() => new Promise(resolve => {
+        const request = indexedDB.open("noxa-studio", 1);
+        request.onupgradeneeded = () => request.result.createObjectStore("assets");
+        request.onsuccess = () => { const db = request.result; const r = db.transaction("assets").objectStore("assets").getAllKeys(); r.onsuccess = () => { db.close(); resolve(r.result.length); }; };
+    }));
+    await studio.locator(".studio-image-file").setInputFiles({ name: "temp.png", mimeType: "image/png", buffer: Buffer.from(png) });
+    await expect(studio.locator(".studio-source-name-label")).toHaveText("temp.png");
+    await expect.poll(keys).toBe(1);
+    await studio.getByRole("button", { name: "Remove temp.png" }).click();
+    await expect.poll(keys).toBe(0);
+    expect(await page.evaluate(() => window.__studio.studioSessionForTest().assets.loadedCount())).toBe(0);
+});
+
+test("a hidden program source's audio is not streamed; visibility applies to audio only at Take", async ({ page }) => {
+    const studio = await open(page);
+    await addDisplay(page, RED, "system");
+    await studio.locator(".studio-transition").selectOption("cut");
+    await page.keyboard.press("Control+Enter");
+    await studio.getByRole("button", { name: "Go live" }).click();
+    await expect(studio.locator(".studio-air")).toHaveText("Live");
+    expect((await diagnostics(page)).routes).toEqual(["c1"]);
+    expect(await publishedRMS(page)).toBeGreaterThan(0.05);
+    // Hide in the draft: still on air (picture and audio) until Take.
+    await studio.getByRole("button", { name: "Hide Screen" }).click();
+    expect((await diagnostics(page)).routes).toEqual(["c1"]);
+    await page.keyboard.press("Control+Enter");
+    await expectPixel(page, "program", [0, 0, 0]);
+    expect((await diagnostics(page)).routes).toEqual([]);
+    expect(await publishedRMS(page)).toBeLessThan(0.005);
+    // Show again in the draft: silent until Take.
+    await studio.getByRole("button", { name: "Show Screen" }).click();
+    expect((await diagnostics(page)).routes).toEqual([]);
+    await page.keyboard.press("Control+Enter");
+    expect((await diagnostics(page)).routes).toEqual(["c1"]);
+    expect(await publishedRMS(page)).toBeGreaterThan(0.05);
+});

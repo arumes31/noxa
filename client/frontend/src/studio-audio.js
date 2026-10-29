@@ -1,11 +1,11 @@
 // studio-audio.js — the Studio's shared-audio graph, separate from pictures.
 //
 // The microphone is never part of this graph: it stays the existing voice
-// track with its own mute/push-to-talk rules. Only app/system audio that the
-// user explicitly captured AND switched on is routed, exactly once per
-// capture (keyed by capture ID, however many scene sources show that
-// capture). Scene changes and transitions never call into this module, so a
-// Take can never start another source's audio. Monitoring is a level meter
+// track with its own mute/push-to-talk rules. sync() routes exactly the set
+// of capture IDs it is given, once per capture (however many sources show
+// it). The caller (studio-ui.js programAudio) derives that set from the live
+// PROGRAM only and calls sync at Take or when a capture ends, never on draft
+// edits, so draft audio cannot reach the publication. Monitoring is a level meter
 // (AnalyserNode): nothing is connected to the local speakers, so the preview
 // cannot create a feedback loop.
 
@@ -32,8 +32,8 @@ export function createStudioAudio({ AudioContextClass = globalThis.AudioContext 
     return {
         // The single stable audio track handed to the encrypted publication.
         track: destination.stream.getAudioTracks()[0],
-        // sync routes exactly the explicitly enabled capture audio tracks.
-        // `enabled` is a set of capture IDs the user switched on.
+        // sync routes exactly the capture IDs in `enabled` that have a live
+        // track in `available` (the program-derived set from studio-ui.js).
         sync(available, enabled) {
             if (disposed) return;
             const wanted = new Map();

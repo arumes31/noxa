@@ -185,6 +185,9 @@ export function createAssetStore({ indexedDB = globalThis.indexedDB, name = "nox
             }
         },
         bitmap(id) { return loaded.get(id)?.bitmap || null; },
+        // settle ends the in-flight protection of an added asset once its
+        // source was committed (or the commit failed).
+        settle(id) { fresh.delete(id); },
         info(id) { const entry = loaded.get(id); return entry ? { width: entry.width, height: entry.height, type: entry.type } : null; },
         loadedCount() { return loaded.size; },
         // prune removes stored and loaded assets no layout references.
