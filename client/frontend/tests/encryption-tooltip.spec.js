@@ -19,11 +19,11 @@ test.beforeEach(async ({page})=>{
  await page.evaluate(()=>{
   const v=window.__noxa;Object.assign(v.state,{activeTabID:'tooltip-test',myClientID:'self',myNickname:'Audit',myChannelID:15});v.showWorkspace(false);
   const original=window.go.main.App;
-  window.go.main.App=new Proxy(original,{get(target,key){
-   if(key==='SessionInfoForTab')return async()=>({connected:true,security:'TLS (fingerprint AA:BB:CC)'});
-   if(key==='E2EEDiagnosticsForTab')return async()=>({active:true,protocol:'noxa-olm-v1',cipher:'Olm <img src=x onerror="window.__injected=true">'});
-   if(key==='MediaE2EEStatusForTab')return async()=>({supported:true});
-   return target[key];
+  window.go.main.App=new Proxy(original,{get(target,method){
+   if(method==='SessionInfoForTab')return async()=>({connected:true,security:'TLS (fingerprint AA:BB:CC)'});
+   if(method==='E2EEDiagnosticsForTab')return async()=>({active:true,protocol:'noxa-olm-v1',cipher:'Olm <img src=x onerror="window.__injected=true">'});
+   if(method==='MediaE2EEStatusForTab')return async()=>({supported:true});
+   return target[method];
   }});
   document.querySelector('#conn-lock').classList.remove('hidden');
  });
