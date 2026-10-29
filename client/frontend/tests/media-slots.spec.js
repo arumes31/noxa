@@ -96,7 +96,7 @@ test.beforeEach(async ({ page }) => {
         // offers go through the secure binding.
         window.go.main.App.WebRTCOfferSecureForTab = (tab, sdp, slots) => window.go.main.App.WebRTCOfferForTab(tab, sdp, slots);
         const channelMedia = await import("/src/channel-media.js");
-        const standIn = () => ({ active: true, identity: { channelID: 1 }, async start() { return this; }, stop() { this.active = false; }, setRoster() {}, protectPeer: pc => pc,
+        const standIn = () => ({ active: true, media: { authenticated: () => true, onAuthenticated() {} }, identity: { channelID: 1 }, async start() { return this; }, stop() { this.active = false; }, setRoster() {}, protectPeer: pc => pc,
             peerConfig: c => c, bindSenders: async () => {}, syncReceivers: async () => {}, rescope() {}, publicationsChanged() {}, receive: () => ({ ok: false }), status: () => ({ state: "encrypted" }) });
         channelMedia.useChannelMediaFactory(standIn);
         channelMedia.useChannelMediaSession(standIn());

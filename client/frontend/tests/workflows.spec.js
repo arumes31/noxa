@@ -6068,7 +6068,7 @@ test.beforeEach(async ({ page }) => {
                 if (nativeMethod === "SendMediaKeyForTab") return async () => ({ state: "accepted" });
                 // UI tests with stand-in peer objects (no encoded transforms)
                 // install this session double through channel-media.js.
-                window.__standInMedia = () => ({ active: true, identity: { channelID: window.__noxa?.state?.myChannelID || 1 }, async start() { return this; }, stop() { this.active = false; },
+                window.__standInMedia = () => ({ active: true, media: { authenticated: () => true, onAuthenticated() {} }, identity: { channelID: window.__noxa?.state?.myChannelID || 1 }, async start() { return this; }, stop() { this.active = false; },
                     setRoster() {}, protectPeer: pc => pc, peerConfig: c => c, bindSenders: async () => {}, syncReceivers: async () => {}, rescope() {},
                     publicationsChanged() {}, receive: () => ({ ok: false }), status: () => ({ state: "encrypted", recipients: 0 }) });
                 return async (...args) => {

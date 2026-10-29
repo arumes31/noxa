@@ -68,9 +68,6 @@ func (s *TCPServer) mediaE2EEOfferRejection(client *Client, msg netproto.WebRTCO
 			return mediaE2EEError(netproto.MediaE2EEReasonInvisible, "encrypted voice is unavailable while you are invisible; become visible to join voice")
 		}
 	}
-	if !s.mediaSeated(client) && s.voiceRecipients(client) >= MediaE2EEMaxVoice {
-		return mediaE2EEError(netproto.MediaE2EEReasonChannelFull, "this encrypted voice channel is full")
-	}
 	if client.currentDeviceID() == "" {
 		if strings.HasPrefix(client.uniqueID(), "guest:") {
 			return mediaE2EEError(netproto.MediaE2EEReasonKeylessGuest, "channel voice is end-to-end encrypted; guest sessions without a key identity cannot join voice")
@@ -80,26 +77,11 @@ func (s *TCPServer) mediaE2EEOfferRejection(client *Client, msg netproto.WebRTCO
 	return ""
 }
 
-// mediaSeated reports whether this session already holds a seat in its
-// current channel's encrypted voice. The channel-full cap only refuses new
-// joiners: camera, screen, ICE-restart and relay renegotiations of seated
-// members are never refused, however other members are counted.
-func (s *TCPServer) mediaSeated(client *Client) bool {
-	if s.deps == nil || s.deps.State == nil {
-		return false
-	}
-	c, ok := s.deps.State.GetClient(client.ID)
-	return ok && c.ChannelID > 0 && client.mediaSeat.Load() == c.ChannelID
-}
-
 // announceMediaDevice records and announces the session's media device once
-// its first encrypted offer was accepted, and seats it in its channel.
+// its first encrypted offer was accepted (the seat was taken with the offer).
 func (s *TCPServer) announceMediaDevice(client *Client) {
 	if !s.mediaE2EERequired() || s.deps == nil || s.deps.State == nil {
 		return
-	}
-	if c, ok := s.deps.State.GetClient(client.ID); ok && c.ChannelID > 0 {
-		client.mediaSeat.Store(c.ChannelID)
 	}
 	device := client.currentDeviceID()
 	if device == "" || !s.deps.State.SetMediaDevice(client.ID, device) {

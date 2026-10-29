@@ -678,7 +678,8 @@ export class Voice extends EventTarget {
             if (!track || !trackID || transceiver.currentDirection === "inactive" || transceiver.currentDirection === "sendonly") continue;
             // Presentation gate: no sink until the first authenticated frame.
             const gate = this.#media?.media;
-            if (gate && !gate.authenticated(transceiver.receiver)) { gate.onAuthenticated(transceiver.receiver, () => this.#reconcile()); continue; }
+            // Fail closed: without a media session (stopped or failed) nothing is presented.
+            if (!gate?.authenticated(transceiver.receiver)) { gate?.onAuthenticated(transceiver.receiver, () => this.#reconcile()); continue; }
             // The gate only reports authentication; this owner enables output.
             track.enabled = true;
             const { clientID, slot } = parseTrackID(trackID);

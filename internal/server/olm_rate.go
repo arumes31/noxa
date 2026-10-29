@@ -17,7 +17,10 @@ package server
 //     multi-device recipients);
 //   - a control `begin` is additionally capped per (sender account, target
 //     device), charged only after the device and account caps passed (the
-//     target is client-chosen; limiter maps are swept). Invisible senders are
+//     target is client-chosen; limiter maps are swept, and at map capacity
+//     this secondary cap is skipped, never refused server-wide);
+//   - a bucket's limit grows within its window when the channel grows (the
+//     difference is added to the remaining tokens). Invisible senders are
 //     refused before any budget with the non-retryable code "invisible". A
 //     control can only
 //     reach one device, stays pending at most MaxPendingControls per pair and
@@ -109,17 +112,18 @@ func (s *TCPServer) allowOlmAdmission(ctx context.Context, client *Client, a sto
 	b := s.olmBudget
 	now := time.Now()
 	device := a.Principal + "\x00" + a.Device
-	n := s.voiceRecipients(client)
-	controls := max(olmControlBegins, 2*n)
-	frames := max(olmAdmissionFrames, 6*n)
 	switch r.Action {
 	case "begin":
 		if r.Manifest != nil && r.Manifest.Purpose == "control" {
+			// Recipients are counted only for the budgets that scale with them.
+			controls := max(olmControlBegins, 2*s.voiceRecipients(client))
 			if !both(b.control, b.accountControl, device, a.Principal, now, controls, controls*5/2) {
 				return false
 			}
 			// The client-chosen target is charged only after the caps passed.
-			if !b.perTarget.allow(a.Principal+"\x00"+controlTarget(r.Manifest), now) {
+			// It is a secondary cap behind the bounded account caps: at map
+			// capacity it is skipped, never refused server-wide.
+			if !b.perTarget.allowOrSkip(a.Principal+"\x00"+controlTarget(r.Manifest), now) {
 				b.control.refund(device, now)
 				b.accountControl.refund(a.Principal, now)
 				return false
@@ -130,27 +134,23 @@ func (s *TCPServer) allowOlmAdmission(ctx context.Context, client *Client, a sto
 	case "deliveries", "receive_ack":
 		return b.drain.allow(device, now)
 	default:
+		frames := max(olmAdmissionFrames, 6*s.voiceRecipients(client))
 		return both(b.admission, b.accountAdmission, device, a.Principal, now, frames, frames*5/2)
 	}
 }
 
-// voiceRecipients is the number of other media devices in the client's
-// channel (the recipients of one rekey), bounded by MediaE2EEMaxVoice.
+// voiceRecipients is the number of other encrypted voice seats in the
+// client's channel (the recipients of one rekey), bounded by
+// MediaE2EEMaxVoice. It counts seats without copying the roster.
 func (s *TCPServer) voiceRecipients(client *Client) int {
 	if s.deps == nil || s.deps.State == nil || client == nil {
 		return 0
 	}
-	c, ok := s.deps.State.GetClient(client.ID)
-	if !ok || c.ChannelID <= 0 {
+	ch, _, ok := s.deps.State.ClientChannelState(client.ID)
+	if !ok || ch <= 0 {
 		return 0
 	}
-	n := 0
-	for _, m := range s.deps.State.ChannelMembers(c.ChannelID) {
-		if m.ClientID != client.ID && m.MediaDevice != "" {
-			n++
-		}
-	}
-	return min(n, MediaE2EEMaxVoice)
+	return min(s.mediaSeats.others(ch, client.ID), MediaE2EEMaxVoice)
 }
 
 func (s *TCPServer) clientInvisible(client *Client) bool {

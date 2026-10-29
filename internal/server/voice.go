@@ -115,13 +115,26 @@ func (s *TCPServer) handleWebRTCOffer(ctx context.Context, client *Client, f *ne
 	if reason := s.mediaE2EEOfferRejection(client, msg); reason != "" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, reason)
 	}
-	return s.roleChannelControl(ctx, client, authorization.Connect, true, func(ctx context.Context, _ int64) error {
+	return s.roleChannelControl(ctx, client, authorization.Connect, true, func(ctx context.Context, channelID int64) error {
+		// The encrypted voice seat is taken under this session's channel-control
+		// lock (moves hold it too), for the channel that lock checked, before
+		// the backend answers. A seated session always renegotiates.
+		undo, ok := s.takeMediaSeat(client, channelID)
+		if !ok {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, errMediaE2EEChannelFull.Error())
+		}
 		s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
-		return s.applyWebRTCOffer(ctx, client, msg)
+		answered, err := s.applyWebRTCOffer(ctx, client, msg)
+		if !answered {
+			undo()
+		}
+		return err
 	})
 }
 
-func (s *TCPServer) applyWebRTCOffer(ctx context.Context, client *Client, msg netproto.WebRTCOffer) error {
+// applyWebRTCOffer applies the offer; answered reports that the answer was
+// written.
+func (s *TCPServer) applyWebRTCOffer(ctx context.Context, client *Client, msg netproto.WebRTCOffer) (answered bool, _ error) {
 	// The slot declaration has to land BEFORE the offer is applied: the
 	// backend builds this client's output tracks while answering, and the
 	// other members' extra output tracks are added from here too (70).
@@ -157,7 +170,7 @@ func (s *TCPServer) applyWebRTCOffer(ctx context.Context, client *Client, msg ne
 	s.deps.State.SetSharing(client.ID, sharing)
 	if err != nil {
 		if errors.Is(err, webrtc.ErrOfferCollision) {
-			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, webrtc.ErrOfferCollision.Error())
+			return false, s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, webrtc.ErrOfferCollision.Error())
 		}
 		s.logger.Warn("webrtc offer failed",
 			zap.String("client_id", client.ID),
@@ -166,15 +179,15 @@ func (s *TCPServer) applyWebRTCOffer(ctx context.Context, client *Client, msg ne
 		if errors.Is(err, webrtc.ErrPeerReset) {
 			// End this control session so the desktop reconnects with a fresh
 			// peer instead of retaining a permanently stuck DTLS transport.
-			return err
+			return false, err
 		}
-		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "webrtc offer failed")
+		return false, s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "webrtc offer failed")
 	}
 	if err := s.writeMessage(client, netproto.MsgWebRTCAnswer, netproto.WebRTCAnswer{SDP: answer}); err != nil {
-		return err
+		return false, err
 	}
 	s.announceMediaDevice(client)
-	return nil
+	return true, nil
 }
 
 // handleWebRTCAnswer applies an SDP answer from the client (used when the

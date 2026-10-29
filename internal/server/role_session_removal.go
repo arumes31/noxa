@@ -83,6 +83,7 @@ func (s *TCPServer) removeRoleSession(ctx context.Context, target *Client, event
 		removalErr = nil
 	}
 	var voiceErr error
+	s.mediaSeats.release(target.ID)
 	if s.deps.Voice != nil {
 		voiceErr = s.deps.Voice.ClosePeer(target.ID)
 	}

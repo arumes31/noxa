@@ -61,10 +61,6 @@ type Client struct {
 	// talkDecision caches the last uncontended Speak evaluation (canTalk).
 	talkDecision atomic.Pointer[talkDecision]
 
-	// mediaSeat is the channel whose encrypted voice accepted this session's
-	// offer; a seated session may always renegotiate there (channel-full cap).
-	mediaSeat atomic.Int64
-
 	mu                 sync.RWMutex
 	lastOwnChannelMove *broadcast.OwnChannelMove // recipient-only cause, protected by mu
 	authRequests       int
@@ -340,6 +336,7 @@ type TCPServer struct {
 	mediaE2EE bool
 	// Per-device noxa-olm-v1 budgets separate from chat sends (olm_rate.go).
 	olmBudget             *olmBudgets
+	mediaSeats            mediaSeats // encrypted voice seats (media_seats.go)
 	olmDoorbell           olmDoorbells
 	keyLookupRate         *chatRateLimiter
 	previewOnce           sync.Once
@@ -1405,6 +1402,7 @@ func (s *TCPServer) onDisconnect(client *Client) {
 		}
 		// Remove voice metadata in the same membership critical section. Key
 		// rotation below acquires Authority and must run after releasing it.
+		s.mediaSeats.release(client.ID)
 		if s.deps.Voice != nil {
 			if err := s.deps.Voice.ClosePeer(client.ID); err != nil {
 				s.logger.Warn("voice session teardown failed", zap.String("client_id", client.ID), zap.Error(err))

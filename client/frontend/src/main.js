@@ -67,7 +67,7 @@ import {
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget } from "./stream-controls.js";
-import { startRemoteMedia, reconcileRemoteMedia } from "./remote-media.js";
+import { startRemoteMedia, reconcileRemoteMedia, gatePresents } from "./remote-media.js";
 import { startChannelMedia, stopChannelMedia, channelMedia, receiveMediaKey, mediaErrorText, mediaStatusText, onChannelMediaStatus } from "./channel-media.js";
 import { remoteTrackID } from "./media-track-id.js";
 import { createReceiverRegistry, attributeReceiver, releaseReceiver } from "./remote-receivers.js";
@@ -2273,7 +2273,9 @@ function ensureVoiceForChannel() {
                 if (!trackID) continue;
                 // Same gate as remote-media: nothing unauthenticated is attached.
                 const gate = channelMedia()?.media;
-                if (gate && !gate.authenticated(receiver)) { const pc = state.pc; gate.onAuthenticated(receiver, () => reconcileRemoteMedia(pc)); continue; }
+                // Fail closed: a channel peer without a media session (stopped
+                // or failed) presents nothing.
+                if (!gatePresents(gate, receiver)) { const pc = state.pc; gate?.onAuthenticated(receiver, () => reconcileRemoteMedia(pc)); continue; }
                 const parsed = parseTrackID(trackID);
                 const publisher = state.clients.find(c => String(c.client_id) === parsed.clientID);
                 if (track.kind === "video") receiveStreamTrack(track, publisher, trackID);
@@ -2495,7 +2497,8 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         // Presentation gate (encrypted media): a new or rebound receiver is
         // neither attached nor enabled until its first authenticated frame.
         const gate = channelMedia()?.media;
-        if (gate && !gate.authenticated(track)) { gate.onAuthenticated(track, () => reconcileRemoteMedia(pc)); return false; }
+        // Fail closed: no media session (stopped or failed) means no output.
+        if (!gatePresents(gate, track)) { gate?.onAuthenticated(track, () => reconcileRemoteMedia(pc)); return false; }
         const { clientID, slot } = parseTrackID(trackID);
         const publisher = state.clients.find((c) => String(c.client_id) === clientID) || null;
         // Attribution follows the negotiated publisher track ID, not track.id.
@@ -2528,7 +2531,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
             voiceRemoteAudioTracks.delete(track);
             syncVoiceLinkMedia();
         }
-    }, (track, trackID) => { const gate = channelMedia()?.media; return (!gate || gate.authenticated(track)) && (track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID)); });
+    }, (track, trackID) => { const gate = channelMedia()?.media; return gatePresents(gate, track) && (track.kind !== "audio" || parseTrackID(trackID).slot !== "" || channelAudioAttached(track, trackID)); });
 
     await renegotiate(pc, state.serverGeneration, undefined, () => expectedEpoch === voiceSessionEpoch);
 

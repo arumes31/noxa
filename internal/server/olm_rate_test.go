@@ -208,6 +208,7 @@ func TestOlmBudgetsAdmitLargeChannelRekeys(t *testing.T) {
 			if err := sm.MoveClient(id, 9); err != nil {
 				t.Fatal(err)
 			}
+			seatForTest(t, srv, 9, id, fmt.Sprintf("u%d", i), fmt.Sprintf("d%d", i))
 		}
 		start := time.Now()
 		refused := 0
@@ -270,16 +271,21 @@ func TestMediaE2EERefusesAFullEncryptedChannel(t *testing.T) {
 		if err := env.state.MoveClient(id, 1); err != nil {
 			t.Fatal(err)
 		}
+		seatForTest(t, env.srv, 1, id, id, "dev-"+id)
 	}
 	send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "secure-offer", MediaE2EE: netproto.MediaE2EEVersion})
 	if e := protocolError(t, conn); !strings.HasPrefix(e.Message, netproto.MediaE2EEReasonChannelFull+": ") {
 		t.Fatalf("full channel: %+v", e)
 	}
+	if env.srv.mediaSeats.seat(userID) != 0 {
+		t.Fatal("a refused offer holds a seat")
+	}
 }
 
 // A member that holds a seat keeps renegotiating (camera, screen, ICE restart)
-// even when strays counted with a media device fill the channel past the cap:
-// one extra joiner can never lock every seated member out.
+// even when the channel is full past the cap: one extra seat can never lock
+// every seated member out. The seat is taken before the answer is written, so
+// the test is deterministic (fix3 review P3-4).
 func TestMediaE2EESeatedMemberRenegotiatesInAFullChannel(t *testing.T) {
 	env := startMediaE2EEEnv(t, true)
 	env.voice.answerSDP = "server-answer"
@@ -290,13 +296,16 @@ func TestMediaE2EESeatedMemberRenegotiatesInAFullChannel(t *testing.T) {
 	client.setDeviceID("dev-1")
 	send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "secure-offer", MediaE2EE: netproto.MediaE2EEVersion})
 	readOfType(t, conn, netproto.MsgWebRTCAnswer)
-	waitFor(t, "seat recorded", func() bool { return client.mediaSeat.Load() == 1 })
+	if got := env.srv.mediaSeats.seat(userID); got != 1 {
+		t.Fatalf("seat after the answer = %d, want 1", got)
+	}
 	for i := 0; i <= MediaE2EEMaxVoice; i++ {
 		id := fmt.Sprintf("member-%d", i)
 		env.state.AddClient(&state.Client{ClientID: id, UniqueID: id, MediaDevice: "dev-" + id})
 		if err := env.state.MoveClient(id, 1); err != nil {
 			t.Fatal(err)
 		}
+		seatForTest(t, env.srv, 1, id, id, "dev-"+id)
 	}
 	send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "renegotiate", MediaE2EE: netproto.MediaE2EEVersion})
 	var answer netproto.WebRTCAnswer
@@ -304,9 +313,12 @@ func TestMediaE2EESeatedMemberRenegotiatesInAFullChannel(t *testing.T) {
 		t.Fatalf("seated renegotiation refused: %+v %v", answer, err)
 	}
 	// A seat in another channel does not carry over.
-	client.mediaSeat.Store(2)
+	seatForTest(t, env.srv, 2, userID, "user-uid", "dev-1")
 	send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "secure-offer", MediaE2EE: netproto.MediaE2EEVersion})
 	if e := protocolError(t, conn); !strings.HasPrefix(e.Message, netproto.MediaE2EEReasonChannelFull+": ") {
 		t.Fatalf("seat from another channel: %+v", e)
+	}
+	if got := env.srv.mediaSeats.seat(userID); got != 2 {
+		t.Fatalf("a refused offer moved the seat to %d", got)
 	}
 }

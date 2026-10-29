@@ -135,3 +135,13 @@ test("a gated track is not recorded and is offered again after authentication", 
     assert.deepEqual(changes, [["add", "alice|screen"]]);
     stop();
 });
+
+test("the presentation gate fails closed without a media session", async () => {
+    const { gatePresents } = await import("../src/remote-media.js");
+    const track = {};
+    assert.equal(gatePresents(null, track), false);
+    assert.equal(gatePresents(undefined, track), false);
+    assert.equal(gatePresents({ authenticated: () => false }, track), false);
+    assert.equal(gatePresents({ authenticated: () => "yes" }, track), false);
+    assert.equal(gatePresents({ authenticated: t => t === track }, track), true);
+});

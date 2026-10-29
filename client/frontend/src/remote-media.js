@@ -2,6 +2,11 @@ import { remoteTrackID, remoteTrackIDs } from "./media-track-id.js";
 
 const sessions = new WeakMap();
 
+// Presentation gate of encrypted channel media, failing closed: a receiver is
+// presented only when a media session exists and reports its first
+// authenticated frame (no session — stopped or failed — presents nothing).
+export function gatePresents(gate, trackOrReceiver) { return gate?.authenticated(trackOrReceiver) === true; }
+
 export function reconcileRemoteMedia(pc) { sessions.get(pc)?.(); }
 
 // Reconcile track events and completed SDP exchanges. Browser receiver identity
