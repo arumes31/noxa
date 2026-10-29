@@ -2264,11 +2264,13 @@ function ensureVoiceForChannel() {
             for (const track of state.localStream?.getVideoTracks() || []) { track.stop(); state.localStream.removeTrack(track); }
             stopDisplayCapture(state.shareStream);
             state.shareStream = null;
-            // The Studio's captures and program belong to the channel too.
-            disposeStudio();
             state.screenSharing = false;
             state.shareStarting = null;
             state.shareStopping = false;
+            // The Studio's captures and program belong to the channel too.
+            // After screenSharing=false: the move owns the share teardown, so
+            // the Studio must not start a stop/renegotiation of its own.
+            disposeStudio();
             resetCameraState();
             startStreamSession(state.pc, videoTrackAdded, videoTrackRemoved);
             for (const receiver of state.pc.getReceivers()) {

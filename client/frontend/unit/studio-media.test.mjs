@@ -49,6 +49,13 @@ describe("studio images", () => {
         const ok = await decodeImage(png(64, 64), { createBitmap });
         assert.equal(ok.width, 64);
     });
+
+    it("accepts an EXIF-rotated JPEG (swapped size) but never a swapped PNG", async () => {
+        const swapped = async () => ({ width: 1080, height: 1920, close() {} });
+        const rotated = await decodeImage(jpeg(1920, 1080), { createBitmap: swapped });
+        assert.deepEqual([rotated.width, rotated.height], [1080, 1920]);
+        await assert.rejects(decodeImage(png(1920, 1080), { createBitmap: swapped }), code("image_invalid"));
+    });
 });
 
 class FakeTrack extends EventTarget {
@@ -121,6 +128,18 @@ describe("studio capture ownership", () => {
         assert.equal(registry.state(id), "ended");
     });
 
+    it("calls the lease release hook once per capture, even after it ended", () => {
+        const released = [];
+        const registry = createCaptureRegistry({ createVideo: fakeVideo, onRelease: stream => released.push(stream) });
+        const video = new FakeTrack("video");
+        const id = registry.add(new FakeStream([video]), { kind: "display" });
+        registry.setHolder("live", [id]);
+        video.readyState = "ended";
+        video.dispatchEvent(new Event("ended"));
+        registry.setHolder("live", []);
+        assert.equal(released.length, 1);
+    });
+
     it("dispose stops every capture and refuses new ones", () => {
         const registry = createCaptureRegistry({ createVideo: fakeVideo });
         const tracks = [new FakeTrack("video"), new FakeTrack("video")];
@@ -174,6 +193,8 @@ describe("studio output", () => {
         assert.deepEqual(outputSize(null), { width: 1280, height: 720 });
         assert.deepEqual(outputSize({ video_max_width: 640, video_max_height: 480 }), { width: 640, height: 360 });
         assert.deepEqual(outputSize({ video_max_width: 3840, video_max_height: 2160 }), { width: 1280, height: 720 });
+        assert.deepEqual(outputSize({ video_max_width: 640 }), { width: 640, height: 360 });
+        assert.deepEqual(outputSize({ video_max_height: 360 }), { width: 640, height: 360 });
         assert.deepEqual(fitRect({ x: 0, y: 0, w: 100, h: 100 }, 200, 100), { x: 0, y: 25, w: 100, h: 50 });
     });
 });
@@ -209,5 +230,19 @@ describe("studio engine", () => {
         engine.dispose();
         assert.equal(stopped.length, 1);
         assert.equal(engine.program.width, 0);
+    });
+});
+
+describe("studio error messages", () => {
+    it("translates every state and image error code in English and German", async () => {
+        const { readFile } = await import("node:fs/promises");
+        const { studioEnglish, studioGerman } = await import("../src/studio-messages.js");
+        const sources = await Promise.all(["studio-state.js", "studio-assets.js"].map(file => readFile(new URL(`../src/${file}`, import.meta.url), "utf8")));
+        const codes = new Set(sources.flatMap(source => [...source.matchAll(/(?:StudioStateError|StudioImageError)\("([a-z_]+)"\)/g)].map(match => match[1])));
+        assert.ok(codes.size >= 10);
+        for (const code of codes) {
+            assert.ok(studioEnglish[`studio.error.${code}`], `en ${code}`);
+            assert.ok(studioGerman[`studio.error.${code}`], `de ${code}`);
+        }
     });
 });

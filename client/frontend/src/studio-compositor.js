@@ -13,6 +13,22 @@ import { captureRefs } from "./studio-state.js";
 export const STUDIO_FPS = 30;
 export const PREVIEW_FPS = 15;
 export const WEAK_PREVIEW_FPS = 5;
+
+// studioClock drives ticks from a dedicated worker (page timers are throttled
+// to ~1 Hz in hidden/minimised windows; worker timers are not), falling back
+// to a page interval. Returns a stop function that terminates the worker.
+export function studioClock(fn, period) {
+    try {
+        // Literal form so the bundler emits the worker (see media-e2ee.js).
+        const worker = new Worker(new URL("./studio-clock.worker.js", import.meta.url), { type: "module" });
+        worker.onmessage = () => fn();
+        worker.postMessage({ period });
+        return () => worker.terminate();
+    } catch {
+        const id = setInterval(fn, period);
+        return () => clearInterval(id);
+    }
+}
 const NEUTRAL = "#11161c";
 const BACKGROUND = "#000000";
 
@@ -21,8 +37,9 @@ const BACKGROUND = "#000000";
 export function outputSize(limits) {
     let width = 1280, height = 720;
     const maxWidth = limits?.video_max_width || 0, maxHeight = limits?.video_max_height || 0;
-    if (maxWidth > 0 && maxHeight > 0) {
-        const scale = Math.min(1, maxWidth / width, maxHeight / height);
+    // Either limit alone also scales the program down (16:9 kept).
+    if (maxWidth > 0 || maxHeight > 0) {
+        const scale = Math.min(1, maxWidth > 0 ? maxWidth / width : 1, maxHeight > 0 ? maxHeight / height : 1);
         width = Math.max(2, Math.floor(width * scale / 2) * 2);
         height = Math.max(2, Math.floor(height * scale / 2) * 2);
     }
@@ -53,7 +70,7 @@ function wrapLines(ctx, text, width) {
 
 export class StudioEngine {
     constructor({ registry, assets, width, height, fps = STUDIO_FPS, document = globalThis.document,
-        now = () => performance.now(), setTimer = (fn, ms) => setInterval(fn, ms), clearTimer = id => clearInterval(id), label = () => "" }) {
+        now = () => performance.now(), setTimer = (fn, ms) => studioClock(fn, ms), clearTimer = stop => stop?.(), label = () => "" }) {
         this.registry = registry;
         this.assets = assets;
         this.width = width;

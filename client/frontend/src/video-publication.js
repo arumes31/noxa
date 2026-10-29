@@ -830,6 +830,9 @@ export function createVideoPublication({ policy }) {
             discardDisplay(display);
             return;
         }
+        // Set together with screenSharing so a stop in the start-up window
+        // still ends the Studio (doStopShare calls its onEnded).
+        studioShare = studio ? { stream: display, onEnded: studio.onEnded } : null;
         state.screenSharing = true;
         let shareErr;
         try { if (!await startPublication("screen", screenTrack, () => {
@@ -845,7 +848,6 @@ export function createVideoPublication({ policy }) {
             await doStopShare();
             return;
         }
-        studioShare = studio ? { stream: display, onEnded: studio.onEnded } : null;
         syncShareButton();
         if (requestedAudioMode !== "none" && audioMode === "none") {
             V().toast(tLabel(requestedAudioMode === "application" ? "share.applicationUnavailable" : "share.audioNotSelected"), "warn");

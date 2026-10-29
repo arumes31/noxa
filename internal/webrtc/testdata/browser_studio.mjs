@@ -125,6 +125,35 @@ async function seen(label, test, timeout = 20000) {
     return poll(label, async () => { const s = await sample(); return { ok: s.ok && test(s.rgb), s }; }, { timeout, every: 100 });
 }
 
+// Receiver: RMS of A's decrypted screen-audio publication (presented only
+// after the gate authenticated it) and its decrypted frame count.
+const listen = () => pages.B.evaluate(async () => {
+    const media = (await import("/src/channel-media.js")).channelMedia();
+    const pc = window.__noxa.state.pc;
+    const transceiver = pc.getTransceivers().find(t => media.media.boundPid(t.receiver) === "A|screenaudio");
+    if (!transceiver) return { ok: false, why: "no A|screenaudio receiver" };
+    if (media.media.authenticated(transceiver.receiver) !== true) return { ok: false, why: "not authenticated yet" };
+    transceiver.receiver.track.enabled = true;
+    if (!window.__ear || window.__ear.track !== transceiver.receiver.track) {
+        // Chromium feeds remote WebRTC audio to Web Audio only while a media element plays it.
+        const element = new Audio(); element.muted = true; element.srcObject = new MediaStream([transceiver.receiver.track]); element.play().catch(() => {});
+        const context = new AudioContext(); const analyser = context.createAnalyser();
+        context.createMediaStreamSource(new MediaStream([transceiver.receiver.track])).connect(analyser);
+        window.__ear = { track: transceiver.receiver.track, element, context, analyser, data: new Float32Array(analyser.fftSize) };
+        await context.resume().catch(() => {});
+    }
+    const { analyser, data } = window.__ear;
+    let rms = 0;
+    for (let i = 0; i < 4; i++) {
+        await new Promise(r => setTimeout(r, 50));
+        analyser.getFloatTimeDomainData(data);
+        rms = Math.max(rms, Math.sqrt(data.reduce((sum, v) => sum + v * v, 0) / data.length));
+    }
+    const stats = await media.stats(transceiver.receiver);
+    return { ok: true, rms, frames: stats?.endpoint?.frames || 0 };
+});
+const A = selector => pages.A.locator(selector);
+
 try {
     await open("A", "script");
     await open("B", "streams");
@@ -132,79 +161,99 @@ try {
     await pages.B.evaluate(() => window.join());
     await new Promise(r => setTimeout(r, 2000));
 
-    // Studio on A: scene 1 red (taken), scene 2 blue (draft only).
+    // A drives the real Studio panel. Captures: colored canvases, with a 440 Hz
+    // tone as "system audio" when audio is requested.
     await pages.A.evaluate(async () => {
-        const { createCaptureRegistry } = await import("/src/studio-captures.js");
-        const { createStudioAudio } = await import("/src/studio-audio.js");
-        const { StudioEngine } = await import("/src/studio-compositor.js");
-        const S = await import("/src/studio-state.js");
-        const registry = createCaptureRegistry();
-        const engine = new StudioEngine({ registry, assets: null, width: 640, height: 360, fps: 30 });
-        const audio = createStudioAudio();
-        const red = window.colored([230, 20, 20]), blue = window.colored([20, 40, 230]);
-        const redID = registry.add(red, { kind: "display" }), blueID = registry.add(blue, { kind: "display" });
-        let studio = S.addSource(S.createStudio(), "sc1", { kind: "display", capture: redID }).studio;
-        studio = S.addScene(studio, "Blue");
-        studio = S.addSource(studio, studio.selected, { kind: "display", capture: blueID }).studio;
-        studio = S.selectScene(studio, "sc1");
-        engine.setDraft(S.selectedScene(studio), studio.scenes);
-        engine.take(S.take(studio), { kind: "cut", ms: 0 });
-        studio = S.selectScene(studio, studio.scenes[1].id);
-        engine.setDraft(S.selectedScene(studio), studio.scenes);
-        // Count every track replacement on any sender from here on.
+        window.colors = [];
+        window.captures = [];
+        Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async options => {
+            const stream = window.colored(window.colors.shift());
+            if (options.audio) {
+                const context = new AudioContext(); const osc = context.createOscillator(); const dest = context.createMediaStreamDestination();
+                osc.frequency.value = 440; osc.connect(dest); osc.start(); stream.addTrack(dest.stream.getAudioTracks()[0]);
+            }
+            window.captures.push(stream);
+            return stream;
+        } });
+        (await import("/src/modal.js")).initModalSystem();
+        window.studioUI = await import("/src/studio-ui.js");
+        window.video = await import("/src/video.js");
+        window.studioUI.openStudio();
+    });
+    const capture = async (rgb, audio) => {
+        await pages.A.evaluate(c => window.colors.push(c), rgb);
+        await A(".studio-capture-audio").selectOption(audio);
+        const before = await pages.A.evaluate(() => window.studioUI.studioDiagnostics().captures.length);
+        await A(".studio-add-display").click();
+        await poll("capture added", async () => ({ ok: await pages.A.evaluate(n => window.studioUI.studioDiagnostics().captures.length === n + 1, before) }));
+    };
+    await capture([230, 20, 20], "none");                      // scene 1: red, no audio
+    await A(".studio-transition").selectOption("cut");
+    await A(".studio-take").click();
+    await pages.A.evaluate(() => {
         window.replacements = 0;
         const replace = RTCRtpSender.prototype.replaceTrack;
         RTCRtpSender.prototype.replaceTrack = function (...args) { window.replacements++; return replace.apply(this, args); };
-        const video = await import("/src/video.js");
-        const stream = engine.outputStream(audio.track);
-        const started = await video.startStudioShare(stream, { width: 640, height: 360, fps: 30 });
-        window.studio = { S, registry, engine, audio, red, blue, studio: () => studio, setStudio: s => { studio = s; }, video, published: window.__noxa.state.shareVideoTransceiver.sender.track };
-        window.replacementsAtLive = window.replacements;
-        return started;
-    }).then(started => { if (!started) throw new Error("startStudioShare did not start"); });
-    await new Promise(r => setTimeout(r, 1000));
-    log("sender program", JSON.stringify(await pages.A.evaluate(() => {
-        const { engine, registry } = window.studio;
-        const d = engine.program.getContext("2d").getImageData(320, 180, 1, 1).data;
-        const ids = registry.ids();
-        return { program: [d[0], d[1], d[2]], live: engine.live?.sources.map(s => s.capture), captures: ids.map(id => ({ id, state: registry.state(id), refs: registry.refs(id), ready: registry.get(id).video?.readyState, w: registry.get(id).video?.videoWidth })) };
-    })));
+    });
+    await A(".studio-golive").click();
+    await poll("A is live", async () => ({ ok: (await A(".studio-air").textContent()) === "Live" }));
+    const published = await pages.A.evaluate(() => { window.replacementsAtLive = window.replacements; window.publishedTrack = window.__noxa.state.shareVideoTransceiver.sender.track; return window.studioUI.studioDiagnostics(); });
+    log("A live through studio-ui", JSON.stringify(published));
+    // Prepare scene 2 in the draft: blue WITH system audio (enabled on the draft source).
+    await A(".studio-add-scene").click();
+    await capture([20, 40, 230], "system");
     await api("/watch", { ID: "B", Publisher: "A", Slot: "screen" });
     const first = await seen("B decrypts and decodes the Studio program (red)", isRed, 40000);
     log("phase 1: receiver decoded the encrypted Studio program", JSON.stringify(first.s));
 
-    // No preview leakage: the blue draft never reaches the receiver before Take.
+    // No draft leak: neither the blue picture nor the draft capture's audio.
+    const quiet = await poll("B receives the (silent) Studio audio publication", async () => {
+        const l = await listen(); return { ok: l.ok && l.frames > 20, l };
+    }, { timeout: 30000 });
+    let loudest = 0;
     for (let i = 0; i < 20; i++) {
         const s = await sample();
         if (s.ok && isBlue(s.rgb)) throw new Error("draft preview leaked to the receiver before Take: " + JSON.stringify(s));
-        await new Promise(r => setTimeout(r, 100));
+        const l = await listen();
+        if (l.ok) loudest = Math.max(loudest, l.rms);
     }
-    log("phase 2: 2 s of samples, draft (blue) never reached the receiver before Take");
+    const framesQuiet = (await listen()).frames;
+    if (loudest > 0.005) throw new Error(`draft capture audio leaked to the receiver before Take: rms ${loudest}`);
+    if (framesQuiet - quiet.l.frames < 50) throw new Error("audio frames did not flow; the silence check would be vacuous");
+    const routesBefore = (await pages.A.evaluate(() => window.studioUI.studioDiagnostics())).routes;
+    if (routesBefore.length) throw new Error("draft audio routed before Take: " + JSON.stringify(routesBefore));
+    log(`phase 2: ~3 s, draft picture (blue) and draft audio (max rms ${loudest.toFixed(4)}, ${framesQuiet - quiet.l.frames} decrypted audio frames) never reached the receiver before Take`);
 
-    // Take (cut): the receiver switches to blue; the published track is the same.
-    await pages.A.evaluate(() => { const { S, engine, studio } = window.studio; engine.take(S.take(studio()), { kind: "cut", ms: 0 }); });
+    // Take (cut) through the panel: picture AND audio go on air together.
+    await A(".studio-take").click();
     await seen("B sees blue after Take (cut)", isBlue);
-    log("phase 3: Take (cut) reached the receiver");
+    const loud = await poll("B hears the scene's audio after Take", async () => { const l = await listen(); return { ok: l.ok && l.rms > 0.02, l }; });
+    log("phase 3: Take (cut) put picture and audio on air", JSON.stringify(loud.l));
 
-    // Crossfade back to red over 1500 ms: mixed frames, then red.
-    await pages.A.evaluate(() => { const { S, engine, studio, setStudio } = window.studio; const next = S.selectScene(studio(), "sc1"); setStudio(next); engine.take(S.take(next), { kind: "fade", ms: 1500 }); });
+    // Crossfade back to scene 1 over 1500 ms: blended frames, then red; the
+    // outgoing scene's audio stops at Take.
+    await A(".studio-transition").selectOption("fade");
+    await A(".studio-duration").fill("1500");
+    await A('.studio-scene[data-scene="sc1"]').click();
+    await poll("scene 1 selected", async () => ({ ok: (await pages.A.evaluate(() => window.studioUI.studioDiagnostics().scene)) === "sc1" }));
+    await A(".studio-take").click();
     let mixed = 0;
     const until = Date.now() + 1800;
     while (Date.now() < until) { const s = await sample(); if (s.ok && s.rgb[0] > 70 && s.rgb[2] > 70) mixed++; await new Promise(r => setTimeout(r, 40)); }
     await seen("B sees red after the crossfade", isRed);
     if (!mixed) throw new Error("receiver never decoded a crossfade frame");
-    log(`phase 4: crossfade reached the receiver (${mixed} blended samples), settled on red`);
+    await poll("audio stops with the Take", async () => { const l = await listen(); return { ok: l.ok && l.rms < 0.005, l }; });
+    log(`phase 4: crossfade reached the receiver (${mixed} blended samples), settled on red; scene audio stopped at Take`);
 
-    const same = await pages.A.evaluate(() => ({ track: window.__noxa.state.shareVideoTransceiver.sender.track === window.studio.published && window.studio.published.readyState === "live", replacements: window.replacements - window.replacementsAtLive }));
+    const same = await pages.A.evaluate(() => ({ track: window.__noxa.state.shareVideoTransceiver.sender.track === window.publishedTrack && window.publishedTrack.readyState === "live", replacements: window.replacements - window.replacementsAtLive }));
     if (!same.track || same.replacements !== 0) throw new Error("the published Studio track was replaced: " + JSON.stringify(same));
     log("phase 5: Takes and the crossfade kept the published track (0 replaceTrack calls)");
 
-    // Revoked source: the live red capture ends; the receiver sees neutral, not a frozen red frame.
-    await pages.A.evaluate(() => { const track = window.studio.red.getVideoTracks()[0]; track.stop(); track.dispatchEvent(new Event("ended")); });
+    // Revoked source: the live red capture ends; the receiver sees neutral.
+    await pages.A.evaluate(() => { const track = window.captures[0].getVideoTracks()[0]; track.stop(); track.dispatchEvent(new Event("ended")); });
     await seen("B sees neutral output after the live source was revoked", isNeutral);
     log("phase 6: revoked live source neutral at the receiver");
 
-    // Sender: nothing left the transform unencrypted.
     const dropped = await pages.A.evaluate(async () => {
         const media = (await import("/src/channel-media.js")).channelMedia();
         const out = {};
@@ -215,12 +264,14 @@ try {
     for (const [pid, s] of Object.entries(dropped)) if ((s.dropped?.unencrypted || 0) > 0) throw new Error(`${pid} produced unencrypted output`);
     log("phase 7: sender encrypted", JSON.stringify(Object.fromEntries(Object.entries(dropped).map(([k, v]) => [k, v.frames]))));
 
-    // Stop: the ordinary share stop ends the publication.
-    await pages.A.evaluate(async () => { await window.studio.video.stopShare(); });
-    const stopped = await pages.A.evaluate(() => ({ sharing: window.__noxa.state.screenSharing, published: window.studio.published.readyState }));
-    if (stopped.sharing || stopped.published !== "ended") throw new Error("stop did not end the publication: " + JSON.stringify(stopped));
-    await pages.A.evaluate(() => { window.studio.engine.dispose(); window.studio.audio.dispose(); });
-    log("phase 8: stop ended the publication; studio disposed");
+    // Stop from the panel: publication and every capture end.
+    await A(".studio-stop").click();
+    const stopped = await poll("Stop ended the publication", async () => {
+        const r = await pages.A.evaluate(() => ({ sharing: window.__noxa.state.screenSharing, published: window.publishedTrack.readyState,
+            captures: window.captures.flatMap(s => s.getTracks()).map(t => t.readyState), diagnostics: window.studioUI.studioDiagnostics() }));
+        return { ok: !r.sharing && r.published === "ended" && r.captures.every(state => state === "ended") && !r.diagnostics.live, r };
+    });
+    log("phase 8: Stop ended the publication and every capture", JSON.stringify(stopped.r.diagnostics));
 
     log("tap", JSON.stringify(await api("/tap")));
     log("STUDIO SCENARIO PASSED");

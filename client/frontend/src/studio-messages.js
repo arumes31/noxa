@@ -64,7 +64,8 @@ export const studioEnglish = {
     "studio.background": "Background",
     "studio.backgroundNone": "No background",
     "studio.routeAudio": "Stream this capture's audio",
-    "studio.routeAudioHelp": "Shared once, however many scenes show this capture. Your microphone stays separate.",
+    "studio.routeAudioHelp": "Goes on air with the next Take, like the picture. Shared once, however many scenes show this capture. Your microphone stays separate.",
+    "studio.recaptureSource": "Recapture {name}",
     "studio.audioLevel": "Studio audio level",
     "studio.goLive": "Go live",
     "studio.stopLive": "Stop",
@@ -85,6 +86,11 @@ export const studioEnglish = {
     "studio.error.image_invalid": "The image could not be read.",
     "studio.error.image_storage_full": "Studio image storage is full. Remove unused images first.",
     "studio.error.generic": "The change could not be applied.",
+    "studio.error.source_invalid": "This source setting is not valid.",
+    "studio.error.source_missing": "The source no longer exists.",
+    "studio.error.scene_missing": "The scene no longer exists.",
+    "studio.error.direction_invalid": "The layer cannot be moved that way.",
+    "studio.error.ids_exhausted": "The Studio has run out of identifiers. Delete and recreate scenes.",
 };
 
 export const studioGerman = {
@@ -153,7 +159,8 @@ export const studioGerman = {
     "studio.background": "Hintergrund",
     "studio.backgroundNone": "Kein Hintergrund",
     "studio.routeAudio": "Ton dieser Aufnahme streamen",
-    "studio.routeAudioHelp": "Wird einmal geteilt, egal in wie vielen Szenen die Aufnahme vorkommt. Dein Mikrofon bleibt getrennt.",
+    "studio.routeAudioHelp": "Geht wie das Bild mit dem nächsten Übernehmen auf Sendung. Wird einmal geteilt, egal in wie vielen Szenen die Aufnahme vorkommt. Dein Mikrofon bleibt getrennt.",
+    "studio.recaptureSource": "{name} neu aufnehmen",
     "studio.audioLevel": "Studio-Tonpegel",
     "studio.goLive": "Live gehen",
     "studio.stopLive": "Beenden",
@@ -174,4 +181,9 @@ export const studioGerman = {
     "studio.error.image_invalid": "Das Bild konnte nicht gelesen werden.",
     "studio.error.image_storage_full": "Der Studio-Bildspeicher ist voll. Entferne zuerst ungenutzte Bilder.",
     "studio.error.generic": "Die Änderung konnte nicht übernommen werden.",
+    "studio.error.source_invalid": "Diese Quelleneinstellung ist ungültig.",
+    "studio.error.source_missing": "Die Quelle existiert nicht mehr.",
+    "studio.error.scene_missing": "Die Szene existiert nicht mehr.",
+    "studio.error.direction_invalid": "Die Ebene kann nicht so verschoben werden.",
+    "studio.error.ids_exhausted": "Dem Studio sind die Kennungen ausgegangen. Lösche Szenen und lege sie neu an.",
 };

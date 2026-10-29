@@ -14,16 +14,17 @@ import (
 )
 
 // Desktop Studio output (Task 3) through the ACTUAL SFU with mandatory media
-// E2EE: a headless Chromium "desktop" page runs the real Studio compositor
-// (studio-compositor.js, studio-captures.js, studio-state.js, studio-audio.js)
-// and publishes its program with the real video-publication.js
+// E2EE: a headless Chromium "desktop" page drives the real Studio panel
+// (studio-ui.js with its compositor, captures, state and audio graph) by its
+// buttons and publishes the program with the real video-publication.js
 // startStudioShare -> startShare -> encrypted screen publication path
 // (channel-media.js + video-negotiation.js, Task 2 worker). A second desktop
 // page receives, decrypts and samples the decoded pixels. Captures are
 // synthetic colored canvases; no capture hardware is involved.
 //
 // Proven: the receiver decodes the program only after decryption with the
-// sender's key; draft changes never reach it before Take; Take (cut) and
+// sender's key; draft pictures AND draft capture audio never reach it before
+// Take; Take (cut) and
 // crossfade change the decoded picture without replacing the published
 // track; a revoked source turns neutral at the receiver; the recorder-style
 // tap sees only library-encrypted frames.
@@ -64,8 +65,9 @@ func TestBrowserStudioOutputThroughSFU(t *testing.T) {
 		}
 		close(done)
 	}()
-	waitErr := cmd.Wait()
+	// Drain the pipe fully before Wait closes it (os/exec contract).
 	<-done
+	waitErr := cmd.Wait()
 	if waitErr != nil {
 		t.Fatalf("studio scenario failed: %v", waitErr)
 	}

@@ -230,7 +230,7 @@ test("ended or revoked sources turn neutral at once; removing a draft source kee
     // No silent restart: an explicit recapture in the draft, then Take.
     expect(await page.evaluate(() => window.__captures.displayCalls)).toBe(2);
     await page.evaluate(() => window.__captures.colors.push([20, 200, 40]));
-    await studio.getByRole("button", { name: "Recapture", exact: true }).click();
+    await studio.getByRole("button", { name: "Recapture Screen", exact: true }).click();
     await expectPixel(page, "preview", GREEN);
     expect(near(await pixel(page, "program"), [17, 22, 28], 12)).toBe(true);
     await page.keyboard.press("Control+Enter");
@@ -367,25 +367,98 @@ test("a server/account switch while live ends the publication and every Studio r
     await expect.poll(() => page.evaluate(h => h.audio.graph().contextState, handles)).toBe("closed");
 });
 
-test("audio: explicit capture audio is routed once, Take never adds audio, nothing monitors to speakers", async ({ page }) => {
+// RMS of the PUBLISHED screen-audio track (what the encrypted publication sends).
+const publishedRMS = page => page.evaluate(async () => {
+    const track = window.__noxa.state.shareAudioSender?.track;
+    if (!track) return -1;
+    const context = new AudioContext(); const analyser = context.createAnalyser();
+    context.createMediaStreamSource(new MediaStream([track])).connect(analyser);
+    const data = new Float32Array(analyser.fftSize); let peak = 0;
+    for (let i = 0; i < 8; i++) {
+        await new Promise(r => setTimeout(r, 50));
+        analyser.getFloatTimeDomainData(data);
+        peak = Math.max(peak, Math.sqrt(data.reduce((sum, v) => sum + v * v, 0) / data.length));
+    }
+    await context.close();
+    return peak;
+});
+
+test("audio follows Take: draft capture audio, recapture audio and the audio switch never reach the publication before Take", async ({ page }) => {
     const studio = await open(page);
-    await addDisplay(page, RED, "system");   // explicitly with audio → routed
-    await studio.getByRole("button", { name: "Add scene" }).click();
-    await studio.locator(".studio-reuse").selectOption("c1"); // the same capture in a second scene
-    await addDisplay(page, BLUE, "system");  // second capture with audio
-    // Switch the second capture's audio off explicitly.
-    await studio.locator(".studio-source-select").first().click();
-    await studio.locator(".studio-route-audio").uncheck();
-    expect((await diagnostics(page)).routes).toEqual(["c1"]);
-    const routedBefore = (await diagnostics(page)).routes;
-    // Takes and a crossfade never activate the second capture's audio.
+    await addDisplay(page, RED, "none");
     await studio.locator(".studio-transition").selectOption("cut");
     await page.keyboard.press("Control+Enter");
+    await studio.getByRole("button", { name: "Go live" }).click();
+    await expect(studio.locator(".studio-air")).toHaveText("Live");
+    expect(await publishedRMS(page)).toBeLessThan(0.005);
+
+    // (a) A new capture WITH audio in a draft-only scene: silent until Take.
+    await studio.getByRole("button", { name: "Add scene" }).click();
+    await addDisplay(page, BLUE, "system");
+    await expectPixel(page, "preview", BLUE);
+    await expect(studio.locator(".studio-route-audio")).toBeChecked(); // enabled on the draft source
+    expect((await diagnostics(page)).routes).toEqual([]);
+    expect(await publishedRMS(page)).toBeLessThan(0.005);
+    await page.keyboard.press("Control+Enter");
+    await expectPixel(page, "program", BLUE);
+    expect((await diagnostics(page)).routes).toEqual(["c2"]);
+    expect(await publishedRMS(page)).toBeGreaterThan(0.05);
+
+    // (b) Back to the silent scene (Take): the outgoing scene's audio stops at Take, even during a fade.
+    await studio.locator(".studio-transition").selectOption("fade");
+    await page.keyboard.press("1");
+    await page.keyboard.press("Control+Enter");
+    expect((await diagnostics(page)).routes).toEqual([]);
+    expect(await publishedRMS(page)).toBeLessThan(0.005);
+
+    // (c) The audio switch on a draft-only source: off in the draft, Take, then
+    // switching it on in the draft does not reach the publication until Take.
+    await page.keyboard.press("2");
+    await studio.locator(".studio-source-select").first().click();
+    await studio.locator(".studio-route-audio").uncheck();
+    await studio.locator(".studio-transition").selectOption("cut");
+    await page.keyboard.press("Control+Enter");
+    expect((await diagnostics(page)).routes).toEqual([]);
+    await studio.locator(".studio-route-audio").check();
+    await page.waitForTimeout(200);
+    expect((await diagnostics(page)).routes).toEqual([]);
+    expect(await publishedRMS(page)).toBeLessThan(0.005);
+    await studio.getByRole("button", { name: "Take", exact: true }).click();
+    expect((await diagnostics(page)).routes).toEqual(["c2"]);
+    expect(await publishedRMS(page)).toBeGreaterThan(0.05);
+
+    // (d) Recapture with audio in the draft while live: the program keeps the
+    // old capture's audio until Take; then exactly the new capture is routed.
+    await page.evaluate(() => { const t = window.__captures.display[1].getVideoTracks()[0]; t.stop(); t.dispatchEvent(new Event("ended")); });
+    await expect(studio.locator(".studio-source[data-state='ended']")).toBeVisible();
+    await page.evaluate(() => window.__captures.colors.push([20, 200, 40]));
+    await studio.locator(".studio-capture-audio").selectOption("system");
+    await studio.getByRole("button", { name: "Recapture Screen", exact: true }).click();
+    await expectPixel(page, "preview", GREEN);
+    expect((await diagnostics(page)).routes).not.toContain("c3");
+    const beforeTake = await publishedRMS(page);
+    await page.keyboard.press("Control+Enter");
+    await expect.poll(async () => (await diagnostics(page)).routes).toEqual(["c3"]);
+    expect(await publishedRMS(page)).toBeGreaterThan(0.05);
+    expect(beforeTake).toBeLessThan(0.005);
+});
+
+test("audio: a capture shown in two scenes is routed once; nothing monitors to speakers; mic and camera stay out", async ({ page }) => {
+    const studio = await open(page);
+    await addDisplay(page, RED, "system");
+    await studio.getByRole("button", { name: "Add scene" }).click();
+    await studio.locator(".studio-reuse").selectOption("c1"); // same capture, second scene
+    await addDisplay(page, BLUE, "system");                   // second capture with audio, switched off
+    await studio.locator(".studio-source-select").first().click();
+    await studio.locator(".studio-route-audio").uncheck();
+    await studio.locator(".studio-transition").selectOption("cut");
+    await page.keyboard.press("Control+Enter");
+    expect((await diagnostics(page)).routes).toEqual(["c1"]);
     await page.keyboard.press("1");
     await studio.locator(".studio-transition").selectOption("fade");
     await page.keyboard.press("Control+Enter");
     await page.waitForTimeout(400);
-    expect((await diagnostics(page)).routes).toEqual(routedBefore);
+    expect((await diagnostics(page)).routes).toEqual(["c1"]);
     const session = await page.evaluate(() => {
         const s = window.__studio.studioSessionForTest();
         return { tracks: s.registry.audioTracks().map(item => item.id), speakers: window.__speakerConnections,
@@ -394,7 +467,6 @@ test("audio: explicit capture audio is routed once, Take never adds audio, nothi
     expect(session.tracks).toEqual(["c1", "c2"]);
     expect(session.speakers).toBe(0);
     expect(session.micInGraph).toBe(0);
-    // The single routed source really reaches the studio output track.
     const level = await page.evaluate(async () => {
         const track = window.__studio.studioSessionForTest().audio.track;
         const context = new AudioContext(); const analyser = context.createAnalyser();
@@ -405,9 +477,58 @@ test("audio: explicit capture audio is routed once, Take never adds audio, nothi
         return peak;
     });
     expect(level).toBeGreaterThan(0.01);
-    // Camera capture never requests audio.
     await addCamera(page, GREEN);
     expect(await page.evaluate(() => window.__captures.cameraConstraints.audio)).toBe(false);
+});
+
+test("Ctrl+Enter in a property field takes the value just typed; the preview shows it too", async ({ page }) => {
+    const studio = await open(page);
+    await addDisplay(page, RED, "none");
+    await studio.locator(".studio-transition").selectOption("cut");
+    await page.keyboard.press("Control+Enter");
+    await expectPixel(page, "program", RED, 0.9, 0.5);
+    await studio.locator(".studio-source-select").first().click();
+    const width = studio.getByLabel("Width (%)");
+    await width.fill("50");
+    await page.keyboard.press("Control+Enter"); // still focused in the field
+    await expectPixel(page, "program", [0, 0, 0], 0.9, 0.5);
+    await expectPixel(page, "preview", [0, 0, 0], 0.9, 0.5);
+    await expectPixel(page, "program", RED, 0.25, 0.5);
+});
+
+test("images: EXIF-rotated phone JPEGs decode; a raced prune never deletes a just-added image", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const { decodeImage, createAssetStore } = await import("/src/studio-assets.js");
+        const canvas = document.createElement("canvas"); canvas.width = 64; canvas.height = 32;
+        canvas.getContext("2d").fillRect(0, 0, 64, 32);
+        const jpeg = new Uint8Array(await (await new Promise(r => canvas.toBlob(r, "image/jpeg", 0.9))).arrayBuffer());
+        // APP1 Exif, big-endian TIFF, one IFD entry: Orientation (0x0112) = 6.
+        const tiff = [0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08, 0x00, 0x01, 0x01, 0x12, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        const payload = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00, ...tiff];
+        const app1 = [0xff, 0xe1, ((payload.length + 2) >> 8) & 255, (payload.length + 2) & 255, ...payload];
+        const rotated = new Uint8Array(jpeg.length + app1.length);
+        rotated.set(jpeg.subarray(0, 2)); rotated.set(app1, 2); rotated.set(jpeg.subarray(2), 2 + app1.length);
+        const decoded = await decodeImage(rotated).then(d => `ok ${d.width}x${d.height}`, e => e.code);
+        // Prune race: keep is empty (the source is not committed yet).
+        const name = "noxa-studio-prune-test";
+        const store = createAssetStore({ name });
+        const added = await store.add(jpeg);
+        await store.prune(() => new Set());
+        store.dispose();
+        const reload = createAssetStore({ name });
+        await reload.load([added.id]);
+        const survived = !!reload.bitmap(added.id);
+        // Once seen referenced and then dropped, it is pruned.
+        await reload.prune(() => new Set([added.id]));
+        await reload.prune(() => new Set());
+        reload.dispose();
+        const after = createAssetStore({ name });
+        await after.load([added.id]);
+        const removed = !after.bitmap(added.id);
+        after.dispose();
+        return { decoded, survived, removed };
+    });
+    expect(result).toEqual({ decoded: "ok 32x64", survived: true, removed: true }); // upright (rotated by EXIF)
 });
 
 test("images: PNG renders from local bytes, SVG and oversize files are refused", async ({ page }) => {
@@ -468,4 +589,40 @@ test("keyboard, accessibility and compact layout", async ({ page }) => {
     await page.keyboard.press("Escape");
     await expect(studio).toBeHidden();
     await expect(page.locator("#voice-studio")).toBeFocused();
+});
+
+test("a click right after editing a field is not lost (the blur commit does not rebuild the clicked list)", async ({ page }) => {
+    const studio = await open(page);
+    await studio.getByRole("button", { name: "Add scene" }).click();
+    await studio.getByRole("button", { name: "Text", exact: true }).click();
+    await studio.getByRole("button", { name: "Text", exact: true }).click();
+    await studio.locator(".studio-transition").selectOption("fade");
+    await studio.locator(".studio-duration").fill("900");          // commits on blur, i.e. on the next mousedown
+    await studio.getByRole("button", { name: "Scene 1 (key 1)" }).click();
+    await expect(studio.getByRole("button", { name: "Scene 1 (key 1)" })).toHaveAttribute("aria-pressed", "true");
+    expect(await page.evaluate(() => window.__studio.studioSessionForTest().studio.transition.ms)).toBe(900);
+    await page.keyboard.press("2");
+    await studio.locator(".studio-source-select").first().click();
+    await studio.getByLabel("Left (%)").fill("10");
+    await studio.locator(".studio-source-select").last().click();     // a different source, right after the edit
+    await expect(studio.locator(".studio-source-select").last()).toHaveAttribute("aria-pressed", "true");
+});
+
+test("the program clock runs in a worker: renders continue when page timers are throttled away", async ({ page }) => {
+    // Simulate background throttling: page intervals never fire from here on.
+    await page.evaluate(() => { window.__realSetInterval = window.setInterval; window.setInterval = () => 0; });
+    const studio = await open(page);
+    await addDisplay(page, RED);
+    await studio.locator(".studio-transition").selectOption("cut");
+    await page.keyboard.press("Control+Enter");
+    await studio.getByRole("button", { name: "Add scene" }).click();
+    await addDisplay(page, BLUE);
+    await studio.locator(".studio-transition").selectOption("fade");
+    await page.keyboard.press("Control+Enter");
+    // Only ticks can complete a fade: with page timers dead, the worker clock does.
+    await expectPixel(page, "program", BLUE);
+    await expect.poll(async () => (await diagnostics(page)).transitioning, { timeout: 3000 }).toBe(false);
+    // Dispose terminates the clock worker with the session.
+    await page.evaluate(() => window.__studio.disposeStudio());
+    expect(await page.evaluate(() => window.__studio.studioActive())).toBe(false);
 });

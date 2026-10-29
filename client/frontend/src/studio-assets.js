@@ -85,11 +85,16 @@ export async function decodeImage(bytes, { createBitmap = globalThis.createImage
     let bitmap;
     try { bitmap = await createBitmap(new Blob([bytes], { type: info.type })); }
     catch { throw new StudioImageError("image_invalid"); }
-    if (bitmap.width !== info.width || bitmap.height !== info.height) {
+    // The decoded size must equal the declared header. A JPEG may decode
+    // rotated by its EXIF orientation (5-8, most phone photos): width and
+    // height swapped, the same bounded pixel count.
+    const exact = bitmap.width === info.width && bitmap.height === info.height;
+    const rotated = info.type === "image/jpeg" && bitmap.width === info.height && bitmap.height === info.width;
+    if (!exact && !rotated) {
         bitmap.close?.();
         throw new StudioImageError("image_invalid");
     }
-    return { ...info, bitmap };
+    return { ...info, width: bitmap.width, height: bitmap.height, bitmap };
 }
 
 function openStore(indexedDB, name) {
@@ -110,6 +115,9 @@ const complete = request => new Promise((resolve, reject) => {
 // closes every bitmap (GPU/memory); persisted bytes stay for the next start.
 export function createAssetStore({ indexedDB = globalThis.indexedDB, name = "noxa-studio", createBitmap } = {}) {
     const loaded = new Map(); // id -> { bitmap, type, width, height, bytes }
+    // Added this session and not yet seen referenced by a prune: protected
+    // from a prune that raced the add (the source is committed right after).
+    const fresh = new Set();
     let db = null;
     let disposed = false;
     const database = async () => {
@@ -154,6 +162,7 @@ export function createAssetStore({ indexedDB = globalThis.indexedDB, name = "nox
                 });
                 loaded.set(id, { ...decoded, bytes: bytes.byteLength });
             }
+            fresh.add(id);
             const entry = loaded.get(id);
             return { id, width: entry.width, height: entry.height };
         },
@@ -179,12 +188,18 @@ export function createAssetStore({ indexedDB = globalThis.indexedDB, name = "nox
         info(id) { const entry = loaded.get(id); return entry ? { width: entry.width, height: entry.height, type: entry.type } : null; },
         loadedCount() { return loaded.size; },
         // prune removes stored and loaded assets no layout references.
+        // `keep` is evaluated after the asynchronous listing (a function), so
+        // an image added meanwhile is never deleted; fresh adds are protected.
         async prune(keep) {
-            for (const [id, entry] of loaded) if (!keep.has(id)) { entry.bitmap.close?.(); loaded.delete(id); }
+            const current = () => { const set = typeof keep === "function" ? keep() : keep; for (const id of set) fresh.delete(id); return set; };
+            const unusedLoaded = current();
+            for (const [id, entry] of loaded) if (!unusedLoaded.has(id) && !fresh.has(id)) { entry.bitmap.close?.(); loaded.delete(id); }
             const handle = await database();
-            if (!handle) return;
+            if (!handle || disposed) return;
             const keys = await stored();
-            const unused = keys.filter(id => !keep.has(id));
+            if (disposed) return;
+            const keepNow = current();
+            const unused = keys.filter(id => !keepNow.has(id) && !fresh.has(id));
             if (!unused.length) return;
             const tx = handle.transaction("assets", "readwrite");
             for (const id of unused) tx.objectStore("assets").delete(id);

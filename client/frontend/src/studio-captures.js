@@ -27,12 +27,19 @@ export function createCaptureRegistry({ createVideo = () => globalThis.document.
         try { video.load?.(); } catch { /* nothing loaded */ }
     }
 
+    // The lease hook runs at most once per capture.
+    function releaseOnce(entry) {
+        if (entry.leaseReleased) return;
+        entry.leaseReleased = true;
+        onRelease(entry.stream);
+    }
+
     function neutralize(entry, state) {
         if (entry.state === "ended" || entry.state === "released") return;
         entry.state = state;
         if (state === "ended") {
             detach(entry);
-            onRelease(entry.stream);
+            releaseOnce(entry);
             for (const track of entry.stream.getTracks()) track.stop();
         }
         onChange(entry.id, state);
@@ -45,7 +52,7 @@ export function createCaptureRegistry({ createVideo = () => globalThis.document.
         }
         entry.listeners.clear();
         detach(entry);
-        onRelease(entry.stream);
+        releaseOnce(entry);
         for (const track of entry.stream.getTracks()) track.stop();
         entry.state = "released";
         onChange(entry.id, "released");

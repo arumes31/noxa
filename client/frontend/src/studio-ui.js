@@ -63,7 +63,7 @@ function createSession() {
     const engine = new StudioEngine({ registry, assets, width, height, fps: STUDIO_FPS,
         label: source => source.kind === "image" ? t("studio.sourceUnavailable") : t(`studio.state.${registry.state(source.capture)}`) });
     const studio = loadStudio();
-    session = { id, registry, assets, engine, audio: null, studio, live: false, starting: false, audioEnabled: new Set(),
+    session = { id, registry, assets, engine, audio: null, studio, live: false, starting: false,
         selectedSource: "", width, height, meterTimer: null, restored: studio.scenes.some(scene => scene.sources.some(source => source.kind === "display" || source.kind === "camera")) };
     engine.setDraft(selectedScene(studio), studio.scenes);
     void assets.load(assetRefs(studio)).then(() => { if (session?.id === id) { engine.renderPreview(); schedule(); } });
@@ -75,14 +75,28 @@ function audioGraph() {
     return session.audio;
 }
 
-// syncAudio routes exactly the explicitly enabled capture audio, once each.
-// Take and transitions never call this.
+// Audio rule (Take applies audio exactly like pictures):
+// - "Stream this capture's audio" is a property of a draft source
+//   (source.audio). Editing it, capturing with audio or recapturing changes
+//   only the draft and never the published audio.
+// - The routed set is computed from the PROGRAM snapshot only: a capture's
+//   app/system audio is routed iff a source of the live program references
+//   it with audio enabled and its audio track is live; once per capture,
+//   however many sources reference it.
+// - It changes only at Take (and when a routed track ends or a capture is
+//   released). During a crossfade only the incoming program counts: the
+//   outgoing scene's audio stops at Take and a fade never adds audio.
+function programAudio(owner) {
+    const ids = new Set();
+    for (const source of owner.engine.live?.sources || []) if (source.kind === "display" && source.audio && source.capture) ids.add(source.capture);
+    return ids;
+}
+
 function syncAudio() {
     if (!session) return;
-    const available = session.registry.audioTracks();
-    for (const id of [...session.audioEnabled]) if (!session.registry.get(id)) session.audioEnabled.delete(id);
-    if (!session.audio && !session.audioEnabled.size) return;
-    audioGraph().sync(available, session.audioEnabled);
+    const enabled = programAudio(session);
+    if (!session.audio && !enabled.size) return;
+    audioGraph().sync(session.registry.audioTracks(), enabled);
 }
 
 function disposeSession() {
@@ -102,8 +116,8 @@ function commit(next, { prune = false } = {}) {
     session.studio = next;
     saveStudio(next);
     session.engine.setDraft(selectedScene(next), next.scenes);
-    syncAudio();
-    if (prune) void session.assets.prune(assetRefs(next, [session.engine.live, session.engine.outgoing]));
+    // Draft edits never touch audio routing (see programAudio).
+    if (prune) { const owner = session; void owner.assets.prune(() => assetRefs(owner.studio, [owner.engine.live, owner.engine.outgoing])); }
     schedule();
 }
 
@@ -124,6 +138,7 @@ function doTake() {
     if (!session) return;
     const snapshot = take(session.studio);
     session.engine.take(snapshot, session.studio.transition);
+    syncAudio(); // the only place a draft audio choice reaches the program
     schedule();
 }
 
@@ -165,11 +180,11 @@ async function capture(kind, { replace = "" } = {}) {
         if (kind === "display") retainDisplayCapture(result.stream);
         id = owner.registry.add(result.stream, { kind, label: video?.label || "", surface, audio: result.audio });
     } catch (error) { releaseDisplayCapture(result.stream); showError(t("studio.captureFailed", { error: error.message })); return; }
-    // An explicitly captured audio track is routed until switched off.
-    if (result.audio) owner.audioEnabled.add(id);
+    // Captured audio is enabled on the DRAFT source only; it reaches the
+    // program (and the publication) with the next Take.
     const scene = selectedScene(owner.studio);
     const ok = apply(studio => {
-        if (replace) return updateSource(studio, scene.id, replace, { capture: id, surface });
+        if (replace) return updateSource(studio, scene.id, replace, { capture: id, surface, audio: result.audio });
         const added = addSource(studio, scene.id, { kind, name: t(`studio.kind.${kind}`), capture: id, surface, audio: result.audio });
         owner.selectedSource = added.source.id;
         return added.studio;
@@ -242,7 +257,11 @@ async function goLive() {
         stream.getTracks().forEach(track => track.stop());
         if (session === owner) showError(t("studio.liveFailed", { error: error.message || String(error) }));
     } finally {
-        if (session === owner) { owner.starting = false; schedule(); }
+        if (session === owner) {
+            owner.starting = false;
+            // Panel closed while starting and the start failed: nothing owns the session.
+            if (!panel && !owner.live) disposeSession(); else schedule();
+        }
     }
 }
 
@@ -377,7 +396,15 @@ function editing(target) {
 // Studio shortcuts work wherever focus is while the Studio is the top dialog.
 function onKey(event) {
     if (!session || !panel || topDialog() !== panel.overlay || event.defaultPrevented) return;
-    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); doTake(); return; }
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        // A value typed but not yet committed (fields commit on change) is
+        // applied to the draft first, so Take takes what the user entered.
+        const active = document.activeElement;
+        if (editing(active) && panel.dialog.contains(active)) active.dispatchEvent(new Event("change", { bubbles: true }));
+        doTake();
+        return;
+    }
     if (editing(event.target) || event.altKey && !["ArrowUp", "ArrowDown"].includes(event.key)) return;
     if (!event.ctrlKey && !event.metaKey && !event.altKey && /^[1-8]$/.test(event.key)) {
         const scene = session.studio.scenes[Number(event.key) - 1];
@@ -436,11 +463,7 @@ function renderProps(container, scene) {
     }
     const entry = source.capture ? session.registry.get(source.capture) : null;
     if (source.kind === "display" && entry?.audioTrack) {
-        const toggle = element("input", { type: "checkbox", class: "studio-route-audio", checked: session.audioEnabled.has(entry.id), onchange: event => {
-            if (event.target.checked) session.audioEnabled.add(entry.id); else session.audioEnabled.delete(entry.id);
-            syncAudio();
-            schedule();
-        } });
+        const toggle = element("input", { type: "checkbox", class: "studio-route-audio", checked: !!source.audio, onchange: event => set({ audio: event.target.checked }) });
         container.append(element("label", { class: "studio-check" }, [toggle, element("span", { text: t("studio.routeAudio") })]),
             element("p", { class: "set-hint", text: t("studio.routeAudioHelp") }));
     }
@@ -465,7 +488,7 @@ function renderSources(list, scene) {
             iconButton("studio-lower", "chevron", t("studio.lower", { name: source.name }), () => apply(studio => moveSource(studio, scene.id, source.id, "down"))),
             iconButton("studio-visibility", source.visible ? "check" : "close", t(source.visible ? "studio.hide" : "studio.show", { name: source.name }),
                 () => apply(studio => updateSource(studio, scene.id, source.id, { visible: !source.visible }))),
-            isCapture && state !== "live" && state !== "muted" ? element("button", { type: "button", class: "studio-recapture", text: t("studio.recapture"), onclick: () => capture(source.kind, { replace: source.id }) }) : null,
+            isCapture && state !== "live" && state !== "muted" ? element("button", { type: "button", class: "studio-recapture", text: t("studio.recapture"), attrs: { "aria-label": t("studio.recaptureSource", { name: source.name }) }, onclick: () => capture(source.kind, { replace: source.id }) }) : null,
             iconButton("studio-remove", "trash", t("studio.remove", { name: source.name }), () => {
                 if (session.selectedSource === source.id) session.selectedSource = "";
                 apply(studio => removeSource(studio, scene.id, source.id), { prune: true });
@@ -495,14 +518,20 @@ function render() {
     $(".studio-duration").value = String(studio.transition.ms);
     $(".studio-duration").disabled = studio.transition.kind === "cut";
     // Scenes
+    // Lists are rebuilt only when their content changed: a field committing
+    // on blur (mousedown elsewhere) must not replace the button being clicked.
     const list = $(".studio-scene-list");
-    list.replaceChildren(...studio.scenes.map((item, index) => {
+    const sceneKey = JSON.stringify([studio.selected, liveScene?.id || "", studio.scenes.map(item => [item.id, item.name])]);
+    if (list.dataset.key !== sceneKey) {
+        list.dataset.key = sceneKey;
+        list.replaceChildren(...studio.scenes.map((item, index) => {
         const onAir = liveScene?.id === item.id;
         const label = t("studio.sceneSelect", { name: item.name, key: index + 1 });
         return element("li", {}, [element("button", { type: "button", class: `studio-scene${item.id === studio.selected ? " selected" : ""}${onAir ? " on-air" : ""}`,
             attrs: { "aria-pressed": String(item.id === studio.selected), "aria-label": onAir ? t("studio.sceneOnAir", { name: label }) : label, "data-scene": item.id },
             onclick: () => apply(next => selectScene(next, item.id)) }, [element("kbd", { text: String(index + 1) }), element("span", { text: item.name })])]);
     }));
+    }
     const nameInput = $(".studio-scene-name");
     if (document.activeElement !== nameInput) nameInput.value = scene.name;
     $(".studio-add-scene").disabled = studio.scenes.length >= MAX_SCENES;
@@ -521,7 +550,10 @@ function render() {
     const hadFocus = panel.dialog.contains(document.activeElement);
     const focusedSource = document.activeElement?.closest?.("[data-source]")?.dataset.source;
     const focusedClass = [...(document.activeElement?.classList || [])].find(name => name.startsWith("studio-"));
-    renderSources($(".studio-source-list"), scene);
+    const sourceList = $(".studio-source-list");
+    const sourceKey = JSON.stringify([scene.id, session.selectedSource, scene.sources.map(source => [source.id, source.name, source.visible,
+        source.capture ? session.registry.state(source.capture) : ""])]);
+    if (sourceList.dataset.key !== sourceKey) { sourceList.dataset.key = sourceKey; renderSources(sourceList, scene); }
     if (focusedSource) {
         const row = $(`[data-source="${focusedSource}"]`);
         (row?.querySelector(focusedClass ? `.${focusedClass}` : ".studio-source-select") || row?.querySelector(".studio-source-select"))?.focus();
@@ -571,7 +603,9 @@ function closePanel(reason) {
     clearInterval(session.meterTimer);
     session.meterTimer = null;
     // Teardown reasons end everything; a user close keeps only a live program.
-    if (session.live && !["server-change", "disconnected"].includes(reason)) session.engine.releaseDraft();
+    // A publication still starting is treated like live: goLive settles it
+    // (and disposes the session if it failed while the panel is closed).
+    if ((session.live || session.starting) && !["server-change", "disconnected"].includes(reason)) session.engine.releaseDraft();
     else disposeSession();
 }
 
