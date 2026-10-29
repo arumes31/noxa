@@ -11,6 +11,7 @@ import { GridCompositor } from "./grid-compositor.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { closeContextMenu, mountContextMenu, contextMenuKey } from "./context-menu.js";
 import { setSafeImage } from "./safe-media.js";
+import { groupFingerprint } from "./contact-key-change.js";
 import { t as tLabel, currentLanguage } from "./i18n.js";
 import { SLOT_SCREEN, parseTrackID } from "./media-track-id.js";
 import { streamQualityTarget, streamUsesSourceQuality } from "./stream-controls.js";
@@ -328,9 +329,14 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         // the keys its media decrypts with, not just the nickname.
         const account = V().verifiedMediaAccount?.(clid) || "";
         const accountEl = t.el.querySelector(".vtile-account");
-        accountEl.textContent = account ? "🔒 " + (account.length > 12 ? account.slice(0, 12) + "…" : account) : "";
+        // Visible label names the key source with its caveat (review 2b P3-3);
+        // the account is shown in the app's 4-character fingerprint blocks.
+        const blocks = groupFingerprint(account);
+        const shortAccount = blocks.slice(0, 6).join(" ") + (blocks.length > 6 ? " …" : "");
+        accountEl.textContent = account ? "🔒 " + tLabel("e2ee.media.tileKeys", { account: shortAccount }) : "";
         accountEl.classList.toggle("hidden", !account);
-        accountEl.title = account ? tLabel("e2ee.media.tileAccount", { account }) : "";
+        accountEl.title = account ? tLabel("e2ee.media.tileAccount", { account: blocks.join(" ") }) : "";
+        if (account) accountEl.setAttribute("aria-label", accountEl.textContent.slice(2) + ". " + accountEl.title); else accountEl.removeAttribute("aria-label");
         t.el.dataset.account = account;
         t.el.title = name + " — " + t.kindEl.textContent + (account ? " — " + accountEl.title : "");
         const full = t.el.querySelector(".vtile-fullscreen");

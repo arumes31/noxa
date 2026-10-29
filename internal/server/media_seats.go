@@ -169,6 +169,17 @@ func (m *mediaSeats) park(client string) {
 	}
 }
 
+// parkFrom parks the client only while it is still seated in ch (a deletion
+// of ch runs after its lock was released; a member that already joined
+// another channel keeps that seat; review 2b P3-1).
+func (m *mediaSeats) parkFrom(client string, ch int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cur, ok := m.byClient[client]; ok && cur == ch && ch != 0 {
+		m.putLocked(0, client, m.byChannel[ch][client])
+	}
+}
+
 func (m *mediaSeats) release(client string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -55,7 +55,7 @@ func (s *TCPServer) ApplyChannelDeletion(result channels.DeleteResult, reason st
 	// The deletion is committed: members' encrypted voice seats are parked
 	// (their peers live on; the next join meets the cap).
 	for _, member := range result.Members {
-		s.mediaSeats.park(member.ClientID)
+		s.mediaSeats.parkFrom(member.ClientID, member.ChannelID)
 	}
 	// State-facing consequences must not sit behind filesystem cleanup. A file
 	// mutation can legitimately hold its lifecycle read lock while finishing a

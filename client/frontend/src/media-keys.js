@@ -29,6 +29,13 @@ export const RENEW_MS = 5 * 60 * 1000;
 // stop being able to decrypt quickly; slow receivers may glitch briefly.
 export const ACTIVATE_DELAY_MS = 2500;
 export const REMOVAL_ACTIVATE_DELAY_MS = 1000;
+// A removal epoch activates at the latest this long after the removal, whether
+// or not every remaining recipient's key delivery settled (confidentiality
+// over availability, review 2b P2-1): the removed device holds the previous
+// epoch, so the sender never keeps encrypting under it while a slow or stalling
+// server delays deliveries. Recipients still waiting get the key when their
+// delivery completes (a brief gap for them, shown in the status).
+export const REMOVAL_ACTIVATE_DEADLINE_MS = 2000;
 export const RECEIVE_GRACE_MS = 10_000;
 export const SENDER_RETIRE_MS = 1_500;
 export const DEBOUNCE_MS = 200;
@@ -142,7 +149,7 @@ export class MediaKeyEngine {
     #gen = 0; #roster = []; #recipients = []; #recipientKey = "";
     #epoch = 0; #kid = 15; #keys = null; #members = ""; #sentTo = new Map();
     #busy = false; #again = false; #debounce = 0; #renew = 0; #retry = 0; #busyOrPending = false;
-    #publishers = new Map(); #pending = []; #failed = new Map(); #reason = "";
+    #publishers = new Map(); #pending = []; #failed = new Map(); #reason = ""; #delivering = null;
     #removed = new Set(); #rosterAt = 0; #settle = 0; #mismatch = [];
 
     constructor({ media, send, onStatus = () => {}, now = () => Date.now(), timers = globalThis, random = n => crypto.getRandomValues(new Uint8Array(n)), uuid = () => crypto.randomUUID(), sendTimeoutMs = SEND_TIMEOUT_MS }) {
@@ -256,9 +263,26 @@ export class MediaKeyEngine {
         this.#epoch = epoch; this.#kid = kid; this.#keys = keys; this.#members = members;
         this.counters.epochs++;
         this.#failed.clear(); this.#sentTo.clear();
-        await this.#distribute(gen, recipients);
-        if (gen !== this.#gen || this.#epoch !== epoch) return;
-        await new Promise(resolve => this.timers.setTimeout(resolve, urgent ? REMOVAL_ACTIVATE_DELAY_MS : ACTIVATE_DELAY_MS));
+        const distribution = this.#distribute(gen, recipients);
+        const delay = ms => new Promise(resolve => this.timers.setTimeout(resolve, ms));
+        if (urgent) {
+            // Bounded: activate after the deliveries plus the short delay, or at
+            // the deadline, whichever comes first. Late deliveries keep running.
+            const token = {};
+            this.#delivering = token;
+            await Promise.race([distribution.then(() => delay(REMOVAL_ACTIVATE_DELAY_MS)), delay(REMOVAL_ACTIVATE_DEADLINE_MS)]);
+            distribution.then(() => {
+                if (this.#delivering === token) this.#delivering = null;
+                if (gen !== this.#gen || this.#epoch !== epoch || this.activeEpoch !== epoch) return;
+                this.#status();
+                this.#scheduleRetry(gen, epoch);
+            });
+        } else {
+            this.#delivering = null;
+            await distribution;
+            if (gen !== this.#gen || this.#epoch !== epoch) return;
+            await delay(ACTIVATE_DELAY_MS);
+        }
         if (gen !== this.#gen || this.#epoch !== epoch) return;
         // A device removed while this epoch was being distributed already
         // holds its keys: never activate it; the queued rekey excludes it
@@ -283,29 +307,39 @@ export class MediaKeyEngine {
             }, SENDER_RETIRE_MS);
         }
         this.#status();
-        if (this.#failed.size) {
-            this.timers.clearTimeout(this.#retry);
-            this.#retry = this.timers.setTimeout(() => { if (gen === this.#gen && this.#epoch === epoch) void this.#retryFailed(gen, epoch); }, RETRY_FAILED_MS);
-        }
+        this.#scheduleRetry(gen, epoch);
+    }
+
+    #scheduleRetry(gen, epoch) {
+        if (!this.#failed.size) return;
+        this.timers.clearTimeout(this.#retry);
+        this.#retry = this.timers.setTimeout(() => { if (gen === this.#gen && this.#epoch === epoch) void this.#retryFailed(gen, epoch); }, RETRY_FAILED_MS);
     }
 
     async #distribute(gen, recipients) {
         const self = this.self;
+        const epoch = this.#epoch;
         const body = buildMediaKeyBody({ channelID: self.channelID, epoch: this.#epoch, nowSeconds: Math.floor(this.now() / 1000), client: self.clientID,
             session: this.session, kid: this.#kid, members: this.#members, count: recipients.length + 1, keys: this.#keys });
-        const results = await pool(recipients, CONCURRENCY, async recipient => {
+        // Each result is recorded as it settles (a deadline-activated removal
+        // epoch shows exactly who is still waiting). Results of an older
+        // epoch's distribution (still running after a newer rekey) never count.
+        const record = (r, result) => {
+            if (gen !== this.#gen || this.#epoch !== epoch) return;
+            const id = `${r.principal}\n${r.device}`;
+            if (result?.ok) { this.counters.sent++; this.#sentTo.set(id, epoch); this.#failed.delete(id); }
+            else { this.counters.failed++; this.#failed.set(id, { ...r, reason: String(result?.error?.code || result?.error?.message || result?.reason || "failed") }); }
+        };
+        await pool(recipients, CONCURRENCY, async recipient => {
             // Going invisible (or stopping) mid-distribution stops the remaining sends.
-            if (gen !== this.#gen || this.#invisible()) return { ok: false, reason: "stopped" };
+            if (gen !== this.#gen || this.#invisible()) { record(recipient, { ok: false, reason: "stopped" }); return; }
             let timer;
             const timeout = new Promise((_, reject) => { if (Number.isFinite(this.sendTimeoutMs)) timer = this.timers.setTimeout(() => reject(Object.assign(new Error("timed out"), { code: "timeout" })), this.sendTimeoutMs); });
-            try { return await Promise.race([this.send({ logicalID: this.uuid(), principal: recipient.principal, device: recipient.device, body }), timeout]); }
+            let result;
+            try { result = await Promise.race([this.send({ logicalID: this.uuid(), principal: recipient.principal, device: recipient.device, body }), timeout]); }
+            catch (error) { result = { ok: false, error }; }
             finally { this.timers.clearTimeout(timer); }
-        });
-        if (gen !== this.#gen) return;
-        results.forEach((result, i) => {
-            const r = recipients[i];
-            if (result?.ok) { this.counters.sent++; this.#sentTo.set(`${r.principal}\n${r.device}`, this.#epoch); this.#failed.delete(`${r.principal}\n${r.device}`); }
-            else { this.counters.failed++; this.#failed.set(`${r.principal}\n${r.device}`, { ...r, reason: String(result?.error?.code || result?.error?.message || result?.reason || "failed") }); }
+            record(recipient, result);
         });
     }
 
@@ -433,6 +467,10 @@ export class MediaKeyEngine {
             epoch: this.activeEpoch || 0,
             recipients: this.#recipients.length,
             delivered: [...this.#sentTo.values()].filter(e => e === this.#epoch).length,
+            // Recipients of the active epoch whose delivery is still running
+            // (after a deadline activation): they hear me once it arrives.
+            waiting: this.activeEpoch === this.#epoch && this.#delivering !== null
+                ? this.#recipients.filter(r => this.#sentTo.get(`${r.principal}\n${r.device}`) !== this.#epoch && !this.#failed.has(`${r.principal}\n${r.device}`)).length : 0,
             failed: [...this.#failed.values()].map(({ principal, device, clientID, reason }) => ({ principal, device, clientID, reason })),
             // Exactly who holds my current keys (shown in the voice UI).
             keyHolders: this.#recipients.filter(r => this.#sentTo.get(`${r.principal}\n${r.device}`) === this.#epoch)

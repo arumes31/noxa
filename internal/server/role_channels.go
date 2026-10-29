@@ -76,7 +76,7 @@ func (s *TCPServer) detachRoleDeletedChannels(deleted channels.DeleteResult) err
 		// deletion and the members keep their seats where they stay (fix5
 		// review P3-1).
 		for _, member := range deleted.Members {
-			s.mediaSeats.park(member.ClientID)
+			s.mediaSeats.parkFrom(member.ClientID, member.ChannelID)
 		}
 	}
 	return revokeErr

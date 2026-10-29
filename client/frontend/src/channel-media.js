@@ -126,6 +126,7 @@ function holderNames(status) {
 }
 
 function withWarning(status, text) {
+    if (status.waiting) text = `${text} · ${t("e2ee.media.waiting", { count: status.waiting })}`;
     const mismatch = status.membershipMismatch || [];
     return mismatch.length ? `${text} · ${t("e2ee.media.mismatch", { names: mismatch.map(m => m.principal).join(", ") })}` : text;
 }

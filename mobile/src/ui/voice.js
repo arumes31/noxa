@@ -190,7 +190,7 @@ export function renderVoice(root) {
         // Task 2b: the tile names the verified account whose keys this
         // member's media decrypts with, not just the nickname.
         const account = self ? null : tileAccount(voice.verifiedAccount?.(member.client_id));
-        if (account) badges.push(h("span", { class: "vc-badge vc-badge-account", title: account.title, "aria-label": account.title }, "🔒 " + account.label));
+        if (account) badges.push(h("span", { class: "vc-badge vc-badge-account", title: account.title, "aria-label": `${account.label}. ${account.title}` }, "🔒 " + account.label));
         const classes = `voice-tile${voice.speaking.has(member.client_id) ? " speaking" : ""}${member.priority_speaker ? " priority" : ""}`;
         const body = [avatar(member.nickname, "lg", member.unique_id), h("span", { class: "tile-name" }, name), h("span", { class: "vc-badges" }, badges)];
         if (self) return h("div", { class: classes }, body);

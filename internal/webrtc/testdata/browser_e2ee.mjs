@@ -114,14 +114,14 @@ window.go = { main: { App: {
   MediaE2EEStatusForTab: async () => ({ supported: true, principal: "u-" + ID, device: "dev-" + ID, client_id: ID }),
   SendMediaKeyForTab: async (_tab, req) => post("/control", { ID, To: req.device, Body: { kind: req.kind, scope: req.scope, epoch: req.epoch, expires_at: req.expires_at, data: req.data } }),
   WebRTCOfferSecureForTab: async (_tab, sdp, slots, version) => { if (version !== "noxa-media-e2ee-v1") throw new Error("undeclared"); window.offers++; return (await post("/offer", { ID, SDP: sdp, Slots: slots })).sdp; },
-  WebRTCAnswerForTab: async (_tab, sdp) => post("/answer", { ID, SDP: sdp }),
+  WebRTCAnswerForTab: async (_tab, sdp) => { window.answers = (window.answers || 0) + 1; return post("/answer", { ID, SDP: sdp }); },
   VideoStreamControlForTab: async (_tab, msg) => { if (msg.action !== "keyframe") throw new Error("unexpected stream control " + msg.action); window.keyframeRequests = (window.keyframeRequests || 0) + 1; return post("/keyframe", { ID, Publisher: msg.publisher_id, Slot: msg.slot }); },
 } } };
 const { startChannelMedia, channelMedia, receiveMediaKey, stopChannelMedia } = await import("/src/channel-media.js");
 const { renegotiate, answerRemoteOffer, queuePeerNegotiation } = await import("/src/video-negotiation.js");
 await post("/register", { ID, Principal: "u-" + ID, Device: "dev-" + ID });
 eventLoop(async e => {
-  if (e.type === "offer" && state.pc) await answerRemoteOffer(state.pc, 1, e.sdp).catch(err => console.log("answer " + err));
+  if (e.type === "offer" && state.pc) { window.serverOffers = (window.serverOffers || 0) + 1; await answerRemoteOffer(state.pc, 1, e.sdp).catch(err => { window.answerErrors = (window.answerErrors || 0) + 1; console.log("answer " + err); }); }
   // As main.js does: remote candidates queue behind the negotiation.
   else if (e.type === "candidate" && state.pc) { const pc = state.pc; void queuePeerNegotiation(pc, async () => { if (state.pc === pc && pc.remoteDescription) await pc.addIceCandidate({ candidate: e.candidate, sdpMid: e.mid, sdpMLineIndex: e.index }); else console.log("candidate dropped"); }).catch(err => console.log("candidate " + err)); }
   else if (e.type === "roster") { state.clients = e.clients; channelMedia()?.setRoster(e.clients); }
@@ -167,6 +167,10 @@ window.e2ee = {
   offers() { return window.offers; },
   audit() { return window.attachAudit; },
   verified(id) { return channelMedia()?.verifiedAccount(id) || ""; },
+  // Negative path: new receivers are no longer protected (as if the track
+  // hook failed), so the next server offer must abort instead of answering.
+  breakProtection() { channelMedia().media.protectTransceiver = () => {}; },
+  counts() { return { offers: window.serverOffers || 0, answers: window.answers || 0, errors: window.answerErrors || 0, signaling: state.pc?.signalingState || "" }; },
 };
 window.ready = true;
 </script>`;
@@ -440,6 +444,21 @@ try {
     const tied = { BseesA: await call("B", "verified", "A"), AseesB: await call("A", "verified", "B"), AseesD: await call("A", "verified", "D") };
     if (tied.BseesA !== "u-A" || tied.AseesB !== "u-B" || tied.AseesD !== "u-D") throw new Error("verified tile accounts: " + JSON.stringify(tied));
     log("phase 10: tiles tied to verified key accounts", JSON.stringify(tied));
+    // 11. Fail-closed abort in a real browser: page F's new receivers are not
+    // protected; the server offer that adds G's tracks is never answered.
+    await open("F", "desktop", "script");
+    await call("F", "join");
+    await growing("F", "A|mic", "F hears A");
+    await call("F", "breakProtection");
+    const fBefore = await call("F", "counts");
+    await open("G", "pwa", "script");
+    await call("G", "join");
+    await growing("B", "G|mic", "B hears new member G");
+    await poll("F receives the server offer for G", async () => ({ ok: (await call("F", "counts")).offers > fBefore.offers }));
+    await new Promise(r => setTimeout(r, 3000));
+    const fAfter = await call("F", "counts");
+    if (fAfter.answers !== fBefore.answers || !(fAfter.errors > fBefore.errors)) throw new Error("unprotected receiver was answered: " + JSON.stringify({ fBefore, fAfter }));
+    log("phase 11: unprotected receiver aborted the negotiation, no answer sent", JSON.stringify({ fBefore, fAfter }));
     log(`phase 8: transforms attached before every local description (${descriptions} descriptions, ${answers} answers to server offers, 0 violations)`);
 
     log("tap", JSON.stringify(await api("/tap")));

@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -137,6 +138,8 @@ type e2eeHarness struct {
 	answers                           []string
 	candidatesIn, candidatesOut       map[string]int
 	reordered                         int
+	reorderMu                         sync.Mutex
+	reorderHeld                       map[string]func() error
 	keyframesServed, keyframesRefused int
 	tapAudio, tapAudioEncrypted       int
 	tapVideoFrames, tapVideoEncrypted int
@@ -337,24 +340,38 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(map[string]any{"served": h.keyframesServed, "refused": h.keyframesRefused})
 		h.mu.Unlock()
 	case "/reorder":
-		// Reordering on the SFU's egress socket (SRTP only): every 7th
-		// datagram is held back and written after the next one.
+		// SRTP-level reordering on the SFU's egress socket, per destination:
+		// every 7th SRTP datagram to a peer is held back and written after the
+		// next SRTP datagram to the same peer (a real swap at that receiver).
+		// Switching it off flushes held datagrams. The receiver's jitter
+		// buffer reorders packets before the frame transform sees them, so
+		// this shows the stack tolerates packet reordering; frame-level
+		// reordering is covered by unit/media-replay.test.mjs.
+		h.reorderMu.Lock()
 		if !body.Active {
 			mediaSocketShape.Store(nil)
+			for _, flush := range h.reorderHeld {
+				_ = flush()
+			}
+			h.reorderHeld = nil
 		} else {
-			var mu sync.Mutex
-			var n uint64
-			var held func() error
-			shape := func(datagram []byte, write func([]byte) error) error {
+			counts := map[string]uint64{}
+			h.reorderHeld = map[string]func() error{}
+			shape := func(datagram []byte, addr net.Addr, write func([]byte) error) error {
 				if !isSRTPDatagram(datagram) {
 					return write(datagram)
 				}
-				mu.Lock()
-				defer mu.Unlock()
-				n++
-				if held == nil && n%7 == 0 {
+				h.reorderMu.Lock()
+				defer h.reorderMu.Unlock()
+				if h.reorderHeld == nil { // switched off while this write waited
+					return write(datagram)
+				}
+				key := addr.String()
+				counts[key]++
+				held := h.reorderHeld[key]
+				if held == nil && counts[key]%7 == 0 {
 					d := append([]byte(nil), datagram...)
-					held = func() error { return write(d) }
+					h.reorderHeld[key] = func() error { return write(d) }
 					h.mu.Lock()
 					h.reordered++
 					h.mu.Unlock()
@@ -363,13 +380,14 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				err := write(datagram)
 				if held != nil {
 					_ = held()
-					held = nil
+					delete(h.reorderHeld, key)
 				}
 				return err
 			}
 			mediaSocketShape.Store(&shape)
 			h.t.Cleanup(func() { mediaSocketShape.Store(nil) })
 		}
+		h.reorderMu.Unlock()
 		h.mu.Lock()
 		reordered := h.reordered
 		h.mu.Unlock()

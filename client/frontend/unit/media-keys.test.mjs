@@ -182,7 +182,7 @@ test("a removal activates its new epoch sooner than other rekeys", async () => {
     delays.length = 0;
     e.setRoster([member("c1", "u1", "d1")]);
     await flush();
-    assert.ok(delays.includes(1000) && !delays.includes(2500), `removal is urgent: ${delays}`);
+    assert.ok(delays.includes(1000) && delays.includes(2000) && !delays.includes(2500), `removal is urgent (1 s after delivery, 2 s deadline): ${delays}`);
     e.stop();
 });
 
@@ -322,4 +322,69 @@ test("a tile's verified account is the roster account whose device delivered the
     await flush();
     assert.equal(e.verifiedPublisher("c7"), "");
     e.stop();
+});
+
+// Review 2b P2-1 (repro removal-latency.mjs adopted): a removal epoch activates
+// within REMOVAL_ACTIVATE_DEADLINE_MS of the removal even when the server
+// stalls key deliveries to one or all remaining recipients; the sender never
+// keeps encrypting under the epoch the removed device holds. Stalled
+// recipients are reported as waiting, then get the key when it arrives.
+test("a removal epoch activates on a short deadline even when deliveries stall", async () => {
+    const { REMOVAL_ACTIVATE_DEADLINE_MS, DEBOUNCE_MS } = await import("../src/media-keys.js");
+    // The roster debounce plus the activation deadline: at most 2.2 s after the removal.
+    const bound = DEBOUNCE_MS + REMOVAL_ACTIVATE_DEADLINE_MS;
+    assert.ok(bound <= 2500, `removal bound ${bound} ms`);
+    for (const [label, stalled] of [["none", () => false], ["one", d => d === "rl-d1"], ["all", () => true]]) {
+        let now = 1_800_000_000_000 + (label === "none" ? 0 : label === "one" ? 1e9 : 2e9);
+        const queue = [];
+        const timers = {
+            setTimeout(fn, ms) { const t = { at: now + ms, fn }; queue.push(t); return t; },
+            clearTimeout(t) { const i = queue.indexOf(t); if (i >= 0) queue.splice(i, 1); },
+            setInterval: () => 0, clearInterval: () => {},
+        };
+        const tick = () => new Promise(r => setImmediate(r));
+        const advance = async total => {
+            const end = now + total;
+            for (;;) {
+                // Real async work (WebCrypto digests) settles before virtual time moves.
+                for (let i = 0; i < 20; i++) await tick();
+                await new Promise(r => setTimeout(r, 5));
+                for (let i = 0; i < 20; i++) await tick();
+                queue.sort((a, b) => a.at - b.at);
+                const next = queue[0];
+                if (!next || next.at > end) { now = end; return; }
+                queue.shift(); now = Math.max(now, next.at); next.fn();
+            }
+        };
+        const activations = [];
+        const releases = [];
+        const media = { async setKey() {}, async activate(pid, e) { activations.push({ at: now, pid, e }); }, async retire() {}, async retireOne() {}, async forget() {} };
+        let stallOn = false;
+        let lastStatus = null;
+        const e = new MediaKeyEngine({ media, timers, now: () => now, sendTimeoutMs: 20_000, onStatus: s => { lastStatus = s; },
+            send: c => (stallOn && stalled(c.device)) ? new Promise(resolve => releases.push(() => resolve({ ok: true }))) : Promise.resolve({ ok: true }) });
+        const m = (c, u, d) => ({ client_id: c, unique_id: u, media_device: d, channel_id: 5 });
+        const roster = [m("rl-me", `rl-u-me-${label}`, `rl-d-me-${label}`), ...Array.from({ length: 64 }, (_, i) => m("rl-c" + i, `rl-u${i}-${label}`, i === 1 ? "rl-d1" : `rl-d${i}-${label}`))];
+        e.setRoster(roster);
+        e.start({ channelID: 5, clientID: "rl-me", principal: `rl-u-me-${label}`, device: `rl-d-me-${label}` });
+        await advance(10_000);
+        const before = activations.length;
+        const oldEpoch = e.activeEpoch;
+        stallOn = true;
+        const t0 = now;
+        e.setRoster(roster.filter(r => r.client_id !== "rl-c0")); // remove one member: 63 remain
+        await advance(bound + 100);
+        const act = activations.slice(before).find(x => x.pid.endsWith("|mic"));
+        assert.ok(act, `${label}: removal epoch never activated`);
+        assert.ok(act.at - t0 <= bound, `${label}: activation ${act.at - t0} ms after the removal`);
+        assert.ok(e.activeEpoch > oldEpoch, `${label}: still encrypting under the removed device's epoch`);
+        const waiting = label === "none" ? 0 : label === "one" ? 1 : 63;
+        assert.equal(lastStatus.waiting, waiting, `${label}: waiting recipients shown`);
+        // Late deliveries complete: nobody waits any more.
+        stallOn = false;
+        for (let wave = 0; wave < 20 && (releases.length || e.status().waiting); wave++) { for (const release of releases.splice(0)) release(); await advance(50); }
+        assert.equal(e.status().waiting, 0, `${label}: late deliveries counted`);
+        assert.equal(e.status().keyHolders.length, 63, `${label}: every remaining device holds the new key`);
+        e.stop();
+    }
 });

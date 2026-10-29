@@ -649,9 +649,19 @@ export class Voice extends EventTarget {
         if (!pc) return;
         await pc.setRemoteDescription({ type: "offer", sdp });
         // Reused or new MIDs are bound to their current publisher first.
-        // Fail closed: no encrypted media session, no answer.
-        if (!this.#media) throw new Error("encrypted media session ended");
-        await this.#media.syncReceivers(pc);
+        // Fail closed: no encrypted media session (or a receiver that could
+        // not be protected), no answer. The offer is rolled back and voice
+        // ends with the localized reason instead of hanging silently
+        // (review 2b P3-2).
+        try {
+            if (!this.#media) throw new MediaSessionError("closed");
+            await this.#media.syncReceivers(pc);
+        } catch (error) {
+            if (this.pc === pc) await pc.setRemoteDescription({ type: "rollback" }).catch(() => {});
+            this.#emit("media-error", error instanceof MediaSessionError ? error : new MediaSessionError("unavailable", String(error?.message || error)));
+            await this.leave().catch(() => {});
+            return;
+        }
         await this.#flushCandidates();
         preferReceiveCodecs(pc);
         const answer = await pc.createAnswer();

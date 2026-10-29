@@ -12,9 +12,10 @@ import (
 var mediaSocketFault atomic.Pointer[func(datagram []byte) error]
 
 // mediaSocketShape lets chaos tests reorder or delay datagrams on the shared
-// media socket: it receives each datagram and a write function for it and
-// decides when (and in which order) to write. Production never installs it.
-var mediaSocketShape atomic.Pointer[func(datagram []byte, write func([]byte) error) error]
+// media socket: it receives each datagram, its destination and a write
+// function for it and decides when (and in which order) to write. Production
+// never installs it.
+var mediaSocketShape atomic.Pointer[func(datagram []byte, addr net.Addr, write func([]byte) error) error]
 
 // faultInjectingPacketConn sits in front of the shared UDP mux socket and
 // consults mediaSocketFault before each write. Every other method is the
@@ -30,7 +31,7 @@ func (c *faultInjectingPacketConn) WriteTo(b []byte, addr net.Addr) (int, error)
 		}
 	}
 	if shape := mediaSocketShape.Load(); shape != nil {
-		err := (*shape)(b, func(d []byte) error { _, err := c.PacketConn.WriteTo(d, addr); return err })
+		err := (*shape)(b, addr, func(d []byte) error { _, err := c.PacketConn.WriteTo(d, addr); return err })
 		if err != nil {
 			return 0, err
 		}
