@@ -25,12 +25,20 @@ func TestAbandonedRecoveryReleasesOnlyCandidateObligations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	core, err := ratchet.New(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer core.Close(context.Background())
+	t.Cleanup(func() {
+		if err := core.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
 	_, secret, _ := ed25519.GenerateKey(rand.Reader)
 	old := applyTest(t, core, ratchet.Request{Op: ratchet.NewAccount, Key: s.CoreKey(), Count: 20})
 	oldOTKs := map[string]OTKObligation{}
