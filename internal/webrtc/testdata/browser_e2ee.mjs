@@ -166,6 +166,7 @@ window.e2ee = {
   report() { return metrics(state.pc, r => channelMedia()?.media?.boundPid(r) || "", e => channelMedia().stats(e)); },
   offers() { return window.offers; },
   audit() { return window.attachAudit; },
+  verified(id) { return channelMedia()?.verifiedAccount(id) || ""; },
 };
 window.ready = true;
 </script>`;
@@ -214,6 +215,7 @@ window.e2ee = {
   report() { return metrics(voice.pc, r => voice.mediaBinding(r), e => voice.mediaStats(e)); },
   offers() { return window.offers; },
   audit() { return window.attachAudit; },
+  verified(id) { return voice.verifiedAccount(id); },
   pc() { return !!voice.pc; },
 };
 window.ready = true;
@@ -433,6 +435,11 @@ try {
     if (!kf.served || !byPage.B) throw new Error(`no streams-API keyframe request was served: ${JSON.stringify({ kf, byPage })}`);
     if (byPage.A || byPage.D || byPage.E) throw new Error(`script-API pages asked through signaling: ${JSON.stringify(byPage)}`);
     log(`phase 9: streams-API keyframe requests after the first authenticated frame: ${JSON.stringify({ ...kf, byPage })}`);
+    // 10. Tiles tie to the verified account: the key a publisher's media
+    // decrypts with came from that roster account's device.
+    const tied = { BseesA: await call("B", "verified", "A"), AseesB: await call("A", "verified", "B"), AseesD: await call("A", "verified", "D") };
+    if (tied.BseesA !== "u-A" || tied.AseesB !== "u-B" || tied.AseesD !== "u-D") throw new Error("verified tile accounts: " + JSON.stringify(tied));
+    log("phase 10: tiles tied to verified key accounts", JSON.stringify(tied));
     log(`phase 8: transforms attached before every local description (${descriptions} descriptions, ${answers} answers to server offers, 0 violations)`);
 
     log("tap", JSON.stringify(await api("/tap")));

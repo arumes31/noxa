@@ -388,6 +388,16 @@ export class MediaKeyEngine {
         return { ok: true, epoch: control.epoch };
     }
 
+    // The account whose verified device delivered the key this publisher's
+    // media decrypts with (Task 2b: voice tiles tie to it), or "" when no key
+    // from it was installed or the roster no longer names that device.
+    verifiedPublisher(clientID) {
+        const state = this.#publishers.get(String(clientID));
+        if (!state?.epochs.length) return "";
+        const entry = this.#roster.find(c => String(c.client_id) === String(clientID));
+        return entry && inChannel(entry, this.self?.channelID) && entry.unique_id === state.principal && entry.media_device === state.device ? state.principal : "";
+    }
+
     // A publisher's authenticated membership digest that still differs from
     // what this device sees after the roster settled is shown as a warning
     // (never a decrypt gate: rosters legitimately race). Review 2a-A P3-2.

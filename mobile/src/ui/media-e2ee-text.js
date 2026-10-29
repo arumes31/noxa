@@ -11,6 +11,7 @@ addStrings({
         "e2ee.media.mismatch": "Warning: {names} sees different channel members than you. Someone may be receiving keys you cannot see.",
         "e2ee.reason.invisible": "Encrypted voice is unavailable while you are invisible. Become visible to join voice.",
         "e2ee.reason.channel_full": "This encrypted voice channel is full (at most 64 participants).",
+        "e2ee.media.tileAccount": "Encryption keys for this participant came from the verified account {account}. Frames prove channel membership, not which member sent them.",
         "e2ee.media.alone": "End-to-end encrypted · nobody else is here yet",
         "e2ee.media.partial": "End-to-end encrypted · {failed} device(s) could not receive the keys and cannot hear or see you",
         "e2ee.media.limits": "The server still sees who is in the channel and when and how much data is sent. Participants can record what they receive. Frames prove channel membership, not which member sent them: with the server's help, any participant could forge another participant's audio or video.",
@@ -34,6 +35,7 @@ addStrings({
         "e2ee.media.mismatch": "Warnung: {names} sieht andere Kanalmitglieder als du. Möglicherweise erhält jemand Schlüssel, den du nicht siehst.",
         "e2ee.reason.invisible": "Verschlüsselte Sprache ist nicht verfügbar, solange du unsichtbar bist. Werde sichtbar, um beizutreten.",
         "e2ee.reason.channel_full": "Dieser verschlüsselte Sprachkanal ist voll (höchstens 64 Teilnehmende).",
+        "e2ee.media.tileAccount": "Die Schlüssel dieser Person stammen vom verifizierten Konto {account}. Frames belegen die Kanalmitgliedschaft, nicht welches Mitglied sie sendete.",
         "e2ee.media.alone": "Ende-zu-Ende-verschlüsselt · noch niemand sonst hier",
         "e2ee.media.partial": "Ende-zu-Ende-verschlüsselt · {failed} Gerät(e) konnten die Schlüssel nicht erhalten und hören/sehen dich nicht",
         "e2ee.media.limits": "Der Server sieht weiterhin, wer im Kanal ist und wann wie viele Daten fließen. Teilnehmende können Empfangenes aufzeichnen. Frames belegen die Kanalmitgliedschaft, nicht welches Mitglied sie sendete: mit Hilfe des Servers könnte jede teilnehmende Person Ton oder Video einer anderen fälschen.",
@@ -57,6 +59,12 @@ addStrings({
 export function mediaErrorText(error) {
     const reason = mediaErrorReason(error);
     return reason ? t(`e2ee.reason.${reason}`) : String(error?.message || error || "");
+}
+
+/** Short label and full explanation of a tile's verified key account ("" when none). */
+export function tileAccount(account) {
+    if (!account) return null;
+    return { label: account.length > 12 ? account.slice(0, 12) + "…" : account, title: t("e2ee.media.tileAccount", { account }) };
 }
 
 /** The voice panel's encryption status line ("" when voice is off). */

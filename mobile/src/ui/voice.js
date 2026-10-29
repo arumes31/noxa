@@ -1,7 +1,7 @@
 // voice.js — Voice room (09): join a channel, speaking tiles, mute,
 // deafen, push-to-talk, whisper, raised hands, priority speaker, the
 // channel's chat, audio output, data used and watching streams.
-import { mediaErrorText, mediaStatusText } from "./media-e2ee-text.js";
+import { mediaErrorText, mediaStatusText, tileAccount } from "./media-e2ee-text.js";
 import { app, leaveVoice } from "../app.js";
 import * as settings from "../core/settings.js";
 import { joinWithPassword, lockBadge } from "./server-tools.js";
@@ -187,6 +187,10 @@ export function renderVoice(root) {
             member.self_muted || member.server_muted ? h("span", { class: "tile-state", "aria-label": t("voice.muted") }, "🔇") : null,
         ];
         const name = self ? `${member.nickname} (${t("dm.you")})` : member.nickname;
+        // Task 2b: the tile names the verified account whose keys this
+        // member's media decrypts with, not just the nickname.
+        const account = self ? null : tileAccount(voice.verifiedAccount?.(member.client_id));
+        if (account) badges.push(h("span", { class: "vc-badge vc-badge-account", title: account.title, "aria-label": account.title }, "🔒 " + account.label));
         const classes = `voice-tile${voice.speaking.has(member.client_id) ? " speaking" : ""}${member.priority_speaker ? " priority" : ""}`;
         const body = [avatar(member.nickname, "lg", member.unique_id), h("span", { class: "tile-name" }, name), h("span", { class: "vc-badges" }, badges)];
         if (self) return h("div", { class: classes }, body);
@@ -282,7 +286,7 @@ export function renderVoice(root) {
     const onChange = () => render();
     const onTracks = () => render();
     renderE2EE();
-    const listeners = [["state", onChange], ["speaking", onChange], ["stats", onChange], ["tracks", onTracks], ["whisper", onChange], ["transmit", renderMicState], ["media-status", renderE2EE]];
+    const listeners = [["state", onChange], ["speaking", onChange], ["stats", onChange], ["tracks", onTracks], ["whisper", onChange], ["transmit", renderMicState], ["media-status", () => { renderE2EE(); render(); }]];
     for (const [type, listener] of listeners) voice.addEventListener(type, listener);
     const onSnapshot = () => render();
     session.addEventListener("snapshot", onSnapshot);

@@ -1872,6 +1872,7 @@ onChannelMediaStatus(status => {
     element.hidden = !text;
     element.dataset.state = status?.state || "off";
     element.title = text ? t("e2ee.media.limits") : "";
+    videoRefreshNames(); // tiles follow the verified key accounts
 });
 
 // ---------------------------------------------------------------------------
@@ -3518,6 +3519,7 @@ window.__noxa = {
     connectFromLogin, renderTree, setChannelExpanded, setDetailsOpen, setDirectTargetVisible,
     trayUnread, syncTrayUnread,
     clientName, initials, fetchAvatar,
+    verifiedMediaAccount: clientID => channelMedia()?.verifiedAccount?.(clientID) || "",
     applyAppearance, toggleCompact, recentChannels, syncOwnChannel,
     playConnectionCue: (event = "connection_connected") => playEvent(event),
     startQualitySampler, stopQualitySampler,

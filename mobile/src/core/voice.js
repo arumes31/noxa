@@ -942,6 +942,8 @@ export class Voice extends EventTarget {
     mediaStats(endpoint) { return this.#media ? this.#media.stats(endpoint) : Promise.resolve(null); }
 
     /** The publication key an endpoint is bound to ("" = unbound: drops everything). */
+    /** The verified account whose keys a member's media decrypts with ("" when none). */
+    verifiedAccount(clientID) { return this.#media?.verifiedAccount?.(clientID) || ""; }
     mediaBinding(endpoint) { return this.#media?.media?.boundPid(endpoint) || ""; }
 
     /** Whispers back to whoever whispered here last. */

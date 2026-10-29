@@ -195,6 +195,7 @@ export class MediaSession {
     setRoster(clients) { this.roster = clients; this.engine?.setRoster(clients); }
     receive(control) { return this.engine ? this.engine.receive(control) : { ok: false, reason: "inactive" }; }
     publicationsChanged() { this.engine?.publicationsChanged(); }
+    verifiedAccount(clientID) { return this.engine?.verifiedPublisher(clientID) || ""; }
     status() { return this.engine ? { ...this.engine.status(), api: this.media?.api } : { state: "off" }; }
     stats(endpoint) { return this.media ? this.media.stats(endpoint) : Promise.resolve(null); }
 

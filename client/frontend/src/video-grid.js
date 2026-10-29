@@ -88,6 +88,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
                 <div class="vtile-label">
                     <span class="vtile-name"></span>
                     <span class="vtile-kind hidden"></span>
+                    <span class="vtile-account hidden"></span>
                     <span class="vtile-preview-age hidden"></span>
                 </div>
                 <span class="vtile-badge hidden"></span>
@@ -323,7 +324,15 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
         t.kindEl.textContent = tLabel(isScreen ? "polish.screen" : "polish.camera");
         t.kindEl.classList.remove("hidden");
         t.el.classList.toggle("is-screen", isScreen);
-        t.el.title = name + " — " + t.kindEl.textContent;
+        // Task 2b: the tile names the account whose verified device delivered
+        // the keys its media decrypts with, not just the nickname.
+        const account = V().verifiedMediaAccount?.(clid) || "";
+        const accountEl = t.el.querySelector(".vtile-account");
+        accountEl.textContent = account ? "🔒 " + (account.length > 12 ? account.slice(0, 12) + "…" : account) : "";
+        accountEl.classList.toggle("hidden", !account);
+        accountEl.title = account ? tLabel("e2ee.media.tileAccount", { account }) : "";
+        t.el.dataset.account = account;
+        t.el.title = name + " — " + t.kindEl.textContent + (account ? " — " + accountEl.title : "");
         const full = t.el.querySelector(".vtile-fullscreen");
         full.title = tLabel(document.fullscreenElement === t.el ? "polish.exitFullscreen" : "polish.fullscreen");
         full.setAttribute("aria-label", full.title + " · " + name);

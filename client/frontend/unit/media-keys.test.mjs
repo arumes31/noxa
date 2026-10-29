@@ -303,3 +303,23 @@ test("invisible entries neither receive keys nor count in the membership digest"
     const roster = [member("c1", "u1", "d1"), { ...member("c2", "u2", "d2"), status: "invisible" }];
     assert.deepEqual(recipientsOf(roster, me).map(r => r.principal), ["u1"]);
 });
+
+test("a tile's verified account is the roster account whose device delivered the installed key", async () => {
+    const { e } = engine();
+    e.setRoster([member("c7", "u7", "d7"), member("c-me", "u-me", "d-me")]);
+    e.start(me);
+    await flush();
+    assert.equal(e.verifiedPublisher("c7"), "", "no key installed yet");
+    assert.equal(e.receive(control(700, { client: "c7", sender: "u7", device: "d7" })).ok, true);
+    await flush();
+    assert.equal(e.verifiedPublisher("c7"), "u7");
+    // A forged control from another device of a different account never verifies c7.
+    assert.equal(e.receive(control(701, { client: "c7", sender: "u-evil", device: "d-evil" })).reason, "pending");
+    await flush();
+    assert.equal(e.verifiedPublisher("c7"), "u7");
+    // The roster moves c7 to another device: the old key no longer ties the tile.
+    e.setRoster([member("c7", "u7", "d7b"), member("c-me", "u-me", "d-me")]);
+    await flush();
+    assert.equal(e.verifiedPublisher("c7"), "");
+    e.stop();
+});
