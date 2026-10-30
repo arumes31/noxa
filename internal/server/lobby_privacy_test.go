@@ -10,7 +10,7 @@ func TestLobbyPrivacyAuthenticationAndStatusPreservation(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
 	conn := dialRetry(t, env.addr)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", HideLobbyPresence: true})
 	var auth netproto.AuthResponse
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &auth); err != nil || !auth.OK {
