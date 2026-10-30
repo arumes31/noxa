@@ -189,7 +189,7 @@ func (s *TCPServer) shareConversationRead(ctx context.Context, backend conversat
 	if s.deps.State == nil {
 		return false, nil
 	}
-	if member, ok := s.deps.State.GetClient(client.ID); !ok || member.Status == "invisible" {
+	if member, ok := s.deps.State.GetClient(client.ID); !ok || s.deps.State.PresenceHidden(member) {
 		return false, nil
 	}
 	receipts, ok := backend.(conversationReceiptStore)

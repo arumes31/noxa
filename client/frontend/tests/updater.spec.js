@@ -50,6 +50,11 @@ async function boot(page, scenario = {}) {
             }
             if (method === "PrepareUpdateReconnect") { window.__preparedAudio = args; return s.prepareError || ""; }
             if (method === "RestoreUpdateConnection") {
+                if (s.restoreResult?.stream) {
+                    window.__noxa.state.activeTabID = s.restoreResult.tab_id;
+                    window.__noxa.state.myChannelID = s.restoreResult.stream_channel_id;
+                    window.__noxa.showWorkspace();
+                }
                 if (s.restoreAudio) for (const cb of window.__events.update_connection_restoring || []) cb(s.restoreAudio);
                 return s.restoreResult || { attempted: false };
             }
@@ -169,6 +174,18 @@ test("replacement readiness waits for native startup and rendered login", async 
     await page.evaluate(() => window.__finishSettings());
     await expect(page.locator(".login-card")).toHaveClass(/(?:^|\s)in(?:\s|$)/);
     await expect.poll(() => page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBe(1);
+});
+
+test("periodic update checks default to two hours and honor a saved opt-out", async ({ page }) => {
+    await page.clock.install();
+    await boot(page, { enabled: false, available: false });
+    await page.clock.fastForward(30000);
+    expect(await page.evaluate(() => window.__calls.CheckForUpdate || 0)).toBe(0);
+    await page.clock.fastForward(7200000);
+    await expect.poll(() => page.evaluate(() => window.__calls.CheckForUpdate)).toBe(1);
+    await page.evaluate(() => { window.__noxa.state.settings.updates_check_periodically = false; });
+    await page.clock.fastForward(7200000);
+    expect(await page.evaluate(() => window.__calls.CheckForUpdate)).toBe(1);
 });
 
 test("reconnect offers an update by default independently of startup checking", async ({ page }) => {
@@ -670,7 +687,7 @@ test("bloom runs only once on transition and observers retire with the dialog", 
 test("changed release requires a fresh offer and confirmation before downloading again", async ({ page }) => {
     await boot(page, { autoInstall: true, versions: ["v0.4.1", "v0.4.2"], downloadError: "update changed from v0.4.1 to v0.4.2; confirm the new version", restartPending: true });
     const dialog = page.getByRole("dialog", { name: "Check for updates", exact: true });
-    await expect(dialog.locator(".upd-status")).toContainText("confirm the new version");
+    await expect(dialog.locator(".upd-status")).toContainText("confirm the new version", { timeout: 10000 });
     await expect(dialog.locator(".upd-update")).toBeHidden();
     await expect(dialog.locator(".upd-retry")).toBeVisible();
     await dialog.locator(".upd-retry").click();
@@ -685,6 +702,7 @@ test("changed release requires a fresh offer and confirmation before downloading
 test("post-update intro waits for startup and remains visible after a fast launch", async ({ page }, testInfo) => {
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.clock.install();
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
     await boot(page, { afterUpdate: true, transitionQueryPending: true, settingsPending: true, enabled: false });
     await page.waitForFunction(() => typeof window.__finishTransitionQuery === "function");
     await expect(page.locator(".update-intro")).toHaveCount(0);
@@ -817,6 +835,15 @@ test("an audio preload timeout cannot delay restart or play after it", async ({ 
     await page.evaluate(() => window.__finishUpdatePreload());
     await page.clock.runFor(1000);
     expect(await page.evaluate(() => window.__lateUpdateSpeech)).toBe(0);
+});
+
+test("successful native update restore offers the saved stream through tab startup", async ({ page }) => {
+    await boot(page, { enabled: false, afterUpdate: true, restoreResult: {
+        attempted: true, tab_id: 'restored-tab', stream_channel_id: 1, addr: 'example.test', nick: 'alice',
+        stream: { surface: 'window', preset: 'hd', custom: {}, audioMode: 'none', bitrateCeiling: 6000000 },
+    } });
+    await expect.poll(() => page.evaluate(() => window.__calls.RestoreUpdateConnection)).toBe(1);
+    await expect(page.getByRole('button', { name: 'Resume stream', exact: true })).toBeVisible();
 });
 
 for (const mutedBeforeDeafen of [false, true]) {

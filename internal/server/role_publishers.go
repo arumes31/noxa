@@ -31,7 +31,7 @@ func (s *TCPServer) refreshRolePublishers(e *authorization.RoleEvaluator) {
 		if !ok || !client.isAuthed() {
 			continue
 		}
-		identities[client.ID] = roleMediaIdentity{client.userID(), client.uniqueID(), member.Status == "invisible", client.rulesBlocked()}
+		identities[client.ID] = roleMediaIdentity{client.userID(), client.uniqueID(), s.deps.State.PresenceHidden(member), client.rulesBlocked()}
 	}
 	s.deps.Voice.SetPublisherGuard(func(pair webrtc.PublisherAccess) bool {
 		sender, senderOK := identities[pair.PublisherID]

@@ -2,6 +2,7 @@
 // on the left and grouped rows (label + help left, control right) per page.
 // Page ids, their saved keys and deep links live in settings-catalog.js.
 import { icon } from "./icons.js";
+import { UPDATE_INTERVAL_HOURS, updateIntervalHours } from "./update-periodic.js";
 import { SETTINGS_CATEGORIES, resetPageDraft, resolveSettingsTarget } from "./settings-catalog.js";
 import { buildSettingsSearchIndex, searchSettings } from "./settings-search.js";
 import { capturedHotkey, hotkeyLabel } from "./hotkey-input.js";
@@ -384,7 +385,10 @@ function pageGeneral() {
         group(t("settings.group.updates"), "updates",
             row(t("settings.install.updates.at.startup"), checkbox(s.updates_auto_install !== false, (v) => { s.updates_auto_install = v; }), "saved", { key: "updates_auto_install", help: t("settings.install.updates.at.startup.help") }),
             row(t("settings.check.for.updates.at.startup"), checkbox(s.updates_auto_check !== false, (v) => { s.updates_auto_check = v; }), "startup", { key: "updates_auto_check" }),
-            row(t("settings.check.for.updates.on.reconnect"), checkbox(s.updates_check_on_reconnect !== false, (v) => { s.updates_check_on_reconnect = v; }), "", { key: "updates_check_on_reconnect" })),
+            row(t("settings.check.for.updates.on.reconnect"), checkbox(s.updates_check_on_reconnect !== false, (v) => { s.updates_check_on_reconnect = v; }), "", { key: "updates_check_on_reconnect" }),
+            row(t("settings.updates.periodic"), checkbox(s.updates_check_periodically !== false, v => { s.updates_check_periodically = v; }), "", { key: "updates_check_periodically" }),
+            row(t("settings.updates.interval"), selectOf(UPDATE_INTERVAL_HOURS.map(hours => [String(hours), t("settings.updates.hours", { hours })]),
+                String(updateIntervalHours(s.updates_check_interval_hours)), v => { s.updates_check_interval_hours = Number(v); }), "saved", { key: "updates_check_interval_hours" })),
         group(t("settings.downloads"), "downloads",
             row(t("settings.download.folder"), folderWrap, "", { key: "download_folder", help: t("settings.downloads.from.the.file.browser.land.here.without.asking.leave.it.unset.to") })),
     );
@@ -1194,7 +1198,6 @@ function pageChat() {
             row(t("settings.layout"), selectOf(
                 [["irc", t("settings.irc.lines")], ["bubbles", t("settings.bubbles")]],
                 s.chat_layout || "irc", (v) => { s.chat_layout = v; }), "", { key: "chat_layout" }),
-            row(t("midnight.linkPreviews"), checkbox(s.link_previews !== false, value => { s.link_previews = value; }), "", { key: "link_previews", help: t("midnight.linkPreviewsHelp") }),
             row(t("delivery.delay"), selectOf([[0, t("delivery.off")], ...[5, 10, 30].map(seconds => [seconds, t("delivery.seconds", { seconds })])],
                 s.chat_undo_seconds ?? 5, value => { s.chat_undo_seconds = Number(value); }), "", { key: "chat_undo_seconds", help: t("delivery.delayHelp") }),
             row(t("settings.font.size"), slider(s.chat_font_size || 14, 12, 18, (v) => { s.chat_font_size = v; }), "", { key: "chat_font_size" })),
@@ -1213,9 +1216,12 @@ function pagePrivacy() {
     // (4b) encryption note.
     return page(
         group("", "identity", securitySettings(s)),
+        group(t("settings.presence"), "presence",
+            row(t("settings.privacy.hideLobby"), checkbox(s.hide_lobby_presence, v => { s.hide_lobby_presence = v; }), "saved", { key: "hide_lobby_presence", help: t("settings.privacy.hideLobbyHelp") })),
         // One switch for read receipts and typing, DMs and private groups.
         group(t("settings.group.chatActivity"), "activity",
-            row(t("dm.privacy.activity"), checkbox(!s.hide_chat_activity, (v) => { s.hide_chat_activity = !v; }), "", { key: "hide_chat_activity" })),
+            row(t("dm.privacy.activity"), checkbox(!s.hide_chat_activity, (v) => { s.hide_chat_activity = !v; }), "", { key: "hide_chat_activity" }),
+            row(t("midnight.linkPreviews"), checkbox(s.link_previews !== false, value => { s.link_previews = value; }), "", { key: "link_previews", help: t("midnight.linkPreviewsHelp") })),
         group(t("settings.group.chatLogs"), "logs",
             row(t("settings.log.channel.chats.to.file"), checkbox(s.log_channel_chat, (v) => { s.log_channel_chat = v; }), "", { key: "log_channel_chat" }),
             row(t("settings.log.private.chats.to.file"), checkbox(s.log_private_chat, (v) => { s.log_private_chat = v; }), "", { key: "log_private_chat" }),

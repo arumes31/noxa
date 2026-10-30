@@ -19,9 +19,11 @@ test.beforeEach(async ({ page }) => {
         const capture = () => document.createElement("canvas").captureStream(1);
         const localStream = capture();
         const camera = localStream.getVideoTracks()[0];
-        const transceivers = [];
-        const pc = {
+        const makePeer = () => {
+          const transceivers = [];
+          return {
             signalingState: "stable",
+            close() { this.signalingState = "closed"; transceivers.forEach(t => t.stop()); },
             getSenders: () => transceivers.filter(t => !t.stopped).map(t => t.sender),
             getTransceivers: () => transceivers.filter(t => !t.stopped),
             createOffer: async () => ({ type: "offer", sdp: "test-offer" }),
@@ -47,9 +49,11 @@ test.beforeEach(async ({ page }) => {
                 transceivers.push(transceiver);
                 return transceiver;
             },
+          };
         };
+        const pc = makePeer();
         const cameraSender = pc.addTransceiver(camera, { direction: "sendrecv" }).sender;
-        window.__media = { camera, cameraSender, offers: [], errors: [], notices: [], displayTracks: [] };
+        window.__media = { makePeer, camera, cameraSender, offers: [], errors: [], notices: [], displayTracks: [] };
         window.__noxa = { state: { pc, localStream, serverGeneration: 1, activeTabID: "media-tab", settings: {}, myChannelID: 1,
             myClientID: "self", clients: [{ client_id: "peer", channel_id: 1 }] },
             $: id => document.getElementById(id), sysMsg: message => window.__media.errors.push(message),
@@ -106,6 +110,37 @@ test.beforeEach(async ({ page }) => {
     });
 });
 
+test("post-update stream prompt waits for an explicit source choice and preserves quality", async ({ page }) => {
+    await page.evaluate(async () => {
+        const bar = document.createElement('div'); bar.id = 'voice-bar'; document.body.append(bar);
+        const { offerUpdateShareResume } = await import('/src/update-share-resume.js');
+        offerUpdateShareResume({ tab_id: 'media-tab', stream_channel_id: 1,
+            stream: { surface: 'window', preset: 'hdMotion', custom: {}, audioMode: 'none', bitrateCeiling: 6000000 } });
+    });
+    expect(await page.evaluate(() => window.__media.displayTracks.length)).toBe(0);
+    await page.getByRole('button', { name: 'Resume stream', exact: true }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    expect(await page.evaluate(() => window.__media.displayTracks.length)).toBe(0);
+    await expect(page.locator('.sh-preset input:checked')).toHaveValue('hdMotion');
+    await expect(page.locator('.sh-bitrate input:checked')).toHaveValue('6000000');
+    await expect(page.locator('.sh-audio input:checked')).toHaveValue('none');
+});
+
+test("leaving the restored channel permanently removes the stream resume prompt", async ({ page }) => {
+    await page.evaluate(async () => {
+        const bar = document.createElement('div'); bar.id = 'voice-bar'; document.body.append(bar);
+        const { offerUpdateShareResume } = await import('/src/update-share-resume.js');
+        offerUpdateShareResume({ tab_id: 'media-tab', stream_channel_id: 1,
+            stream: { surface: 'window', preset: 'hd', custom: {}, audioMode: 'none', bitrateCeiling: 6000000 } });
+    });
+    const resume = page.getByRole('button', { name: 'Resume stream', exact: true });
+    await expect(resume).toBeVisible();
+    await page.evaluate(() => { window.__noxa.state.myChannelID = 0; });
+    await expect(resume).toHaveCount(0);
+    await page.evaluate(() => { window.__noxa.state.myChannelID = 1; });
+    await expect(resume).toHaveCount(0);
+});
+
 test("encrypted channel media never uploads a plaintext screen preview", async ({ page }) => {
     await page.evaluate(() => {
         const control = window.go.main.App.VideoStreamControlForTab;
@@ -153,6 +188,49 @@ test("repeated screen shares reuse senders and declare shared audio after every 
         expect(await page.evaluate(() => window.__captureLeases.acquired.length)).toBe(i + 1);
     }
     await page.evaluate(() => window.__media.audioContext.close());
+});
+
+test("reconnect republishes the original screen without another capture request", async ({ page }) => {
+    await page.locator('#voice-screen').click();
+    await chooseShareOption(page, 'preset', 'hd');
+    await page.getByRole('button', { name: 'Choose screen or window…', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Start sharing', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
+    const result = await page.evaluate(async () => {
+        const { state } = window.__noxa, video = window.__media.video;
+        const original = state.shareStream;
+        video.pauseShareForReconnect();
+        const paused = !original.getVideoTracks()[0].enabled && state.shareStream === null;
+        (await import('/src/stream-controls.js')).stopStreamSession();
+        video.resetCameraState();
+        const retained = original.getVideoTracks()[0].readyState;
+        const oldPeer = state.pc;
+        oldPeer.close(); state.pc = window.__media.makePeer();
+        // The real voice teardown discards transceivers owned by the old peer.
+        state.shareVideoTransceiver = null; state.shareAudioTransceiver = null;
+        state.serverGeneration++;
+        await video.resumeShareAfterReconnect();
+        const answer = { paused, retained, same: state.shareStream === original, active: state.screenSharing,
+            enabled: original.getVideoTracks()[0].enabled, captures: window.__media.displayTracks.length,
+            replacementPeer: state.pc !== oldPeer && state.pc.getSenders().some(sender => sender.track === original.getVideoTracks()[0]),
+            settings: video.updateShareSettings() };
+        await video.stopShare();
+        return answer;
+    });
+    expect(result).toMatchObject({ paused: true, retained: 'live', same: true, active: true, enabled: true, captures: 1, replacementPeer: true, settings: { preset: 'hd', audioMode: 'none' } });
+});
+
+test("stopping a pending reconnect releases the original capture and cannot restart it", async ({ page }) => {
+    await page.locator('#voice-screen').click();
+    await page.getByRole('button', { name: 'Choose screen or window…', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Start sharing', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
+    await page.evaluate(() => window.__media.video.pauseShareForReconnect());
+    await page.locator('#voice-screen').click();
+    expect(await page.evaluate(async () => {
+        await window.__media.video.resumeShareAfterReconnect();
+        return { pending: window.__media.video.shareResumePending(), state: window.__media.displayTracks[0].readyState, sharing: window.__noxa.state.screenSharing };
+    })).toEqual({ pending: false, state: 'ended', sharing: false });
 });
 
 async function installApplicationCapture(page, label = "Application Audio", surface = "window") {

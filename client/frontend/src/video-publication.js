@@ -22,6 +22,7 @@ import { hardwareVideoEncodeAvailable, videoSenderCaptureSample } from "./video-
 import { sampleSenderStats } from "./peer-stats.js";
 import { createScreenResolutionController } from "./screen-resolution.js";
 import { createScreenStartupAttempt } from "./video-startup-plan.js";
+import { createShareResume } from "./share-resume.js";
 import { renegotiate, negotiateOffer, queuePeerNegotiation } from "./video-negotiation.js";
 const V = () => window.__noxa;
 
@@ -525,11 +526,48 @@ export function createVideoPublication({ policy }) {
     let shareDialogID = 0;
     // The Studio program currently published on the screen slot, if any.
     let studioShare = null;
+    const resumeScope = () => { const s = V().state; return { tabID: s.activeTabID, channelID: s.myChannelID, uid: s.myUniqueID }; };
+    const shareResume = createShareResume({ stop: stopDisplayCapture, changed: () => syncShareButton() });
+    globalThis.addEventListener?.("pagehide", () => shareResume.cancel());
+    function pauseShareForReconnect() {
+        const { state } = V();
+        if (!state.screenSharing || !shareResume.pause(state.shareStream)) return;
+        // Detach ownership before teardown, keeping the original region/Studio
+        // source graph alive. Its tracks are disabled throughout the outage.
+        state.shareStream = null;
+        state.screenSharing = false;
+        syncShareButton();
+    }
+    function cancelShareResume() { shareResume.cancel(); }
+    function shareResumePending() { return !!shareResume.pending(); }
+    async function resumeShareAfterReconnect() {
+        const { state } = V();
+        if (!state.pc || state.shareStarting || state.screenSharing || state.myChannelID <= 0) return;
+        const pending = shareResume.take(resumeScope());
+        if (!pending) return;
+        const request = {}; state.shareStarting = request;
+        try {
+            if (!await startShare({ ...pending.options, selectedDisplay: pending.stream })) {
+                stopDisplayCapture(pending.stream); pending.options.studio?.onEnded?.();
+            }
+        } catch { stopDisplayCapture(pending.stream); pending.options.studio?.onEnded?.(); }
+        finally { if (state.shareStarting === request) state.shareStarting = null; syncShareButton(); }
+    }
+    function updateShareSettings() {
+        const { state } = V(), options = state.screenSharing && shareResume.settings(state.shareStream);
+        if (!options) return null;
+        const { surface, preset, custom, bitrateCeiling, audioMode } = options;
+        return { surface, preset, custom, bitrateCeiling, audioMode };
+    }
+    function openResumedShare(settings) {
+        if (settings.surface === "studio") { document.getElementById("voice-studio")?.click(); return; }
+        openShareDialog(false, settings.preset, settings.audioMode, settings.surface, settings.custom, settings.bitrateCeiling);
+    }
 
     function syncShareButton() {
         const btn = V().$("voice-screen");
         if (!btn) return;
-        const sharing = !!V().state.screenSharing;
+        const sharing = !!V().state.screenSharing || shareResumePending();
         if (!sharing) stopShareStatus();
         btn.disabled = !!V().state.shareStarting || !!V().state.shareStopping;
         const label = sharing ? tLabel("voice.stopShare") : tLabel("voice.startShare");
@@ -547,6 +585,7 @@ export function createVideoPublication({ policy }) {
         if (updateStartupBlocked()) return;
         const { state } = V();
         if (state.shareStarting || state.shareStopping) return;
+        if (shareResumePending()) { cancelShareResume(); return; }
         if (state.screenSharing) {
             await confirmStopShare();
             return;
@@ -563,7 +602,7 @@ export function createVideoPublication({ policy }) {
         overlay.appendChild(view.element);
         const { quality, $ } = view;
         const sources = () => overlay.querySelectorAll(`input[name="${view.sourceName}"]`);
-        const audioChoices = new Map();
+        const audioChoices = new Map([[initialSurface, initialAudio]]);
         if (replacing) audioChoices.set(initialSurface,
             V().state.shareStream?.getAudioTracks().some(track => track.readyState === "live") ? initialAudio : "none");
         // Keep explicit choices per source so toggling sources cannot undo an override.
@@ -913,6 +952,10 @@ export function createVideoPublication({ policy }) {
             await doStopShare();
             return;
         }
+        const resumeOptions = { surface, ...selection, audioMode, studio };
+        // Keep the same selection object so live quality changes are retained.
+        Object.defineProperties(resumeOptions, Object.fromEntries(["preset", "custom", "bitrateCeiling"].map(key => [key, { enumerable: true, get: () => selection[key] }])));
+        shareResume.remember(display, resumeOptions, resumeScope());
         syncShareButton();
         if (requestedAudioMode !== "none" && audioMode === "none") {
             V().toast(tLabel(requestedAudioMode === "application" ? "share.applicationUnavailable" : "share.audioNotSelected"), "warn");
@@ -949,7 +992,9 @@ export function createVideoPublication({ policy }) {
     }
 
     function studioShareActive(stream) {
-        return !!studioShare && V().state.screenSharing && (!stream || studioShare.stream === stream);
+        const pending = shareResume.pending();
+        return (!!studioShare && V().state.screenSharing && (!stream || studioShare.stream === stream)) ||
+            (!!pending?.options.studio && (!stream || pending.stream === stream));
     }
 
     function openLiveShareQuality(stream, pc, scope, profile, selection) {
@@ -1109,6 +1154,7 @@ export function createVideoPublication({ policy }) {
     // doStopShare stops only display tracks; camera publication is independent.
     async function doStopShare() {
         const { state } = V();
+        cancelShareResume();
         if (!state.screenSharing) return;
         const pc = state.pc;
         const generation = state.serverGeneration;
@@ -1309,5 +1355,6 @@ export function createVideoPublication({ policy }) {
         }
     }
 
-    return { applyVideoLimits, shareToggle, resetCameraState, cameraToggle, applySendCaps, adaptScreenResolution, retryVideoHardware, syncCameraButton, syncShareButton, startStudioShare, studioShareActive, stopShare: doStopShare };
+    return { applyVideoLimits, shareToggle, resetCameraState, cameraToggle, applySendCaps, adaptScreenResolution, retryVideoHardware, syncCameraButton, syncShareButton, startStudioShare, studioShareActive, stopShare: doStopShare,
+        pauseShareForReconnect, cancelShareResume, shareResumePending, resumeShareAfterReconnect, updateShareSettings, openResumedShare };
 }

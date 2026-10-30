@@ -121,6 +121,30 @@ async function addCamera(page, color) {
 }
 const diagnostics = page => page.evaluate(() => window.__studio.studioDiagnostics());
 
+test("Studio reconnect keeps the program capture and stops all sources on cancellation", async ({ page }) => {
+    const studio = await open(page);
+    await addDisplay(page, RED);
+    await studio.getByRole("button", { name: "Go live", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
+    const result = await page.evaluate(async () => {
+        const original = window.__noxa.state.shareStream;
+        window.__video.pauseShareForReconnect();
+        (await import('/src/modal.js')).closeServerDialogs('disconnected');
+        (await import('/src/stream-controls.js')).stopStreamSession();
+        window.__video.resetCameraState();
+        const retained = !!window.__studio.studioSessionForTest();
+        window.__noxa.state.serverGeneration++;
+        await window.__video.resumeShareAfterReconnect();
+        const same = window.__noxa.state.shareStream === original;
+        window.__video.pauseShareForReconnect();
+        window.__video.cancelShareResume();
+        return { retained, same, captures: window.__captures.displayCalls,
+            source: window.__captures.display[0].getVideoTracks()[0].readyState,
+            disposed: !window.__studio.studioSessionForTest() };
+    });
+    expect(result).toEqual({ retained: true, same: true, captures: 1, source: 'ended', disposed: true });
+});
+
 test("opening the Studio never captures; draft edits stay off the program until Take", async ({ page }) => {
     const studio = await open(page);
     expect(await page.evaluate(() => [window.__captures.displayCalls, window.__captures.cameraCalls])).toEqual([0, 0]);

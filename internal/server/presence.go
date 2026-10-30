@@ -111,6 +111,9 @@ func (s *TCPServer) handleSetStatus(ctx context.Context, client *Client, f *netp
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed set_status: "+err.Error())
 	}
+	if msg.PrivacyOnly && msg.HideLobbyPresence == nil {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "missing lobby privacy preference")
+	}
 	status := strings.ToLower(strings.TrimSpace(msg.Status))
 	if !validStatuses[status] {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid status (want online|away|busy|invisible)")
@@ -133,7 +136,18 @@ func (s *TCPServer) handleSetStatus(ctx context.Context, client *Client, f *netp
 		if status == "invisible" && !e.Evaluate(client.userID(), 0, authorization.Administrator).Allowed {
 			return s.roleError(ctx, client, authorization.ErrRoleForbidden)
 		}
-		s.deps.State.SetStatus(client.ID, status, msg.Message)
+		if msg.PrivacyOnly {
+			previous, ok := s.deps.State.GetClient(client.ID)
+			if !ok {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session presence unavailable")
+			}
+			status, msg.Message = previous.Status, previous.StatusMessage
+		} else {
+			s.deps.State.SetStatus(client.ID, status, msg.Message)
+		}
+		if msg.HideLobbyPresence != nil {
+			s.deps.State.SetLobbyPrivacy(client.ID, *msg.HideLobbyPresence)
+		}
 		current, ok := s.deps.State.GetClient(client.ID)
 		if !ok || current.Status != status || current.StatusMessage != msg.Message {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session presence unavailable")
@@ -141,8 +155,13 @@ func (s *TCPServer) handleSetStatus(ctx context.Context, client *Client, f *netp
 		s.refreshRolePublishers(e)
 		s.broadcastEvent(eventStatusChanged, statusEvent{ClientID: client.ID, Status: status, Message: msg.Message})
 		if msg.AckRequested {
+			var lobbyPrivacy *bool
+			if msg.HideLobbyPresence != nil {
+				lobbyPrivacy = &current.HideLobbyPresence
+			}
 			return s.writeCommittedReply(client, netproto.MsgStatusSaved, netproto.StatusSaved{
 				ClientID: client.ID, Status: status, Message: msg.Message,
+				HideLobbyPresence: lobbyPrivacy,
 			})
 		}
 		return nil

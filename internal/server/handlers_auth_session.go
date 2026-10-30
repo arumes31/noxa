@@ -197,7 +197,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		Nickname:           id.nickname,
 		Guest:              id.guest,
 		TLSFingerprint:     s.tlsFingerprint,
-		Capabilities:       []string{netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity},
+		Capabilities:       []string{netproto.CapabilityLobbyPrivacy, netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity},
 	}
 	if s.deps.Relay != nil {
 		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityManagedRelay)
@@ -285,11 +285,14 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 // role mode final ban admission, identity and this publication share the policy
 // and metadata barriers; slow handshake delivery happens after releasing them.
 func (s *TCPServer) publishAuthenticatedSession(ctx context.Context, client *Client, id authIdentity) {
+	client.mu.Lock()
+	hideLobby := client.hideLobbyPresence
+	client.mu.Unlock()
 	if s.deps.Relay != nil {
 		s.deps.Relay.Register(client.ID, id.uniqueID)
 	}
 	if s.deps.State != nil {
-		s.deps.State.AddClient(&state.Client{ClientID: client.ID, UserID: id.userID, UniqueID: id.uniqueID, Nickname: id.nickname, ConnectedAt: time.Now(), Conn: client.Conn, IsBot: s.ClientIsBot(ctx, client), OnMobile: client.isWebTransport()})
+		s.deps.State.AddClient(&state.Client{ClientID: client.ID, UserID: id.userID, UniqueID: id.uniqueID, Nickname: id.nickname, ConnectedAt: time.Now(), Conn: client.Conn, IsBot: s.ClientIsBot(ctx, client), OnMobile: client.isWebTransport(), HideLobbyPresence: hideLobby})
 		if x := client.x25519(); x != "" {
 			s.deps.State.SetE2EPublicKey(client.ID, x)
 		}

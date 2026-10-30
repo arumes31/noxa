@@ -28,6 +28,39 @@ test.beforeEach(async ({ page }) => {
     await page.waitForFunction(() => !!window.__noxa?.openSettings);
 });
 
+test("update switches keep their width and periodic preferences persist", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.evaluate(() => window.__noxa.openSettings('general', { section: 'updates' }));
+    const periodic = page.getByLabel('Check for updates periodically', { exact: true });
+    await expect(periodic).toBeChecked();
+    const interval = page.getByLabel('Check interval (hours)', { exact: true });
+    await expect(interval).toHaveValue('2');
+    const widths = await page.locator('[data-section="updates"] input.set-switch').evaluateAll(nodes => nodes.map(el => el.getBoundingClientRect().width));
+    expect(widths.length).toBeGreaterThan(0);
+    expect(widths.every(width => width === 42)).toBe(true);
+    await periodic.uncheck(); await interval.selectOption('4');
+    await page.getByRole('button', { name: 'Apply', exact: true }).click();
+    expect(await page.evaluate(() => window.__saved.at(-1))).toMatchObject({ updates_check_periodically: false, updates_check_interval_hours: 4 });
+});
+
+test("Privacy contains lobby visibility and link previews with lobby hiding off by default", async ({ page }) => {
+    await page.evaluate(() => window.__noxa.openSettings({ setting: 'hide_lobby_presence' }));
+    await expect(page.getByRole('tab', { name: 'Privacy', exact: true })).toHaveAttribute('aria-selected', 'true');
+    const hidden = page.getByLabel('Hide my presence in the lobby', { exact: true });
+    await expect(hidden).not.toBeChecked();
+    await expect(page.locator('[data-setting="link_previews"]')).toHaveCount(1);
+    await hidden.check();
+    await page.getByRole('button', { name: 'Apply', exact: true }).click();
+    expect(await page.evaluate(() => window.__saved.at(-1)?.hide_lobby_presence)).toBe(true);
+});
+
+test("saved privacy with an unconfirmed server displays a separate warning", async ({ page }) => {
+    await page.evaluate(() => {
+        for (const callback of window.__events.settings_lobby_privacy_warning || []) callback('server did not confirm');
+    });
+    await expect(page.locator('.toast').filter({ hasText: 'Settings saved. A server could not confirm lobby privacy.' })).toBeVisible();
+});
+
 test("rail lists the categories, deep links open pages, sections and settings", async ({ page }) => {
     await page.evaluate(() => window.__noxa.openSettings());
     const dialog = page.getByRole("dialog", { name: "Settings", exact: true });

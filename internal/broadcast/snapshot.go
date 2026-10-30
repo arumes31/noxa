@@ -185,7 +185,7 @@ func BuildSnapshot(sm *state.Manager, forAdmin bool, viewerUniqueID string) *Tre
 	// Populate clients per channel (filtering invisible users per viewer).
 	total := 0
 	for _, c := range members {
-		if c.Status == "invisible" && !forAdmin && c.UniqueID != viewerUniqueID {
+		if sm.PresenceHidden(c) && !forAdmin && c.UniqueID != viewerUniqueID {
 			continue
 		}
 		total++

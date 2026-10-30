@@ -723,7 +723,7 @@ func (s *TCPServer) parseMentions(ctx context.Context, client *Client, channelID
 	out := map[string]bool{}
 	addMention := func(member *state.Client) {
 		if !s.roleAllowed(ctx, client, member.ChannelID, authorization.ViewChannel) ||
-			(member.Status == "invisible" && !s.roleAllowed(ctx, client, 0, authorization.ViewConnectionInfo)) {
+			(s.deps.State.PresenceHidden(member) && !s.roleAllowed(ctx, client, 0, authorization.ViewConnectionInfo)) {
 			return
 		}
 		out[member.UniqueID] = true

@@ -159,7 +159,7 @@ func (s *TCPServer) clientInvisible(client *Client) bool {
 		return false
 	}
 	c, ok := s.deps.State.GetClient(client.ID)
-	return ok && c.Status == "invisible"
+	return ok && s.deps.State.PresenceHidden(c)
 }
 
 // olmDoorbells coalesces rings per target device.

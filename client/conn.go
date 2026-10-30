@@ -61,6 +61,10 @@ type connManager struct {
 	displayNameMu                  sync.Mutex
 	audioStateMu                   sync.Mutex
 	supportsAudioState             bool
+	supportsLobbyPrivacy           bool
+	lobbyPrivacyApplied            bool
+	lobbyPrivacyPreference         func() bool
+	reconcileLobbyPrivacy          func() error
 	supportsVoiceTelemetry         bool
 	supportsStreamVideoQuality     bool
 	supportsStreamDiagnostics      bool
@@ -508,6 +512,9 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.mu.Unlock()
 	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	authMsg.ClientVersion = version.Short()
+	if m.lobbyPrivacyPreference != nil {
+		authMsg.HideLobbyPresence = m.lobbyPrivacyPreference()
+	}
 	conn, err := m.dialTransport(addr)
 	if err != nil {
 		if errors.Is(err, errFingerprintMismatch) || errors.Is(err, errTrustStoreUnavailable) {
@@ -587,6 +594,11 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 		_ = conn.Close()
 		return "unsupported server authorization model; upgrade noXa"
 	}
+	if authMsg.HideLobbyPresence && !slices.Contains(resp.Capabilities, netproto.CapabilityLobbyPrivacy) {
+		m.markReconnectTerminal()
+		_ = conn.Close()
+		return "this server does not support hiding lobby presence; upgrade the server or disable this privacy setting"
+	}
 	if (resp.MediaLimits != nil && !resp.MediaLimits.Valid()) || (resp.MediaLimitsRevision != 0 && resp.MediaLimits == nil) {
 		m.markReconnectTerminal()
 		_ = conn.Close()
@@ -628,6 +640,8 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.displayName = authMsg.Nickname
 	m.authorizationModel = resp.AuthorizationModel
 	m.supportsAudioState = slices.Contains(resp.Capabilities, netproto.CapabilityAudioState)
+	m.supportsLobbyPrivacy = slices.Contains(resp.Capabilities, netproto.CapabilityLobbyPrivacy)
+	m.lobbyPrivacyApplied = authMsg.HideLobbyPresence
 	m.supportsVoiceTelemetry = slices.Contains(resp.Capabilities, netproto.CapabilityVoiceTelemetry)
 	m.supportsStreamVideoQuality = slices.Contains(resp.Capabilities, netproto.CapabilityStreamVideoQuality)
 	m.supportsStreamDiagnostics = slices.Contains(resp.Capabilities, netproto.CapabilityStreamDiagnostics)
@@ -674,6 +688,14 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 		m.approvePasskeyDevices(conn)
 		m.startRatchetRecorded(conn)
 	})
+	// Settings may change during authentication. The reader now permits a
+	// confirmed correction without exposing another tab's settings failure.
+	if m.reconcileLobbyPrivacy != nil {
+		if err := m.reconcileLobbyPrivacy(); err != nil {
+			_ = conn.Close()
+			return err.Error()
+		}
+	}
 	return ""
 }
 

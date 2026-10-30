@@ -20,7 +20,7 @@ func (s *TCPServer) roleAvatarGet(ctx context.Context, client *Client, msg netpr
 			}
 			member, ok := s.deps.State.GetClientByUniqueID(msg.UniqueID)
 			if !ok || !e.Evaluate(client.userID(), member.ChannelID, authorization.ViewChannel).Allowed ||
-				(member.Status == "invisible" && !e.Evaluate(client.userID(), 0, authorization.ViewConnectionInfo).Allowed) {
+				(s.deps.State.PresenceHidden(member) && !e.Evaluate(client.userID(), 0, authorization.ViewConnectionInfo).Allowed) {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "no avatar for this user")
 			}
 		}

@@ -359,8 +359,14 @@ func (a *App) newTabManager(id string, identity *identity) *connManager {
 	allowPlaintext := a.settings.AllowPlaintext
 	a.settingsMu.Unlock()
 	cm := newConnManager(a.ctx)
+	cm.lobbyPrivacyPreference = func() bool {
+		a.settingsMu.Lock()
+		defer a.settingsMu.Unlock()
+		return a.settings.HideLobbyPresence
+	}
 	cm.id = identity
 	cm.tabID = id
+	cm.reconcileLobbyPrivacy = func() error { return a.applyLobbyPrivacyFor(cm) }
 	cm.sink = tabSink{app: a, tabID: id, owner: cm}
 	cm.dmChanges = a.recordDMChange
 	cm.ratchetProject = a.projectRatchetRecord

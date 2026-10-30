@@ -917,6 +917,34 @@ func (m *Manager) SetStatus(clientID, status, message string) {
 	}
 }
 
+// PresenceHidden applies lobby privacy to channel zero (the connected lobby)
+// and legacy home-channel memberships.
+// Joining any ordinary voice channel makes that membership visible again.
+func (m *Manager) PresenceHidden(c *Client) bool {
+	if c == nil {
+		return false
+	}
+	if c.Status == "invisible" {
+		return true
+	}
+	if !c.HideLobbyPresence {
+		return false
+	}
+	if c.ChannelID == 0 {
+		return true
+	}
+	ch, ok := m.GetChannel(c.ChannelID)
+	return ok && ch.SystemKind == "home"
+}
+
+func (m *Manager) SetLobbyPrivacy(clientID string, hidden bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c := m.clients[clientID]; c != nil {
+		c.HideLobbyPresence = hidden
+	}
+}
+
 // SpeakingClients returns a snapshot slice of all current SpeakingStates.
 func (m *Manager) SpeakingClients() []*SpeakingState {
 	m.mu.RLock()

@@ -378,4 +378,13 @@ func TestRoleServerKickNormalizesInvisibleAndMissingTargets(t *testing.T) {
 			t.Fatal(got)
 		}
 	}
+	// Ordinary members' lobby privacy is not immunity from moderation.
+	env.state.SetStatus(memberID, "", "")
+	if err := env.state.LeaveChannel(memberID); err != nil {
+		t.Fatal(err)
+	}
+	env.state.SetLobbyPrivacy(memberID, true)
+	send(t, moderator, netproto.MsgKickClient, netproto.KickClient{ClientID: memberID, FromServer: true})
+	readEventOfType(t, member, eventKicked)
+	waitFor(t, "hidden lobby member removed", func() bool { _, exists := env.state.GetClient(memberID); return !exists })
 }

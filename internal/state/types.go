@@ -43,8 +43,9 @@ type Client struct {
 	// Status/StatusMessage carry the client's presence (wave 8b, 307-309):
 	// "online" ("" counts as online), "away", or "busy", plus a free-form
 	// status message.
-	Status        string
-	StatusMessage string
+	Status            string
+	StatusMessage     string
+	HideLobbyPresence bool
 	// E2EPublicKey is the client's X25519 public key (base64) for E2EE
 	// direct messages and sealed chat-key distribution (wave 4b). Registered
 	// users also persist it in the database; guests live here only.

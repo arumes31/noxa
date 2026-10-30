@@ -3,12 +3,14 @@ import { closeDialog, mountDialog } from "./modal.js";
 import { t } from "./i18n.js";
 import { formatBytes } from "./connection-stats.js";
 import { createUpdateCountdown } from "./update-countdown.js";
+import { createPeriodicUpdateCheck } from "./update-periodic.js";
 import { measuredUpdateProgress } from "./update-core.js";
 import { createUpdateLogo } from "./update-logo.js";
 import { announceConnectedUpdate } from "./update-announcement.js";
 import { playUpdateAnnouncement, soundEngine } from "./sounds.js";
 import { startUpdateMusic } from "./update-music.js";
 import { setStatusIcon } from "./icons.js";
+import { updateShareSettings } from "./video.js";
 import "./updater.css";
 
 const V = () => window.__noxa;
@@ -370,6 +372,13 @@ async function restartUpdate(m) {
             const audio = window.__noxa.updateReconnectAudio();
             const preparationError = await app.PrepareUpdateReconnect(audio.muted, audio.deafened, audio.mutedBeforeDeafen);
             if (preparationError) throw new Error(preparationError);
+            const streamSettings = updateShareSettings();
+            if (streamSettings && typeof app.PrepareUpdateStreamResume === "function") {
+                try {
+                    const streamError = await app.PrepareUpdateStreamResume(JSON.stringify(streamSettings));
+                    if (streamError) V().sysMsg(t("share.resumeUnavailable"));
+                } catch { V().sysMsg(t("share.resumeUnavailable")); }
+            }
         }
         const error = await app.ApplyAndRestart();
         if (error) throw new Error(error);
@@ -470,7 +479,14 @@ export async function reconnectAutoCheck(tabID) {
     } catch { /* A closing or disconnected tab cannot offer an update. */ }
 }
 
+let periodicTimer;
 export function initUpdater() {
+    clearInterval(periodicTimer);
+    const periodic = createPeriodicUpdateCheck({ settings: () => V().state.settings,
+        check: enabled => quietUpdateCheck(enabled, undefined,
+            () => !!V().state.settings && V().state.settings.updates_auto_install !== false) });
+    void periodic();
+    periodicTimer = setInterval(periodic, 30000);
     window.__noxa.checkForUpdatesInteractive = checkForUpdatesInteractive;
     window.__noxa.startupAutoCheck = startupAutoCheck;
     window.__noxa.startupUpdateFinished = () => startupCheck;
