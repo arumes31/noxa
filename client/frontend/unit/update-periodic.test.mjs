@@ -1,6 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createPeriodicUpdateCheck, updateIntervalHours } from '../src/update-periodic.js';
+import { createPeriodicUpdateCheck, createUpdateClock, updateIntervalHours } from '../src/update-periodic.js';
+
+test('elapsed clock resists backward corrections and includes sleep', () => {
+    let wall = 100000, mono = 0;
+    const now = createUpdateClock(() => wall, () => mono);
+    wall -= 86400000; mono += 3600000;
+    assert.equal(now(), 3600000);
+    wall += 3600000; mono += 3600000;
+    assert.equal(now(), 7200000);
+    wall += 86400000; // A suspended performance clock must not lose the sleep interval.
+    assert.equal(now(), 93600000);
+});
+
+test('a failed check waits another full interval before retrying', async () => {
+    let now = 0, calls = 0;
+    const tick = createPeriodicUpdateCheck({ settings: () => ({}), now: () => now,
+        check: async () => { calls++; throw new Error('offline'); } });
+    await tick(); now = 7200000; await tick();
+    now += 30000; await tick(); assert.equal(calls, 1);
+    now = 14400000; await tick(); assert.equal(calls, 2);
+});
 
 test('defaults to two hours, waits for settings, and skips missed intervals after sleep', async () => {
     let saved, now = 0, calls = 0;

@@ -50,6 +50,11 @@ async function boot(page, scenario = {}) {
             }
             if (method === "PrepareUpdateReconnect") { window.__preparedAudio = args; return s.prepareError || ""; }
             if (method === "RestoreUpdateConnection") {
+                if (s.restoreResult?.stream) {
+                    window.__noxa.state.activeTabID = s.restoreResult.tab_id;
+                    window.__noxa.state.myChannelID = s.restoreResult.stream_channel_id;
+                    window.__noxa.showWorkspace();
+                }
                 if (s.restoreAudio) for (const cb of window.__events.update_connection_restoring || []) cb(s.restoreAudio);
                 return s.restoreResult || { attempted: false };
             }
@@ -830,6 +835,15 @@ test("an audio preload timeout cannot delay restart or play after it", async ({ 
     await page.evaluate(() => window.__finishUpdatePreload());
     await page.clock.runFor(1000);
     expect(await page.evaluate(() => window.__lateUpdateSpeech)).toBe(0);
+});
+
+test("successful native update restore offers the saved stream through tab startup", async ({ page }) => {
+    await boot(page, { enabled: false, afterUpdate: true, restoreResult: {
+        attempted: true, tab_id: 'restored-tab', stream_channel_id: 1, addr: 'example.test', nick: 'alice',
+        stream: { surface: 'window', preset: 'hd', custom: {}, audioMode: 'none', bitrateCeiling: 6000000 },
+    } });
+    await expect.poll(() => page.evaluate(() => window.__calls.RestoreUpdateConnection)).toBe(1);
+    await expect(page.getByRole('button', { name: 'Resume stream', exact: true })).toBeVisible();
 });
 
 for (const mutedBeforeDeafen of [false, true]) {

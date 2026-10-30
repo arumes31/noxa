@@ -1024,7 +1024,12 @@ func (a *App) SaveSettings(s Settings) string {
 // current-state commit.
 func (a *App) applyAllSettingsEffects(ticket uint64) error {
 	localErr := a.applyLocalSettingsEffects(ticket)
-	return errors.Join(localErr, a.applyLobbyPrivacy())
+	if err := a.applyLobbyPrivacy(); err != nil {
+		// Persistence succeeded. Report the failed server application separately
+		// so the dialog can rebase its draft and keep unrelated saved edits.
+		a.emitPlain("settings_lobby_privacy_warning", err.Error())
+	}
+	return localErr
 }
 
 func (a *App) applyLocalSettingsEffects(ticket uint64) error {

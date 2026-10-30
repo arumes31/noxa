@@ -1202,6 +1202,11 @@ window.runtime.EventsOn("servererror", (msg) => {
 // (282) the Go side maintains settings of its own (recents on every connect),
 // so the merged blob it pushes is the authoritative cache — without this the
 // recents list stays frozen at the value read once at startup.
+window.runtime.EventsOn("settings_lobby_privacy_warning", () => {
+    const message = t("settings.privacy.applyWarning");
+    toast(message, "warn");
+    sysMsg(message);
+});
 window.runtime.EventsOn("settings_update", (s) => {
     const memberStateChanged = ["muted_users", "blocked_users"].some((key) =>
         JSON.stringify(state.settings?.[key] || []) !== JSON.stringify(s?.[key] || []));

@@ -21,7 +21,7 @@ export function offerUpdateShareResume(result) {
     const current = () => state()?.activeTabID === result.tab_id && state()?.myChannelID === result.stream_channel_id;
     const close = () => { clearInterval(timer); prompt.remove(); };
     const timer = setInterval(() => {
-        if (!prompt.isConnected || state()?.activeTabID !== result.tab_id || (state()?.myChannelID > 0 && !current())) close();
+        if (!prompt.isConnected || !current()) close();
         resume.disabled = !current() || !state()?.pc;
     }, 250);
     resume.onclick = () => { if (!current() || !state()?.pc) return; close(); openResumedShare(settings); };

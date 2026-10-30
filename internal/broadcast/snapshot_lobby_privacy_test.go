@@ -10,6 +10,11 @@ func TestLobbyPrivacyTracksMembershipAndViewer(t *testing.T) {
 	sm.AddChannel(&state.Channel{ChannelID: 1, Name: "renamed lobby", SystemKind: "home"})
 	sm.AddChannel(&state.Channel{ChannelID: 2, Name: "Lobby"}) // Name alone must not hide real voice.
 	sm.AddClient(&state.Client{ClientID: "hidden", UniqueID: "hidden-uid", HideLobbyPresence: true})
+	sm.AddClient(&state.Client{ClientID: "legacy-home", UniqueID: "legacy-uid", ChannelID: 1, HideLobbyPresence: true})
+	if snap := BuildSnapshot(sm, false, "other"); snap.TotalClients != 0 {
+		t.Fatal("legacy system-home membership leaked")
+	}
+	sm.RemoveClient("legacy-home")
 	for _, tc := range []struct {
 		admin bool
 		uid   string

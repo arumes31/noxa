@@ -3,17 +3,29 @@ import test from 'node:test';
 import { createShareResume } from '../src/share-resume.js';
 
 function fixture() {
-    let now = 1, expiry, stopped = 0, studioStopped = 0;
+    let now = 1, stopped = 0, studioStopped = 0;
+    const timers = [];
+    const fire = timer => { if (!timer.cancelled) timer.fn(); };
     const track = new EventTarget(); Object.assign(track, { readyState: 'live', enabled: true });
     const audio = { readyState: 'live', enabled: false };
     const stream = { getTracks: () => [track, audio], getVideoTracks: () => [track] };
     const scope = { tabID: 'original', channelID: 42, uid: 'account' };
     const options = { preset: 'hd', surface: 'window', audioMode: 'none', studio: { onEnded: () => studioStopped++ } };
     const controller = createShareResume({ stop: value => { assert.equal(value, stream); stopped++; track.readyState = 'ended'; },
-        now: () => now, schedule: fn => { expiry = fn; }, cancelTimer() {} });
+        now: () => now, schedule: fn => { const timer = { fn, cancelled: false }; timers.push(timer); return timer; },
+        cancelTimer(timer) { if (timer) timer.cancelled = true; } });
     controller.remember(stream, options, scope);
-    return { controller, stream, track, audio, scope, options, stopped: () => stopped, studioStopped: () => studioStopped, expire: () => { now += 120001; expiry(); } };
+    return { controller, stream, track, audio, scope, options, timers, fire, stopped: () => stopped, studioStopped: () => studioStopped, expire: () => { now += 120001; fire(timers.at(-1)); } };
 }
+
+test('a completed resume cancels its timer before the next pause', () => {
+    const f = fixture(); f.controller.pause(f.stream);
+    const first = f.timers[0];
+    assert.equal(f.controller.take(f.scope).stream, f.stream);
+    f.controller.pause(f.stream); f.fire(first);
+    assert.equal(f.controller.pending().stream, f.stream);
+    assert.equal(f.controller.take(f.scope).stream, f.stream);
+});
 
 test('reconnect retains the exact capture and restores prior track enablement once', () => {
     const f = fixture(); assert.equal(f.controller.pause(f.stream), f.stream);

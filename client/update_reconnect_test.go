@@ -29,7 +29,12 @@ func TestUpdateStreamPreferencesValidation(t *testing.T) {
 		func(s *updateStreamResume) { s.Preset = "invalid" },
 		func(s *updateStreamResume) { s.AudioMode = "microphone" },
 		func(s *updateStreamResume) { s.BitrateCeiling = -1 },
-		func(s *updateStreamResume) { s.Preset = "custom"; s.Custom.Width = 10000 },
+		func(s *updateStreamResume) {
+			s.Preset = "custom"
+			s.Custom.Height = 1080
+			s.Custom.FPS = 30
+			s.Custom.Width = 10000
+		},
 	} {
 		bad := s
 		change(&bad)
