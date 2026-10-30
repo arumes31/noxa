@@ -49,6 +49,34 @@ export function closingClip(language, date = new Date()) {
     const night = date.getHours() >= 20 || date.getHours() < 5;
     return night && SPEECH_ASSETS[language]?.client_closing_night ? "client_closing_night" : "client_closing";
 }
+export async function playUpdateAnnouncement(current = () => true) {
+    const event = "client_updating", settings = V()?.state.settings;
+    const language = speechLanguage(settings, navigator.language);
+    const id = "speech_" + language + "_" + event;
+    let finished = false;
+    const allowed = () => !finished && current() && speechQueue.allowed(event, V()?.state.settings, false)
+        && soundEngine.allowed(id, { settings: V()?.state.settings, volume: V()?.state.settings?.speech_volume ?? 100 });
+    if (!allowed()) return;
+    stopPreviews();
+    speechQueue.clear();
+    let timer;
+    // Bounded even if an audio device disappears or decoding never settles.
+    const playback = (async () => {
+        await Promise.all([soundEngine.preload([id]), soundEngine.resume()]);
+        if (!allowed()) return;
+        await soundEngine.setOutput(settings.playback_device_id);
+        if (!allowed()) return;
+        await new Promise(resolve => {
+            if (!soundEngine.play(id, { scope: "application", volume: V()?.state.settings?.speech_volume ?? 100, onEnded: resolve })) resolve();
+        });
+    })();
+    try { await Promise.race([playback, new Promise(resolve => { timer = setTimeout(resolve, 7500); })]); }
+    finally {
+        finished = true;
+        clearTimeout(timer);
+        for (const entry of soundEngine.active) if (entry.family === id) soundEngine.retire(entry);
+    }
+}
 export async function playClosingAnnouncement({ now = new Date() } = {}) {
     const settings = V()?.state.settings;
     const language = speechLanguage(settings, navigator.language);

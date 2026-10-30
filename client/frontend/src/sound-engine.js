@@ -242,6 +242,7 @@ export class SoundEngine {
             source = ctx.createBufferSource();
             gain = ctx.createGain();
             source.buffer = this.buffers.get(name);
+            source.loop = def.loop === true;
             gain.gain.value = volume;
             source.connect(gain).connect(ctx.destination);
             // Reserve the slot while its previous cue fades. Rapid replacements

@@ -1,4 +1,28 @@
 {
+  "en/client_updating": {
+    "sha256": "c782c09ddae95a7acd971a6680f2680a86faf9b8c68a1666dec7c9d40621c0f7",
+    "expected": "Updating. Automatically reconnecting after the update.",
+    "renderText": "Updating. Automatically reconnecting after the update.",
+    "language": "en",
+    "automatic_transcript": "updating automatically reconnecting after the update.",
+    "duration": 4.226,
+    "asr": "Whisper small (sherpa-onnx int8)",
+    "note": "Automatic content review; not a human listening or timbre assessment.",
+    "letterEdits": 0,
+    "reviewStatus": "accepted-automatic-content-review"
+  },
+  "de/client_updating": {
+    "sha256": "5accf035c77af1587452ab0ac72912fde6cfc5cd6af9de9db179a3d2eb537c23",
+    "expected": "Update startet. Danach verbinde ich dich automatisch wieder.",
+    "renderText": "Update startet. Danach verbinde ich dich automatisch wieder.",
+    "language": "de",
+    "automatic_transcript": "\"Updates startet, danach verbinde ich dich automatisch wieder.\"",
+    "duration": 4.138,
+    "asr": "Whisper small (sherpa-onnx int8)",
+    "note": "Automatic content review; not a human listening or timbre assessment.",
+    "letterEdits": 1,
+    "reviewStatus": "accepted-automatic-content-review"
+  },
   "en/microphone_muted": {
     "sha256": "0155732ce93ef4279c3609c79a3c36e9904299eabeea653e7d2e4e438aee2173",
     "expected": "Microphone muted.",

@@ -31,12 +31,18 @@ test.beforeEach(async ({page})=>{
 
 test('top lock opens details on focus and hover, fits viewport and escapes markup',async({page})=>{
  const lock=page.locator('#conn-lock'),tip=page.locator('#conn-lock-details');
- await lock.focus();await expect(tip).toBeVisible();await expect(tip).toContainText('AA:BB:CC');
- await expect(tip).toContainText('noxa-olm-v1');await expect(tip).toContainText('AES-GCM');
- await expect(tip).toContainText('Channel and global messages and private calls are not end-to-end encrypted');
+ await lock.focus();await expect(tip).toBeVisible();await expect(tip).toContainText('You ↔ server: TLS encrypted');
+ await expect(tip).toContainText('User ↔ user: E2EE');
+ await expect(tip).toContainText('Voice, camera & streams: E2EE available');
+ await expect(tip).toContainText('Currently used for media: none · no media session');
+ await expect(tip).not.toContainText('AA:BB:CC');await expect(tip).not.toContainText('noxa-olm-v1');
+ await expect(tip).toContainText('Channel chat & private calls: no E2EE');
+ await expect(tip.locator('.encryption-tooltip-footer')).toContainText('only the participating devices');
  await expect(tip.locator('img')).toHaveCount(0);
  expect(await tip.evaluate(e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;})).toBe(true);
- await page.keyboard.press('PageDown');expect(await tip.evaluate(e=>e.scrollTop)).toBeGreaterThan(0);
+ expect(await tip.evaluate(e=>e.scrollHeight<=e.clientHeight)).toBe(true);
+ expect(await tip.evaluate(e=>e.getBoundingClientRect().height)).toBeLessThan(230);
+ await page.screenshot({path:'../../.tmp/audit-logs/compact-encryption-desktop.png'});
  await page.keyboard.press('Escape');await expect(tip).toBeHidden();
  await lock.hover();await expect(tip).toBeVisible();await tip.hover();await expect(tip).toBeVisible();
  await page.evaluate(()=>{for(const cb of window.__events.tab_reset||[])cb('');});await expect(tip).toBeHidden();
@@ -50,10 +56,22 @@ test('long encryption status remains a small lock inside narrow voice card',asyn
  });
  const lock=page.locator('#voice-e2ee');await expect(lock.locator('svg')).toBeVisible();
  await expect(lock).toHaveAttribute('data-state','encrypted');
- await expect(lock).toHaveAttribute('aria-label',/A very long account identity/);
+ await expect(lock).toHaveAttribute('aria-label','E2EE active');
  expect(await lock.evaluate(e=>e.getBoundingClientRect().width)).toBeLessThanOrEqual(24);
  expect(await lock.evaluate(e=>{const r=e.getBoundingClientRect(),c=document.querySelector('#voice-bar').getBoundingClientRect();return r.left>=c.left&&r.right<=c.right;})).toBe(true);
- await lock.focus();await expect(page.locator('#voice-e2ee-details')).toContainText('Frames prove channel membership');
+ await lock.focus();await expect(page.locator('#voice-e2ee-details .encryption-tooltip-footer')).toContainText('only the participating devices');
+ await expect(page.locator('#voice-e2ee-details')).not.toContainText('A very long account identity');
  await page.evaluate(async()=>{(await import('/src/main.js')).renderVoiceEncryptionStatus({state:'off'});});
  await expect(lock).toBeHidden();
+});
+
+test('server support alone does not claim this browser can use media E2EE',async({page})=>{
+ await page.evaluate(()=>{
+  Object.defineProperty(window,'RTCRtpScriptTransform',{configurable:true,value:undefined});
+  Object.defineProperty(RTCRtpSender.prototype,'createEncodedStreams',{configurable:true,value:undefined});
+ });
+ await page.locator('#conn-lock').focus();
+ const tip=page.locator('#conn-lock-details');
+ await expect(tip).toContainText('Voice, camera & streams: E2EE unavailable');
+ await expect(tip).not.toContainText('E2EE available');
 });

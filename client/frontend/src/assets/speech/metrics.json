@@ -1,4 +1,46 @@
 {
+  "en/client_updating": {
+    "title": "noXa — client_updating",
+    "text": "Updating. Automatically reconnecting after the update.",
+    "duration": 4.226208333333333,
+    "sampleRate": 24000,
+    "peak": 0.114990234375,
+    "rmsDB": -32.1523156491164,
+    "sha256": "c782c09ddae95a7acd971a6680f2680a86faf9b8c68a1666dec7c9d40621c0f7",
+    "voice": "TROLL1",
+    "renderText": "Updating. Automatically reconnecting after the update.",
+    "rawSha256": "24fae44fbd76c36269746f0c6725b7912b0d89525b07d9327c0d9d8a35c7637f",
+    "rawSampleRate": 44100,
+    "styleSha256": "e0dc430684ef97e15ad22e781c0d9c26a131f5f1a42c0c89ccf6a6501cab985e",
+    "modelSha256": "82fa96f91c4ef8abaae3a14a3f4153facf88bed821d1f7331cec2700f432c427",
+    "postprocess": {
+      "kind": "cave-troll",
+      "pitch_ratio": 0.86,
+      "roughness": 0.1,
+      "growl_hz": 35
+    }
+  },
+  "de/client_updating": {
+    "title": "noXa — client_updating",
+    "text": "Update startet. Danach verbinde ich dich automatisch wieder.",
+    "duration": 4.137791666666667,
+    "sampleRate": 24000,
+    "peak": 0.114990234375,
+    "rmsDB": -33.05198915957582,
+    "sha256": "5accf035c77af1587452ab0ac72912fde6cfc5cd6af9de9db179a3d2eb537c23",
+    "voice": "TROLL1",
+    "renderText": "Update startet. Danach verbinde ich dich automatisch wieder.",
+    "rawSha256": "25e49f191d22fc8d23e3d890aacfdf672c5d948b1c4b27581646a7cbb6691294",
+    "rawSampleRate": 44100,
+    "styleSha256": "e0dc430684ef97e15ad22e781c0d9c26a131f5f1a42c0c89ccf6a6501cab985e",
+    "modelSha256": "82fa96f91c4ef8abaae3a14a3f4153facf88bed821d1f7331cec2700f432c427",
+    "postprocess": {
+      "kind": "cave-troll",
+      "pitch_ratio": 0.86,
+      "roughness": 0.1,
+      "growl_hz": 35
+    }
+  },
   "en/microphone_muted": {
     "title": "noXa — microphone_muted",
     "text": "Microphone muted.",

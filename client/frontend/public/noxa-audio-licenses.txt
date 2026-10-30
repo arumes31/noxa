@@ -224,3 +224,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Update announcement: TROLL1, a synthetic ST13-derived cave-troll voice with
+offline pitch/growl processing, original noXa recording under MIT. Same
+Supertonic 3 model/license; no runtime TTS, actor or character imitation.

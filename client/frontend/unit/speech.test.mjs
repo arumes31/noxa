@@ -142,10 +142,14 @@ test("every announcement in both languages is a reviewed recording of its respel
         assert.ok(["accepted-automatic-content-review", "accepted-user-listening-review"].includes(review[key].reviewStatus), key);
         if (review[key].reviewStatus === "accepted-user-listening-review") assert.match(review[key].note, /selected this exact recording after listening/, key);
     }
-    assert.deepEqual(Object.keys(provenance.authoring.de.clip_voices), ["client_closing", "client_closing_night"]);
+    assert.deepEqual(Object.keys(provenance.authoring.de.clip_voices), ["client_closing", "client_closing_night", "client_updating"]);
     assert.equal(metrics["de/client_closing"].voice, "F5");
     assert.equal(metrics["de/client_closing_night"].voice, "F1");
-    assert.equal(provenance.authoring.en.clip_voices, undefined);
+    assert.deepEqual(Object.keys(provenance.authoring.en.clip_voices), ["client_updating"]);
+    for (const language of ["en", "de"]) {
+        assert.equal(metrics[`${language}/client_updating`].voice, "TROLL1");
+        assert.equal(metrics[`${language}/client_updating`].postprocess.kind, "cave-troll");
+    }
 });
 
 test("German closing says good night from 20:00 until 04:59; English keeps one closing line", async () => {

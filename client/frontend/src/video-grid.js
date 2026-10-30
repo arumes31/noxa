@@ -592,7 +592,7 @@ export function createVideoGrid({ applySendCaps, syncCameraButton, syncShareButt
             if (!target) return;
             const identity = JSON.stringify(target);
             const desired = qualities.get(tile.key);
-            tile.autoQuality = settleAutoQuality(tile.autoQuality, desired, immediate || tile.qualityPreference !== "auto" || lowBandwidth);
+            tile.autoQuality = settleAutoQuality(tile.autoQuality, desired, immediate || tile.qualityPreference !== "auto" || lowBandwidth || receiveCpuPressure);
             const quality = tile.autoQuality.applied;
             tile.desiredQuality = quality;
             if (tile.qualityRequest || (tile.sentQuality === quality && tile.qualityIdentity === identity)) return;

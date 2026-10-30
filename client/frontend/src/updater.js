@@ -5,6 +5,10 @@ import { formatBytes } from "./connection-stats.js";
 import { createUpdateCountdown } from "./update-countdown.js";
 import { measuredUpdateProgress } from "./update-core.js";
 import { createUpdateLogo } from "./update-logo.js";
+import { announceConnectedUpdate } from "./update-announcement.js";
+import { playUpdateAnnouncement, soundEngine } from "./sounds.js";
+import { startUpdateMusic } from "./update-music.js";
+import { setStatusIcon } from "./icons.js";
 import "./updater.css";
 
 const V = () => window.__noxa;
@@ -60,6 +64,7 @@ function showUpdateModal() {
             <footer class="upd-footer">
                 <span class="upd-block-size"></span>
                 <div class="dlg-buttons">
+                    <button class="upd-music hidden" type="button"></button>
                     <button class="upd-retry hidden">${t("common.retry")}</button>
                     <button class="upd-cancel hidden">${t("updater.cancelDownload")}</button>
                     <button class="upd-close">${t("common.close")}</button>
@@ -153,6 +158,16 @@ async function startDownload(m, info) {
     const cancel = m.querySelector(".upd-cancel");
     let phase = "downloading";
     let attemptActive = true;
+    const musicButton = m.querySelector(".upd-music");
+    musicButton.classList.remove("hidden");
+    const music = startUpdateMusic({ engine: soundEngine, onChange: ({ muted, playing, blocked }) => {
+        const label = t(muted ? "updater.unmuteMusic" : "updater.muteMusic");
+        setStatusIcon(musicButton, muted || !playing ? "speakerOff" : "speaker", label);
+        musicButton.setAttribute("aria-pressed", String(muted));
+        musicButton.title = blocked && !muted ? `${label} · ${t("updater.musicSilent")}` : label;
+    } });
+    musicButton.onclick = () => music.toggle();
+    const stopMusic = () => { music.stop(); musicButton.classList.add("hidden"); musicButton.onclick = null; };
     cancel.classList.remove("hidden");
     cancel.disabled = false;
     cancel.textContent = t("updater.cancelDownload");
@@ -231,12 +246,14 @@ async function startDownload(m, info) {
         m.querySelector(".update-dlg").dataset.phase = phase;
         status.textContent = t(`updater.${phase === "ready" ? "restartRequired" : phase}`);
         if (phase !== "downloading") {
+            stopMusic();
             clearTimeout(stallTimer);
             cancel.classList.add("hidden");
             prog.classList.add("hidden");
         }
     });
     const unsubscribe = () => {
+        stopMusic();
         clearTimeout(stallTimer);
         phaseUnsub?.();
         phaseUnsub = null;
@@ -347,6 +364,8 @@ async function restartUpdate(m) {
     status.textContent = t("updater.starting");
     try {
         const app = window.go.main.App;
+        await announceConnectedUpdate({ getState: () => V()?.state,
+            sessionInfo: tab => app.SessionInfoForTab(tab), play: playUpdateAnnouncement });
         if (typeof app.PrepareUpdateReconnect === "function") {
             const audio = window.__noxa.updateReconnectAudio();
             const preparationError = await app.PrepareUpdateReconnect(audio.muted, audio.deafened, audio.mutedBeforeDeafen);

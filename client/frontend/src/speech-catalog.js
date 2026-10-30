@@ -35,6 +35,7 @@ export const SPEECH_ASSETS = {
         buddy_online: { url: new URL("./assets/speech/en/buddy_online.wav", import.meta.url).href, duration: 1.717125, transcript: "A watched contact is online." },
         channel_watch: { url: new URL("./assets/speech/en/channel_watch.wav", import.meta.url).href, duration: 2.698541666666667, transcript: "The requested channel user count has been reached." },
         stream_watch_started: { url: new URL("./assets/speech/en/stream_watch_started.wav", import.meta.url).href, duration: 1.7177916666666666, transcript: "Someone is watching your stream." },
+        client_updating: { url: new URL("./assets/speech/en/client_updating.wav", import.meta.url).href, duration: 4.226208333333333, transcript: "Updating. Automatically reconnecting after the update." },
     },
     de: {
         microphone_muted: { url: new URL("./assets/speech/de/microphone_muted.wav", import.meta.url).href, duration: 1.6304166666666666, transcript: "Mikrofon stummgeschaltet." },
@@ -72,5 +73,6 @@ export const SPEECH_ASSETS = {
         buddy_online: { url: new URL("./assets/speech/de/buddy_online.wav", import.meta.url).href, duration: 1.9418333333333333, transcript: "Ein beobachteter Kontakt ist online." },
         channel_watch: { url: new URL("./assets/speech/de/channel_watch.wav", import.meta.url).href, duration: 3.2420416666666667, transcript: "Die gewünschte Benutzerzahl im Channel ist erreicht." },
         stream_watch_started: { url: new URL("./assets/speech/de/stream_watch_started.wav", import.meta.url).href, duration: 1.794375, transcript: "Jemand schaut deinem Stream zu." },
+        client_updating: { url: new URL("./assets/speech/de/client_updating.wav", import.meta.url).href, duration: 4.137791666666667, transcript: "Update startet. Danach verbinde ich dich automatisch wieder." },
     },
 };

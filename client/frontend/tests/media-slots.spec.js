@@ -372,7 +372,7 @@ for (const [preset, fps] of [["hd", 30], ["hdMotion", 60]]) {
         expect(result.options.video.frameRate.ideal).toBe(fps);
         expectLayeredScreenBudget(result.parameters.encodings, 8000000);
         expect(await page.evaluate(() => window.__media.initialVideoEncodings)).toMatchObject([{ maxBitrate: 8000000, maxFramerate: fps, scaleResolutionDownBy: 1 }]);
-        expect(result.parameters.degradationPreference).toBe("maintain-framerate");
+        expect(result.parameters.degradationPreference).toBe("maintain-resolution");
         expect(result.parameters.encodings[0]).toMatchObject({ priority: "high", maxFramerate: fps });
         expect(result.hint).toBe("motion");
     });
@@ -428,7 +428,7 @@ test("text sharing retains readable pixels and live motion changes update the sa
     await chooseShareOption(page, "preset", "hdMotion");
     await page.getByRole("button", { name: "Apply quality", exact: true }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    expect(await read()).toMatchObject({ hint: "motion", parameters: { degradationPreference: "maintain-framerate",
+    expect(await read()).toMatchObject({ hint: "motion", parameters: { degradationPreference: "maintain-resolution",
         encodings: [{ priority: "high", maxFramerate: 60 }] } });
     expect(await page.evaluate(() => window.__media.originalShare === window.__noxa.state.shareStream)).toBe(true);
     expect(await page.evaluate(() => window.__media.cameraSender.getParameters().encodings[0].priority)).toBe("medium");
@@ -790,7 +790,7 @@ test("negotiated screen sender restores quality headroom after low bandwidth and
     expect(result.bounded.encodings[0].maxBitrate).toBe(510000);
     expect(result.low.encodings[0]).toMatchObject({ maxBitrate: 150000, scaleResolutionDownBy: 2 });
     expect(result.restored.encodings[0]).toMatchObject({ maxBitrate: 8000000, scaleResolutionDownBy: 1 });
-    expect(result.restored.degradationPreference).toBe("maintain-framerate");
+    expect(result.restored.degradationPreference).toBe("maintain-resolution");
     expect(result.restored.encodings[0].priority).toBe("high");
     expect(result.ready).toBe("live");
 });

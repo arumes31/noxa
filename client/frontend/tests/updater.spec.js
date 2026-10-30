@@ -272,6 +272,35 @@ test("verification and installation show distinct stages and cannot be cancelled
     expect(await page.evaluate(() => window.__events.update_phase.length)).toBe(0);
 });
 
+test("waiting music has a compact mute control and stops before verification", async ({ page }) => {
+    await boot(page, { downloadPending: true });
+    await page.getByRole("button", { name: "Update now" }).click();
+    const button = page.locator(".upd-music");
+    const playing = () => page.evaluate(async () => [...(await import('/src/sounds.js')).soundEngine.active].some(entry => entry.name === 'update_waiting_music'));
+    await expect(button).toBeVisible();
+    await expect.poll(playing).toBe(true);
+    expect(await button.evaluate(element => element.getBoundingClientRect().width)).toBeLessThanOrEqual(34);
+    await button.click(); await expect(button).toHaveAccessibleName("Play waiting music");
+    await expect(button).toHaveAttribute("aria-pressed", "true"); await expect.poll(playing).toBe(false);
+    await button.click(); await expect.poll(playing).toBe(true);
+    await page.evaluate(() => window.__events.update_phase.forEach(cb => cb('verifying')));
+    await expect(button).toBeHidden(); await expect.poll(playing).toBe(false);
+    await page.evaluate(() => window.__finishDownload());
+    await expect(page.getByRole("button", { name: "Restart now" })).toBeVisible();
+});
+
+for (const outcome of ["cancel", "failure"]) {
+    test(`waiting music stops on download ${outcome}`, async ({ page }) => {
+        await boot(page, { downloadPending: true, downloadThrows: outcome === "failure" });
+        await page.getByRole("button", { name: "Update now" }).click();
+        await expect(page.locator('.upd-music')).toBeVisible();
+        if (outcome === "cancel") await page.getByRole("button", { name: "Cancel download", exact: true }).click();
+        else await page.evaluate(() => window.__finishDownload());
+        await expect(page.locator('.upd-music')).toBeHidden();
+        expect(await page.evaluate(async () => [...(await import('/src/sounds.js')).soundEngine.active].some(entry => entry.name === 'update_waiting_music'))).toBe(false);
+    });
+}
+
 test("a restored failed startup offers a fresh update check", async ({ page }) => {
     await boot(page, { restartError: "Previous version restored after startup failed", restored: true });
     await page.getByRole("button", { name: "Update now" }).click();
@@ -734,6 +763,60 @@ test("handoff failure keeps the current client running", async ({ page }) => {
     await page.getByRole("button", { name: "Restart now", exact: true }).click();
     await expect(page.locator(".upd-status")).toContainText("OS protection unavailable");
     expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
+});
+
+for (const scenario of [{ connected: true }, { connected: false }, { connected: true, muted: true }, { connected: true, speechOff: true }]) {
+    test(`update speech only for an unmuted connected client ${JSON.stringify(scenario)}`, async ({ page }) => {
+        await boot(page, { disconnected: !scenario.connected });
+        await page.evaluate(async scenario => {
+            const state = window.__noxa.state;
+            state.activeTabID = "update-test";
+            state.serverGeneration = 1;
+            state.muted = !!scenario.muted;
+            state.settings.spoken_messages = !scenario.speechOff;
+            const { soundEngine } = await import("/src/sounds.js");
+            soundEngine.allowed = () => true;
+            soundEngine.preload = soundEngine.resume = soundEngine.setOutput = async () => {};
+            window.__updateSpeech = [];
+            soundEngine.play = (id, options) => {
+                window.__updateSpeech.push(id);
+                window.__finishUpdateSpeech = options.onEnded;
+                return true;
+            };
+        }, scenario);
+        await page.getByRole("button", { name: "Update now", exact: true }).click();
+        await page.getByRole("button", { name: "Restart now", exact: true }).click();
+        const speaks = scenario.connected && !scenario.muted && !scenario.speechOff;
+        if (speaks) {
+            await expect.poll(() => page.evaluate(() => window.__updateSpeech)).toEqual(["speech_en_client_updating"]);
+            expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
+            await page.evaluate(() => window.__finishUpdateSpeech());
+        }
+        await expect.poll(() => page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
+        expect(await page.evaluate(() => window.__updateSpeech.length)).toBe(speaks ? 1 : 0);
+    });
+}
+
+test("an audio preload timeout cannot delay restart or play after it", async ({ page }) => {
+    await boot(page);
+    await page.evaluate(async () => {
+        window.__noxa.state.activeTabID = "update-test";
+        const { soundEngine } = await import("/src/sounds.js");
+        soundEngine.allowed = () => true;
+        soundEngine.preload = () => new Promise(resolve => { window.__finishUpdatePreload = resolve; });
+        soundEngine.resume = soundEngine.setOutput = async () => {};
+        window.__lateUpdateSpeech = 0;
+        soundEngine.play = () => { window.__lateUpdateSpeech++; return false; };
+    });
+    await page.getByRole("button", { name: "Update now", exact: true }).click();
+    await page.clock.install();
+    await page.getByRole("button", { name: "Restart now", exact: true }).click();
+    await page.waitForFunction(() => !!window.__finishUpdatePreload);
+    await page.clock.runFor(7500);
+    await expect.poll(() => page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
+    await page.evaluate(() => window.__finishUpdatePreload());
+    await page.clock.runFor(1000);
+    expect(await page.evaluate(() => window.__lateUpdateSpeech)).toBe(0);
 });
 
 for (const mutedBeforeDeafen of [false, true]) {

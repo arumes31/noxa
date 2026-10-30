@@ -1,10 +1,10 @@
 import { t } from "./i18n.js";
 import { setStatusIcon } from "./icons.js";
-import { channelMediaStatus, mediaStatusText } from "./channel-media.js";
-import { encryptionDetails } from "./encryption-details.js";
+import { channelMediaStatus } from "./channel-media.js";
+import { mediaE2EESupport } from "./media-e2ee.js";
+import { encryptionDetails, compactMediaEncryptionStatus } from "./encryption-details.js";
 
-// Hoverable, scrollable and keyboard-accessible: native title tooltips clip
-// long device rosters and cannot be read reliably using keyboard focus.
+// Compact hover with a plain-language footer, also available by keyboard.
 export function createEncryptionTooltip(trigger, { context, voiceOnly = false }) {
     const tip = document.createElement("div");
     tip.id = `${trigger.id}-details`;
@@ -16,7 +16,7 @@ export function createEncryptionTooltip(trigger, { context, voiceOnly = false })
     trigger.removeAttribute("title");
     trigger.setAttribute("aria-describedby", tip.id);
     let request = 0, timer, refreshTimer, hovering = false, overTip = false;
-    const label = () => (voiceOnly && mediaStatusText(channelMediaStatus())) || t("security.details.title");
+    const label = () => (voiceOnly && compactMediaEncryptionStatus(channelMediaStatus())) || t("security.details.title");
     const position = () => {
         if (tip.hidden) return;
         const rect = trigger.getBoundingClientRect();
@@ -28,7 +28,7 @@ export function createEncryptionTooltip(trigger, { context, voiceOnly = false })
         tip.style.left = `${Math.max(8, Math.min(rect.left, width - tip.offsetWidth - 8))}px`;
         tip.style.top = `${useAbove ? rect.top - tip.offsetHeight - 8 : rect.bottom + 8}px`;
     };
-    function close() { ++request; clearTimeout(timer); clearInterval(refreshTimer); tip.hidden = true; tip.textContent = ""; overTip = false; }
+    function close() { ++request; clearTimeout(timer); clearInterval(refreshTimer); tip.hidden = true; tip.textContent = ""; delete tip.dataset.value; overTip = false; }
     async function refresh() {
         const revision = ++request;
         const snapshot = context();
@@ -37,8 +37,7 @@ export function createEncryptionTooltip(trigger, { context, voiceOnly = false })
             return revision === request && !tip.hidden && snapshot.tabID === now.tabID && snapshot.generation === now.generation && snapshot.sessionGeneration === now.sessionGeneration;
         };
         setStatusIcon(trigger, "lock", label());
-        // close() clears the previous context. Keep an unchanged live roster
-        // intact so periodic refreshes do not reset a reader's scroll position.
+        // close() clears the previous context; keep an unchanged status intact.
         if (!tip.textContent) tip.textContent = t("security.details.loading");
         position();
         const app = window.go?.main?.App;
@@ -49,8 +48,20 @@ export function createEncryptionTooltip(trigger, { context, voiceOnly = false })
         ]);
         if (!matches()) return;
         const value = result => result.status === "fulfilled" ? result.value : undefined;
-        const text = encryptionDetails({ session: value(session), diagnostics: value(diagnostics), capability: value(capability), media: channelMediaStatus(), voiceOnly });
-        if (tip.textContent !== text) tip.textContent = text;
+        let mediaCapability = value(capability);
+        if (mediaCapability?.supported && !mediaCapability.reason && !mediaE2EESupport().ok) {
+            mediaCapability = { ...mediaCapability, reason: "unsupported_runtime" };
+        }
+        const text = encryptionDetails({ session: value(session), diagnostics: value(diagnostics), capability: mediaCapability, media: channelMediaStatus(), voiceOnly });
+        if (tip.dataset.value !== text) {
+            const split = text.lastIndexOf("\n\n");
+            const body = document.createElement("div"), footer = document.createElement("div");
+            body.textContent = text.slice(0, split);
+            footer.className = "encryption-tooltip-footer";
+            footer.textContent = text.slice(split + 2);
+            tip.replaceChildren(body, footer);
+            tip.dataset.value = text;
+        }
         position();
     }
     const open = () => {
@@ -69,7 +80,7 @@ export function createEncryptionTooltip(trigger, { context, voiceOnly = false })
     trigger.addEventListener("click", open);
     tip.addEventListener("mouseenter", () => { overTip = true; clearTimeout(timer); });
     tip.addEventListener("mouseleave", () => { overTip = false; leave(); });
-    // Arrow/Page keys scroll long key-holder lists without moving focus.
+    // Retain keyboard scrolling for small viewports or enlarged text.
     trigger.addEventListener("keydown", event => {
         const amount = { ArrowDown: 40, ArrowUp: -40, PageDown: 240, PageUp: -240 }[event.key];
         if (!tip.hidden && amount) { event.preventDefault(); tip.scrollTop += amount; }

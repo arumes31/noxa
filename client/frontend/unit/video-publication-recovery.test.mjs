@@ -49,9 +49,88 @@ function fixture(options = {}) {
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { mediaCapabilities: {
         encodingInfo: async config => { queries.push(config); return { supported: true, powerEfficient: options.capable !== false }; },
     } } });
-    const api = createVideoPublication({ policy: { lowBandwidth: false } });
-    return { api, sender, track, transceiver, pc, state, writes, queries };
+    const policy = { lowBandwidth: false, lowBandwidthBitrate: 400000 };
+    const api = createVideoPublication({ policy });
+    return { api, sender, track, transceiver, pc, state, writes, queries, policy };
 }
+
+function resolutionStats(f, tick, encodeFPS = 10) {
+    return new Map([
+        ["v", { id: "v", type: "outbound-rtp", kind: "video", timestamp: tick * 5000,
+            mediaSourceId: "source", framesEncoded: tick * 5 * encodeFPS, qualityLimitationReason: "bandwidth" }],
+        ["source", { id: "source", type: "media-source", kind: "video", trackIdentifier: f.track.id,
+            timestamp: tick * 5000, frames: tick * 150 }],
+    ]);
+}
+
+test("continuous screen scaling survives cap refresh and leaves the bitrate controller intact", async () => {
+    const f = fixture();
+    for (let tick = 0; tick <= 4; tick++) await f.api.adaptScreenResolution(f.pc, resolutionStats(f, tick));
+    assert.equal(f.writes.length, 1);
+    assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 1.08);
+    assert.equal(f.sender.getParameters().encodings[0].maxBitrate, 8000000);
+    f.state.mediaLimits = { video_max_bitrate: 4000000 };
+    await f.api.applySendCaps();
+    assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 1.08);
+    assert.equal(f.sender.getParameters().encodings[0].maxBitrate, 3400000);
+    f.policy.lowBandwidth = true;
+    await f.api.applySendCaps();
+    assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 2);
+    await f.api.adaptScreenResolution(f.pc, resolutionStats(f, 5));
+    assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 2);
+});
+
+test("a replacement source/session cannot inherit the old congestion history", async () => {
+    for (const replace of [f => { f.state.sessionGeneration++; }, f => { f.track = { ...f.track, id: "new" };
+        f.sender.track = f.track; f.state.shareStream = { getVideoTracks: () => [f.track] }; }]) {
+        const f = fixture();
+        for (let tick = 0; tick < 4; tick++) await f.api.adaptScreenResolution(f.pc, resolutionStats(f, tick));
+        replace(f);
+        await f.api.adaptScreenResolution(f.pc, resolutionStats(f, 4));
+        assert.equal(f.writes.length, 0);
+    }
+});
+
+test("rejected scaling retries with fresh stats and does not leak into cap refresh", async () => {
+    let reject = true;
+    const f = fixture();
+    const write = f.sender.setParameters;
+    f.sender.setParameters = async p => { if (reject) throw new Error("busy encoder"); await write(p); };
+    for (let tick = 0; tick < 4; tick++) await f.api.adaptScreenResolution(f.pc, resolutionStats(f, tick));
+    await assert.rejects(f.api.adaptScreenResolution(f.pc, resolutionStats(f, 4)), /busy encoder/);
+    reject = false;
+    await f.api.applySendCaps();
+    assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 1);
+    await f.api.adaptScreenResolution(f.pc, resolutionStats(f, 5));
+    assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 1.08);
+});
+
+test("a reused sender starts a new static share at full resolution", async () => {
+    const f = fixture();
+    for (let tick = 0; tick <= 6; tick++) await f.api.adaptScreenResolution(f.pc, resolutionStats(f, tick));
+    assert.ok(f.sender.getParameters().encodings[0].scaleResolutionDownBy > 1);
+    f.track = { ...f.track, id: "new-static-source" };
+    f.state.shareStream = { getVideoTracks: () => [f.track] };
+    await f.api.applySendCaps(); // production applies caps before replaceTrack
+    f.sender.track = f.track;
+    assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 1);
+    for (let tick = 7; tick <= 10; tick++) {
+        const stats = resolutionStats(f, tick, 0);
+        stats.get("source").frames = 1;
+        await f.api.adaptScreenResolution(f.pc, stats);
+    }
+    assert.equal(f.sender.getParameters().encodings[0].scaleResolutionDownBy, 1);
+});
+
+test("a demand or negotiation pause resets sustained pressure without resetting quality", async () => {
+    const f = fixture();
+    for (let tick = 0; tick < 4; tick++) await f.api.adaptScreenResolution(f.pc, resolutionStats(f, tick));
+    f.pc.signalingState = "have-local-offer";
+    await f.api.adaptScreenResolution(f.pc, resolutionStats(f, 4));
+    f.pc.signalingState = "stable";
+    await f.api.adaptScreenResolution(f.pc, resolutionStats(f, 5));
+    assert.equal(f.writes.length, 0);
+});
 
 test("hardware retry pulses one existing sender and restores its source quality", async () => {
     const f = fixture();

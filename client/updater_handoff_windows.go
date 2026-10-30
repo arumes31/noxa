@@ -216,6 +216,13 @@ func runUpdateSupervisor(input io.Reader) error {
 		return err
 	}
 	defer processes.close()
+	// Capture only after PID, creation time, image and parent ownership checks,
+	// and before readiness lets the old client exit and destroy its window.
+	windowParent := plan.Parent.PID
+	if plan.LegacyParent != nil {
+		windowParent = plan.LegacyParent.PID
+	}
+	inheritSupervisorUpdateWindow(windowParent)
 	// Legacy updates have both the old parent's image and an independent
 	// rollback snapshot. Retain the exact original identity before waiting;
 	// neither is cleanup-owned until the final normal frontend is stable.

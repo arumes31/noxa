@@ -110,6 +110,23 @@ def resample(samples, rate, target):
     return np.fft.irfft(out, count) * (count / len(samples))
 
 
+def process_voice(samples, voice, rate):
+    """Offline character treatment only for explicitly assigned fixed clips."""
+    import numpy as np
+    effect = voice.get('postprocess')
+    if not effect:
+        return samples
+    if effect != {'kind': 'cave-troll', 'pitch_ratio': 0.86, 'roughness': 0.10, 'growl_hz': 35}:
+        raise ValueError('Unknown voice treatment')
+    # Slower/lower resampling plus mild amplitude modulation gives a synthetic
+    # growl while retaining consonants. Final mastering still enforces the same
+    # duration, quiet peak/RMS, endpoint and DC limits as every other clip.
+    source = np.arange(len(samples))
+    lowered = np.interp(np.arange(0, len(samples), effect['pitch_ratio']), source, samples)
+    times = np.arange(len(lowered)) / rate
+    return lowered * (1 - effect['roughness'] / 2 + effect['roughness'] / 2 * np.cos(2 * np.pi * effect['growl_hz'] * times))
+
+
 def render(args):
     model_dir = Path(args.model_dir)
     verify_model(model_dir)
@@ -142,14 +159,15 @@ def render(args):
                 f'--num-threads={settings["threads"]}', f'--output-filename={raw}', spoken],
                 check=True, capture_output=True, timeout=300)
             samples, rate = read_wav(raw)
-            pcm, metric = generate_speech.master_samples(resample(samples, rate, TARGET_RATE), TARGET_RATE,
+            pcm, metric = generate_speech.master_samples(process_voice(resample(samples, rate, TARGET_RATE), voice, TARGET_RATE), TARGET_RATE,
                                                          PROVENANCE['authoring'], language)
             clip = out / 'clips' / language / f'{event}.wav'
             generate_speech.write_recording(clip, pcm, TARGET_RATE)
             manifest['clips'][f'{language}/{event}'] = {
                 'title': f'noXa — {event}', 'text': text, **metric, 'sha256': sha256(clip),
                 'voice': voice['id'], 'renderText': spoken, 'rawSha256': sha256(raw), 'rawSampleRate': rate,
-                'styleSha256': styles[voice['id']], 'modelSha256': VOICE['model']['archive_sha256']}
+                'styleSha256': styles[voice['id']], 'modelSha256': VOICE['model']['archive_sha256'],
+                **({'postprocess': voice['postprocess']} if voice.get('postprocess') else {})}
             print(f'{language}/{event}: {metric["duration"]:.2f} s')
     previous = out / 'manifest.json'
     if previous.exists():

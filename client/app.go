@@ -188,6 +188,7 @@ func (a *App) requireCM() (*connManager, error) {
 func (a *App) cmStore(cm *connManager) { a.cm.Store(cm) }
 
 func (a *App) domReady(ctx context.Context) {
+	restoreUpdateWindow()
 	if err := a.restoreWindowOpacityOnce(ctx); err != nil && err != context.Canceled {
 		log.Printf("window opacity at DOM-ready: %v", err)
 	}
