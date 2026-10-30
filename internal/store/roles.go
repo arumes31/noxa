@@ -275,6 +275,12 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 	for _, r := range before.Roles {
 		oldRoles[r.ID] = r
 	}
+
+	var insertRoleGrantsIDs []int64
+	var insertRoleCaps []string
+	var deleteRoleIDs []int64
+	var deleteRoleGrantsIDs []int64
+
 	for _, r := range after.Roles {
 		old, exists := oldRoles[r.ID]
 		delete(oldRoles, r.ID)
@@ -288,17 +294,30 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 		if exists && reflect.DeepEqual(old.Permissions, r.Permissions) {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_role_grants WHERE role_id=$1`, r.ID); err != nil {
-			return err
-		}
-		if len(r.Permissions) > 0 {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO auth_role_grants(role_id,capability) SELECT $1, UNNEST($2::text[])`, r.ID, pq.Array(r.Permissions)); err != nil {
-				return err
-			}
+		deleteRoleGrantsIDs = append(deleteRoleGrantsIDs, r.ID)
+		for _, cap := range r.Permissions {
+			insertRoleGrantsIDs = append(insertRoleGrantsIDs, r.ID)
+			insertRoleCaps = append(insertRoleCaps, string(cap))
 		}
 	}
+
+	if len(deleteRoleGrantsIDs) > 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_role_grants WHERE role_id = ANY($1)`, pq.Array(deleteRoleGrantsIDs)); err != nil {
+			return err
+		}
+	}
+
+	if len(insertRoleGrantsIDs) > 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO auth_role_grants(role_id,capability) SELECT unnest($1::bigint[]), unnest($2::text[])`, pq.Array(insertRoleGrantsIDs), pq.Array(insertRoleCaps)); err != nil {
+			return err
+		}
+	}
+
 	for id := range oldRoles {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_roles WHERE id=$1`, id); err != nil {
+		deleteRoleIDs = append(deleteRoleIDs, id)
+	}
+	if len(deleteRoleIDs) > 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_roles WHERE id = ANY($1)`, pq.Array(deleteRoleIDs)); err != nil {
 			return err
 		}
 	}
@@ -306,23 +325,32 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 	for _, m := range before.Members {
 		oldMembers[m.UserID] = m.RoleIDs
 	}
+
+	var insertUserIDs, insertRoleIDs []int64
+	var deleteUserIDs []int64
+
 	for _, m := range after.Members {
 		old := oldMembers[m.UserID]
 		delete(oldMembers, m.UserID)
 		if reflect.DeepEqual(old, m.RoleIDs) {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_member_roles WHERE user_id=$1`, m.UserID); err != nil {
-			return err
-		}
-		if len(m.RoleIDs) > 0 {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO auth_member_roles(user_id,role_id) SELECT $1, unnest($2::bigint[])`, m.UserID, pq.Array(m.RoleIDs)); err != nil {
-				return err
-			}
+		deleteUserIDs = append(deleteUserIDs, m.UserID)
+		for _, roleID := range m.RoleIDs {
+			insertUserIDs = append(insertUserIDs, m.UserID)
+			insertRoleIDs = append(insertRoleIDs, roleID)
 		}
 	}
 	for id := range oldMembers {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_member_roles WHERE user_id=$1`, id); err != nil {
+		deleteUserIDs = append(deleteUserIDs, id)
+	}
+	if len(deleteUserIDs) > 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_member_roles WHERE user_id = ANY($1)`, pq.Array(deleteUserIDs)); err != nil {
+			return err
+		}
+	}
+	if len(insertUserIDs) > 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO auth_member_roles(user_id,role_id) SELECT unnest($1::bigint[]), unnest($2::bigint[])`, pq.Array(insertUserIDs), pq.Array(insertRoleIDs)); err != nil {
 			return err
 		}
 	}
