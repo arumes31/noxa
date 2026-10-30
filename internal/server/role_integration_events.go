@@ -55,7 +55,7 @@ func (s *TCPServer) projectIntegrationEvent(ctx context.Context, e *authorizatio
 			!e.Evaluate(viewerID, member.ChannelID, authorization.ViewChannel).Allowed {
 			return result, nil
 		}
-		if member.Status == "invisible" && member.UniqueID != viewerUID && !e.Evaluate(viewerID, 0, authorization.ViewConnectionInfo).Allowed {
+		if s.deps.State.PresenceHidden(member) && member.UniqueID != viewerUID && !e.Evaluate(viewerID, 0, authorization.ViewConnectionInfo).Allowed {
 			return result, nil
 		}
 		if *activity.Speaking && (member.ServerMuted || !e.Evaluate(member.UserID, member.ChannelID, authorization.Speak).Allowed) {

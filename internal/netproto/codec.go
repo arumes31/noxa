@@ -471,6 +471,7 @@ func (m MessageType) String() string {
 // PublicKey in AuthSignature then authenticates the client as a guest with a
 // stable, key-derived unique ID even when no users row exists.
 type Authenticate struct {
+	HideLobbyPresence bool `json:"hide_lobby_presence,omitempty"`
 	// ClientVersion is optional, self-reported build metadata, never authority.
 	ClientVersion string `json:"client_version,omitempty"`
 	// AuthorizationModels lists the replacement policy models this client supports.
@@ -1021,9 +1022,11 @@ type ServerIconData struct {
 // SetStatus sets the caller's presence (307-309): Status is "online",
 // "away", or "busy"; Message is a free-form status line ("" clears).
 type SetStatus struct {
-	AckRequested bool   `json:"ack_requested,omitempty"`
-	Status       string `json:"status"`
-	Message      string `json:"message,omitempty"`
+	HideLobbyPresence *bool  `json:"hide_lobby_presence,omitempty"`
+	PrivacyOnly       bool   `json:"privacy_only,omitempty"`
+	AckRequested      bool   `json:"ack_requested,omitempty"`
+	Status            string `json:"status"`
+	Message           string `json:"message,omitempty"`
 }
 
 // Poke pokes a client (321/322): a short attention message relayed as a

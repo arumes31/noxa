@@ -612,4 +612,6 @@ export function WhisperSetForTab(arg1:string,arg2:Array<string>,arg3:Array<numbe
 export function SupportsStreamHEVCForTab(arg1:string):Promise<boolean>;
 
 export function PrepareUpdateReconnect(arg1:boolean,arg2:boolean,arg3:boolean):Promise<string>;
+
+export function PrepareUpdateStreamResume(arg1:string):Promise<string>;
 export function RestoreUpdateConnection():Promise<{[key:string]:any}>;

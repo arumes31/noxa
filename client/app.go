@@ -98,6 +98,7 @@ type App struct {
 	// settingsMu. Commit generations are per effect family: an always-on-top
 	// update must not suppress a pending opacity application (and vice versa).
 	settingsEffectMu            sync.Mutex
+	lobbyPrivacyMu              sync.Mutex
 	hotkeyEffectGeneration      uint64
 	opacityEffectGeneration     uint64
 	alwaysOnTopEffectGeneration uint64

@@ -98,6 +98,7 @@ type Client struct {
 	voiceHistoryEpoch   uint64
 	voiceHistorySession string
 	clientVersion       string // self-reported at authentication, protected by mu
+	hideLobbyPresence   bool   // requested session privacy, protected by mu
 
 	// Pending challenge-response handshake state (set on Authenticate without
 	// a password, consumed by AuthSignature).
@@ -1401,7 +1402,7 @@ func (s *TCPServer) onDisconnect(client *Client) {
 			}
 			if removed != nil {
 				channelID = removed.ChannelID
-				wasInvisible = removed.Status == "invisible"
+				wasInvisible = s.deps.State.PresenceHidden(removed)
 			}
 		}
 		// Remove voice metadata in the same membership critical section. Key

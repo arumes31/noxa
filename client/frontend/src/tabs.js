@@ -12,6 +12,8 @@ import { closeServerDialogs } from "./modal.js";
 import { clearSpeech } from "./sounds.js";
 import { initConversations } from "./conversations.js";
 import { retainPresenceTabs } from "./presence.js";
+import { offerUpdateShareResume } from "./update-share-resume.js";
+import { cancelShareResume } from "./video.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
@@ -230,6 +232,7 @@ async function refreshTabIdentity(tabID) {
 function onTabReset(tabID) {
     clearSpeech();
     const { state, $ } = V();
+    if (String(tabID || "") !== state.activeTabID) cancelShareResume();
     activeTabID = tabID || "";
     state.activeTabID = activeTabID;
     const restoringKnownTab = state.tabConnects.has(tabID);
@@ -472,6 +475,7 @@ export function initTabs() {
             const restored = await App().RestoreUpdateConnection();
             if (restored?.attempted) {
                 if (restored.tab_id) await V().completeUpdateReconnect(restored);
+                if (restored.tab_id && !restored.error && !restored.warning) offerUpdateShareResume(restored);
                 if (restored.error || restored.warning) {
                     const message = restored.error || restored.warning;
                     V().sysMsg(message);

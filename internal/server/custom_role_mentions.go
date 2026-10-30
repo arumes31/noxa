@@ -55,7 +55,7 @@ func (s *TCPServer) parseRoleMentions(ctx context.Context, sender *Client, chann
 		}
 		if !e.Evaluate(member.UserID, channelID, authorization.ViewChannel).Allowed ||
 			!e.Evaluate(sender.userID(), member.ChannelID, authorization.ViewChannel).Allowed ||
-			(member.Status == "invisible" && !showInvisible) {
+			(s.deps.State.PresenceHidden(member) && !showInvisible) {
 			continue
 		}
 		seen[member.UniqueID] = true

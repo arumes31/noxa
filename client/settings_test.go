@@ -77,6 +77,31 @@ func TestReconnectUpdateCheckDefaultAndOptOut(t *testing.T) {
 	}
 }
 
+func TestPeriodicUpdateSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"settings_version":12,"updates_auto_check":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := loadSettingsAt(path)
+	if !s.UpdatesCheckPeriodically || s.UpdatesCheckIntervalHours != 2 {
+		t.Fatal("periodic checks must default to two hours for existing installations")
+	}
+	s.UpdatesCheckPeriodically, s.UpdatesCheckIntervalHours = false, 4
+	if err := saveSettingsAt(path, s); err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadSettingsAt(path)
+	if loaded.UpdatesCheckPeriodically || loaded.UpdatesCheckIntervalHours != 4 {
+		t.Fatal("periodic preferences not preserved")
+	}
+	for _, bad := range []int{-1, 0, 3, 9999} {
+		s.UpdatesCheckIntervalHours = bad
+		if normalizeSettings(s).UpdatesCheckIntervalHours != 2 {
+			t.Fatal("invalid interval not repaired")
+		}
+	}
+}
+
 func TestVADThresholdPreservesFineAndLegacyValues(t *testing.T) {
 	for _, value := range []string{"1.2", "1.5", "1.8", "3", "50"} {
 		t.Run(value, func(t *testing.T) {

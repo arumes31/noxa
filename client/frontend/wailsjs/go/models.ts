@@ -1461,6 +1461,9 @@ export namespace main {
 	    reconnect_on_loss: boolean;
 	    updates_auto_check: boolean;
 	    updates_auto_install: boolean;
+        updates_check_periodically: boolean;
+        updates_check_interval_hours: number;
+        hide_lobby_presence?: boolean;
 	    user_volumes: Record<string, number>;
 	    user_share_volumes: Record<string, number>;
 	    muted_share_users: string[];
@@ -1588,6 +1591,9 @@ export namespace main {
 	        this.reconnect_on_loss = source["reconnect_on_loss"];
 	        this.updates_auto_check = source["updates_auto_check"];
 	        this.updates_auto_install = source["updates_auto_install"];
+            this.updates_check_periodically = source["updates_check_periodically"];
+            this.updates_check_interval_hours = source["updates_check_interval_hours"];
+            this.hide_lobby_presence = source["hide_lobby_presence"];
 	        this.user_volumes = source["user_volumes"];
 	        this.user_share_volumes = source["user_share_volumes"];
 	        this.muted_share_users = source["muted_share_users"];

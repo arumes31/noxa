@@ -39,7 +39,7 @@ func (s *TCPServer) buildRoleClientInfo(e *authorization.RoleEvaluator, actorID 
 	member, ok := s.deps.State.GetClient(targetID)
 	self := selfSessionID != "" && targetID == selfSessionID
 	showStats := self || e.Evaluate(actorID, 0, authorization.ViewConnectionInfo).Allowed
-	if !ok || (!self && (!e.Evaluate(actorID, member.ChannelID, authorization.ViewChannel).Allowed || (member.Status == "invisible" && member.UniqueID != actorUID && !showStats))) {
+	if !ok || (!self && (!e.Evaluate(actorID, member.ChannelID, authorization.ViewChannel).Allowed || (s.deps.State.PresenceHidden(member) && member.UniqueID != actorUID && !showStats))) {
 		return netproto.ClientInfoResponse{}, authorization.ErrRoleForbidden
 	}
 	resp := netproto.ClientInfoResponse{ClientID: member.ClientID, UniqueID: member.UniqueID, Nickname: member.Nickname, ChannelID: member.ChannelID, PingMs: -1}

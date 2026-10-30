@@ -188,7 +188,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		if envelope.Type != eventAvatarChanged && (event.ChannelID == nil || *event.ChannelID != member.ChannelID) {
 			return nil, nil
 		}
-		if member.Status == "invisible" && member.UniqueID != client.uniqueID() && !e.Evaluate(client.userID(), 0, authorization.ViewConnectionInfo).Allowed {
+		if s.deps.State.PresenceHidden(member) && member.UniqueID != client.uniqueID() && !e.Evaluate(client.userID(), 0, authorization.ViewConnectionInfo).Allowed {
 			return nil, nil
 		}
 	case eventChannelIconChanged:
@@ -251,7 +251,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		if event.Speaking && (source.ServerMuted || target.ServerDeafened || !source.IsSpeaking) {
 			return nil, nil
 		}
-		if source.Status == "invisible" && source.UniqueID != client.uniqueID() && !e.Evaluate(client.userID(), 0, authorization.ViewConnectionInfo).Allowed {
+		if s.deps.State.PresenceHidden(source) && source.UniqueID != client.uniqueID() && !e.Evaluate(client.userID(), 0, authorization.ViewConnectionInfo).Allowed {
 			return nil, nil
 		}
 	case eventPoke:

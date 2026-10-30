@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"time"
 )
 
@@ -14,18 +15,73 @@ const updateReconnectMaxBytes = 32 * 1024
 // Credentials stay native and OS-protected, even while crossing the updater
 // supervisor. Nothing is persisted in settings or exposed to the renderer.
 type updateReconnectEnvelope struct {
-	Version           int            `json:"version"`
-	Expires           int64          `json:"expires"`
-	Addr              string         `json:"addr"`
-	Nickname          string         `json:"nickname"`
-	DisplayName       string         `json:"display_name"`
-	Bookmark          string         `json:"bookmark"`
-	ChannelID         int64          `json:"channel_id"`
-	Identity          identity       `json:"identity"`
-	Passwords         loginPasswords `json:"passwords"`
-	Muted             bool           `json:"muted"`
-	Deafened          bool           `json:"deafened"`
-	MutedBeforeDeafen bool           `json:"muted_before_deafen"`
+	Version           int                 `json:"version"`
+	Expires           int64               `json:"expires"`
+	Addr              string              `json:"addr"`
+	Nickname          string              `json:"nickname"`
+	DisplayName       string              `json:"display_name"`
+	Bookmark          string              `json:"bookmark"`
+	ChannelID         int64               `json:"channel_id"`
+	Identity          identity            `json:"identity"`
+	Passwords         loginPasswords      `json:"passwords"`
+	Muted             bool                `json:"muted"`
+	Deafened          bool                `json:"deafened"`
+	MutedBeforeDeafen bool                `json:"muted_before_deafen"`
+	Stream            *updateStreamResume `json:"stream,omitempty"`
+}
+
+type updateStreamResume struct {
+	Surface string `json:"surface"`
+	Preset  string `json:"preset"`
+	Custom  struct {
+		Width  int `json:"width"`
+		Height int `json:"height"`
+		FPS    int `json:"fps"`
+	} `json:"custom"`
+	BitrateCeiling int    `json:"bitrateCeiling"`
+	AudioMode      string `json:"audioMode"`
+}
+
+func validUpdateStream(s *updateStreamResume) bool {
+	if s == nil {
+		return true
+	}
+	return slices.Contains([]string{"monitor", "window", "region", "studio"}, s.Surface) &&
+		slices.Contains([]string{"balanced", "text", "motion", "hd", "hdMotion", "qhd", "uhd", "original", "custom"}, s.Preset) &&
+		slices.Contains([]string{"none", "system", "application"}, s.AudioMode) &&
+		slices.Contains([]int{0, 2000000, 4000000, 6000000, 8000000}, s.BitrateCeiling) &&
+		(s.Preset != "custom" || (s.Custom.Width >= 160 && s.Custom.Width <= 8192 && s.Custom.Height >= 160 && s.Custom.Height <= 8192 && slices.Contains([]int{15, 30, 60}, s.Custom.FPS)))
+}
+
+// Preferences only: the new process opens the normal source picker again.
+func (a *App) PrepareUpdateStreamResume(raw string) string {
+	if len(raw) > 2048 {
+		return "invalid stream settings"
+	}
+	var stream updateStreamResume
+	if json.Unmarshal([]byte(raw), &stream) != nil || !validUpdateStream(&stream) {
+		return "invalid stream settings"
+	}
+	a.update.mu.Lock()
+	defer a.update.mu.Unlock()
+	if a.update.running || a.updateReconnect == "" {
+		return ""
+	}
+	saved, err := decodeUpdateReconnect(a.updateReconnect, time.Now(), unprotectBytes)
+	if err != nil {
+		return "cannot preserve stream settings"
+	}
+	current := a.snapshotUpdateConnection()
+	if current == nil || saved.Addr != current.Addr || saved.ChannelID != current.ChannelID || saved.Identity.PublicKey != current.Identity.PublicKey {
+		return ""
+	}
+	saved.Stream = &stream
+	encoded, err := encodeUpdateReconnect(*saved, protectBytes)
+	if err != nil {
+		return "cannot preserve stream settings"
+	}
+	a.updateReconnect = encoded
+	return ""
 }
 
 // PrepareUpdateReconnect captures only the currently connected server. A normal
@@ -117,7 +173,7 @@ func decodeUpdateReconnect(encoded string, now time.Time, unprotect func([]byte)
 	defer clear(raw)
 	var saved updateReconnectEnvelope
 	if json.Unmarshal(raw, &saved) != nil || saved.Version != 1 || saved.Expires < now.Unix() || saved.Expires > now.Add(10*time.Minute).Unix() ||
-		saved.Addr == "" || saved.Nickname == "" || saved.ChannelID < 0 {
+		saved.Addr == "" || saved.Nickname == "" || saved.ChannelID < 0 || !validUpdateStream(saved.Stream) {
 		return nil, errors.New("connection handoff is invalid or expired")
 	}
 	if _, err := saved.Identity.uniqueID(); err != nil {
@@ -205,5 +261,9 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	}
 	a.finishActivateSerialized(id, cm, journal, generation)
 	result["tab_id"] = id
+	if saved.Stream != nil && saved.ChannelID > 0 && result["warning"] == nil {
+		result["stream"] = saved.Stream
+		result["stream_channel_id"] = saved.ChannelID
+	}
 	return result
 }

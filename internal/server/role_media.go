@@ -85,7 +85,7 @@ func (s *TCPServer) guardRoleMedia(delivery webrtc.MediaDelivery, write func() e
 			}
 		} else {
 			source, ok := s.deps.State.GetClient(sender.ID)
-			if !ok || (source.Status == "invisible" && sender.uniqueID() != recipient.uniqueID() && !e.Evaluate(recipient.userID(), 0, authorization.ViewConnectionInfo).Allowed) {
+			if !ok || (s.deps.State.PresenceHidden(source) && sender.uniqueID() != recipient.uniqueID() && !e.Evaluate(recipient.userID(), 0, authorization.ViewConnectionInfo).Allowed) {
 				return nil
 			}
 			receiverChannelID, _, present := s.deps.State.ClientChannelState(recipient.ID)

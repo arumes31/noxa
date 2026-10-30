@@ -66,6 +66,7 @@ import {
     initVideo, videoTrackAdded, videoTrackRemoved, videoSpeaking,
     videoRefreshNames, clearVideoGrid, shareToggle, setLowBandwidth, isLowBandwidth,
     parseTrackID, SLOT_SCREEN_AUDIO, cameraToggle, resetCameraState,
+    pauseShareForReconnect, cancelShareResume, shareResumePending, resumeShareAfterReconnect,
     renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits, adaptScreenResolution, retryVideoHardware, videoPresentationDiagnostics,
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
@@ -969,6 +970,7 @@ const tabReconnects = createTabReconnects({
     },
 });
 function cancelOverlayRetries() {
+    cancelShareResume();
     const tabID = state.activeTabID;
     if (state.reconnectInFlight) return;
     tabReconnects.cancel(tabID);
@@ -1005,14 +1007,19 @@ window.runtime.EventsOn("tab_disconnected", tabID => {
 });
 window.runtime.EventsOn("tab_closed", tabID => {
     tabID = String(tabID);
+    if (tabID === state.activeTabID) cancelShareResume();
     tabReconnects.cancel(tabID);
     connectionOverlay.forget(tabID);
     reconnectNotices.delete(tabID);
     restoredVoiceChannels.delete(tabID);
     state.tabConnects.delete(tabID);
 });
-window.runtime.EventsOn("tab_reconnect_disabled", tabID => tabReconnects.cancel(String(tabID)));
+window.runtime.EventsOn("tab_reconnect_disabled", tabID => {
+    if (String(tabID) === state.activeTabID) cancelShareResume();
+    tabReconnects.cancel(String(tabID));
+});
 window.runtime.EventsOn("tab_reset", tabID => {
+    if (String(tabID || "") !== state.activeTabID) cancelShareResume();
     const cue = pendingIntentionalDisconnectCue;
     if (cue) {
         // The native intentional edge precedes its replacement reset. A
@@ -1131,6 +1138,8 @@ window.runtime.EventsOn("intentional_disconnect", (tabID) => {
 window.addEventListener("pagehide", () => { pendingIntentionalDisconnectCue = null; });
 
 window.runtime.EventsOn("disconnected", () => {
+    if (state.lastConnect && autoReconnectEnabled()) pauseShareForReconnect();
+    else cancelShareResume();
     // A selected server that drops takes over the one foreground retry
     // timer. Otherwise the previous server's callback can cancel this new
     // timer and keep spending its budget on the wrong connection.
@@ -2156,6 +2165,7 @@ let intentionalVoiceDisconnectScope = "";
 const voiceConnectionScope = () => JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration]);
 
 function stopVoiceForDisconnect() {
+    cancelShareResume();
     intentionalVoiceDisconnectScope = voiceConnectionScope();
     resetVoiceSession();
 }
@@ -2271,6 +2281,7 @@ function ensureVoiceForChannel() {
     if (voiceStartPromise) return voiceStartPromise;
     if (state.pc) {
         if (!streamSessionIsCurrent(state.pc)) {
+            cancelShareResume();
             // A channel move retains microphone voice, but publication and
             // viewing consent belong to the channel that granted them.
             for (const track of state.localStream?.getVideoTracks() || []) { track.stop(); state.localStream.removeTrack(track); }
@@ -2567,6 +2578,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     startMicMeter(state.localStream);
     applyVoiceState();
     setVoiceStatus("voice on");
+    void resumeShareAfterReconnect();
     return true;
 }
 
@@ -2796,7 +2808,7 @@ function teardownVoice() {
     state.shareStopping = false;
     // Studio captures, audio graph, timers and canvases end with the session
     // (its published clone was stopped with the share stream above).
-    disposeStudio();
+    if (!shareResumePending()) disposeStudio();
     detachRemoteAudio();
     if (state.pc) { state.pc.close(); state.pc = null; }
     // The session's worker and every media key end with the peer.

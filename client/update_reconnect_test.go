@@ -19,6 +19,37 @@ func testUpdateEnvelope(t *testing.T) updateReconnectEnvelope {
 	return updateReconnectEnvelope{Version: 1, Expires: time.Now().Add(5 * time.Minute).Unix(), Addr: "127.0.0.1:1", Nickname: "account", DisplayName: "Daniel", Bookmark: "home", ChannelID: 42, Identity: *mustTempIdentity(t), Passwords: loginPasswords{Password: "account-secret", ServerPassword: "server-secret"}, Muted: true, Deafened: true, MutedBeforeDeafen: false}
 }
 
+func TestUpdateStreamPreferencesValidation(t *testing.T) {
+	s := updateStreamResume{Surface: "window", Preset: "hd", AudioMode: "application", BitrateCeiling: 6000000}
+	if !validUpdateStream(&s) {
+		t.Fatal("valid stream preferences rejected")
+	}
+	for _, change := range []func(*updateStreamResume){
+		func(s *updateStreamResume) { s.Surface = "arbitrary-source" },
+		func(s *updateStreamResume) { s.Preset = "invalid" },
+		func(s *updateStreamResume) { s.AudioMode = "microphone" },
+		func(s *updateStreamResume) { s.BitrateCeiling = -1 },
+		func(s *updateStreamResume) { s.Preset = "custom"; s.Custom.Width = 10000 },
+	} {
+		bad := s
+		change(&bad)
+		if validUpdateStream(&bad) {
+			t.Fatalf("invalid settings accepted: %+v", bad)
+		}
+	}
+	copyBytes := func(b []byte) ([]byte, error) { return append([]byte(nil), b...), nil }
+	saved := testUpdateEnvelope(t)
+	saved.Stream = &s
+	encoded, err := encodeUpdateReconnect(saved, copyBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := decodeUpdateReconnect(encoded, time.Now(), copyBytes)
+	if err != nil || !reflect.DeepEqual(restored.Stream, saved.Stream) {
+		t.Fatalf("stream preferences lost: %v", err)
+	}
+}
+
 func TestUpdateReconnectEnvelopeValidation(t *testing.T) {
 	// The codec is portable; the production protection primitive is DPAPI.
 	copyBytes := func(b []byte) ([]byte, error) { return append([]byte(nil), b...), nil }

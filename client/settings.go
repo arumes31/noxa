@@ -184,7 +184,9 @@ type Settings struct {
 	UpdatesAutoCheck   bool   `json:"updates_auto_check"`
 	UpdatesAutoInstall bool   `json:"updates_auto_install"` // install/restart after countdown on startup or reconnect
 
-	UpdatesCheckOnReconnect bool `json:"updates_check_on_reconnect"`
+	UpdatesCheckOnReconnect   bool `json:"updates_check_on_reconnect"`
+	UpdatesCheckPeriodically  bool `json:"updates_check_periodically"`
+	UpdatesCheckIntervalHours int  `json:"updates_check_interval_hours"`
 
 	// Voice UX (wave 1).
 	UserVolumes              map[string]int  `json:"user_volumes"` // uniqueID -> volume 0..200
@@ -270,13 +272,14 @@ type Settings struct {
 	// HideChatActivity stops this client from sending read receipts and typing
 	// indicators, in direct messages and private groups alike. Delivery
 	// receipts are unaffected. Default (false) keeps the existing behaviour.
-	HideChatActivity bool               `json:"hide_chat_activity,omitempty"`
-	UserNotes        map[string]string  `json:"user_notes,omitempty"`      // (315) uniqueID -> local note
-	RecentChannels   map[string][]int64 `json:"recent_channels,omitempty"` // (320) server addr -> last 5 channel IDs
-	AutoAwayMinutes  int                `json:"auto_away_minutes"`         // (308) 0 = off, default 15
-	AutoAwayMessage  string             `json:"auto_away_message"`         // (390) status line other clients see while idle
-	OnboardingDone   bool               `json:"onboarding_done"`           // (329)
-	LastSeenVersion  string             `json:"last_seen_version"`         // (330) what's-new tracking
+	HideChatActivity  bool               `json:"hide_chat_activity,omitempty"`
+	HideLobbyPresence bool               `json:"hide_lobby_presence,omitempty"`
+	UserNotes         map[string]string  `json:"user_notes,omitempty"`      // (315) uniqueID -> local note
+	RecentChannels    map[string][]int64 `json:"recent_channels,omitempty"` // (320) server addr -> last 5 channel IDs
+	AutoAwayMinutes   int                `json:"auto_away_minutes"`         // (308) 0 = off, default 15
+	AutoAwayMessage   string             `json:"auto_away_message"`         // (390) status line other clients see while idle
+	OnboardingDone    bool               `json:"onboarding_done"`           // (329)
+	LastSeenVersion   string             `json:"last_seen_version"`         // (330) what's-new tracking
 
 	// Identity (wave 9).
 	ActiveIdentity string `json:"active_identity,omitempty"` // (351) identity file stem in identities/
@@ -324,7 +327,9 @@ func DefaultSettings() Settings {
 		UpdatesAutoCheck:      true,
 		UpdatesAutoInstall:    true,
 
-		UpdatesCheckOnReconnect: true,
+		UpdatesCheckOnReconnect:   true,
+		UpdatesCheckPeriodically:  true,
+		UpdatesCheckIntervalHours: 2,
 
 		PTTReleaseDelayMs: 0,
 		WarnMutedTalking:  true,
@@ -549,6 +554,11 @@ func migrateEventSoundSplits(s *Settings) {
 // (modes, enums, hotkey syntax) are validated by SaveSettings and are never
 // silently rewritten.
 func normalizeSettings(s Settings) Settings {
+	switch s.UpdatesCheckIntervalHours {
+	case 1, 2, 4, 8, 24:
+	default:
+		s.UpdatesCheckIntervalHours = 2
+	}
 	s.Theme = "midnight"
 	s.GamingOverlayScale = clampSetting(s.GamingOverlayScale, 75, 200)
 	s.GamingOverlayStyle = normalizeOverlayStyle(s.GamingOverlayStyle)
@@ -1013,6 +1023,11 @@ func (a *App) SaveSettings(s Settings) string {
 // family may have changed in that snapshot, so each needs an independent
 // current-state commit.
 func (a *App) applyAllSettingsEffects(ticket uint64) error {
+	localErr := a.applyLocalSettingsEffects(ticket)
+	return errors.Join(localErr, a.applyLobbyPrivacy())
+}
+
+func (a *App) applyLocalSettingsEffects(ticket uint64) error {
 	if err := a.applyHotkeyEffect(ticket); err != nil {
 		return err
 	}

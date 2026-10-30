@@ -16,3 +16,4 @@ publication = createVideoPublication({ policy: grid });
 
 export const { videoTrackAdded, videoTrackRemoved, videoSpeaking, videoRefreshNames, clearVideoGrid, initVideo, isLowBandwidth, setLowBandwidth, videoPresentationDiagnostics } = grid;
 export const { applyVideoLimits, shareToggle, resetCameraState, cameraToggle, adaptScreenResolution, retryVideoHardware, startStudioShare, studioShareActive, stopShare } = publication;
+export const { pauseShareForReconnect, cancelShareResume, shareResumePending, resumeShareAfterReconnect, updateShareSettings, openResumedShare } = publication;

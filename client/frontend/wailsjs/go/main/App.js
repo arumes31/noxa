@@ -1218,6 +1218,10 @@ export function PrepareUpdateReconnect(arg1, arg2, arg3) {
   return window['go']['main']['App']['PrepareUpdateReconnect'](arg1, arg2, arg3);
 }
 
+export function PrepareUpdateStreamResume(arg1) {
+  return window['go']['main']['App']['PrepareUpdateStreamResume'](arg1);
+}
+
 export function RestoreUpdateConnection() {
   return window['go']['main']['App']['RestoreUpdateConnection']();
 }

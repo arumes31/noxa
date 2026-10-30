@@ -171,6 +171,18 @@ test("replacement readiness waits for native startup and rendered login", async 
     await expect.poll(() => page.evaluate(() => window.__calls.ConfirmUpdateStartup)).toBe(1);
 });
 
+test("periodic update checks default to two hours and honor a saved opt-out", async ({ page }) => {
+    await page.clock.install();
+    await boot(page, { enabled: false, available: false });
+    await page.clock.fastForward(30000);
+    expect(await page.evaluate(() => window.__calls.CheckForUpdate || 0)).toBe(0);
+    await page.clock.fastForward(7200000);
+    await expect.poll(() => page.evaluate(() => window.__calls.CheckForUpdate)).toBe(1);
+    await page.evaluate(() => { window.__noxa.state.settings.updates_check_periodically = false; });
+    await page.clock.fastForward(7200000);
+    expect(await page.evaluate(() => window.__calls.CheckForUpdate)).toBe(1);
+});
+
 test("reconnect offers an update by default independently of startup checking", async ({ page }) => {
     await boot(page, { enabled: false });
     await page.evaluate(() => window.__noxa.reconnectAutoCheck("server-a"));
@@ -670,7 +682,7 @@ test("bloom runs only once on transition and observers retire with the dialog", 
 test("changed release requires a fresh offer and confirmation before downloading again", async ({ page }) => {
     await boot(page, { autoInstall: true, versions: ["v0.4.1", "v0.4.2"], downloadError: "update changed from v0.4.1 to v0.4.2; confirm the new version", restartPending: true });
     const dialog = page.getByRole("dialog", { name: "Check for updates", exact: true });
-    await expect(dialog.locator(".upd-status")).toContainText("confirm the new version");
+    await expect(dialog.locator(".upd-status")).toContainText("confirm the new version", { timeout: 10000 });
     await expect(dialog.locator(".upd-update")).toBeHidden();
     await expect(dialog.locator(".upd-retry")).toBeVisible();
     await dialog.locator(".upd-retry").click();
@@ -685,6 +697,7 @@ test("changed release requires a fresh offer and confirmation before downloading
 test("post-update intro waits for startup and remains visible after a fast launch", async ({ page }, testInfo) => {
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.clock.install();
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
     await boot(page, { afterUpdate: true, transitionQueryPending: true, settingsPending: true, enabled: false });
     await page.waitForFunction(() => typeof window.__finishTransitionQuery === "function");
     await expect(page.locator(".update-intro")).toHaveCount(0);

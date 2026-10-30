@@ -29,5 +29,5 @@ func (s *TCPServer) rolePokeTargetVisible(e *authorization.RoleEvaluator, sender
 	target, ok := s.deps.State.GetClient(targetID)
 	return ok && (targetID == sender.ID ||
 		(e.Evaluate(sender.userID(), target.ChannelID, authorization.ViewChannel).Allowed &&
-			(target.Status != "invisible" || e.Evaluate(sender.userID(), 0, authorization.ViewConnectionInfo).Allowed)))
+			(!s.deps.State.PresenceHidden(target) || e.Evaluate(sender.userID(), 0, authorization.ViewConnectionInfo).Allowed)))
 }

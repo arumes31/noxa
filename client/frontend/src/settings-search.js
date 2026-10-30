@@ -14,6 +14,9 @@
 // Keywords and problem phrases per saved preference key. Both languages are
 // always indexed, so a German user may type English terms and vice versa.
 export const SETTINGS_SEARCH_TERMS = Object.freeze({
+    hide_lobby_presence: { de: ["Lobby", "Anwesenheit verbergen", "Privatsphäre"], en: ["hide lobby presence", "privacy", "visibility"] },
+    updates_check_periodically: { de: ["regelmäßig", "Updates", "zwei Stunden"], en: ["periodic update checks", "two hours"] },
+    updates_check_interval_hours: { de: ["Prüfintervall", "Updates", "Stunden"], en: ["update interval", "hours"] },
     // General
     language: { de: ["Sprache", "Deutsch", "Englisch", "Sprache umstellen", "falsche Sprache"], en: ["language", "German", "English", "wrong language", "switch language"] },
     auto_away_minutes: { de: ["abwesend", "AFK", "automatisch abwesend", "Status wechselt von selbst"], en: ["away", "AFK", "idle", "auto away", "status changes by itself"] },

@@ -17,7 +17,7 @@ import { labelButton } from "./icons.js";
 import { retainDisplayCapture, releaseDisplayCapture } from "./display-capture-lease.js";
 import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 import { cameraConstraints } from "./camera-capture.js";
-import { startStudioShare, studioShareActive, stopShare } from "./video.js";
+import { startStudioShare, studioShareActive, stopShare, shareResumePending } from "./video.js";
 import {
     MAX_SCENES, MAX_SOURCES, TRANSITION_MIN_MS, TRANSITION_MAX_MS, StudioStateError,
     parseStudio, serializeStudio, selectedScene, addScene, renameScene, removeScene, selectScene, setTransition,
@@ -621,7 +621,7 @@ function closePanel(reason) {
     // Teardown reasons end everything; a user close keeps only a live program.
     // A publication still starting is treated like live: goLive settles it
     // (and disposes the session if it failed while the panel is closed).
-    if ((session.live || session.starting) && !["server-change", "disconnected"].includes(reason)) session.engine.releaseDraft();
+    if ((session.live || session.starting) && (shareResumePending() || !["server-change", "disconnected"].includes(reason))) session.engine.releaseDraft();
     else disposeSession();
 }
 
