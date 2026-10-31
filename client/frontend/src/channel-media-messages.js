@@ -1,6 +1,14 @@
 // Encrypted channel media (Task 2) strings; the PWA carries the same texts
 // (mobile/src/ui/media-e2ee-text.js).
 export const channelMediaEnglish = {
+    "e2ee.reason.hardware_unverified": "Stream stopped: hardware acceleration could not be verified in this browser.",
+    "e2ee.reason.hardware_encoder": "Stream stopped: no hardware encoder is available.",
+    "e2ee.member.connecting": "Connecting…",
+    "e2ee.member.keying": "Exchanging encryption keys…",
+    "e2ee.member.ready": "Encryption keys ready",
+    "e2ee.member.retrying": "Retrying key exchange…",
+    "e2ee.member.paused": "Waiting for new encryption keys…",
+
 
     "e2ee.media.keying": "Setting up end-to-end encryption…",
     "e2ee.media.encrypted": "End-to-end encrypted · keys held by {count} device(s): {names}",
@@ -31,6 +39,13 @@ export const channelMediaEnglish = {
 };
 
 export const channelMediaGerman = {
+    "e2ee.reason.hardware_encoder": "Stream beendet: Kein Hardwareencoder verfügbar.",
+    "e2ee.member.connecting": "Verbinden…",
+    "e2ee.member.keying": "Schlüssel werden ausgetauscht…",
+    "e2ee.member.ready": "Verschlüsselungsschlüssel bereit",
+    "e2ee.member.retrying": "Schlüsselaustausch wird wiederholt…",
+    "e2ee.member.paused": "Warten auf neue Verschlüsselungsschlüssel…",
+
 
     "e2ee.media.keying": "Ende-zu-Ende-Verschlüsselung wird eingerichtet…",
     "e2ee.media.encrypted": "Ende-zu-Ende-verschlüsselt · Schlüssel bei {count} Gerät(en): {names}",

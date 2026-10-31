@@ -4,6 +4,7 @@ import { isUserMuted } from "./audio.js";
 import * as chatUI from "./chat-ui.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
 import { memberIsInLobby, visibleInChannelTree } from "./member-presence.js";
+import { createMemberMediaIndicator } from "./member-media-indicator.js";
 import { roleIconElement } from "./role-icons.js";
 import { deniedActionMessage, missingPermissionHint } from "./permission-denied.js";
 import { roleChip } from "./role-presentation.js";
@@ -445,6 +446,8 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             indicator.setAttribute("aria-label", streamLabel);
             row.appendChild(indicator);
         }
+        const mediaIndicator = createMemberMediaIndicator(c, state);
+        if (mediaIndicator) row.appendChild(mediaIndicator);
         // (310) group badge next to the name. Groups without an icon get a text
         // chip in the group colour instead of nothing — colour and hoisting are
         // settable on their own, so an icon is not what makes a group visible.

@@ -81,7 +81,7 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 }
 
 // MediaPolicy selects what the SFU negotiates. With E2EE (mandatory channel
-// media encryption) only Opus and VP8 are registered: their encrypted
+// media encryption) only Opus, VP8 and H264 are registered: their encrypted
 // frames keep the clear header the router's packetization, keyframe and
 // dimension admission rely on (VP8 keyframes keep 10 clear bytes). H.264 and
 // HEVC are not offered until encrypted packet/codec admission is proven.
@@ -280,6 +280,7 @@ func (e *Engine) NewPeerConnection(clientID string) (*PeerConnectionWrapper, err
 	wrapper.egress = e.egress
 	wrapper.upstreamFeedback = e.upstreamFeedback.take(lease, pc.ID())
 	wrapper.videoBounds = e.videoBounds
+	wrapper.mediaPolicy = e.policy
 	e.peers[clientID] = wrapper
 	e.logger.Info("webrtc peer connection created", zap.String("client_id", clientID))
 	return wrapper, nil
@@ -428,7 +429,7 @@ func registerCodecsWithPolicy(m *webrtc.MediaEngine, enableAV1 bool, bounds Vide
 	if err := registerVideo(vp8); err != nil {
 		return fmt.Errorf("vp8: %w", err)
 	}
-	if bounds != (VideoBounds{}) || policy.E2EE {
+	if bounds != (VideoBounds{}) && !policy.E2EE {
 		return nil
 	}
 
@@ -439,8 +440,10 @@ func registerCodecsWithPolicy(m *webrtc.MediaEngine, enableAV1 bool, bounds Vide
 		},
 		PayloadType: 98,
 	}
-	if err := registerVideo(vp9); err != nil {
-		return fmt.Errorf("vp9: %w", err)
+	if !policy.E2EE {
+		if err := registerVideo(vp9); err != nil {
+			return fmt.Errorf("vp9: %w", err)
+		}
 	}
 
 	h264 := webrtc.RTPCodecParameters{
@@ -453,6 +456,10 @@ func registerCodecsWithPolicy(m *webrtc.MediaEngine, enableAV1 bool, bounds Vide
 	}
 	if err := registerVideo(h264); err != nil {
 		return fmt.Errorf("h264: %w", err)
+	}
+
+	if policy.E2EE {
+		return nil
 	}
 
 	// The SFU does not decode HEVC; preserve the source's explicitly admitted

@@ -106,6 +106,8 @@ type connManager struct {
 	lastSnapshot string
 	// lastSubscriptions is the newest authoritative subscription set (312).
 	lastSubscriptions string
+	// rulesPending remembers a prompt on this connection until its acceptance ACK.
+	rulesPending bool
 	// iceServers are the ICE servers delivered by the server in the
 	// AuthResponse (nil = use client defaults).
 	iceServers          []netproto.ICEServer
@@ -625,6 +627,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.mu.Lock()
 	m.conn = conn
 	m.connEpoch++
+	m.rulesPending = false
 	m.addr = addr
 	m.clientID = resp.ClientID
 	m.uniqueID = resp.UniqueID
@@ -764,6 +767,7 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	// disconnect, so keeping the cached set would show tabs that no longer
 	// receive anything.
 	m.lastSubscriptions = ""
+	m.rulesPending = false
 	m.mediaLimits = netproto.MediaLimits{}
 	m.mediaLimitsRevision = 0
 	m.closed = true
@@ -1293,6 +1297,11 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		// (216) The webview owns the blocking prompt, but the frame stays a
 		// typed backend event so operator text is never interpreted as markup.
 		m.emit("server_rules", string(f.Payload))
+		if checkSource {
+			if err := m.republishE2EKeyAfterRules(conn, epoch, f); err != nil {
+				m.emit("servererror", "encryption identity publish failed after accepting server rules")
+			}
+		}
 	case netproto.MsgICECandidate:
 		m.emit("ice", string(f.Payload))
 	case netproto.MsgWebRTCOffer:

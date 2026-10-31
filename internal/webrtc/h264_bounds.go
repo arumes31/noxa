@@ -47,6 +47,7 @@ type h264AccessUnit struct {
 // STAP entry or fragment cannot expose an earlier unvalidated parameter change.
 // This plaintext inspector must not be used to claim encrypted-frame validation.
 type h264BoundsInspector struct {
+	encrypted    bool
 	bounds       VideoBounds
 	seen, known  bool
 	referencePPS uint32
@@ -173,6 +174,12 @@ func (v *h264BoundsInspector) addNAL(nal []byte) bool {
 		return false
 	}
 	switch nal[0] & 31 {
+	case 14:
+		if !v.encrypted || !validH264TemporalPrefix(nal) {
+			return false
+		}
+		v.nals = append(v.nals, bytes.Clone(nal))
+		return true
 	case 1, 5, 6, 7, 8, 9, 12:
 		v.nals = append(v.nals, bytes.Clone(nal))
 		return true
@@ -182,6 +189,9 @@ func (v *h264BoundsInspector) addNAL(nal []byte) bool {
 }
 
 func (v *h264BoundsInspector) finish() (*h264AccessUnit, error) {
+	if v.encrypted {
+		return v.finishEncrypted()
+	}
 	var unit *h264AccessUnit
 	var picturePPS uint32
 	var picture h264Picture

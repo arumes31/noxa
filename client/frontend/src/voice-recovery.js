@@ -11,7 +11,7 @@ import { remoteTrackID, parseTrackID } from "./media-track-id.js";
 // fresh packets trigger a resync.
 const SPEAKER_STRIKES = 2;
 
-export function createVoiceRecovery({ state, attached, repair, resync, rebuild, now = () => performance.now() }) {
+export function createVoiceRecovery({ state, attached, repair, resync, rebuild, canReceive = () => true, now = () => performance.now() }) {
     let scope = "", peer = null, previous = new Map(), strikes = new Map(), busy = false, attempts = 0, next = 0;
     let speakerPackets = new Map(), speakerStrikes = new Map();
     return async (pc, stats) => {
@@ -39,12 +39,14 @@ export function createVoiceRecovery({ state, attached, repair, resync, rebuild, 
             const old = previous.get(token);
             previous.set(token, { packets: stat.packetsReceived, timestamp: stat.timestamp });
             const progressing = old && stat.timestamp > old.timestamp && stat.packetsReceived > old.packets;
-            const broken = progressing && (track.readyState === "ended" || !attached(track, id));
+            const broken = progressing && (track.readyState === "ended" || (canReceive(publisher) && !attached(track, id)));
             strikes.set(token, broken ? (strikes.get(token) || 0) + 1 : 0);
             if (strikes.get(token) >= 2) failed.push({track,id});
         }
         for (const token of previous.keys()) if (!seen.has(token)) { previous.delete(token); strikes.delete(token); }
-        const silent = silentSpeakers(state, micPackets, speakerPackets, speakerStrikes);
+        // A key-gated receiver is intentionally unattached. Renegotiating cannot
+        // supply a missing key and must not compete with key distribution.
+        const silent = silentSpeakers(state, micPackets, speakerPackets, speakerStrikes).filter(canReceive);
         if ((!failed.length && !silent.length) || now() < next) return;
         busy = true;
         // Keep the budget across replacement peers in the same server/channel.

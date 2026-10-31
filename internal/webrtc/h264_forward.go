@@ -92,7 +92,7 @@ func (f *h264ForwardFrame) nal(header byte) bool {
 	}
 	f.nals++
 	switch header & 31 {
-	case 1, 6, 9, 12:
+	case 1, 6, 9, 12, 14:
 	case 5:
 		if !f.idr {
 			f.configurationBeforeIDR = f.sps && f.pps

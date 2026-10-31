@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { setLanguage } from "../src/i18n.js";
 import { accountBlocks, tileAccount } from "../src/ui/media-e2ee-text.js";
 
 // Review 2b P3-3: the visible tile label names the key source with its caveat
 // and shows the account in 4-character blocks (24 characters), the full
 // account in the explanation.
 test("tile account label names the key source, with the caveat, in fingerprint blocks", () => {
+    Object.defineProperty(globalThis, "localStorage", {configurable:true,value:{getItem:()=>"en",setItem(){}}});
+    setLanguage("en");
     const account = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
     assert.equal(accountBlocks(account), "AbCd EfGh IjKl MnOp QrSt UvWx …");
     assert.equal(accountBlocks(account, Infinity), "AbCd EfGh IjKl MnOp QrSt UvWx Yz01 2345");

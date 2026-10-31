@@ -121,6 +121,9 @@ func NewVoice(engine *Engine, router *Router, logger *zap.Logger) *Voice {
 		renegDebounce:  defaultRenegDebounce,
 		renegRateLimit: defaultRenegRateLimit,
 	}
+	router.mu.Lock()
+	router.mediaPolicy = engine.policy
+	router.mu.Unlock()
 	router.SetRenegotiateHook(v.scheduleRenegotiate)
 	return v
 }

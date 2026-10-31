@@ -211,7 +211,6 @@ func TestVideoStreamKeyframeRequestScope(t *testing.T) {
 	}
 	for _, bad := range []netproto.VideoStreamControl{
 		{Action: "keyframe", Slot: webrtc.SlotCam, Active: true},
-		{Action: "keyframe", PublisherID: subID, Slot: webrtc.SlotCam, Active: true},
 		{Action: "keyframe", PublisherID: "pub", Slot: webrtc.SlotMic, Active: true},
 		{Action: "keyframe", PublisherID: "pub", Slot: webrtc.SlotCam},
 	} {

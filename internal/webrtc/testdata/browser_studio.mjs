@@ -68,7 +68,7 @@ window.colored = rgb => {
   return canvas.captureStream(30);
 };
 window.join = async () => {
-  const media = await startChannelMedia({ tabID: "tab", channelID: 1, roster: state.clients, onError: err => console.log("media error " + err) });
+  const media = await startChannelMedia({ hardwareVideoRequired: false, tabID: "tab", channelID: 1, roster: state.clients, onError: err => console.log("media error " + err) });
   const pc = media.protectPeer(new RTCPeerConnection(media.peerConfig()));
   state.pc = pc;
   pc.onicecandidate = ev => { if (ev.candidate) post("/candidate", { ID, Candidate: ev.candidate.candidate, Mid: ev.candidate.sdpMid || "", Index: ev.candidate.sdpMLineIndex || 0 }); };

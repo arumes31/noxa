@@ -40,14 +40,14 @@ class Frame {
 const clone = frame => Object.assign(Object.create(Frame.prototype), frame, { data: frame.data.slice(0), meta: { ...frame.meta } });
 
 let endpointN = 0;
-function endpoint(operation, kind = "audio", via = "post") {
+function endpoint(operation, kind = "audio", via = "post", hardwareRequired = false) {
     const id = `${operation === "encode" ? "tx" : "rx"}:t${++endpointN}`;
     let push;
     const readable = new ReadableStream({ start(c) { push = c; } });
     const out = [];
     const writable = new WritableStream({ write(frame) { out.push(frame); } });
-    if (via === "script") globalThis.onrtctransform({ transformer: { options: { id, operation, kind }, readable, writable } });
-    else globalThis.onmessage({ data: { op: "attach", id, operation, kind, readable, writable } });
+    if (via === "script") globalThis.onrtctransform({ transformer: { options: { id, operation, kind, hardwareRequired }, readable, writable } });
+    else globalThis.onmessage({ data: { op: "attach", id, operation, kind, readable, writable, hardwareRequired } });
     return { id, out, push: frame => push.enqueue(frame) };
 }
 const settle = () => new Promise(r => setTimeout(r, 60));
@@ -164,8 +164,8 @@ test("senders never emit plaintext: no key, unsupported codec, or a library that
     tx.push(audio(10, 960)); await settle();
     assert.equal(tx.out.length, 0, "no active key: nothing leaves");
     const video = await sender("tx|h264", 5, 0, key(10), "video");
-    video.push(new Frame([0, 0, 0, 1, 0x65, 1, 2, 3, 4, 5, 6, 7], { kind: "video", mime: "video/H264" })); await settle();
-    assert.equal(video.out.length, 0, "H.264 is refused until proven through the SFU");
+    video.push(new Frame([0, 0, 0, 1, 0x65, 1, 2, 3, 4, 5, 6, 7], { kind: "video", mime: "video/H265" })); await settle();
+    assert.equal(video.out.length, 0, "unsupported codecs never leave the worker");
     const guarded = await sender("tx|guard", 6, 0, key(11));
     // Simulate the library switching this endpoint to passthrough (a state
     // the page cannot request): the wrapper still drops the output.
@@ -229,8 +229,11 @@ test("a script-API bind that arrives before the endpoint attaches is applied on 
     let push; const out = [];
     globalThis.onrtctransform({ transformer: { options: { id, operation: "decode", kind: "audio" },
         readable: new ReadableStream({ start(c) { push = c; } }), writable: new WritableStream({ write(f) { out.push(f); } }) } });
-    await settle();
-    push.enqueue(clone(tx.out[0])); await settle();
+    const deadline = Date.now() + 2000;
+    while (!(await call("stats", { id })).endpoint?.ready && Date.now() < deadline) await settle();
+    assert.equal((await call("stats", { id })).endpoint.pid, "early|mic", "the pending bind is applied without a second bind");
+    push.enqueue(clone(tx.out[0]));
+    while (!out.length && Date.now() < deadline) await settle();
     assert.equal(out.length, 1);
 });
 
@@ -261,4 +264,73 @@ test("retireOne removes only that epoch; an older live epoch keeps decrypting", 
     rx.push(clone(tx.out[0])); await settle();
     assert.equal(rx.out.length, 1, "epoch 30 still decrypts");
     await assert.rejects(call("key", { pid: "one|mic", epoch: 31, kid: 1, key: key(0x72) }), /retired/);
+});
+
+
+test("H264 encrypts and authenticates normalized headers with both transform APIs", async () => {
+    for (const via of ["post", "script"]) {
+        const pid = `tx|h264-${via}`;
+        const tx = await sender(pid, 81, 4, key(24), "video", via);
+        const rx = endpoint("decode", "video", via);
+        await call("bind", { id: rx.id, pid: `rx|h264-${via}` });
+        await call("key", { pid: `rx|h264-${via}`, epoch: 81, kid: 4, key: key(24) });
+        const head = [0,0,1,0x67,0x42,0xe0,0x1f,0xab,0,0,1,0x68,0xce,0x3c,0x80,0,0,1,0x65,0x88];
+        const normalized = [0,0,0,1,0x67,0x42,0xe0,0x1f,0xab,0,0,0,1,0x68,0xce,0x3c,0x80,0,0,0,1,0x65,0x88];
+        const payload = Array.from({length:400},(_,i)=>i%256);
+        tx.push(new Frame([...head,...payload],{kind:"video",mime:"video/H264",timestamp:18000}));
+        await settle();
+        assert.equal(tx.out.length,1,via);
+        assert.notDeepEqual([...new Uint8Array(tx.out[0].data)].slice(-400),payload);
+        rx.push(clone(tx.out[0]));
+        await settle();
+        assert.equal(rx.out.length,1,via);
+        assert.deepEqual([...new Uint8Array(rx.out[0].data)],[...normalized,...payload]);
+        const tampered=clone(tx.out[0]);new Uint8Array(tampered.data)[5]^=1;rx.push(tampered);
+        rx.push(clone(tx.out[0]));
+        rx.push(new Frame([...normalized,...payload],{kind:"video",mime:"video/H264",timestamp:21000}));
+        await settle();
+        assert.equal(rx.out.length,1,"tampering, replay and plaintext cannot be presented");
+    }
+});
+
+
+test("screen content stays closed without fresh, source-bound hardware evidence", async () => {
+    for (const [index,via] of ["post","script"].entries()) {
+        const tx=endpoint("encode","video",via,true);
+        const pid="self|screen",epoch=120+index;
+        await call("bind",{id:tx.id,pid,sourceTag:"capture-a"});
+        await call("key",{pid,epoch,kid:8+index,key:key(31+index)});
+        await call("activate",{pid,epoch});
+        const push=ts=>tx.push(new Frame(Array.from({length:300},(_,i)=>i%256),{kind:"video",timestamp:ts}));
+        push(3000);await settle();assert.equal(tx.out.length,1);
+        assert.equal(tx.out[0].data.byteLength,61,"only an encrypted neutral picture is sent");
+        await call("hardwareProof",{id:tx.id,pid,sourceTag:"old-capture",enabled:true});
+        push(6000);await settle();assert.equal(tx.out.length,1,"old-source evidence cannot open upload");
+        await call("hardwareProof",{id:tx.id,pid,sourceTag:"capture-a",enabled:true});
+        push(9000);await settle();assert.equal(tx.out.length,2);
+        assert.equal(tx.out[1].data.byteLength,330,"real source frames require hardware proof");
+        await new Promise(r=>setTimeout(r,1050));
+        push(12000);await settle();assert.equal(tx.out.length,2,"expired evidence closes upload");
+        await call("hardwareProof",{id:tx.id,pid,sourceTag:"capture-a",enabled:true});
+        await call("bind",{id:tx.id,pid,sourceTag:"capture-b"});
+        push(15000);await settle();assert.equal(tx.out.length,3,"new capture starts with its own neutral probe");
+        assert.equal(tx.out.at(-1).data.byteLength,61);
+    }
+});
+
+test("Intel H264 temporal prefixes survive real AEAD encryption and decryption", async () => {
+ for (const via of ["post", "script"]) {
+  const pid=`intel-${via}|screen`, epoch=900;
+  const tx=await sender(`tx-${pid}`,epoch,4,key(42),"video",via);
+  const rx=endpoint("decode","video",via);
+  await call("bind",{id:rx.id,pid});await call("key",{pid,epoch,kid:4,key:key(42)});
+  const plain=new Frame([0,0,0,1,0x67,0x42,0x40,0x2a,0,0,0,1,0x68,0xc8,0,0,1,0x6e,0xc0,0x80,0x07,0xc0,0,0,1,0x65,0x88,...new Array(100).fill(0x55)],{kind:"video",mime:"video/H264",timestamp:123456});
+  tx.push(clone(plain));await settle();assert.equal(tx.out.length,1);
+  rx.push(clone(tx.out[0]));await settle();assert.equal(rx.out.length,1);
+  // The maintained cipher normalizes Annex-B start codes to four bytes.
+  assert.ok(new Uint8Array(rx.out[0].data).includes(0x6e));
+  assert.equal(new Uint8Array(rx.out[0].data).at(-1),0x55);
+  const tampered=clone(tx.out[0]);new Uint8Array(tampered.data)[21]^=1;
+  rx.push(tampered);await settle();assert.equal(rx.out.length,1,"clear prefix is authenticated");
+ }
 });

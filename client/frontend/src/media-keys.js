@@ -51,7 +51,7 @@ export const CONTROL_TTL_S = 120;
 export const PENDING_MS = 15_000;
 export const MEMBERSHIP_SETTLE_MS = 5_000;
 const MAX_PENDING = 64;
-const MAX_RETRIES = 5;
+export const MAX_RETRY_DELAY_MS = 60_000;
 const CONCURRENCY = 6;
 const ID_RE = /^[\x21-\x7e]{1,128}$/;
 const KEYS_B64 = /^[A-Za-z0-9+/]{43}=$/;
@@ -466,11 +466,11 @@ export class MediaKeyEngine {
             if (gen !== this.#gen) return;
             const id = `${r.principal}\n${r.device}`;
             const tally = this.#deliveries.get(epoch);
-            const reason = String(result?.error?.code || result?.error?.message || result?.reason || "failed");
+            const reason = String(result?.error?.code || result?.error?.message || result?.code || (typeof result?.error === "string" ? result.error : "") || result?.reason || "failed");
             if (tally) { if (result?.ok) { tally.ok.add(id); tally.failed.delete(id); } else tally.failed.set(id, reason); }
             if (this.#epoch === epoch) {
                 if (result?.ok) { this.counters.sent++; this.#sentTo.set(id, epoch); this.#failed.delete(id); }
-                else { this.counters.failed++; this.#failed.set(id, { ...r, reason: String(result?.error?.code || result?.error?.message || result?.reason || "failed") }); }
+                else { this.counters.failed++; this.#failed.set(id, { ...r, reason }); }
             }
             this.#statusSoon();
         };
@@ -496,9 +496,9 @@ export class MediaKeyEngine {
         await this.#distribute(gen, again, epoch);
         if (gen !== this.#gen || this.#epoch !== epoch) return;
         this.#status();
-        // Bounded: later epochs (membership, publication, renewal) retry anyway.
-        if (this.#failed.size && attempt < MAX_RETRIES) {
-            this.#retry = this.timers.setTimeout(() => { if (gen === this.#gen && this.#epoch === epoch) void this.#retryFailed(gen, epoch, attempt + 1); }, RETRY_FAILED_MS * (attempt + 1));
+        // Retry the current epoch until recovery, removal, stop or rekey, at a bounded rate.
+        if (this.#failed.size) {
+            this.#retry = this.timers.setTimeout(() => { if (gen === this.#gen && this.#epoch === epoch) void this.#retryFailed(gen, epoch, attempt + 1); }, Math.min(MAX_RETRY_DELAY_MS, RETRY_FAILED_MS * (attempt + 1)));
         }
     }
 
@@ -554,6 +554,7 @@ export class MediaKeyEngine {
                 return;
             }
             state.epochs.push(control.epoch);
+            state.installedMembers = value.members;
             const previous = state.epochs.slice(0, -1);
             state.epochs = state.epochs.slice(-1);
             if (previous.length) {
@@ -623,6 +624,13 @@ export class MediaKeyEngine {
             // Recipients of the active epoch that are still current.
             recipients: current.length,
             delivered: holders.length,
+            participants: this.#recipients.map(r => {
+                const id = `${r.principal}\n${r.device}`;
+                const publisher = this.#publishers.get(r.clientID);
+                return { clientID: r.clientID, sent: !!tally?.ok.has(id),
+                    received: !!publisher?.epochs.length && publisher.installedMembers === tally?.members,
+                    failed: !!tally?.failed.has(id) };
+            }),
             waiting: this.#waiting(),
             failed: failed.map(r => ({ principal: r.principal, device: r.device, clientID: r.clientID, reason: tally.failed.get(`${r.principal}\n${r.device}`) || "failed" })),
             // Exactly who holds the keys my media is encrypted with (voice UI).

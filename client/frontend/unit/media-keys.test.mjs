@@ -517,3 +517,18 @@ test("controls of an epoch always carry that epoch's own keys (retries, preempti
     assert.ok(sent.every(c => c.device !== "d3" || c.body.epoch < e.activeEpoch), "the removed device never gets the newest epoch");
     e.stop();
 });
+
+test("key delivery recovers after more than five failures without a channel rejoin", async () => {
+    let attempts = 0;
+    const states = [];
+    const e = new MediaKeyEngine({ media: fakeMedia(), timers: fastTimers, sendTimeoutMs: Infinity,
+        onStatus: state => states.push(state),
+        send: async () => ({ ok: ++attempts > 8, code: "device_unavailable" }) });
+    try {
+        e.setRoster([member("c1", "u1", "d1")]); e.start(me);
+        await flush(140);
+        assert.equal(attempts, 9);
+        assert.equal(e.status().state, "encrypted");
+        assert.ok(states.some(s => s.failed?.some(f => f.reason === "device_unavailable")));
+    } finally { e.stop(); }
+});

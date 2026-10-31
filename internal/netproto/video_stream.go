@@ -13,18 +13,21 @@ const (
 // VideoStreamControl has mandatory acknowledgement. Publication generations
 // travel as decimal strings so WebView numbers cannot truncate their identity.
 type VideoStreamControl struct {
-	Action        string   `json:"action"`
-	PublisherID   string   `json:"publisher_id"`
-	Slot          string   `json:"slot"`
-	Generation    uint64   `json:"generation,string"`
-	Revision      uint64   `json:"revision,string"`
-	Session       uint64   `json:"session,string"`
-	Active        bool     `json:"active"`
-	JPEG          []byte   `json:"jpeg,omitempty"`
-	QualityMode   string   `json:"quality_mode,omitempty"`
-	Codecs        []string `json:"codecs,omitempty"`
-	HEVCLevelID   uint8    `json:"hevc_level_id,omitempty"`
-	CodecRevision uint64   `json:"codec_revision,string,omitempty"`
+	// EncryptedCodecs scopes codec capabilities to the frame-cipher adapter,
+	// rather than just the browser decoder. Absent means VP8-only under E2EE.
+	EncryptedCodecs string   `json:"encrypted_codecs,omitempty"`
+	Action          string   `json:"action"`
+	PublisherID     string   `json:"publisher_id"`
+	Slot            string   `json:"slot"`
+	Generation      uint64   `json:"generation,string"`
+	Revision        uint64   `json:"revision,string"`
+	Session         uint64   `json:"session,string"`
+	Active          bool     `json:"active"`
+	JPEG            []byte   `json:"jpeg,omitempty"`
+	QualityMode     string   `json:"quality_mode,omitempty"`
+	Codecs          []string `json:"codecs,omitempty"`
+	HEVCLevelID     uint8    `json:"hevc_level_id,omitempty"`
+	CodecRevision   uint64   `json:"codec_revision,string,omitempty"`
 }
 
 type VideoStream struct {

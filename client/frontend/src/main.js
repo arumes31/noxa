@@ -21,6 +21,7 @@ import { watchMicrophone } from "./microphone-recovery.js";
 import { voiceSendEncoding, applyVoicePriority } from "./voice-priority.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { startVoiceDiagnostics, noteVoiceActivity } from './voice-diagnostics.js';
+import { updateMemberMediaIndicators } from "./member-media-indicator.js";
 import { createVoiceRecovery } from './voice-recovery.js';
 import { createHardwareRecoveryScheduler, createVideoReceiverRecovery } from './video-hardware-recovery.js';
 import { createVideoSenderRecovery } from './video-sender-hardware-recovery.js';
@@ -202,6 +203,7 @@ const channelAudioAttached = (track, id = remoteTrackID(state.pc, track)) => rem
     trackUserReceivers.owns(id, track) && state.trackUsers.get(id)?.track_id === id;
 const recoverVoice = createVoiceRecovery({ state,
         attached: channelAudioAttached,
+        canReceive: publisher => (channelMedia()?.engine?.publisherStatus(publisher)?.epoch || 0) > 0,
         repair: pc => reconcileRemoteMedia(pc),
         resync: pc => renegotiate(pc),
         rebuild: async pc => {
@@ -1890,6 +1892,7 @@ for (const event of ["tab_reset", "disconnected", "tab_disconnected"]) window.ru
     voiceEncryptionTooltip.close();
 });
 export function renderVoiceEncryptionStatus(status) {
+    updateMemberMediaIndicators(state, status);
     const element = $("voice-e2ee");
     if (!element) return;
     const text = compactMediaEncryptionStatus(status);
@@ -2523,6 +2526,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         if (state.pc !== pc) return;
         updateVoiceLink({ type: "transport", state: pc.connectionState });
         syncVoiceLinkMedia();
+        updateMemberMediaIndicators(state, channelMedia()?.engine?.status());
     });
     updateVoiceLink({ type: "transport", state: pc.connectionState });
     stopRemoteMedia();
