@@ -39,7 +39,7 @@ export const channelMediaEnglish = {
 };
 
 export const channelMediaGerman = {
-    "e2ee.reason.hardware_unverified": "Stream beendet: Hardwarebeschleunigung konnte in diesem Browser nicht gepr�ft werden.",
+    "e2ee.reason.hardware_unverified": "Stream beendet: Hardwarebeschleunigung konnte in diesem Browser nicht geprüft werden.",
     "e2ee.reason.hardware_encoder": "Stream beendet: Kein Hardwareencoder verfügbar.",
     "e2ee.member.connecting": "Verbinden…",
     "e2ee.member.keying": "Schlüssel werden ausgetauscht…",

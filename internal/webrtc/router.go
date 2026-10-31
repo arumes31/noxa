@@ -1770,7 +1770,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 	}); ok {
 		currentCodec = codec.Codec
 	}
-	if policy.bounds != (VideoBounds{}) && (currentCodec == nil || !strings.EqualFold(currentCodec().MimeType, webrtc.MimeTypeVP8) && !(encrypted && strings.EqualFold(currentCodec().MimeType, webrtc.MimeTypeH264))) {
+	if policy.bounds != (VideoBounds{}) && (currentCodec == nil || !strings.EqualFold(currentCodec().MimeType, webrtc.MimeTypeVP8) && (!encrypted || !strings.EqualFold(currentCodec().MimeType, webrtc.MimeTypeH264))) {
 		return
 	}
 	if !r.allowVideo(clientID) {
@@ -1932,7 +1932,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			boundsRevision = policy.boundsRevision
 			encryptedDimensions = h264BoundsInspector{bounds: policy.bounds, encrypted: true}
 		}
-		if policy.bounds != (VideoBounds{}) && !(encrypted && strings.EqualFold(mime, webrtc.MimeTypeH264)) {
+		if policy.bounds != (VideoBounds{}) && (!encrypted || !strings.EqualFold(mime, webrtc.MimeTypeH264)) {
 			// Pion updates codec metadata on payload-type changes during ReadRTP.
 			if currentCodec == nil || !strings.EqualFold(mime, webrtc.MimeTypeVP8) {
 				// An admitted track can switch to VP8 during renegotiation.

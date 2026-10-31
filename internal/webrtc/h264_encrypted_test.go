@@ -84,7 +84,8 @@ func TestH264EncryptedAnnexBParameterPaddingPreserved(t *testing.T) {
 	if !bytes.Equal(unit.packets[0].Payload, payload) || !bytes.Equal(unit.configuration[0], sps) || !bytes.Equal(unit.configuration[1], pps) {
 		t.Fatal("authenticated header bytes changed")
 	}
-	oversized := append(sps, bytes.Repeat([]byte{0}, h264ParameterBytes)...)
+	oversized := bytes.Clone(sps)
+	oversized = append(oversized, bytes.Repeat([]byte{0}, h264ParameterBytes)...)
 	v = h264BoundsInspector{bounds: VideoBounds{1920, 1080}, encrypted: true}
 	if _, err = v.push(h264TestPacket(1, 3000, true, h264TestSTAP(oversized, pps, encryptedH264Slice(true))), time.Now()); err == nil {
 		t.Fatal("trailing zeros bypassed parameter size limit")
