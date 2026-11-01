@@ -1,0 +1,15 @@
+{
+    admin off
+    auto_https off
+}
+
+:8080 {
+    root * /srv
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        Cache-Control "public, max-age=300"
+    }
+    file_server
+}

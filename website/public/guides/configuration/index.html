@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#03070a">
+  <title>Configure networking, TLS and server limits | noXa Guides</title>
+  <meta name="description" content="Understand environment settings, Docker overrides, DNS discovery, certificate trust and WebRTC networking.">
+  <link rel="canonical" href="https://noxa.wowcraft.pw/guides/configuration/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="noXa">
+  <meta property="og:title" content="Configure networking, TLS and server limits | noXa Guides">
+  <meta property="og:description" content="Understand environment settings, Docker overrides, DNS discovery, certificate trust and WebRTC networking.">
+  <meta property="og:url" content="https://noxa.wowcraft.pw/guides/configuration/">
+  <meta property="og:image" content="https://noxa.wowcraft.pw/assets/screenshots/app-chat.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="800">
+  <meta property="og:image:alt" content="noXa desktop channels and chat with fictional demo data">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/png" sizes="32x32" href="../../assets/branding/favicon-32.png">
+  <link rel="apple-touch-icon" href="../../assets/branding/apple-touch-icon.png">
+  <link rel="stylesheet" href="../../assets/css/site.css">
+  <link rel="stylesheet" href="../../assets/css/guides.css">
+  <script defer src="../../assets/js/site.js"></script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://noxa.wowcraft.pw/guides/configuration/#article","headline":"Configure networking, TLS and server limits","description":"Understand environment settings, Docker overrides, DNS discovery, certificate trust and WebRTC networking.","url":"https://noxa.wowcraft.pw/guides/configuration/","inLanguage":"en","isPartOf":{"@id":"https://noxa.wowcraft.pw/#website"},"about":{"@id":"https://noxa.wowcraft.pw/#software"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://noxa.wowcraft.pw/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://noxa.wowcraft.pw/guides/"},{"@type":"ListItem","position":3,"name":"Configure networking, TLS and server limits","item":"https://noxa.wowcraft.pw/guides/configuration/"}]}]}</script>
+</head>
+<body class="documentation">
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="site-header wrap">
+    <a class="brand" href="../../" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span><span class="alpha">Alpha</span></a>
+    <nav class="guide-top-nav" aria-label="Main navigation">
+      <a href="../../guides/">Guides</a>
+      <a href="../../guides/server-setup/">Self-host</a>
+      <a href="https://github.com/arumes31/noxa">GitHub</a>
+    </nav>
+    <a class="header-download" href="https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe">Download noXa</a>
+  </header>
+  <div class="wrap docs-layout">
+    <aside class="docs-sidebar"><details open><summary>Browse guides</summary><nav aria-label="Guide navigation"><a href="../">All guides</a><a href="../getting-started/">Get started with the Windows client</a>
+<a href="../voice-video/">Voice, camera, and screen sharing</a>
+<a href="../messaging/">Chat, direct messages, and forums</a>
+<a href="../roles-permissions/">Roles, members, and channel access</a>
+<a href="../mobile/">Use noXa in your browser</a>
+<a href="../studio/">Compose a live stream with Desktop Studio</a>
+<a href="../privacy-security/">Privacy, encryption, and device trust</a>
+<a href="../troubleshooting/">Troubleshooting connections, chat, and media</a>
+<a href="../server-setup/">Set up your own noXa server</a>
+<a href="../configuration/" aria-current="page">Configure networking, TLS and server limits</a>
+<a href="../operations/">Back up, update and troubleshoot a server</a>
+<a href="../integrations/">Connect webhooks and administration tools</a></nav></details></aside>
+    <main class="guide-article" id="content" tabindex="-1">
+      <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../../">Home</a><span aria-hidden="true">/</span><a href="../">Guides</a><span aria-hidden="true">/</span><span aria-current="page">Configure networking, TLS and server limits</span></nav>
+      <header class="guide-intro"><p class="eyebrow">Server administration · Public alpha</p><h1>Configure networking, TLS and server limits</h1><p class="guide-summary">Understand environment settings, Docker overrides, DNS discovery, certificate trust and WebRTC networking.</p></header>
+      <nav class="guide-toc" aria-label="On this page"><h2>On this page</h2><ol><li><a href="#configuration-order">Know which configuration is active</a></li><li><a href="#secrets">Separate development settings from production secrets</a></li><li><a href="#hostname-discovery">Let people join with a hostname</a></li><li><a href="#media-and-turn">Choose reachable WebRTC and TURN addresses</a></li><li><a href="#certificates-and-web">Preserve certificate identity and HTTPS boundaries</a></li><li><a href="#web-hosting">Host the mobile and browser app over HTTPS</a></li><li><a href="#capacity">Set practical capacity and media limits</a></li></ol></nav>
+      <section id="configuration-order" aria-labelledby="configuration-order-heading"><h2 id="configuration-order-heading">Know which configuration is active</h2><p><code>NOXA_*</code> environment variables override <code>config.yaml</code>. The loader looks for the YAML file in the working directory and then <code>/etc/noxa</code>; unspecified settings use built-in defaults. Nested keys use underscores, so <code>webrtc.udp_addr</code> becomes <code>NOXA_WEBRTC_UDP_ADDR</code>.</p>
+<p>The application does not load <code>.env</code> itself. Docker Compose reads it for interpolation, and the supplied service configures noXa through its explicit <code>environment</code> mapping. For an extra setting such as the displayed server name, add it to an override rather than assuming a new <code>.env</code> line is passed through.</p>
+<pre><code>services:
+  noxa:
+    environment:
+      NOXA_SERVER_NAME: "The Common Room"
+      NOXA_MAX_CLIENTS: "100"</code></pre>
+<p>Review the sample YAML, Compose service and full config schema when changing a setting. Recreate the service with your chosen override files, then inspect startup validation and logs. Redact passwords and complete database URLs before sharing configuration output.</p></section>
+<section id="secrets" aria-labelledby="secrets-heading"><h2 id="secrets-heading">Separate development settings from production secrets</h2><p><code>.env.example</code> and <code>config.yaml</code> are development starting points. Production requires <code>NOXA_DEV_MODE=false</code>, unique database credentials with <code>sslmode=verify-full</code>, an intentional admission policy and authenticated Redis when it is remote.</p>
+<p>The Compose stack separates the database owner used by <code>noxa-operator</code>, the <code>noxa_runtime</code> account used by the serving process and the <code>noxa_backup</code> read-only account. Run the tracked provisioning script after offline schema setup.</p>
+<p>Supported Compose secrets accept a plain value or an <code>_FILE</code> source. Configure one nonempty source for each secret. An <code>_FILE</code> path is a host file mounted read-only into the selected container; keep it outside the repository. On Linux, protect the parent directory from unrelated users and mount only the selected file.</p>
+<aside class="guide-note">Changing a password variable does not change a PostgreSQL role’s existing password automatically. Coordinate database role changes and application secret changes during maintenance.</aside></section>
+<section id="hostname-discovery" aria-labelledby="hostname-discovery-heading"><h2 id="hostname-discovery-heading">Let people join with a hostname</h2><p>The desktop client accepts a hostname without a port. With no SRV record, it uses control TCP port <code>12333</code>. An explicit <code>hostname:port</code> bypasses SRV discovery.</p>
+<pre><code>_noxa._tcp.voice.example.com. 3600 IN SRV 0 5 23456 node.example.com.
+node.example.com.            3600 IN A   203.0.113.10</code></pre>
+<p>This documentation example makes <code>voice.example.com</code> resolve to the control listener at <code>node.example.com:23456</code>. Replace both hostnames and the reserved IP. The SRV target needs an A or AAAA record. SRV advertises control discovery; it does not configure media forwarding.</p>
+<p>Bookmarks retain the entered hostname and resolve it again on reconnect. Certificate pins remain associated with that entered host; changing an SRV destination does not bypass an existing pin. Authentication and certificate trust failures stop connection recovery.</p></section>
+<section id="media-and-turn" aria-labelledby="media-and-turn-heading"><h2 id="media-and-turn-heading">Choose reachable WebRTC and TURN addresses</h2><p>Set a fixed <code>NOXA_WEBRTC_UDP_ADDR</code> when publishing one media port through Docker or NAT. <code>NOXA_WEBRTC_EXTERNAL_IPS</code> requires that fixed listener. Publish and forward the same UDP port, and verify reachable ICE candidates from another network.</p>
+<p><code>NOXA_WEBRTC_ALLOWED_REMOTE_CIDRS</code> is an explicit allowlist for intended private, LAN or VPN client networks. Default remote ICE validation blocks private and loopback destinations. Add only networks your deployment actually serves.</p>
+<p>The optional <code>turn</code> profile supports clients behind restrictive NATs. Configure the relay’s public address, allowed peer policy, listener and relay ports. The server and coturn must use matching shared-secret and realm settings; the client-facing TURN URIs must name reachable listeners. Follow the comments in the current Compose file and environment sample for the selected topology.</p>
+<p>Test control login, microphone audio, camera, screen sharing and file transfer independently. A working login or UDP keepalive response does not establish that WebRTC is reachable.</p></section>
+<section id="certificates-and-web" aria-labelledby="certificates-and-web-heading"><h2 id="certificates-and-web-heading">Preserve certificate identity and HTTPS boundaries</h2><p>By default, control and file-transfer connections use TLS. With no supplied certificate, the server generates and reuses its identity under <code>NOXA_TLS_DIR</code>. Back up that directory. Losing it changes the fingerprint clients have pinned.</p>
+<ol><li>On a planned rotation, record the new startup fingerprint.</li><li>Verify it with users through a separate trusted channel.</li><li>In the changed-certificate warning, choose <strong>Trust new fingerprint</strong> only when the values match.</li><li>Reconnect and verify the connection-security message.</li></ol>
+<p>Do not delete the client’s known-server records to bypass a mismatch. If the new fingerprint cannot be verified, stop and restore the prior certificate and key.</p>
+<p>Secure messaging is bound to that fingerprint too. Readable history stays, but a desktop may need <strong>Settings → Security → Recover secure messaging</strong> after rotation. Link each phone or browser again from a desktop that already trusts the new certificate through <strong>Connections → PWA / Mobile login</strong>. Browser guests must explicitly review and accept a changed fingerprint before secure messaging resumes.</p>
+<p>Keep raw administration and operational listeners private. Use native HTTPS or a correctly configured trusted HTTPS reverse proxy for remote events, incoming hooks and file links. Set <code>NOXA_DOWNLOAD_PUBLIC_ORIGIN</code> to a fixed HTTPS origin and allow only the immediate trusted proxy CIDRs. Proxies must overwrite forwarded-protocol headers.</p></section>
+<section id="web-hosting" aria-labelledby="web-hosting-heading"><h2 id="web-hosting-heading">Host the mobile and browser app over HTTPS</h2><p>The Docker image includes the built PWA; the product website is a separate static deployment. Choose a stable HTTPS domain for the app. Its origin is also the passkey relying party, so use the domain people should keep using rather than a temporary hostname.</p>
+<h3>Fresh host with the bundled Caddy proxy</h3>
+<ol><li>Create DNS records for your app hostname that point to this host. The example <code>chat.example.com</code> below must be replaced with your own domain.</li><li>Confirm host TCP ports <code>80</code> and <code>443</code> are available and reachable for Caddy and certificate issuance. The supplied Caddy service also publishes UDP <code>443</code>. If another proxy already owns these ports, use that proxy instead of starting a competing listener.</li><li>Set the following values in the existing <code>.env</code> file alongside the database and other deployment settings.</li></ol>
+<pre><code>NOXA_WEB_ENABLED=true
+NOXA_WEB_PUBLIC_URL=https://chat.example.com
+NOXA_WEB_DOMAIN=chat.example.com</code></pre>
+<p><code>NOXA_WEB_PUBLIC_URL</code> is the HTTPS origin, without <code>/app/</code>. The Compose file passes it and <code>NOXA_WEB_ENABLED</code> to the application. <code>NOXA_WEB_DOMAIN</code> configures Caddy’s hostname; it is not a separate application setting. The web listener is internal on <code>:12342</code>, and the supplied Compose network trusts only Caddy’s fixed address for forwarded headers.</p>
+<p>Start the mobile profile, preserving the same media override used earlier:</p>
+<pre><code>docker compose -f docker-compose.yml -f compose.media.yml --profile mobile up -d noxa caddy
+docker compose -f docker-compose.yml -f compose.media.yml --profile mobile logs --tail=50 caddy noxa</code></pre>
+<p>If you did not create <code>compose.media.yml</code>, omit that <code>-f</code> argument. Retain any external-database or other deployment overrides on every command. Caddy obtains and renews the public certificate, proxies the app and its WebSockets, and stores its state in persistent named volumes. Keep the media UDP forwarding from the server setup guide; HTTPS alone does not make voice reachable.</p>
+<p>Open <code>https://chat.example.com/app/</code> and check <code>https://chat.example.com/api/v1/web/info</code>. Then link a device through <strong>Connections → PWA / Mobile login</strong>, compare the confirmation codes and test a chat and voice session.</p>
+<h3>Use an existing HTTPS reverse proxy</h3>
+<p>Leave the bundled Caddy service stopped. Connect your proxy to the intended backend network and forward to the web listener, <code>noxa:12342</code> when both services can resolve that Docker name. The backend should stay private. Keep <code>NOXA_WEB_ENABLED=true</code> and the app’s public HTTPS origin.</p>
+<p>The base Compose file sets <code>NOXA_WEB_TRUSTED_PROXIES</code> directly to Caddy’s address. Adding a different value only to <code>.env</code> does not replace it. Override the service’s environment explicitly for your own proxy:</p>
+<pre><code>services:
+  noxa:
+    environment:
+      NOXA_WEB_ENABLED: "true"
+      NOXA_WEB_PUBLIC_URL: "https://chat.example.com"
+      NOXA_WEB_TRUSTED_PROXIES: "192.0.2.10/32"</code></pre>
+<p><code>192.0.2.10/32</code> is a reserved documentation example, not a working proxy address. Replace it with the exact immediate proxy address or narrow CIDR the backend actually sees. The proxy must overwrite <code>X-Forwarded-For</code> and <code>X-Forwarded-Proto</code>, preserve WebSocket upgrades for <code>/ws</code> and <code>/ft</code>, and allow long-lived connections. Never trust forwarded headers from arbitrary clients or a whole public network.</p>
+<h3>Choose a dedicated domain or share the product website’s origin</h3>
+<p>On a dedicated app domain, proxy the whole origin to the web listener; its root redirects to <code>/app/</code>. This is the simplest fit for the bundled Caddy service.</p>
+<p>On a shared marketing origin, keep <code>/</code>, <code>/guides/</code> and product assets on the static website host. Route <code>/app/</code>, <code>/link</code>, <code>/ws</code>, <code>/ft</code>, <code>/api/v1/web/</code> and app invitations under <code>/invite/</code> to the noXa web listener, preserving their paths and methods. The app needs those API and linking routes as well as its HTML, service worker and assets. Route remote hooks, events and server download links to their separate health-service backend only when deliberately configured; they are not the PWA’s <code>/ft</code> WebSocket.</p>
+<p>Test a direct app reload, device linking, an invitation, WebSocket connection, file transfer and installation after changing proxy routes. Keep one intended HTTPS origin throughout login and linking.</p></section>
+<section id="capacity" aria-labelledby="capacity-heading"><h2 id="capacity-heading">Set practical capacity and media limits</h2><p>Start with a capacity your network and host can support, then measure. Common settings include <code>NOXA_MAX_CLIENTS</code>, <code>NOXA_CLIENT_TIMEOUT_SECONDS</code>, file size and connection limits, and the default Opus bitrate, FEC, DTX and stereo controls.</p>
+<p>A stream publishes one current encoding, and every viewer receives that source. A slower viewer can require the sender to lower the source quality. Server video limits and explicitly selected low bandwidth mode still apply.</p>
+<p>Channel voice, video and screen sharing are always end-to-end encrypted on current releases. They require the database device directory, control-channel TLS and supported client encryption transforms. There is no unencrypted fallback. Encrypted channels use Opus and VP8, hold at most 64 participants, and cannot be used while invisible. Server recording cannot be started; whisper, uploaded stream previews, H.264/HEVC publication and the connection benchmark are unavailable while channel media is encrypted.</p>
+<p>Keep metrics private unless remote exposure is deliberate. Profiling is opt-in and remains direct-loopback-only. Server limits control resource use; they are separate from channel permissions and do not grant access.</p></section>
+      <section class="guide-related" aria-labelledby="next-heading"><h2 id="next-heading">Keep going</h2><ul><li><a href="../server-setup/">Set up your own noXa server</a></li><li><a href="../operations/">Back up, update and troubleshoot a server</a></li><li><a href="../troubleshooting/">Troubleshooting connections, chat, and media</a></li></ul></section>
+      <aside class="guide-sources" aria-label="Source documentation"><p>Based on the current noXa documentation. Public alpha features and menu labels can change; use the client and server from the same release.</p><ul><li><a href="https://github.com/arumes31/noxa#configuration">Configuration reference</a></li><li><a href="https://github.com/arumes31/noxa/blob/main/.env.example">Environment sample</a></li><li><a href="https://github.com/arumes31/noxa/blob/main/internal/config/config.go">Configuration schema and validation</a></li></ul><a href="https://github.com/arumes31/noxa/issues">Suggest a correction</a></aside>
+    </main>
+  </div>
+  <footer class="wrap site-footer">
+    <a class="footer-brand" href="../../" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span></a>
+    <nav aria-label="Footer navigation"><a href="../../guides/">All guides</a><a href="../../guides/server-setup/">Server setup</a><a href="https://github.com/arumes31/noxa/releases">Releases</a><a href="https://github.com/arumes31/noxa/issues">Report an issue</a></nav>
+  </footer>
+  <dialog class="lightbox" aria-label="Product screenshot" aria-describedby="image-caption"><button type="button" aria-label="Close image" autofocus>×</button><img alt=""><p id="image-caption">noXa client · Fictional demo data</p></dialog>
+</body>
+</html>

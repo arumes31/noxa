@@ -1,0 +1,6 @@
+**
+!Caddyfile
+!public/
+!public/**
+**/*.sync-conflict-*
+**/.nojekyll

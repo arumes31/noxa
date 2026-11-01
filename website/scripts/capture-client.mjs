@@ -8,19 +8,22 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const frontend = path.join(root, 'client/frontend');
-const require = createRequire(path.join(frontend, 'package.json'));
+const sourceRoot = path.resolve(process.env.NOXA_CAPTURE_SOURCE_ROOT || root);
+const frontend = path.join(sourceRoot, 'client/frontend');
+const require = createRequire(path.join(root, 'client/frontend/package.json'));
 const { chromium } = require('@playwright/test');
 const { createServer } = await import(pathToFileURL(require.resolve('vite')).href);
 const output = path.join(root, 'website/public/assets/screenshots');
+const guidesOnly = process.argv.includes('--guides-only');
 const server = await createServer({ root: frontend, logLevel: 'error', server: {
   host: '127.0.0.1', port: 12367, strictPort: true,
+  fs: { allow: [frontend, path.join(root, 'client/frontend/node_modules')] },
 } });
 await mkdir(output, { recursive: true });
 let browser;
 try {
   await server.listen();
-  browser = await chromium.launch();
+  browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 },
     deviceScaleFactor: 1, locale: 'en-GB', timezoneId: 'UTC', reducedMotion: 'reduce' });
   // Never connect the fixture to a public server or third-party asset host.
@@ -71,7 +74,13 @@ try {
         if (method === 'RoleStateForTab') return { actor_id: 1, capabilities,
           grantable_capabilities: capabilities.map(item => item.key), manageable_role_ids: [10, 20, 30, 40],
           policy: { revision: 1, owner_id: 1, everyone_id: 10, default_member_role_id: 20,
-            channels: [], members: [], roles: [
+            channels: [{ channel_id: 2, parent_id: 1, name: 'The lounge', synced: false, overrides: [
+              { role_id: 10, capability: 'view_channel', effect: 'deny' },
+              { role_id: 20, capability: 'view_channel', effect: 'allow' },
+              { role_id: 20, capability: 'connect', effect: 'allow' },
+              { role_id: 20, capability: 'speak', effect: 'allow' },
+              { role_id: 20, capability: 'send_messages', effect: 'allow' },
+            ] }], members: [], roles: [
               { id: 10, name: '@everyone', position: 0, permissions: ['view_channel', 'connect'] },
               { id: 20, name: 'Member', position: 1, color: '#a0e6e8', permissions: ['view_channel', 'connect', 'speak', 'share_screen', 'send_messages'] },
               { id: 30, name: 'Moderator', position: 2, color: '#bfa6ed', permissions: ['view_channel', 'connect', 'speak', 'manage_channels'] },
@@ -89,6 +98,16 @@ try {
   });
   await page.goto('http://127.0.0.1:12367/');
   await page.waitForFunction(() => !!window.__noxa?.openSettings);
+  if (guidesOnly) {
+    await page.setViewportSize({ width: 1280, height: 1100 });
+    await page.evaluate(() => window.__noxa.showLogin());
+    await page.locator('#login-addr').fill('community.example');
+    await page.locator('#login-nick').fill('Rowan');
+    await page.locator('#login-options').evaluate(node => { node.open = true; });
+    await page.evaluate(() => document.fonts.ready);
+    await page.screenshot({ path: path.join(output, 'app-connect.jpg'), type: 'jpeg', quality: 85, animations: 'disabled' });
+    await page.setViewportSize({ width: 1280, height: 800 });
+  }
   await page.evaluate(async () => {
     for (const callback of window.__captureEvents.tab_update) callback(await window.go.main.App.ListTabs());
     for (const callback of window.__captureEvents.tab_reset) callback('demo-server');
@@ -129,8 +148,23 @@ try {
   await page.locator('#chat-log [data-msg-id="4"]').waitFor();
   await page.locator('#toasts .toast').waitFor({ state: 'hidden' });
   await page.mouse.move(1270, 790);
-  await page.screenshot({ path: path.join(output, 'app-chat.png'), animations: 'disabled' });
+  if (!guidesOnly) await page.screenshot({ path: path.join(output, 'app-chat.png'), animations: 'disabled' });
   await page.setViewportSize({ width: 1280, height: 1100 });
+  if (guidesOnly) {
+    await page.evaluate(() => window.__noxa.openSettings('capture'));
+    await page.locator('#settings-overlay .settings-dialog').waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    await page.locator('#settings-overlay .settings-dialog').screenshot({ path: path.join(output, 'app-capture.png'), animations: 'disabled' });
+    await page.keyboard.press('Escape');
+    await page.evaluate(async () => { const { openChannelAccess } = await import('/src/channel-access-ui.js'); openChannelAccess(2); });
+    await page.locator('.channel-access-dialog .channel-access-content select').first().waitFor();
+    await page.locator('.channel-access-dialog').screenshot({ path: path.join(output, 'app-channel-access.png'), animations: 'disabled' });
+    await page.keyboard.press('Escape');
+    await page.evaluate(async () => { const { openStudio } = await import('/src/studio-ui.js'); openStudio(); });
+    await page.locator('.studio-overlay .studio').waitFor();
+    await page.locator('.studio-overlay .studio').screenshot({ path: path.join(output, 'app-studio.png'), animations: 'disabled' });
+    await page.keyboard.press('Escape');
+  }
   await page.evaluate(async () => {
     const { openRolesManager } = await import('/src/roles-ui.js');
     openRolesManager();
@@ -138,15 +172,22 @@ try {
   const roles = page.getByRole('dialog', { name: 'Roles', exact: true });
   await roles.getByRole('button', { name: 'Member', exact: true }).click();
   await roles.locator('.roles-editor').evaluate(node => { node.scrollTop = 0; });
-  await roles.locator('.roles-dialog').screenshot({ path: path.join(output, 'app-roles.png'), animations: 'disabled' });
+  if (!guidesOnly) await roles.locator('.roles-dialog').screenshot({ path: path.join(output, 'app-roles.png'), animations: 'disabled' });
   assert.deepEqual(errors, [], 'Client screenshot runtime errors');
-  const manifest = { sourceCommit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+  const manifest = { sourceCommit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sourceRoot, encoding: 'utf8' }).trim(),
     browser: browser.version(), viewport: '1280x800', rolesViewport: '1280x1100', scale: 1, locale: 'en-GB', timezone: 'UTC',
     fixtureTime: '2026-10-24T18:35:00Z',
     fixture: 'website/scripts/capture-client.mjs', data: 'Fictional local-only demo data',
     appChat: 'Full actual frontend viewport', appRoles: 'Actual Roles dialog crop',
     generatedAt: new Date().toISOString() };
-  await writeFile(path.join(root, 'website/scripts/capture-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+  if (guidesOnly) {
+    manifest.appConnect = 'Actual connection screen, fictional community.example address';
+    manifest.appCapture = 'Actual Capture settings dialog, no hardware access';
+    manifest.appChannelAccess = 'Actual Channel access dialog, fictional policy';
+    manifest.appStudio = 'Actual Studio dialog, no captures or broadcast';
+    manifest.connectViewport = '1280x1100';
+  }
+  await writeFile(path.join(root, guidesOnly ? 'website/scripts/capture-guides-manifest.json' : 'website/scripts/capture-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
   console.log('Captured actual client screenshots with fictional data:', manifest);
 } finally {
   await browser?.close();

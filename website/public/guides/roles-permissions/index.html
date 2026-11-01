@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#03070a">
+  <title>Roles, members, and channel access | noXa Guides</title>
+  <meta name="description" content="Grant useful access, keep administration deliberate, and verify what a regular member can actually do.">
+  <link rel="canonical" href="https://noxa.wowcraft.pw/guides/roles-permissions/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="noXa">
+  <meta property="og:title" content="Roles, members, and channel access | noXa Guides">
+  <meta property="og:description" content="Grant useful access, keep administration deliberate, and verify what a regular member can actually do.">
+  <meta property="og:url" content="https://noxa.wowcraft.pw/guides/roles-permissions/">
+  <meta property="og:image" content="https://noxa.wowcraft.pw/assets/screenshots/app-chat.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="800">
+  <meta property="og:image:alt" content="noXa desktop channels and chat with fictional demo data">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/png" sizes="32x32" href="../../assets/branding/favicon-32.png">
+  <link rel="apple-touch-icon" href="../../assets/branding/apple-touch-icon.png">
+  <link rel="stylesheet" href="../../assets/css/site.css">
+  <link rel="stylesheet" href="../../assets/css/guides.css">
+  <script defer src="../../assets/js/site.js"></script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://noxa.wowcraft.pw/guides/roles-permissions/#article","headline":"Roles, members, and channel access","description":"Grant useful access, keep administration deliberate, and verify what a regular member can actually do.","url":"https://noxa.wowcraft.pw/guides/roles-permissions/","inLanguage":"en","isPartOf":{"@id":"https://noxa.wowcraft.pw/#website"},"about":{"@id":"https://noxa.wowcraft.pw/#software"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://noxa.wowcraft.pw/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://noxa.wowcraft.pw/guides/"},{"@type":"ListItem","position":3,"name":"Roles, members, and channel access","item":"https://noxa.wowcraft.pw/guides/roles-permissions/"}]}]}</script>
+</head>
+<body class="documentation">
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="site-header wrap">
+    <a class="brand" href="../../" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span><span class="alpha">Alpha</span></a>
+    <nav class="guide-top-nav" aria-label="Main navigation">
+      <a href="../../guides/">Guides</a>
+      <a href="../../guides/server-setup/">Self-host</a>
+      <a href="https://github.com/arumes31/noxa">GitHub</a>
+    </nav>
+    <a class="header-download" href="https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe">Download noXa</a>
+  </header>
+  <div class="wrap docs-layout">
+    <aside class="docs-sidebar"><details open><summary>Browse guides</summary><nav aria-label="Guide navigation"><a href="../">All guides</a><a href="../getting-started/">Get started with the Windows client</a>
+<a href="../voice-video/">Voice, camera, and screen sharing</a>
+<a href="../messaging/">Chat, direct messages, and forums</a>
+<a href="../roles-permissions/" aria-current="page">Roles, members, and channel access</a>
+<a href="../mobile/">Use noXa in your browser</a>
+<a href="../studio/">Compose a live stream with Desktop Studio</a>
+<a href="../privacy-security/">Privacy, encryption, and device trust</a>
+<a href="../troubleshooting/">Troubleshooting connections, chat, and media</a>
+<a href="../server-setup/">Set up your own noXa server</a>
+<a href="../configuration/">Configure networking, TLS and server limits</a>
+<a href="../operations/">Back up, update and troubleshoot a server</a>
+<a href="../integrations/">Connect webhooks and administration tools</a></nav></details></aside>
+    <main class="guide-article" id="content" tabindex="-1">
+      <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../../">Home</a><span aria-hidden="true">/</span><a href="../">Guides</a><span aria-hidden="true">/</span><span aria-current="page">Roles, members, and channel access</span></nav>
+      <header class="guide-intro"><p class="eyebrow">Managing a community · Public alpha</p><h1>Roles, members, and channel access</h1><p class="guide-summary">Grant useful access, keep administration deliberate, and verify what a regular member can actually do.</p></header>
+      <nav class="guide-toc" aria-label="On this page"><h2>On this page</h2><ol><li><a href="#model">Understand the closed starting policy</a></li><li><a href="#roles">Create roles and assign members</a></li><li><a href="#channel-access">Open the channels members need</a></li><li><a href="#resolution">Read the effective decision</a></li><li><a href="#administration">Protect administration and ownership</a></li></ol></nav>
+      <section id="model" aria-labelledby="model-heading"><h2 id="model-heading">Understand the closed starting policy</h2><p>A fresh installation starts closed. <code>@everyone</code> has no grants, the Member, Moderator, and Administrator roles are unassigned, and no default member role is selected. Existing channels begin with <strong>View channel → Deny</strong> for <code>@everyone</code>.</p><p>Roles add their server permissions together. Role names are labels; naming a role “Moderator” does not give it moderation rights. Role order also matters: delegated managers can manage roles and moderate members only below their permitted hierarchy.</p><p>The current server and desktop client use the coordinated <code>roles-v1</code> authorization model. A new installation needs a fresh database; this release does not automatically migrate a legacy permission database. Follow the <a href="../server-setup/">server setup guide</a> before configuring members.</p></section>
+<section id="roles" aria-labelledby="roles-heading"><h2 id="roles-heading">Create roles and assign members</h2><figure class="guide-figure"><a class="image-link" href="../../assets/screenshots/app-roles.png" data-full><img src="../../assets/screenshots/app-roles.png" width="960" height="1012" loading="lazy" decoding="async" alt="The noXa Roles dialog showing the Member role and its permission controls."></a><figcaption>Actual Roles dialog · Fictional demo roles. A role name does not grant permissions by itself.</figcaption></figure><ol><li>As owner or an appropriately authorized manager, open <strong>Permissions → Roles</strong>.</li><li>Select a role or choose <strong>Create role</strong>. <strong>Start from a template</strong> provides Member and Moderator starting points; review the permissions before saving.</li><li>Use <strong>Move role up/down</strong> to set the intended hierarchy.</li><li>Open <strong>Members</strong>, select a registered account, choose the role, and use <strong>Add role</strong>.</li><li>As owner, optionally set <strong>Role for new members</strong>. It saves immediately and applies to future registrations, not existing accounts or guests. Administrator cannot be the automatic role.</li></ol><p>A permitted member’s context menu also offers <strong>Assign roles…</strong>. Guests with a saved client identity can receive persistent assignments: adding their first role registers that identity and retains the assignment on reconnect. Ephemeral guests without an identity key cannot retain roles.</p></section>
+<section id="channel-access" aria-labelledby="channel-access-heading"><h2 id="channel-access-heading">Open the channels members need</h2><ol><li>Right-click a channel and choose <strong>Channel access</strong>.</li><li>For a members-only channel, retain the <code>@everyone</code> view deny and add a Member override allowing <strong>View channel</strong>, then the intended chat or voice permissions and their prerequisites.</li><li>For a public channel, apply the <strong>Public</strong> preset and review the resulting <code>@everyone</code> rules. Other role and member exceptions still apply.</li><li>Choose <strong>Sync with parent</strong> for a child that should inherit its parent’s policy, or <strong>Customize this channel</strong> for a separate policy.</li><li>Use <strong>Preview role changes</strong> before saving. Search by name or exact unique ID to inspect combined member roles and individual overrides.</li><li>Save, then use <strong>Check access</strong> for a regular member and a guest. Also connect with a non-admin account and test viewing, joining, sending, and speaking.</li></ol><p><strong>Edit channel</strong> also opens Channel access. Save metadata first, or confirm discarding its unsaved edits when moving to access settings. Channel passwords are configured separately from permission rules.</p><figure class="guide-figure"><a class="image-link" href="../../assets/screenshots/app-channel-access.png" data-full><img src="../../assets/screenshots/app-channel-access.png" width="690" height="1036" loading="lazy" decoding="async" alt="noXa channel permissions showing role-based voice, video, sharing, messages and file controls"></a><figcaption>Channel access in a fictional members-only lounge · Actual client interface with fictional local demo data.</figcaption></figure></section>
+<section id="resolution" aria-labelledby="resolution-heading"><h2 id="resolution-heading">Read the effective decision</h2><p>Permission resolution starts with server role grants, applies the channel’s <code>@everyone</code> overrides, combines role overrides, then applies member-specific overrides. An Allow wins when combining role overrides at that stage; capability prerequisites and moderation restrictions still apply.</p><p><strong>Check access</strong> shows the saved effective decision and its source. It does not test unsaved changes, passwords, bans, or resource limits. A successful check is therefore one part of verification, alongside a real ordinary-member connection.</p><aside class="guide-note"><p><strong>Test with an ordinary account.</strong> Owner and Administrator bypass configurable channel overrides, so an owner’s own view cannot prove the channel is open to members. They still remain subject to admission, bans, ownership protection, hierarchy checks, and operational limits.</p></aside></section>
+<section id="administration" aria-labelledby="administration-heading"><h2 id="administration-heading">Protect administration and ownership</h2><p>Only the owner can grant Administrator or transfer ownership. Limit Administrator to trusted operators; use a dedicated Moderator role for routine work.</p><p>The owner can enable <strong>Protect from deletion</strong> on important roles. Administrator roles begin protected. To delete a protected role, the owner must disable protection and save first, then confirm deletion. Deleting a role removes its assignments and channel overrides.</p><p>Ownership transfer in Members gives the recipient ownership and removes your owner protection. Check the recipient carefully before confirming a transfer. Role and access changes are audited, and revision checks reject stale edits rather than silently overwriting another manager’s work.</p></section>
+      <section class="guide-related" aria-labelledby="next-heading"><h2 id="next-heading">Keep going</h2><ul><li><a href="../server-setup/">Set up your own noXa server</a></li><li><a href="../configuration/">Configure networking, TLS and server limits</a></li><li><a href="../messaging/">Chat, direct messages, and forums</a></li><li><a href="../troubleshooting/">Troubleshooting connections, chat, and media</a></li></ul></section>
+      <aside class="guide-sources" aria-label="Source documentation"><p>Based on the current noXa documentation. Public alpha features and menu labels can change; use the client and server from the same release.</p><ul><li><a href="https://github.com/arumes31/noxa#-roles-and-channel-access">Roles and channel access model</a></li><li><a href="https://github.com/arumes31/noxa#3-configure-roles-and-member-defaults">Role and channel setup steps</a></li></ul><a href="https://github.com/arumes31/noxa/issues">Suggest a correction</a></aside>
+    </main>
+  </div>
+  <footer class="wrap site-footer">
+    <a class="footer-brand" href="../../" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span></a>
+    <nav aria-label="Footer navigation"><a href="../../guides/">All guides</a><a href="../../guides/server-setup/">Server setup</a><a href="https://github.com/arumes31/noxa/releases">Releases</a><a href="https://github.com/arumes31/noxa/issues">Report an issue</a></nav>
+  </footer>
+  <dialog class="lightbox" aria-label="Product screenshot" aria-describedby="image-caption"><button type="button" aria-label="Close image" autofocus>×</button><img alt=""><p id="image-caption">noXa client · Fictional demo data</p></dialog>
+</body>
+</html>

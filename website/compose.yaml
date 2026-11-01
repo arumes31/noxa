@@ -1,0 +1,28 @@
+# Run behind the existing HTTPS proxy. App/API routes remain on the noXa server.
+name: noxa-website
+services:
+  website:
+    image: ${NOXA_WEBSITE_IMAGE:?Set an immutable ghcr.io/arumes31/noxa-website digest or commit tag}
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /data:size=16m,uid=10001,gid=10001
+      - /config:size=16m,uid=10001,gid=10001
+    mem_limit: 128m
+    cpus: 0.5
+    networks:
+      proxy:
+        aliases: [noxa-website]
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+networks:
+  proxy:
+    external: true
+    name: ${NOXA_WEBSITE_NETWORK:-npm_default}

@@ -42,10 +42,13 @@ test('does not expose tooling, unavailable resources, or parent files', async ()
 test('Website artifact contains only public assets', async () => {
   const root = fileURLToPath(new URL('../public/', import.meta.url));
   const extensions = new Set(['.html', '.css', '.js', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.ico', '.woff2']);
-  const allowedDirectories = new Set(['assets', 'css', 'js', 'branding', 'screenshots', 'fonts']);
+  const allowedDirectories = new Set(['assets', 'css', 'js', 'branding', 'screenshots', 'fonts', 'guides', 'getting-started', 'voice-video', 'messaging', 'roles-permissions', 'mobile', 'privacy-security', 'troubleshooting', 'server-setup', 'configuration', 'operations', 'integrations', 'studio']);
   const found = [];
   async function check(directory) {
     for (const name of await readdir(directory)) {
+      // Sync conflict copies are local workspace data, excluded by .dockerignore.
+      if (name.includes('.sync-conflict-')) continue;
+      if (directory === root && name === '.nojekyll') continue;
       const path = join(directory, name);
       const info = await lstat(path);
       assert.equal(info.isSymbolicLink(), false, `Artifact contains symlink: ${name}`);
@@ -54,11 +57,27 @@ test('Website artifact contains only public assets', async () => {
         assert.ok(allowedDirectories.has(name), `Unexpected public directory: ${name}`);
         await check(path);
       } else {
-        assert.ok((directory === join(root, 'assets', 'fonts') && name === 'OFL.txt') || extensions.has(extname(name)), `Unexpected public file: ${name}`);
+        assert.ok((directory === root && ['robots.txt', 'sitemap.xml'].includes(name)) || (directory === join(root, 'assets', 'fonts') && name === 'OFL.txt') || extensions.has(extname(name)), `Unexpected public file: ${name}`);
         found.push(name);
       }
     }
   }
   await check(root);
   assert.ok(found.includes('index.html'));
+});
+
+test('crawl files expose canonical public guides with correct MIME types', async () => {
+  const robots = await fetch(`${origin}/robots.txt`);
+  assert.equal(robots.status, 200);
+  assert.match(robots.headers.get('content-type'), /text\/plain/);
+  assert.match(await robots.text(), /Sitemap: https:\/\/noxa\.wowcraft\.pw\/sitemap\.xml/);
+  const sitemap = await fetch(`${origin}/sitemap.xml`);
+  assert.equal(sitemap.status, 200);
+  assert.match(sitemap.headers.get('content-type'), /application\/xml/);
+  const locations = [...(await sitemap.text()).matchAll(/<loc>(.*?)<\/loc>/g)].map(match => match[1]);
+  assert.equal(new Set(locations).size, locations.length);
+  assert.ok(locations.length >= 13);
+  assert.ok(locations.includes('https://noxa.wowcraft.pw/guides/server-setup/'));
+  assert.ok(locations.every(location => !location.includes('/app/')));
+  for (const location of locations) assert.equal((await fetch(`${origin}${new URL(location).pathname}`)).status, 200, location);
 });

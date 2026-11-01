@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#03070a">
+  <title>Use noXa in your browser | noXa Guides</title>
+  <meta name="description" content="Open the mobile PWA, link a device or sign in, install it, and manage its local settings.">
+  <link rel="canonical" href="https://noxa.wowcraft.pw/guides/mobile/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="noXa">
+  <meta property="og:title" content="Use noXa in your browser | noXa Guides">
+  <meta property="og:description" content="Open the mobile PWA, link a device or sign in, install it, and manage its local settings.">
+  <meta property="og:url" content="https://noxa.wowcraft.pw/guides/mobile/">
+  <meta property="og:image" content="https://noxa.wowcraft.pw/assets/screenshots/app-chat.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="800">
+  <meta property="og:image:alt" content="noXa desktop channels and chat with fictional demo data">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/png" sizes="32x32" href="../../assets/branding/favicon-32.png">
+  <link rel="apple-touch-icon" href="../../assets/branding/apple-touch-icon.png">
+  <link rel="stylesheet" href="../../assets/css/site.css">
+  <link rel="stylesheet" href="../../assets/css/guides.css">
+  <script defer src="../../assets/js/site.js"></script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://noxa.wowcraft.pw/guides/mobile/#article","headline":"Use noXa in your browser","description":"Open the mobile PWA, link a device or sign in, install it, and manage its local settings.","url":"https://noxa.wowcraft.pw/guides/mobile/","inLanguage":"en","isPartOf":{"@id":"https://noxa.wowcraft.pw/#website"},"about":{"@id":"https://noxa.wowcraft.pw/#software"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://noxa.wowcraft.pw/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://noxa.wowcraft.pw/guides/"},{"@type":"ListItem","position":3,"name":"Use noXa in your browser","item":"https://noxa.wowcraft.pw/guides/mobile/"}]}]}</script>
+</head>
+<body class="documentation">
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="site-header wrap">
+    <a class="brand" href="../../" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span><span class="alpha">Alpha</span></a>
+    <nav class="guide-top-nav" aria-label="Main navigation">
+      <a href="../../guides/">Guides</a>
+      <a href="../../guides/server-setup/">Self-host</a>
+      <a href="https://github.com/arumes31/noxa">GitHub</a>
+    </nav>
+    <a class="header-download" href="https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe">Download noXa</a>
+  </header>
+  <div class="wrap docs-layout">
+    <aside class="docs-sidebar"><details open><summary>Browse guides</summary><nav aria-label="Guide navigation"><a href="../">All guides</a><a href="../getting-started/">Get started with the Windows client</a>
+<a href="../voice-video/">Voice, camera, and screen sharing</a>
+<a href="../messaging/">Chat, direct messages, and forums</a>
+<a href="../roles-permissions/">Roles, members, and channel access</a>
+<a href="../mobile/" aria-current="page">Use noXa in your browser</a>
+<a href="../studio/">Compose a live stream with Desktop Studio</a>
+<a href="../privacy-security/">Privacy, encryption, and device trust</a>
+<a href="../troubleshooting/">Troubleshooting connections, chat, and media</a>
+<a href="../server-setup/">Set up your own noXa server</a>
+<a href="../configuration/">Configure networking, TLS and server limits</a>
+<a href="../operations/">Back up, update and troubleshoot a server</a>
+<a href="../integrations/">Connect webhooks and administration tools</a></nav></details></aside>
+    <main class="guide-article" id="content" tabindex="-1">
+      <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../../">Home</a><span aria-hidden="true">/</span><a href="../">Guides</a><span aria-hidden="true">/</span><span aria-current="page">Use noXa in your browser</span></nav>
+      <header class="guide-intro"><p class="eyebrow">Using noXa · Public alpha</p><h1>Use noXa in your browser</h1><p class="guide-summary">Open the mobile PWA, link a device or sign in, install it, and manage its local settings.</p></header>
+      <nav class="guide-toc" aria-label="On this page"><h2>On this page</h2><ol><li><a href="#open">Open the PWA for the right community</a></li><li><a href="#sign-in">Sign in or link from a trusted device</a></li><li><a href="#install">Install the app and choose notifications</a></li><li><a href="#chat">Chat and keep your device recoverable</a></li></ol></nav>
+      <section id="open" aria-labelledby="open-heading"><h2 id="open-heading">Open the PWA for the right community</h2><p>The browser client is a separate progressive web app served at the community’s HTTPS <code>/app/</code> path. The public noXa site offers <a href="https://noxa.wowcraft.pw/app/">Launch PWA client</a>. For another self-hosted community, use its operator’s HTTPS address.</p><p>The sign-in screen shows the server name and host. Check both before linking a device or entering credentials. Your device identity and remembered settings belong to this browser’s storage; another browser or a private browsing session can have different local state.</p><p>The PWA has its own phone and wide-screen layouts. Its available actions depend on browser support, server configuration, your account, and permissions. Desktop capture and native OS features do not imply identical browser behavior.</p></section>
+<section id="sign-in" aria-labelledby="sign-in-heading"><h2 id="sign-in-heading">Sign in or link from a trusted device</h2><p>The connection screen offers the sign-in methods supported by the current server. A registered passkey can authorize a new device through the browser’s passkey prompt. Passkeys require a supporting browser and platform.</p><ol><li>On an existing desktop session, open <strong>Connections → PWA / Mobile login</strong>. Check that the PWA host shown really belongs to the server you are connected to.</li><li>Open the provided link, scan its QR code, or enter its hidden one-time code in the PWA.</li><li>Compare the two-digit verification code shown on the two devices and check that the request belongs to the device you intend to add.</li><li>Approve the request on the existing trusted device. Keep the PWA open while it waits for that decision.</li><li>If the code expires or the request is denied, start a new link. Do not approve an unexpected device request.</li></ol><p>After approval, this browser connects with its own registered device identity. When offered, save a passkey under <strong>You</strong> for a later sign-in. Guest access appears only when the server allows guest login; a server join password may still be required.</p><p>Use <strong>Devices &amp; passkeys</strong> on the desktop or the device list under You in the PWA to review the new device. Where confirmation is required, compare its fingerprint and confirm it before sending it direct messages. <strong>Copy recent history</strong> can transfer readable direct-message records from a confirmed existing device, with a chosen time range. This copies records rather than old encryption sessions or keys; the privacy guide explains the transfer’s limits.</p></section>
+<section id="install" aria-labelledby="install-heading"><h2 id="install-heading">Install the app and choose notifications</h2><p>On supported phones, the signed-in PWA offers an installation prompt. Installing changes how you launch the app; it does not create a separate community account.</p><ul><li><strong>iPhone / iPad:</strong> in Safari, choose <strong>Share → Add to Home Screen</strong>. Enable <strong>Open as Web App</strong> if offered, then Add.</li><li><strong>Android:</strong> in Chrome, choose <strong>⋮ → Install and create shortcut → Install</strong>. Some versions show <strong>Add to Home screen → Install</strong>.</li><li><strong>macOS:</strong> Safari on macOS 14 or later offers <strong>File → Add to Dock</strong>. Chrome offers an install icon in the address bar.</li><li><strong>Windows / Linux:</strong> use the install icon in Chrome or Edge when available, or continue in a browser tab.</li></ul><p>Open the installed app afterwards. If it asks you to sign in again, use a passkey or link it from the desktop.</p><p>Open <strong>You</strong> to find the searchable Settings sections, profile, passkeys, and devices. Notification availability depends on browser support, installation requirements, permission, and the server’s push configuration.</p><p>Enable notifications only when wanted, then choose whether to hide details or always notify. If the browser denied permission, change the site’s permission in browser settings before trying again. Use the app’s notification controls for quiet hours, behavior, and sounds when available.</p></section>
+<section id="chat" aria-labelledby="chat-heading"><h2 id="chat-heading">Chat and keep your device recoverable</h2><figure class="guide-figure mobile-shot"><a class="image-link" href="../../assets/screenshots/pwa-chat.png" data-full><img src="../../assets/screenshots/pwa-chat.png" width="390" height="844" loading="lazy" decoding="async" alt="The noXa phone interface displaying a channel conversation and message composer with fictional messages."></a><figcaption>Actual mobile chat components at 390 × 844 · Fictional local demo messages. This capture does not show a live server session.</figcaption></figure><p>Open a permitted conversation from the app navigation and use its message composer. The app also includes voice, calls, threads, search, saved items, and community administration screens where the account and browser support them.</p><p>Use <strong>You</strong> to review registered devices and the backup options. An identity backup and a settings export are different: a settings export does not include identity keys or message history. Protect an identity backup and its passphrase as account access material.</p><p>Before clearing browser storage, forgetting this device, or changing phones, verify that you have another approved sign-in or a usable identity backup. Local settings and data can be lost when browser storage is cleared.</p></section>
+      <section class="guide-related" aria-labelledby="next-heading"><h2 id="next-heading">Keep going</h2><ul><li><a href="../getting-started/">Get started with the Windows client</a></li><li><a href="../messaging/">Chat, direct messages, and forums</a></li><li><a href="../privacy-security/">Privacy, encryption, and device trust</a></li><li><a href="../troubleshooting/">Troubleshooting connections, chat, and media</a></li></ul></section>
+      <aside class="guide-sources" aria-label="Source documentation"><p>Based on the current noXa documentation. Public alpha features and menu labels can change; use the client and server from the same release.</p><ul><li><a href="https://github.com/arumes31/noxa/blob/main/mobile/src/ui/connect.js">PWA connection and device-linking implementation</a></li><li><a href="https://github.com/arumes31/noxa/blob/main/mobile/src/ui/install-prompt.js">PWA installation behavior</a></li><li><a href="https://github.com/arumes31/noxa/blob/main/mobile/src/ui/you.js">PWA profile and device settings</a></li></ul><a href="https://github.com/arumes31/noxa/issues">Suggest a correction</a></aside>
+    </main>
+  </div>
+  <footer class="wrap site-footer">
+    <a class="footer-brand" href="../../" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span></a>
+    <nav aria-label="Footer navigation"><a href="../../guides/">All guides</a><a href="../../guides/server-setup/">Server setup</a><a href="https://github.com/arumes31/noxa/releases">Releases</a><a href="https://github.com/arumes31/noxa/issues">Report an issue</a></nav>
+  </footer>
+  <dialog class="lightbox" aria-label="Product screenshot" aria-describedby="image-caption"><button type="button" aria-label="Close image" autofocus>×</button><img alt=""><p id="image-caption">noXa client · Fictional demo data</p></dialog>
+</body>
+</html>

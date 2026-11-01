@@ -1,0 +1,23 @@
+{
+  "date": "2026-11-01",
+  "url": "https://noxa.wowcraft.pw/",
+  "methodology": "https://github.com/AgriciDaniel/claude-seo/tree/main/skills/seo-page",
+  "evidence": {
+    "homepage_status": 200,
+    "homepage_matched_local_source": true,
+    "robots_txt_status_before": 404,
+    "sitemap_xml_status_before": 404,
+    "source_baseline": "03053a3fa3c369bc94ffa4403703db8ced0c6c14"
+  },
+  "findings": [
+    { "priority": "high", "finding": "Title did not identify the product category", "change": "Describe self-hosted voice, video and community chat in metadata and supporting visible text" },
+    { "priority": "high", "finding": "No first-party setup or user guides", "change": "Add 12 substantive static guides with source references, real screenshots and related navigation" },
+    { "priority": "medium", "finding": "robots.txt and sitemap.xml returned 404", "change": "Allow public crawling and publish canonical homepage and guide URLs; omit the authenticated PWA" },
+    { "priority": "medium", "finding": "No structured software or documentation metadata", "change": "Add WebSite, WebPage, SoftwareApplication, TechArticle, CollectionPage and breadcrumb JSON-LD matching visible content" },
+    { "priority": "medium", "finding": "Social previews used a 512px app icon with incomplete metadata", "change": "Use the actual 1280 by 800 client screenshot and descriptive social cards" }
+  ],
+  "strengths_preserved": ["Static readable HTML without JavaScript", "Canonical HTTPS URL", "Local fonts and assets", "Semantic navigation and keyboard skip links", "Real screenshots with dimensions", "Deferred small browser script"],
+  "verification_limits": ["Search Console, rankings, traffic and CTR were not available", "No CrUX or PageSpeed field data: no Core Web Vitals pass or score claimed", "No backlink data: no authority or ranking score claimed"],
+  "code_review": { "tool": "CodeRabbit CLI 0.9.2", "usage": "Included free review; paid usage disabled", "findings": 1, "resolution": "CI drift detection now checks both tracked and untracked generated guide files" },
+  "follow_up": ["Submit the deployed sitemap through Search Console", "Monitor guide indexing and search queries", "Measure field Core Web Vitals when sufficient traffic is available"]
+}
