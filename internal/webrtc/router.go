@@ -143,6 +143,8 @@ type pubSlot struct {
 	track             *webrtc.TrackLocalStaticRTP
 	sender            *webrtc.RTPSender
 	egress            *mediaEgressStream
+	audioMu           sync.Mutex
+	audioContinuity   audioContinuity
 	videoMu           sync.Mutex
 	videoContinuity   videoContinuity
 	watchEpoch        uint64 // serialized by videoMu; never decreases
