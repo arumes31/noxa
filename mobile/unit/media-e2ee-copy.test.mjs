@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const FILES = ["media-e2ee-core.js", "media-e2ee.js", "media-e2ee.worker.js", "media-keys.js", "media-replay.js", "media-session.js"];
+const FILES = ["peer-stats.js", "media-frame-envelope.js", "hardware-video.js", "hardware-probe-frame.js", "media-e2ee-core.js", "media-e2ee.js", "media-e2ee.worker.js", "media-keys.js", "media-replay.js", "media-session.js"];
 const here = new URL("../src/core/media-e2ee/", import.meta.url);
 const desktop = new URL("../../client/frontend/src/", import.meta.url);
 

@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 test(
   "real IndexedDB wrapping-key winner and identity logout fence",
   { timeout: 60000 },
-  async () => {
+  async (t) => {
     const server = createServer(async (req, res) => {
       try {
         const p = new URL(req.url, "http://localhost").pathname;
@@ -33,9 +33,20 @@ test(
       }
     });
     await new Promise((r) => server.listen(0, "127.0.0.1", r));
-    let browser;
+    let browser, launch, cleanupPromise;
+    const cleanup = () => cleanupPromise ||= (async () => {
+      try { await (browser || await launch)?.close(); }
+      finally {
+        server.closeAllConnections();
+        await new Promise((resolve) => server.close(resolve));
+      }
+    })();
+    // A timed-out page evaluation never reaches its finally block on its own.
+    // Closing the browser from the hook also rejects that pending operation.
+    t.after(cleanup);
     try {
-      browser = await chromium.launch();
+      launch = chromium.launch();
+      browser = await launch;
       const ctx = await browser.newContext();
       const pages = await Promise.all([ctx.newPage(), ctx.newPage()]);
       await Promise.all(
@@ -708,8 +719,7 @@ test(
       );
       for (const page of pages) await page.evaluate(() => core.close());
     } finally {
-      await browser?.close();
-      await new Promise((r) => server.close(r));
+      await cleanup();
     }
   },
 );

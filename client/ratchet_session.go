@@ -442,7 +442,7 @@ func (m *connManager) ratchetDeviceKey(ctx context.Context, principal, device st
 				m.promptRatchetIdentity(principal)
 				return nil, &ratchetError{Code: "identity_changed", Err: err}
 			}
-			if errors.Is(err, errDMDevicesUnverified) || errors.Is(err, devicetrust.ErrUntrusted) {
+			if errors.Is(err, errDMDevicesUnverified) || errors.Is(err, devicetrust.ErrUntrusted) || errors.Is(err, e2ee.ErrKeyRecord) {
 				return nil, &ratchetError{Code: "untrusted_device", Err: err}
 			}
 			return nil, err

@@ -1693,40 +1693,44 @@ async function installHEVCPublication(page, reject = false) {
     }, reject);
 }
 
-// Encrypted channel media (Task 2) publishes VP8 only: hardware H.264/HEVC
-// is neither probed nor preferred nor declared, because only Opus/VP8 are
-// proven end-to-end encrypted through the SFU. (The former H.264/HEVC
-// selection tests covered a path that is unreachable while media is
-// encrypted.)
-test("encrypted channel media publishes the screen as VP8 even with hardware HEVC/H.264 available", async ({ page }) => {
+// The validated H264 frame cipher can use hardware evidence. HEVC remains
+// excluded until its encrypted packetization path is supported.
+test("encrypted channel media prefers hardware H264 and excludes HEVC", async ({ page }) => {
     await installHEVCPublication(page);
     await page.locator("#voice-screen").click();
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__media.codecRequests.length)).toBe(1);
     const result = await page.evaluate(() => ({ preferences: __media.codecPreferences, requests: __media.codecRequests, errors: __media.errors }));
-    expect(result.preferences.every(row => row.mime.toLowerCase() === "video/vp8")).toBe(true);
-    expect(result.requests[0].codecs).toEqual(["vp8"]);
+    expect(result.preferences.length).toBeGreaterThan(0);
+    expect(result.preferences.every(row => row.mime.toLowerCase() === "video/h264")).toBe(true);
+    expect(result.requests[0].codecs).toEqual(["h264", "vp8"]);
+    expect(result.requests[0].encrypted_codecs).toBe("noxa-media-e2ee-h264-v1");
     expect(result.requests[0]).not.toHaveProperty("hevc_level_id");
     expect(result.errors).toEqual([]);
 });
 
-test("pending HEVC withdrawal cannot prevent last-viewer upload pause or apply stale codec", async ({ page }) => {
+test("last-viewer upload pause defers codec changes for encrypted H264", async ({ page }) => {
     await installHEVCPublication(page);
     await page.locator("#voice-screen").click();
     await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
     await page.getByRole("button", { name: "Start sharing", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__media.codecRequests.length)).toBe(1);
     const before = await page.evaluate(async () => {
-        const p = await import("/src/stream-publication.js"), original = window.go.main.App.VideoStreamControlForTab;
-        window.go.main.App.VideoStreamControlForTab = (tab, body) => body.codec_revision === "2" ? Promise.reject(new Error("not applied")) : original(tab, body);
-        try { await p.withdrawPublicationHEVC("screen", __noxa.state.shareStream.getVideoTracks()[0]); } catch {}
+        const p = await import("/src/stream-publication.js");
         const before = { offers: __media.offers.length, preferences: __media.codecPreferences.length };
         p.reconcilePublicationUploads(p.publicationSnapshot(), [{ publisher_id: "self", slot: "screen", generation: "1",
             codec_revision: "1", codec: "vp8", upload_active: false }]);
         return before;
     });
     await expect.poll(() => page.evaluate(() => __noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].active)).toBe(false);
+    expect(await page.evaluate(() => ({ offers: __media.offers.length, preferences: __media.codecPreferences.length }))).toEqual(before);
+    await page.evaluate(async () => {
+        const p = await import("/src/stream-publication.js");
+        p.reconcilePublicationUploads(p.publicationSnapshot(), [{ publisher_id: "self", slot: "screen", generation: "1",
+            codec: "h264", upload_active: true }]);
+    });
+    await expect.poll(() => page.evaluate(() => __noxa.state.shareVideoTransceiver.sender.getParameters().encodings[0].active)).toBe(true);
     expect(await page.evaluate(() => ({ offers: __media.offers.length, preferences: __media.codecPreferences.length }))).toEqual(before);
 });
 
@@ -1747,4 +1751,19 @@ test("start sharing reports an unready voice connection without losing the selec
     await expect(page.locator(".sh-error")).toContainText("voice connection is not ready");
     await expect(page.locator(".sh-preview")).toBeVisible();
     expect(await page.evaluate(()=>window.__media.offers)).toEqual([]);
+});
+
+
+test("hardware capture failure clears the desktop share owner and publication",async({page})=>{
+    await page.locator("#voice-screen").click();
+    await page.getByRole("button",{name:"Choose screen or window…",exact:true}).click();
+    await page.getByRole("dialog").getByRole("button",{name:"Start sharing",exact:true}).click();
+    await expect.poll(()=>page.evaluate(()=>!!window.__noxa.state.screenSharing)).toBe(true);
+    await page.evaluate(()=>{
+        const track=window.__noxa.state.shareStream.getVideoTracks()[0];
+        track.stop();track.dispatchEvent(new Event("ended"));
+    });
+    await expect.poll(()=>page.evaluate(()=>!!window.__noxa.state.screenSharing)).toBe(false);
+    await expect.poll(()=>page.evaluate(()=>window.__media.video.trackSlots().map(t=>t.slot))).toEqual(["cam"]);
+    expect(await page.evaluate(()=>window.__media.camera.readyState)).toBe("live");
 });

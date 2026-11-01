@@ -21,7 +21,9 @@ import { watchMicrophone } from "./microphone-recovery.js";
 import { voiceSendEncoding, applyVoicePriority } from "./voice-priority.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { startVoiceDiagnostics, noteVoiceActivity } from './voice-diagnostics.js';
+import { updateMemberMediaIndicators } from "./member-media-indicator.js";
 import { createVoiceRecovery } from './voice-recovery.js';
+import { createVoiceTransportRecovery, voiceTransportFailed } from './voice-transport-recovery.js';
 import { createHardwareRecoveryScheduler, createVideoReceiverRecovery } from './video-hardware-recovery.js';
 import { createVideoSenderRecovery } from './video-sender-hardware-recovery.js';
 import { createChannelTree } from './channel-tree.js';
@@ -200,8 +202,25 @@ const { selectAudioOutput, applyOutputSettings, remoteChain, reconcileSpatialVoi
 const trackUserReceivers = createReceiverRegistry();
 const channelAudioAttached = (track, id = remoteTrackID(state.pc, track)) => remoteAudio.hasRemoteAudio(track, id) &&
     trackUserReceivers.owns(id, track) && state.trackUsers.get(id)?.track_id === id;
+const recoverVoiceTransport = createVoiceTransportRecovery({ state,
+    allowed: () => !updateStartupBlocked() && intentionalVoiceDisconnectScope !== voiceConnectionScope(),
+    abort: () => {
+        // Cancellation releases startup ownership and fences any late capture.
+        pauseShareForReconnect();
+        resetVoiceSession({ retainMedia: true });
+    },
+    rebuild: async (_pc, current) => {
+        if (!current()) return;
+        // Retain only the already authorized screen/Studio capture. A fresh
+        // peer refreshes ICE and E2EE; camera capture is never auto-started.
+        pauseShareForReconnect();
+        resetVoiceSession({ retainMedia: true });
+        await ensureVoiceForChannel();
+    },
+});
 const recoverVoice = createVoiceRecovery({ state,
         attached: channelAudioAttached,
+        canReceive: publisher => channelMedia()?.engine?.publisherStatus(publisher)?.ready === true,
         repair: pc => reconcileRemoteMedia(pc),
         resync: pc => renegotiate(pc),
         rebuild: async pc => {
@@ -1890,6 +1909,7 @@ for (const event of ["tab_reset", "disconnected", "tab_disconnected"]) window.ru
     voiceEncryptionTooltip.close();
 });
 export function renderVoiceEncryptionStatus(status) {
+    updateMemberMediaIndicators(state, status);
     const element = $("voice-e2ee");
     if (!element) return;
     const text = compactMediaEncryptionStatus(status);
@@ -2166,6 +2186,12 @@ $("chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") sendC
 // ---------------------------------------------------------------------------
 
 let voiceSessionEpoch = 0;
+let retainedVoiceMedia = null;
+const voiceMediaOwners = new WeakMap();
+function stopOwnedVoiceMedia(media, owner) {
+    if (channelMedia() === media && voiceMediaOwners.get(media) === owner) stopChannelMedia();
+}
+const voiceMediaScope = () => JSON.stringify([voiceConnectionScope(), state.myChannelID, state.myClientID]);
 let intentionalVoiceDisconnectScope = "";
 const voiceConnectionScope = () => JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration]);
 
@@ -2316,6 +2342,11 @@ function ensureVoiceForChannel() {
                 else if (parsed.slot === SLOT_SCREEN_AUDIO) receiveShareAudio(track, parsed.clientID);
             }
         }
+        if (voiceTransportFailed(state.pc)) {
+            scheduleICERestart(state.pc);
+            setVoiceStatus("voice connecting…");
+            return Promise.resolve(false);
+        }
         setVoiceStatus("voice on");
         return Promise.resolve(true);
     }
@@ -2370,12 +2401,12 @@ async function readInitialMediaLimits(tabID, stillRelevant) {
     finally { active = false; clearTimeout(timer); }
 }
 
-function resetVoiceSession() {
+function resetVoiceSession({ retainMedia = false } = {}) {
     voiceSessionEpoch++;
     voiceStartOwner?.cancel();
     voiceStartOwner = null;
     voiceStartPromise = null;
-    teardownVoice();
+    teardownVoice({ retainMedia });
     resetVoiceUI();
     state.micState = "unknown";
     renderMicStatus($("mic-status"), "unknown");
@@ -2393,6 +2424,7 @@ function microphoneFailureState(error) {
 }
 
 async function startVoice(expectedEpoch = voiceSessionEpoch) {
+    const mediaOwner = {};
     const generation = state.serverGeneration;
     const tabID = state.activeTabID;
     const current = () => expectedEpoch === voiceSessionEpoch && state.serverGeneration === generation && state.activeTabID === tabID && state.myChannelID > 0;
@@ -2452,7 +2484,19 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     // created (explicit error, never plaintext channel media).
     let media;
     try {
-        media = await startChannelMedia({ tabID, channelID: state.myChannelID, roster: state.clients, onError: error => {
+        // A transport-only replacement must keep receive keys and replay
+        // windows. Peers on older clients will not re-send their current key
+        // merely because our DTLS peer changed while membership stayed equal.
+        const retained = retainedVoiceMedia;
+        media = retained?.scope === voiceMediaScope() && retained.media === channelMedia() ? retained.media : null;
+        if (media) {
+            // Claim before awaiting release: a retired startup must never stop
+            // the session this attempt is adopting.
+            voiceMediaOwners.set(media, mediaOwner);
+            await retained.released;
+            if (!current() || channelMedia() !== media) throw new Error(mediaErrorText(new Error("closed")));
+            media.setRoster(state.clients);
+        } else media = await startChannelMedia({ tabID, channelID: state.myChannelID, roster: state.clients, onError: error => {
             toast(mediaErrorText(error), "warn");
             if (state.pc) resetVoiceSession();
         } });
@@ -2462,8 +2506,9 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         if (current()) throw new Error(mediaErrorText(error));
         return false;
     }
+    if (current()) voiceMediaOwners.set(media, mediaOwner);
     if (!current()) {
-        stopChannelMedia();
+        stopOwnedVoiceMedia(media, mediaOwner);
         capturedStream.getTracks().forEach((track) => track.stop());
         if (state.localStream === capturedStream) state.localStream = null;
         return false;
@@ -2476,6 +2521,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     // that old peer can never affect the new one.
     if (state.pc && state.pc !== pc) resetICERestart(state.pc);
     state.pc = pc;
+    retainedVoiceMedia = null;
     state.voiceTabID = tabID;
     maintainRelay(pc, {
         app: window.go.main.App, tabID,
@@ -2494,7 +2540,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         if (!current() || state.pc !== pc) {
             disposeMicrophoneGate(audioTrack);
             audioTrack.stop(); pc.close();
-            if (channelMedia() === media) stopChannelMedia();
+            stopOwnedVoiceMedia(media, mediaOwner);
             return false;
         }
         pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream], sendEncodings: [voiceSendEncoding()] });
@@ -2515,7 +2561,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         }
     };
     // (59) ICE restart: re-offer with iceRestart on failed/disconnected,
-    // backing off 1s, 2s, 5s, 15s before giving up with a warning toast.
+    // backing off 1s, 2s, 5s, 15s before a bounded full-peer recovery.
     pc.oniceconnectionstatechange = () => onICEStateChange(pc);
     // (141) transport + media-flow status beside the voice label.
     resetVoiceLink();
@@ -2523,6 +2569,12 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         if (state.pc !== pc) return;
         updateVoiceLink({ type: "transport", state: pc.connectionState });
         syncVoiceLinkMedia();
+        updateMemberMediaIndicators(state, channelMedia()?.engine?.status());
+        if (voiceTransportFailed(pc)) scheduleICERestart(pc);
+        else if (pc.connectionState === "connected") {
+            resetICERestart(pc);
+            if (state.myChannelID > 0) setVoiceStatus("voice on");
+        }
     });
     updateVoiceLink({ type: "transport", state: pc.connectionState });
     stopRemoteMedia();
@@ -2571,7 +2623,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
 
     if (expectedEpoch !== voiceSessionEpoch || state.pc !== pc || state.myChannelID <= 0) {
         pc.close();
-        if (channelMedia() === media) stopChannelMedia();
+        stopOwnedVoiceMedia(media, mediaOwner);
         return false;
     }
 
@@ -2697,7 +2749,8 @@ $("voice-prio").onclick = async () => {
 
 // (59) ICE restart ladder: on failed/disconnected, re-offer with iceRestart
 // after 1s, 2s, 5s, then 15s; a connected/completed state resets the ladder.
-// The server treats a re-offer as a full session replacement (idempotent).
+// Re-offers retain the existing peer. Exhaustion must create a fresh peer
+// (new DTLS identity) rather than keep the failed transport forever.
 const ICE_BACKOFF_MS = [1000, 2000, 5000, 15000];
 let iceFailures = 0;
 let iceTimer = null;
@@ -2724,16 +2777,18 @@ function claimICERestart(pc) {
 function onICEStateChange(pc) {
     if (pc !== state.pc) return;
     const s = pc.iceConnectionState;
-    if (s === "connected" || s === "completed") {
+    if ((s === "connected" || s === "completed") && !voiceTransportFailed(pc)) {
         resetICERestart(pc);
+        if (state.myChannelID > 0 && (!pc.connectionState || pc.connectionState === "connected")) setVoiceStatus("voice on");
         return;
     }
-    if (s === "failed" || s === "disconnected") {
+    if (voiceTransportFailed(pc)) {
         scheduleICERestart(pc);
     }
 }
 
 function resetICERestart(pc) {
+    recoverVoiceTransport.cancel(pc);
     if (!ownsICERestart(pc)) return;
     if (iceTimer !== null) clearTimeout(iceTimer);
     iceFailures = 0;
@@ -2750,6 +2805,7 @@ function scheduleICERestart(pc) {
             iceFailureNotified = true;
             toast(t("runtime.voiceUnstable"), "warn", "conn");
         }
+        recoverVoiceTransport.schedule(pc);
         return;
     }
     const delay = ICE_BACKOFF_MS[iceFailures++];
@@ -2758,7 +2814,7 @@ function scheduleICERestart(pc) {
         if (!ownsICERestart(pc) || iceTimer !== timer) return;
         iceTimer = null;
         const s = pc.iceConnectionState;
-        if (s === "connected" || s === "completed" || s === "closed") {
+        if (s === "closed" || ((s === "connected" || s === "completed") && !voiceTransportFailed(pc))) {
             resetICERestart(pc);
             return;
         }
@@ -2770,7 +2826,8 @@ function scheduleICERestart(pc) {
         }
         // Still not connected: oniceconnectionstatechange may not fire again
         // for a persistent failure, so chain the next backoff step explicitly.
-        if (ownsICERestart(pc) && !["connected", "completed", "closed"].includes(pc.iceConnectionState)) {
+        if (ownsICERestart(pc) && pc.iceConnectionState !== "closed" &&
+            (!["connected", "completed"].includes(pc.iceConnectionState) || voiceTransportFailed(pc))) {
             scheduleICERestart(pc);
         }
     }, delay);
@@ -2781,7 +2838,7 @@ function scheduleICERestart(pc) {
     iceTimer = timer;
 }
 
-function teardownVoice() {
+function teardownVoice({ retainMedia = false } = {}) {
     stopRemoteMedia();
     stopWatchingMicrophone();
     lostMicrophoneName = "";
@@ -2815,9 +2872,20 @@ function teardownVoice() {
     // (its published clone was stopped with the share stream above).
     if (!shareResumePending()) disposeStudio();
     detachRemoteAudio();
-    if (state.pc) { state.pc.close(); state.pc = null; }
-    // The session's worker and every media key end with the peer.
-    stopChannelMedia();
+    const closingPeer = state.pc;
+    if (closingPeer) { closingPeer.close(); state.pc = null; }
+    const media = channelMedia();
+    retainedVoiceMedia = retainMedia && media ? { media, scope: voiceMediaScope() } : null;
+    if (retainedVoiceMedia) {
+        // Retention also transfers cleanup ownership away from an old startup.
+        voiceMediaOwners.set(media, retainedVoiceMedia);
+        // Drop old endpoint bindings, preserving the same channel's keys and
+        // replay windows. Channel moves, sign-out and server changes still
+        // destroy the complete encryption session through normal teardown.
+        retainedVoiceMedia.released = Promise.resolve(media.releasePeer?.(closingPeer));
+        // Startup awaits this promise; keep synchronous teardown callers safe.
+        void retainedVoiceMedia.released.catch(() => {});
+    } else stopChannelMedia();
     state.voiceTabID = "";
     syncTrayVoice();
     if (state.localStream) {

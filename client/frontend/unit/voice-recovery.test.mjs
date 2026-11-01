@@ -193,3 +193,20 @@ test("an SSRC change restarting the inbound counter is a baseline, not a strike"
     await recover(f.pc, sample(2, 9)); await recover(f.pc, sample(2, 9));
     assert.deepEqual(f.calls, ["repair", "resync", "repair"], "a stalled new stream is still detected");
 });
+
+test("a key-gated receiver with fresh RTP does not start a renegotiation storm", async () => {
+    const f = fixture(); let keyReady = false;
+    const recover = createVoiceRecovery({ ...f.options, canReceive: () => keyReady });
+    for (let i = 0; i < 12; i++) { f.time(i * 5000); await recover(f.pc, f.stats()); }
+    assert.deepEqual(f.calls, []);
+    keyReady = true;
+    for (let i = 0; i < 3; i++) await recover(f.pc, f.stats());
+    assert.deepEqual(f.calls, ["repair"]);
+});
+
+test("an ended track still rebuilds while key exchange is pending", async () => {
+    const f = fixture(); f.track.readyState = "ended";
+    const recover = createVoiceRecovery({ ...f.options, canReceive: () => false });
+    for (let i = 0; i < 3; i++) await recover(f.pc, f.stats());
+    assert.deepEqual(f.calls, ["repair", "rebuild"]);
+});

@@ -708,17 +708,62 @@ func (m *connManager) publishE2EKeyConn(conn net.Conn, uid string) error {
 	if err != nil {
 		return err
 	}
-	pub, _, err := id.x25519()
+	record, err := signedE2EKeyRecord(id, uid)
 	if err != nil {
 		return err
+	}
+	return m.writeConn(conn, netproto.MsgKeyPublish, netproto.KeyPublish{PublicKey: record})
+}
+
+func signedE2EKeyRecord(id *identity, uid string) (string, error) {
+	pub, _, err := id.x25519()
+	if err != nil {
+		return "", err
 	}
 	private, err := auth.LoadPrivateKey(id.PrivateKey)
 	if err != nil {
-		return err
+		return "", err
 	}
-	record, err := e2ee.SignKeyRecord(uid, pub, private)
+	return e2ee.SignKeyRecord(uid, pub, private)
+}
+
+// The initial publication can be refused while server rules are pending.
+// Retry the same identity only after this connection receives acceptance;
+// neither a changed rules prompt nor an old connection can publish for it.
+func (m *connManager) republishE2EKeyAfterRules(conn net.Conn, epoch uint64, f *netproto.Frame) error {
+	var rules *netproto.ServerRules
+	if err := netproto.Decode(f, &rules); err != nil || rules == nil {
+		return nil
+	}
+	m.mu.Lock()
+	if conn == nil || m.conn != conn || m.connEpoch != epoch || m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+	if rules.Hash != "" {
+		m.rulesPending = true
+		m.mu.Unlock()
+		return nil
+	}
+	if rules.Text != "" || !m.rulesPending {
+		m.mu.Unlock()
+		return nil
+	}
+	m.rulesPending = false
+	id, uid := m.id, m.uniqueID
+	m.mu.Unlock()
+	if id == nil || uid == "" {
+		return nil
+	}
+	record, err := signedE2EKeyRecord(id, uid)
 	if err != nil {
 		return err
+	}
+	m.mu.Lock()
+	current := m.conn == conn && m.connEpoch == epoch && !m.closed && m.id == id && m.uniqueID == uid
+	m.mu.Unlock()
+	if !current {
+		return nil
 	}
 	return m.writeConn(conn, netproto.MsgKeyPublish, netproto.KeyPublish{PublicKey: record})
 }

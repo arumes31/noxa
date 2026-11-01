@@ -21,7 +21,7 @@ import { CameraSource, capSender, preferReceiveCodecs, watchCodecNames, wireQual
 import * as settings from "./settings.js";
 import { LevelMeter, Mixer, installAudioUnlock } from "./voice-audio.js";
 import { MutedTalkingWarning, PushToTalkLatch, VoiceGate, parseKeyKind, playbackGain } from "./voice-gate.js";
-import { MEDIA_E2EE_VERSION, MediaSession, MediaSessionError } from "./media-e2ee/media-session.js";
+import { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, MediaSession, MediaSessionError } from "./media-e2ee/media-session.js";
 
 const MsgChannelJoined = 158;
 const STATS_INTERVAL = 2000;
@@ -553,7 +553,7 @@ export class Voice extends EventTarget {
             await this.#enqueue(() => this.#offer());
             this.#media?.publicationsChanged();
             await capSender(this.#cameraTransceiver.sender, this.session.mediaLimits);
-            const result = await this.conn.request(Msg.VideoStreamControl, { action: "publish", slot: "cam", generation: "0", revision: "0", session: "0", active: true, codecs: ["vp8"] },
+            const result = await this.conn.request(Msg.VideoStreamControl, { action: "publish", slot: "cam", generation: "0", revision: "0", session: "0", active: true, codecs: ["vp8"], encrypted_codecs: MEDIA_E2EE_CODEC_VERSION },
                 Msg.VideoStreamResult, { accept: r => r.action === "publish" });
             this.#cameraGeneration = String(result.generation ?? "0");
             this.#applyBitrate();
@@ -1031,7 +1031,7 @@ export class Voice extends EventTarget {
         this.#emit("tracks");
         const result = await this.conn.request(Msg.VideoStreamControl, {
             action: "watch", publisher_id: stream.publisher_id, slot: stream.slot, generation: String(stream.generation),
-            revision: String(this.#watchRevision), session: this.#watchSession, active, codecs: watchCodecs(),
+            revision: String(this.#watchRevision), session: this.#watchSession, active, codecs: watchCodecs(), encrypted_codecs: MEDIA_E2EE_CODEC_VERSION,
         }, Msg.VideoStreamResult, { accept: r => r.action === "watch" });
         if (result?.session && result.session !== "0") this.#watchSession = String(result.session);
         if (active) await this.applyQualities().catch(() => {});

@@ -50,6 +50,12 @@ import (
 // node_modules (livekit-client). NOXA_E2EE_LONG_MINUTES runs the long-session
 // phase for that many minutes (default: skipped).
 func TestBrowserE2EEChannelMediaThroughSFU(t *testing.T) {
+	runBrowserE2EEChannelMedia(t, "")
+}
+func TestBrowserE2EEH264ChannelMediaThroughSFU(t *testing.T) {
+	runBrowserE2EEChannelMedia(t, "h264")
+}
+func runBrowserE2EEChannelMedia(t *testing.T, codec string) {
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node is required")
@@ -59,12 +65,15 @@ func TestBrowserE2EEChannelMediaThroughSFU(t *testing.T) {
 		t.Skip("client/frontend node_modules are not installed")
 	}
 	h := newE2EEHarness(t)
+	if codec != "" {
+		h.codecs = append(h.codecs, codec)
+	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
 	cmd := exec.Command(node, filepath.Join("testdata", "browser_e2ee.mjs"), srv.URL)
 	cmd.Dir, _ = filepath.Abs(".")
-	cmd.Env = append(os.Environ(), "NOXA_FRONTEND="+frontend)
+	cmd.Env = append(os.Environ(), "NOXA_FRONTEND="+frontend, "NOXA_E2EE_TEST_CODEC="+codec)
 	out, _ := cmd.StdoutPipe()
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
@@ -107,7 +116,7 @@ func TestBrowserE2EEChannelMediaThroughSFU(t *testing.T) {
 	}
 	for _, answer := range h.answers {
 		lower := strings.ToLower(answer)
-		if strings.Contains(lower, "h264/") || strings.Contains(lower, "h265/") || strings.Contains(lower, "vp9/") || strings.Contains(lower, "av1/") {
+		if strings.Contains(lower, "h265/") || strings.Contains(lower, "vp9/") || strings.Contains(lower, "av1/") {
 			t.Fatalf("SFU answered an unproven codec while media is encrypted:\n%s", answer)
 		}
 	}
@@ -126,10 +135,11 @@ type e2eePeer struct {
 }
 
 type e2eeHarness struct {
-	t *testing.T
-	e *Engine
-	r *Router
-	v *Voice
+	t      *testing.T
+	codecs []string
+	e      *Engine
+	r      *Router
+	v      *Voice
 
 	mu                                sync.Mutex
 	peers                             map[string]*e2eePeer
@@ -148,12 +158,36 @@ type e2eeHarness struct {
 
 func newE2EEHarness(t *testing.T) *e2eeHarness {
 	t.Helper()
-	e, err := NewWithMediaPolicy(zap.NewNop(), nil, false, NetworkConfig{UDPAddr: "127.0.0.1:0", ExternalIPs: []string{"127.0.0.1"}}, VideoBounds{}, MediaPolicy{E2EE: true})
+	// Windows browsers may not offer loopback candidates. A test-only local
+	// address override keeps both ICE endpoints on the same host interface.
+	network := NetworkConfig{UDPAddr: "127.0.0.1:0", ExternalIPs: []string{"127.0.0.1"}}
+	if host := os.Getenv("NOXA_E2EE_TEST_HOST"); host != "" {
+		ip := net.ParseIP(host)
+		if ip == nil || ip.To4() == nil {
+			t.Fatal("invalid test host")
+		}
+		found := false
+		addresses, err := net.InterfaceAddrs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, address := range addresses {
+			own, _, _ := net.ParseCIDR(address.String())
+			if own.Equal(ip) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("test host must belong to this machine")
+		}
+		network = NetworkConfig{UDPAddr: net.JoinHostPort(host, "0"), ExternalIPs: []string{host}, AllowedRemoteCIDRs: []string{host + "/32"}}
+	}
+	e, err := NewWithMediaPolicy(zap.NewNop(), nil, false, network, VideoBounds{}, MediaPolicy{E2EE: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.iceServers = nil
-	h := &e2eeHarness{t: t, e: e, peers: map[string]*e2eePeer{}, inChannel: map[string]int64{}, watchRevision: map[string]uint64{}, candidatesIn: map[string]int{}, candidatesOut: map[string]int{}}
+	h := &e2eeHarness{t: t, e: e, codecs: []string{"vp8"}, peers: map[string]*e2eePeer{}, inChannel: map[string]int64{}, watchRevision: map[string]uint64{}, candidatesIn: map[string]int{}, candidatesOut: map[string]int{}}
 	h.r = NewRouter(zap.NewNop())
 	h.v = NewVoice(e, h.r, zap.NewNop())
 	h.v.renegDebounce = 20 * time.Millisecond
@@ -444,7 +478,7 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !body.Active {
 			generation, _ = strconv.ParseUint(body.Generation, 10, 64)
 		}
-		gen, err := h.v.PublishVideoWithCodecs(body.ID, body.Slot, generation, body.Active, "", []string{"vp8"})
+		gen, err := h.v.PublishVideoWithCodecs(body.ID, body.Slot, generation, body.Active, "", h.codecs)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -462,7 +496,7 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.watchRevision[key]++
 		rev := h.watchRevision[key]
 		h.mu.Unlock()
-		started, err := h.v.WatchVideoWithCodecs(body.ID, body.Publisher, body.Slot, gen, rev, h.v.VideoWatchSession(body.ID), true, []string{"vp8"})
+		started, err := h.v.WatchVideoWithCodecs(body.ID, body.Publisher, body.Slot, gen, rev, h.v.VideoWatchSession(body.ID), true, h.codecs)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return

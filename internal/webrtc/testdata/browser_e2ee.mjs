@@ -40,7 +40,7 @@ const vite = await createServer({ root: frontend, configFile: join(frontend, "vi
     server: { port: 0, host: "127.0.0.1", fs: { allow: [repo] }, proxy: { "/bridge": { target: bridge, rewrite: p => p.replace(/^\/bridge/, "") } } } });
 await vite.listen();
 const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
-const browser = await chromium.launch({ headless: true,
+const browser = await chromium.launch({ headless: true, executablePath: process.env.NOXA_BROWSER || undefined,
     args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--autoplay-policy=no-user-gesture-required"] });
 const mobileFS = "/@fs/" + repo.replace(/\\/g, "/").replace(/^\//, "") + "/mobile/src/core";
 
@@ -51,6 +51,7 @@ ${transformAPI === "streams" ? "delete window.RTCRtpScriptTransform;" : ""}
 ${transformAPI === "none" ? "delete window.RTCRtpScriptTransform; delete RTCRtpSender.prototype.createEncodedStreams; delete RTCRtpReceiver.prototype.createEncodedStreams;" : ""}
 window.post = async (path, body) => { const r = await fetch(BRIDGE + path, { method: "POST", body: JSON.stringify(body) }); if (!r.ok) throw new Error(path + ": " + await r.text()); return r.json(); };
 window.offers = 0;
+const FORCE_CODEC = ${JSON.stringify(process.env.NOXA_E2EE_TEST_CODEC || "")};
 // Attach audit (structural close of the attach window): when a local
 // description is set (an answer to a server offer adds receivers), every
 // receiver must already carry its transform, so no frame can reach it
@@ -92,12 +93,12 @@ window.metrics = async (pc, binding, stats) => {
     const hist = window.bindings.get(tr.mid) || []; if (hist.at(-1) !== pid) hist.push(pid); window.bindings.set(tr.mid, hist);
     const st = await stats(tr.receiver);
     const s = inbound.get(tr.mid);
-    out[pid] = { mid: tr.mid, frames: st?.endpoint?.frames || 0, dropped: st?.endpoint?.dropped || {}, decoded: s?.framesDecoded || 0, bytes: s?.bytesReceived || 0 };
+    out[pid] = { mid: tr.mid, frames: st?.endpoint?.frames || 0, dropped: st?.endpoint?.dropped || {}, decoded: s?.framesDecoded || 0, codec: (await pc.getStats()).get(s?.codecId)?.mimeType || "", bytes: s?.bytesReceived || 0 };
   }
   const senders = {};
   for (const tr of pc.getTransceivers()) {
     const st = await stats(tr.sender); if (!st?.endpoint?.pid) continue;
-    senders[st.endpoint.pid] = { frames: st.endpoint.frames, dropped: st.endpoint.dropped };
+    senders[st.endpoint.pid] = { frames: st.endpoint.frames, dropped: st.endpoint.dropped, encodings: tr.sender.getParameters().encodings.length, sources: [...(await tr.sender.getStats()).values()].filter(r=>r.type === "outbound-rtp" && r.kind === "video" && r.active !== false).map(r=>r.ssrc) };
   }
   let sent = 0; const pairs = []; const cands = {}; const all = await pc.getStats(); all.forEach(s => { if (s.type === "outbound-rtp") sent += s.bytesSent || 0; if (s.type === "local-candidate" || s.type === "remote-candidate") cands[s.id] = s.type[0] + ":" + s.candidateType + ":" + s.address + ":" + s.port + ":" + s.protocol; }); all.forEach(s => { if (s.type === "candidate-pair") pairs.push(s.state + " " + cands[s.localCandidateId] + " -> " + cands[s.remoteCandidateId]); }); all.forEach(s => { if (s.type === "transport") pairs.push("transport dtls=" + s.dtlsState + " ice=" + s.iceState); });
   return { receivers: out, senders, bindings: Object.fromEntries(window.bindings), conn: pc.connectionState, ice: pc.iceConnectionState, sent, pairs,
@@ -130,7 +131,7 @@ eventLoop(async e => {
 let mic = null;
 window.e2ee = {
   async join(channel = 1) {
-    const media = await startChannelMedia({ tabID: "tab", channelID: channel, roster: state.clients, onError: err => console.log("media error " + err) });
+    const media = await startChannelMedia({ hardwareVideoRequired: false, tabID: "tab", channelID: channel, roster: state.clients, onError: err => console.log("media error " + err) });
     const pc = media.protectPeer(new RTCPeerConnection(media.peerConfig()));
     state.pc = pc;
     pc.onicecandidate = ev => { if (ev.candidate) post("/candidate", { ID, Candidate: ev.candidate.candidate, Mid: ev.candidate.sdpMid || "", Index: ev.candidate.sdpMLineIndex || 0 }); };
@@ -151,6 +152,7 @@ window.e2ee = {
     const { video, audio } = fakeScreen();
     const stream = new MediaStream([video, audio]);
     state.shareVideoTransceiver = state.pc.addTransceiver(video, { direction: "sendonly", streams: [stream] });
+    if (FORCE_CODEC) (await import("/src/video-codecs.js")).preferPublicationCodec(state.shareVideoTransceiver, FORCE_CODEC);
     state.shareAudioSender = state.pc.addTransceiver(audio, { direction: "sendonly", streams: [stream] }).sender;
     await renegotiate(state.pc, 1);
     await post("/publish", { ID, Slot: "screen", Active: true });
@@ -245,14 +247,45 @@ const call = (id, fn, ...args) => pages[id].evaluate(([fn, args]) => window.e2ee
 const report = id => call(id, "report");
 const frames = async (viewer, pid) => (await report(viewer)).receivers[pid]?.frames || 0;
 async function growing(viewer, pid, label, { min = 20, video = false } = {}) {
-    const start = await frames(viewer, pid);
+    const initial = (await report(viewer)).receivers[pid];
+    const start = initial?.frames || 0, decoded = initial?.decoded || 0;
     return poll(label, async () => {
         const r = (await report(viewer)).receivers[pid];
-        return { ok: !!r && r.frames - start >= min && (!video || r.decoded > 0), r };
+        return { ok: !!r && r.frames - start >= min && (!video || r.decoded > decoded), r };
     }, { timeout: 40000 });
 }
 
 try {
+    if (process.env.NOXA_E2EE_TEST_CODEC) {
+      // Exercise the real H264 publication path, not a prototype override of
+      // unrelated camera codecs or receive-only transceivers.
+      await open("A", "desktop", "script");await open("B", "desktop", "streams");
+      await call("A","join");await call("B","join");await call("A","screen");
+      await api("/watch",{ID:"B",Publisher:"A",Slot:"screen"});
+      await growing("B","A|screen","H264 decrypts and decodes through SFU",{video:true,min:30});
+      const epoch=await call("A","epoch");
+      await open("C","pwa","script");await call("C","join");
+      await api("/watch",{ID:"C",Publisher:"A",Slot:"screen"});
+      await growing("C","A|screen","H264 reaches joining viewer",{video:true,min:30});
+      await growing("B","A|screen","existing viewer survives rekey",{video:true,min:20});
+      const controls=(await api("/controls")).filter(c=>c.from==="dev-A" && c.to==="dev-C");
+      if(!controls.length || controls.some(c=>c.epoch<=epoch))throw new Error("joiner received old epoch");
+      const upload=(await report("A")).senders["self|screen"];
+      if(upload.encodings!==1 || upload.sources.length!==1)throw new Error("more than one screen upload: "+JSON.stringify(upload));
+      for(const id of ["B","C"]){const r=(await report(id)).receivers["A|screen"];if(r.codec.toLowerCase()!=="video/h264")throw new Error("wrong H264 test codec "+r.codec);}
+      await api("/hide",{ID:"A",Hide:"C"});
+      await poll("removal rekey",async()=>({ok:(await call("A","status")).recipients===1 && (await call("A","epoch"))>controls.at(-1).epoch}));
+      const removalEpoch=await call("A","epoch");
+      await new Promise(r=>setTimeout(r,4000));const before=(await report("C")).receivers["A|screen"];
+      await growing("B","A|screen","remaining viewer keeps decoding",{video:true,min:30});
+      const after=(await report("C")).receivers["A|screen"];
+      const lateToC=(await api("/controls")).some(c=>c.from==="dev-A" && c.to==="dev-C" && c.epoch>=removalEpoch);
+      if(after.frames!==before.frames || after.bytes<=before.bytes || lateToC)throw new Error("removed viewer proof failed "+JSON.stringify({before,after,lateToC}));
+      for(const id of ["A","B","C"]){const audit=await call(id,"audit");if(audit.violations.length)throw new Error("unprotected receiver");}
+      log("H264: two viewers, one upload; join/removal rekey and both transform APIs passed",JSON.stringify(upload));
+      if(pageErrors.length)throw new Error(pageErrors.join("; "));
+      log("E2EE SCENARIO PASSED");await browser.close();await vite.close();process.exit(0);
+    }
     // 0. A runtime without encoded transforms never creates a peer or offers.
     await open("X", "pwa", "none");
     const refused = await call("X", "tryJoin");
@@ -310,15 +343,20 @@ try {
     // 3. A device removed from A's membership but still served by the SFU
     // cannot decrypt A's new epoch; B keeps hearing A.
     const hideAt = Date.now();
+    const beforeRemovalEpoch = await call("A", "epoch");
     await api("/hide", { ID: "A", Hide: "C" });
-    await poll("A rekeys without C", async () => ({ ok: (await call("A", "epoch")) > (toC.at(-1)?.epoch || 0) && (await call("A", "status")).recipients === 1 }));
+    await poll("A rekeys without C", async () => ({ ok: (await call("A", "epoch")) > beforeRemovalEpoch && (await call("A", "status")).recipients === 1 }));
+    const removedEpoch = await call("A", "epoch");
     await new Promise(r => setTimeout(r, 4000));
     const cut = await report("C");
     await new Promise(r => setTimeout(r, 3000));
     const after = await report("C");
     const gained = (after.receivers["A|mic"]?.frames || 0) - (cut.receivers["A|mic"]?.frames || 0);
     const nokey = (after.receivers["A|mic"]?.dropped?.nokey || 0) - (cut.receivers["A|mic"]?.dropped?.nokey || 0);
-    const lateToC = (await api("/controls")).filter(c => c.to === "dev-C" && c.from === "dev-A" && c.epoch > (toC.at(-1)?.epoch || 0));
+    // A concurrently completed join epoch may postdate the earlier
+    // control snapshot. Only the removal epoch and its successors must
+    // exclude C; the decode/byte checks also prove the actual cutoff.
+    const lateToC = (await api("/controls")).filter(c => c.to === "dev-C" && c.from === "dev-A" && c.epoch >= removedEpoch);
     const bytesGained = (after.receivers["A|mic"]?.bytes || 0) - (cut.receivers["A|mic"]?.bytes || 0);
     // The SFU still delivers A's packets to C (bytes grow), but without the
     // new key not one frame decrypts: the media is really encrypted.

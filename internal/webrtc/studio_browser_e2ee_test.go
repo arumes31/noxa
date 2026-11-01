@@ -87,7 +87,7 @@ func TestBrowserStudioOutputThroughSFU(t *testing.T) {
 	}
 	for _, answer := range h.answers {
 		lower := strings.ToLower(answer)
-		if strings.Contains(lower, "h264/") || strings.Contains(lower, "h265/") || strings.Contains(lower, "vp9/") || strings.Contains(lower, "av1/") {
+		if strings.Contains(lower, "h265/") || strings.Contains(lower, "vp9/") || strings.Contains(lower, "av1/") {
 			t.Fatalf("SFU answered an unproven codec while media is encrypted:\n%s", answer)
 		}
 	}

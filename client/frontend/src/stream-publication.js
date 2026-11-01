@@ -2,6 +2,7 @@ import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
 import { t } from "./i18n.js";
 import { hevcReadmissionDelay } from "./video-hevc.js";
 import { publicationCodecSupport, publicationCodecQueryKey } from "./video-codecs.js";
+import { MEDIA_E2EE_CODEC_VERSION } from "./media-e2ee.js";
 import { channelMedia } from "./channel-media.js";
 
 const V = () => window.__noxa;
@@ -25,11 +26,11 @@ export async function preparePublicationUpload(slot, track, onChange) {
     const scope = captureMediaScope(), pc = V().state.pc;
     const supported = await window.go.main.App.SupportsStreamSourceQualityForTab?.(scope.tabID) || false;
     const codecSupport = supported && await window.go.main.App.SupportsStreamCodecForTab?.(scope.tabID) || false;
-    // Encrypted channel media publishes VP8 only (the proven encrypted codec
-    // through the SFU); H.264/HEVC are neither probed nor offered.
+    // H.264 uses the authenticated NAL envelope through the encrypted SFU.
+    // HEVC is still excluded until its encrypted admission path is validated.
     const encrypted = !!channelMedia();
     const hevc = !encrypted && codecSupport && await window.go.main.App.SupportsStreamHEVCForTab?.(scope.tabID) === true;
-    const probe = codecSupport ? (encrypted ? { codecs: ["vp8"], status: "unsupported", key: "e2ee-vp8" } : await publicationCodecSupport(track, hevc)) : null;
+    const probe = codecSupport ? await publicationCodecSupport(track, hevc) : null;
     const codecs = probe?.codecs;
     const refreshSupported = !encrypted && codecSupport && await supportsCodecRefresh(scope.tabID);
     if (!mediaScopeIsCurrent(scope) || V().state.pc !== pc || track.readyState === "ended") return false;
@@ -46,6 +47,7 @@ function currentUpload(slot, track) {
 }
 
 function applyUpload(upload, slot, demandOnly = false) {
+    demandOnly = demandOnly || upload.active === false;
     if (upload.applying) {
         if (demandOnly) upload.demandOnlyPending = true;
         return upload.applying;
@@ -201,6 +203,13 @@ export function reconcilePublicationUploads(snapshot, streams) {
             stream.slot === publication.slot && stream.generation === generation);
         retryCapabilities(publication, upload);
         if (typeof own?.upload_active !== "boolean") continue;
+        // No viewers: pause the existing encoding without renegotiating a
+        // catalog codec change. Adopt the selected codec when demand returns.
+        if (!own.upload_active) {
+            upload.active = false;
+            if (upload.applied !== false) void applyUpload(upload, publication.slot, true).catch(() => {});
+            continue;
+        }
         if (upload.hevc && String(own.codec_revision) !== String(upload.codecRevision)) {
             // Demand is authoritative for this exact generation even while its
             // codec replacement is pending. Never adopt the older codec here.
@@ -228,6 +237,7 @@ export function isCurrentPublication(data) {
 export function streamRequest(scope, body) {
     return window.go.main.App.VideoStreamControlForTab(scope.tabID, {
         publisher_id: "", slot: "", generation: "0", revision: "0", session: "0", active: false, ...body,
+        ...(channelMedia() ? { encrypted_codecs: MEDIA_E2EE_CODEC_VERSION } : {}),
     });
 }
 

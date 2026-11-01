@@ -10368,8 +10368,37 @@ test("does not construct stale attachment data URLs after channel or view change
     });
 });
 
+test("a channel move cleans old capture even while voice transport has failed", async ({page}) => {
+    const result=await page.evaluate(async()=>{
+        const v=window.__noxa, video=await import("/src/stream-controls.js");
+        v.state.myChannelID=42;
+        const pc=new RTCPeerConnection();v.state.pc=pc;
+        const camera=document.createElement("canvas").captureStream(1);
+        const share=document.createElement("canvas").captureStream(1);
+        const audio=new AudioContext(), mic=audio.createMediaStreamDestination().stream.getAudioTracks()[0];
+        v.state.localStream=new MediaStream([mic,...camera.getVideoTracks()]);
+        v.state.shareStream=share;v.state.screenSharing=true;
+        video.startStreamSession(pc,()=>{},()=>{});
+        Object.defineProperty(pc,"connectionState",{get:()=>"failed"});
+        v.state.myChannelID=43;
+        const connected=await v.ensureVoiceForChannel();
+        const result={connected,camera:camera.getVideoTracks()[0].readyState,share:share.getVideoTracks()[0].readyState,
+            microphone:mic.readyState,sharing:v.state.screenSharing,shareCleared:v.state.shareStream===null,retainedPeer:v.state.pc===pc};
+        v.resetVoiceSession();await audio.close();return result;
+    });
+    expect(result).toEqual({connected:false,camera:"ended",share:"ended",microphone:"live",sharing:false,shareCleared:true,retainedPeer:true});
+});
+
 test("contains disconnect and ICE-candidate rejections and reports ICE exhaustion once per outage", async ({ page }) => {
+    test.setTimeout(60000);
     await page.evaluate(async () => {
+        window.__mediaStarts = 0;
+        (await import("/src/channel-media.js")).useChannelMediaFactory(() => {window.__mediaStarts++;return window.__standInMedia();});
+        const originalApp=window.go.main.App;
+        window.go.main.App=new Proxy(originalApp,{get(target,key){
+            if(key==="ChannelOfferMockForTab")return async(...args)=>{await target[key](...args);return "ice-answer";};
+            return target[key];
+        }});
         window.__unhandled = [];
         window.addEventListener("unhandledrejection", (event) => window.__unhandled.push(String(event.reason)));
         window.__noxa.state.settings.notify_connection = true;
@@ -10430,9 +10459,9 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
             }
             getSenders() { return this.senders; }
             getTransceivers() { return this.transceivers; }
-            async createOffer() { return { type: "offer", sdp: "ice-test" }; }
-            async setLocalDescription() {}
-            async setRemoteDescription() {}
+            async createOffer() { this.offered=true;return { type: "offer", sdp: "ice-test" }; }
+            async setLocalDescription(description) { this.localSet=description; }
+            async setRemoteDescription(description) { this.answerSet=description; }
             close() { this.iceConnectionState = "closed"; }
         }
         window.RTCPeerConnection = FakePeerConnection;
@@ -10466,17 +10495,34 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
         for (let i = 0; i < 4; i++) await runNextICETimer();
         window.__terminalToastsBeforeRecovery = [...document.querySelectorAll("#toasts .toast")]
             .filter((toast) => toast.textContent.includes("Voice connection unstable")).length;
+        await window.__noxa.ensureVoiceForChannel();
         pc.iceConnectionState = "connected";
         pc.oniceconnectionstatechange();
+        window.__inPlaceVoiceStatus=document.querySelector("#voice-status").dataset.state;
         pc.iceConnectionState = "failed";
         pc.oniceconnectionstatechange();
         for (let i = 0; i < 4; i++) await runNextICETimer();
-        window.__iceRetryDelays = delays;
+        window.__iceRetryDelays = delays.slice();
+        const iceReads = window.__calls.GetICEServersForTab || 0;
+        state.muted = true; state.deafened = true;
+        await runNextICETimer();
+        window.__transportReplacement = {
+            offer: state.pc.localSet, answer: state.pc.answerSet,
+            negotiated: !!state.pc.offered && !!state.pc.localSet && !!state.pc.answerSet,
+            encrypted: (await import("/src/channel-media.js")).channelMedia()?.status().state === "encrypted",
+            secureOffers: window.__secureOffers.length,
+            replaced: state.pc !== pc,
+            oldClosed: pc.iceConnectionState === "closed",
+            freshICEReads: (window.__calls.GetICEServersForTab || 0) - iceReads,
+            muted: state.muted, deafened: state.deafened, mediaStarts: window.__mediaStarts,
+        };
     });
     expect(await page.evaluate(() => window.__calls.DisconnectTab)).toBe(1);
     expect(await page.evaluate(() => window.__calls.SendICECandidateForTab)).toBe(1);
     expect(await page.evaluate(() => window.__oldPeerIsolation)).toEqual({ pendingBeforeOldEvents: 1, pendingAfterOldEvents: 1 });
-    expect(await page.evaluate(() => window.__iceRetryDelays)).toEqual([1000, 2000, 5000, 15000, 1000, 2000, 5000, 15000]);
+    expect(await page.evaluate(() => window.__iceRetryDelays)).toEqual([1000, 2000, 5000, 15000, 1000, 1000, 2000, 5000, 15000, 1000]);
+    expect(await page.evaluate(() => window.__transportReplacement)).toEqual({offer:{type:"offer",sdp:"ice-test"},answer:{type:"answer",sdp:"ice-answer"},negotiated:true, encrypted:true, secureOffers:11, replaced: true, oldClosed: true, freshICEReads: 1, muted: true, deafened: true, mediaStarts: 2});
+    expect(await page.evaluate(() => window.__inPlaceVoiceStatus)).toBe("connected");
     expect(await page.evaluate(() => window.__terminalToastsBeforeRecovery)).toBe(1);
     expect(await page.locator("#toasts .toast", { hasText: "Voice connection unstable" }).count()).toBe(2);
     expect(await page.locator("#toasts .toast", { hasText: "disconnect failed" }).count()).toBe(1);
@@ -13008,4 +13054,77 @@ test("unsupported server, keyless guest and missing device refuse voice with a l
         return out;
     });
     for (const reason of ["server_outdated", "keyless_guest", "no_device"]) expect(results[reason], reason).toEqual({ started: false, shown: true, peer: false });
+});
+
+
+for(const stage of ["gate","offer"])for(const completion of ["retained","adopted"])
+ test(`late ${stage} startup cannot stop ${completion} encrypted media`,async({page})=>{
+    await installMediaUpdateFixture(page);
+    await page.evaluate(async stage=>{
+        const v=window.__noxa,cm=await import("/src/channel-media.js");
+        v.resetVoiceSession();
+        const f=window.__mediaUpdate;f.mediaStops=0;f.mediaReleases=0;
+        cm.useChannelMediaFactory(()=>{
+            const media=window.__standInMedia();f.sharedMedia=media;
+            media.stop=()=>{f.mediaStops++;media.active=false;};
+            media.releasePeer=async()=>{f.mediaReleases++;};
+            return media;
+        });
+        window.RTCPeerConnection=window.__limitPeer;
+        f.sourceAudio=new AudioContext();
+        navigator.mediaDevices.getUserMedia=async()=>f.sourceAudio.createMediaStreamDestination().stream;
+        if(stage==="gate"){
+            const original=AudioContext.prototype.resume;
+            AudioContext.prototype.resume=function(){
+                AudioContext.prototype.resume=original;
+                return new Promise(resolve=>{f.finishOldStage=resolve;});
+            };
+        }else f.holdOffer=true;
+        f.firstStart=v.ensureVoiceForChannel();
+    },stage);
+    await expect.poll(()=>page.evaluate(stage=>typeof window.__mediaUpdate[stage==="gate"?"finishOldStage":"finishOffer"],stage)).toBe("function");
+    await page.evaluate(stage=>{
+        const f=window.__mediaUpdate,v=window.__noxa;
+        f.finishRetired=stage==="gate"?f.finishOldStage:f.finishOffer;
+        f.oldPeer=v.state.pc;f.oldCloses=0;f.oldRollbacks=0;
+        const describe=f.oldPeer.setLocalDescription.bind(f.oldPeer);
+        f.oldPeer.setLocalDescription=description=>{if(description.type==="rollback")f.oldRollbacks++;return describe(description);};
+        const close=f.oldPeer.close.bind(f.oldPeer);
+        f.oldPeer.close=()=>{f.oldCloses++;close();};
+        v.resetVoiceSession({retainMedia:true});f.holdOffer=false;
+    },stage);
+    if(completion==="retained"){
+        await page.evaluate(()=>window.__mediaUpdate.finishRetired());
+        await expect.poll(()=>page.evaluate(stage=>stage==="gate"?window.__mediaUpdate.oldCloses:window.__mediaUpdate.oldRollbacks,stage)).toBe(stage==="gate"?2:1);
+    }
+    await page.evaluate(async()=>{await window.__noxa.ensureVoiceForChannel();window.__mediaUpdate.newPeer=window.__noxa.state.pc;});
+    if(completion==="adopted"){
+        await page.evaluate(()=>window.__mediaUpdate.finishRetired());
+        await expect.poll(()=>page.evaluate(stage=>stage==="gate"?window.__mediaUpdate.oldCloses:window.__mediaUpdate.oldRollbacks,stage)).toBe(stage==="gate"?2:1);
+    }
+    await page.evaluate(async()=>{
+        const f=window.__mediaUpdate,v=window.__noxa,cm=await import("/src/channel-media.js");
+        f.ownershipResult={mediaActive:f.sharedMedia.active,sameMedia:cm.channelMedia()===f.sharedMedia,
+            mediaStops:f.mediaStops,mediaReleases:f.mediaReleases,newPeer:f.newPeer!==f.oldPeer,peerCurrent:v.state.pc===f.newPeer};
+        v.resetVoiceSession();await f.sourceAudio.close();
+    });
+    expect(await page.evaluate(()=>window.__mediaUpdate.ownershipResult)).toEqual({mediaActive:true,sameMedia:true,mediaStops:0,mediaReleases:1,newPeer:true,peerCurrent:true});
+ });
+
+
+test("a connected transport event clears the in-place recovery label",async({page})=>{
+    await installMediaUpdateFixture(page);
+    const result=await page.evaluate(async()=>{
+        const v=window.__noxa;v.resetVoiceSession();window.RTCPeerConnection=window.__limitPeer;
+        navigator.mediaDevices.getUserMedia=async()=>new MediaStream();
+        await v.ensureVoiceForChannel();const pc=v.state.pc;
+        pc.connectionState="failed";pc.iceConnectionState="failed";
+        await v.ensureVoiceForChannel();
+        const failed=document.querySelector("#voice-status").dataset.state;
+        pc.connectionState="connected";pc.iceConnectionState="connected";
+        pc.dispatchEvent(new Event("connectionstatechange"));
+        const restored=document.querySelector("#voice-status").dataset.state;
+        v.resetVoiceSession();return{failed,restored};
+    });
+    expect(result).toEqual({failed:"connecting",restored:"connected"});
 });

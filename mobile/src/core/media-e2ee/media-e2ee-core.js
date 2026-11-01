@@ -15,16 +15,19 @@
 //     reassigned to another publisher) drops every frame tagged with the old
 //     binding and only resumes after the new keys are installed (fence);
 //   - encode output must be exactly the library's encrypted frame (length
-//     +30, trailer, active key slot, Opus/VP8 only); anything else is dropped,
+//     +30 canonical bytes, trailer, active key slot, Opus/VP8/H.264); anything else is dropped,
 //     so a disabled/keyless/unknown state can never emit plaintext;
 //   - decode input must carry the encrypted trailer of a live epoch, and the
 //     output must be exactly the authenticated plaintext (length -30) before
 //     the replay window accepts it.
 //
 // The page talks to this module only through {op: ...} messages.
+import { hardwareProbeFrame } from "./hardware-probe-frame.js";
+import { mediaFrameEnvelope } from "./media-frame-envelope.js";
 import { MediaReplayWindow } from "./media-replay.js";
 
 export const MEDIA_E2EE_VERSION = "noxa-media-e2ee-v1";
+export const MEDIA_E2EE_CODEC_VERSION = "noxa-media-e2ee-h264-v1";
 export const SLOTS = Object.freeze(["mic", "cam", "screen", "screenaudio"]);
 const IV_LENGTH = 12;
 const OVERHEAD = 16 + IV_LENGTH + 2; // GCM tag + IV + trailer
@@ -35,23 +38,24 @@ const MAX_PIDS = 512;
 const MAX_ENDPOINTS = 512;
 const MAX_RETIRED_MARKERS = 4096;
 const FENCE = "noxa-fence";
+export const HARDWARE_PROOF_MS = 1000;
 // 2 x the 5-minute renewal plus grace.
 export const MAX_RECEIVE_EPOCH_AGE = 12 * 60 * 1000;
 const PID_RE = /^[\x21-\x7e]{1,160}$/;
 const ENDPOINT_RE = /^[a-z]+:[A-Za-z0-9_-]{1,64}$/;
 // "replay" is an exact duplicate of an accepted frame; "replay-old" a frame
 // older than the replay window; "replay-full" a full window (or source table).
-const DROP_REASONS = ["unbound", "empty", "plaintext", "nokey", "codec", "stale", "unauthenticated", "replay", "replay-old", "replay-full", "replay-invalid", "unencrypted"];
+const DROP_REASONS = ["unbound", "empty", "plaintext", "nokey", "codec", "stale", "unauthenticated", "replay", "replay-old", "replay-full", "replay-invalid", "unencrypted", "hardware"];
 
 export function validPid(pid) { return typeof pid === "string" && PID_RE.test(pid); }
 export function validEpoch(epoch) { return Number.isSafeInteger(epoch) && epoch > 0; }
 export function validKid(kid) { return Number.isInteger(kid) && kid >= 0 && kid < KEYRING; }
 
-// mimeType policy: Opus and VP8 are the only proven encrypted codecs.
+// Only codecs validated with the maintained frame cipher and SFU are admitted.
 export function codecAllowed(frame, kind) {
     let mime = "";
     try { mime = String(frame.getMetadata?.().mimeType || "").toLowerCase(); } catch { mime = ""; }
-    if (kind === "video") return mime === "video/vp8";
+    if (kind === "video") return mime === "video/vp8" || mime === "video/h264";
     return mime === "" || mime === "audio/opus";
 }
 
@@ -81,6 +85,11 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
     const stats = { encrypted: 0, decrypted: 0, cryptorErrors: 0, dropped: Object.fromEntries(DROP_REASONS.map(r => [r, 0])) };
     const pids = new Map();      // pid -> {epochs: Map<epoch,{kid,key,fp}>, active, retired}
     const retiredMarks = new Map(); // pid -> highest retired epoch, survives forget
+    // LiveKit removeTransform unassigns a cryptor but retains it. Reuse a
+    // bounded set of library identities/track IDs after aborting closed pipes,
+    // rather than create a new retained cryptor/key handler on every reconnect.
+    const freeLibrarySlots = [];
+    let librarySlots = 0;
     const endpoints = new Map(); // id -> endpoint
     const windows = new Map();   // pid#epoch -> MediaReplayWindow
     const pendingBinds = new Map(); // endpoint id -> pid, bound before its rtctransform event
@@ -136,16 +145,23 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
         return installed;
     }
 
-    function attach(id, operation, kind, readable, writable, transformer = null) {
+    function attach(id, operation, kind, readable, writable, transformer = null, hardwareRequired = false) {
         if (typeof id !== "string" || !ENDPOINT_RE.test(id) || (operation !== "encode" && operation !== "decode") || (kind !== "audio" && kind !== "video")) throw new Error("invalid media endpoint");
         if (endpoints.has(id)) throw new Error("media endpoint already attached");
         if (endpoints.size >= MAX_ENDPOINTS) throw new Error("media endpoint capacity reached");
-        const ep = { id, operation, kind, lk: `ep:${id}`, pid: "", gen: 0, ready: false, kids: new Map(), dropped: {}, frames: 0, authenticated: false, transformer };
+        const matching = freeLibrarySlots.findIndex(slot => slot.operation === operation && slot.kind === kind);
+        // A fenced idle cryptor can also change operation/kind: setupTransform
+        // replaces its pipeline and codec. Never exhaust capacity on idle slots.
+        const available = matching >= 0 ? matching : freeLibrarySlots.length ? 0 : -1;
+        const libraryID = available >= 0 ? freeLibrarySlots.splice(available, 1)[0].id : (librarySlots < MAX_ENDPOINTS ? `slot:${++librarySlots}` : "");
+        if (!libraryID) throw new Error("media cryptor capacity reached");
+        const abort = new AbortController();
+        const ep = { id, operation, kind, libraryID, abort, lk: `ep:${libraryID}`, pid: "", gen: 0, ready: false, kids: new Map(), dropped: {}, frames: 0, authenticated: false, transformer, hardwareRequired, hardwareUntil: 0, hardwareCheckAt: 0, hardwareProbed: false, hardwareProven: false, needsKeyframe: false, sourceTag: "" };
         endpoints.set(id, ep);
         if (pendingBinds.has(id)) {
-            const pid = pendingBinds.get(id);
+            const binding = pendingBinds.get(id);
             pendingBinds.delete(id);
-            serial(() => ops.bind({ id, pid })).catch(error => send({ event: "attach-failed", id, error: String(error?.message || error) }));
+            serial(() => ops.bind({ id, ...binding })).catch(error => send({ event: "attach-failed", id, error: String(error?.message || error) }));
         }
         lk("enable", { participantIdentity: ep.lk, enabled: true });
         const inputs = new WeakMap();
@@ -157,12 +173,33 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                 if (!codecAllowed(frame, ep.kind)) return drop(ep, "codec");
                 if (ep.operation === "encode") {
                     if (!ep.kids.size || !pids.get(ep.pid)?.active) return drop(ep, "nokey");
-                    inputs.set(frame, { gen: ep.gen, pid: ep.pid, n });
+                    // Frame-driven checks avoid background-tab timer throttling.
+                    // The page still verifies the actual encoder; a missed proof
+                    // expires closed even if the page is busy or suspended.
+                    if (ep.hardwareRequired && ep.pid === "self|screen" && performance.now() >= ep.hardwareCheckAt) {
+                        ep.hardwareCheckAt = performance.now() + 300;
+                        send({ event: "hardware-check", id: ep.id });
+                    }
+                    if (ep.hardwareRequired && ep.pid === "self|screen" && performance.now() >= ep.hardwareUntil) {
+                        if (ep.hardwareProbed || ep.hardwareProven) return drop(ep, "hardware");
+                        const probe = hardwareProbeFrame(frame);
+                        if (!probe) return drop(ep, "hardware");
+                        frame.data = probe.buffer;
+                        ep.hardwareProbed = true;
+                    } else if (ep.needsKeyframe) {
+                        if (frame.type !== "key") return drop(ep, "hardware");
+                        ep.needsKeyframe = false;
+                    }
+                    const envelope = mediaFrameEnvelope(frame);
+                    if (!envelope) return drop(ep, "codec");
+                    inputs.set(frame, { gen: ep.gen, pid: ep.pid, n: envelope.size });
                     return controller.enqueue(frame);
                 }
-                const bytes = new Uint8Array(frame.data);
-                if (n < MIN_ENCRYPTED || bytes[n - 2] !== IV_LENGTH) return drop(ep, "plaintext");
-                const kid = bytes[n - 1];
+                const envelope = mediaFrameEnvelope(frame, true);
+                if (!envelope) return drop(ep, "codec");
+                const bytes = envelope.tail;
+                if (bytes.length < MIN_ENCRYPTED || bytes[bytes.length - 2] !== IV_LENGTH) return drop(ep, "plaintext");
+                const kid = bytes[bytes.length - 1];
                 const epoch = ep.kids.get(kid);
                 if (!epoch || !liveEpoch(ep.pid, epoch)) return drop(ep, "nokey");
                 // A receive epoch older than MAX_RECEIVE_EPOCH_AGE is stale: keys
@@ -170,7 +207,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                 // never lives near half the RTP timestamp range.
                 // Monotonic clock: a wall-clock step never expires keys early.
                 if (performance.now() - pids.get(ep.pid).epochs.get(epoch).at > MAX_RECEIVE_EPOCH_AGE) return drop(ep, "stale");
-                inputs.set(frame, { gen: ep.gen, pid: ep.pid, epoch, n, iv: bytes.slice(n - 2 - IV_LENGTH, n - 2) });
+                inputs.set(frame, { gen: ep.gen, pid: ep.pid, epoch, n: envelope.size, iv: bytes.slice(bytes.length - 2 - IV_LENGTH, bytes.length - 2) });
                 controller.enqueue(frame);
             },
         });
@@ -178,10 +215,11 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
             transform(frame, controller) {
                 const input = inputs.get(frame); inputs.delete(frame);
                 if (!input || input.gen !== ep.gen || input.pid !== ep.pid || !ep.ready) return drop(ep, "stale");
-                const n = frame.data?.byteLength || 0;
                 if (ep.operation === "encode") {
-                    const bytes = new Uint8Array(frame.data);
-                    if (n !== input.n + OVERHEAD || bytes[n - 2] !== IV_LENGTH || !liveEpoch(ep.pid, ep.kids.get(bytes[n - 1]))) return drop(ep, "unencrypted");
+                    const envelope = mediaFrameEnvelope(frame, true);
+                    if (!envelope) return drop(ep, "unencrypted");
+                    const bytes = envelope.tail;
+                    if (envelope.size !== input.n + OVERHEAD || bytes[bytes.length - 2] !== IV_LENGTH || !liveEpoch(ep.pid, ep.kids.get(bytes[bytes.length - 1]))) return drop(ep, "unencrypted");
                     stats.encrypted++; ep.frames++;
                     return controller.enqueue(frame);
                 }
@@ -189,7 +227,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                 // The library forwards a frame unchanged when it does not
                 // decrypt it; only an authenticated frame shrinks by exactly
                 // the tag, IV and trailer.
-                if (n !== input.n - OVERHEAD) return drop(ep, "unauthenticated");
+                if (mediaFrameEnvelope(frame)?.size !== input.n - OVERHEAD) return drop(ep, "unauthenticated");
                 const key = `${input.pid}#${input.epoch}`;
                 let window = windows.get(key);
                 if (!window) { window = new MediaReplayWindow(); windows.set(key, window); }
@@ -208,9 +246,9 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                 controller.enqueue(frame);
             },
         });
-        void post.readable.pipeTo(writable).catch(() => {});
-        lk(operation, { participantIdentity: ep.lk, trackId: id, codec: kind === "video" ? "vp8" : undefined, hasPacketTrailer: false,
-            readableStream: readable.pipeThrough(pre), writableStream: post.writable });
+        ep.outputClosed = post.readable.pipeTo(writable, {signal:abort.signal}).catch(() => {});
+        lk(operation, { participantIdentity: ep.lk, trackId: libraryID, codec: kind === "video" ? "vp8" : undefined, hasPacketTrailer: false,
+            readableStream: readable.pipeThrough(pre, {signal:abort.signal}), writableStream: post.writable });
         return ep;
     }
 
@@ -223,24 +261,59 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
             }
             return { version: MEDIA_E2EE_VERSION };
         },
-        attach({ id, operation, kind, readable, writable }) { attach(id, operation, kind, readable, writable); return {}; },
-        async bind({ id, pid }) {
-            if (typeof id !== "string" || !ENDPOINT_RE.test(id) || (pid !== "" && !validPid(pid))) throw new Error("invalid media binding");
+        attach({ id, operation, kind, readable, writable, hardwareRequired = false }) { attach(id, operation, kind, readable, writable, null, hardwareRequired); return {}; },
+        async detach({ id }) {
+            if (typeof id !== "string" || !ENDPOINT_RE.test(id)) throw new Error("invalid media endpoint");
+            pendingBinds.delete(id);
+            const ep = endpoints.get(id);
+            if (!ep) return {};
+            ep.ready = false; ep.gen++; ep.pid = ""; ep.kids.clear();
+            ep.hardwareUntil = 0;
+            ep.abort.abort(new DOMException("noXa endpoint detached", "AbortError"));
+            await ep.outputClosed;
+            // Scrub the detached library endpoint's key ring. Publication key
+            // material and replay windows stay scoped to this voice session.
+            const replacement = await junk();
+            await Promise.all(Array.from({length:KEYRING}, (_,kid) => lk("setKey", {participantIdentity:ep.lk,key:replacement,keyIndex:kid,updateCurrentKeyIndex:false})));
+            lk("removeTransform", {trackId:ep.libraryID,participantIdentity:ep.lk});
+            endpoints.delete(id);
+            await fence();
+            freeLibrarySlots.push({id:ep.libraryID,operation:ep.operation,kind:ep.kind});
+            return {};
+        },
+        hardwareProof({ id, pid, sourceTag = "", enabled }) {
+            const ep = endpoints.get(id);
+            if (!ep || ep.operation !== "encode" || ep.kind !== "video" || typeof enabled !== "boolean") throw new Error("invalid hardware proof");
+            if (pid !== ep.pid || sourceTag !== ep.sourceTag) return { superseded: true };
+            const wasActive = ep.hardwareUntil > performance.now();
+            ep.hardwareUntil = enabled ? performance.now() + HARDWARE_PROOF_MS : 0;
+            if (enabled) {
+                ep.hardwareProven = true;
+                if (!wasActive) {
+                    ep.needsKeyframe = true;
+                    try { ep.transformer?.generateKeyFrame?.()?.catch?.(() => {}); } catch { /* legacy API uses the owner hook */ }
+                    send({ event: "hardware-ready", id: ep.id, pid: ep.pid });
+                }
+            }
+            return {};
+        },
+        async bind({ id, pid, sourceTag = "" }) {
+            if (typeof id !== "string" || !ENDPOINT_RE.test(id) || (pid !== "" && !validPid(pid)) || (sourceTag !== "" && !validPid(sourceTag))) throw new Error("invalid media binding");
             const ep = endpoints.get(id);
             if (!ep) {
                 // RTCRtpScriptTransform attaches on the worker's rtctransform
                 // event, which may arrive after this message: keep the binding
                 // and apply it the moment the endpoint attaches.
                 if (!pendingBinds.has(id) && pendingBinds.size >= MAX_ENDPOINTS) throw new Error("media endpoint capacity reached");
-                pendingBinds.set(id, pid);
+                pendingBinds.set(id, { pid, sourceTag });
                 return { pending: true };
             }
             // A repeated bind reports the binding's state, so a page that lost
             // the previous reply (timeout) adopts it instead of waiting for a
             // first-frame event that was already sent (review P3-1).
-            if (ep.pid === pid && ep.ready) return { gen: ep.gen, authenticated: ep.authenticated };
+            if (ep.pid === pid && ep.ready && ep.sourceTag === sourceTag) return { gen: ep.gen, authenticated: ep.authenticated };
             const changed = ep.pid !== pid;
-            ep.ready = false; ep.gen++; ep.pid = pid; ep.authenticated = false;
+            ep.ready = false; ep.gen++; ep.hardwareUntil = 0; ep.hardwareProbed = false; ep.hardwareProven = false; ep.needsKeyframe = false; ep.sourceTag = sourceTag; ep.pid = pid; ep.authenticated = false;
             const gen = ep.gen;
             // Key slots are only meaningful within one publication: on any pid
             // change every slot is scrubbed, so a colliding (kid, epoch) of the
@@ -327,8 +400,8 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
         },
         stats({ id } = {}) {
             const ep = id ? endpoints.get(id) : null;
-            return { ...structuredClone(stats), endpoint: ep ? { pid: ep.pid, ready: ep.ready, frames: ep.frames, dropped: { ...ep.dropped }, kids: [...ep.kids.entries()] } : undefined,
-                pids: pids.size, endpoints: endpoints.size };
+            return { ...structuredClone(stats), endpoint: ep ? { pid: ep.pid, ready: ep.ready, activeEpoch: pids.get(ep.pid)?.active || 0, frames: ep.frames, dropped: { ...ep.dropped }, kids: [...ep.kids.entries()] } : undefined,
+                pids: pids.size, endpoints: endpoints.size, librarySlots };
         },
     };
 
@@ -348,8 +421,8 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
     // only the endpoint identity; keys and bindings come via messages.
     scope.onrtctransform = event => {
         const { transformer } = event;
-        const { id, operation, kind } = transformer?.options || {};
-        try { attach(id, operation, kind, transformer.readable, transformer.writable, transformer); }
+        const { id, operation, kind, hardwareRequired = false } = transformer?.options || {};
+        try { attach(id, operation, kind, transformer.readable, transformer.writable, transformer, hardwareRequired); }
         catch (error) { send({ event: "attach-failed", id, error: String(error?.message || error) }); }
     };
     return { stats, endpoints, pids };
