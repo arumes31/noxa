@@ -247,8 +247,9 @@ export class MediaE2EE {
 
     // A transport replacement retains publication keys and replay windows,
     // but a closed peer must no longer own endpoints or hardware proof.
-    releasePeer(pc) {
+    async releasePeer(pc) {
         this.peers.delete(pc);
+        const detached = [];
         for (const tr of pc?.getTransceivers?.() || []) for (const endpoint of [tr.sender, tr.receiver]) {
             const entry = endpoint && this.endpoints.get(endpoint);
             if (!entry) continue;
@@ -256,8 +257,13 @@ export class MediaE2EE {
             this.endpoints.delete(endpoint); this.byId.delete(entry.id); this.bySenderId.delete(entry.id);
             if (endpoint.track) this.byTrack.delete(endpoint.track);
             this.hardwarePollers.delete(entry.id);
-            void this.request("detach", {id:entry.id}).catch(error => this.fail(error));
+            detached.push(entry.id);
         }
+        try {
+            // A large peer can own hundreds of endpoints. Stay well below the
+            // worker request budget, and finish before replacement endpoints attach.
+            for (let i = 0; i < detached.length; i += 8) await Promise.all(detached.slice(i, i + 8).map(id => this.request("detach", {id})));
+        } catch (error) { this.fail(error); throw error; }
     }
 
     // Covers transceivers created by a remote offer before its track event.

@@ -85,6 +85,11 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
     const stats = { encrypted: 0, decrypted: 0, cryptorErrors: 0, dropped: Object.fromEntries(DROP_REASONS.map(r => [r, 0])) };
     const pids = new Map();      // pid -> {epochs: Map<epoch,{kid,key,fp}>, active, retired}
     const retiredMarks = new Map(); // pid -> highest retired epoch, survives forget
+    // LiveKit removeTransform unassigns a cryptor but retains it. Reuse a
+    // bounded set of library identities/track IDs after aborting closed pipes,
+    // rather than create a new retained cryptor/key handler on every reconnect.
+    const freeLibrarySlots = [];
+    let librarySlots = 0;
     const endpoints = new Map(); // id -> endpoint
     const windows = new Map();   // pid#epoch -> MediaReplayWindow
     const pendingBinds = new Map(); // endpoint id -> pid, bound before its rtctransform event
@@ -144,7 +149,14 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
         if (typeof id !== "string" || !ENDPOINT_RE.test(id) || (operation !== "encode" && operation !== "decode") || (kind !== "audio" && kind !== "video")) throw new Error("invalid media endpoint");
         if (endpoints.has(id)) throw new Error("media endpoint already attached");
         if (endpoints.size >= MAX_ENDPOINTS) throw new Error("media endpoint capacity reached");
-        const ep = { id, operation, kind, lk: `ep:${id}`, pid: "", gen: 0, ready: false, kids: new Map(), dropped: {}, frames: 0, authenticated: false, transformer, hardwareRequired, hardwareUntil: 0, hardwareCheckAt: 0, hardwareProbed: false, hardwareProven: false, needsKeyframe: false, sourceTag: "" };
+        const matching = freeLibrarySlots.findIndex(slot => slot.operation === operation && slot.kind === kind);
+        // A fenced idle cryptor can also change operation/kind: setupTransform
+        // replaces its pipeline and codec. Never exhaust capacity on idle slots.
+        const available = matching >= 0 ? matching : freeLibrarySlots.length ? 0 : -1;
+        const libraryID = available >= 0 ? freeLibrarySlots.splice(available, 1)[0].id : (librarySlots < MAX_ENDPOINTS ? `slot:${++librarySlots}` : "");
+        if (!libraryID) throw new Error("media cryptor capacity reached");
+        const abort = new AbortController();
+        const ep = { id, operation, kind, libraryID, abort, lk: `ep:${libraryID}`, pid: "", gen: 0, ready: false, kids: new Map(), dropped: {}, frames: 0, authenticated: false, transformer, hardwareRequired, hardwareUntil: 0, hardwareCheckAt: 0, hardwareProbed: false, hardwareProven: false, needsKeyframe: false, sourceTag: "" };
         endpoints.set(id, ep);
         if (pendingBinds.has(id)) {
             const binding = pendingBinds.get(id);
@@ -234,9 +246,9 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                 controller.enqueue(frame);
             },
         });
-        void post.readable.pipeTo(writable).catch(() => {});
-        lk(operation, { participantIdentity: ep.lk, trackId: id, codec: kind === "video" ? "vp8" : undefined, hasPacketTrailer: false,
-            readableStream: readable.pipeThrough(pre), writableStream: post.writable });
+        ep.outputClosed = post.readable.pipeTo(writable, {signal:abort.signal}).catch(() => {});
+        lk(operation, { participantIdentity: ep.lk, trackId: libraryID, codec: kind === "video" ? "vp8" : undefined, hasPacketTrailer: false,
+            readableStream: readable.pipeThrough(pre, {signal:abort.signal}), writableStream: post.writable });
         return ep;
     }
 
@@ -257,13 +269,16 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
             if (!ep) return {};
             ep.ready = false; ep.gen++; ep.pid = ""; ep.kids.clear();
             ep.hardwareUntil = 0;
+            ep.abort.abort(new DOMException("noXa endpoint detached", "AbortError"));
+            await ep.outputClosed;
             // Scrub the detached library endpoint's key ring. Publication key
             // material and replay windows stay scoped to this voice session.
             const replacement = await junk();
-            for (let kid = 0; kid < KEYRING; kid++) lk("setKey", {participantIdentity:ep.lk,key:replacement,keyIndex:kid,updateCurrentKeyIndex:false});
-            lk("removeTransform", {trackId:id,participantIdentity:ep.lk});
+            await Promise.all(Array.from({length:KEYRING}, (_,kid) => lk("setKey", {participantIdentity:ep.lk,key:replacement,keyIndex:kid,updateCurrentKeyIndex:false})));
+            lk("removeTransform", {trackId:ep.libraryID,participantIdentity:ep.lk});
             endpoints.delete(id);
             await fence();
+            freeLibrarySlots.push({id:ep.libraryID,operation:ep.operation,kind:ep.kind});
             return {};
         },
         hardwareProof({ id, pid, sourceTag = "", enabled }) {
@@ -386,7 +401,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
         stats({ id } = {}) {
             const ep = id ? endpoints.get(id) : null;
             return { ...structuredClone(stats), endpoint: ep ? { pid: ep.pid, ready: ep.ready, activeEpoch: pids.get(ep.pid)?.active || 0, frames: ep.frames, dropped: { ...ep.dropped }, kids: [...ep.kids.entries()] } : undefined,
-                pids: pids.size, endpoints: endpoints.size };
+                pids: pids.size, endpoints: endpoints.size, librarySlots };
         },
     };
 

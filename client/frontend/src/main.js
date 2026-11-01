@@ -2479,8 +2479,11 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         // merely because our DTLS peer changed while membership stayed equal.
         const retained = retainedVoiceMedia;
         media = retained?.scope === voiceMediaScope() && retained.media === channelMedia() ? retained.media : null;
-        if (media) media.setRoster(state.clients);
-        else media = await startChannelMedia({ tabID, channelID: state.myChannelID, roster: state.clients, onError: error => {
+        if (media) {
+            await retained.released;
+            if (!current() || channelMedia() !== media) throw new Error(mediaErrorText(new Error("closed")));
+            media.setRoster(state.clients);
+        } else media = await startChannelMedia({ tabID, channelID: state.myChannelID, roster: state.clients, onError: error => {
             toast(mediaErrorText(error), "warn");
             if (state.pc) resetVoiceSession();
         } });
@@ -2859,7 +2862,9 @@ function teardownVoice({ retainMedia = false } = {}) {
         // Drop old endpoint bindings, preserving the same channel's keys and
         // replay windows. Channel moves, sign-out and server changes still
         // destroy the complete encryption session through normal teardown.
-        media.releasePeer?.(closingPeer);
+        retainedVoiceMedia.released = Promise.resolve(media.releasePeer?.(closingPeer));
+        // Startup awaits this promise; keep synchronous teardown callers safe.
+        void retainedVoiceMedia.released.catch(() => {});
     } else stopChannelMedia();
     state.voiceTabID = "";
     syncTrayVoice();
