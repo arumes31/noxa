@@ -24,7 +24,7 @@ async function poll(label, fn, { timeout = 30000, every = 300 } = {}) {
         try { last = await fn(); if (last?.ok) return last; } catch (error) { last = { error: String(error) }; }
         if (Date.now() > deadline) {
             let diag = "";
-            try { diag = JSON.stringify(Object.fromEntries(await Promise.all(Object.keys(pages).filter(k => k !== "X").map(async k => [k, await report(k)])))).slice(0, 6000); } catch (e) { diag = String(e); }
+            try { diag = JSON.stringify(Object.fromEntries(await Promise.all(Object.keys(pages).filter(k => k !== "X").map(async k => { try { return [k, await report(k)]; } catch (error) { return [k, { error: String(error) }]; } })))).slice(0, 6000); } catch (e) { diag = String(e); }
             diag += " TAP " + JSON.stringify(await api("/tap"));
             throw new Error(`${label}: timed out; last ${JSON.stringify(last)?.slice(0, 1500)}
 ${diag}`);
@@ -84,6 +84,7 @@ window.fakeScreen = () => {
 };
 window.bindings = new Map(); // mid -> [pid history]
 window.metrics = async (pc, binding, stats) => {
+  if (!pc) return { receivers: {}, senders: {}, conn: "closed", ice: "closed" };
   const out = {};
   const inbound = new Map();
   (await pc.getStats()).forEach(s => { if (s.type === "inbound-rtp") inbound.set(s.mid, s); });
@@ -338,6 +339,8 @@ try {
     await growing("C", "A|cam", "joiner C sees A camera", { video: true, min: 10 });
     const toC = (await api("/controls")).filter(c => c.to === "dev-C");
     if (!toC.length || toC.some(c => c.epoch <= epochBefore)) throw new Error(`joiner received an earlier epoch: ${JSON.stringify(toC)} before ${epochBefore}`);
+    await growing("B", "C|mic", "B hears C before the receiver reuse check");
+    const cMicMid = (await report("B")).receivers["C|mic"].mid;
     log("phase 2: joiner received only epochs after", epochBefore);
 
     // 3. A device removed from A's membership but still served by the SFU
@@ -365,26 +368,30 @@ try {
     await growing("B", "A|mic", "B still hears A after the removal rekey");
     log(`phase 3: removed-but-served device decrypted 0 new frames (${nokey} dropped without key) ${Date.now() - hideAt}ms`);
 
-    // 4. C leaves; A reconnects with a fresh session; B decrypts again.
+    // 4. C leaves. Wait until B has answered the removal offer before a
+    // new publisher joins: an in-flight removal cannot supply a reusable MID.
     await call("C", "leave");
     await api("/leave", { ID: "C" });
-    const beforeReconnect = await call("A", "epoch");
-    await call("A", "leave");
-    await call("A", "join");
-    await api("/watch", { ID: "B", Publisher: "A", Slot: "cam" }).catch(() => {});
-    await poll("reconnect starts a newer epoch", async () => ({ ok: (await call("A", "epoch")) > beforeReconnect }));
-    await growing("B", "A|mic", "B hears A after A reconnects");
-    log("phase 4: leave + reconnect re-keyed, media resumed");
+    await poll("C's receiver is available for reuse", async () => ({ ok: (await report("B")).transceivers.some(t => t.mid === cMicMid && t.dir === "inactive") }));
 
-    // 5. Same MID, new publisher: PWA D (script) joins after C left; B's
-    // receivers rebind to D (never outputting C) and decrypt D.
+    // 5. Same MID, new publisher: PWA D (script) takes C's released receiver.
+    // Exercise this before A reconnects, which can legitimately consume the
+    // freed audio MID first and leave D a previously unused receiver instead.
     await open("D", "pwa", "script");
     await call("D", "join");
     await growing("B", "D|mic", "B hears new publisher D");
     const bindings = (await report("B")).bindings;
-    const reused = Object.entries(bindings).filter(([, h]) => h.at(-1)?.startsWith("D|") && h.some(pid => !pid.startsWith("D|")));
-    if (!reused.length) throw new Error(`no receiver MID was reused for the new publisher: ${JSON.stringify(bindings)}`);
-    log("phase 5: same MID rebound to new publisher D:", JSON.stringify(Object.fromEntries(reused)));
+    const reused = Object.entries(bindings).filter(([, h]) => h.at(-1) === "D|mic" && h.includes("C|mic"));
+    if (!reused.length) throw new Error(`no C receiver MID was reused for D: ${JSON.stringify(bindings)}`);
+    log("phase 5: same MID rebound from C to D:", JSON.stringify(Object.fromEntries(reused)));
+
+    // A reconnects with a fresh session; B decrypts again.
+    const beforeReconnect = await call("A", "epoch");
+    await call("A", "leave");
+    await call("A", "join");
+    await poll("reconnect starts a newer epoch", async () => ({ ok: (await call("A", "epoch")) > beforeReconnect }));
+    await growing("B", "A|mic", "B hears A after A reconnects");
+    log("phase 4: leave + reconnect re-keyed, media resumed");
 
     // 6. Repeated rekeys while media flows (publication changes / renewal).
     const nokeyBefore = (await report("B")).receivers["A|mic"]?.dropped?.nokey || 0;
