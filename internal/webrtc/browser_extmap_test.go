@@ -173,6 +173,8 @@ func TestBrowserFirstVideoOfferCollisionPreservesExtensions(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"receivers": params, "outgoing": outgoing.snapshot()})
 			return
+		case "/local-offer":
+			sdp = peer.pc.LocalDescription().SDP
 		case "/reoffer":
 			sdp, requestErr = peer.CreateOffer()
 		case "/crossing":

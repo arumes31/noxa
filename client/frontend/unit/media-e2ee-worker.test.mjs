@@ -609,6 +609,7 @@ for (const via of ["post", "script"]) test(`key rotation during initial AES disc
         clearTimeout(timer);
         const next = await installHardwareKey();
         await call("activate", { pid: "self|screen", epoch: next.epoch });
+        f.tx.push(hardwareFrame(10500, "delta"));
         resume(); await settle();
         assert.equal(f.tx.out.length, 0, "old held IDR cannot be relabelled by a crypto/key race");
         assert.equal(f.state.hardwareUntil, 0);

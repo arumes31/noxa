@@ -55,6 +55,11 @@ try {
             await pc.setLocalDescription(offer);
             const localExtensions = extmaps(offer.sdp);
             const remoteExtensions = extmaps(crossing);
+            const originalExtensions = extmaps(await window.request("local-offer"));
+            const idOf = line => Number(line.match(/^a=extmap:(\d+)/)?.[1]);
+            const uriOf = line => line.split(" ")[1];
+            const collides = remote => localExtensions.some(local => remote.some(other => idOf(local) === idOf(other) && uriOf(local) !== uriOf(other)));
+            if (!collides(originalExtensions) || collides(remoteExtensions)) throw new Error(`first-video fixture must exercise and avoid the original extmap collision: ${JSON.stringify({localExtensions,originalExtensions,remoteExtensions})}`);
             await pc.setLocalDescription({ type: "rollback" });
             await pc.setRemoteDescription({ type: "offer", sdp: crossing });
             const answer = await pc.createAnswer();
@@ -84,16 +89,19 @@ try {
             const reanswer = await pc.createAnswer();
             await pc.setLocalDescription(reanswer);
             await window.request("answer", reanswer.sdp);
+            const decodedFrames = async () => [...(await pc.getStats()).values()].filter(row => row.type === "inbound-rtp" && row.kind === "video").reduce((sum, row) => sum + (row.framesDecoded || 0), 0);
+            const baselineDecoded = await decodedFrames();
+            const baselineSent = (await window.request("parameters")).outgoing.sent;
             const received = await window.request("received");
-            let decoded = 0;
+            let decoded = 0, outgoing;
             for (let i = 0; i < 100; i++) {
-                decoded = [...(await pc.getStats()).values()].filter(row => row.type === "inbound-rtp" && row.kind === "video").reduce((sum, row) => sum + (row.framesDecoded || 0), 0);
-                if (decoded > 0) break;
+                decoded = await decodedFrames();
+                outgoing = (await window.request("parameters")).outgoing;
+                if (decoded > baselineDecoded && outgoing.sent > baselineSent) break;
                 await new Promise(resolve => setTimeout(resolve, 50));
             }
-            const outgoing = (await window.request("parameters")).outgoing;
-            if (!(decoded > 0) || !(outgoing.sent > 0) || outgoing.boundRIDID !== offered("urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id")) throw new Error(`outbound RTP not decoded with negotiated sender IDs: ${JSON.stringify({decoded,outgoing,inbound:[...(await pc.getStats()).values()].filter(row=>row.type==="inbound-rtp"),remote:pc.remoteDescription.sdp.split(/\r?\n/).filter(line=>/^a=(?:ssrc|msid|mid|rid|simulcast)/.test(line))})}`);
-            return { received, decoded, outgoing, state: pc.signalingState, track: stream.getVideoTracks()[0].readyState, parameters, localExtensions, remoteExtensions };
+            if (!(decoded > baselineDecoded) || !(outgoing.sent > baselineSent) || outgoing.boundRIDID !== offered("urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id")) throw new Error(`outbound RTP not decoded with negotiated sender IDs: ${JSON.stringify({decoded,baselineDecoded,outgoing,baselineSent,inbound:[...(await pc.getStats()).values()].filter(row=>row.type==="inbound-rtp"),remote:pc.remoteDescription.sdp.split(/\r?\n/).filter(line=>/^a=(?:ssrc|msid|mid|rid|simulcast)/.test(line))})}`);
+            return { received, decoded, baselineDecoded, baselineSent, outgoing, state: pc.signalingState, track: stream.getVideoTracks()[0].readyState, parameters, localExtensions, remoteExtensions };
         } finally {
             clearInterval(timer);
             pc.close();
