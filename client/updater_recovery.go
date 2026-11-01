@@ -244,11 +244,11 @@ func restoreFailedClientUpdate(pending *appliedClientUpdate, cause error) error 
 	if _, err := os.Lstat(failedPath); !os.IsNotExist(err) {
 		return fmt.Errorf("%w; recovery destination is unavailable; previous executable retained at %s", cause, pending.previous)
 	}
-	if err := os.Rename(pending.target, failedPath); err != nil {
+	if err := renameClientUpdateForRecovery(pending.target, failedPath, pending.newHash); err != nil {
 		return fmt.Errorf("%w; could not move failed update: %v; previous executable retained at %s", cause, err, pending.previous)
 	}
-	if err := os.Rename(pending.previous, pending.target); err != nil {
-		restoreErr := os.Rename(failedPath, pending.target)
+	if err := renameClientUpdateForRecovery(pending.previous, pending.target, pending.oldHash); err != nil {
+		restoreErr := renameClientUpdateForRecovery(failedPath, pending.target, pending.newHash)
 		return fmt.Errorf("%w; could not restore previous executable: %v; reinstating update: %v; previous executable retained at %s", cause, err, restoreErr, pending.previous)
 	}
 	if !pending.retainFailedImage {
