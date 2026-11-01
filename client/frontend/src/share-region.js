@@ -49,12 +49,19 @@ const bound = value => {
 
 // sourceConstraints scales the source so the cropped part fits the output box
 // described by `output` (screenShareConstraints of the chosen quality).
-export function sourceConstraints(native, region, output = {}) {
+export function sourceConstraints(native, region, output = {}, captureRateMultiplier = 1) {
     const cropWidth = Math.max(1, region.width * native.width), cropHeight = Math.max(1, region.height * native.height);
     const scale = Math.min(1, bound(output.width) / cropWidth, bound(output.height) / cropHeight);
     const width = Math.max(2, Math.round(native.width * scale)), height = Math.max(2, Math.round(native.height * scale));
+    // Chromium budgets desktop capture time separately from the RTP frame cap.
+    // Sampling headroom avoids coupling a 30 fps upload to a capture loop whose
+    // scheduling overhead otherwise undershoots 30. Extra sampling stops at 60;
+    // explicitly requested higher rates retain their existing behavior.
+    const fps = bound(output.frameRate);
+    const rate = captureRateMultiplier === 2 && Number.isFinite(fps) && fps < 60 ? Math.min(60, fps * 2) : null;
+    const frameRate = rate ? { ideal: rate, max: rate } : output.frameRate;
     return { width: { ideal: width, max: width }, height: { ideal: height, max: height },
-        ...(output.frameRate ? { frameRate: output.frameRate } : {}) };
+        ...(frameRate ? { frameRate } : {}) };
 }
 
 // Texture-backed capture may bypass the browser's CPU-size adapter. Align
@@ -80,7 +87,7 @@ export function regionFrameLayout(frame, region, output = {}) {
 // cropDisplayStream returns a stream whose video track is `stream`'s video
 // cropped to `region`; its audio tracks are passed through. Stopping the
 // cropped track stops the source; the source ending ends the cropped track.
-export function cropDisplayStream(stream, region) {
+export function cropDisplayStream(stream, region, { captureRateMultiplier = 1 } = {}) {
     const source = stream.getVideoTracks()[0];
     const initial = source.getSettings();
     const native = { width: initial.width || 1920, height: initial.height || 1080 };
@@ -142,7 +149,7 @@ export function cropDisplayStream(stream, region) {
     };
     track.getConstraints = () => ({ ...output });
     track.applyConstraints = async (constraints = {}) => {
-        await source.applyConstraints(sourceConstraints(native, region, constraints));
+        await source.applyConstraints(sourceConstraints(native, region, constraints, captureRateMultiplier));
         output = { ...constraints };
     };
     return { stream: new MediaStream([track, ...stream.getAudioTracks()]), source };

@@ -784,7 +784,7 @@ export function createVideoPublication({ policy }) {
         // source adapter's advertised constraints (e.g. 1620 -> 1621 pixels).
         if (regionSupported && surface !== "region" && surface !== "studio" && !displayStreamHasFrameGeometry(display)) {
             try {
-                const aligned = cropDisplayStream(display, { x: 0, y: 0, width: 1, height: 1 });
+                const aligned = cropDisplayStream(display, { x: 0, y: 0, width: 1, height: 1 }, { captureRateMultiplier: 2 });
                 transferDisplayCapture(display, aligned.stream);
                 display = aligned.stream;
             } catch (error) {

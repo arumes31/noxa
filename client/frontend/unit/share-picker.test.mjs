@@ -185,3 +185,18 @@ test("capture pipeline forwards even frames, wraps odd GPU frames and releases r
     assert.equal(source.readyState, "ended");
     assert.equal(track.readyState, "ended");
 });
+
+
+test("whole-display sampling headroom preserves dimensions and the requested output constraints", () => {
+    for (const [fps, captured] of [[7.5, 15], [15, 30], [24, 48], [30, 60], [50, 60], [60, 60], [120, 120]]) {
+        const output = { width: { max: 1920 }, height: { max: 1080 }, frameRate: { ideal: fps, max: fps } };
+        const before = structuredClone(output);
+        const sampled = sourceConstraints({ width: 1920, height: 1080 }, wholeFrame, output, 2);
+        assert.deepEqual(sampled.frameRate, { ideal: captured, max: captured });
+        assert.deepEqual([sampled.width.max, sampled.height.max], [1920, 1080]);
+        assert.deepEqual(output, before, "RTP/output settings must not inherit the capture sampling rate");
+        assert.deepEqual(sourceConstraints({ width: 1920, height: 1080 }, wholeFrame, output).frameRate, output.frameRate,
+            "region/default capture keeps its original rate contract");
+    }
+    assert.equal(sourceConstraints({ width: 640, height: 360 }, wholeFrame, {}, 2).frameRate, undefined);
+});

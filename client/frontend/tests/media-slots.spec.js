@@ -1803,3 +1803,23 @@ test("frame processing enforces server dimensions even when capture ignores cons
     expect(result.displayHeight).toBeGreaterThan(0); expect(result.displayHeight).toBeLessThanOrEqual(100);
     expect(result.displayWidth % 2).toBe(0); expect(result.displayHeight % 2).toBe(0);
 });
+
+
+test("whole-display sampling headroom keeps one RTP encoding capped at the selected frame rate", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await chooseShareOption(page, "preset", "hd");
+    await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
+    await page.evaluate(() => {
+        const track = window.__media.displayTracks[0], apply = track.applyConstraints.bind(track);
+        track.applyConstraints = constraints => { window.__media.lastSourceConstraints = structuredClone(constraints); return apply(constraints); };
+    });
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
+    const sample = await page.evaluate(() => ({ capture: window.__media.lastSourceConstraints,
+        output: window.__noxa.state.shareStream.getVideoTracks()[0].getConstraints(),
+        encodings: window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings }));
+    expect(sample.capture.frameRate).toEqual({ ideal: 60, max: 60 });
+    expect(sample.output.frameRate).toEqual({ ideal: 30, max: 30 });
+    expect(sample.encodings).toHaveLength(1);
+    expect(sample.encodings[0].maxFramerate).toBe(30);
+});
