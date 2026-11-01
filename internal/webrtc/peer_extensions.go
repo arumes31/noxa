@@ -31,6 +31,8 @@ func stabilizeOfferExtensions(offer, remote string) (string, error) {
 		}
 		return extension{strconv.Itoa(id), fields[1]}, true
 	}
+	// Preserve exact URI/ID pairs from accepted remote SDP. Every remote ID
+	// stays reserved, including IDs offered for unsupported extensions.
 	established := make(map[extension]bool)
 	used := make(map[string]bool)
 	for line := range strings.SplitSeq(remote, "\n") {
@@ -39,12 +41,8 @@ func stabilizeOfferExtensions(offer, remote string) (string, error) {
 			used[ext.id] = true
 		}
 	}
+	// Offers come from Pion's canonical CRLF marshaler; remote SDP can use LF.
 	lines := strings.Split(offer, "\r\n")
-	for _, line := range lines {
-		if ext, ok := parse(line); ok {
-			used[ext.id] = true
-		}
-	}
 	replacements := make(map[extension]string)
 	// pion/sdp v3.0.20 accepts extension IDs only through 246.
 	nextID := 246

@@ -17,6 +17,10 @@ try {
     });
     const result = await page.evaluate(async () => {
         const pc = new RTCPeerConnection();
+        pc.ontrack = event => {
+            const video = document.createElement("video"); video.muted = true; video.autoplay = true;
+            video.srcObject = new MediaStream([event.track]); document.body.append(video);
+        };
         const canvas = document.createElement("canvas");
         canvas.width = 320;
         canvas.height = 180;
@@ -64,13 +68,16 @@ try {
             offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             await pc.setRemoteDescription({ type: "answer", sdp: await window.request("offer", offer.sdp) });
-            const parameters = await window.request("parameters");
+            const binding = await window.request("parameters");
+            const parameters = binding.receivers;
             const negotiated = uri => parameters.find(item => item.URI === uri)?.ID;
             const offered = uri => Number(extmaps(offer.sdp).find(line => line.split(" ")[1] === uri)?.match(/^a=extmap:(\d+)/)?.[1]);
             for (const uri of ["urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id", "urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id"]) {
                 if (!(offered(uri) >= 16) || negotiated(uri) !== offered(uri)) {
                     throw new Error(`wrong negotiated receiver IDs: ${JSON.stringify(parameters)}`);
                 }
+                const senderID = binding.outgoing.extensions.find(item => item.URI === uri)?.ID;
+                if (senderID !== offered(uri)) throw new Error(`sender binding differs from wire answer: ${JSON.stringify(binding.outgoing)}`);
             }
             // Once accepted, server reoffers retain the very same mappings.
             await pc.setRemoteDescription({ type: "offer", sdp: await window.request("reoffer") });
@@ -78,7 +85,15 @@ try {
             await pc.setLocalDescription(reanswer);
             await window.request("answer", reanswer.sdp);
             const received = await window.request("received");
-            return { received, state: pc.signalingState, track: stream.getVideoTracks()[0].readyState, parameters, localExtensions, remoteExtensions };
+            let decoded = 0;
+            for (let i = 0; i < 100; i++) {
+                decoded = [...(await pc.getStats()).values()].filter(row => row.type === "inbound-rtp" && row.kind === "video").reduce((sum, row) => sum + (row.framesDecoded || 0), 0);
+                if (decoded > 0) break;
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            const outgoing = (await window.request("parameters")).outgoing;
+            if (!(decoded > 0) || !(outgoing.sent > 0) || outgoing.boundRIDID !== offered("urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id")) throw new Error(`outbound RTP not decoded with negotiated sender IDs: ${JSON.stringify({decoded,outgoing,inbound:[...(await pc.getStats()).values()].filter(row=>row.type==="inbound-rtp"),remote:pc.remoteDescription.sdp.split(/\r?\n/).filter(line=>/^a=(?:ssrc|msid|mid|rid|simulcast)/.test(line))})}`);
+            return { received, decoded, outgoing, state: pc.signalingState, track: stream.getVideoTracks()[0].readyState, parameters, localExtensions, remoteExtensions };
         } finally {
             clearInterval(timer);
             pc.close();

@@ -4,6 +4,8 @@
 // policy (epochs, retirement, rebinding, replay, plaintext/codec guards).
 import assert from "node:assert/strict";
 import { before, test } from "node:test";
+import { getEventListeners } from "node:events";
+import { hardwareProbeFrame } from "../src/hardware-probe-frame.js";
 
 globalThis.self = globalThis;
 globalThis.onmessage = null;
@@ -16,7 +18,7 @@ globalThis.onmessage = event => {
     if (["encode", "decode"].includes(event.data?.kind)) libraryTrackIDs.add(event.data.data.trackId);
     return library(event);
 };
-const { installMediaE2EEWorker } = await import("../src/media-e2ee-core.js");
+const { installMediaE2EEWorker, INITIAL_KEYFRAME_HOLD_MS, MAX_INITIAL_KEYFRAME_BYTES } = await import("../src/media-e2ee-core.js");
 const installed = installMediaE2EEWorker(globalThis, { reply: message => replies.push(message) });
 
 let seq = 0;
@@ -413,4 +415,213 @@ test("repeated replacements reuse library cryptors and cancel obsolete streams",
         assert.equal(libraryTrackIDs.size,libraryIDs,"the actual pinned library must see recycled identities");
     }
     await call("detach",{id:tx.id});
+});
+
+let hardwareEpoch = 200000;
+async function installHardwareKey() {
+    const epoch = ++hardwareEpoch, kid = epoch % 16, material = key(epoch % 251);
+    await call("key", { pid: "self|screen", epoch, kid, key: material });
+    return { epoch, kid, material };
+}
+async function hardwareScreen(via) {
+    const tx = endpoint("encode", "video", via, true);
+    const sourceTag = `capture-${tx.id}`;
+    await call("bind", { id: tx.id, pid: "self|screen", sourceTag });
+    const entry = await installHardwareKey();
+    await call("activate", { pid: "self|screen", epoch: entry.epoch });
+    return { tx, sourceTag, state: installed.endpoints.get(tx.id), ...entry };
+}
+function hardwareFrame(timestamp, type = "key", length = 160) {
+    const prefix = type === "key" ? [0,0,0,1,0x67,0x42,0x40,0x2a,0,0,0,1,0x68,0xc8,0,0,0,1,0x65,0x88] : [0,0,0,1,0x41,0x88];
+    return new Frame([...prefix, ...new Uint8Array(length - prefix.length).fill(0x55)], { kind: "video", mime: "video/H264", timestamp, type });
+}
+async function heldFrame(state) {
+    const deadline = performance.now() + 2000;
+    while (!state.hardwareHold && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.ok(state.hardwareHold, "initial frame is waiting for independent hardware proof");
+    return state.hardwareHold;
+}
+const proveHardware = (f, enabled = true, sourceTag = f.sourceTag) => call("hardwareProof", { id: f.tx.id, pid: "self|screen", sourceTag, enabled });
+
+for (const via of ["post", "script"]) {
+    test(`initial hardware keyframe waits, preserves the original and leaves audio independent (${via})`, async () => {
+        const f = await hardwareScreen(via);
+        const rx = endpoint("decode", "video", via);
+        const mic = await sender(`hold-audio-${via}|mic`, 1, 0, key(77));
+        await call("bind", { id: rx.id, pid: `hold-peer-${via}|screen` });
+        await call("key", { pid: `hold-peer-${via}|screen`, epoch: f.epoch, kid: f.kid, key: f.material });
+        try {
+            const listeners = getEventListeners(f.state.abort.signal, "abort").length;
+            const original = hardwareFrame(9000), originalBytes = original.data.slice(0);
+            const delta = hardwareFrame(12000, "delta"), deltaBytes = delta.data.slice(0);
+            f.tx.push(original);
+            const held = await heldFrame(f.state);
+            f.tx.push(delta);
+            await call("bind", { id: f.tx.id, pid: "self|screen", sourceTag: f.sourceTag });
+            assert.equal(f.state.hardwareHold, held, "an idempotent bind preserves the pending scope");
+            assert.equal(getEventListeners(f.state.abort.signal, "abort").length, listeners + 1);
+            assert.equal(f.tx.out.length, 0);
+            await call("stats", { id: f.tx.id });
+            mic.push(audio(40, 960));
+            await waitFrames(mic, 1);
+            assert.equal(mic.out.length, 1, "a screen wait does not block microphone encryption");
+            await proveHardware(f, false);
+            await proveHardware(f, true, "superseded-capture");
+            assert.equal(f.state.hardwareHold, held, "pending/foreign proof does not release source pixels");
+            assert.equal(f.tx.out.length, 0);
+            await proveHardware(f);
+            await waitFrames(f.tx, 2);
+            assert.equal(f.tx.out.length, 2);
+            assert.equal(f.tx.out[0], original, "the original frame object/counter is emitted once");
+            assert.equal(f.state.hardwareHold, null);
+            assert.equal(getEventListeners(f.state.abort.signal, "abort").length, listeners);
+            assert.equal(f.state.hardwareProbed, false, "no neutral picture replaced the initial IDR");
+            assert.equal(f.state.needsKeyframe, false, "the original IDR satisfies ordinary keyframe admission");
+            rx.push(clone(f.tx.out[0])); rx.push(clone(f.tx.out[1]));
+            await waitFrames(rx, 2);
+            assert.deepEqual(rx.out.map(frame => new Uint8Array(frame.data)), [new Uint8Array(originalBytes), new Uint8Array(deltaBytes)]);
+            f.state.hardwareUntil = performance.now() - 1;
+            f.tx.push(hardwareFrame(15000));
+            await settle();
+            assert.equal(f.tx.out.length, 2, "expired proof never grants another startup wait or probe");
+            assert.equal(f.state.hardwareHold, null);
+        } finally {
+            await call("detach", { id: f.tx.id }); await call("detach", { id: rx.id }); await call("detach", { id: mic.id });
+        }
+    });
+
+    test(`missing/negative hardware proof times out to one neutral frame (${via})`, async () => {
+        const f = await hardwareScreen(via);
+        const rx = endpoint("decode", "video", via), receivePID = `neutral-${f.epoch}|screen`;
+        await call("bind", { id: rx.id, pid: receivePID });
+        await call("key", { pid: receivePID, epoch: f.epoch, kid: f.kid, key: f.material });
+        try {
+            const original = hardwareFrame(9000), neutral = hardwareProbeFrame(original);
+            f.tx.push(original);
+            await heldFrame(f.state);
+            await proveHardware(f, false);
+            assert.equal(f.tx.out.length, 0);
+            await waitFrames(f.tx, 1);
+            assert.equal(f.tx.out.length, 1);
+            assert.equal(f.state.hardwareHold, null);
+            assert.equal(f.state.hardwareProbed, true);
+            assert.ok(f.tx.out[0].data.byteLength < 120, "fallback contains only the existing tiny encrypted neutral picture");
+            rx.push(clone(f.tx.out[0])); await waitFrames(rx, 1);
+            assert.deepEqual(new Uint8Array(rx.out[0].data), neutral, "timeout emits exactly the known neutral plaintext, never source pixels");
+            f.tx.push(hardwareFrame(12000));
+            await settle(); assert.equal(f.tx.out.length, 1);
+            await proveHardware(f);
+            f.tx.push(hardwareFrame(15000, "delta"));
+            await settle(); assert.equal(f.tx.out.length, 1, "late proof still requires a real source IDR");
+            f.tx.push(hardwareFrame(18000));
+            await waitFrames(f.tx, 2);
+            assert.equal(f.tx.out.length, 2);
+            assert.equal(f.state.needsKeyframe, false);
+        } finally { await call("detach", { id: f.tx.id }); await call("detach", { id: rx.id }); }
+    });
+
+    for (const action of ["source", "publication", "revoke", "activate", "retire", "retireOne", "forget", "detach", "abort"]) {
+        test(`held keyframe is cancelled promptly by ${action} (${via})`, async () => {
+            const f = await hardwareScreen(via);
+            try {
+                f.tx.push(hardwareFrame(9000));
+                const held = await heldFrame(f.state);
+                const start = performance.now();
+                if (action === "source") await call("bind", { id: f.tx.id, pid: "self|screen", sourceTag: "replacement-source" });
+                else if (action === "publication") await call("bind", { id: f.tx.id, pid: `replacement-${f.epoch}|screen`, sourceTag: f.sourceTag });
+                else if (action === "revoke") await call("bind", { id: f.tx.id, pid: "", sourceTag: f.sourceTag });
+                else if (action === "activate") {
+                    const next = await installHardwareKey();
+                    assert.equal(f.state.hardwareHold, held, "installing an inactive epoch preserves the current scope");
+                    await call("activate", { pid: "self|screen", epoch: next.epoch });
+                } else if (action === "retire") await call("retire", { pid: "self|screen", through: f.epoch });
+                else if (action === "retireOne") await call("retireOne", { pid: "self|screen", epoch: f.epoch });
+                else if (action === "forget") await call("forget", { pid: "self|screen" });
+                else if (action === "detach") await call("detach", { id: f.tx.id });
+                else f.state.abort.abort(new DOMException("test teardown", "AbortError"));
+                assert.ok(performance.now() - start < INITIAL_KEYFRAME_HOLD_MS / 2, "cancellation does not await the startup timeout");
+                assert.equal(f.state.hardwareHold, null);
+                held.finish("proof"); // a queued old callback has no authority
+                await settle();
+                assert.equal(f.tx.out.length, 0, "cancelled scope emits neither old content nor a neutral fallback");
+                if (!["detach", "abort"].includes(action)) {
+                    await call("bind", { id: f.tx.id, pid: "self|screen", sourceTag: "current-source" });
+                    const next = await installHardwareKey();
+                    await call("activate", { pid: "self|screen", epoch: next.epoch });
+                    f.tx.push(hardwareFrame(18000));
+                    const replacementHeld = await heldFrame(f.state);
+                    held.finish("proof");
+                    assert.equal(f.state.hardwareHold, replacementHeld, "an old timer/proof callback cannot clear the replacement hold");
+                    await proveHardware(f, true, "current-source");
+                    await waitFrames(f.tx, 1);
+                    assert.equal(f.tx.out.length, 1, "cancelling the old frame leaves the transform reusable");
+                }
+            } finally { await call("detach", { id: f.tx.id }); }
+        });
+    }
+
+    test(`delta and oversized first frames keep the legacy fallback (${via})`, async () => {
+        for (const frame of [hardwareFrame(9000, "delta"), hardwareFrame(9000, "key", MAX_INITIAL_KEYFRAME_BYTES + 1), new Frame([1,2,3], { kind: "video", mime: "video/H264" })]) {
+            const f = await hardwareScreen(via);
+            try {
+                f.tx.push(frame);
+                await waitFrames(f.tx, 1);
+                assert.equal(f.state.hardwareHoldAttempted, false);
+                assert.equal(f.state.hardwareHold, null);
+                assert.equal(f.state.hardwareProbed, true);
+                assert.ok(f.tx.out[0].data.byteLength < 120);
+            } finally { await call("detach", { id: f.tx.id }); }
+        }
+    });
+
+    test(`late proof cannot release a keyframe beyond its absolute deadline (${via})`, async t => {
+        const f = await hardwareScreen(via);
+        try {
+            f.tx.push(hardwareFrame(9000));
+            const held = await heldFrame(f.state);
+            t.mock.method(performance, "now", () => held.deadline + 1);
+            await proveHardware(f);
+            await settle();
+            assert.equal(f.state.hardwareHold, null);
+            assert.equal(f.tx.out.length, 0, "late proof cannot turn delayed timer scheduling into a longer grace");
+        } finally {
+            t.mock.restoreAll();
+            await call("detach", { id: f.tx.id });
+        }
+    });
+}
+
+for (const via of ["post", "script"]) test(`key rotation during initial AES discards the old IDR and requires a fresh one (${via})`, async t => {
+    const f = await hardwareScreen(via);
+    const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+    let entered, resume, timer;
+    const started = new Promise(resolve => { entered = resolve; });
+    const blocked = new Promise(resolve => { resume = resolve; });
+    t.mock.method(crypto.subtle, "encrypt", async (...args) => {
+        entered(); await blocked;
+        return encrypt(...args);
+    });
+    try {
+        f.tx.push(hardwareFrame(9000));
+        await heldFrame(f.state);
+        await proveHardware(f);
+        await Promise.race([started, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("AES was not entered")), 2000); })]);
+        clearTimeout(timer);
+        const next = await installHardwareKey();
+        await call("activate", { pid: "self|screen", epoch: next.epoch });
+        resume(); await settle();
+        assert.equal(f.tx.out.length, 0, "old held IDR cannot be relabelled by a crypto/key race");
+        assert.equal(f.state.hardwareUntil, 0);
+        assert.equal(f.state.needsKeyframe, true);
+        assert.equal(f.state.hardwareProven, true, "no second startup hold or neutral grace is granted");
+        t.mock.restoreAll();
+        await proveHardware(f);
+        f.tx.push(hardwareFrame(12000, "delta"));
+        await settle(); assert.equal(f.tx.out.length, 0);
+        f.tx.push(hardwareFrame(15000)); await waitFrames(f.tx, 1);
+        assert.equal(f.tx.out.length, 1, "a fresh proof and IDR recover the same pipeline");
+    } finally {
+        clearTimeout(timer); resume(); t.mock.restoreAll();
+        await call("detach", { id: f.tx.id });
+    }
 });

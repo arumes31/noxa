@@ -45,3 +45,24 @@ func TestOfferExtensionIDsAcceptRemoteLFAndNumericIDs(t *testing.T) {
 		t.Fatalf("numeric/LF mapping = %q, want %q", got, want)
 	}
 }
+
+func TestOfferExtensionIDsCanReuseAnUnestablishedGeneratedID(t *testing.T) {
+	var remote strings.Builder
+	for id := 16; id < 246; id++ {
+		fmt.Fprintf(&remote, "a=extmap:%d established-%d\r\n", id, id)
+	}
+	const offer = "a=extmap:246 new-rid\r\n"
+	got, err := stabilizeOfferExtensions(offer, remote.String())
+	if err != nil || got != offer {
+		t.Fatalf("last free ID was reserved by its own replaced offer line: %v, %q", err, got)
+	}
+}
+
+func TestOfferExtensionIDsDoNotReuseAnEstablishedIDForAnotherURI(t *testing.T) {
+	const remote = "a=extmap:3 twcc\r\n"
+	const offer = "a=extmap:3 twcc\r\na=extmap:3 different-uri\r\n"
+	got, err := stabilizeOfferExtensions(offer, remote)
+	if err != nil || got != "a=extmap:3 twcc\r\na=extmap:246 different-uri\r\n" {
+		t.Fatalf("different URI inherited an established ID: %v, %q", err, got)
+	}
+}
