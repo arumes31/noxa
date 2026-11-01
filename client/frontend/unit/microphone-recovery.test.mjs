@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { watchMicrophone, watchAudioOutput } from "../src/microphone-recovery.js";
+import { watchMicrophone, watchAudioOutput, createMicrophoneSenderOwner } from "../src/microphone-recovery.js";
 
 function fixture() {
     const track = new EventTarget(); track.readyState = "live";
@@ -65,4 +65,69 @@ test("a default microphone alias cannot silently move capture to a different phy
     devices.enumerateDevices = async () => [{ kind: "audioinput", deviceId: "default", groupId: "laptop" }];
     devices.dispatchEvent(new Event("devicechange")); await settle(); assert.equal(losses, 1);
     stop();
+});
+
+function senderFixture(track = { id: "first" }) {
+    const calls = [], transceiver = { direction: "sendrecv", sender: { track, async replaceTrack(next) { calls.push(next); this.track = next; } } };
+    const pc = { addTransceiver() { assert.fail("must reuse the registered microphone, not another transceiver"); } };
+    const owner = createMicrophoneSenderOwner(); owner.remember(pc, transceiver);
+    return { owner, pc, transceiver, calls, track };
+}
+const microphoneOptions = { direction: "sendrecv" };
+test("repeated microphone retries reuse the same sender and leave other media untouched", async () => {
+    const f = senderFixture(), sender = f.transceiver.sender;
+    for (let i = 0; i < 3; i++) {
+        const previous = sender.track, next = { id: `retry-${i}` };
+        await f.owner.detach(f.pc, previous);
+        assert.equal(await f.owner.attach(f.pc, next, microphoneOptions, () => true), f.transceiver);
+        assert.equal(f.transceiver.sender, sender); assert.equal(sender.track, next);
+    }
+    assert.equal(f.calls.length, 6);
+});
+test("a delayed microphone detach finishes before replacement and cannot clear the new source", async () => {
+    const f = senderFixture(); let finish;
+    f.transceiver.sender.replaceTrack = next => new Promise(resolve => {
+        if (next === null) finish = () => { f.transceiver.sender.track = null; resolve(); };
+        else { f.transceiver.sender.track = next; resolve(); }
+    });
+    const detached = f.owner.detach(f.pc, f.track), next = { id: "new" };
+    const attached = f.owner.attach(f.pc, next, microphoneOptions, () => true);
+    await settle(); assert.equal(f.transceiver.sender.track, f.track);
+    finish(); await detached; await attached;
+    assert.equal(await f.owner.detach(f.pc, f.track), false);
+    assert.equal(f.transceiver.sender.track, next);
+});
+test("a stale session cannot attach to the retained microphone slot", async () => {
+    const f = senderFixture();
+    await assert.rejects(f.owner.attach(f.pc, {}, microphoneOptions, () => false), { name: "AbortError" });
+    assert.equal(f.calls.length, 0); assert.equal(f.transceiver.sender.track, f.track);
+});
+test("session replacement during replaceTrack removes only that stale source", async () => {
+    const f = senderFixture(); let current = true;
+    f.transceiver.sender.replaceTrack = async next => { f.transceiver.sender.track = next; current = false; };
+    await assert.rejects(f.owner.attach(f.pc, {}, microphoneOptions, () => current), { name: "AbortError" });
+    assert.equal(f.transceiver.sender.track, null);
+    const next = { id: "next" }; current = true;
+    f.transceiver.sender.replaceTrack = async t => { f.transceiver.sender.track = t; };
+    await f.owner.attach(f.pc, next, microphoneOptions, () => current);
+    assert.equal(f.transceiver.sender.track, next);
+});
+test("initial receive-only microphone is promoted without adding a new transceiver", async () => {
+    const f = senderFixture(null); f.transceiver.direction = "recvonly";
+    const next = { id: "first-capture" };
+    await f.owner.attach(f.pc, next, microphoneOptions, () => true);
+    assert.equal(f.transceiver.direction, "sendrecv"); assert.equal(f.transceiver.sender.track, next);
+});
+test("sender ownership does not leak across peer replacement or failed operations", async () => {
+    const f = senderFixture(), next = { id: "new-peer" };
+    const transceiver = { sender: { track: next }, direction: "sendrecv" };
+    let added = 0;
+    const pc = { addTransceiver(track, options) { added++; assert.equal(track, next); assert.equal(options, microphoneOptions); return transceiver; } };
+    await f.owner.attach(pc, next, microphoneOptions, () => true);
+    assert.equal(added, 1); assert.equal(f.transceiver.sender.track, f.track);
+    f.transceiver.sender.replaceTrack = async () => { throw Error("closed"); };
+    await assert.rejects(f.owner.detach(f.pc, f.track), /closed/);
+    f.transceiver.sender.replaceTrack = async t => { f.transceiver.sender.track = t; };
+    await f.owner.attach(f.pc, next, microphoneOptions, () => true);
+    assert.equal(f.transceiver.sender.track, next);
 });

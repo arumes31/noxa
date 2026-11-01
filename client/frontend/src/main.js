@@ -17,7 +17,7 @@ import { createLoginMemory } from './login-memory.js';
 import { createLoginFeedback, connectFailureCategory, connectFailureIsDefinitive, loginFailure } from './login-errors.js';
 import { describeDeniedError } from './permission-denied.js';
 import { initLoginBackground } from './login-background.js';
-import { watchMicrophone } from "./microphone-recovery.js";
+import { watchMicrophone, createMicrophoneSenderOwner } from "./microphone-recovery.js";
 import { voiceSendEncoding, applyVoicePriority } from "./voice-priority.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { startVoiceDiagnostics, noteVoiceActivity } from './voice-diagnostics.js';
@@ -2212,6 +2212,7 @@ function stopVoiceForDisconnect() {
 }
 let stopRemoteMedia = () => {};
 let stopWatchingMicrophone = () => {};
+const microphoneSenders = createMicrophoneSenderOwner();
 let lostMicrophoneName = "";
 
 function watchCurrentMicrophone() {
@@ -2226,9 +2227,7 @@ function watchCurrentMicrophone() {
         lost.enabled = false;
         stream.removeTrack(lost); lost.stop();
         stopMicMeter(); stopVoiceMonitor(); setPTT(false);
-        for (const sender of pc.getSenders()) {
-            if (sender.track === sent) void sender.replaceTrack(null).catch(() => {});
-        }
+        void microphoneSenders.detach(pc, sent).catch(() => {});
         setMicState("disconnected");
     });
 }
@@ -2566,10 +2565,10 @@ async function startVoiceAttempt(expectedEpoch, startup) {
             stopOwnedVoiceMedia(media, mediaOwner);
             return false;
         }
-        pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream], sendEncodings: [voiceSendEncoding()] });
+        microphoneSenders.remember(pc, pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream], sendEncodings: [voiceSendEncoding()] }));
         applyVoiceState();
     } else {
-        pc.addTransceiver("audio", { direction: "recvonly" });
+        microphoneSenders.remember(pc, pc.addTransceiver("audio", { direction: "recvonly" }));
     }
     watchCurrentMicrophone();
 
@@ -3090,15 +3089,15 @@ async function retryMicrophoneCapture() {
     audioTrack.enabled = false;
     localStream.addTrack(audioTrack);
     markCaptureProfile(audioTrack, state.channels.find((channel) => channel.ChannelID === state.myChannelID));
-    let transceiver = null;
+    let sent = null;
     try {
-        const sent = await prepareChannelMicrophone(audioTrack);
+        sent = await prepareChannelMicrophone(audioTrack);
         if (!current()) throw new DOMException("voice session changed", "AbortError");
-        transceiver = peerConnection.addTransceiver(sent, {
+        await microphoneSenders.attach(peerConnection, sent, {
             direction: "sendrecv",
             streams: [localStream],
             sendEncodings: [voiceSendEncoding()],
-        });
+        }, current);
         await renegotiate(peerConnection, generation);
         if (!current()) throw new DOMException("voice session changed", "AbortError");
         await applyChannelAudio();
@@ -3114,10 +3113,7 @@ async function retryMicrophoneCapture() {
         localStream.removeTrack(audioTrack);
         disposeMicrophoneGate(audioTrack);
         audioTrack.stop();
-        await transceiver?.sender?.replaceTrack(null).catch(() => {});
-        try {
-            if (transceiver) transceiver.direction = "inactive";
-        } catch { /* the peer connection may already be closed */ }
+        if (sent) await microphoneSenders.detach(peerConnection, sent).catch(() => {});
         if (!current()) return false;
         setMicState(state.micState === "denied" ? "denied" : "none");
         sysMsg(t("runtime.micRetryFailed", { error: error?.message || error }));
