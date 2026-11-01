@@ -75,6 +75,7 @@ import * as chatUI from "./chat-ui.js";
 import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget } from "./stream-controls.js";
 import { startRemoteMedia, reconcileRemoteMedia, gatePresents } from "./remote-media.js";
 import { startChannelMedia, stopChannelMedia, channelMedia, receiveMediaKey, mediaErrorText, onChannelMediaStatus } from "./channel-media.js";
+import { MediaKeyStartupInbox } from "./media-keys.js";
 import { remoteTrackID } from "./media-track-id.js";
 import { createReceiverRegistry, attributeReceiver, releaseReceiver } from "./remote-receivers.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
@@ -1900,7 +1901,15 @@ function syncChannelMedia() {
 }
 // Delivered media-key controls (authenticated ratchet controls; never chat,
 // activity, notifications or history).
-window.runtime.EventsOn("media_key", event => { receiveMediaKey(event); });
+window.runtime.EventsOn("media_key", payload => {
+    const event = parseRuntimeObject(payload);
+    if (!event) return;
+    const result = receiveMediaKey(event);
+    const startup = voiceStartupKeys;
+    if (result?.reason === "inactive" && startup?.scope === voiceMediaScope()) {
+        startup.keys.receive({ ...event, senderDevice: event.sender_device, expiresAt: event.expires_at }, state.myChannelID);
+    }
+});
 const encryptionContext = () => ({ tabID: state.activeTabID, generation: state.serverGeneration, sessionGeneration: state.sessionGeneration });
 const connectionEncryptionTooltip = createEncryptionTooltip($("conn-lock"), { context: encryptionContext });
 const voiceEncryptionTooltip = createEncryptionTooltip($("voice-e2ee"), { context: encryptionContext, voiceOnly: true });
@@ -2186,6 +2195,7 @@ $("chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") sendC
 // ---------------------------------------------------------------------------
 
 let voiceSessionEpoch = 0;
+let voiceStartupKeys = null;
 let retainedVoiceMedia = null;
 const voiceMediaOwners = new WeakMap();
 function stopOwnedVoiceMedia(media, owner) {
@@ -2403,6 +2413,8 @@ async function readInitialMediaLimits(tabID, stillRelevant) {
 
 function resetVoiceSession({ retainMedia = false } = {}) {
     voiceSessionEpoch++;
+    voiceStartupKeys?.keys.clear();
+    voiceStartupKeys = null;
     voiceStartOwner?.cancel();
     voiceStartOwner = null;
     voiceStartPromise = null;
@@ -2424,6 +2436,16 @@ function microphoneFailureState(error) {
 }
 
 async function startVoice(expectedEpoch = voiceSessionEpoch) {
+    const startup = { scope: voiceMediaScope(), keys: new MediaKeyStartupInbox() };
+    voiceStartupKeys = startup;
+    try { return await startVoiceAttempt(expectedEpoch, startup); }
+    finally {
+        startup.keys.clear();
+        if (voiceStartupKeys === startup) voiceStartupKeys = null;
+    }
+}
+
+async function startVoiceAttempt(expectedEpoch, startup) {
     const mediaOwner = {};
     const generation = state.serverGeneration;
     const tabID = state.activeTabID;
@@ -2513,6 +2535,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         if (state.localStream === capturedStream) state.localStream = null;
         return false;
     }
+    startup.keys.drain(control => media.receive(control));
     const pc = media.protectPeer(iceServers && iceServers.length
         ? new RTCPeerConnection(media.peerConfig({ iceServers }))
         : new RTCPeerConnection(media.peerConfig()));

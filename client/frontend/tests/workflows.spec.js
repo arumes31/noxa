@@ -13128,3 +13128,33 @@ test("a connected transport event clears the in-place recovery label",async({pag
     });
     expect(result).toEqual({failed:"connecting",restored:"connected"});
 });
+
+for (const cancelled of [false, true]) test(`early channel keys during desktop microphone startup ${cancelled ? "are discarded on cancel" : "are retained"}`, async ({ page }) => {
+    await installMediaUpdateFixture(page);
+    await page.evaluate(async () => {
+        const v = window.__noxa, cm = await import("/src/channel-media.js");
+        v.resetVoiceSession();
+        window.__startupReceived = [];
+        cm.useChannelMediaFactory(() => {
+            const media = window.__standInMedia();
+            media.receive = control => { window.__startupReceived.push(control.epoch); return { ok: true }; };
+            return media;
+        });
+        window.RTCPeerConnection = window.__limitPeer;
+        navigator.mediaDevices.getUserMedia = () => new Promise(resolve => { window.__finishStartupMic = () => resolve(new MediaStream()); });
+        window.__startupAttempt = v.ensureVoiceForChannel();
+    });
+    await expect.poll(() => page.evaluate(() => typeof window.__finishStartupMic)).toBe("function");
+    await page.evaluate(async cancelled => {
+        const { buildMediaKeyBody } = await import("/src/media-keys.js");
+        const body = buildMediaKeyBody({ channelID: 42, epoch: 98765, nowSeconds: Math.floor(Date.now()/1000), client: "peer", session: "session", kid: 0, members: "digest", count: 2,
+            keys: Object.fromEntries(["mic", "cam", "screen", "screenaudio"].map(s => [s, new Uint8Array(32).fill(5)])) });
+        const event = { ...body, sender: "peer-user", sender_device: "peer-device" };
+        for (const callback of window.__events.media_key) callback(JSON.stringify(event));
+        if (cancelled) window.__noxa.resetVoiceSession();
+        window.__finishStartupMic();
+        await window.__startupAttempt;
+    }, cancelled);
+    expect(await page.evaluate(() => window.__startupReceived)).toEqual(cancelled ? [] : [98765]);
+    await page.evaluate(() => window.__noxa.resetVoiceSession());
+});

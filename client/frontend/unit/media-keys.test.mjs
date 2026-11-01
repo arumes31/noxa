@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MediaKeyEngine, parseMediaKeyControl, recipientsOf, buildMediaKeyBody, publicationPid, senderPid, MEDIA_KEY_KIND } from "../src/media-keys.js";
+import { MediaKeyStartupInbox, CONTROL_TTL_S, MediaKeyEngine, parseMediaKeyControl, recipientsOf, buildMediaKeyBody, publicationPid, senderPid, MEDIA_KEY_KIND } from "../src/media-keys.js";
 
 const flush = async (n = 30) => { for (let i = 0; i < n; i++) await new Promise(r => setTimeout(r, 0)); };
 // Delays collapse to zero; the send timeout is disabled (Infinity).
@@ -573,4 +573,34 @@ test("duplicate sessions share key delivery but retain distinct publication read
         assert.deepEqual(e.status().participants.map(p=>p.received),[true,true]);
         assert.equal(sent.length,1);
     } finally {e.stop();}
+});
+
+const startupControl = (epoch = 1, device = "startup-device") => {
+    const body = buildMediaKeyBody({ channelID: 5, epoch, nowSeconds: Math.floor(Date.now() / 1000), client: "startup-client", session: "startup-session", kid: 0, members: "digest", count: 2,
+        keys: Object.fromEntries(["mic", "cam", "screen", "screenaudio"].map(s => [s, new Uint8Array(32).fill(7)])) });
+    return { ...body, expiresAt: body.expires_at, sender: "startup-user", senderDevice: device };
+};
+test("startup inbox retains only newest scoped control and owns its copy", () => {
+    const inbox = new MediaKeyStartupInbox(), first = startupControl(1), newest = startupControl(2);
+    assert.equal(inbox.receive(first, 9).reason, "scope");
+    assert.equal(inbox.receive(first, 5).reason, "pending");
+    assert.equal(inbox.receive(newest, 5).reason, "pending");
+    assert.equal(inbox.receive(first, 5).reason, "stale");
+    newest.data.keys.mic = "changed"; newest.scope.id = "9";
+    const controls = []; inbox.drain(c => controls.push(c));
+    assert.equal(controls.length, 1); assert.equal(controls[0].epoch, 2);
+    assert.equal(controls[0].scope.id, "5"); assert.equal(parseMediaKeyControl(controls[0], 5).ok, true);
+    inbox.drain(() => assert.fail("already drained"));
+});
+test("startup inbox bounds devices, expires controls and clears on cancellation", () => {
+    let now = Date.now(); const inbox = new MediaKeyStartupInbox({ now: () => now });
+    for (let i = 0; i < 64; i++) assert.equal(inbox.receive(startupControl(1, `device-${i}`), 5).reason, "pending");
+    assert.equal(inbox.receive(startupControl(1, "overflow"), 5).reason, "pending-full");
+    now += (CONTROL_TTL_S + 1) * 1000;
+    inbox.drain(() => assert.fail("expired key retained"));
+    now = Date.now(); inbox.receive(startupControl(), 5); inbox.clear();
+    inbox.drain(() => assert.fail("cancelled key retained"));
+    const expired = startupControl(); expired.expiresAt = Math.floor(now / 1000);
+    assert.equal(inbox.receive(expired, 5).reason, "expired");
+    assert.equal(inbox.receive({ ...startupControl(), sender: "" }, 5).reason, "sender");
 });
