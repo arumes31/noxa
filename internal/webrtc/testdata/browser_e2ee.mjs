@@ -49,7 +49,8 @@ const common = (id, transformAPI) => `
 const BRIDGE = "/bridge", ID = ${JSON.stringify(id)};
 ${transformAPI === "streams" ? "delete window.RTCRtpScriptTransform;" : ""}
 ${transformAPI === "none" ? "delete window.RTCRtpScriptTransform; delete RTCRtpSender.prototype.createEncodedStreams; delete RTCRtpReceiver.prototype.createEncodedStreams;" : ""}
-window.post = async (path, body) => { const r = await fetch(BRIDGE + path, { method: "POST", body: JSON.stringify(body) }); if (!r.ok) throw new Error(path + ": " + await r.text()); return r.json(); };
+window.peerGeneration = 0;
+window.post = async (path, body) => { if (["/offer", "/candidate", "/close", "/leave"].includes(path)) body = { PeerGeneration: window.peerGeneration, ...body }; const r = await fetch(BRIDGE + path, { method: "POST", body: JSON.stringify(body) }); if (!r.ok) throw new Error(path + ": " + await r.text()); return r.json(); };
 window.offers = 0;
 const FORCE_CODEC = ${JSON.stringify(process.env.NOXA_E2EE_TEST_CODEC || "")};
 // Attach audit (structural close of the attach window): when a local
@@ -132,10 +133,12 @@ eventLoop(async e => {
 let mic = null;
 window.e2ee = {
   async join(channel = 1) {
+    window.peerGeneration = (await post("/begin", { ID })).generation;
     const media = await startChannelMedia({ hardwareVideoRequired: false, tabID: "tab", channelID: channel, roster: state.clients, onError: err => console.log("media error " + err) });
+    const peerGeneration = window.peerGeneration;
     const pc = media.protectPeer(new RTCPeerConnection(media.peerConfig()));
     state.pc = pc;
-    pc.onicecandidate = ev => { if (ev.candidate) post("/candidate", { ID, Candidate: ev.candidate.candidate, Mid: ev.candidate.sdpMid || "", Index: ev.candidate.sdpMLineIndex || 0 }); };
+    pc.onicecandidate = ev => { if (ev.candidate) post("/candidate", { ID, PeerGeneration: peerGeneration, Candidate: ev.candidate.candidate, Mid: ev.candidate.sdpMid || "", Index: ev.candidate.sdpMLineIndex || 0 }); };
     mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     pc.addTransceiver(mic.getAudioTracks()[0], { direction: "sendrecv", streams: [mic] });
     await post("/join", { ID, Channel: channel });
@@ -203,6 +206,11 @@ const session = Object.assign(new EventTarget(), {
 await post("/register", { ID, Principal: "u-" + ID, Device: "dev-" + ID });
 const adapter = { status: async () => ({ supported: true, principal: "u-" + ID, device: "dev-" + ID, clientID: ID }),
   send: async c => post("/control", { ID, To: c.device, Body: c.body }) };
+// Delayed permission/capture must not discard keys already admitted for this join.
+if (["C", "G"].includes(ID)) {
+  const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  navigator.mediaDevices.getUserMedia = async constraints => { await new Promise(r => setTimeout(r, 4000)); return getUserMedia(constraints); };
+}
 const voice = new Voice(session, null, { media: adapter });
 window.voice = voice;
 eventLoop(async e => {
@@ -212,7 +220,7 @@ eventLoop(async e => {
   else if (e.type === "control") voice.receiveMediaKey({ sender: e.sender, senderDevice: e.senderDevice, ...e.body, expiresAt: e.body.expires_at });
 });
 window.e2ee = {
-  async join() { await voice.join(1); return voice.mediaStatus?.api; },
+  async join() { window.peerGeneration = (await post("/begin", { ID })).generation; await voice.join(1); return voice.mediaStatus?.api; },
   async camera() { await voice.startCamera(); },
   async flip() { try { await voice.flipCamera(); return "flipped"; } catch (e) { return "flip unavailable: " + e.message; } },
   async tryJoin() { try { await voice.join(1); return "joined"; } catch (error) { return String(error?.reason || error?.message || error); } },
@@ -388,6 +396,7 @@ try {
     // A reconnects with a fresh session; B decrypts again.
     const beforeReconnect = await call("A", "epoch");
     await call("A", "leave");
+    await api("/leave", { ID: "A" });
     await call("A", "join");
     await poll("reconnect starts a newer epoch", async () => ({ ok: (await call("A", "epoch")) > beforeReconnect }));
     await growing("B", "A|mic", "B hears A after A reconnects");

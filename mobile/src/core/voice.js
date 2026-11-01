@@ -22,6 +22,7 @@ import * as settings from "./settings.js";
 import { LevelMeter, Mixer, installAudioUnlock } from "./voice-audio.js";
 import { MutedTalkingWarning, PushToTalkLatch, VoiceGate, parseKeyKind, playbackGain } from "./voice-gate.js";
 import { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, MediaSession, MediaSessionError } from "./media-e2ee/media-session.js";
+import { MediaKeyStartupInbox } from "./media-e2ee/media-keys.js";
 
 const MsgChannelJoined = 158;
 const STATS_INTERVAL = 2000;
@@ -204,6 +205,8 @@ export class Voice extends EventTarget {
 
     #joinGeneration = 0;
     #joining = false;
+    #joiningChannel = 0;
+    #startupKeys = new MediaKeyStartupInbox();
     #cancelStart = null;
 
     /** Joins a voice channel; false means the attempt was cancelled. */
@@ -212,6 +215,8 @@ export class Voice extends EventTarget {
         this.#cancelStart?.();
         this.#cancelStart = null;
         this.#joining = true;
+        this.#joiningChannel = Number(channelID);
+        this.#startupKeys.clear();
         let acknowledged = false;
         try {
             const joined = await this.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: channelID, password: password || undefined }, MsgChannelJoined);
@@ -224,6 +229,7 @@ export class Voice extends EventTarget {
             if (this.pc && this.#media) { this.#media.setRoster([]); this.#media.rescope(this.channelID); }
             if (!this.pc && !await this.#start(generation)) return false;
             if (generation !== this.#joinGeneration) return false;
+            this.#startupKeys.drain(control => this.#media?.receive(control));
             if (this.muted || this.deafened) this.#announce();
             this.#emit("state");
             return this.channelID;
@@ -233,7 +239,9 @@ export class Voice extends EventTarget {
             if (acknowledged && generation === this.#joinGeneration) await this.leave();
             throw error;
         } finally {
-            if (generation === this.#joinGeneration) this.#joining = false;
+            if (generation === this.#joinGeneration) {
+                this.#joining = false; this.#joiningChannel = 0; this.#startupKeys.clear();
+            }
         }
     }
 
@@ -299,7 +307,7 @@ export class Voice extends EventTarget {
             });
             this.pc = pc;
             pc.onicecandidate = event => {
-                if (!event.candidate || !this.conn.open) return;
+                if (!event.candidate || !this.conn.open || this.pc !== pc) return;
                 this.conn.send(Msg.ICECandidate, { candidate: event.candidate.candidate, sdp_mid: event.candidate.sdpMid ?? "", sdp_mline_index: event.candidate.sdpMLineIndex ?? 0 });
             };
             pc.ontrack = () => this.#reconcile();
@@ -342,6 +350,7 @@ export class Voice extends EventTarget {
     #teardown() {
         ++this.#joinGeneration;
         this.#joining = false;
+        this.#joiningChannel = 0; this.#startupKeys.clear();
         this.#cancelStart?.();
         this.#cancelStart = null;
         this.#stopMeter();
@@ -949,6 +958,9 @@ export class Voice extends EventTarget {
 
     /** Hands a delivered media-key control (app.js onSecureControl) to the session. */
     receiveMediaKey(control) {
+        if (this.#joining && control?.scope?.id === String(this.#joiningChannel) && (!this.#media || this.#media.identity?.channelID !== this.#joiningChannel)) {
+            return this.#startupKeys.receive(control, this.#joiningChannel);
+        }
         return this.#media ? this.#media.receive(control) : { ok: false, reason: "inactive" };
     }
 

@@ -142,6 +142,41 @@ export function parseMediaKeyControl(control, channelID) {
     return { ok: true, value: { client: d.client, session: d.session, kid: d.kid, members: d.members, n: d.n, keys } };
 }
 
+// Memory only, during one channel join/worker startup. Delivery can precede
+// getUserMedia permission or worker readiness; admission is not playback.
+// Keep only the newest key per publisher device, then let the running engine
+// authenticate its roster binding and monotonic epoch as usual.
+export class MediaKeyStartupInbox {
+    #pending = new Map();
+    constructor({ now = Date.now } = {}) { this.now = now; }
+    #fresh(control, at, receivedAt = at) {
+        return Number.isSafeInteger(control.expiresAt) && control.expiresAt * 1000 > at && at - receivedAt < CONTROL_TTL_S * 1000;
+    }
+    receive(control, channelID) {
+        const at = this.now();
+        for (const [key, entry] of this.#pending) if (!this.#fresh(entry.control, at, entry.at)) this.#pending.delete(key);
+        const parsed = parseMediaKeyControl(control, channelID);
+        if (!parsed.ok) return parsed;
+        if (typeof control.sender !== "string" || !ID_RE.test(control.sender) || typeof control.senderDevice !== "string" || !ID_RE.test(control.senderDevice)) return { ok: false, reason: "sender" };
+        if (!this.#fresh(control, at)) return { ok: false, reason: "expired" };
+        const key = `${control.sender}\n${control.senderDevice}\n${parsed.value.client}`;
+        const previous = this.#pending.get(key);
+        if (previous && previous.control.epoch >= control.epoch) return { ok: false, reason: "stale" };
+        if (!previous && this.#pending.size >= MAX_PENDING) return { ok: false, reason: "pending-full" };
+        // Own the bounded validated fields; caller mutation cannot alter scope.
+        this.#pending.set(key, { at, control: structuredClone({ sender: control.sender, senderDevice: control.senderDevice, kind: control.kind, scope: control.scope,
+            epoch: control.epoch, expiresAt: control.expiresAt, data: control.data }) });
+        return { ok: false, reason: "pending" };
+    }
+    drain(receive) {
+        const pending = [...this.#pending.values()];
+        this.clear();
+        const at = this.now();
+        for (const entry of pending) if (this.#fresh(entry.control, at, entry.at)) receive(entry.control);
+    }
+    clear() { this.#pending.clear(); }
+}
+
 async function pool(items, limit, task) {
     const results = new Array(items.length);
     let next = 0;
