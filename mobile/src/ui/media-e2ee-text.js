@@ -75,7 +75,8 @@ export function mediaErrorText(error) {
 }
 
 let trustNotice = null;
-/** A setup instruction stays visible until dismissed, rather than disappearing as a toast. */
+/** Keep the first setup instruction until dismissed; overlapping failures share
+ * its promise, and a later attempt can show its current reason after dismissal. */
 export function showVoiceJoinError(error) {
     const reason = mediaErrorReason(error);
     if (reason === "link_required" || reason === "binding_changed") {

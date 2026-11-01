@@ -250,6 +250,8 @@ export class Voice extends EventTarget {
         }
     }
 
+    /** Refuse unsupported devices before entry; a missing adapter fails closed.
+     * Returns false on cancellation, otherwise true or a media setup error. */
     async #preflight(generation) {
         let cancel;
         const cancelled = new Promise(resolve => { cancel = () => resolve(null); });

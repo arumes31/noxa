@@ -204,6 +204,8 @@ const MEDIA_BINDING_FAILURES = new Map([
 export function mediaAdapter(session) {
     const current = () => app.session === session;
     return {
+        // Known binding refusals need user action immediately. Other secure
+        // startup reasons may be transient and retain the bounded wait/fallback.
         async status() {
             const caps = session.capabilities || new Set();
             const base = { principal: session.uniqueID, device: session.deviceID, clientID: session.clientID };

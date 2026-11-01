@@ -21,6 +21,8 @@ test("voice trust guidance stays in one dismissible sheet; ordinary errors remai
  assert.equal(notices.length,1);assert.equal(toasts.length,0);
  assert.match(notices[0][1],/QR code.*own desktop account/);
  assert.equal(notices[0][2][0].primary,true);
+ assert.equal(showVoiceJoinError(new MediaSessionError("binding_changed")),pending);
+ assert.equal(notices.length,1,"overlapping setup failures reuse the visible notice");
  dismiss(true);await pending;
  const changed=showVoiceJoinError(new MediaSessionError("binding_changed"));
  assert.equal(notices.length,2);assert.match(notices[1][1],/identity does not match/);
