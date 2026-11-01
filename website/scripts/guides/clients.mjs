@@ -63,7 +63,7 @@ export default [
     ],
     related: ['studio', 'getting-started', 'troubleshooting', 'privacy-security'],
     sources: [
-      { label: 'Voice, sharing, microphone recovery, and diagnostics', href: 'https://github.com/arumes31/noxa#-voice-video-and-screen-sharing' },
+      { label: 'Voice, sharing, microphone recovery, and diagnostics', href: 'https://github.com/arumes31/noxa#features' },
     ],
   },
   {
@@ -124,7 +124,7 @@ export default [
     ],
     related: ['server-setup', 'configuration', 'messaging', 'troubleshooting'],
     sources: [
-      { label: 'Roles and channel access model', href: 'https://github.com/arumes31/noxa#-roles-and-channel-access' },
+      { label: 'Roles and channel access model', href: 'https://github.com/arumes31/noxa#permissions' },
       { label: 'Role and channel setup steps', href: 'https://github.com/arumes31/noxa#3-configure-roles-and-member-defaults' },
     ],
   },
@@ -264,8 +264,8 @@ export default [
     ],
     related: ['getting-started', 'voice-video', 'roles-permissions', 'operations'],
     sources: [
-      { label: 'Connection behavior and diagnostics', href: 'https://github.com/arumes31/noxa#-desktop-experience' },
-      { label: 'Media behavior and recovery', href: 'https://github.com/arumes31/noxa#-voice-video-and-screen-sharing' },
+      { label: 'Connection behavior and diagnostics', href: 'https://github.com/arumes31/noxa#features' },
+      { label: 'Media behavior and recovery', href: 'https://github.com/arumes31/noxa#features' },
       { label: 'Server operations', href: 'https://github.com/arumes31/noxa#operations' },
     ],
   },
