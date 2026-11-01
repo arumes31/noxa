@@ -194,6 +194,8 @@ export class MediaSession {
         await Promise.all(work);
     }
 
+    releasePeer(pc) { if (pc) this.media?.releasePeer(pc); }
+
     setRoster(clients) { this.roster = clients; this.engine?.setRoster(clients); }
     receive(control) { return this.engine ? this.engine.receive(control) : { ok: false, reason: "inactive" }; }
     publicationsChanged() { this.engine?.publicationsChanged(); }

@@ -245,6 +245,21 @@ export class MediaE2EE {
         return pc;
     }
 
+    // A transport replacement retains publication keys and replay windows,
+    // but a closed peer must no longer own endpoints or hardware proof.
+    releasePeer(pc) {
+        this.peers.delete(pc);
+        for (const tr of pc?.getTransceivers?.() || []) for (const endpoint of [tr.sender, tr.receiver]) {
+            const entry = endpoint && this.endpoints.get(endpoint);
+            if (!entry) continue;
+            entry.pid = ""; entry.gen++; entry.waiters.length = 0;
+            this.endpoints.delete(endpoint); this.byId.delete(entry.id); this.bySenderId.delete(entry.id);
+            if (endpoint.track) this.byTrack.delete(endpoint.track);
+            this.hardwarePollers.delete(entry.id);
+            void this.request("detach", {id:entry.id}).catch(error => this.fail(error));
+        }
+    }
+
     // Covers transceivers created by a remote offer before its track event.
     syncPeer(pc) {
         for (const transceiver of pc.getTransceivers?.() || []) {

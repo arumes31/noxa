@@ -338,3 +338,30 @@ test("Intel H264 temporal prefixes survive real AEAD encryption and decryption",
   rx.push(tampered);await settle();assert.equal(rx.out.length,1,"clear prefix is authenticated");
  }
 });
+
+
+test("transport replacement retains installed keys and replay protection without old endpoint authority", async () => {
+    const tx = await sender("resume|mic", 90001, 0, key(61));
+    const oldRX = endpoint("decode");
+    await call("bind", {id:oldRX.id,pid:"resumed-peer|mic"});
+    await call("key", {pid:"resumed-peer|mic",epoch:90001,kid:0,key:key(61)});
+    tx.push(audio(40, 960));tx.push(audio(40,1920));
+    await waitFrames(tx,2);assert.equal(tx.out.length,2);
+    oldRX.push(clone(tx.out[0]));await waitFrames(oldRX,1);assert.equal(oldRX.out.length,1);
+    const before=await call("stats");
+    await call("detach",{id:oldRX.id});
+    assert.equal((await call("stats")).endpoints,before.endpoints-1);
+    const resumedRX=endpoint("decode");
+    await call("bind",{id:resumedRX.id,pid:"resumed-peer|mic"}); // no new key control
+    const replay=(await call("stats")).dropped.replay;
+    resumedRX.push(clone(tx.out[0]));resumedRX.push(clone(tx.out[1]));
+    oldRX.push(clone(tx.out[1]));await waitFrames(resumedRX,1);
+    assert.equal(resumedRX.out.length,1);
+    assert.deepEqual([...new Uint8Array(resumedRX.out[0].data)],[...new Uint8Array(audio(40,1920).data)]);
+    assert.equal(oldRX.out.length,1,"a closed peer has no presentation authority");
+    assert.equal((await call("stats")).dropped.replay,replay+1,"replay window survives the transport replacement");
+    await call("detach",{id:tx.id});
+    const resumedTX=endpoint("encode");await call("bind",{id:resumedTX.id,pid:"resume|mic"});
+    resumedTX.push(audio(40,2880));await waitFrames(resumedTX,1);
+    assert.equal(resumedTX.out.length,1,"retained active sender key needs no remote handshake");
+});

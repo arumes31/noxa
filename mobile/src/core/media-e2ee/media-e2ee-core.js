@@ -250,6 +250,22 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
             return { version: MEDIA_E2EE_VERSION };
         },
         attach({ id, operation, kind, readable, writable, hardwareRequired = false }) { attach(id, operation, kind, readable, writable, null, hardwareRequired); return {}; },
+        async detach({ id }) {
+            if (typeof id !== "string" || !ENDPOINT_RE.test(id)) throw new Error("invalid media endpoint");
+            pendingBinds.delete(id);
+            const ep = endpoints.get(id);
+            if (!ep) return {};
+            ep.ready = false; ep.gen++; ep.pid = ""; ep.kids.clear();
+            ep.hardwareUntil = 0;
+            // Scrub the detached library endpoint's key ring. Publication key
+            // material and replay windows stay scoped to this voice session.
+            const replacement = await junk();
+            for (let kid = 0; kid < KEYRING; kid++) lk("setKey", {participantIdentity:ep.lk,key:replacement,keyIndex:kid,updateCurrentKeyIndex:false});
+            lk("removeTransform", {trackId:id,participantIdentity:ep.lk});
+            endpoints.delete(id);
+            await fence();
+            return {};
+        },
         hardwareProof({ id, pid, sourceTag = "", enabled }) {
             const ep = endpoints.get(id);
             if (!ep || ep.operation !== "encode" || ep.kind !== "video" || typeof enabled !== "boolean") throw new Error("invalid hardware proof");

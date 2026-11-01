@@ -209,7 +209,7 @@ const recoverVoiceTransport = createVoiceTransportRecovery({ state,
         // Retain only the already authorized screen/Studio capture. A fresh
         // peer refreshes ICE and E2EE; camera capture is never auto-started.
         pauseShareForReconnect();
-        resetVoiceSession();
+        resetVoiceSession({ retainMedia: true });
         await ensureVoiceForChannel();
     },
 });
@@ -2181,6 +2181,8 @@ $("chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") sendC
 // ---------------------------------------------------------------------------
 
 let voiceSessionEpoch = 0;
+let retainedVoiceMedia = null;
+const voiceMediaScope = () => JSON.stringify([voiceConnectionScope(), state.myChannelID, state.myClientID]);
 let intentionalVoiceDisconnectScope = "";
 const voiceConnectionScope = () => JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration]);
 
@@ -2390,12 +2392,12 @@ async function readInitialMediaLimits(tabID, stillRelevant) {
     finally { active = false; clearTimeout(timer); }
 }
 
-function resetVoiceSession() {
+function resetVoiceSession({ retainMedia = false } = {}) {
     voiceSessionEpoch++;
     voiceStartOwner?.cancel();
     voiceStartOwner = null;
     voiceStartPromise = null;
-    teardownVoice();
+    teardownVoice({ retainMedia });
     resetVoiceUI();
     state.micState = "unknown";
     renderMicStatus($("mic-status"), "unknown");
@@ -2472,7 +2474,13 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     // created (explicit error, never plaintext channel media).
     let media;
     try {
-        media = await startChannelMedia({ tabID, channelID: state.myChannelID, roster: state.clients, onError: error => {
+        // A transport-only replacement must keep receive keys and replay
+        // windows. Peers on older clients will not re-send their current key
+        // merely because our DTLS peer changed while membership stayed equal.
+        const retained = retainedVoiceMedia;
+        media = retained?.scope === voiceMediaScope() && retained.media === channelMedia() ? retained.media : null;
+        if (media) media.setRoster(state.clients);
+        else media = await startChannelMedia({ tabID, channelID: state.myChannelID, roster: state.clients, onError: error => {
             toast(mediaErrorText(error), "warn");
             if (state.pc) resetVoiceSession();
         } });
@@ -2496,6 +2504,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
     // that old peer can never affect the new one.
     if (state.pc && state.pc !== pc) resetICERestart(state.pc);
     state.pc = pc;
+    retainedVoiceMedia = null;
     state.voiceTabID = tabID;
     maintainRelay(pc, {
         app: window.go.main.App, tabID,
@@ -2808,7 +2817,7 @@ function scheduleICERestart(pc) {
     iceTimer = timer;
 }
 
-function teardownVoice() {
+function teardownVoice({ retainMedia = false } = {}) {
     stopRemoteMedia();
     stopWatchingMicrophone();
     lostMicrophoneName = "";
@@ -2842,9 +2851,16 @@ function teardownVoice() {
     // (its published clone was stopped with the share stream above).
     if (!shareResumePending()) disposeStudio();
     detachRemoteAudio();
-    if (state.pc) { state.pc.close(); state.pc = null; }
-    // The session's worker and every media key end with the peer.
-    stopChannelMedia();
+    const closingPeer = state.pc;
+    if (closingPeer) { closingPeer.close(); state.pc = null; }
+    const media = channelMedia();
+    retainedVoiceMedia = retainMedia && media ? { media, scope: voiceMediaScope() } : null;
+    if (retainedVoiceMedia) {
+        // Drop old endpoint bindings, preserving the same channel's keys and
+        // replay windows. Channel moves, sign-out and server changes still
+        // destroy the complete encryption session through normal teardown.
+        media.releasePeer?.(closingPeer);
+    } else stopChannelMedia();
     state.voiceTabID = "";
     syncTrayVoice();
     if (state.localStream) {
