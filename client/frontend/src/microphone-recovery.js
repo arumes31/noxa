@@ -44,3 +44,63 @@ export function watchAudioOutput(selected, onLost, devices = navigator.mediaDevi
     devices?.addEventListener?.("devicechange", changed);
     return () => { active = false; devices?.removeEventListener?.("devicechange", changed); };
 }
+
+// Only the explicitly registered microphone slot may be reused. Serialize detach
+// and replacement so a late device-loss operation cannot clear its successor.
+export function createMicrophoneSenderOwner() {
+    const owners = new WeakMap();
+    const queue = (owner, action) => {
+        const result = owner.pending.catch(() => {}).then(action);
+        owner.pending = result;
+        return result;
+    };
+    const replace = async (owner, track, current) => {
+        if (!current()) throw new DOMException("voice session changed", "AbortError");
+        await owner.transceiver.sender.replaceTrack(track);
+        owner.track = track;
+        if (!current()) {
+            await owner.transceiver.sender.replaceTrack(null);
+            owner.track = null;
+            throw new DOMException("voice session changed", "AbortError");
+        }
+    };
+    return {
+        remember(pc, transceiver) {
+            owners.set(pc, { transceiver, track: transceiver.sender.track, pending: Promise.resolve() });
+            return transceiver;
+        },
+        detach(pc, track) {
+            const owner = owners.get(pc);
+            if (!owner) return Promise.resolve(false);
+            return queue(owner, async () => {
+                if (owner.track !== track) return false;
+                await owner.transceiver.sender.replaceTrack(null);
+                owner.track = null;
+                return true;
+            });
+        },
+        replace(pc, sender, track, current) {
+            const owner = owners.get(pc);
+            if (!owner || owner.transceiver?.sender !== sender) return Promise.reject(new Error("microphone sender changed"));
+            return queue(owner, () => replace(owner, track, current));
+        },
+        attach(pc, track, options, current) {
+            let owner = owners.get(pc);
+            if (!owner) {
+                owner = { transceiver: null, track: null, pending: Promise.resolve() };
+                owners.set(pc, owner);
+            }
+            return queue(owner, async () => {
+                if (!current()) throw new DOMException("voice session changed", "AbortError");
+                if (!owner.transceiver || owner.transceiver.stopped) {
+                    owner.transceiver = pc.addTransceiver(track, options);
+                    owner.track = track;
+                } else {
+                    await replace(owner, track, current);
+                }
+                owner.transceiver.direction = options.direction;
+                return owner.transceiver;
+            });
+        },
+    };
+}

@@ -74,7 +74,7 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
             const capture = videoSenderCaptureSample(stats, stat, p.track);
             const scale = parameters.encodings[0].scaleResolutionDownBy ?? 1;
             const geometry = Number.isFinite(scale) && scale >= 1 && stat.frameWidth >= 640 && stat.frameHeight >= 360 &&
-                stat.frameWidth % 4 === 0 && stat.frameHeight % 4 === 0 &&
+                stat.frameWidth % 2 === 0 && stat.frameHeight % 2 === 0 &&
                 Number.isFinite(settings.width) && Number.isFinite(settings.height) &&
                 stat.frameWidth * scale <= settings.width && stat.frameHeight * scale <= settings.height &&
                 stat.frameWidth * settings.height === stat.frameHeight * settings.width;

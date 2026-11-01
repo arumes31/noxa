@@ -95,7 +95,7 @@ window.metrics = async (pc, binding, stats) => {
     const hist = window.bindings.get(tr.mid) || []; if (hist.at(-1) !== pid) hist.push(pid); window.bindings.set(tr.mid, hist);
     const st = await stats(tr.receiver);
     const s = inbound.get(tr.mid);
-    out[pid] = { mid: tr.mid, frames: st?.endpoint?.frames || 0, dropped: st?.endpoint?.dropped || {}, decoded: s?.framesDecoded || 0, codec: (await pc.getStats()).get(s?.codecId)?.mimeType || "", bytes: s?.bytesReceived || 0 };
+    out[pid] = { mid: tr.mid, frames: st?.endpoint?.frames || 0, dropped: st?.endpoint?.dropped || {}, decoded: s?.framesDecoded || 0, codec: (await pc.getStats()).get(s?.codecId)?.mimeType || "", bytes: s?.bytesReceived || 0, samples: s?.totalSamplesReceived || 0, energy: s?.totalAudioEnergy || 0, pcm: window.micPCM?.get(pid) || null };
   }
   const senders = {};
   for (const tr of pc.getTransceivers()) {
@@ -131,6 +131,9 @@ eventLoop(async e => {
   else if (e.type === "control") receiveMediaKey({ sender: e.sender, sender_device: e.senderDevice, ...e.body });
 });
 let mic = null;
+const micSinks = [];
+const micElements = [];
+window.micPCM = new Map();
 window.e2ee = {
   async join(channel = 1) {
     window.peerGeneration = (await post("/begin", { ID })).generation;
@@ -165,10 +168,62 @@ window.e2ee = {
   rekey() { channelMedia().publicationsChanged(); },
   // Transforms belong to the sender: replaceTrack keeps encryption.
   async replaceMic() { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); const tr = state.pc.getTransceivers().find(t => t.sender.track?.kind === "audio" && t !== state.shareAudioSender); await tr.sender.replaceTrack(s.getAudioTracks()[0]); },
+  async consumeMic(publisher) {
+    const pc = state.pc, media = channelMedia()?.media, pid = publisher + "|mic";
+    const tr = pc.getTransceivers().find(t => media?.boundPid(t.receiver) === pid);
+    if (!tr) throw new Error("missing mic receiver " + publisher);
+    const ctx = new AudioContext();
+    // Match main's presentation owner: enable only the current authenticated
+    // binding. Rebinding still disables it; a stale callback cannot enable it.
+    media.onAuthenticated(tr.receiver, () => {
+      if (ctx.state !== "closed" && state.pc === pc && channelMedia()?.media === media &&
+          media.boundPid(tr.receiver) === pid && media.authenticated(tr.receiver)) tr.receiver.track.enabled = true;
+    });
+    const stream = new MediaStream([tr.receiver.track]);
+    const element = document.createElement("audio");
+    element.muted = true; element.srcObject = stream; document.body.append(element);
+    micElements.push(element);
+    await element.play();
+    const source = ctx.createMediaStreamSource(stream);
+    const sink = ctx.createScriptProcessor(1024, 1, 1);
+    const pcm = { samples: 0, energy: 0, state: ctx.state };
+    window.micPCM.set(pid, pcm);
+    sink.onaudioprocess = event => {
+      const input = event.inputBuffer.getChannelData(0);
+      pcm.samples += input.length;
+      for (const value of input) pcm.energy += value * value / ctx.sampleRate;
+      event.outputBuffer.getChannelData(0).fill(0); // never audible
+      pcm.state = ctx.state;
+    };
+    source.connect(sink).connect(ctx.destination);
+    await ctx.resume(); pcm.state = ctx.state; micSinks.push(ctx);
+  },
+  // Model a legitimate new RTP source beneath the same logical mic slot.
+  // This intentionally differs from sender reuse, which has its own client tests.
+  async restartMicSource() {
+    const previous = state.pc.getTransceivers().find(t => t.sender.track?.kind === "audio" && t.sender !== state.shareAudioSender);
+    if (!previous) throw new Error("missing microphone source");
+    previous.sender.track.stop(); await previous.sender.replaceTrack(null);
+    previous.direction = "recvonly";
+    // A generated tone avoids platform-dependent silent fake microphones.
+    const ctx = new AudioContext(), oscillator = ctx.createOscillator();
+    const gain = ctx.createGain(), destination = ctx.createMediaStreamDestination();
+    oscillator.type = "triangle"; oscillator.frequency.value = 660; gain.gain.value = .03;
+    oscillator.connect(gain).connect(destination); oscillator.start(); await ctx.resume();
+    mic = destination.stream; micSinks.push(ctx);
+    state.pc.addTransceiver(mic.getAudioTracks()[0], { direction: "sendrecv", streams: [mic] });
+    await renegotiate(state.pc, 1);
+  },
   async restartCamera() { const cam = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 360 } }); const tr = state.pc.getTransceivers().find(t => t.sender.track?.kind === "video" && t !== state.shareVideoTransceiver); tr.sender.track.stop(); await tr.sender.replaceTrack(cam.getVideoTracks()[0]); },
   status() { return channelMedia()?.status() || { state: "off" }; },
   epoch() { return channelMedia()?.engine?.activeEpoch || 0; },
-  async leave() { stopChannelMedia(); state.pc?.close(); state.pc = null; await post("/close", { ID }); },
+  async leave() {
+    for (const element of micElements.splice(0)) {
+      element.pause(); element.srcObject = null; element.remove();
+    }
+    await Promise.all(micSinks.splice(0).map(ctx => ctx.close()));
+    stopChannelMedia(); state.pc?.close(); state.pc = null; await post("/close", { ID });
+  },
   report() { return metrics(state.pc, r => channelMedia()?.media?.boundPid(r) || "", e => channelMedia().stats(e)); },
   offers() { return window.offers; },
   audit() { return window.attachAudit; },
@@ -272,6 +327,26 @@ try {
       await call("A","join");await call("B","join");await call("A","screen");
       await api("/watch",{ID:"B",Publisher:"A",Slot:"screen"});
       await growing("B","A|screen","H264 decrypts and decodes through SFU",{video:true,min:30});
+      // Both transform APIs must decrypt replacement Opus and produce fresh
+      // PCM energy, not only advance decoder concealment/sample counters.
+      for (const [publisher, viewer] of [["A", "B"], ["B", "A"]]) {
+        const pid = publisher + "|mic";
+        await growing(viewer, pid, "initial encrypted microphone");
+        await call(viewer, "consumeMic", publisher);
+        await call(publisher, "restartMicSource");
+        await poll("initial decoded microphone PCM", async () => {
+          const r = (await report(viewer)).receivers[pid];
+          return { ok: r?.pcm?.samples > 0 && r?.pcm?.energy > 0, r };
+        }, { timeout: 10000 });
+        const before = (await report(viewer)).receivers[pid];
+        await call(publisher, "restartMicSource");
+        await poll("encrypted microphone source replacement", async () => {
+          const r = (await report(viewer)).receivers[pid];
+          return { ok: !!r && r.mid === before.mid && r.frames > before.frames + 20 &&
+            r.pcm?.samples > before.pcm.samples && r.pcm.energy > before.pcm.energy + 1e-5, r };
+        }, { timeout: 40000 });
+      }
+      log("Opus source replacement: both transform APIs decrypted fresh PCM on persistent receiver MIDs");
       const epoch=await call("A","epoch");
       await open("C","pwa","script");await call("C","join");
       await api("/watch",{ID:"C",Publisher:"A",Slot:"screen"});

@@ -15,6 +15,9 @@ test.beforeEach(async ({ page }) => {
         <button id="voice-screen">Share</button><button id="voice-video">Camera</button>
         <video id="local-video"></video><div id="mic-status"></div><button id="ptt-btn">Talk</button><section id="sharing-status" hidden></section>` }));
     await page.goto("/media-slots-fixture");
+    if (test.info().title.includes("without frame processing")) {
+        await page.evaluate(() => { window.MediaStreamTrackProcessor = undefined; });
+    }
     await page.evaluate(async () => {
         const capture = () => document.createElement("canvas").captureStream(1);
         const localStream = capture();
@@ -1188,7 +1191,7 @@ test("pending screen capture is checked against the latest limits", async ({ pag
     expect(settings.width).toBeLessThanOrEqual(100); expect(settings.height).toBeLessThanOrEqual(100);
 });
 
-test("capture ignoring server dimensions is stopped before publication", async ({ page }) => {
+test("capture ignoring server dimensions is stopped without frame processing", async ({ page }) => {
     await page.evaluate(() => {
         window.__noxa.state.mediaLimits = { video_max_width: 100, video_max_height: 100 };
     });
@@ -1766,4 +1769,57 @@ test("hardware capture failure clears the desktop share owner and publication",a
     await expect.poll(()=>page.evaluate(()=>!!window.__noxa.state.screenSharing)).toBe(false);
     await expect.poll(()=>page.evaluate(()=>window.__media.video.trackSlots().map(t=>t.slot))).toEqual(["cam"]);
     expect(await page.evaluate(()=>window.__media.camera.readyState)).toBe("live");
+});
+
+
+test("frame processing enforces server dimensions even when capture ignores constraints", async ({ page }) => {
+    await page.evaluate(() => {
+        window.__noxa.state.mediaLimits = { video_max_width: 100, video_max_height: 100 };
+        Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", { configurable: true, value: async () => {
+            const canvas = document.createElement("canvas"); canvas.width = 640; canvas.height = 480;
+            const context = canvas.getContext("2d"); let frame = 0;
+            const draw = () => { context.fillStyle = frame++ % 2 ? "red" : "blue"; context.fillRect(0, 0, 640, 480); };
+            draw(); const stream = canvas.captureStream(30), track = stream.getVideoTracks()[0];
+            const timer = setInterval(draw, 33); track.addEventListener("ended", () => clearInterval(timer), { once: true });
+            track.applyConstraints = async () => {};
+            window.__media.displayTracks.push(track); return stream;
+        } });
+    });
+    await page.locator("#voice-screen").click();
+    await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
+    const result = await page.evaluate(async () => {
+        const source = window.__media.displayTracks[0], clone = window.__noxa.state.shareStream.getVideoTracks()[0].clone();
+        const processor = new MediaStreamTrackProcessor({ track: clone, maxBufferSize: 1 }), reader = processor.readable.getReader();
+        let frame;
+        try {
+            ({ value: frame } = await reader.read());
+            return { source: source.getSettings(), displayWidth: frame.displayWidth, displayHeight: frame.displayHeight };
+        } finally { frame?.close(); await reader.cancel(); clone.stop(); }
+    });
+    expect(result.source.width).toBe(640); expect(result.source.height).toBe(480);
+    expect(result.displayWidth).toBeGreaterThan(0); expect(result.displayWidth).toBeLessThanOrEqual(100);
+    expect(result.displayHeight).toBeGreaterThan(0); expect(result.displayHeight).toBeLessThanOrEqual(100);
+    expect(result.displayWidth % 2).toBe(0); expect(result.displayHeight % 2).toBe(0);
+});
+
+
+test("whole-display sampling headroom keeps one RTP encoding capped at the selected frame rate", async ({ page }) => {
+    await page.locator("#voice-screen").click();
+    await chooseShareOption(page, "preset", "hd");
+    await page.getByRole("button", { name: "Choose screen or window…", exact: true }).click();
+    await page.evaluate(() => {
+        const track = window.__media.displayTracks[0], apply = track.applyConstraints.bind(track);
+        track.applyConstraints = constraints => { window.__media.lastSourceConstraints = structuredClone(constraints); return apply(constraints); };
+    });
+    await page.getByRole("button", { name: "Start sharing", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => !!window.__noxa.state.screenSharing)).toBe(true);
+    const sample = await page.evaluate(() => ({ capture: window.__media.lastSourceConstraints,
+        output: window.__noxa.state.shareStream.getVideoTracks()[0].getConstraints(),
+        encodings: window.__noxa.state.shareVideoTransceiver.sender.getParameters().encodings }));
+    expect(sample.capture.frameRate).toEqual({ ideal: 60, max: 60 });
+    expect(sample.output.frameRate).toEqual({ ideal: 30, max: 30 });
+    expect(sample.encodings).toHaveLength(1);
+    expect(sample.encodings[0].maxFramerate).toBe(30);
 });

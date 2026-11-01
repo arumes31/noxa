@@ -50,9 +50,13 @@ type videoLoopbackFixture struct {
 	output   *pubSlot
 }
 
-func newVideoLoopbackFixture(t *testing.T, slot string) *videoLoopbackFixture {
+func newVideoLoopbackFixture(t *testing.T, slot string, policies ...MediaPolicy) *videoLoopbackFixture {
 	t.Helper()
-	engine, err := NewWithNetwork(testLogger(), []string{"stun:127.0.0.1:9"}, false, NetworkConfig{UDPAddr: "127.0.0.1:0", ExternalIPs: []string{"127.0.0.1"}})
+	var policy MediaPolicy
+	if len(policies) != 0 {
+		policy = policies[0]
+	}
+	engine, err := NewWithMediaPolicy(testLogger(), []string{"stun:127.0.0.1:9"}, false, NetworkConfig{UDPAddr: "127.0.0.1:0", ExternalIPs: []string{"127.0.0.1"}}, VideoBounds{}, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +67,8 @@ func newVideoLoopbackFixture(t *testing.T, slot string) *videoLoopbackFixture {
 		t.Fatal(err)
 	}
 	r := NewRouter(nil)
+	// Match NewVoice: use the policy negotiated by the engine.
+	r.mediaPolicy = engine.policy
 	r.JoinChannel(1, "pub")
 	r.JoinChannel(1, "viewer")
 	if slot == SlotScreen {

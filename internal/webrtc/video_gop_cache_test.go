@@ -1,6 +1,8 @@
 package webrtc
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -148,11 +150,16 @@ func startGOPFixture(t *testing.T, keyEvery time.Duration, mimes ...string) (*go
 	if len(mimes) > 0 {
 		mime = mimes[0]
 	}
+	return startGOPFixturePolicy(t, keyEvery, mime, MediaPolicy{})
+}
+
+func startGOPFixturePolicy(t *testing.T, keyEvery time.Duration, mime string, policy MediaPolicy) (*gopFixture, chan gopArrival) {
+	t.Helper()
 	codec := pion.RTPCodecCapability{MimeType: pion.MimeTypeH264, ClockRate: 90000, SDPFmtpLine: chaosH264Fmtp}
 	if mime == pion.MimeTypeH265 {
 		codec = pion.RTPCodecCapability{MimeType: pion.MimeTypeH265, ClockRate: 90000, SDPFmtpLine: chaosH265Fmtp}
 	}
-	f := &gopFixture{videoLoopbackFixture: newVideoLoopbackFixture(t, SlotCam), stop: make(chan struct{}), mime: mime,
+	f := &gopFixture{videoLoopbackFixture: newVideoLoopbackFixture(t, SlotCam, policy), stop: make(chan struct{}), mime: mime,
 		track: &chanVideoTrack{ch: make(chan *rtp.Packet, 1024), ssrc: 4242, codec: codec}}
 	if _, err := f.router.PublishVideoWithFormats("pub", SlotCam, 0, true, "", []string{"h265", "h264", "vp8"}, chaosHEVCLevel); err != nil {
 		t.Fatal(err)
@@ -202,7 +209,14 @@ func startGOPFixture(t *testing.T, keyEvery time.Duration, mimes ...string) (*go
 				lastKey = time.Now()
 				f.keyframes.Add(1)
 			}
-			for _, packet := range gopTestFrame(f.track.ssrc, f.mime, key, &sequence, frame) {
+			var packets []*rtp.Packet
+			if policy.E2EE {
+				packets = []*rtp.Packet{encryptedGOPTestFrame(f.track.ssrc, key, sequence, frame)}
+				sequence++
+			} else {
+				packets = gopTestFrame(f.track.ssrc, f.mime, key, &sequence, frame)
+			}
+			for _, packet := range packets {
 				select {
 				case f.track.ch <- packet:
 				case <-f.stop:
@@ -277,8 +291,9 @@ func testGOPCacheServesJoin(t *testing.T, mime string) {
 	verifyNoLeaks(t)
 	f, arrivals := startGOPFixture(t, 0, mime)
 	time.Sleep(300 * time.Millisecond)
-	start := time.Now()
 	f.watch(t)
+	// Measure media startup after ICE/DTLS is ready, not connection setup.
+	start := time.Now()
 	got := receiveDecodable(t, arrivals, time.Second, mime)
 	if wait := got[0].at.Sub(start); wait > 800*time.Millisecond {
 		t.Fatalf("first keyframe after %v", wait)
@@ -314,8 +329,11 @@ func TestGOPCacheServesViewerPLI(t *testing.T) {
 	f, arrivals := startGOPFixture(t, 0)
 	time.Sleep(200 * time.Millisecond)
 	f.watch(t)
+	// Warm the GOP after ICE setup so slow negotiation cannot age it out.
+	// This explicit source request is outside the cache-repair measurement.
+	f.router.requestKeyframe("pub", SlotCam, "", keyframeExplicit)
 	// The initial cache join also consumes the per-viewer refill interval.
-	// Wait it out and disable periodic keyframes so only a real refill can pass.
+	// Wait it out; periodic keyframes remain disabled so only a refill can pass.
 	got := receiveDecodable(t, arrivals, gopRefillInterval+100*time.Millisecond)
 	keyframes := f.keyframes.Load()
 	// Startup has its own no-upstream-PLI test. Measure only feedback caused
@@ -473,5 +491,143 @@ func TestGOPCacheJoinMidUnitWaitsForBoundary(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// Opaque synthetic cipher tails carry unique frame identities and the production
+// clear-header/trailer shape. SFU transport tests never need the media keys.
+func encryptedGOPTestFrame(ssrc uint32, key bool, sequence uint16, frame uint32) *rtp.Packet {
+	payload := encryptedH264Slice(key)
+	copy(payload[2:10], fmt.Sprintf("%08x", frame))
+	copy(payload[len(payload)-6:len(payload)-2], fmt.Sprintf("%04x", frame))
+	if key {
+		payload = h264TestSTAP(h264TestSPS(1920, 1080), h264TestPPSID(0, 0), payload)
+	}
+	packet := h264TestPacket(sequence, frame*1500, true, payload)
+	packet.SSRC = ssrc
+	return packet
+}
+
+// Establish the source codec before negotiating the recipient: the first
+// source packet replaces its placeholder output, which must not race SDP.
+func startEncryptedGOPFixture(t *testing.T) (*gopFixture, chan gopArrival) {
+	t.Helper()
+	f, arrivals := startGOPFixturePolicy(t, 0, pion.MimeTypeH264, MediaPolicy{E2EE: true})
+	deadline := time.Now().Add(time.Second)
+	for {
+		f.router.mu.RLock()
+		ready := f.router.videoCodecs[videoSourceRef{"pub", SlotCam}].MimeType == pion.MimeTypeH264
+		f.router.mu.RUnlock()
+		if ready {
+			return f, arrivals
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("encrypted source codec did not become ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// Whole-GOP replay reassigns RTP headers but reuses authenticated frame IVs.
+// Packet-level NACK repair must still work; picture repair needs a fresh IDR.
+func TestE2EEGOPRepairRequestsFreshKeyframe(t *testing.T) {
+	verifyNoLeaks(t)
+	f, arrivals := startEncryptedGOPFixture(t)
+	f.watch(t)
+	got := receiveDecodable(t, arrivals, 200*time.Millisecond)
+	seen := make(map[[sha256.Size]byte]uint16)
+	for _, a := range got {
+		seen[sha256.Sum256(a.packet.Payload)] = a.packet.SequenceNumber
+	}
+	target := got[len(got)-1].packet
+	beforePLI, beforeNACK := f.upstream.counts()
+	if err := f.receiver.WriteRTCP([]rtcp.Packet{&rtcp.TransportLayerNack{
+		MediaSSRC: f.output.egress.outputSSRC.Load(),
+		Nacks:     []rtcp.NackPair{{PacketID: target.SequenceNumber}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	repaired := false
+	repairDeadline := time.After(2 * time.Second)
+	for !repaired {
+		select {
+		case a := <-arrivals:
+			seen[sha256.Sum256(a.packet.Payload)] = a.packet.SequenceNumber
+			repaired = a.packet.SequenceNumber == target.SequenceNumber &&
+				sha256.Sum256(a.packet.Payload) == sha256.Sum256(target.Payload)
+		case <-repairDeadline:
+			t.Fatal("encrypted RTP packet was not repaired from egress history")
+		}
+	}
+	if plis, nacks := f.upstream.counts(); plis != beforePLI || nacks != beforeNACK {
+		t.Fatalf("packet repair reached publisher: PLI %d -> %d, NACK %d -> %d", beforePLI, plis, beforeNACK, nacks)
+	}
+	// Warm a fresh GOP after startup negotiation: slow ICE setup must not age
+	// the original GOP out and accidentally skip the cache regression.
+	time.Sleep(keyframeRequestWindow + 50*time.Millisecond)
+	f.router.requestKeyframe("pub", SlotCam, "", keyframeExplicit)
+	warmDeadline := time.After(2 * time.Second)
+	warmed := false
+	for !warmed {
+		select {
+		case a := <-arrivals:
+			seen[sha256.Sum256(a.packet.Payload)] = a.packet.SequenceNumber
+			warmed = chaosKeyStart(pion.MimeTypeH264, a.packet.Payload)
+		case <-warmDeadline:
+			t.Fatal("publisher did not produce the fresh warm-up IDR")
+		}
+	}
+	// Expire the warm-up PLI throttle while this GOP is still cacheable.
+	time.Sleep(keyframeRequestWindow + 50*time.Millisecond)
+	for len(arrivals) != 0 {
+		a := <-arrivals
+		seen[sha256.Sum256(a.packet.Payload)] = a.packet.SequenceNumber
+	}
+	beforePLI, _ = f.upstream.counts()
+	// A simultaneous PLI burst remains coalesced into one fresh source IDR.
+	requests := make([]rtcp.Packet, 3)
+	for i := range requests {
+		requests[i] = &rtcp.PictureLossIndication{MediaSSRC: f.output.egress.outputSSRC.Load()}
+	}
+	if err := f.receiver.WriteRTCP(requests); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case a := <-arrivals:
+			hash := sha256.Sum256(a.packet.Payload)
+			if sequence, ok := seen[hash]; ok && sequence != a.packet.SequenceNumber {
+				t.Fatal("encrypted GOP was replayed under fresh RTP sequence numbers")
+			}
+			seen[hash] = a.packet.SequenceNumber
+			if chaosKeyStart(pion.MimeTypeH264, a.packet.Payload) {
+				if plis, _ := f.upstream.counts(); plis != beforePLI+1 {
+					t.Fatalf("encrypted viewer repair issued %d upstream PLIs, want 1", plis-beforePLI)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("encrypted viewer did not receive a fresh source keyframe")
+		}
+	}
+}
+
+// A late watcher may have a different key epoch: never serve its pre-watch GOP.
+func TestE2EEGOPJoinRequestsFreshKeyframe(t *testing.T) {
+	verifyNoLeaks(t)
+	f, arrivals := startEncryptedGOPFixture(t)
+	time.Sleep(100 * time.Millisecond)
+	if f.keyframes.Load() != 1 {
+		t.Fatal("publisher did not produce its pre-watch keyframe")
+	}
+	f.watch(t)
+	got := receiveDecodable(t, arrivals, 200*time.Millisecond)
+	if plis, _ := f.upstream.counts(); plis != 1 || f.keyframes.Load() != 2 {
+		t.Fatalf("encrypted join reused pre-watch GOP: %d upstream PLIs, %d source keyframes", plis, f.keyframes.Load())
+	}
+	old := encryptedGOPTestFrame(f.track.ssrc, true, 0, 1)
+	if sha256.Sum256(got[0].packet.Payload) == sha256.Sum256(old.Payload) {
+		t.Fatal("encrypted join received a keyframe from before watch authorization")
 	}
 }

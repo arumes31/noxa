@@ -167,6 +167,260 @@ for(const failedPid of ["","self|screen"])test(`a failed source ${failedPid?"reb
         f.media.stats=async()=>({endpoint:{activeEpoch:1}});
         const poll=f.media.hardwarePollers.get(f.media.endpointID(f.sender));
         await poll();clock=20000;await poll();
-        assert.equal(calls,2);assert.equal(stopped,1);
+        assert.equal(calls,1,"an expired deadline stops before issuing another stats request");assert.equal(stopped,1);
     }finally{f.media.close();}
+});
+
+async function hardwarePollFixture(t) {
+    let clock = 1, evidence = "hardware", stopped = 0;
+    const proofs = [];
+    t.mock.method(performance, "now", () => clock);
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    class Worker {
+        postMessage({ seq, op, enabled }) {
+            if (op === "hardwareProof") proofs.push(enabled);
+            if (seq !== undefined) queueMicrotask(() => this.onmessage?.({ data: { seq, ok: true, value: { gen: 1 } } }));
+        }
+        terminate() {}
+    }
+    const media = new MediaE2EE({ api: "streams", workerURL: "fake", scope: {
+        Worker, crypto: globalThis.crypto, RTCRtpSender: { prototype: { createEncodedStreams() {} } },
+        RTCRtpReceiver: { prototype: { createEncodedStreams() {} } },
+    } });
+    await media.ready;
+    const track = { id: "proven-screen", kind: "video", readyState: "live",
+        stop() { stopped++; this.readyState = "ended"; }, dispatchEvent() {} };
+    const sender = { track, createEncodedStreams: () => ({ readable: {}, writable: {} }),
+        getParameters: () => ({ encodings: [{ active: true }] }),
+        getStats: async () => evidence === "pending" ? new Map() : new Map([
+            ["source", { trackIdentifier: sender.track.id }],
+            ["video", { type: "outbound-rtp", kind: "video", mediaSourceId: "source",
+                powerEfficientEncoder: evidence === "hardware", encoderImplementation: evidence === "hardware" ? "Intel QSV MFT" : "OpenH264" }],
+        ]),
+    };
+    media.protectSender(sender, "video");
+    media.stats = async () => ({ endpoint: { activeEpoch: 1 } });
+    await media.bind(sender, "self|screen");
+    t.after(() => media.close());
+    return { media, sender, track, proofs, stopped: () => stopped,
+        async sample(at, value) { clock = at; evidence = value; await media.hardwarePollers.get(media.endpointID(sender))?.(); } };
+}
+
+test("an established hardware stream gets a fresh deadline after a transient missing report", async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "hardware");
+    await f.sample(120001, "hardware");
+    await f.sample(120301, "pending");
+    assert.equal(f.stopped(), 0, "stream age must not make one missing report fatal");
+    assert.equal(f.proofs.at(-1), false, "missing evidence immediately revokes upload permission");
+    await f.sample(130302, "pending");
+    assert.equal(f.stopped(), 1, "persistent missing evidence still stops capture");
+});
+
+test("hardware fallback preserves the selected window through a bounded recovery opportunity", async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "hardware");
+    await f.sample(60001, "software");
+    assert.equal(f.stopped(), 0);
+    assert.equal(f.proofs.at(-1), false, "software fallback never receives hardware authorization");
+    await f.sample(75001, "software");
+    assert.equal(f.stopped(), 0, "the 10-second sender recovery scheduler must have time to run");
+    await f.sample(80002, "software");
+    assert.equal(f.stopped(), 1, "a failed recovery cannot retain capture indefinitely");
+});
+
+test("a recovered hardware encoder keeps the original capture and renews proof", async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "hardware");
+    await f.sample(60001, "software");
+    await f.sample(75001, "hardware");
+    assert.equal(f.sender.track, f.track);
+    assert.equal(f.track.readyState, "live");
+    assert.equal(f.stopped(), 0);
+    assert.deepEqual(f.proofs, [true, false, true]);
+    await f.sample(75002, "pending");
+    await f.sample(85003, "pending");
+    assert.equal(f.stopped(), 1, "the unknown-proof deadline applies again after recovery");
+});
+
+test("a source that never proved hardware still rejects software immediately", async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "software");
+    assert.equal(f.proofs.at(-1), false);
+    assert.equal(f.stopped(), 1);
+});
+
+test("a replacement source cannot inherit the previous window's hardware recovery grace", async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "hardware");
+    f.sender.track = { ...f.track, id: "new-window" };
+    await f.media.bind(f.sender, "self|screen");
+    await f.sample(60001, "software");
+    assert.equal(f.stopped(), 1);
+    assert.equal(f.track.readyState, "live", "the previous source is not stopped by a late poll");
+    assert.equal(f.sender.track.readyState, "ended");
+    assert.equal(f.proofs.at(-1), false);
+});
+
+for (const outcome of ["pending", "rejected stats", "rejected proof"]) test(`hardware fallback grace survives ${outcome} while the encoder restarts`, async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "hardware");
+    await f.sample(60001, "software");
+    if (outcome === "rejected stats") f.sender.getStats = async () => { throw Error("encoder restarting"); };
+    if (outcome === "rejected proof") {
+        const request = f.media.request.bind(f.media);
+        f.media.request = (op, ...args) => op === "hardwareProof" ? Promise.reject(Error("worker busy")) : request(op, ...args);
+    }
+    await f.sample(75001, "pending");
+    assert.equal(f.stopped(), 0, "an inconclusive poll must not shorten an admitted fallback retry");
+    assert.equal(f.proofs.at(-1), false);
+    await f.sample(80002, "pending");
+    assert.equal(f.stopped(), 1, "inconclusive retries still have a bounded deadline");
+});
+
+
+test("first software evidence retains recovery grace when its proof revocation rejects", async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "hardware");
+    const request = f.media.request.bind(f.media), attempted = [];
+    f.media.request = (op, data, ...args) => {
+        if (op !== "hardwareProof") return request(op, data, ...args);
+        attempted.push(data.enabled);
+        return Promise.reject(Error("worker busy on first revocation"));
+    };
+    await f.sample(60001, "software");
+    await f.sample(75001, "pending");
+    assert.equal(f.stopped(), 0, "the sampled fallback owns the window even if its first revocation fails");
+    assert.deepEqual(attempted, [false, false], "failed revocations must never extend positive proof");
+    await f.sample(80002, "pending");
+    assert.equal(f.stopped(), 1, "failed revocations remain bounded by the recovery deadline");
+});
+
+async function hungHardwareFixture(t, grace, failedOperation) {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1 });
+    t.mock.method(performance, "now", () => Date.now());
+    let evidence = grace === 20000 ? "hardware" : "pending", hold = false, calls = 0, stopped = 0;
+    const held = [];
+    class Worker {
+        postMessage(message) {
+            if (message.seq === undefined) return;
+            const reply = () => this.onmessage?.({ data: { seq: message.seq, ok: true, value: { gen: 1, endpoint: { activeEpoch: 1 } } } });
+            if (hold && message.op === (failedOperation === "worker stats" ? "stats" : "hardwareProof")) {
+                calls++; held.push(reply);
+            } else queueMicrotask(reply);
+        }
+        terminate() {}
+    }
+    const media = new MediaE2EE({ api: "streams", workerURL: "fake", scope: {
+        Worker, crypto: globalThis.crypto, RTCRtpSender: { prototype: { createEncodedStreams() {} } },
+        RTCRtpReceiver: { prototype: { createEncodedStreams() {} } },
+    } });
+    await media.ready;
+    const track = { id: "deadline-screen", kind: "video", readyState: "live",
+        stop() { stopped++; this.readyState = "ended"; }, dispatchEvent() {} };
+    const sender = { track, createEncodedStreams: () => ({ readable: {}, writable: {} }),
+        getParameters: () => ({ encodings: [{ active: true }] }),
+        getStats: () => {
+            if (hold && failedOperation === "sender stats") { calls++; return new Promise(() => {}); }
+            return Promise.resolve(evidence === "pending" ? new Map() : new Map([
+                ["source", { trackIdentifier: sender.track.id }],
+                ["video", { type: "outbound-rtp", kind: "video", mediaSourceId: "source", powerEfficientEncoder: evidence === "hardware", encoderImplementation: evidence === "hardware" ? "Intel QSV MFT" : "OpenH264" }],
+            ]));
+        },
+    };
+    media.protectSender(sender, "video"); await media.bind(sender, "self|screen");
+    const poll = media.hardwarePollers.get(media.endpointID(sender));
+    if (grace === 20000) await poll();
+    evidence = grace === 20000 ? "software" : "pending";
+    await poll();
+    evidence = "pending"; hold = true;
+    const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+    t.after(() => media.close());
+    return { media, sender, held, calls: () => calls, stopped: () => stopped, flush, evidence: value => { evidence = value; } };
+}
+
+for (const grace of [10000, 20000]) for (const operation of ["worker stats", "sender stats", "proof"]) {
+    test(grace + "ms capture deadline expires while " + operation + " is genuinely pending", async t => {
+        const f = await hungHardwareFixture(t, grace, operation);
+        t.mock.timers.tick(grace - 100); await f.flush();
+        assert.equal(f.calls(), 1, "exactly one request may remain in flight");
+        assert.equal(f.stopped(), 0);
+        t.mock.timers.tick(100); await f.flush();
+        assert.equal(f.stopped(), 1, "capture stop must not await request timeout");
+        assert.equal(f.sender.track.readyState, "ended");
+        for (const reply of f.held.splice(0)) reply();
+        await f.flush(); assert.equal(f.stopped(), 1, "late completion cannot stop twice");
+    });
+}
+
+for (const teardown of ["rebind", "detach", "close"]) test("pending proof deadline is cleaned on " + teardown, async t => {
+    const f = await hungHardwareFixture(t, 20000, "proof");
+    t.mock.timers.tick(19900); await f.flush();
+    assert.equal(f.calls(), 1);
+    if (teardown === "rebind") await f.media.bind(f.sender, "self|cam");
+    else if (teardown === "detach") await f.media.releasePeer({ getTransceivers: () => [{ sender: f.sender }] });
+    else f.media.close();
+    assert.equal(f.media.hardwareTimers.size, 0, "owner teardown removes both poll and deadline timers");
+    t.mock.timers.tick(100); await f.flush();
+    assert.equal(f.stopped(), 0, "retired deadline cannot stop the capture");
+    for (const reply of f.held.splice(0)) reply();
+    await f.flush();
+    assert.equal(f.media.hardwareTimers.size, 0, "late completion cannot revive an old watcher");
+});
+
+test("late old proof cannot stop or unschedule a replacement source watcher", async t => {
+    const f = await hungHardwareFixture(t, 20000, "proof");
+    t.mock.timers.tick(19900); await f.flush();
+    const oldPoll = f.media.hardwarePollers.get(f.media.endpointID(f.sender));
+    let replacementStopped = 0;
+    f.sender.track = { ...f.sender.track, id: "replacement-screen", stop() { replacementStopped++; } };
+    await f.media.bind(f.sender, "self|screen");
+    const nextPoll = f.media.hardwarePollers.get(f.media.endpointID(f.sender));
+    assert.notEqual(nextPoll, oldPoll);
+    t.mock.timers.tick(100); await f.flush();
+    for (const reply of f.held.splice(0)) reply();
+    await f.flush();
+    assert.equal(f.stopped(), 0); assert.equal(replacementStopped, 0);
+    assert.equal(f.media.hardwarePollers.get(f.media.endpointID(f.sender)), nextPoll);
+    assert.ok(f.media.hardwareTimers.size > 0, "new owner retains its independent timers");
+});
+
+test("demand returning during a stuck poll gets an independent deadline", async t => {
+    const f = await hungHardwareFixture(t, 20000, "proof");
+    t.mock.timers.tick(19900); await f.flush();
+    f.sender.getParameters = () => ({ encodings: [{ active: false }] });
+    t.mock.timers.tick(100); await f.flush();
+    assert.equal(f.stopped(), 0);
+    f.sender.getParameters = () => ({ encodings: [{ active: true }] });
+    t.mock.timers.tick(300); await f.flush();
+    t.mock.timers.tick(10000); await f.flush();
+    assert.equal(f.stopped(), 1, "a pending request cannot hide resumed demand");
+    assert.equal(f.calls(), 1, "poll serialization still bounds in-flight requests");
+});
+
+test("initial software stops capture without awaiting a hung proof revocation", async t => {
+    const f = await hardwarePollFixture(t);
+    const post = f.media.worker.postMessage.bind(f.media.worker), attempted = [];
+    f.media.worker.postMessage = message => {
+        if (message.op === "hardwareProof") { attempted.push(message.enabled); return; }
+        post(message);
+    };
+    const pending = f.sample(1, "software");
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    assert.equal(f.stopped(), 1, "software-only admission has no capture grace");
+    assert.deepEqual(attempted, [false], "no hardware authorization is granted");
+    f.media.close(); await pending;
+});
+
+test("a positive proof arriving after the deadline cannot revive polling", async t => {
+    const f = await hungHardwareFixture(t, 20000, "proof");
+    f.evidence("hardware");
+    t.mock.timers.tick(19900); await f.flush();
+    assert.equal(f.calls(), 1);
+    t.mock.timers.tick(100); await f.flush();
+    assert.equal(f.stopped(), 1); assert.equal(f.media.hardwareTimers.size, 0);
+    for (const reply of f.held.splice(0)) reply();
+    await f.flush();
+    assert.equal(f.stopped(), 1); assert.equal(f.media.hardwareTimers.size, 0);
+    assert.equal(f.media.hardwarePollers.size, 0);
 });

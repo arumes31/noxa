@@ -18,8 +18,10 @@ func hardwareBrowserArguments(fragments []string) (string, error) {
 		return "", err
 	}
 	const disabledSwitch = "--disable-features"
+	const enabledSwitch = "--enable-features"
+	const captureTextureFeature = "WebRtcAllowWgcUsingTexture"
 	const hardwareFeature = "ForceSoftwareForRtcLowResolutions"
-	var features, retained []string
+	var features, enabledFeatures, retained []string
 	seen := make(map[string]bool)
 	addFeature := func(feature string) {
 		feature = strings.TrimSpace(feature)
@@ -28,6 +30,21 @@ func hardwareBrowserArguments(fragments []string) (string, error) {
 			features = append(features, feature)
 		}
 	}
+	seenEnabled := make(map[string]bool)
+	addEnabled := func(feature string) {
+		feature = strings.TrimSpace(feature)
+		if feature != "" && !seenEnabled[feature] {
+			seenEnabled[feature] = true
+			enabledFeatures = append(enabledFeatures, feature)
+		}
+	}
+	featureName := func(feature string) string {
+		if i := strings.IndexAny(feature, "<:"); i >= 0 {
+			return feature[:i]
+		}
+		return feature
+	}
+
 	switches := true
 	for _, arg := range args[1:] {
 		if arg == "--" {
@@ -54,6 +71,14 @@ func hardwareBrowserArguments(fragments []string) (string, error) {
 			}
 			continue
 		}
+		if switches && name == enabledSwitch {
+			if hasValue {
+				for _, feature := range strings.Split(value, ",") {
+					addEnabled(feature)
+				}
+			}
+			continue
+		}
 		retained = append(retained, arg)
 	}
 	addFeature(hardwareFeature)
@@ -62,9 +87,27 @@ func hardwareBrowserArguments(fragments []string) (string, error) {
 	// sharing. This also changes trusted-rate-controller behavior and affects
 	// cameras; the measured improvement is NVIDIA-specific, not a vendor guarantee.
 	addFeature("MediaFoundationUseSWBRCForH264Camera")
+	// WGC can deliver GPU textures directly instead of reading every captured
+	// window back to CPU memory. Chromium guards this path to Windows 11 24H2+
+	// while actual encoder hardware proof remains a separate admission check.
+	// Preserve an explicit opt-out and caller-supplied feature parameters.
+	textureConfigured := false
+	for _, feature := range append(append([]string(nil), features...), enabledFeatures...) {
+		if featureName(feature) == captureTextureFeature {
+			textureConfigured = true
+			break
+		}
+	}
+	if !textureConfigured {
+		addEnabled(captureTextureFeature)
+	}
 	// Place the merged switch before a possible -- terminator. Positional
 	// arguments after it, even ones resembling switches, remain untouched.
-	retained = append([]string{disabledSwitch + "=" + strings.Join(features, ",")}, retained...)
+	merged := []string{disabledSwitch + "=" + strings.Join(features, ",")}
+	if len(enabledFeatures) != 0 {
+		merged = append(merged, enabledSwitch+"="+strings.Join(enabledFeatures, ","))
+	}
+	retained = append(merged, retained...)
 	for i, arg := range retained {
 		retained[i] = windows.EscapeArg(arg)
 	}
