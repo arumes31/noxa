@@ -95,7 +95,7 @@ export function cropDisplayStream(stream, region, { captureRateMultiplier = 1 } 
     const track = new MediaStreamTrackGenerator({ kind: "video" });
     processedTracks.add(track);
     const abort = new AbortController();
-    let stopped = false, output = {};
+    let stopped = false, output = {}, deliveredLayout = null;
     const transform = new TransformStream({
         transform(frame, controller) {
             let wrapped = null, transferred = false;
@@ -113,6 +113,7 @@ export function cropDisplayStream(stream, region, { captureRateMultiplier = 1 } 
                     controller.enqueue(wrapped);
                     wrapped = null;
                 }
+                deliveredLayout = layout;
             } finally {
                 if (!transferred) frame.close();
                 wrapped?.close();
@@ -143,7 +144,10 @@ export function cropDisplayStream(stream, region, { captureRateMultiplier = 1 } 
     track.getSettings = () => {
         const settings = source.getSettings();
         const width = settings.width || native.width, height = settings.height || native.height;
-        const layout = regionFrameLayout({ codedWidth: width, codedHeight: height,
+        // Settings describe delivered frames, including GPU captures whose
+        // actual geometry differs from the native track's reported size. During
+        // a pause/constraint change keep the last frame until a new one arrives.
+        const layout = deliveredLayout || regionFrameLayout({ codedWidth: width, codedHeight: height,
             displayWidth: width, displayHeight: height }, region, output);
         return { ...settings, width: layout.displayWidth, height: layout.displayHeight };
     };
