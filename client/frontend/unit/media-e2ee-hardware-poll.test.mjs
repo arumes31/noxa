@@ -278,3 +278,21 @@ for (const outcome of ["pending", "rejected stats", "rejected proof"]) test(`har
     await f.sample(80002, "pending");
     assert.equal(f.stopped(), 1, "inconclusive retries still have a bounded deadline");
 });
+
+
+test("first software evidence retains recovery grace when its proof revocation rejects", async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "hardware");
+    const request = f.media.request.bind(f.media), attempted = [];
+    f.media.request = (op, data, ...args) => {
+        if (op !== "hardwareProof") return request(op, data, ...args);
+        attempted.push(data.enabled);
+        return Promise.reject(Error("worker busy on first revocation"));
+    };
+    await f.sample(60001, "software");
+    await f.sample(75001, "pending");
+    assert.equal(f.stopped(), 0, "the sampled fallback owns the window even if its first revocation fails");
+    assert.deepEqual(attempted, [false, false], "failed revocations must never extend positive proof");
+    await f.sample(80002, "pending");
+    assert.equal(f.stopped(), 1, "failed revocations remain bounded by the recovery deadline");
+});

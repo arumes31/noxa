@@ -181,6 +181,9 @@ export class MediaE2EE {
                 const report = await sampleSenderStats(sender, { fresh: true });
                 if (this.closed || entry.invalidated || this.endpoints.get(sender) !== entry || source !== sender.track || source !== track || entry.sourceTag !== source.id) return;
                 const evidence = hardwareVideoEvidence(report, track.id);
+                // Capture lifetime follows sampled evidence even if the worker
+                // rejects this first revocation. This never grants upload proof.
+                if (evidence === "software" && hardwareSeen) recoveringSoftware = true;
                 await this.request("hardwareProof", { id, pid: entry.pid, sourceTag: track.id, enabled: evidence === "hardware" });
                 if (evidence === "hardware") {
                     // Measure loss of proof, not the total age of a good stream.
@@ -193,7 +196,6 @@ export class MediaE2EE {
                     // the sender recovery scheduler (10 s evidence) to restart
                     // its encoder without losing the user's selected window.
                     // Initial software-only admission still fails immediately.
-                    if (evidence === "software" && hardwareSeen) recoveringSoftware = true;
                     // Restarting encoders may temporarily omit the stats row.
                     // Neither that nor a failed poll shortens an admitted retry.
                     const grace = recoveringSoftware ? 20000 : 10000;
