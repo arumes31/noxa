@@ -17,7 +17,7 @@ require (
 	github.com/pion/sdp/v3 v3.0.20
 	github.com/pion/srtp/v3 v3.1.3
 	github.com/pion/transport/v5 v5.1.1
-	github.com/pion/turn/v5 v5.1.2
+	github.com/pion/turn/v5 v5.1.3
 	github.com/pion/webrtc/v4 v4.2.25
 	github.com/pires/go-proxyproto v0.16.0
 	github.com/prometheus/client_golang v1.25.0
