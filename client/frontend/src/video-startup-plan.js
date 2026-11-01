@@ -7,7 +7,7 @@ import { rtcStatsEpochNow } from "./rtc-stats-clock.js";
 export function screenStartupPlan({ stats, mid, parameters, profile, settings, limits, now = rtcStatsEpochNow() }) {
     if (!stats?.values || !stats?.get || typeof mid !== "string" || !mid ||
         !Number.isFinite(now) || !profile || !Number.isFinite(profile.width) || profile.width < 1280 ||
-        !Number.isFinite(profile.height) || profile.height < 720 || !Number.isFinite(profile.fps) || profile.fps < 50 || profile.fps > 240 ||
+        !Number.isFinite(profile.height) || profile.height < 720 || !Number.isFinite(profile.fps) || profile.fps < 25 || profile.fps > 240 ||
         parameters?.encodings?.length !== 1 || parameters.encodings[0].active !== false) return null;
     const encoding = parameters.encodings[0];
     if (!Number.isSafeInteger(encoding.maxBitrate) || encoding.maxBitrate <= 0) return null;

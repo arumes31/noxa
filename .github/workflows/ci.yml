@@ -167,7 +167,7 @@ jobs:
         run: go test -tags integration -count=1 -timeout=4m -run '^TestBrowser(ScreenSingleSource|SingleCodecSwitch)$' -v ./internal/webrtc
       - name: Verify end-to-end encrypted channel media and Studio output through the SFU
         working-directory: .
-        run: go test -tags integration -count=1 -timeout=12m -run '^TestBrowser(E2EE(H264)?ChannelMediaThroughSFU|StudioOutputThroughSFU)$' -v ./internal/webrtc
+        run: go test -tags integration -count=1 -timeout=12m -run '^TestBrowser(E2EE(H264)?ChannelMediaThroughSFU|StudioOutputThroughSFU|FirstVideoOfferCollisionPreservesExtensions)$' -v ./internal/webrtc
 
   frontend-e2e-shard:
     name: Browser tests (${{ matrix.shard }}/4)
