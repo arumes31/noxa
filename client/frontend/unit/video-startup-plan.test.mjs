@@ -32,6 +32,23 @@ test("a paused 1080p60 sender can seed a fresh audio-sized estimate without chan
     assert.deepEqual(f.parameters, before);
 });
 
+test("the default 1080p30 H264 share can escape an audio-only estimate once", async () => {
+    const f = fixture();
+    f.profile.fps = 30; f.settings.frameRate = 30;
+    f.stats.get("pair").availableOutgoingBitrate = 30000;
+    const original = structuredClone(f.parameters);
+    let reads = 0;
+    const attempt = createScreenStartupAttempt({ now: () => f.now, sample: async () => { reads++; return f.stats; } });
+    assert.equal((await attempt(f)).bitrateKbps, 2000);
+    assert.equal(await attempt(f), null, "additional viewers cannot repeatedly reset congestion control");
+    assert.equal(reads, 1);
+    assert.deepEqual(f.parameters, original, "the start hint does not install an encoder bitrate floor");
+    f.profile.bitrateCeiling = 500000;
+    assert.equal(screenStartupPlan(f).bitrateKbps, 500);
+    f.limits.video_max_bitrate = 200000;
+    assert.equal(screenStartupPlan(f).bitrateKbps, 170);
+});
+
 test("user, encoding and live server ceilings bound the initial estimate", () => {
     const f = fixture();
     f.profile.bitrateCeiling = 600000;
@@ -60,7 +77,7 @@ test("missing, stale, ambiguous and unrelated statistics cannot authorize a rese
         f => { f.parameters.encodings[0].active = true; },
         f => { f.parameters.encodings.push({ active: false }); },
         f => { f.parameters.encodings[0].maxBitrate = Infinity; },
-        f => { f.profile.width = undefined; }, f => { f.profile.fps = 30; },
+        f => { f.profile.width = undefined; }, f => { f.profile.fps = 15; },
         f => { f.limits.video_max_bitrate = -1; },
     ];
     for (const mutate of mutations) { const f = fixture(); mutate(f); assert.equal(screenStartupPlan(f), null); }
