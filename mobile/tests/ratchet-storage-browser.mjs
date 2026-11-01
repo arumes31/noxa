@@ -97,25 +97,8 @@ test(
           p.evaluate(async () => {
             globalThis.dbmod = await import("/src/core/db.js");
             globalThis.idmod = await import("/src/core/identity-store.js");
-            // Share one gate even with calls whose callee was captured before
-            // an awaited argument. Restoring the method alone cannot release them.
-            globalThis.holdCrypto = (method, flag) => {
-              const original = crypto.subtle[method].bind(crypto.subtle);
-              let open, released = false;
-              const gate = new Promise(resolve => { open = resolve; });
-              const held = async (...args) => {
-                globalThis[flag] = true;
-                await gate;
-                return original(...args);
-              };
-              crypto.subtle[method] = held;
-              return () => {
-                if (released) return;
-                released = true;
-                if (crypto.subtle[method] === held) crypto.subtle[method] = original;
-                open();
-              };
-            };
+            const { pauseCrypto } = await import("/tests/crypto-pause.mjs");
+            globalThis.holdCrypto = (method, flag) => pauseCrypto(crypto.subtle, method, () => { globalThis[flag] = true; });
             globalThis.releaseKey = holdCrypto("generateKey", "generating");
             globalThis.pending = (async () => {
               const db = await dbmod.openDB();

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { chromium } from "@playwright/test";
 
-test("abandoned recovery returns candidate quota and preserves receive keys", { timeout: 60000 }, async () => {
+test("abandoned recovery returns candidate quota and preserves receive keys", { timeout: 60000 }, async (t) => {
   // Serve source modules so this exercises the actual IndexedDB store without
   // relying on a stale application build or an in-memory transaction mock.
   const server = await createServer({
@@ -17,9 +17,14 @@ test("abandoned recovery returns candidate quota and preserves receive keys", { 
     res.end("<!doctype html><title>recovery storage</title>");
   });
   await server.listen();
-  let browser;
+  let browser, launch, cleaning;
+  const cleanup = () => cleaning ||= (async () => {
+    try { await (browser || await launch)?.close(); }
+    finally { await server.close(); }
+  })();
+  t.after(cleanup);
   try {
-    browser = await chromium.launch();
+    launch = chromium.launch(); browser = await launch;
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/__recovery-test`);
     const result = await page.evaluate(async () => {
@@ -97,7 +102,6 @@ test("abandoned recovery returns candidate quota and preserves receive keys", { 
     });
     assert.deepEqual(result, { abandoned: 8, account: "candidate-8", epoch: 4, blocked: false, outstanding: 40 });
   } finally {
-    await browser?.close();
-    await server.close();
+    await cleanup();
   }
 });
