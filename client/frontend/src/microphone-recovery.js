@@ -54,6 +54,16 @@ export function createMicrophoneSenderOwner() {
         owner.pending = result;
         return result;
     };
+    const replace = async (owner, track, current) => {
+        if (!current()) throw new DOMException("voice session changed", "AbortError");
+        await owner.transceiver.sender.replaceTrack(track);
+        owner.track = track;
+        if (!current()) {
+            await owner.transceiver.sender.replaceTrack(null);
+            owner.track = null;
+            throw new DOMException("voice session changed", "AbortError");
+        }
+    };
     return {
         remember(pc, transceiver) {
             owners.set(pc, { transceiver, track: transceiver.sender.track, pending: Promise.resolve() });
@@ -69,6 +79,11 @@ export function createMicrophoneSenderOwner() {
                 return true;
             });
         },
+        replace(pc, sender, track, current) {
+            const owner = owners.get(pc);
+            if (!owner || owner.transceiver?.sender !== sender) return Promise.reject(new Error("microphone sender changed"));
+            return queue(owner, () => replace(owner, track, current));
+        },
         attach(pc, track, options, current) {
             let owner = owners.get(pc);
             if (!owner) {
@@ -79,16 +94,11 @@ export function createMicrophoneSenderOwner() {
                 if (!current()) throw new DOMException("voice session changed", "AbortError");
                 if (!owner.transceiver || owner.transceiver.stopped) {
                     owner.transceiver = pc.addTransceiver(track, options);
+                    owner.track = track;
                 } else {
-                    await owner.transceiver.sender.replaceTrack(track);
+                    await replace(owner, track, current);
                 }
-                owner.track = track;
                 owner.transceiver.direction = options.direction;
-                if (!current()) {
-                    await owner.transceiver.sender.replaceTrack(null);
-                    owner.track = null;
-                    throw new DOMException("voice session changed", "AbortError");
-                }
                 return owner.transceiver;
             });
         },

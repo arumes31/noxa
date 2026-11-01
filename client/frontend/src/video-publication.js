@@ -443,9 +443,11 @@ export function createVideoPublication({ policy }) {
                 if (!current() || parameters.encodings?.length !== 1 || encoding.active === false || !Number.isFinite(scale) || scale < 1 || !eligible(first)) return false;
                 // The shared bounded cache retains hung native queries; a later
                 // retry must not launch additional work for the same geometry.
+                const sourceRate = size.frameRate > 0 ? size.frameRate : 30;
+                const encodedRate = encoding.maxFramerate > 0 ? Math.min(sourceRate, encoding.maxFramerate) : sourceRate;
                 const supported = await Promise.all([1, 2].map(divisor => hardwareVideoEncodeAvailable(first.codec, {
                     frameWidth: first.frameWidth / divisor, frameHeight: first.frameHeight / divisor,
-                    framesPerSecond: size.frameRate || 30,
+                    framesPerSecond: encodedRate,
                 })));
                 if (supported.some(value => !value)) return false;
                 await pause(150);

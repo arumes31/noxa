@@ -131,3 +131,12 @@ test("sender ownership does not leak across peer replacement or failed operation
     await f.owner.attach(f.pc, next, microphoneOptions, () => true);
     assert.equal(f.transceiver.sender.track, next);
 });
+
+test("profile updates share the microphone owner queue and cannot claim another sender", async () => {
+    const f = senderFixture(), next = { id: "processed-profile" };
+    await f.owner.replace(f.pc, f.transceiver.sender, next, () => true);
+    assert.equal(await f.owner.detach(f.pc, next), true);
+    assert.equal(f.transceiver.sender.track, null);
+    await assert.rejects(f.owner.replace(f.pc, { track: null }, next, () => true), /sender changed/);
+    assert.equal(f.transceiver.sender.track, null);
+});

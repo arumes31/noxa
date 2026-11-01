@@ -18,7 +18,7 @@ import { createLoginFeedback, connectFailureCategory, connectFailureIsDefinitive
 import { describeDeniedError } from './permission-denied.js';
 import { initLoginBackground } from './login-background.js';
 import { watchMicrophone, createMicrophoneSenderOwner } from "./microphone-recovery.js";
-import { voiceSendEncoding, applyVoicePriority } from "./voice-priority.js";
+import { voiceSendEncoding, setVoiceSenderParameters } from "./voice-priority.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { startVoiceDiagnostics, noteVoiceActivity } from './voice-diagnostics.js';
 import { updateMemberMediaIndicators } from "./member-media-indicator.js";
@@ -1427,7 +1427,7 @@ function syncOwnChannel({ audible = true, ownMove } = {}) {
     }
     if (playedCue && initialCuePending) state.pendingInitialChannelCueTabID = "";
     expandMyBranch();
-    applyChannelAudio();
+    refreshChannelAudio();
     chatUI.onMyChannelChanged();
     window.__noxaFiles?.onChannelChanged?.();
     renderTree();
@@ -1591,7 +1591,7 @@ window.runtime.EventsOn("event", (json) => {
                     state.pendingInitialChannelCueTabID = "";
                 }
                 expandMyBranch(); // (302)
-                applyChannelAudio();
+                refreshChannelAudio();
                 chatUI.onMyChannelChanged(); // (103/111) load history + header for the new channel
                 window.__noxaFiles?.onChannelChanged?.(); // (256) file browser follows the channel
                 recordRecentChannel(nextChannelID); // (320) recent channels
@@ -1685,7 +1685,7 @@ window.runtime.EventsOn("event", (json) => {
                 // a re-parent moves the row, so the cached ancestry has to
                 // follow it or the next edit dialog offers a stale parent.
                 ch.ParentID = d.parent_id || 0;
-                if (d.channel_id === state.myChannelID) applyChannelAudio();
+                if (d.channel_id === state.myChannelID) refreshChannelAudio();
                 chatUI.refreshHeader();
             }
             break;
@@ -2649,7 +2649,7 @@ async function startVoiceAttempt(expectedEpoch, startup) {
         return false;
     }
 
-    applyChannelAudio();
+    refreshChannelAudio();
     resetCameraState();
     // (88) re-apply the persisted low-bandwidth mode to the fresh session.
     if (state.settings?.low_bandwidth) setLowBandwidth(true, false);
@@ -2661,6 +2661,15 @@ async function startVoiceAttempt(expectedEpoch, startup) {
     return true;
 }
 
+// Event/startup owners report failed audio updates without an unhandled
+// rejection. Explicit microphone retry and settings owners await them instead.
+function refreshChannelAudio() {
+    const pc = state.pc, epoch = voiceSessionEpoch;
+    void applyChannelAudio().then(error => { if (error) throw error; }).catch(error => {
+        if (state.pc === pc && voiceSessionEpoch === epoch) sysMsg(t("settings.audioApplyFailed", { error: error?.message || String(error) }));
+    });
+}
+
 // (24) applyChannelAudio applies the current channel's Opus settings to the
 // outgoing audio: a maxBitrate cap on the sender encoding (0 = server
 // default 32000 bits/s, i.e. no explicit cap) and a contentHint on the local
@@ -2669,23 +2678,19 @@ async function applyChannelAudio() {
     if (!state.pc) return;
     const ch = state.channels.find((c) => c.ChannelID === state.myChannelID);
     if (!ch) return;
-    const bitrate = ch.OpusBitrate || 0;
-    const sender = state.pc.getSenders().find((s) => s.track && s.track.kind === "audio");
-    if (sender) {
-        const p = sender.getParameters();
-        if (p.encodings?.length) {
-            p.encodings[0].maxBitrate = bitrate > 0 ? bitrate : undefined;
-            // Voice stays in the highest allocation and network class.
-            // These parameters belong to the existing channel-audio update owner.
-            applyVoicePriority(p);
-            await sender.setParameters(p).catch(() => {});
-        }
-    }
+    const pc = state.pc, stream = state.localStream, epoch = voiceSessionEpoch, channelID = state.myChannelID;
+    const current = () => state.pc === pc && state.localStream === stream && voiceSessionEpoch === epoch && state.myChannelID === channelID;
+    const sender = pc.getSenders().find((s) => s.track && s.track.kind === "audio");
+    if (sender) await setVoiceSenderParameters(sender, ch.OpusBitrate || 0);
+    if (!current()) return;
     // (25) A move into or out of a music channel needs a fresh capture: the
     // stereo/DSP constraints cannot be changed on a live track.
-    const { track, changed, error } = await applyCaptureProfile(state.pc, state.localStream, ch, {
-        prepare: replaceMicrophoneGate, sendTrack: microphoneSendTrack, dispose: disposeMicrophoneGate,
+    const { track, changed, error } = await applyCaptureProfile(pc, stream, ch, {
+        prepare: replaceMicrophoneGate, sendTrack: microphoneSendTrack, dispose: disposeMicrophoneGate, current,
+        replace: (sender, next, valid) => microphoneSenders.replace(pc, sender, next, () => current() && valid()),
+        detach: (_sender, next) => microphoneSenders.detach(pc, next),
     });
+    if (!current()) return error;
     if (changed) {
         watchCurrentMicrophone();
         startVoiceMonitor();
