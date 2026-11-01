@@ -17,3 +17,7 @@ test("both directions must have current-epoch key material",()=>{
  status.state="paused";
  assert.equal(state({connected:true,status,clientID:"peer"}),"paused");
 });
+
+test("a failed voice transport is unavailable even when encryption keys are ready",()=>{
+ assert.equal(state({connected:false,failed:true,status:{epoch:1},self:true}),"unavailable");
+});

@@ -544,6 +544,8 @@ export class MediaKeyEngine {
             this.#publishers.set(value.client, state);
         }
         state.members = value.members; state.n = value.n; state.session = value.session;
+        state.announcedEpoch = control.epoch;
+        this.#statusSoon();
         this.#scheduleMembershipCheck();
         const install = (async () => {
             for (const slot of SLOTS) await this.media.setKey(publicationPid(value.client, slot), control.epoch, value.kid, value.keys[slot]);
@@ -554,7 +556,8 @@ export class MediaKeyEngine {
                 return;
             }
             state.epochs.push(control.epoch);
-            state.installedMembers = value.members;
+            state.epochs.sort((a, b) => a - b);
+            if (control.epoch === state.announcedEpoch) state.installedMembers = value.members;
             const previous = state.epochs.slice(0, -1);
             state.epochs = state.epochs.slice(-1);
             if (previous.length) {
@@ -628,7 +631,7 @@ export class MediaKeyEngine {
                 const id = `${r.principal}\n${r.device}`;
                 const publisher = this.#publishers.get(r.clientID);
                 return { clientID: r.clientID, sent: !!tally?.ok.has(id),
-                    received: !!publisher?.epochs.length && publisher.installedMembers === tally?.members,
+                    received: !!publisher?.announcedEpoch && publisher.epochs.includes(publisher.announcedEpoch) && publisher.installedMembers === tally?.members,
                     failed: !!tally?.failed.has(id) };
             }),
             waiting: this.#waiting(),

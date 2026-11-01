@@ -77,7 +77,7 @@ test("publication start and stop notify the media session", async t => {
     assert.equal(changes.length, 4, "stopping nothing does not rekey");
 });
 
-test("codec-only catalog changes reconfigure one current publication and ignore stale generations", async t => {
+test("codec-only catalog changes wait for demand and ignore stale generations", async t => {
     const fixture = setup(t);
     window.go.main.App.SupportsStreamCodecForTab = async () => true;
     fixture.track.getSettings = () => ({ width: 640, height: 360, frameRate: 30 });
@@ -96,8 +96,10 @@ test("codec-only catalog changes reconfigure one current publication and ignore 
     reconcilePublicationUploads(snapshot, [{ ...own, generation: "999", codec: "vp8" }]); await settle();
     assert.deepEqual(choices, ["h264"]);
     reconcilePublicationUploads(snapshot, [{ ...own, codec: "vp8" }]); await settle();
-    assert.deepEqual(choices, ["h264", "vp8"]);
-    reconcilePublicationUploads(snapshot, [{ ...own, codec: "vp8" }]); await settle();
+    assert.deepEqual(choices, ["h264"], "a paused upload keeps its encoder configuration");
+    reconcilePublicationUploads(snapshot, [{ ...own, upload_active: true, codec: "vp8" }]); await settle();
+    assert.deepEqual(choices, ["h264", "vp8"], "the current codec applies when demand returns");
+    reconcilePublicationUploads(snapshot, [{ ...own, upload_active: true, codec: "vp8" }]); await settle();
     assert.equal(choices.length, 2);
 });
 

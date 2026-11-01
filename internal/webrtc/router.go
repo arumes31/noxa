@@ -1872,7 +1872,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		}
 		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000}
 	}
-	var h264Frame h264ForwardFrame
+	h264Frame := h264ForwardFrame{encrypted: encrypted}
 	var h264RecoveryPending bool
 	var h265Frame h265ForwardFrame
 	var h265RecoveryPending bool
@@ -1927,7 +1927,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		policy = r.videoPolicySnapshot()
 		if boundsRevision != policy.boundsRevision {
 			dimensions = vp8BoundsInspector{bounds: policy.bounds}
-			h264Frame = h264ForwardFrame{onReject: h264Frame.onReject}
+			h264Frame = h264ForwardFrame{encrypted: encrypted, onReject: h264Frame.onReject}
 			h265Frame = h265ForwardFrame{}
 			boundsRevision = policy.boundsRevision
 			encryptedDimensions = h264BoundsInspector{bounds: policy.bounds, encrypted: true}
@@ -1953,7 +1953,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			// Never complete an access unit across a rejected format transition.
 			// Quarantine its timestamp too: a later Baseline-labelled slice alone
 			// cannot make that rejected unit complete. Preserve the diagnostics hook.
-			h264Frame = h264ForwardFrame{onReject: h264Frame.onReject,
+			h264Frame = h264ForwardFrame{encrypted: encrypted, onReject: h264Frame.onReject,
 				rejected: true, rejectedSSRC: pkt.SSRC, rejectedTimestamp: pkt.Timestamp}
 			h264RecoveryPending = true
 			h265Frame = h265ForwardFrame{rejected: true, rejectedSSRC: pkt.SSRC, rejectedTimestamp: pkt.Timestamp}
@@ -1964,7 +1964,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		if hasAdmittedCodec && !sameVideoCodec(lastAdmittedCodec, codec) {
 			ownedSource.gop.invalidate()
 			oldH264, oldH265 := h264Frame, h265Frame
-			h264Frame = h264ForwardFrame{onReject: oldH264.onReject}
+			h264Frame = h264ForwardFrame{encrypted: encrypted, onReject: oldH264.onReject}
 			h265Frame = h265ForwardFrame{}
 			if len(oldH264.packets) > 0 {
 				h264Frame.rejected = true
@@ -1981,7 +1981,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		lastAdmittedCodec, hasAdmittedCodec = codec, true
 		now := enqueuedAt // Reorder emission time; kernel/read arrival is recorded separately.
 		if strings.EqualFold(mime, webrtc.MimeTypeH265) {
-			h264Frame = h264ForwardFrame{onReject: h264Frame.onReject}
+			h264Frame = h264ForwardFrame{encrypted: encrypted, onReject: h264Frame.onReject}
 			h264RecoveryPending = false
 			packets, keyframe, lost := h265Frame.push(pkt, now)
 			if dispatchRecovery && len(packets) > 0 {
@@ -2066,7 +2066,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			ownedSource.gop.observe(mime, packets, keyframe, lost, now)
 			return
 		}
-		h264Frame = h264ForwardFrame{onReject: h264Frame.onReject}
+		h264Frame = h264ForwardFrame{encrypted: encrypted, onReject: h264Frame.onReject}
 		h264RecoveryPending = false
 		if dispatchRecovery {
 			if !strings.EqualFold(mime, webrtc.MimeTypeVP8) || isVideoPadding(pkt) || !dispatchVP8.accept(pkt) {

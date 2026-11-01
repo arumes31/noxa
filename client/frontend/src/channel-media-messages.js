@@ -1,6 +1,7 @@
 // Encrypted channel media (Task 2) strings; the PWA carries the same texts
 // (mobile/src/ui/media-e2ee-text.js).
 export const channelMediaEnglish = {
+    "e2ee.member.unavailable": "Voice connection unavailable",
     "e2ee.reason.hardware_unverified": "Stream stopped: hardware acceleration could not be verified in this browser.",
     "e2ee.reason.hardware_encoder": "Stream stopped: no hardware encoder is available.",
     "e2ee.member.connecting": "Connecting…",
@@ -39,6 +40,7 @@ export const channelMediaEnglish = {
 };
 
 export const channelMediaGerman = {
+    "e2ee.member.unavailable": "Sprachverbindung nicht verfügbar",
     "e2ee.reason.hardware_unverified": "Stream beendet: Hardwarebeschleunigung konnte in diesem Browser nicht geprüft werden.",
     "e2ee.reason.hardware_encoder": "Stream beendet: Kein Hardwareencoder verfügbar.",
     "e2ee.member.connecting": "Verbinden…",

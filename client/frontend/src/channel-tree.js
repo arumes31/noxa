@@ -447,7 +447,11 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             row.appendChild(indicator);
         }
         const mediaIndicator = createMemberMediaIndicator(c, state);
-        if (mediaIndicator) row.appendChild(mediaIndicator);
+        if (mediaIndicator) {
+            row.dataset.mediaBaseAriaLabel = row.getAttribute("aria-label") || "";
+            row.appendChild(mediaIndicator);
+            if (!mediaIndicator.hidden) row.setAttribute("aria-label", `${row.dataset.mediaBaseAriaLabel}, ${mediaIndicator.getAttribute("aria-label")}`);
+        }
         // (310) group badge next to the name. Groups without an icon get a text
         // chip in the group colour instead of nothing — colour and hoisting are
         // settable on their own, so an icon is not what makes a group visible.

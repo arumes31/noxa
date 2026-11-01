@@ -441,3 +441,16 @@ func TestH264ForwardAcceptsLateReorderRepair(t *testing.T) {
 		})
 	}
 }
+
+func TestH264ForwardTemporalPrefixOnlyEncrypted(t *testing.T) {
+	for _, encrypted := range []bool{false, true} {
+		frame := h264ForwardFrame{encrypted: encrypted}
+		if got := frame.nal(14); got != encrypted {
+			t.Fatalf("encrypted=%v prefix admitted=%v", encrypted, got)
+		}
+		frame.clearUnit()
+		if got := frame.nal(14); got != encrypted {
+			t.Fatalf("reset lost encryption mode: encrypted=%v admitted=%v", encrypted, got)
+		}
+	}
+}

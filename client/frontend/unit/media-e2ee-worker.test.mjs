@@ -51,6 +51,10 @@ function endpoint(operation, kind = "audio", via = "post", hardwareRequired = fa
     return { id, out, push: frame => push.enqueue(frame) };
 }
 const settle = () => new Promise(r => setTimeout(r, 60));
+async function waitFrames(endpoint, count) {
+    const deadline = performance.now() + 3000;
+    while (endpoint.out.length < count && performance.now() < deadline) await new Promise(r => setTimeout(r, 5));
+}
 const key = fill => new Uint8Array(32).fill(fill);
 const audio = (n, ts) => new Frame([0xf8, ...Array.from({ length: n }, (_, i) => (i * 7 + ts) & 255)], { timestamp: ts });
 
@@ -72,7 +76,7 @@ test("both entry points encrypt with the library and decrypt only authenticated 
         await call("key", { pid: `c1|mic-${via}`, epoch: 10, kid: 0, key: key(1) });
         const plain = [audio(40, 960), audio(41, 1920), audio(42, 2880)];
         for (const f of plain) tx.push(clone(f));
-        await settle();
+        await waitFrames(tx, 3);
         assert.equal(tx.out.length, 3, via);
         for (const [i, f] of tx.out.entries()) {
             const bytes = new Uint8Array(f.data);
@@ -81,7 +85,7 @@ test("both entry points encrypt with the library and decrypt only authenticated 
             assert.notDeepEqual(bytes.slice(1, 41), new Uint8Array(plain[i].data).slice(1, 41), "payload is encrypted");
         }
         for (const f of tx.out) rx.push(clone(f));
-        await settle();
+        await waitFrames(rx, 3);
         assert.deepEqual(rx.out.map(f => [...new Uint8Array(f.data)]), plain.map(f => [...new Uint8Array(f.data)]), via);
     }
 });

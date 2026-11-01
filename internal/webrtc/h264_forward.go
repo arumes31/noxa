@@ -40,6 +40,7 @@ const (
 // deliberately separate from the strict dimension-policy inspector. A fresh
 // receiver needs the SPS, PPS and a complete IDR access unit before deltas.
 type h264ForwardFrame struct {
+	encrypted              bool
 	observed               bool
 	lastSSRC               uint32
 	lastSequence           uint16
@@ -60,7 +61,7 @@ type h264ForwardFrame struct {
 }
 
 func (f *h264ForwardFrame) clearUnit() {
-	*f = h264ForwardFrame{observed: f.observed, lastSSRC: f.lastSSRC, lastSequence: f.lastSequence, onReject: f.onReject,
+	*f = h264ForwardFrame{encrypted: f.encrypted, observed: f.observed, lastSSRC: f.lastSSRC, lastSequence: f.lastSequence, onReject: f.onReject,
 		rejected: f.rejected, rejectedSSRC: f.rejectedSSRC, rejectedTimestamp: f.rejectedTimestamp}
 }
 
@@ -92,7 +93,11 @@ func (f *h264ForwardFrame) nal(header byte) bool {
 	}
 	f.nals++
 	switch header & 31 {
-	case 1, 6, 9, 12, 14:
+	case 14:
+		if !f.encrypted {
+			return false
+		}
+	case 1, 6, 9, 12:
 	case 5:
 		if !f.idr {
 			f.configurationBeforeIDR = f.sps && f.pps

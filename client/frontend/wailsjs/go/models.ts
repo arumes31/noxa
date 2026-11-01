@@ -4129,6 +4129,8 @@ export namespace netproto {
 	    }
 	}
 	export class VideoStreamControl {
+	    encrypted_codecs?: string;
+	    codecs?: string[];
 	    hevc_level_id?: number;
 	    codec_revision?: string;
 	    action: string;
@@ -4147,6 +4149,8 @@ export namespace netproto {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.encrypted_codecs = source["encrypted_codecs"];
+	        this.codecs = source["codecs"];
 	        this.hevc_level_id = source["hevc_level_id"];
 	        this.codec_revision = source["codec_revision"];
 	        this.action = source["action"];

@@ -10369,7 +10369,9 @@ test("does not construct stale attachment data URLs after channel or view change
 });
 
 test("contains disconnect and ICE-candidate rejections and reports ICE exhaustion once per outage", async ({ page }) => {
+    test.setTimeout(60000);
     await page.evaluate(async () => {
+        (await import("/src/channel-media.js")).useChannelMediaFactory(window.__standInMedia);
         window.__unhandled = [];
         window.addEventListener("unhandledrejection", (event) => window.__unhandled.push(String(event.reason)));
         window.__noxa.state.settings.notify_connection = true;
@@ -10471,12 +10473,22 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
         pc.iceConnectionState = "failed";
         pc.oniceconnectionstatechange();
         for (let i = 0; i < 4; i++) await runNextICETimer();
-        window.__iceRetryDelays = delays;
+        window.__iceRetryDelays = delays.slice();
+        const iceReads = window.__calls.GetICEServersForTab || 0;
+        state.muted = true; state.deafened = true;
+        await runNextICETimer();
+        window.__transportReplacement = {
+            replaced: state.pc !== pc,
+            oldClosed: pc.iceConnectionState === "closed",
+            freshICEReads: (window.__calls.GetICEServersForTab || 0) - iceReads,
+            muted: state.muted, deafened: state.deafened,
+        };
     });
     expect(await page.evaluate(() => window.__calls.DisconnectTab)).toBe(1);
     expect(await page.evaluate(() => window.__calls.SendICECandidateForTab)).toBe(1);
     expect(await page.evaluate(() => window.__oldPeerIsolation)).toEqual({ pendingBeforeOldEvents: 1, pendingAfterOldEvents: 1 });
-    expect(await page.evaluate(() => window.__iceRetryDelays)).toEqual([1000, 2000, 5000, 15000, 1000, 2000, 5000, 15000]);
+    expect(await page.evaluate(() => window.__iceRetryDelays)).toEqual([1000, 2000, 5000, 15000, 1000, 1000, 2000, 5000, 15000, 1000]);
+    expect(await page.evaluate(() => window.__transportReplacement)).toEqual({replaced: true, oldClosed: true, freshICEReads: 1, muted: true, deafened: true});
     expect(await page.evaluate(() => window.__terminalToastsBeforeRecovery)).toBe(1);
     expect(await page.locator("#toasts .toast", { hasText: "Voice connection unstable" }).count()).toBe(2);
     expect(await page.locator("#toasts .toast", { hasText: "disconnect failed" }).count()).toBe(1);

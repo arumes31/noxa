@@ -117,7 +117,16 @@ export class MediaE2EE {
     }
 
     #watchHardware(sender, id) {
-        let track = null, started = 0, checking = false, scheduled = null;
+        let track = null, started = null, checking = false, scheduled = null;
+        const stopUnverified = (entry, reason) => {
+            if (this.closed || this.endpoints.get(sender) !== entry || entry?.pid !== "self|screen" ||
+                track !== sender.track || track?.readyState === "ended" ||
+                sender.getParameters?.().encodings?.every(e => e.active === false)) return;
+            track.stop();
+            // stop() does not dispatch ended; the owner must clear the share.
+            track.dispatchEvent?.(new Event("ended"));
+            this.onHardwareUnavailable(new Error(reason));
+        };
         const poll = async () => {
             if (this.closed || checking) return;
             checking = true;
@@ -126,26 +135,23 @@ export class MediaE2EE {
                 // The mandatory policy applies to screen/Studio streams. Camera
                 // calls retain their existing behavior and microphone is separate.
                 if (!sender.track || sender.track.readyState === "ended" || entry?.pid !== "self|screen") return;
-                if (track !== sender.track) { track = sender.track; started = 0; }
+                if (track !== sender.track) { track = sender.track; started = null; }
                 const active = sender.getParameters?.().encodings?.some(e => e.active !== false);
-                if (active === false) { started = 0; return; } // no viewer demand
+                if (active === false) { started = null; return; } // no viewer demand
+                if (started === null) started = performance.now();
                 const cryptor = await this.stats(sender);
-                if (!cryptor.endpoint?.activeEpoch) { started = 0; return; }
-                if (!started) started = performance.now();
+                if (!cryptor.endpoint?.activeEpoch) { started = null; return; }
                 const report = typeof sender.getStats === "function" ? await sender.getStats() : new Map();
                 if (this.closed || track !== sender.track) return;
                 const evidence = hardwareVideoEvidence(report, track.id);
                 await this.request("hardwareProof", { id, pid: entry.pid, sourceTag: track.id, enabled: evidence === "hardware" });
                 if (evidence === "software" || evidence !== "hardware" && performance.now() - started > 10000) {
-                    track.stop();
-                    // stop() itself emits no ended event; notify the capture
-                    // owner so it clears the publication and its controls too.
-                    track.dispatchEvent?.(new Event("ended"));
-                    this.onHardwareUnavailable(new Error(evidence === "software" ? "hardware_encoder" : "hardware_unverified"));
+                    stopUnverified(entry, evidence === "software" ? "hardware_encoder" : "hardware_unverified");
                 }
             } catch {
-                // A late/missing proof expires in the worker. Busy page code
-                // never authorizes software media by default.
+                // Proof still expires in the worker. Rejected stats/proof
+                // requests must also stop an unverified capture, not poll forever.
+                if (started !== null && performance.now() - started > 10000) stopUnverified(entry, "hardware_unverified");
             } finally {
                 checking = false;
                 if (scheduled !== null) { clearTimeout(scheduled); this.hardwareTimers.delete(scheduled); }

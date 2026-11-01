@@ -532,3 +532,22 @@ test("key delivery recovers after more than five failures without a channel rejo
         assert.ok(states.some(s => s.failed?.some(f => f.reason === "device_unavailable")));
     } finally { e.stop(); }
 });
+
+
+test("a newly announced epoch is not ready until installed, including reordered completions", async () => {
+    const media=fakeMedia(), original=media.setKey, pending=[];
+    const {e,sent}=engine({media});
+    const client="c-new-epoch", sender="u-new-epoch", device="d-new-epoch";
+    e.setRoster([member(client,sender,device)]);e.start(me);await flush();
+    const incoming=epoch=>{const c=control(epoch,{client,sender,device});c.data.members=sent[0].body.data.members;return c;};
+    const ready=()=>e.status().participants[0].received;
+    try {
+        e.receive(incoming(10000));await flush();assert.equal(ready(),true);
+        media.setKey=async(...args)=>{if(args[0]===publicationPid(client,"mic"))await new Promise(r=>pending.push(r));return original(...args);};
+        e.receive(incoming(10001));assert.equal(ready(),false);
+        e.receive(incoming(10002));assert.equal(ready(),false);
+        pending[1]();await flush();assert.equal(ready(),true);
+        pending[0]();await flush();assert.equal(ready(),true,"old completion cannot replace current installed epoch");
+        assert.equal(e.publisherStatus(client).epoch,10002);
+    } finally {e.stop();}
+});

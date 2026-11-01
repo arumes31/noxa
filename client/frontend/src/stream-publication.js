@@ -47,6 +47,7 @@ function currentUpload(slot, track) {
 }
 
 function applyUpload(upload, slot, demandOnly = false) {
+    demandOnly = demandOnly || upload.active === false;
     if (upload.applying) {
         if (demandOnly) upload.demandOnlyPending = true;
         return upload.applying;
@@ -202,6 +203,13 @@ export function reconcilePublicationUploads(snapshot, streams) {
             stream.slot === publication.slot && stream.generation === generation);
         retryCapabilities(publication, upload);
         if (typeof own?.upload_active !== "boolean") continue;
+        // No viewers: pause the existing encoding without renegotiating a
+        // catalog codec change. Adopt the selected codec when demand returns.
+        if (!own.upload_active) {
+            upload.active = false;
+            if (upload.applied !== false) void applyUpload(upload, publication.slot, true).catch(() => {});
+            continue;
+        }
         if (upload.hevc && String(own.codec_revision) !== String(upload.codecRevision)) {
             // Demand is authoritative for this exact generation even while its
             // codec replacement is pending. Never adopt the older codec here.
