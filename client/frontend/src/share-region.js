@@ -10,6 +10,12 @@ export const MIN_REGION_PX = 64;
 export const regionCropSupported = () => typeof globalThis.MediaStreamTrackProcessor === "function" &&
     typeof globalThis.MediaStreamTrackGenerator === "function" && typeof globalThis.VideoFrame === "function";
 
+const processedTracks = new WeakSet();
+export function displayStreamHasFrameGeometry(stream) {
+    const tracks = stream?.getVideoTracks?.() || [];
+    return tracks.length === 1 && processedTracks.has(tracks[0]);
+}
+
 const unit = value => Math.min(1, Math.max(0, Number(value) || 0));
 const even = value => Math.max(0, Math.floor(value / 2) * 2);
 
@@ -51,6 +57,26 @@ export function sourceConstraints(native, region, output = {}) {
         ...(output.frameRate ? { frameRate: output.frameRate } : {}) };
 }
 
+// Texture-backed capture may bypass the browser's CPU-size adapter. Align
+// both the visible resource and its display size before it reaches H264;
+// getSettings()/applyConstraints alone cannot prove the next frame is even.
+export function regionFrameLayout(frame, region, output = {}) {
+    const visible = frame.visibleRect || { x: 0, y: 0, width: frame.codedWidth, height: frame.codedHeight };
+    if (![frame.codedWidth, frame.codedHeight, visible.x, visible.y, visible.width, visible.height, frame.displayWidth, frame.displayHeight].every(Number.isSafeInteger) ||
+        visible.x < 0 || visible.y < 0 || visible.width < 2 || visible.height < 2 ||
+        frame.displayWidth < 2 || frame.displayHeight < 2) throw new Error("invalid capture frame geometry");
+    if (visible.x + visible.width > frame.codedWidth || visible.y + visible.height > frame.codedHeight ||
+        bound(output.width) < 2 || bound(output.height) < 2) throw new Error("invalid capture frame bounds");
+    const rect = cropRect(visible.width, visible.height, region);
+    const displayWidth = frame.displayWidth * rect.width / visible.width;
+    const displayHeight = frame.displayHeight * rect.height / visible.height;
+    const scale = Math.min(1, bound(output.width) / displayWidth, bound(output.height) / displayHeight);
+    const aligned = (value, maximum) => Math.max(2, Math.min(even(maximum), Math.round(value / 2) * 2));
+    return { visibleRect: { x: visible.x + rect.x, y: visible.y + rect.y, width: rect.width, height: rect.height },
+        displayWidth: aligned(displayWidth * scale, Math.min(frame.displayWidth, bound(output.width))),
+        displayHeight: aligned(displayHeight * scale, Math.min(frame.displayHeight, bound(output.height))) };
+}
+
 // cropDisplayStream returns a stream whose video track is `stream`'s video
 // cropped to `region`; its audio tracks are passed through. Stopping the
 // cropped track stops the source; the source ending ends the cropped track.
@@ -58,18 +84,32 @@ export function cropDisplayStream(stream, region) {
     const source = stream.getVideoTracks()[0];
     const initial = source.getSettings();
     const native = { width: initial.width || 1920, height: initial.height || 1080 };
-    const processor = new MediaStreamTrackProcessor({ track: source });
+    const processor = new MediaStreamTrackProcessor({ track: source, maxBufferSize: 1 });
     const track = new MediaStreamTrackGenerator({ kind: "video" });
+    processedTracks.add(track);
     const abort = new AbortController();
     let stopped = false, output = {};
     const transform = new TransformStream({
         transform(frame, controller) {
+            let wrapped = null, transferred = false;
             try {
+                const layout = regionFrameLayout(frame, region, output);
                 const visible = frame.visibleRect || { x: 0, y: 0, width: frame.codedWidth, height: frame.codedHeight };
-                const rect = cropRect(visible.width, visible.height, region);
-                controller.enqueue(new VideoFrame(frame, { visibleRect: {
-                    x: visible.x + rect.x, y: visible.y + rect.y, width: rect.width, height: rect.height } }));
-            } finally { frame.close(); }
+                if (Object.keys(layout.visibleRect).every(key => layout.visibleRect[key] === visible[key]) &&
+                    layout.displayWidth === frame.displayWidth && layout.displayHeight === frame.displayHeight) {
+                    controller.enqueue(frame);
+                    transferred = true;
+                } else {
+                    // VideoFrame's copy constructor wraps the same GPU resource;
+                    // no canvas draw, pixel readback or software codec is needed.
+                    wrapped = new VideoFrame(frame, layout);
+                    controller.enqueue(wrapped);
+                    wrapped = null;
+                }
+            } finally {
+                if (!transferred) frame.close();
+                wrapped?.close();
+            }
         },
     });
     processor.readable.pipeThrough(transform, { signal: abort.signal })
@@ -95,8 +135,10 @@ export function cropDisplayStream(stream, region) {
     }, { once: true });
     track.getSettings = () => {
         const settings = source.getSettings();
-        const rect = cropRect(settings.width || native.width, settings.height || native.height, region);
-        return { ...settings, width: rect.width, height: rect.height };
+        const width = settings.width || native.width, height = settings.height || native.height;
+        const layout = regionFrameLayout({ codedWidth: width, codedHeight: height,
+            displayWidth: width, displayHeight: height }, region, output);
+        return { ...settings, width: layout.displayWidth, height: layout.displayHeight };
     };
     track.getConstraints = () => ({ ...output });
     track.applyConstraints = async (constraints = {}) => {

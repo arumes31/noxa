@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cropDisplayStream, cropRect, normalizeRegion, regionLargeEnough, sourceConstraints, MIN_REGION_PX } from "../src/share-region.js";
+import { cropDisplayStream, displayStreamHasFrameGeometry, regionFrameLayout, cropRect, normalizeRegion, regionLargeEnough, sourceConstraints, MIN_REGION_PX } from "../src/share-region.js";
 import { DEFAULT_SHARE_PRESET, presetSpec, shareSummary, screenShareConstraints, shareQuality } from "../src/screen-share-quality.js";
 
 test("a drag in any direction becomes a rectangle inside the preview", () => {
@@ -62,7 +62,7 @@ test("a failed crop frame ends the generated track and releases its source", asy
     source.readyState = "live";
     source.stop = () => { source.readyState = "ended"; };
     let frameClosed = false;
-    const frame = { codedWidth: 1920, codedHeight: 1080, close: () => { frameClosed = true; } };
+    const frame = { codedWidth: 1920, codedHeight: 1080, displayWidth: 1920, displayHeight: 1080, close: () => { frameClosed = true; } };
     const replacements = {
         MediaStreamTrackProcessor: class {
             readable = new ReadableStream({ start: controller => controller.enqueue(frame) });
@@ -93,4 +93,95 @@ test("a failed crop frame ends the generated track and releases its source", asy
     assert.equal(track.readyState, "ended");
     assert.equal(source.readyState, "ended");
     assert.equal(frameClosed, true);
+});
+
+
+const wholeFrame = { x: 0, y: 0, width: 1, height: 1 };
+const captureFrame = (width, height, extra = {}) => ({ codedWidth: width, codedHeight: height,
+    displayWidth: width, displayHeight: height, ...extra });
+
+test("H264 geometry stays even through transient odd capture and display sizes", () => {
+    for (const width of [1620, 1621, 1620, 1623, 1620]) {
+        for (const height of [1080, 1081]) {
+            const layout = regionFrameLayout(captureFrame(width, height), wholeFrame);
+            assert.deepEqual(layout, { visibleRect: { x: 0, y: 0, width: width - width % 2, height: 1080 },
+                displayWidth: width - width % 2, displayHeight: 1080 });
+        }
+    }
+    // An even resource can still advertise an odd natural/display size.
+    assert.deepEqual(regionFrameLayout(captureFrame(1620, 1080, { displayWidth: 1621 }), wholeFrame), {
+        visibleRect: { x: 0, y: 0, width: 1620, height: 1080 }, displayWidth: 1620, displayHeight: 1080,
+    });
+});
+
+test("frame layout respects visible offsets, aspect ratio and output limits without upscaling", () => {
+    const frame = captureFrame(2000, 1200, { visibleRect: { x: 10, y: 20, width: 1920, height: 1080 },
+        displayWidth: 1920, displayHeight: 1080 });
+    assert.deepEqual(regionFrameLayout(frame, { x: 0.25, y: 0.25, width: 0.5, height: 0.5 }), {
+        visibleRect: { x: 490, y: 290, width: 960, height: 540 }, displayWidth: 960, displayHeight: 540,
+    });
+    assert.deepEqual(regionFrameLayout(frame, wholeFrame, { width: { max: 1281 }, height: { max: 720 } }), {
+        visibleRect: { x: 10, y: 20, width: 1920, height: 1080 }, displayWidth: 1280, displayHeight: 720,
+    });
+    assert.deepEqual(regionFrameLayout(captureFrame(640, 360), wholeFrame, { width: 1920, height: 1080 }), {
+        visibleRect: { x: 0, y: 0, width: 640, height: 360 }, displayWidth: 640, displayHeight: 360,
+    });
+    assert.throws(() => regionFrameLayout(captureFrame(1, 1080), wholeFrame), /geometry/);
+    assert.throws(() => regionFrameLayout({ ...frame, visibleRect: { x: 100, y: 20, width: 1920, height: 1080 } }, wholeFrame), /bounds/);
+    assert.throws(() => regionFrameLayout(frame, wholeFrame, { width: { max: 1 } }), /bounds/);
+});
+
+test("capture pipeline forwards even frames, wraps odd GPU frames and releases resources on stop", async t => {
+    const source = new EventTarget();
+    Object.assign(source, { kind: "video", readyState: "live", getSettings: () => ({ width: 1620, height: 1080 }),
+        applyConstraints: async () => {}, stop() { this.readyState = "ended"; } });
+    let input, delivered = [], wrapped = [], processorOptions;
+    const replacements = {
+        MediaStreamTrackProcessor: class {
+            constructor(options) { processorOptions = options; this.readable = new ReadableStream({ start(c) { input = c; } }); }
+        },
+        MediaStreamTrackGenerator: class extends EventTarget {
+            kind = "video"; readyState = "live";
+            writable = new WritableStream({ write(frame) { delivered.push(frame); frame.close(); } });
+            stop() { this.readyState = "ended"; }
+        },
+        VideoFrame: class {
+            constructor(frame, layout) { this.source = frame; Object.assign(this, layout); wrapped.push(this); }
+            closed = 0;
+            close() { this.closed++; }
+        },
+        MediaStream: class {
+            constructor(tracks) { this.tracks = tracks; }
+            getVideoTracks() { return this.tracks.filter(t => t.kind === "video"); }
+        },
+    };
+    for (const [key, value] of Object.entries(replacements)) {
+        const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
+        Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+        t.after(() => { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; });
+    }
+    const original = { getVideoTracks: () => [source], getAudioTracks: () => [] };
+    const { stream } = cropDisplayStream(original, wholeFrame), track = stream.getVideoTracks()[0];
+    t.after(() => track.stop());
+    assert.equal(displayStreamHasFrameGeometry(original), false);
+    assert.equal(displayStreamHasFrameGeometry(stream), true);
+    assert.equal(processorOptions.maxBufferSize, 1);
+    const frames = [1620, 1621, 1620].map(width => ({ ...captureFrame(width, 1080), closed: 0, close() { this.closed++; } }));
+    for (const frame of frames) input.enqueue(frame);
+    for (let i = 0; delivered.length < 3 && i < 50; i++) await new Promise(r => setTimeout(r, 5));
+    assert.equal(delivered.length, 3);
+    assert.equal(delivered[0], frames[0]);
+    assert.equal(delivered[2], frames[2]);
+    assert.equal(wrapped.length, 1);
+    assert.equal(wrapped[0].source, frames[1]);
+    assert.deepEqual(wrapped[0].visibleRect, { x: 0, y: 0, width: 1620, height: 1080 });
+    assert.equal(wrapped[0].displayWidth, 1620);
+    assert.equal(wrapped[0].displayHeight, 1080);
+    assert.deepEqual(frames.map(f => f.closed), [1, 1, 1]);
+    assert.equal(wrapped[0].closed, 1);
+    await track.applyConstraints({ width: { max: 1280 }, height: { max: 720 } });
+    assert.deepEqual(track.getSettings(), { width: 1080, height: 720 });
+    source.dispatchEvent(new Event("ended"));
+    assert.equal(source.readyState, "ended");
+    assert.equal(track.readyState, "ended");
 });

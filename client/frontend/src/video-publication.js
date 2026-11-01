@@ -11,7 +11,7 @@ import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 import { applyVideoNetworkPriority } from "./voice-priority.js";
 import { shareQuality, screenShareConstraints, createShareQualityControls, DEFAULT_SHARE_PRESET } from "./screen-share-quality.js";
 import { createSharePicker } from "./share-picker.js";
-import { cropDisplayStream, regionCropSupported } from "./share-region.js";
+import { cropDisplayStream, regionCropSupported, displayStreamHasFrameGeometry } from "./share-region.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { labelButton } from "./icons.js";
 import { renderMicStatus } from "./audio.js";
@@ -779,6 +779,21 @@ export function createVideoPublication({ policy }) {
             return;
         }
         audioMode = validateDisplayAudio(display, audioMode);
+        // Full-window/screen capture needs the same per-frame even geometry as
+        // region capture. GPU textures can change size without honoring the
+        // source adapter's advertised constraints (e.g. 1620 -> 1621 pixels).
+        if (regionSupported && surface !== "region" && surface !== "studio" && !displayStreamHasFrameGeometry(display)) {
+            try {
+                const aligned = cropDisplayStream(display, { x: 0, y: 0, width: 1, height: 1 });
+                releaseDisplayCapture(display);
+                display = aligned.stream;
+                retainDisplayCapture(display);
+            } catch (error) {
+                discardDisplay(display);
+                V().sysMsg(tLabel("desktop.screen.capture.failed") + error.message);
+                return;
+            }
+        }
         const screenTrack = display.getVideoTracks()[0];
         if (!screenTrack) {
             discardDisplay(display);
