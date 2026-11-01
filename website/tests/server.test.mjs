@@ -75,9 +75,11 @@ test('crawl files expose canonical public guides with correct MIME types', async
   assert.equal(sitemap.status, 200);
   assert.match(sitemap.headers.get('content-type'), /application\/xml/);
   const locations = [...(await sitemap.text()).matchAll(/<loc>(.*?)<\/loc>/g)].map(match => match[1]);
-  assert.equal(new Set(locations).size, locations.length);
+  const canonicalURLs = new Set(locations);
+  assert.equal(canonicalURLs.size, locations.length);
   assert.ok(locations.length >= 13);
-  assert.ok(locations.includes('https://noxa.wowcraft.pw/guides/server-setup/'));
+  assert.ok(canonicalURLs.has('https://noxa.wowcraft.pw/guides/server-setup/'));
+  assert.ok(locations.every(location => new URL(location).origin === 'https://noxa.wowcraft.pw'));
   assert.ok(locations.every(location => !location.includes('/app/')));
   for (const location of locations) assert.equal((await fetch(`${origin}${new URL(location).pathname}`)).status, 200, location);
 });

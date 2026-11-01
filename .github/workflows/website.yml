@@ -113,6 +113,9 @@ jobs:
           curl --fail --silent http://127.0.0.1:8080/robots.txt | grep -q 'sitemap.xml'
           curl --fail --silent http://127.0.0.1:8080/sitemap.xml | grep -q '/guides/server-setup/'
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/package.json)" = 404
+      - name: Preserve website startup diagnostics
+        if: failure()
+        run: docker logs website || true
       - name: Export published image for deployment
         if: github.event_name != 'pull_request'
         run: |
