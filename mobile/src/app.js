@@ -190,6 +190,11 @@ onSecureControl(control => {
 
 const MEDIA_E2EE_CAPABILITY = "noxa-media-e2ee-v1";
 const SECURE_WAIT_MS = 15000;
+const MEDIA_BINDING_FAILURES = new Map([
+    ["server_binding_unavailable", "link_required"],
+    ["server_binding_mismatch", "binding_changed"],
+    ["server_binding_rotated", "binding_changed"],
+]);
 
 /**
  * The encrypted-media adapter of one signed-in session: its identity and the
@@ -206,9 +211,13 @@ export function mediaAdapter(session) {
             if (String(session.uniqueID || "").startsWith("guest:")) return { ...base, supported: true, reason: "keyless_guest" };
             if (!session.deviceID) return { ...base, supported: true, reason: "no_device" };
             const deadline = Date.now() + SECURE_WAIT_MS;
-            while (current() && !secureMessagingStatus().active && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 200));
-            const secure = current() && secureMessagingStatus().active;
-            return { ...base, supported: true, reason: secure ? "" : "secure_unavailable" };
+            let secure = secureMessagingStatus();
+            while (current() && !secure.active && !MEDIA_BINDING_FAILURES.has(secure.reason) && Date.now() < deadline) {
+                await new Promise(resolve => setTimeout(resolve, 200));
+                secure = secureMessagingStatus();
+            }
+            return { ...base, supported: true, reason: !current() ? "secure_unavailable"
+                : secure.active ? "" : MEDIA_BINDING_FAILURES.get(secure.reason) || "secure_unavailable" };
         },
         async send({ logicalID, principal, device, body }) {
             const owner = app.ratchet;

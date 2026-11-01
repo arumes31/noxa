@@ -1,7 +1,7 @@
 // voice.js — Voice room (09): join a channel, speaking tiles, mute,
 // deafen, push-to-talk, whisper, raised hands, priority speaker, the
 // channel's chat, audio output, data used and watching streams.
-import { mediaErrorText, mediaStatusText, tileAccount } from "./media-e2ee-text.js";
+import { mediaErrorText, mediaStatusText, tileAccount, showVoiceJoinError } from "./media-e2ee-text.js";
 import { app, leaveVoice } from "../app.js";
 import * as settings from "../core/settings.js";
 import { joinWithPassword, lockBadge } from "./server-tools.js";
@@ -33,7 +33,7 @@ function channelList(root, session) {
                 h("button", { class: "row", type: "button", style: `padding-left:${10 + c.depth * 14}px`, onclick: async event => {
                     const button = event.currentTarget;
                     button.disabled = true;
-                    try { await joinWithPassword(c); } catch (error) { toast(t("voice.joinFailed", { error: mediaErrorText(error) }), "warn"); }
+                    try { await joinWithPassword(c); } catch (error) { await showVoiceJoinError(error); }
                     button.disabled = false;
                 } },
                     icon("voice"),

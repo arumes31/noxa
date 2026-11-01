@@ -1,8 +1,8 @@
 // servers.js — Server & channels (03): text and voice tree with members.
-import { mediaErrorText } from "./media-e2ee-text.js";
+import { showVoiceJoinError } from "./media-e2ee-text.js";
 import { app } from "../app.js";
 import { t } from "../i18n.js";
-import { avatar, h, toast } from "./dom.js";
+import { avatar, h } from "./dom.js";
 import { icon } from "./icons.js";
 import { header, nav, unreadBadge } from "./common.js";
 import { memberMenuButton } from "./moderation.js";
@@ -39,7 +39,7 @@ export function renderServers(root) {
             if ((!app.voice?.active || app.voice.channelID !== channel.id) && !await joinWithPassword(channel)) return;
             if (app.session === session && location.hash === before) location.hash = "#/voice";
         } catch (error) {
-            if (app.session === session) toast(t("voice.joinFailed", { error: mediaErrorText(error) }), "warn");
+            if (app.session === session) await showVoiceJoinError(error);
         } finally { joining = false; button.disabled = false; root.querySelectorAll(".server-join").forEach(control => { control.disabled = false; }); }
     } }, t("voice.joinAction"));
     const channels = session.channels().map(c => ({ ...c, clients: c.home ? c.clients.filter(member => !member.on_mobile) : c.clients }));

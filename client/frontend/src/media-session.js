@@ -34,7 +34,7 @@ const SERVER_REASONS = {
     stream_preview_disabled_e2ee: "preview",
 };
 export const MEDIA_REASONS = Object.freeze(["server_outdated", "client_outdated", "keyless_guest", "no_device", "secure_unavailable",
-    "unsupported_runtime", "worker", "unavailable", "codec", "recording", "whisper_unavailable", "preview", "closed", "invisible", "channel_full"]);
+    "unsupported_runtime", "worker", "unavailable", "link_required", "binding_changed", "codec", "recording", "whisper_unavailable", "preview", "closed", "invisible", "channel_full"]);
 export function mediaErrorReason(error) {
     if (error instanceof MediaSessionError || (error?.name === "MediaSessionError" && error.reason)) return MEDIA_REASONS.includes(error.reason) ? error.reason : "unavailable";
     const text = String(error?.message ?? error ?? "");
