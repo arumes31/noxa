@@ -11,7 +11,7 @@
 // runtime, the server or the session cannot encrypt, and the caller must not
 // create a peer connection then.
 import { MediaE2EE, MediaE2EEUnsupported, MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, mediaE2EESupport } from "./media-e2ee.js";
-import { MediaKeyEngine, publicationPid, senderPid } from "./media-keys.js";
+import { MediaKeyStartupInbox, MediaKeyEngine, publicationPid, senderPid } from "./media-keys.js";
 
 export { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, mediaE2EESupport };
 
@@ -84,12 +84,14 @@ export class MediaSession {
         this.hardwareVideoRequired = hardwareVideoRequired; this.onHardwareUnavailable = onHardwareUnavailable;
         this.api = api; this.workerURL = workerURL; this.scope = scope;
         this.media = null; this.engine = null; this.identity = null; this.closed = false;
+        this.startingChannel = null; this.startupKeys = new MediaKeyStartupInbox();
     }
 
     // Starts encryption for a voice session in channelID. Throws
     // MediaSessionError(reason): unsupported_runtime, server_outdated,
     // keyless_guest, no_device, secure_unavailable, worker.
     async start(channelID) {
+        this.startingChannel = Number(channelID);
         const status = await this.adapter.status();
         if (this.closed) throw new MediaSessionError("closed");
         if (!status?.supported) throw new MediaSessionError(status?.reason || "server_outdated");
@@ -119,6 +121,8 @@ export class MediaSession {
         this.engine.onInvisible = () => this.#fail(new MediaSessionError("invisible"));
         if (this.roster) this.engine.setRoster(this.roster);
         this.engine.start(this.identity);
+        this.startupKeys.drain(control => this.engine.receive(control));
+        this.startingChannel = null;
     }
 
     // The same peer moved to another channel: a new key scope. Every key of
@@ -197,7 +201,11 @@ export class MediaSession {
     releasePeer(pc) { return pc ? this.media?.releasePeer(pc) : Promise.resolve(); }
 
     setRoster(clients) { this.roster = clients; this.engine?.setRoster(clients); }
-    receive(control) { return this.engine ? this.engine.receive(control) : { ok: false, reason: "inactive" }; }
+    receive(control) {
+        if (this.closed) return { ok: false, reason: "inactive" };
+        if (this.engine) return this.engine.receive(control);
+        return this.startingChannel == null ? { ok: false, reason: "inactive" } : this.startupKeys.receive(control, this.startingChannel);
+    }
     publicationsChanged() { this.engine?.publicationsChanged(); }
     verifiedAccount(clientID) { return this.engine?.verifiedPublisher(clientID) || ""; }
     status() { return this.engine ? { ...this.engine.status(), api: this.media?.api } : { state: "off" }; }
@@ -212,6 +220,7 @@ export class MediaSession {
     stop() {
         if (this.closed) return;
         this.closed = true;
+        this.startingChannel = null; this.startupKeys.clear();
         try { this.engine?.stop(); } catch { /* best effort */ }
         try { this.media?.close(); } catch { /* best effort */ }
         this.engine = null; this.media = null;

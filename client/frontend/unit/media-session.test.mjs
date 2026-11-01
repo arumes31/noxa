@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MediaSession, MediaSessionError, mediaErrorReason, remoteTrackIDsByMid, trackPid, keyframeTarget } from "../src/media-session.js";
+import { buildMediaKeyBody } from "../src/media-keys.js";
 import { mediaE2EESupport } from "../src/media-e2ee.js";
 
 test("remote track IDs map to publication pids per MID; inactive sections bind nothing", () => {
@@ -66,4 +67,31 @@ test("a worker failure during startup keeps the original error after session cle
  const session=new MediaSession({scope,workerURL:"worker-test.js",onError:()=>errors++,adapter:{status:async()=>({supported:true,principal:"u",device:"d",clientID:"c"}),send:async()=>({ok:true})}});
  await assert.rejects(session.start(1),e=>e instanceof MediaSessionError && e.reason==="worker" && !/null/.test(e.message));
  assert.equal(errors,1);assert.equal(session.media,null);
+});
+
+test("keys admitted before identity/worker startup install only for the bound roster", async t => {
+    let release; const identity = new Promise(resolve => { release = resolve; });
+    const messages = [];
+    class Worker {
+        postMessage(message) { messages.push(message); queueMicrotask(() => this.onmessage?.({ data: { seq: message.seq, ok: true } })); }
+        terminate() {}
+    }
+    const session = new MediaSession({ workerURL: "test-worker", scope: { Worker, crypto, RTCRtpScriptTransform: function () {} },
+        adapter: { status: () => identity, send: async () => ({ ok: true }) } });
+    t.after(() => session.stop());
+    session.setRoster([{ client_id: "startup-peer", unique_id: "startup-peer-user", media_device: "startup-peer-device", channel_id: 5 }]);
+    const starting = session.start(5);
+    const body = buildMediaKeyBody({ channelID: 5, epoch: Date.now(), nowSeconds: Math.floor(Date.now()/1000), client: "startup-peer", session: "session", kid: 0, members: "digest", count: 2,
+        keys: Object.fromEntries(["mic", "cam", "screen", "screenaudio"].map(s => [s, new Uint8Array(32).fill(5)])) });
+    const control = { ...body, expiresAt: body.expires_at, sender: "startup-peer-user", senderDevice: "startup-peer-device" };
+    assert.equal(session.receive({ ...control, scope: { type: "channel-media", id: "9" } }).reason, "scope");
+    assert.equal(session.receive({ ...control, sender: "unbound-user", epoch: control.epoch + 1 }).reason, "pending");
+    assert.equal(session.receive(control).reason, "pending");
+    assert.equal(messages.length, 0, "no worker or keys before identity lookup");
+    release({ supported: true, principal: "startup-self-user", device: "startup-self-device", clientID: "startup-self" });
+    await starting;
+    for (let i = 0; i < 50 && messages.filter(m => m.op === "key" && m.pid.startsWith("startup-peer|")).length < 4; i++) await new Promise(setImmediate);
+    assert.equal(messages.filter(m => m.op === "key" && m.pid.startsWith("startup-peer|")).length, 4);
+    assert.ok(messages.filter(m => m.op === "key" && m.pid.startsWith("startup-peer|")).every(m => m.epoch === control.epoch), "startup buffering never bypasses the authenticated roster binding");
+    session.stop(); assert.equal(session.receive(control).reason, "inactive");
 });

@@ -4,6 +4,7 @@ package webrtc
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
+	pion "github.com/pion/webrtc/v4"
 	"go.uber.org/zap"
 )
 
@@ -127,7 +129,18 @@ const e2eeEchoChannel = 2
 
 var errLossInjected = errors.New("injected loss")
 
+type e2eeCandidate struct {
+	candidate, mid string
+	index          uint16
+}
+
 type e2eePeer struct {
+	// Independent HTTP requests can overtake the initial offer. Keep trickle
+	// ICE until its peer exists, and serialize draining against later requests.
+	signalMu              sync.Mutex
+	pendingICE            []e2eeCandidate
+	generation            uint64
+	active                bool
 	id, principal, device string
 	events                []map[string]any
 	wake                  chan struct{}
@@ -283,6 +296,100 @@ func (h *e2eeHarness) pushRosters() {
 	}
 }
 
+func (h *e2eeHarness) closeTestPeer(id string, generation uint64) {
+	h.mu.Lock()
+	peer := h.peers[id]
+	h.mu.Unlock()
+	if peer == nil {
+		return
+	}
+	peer.signalMu.Lock()
+	defer peer.signalMu.Unlock()
+	if generation != peer.generation {
+		return
+	}
+	_ = h.v.ClosePeer(id)
+	peer.pendingICE = nil
+	peer.active = false
+}
+
+// The browser bridge uses concurrent HTTP, unlike the ordered control channel.
+// Reproduce a candidate arriving before the initial SDP deterministically.
+func TestE2EEHarnessRetainsEarlyICE(t *testing.T) {
+	h := newE2EEHarness(t)
+	post := func(path string, body map[string]any) *httptest.ResponseRecorder {
+		t.Helper()
+		if _, ok := body["PeerGeneration"]; !ok {
+			body["PeerGeneration"] = 1
+		}
+		data, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, bytes.NewReader(data)))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
+		}
+		return w
+	}
+	post("/register", map[string]any{"ID": "early", "Principal": "u-early", "Device": "dev-early"})
+	post("/begin", map[string]any{"ID": "early"})
+	candidate := map[string]any{"ID": "early", "Candidate": "candidate:1 1 udp 2130706431 127.0.0.1 54321 typ host", "Mid": "0", "Index": 0}
+	post("/candidate", candidate)
+	peer := h.peers["early"]
+	if len(peer.pendingICE) != 1 {
+		t.Fatal("early candidate was discarded")
+	}
+	pc, err := pion.NewPeerConnection(pion.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	if _, err = pc.AddTransceiverFromKind(pion.RTPCodecTypeAudio); err != nil {
+		t.Fatal(err)
+	}
+	offer, err := pc.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	post("/offer", map[string]any{"ID": "early", "SDP": offer.SDP})
+	if len(peer.pendingICE) != 0 || h.e.PeerConnection("early") == nil {
+		t.Fatal("offer did not drain queued ICE into its peer")
+	}
+	post("/candidate", candidate)
+	if len(peer.pendingICE) != 0 {
+		t.Fatal("candidate for an existing peer was unnecessarily queued")
+	}
+	post("/close", map[string]any{"ID": "early"})
+	post("/candidate", candidate)
+	if len(peer.pendingICE) != 0 {
+		t.Fatal("closed peer accepted old ICE")
+	}
+	post("/begin", map[string]any{"ID": "early"})
+	post("/candidate", candidate)
+	if len(peer.pendingICE) != 0 {
+		t.Fatal("replacement accepted retired generation ICE")
+	}
+	candidate["PeerGeneration"] = 2
+	post("/candidate", candidate)
+	if len(peer.pendingICE) != 1 {
+		t.Fatal("replacement candidate was discarded")
+	}
+	post("/offer", map[string]any{"ID": "early", "SDP": offer.SDP, "PeerGeneration": 2})
+	if len(peer.pendingICE) != 0 {
+		t.Fatal("replacement offer did not drain ICE")
+	}
+	post("/close", map[string]any{"ID": "early", "PeerGeneration": 1})
+	if h.e.PeerConnection("early") == nil {
+		t.Fatal("retired close stopped replacement peer")
+	}
+	post("/close", map[string]any{"ID": "early", "PeerGeneration": 2})
+	if peer.active || len(peer.pendingICE) != 0 {
+		t.Fatal("closed replacement retained ICE")
+	}
+}
+
 func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "content-type")
@@ -292,6 +399,7 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ID, Principal, Device, SDP, Candidate, Mid, To, Hide, Publisher, Slot string
 		Generation                                                            string // of the publication an inactive /publish ends
+		PeerGeneration                                                        uint64
 		Index                                                                 uint16
 		Slots                                                                 []map[string]string
 		Body                                                                  json.RawMessage
@@ -310,6 +418,21 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		h.mu.Unlock()
 		reply(map[string]any{"ok": true})
+	case "/begin":
+		h.mu.Lock()
+		peer := h.peers[body.ID]
+		h.mu.Unlock()
+		if peer == nil {
+			http.Error(w, "unregistered peer", http.StatusBadRequest)
+			return
+		}
+		peer.signalMu.Lock()
+		defer peer.signalMu.Unlock()
+		_ = h.v.ClosePeer(body.ID)
+		peer.pendingICE = nil
+		peer.generation++
+		peer.active = true
+		reply(map[string]any{"generation": peer.generation})
 	case "/join":
 		channel := int64(e2eeChannel)
 		if body.Channel != 0 {
@@ -327,7 +450,7 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		delete(h.inChannel, body.ID)
 		h.mu.Unlock()
 		h.v.LeaveChannel(body.ID, channel)
-		_ = h.v.ClosePeer(body.ID)
+		h.closeTestPeer(body.ID, body.PeerGeneration)
 		h.pushRosters()
 		reply(map[string]any{"ok": true})
 	case "/hide":
@@ -341,7 +464,7 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.pushRosters()
 		reply(map[string]any{"ok": true})
 	case "/close":
-		_ = h.v.ClosePeer(body.ID)
+		h.closeTestPeer(body.ID, body.PeerGeneration)
 		reply(map[string]any{"ok": true})
 	case "/loss":
 		// Packet loss on the SFU's egress socket (SRTP only).
@@ -435,6 +558,19 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 		reply(map[string]any{"ok": true, "reordered": reordered})
 	case "/offer":
+		h.mu.Lock()
+		peer := h.peers[body.ID]
+		h.mu.Unlock()
+		if peer == nil {
+			http.Error(w, "unregistered peer", http.StatusBadRequest)
+			return
+		}
+		peer.signalMu.Lock()
+		defer peer.signalMu.Unlock()
+		if !peer.active || body.PeerGeneration != peer.generation {
+			http.Error(w, "stale peer", http.StatusConflict)
+			return
+		}
 		slots := map[string]string{}
 		for _, s := range body.Slots {
 			slots[s["track_id"]] = s["slot"]
@@ -451,6 +587,13 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
+		for _, candidate := range peer.pendingICE {
+			if err := h.v.AddICECandidate(body.ID, candidate.candidate, candidate.mid, candidate.index); err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+		}
+		peer.pendingICE = nil
 		h.t.Logf("offer from %s answered (answer candidates %d, ice-lite %v)", body.ID, strings.Count(answer, "a=candidate"), strings.Contains(answer, "ice-lite"))
 		h.mu.Lock()
 		h.answers = append(h.answers, answer)
@@ -463,12 +606,26 @@ func (h *e2eeHarness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(map[string]any{"ok": true})
 	case "/candidate":
-		err := h.v.AddICECandidate(body.ID, body.Candidate, body.Mid, body.Index)
 		h.mu.Lock()
+		peer := h.peers[body.ID]
 		h.candidatesIn[body.ID]++
 		h.mu.Unlock()
-		if err != nil {
-			h.t.Logf("candidate from %s rejected: %v", body.ID, err)
+		if peer == nil {
+			http.Error(w, "unregistered peer", http.StatusBadRequest)
+			return
+		}
+		peer.signalMu.Lock()
+		defer peer.signalMu.Unlock()
+		if !peer.active || body.PeerGeneration != peer.generation {
+			reply(map[string]any{"ok": false, "code": "stale_peer"})
+			return
+		}
+		err := h.v.AddICECandidate(body.ID, body.Candidate, body.Mid, body.Index)
+		if errors.Is(err, ErrNoPeer) {
+			peer.pendingICE = append(peer.pendingICE, e2eeCandidate{body.Candidate, body.Mid, body.Index})
+		} else if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
 		}
 		reply(map[string]any{"ok": true})
 	case "/publish":
