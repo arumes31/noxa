@@ -57,7 +57,7 @@ func TestH264EncryptedTemporalPrefix(t *testing.T) {
 			t.Fatalf("prefix %x: unit=%v err=%v", prefix, unit, err)
 		}
 		if valid {
-			f := h264ForwardFrame{}
+			f := h264ForwardFrame{encrypted: true}
 			packets, key, lost := f.push(h264TestPacket(1, 3000, true, payload), time.Now())
 			if len(packets) != 1 || !key || lost || !bytes.Equal(packets[0].Payload, payload) {
 				t.Fatal("forwarder changed temporal prefix")
