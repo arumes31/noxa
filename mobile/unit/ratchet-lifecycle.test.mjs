@@ -93,11 +93,13 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
         "./core/conversation-prefs.js": { activityShared: () => false, isMuted: () => false, syncMuted: () => {}, watchCallLog: () => {}, resetCallLog: async () => {} },
         "./core/saved.js": { SavedMessages: class extends EventTarget {} },
     };
-    const context = vm.createContext({ EventTarget, Event, CustomEvent, setTimeout, clearTimeout, clearInterval, console, document: { visibilityState: "hidden", addEventListener() {} } });
+    let secureWaits = 0;
+    const trackedTimeout = (fn, ms) => { if (ms === 200) secureWaits++; return setTimeout(fn, ms); };
+    const context = vm.createContext({ EventTarget, Event, CustomEvent, setTimeout: trackedTimeout, clearTimeout, clearInterval, console, document: { visibilityState: "hidden", addEventListener() {} } });
     const mod = new vm.SourceTextModule(await fs.readFile(new URL("../src/app.js", import.meta.url), "utf8"), { context });
     await mod.link(spec => new vm.SyntheticModule(Object.keys(sources[spec]), function () { for (const [k, v] of Object.entries(sources[spec])) this.setExport(k, v); }, { context }));
     await mod.evaluate();
-    const { app, connect, disconnect, forgetDevice, configureRatchetForTests, secureMessagingStatus, confirmGuestCertificateChange } = mod.namespace;
+    const { app, connect, disconnect, forgetDevice, configureRatchetForTests, secureMessagingStatus, confirmGuestCertificateChange, mediaAdapter } = mod.namespace;
 
     configureRatchetForTests({
         pollMS: 10,
@@ -122,6 +124,14 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
         await connect();
         assert.equal(app.ratchet, null, note);
         assert.equal(app.ratchetError?.code, code, note);
+        const session = app.session;
+        session.capabilities.add("noxa-media-e2ee-v1");
+        const adapter = mediaAdapter(session);
+        const beforeWaits = secureWaits;
+        const result = await adapter.status();
+        assert.equal(result.reason, code === "server_binding_unavailable" ? "link_required" : "binding_changed");
+        assert.equal(secureWaits, beforeWaits, "a permanent trust refusal must not enter the startup wait loop");
+        session.capabilities.delete("noxa-media-e2ee-v1");
     };
     await blocked({}, "server_binding_unavailable", "no statement");
     await blocked({ linkBinding: statementFor(app.identity) }, "server_binding_mismatch", "a statement without the QR anchor (typed code / empty fingerprint)");

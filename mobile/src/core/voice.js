@@ -219,6 +219,11 @@ export class Voice extends EventTarget {
         this.#startupKeys.clear();
         let acknowledged = false;
         try {
+            // Do not enter a channel until this device can establish encrypted
+            // media. Passkey authentication alone does not restore the signed
+            // desktop binding; failing after JoinChannel looks like a kick.
+            if (!this.pc && !await this.#preflight(generation)) return false;
+            if (generation !== this.#joinGeneration) return false;
             const joined = await this.conn.request(Msg.JoinChannel, { ack_requested: true, channel_id: channelID, password: password || undefined }, MsgChannelJoined);
             if (generation !== this.#joinGeneration) return false;
             acknowledged = true;
@@ -242,6 +247,29 @@ export class Voice extends EventTarget {
             if (generation === this.#joinGeneration) {
                 this.#joining = false; this.#joiningChannel = 0; this.#startupKeys.clear();
             }
+        }
+    }
+
+    /** Refuse unsupported devices before entry; a missing adapter fails closed.
+     * Returns false on cancellation, otherwise true or a media setup error. */
+    async #preflight(generation) {
+        let cancel;
+        const cancelled = new Promise(resolve => { cancel = () => resolve(null); });
+        this.#cancelStart = cancel;
+        try {
+            const status = await Promise.race([
+                this.mediaAdapter?.status() || Promise.resolve({ supported: false, reason: "server_outdated" }), cancelled,
+            ]);
+            if (generation !== this.#joinGeneration) return false;
+            if (!status?.supported) throw new MediaSessionError(status?.reason || "server_outdated");
+            if (status.reason) throw new MediaSessionError(status.reason);
+            if (!status.principal || !status.device || !status.clientID) throw new MediaSessionError("no_device");
+            return true;
+        } catch (error) {
+            if (generation !== this.#joinGeneration) return false;
+            throw error;
+        } finally {
+            if (this.#cancelStart === cancel) this.#cancelStart = null;
         }
     }
 
