@@ -106,6 +106,7 @@ jobs:
           docker run -d --name website --read-only --tmpfs /data:uid=10001,gid=10001 --tmpfs /config:uid=10001,gid=10001 --cap-drop ALL --security-opt no-new-privileges:true -p 127.0.0.1:8080:8080 "ghcr.io/${{ github.repository }}-website:sha-${{ github.sha }}"
           for attempt in $(seq 1 20); do
             if curl --fail --silent http://127.0.0.1:8080/ >/dev/null; then break; fi
+            echo "Waiting for website (attempt $attempt/20)"
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:8080/guides/server-setup/ | grep -q 'Initialize the database'
