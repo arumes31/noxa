@@ -2,7 +2,7 @@
 // its README.md #encryption section, and the current client UI.
 // Screenshots show the actual frontend with fictional local-only demo data.
 const chatShot = `<figure class="guide-figure"><a href="../../assets/screenshots/app-chat.png"><img src="../../assets/screenshots/app-chat.png" width="1280" height="800" loading="lazy" decoding="async" alt="The noXa desktop client with channels on the left, a conversation in the centre, and community members on the right."></a><figcaption>Actual desktop client · Fictional demo community and messages. Select the image to view it full size.</figcaption></figure>`;
-const rolesShot = `<figure class="guide-figure"><a href="../../assets/screenshots/app-roles.png"><img src="../../assets/screenshots/app-roles.png" width="960" height="1012" loading="lazy" decoding="async" alt="The noXa Roles dialog showing the Member role and its permission controls."></a><figcaption>Actual Roles dialog · Fictional demo roles. A role name does not grant permissions by itself.</figcaption></figure>`;
+const rolesShot = `<figure class="guide-figure"><a href="../../assets/screenshots/app-roles-guide.png"><img src="../../assets/screenshots/app-roles-guide.png" width="960" height="1012" loading="lazy" decoding="async" alt="The noXa Roles dialog showing the Member role and its permission controls."></a><figcaption>Actual Roles dialog · Fictional demo roles. A role name does not grant permissions by itself.</figcaption></figure>`;
 
 export default [
   {

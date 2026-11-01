@@ -122,7 +122,7 @@ jobs:
           image="ghcr.io/${{ github.repository }}-website:sha-${{ github.sha }}"
           docker pull "$image"
           docker save "$image" | gzip > "$RUNNER_TEMP/noxa-website-image.tar.gz"
-          sha256sum "$RUNNER_TEMP/noxa-website-image.tar.gz" > "$RUNNER_TEMP/noxa-website-image.sha256"
+          (cd "$RUNNER_TEMP" && sha256sum noxa-website-image.tar.gz > noxa-website-image.sha256)
       - name: Retain deployment image
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

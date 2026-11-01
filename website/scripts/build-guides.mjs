@@ -1,5 +1,6 @@
 // Generate crawlable documentation. Only the resulting public/ files are hosted.
-import { mkdir, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import serverGuides from './guides/server.mjs';
 import clientGuides from './guides/clients.mjs';
@@ -77,6 +78,15 @@ function shell({ title, description, path, depth, body, schema }) {
 </html>
 `;
 }
+
+// public/guides is exclusively generated. Refuse symlinks and verify its
+// resolved parent before removing stale pages from a renamed/removed guide.
+const publicPath = await realpath(publicDirectory);
+const guidesPath = resolve(publicPath, 'guides');
+if (dirname(guidesPath) !== publicPath) throw new Error('Guide output must be a direct child of public/');
+const oldGuides = await lstat(guidesPath).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
+if (oldGuides?.isSymbolicLink()) throw new Error('Refusing to replace a symlinked guide directory');
+await rm(guidesPath, { recursive: true, force: true });
 
 for (const guide of guides) {
   const path = `/guides/${guide.slug}/`;

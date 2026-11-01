@@ -2,6 +2,7 @@
 // Run from any directory: node website/scripts/capture-client.mjs
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -9,15 +10,18 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const sourceRoot = path.resolve(process.env.NOXA_CAPTURE_SOURCE_ROOT || root);
+// Validate provenance before opening a browser or replacing any output file.
+const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sourceRoot, encoding: 'utf8' }).trim();
 const frontend = path.join(sourceRoot, 'client/frontend');
 const require = createRequire(path.join(root, 'client/frontend/package.json'));
+const dependencyDirectory = realpathSync(path.join(root, 'client/frontend/node_modules'));
 const { chromium } = require('@playwright/test');
 const { createServer } = await import(pathToFileURL(require.resolve('vite')).href);
 const output = path.join(root, 'website/public/assets/screenshots');
 const guidesOnly = process.argv.includes('--guides-only');
 const server = await createServer({ root: frontend, logLevel: 'error', server: {
   host: '127.0.0.1', port: 12367, strictPort: true,
-  fs: { allow: [frontend, path.join(root, 'client/frontend/node_modules')] },
+  fs: { allow: [frontend, dependencyDirectory] },
 } });
 await mkdir(output, { recursive: true });
 let browser;
@@ -33,6 +37,9 @@ try {
   await page.clock.setFixedTime(new Date('2026-10-24T18:35:00Z'));
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
+  page.on('response', response => {
+    if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`);
+  });
   await page.addInitScript(() => {
     const settings = { settings_version: 4, capture_device_id: '', playback_device_id: '',
       activation_mode: 'vad', vad_threshold: 25, volume: 100, chat_max_lines: 200,
@@ -172,9 +179,9 @@ try {
   const roles = page.getByRole('dialog', { name: 'Roles', exact: true });
   await roles.getByRole('button', { name: 'Member', exact: true }).click();
   await roles.locator('.roles-editor').evaluate(node => { node.scrollTop = 0; });
-  if (!guidesOnly) await roles.locator('.roles-dialog').screenshot({ path: path.join(output, 'app-roles.png'), animations: 'disabled' });
+  await roles.locator('.roles-dialog').screenshot({ path: path.join(output, guidesOnly ? 'app-roles-guide.png' : 'app-roles.png'), animations: 'disabled' });
   assert.deepEqual(errors, [], 'Client screenshot runtime errors');
-  const manifest = { sourceCommit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sourceRoot, encoding: 'utf8' }).trim(),
+  const manifest = { sourceCommit,
     browser: browser.version(), viewport: '1280x800', rolesViewport: '1280x1100', scale: 1, locale: 'en-GB', timezone: 'UTC',
     fixtureTime: '2026-10-24T18:35:00Z',
     fixture: 'website/scripts/capture-client.mjs', data: 'Fictional local-only demo data',
@@ -185,6 +192,7 @@ try {
     manifest.appCapture = 'Actual Capture settings dialog, no hardware access';
     manifest.appChannelAccess = 'Actual Channel access dialog, fictional policy';
     manifest.appStudio = 'Actual Studio dialog, no captures or broadcast';
+    manifest.appRoles = 'app-roles-guide.png: Actual Roles dialog crop';
     manifest.connectViewport = '1280x1100';
   }
   await writeFile(path.join(root, guidesOnly ? 'website/scripts/capture-guides-manifest.json' : 'website/scripts/capture-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');

@@ -43,6 +43,8 @@ both base paths. It covers 320, 390, 768, 1440, and 1920 pixel widths, including
 the primary download in the 390 by 844 first viewport. It checks local
 resources, anchors, repeated download links, overflow, menu and dialog keyboard
 behavior, no-JavaScript fallbacks, reduced motion, and browser errors.
+Authoring checks cover obsolete-guide removal without changing unrelated public
+files and rejection of an invalid screenshot source before existing captures change.
 Linux CI installs Chromium dependencies with
 `npx playwright install --with-deps chromium`.
 
@@ -132,7 +134,9 @@ Refresh guide screenshots using `node scripts/capture-client.mjs --guides-only`.
 They show the actual frontend with fictional local data, no live server or
 hardware capture. `scripts/capture-guides-manifest.json` records their source
 commit and browser. The additional captures show the connection screen,
-Audio and voice settings, Channel access, and Desktop Studio. All published
+Audio and voice settings, Channel access, Desktop Studio, and a separate current
+Roles capture (`app-roles-guide.png`). Guide refreshes preserve the homepage's
+original Roles capture and its recorded provenance. All published
 guide screenshots open full size and work without JavaScript.
 
 ## Hosting and validation
