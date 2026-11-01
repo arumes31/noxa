@@ -49,11 +49,12 @@ func (a *audioContinuity) translate(packet *rtp.Packet, epoch uint64, clockRate 
 		return nil, false
 	}
 	if first || switching || delta > 0 {
-		if first {
+		switch {
+		case first:
 			a.epochPackets = 32768
-		} else if switching {
+		case switching:
 			a.epochPackets = 0
-		} else {
+		default:
 			a.epochPackets = min(uint32(32768), a.epochPackets+uint32(delta))
 		}
 		a.seen, a.epoch, a.ssrc = true, epoch, packet.SSRC
