@@ -76,7 +76,7 @@ function shell({ title, description, path, depth, body, schema }) {
     <a class="footer-brand" href="${base}" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span></a>
     <nav aria-label="Footer navigation"><a href="${base}guides/">All guides</a><a href="${base}guides/server-setup/">Server setup</a><a href="https://github.com/arumes31/noxa/releases">Releases</a><a href="https://github.com/arumes31/noxa/issues">Report an issue</a></nav>
   </footer>
-  <dialog class="lightbox" aria-label="Product screenshot" aria-describedby="image-caption"><button type="button" aria-label="Close image" autofocus>×</button><img alt=""><p id="image-caption">noXa client · Fictional demo data</p></dialog>
+  <dialog class="lightbox" aria-label="Product screenshot" aria-describedby="image-caption"><button type="button" aria-label="Close image" autofocus>×</button><p id="image-caption">noXa client · Fictional demo data</p></dialog>
 </body>
 </html>
 `;
@@ -99,7 +99,7 @@ for (const guide of guides) {
     <main class="guide-article" id="content" tabindex="-1">
       <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../../">Home</a><span aria-hidden="true">/</span><a href="../">Guides</a><span aria-hidden="true">/</span><span aria-current="page">${escape(guide.title)}</span></nav>
       <header class="guide-intro"><p class="eyebrow">${escape(guide.category)} · Public alpha</p><h1>${escape(guide.title)}</h1><p class="guide-summary">${escape(guide.summary)}</p></header>
-      <nav class="guide-toc" aria-label="On this page"><h2>On this page</h2><ol>${guide.sections.map(section => `<li><a href="#${section.id}">${escape(section.title)}</a></li>`).join('')}</ol></nav>
+      <nav class="guide-toc" aria-label="On this page"><h2>On this page</h2><ol>${guide.sections.map(section => `<li><a href="#${section.id}">${escape(section.title.replace(/^\d+\.\s+/, ''))}</a></li>`).join('')}</ol></nav>
       ${guide.sections.map(section => `<section id="${section.id}" aria-labelledby="${section.id}-heading"><h2 id="${section.id}-heading">${escape(section.title)}</h2>${enhance(section.body + (guideScreenshots[`${guide.slug}:${section.id}`] || ''))}</section>`).join('\n')}
       <section class="guide-related" aria-labelledby="next-heading"><h2 id="next-heading">Keep going</h2><ul>${guide.related.map(slug => { const item = guides.find(item => item.slug === slug); if (!item) throw new Error(`Unknown related guide: ${slug}`); return `<li><a href="../${item.slug}/">${escape(item.title)}</a></li>`; }).join('')}</ul></section>
       <aside class="guide-sources" aria-label="Source documentation"><p>Based on the current noXa documentation. Public alpha features and menu labels can change; use the client and server from the same release.</p><ul>${guide.sources.map(source => `<li><a href="${escape(source.href)}">${escape(source.label)}</a></li>`).join('')}</ul><a href="https://github.com/arumes31/noxa/issues">Suggest a correction</a></aside>

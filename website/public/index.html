@@ -24,6 +24,8 @@
   <link rel="icon" type="image/png" sizes="32x32" href="assets/branding/favicon-32.png">
   <link rel="apple-touch-icon" href="assets/branding/apple-touch-icon.png">
   <link rel="stylesheet" href="assets/css/site.css">
+  <link rel="stylesheet" href="assets/css/landing.css">
+  <script defer src="assets/js/signal-room.js"></script>
   <script defer src="assets/js/site.js"></script>
   <script type="application/ld+json">
   {
@@ -72,24 +74,26 @@
     <section class="hero" id="overview" aria-labelledby="hero-heading" tabindex="-1">
       <div class="wrap hero-inner">
         <div class="hero-copy">
-          <p class="eyebrow"><span class="dot"></span> noXa · Self-hosted voice, video &amp; chat</p>
-          <h1 id="hero-heading">More than a call.<br><em>A place<br>to belong.</em></h1>
-          <p class="lede">Bring your community together with voice channels, video, screen sharing, and chat. Open source. Hosted on a server you control.</p>
+          <h1 id="hero-heading">A place<br>to belong.</h1>
+          <p class="lede">Self-hosted voice, video and chat.<br>Your community, your server.</p>
           <div class="actions">
             <a class="btn" href="https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe"><svg class="icon" aria-hidden="true"><use href="#download-icon"/></svg> Download for Windows</a>
             <a class="btn secondary" href="https://noxa.wowcraft.pw/app/">Launch PWA client <svg class="icon" aria-hidden="true"><use href="#arrow-icon"/></svg></a>
           </div>
-          <p class="release-note">Windows x64 · Public alpha · <a href="https://github.com/arumes31/noxa/releases/latest">Latest release on GitHub</a></p>
+          <p class="release-note">Public alpha for Windows x64. <a href="https://github.com/arumes31/noxa/releases/latest">Latest release on GitHub</a></p>
         </div>
         <div class="hero-art">
-          <div class="pill"><svg class="icon" aria-hidden="true"><use href="#headphones-icon"/></svg> A little closer, wherever you are.</div>
+          <div class="signal-field" aria-hidden="true">
+            <svg class="signal-still" viewBox="0 0 1000 740" fill="none"><g stroke="currentColor"><path d="M0 490C160 490 190 50 420 50S730 630 1000 180"/><path d="M0 515C190 515 170 95 420 95S730 670 1000 225"/><path d="M0 540C190 540 180 140 420 140S760 680 1000 270"/><path d="M0 565C220 565 200 185 420 185S770 700 1000 315"/><path d="M0 590C250 590 220 230 420 230S800 730 1000 360"/></g></svg>
+            <canvas class="signal-canvas" hidden></canvas>
+          </div>
           <figure class="app-shot">
             <a class="image-link" href="assets/screenshots/app-chat.png" data-full aria-label="Enlarge channels and conversations screenshot">
               <img src="assets/screenshots/app-chat.png" width="1280" height="800" fetchpriority="high" alt="noXa desktop client showing a community's channels, members, and conversation with fictional demo data.">
             </a>
-            <figcaption><span>Channels &amp; conversations · Actual client · Demo data</span><a href="assets/screenshots/app-chat.png">View larger <svg class="icon" aria-hidden="true"><use href="#arrow-icon"/></svg></a></figcaption>
+            <figcaption><span>Actual client. Fictional demo community.</span><a href="assets/screenshots/app-chat.png">View larger</a></figcaption>
           </figure>
-          <div class="float-label"><svg class="icon" aria-hidden="true"><use href="#voice-icon"/></svg><div>A place that feels like yours<small>Your community · Your server</small></div></div>
+          <div class="signal-controls"><button type="button" class="signal-toggle" aria-pressed="false" hidden>Pause visual effect</button></div>
         </div>
       </div>
     </section>
@@ -133,7 +137,6 @@
         <figcaption><span>Roles &amp; permissions · Actual client · Demo data</span><a href="assets/screenshots/app-roles.png">View larger <svg class="icon" aria-hidden="true"><use href="#arrow-icon"/></svg></a></figcaption>
       </figure>
       <div class="story-copy">
-        <p class="eyebrow"><span class="dot"></span> Make it your own</p>
         <h2 id="story-heading">Your community.<br>Your way of doing things.</h2>
         <p>Organize your channels, set up named roles, and decide who has access. Host the noXa server on infrastructure you choose.</p>
         <a class="text-link" href="guides/server-setup/">Explore server setup <svg class="icon" aria-hidden="true"><use href="#arrow-icon"/></svg></a>
@@ -148,9 +151,9 @@
     <section class="section wrap learn-section" id="guides" aria-labelledby="guides-heading">
       <div class="section-heading"><h2 id="guides-heading">Make yourself<br>at home.</h2><p>From your first connection to your own community server. Step-by-step guides with real client screenshots.</p></div>
       <div class="learn-grid">
-        <a class="learn-card" href="guides/getting-started/"><span class="eyebrow">Start here</span><h3>Your first connection.</h3><p>Get the Windows client, join a server, and find your people.</p><span class="learn-link">Get started <span aria-hidden="true">↗</span></span></a>
-        <a class="learn-card" href="guides/server-setup/"><span class="eyebrow">Build your space</span><h3>Host your own server.</h3><p>Set up Docker, create your owner account, and open your channels.</p><span class="learn-link">Server setup guide <span aria-hidden="true">↗</span></span></a>
-        <a class="learn-card" href="guides/roles-permissions/"><span class="eyebrow">Bring everyone in</span><h3>A role for everyone.</h3><p>Manage members, permissions, and who can see each channel.</p><span class="learn-link">Roles &amp; channel access <span aria-hidden="true">↗</span></span></a>
+        <a class="learn-card" href="guides/getting-started/"><h3>Your first connection.</h3><p>Get the Windows client, join a server, and find your people.</p><span class="learn-link">Get started</span></a>
+        <a class="learn-card" href="guides/server-setup/"><h3>Host your own server.</h3><p>Set up Docker, create your owner account, and open your channels.</p><span class="learn-link">Server setup guide</span></a>
+        <a class="learn-card" href="guides/roles-permissions/"><h3>A role for everyone.</h3><p>Manage members, permissions, and who can see each channel.</p><span class="learn-link">Roles &amp; channel access</span></a>
       </div>
       <a class="text-link browse-guides" href="guides/">Browse all guides: voice, video, chat, mobile &amp; more <svg class="icon" aria-hidden="true"><use href="#arrow-icon"/></svg></a>
     </section>
@@ -181,7 +184,6 @@
 
   <dialog class="lightbox" aria-label="Product screenshot" aria-describedby="image-caption">
     <button type="button" aria-label="Close image" autofocus><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button>
-    <img alt="">
     <p id="image-caption">noXa desktop client · Fictional demo data</p>
   </dialog>
 </body>

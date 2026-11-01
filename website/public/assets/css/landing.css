@@ -1,0 +1,71 @@
+/* noXa Signal room. Impeccable Overdrive direction selected by the user.
+ * Real product captures; one pointer-driven geometric field, with static fallbacks. */
+:root {
+  --signal-line: #258c9b;
+  --signal-ink: #02080c;
+  --signal-surface: #081119;
+  --signal-shadow: #01050866;
+  --signal-rule: #29414d;
+}
+html, body { overflow-x: clip; }
+::selection { color: var(--ink); background: var(--accent); }
+body { scrollbar-color: var(--line) var(--bg); }
+h1, h2, h3 { min-width: 0; overflow-wrap: break-word; text-wrap: balance; }
+.hero { background: var(--bg); overflow: clip; }
+.hero-inner { grid-template-columns: minmax(0, .82fr) minmax(0, 1.18fr); gap: 48px; min-height: 660px; padding-block: 56px 64px; }
+.hero h1 { font-size: clamp(64px, 6.6vw, 96px); letter-spacing: -.035em; line-height: 1.02; font-weight: 650; margin-bottom: 28px; }
+.hero .lede { font-size: 19px; line-height: 1.65; margin-bottom: 30px; }
+.hero-art { isolation: isolate; padding: 72px 0 12px; }
+.hero-art::before { content: none; }
+.hero-art > .app-shot { position: relative; z-index: 1; transform: none; }
+.hero .app-shot img { border: 0; box-shadow: 0 28px 64px var(--signal-shadow); }
+.hero .app-shot figcaption { margin-top: 18px; font-size: 12px; }
+.app-shot figcaption, .lightbox p { font-size: 12px; }
+.signal-field { position: absolute; inset: -120px -140px -70px; z-index: 0; pointer-events: none; color: var(--signal-line); }
+.signal-still, .signal-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.signal-still { stroke-width: 1.1; opacity: .75; }
+.signal-field[data-renderer="webgl"] .signal-still { visibility: hidden; }
+.signal-controls { position: relative; z-index: 1; min-height: 44px; display: flex; align-items: end; justify-content: end; }
+.signal-toggle { color: var(--muted); background: var(--bg); border: 1px solid var(--signal-rule); border-radius: 6px; padding: 8px 12px; min-height: 36px; font-size: 12px; }
+.signal-toggle:hover { color: var(--fg); border-color: var(--accent); }
+.signal-toggle:active { background: var(--signal-surface); }
+.signal-toggle:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+.hero .release-note { max-width: 32ch; font-size: 12px; line-height: 1.8; }
+.alpha { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 400; padding: 0; border: 0; }
+.features { gap: 0; border-block: 1px solid var(--signal-rule); }
+.feature { border: 0; border-radius: 0; background: none; padding: 34px 30px; }
+.feature + .feature { border-left: 1px solid var(--signal-rule); }
+.feature > .icon { margin-bottom: 22px; }
+.learn-card { border-radius: 12px; background: var(--signal-surface); }
+.learn-card h3 { font-size: 25px; }
+.learn-card p { font-size: 15px; }
+.section-heading h2, .story h2 { letter-spacing: -.03em; }
+.btn, .header-download, .signal-toggle { white-space: nowrap; }
+@media (max-width: 1150px) {
+  .hero-inner { gap: 32px; min-height: 620px; }
+  .hero h1 { font-size: clamp(60px, 7vw, 80px); }
+  .hero .lede { font-size: 17px; }
+}
+@media (max-width: 900px) {
+  .hero-inner { grid-template-columns: minmax(0, 1fr); min-height: 0; gap: 0; padding-block: 36px 40px; }
+  .hero h1 { font-size: clamp(60px, 11vw, 84px); }
+  .hero-copy { max-width: 620px; }
+  .hero-art { margin: 0; padding: 64px 0 0; }
+  .hero-art > .app-shot { transform: none; }
+  .signal-field { inset: -30px -55px -20px; }
+  .signal-controls { min-height: 12px; }
+  .feature { padding: 28px 24px; }
+}
+@media (max-width: 600px) {
+  .hero h1 { font-size: clamp(56px, 15vw, 76px); margin-bottom: 24px; }
+  .hero .lede { font-size: 17px; }
+  .hero .release-note { max-width: none; }
+  .hero .app-shot figcaption { font-size: 12px; align-items: start; }
+  .hero .app-shot figcaption span { max-width: 23ch; }
+  .feature { padding: 28px 8px; }
+  .feature + .feature { border-left: 0; border-top: 1px solid var(--signal-rule); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .signal-canvas { display: none; }
+  .signal-field .signal-still { visibility: visible; }
+}

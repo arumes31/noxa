@@ -124,6 +124,21 @@ the current [new-server setup guide](https://github.com/arumes31/noxa#new-server
 
 ## Guides and SEO
 
+The landing page uses the user-selected **Signal room** direction from Impeccable
+Overdrive. `assets/js/signal-room.js` adds a pointer-driven WebGL field around the
+real client capture. Its critically damped movement settles completely; the pixel
+budget is capped at 500,000. Rendering stops off screen, in background tabs and
+when paused. Touch layouts, reduced-motion preferences, data-saving mode and
+unavailable/lost WebGL contexts retain the still SVG composition. No microphone,
+audio, telemetry or external runtime is used by the effect. The guide library
+remains a reading surface with static screenshots and full written instructions.
+
+Hallmark's audit covers the live homepage and all 13 guide routes. Marketing word
+budgets and one-line navigation rules require interpretation for long technical
+documents; raw linter counts are not a count of broken pages. The follow-up fixes
+address numbered tables of contents, reading measure, small labels and screenshot
+captions. See `seo-audit.json` for the evidence and measurement limits.
+
 The guide library lives at `/guides/`. Edit `scripts/guides/clients.mjs` or
 `scripts/guides/server.mjs`, then run `npm run build`. The generator writes
 the guide index, individual HTML pages, and `public/sitemap.xml`. Generated

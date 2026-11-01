@@ -35,6 +35,11 @@
       "Keep mobile guide navigation in reading order and preserve each image caption when enlarged",
       "Validate cross-page fragments in the deterministic browser crawl"
     ],
-    "measurement_limits": "Browser checks are functional and visual lab evidence; they do not establish field Core Web Vitals, indexing, traffic or ranking gains."
+    "design_audits": {
+      "hallmark": { "source": "https://github.com/Nutlope/hallmark", "revision": "4f6a46c6dc325d40ab268c93e25c7b96676ebccd", "live_pages": 14, "baseline_captures": 70, "fixes": ["Remove duplicate step numbers in the guide tables of contents", "Limit reference prose to a readable measure", "Increase small labels and captions", "Replace landing-page eyebrow, tilted image and floating callouts with one product-led composition"], "interpretation": "Marketing word budgets and one-line link rules do not fit long technical guides. Raw mechanical gate counts were triaged rather than presented as broken-page counts or a universal pass." },
+      "impeccable": { "source": "https://github.com/pbakaus/impeccable", "command": "overdrive", "selected_direction": "Signal room", "implementation": "Pointer-driven, critically damped WebGL voice-wave geometry around an actual client screenshot; at most 500000 drawing-buffer pixels; no continuous idle rendering", "fallbacks": ["Touch layouts", "Reduced motion", "Data saving", "Unavailable or lost WebGL", "JavaScript disabled"], "review": "Independent visual review confirmed legible hero actions, honest screenshot labels, correct fallbacks and no page errors. Back/forward-cache lifecycle behavior was corrected.", "mechanical_detector_findings_after_fixes": 0 }
+    },
+    "code_review": { "tool": "CodeRabbit CLI 0.9.2", "included_reviews": 2, "review_findings": 2, "resolution": "The new binary screenshot files are explicitly committed and browser-verified. The suggested hidden-canvas issue is already prevented by the shared [hidden] display:none!important rule and covered by reduced-motion, touch and unavailable-WebGL checks." },
+    "measurement_limits": "Browser checks are functional and visual lab evidence; they do not establish field Core Web Vitals, indexing, traffic or ranking gains. No physical mid-range phone or GPU frame-rate benchmark was available."
   }
 }
