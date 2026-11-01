@@ -38,7 +38,8 @@ const page = (id, transformAPI) => `<!doctype html><meta charset="utf-8"><title>
 <script type="module">
 const BRIDGE = "/bridge", ID = ${JSON.stringify(id)};
 ${transformAPI === "streams" ? "delete window.RTCRtpScriptTransform;" : ""}
-window.post = async (path, body) => { const r = await fetch(BRIDGE + path, { method: "POST", body: JSON.stringify(body) }); if (!r.ok) throw new Error(path + ": " + await r.text()); return r.json(); };
+window.peerGeneration = 0;
+window.post = async (path, body) => { if (["/offer", "/candidate", "/close"].includes(path)) body = { PeerGeneration: window.peerGeneration, ...body }; const r = await fetch(BRIDGE + path, { method: "POST", body: JSON.stringify(body) }); if (!r.ok) throw new Error(path + ": " + await r.text()); return r.json(); };
 const state = { pc: null, serverGeneration: 1, activeTabID: "tab", myClientID: ID, myChannelID: 1, clients: [], settings: {}, localStream: null, mediaLimits: null, shareAudioSender: null, shareVideoTransceiver: null };
 window.__noxa = { state, $: id => document.getElementById(id), sysMsg: m => console.log("sys " + m), toast: m => console.log("toast " + m) };
 window.go = { main: { App: {
@@ -68,10 +69,11 @@ window.colored = rgb => {
   return canvas.captureStream(30);
 };
 window.join = async () => {
+  const peerGeneration = window.peerGeneration = (await post("/begin", { ID })).generation;
   const media = await startChannelMedia({ hardwareVideoRequired: false, tabID: "tab", channelID: 1, roster: state.clients, onError: err => console.log("media error " + err) });
   const pc = media.protectPeer(new RTCPeerConnection(media.peerConfig()));
   state.pc = pc;
-  pc.onicecandidate = ev => { if (ev.candidate) post("/candidate", { ID, Candidate: ev.candidate.candidate, Mid: ev.candidate.sdpMid || "", Index: ev.candidate.sdpMLineIndex || 0 }); };
+  pc.onicecandidate = ev => { if (ev.candidate) post("/candidate", { ID, PeerGeneration: peerGeneration, Candidate: ev.candidate.candidate, Mid: ev.candidate.sdpMid || "", Index: ev.candidate.sdpMLineIndex || 0 }); };
   const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
   state.localStream = mic;
   pc.addTransceiver(mic.getAudioTracks()[0], { direction: "sendrecv", streams: [mic] });
