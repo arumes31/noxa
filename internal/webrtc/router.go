@@ -1802,11 +1802,19 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		return
 	}
 	ownedSource := r.slotClaims[clientID][claimKey]
-	ownedSource.gop = &gopCache{}
-	if r.gopCaches == nil {
-		r.gopCaches = make(map[videoIngressKey]*gopCache)
+	// Encrypted frames retain their authenticated IV and membership-key epoch.
+	// Replaying a whole GOP under new RTP headers cannot repair an existing
+	// receiver's replay window, nor start a viewer with a newer key epoch.
+	// Without a cache, joins and picture loss request a fresh source keyframe;
+	// ordinary packet-level NACK/RTX repair still uses the egress history.
+	ownedSource.gop = nil
+	if !encrypted {
+		ownedSource.gop = &gopCache{}
+		if r.gopCaches == nil {
+			r.gopCaches = make(map[videoIngressKey]*gopCache)
+		}
+		r.gopCaches[videoIngressKey{clientID, slot, rid}] = ownedSource.gop
 	}
-	r.gopCaches[videoIngressKey{clientID, slot, rid}] = ownedSource.gop
 	bySlot, ok := r.videoSources[clientID]
 	if !ok {
 		bySlot = make(map[string]map[string]uint32)
