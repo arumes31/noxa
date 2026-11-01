@@ -170,3 +170,95 @@ for(const failedPid of ["","self|screen"])test(`a failed source ${failedPid?"reb
         assert.equal(calls,2);assert.equal(stopped,1);
     }finally{f.media.close();}
 });
+
+async function hardwarePollFixture(t) {
+    let clock = 1, evidence = "hardware", stopped = 0;
+    const proofs = [];
+    t.mock.method(performance, "now", () => clock);
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    class Worker {
+        postMessage({ seq, op, enabled }) {
+            if (op === "hardwareProof") proofs.push(enabled);
+            if (seq !== undefined) queueMicrotask(() => this.onmessage?.({ data: { seq, ok: true, value: { gen: 1 } } }));
+        }
+        terminate() {}
+    }
+    const media = new MediaE2EE({ api: "streams", workerURL: "fake", scope: {
+        Worker, crypto: globalThis.crypto, RTCRtpSender: { prototype: { createEncodedStreams() {} } },
+        RTCRtpReceiver: { prototype: { createEncodedStreams() {} } },
+    } });
+    await media.ready;
+    const track = { id: "proven-screen", kind: "video", readyState: "live",
+        stop() { stopped++; this.readyState = "ended"; }, dispatchEvent() {} };
+    const sender = { track, createEncodedStreams: () => ({ readable: {}, writable: {} }),
+        getParameters: () => ({ encodings: [{ active: true }] }),
+        getStats: async () => evidence === "pending" ? new Map() : new Map([
+            ["source", { trackIdentifier: sender.track.id }],
+            ["video", { type: "outbound-rtp", kind: "video", mediaSourceId: "source",
+                powerEfficientEncoder: evidence === "hardware", encoderImplementation: evidence === "hardware" ? "Intel QSV MFT" : "OpenH264" }],
+        ]),
+    };
+    media.protectSender(sender, "video");
+    media.stats = async () => ({ endpoint: { activeEpoch: 1 } });
+    await media.bind(sender, "self|screen");
+    t.after(() => media.close());
+    const poll = media.hardwarePollers.get(media.endpointID(sender));
+    return { media, sender, track, proofs, stopped: () => stopped,
+        async sample(at, value) { clock = at; evidence = value; await poll(); } };
+}
+
+test("an established hardware stream gets a fresh deadline after a transient missing report", async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "hardware");
+    await f.sample(120001, "hardware");
+    await f.sample(120301, "pending");
+    assert.equal(f.stopped(), 0, "stream age must not make one missing report fatal");
+    assert.equal(f.proofs.at(-1), false, "missing evidence immediately revokes upload permission");
+    await f.sample(130302, "pending");
+    assert.equal(f.stopped(), 1, "persistent missing evidence still stops capture");
+});
+
+test("hardware fallback preserves the selected window through a bounded recovery opportunity", async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "hardware");
+    await f.sample(60001, "software");
+    assert.equal(f.stopped(), 0);
+    assert.equal(f.proofs.at(-1), false, "software fallback never receives hardware authorization");
+    await f.sample(75001, "software");
+    assert.equal(f.stopped(), 0, "the 10-second sender recovery scheduler must have time to run");
+    await f.sample(80002, "software");
+    assert.equal(f.stopped(), 1, "a failed recovery cannot retain capture indefinitely");
+});
+
+test("a recovered hardware encoder keeps the original capture and renews proof", async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "hardware");
+    await f.sample(60001, "software");
+    await f.sample(75001, "hardware");
+    assert.equal(f.sender.track, f.track);
+    assert.equal(f.track.readyState, "live");
+    assert.equal(f.stopped(), 0);
+    assert.deepEqual(f.proofs, [true, false, true]);
+    await f.sample(75002, "pending");
+    await f.sample(85003, "pending");
+    assert.equal(f.stopped(), 1, "the unknown-proof deadline applies again after recovery");
+});
+
+test("a source that never proved hardware still rejects software immediately", async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "software");
+    assert.equal(f.proofs.at(-1), false);
+    assert.equal(f.stopped(), 1);
+});
+
+test("a replacement source cannot inherit the previous window's hardware recovery grace", async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "hardware");
+    f.sender.track = { ...f.track, id: "new-window" };
+    await f.media.bind(f.sender, "self|screen");
+    await f.sample(60001, "software");
+    assert.equal(f.stopped(), 1);
+    assert.equal(f.track.readyState, "live", "the previous source is not stopped by a late poll");
+    assert.equal(f.sender.track.readyState, "ended");
+    assert.equal(f.proofs.at(-1), false);
+});

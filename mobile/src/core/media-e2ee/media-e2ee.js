@@ -153,7 +153,7 @@ export class MediaE2EE {
     }
 
     #watchHardware(sender, id) {
-        let track = null, started = null, checking = false, scheduled = null;
+        let track = null, started = null, hardwareSeen = false, checking = false, scheduled = null;
         const stopUnverified = (entry, reason) => {
             if (this.closed || this.endpoints.get(sender) !== entry || entry.invalidated || entry?.pid !== "self|screen" ||
                 track !== sender.track || track?.readyState === "ended" ||
@@ -171,7 +171,7 @@ export class MediaE2EE {
                 // The mandatory policy applies to screen/Studio streams. Camera
                 // calls retain their existing behavior and microphone is separate.
                 if (entry?.invalidated || !sender.track || sender.track.readyState === "ended" || entry?.pid !== "self|screen") return;
-                if (track !== sender.track) { track = sender.track; started = null; }
+                if (track !== sender.track) { track = sender.track; started = null; hardwareSeen = false; }
                 const active = sender.getParameters?.().encodings?.some(e => e.active !== false);
                 if (active === false) { started = null; return; } // no viewer demand
                 if (started === null) started = performance.now();
@@ -182,8 +182,20 @@ export class MediaE2EE {
                 if (this.closed || entry.invalidated || this.endpoints.get(sender) !== entry || source !== sender.track || source !== track || entry.sourceTag !== source.id) return;
                 const evidence = hardwareVideoEvidence(report, track.id);
                 await this.request("hardwareProof", { id, pid: entry.pid, sourceTag: track.id, enabled: evidence === "hardware" });
-                if (evidence === "software" || evidence !== "hardware" && performance.now() - started > 10000) {
-                    stopUnverified(entry, evidence === "software" ? "hardware_encoder" : "hardware_unverified");
+                if (evidence === "hardware") {
+                    // Measure loss of proof, not the total age of a good stream.
+                    started = null;
+                    hardwareSeen = true;
+                } else {
+                    // The worker has already revoked permission to send frames.
+                    // An established hardware source gets a bounded chance for
+                    // the sender recovery scheduler (10 s evidence) to restart
+                    // its encoder without losing the user's selected window.
+                    // Initial software-only admission still fails immediately.
+                    const grace = evidence === "software" && hardwareSeen ? 20000 : 10000;
+                    if (evidence === "software" && !hardwareSeen || performance.now() - started > grace) {
+                        stopUnverified(entry, evidence === "software" ? "hardware_encoder" : "hardware_unverified");
+                    }
                 }
             } catch {
                 // Proof still expires in the worker. Rejected stats/proof
