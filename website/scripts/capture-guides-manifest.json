@@ -1,5 +1,5 @@
 {
-  "sourceCommit": "5ec0be7813fc9cdc98550b617c353c19c79c8a8d",
+  "sourceCommit": "b2cf8d062249316dfe0a823ce5f38f6665da97d9",
   "browser": "156.0.4314.50",
   "viewport": "1280x800",
   "rolesViewport": "1280x1100",
@@ -11,9 +11,10 @@
   "data": "Fictional local-only demo data",
   "appChat": "Full actual frontend viewport",
   "appRoles": "app-roles-guide.png: Actual Roles dialog crop",
-  "generatedAt": "2026-11-01T02:48:06.692Z",
+  "generatedAt": "2026-11-01T03:35:10.799Z",
   "appConnect": "Actual connection screen, fictional community.example address",
-  "appCapture": "Actual Capture settings dialog, no hardware access",
+  "appCapture": "Actual Audio & voice settings dialog, no hardware access",
+  "appConnection": "Actual Connection diagnostics, no network tests running",
   "appChannelAccess": "Actual Channel access dialog, fictional policy",
   "appStudio": "Actual Studio dialog, no captures or broadcast",
   "connectViewport": "1280x1100"

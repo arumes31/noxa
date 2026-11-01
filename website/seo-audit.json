@@ -19,5 +19,27 @@
   "strengths_preserved": ["Static readable HTML without JavaScript", "Canonical HTTPS URL", "Local fonts and assets", "Semantic navigation and keyboard skip links", "Real screenshots with dimensions", "Deferred small browser script"],
   "verification_limits": ["Search Console, rankings, traffic and CTR were not available", "No CrUX or PageSpeed field data: no Core Web Vitals pass or score claimed", "No backlink data: no authority or ranking score claimed"],
   "code_review": { "tool": "CodeRabbit CLI 0.9.2", "usage": "Included free reviews; paid usage disabled", "findings": 1, "resolution": "CI drift detection checks both tracked and untracked generated guide files", "follow_up_findings": 0, "github_findings": 4, "github_resolution": "Portable image checksums, safe stale-guide removal, current guide Roles captures and capture-source preflight; validated by authoring and browser checks" },
-  "follow_up": ["Submit the deployed sitemap through Search Console", "Monitor guide indexing and search queries", "Measure field Core Web Vitals when sufficient traffic is available"]
+  "follow_up": ["Submit the deployed sitemap through Search Console", "Monitor guide indexing and search queries", "Measure field Core Web Vitals when sufficient traffic is available"],
+  "reaudit": {
+    "date": "2026-11-01",
+    "baseline": "b2cf8d062249316dfe0a823ce5f38f6665da97d9",
+    "scope": "Live homepage, guide hub, all 12 guides, screenshots, local assets, internal and external links including fragments",
+    "live_evidence": { "canonical_pages": 14, "resolved_reference_urls": 139, "unique_targets": 46, "browser_errors": 0, "overflow_widths_checked": [320, 390, 1440], "broken_internal_links_or_fragments": 0 },
+    "external_limit": "Four GitHub source-file pages returned temporary HTTP 429 responses. Their exact paths were verified in the current Git checkout; no broken destination was established.",
+    "fixes": [
+      "Use current Audio & voice and Privacy settings labels, and point network echo testing to Connection / Diagnostics",
+      "Explain QR trust binding for encrypted PWA messages and channel media, including certificate rotation",
+      "Provision service database roles before starting an isolated backup restoration",
+      "Link server operators directly to HTTPS app hosting instructions",
+      "Refresh real desktop and PWA captures, include sign-in, You and Connection diagnostics, and require complete visible PWA controls",
+      "Keep mobile guide navigation in reading order and preserve each image caption when enlarged",
+      "Validate cross-page fragments in the deterministic browser crawl"
+    ],
+    "design_audits": {
+      "hallmark": { "source": "https://github.com/Nutlope/hallmark", "revision": "4f6a46c6dc325d40ab268c93e25c7b96676ebccd", "live_pages": 14, "baseline_captures": 70, "fixes": ["Remove duplicate step numbers in the guide tables of contents", "Limit reference prose to a readable measure", "Increase small labels and captions", "Replace landing-page eyebrow, tilted image and floating callouts with one product-led composition"], "interpretation": "Marketing word budgets and one-line link rules do not fit long technical guides. Raw mechanical gate counts were triaged rather than presented as broken-page counts or a universal pass." },
+      "impeccable": { "source": "https://github.com/pbakaus/impeccable", "command": "overdrive", "selected_direction": "Signal room", "implementation": "Pointer-driven, critically damped WebGL voice-wave geometry around an actual client screenshot; at most 500000 drawing-buffer pixels; no continuous idle rendering", "fallbacks": ["Touch layouts", "Reduced motion", "Data saving", "Unavailable or lost WebGL", "JavaScript disabled"], "review": "Independent visual review confirmed legible hero actions, honest screenshot labels, correct fallbacks and no page errors. Back/forward-cache lifecycle behavior was corrected.", "mechanical_detector_findings_after_fixes": 0 }
+    },
+    "code_review": { "tool": "CodeRabbit CLI 0.9.2", "included_reviews": 2, "review_findings": 2, "resolution": "The new binary screenshot files are explicitly committed and browser-verified. The suggested hidden-canvas issue is already prevented by the shared [hidden] display:none!important rule and covered by reduced-motion, touch and unavailable-WebGL checks." },
+    "measurement_limits": "Browser checks are functional and visual lab evidence; they do not establish field Core Web Vitals, indexing, traffic or ranking gains. No physical mid-range phone or GPU frame-rate benchmark was available."
+  }
 }

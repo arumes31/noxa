@@ -61,7 +61,7 @@ outside the published directory.
 
 `public/assets/screenshots/app-chat.png` and `app-roles.png` are captures of
 the actual noXa frontend at application commit
-`68bb5cfe75c3f450590d92cca5b9cca1a7ef9aee`. They use fictional local demo
+`b2cf8d062249316dfe0a823ce5f38f6665da97d9`. They use fictional local demo
 messages, members, channels, roles, and the reserved `community.example`
 hostname. The page identifies the images as demo data. They are browser
 captures with native API fixtures, not a connection to a production server
@@ -88,10 +88,15 @@ manifest before committing them, then run the website tests and compare
 desktop/mobile previews. The script and fixture data stay outside `public/`.
 Update the application commit recorded above when replacing these captures.
 
-`public/assets/screenshots/pwa-chat.png` captures the actual mobile chat components
-at 390 × 844 with fictional local data. Run `node website/scripts/capture-mobile.mjs`
-after installing `mobile/` dependencies and Chromium to refresh it. Its source
-revision and browser are recorded in `scripts/capture-mobile-manifest.json`.
+`public/assets/screenshots/pwa-chat.png`, `pwa-you.png`, and `pwa-connect.png`
+capture the current mobile Chat, You, and sign-in components at 390 × 844 with
+fictional local data. Run `node website/scripts/capture-mobile.mjs` after
+installing `mobile/` dependencies and Chromium to refresh them. The script checks
+that the composer, Send button, navigation and sign-in action fit in the viewport.
+Their source revision and browser are recorded in `scripts/capture-mobile-manifest.json`.
+Both capture scripts accept `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` for an existing
+Chromium browser and `NOXA_CAPTURE_SOURCE_ROOT` for a separate Git source checkout.
+They validate the source revision before replacing any images.
 External requests and service workers are blocked during both capture workflows.
 
 ## Download contract
@@ -118,6 +123,21 @@ the current [new-server setup guide](https://github.com/arumes31/noxa#new-server
 “Latest” does not imply stable; the product remains labeled Public alpha.
 
 ## Guides and SEO
+
+The landing page uses the user-selected **Signal room** direction from Impeccable
+Overdrive. `assets/js/signal-room.js` adds a pointer-driven WebGL field around the
+real client capture. Its critically damped movement settles completely; the pixel
+budget is capped at 500,000. Rendering stops off screen, in background tabs and
+when paused. Touch layouts, reduced-motion preferences, data-saving mode and
+unavailable/lost WebGL contexts retain the still SVG composition. No microphone,
+audio, telemetry or external runtime is used by the effect. The guide library
+remains a reading surface with static screenshots and full written instructions.
+
+Hallmark's audit covers the live homepage and all 13 guide routes. Marketing word
+budgets and one-line navigation rules require interpretation for long technical
+documents; raw linter counts are not a count of broken pages. The follow-up fixes
+address numbered tables of contents, reading measure, small labels and screenshot
+captions. See `seo-audit.json` for the evidence and measurement limits.
 
 The guide library lives at `/guides/`. Edit `scripts/guides/clients.mjs` or
 `scripts/guides/server.mjs`, then run `npm run build`. The generator writes

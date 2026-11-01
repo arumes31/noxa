@@ -4,6 +4,12 @@
   const menu = document.querySelector('.menu-button');
   const nav = document.querySelector('#navigation');
   const mobile = window.matchMedia('(max-width: 900px)');
+  const guideDetails = document.querySelector('.docs-sidebar details');
+  if (guideDetails) {
+    const syncGuides = () => { guideDetails.open = !mobile.matches; };
+    mobile.addEventListener('change', syncGuides);
+    syncGuides();
+  }
 
   if (menu && nav) {
     const setOpen = (open, restoreFocus = false) => {
@@ -32,7 +38,7 @@
 
   const dialog = document.querySelector('.lightbox');
   if (!dialog || typeof dialog.showModal !== 'function') return;
-  const image = dialog.querySelector('img');
+  let image;
   let opener;
 
   document.querySelectorAll('a[data-full]').forEach((link) => {
@@ -40,8 +46,15 @@
       if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
       opener = link;
+      if (!image) {
+        image = document.createElement('img');
+        dialog.insertBefore(image, dialog.querySelector('#image-caption'));
+      }
       image.src = link.href;
       image.alt = link.querySelector('img').alt;
+      const caption = link.closest('figure')?.querySelector('figcaption');
+      dialog.querySelector('#image-caption').textContent =
+        (caption?.querySelector('span') || caption)?.textContent.trim() || image.alt;
       dialog.showModal();
     });
   });

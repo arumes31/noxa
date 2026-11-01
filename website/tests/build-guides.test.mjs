@@ -32,7 +32,7 @@ test('regeneration removes retired guides and preserves unrelated public files',
   }
 });
 
-test('an invalid capture source is rejected before screenshot outputs change', async () => {
+for (const capture of ['capture-client.mjs', 'capture-mobile.mjs']) test(`${capture} rejects an invalid source before screenshot outputs change`, async () => {
   const temporaryRoot = resolve(tmpdir());
   const fixture = await mkdtemp(join(temporaryRoot, 'noxa-capture-'));
   assert.equal(dirname(fixture), temporaryRoot);
@@ -41,10 +41,10 @@ test('an invalid capture source is rejected before screenshot outputs change', a
     const output = join(fixture, 'website/public/assets/screenshots');
     await mkdir(scripts, { recursive: true });
     await mkdir(output, { recursive: true });
-    await copyFile(new URL('../scripts/capture-client.mjs', import.meta.url), join(scripts, 'capture-client.mjs'));
+    await copyFile(new URL(`../scripts/${capture}`, import.meta.url), join(scripts, capture));
     const sentinel = join(output, 'existing.png');
     await writeFile(sentinel, 'existing screenshot');
-    assert.throws(() => execFileSync(process.execPath, [join(scripts, 'capture-client.mjs'), '--guides-only'], {
+    assert.throws(() => execFileSync(process.execPath, [join(scripts, capture), '--guides-only'], {
       env: { ...process.env, NOXA_CAPTURE_SOURCE_ROOT: fixture, GIT_CEILING_DIRECTORIES: temporaryRoot, LC_ALL: 'C' },
       stdio: 'pipe',
     }), error => {
