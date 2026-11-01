@@ -2,7 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"testing"
+	"time"
 
 	"noxa/internal/auth"
 	"noxa/internal/authorization"
@@ -184,6 +188,40 @@ func TestRoleModerationProtectsOwnerAndTargetsDestinationAccess(t *testing.T) {
 	if got := readError(t, owner); got.Code != errCodePermissionDenied {
 		t.Fatalf("member moved without destination access: %+v", got)
 	}
-	send(t, owner, netproto.MsgKickClient, netproto.KickClient{ClientID: memberID, FromServer: true})
-	readEventOfType(t, member, eventKicked)
+	// A busy target writer must not block an authorized removal. Its terminal
+	// notice is best effort; the actor's acknowledgement and removal are not.
+	target, ok := env.srv.clientByID(memberID)
+	if !ok {
+		t.Fatal("member missing before kick")
+	}
+	target.wmu.Lock()
+	defer target.wmu.Unlock()
+	send(t, owner, netproto.MsgKickClient, netproto.KickClient{ClientID: memberID, FromServer: true, AckRequested: true})
+	frame := readOfType(t, owner, netproto.MsgClientRemoved)
+	var removed netproto.ClientRemoved
+	if err := json.Unmarshal(frame.Payload, &removed); err != nil {
+		t.Fatal(err)
+	}
+	if removed != (netproto.ClientRemoved{ClientID: memberID, FromServer: true}) {
+		t.Fatalf("wrong kick acknowledgement: %+v", removed)
+	}
+	if _, ok := env.state.GetClient(memberID); ok {
+		t.Fatal("kicked member remains in state")
+	}
+	if _, ok := env.srv.clientByID(memberID); ok {
+		t.Fatal("kicked member remains registered")
+	}
+	if _, ok := env.state.GetClient(ownerID); !ok {
+		t.Fatal("owner was removed")
+	}
+	_ = member.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		_, err := netproto.ReadFrame(member) // drain already-queued ordinary frames
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("kicked connection did not close cleanly: %v", err)
+		}
+	}
 }
