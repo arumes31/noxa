@@ -102,6 +102,14 @@ func runHandoffFixtureMain() bool {
 				panic(err)
 			}
 		} else {
+			// A real browser remains alive while its host arms the supervisor.
+			// Starting the exit timer at process creation can let a slow disk or
+			// scanner kill this fixture before its identity is even captured.
+			ctx, cancel := context.WithTimeout(context.Background(), handoffFixtureOuter)
+			defer cancel()
+			if err := waitHandoffFixtureMarker(ctx, filepath.Join(dir, "parent-armed")); err != nil {
+				panic(err)
+			}
 			time.Sleep(600 * time.Millisecond)
 		}
 		_ = os.WriteFile(filepath.Join(dir, "browser-exiting"), []byte("natural exit"), 0600)
@@ -272,6 +280,9 @@ func runHandoffFixtureParent(dir, name string) error {
 	if err := os.WriteFile(filepath.Join(dir, "helper.json"), helperBytes, 0600); err != nil {
 		return err
 	}
+	if err := os.WriteFile(filepath.Join(dir, "parent-armed"), []byte("supervisor identity verified"), 0600); err != nil {
+		return err
+	}
 	if name == "parent timeout" {
 		select {
 		case err := <-helper.exited:
@@ -390,7 +401,9 @@ func TestUpdateHandoffSupervisorIntegration(t *testing.T) {
 			cmd.Env = append(os.Environ(), handoffFixtureRootEnv+"="+dir, handoffFixtureCaseEnv+"="+name, handoffFixtureOldHashEnv+"="+hex.EncodeToString(oldHash[:]))
 			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("disposable parent: %v\n%s", err, out)
+				logData, _ := os.ReadFile(filepath.Join(dir, "supervisor.log"))
+				result, _ := os.ReadFile(filepath.Join(dir, "supervisor-result.txt"))
+				t.Fatalf("disposable parent: %v\n%s\nsupervisor log: %s\nsupervisor result: %s", err, out, logData, result)
 			}
 			for {
 				if _, err := os.Stat(filepath.Join(dir, "supervisor-result.txt")); err == nil {
