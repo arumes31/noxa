@@ -55,7 +55,8 @@ func (a *audioContinuity) translate(packet *rtp.Packet, epoch uint64, clockRate 
 		case switching:
 			a.epochPackets = 0
 		default:
-			a.epochPackets = min(uint32(32768), a.epochPackets+uint32(delta))
+			// This is a forward RTP distance, including uint16 sequence wrap.
+			a.epochPackets = min(uint32(32768), a.epochPackets+uint32(out.SequenceNumber-a.sequence))
 		}
 		a.seen, a.epoch, a.ssrc = true, epoch, packet.SSRC
 		a.sequence, a.timestamp, a.last = out.SequenceNumber, out.Timestamp, now
