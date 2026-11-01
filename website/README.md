@@ -61,7 +61,7 @@ outside the published directory.
 
 `public/assets/screenshots/app-chat.png` and `app-roles.png` are captures of
 the actual noXa frontend at application commit
-`68bb5cfe75c3f450590d92cca5b9cca1a7ef9aee`. They use fictional local demo
+`b2cf8d062249316dfe0a823ce5f38f6665da97d9`. They use fictional local demo
 messages, members, channels, roles, and the reserved `community.example`
 hostname. The page identifies the images as demo data. They are browser
 captures with native API fixtures, not a connection to a production server
@@ -88,10 +88,15 @@ manifest before committing them, then run the website tests and compare
 desktop/mobile previews. The script and fixture data stay outside `public/`.
 Update the application commit recorded above when replacing these captures.
 
-`public/assets/screenshots/pwa-chat.png` captures the actual mobile chat components
-at 390 × 844 with fictional local data. Run `node website/scripts/capture-mobile.mjs`
-after installing `mobile/` dependencies and Chromium to refresh it. Its source
-revision and browser are recorded in `scripts/capture-mobile-manifest.json`.
+`public/assets/screenshots/pwa-chat.png`, `pwa-you.png`, and `pwa-connect.png`
+capture the current mobile Chat, You, and sign-in components at 390 × 844 with
+fictional local data. Run `node website/scripts/capture-mobile.mjs` after
+installing `mobile/` dependencies and Chromium to refresh them. The script checks
+that the composer, Send button, navigation and sign-in action fit in the viewport.
+Their source revision and browser are recorded in `scripts/capture-mobile-manifest.json`.
+Both capture scripts accept `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` for an existing
+Chromium browser and `NOXA_CAPTURE_SOURCE_ROOT` for a separate Git source checkout.
+They validate the source revision before replacing any images.
 External requests and service workers are blocked during both capture workflows.
 
 ## Download contract

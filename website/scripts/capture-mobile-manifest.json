@@ -1,8 +1,13 @@
 {
-  "sourceCommit": "5442eb2e4275fe2c6c651dcc0cea955fc5dfdd36",
-  "browser": "156.0.8078.4",
+  "sourceCommit": "b2cf8d062249316dfe0a823ce5f38f6665da97d9",
+  "browser": "156.0.4314.50",
   "viewport": "390x844",
-  "fixture": "mobile/ui-tests/layout-fixture.js with fictional capture data",
+  "fixture": "Actual Connect screen with local server-info response; mobile/ui-tests/layout-fixture.js Chat and You with fictional capture data",
   "fixtureTime": "2026-10-25T18:35:00Z",
-  "generatedAt": "2026-10-25T09:36:20.911Z"
+  "screenshots": [
+    "pwa-chat.png",
+    "pwa-you.png",
+    "pwa-connect.png"
+  ],
+  "generatedAt": "2026-11-01T03:39:39.911Z"
 }

@@ -4,6 +4,12 @@
   const menu = document.querySelector('.menu-button');
   const nav = document.querySelector('#navigation');
   const mobile = window.matchMedia('(max-width: 900px)');
+  const guideDetails = document.querySelector('.docs-sidebar details');
+  if (guideDetails) {
+    const syncGuides = () => { guideDetails.open = !mobile.matches; };
+    mobile.addEventListener('change', syncGuides);
+    syncGuides();
+  }
 
   if (menu && nav) {
     const setOpen = (open, restoreFocus = false) => {
@@ -42,6 +48,9 @@
       opener = link;
       image.src = link.href;
       image.alt = link.querySelector('img').alt;
+      const caption = link.closest('figure')?.querySelector('figcaption');
+      dialog.querySelector('#image-caption').textContent =
+        (caption?.querySelector('span') || caption)?.textContent.trim() || image.alt;
       dialog.showModal();
     });
   });

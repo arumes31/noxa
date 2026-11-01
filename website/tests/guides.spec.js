@@ -7,6 +7,7 @@ const pages = [...sitemap.matchAll(/<loc>(.*?)<\/loc>/g)].map(match => new URL(m
 test('every canonical page is crawlable with complete metadata, images, and local links', async ({ page, request, baseURL }) => {
   test.setTimeout(120000);
   const errors = [];
+  const targets = new Map();
   page.on('pageerror', error => errors.push(error.message));
   for (const path of pages) {
     await page.goto(path || './');
@@ -31,8 +32,17 @@ test('every canonical page is crawlable with complete metadata, images, and loca
       if (url.hash && url.pathname === new URL(page.url()).pathname) {
         expect(ids, `${path}: ${url.hash}`).toContain(decodeURIComponent(url.hash.slice(1)));
       } else {
-        const response = await request.get(url.href);
-        expect(response.status(), `${path}: ${resource.value}`).toBe(200);
+        const target = new URL(url);
+        target.hash = '';
+        if (!targets.has(target.href)) {
+          const response = await request.get(target.href);
+          expect(response.status(), `${path}: ${resource.value}`).toBe(200);
+          const ids = response.headers()['content-type']?.includes('text/html')
+            ? await page.evaluate(html => [...new DOMParser().parseFromString(html, 'text/html').querySelectorAll('[id]')].map(node => node.id), await response.text())
+            : [];
+          targets.set(target.href, ids);
+        }
+        if (url.hash) expect(targets.get(target.href), `${path}: ${resource.value}`).toContain(decodeURIComponent(url.hash.slice(1)));
       }
     }
     for (const width of [320, 390, 1440]) {
@@ -50,6 +60,31 @@ test('every canonical page is crawlable with complete metadata, images, and loca
     }
   }
   expect(errors).toEqual([]);
+});
+
+test('guide browsing follows reading order and enlarged screenshots keep their captions', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('guides/mobile/');
+  const details = page.locator('.docs-sidebar details');
+  await expect(details).not.toHaveAttribute('open', '');
+  const sidebar = await details.boundingBox();
+  const article = await page.locator('main').boundingBox();
+  expect(sidebar.y + sidebar.height).toBeLessThan(article.y);
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('link', { name: 'Skip to content' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('main')).toBeFocused();
+  const figure = page.locator('figure').filter({ has: page.locator('img[src$="pwa-connect.png"]') });
+  const caption = await figure.locator('figcaption').textContent();
+  const link = figure.getByRole('link');
+  await link.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.locator('#image-caption')).toHaveText(caption);
+  await page.keyboard.press('Escape');
+  await expect(link).toBeFocused();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await expect(details).toHaveAttribute('open', '');
 });
 
 test('server setup works without JavaScript and guide images open with keyboard', async ({ browser, baseURL }) => {

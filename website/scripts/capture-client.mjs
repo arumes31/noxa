@@ -34,6 +34,7 @@ try {
   await context.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1'
     ? route.continue() : route.abort());
   const page = await context.newPage();
+  page.setDefaultNavigationTimeout(120000);
   await page.clock.setFixedTime(new Date('2026-10-24T18:35:00Z'));
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -163,6 +164,11 @@ try {
     await page.evaluate(() => document.fonts.ready);
     await page.locator('#settings-overlay .settings-dialog').screenshot({ path: path.join(output, 'app-capture.png'), animations: 'disabled' });
     await page.keyboard.press('Escape');
+    await page.evaluate(() => window.__noxa.openSettings('connection'));
+    await page.locator('#settings-overlay .settings-dialog').waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    await page.locator('#settings-overlay .settings-dialog').screenshot({ path: path.join(output, 'app-connection.png'), animations: 'disabled' });
+    await page.keyboard.press('Escape');
     await page.evaluate(async () => { const { openChannelAccess } = await import('/src/channel-access-ui.js'); openChannelAccess(2); });
     await page.locator('.channel-access-dialog .channel-access-content select').first().waitFor();
     await page.locator('.channel-access-dialog').screenshot({ path: path.join(output, 'app-channel-access.png'), animations: 'disabled' });
@@ -189,7 +195,8 @@ try {
     generatedAt: new Date().toISOString() };
   if (guidesOnly) {
     manifest.appConnect = 'Actual connection screen, fictional community.example address';
-    manifest.appCapture = 'Actual Capture settings dialog, no hardware access';
+    manifest.appCapture = 'Actual Audio & voice settings dialog, no hardware access';
+    manifest.appConnection = 'Actual Connection diagnostics, no network tests running';
     manifest.appChannelAccess = 'Actual Channel access dialog, fictional policy';
     manifest.appStudio = 'Actual Studio dialog, no captures or broadcast';
     manifest.appRoles = 'app-roles-guide.png: Actual Roles dialog crop';

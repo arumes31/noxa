@@ -16,6 +16,9 @@ const guideScreenshots = {
   'getting-started:connect': guideShot('app-connect', 1280, 1100, 'noXa connection screen with server, account, display name and separate password fields', 'Connect to the address supplied by your community'),
   'server-setup:first-start': guideShot('app-connect', 1280, 1100, 'noXa connection screen showing separate account and server password fields', 'Use the owner account created during offline setup'),
   'voice-video:microphone': guideShot('app-capture', 1080, 760, 'noXa Audio and voice settings showing transmission modes, input selection and microphone testing', 'Audio and voice settings; this fixture has no connected microphone'),
+  'voice-video:echo': guideShot('app-connection', 1080, 760, 'noXa Connection settings showing network echo test and connection benchmark diagnostics', 'Find the network echo test under Connection, in Diagnostics'),
+  'mobile:sign-in': guideShot('pwa-connect', 390, 844, 'noXa mobile sign-in screen with passkey, Scan QR code and desktop code controls', 'Use Scan QR code or the complete QR link to prepare encrypted messaging on a new browser'),
+  'mobile:install': guideShot('pwa-you', 390, 844, 'noXa You screen with profile, searchable settings and the bottom navigation', 'Open You to find this browser’s settings and account controls'),
   'roles-permissions:channel-access': guideShot('app-channel-access', 690, 1036, 'noXa channel permissions showing role-based voice, video, sharing, messages and file controls', 'Channel access in a fictional members-only lounge'),
   'server-setup:roles-and-channels': guideShot('app-channel-access', 690, 1036, 'noXa channel permissions matrix with Member and everyone role settings', 'Channel access uses a separate policy from global role grants'),
   'studio:open': guideShot('app-studio', 1180, 602, 'noXa Studio with Preview and Program monitors, scene controls and a Go live button', 'Studio opens before any capture or broadcast starts'),
@@ -26,7 +29,7 @@ const enhance = html => html
   .replace(/<table>/g, '<div class="table-scroll" role="region" aria-label="Reference table" tabindex="0"><table>')
   .replace(/<\/table>/g, '</table></div>')
   .replace(/<a href="([^"<>]+\.(?:png|webp|jpe?g))">(?=<img)/g, '<a class="image-link" href="$1" data-full>')
-  .replace(/class="guide-figure"(?=><a[^>]+><img[^>]+pwa-chat)/g, 'class="guide-figure mobile-shot"');
+  .replace(/class="guide-figure"(?=><a[^>]+><img[^>]+pwa-)/g, 'class="guide-figure mobile-shot"');
 const guideLink = guide => `<a href="${guide.slug}/"><span class="guide-category">${escape(guide.category)}</span><h2>${escape(guide.title)}</h2><p>${escape(guide.summary)}</p><span class="guide-card-link">Read guide <span aria-hidden="true">↗</span></span></a>`;
 
 function shell({ title, description, path, depth, body, schema }) {

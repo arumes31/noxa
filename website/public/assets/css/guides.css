@@ -63,8 +63,8 @@
 }
 @media (max-width: 900px) {
   .docs-layout { grid-template-columns: 1fr; gap: 32px; }
-  .docs-sidebar { position: static; grid-row: 2; }
-  .guide-article { grid-row: 1; }
+  .docs-sidebar { position: static; }
+  .docs-sidebar details:not([open]) summary { margin-bottom: 0; }
   .docs-sidebar nav { display: grid; grid-template-columns: 1fr 1fr; }
   .docs-sidebar details { border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
   .docs-sidebar summary { margin-bottom: 12px; cursor: pointer; }
