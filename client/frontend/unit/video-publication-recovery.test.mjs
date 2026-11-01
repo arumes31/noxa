@@ -12,12 +12,12 @@ const { createVideoSenderRecovery } = await import("../src/video-sender-hardware
 const { createHardwareRecoveryScheduler } = await import("../src/video-hardware-recovery.js");
 
 function fixture(options = {}) {
-    let parameters = { degradationPreference: "maintain-framerate", encodings: [{ active: true, scaleResolutionDownBy: options.scale ?? 1, maxBitrate: 8000000 }] };
+    let parameters = { degradationPreference: "maintain-framerate", encodings: [{ active: true, scaleResolutionDownBy: options.scale ?? 1, maxBitrate: 8000000, ...(options.maxFramerate ? { maxFramerate: options.maxFramerate } : {}) }] };
     let frames = 0;
     const writes = [], queries = [];
     const size = options.size || { width: 1920, height: 1080 };
     const track = { id: "capture-track", kind: "video", readyState: "live", enabled: true, contentHint: "motion",
-        getSettings: () => ({ ...size, frameRate: 60 }) };
+        getSettings: () => ({ ...size, frameRate: options.frameRate ?? 60 }) };
     const sender = { track,
         getParameters: () => structuredClone(parameters),
         async setParameters(next) {
@@ -47,7 +47,7 @@ function fixture(options = {}) {
         serverGeneration: 1, sessionGeneration: 1, activeTabID: "a", myClientID: "me", myChannelID: 1 };
     window.__noxa = { state, sysMsg() {} };
     Object.defineProperty(globalThis, "navigator", { configurable: true, value: { mediaCapabilities: {
-        encodingInfo: async config => { queries.push(config); return { supported: true, powerEfficient: options.capable !== false }; },
+        encodingInfo: async config => { queries.push(config); return { supported: true, powerEfficient: options.capability ? options.capability(config) : options.capable !== false }; },
     } } });
     const policy = { lowBandwidth: false, lowBandwidthBitrate: 400000 };
     const api = createVideoPublication({ policy });
@@ -396,4 +396,13 @@ test("HEVC hardware retry keeps one sender, exact codec and caps while restoring
     assert.ok(f.writes.every(p => p.encodings.length === 1 && p.encodings[0].maxBitrate === 8000000 && p.degradationPreference === "maintain-framerate"));
     assert.ok(f.queries.every(q => q.video.contentType.includes("H265") && q.video.contentType.includes("level-id=153")));
     assert.equal(f.sender.track, f.track);
+});
+
+test("hardware recovery capability uses the RTP cap instead of doubled capture sampling", async () => {
+    for (const [frameRate, maxFramerate, expected] of [[60, 30, 30], [0, 15, 15], [0, undefined, 30], [24, 30, 24]]) {
+        const f = fixture({ frameRate, maxFramerate, capability: config => config.video.framerate === expected });
+        assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
+        assert.deepEqual(f.queries.map(q => q.video.framerate), [expected, expected]);
+        assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
+    }
 });

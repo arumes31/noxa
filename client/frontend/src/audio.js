@@ -347,7 +347,8 @@ export async function applyCaptureProfile(pc, stream, ch, gate = null) {
             fresh.getTracks().forEach((t) => t.stop());
             return { track: cur, changed: false };
         }
-        const current = () => pc?.connectionState !== "closed" && (cur.readyState !== "ended" || initialState === "ended") && stream.getAudioTracks().includes(cur);
+        const current = () => pc?.connectionState !== "closed" && (cur.readyState !== "ended" || initialState === "ended") &&
+            stream.getAudioTracks().includes(cur) && (gate?.current?.() ?? true);
         if (!current()) {
             fresh.getTracks().forEach((track) => track.stop());
             return { track: cur, changed: false };
@@ -369,10 +370,14 @@ export async function applyCaptureProfile(pc, stream, ch, gate = null) {
         const sender = pc?.getSenders().find((s) => s.track === (gate ? gate.sendTrack(cur) : cur)) || null;
         if (sender) {
             try {
-                await sender.replaceTrack(sendTrack);
+                if (gate?.replace) await gate.replace(sender, sendTrack, current);
+                else await sender.replaceTrack(sendTrack);
                 if (!current()) {
                     sendTrack.enabled = false;
-                    if (sender.track === sendTrack) await sender.replaceTrack(null).catch(() => {});
+                    if (sender.track === sendTrack) {
+                        if (gate?.detach) await gate.detach(sender, sendTrack).catch(() => {});
+                        else await sender.replaceTrack(null).catch(() => {});
+                    }
                     gate?.dispose(next);
                     next.stop();
                     return { track: null, changed: false };

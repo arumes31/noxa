@@ -303,6 +303,12 @@ try {
     await publishers[0].locator(".live-share-quality .sh-fps").selectOption(String(fps));
     await publishers[0].locator(".live-share-quality").locator("..").getByRole("button", { name: "Apply quality", exact: true }).click();
     await expect(publishers[0].locator(".live-share-quality")).toHaveCount(0);
+    // Generated-track settings describe the last delivered frame. Applying
+    // constraints does not resize a frame that has already been delivered.
+    await expect.poll(() => publishers[0].evaluate(([maxWidth, maxHeight]) => {
+        const size = window.__noxa.state.shareStream.getVideoTracks()[0].getSettings();
+        return size.width > 0 && size.width <= maxWidth && size.height > 0 && size.height <= maxHeight;
+    }, [width / 2, height / 2]), { timeout: 10000, message: "constrained capture frame is delivered" }).toBe(true);
     const capture = await publishers[0].evaluate(() => {
         const track = window.__noxa.state.shareStream.getVideoTracks()[0];
         return { constraints: track.getConstraints(), settings: track.getSettings(), hint: track.contentHint };

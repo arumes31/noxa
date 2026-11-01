@@ -29,3 +29,12 @@ export function applyVideoNetworkPriority(encoding) {
     if (encoding) encoding.networkPriority = VIDEO_NETWORK_PRIORITY;
     return encoding;
 }
+
+// A promoted receive-only sender has no initial send encodings to rely on.
+// Keep update failures visible to its retry/settings owner.
+export async function setVoiceSenderParameters(sender, bitrate) {
+    const parameters = sender.getParameters();
+    if (!parameters.encodings?.length) return;
+    parameters.encodings[0].maxBitrate = bitrate > 0 ? bitrate : undefined;
+    await sender.setParameters(applyVoicePriority(parameters));
+}

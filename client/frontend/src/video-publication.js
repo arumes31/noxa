@@ -1,5 +1,5 @@
 import { updateStartupBlocked } from "./update-transition.js";
-import { retainDisplayCapture, releaseDisplayCapture, stopDisplayCapture } from "./display-capture-lease.js";
+import { retainDisplayCapture, releaseDisplayCapture, stopDisplayCapture, transferDisplayCapture } from "./display-capture-lease.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
 import { captureCamera, applyCameraPreview } from "./camera-capture.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
@@ -11,7 +11,7 @@ import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
 import { applyVideoNetworkPriority } from "./voice-priority.js";
 import { shareQuality, screenShareConstraints, createShareQualityControls, DEFAULT_SHARE_PRESET } from "./screen-share-quality.js";
 import { createSharePicker } from "./share-picker.js";
-import { cropDisplayStream, regionCropSupported } from "./share-region.js";
+import { cropDisplayStream, regionCropSupported, displayStreamHasFrameGeometry } from "./share-region.js";
 import { closeDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { labelButton } from "./icons.js";
 import { renderMicStatus } from "./audio.js";
@@ -443,9 +443,11 @@ export function createVideoPublication({ policy }) {
                 if (!current() || parameters.encodings?.length !== 1 || encoding.active === false || !Number.isFinite(scale) || scale < 1 || !eligible(first)) return false;
                 // The shared bounded cache retains hung native queries; a later
                 // retry must not launch additional work for the same geometry.
+                const sourceRate = size.frameRate > 0 ? size.frameRate : 30;
+                const encodedRate = encoding.maxFramerate > 0 ? Math.min(sourceRate, encoding.maxFramerate) : sourceRate;
                 const supported = await Promise.all([1, 2].map(divisor => hardwareVideoEncodeAvailable(first.codec, {
                     frameWidth: first.frameWidth / divisor, frameHeight: first.frameHeight / divisor,
-                    framesPerSecond: size.frameRate || 30,
+                    framesPerSecond: encodedRate,
                 })));
                 if (supported.some(value => !value)) return false;
                 await pause(150);
@@ -688,7 +690,7 @@ export function createVideoPublication({ policy }) {
                     // The cropped track owns the capture from here; its own lease
                     // replaces the picker's one in startShare.
                     const cropped = cropDisplayStream(display, region);
-                    releaseDisplayCapture(display);
+                    transferDisplayCapture(display, cropped.stream);
                     display = cropped.stream;
                 }
                 const started = await startShare({ surface, ...selected, audioMode: view.audio(), replacing, selectedDisplay: display });
@@ -779,6 +781,20 @@ export function createVideoPublication({ policy }) {
             return;
         }
         audioMode = validateDisplayAudio(display, audioMode);
+        // Full-window/screen capture needs the same per-frame even geometry as
+        // region capture. GPU textures can change size without honoring the
+        // source adapter's advertised constraints (e.g. 1620 -> 1621 pixels).
+        if (regionSupported && surface !== "region" && surface !== "studio" && !displayStreamHasFrameGeometry(display)) {
+            try {
+                const aligned = cropDisplayStream(display, { x: 0, y: 0, width: 1, height: 1 }, { captureRateMultiplier: 2 });
+                transferDisplayCapture(display, aligned.stream);
+                display = aligned.stream;
+            } catch (error) {
+                discardDisplay(display);
+                V().sysMsg(tLabel("desktop.screen.capture.failed") + error.message);
+                return;
+            }
+        }
         const screenTrack = display.getVideoTracks()[0];
         if (!screenTrack) {
             discardDisplay(display);

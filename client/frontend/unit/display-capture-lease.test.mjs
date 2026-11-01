@@ -119,3 +119,38 @@ test("picker settling after pagehide cannot start a lease; pageshow permits only
     h.manager.retain(new Track()); await settle(); assert.deepEqual(h.acquired, ["lease-0"]);
     h.manager.releaseAll(); await settle();
 });
+
+
+test("generated capture inherits one native lease and only its new owner releases it", async () => {
+    const h = harness(), source = new Track(), generated = new Track();
+    h.manager.retain(source); await settle();
+    h.manager.transfer(source, generated); h.manager.retain(generated); source.end(); await h.tick();
+    assert.deepEqual(h.acquired, ["lease-0"]);
+    assert.deepEqual(h.released, []);
+    assert.deepEqual(h.refreshed, ["lease-0"]);
+    generated.end(); await settle();
+    assert.deepEqual(h.released, ["lease-0"]);
+    assert.equal(h.timers.size, 0);
+});
+
+for (const cleanup of ["ended", "pagehide"]) {
+    test(`pending native acquire follows generated capture and cleans up after ${cleanup}`, async () => {
+        const pending = deferred(), h = harness({ AcquireDisplayCaptureLease: () => pending.promise });
+        const source = new Track(), generated = new Track();
+        h.manager.retain(source); h.manager.transfer(source, generated); source.end();
+        pending.resolve("pending-transfer"); await settle(); await h.tick();
+        assert.deepEqual(h.released, []);
+        assert.deepEqual(h.refreshed, ["pending-transfer"]);
+        if (cleanup === "ended") generated.end(); else h.page.dispatchEvent(new Event("pagehide"));
+        await settle();
+        assert.deepEqual(h.released, ["pending-transfer"]);
+        assert.equal(h.timers.size, 0);
+    });
+}
+
+test("transfer to an ended generated track releases only its source lease", async () => {
+    const h = harness(), source = new Track(), ended = new Track(); ended.stop();
+    h.manager.retain(source); await settle(); h.manager.transfer(source, ended); await settle();
+    assert.deepEqual(h.acquired, ["lease-0"]); assert.deepEqual(h.released, ["lease-0"]);
+    assert.equal(h.timers.size, 0);
+});

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createMicrophoneSenderOwner } from "../src/microphone-recovery.js";
 import { registerHooks } from "node:module";
 
 // Vite owns stylesheet loading; these Node tests exercise module behavior.
@@ -261,6 +262,28 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal(gatedSender.track, null);
         assert.equal(processedNext.enabled, false);
         assert.equal(disposed.at(-1), freshTrack);
+
+        // Profile replacement must keep the retry/loss owner on the processed
+        // sender track, not the raw capture or its now-retired predecessor.
+        const profileOld = { kind: "audio", enabled: false, readyState: "live", stop() { this.readyState = "ended"; } };
+        freshTrack = { kind: "audio", readyState: "live", stop() { this.readyState = "ended"; } };
+        const profileTracks = [profileOld], profileSender = { track: processedOld, async replaceTrack(track) { this.track = track; } };
+        const profilePeer = { connectionState: "connected", getSenders: () => [profileSender] };
+        const owner = createMicrophoneSenderOwner(); owner.remember(profilePeer, { sender: profileSender });
+        const profileStream = { getAudioTracks: () => profileTracks, removeTrack: t => profileTracks.splice(profileTracks.indexOf(t), 1), addTrack: t => profileTracks.push(t) };
+        const profile = await audio.applyCaptureProfile(profilePeer, profileStream, { AudioProfile: "music" }, {
+            prepare: async () => processedNext, sendTrack: t => t === profileOld ? processedOld : processedNext,
+            dispose() {}, replace: (sender, next, valid) => owner.replace(profilePeer, sender, next, valid),
+            detach: (_sender, next) => owner.detach(profilePeer, next),
+        });
+        assert.equal(profile.changed, true); assert.equal(profileSender.track, processedNext);
+        assert.equal(freshTrack.enabled, false); assert.equal(profileTracks[0], freshTrack);
+        assert.equal(await owner.detach(profilePeer, processedNext), true, "device loss after a profile switch clears the registered sender");
+        assert.equal(profileSender.track, null);
+        freshTrack = { kind: "audio", stop() { this.stopped = true; } };
+        const staleProfile = await audio.applyCaptureProfile(profilePeer, profileStream, null, { current: () => false });
+        assert.equal(staleProfile.changed, false); assert.equal(freshTrack.stopped, true);
+        assert.equal(profileSender.track, null, "a stale channel capture cannot replace current media");
 
         const gainNode = { gain: { value: 0 } };
         const muteNode = { gain: { value: 0 } };
