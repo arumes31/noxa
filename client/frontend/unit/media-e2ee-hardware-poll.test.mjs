@@ -262,3 +262,19 @@ test("a replacement source cannot inherit the previous window's hardware recover
     assert.equal(f.sender.track.readyState, "ended");
     assert.equal(f.proofs.at(-1), false);
 });
+
+for (const outcome of ["pending", "rejected stats", "rejected proof"]) test(`hardware fallback grace survives ${outcome} while the encoder restarts`, async t => {
+    const f = await hardwarePollFixture(t);
+    await f.sample(1, "hardware");
+    await f.sample(60001, "software");
+    if (outcome === "rejected stats") f.sender.getStats = async () => { throw Error("encoder restarting"); };
+    if (outcome === "rejected proof") {
+        const request = f.media.request.bind(f.media);
+        f.media.request = (op, ...args) => op === "hardwareProof" ? Promise.reject(Error("worker busy")) : request(op, ...args);
+    }
+    await f.sample(75001, "pending");
+    assert.equal(f.stopped(), 0, "an inconclusive poll must not shorten an admitted fallback retry");
+    assert.equal(f.proofs.at(-1), false);
+    await f.sample(80002, "pending");
+    assert.equal(f.stopped(), 1, "inconclusive retries still have a bounded deadline");
+});

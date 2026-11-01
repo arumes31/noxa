@@ -153,7 +153,7 @@ export class MediaE2EE {
     }
 
     #watchHardware(sender, id) {
-        let track = null, started = null, hardwareSeen = false, checking = false, scheduled = null;
+        let track = null, started = null, hardwareSeen = false, recoveringSoftware = false, checking = false, scheduled = null;
         const stopUnverified = (entry, reason) => {
             if (this.closed || this.endpoints.get(sender) !== entry || entry.invalidated || entry?.pid !== "self|screen" ||
                 track !== sender.track || track?.readyState === "ended" ||
@@ -171,12 +171,12 @@ export class MediaE2EE {
                 // The mandatory policy applies to screen/Studio streams. Camera
                 // calls retain their existing behavior and microphone is separate.
                 if (entry?.invalidated || !sender.track || sender.track.readyState === "ended" || entry?.pid !== "self|screen") return;
-                if (track !== sender.track) { track = sender.track; started = null; hardwareSeen = false; }
+                if (track !== sender.track) { track = sender.track; started = null; hardwareSeen = false; recoveringSoftware = false; }
                 const active = sender.getParameters?.().encodings?.some(e => e.active !== false);
-                if (active === false) { started = null; return; } // no viewer demand
+                if (active === false) { started = null; recoveringSoftware = false; return; } // no viewer demand
                 if (started === null) started = performance.now();
                 const cryptor = await this.stats(sender);
-                if (!cryptor.endpoint?.activeEpoch) { started = null; return; }
+                if (!cryptor.endpoint?.activeEpoch) { started = null; recoveringSoftware = false; return; }
                 const source = track;
                 const report = await sampleSenderStats(sender, { fresh: true });
                 if (this.closed || entry.invalidated || this.endpoints.get(sender) !== entry || source !== sender.track || source !== track || entry.sourceTag !== source.id) return;
@@ -186,13 +186,17 @@ export class MediaE2EE {
                     // Measure loss of proof, not the total age of a good stream.
                     started = null;
                     hardwareSeen = true;
+                    recoveringSoftware = false;
                 } else {
                     // The worker has already revoked permission to send frames.
                     // An established hardware source gets a bounded chance for
                     // the sender recovery scheduler (10 s evidence) to restart
                     // its encoder without losing the user's selected window.
                     // Initial software-only admission still fails immediately.
-                    const grace = evidence === "software" && hardwareSeen ? 20000 : 10000;
+                    if (evidence === "software" && hardwareSeen) recoveringSoftware = true;
+                    // Restarting encoders may temporarily omit the stats row.
+                    // Neither that nor a failed poll shortens an admitted retry.
+                    const grace = recoveringSoftware ? 20000 : 10000;
                     if (evidence === "software" && !hardwareSeen || performance.now() - started > grace) {
                         stopUnverified(entry, evidence === "software" ? "hardware_encoder" : "hardware_unverified");
                     }
@@ -200,7 +204,7 @@ export class MediaE2EE {
             } catch {
                 // Proof still expires in the worker. Rejected stats/proof
                 // requests must also stop an unverified capture, not poll forever.
-                if (started !== null && performance.now() - started > 10000) stopUnverified(entry, "hardware_unverified");
+                if (started !== null && performance.now() - started > (recoveringSoftware ? 20000 : 10000)) stopUnverified(entry, "hardware_unverified");
             } finally {
                 checking = false;
                 if (scheduled !== null) { clearTimeout(scheduled); this.hardwareTimers.delete(scheduled); }
