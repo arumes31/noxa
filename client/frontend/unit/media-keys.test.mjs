@@ -226,6 +226,7 @@ test("a membership digest that differs after the roster settled is a warning, no
     await flush(60);
     assert.ok(media.keys.has("cm|mic#5000000000000"), "the key is still installed");
     assert.deepEqual(e.status().membershipMismatch.map(m => m.principal), ["u-m"]);
+    assert.equal(e.status().participants.find(p=>p.clientID==="cm").received,true,"installed current keys are ready despite a separate roster warning");
     e.stop();
 });
 

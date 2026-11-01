@@ -630,9 +630,8 @@ export class MediaKeyEngine {
             // Delivery is per device; incoming publications and member rows are per client.
             participants: this.#roster.flatMap(c => recipientsOf([c], this.self)).map(r => {
                 const id = `${r.principal}\n${r.device}`;
-                const publisher = this.#publishers.get(r.clientID);
                 return { clientID: r.clientID, sent: !!tally?.ok.has(id),
-                    received: !!publisher?.announcedEpoch && publisher.epochs.includes(publisher.announcedEpoch) && publisher.installedMembers === tally?.members,
+                    received: this.publisherStatus(r.clientID)?.ready === true,
                     failed: !!tally?.failed.has(id) };
             }),
             waiting: this.#waiting(),

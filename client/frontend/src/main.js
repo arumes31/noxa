@@ -2187,6 +2187,10 @@ $("chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") sendC
 
 let voiceSessionEpoch = 0;
 let retainedVoiceMedia = null;
+const voiceMediaOwners = new WeakMap();
+function stopOwnedVoiceMedia(media, owner) {
+    if (channelMedia() === media && voiceMediaOwners.get(media) === owner) stopChannelMedia();
+}
 const voiceMediaScope = () => JSON.stringify([voiceConnectionScope(), state.myChannelID, state.myClientID]);
 let intentionalVoiceDisconnectScope = "";
 const voiceConnectionScope = () => JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration]);
@@ -2420,6 +2424,7 @@ function microphoneFailureState(error) {
 }
 
 async function startVoice(expectedEpoch = voiceSessionEpoch) {
+    const mediaOwner = {};
     const generation = state.serverGeneration;
     const tabID = state.activeTabID;
     const current = () => expectedEpoch === voiceSessionEpoch && state.serverGeneration === generation && state.activeTabID === tabID && state.myChannelID > 0;
@@ -2485,6 +2490,9 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         const retained = retainedVoiceMedia;
         media = retained?.scope === voiceMediaScope() && retained.media === channelMedia() ? retained.media : null;
         if (media) {
+            // Claim before awaiting release: a retired startup must never stop
+            // the session this attempt is adopting.
+            voiceMediaOwners.set(media, mediaOwner);
             await retained.released;
             if (!current() || channelMedia() !== media) throw new Error(mediaErrorText(new Error("closed")));
             media.setRoster(state.clients);
@@ -2498,8 +2506,9 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         if (current()) throw new Error(mediaErrorText(error));
         return false;
     }
+    if (current()) voiceMediaOwners.set(media, mediaOwner);
     if (!current()) {
-        stopChannelMedia();
+        stopOwnedVoiceMedia(media, mediaOwner);
         capturedStream.getTracks().forEach((track) => track.stop());
         if (state.localStream === capturedStream) state.localStream = null;
         return false;
@@ -2531,7 +2540,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         if (!current() || state.pc !== pc) {
             disposeMicrophoneGate(audioTrack);
             audioTrack.stop(); pc.close();
-            if (channelMedia() === media) stopChannelMedia();
+            stopOwnedVoiceMedia(media, mediaOwner);
             return false;
         }
         pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream], sendEncodings: [voiceSendEncoding()] });
@@ -2562,7 +2571,10 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
         syncVoiceLinkMedia();
         updateMemberMediaIndicators(state, channelMedia()?.engine?.status());
         if (voiceTransportFailed(pc)) scheduleICERestart(pc);
-        else if (pc.connectionState === "connected") resetICERestart(pc);
+        else if (pc.connectionState === "connected") {
+            resetICERestart(pc);
+            if (state.myChannelID > 0) setVoiceStatus("voice on");
+        }
     });
     updateVoiceLink({ type: "transport", state: pc.connectionState });
     stopRemoteMedia();
@@ -2611,7 +2623,7 @@ async function startVoice(expectedEpoch = voiceSessionEpoch) {
 
     if (expectedEpoch !== voiceSessionEpoch || state.pc !== pc || state.myChannelID <= 0) {
         pc.close();
-        if (channelMedia() === media) stopChannelMedia();
+        stopOwnedVoiceMedia(media, mediaOwner);
         return false;
     }
 
@@ -2767,6 +2779,7 @@ function onICEStateChange(pc) {
     const s = pc.iceConnectionState;
     if ((s === "connected" || s === "completed") && !voiceTransportFailed(pc)) {
         resetICERestart(pc);
+        if (state.myChannelID > 0 && (!pc.connectionState || pc.connectionState === "connected")) setVoiceStatus("voice on");
         return;
     }
     if (voiceTransportFailed(pc)) {
@@ -2864,6 +2877,8 @@ function teardownVoice({ retainMedia = false } = {}) {
     const media = channelMedia();
     retainedVoiceMedia = retainMedia && media ? { media, scope: voiceMediaScope() } : null;
     if (retainedVoiceMedia) {
+        // Retention also transfers cleanup ownership away from an old startup.
+        voiceMediaOwners.set(media, retainedVoiceMedia);
         // Drop old endpoint bindings, preserving the same channel's keys and
         // replay windows. Channel moves, sign-out and server changes still
         // destroy the complete encryption session through normal teardown.
