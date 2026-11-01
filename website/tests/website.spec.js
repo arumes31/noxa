@@ -26,7 +26,7 @@ const test = base.extend({
 });
 
 // Exercise CSS scrolling consistently across local and Linux CI browser defaults.
-test.use({ launchOptions: { args: ['--enable-smooth-scrolling'] } });
+test.use({ launchOptions: { args: ['--enable-smooth-scrolling'], executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined } });
 
 async function ready(page) {
   await page.goto('./');

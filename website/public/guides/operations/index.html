@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#03070a">
+  <title>Back up, update and troubleshoot a server | noXa Guides</title>
+  <meta name="description" content="Keep recoverable data, protect the server identity, verify health and plan maintenance with a restore path.">
+  <link rel="canonical" href="https://noxa.wowcraft.pw/guides/operations/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="noXa">
+  <meta property="og:title" content="Back up, update and troubleshoot a server | noXa Guides">
+  <meta property="og:description" content="Keep recoverable data, protect the server identity, verify health and plan maintenance with a restore path.">
+  <meta property="og:url" content="https://noxa.wowcraft.pw/guides/operations/">
+  <meta property="og:image" content="https://noxa.wowcraft.pw/assets/screenshots/app-chat.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="800">
+  <meta property="og:image:alt" content="noXa desktop channels and chat with fictional demo data">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/png" sizes="32x32" href="../../assets/branding/favicon-32.png">
+  <link rel="apple-touch-icon" href="../../assets/branding/apple-touch-icon.png">
+  <link rel="stylesheet" href="../../assets/css/site.css">
+  <link rel="stylesheet" href="../../assets/css/guides.css">
+  <script defer src="../../assets/js/site.js"></script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://noxa.wowcraft.pw/guides/operations/#article","headline":"Back up, update and troubleshoot a server","description":"Keep recoverable data, protect the server identity, verify health and plan maintenance with a restore path.","url":"https://noxa.wowcraft.pw/guides/operations/","inLanguage":"en","isPartOf":{"@id":"https://noxa.wowcraft.pw/#website"},"about":{"@id":"https://noxa.wowcraft.pw/#software"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://noxa.wowcraft.pw/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://noxa.wowcraft.pw/guides/"},{"@type":"ListItem","position":3,"name":"Back up, update and troubleshoot a server","item":"https://noxa.wowcraft.pw/guides/operations/"}]}]}</script>
+</head>
+<body class="documentation">
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="site-header wrap">
+    <a class="brand" href="../../" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span><span class="alpha">Alpha</span></a>
+    <nav class="guide-top-nav" aria-label="Main navigation">
+      <a href="../../guides/">Guides</a>
+      <a href="../../guides/server-setup/">Self-host</a>
+      <a href="https://github.com/arumes31/noxa">GitHub</a>
+    </nav>
+    <a class="header-download" href="https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe">Download noXa</a>
+  </header>
+  <div class="wrap docs-layout">
+    <aside class="docs-sidebar"><details open><summary>Browse guides</summary><nav aria-label="Guide navigation"><a href="../">All guides</a><a href="../getting-started/">Get started with the Windows client</a>
+<a href="../voice-video/">Voice, camera, and screen sharing</a>
+<a href="../messaging/">Chat, direct messages, and forums</a>
+<a href="../roles-permissions/">Roles, members, and channel access</a>
+<a href="../mobile/">Use noXa in your browser</a>
+<a href="../studio/">Compose a live stream with Desktop Studio</a>
+<a href="../privacy-security/">Privacy, encryption, and device trust</a>
+<a href="../troubleshooting/">Troubleshooting connections, chat, and media</a>
+<a href="../server-setup/">Set up your own noXa server</a>
+<a href="../configuration/">Configure networking, TLS and server limits</a>
+<a href="../operations/" aria-current="page">Back up, update and troubleshoot a server</a>
+<a href="../integrations/">Connect webhooks and administration tools</a></nav></details></aside>
+    <main class="guide-article" id="content" tabindex="-1">
+      <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../../">Home</a><span aria-hidden="true">/</span><a href="../">Guides</a><span aria-hidden="true">/</span><span aria-current="page">Back up, update and troubleshoot a server</span></nav>
+      <header class="guide-intro"><p class="eyebrow">Server administration · Public alpha</p><h1>Back up, update and troubleshoot a server</h1><p class="guide-summary">Keep recoverable data, protect the server identity, verify health and plan maintenance with a restore path.</p></header>
+      <nav class="guide-toc" aria-label="On this page"><h2>On this page</h2><ol><li><a href="#recovery-point">Back up data and matching keys together</a></li><li><a href="#compose-backups">Use the optional Compose backup service</a></li><li><a href="#restore-drill">Verify a restore before depending on it</a></li><li><a href="#updates">Prepare a controlled update</a></li><li><a href="#health-checks">Distinguish health from a working user session</a></li></ol></nav>
+      <section id="recovery-point" aria-labelledby="recovery-point-heading"><h2 id="recovery-point-heading">Back up data and matching keys together</h2><p>A noXa recovery point needs PostgreSQL and the matching files, server/channel assets, recordings, encryption keys, TLS identity and configuration. A database-only backup can reference missing files. A filesystem-only copy lacks the matching ownership and authorization state.</p>
+<ol><li>Record the noXa version, image digest, PostgreSQL version, UTC timestamp and redacted configuration.</li><li>Stop writes or use a snapshot system that provides a documented common point in time. Avoid a best-effort recursive copy of a live mutable directory.</li><li>Create a PostgreSQL custom-format dump and capture the corresponding file and asset roots.</li><li>Preserve the actual PII key and complete chat master key ring. Protect private keys in encrypted secret backup storage with a documented relationship to that recovery point.</li><li>Hash artifacts, encrypt them for operator-controlled recipients, upload to separate storage, and verify the uploaded sizes and digests.</li></ol>
+<p>The current Compose backup image creates an encrypted bundle containing the database and actual PII/chat keys. It requires an age recipients file; keep decryption keys off the server. It does not replace a coordinated backup of uploaded files, recordings, TLS identity and the rest of your deployment. Preserve the web push VAPID key if the deployment should retain existing push subscriptions.</p>
+<p>Direct and private-group messages use device-held Olm sessions; a server backup does not give the operator their plaintext or recreate a device’s readable history. Keep client history recovery and the server recovery plan distinct.</p></section>
+<section id="compose-backups" aria-labelledby="compose-backups-heading"><h2 id="compose-backups-heading">Use the optional Compose backup service</h2><p>Provision <code>noxa_backup</code> with the tracked database role script. Configure exactly one backup password source, <code>BACKUP_AGE_RECIPIENTS_FILE</code>, and any selected remote-storage settings before enabling the <code>backup</code> profile.</p>
+<pre><code>docker compose --profile backup build postgres-backup
+docker compose --profile backup run --rm --no-deps -e BACKUP_RUN_ONCE=1 postgres-backup</code></pre>
+<p>For scheduled service operation, start <code>postgres-backup</code> under the same profile without <code>BACKUP_RUN_ONCE=1</code>. A one-shot job should use <code>run --rm</code>; setting the one-shot flag on a service with a restart policy can repeat it.</p>
+<p>External databases require the explicit <code>BACKUP_PGHOST</code>, <code>BACKUP_PGPORT</code>, <code>BACKUP_PGUSER</code>, <code>BACKUP_PGDATABASE</code> and <code>BACKUP_PGSSLMODE</code> settings, along with the backup password. Use both the base and external-database Compose files on every command. Supply the required CA/client TLS files for the external database. The backup service does not infer its password from the serving database URL.</p>
+<p>Check backup logs, the encrypted artifact, and the remote upload. A successful process exit is only one part of verification; complete the restore drill below.</p></section>
+<section id="restore-drill" aria-labelledby="restore-drill-heading"><h2 id="restore-drill-heading">Verify a restore before depending on it</h2><ol><li>Use an isolated network, a new empty database and new empty file roots. Do not overlay production directories.</li><li>Verify artifact signatures or digests before decrypting and extracting. Reject unsafe archive paths, links and unexpected special files.</li><li>Restore the database, matched files/assets and required key material from the same recovery point.</li><li>Start the matching noXa version. Check readiness and schema version, stop cleanly, and verify a second start accepts the existing roles policy.</li><li>With synthetic non-admin accounts, test login, channel access, encrypted history, one upload/download digest and server/channel assets. Confirm unauthorized access is denied.</li><li>Record the result, recovery-point ID and recovery time. Remove isolated credentials and plaintext after the drill.</li></ol>
+<aside class="guide-note">The restored channel table is authoritative: startup can remove canonical numeric file directories for channels absent from it. Never pair a newer file snapshot with an older or incomplete database restore. Current fresh-install roles-v1 releases reject incompatible older database generations; do not hand-edit schema markers to force a start.</aside></section>
+<section id="updates" aria-labelledby="updates-heading"><h2 id="updates-heading">Prepare a controlled update</h2><p>Read the release notes and record the current version and image digest. Create a verified recovery point before changing binaries or schema. Rehearse the candidate against an isolated restore when compatibility is uncertain.</p>
+<p>Stop the serving process before offline migration or account tools. Use the migration owner through <code>noxa-operator</code> for schema work, then refresh service-role grants with the tracked provisioning script when required. The serving database account should retain only its intended runtime privileges.</p>
+<p>For the end-to-end encryption release, deploy the server before or together with updated clients. Updated clients refuse an older server’s login challenge and do not fall back. Older clients cannot join encrypted channel voice or use current end-to-end encrypted private messaging. Keep client and server versions compatible.</p>
+<p>After starting the candidate, check owner login and ordinary-member access, chat, voice, media and files. Roll back using a compatible version and matched recovery point; replacing only the executable does not reverse a database migration.</p>
+<p>Preserve the TLS directory during maintenance so clients keep the same server identity. Planned certificate rotation requires independent fingerprint verification.</p></section>
+<section id="health-checks" aria-labelledby="health-checks-heading"><h2 id="health-checks-heading">Distinguish health from a working user session</h2><pre><code>docker compose ps
+docker compose logs --tail=100 noxa
+docker compose exec noxa wget -qO- http://127.0.0.1:12337/readyz</code></pre>
+<p><code>/healthz</code> is the liveness probe; <code>/readyz</code> checks readiness. When native health HTTPS is enabled, use the appropriate trusted HTTPS client and endpoint. Keep these listeners private.</p>
+<p>Use an authenticated ordinary-member probe for the experience that matters: login, visible channels, chat, voice and a known file. For media failures, compare sender, server and viewer evidence in stream details before changing quality settings.</p>
+<p>When collecting logs, remove account secrets, tokens, complete database URLs and personal information. Production logs sample repeated messages, so a low repeated-log count does not by itself prove the underlying issue stopped.</p></section>
+      <section class="guide-related" aria-labelledby="next-heading"><h2 id="next-heading">Keep going</h2><ul><li><a href="../server-setup/">Set up your own noXa server</a></li><li><a href="../configuration/">Configure networking, TLS and server limits</a></li><li><a href="../troubleshooting/">Troubleshooting connections, chat, and media</a></li></ul></section>
+      <aside class="guide-sources" aria-label="Source documentation"><p>Based on the current noXa documentation. Public alpha features and menu labels can change; use the client and server from the same release.</p><ul><li><a href="https://github.com/arumes31/noxa#operations">Repository operations reference</a></li><li><a href="https://github.com/arumes31/noxa/blob/main/docker-compose.yml">Compose backup service</a></li><li><a href="https://github.com/arumes31/noxa/blob/main/scripts/postgres-backup.sh">Backup implementation</a></li></ul><a href="https://github.com/arumes31/noxa/issues">Suggest a correction</a></aside>
+    </main>
+  </div>
+  <footer class="wrap site-footer">
+    <a class="footer-brand" href="../../" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span></a>
+    <nav aria-label="Footer navigation"><a href="../../guides/">All guides</a><a href="../../guides/server-setup/">Server setup</a><a href="https://github.com/arumes31/noxa/releases">Releases</a><a href="https://github.com/arumes31/noxa/issues">Report an issue</a></nav>
+  </footer>
+  <dialog class="lightbox" aria-label="Product screenshot" aria-describedby="image-caption"><button type="button" aria-label="Close image" autofocus>×</button><img alt=""><p id="image-caption">noXa client · Fictional demo data</p></dialog>
+</body>
+</html>

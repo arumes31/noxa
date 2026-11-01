@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#03070a">
+  <title>Connect webhooks and administration tools | noXa Guides</title>
+  <meta name="description" content="Create channel-scoped incoming webhooks and use role-aware Query, SSH and gRPC integrations.">
+  <link rel="canonical" href="https://noxa.wowcraft.pw/guides/integrations/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="noXa">
+  <meta property="og:title" content="Connect webhooks and administration tools | noXa Guides">
+  <meta property="og:description" content="Create channel-scoped incoming webhooks and use role-aware Query, SSH and gRPC integrations.">
+  <meta property="og:url" content="https://noxa.wowcraft.pw/guides/integrations/">
+  <meta property="og:image" content="https://noxa.wowcraft.pw/assets/screenshots/app-chat.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="800">
+  <meta property="og:image:alt" content="noXa desktop channels and chat with fictional demo data">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/png" sizes="32x32" href="../../assets/branding/favicon-32.png">
+  <link rel="apple-touch-icon" href="../../assets/branding/apple-touch-icon.png">
+  <link rel="stylesheet" href="../../assets/css/site.css">
+  <link rel="stylesheet" href="../../assets/css/guides.css">
+  <script defer src="../../assets/js/site.js"></script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://noxa.wowcraft.pw/guides/integrations/#article","headline":"Connect webhooks and administration tools","description":"Create channel-scoped incoming webhooks and use role-aware Query, SSH and gRPC integrations.","url":"https://noxa.wowcraft.pw/guides/integrations/","inLanguage":"en","isPartOf":{"@id":"https://noxa.wowcraft.pw/#website"},"about":{"@id":"https://noxa.wowcraft.pw/#software"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://noxa.wowcraft.pw/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://noxa.wowcraft.pw/guides/"},{"@type":"ListItem","position":3,"name":"Connect webhooks and administration tools","item":"https://noxa.wowcraft.pw/guides/integrations/"}]}]}</script>
+</head>
+<body class="documentation">
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="site-header wrap">
+    <a class="brand" href="../../" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span><span class="alpha">Alpha</span></a>
+    <nav class="guide-top-nav" aria-label="Main navigation">
+      <a href="../../guides/">Guides</a>
+      <a href="../../guides/server-setup/">Self-host</a>
+      <a href="https://github.com/arumes31/noxa">GitHub</a>
+    </nav>
+    <a class="header-download" href="https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe">Download noXa</a>
+  </header>
+  <div class="wrap docs-layout">
+    <aside class="docs-sidebar"><details open><summary>Browse guides</summary><nav aria-label="Guide navigation"><a href="../">All guides</a><a href="../getting-started/">Get started with the Windows client</a>
+<a href="../voice-video/">Voice, camera, and screen sharing</a>
+<a href="../messaging/">Chat, direct messages, and forums</a>
+<a href="../roles-permissions/">Roles, members, and channel access</a>
+<a href="../mobile/">Use noXa in your browser</a>
+<a href="../studio/">Compose a live stream with Desktop Studio</a>
+<a href="../privacy-security/">Privacy, encryption, and device trust</a>
+<a href="../troubleshooting/">Troubleshooting connections, chat, and media</a>
+<a href="../server-setup/">Set up your own noXa server</a>
+<a href="../configuration/">Configure networking, TLS and server limits</a>
+<a href="../operations/">Back up, update and troubleshoot a server</a>
+<a href="../integrations/" aria-current="page">Connect webhooks and administration tools</a></nav></details></aside>
+    <main class="guide-article" id="content" tabindex="-1">
+      <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../../">Home</a><span aria-hidden="true">/</span><a href="../">Guides</a><span aria-hidden="true">/</span><span aria-current="page">Connect webhooks and administration tools</span></nav>
+      <header class="guide-intro"><p class="eyebrow">Server administration · Public alpha</p><h1>Connect webhooks and administration tools</h1><p class="guide-summary">Create channel-scoped incoming webhooks and use role-aware Query, SSH and gRPC integrations.</p></header>
+      <nav class="guide-toc" aria-label="On this page"><h2>On this page</h2><ol><li><a href="#incoming-webhooks">Create an incoming channel webhook</a></li><li><a href="#post-message">Send and verify a webhook message</a></li><li><a href="#query-account">Provision a least-privilege integration account</a></li><li><a href="#transports">Choose Query, SSH or gRPC</a></li><li><a href="#integration-checklist">Verify access and revocation</a></li></ol></nav>
+      <section id="incoming-webhooks" aria-labelledby="incoming-webhooks-heading"><h2 id="incoming-webhooks-heading">Create an incoming channel webhook</h2><p>In the channel, open <strong>Threads and forum → Incoming webhooks</strong>. A channel manager can create a named integration, copy its one-time bearer token, list integrations and revoke one.</p>
+<p>The creator needs current View Channel, Read History, Manage Channels and Send Messages permissions. The webhook is fixed to that channel. Revocation, lost creator permissions, a creator ban or deletion of the account/channel stops future posts.</p>
+<ol><li>Create the integration in the intended channel.</li><li>Copy the token once into your automation’s secret store.</li><li>Expose the required <code>/hooks/&lt;id&gt;</code> path through your HTTPS proxy.</li><li>Post a test message and verify its attribution in that channel.</li></ol>
+<p>Tokens belong in the Authorization header, never in the URL. Do not publish the token in screenshots, logs or repository files.</p></section>
+<section id="post-message" aria-labelledby="post-message-heading"><h2 id="post-message-heading">Send and verify a webhook message</h2><p>Replace the example hostname and hook ID. Supply <code>NOXA_WEBHOOK_TOKEN</code> from your secret manager; do not paste a live token into a shared command.</p>
+<pre><code>curl --request POST 'https://voice.example.com/hooks/123' --header "Authorization: Bearer $NOXA_WEBHOOK_TOKEN" --header 'Content-Type: application/json' --data '{"content":"Build passed"}'</code></pre>
+<p>A successful post returns HTTP <code>201</code> and a <code>message_id</code>. Only the JSON <code>content</code> property is supported. Messages appear as <strong>Integration name [Webhook]</strong>. The server receives and encrypts this channel message; it is not a direct-message E2EE channel.</p>
+<div class="table-scroll" role="region" aria-label="Reference table" tabindex="0"><table><thead><tr><th>Response</th><th>Action</th></tr></thead><tbody><tr><td>400</td><td>Check supported content and size.</td></tr><tr><td>401</td><td>Check the secret, revocation and creator eligibility.</td></tr><tr><td>429</td><td>Respect Retry-After and reduce the posting rate.</td></tr><tr><td>503</td><td>Check service, storage and policy availability.</td></tr></tbody></table></div>
+<p>The documented webhook limit is five posts per three seconds, up to twenty hooks per channel and 12,000 content bytes or the server’s smaller chat limit. Channel slow mode and moderation also apply. Avoid blindly retrying an ambiguous connection failure: the first message may already have committed.</p></section>
+<section id="query-account" aria-labelledby="query-account-heading"><h2 id="query-account-heading">Provision a least-privilege integration account</h2><p>Stop the server and use the offline <code>adduser -integration</code> option for a new integration account. It enables integration login and grants no roles. The <code>-bot</code> option alone does not enable integration access; rerunning <code>adduser</code> for an existing nickname changes nothing.</p>
+<p>Restart, then assign only the roles the integration requires through the owner’s Roles manager. Every protected operation rechecks current capabilities, hierarchy, bans and account eligibility. A long-lived connection does not preserve permissions after revocation.</p>
+<p>Use the operator service and password handling described in the <a href="../server-setup/#initialize-owner">server setup guide</a>. Do not give an automation the owner account simply to make its first request work.</p></section>
+<section id="transports" aria-labelledby="transports-heading"><h2 id="transports-heading">Choose Query, SSH or gRPC</h2><p>Raw ServerQuery is a line-based administration interface on <code>127.0.0.1:12335</code> by default. It is plaintext and intentionally private. For remote administration, enable the SSH transport and deliberately publish its configured port, normally <code>12339</code>. Compose does not publish either administration port by default.</p>
+<pre><code>login &lt;integration_nickname&gt; &lt;account_password&gt; authorization_model=roles-v1
+channellist
+quit</code></pre>
+<p>The text above is a protocol session example, not a shell command. Escape Query spaces as <code>\s</code>. SSH sessions separately negotiate <code>NOXA_AUTHORIZATION_MODEL=roles-v1</code>; gRPC unary requests send <code>noxa-authorization-model: roles-v1</code> metadata. The plaintext gRPC listener must stay on loopback.</p>
+<p>Use <code>help</code> for supported Query commands. Read <code>channellist</code> or <code>rolelist</code> to obtain current IDs and revisions before constructing a mutation. Role changes require the current expected revision and the same delegation and hierarchy checks used by the native client. Refresh after a revision conflict rather than reusing stale IDs.</p></section>
+<section id="integration-checklist" aria-labelledby="integration-checklist-heading"><h2 id="integration-checklist-heading">Verify access and revocation</h2><ul><li>Confirm the integration sees only the intended channels and members.</li><li>Test an allowed operation and a denied operation with a dedicated test account.</li><li>Revoke a required role or webhook and confirm future operations stop.</li><li>Keep bearer tokens, account passwords and response data out of public logs.</li><li>Review creator permissions when an existing hook stops working; permission loss is an enforced boundary.</li></ul>
+<p>There is no compatibility fallback to retired numeric permissions or administrator privilege tokens. Build against the current roles-v1 contract.</p></section>
+      <section class="guide-related" aria-labelledby="next-heading"><h2 id="next-heading">Keep going</h2><ul><li><a href="../roles-permissions/">Roles, members, and channel access</a></li><li><a href="../configuration/">Configure networking, TLS and server limits</a></li><li><a href="../operations/">Back up, update and troubleshoot a server</a></li></ul></section>
+      <aside class="guide-sources" aria-label="Source documentation"><p>Based on the current noXa documentation. Public alpha features and menu labels can change; use the client and server from the same release.</p><ul><li><a href="https://github.com/arumes31/noxa#serverquery">ServerQuery reference</a></li><li><a href="https://github.com/arumes31/noxa/tree/main/cmd/adduser">Account provisioning tool</a></li><li><a href="https://github.com/arumes31/noxa/blob/main/config.yaml">Server configuration</a></li></ul><a href="https://github.com/arumes31/noxa/issues">Suggest a correction</a></aside>
+    </main>
+  </div>
+  <footer class="wrap site-footer">
+    <a class="footer-brand" href="../../" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span></a>
+    <nav aria-label="Footer navigation"><a href="../../guides/">All guides</a><a href="../../guides/server-setup/">Server setup</a><a href="https://github.com/arumes31/noxa/releases">Releases</a><a href="https://github.com/arumes31/noxa/issues">Report an issue</a></nav>
+  </footer>
+  <dialog class="lightbox" aria-label="Product screenshot" aria-describedby="image-caption"><button type="button" aria-label="Close image" autofocus>×</button><img alt=""><p id="image-caption">noXa client · Fictional demo data</p></dialog>
+</body>
+</html>

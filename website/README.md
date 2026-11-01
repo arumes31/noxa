@@ -10,7 +10,9 @@ is `wowcraft.pw`.
 
 Only `public/` is deployed. It contains semantic HTML, CSS, a small browser
 script and local branding/screenshots. There is no application
-server, build step, analytics, remote font request, or service worker.
+server, analytics, remote font request, or service worker. Guide content is
+rendered to ordinary HTML by `npm run build`; the committed `public/` artifact
+can also be served directly without Node.js.
 Tests, tooling, this document, and design references are not published.
 
 Use Node.js 24 (the CI version), or a supported Node.js version of at least 22:
@@ -19,6 +21,7 @@ Use Node.js 24 (the CI version), or a supported Node.js version of at least 22:
 cd website
 npm ci
 npx playwright install chromium
+npm run build
 npm run preview
 ```
 
@@ -40,6 +43,8 @@ both base paths. It covers 320, 390, 768, 1440, and 1920 pixel widths, including
 the primary download in the 390 by 844 first viewport. It checks local
 resources, anchors, repeated download links, overflow, menu and dialog keyboard
 behavior, no-JavaScript fallbacks, reduced motion, and browser errors.
+Authoring checks cover obsolete-guide removal without changing unrelated public
+files and rejection of an invalid screenshot source before existing captures change.
 Linux CI installs Chromium dependencies with
 `npx playwright install --with-deps chromium`.
 
@@ -112,14 +117,45 @@ The page links to [all releases](https://github.com/arumes31/noxa/releases),
 the current [new-server setup guide](https://github.com/arumes31/noxa#new-server-setup).
 “Latest” does not imply stable; the product remains labeled Public alpha.
 
+## Guides and SEO
+
+The guide library lives at `/guides/`. Edit `scripts/guides/clients.mjs` or
+`scripts/guides/server.mjs`, then run `npm run build`. The generator writes
+the guide index, individual HTML pages, and `public/sitemap.xml`. Generated
+HTML is committed and checked for drift in CI. The homepage links to the guide
+library and uses SoftwareApplication metadata; guides have article and
+breadcrumb metadata. `public/robots.txt` advertises the canonical sitemap.
+
+`seo-audit.json` records the 1 November 2026 audit evidence, fixes and measurement
+limits, using the public Claude SEO single-page checklist. No ranking, field
+Core Web Vitals, or indexing score is claimed without the corresponding data.
+
+Refresh guide screenshots using `node scripts/capture-client.mjs --guides-only`.
+They show the actual frontend with fictional local data, no live server or
+hardware capture. `scripts/capture-guides-manifest.json` records their source
+commit and browser. The additional captures show the connection screen,
+Audio and voice settings, Channel access, Desktop Studio, and a separate current
+Roles capture (`app-roles-guide.png`). Guide refreshes preserve the homepage's
+original Roles capture and its recorded provenance. All published
+guide screenshots open full size and work without JavaScript.
+
 ## Hosting and validation
 
-GitHub Pages is disabled. The [Website workflow](../.github/workflows/website.yml)
-validates pull requests and website changes; it does not publish a site or
-create deployments. Host `public/` at the root of the public HTTPS origin.
+The [Website workflow](../.github/workflows/website.yml) validates pull requests,
+builds and smoke-tests the website image, and publishes
+`ghcr.io/arumes31/noxa-website:sha-<full-commit>` after a successful push to main.
+`Dockerfile` serves only the validated public artifact using Caddy on port 8080;
+local sync-conflict copies, tooling and node_modules are excluded from its context.
+Use `compose.yaml` behind the existing HTTPS proxy, setting
+`NOXA_WEBSITE_IMAGE` to a verified digest or commit tag. The example joins the
+existing `npm_default` proxy network and exposes the `noxa-website` network alias.
+Override `NOXA_WEBSITE_NETWORK` when the proxy uses another network. It does not
+publish a host port. Proxy the site's default route to `http://noxa-website:8080`.
 Keep the `/app/`, `/ws`, API and file-transfer routes directed to the noXa web
 listener, and the exact Windows download route redirected to GitHub Releases.
-The website files are separate from the noXa Docker image.
+The website image is separate from the noXa server image. Updating it does not
+require restarting the voice server or PostgreSQL. Keep the previous image digest
+and proxy configuration for rollback before recreating the website container.
 
 Validate before copying the static files to the host. Keep a copy of the
 previous public directory for rollback; deploy only `public/`, never the

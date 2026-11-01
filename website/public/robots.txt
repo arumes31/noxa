@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://noxa.wowcraft.pw/sitemap.xml

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#03070a">
+  <title>Set up your own noXa server | noXa Guides</title>
+  <meta name="description" content="Build the Docker stack, create the owner, open your first channels and check that people can connect.">
+  <link rel="canonical" href="https://noxa.wowcraft.pw/guides/server-setup/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="noXa">
+  <meta property="og:title" content="Set up your own noXa server | noXa Guides">
+  <meta property="og:description" content="Build the Docker stack, create the owner, open your first channels and check that people can connect.">
+  <meta property="og:url" content="https://noxa.wowcraft.pw/guides/server-setup/">
+  <meta property="og:image" content="https://noxa.wowcraft.pw/assets/screenshots/app-chat.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="800">
+  <meta property="og:image:alt" content="noXa desktop channels and chat with fictional demo data">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/png" sizes="32x32" href="../../assets/branding/favicon-32.png">
+  <link rel="apple-touch-icon" href="../../assets/branding/apple-touch-icon.png">
+  <link rel="stylesheet" href="../../assets/css/site.css">
+  <link rel="stylesheet" href="../../assets/css/guides.css">
+  <script defer src="../../assets/js/site.js"></script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://noxa.wowcraft.pw/guides/server-setup/#article","headline":"Set up your own noXa server","description":"Build the Docker stack, create the owner, open your first channels and check that people can connect.","url":"https://noxa.wowcraft.pw/guides/server-setup/","inLanguage":"en","isPartOf":{"@id":"https://noxa.wowcraft.pw/#website"},"about":{"@id":"https://noxa.wowcraft.pw/#software"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://noxa.wowcraft.pw/"},{"@type":"ListItem","position":2,"name":"Guides","item":"https://noxa.wowcraft.pw/guides/"},{"@type":"ListItem","position":3,"name":"Set up your own noXa server","item":"https://noxa.wowcraft.pw/guides/server-setup/"}]}]}</script>
+</head>
+<body class="documentation">
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="site-header wrap">
+    <a class="brand" href="../../" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span><span class="alpha">Alpha</span></a>
+    <nav class="guide-top-nav" aria-label="Main navigation">
+      <a href="../../guides/">Guides</a>
+      <a href="../../guides/server-setup/">Self-host</a>
+      <a href="https://github.com/arumes31/noxa">GitHub</a>
+    </nav>
+    <a class="header-download" href="https://github.com/arumes31/noxa/releases/latest/download/noxa-client-windows-amd64.exe">Download noXa</a>
+  </header>
+  <div class="wrap docs-layout">
+    <aside class="docs-sidebar"><details open><summary>Browse guides</summary><nav aria-label="Guide navigation"><a href="../">All guides</a><a href="../getting-started/">Get started with the Windows client</a>
+<a href="../voice-video/">Voice, camera, and screen sharing</a>
+<a href="../messaging/">Chat, direct messages, and forums</a>
+<a href="../roles-permissions/">Roles, members, and channel access</a>
+<a href="../mobile/">Use noXa in your browser</a>
+<a href="../studio/">Compose a live stream with Desktop Studio</a>
+<a href="../privacy-security/">Privacy, encryption, and device trust</a>
+<a href="../troubleshooting/">Troubleshooting connections, chat, and media</a>
+<a href="../server-setup/" aria-current="page">Set up your own noXa server</a>
+<a href="../configuration/">Configure networking, TLS and server limits</a>
+<a href="../operations/">Back up, update and troubleshoot a server</a>
+<a href="../integrations/">Connect webhooks and administration tools</a></nav></details></aside>
+    <main class="guide-article" id="content" tabindex="-1">
+      <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../../">Home</a><span aria-hidden="true">/</span><a href="../">Guides</a><span aria-hidden="true">/</span><span aria-current="page">Set up your own noXa server</span></nav>
+      <header class="guide-intro"><p class="eyebrow">Server administration · Public alpha</p><h1>Set up your own noXa server</h1><p class="guide-summary">Build the Docker stack, create the owner, open your first channels and check that people can connect.</p></header>
+      <nav class="guide-toc" aria-label="On this page"><h2>On this page</h2><ol><li><a href="#before-you-start">1. Prepare a fresh installation</a></li><li><a href="#initialize-owner">2. Initialize the database and create the owner</a></li><li><a href="#database-service-roles">3. Provision the serving and backup database roles</a></li><li><a href="#first-start">4. Start the server and sign in</a></li><li><a href="#roles-and-channels">5. Give members access to channels</a></li><li><a href="#networking">6. Configure reachable voice and file connections</a></li><li><a href="#production-check">7. Prepare for real users</a></li></ol></nav>
+      <section id="before-you-start" aria-labelledby="before-you-start-heading"><h2 id="before-you-start-heading">1. Prepare a fresh installation</h2><p>You need a host with Docker Engine, the Docker Compose plugin, Git, and an empty PostgreSQL database. The repository stack includes PostgreSQL 16 and Redis 7. Use matching current server and client versions.</p>
+<p>The commands below use Bash and the repository’s default database name and owner, <code>noxa</code>. They initialize a fresh installation. Do not run initial setup against an existing server to reset its owner or password.</p>
+<aside class="guide-note"><strong>Start on a restricted host.</strong> The sample environment selects development mode and sample database credentials. The Compose file publishes control and file-transfer ports on all host interfaces. Limit access with host bindings or firewall rules while setting up; complete the production steps before inviting remote users.</aside>
+<pre><code>git clone https://github.com/arumes31/noxa.git
+cd noxa
+cp .env.example .env
+printf '\nNOXA_WEB_DOMAIN=localhost\n' &gt;&gt; .env
+docker compose build noxa
+docker compose up -d postgres redis
+docker compose stop noxa</code></pre>
+<p>The current Compose file requires <code>NOXA_WEB_DOMAIN</code> even before the optional web profile is started. The local placeholder above keeps initial setup valid; replace that entry with your real app hostname when configuring HTTPS.</p>
+<p>Wait for the database to become healthy with <code>docker compose ps</code>. The server must remain stopped during offline account creation and role activation.</p>
+<p>Using an external PostgreSQL service? Add <code>-f docker-compose.yml -f docker-compose.external-db.yml</code> to every Compose command, configure the external database URLs, and start only Redis instead of the bundled PostgreSQL service.</p></section>
+<section id="initialize-owner" aria-labelledby="initialize-owner-heading"><h2 id="initialize-owner-heading">2. Initialize the database and create the owner</h2><p>The current Compose stack separates the serving database account from the offline operator account. Run schema and account tools through <code>noxa-operator</code>, which has the migration owner credential and shares the server’s data volume.</p>
+<pre><code>docker compose --profile tools run --rm --no-deps noxa-operator /out/migrate
+read -r -s -p 'Choose an owner account password: ' OWNER_PASSWORD; printf '\n'
+printf '%s\n' "$OWNER_PASSWORD" | docker compose --profile tools run -T --rm --no-deps noxa-operator /out/adduser -nickname owner -password-stdin
+unset OWNER_PASSWORD</code></pre>
+<p>Keep the owner password securely. Copy the exact <code>unique_id</code> printed by <code>adduser</code>; the next command needs that ID, not the account nickname. Replace the placeholder below before running it.</p>
+<pre><code>docker compose --profile tools run --rm --no-deps noxa-operator /out/role-setup -owner-uid '&lt;OWNER_UNIQUE_ID&gt;' -activate -confirm ACTIVATE-ROLES-V1 -chat-master-key-file /data/keys/chat_master.key -query-timeout 30s</code></pre>
+<p>The setup report must say <code>active: true</code>. Activation is a one-time operation and refuses to run alongside a serving server. The selected account becomes <strong>Server owner</strong>; joining first does not grant administration and there is no privilege token.</p>
+<aside class="guide-note">The current <code>adduser</code> tool requires <code>-password-stdin</code>. The hidden prompt and standard-input pipe keep the password out of command-line arguments and shell history. Run offline account tools on a trusted operator host. Repeating <code>adduser</code> for an existing account does not change its password or flags.</aside></section>
+<section id="database-service-roles" aria-labelledby="database-service-roles-heading"><h2 id="database-service-roles-heading">3. Provision the serving and backup database roles</h2><p>The <code>noxa</code> service connects as <code>noxa_runtime</code>, not as the PostgreSQL owner. Provision its permissions after offline schema setup. The tracked SQL script also creates a separate read-only backup role. Choose two different passwords of at least 24 characters.</p>
+<pre><code>read -r -s -p 'Runtime database password: ' NOXA_RUNTIME_PASSWORD; printf '\n'
+read -r -s -p 'Backup database password: ' NOXA_BACKUP_PASSWORD; printf '\n'
+export NOXA_RUNTIME_PASSWORD NOXA_BACKUP_PASSWORD
+docker compose exec -T -e NOXA_RUNTIME_PASSWORD -e NOXA_BACKUP_PASSWORD postgres psql -U noxa -d noxa &lt; scripts/provision-database-roles.sql
+export NOXA_RUNTIME_DB_PASSWORD="$NOXA_RUNTIME_PASSWORD"
+export BACKUP_POSTGRES_PASSWORD="$NOXA_BACKUP_PASSWORD"
+unset NOXA_RUNTIME_PASSWORD NOXA_BACKUP_PASSWORD</code></pre>
+<p>These exports configure this shell only. Before future restarts, persist the runtime and backup credentials using the corresponding <code>NOXA_RUNTIME_DB_PASSWORD_FILE</code> and <code>BACKUP_POSTGRES_PASSWORD_FILE</code> settings, or your deployment’s secret mechanism. Configure exactly one nonempty value or file source for each secret. Never reuse the migration owner password for a serving account.</p>
+<p>If you changed <code>POSTGRES_USER</code> or <code>POSTGRES_DB</code>, update the <code>psql</code> arguments. For an external database, run the same tracked SQL script as its offline database owner with an authenticated, TLS-verified PostgreSQL client.</p></section>
+<section id="first-start" aria-labelledby="first-start-heading"><h2 id="first-start-heading">4. Start the server and sign in</h2><pre><code>docker compose up -d noxa
+docker compose logs --tail=50 noxa
+docker compose exec noxa wget -qO- http://127.0.0.1:12337/readyz</code></pre>
+<p>Readiness should return <code>ok</code>. Open the Windows desktop client and connect to <code>localhost:12333</code>, or the host’s reachable address. Enter <code>owner</code> in <strong>Account login / guest name</strong> and use the account password you chose. An optional server join password is a separate field.</p>
+<p>Compare the certificate fingerprint with the server’s startup log before trusting the first connection. An optional display name changes the name people see without changing the owner login, identity or roles.</p>
+<p>If the service cannot connect to PostgreSQL, first check that the runtime role was provisioned and that its password is available in this shell or configured secret file. Do not work around the problem by giving the serving container the database owner credential.</p><figure class="guide-figure"><a class="image-link" href="../../assets/screenshots/app-connect.jpg" data-full><img src="../../assets/screenshots/app-connect.jpg" width="1280" height="1100" loading="lazy" decoding="async" alt="noXa connection screen showing separate account and server password fields"></a><figcaption>Use the owner account created during offline setup · Actual client interface with fictional local demo data.</figcaption></figure></section>
+<section id="roles-and-channels" aria-labelledby="roles-and-channels-heading"><h2 id="roles-and-channels-heading">5. Give members access to channels</h2><p>A fresh installation starts closed: <code>@everyone</code> has no grants, Member, Moderator and Administrator are unassigned, and there is no default member role.</p>
+<ol><li>Open <strong>Tools → Roles</strong>. Select a role, choose <strong>Start from a template</strong> when useful, review its permissions and save.</li><li>In <strong>Members</strong>, assign Member to a registered account. As owner, set <strong>Role for new members</strong> if future registrations should receive it. This does not change existing accounts or guests.</li><li>Right-click a channel and choose <strong>Channel access</strong>. Existing channels deny <strong>View channel</strong> to <code>@everyone</code>, so assigning Member alone does not make them visible.</li><li>For a members-only channel, retain the everyone deny and allow the Member role to view it, with the desired chat and voice permissions and their prerequisites. For a public channel, review the <strong>Public</strong> preset before saving.</li><li>Use <strong>Preview role changes</strong> before saving and <strong>Check access</strong> afterward. Test with an ordinary member and a guest; owner/admin access bypasses configurable channel overrides.</li></ol>
+<figure class="guide-figure"><a class="image-link" href="../../assets/screenshots/app-roles-guide.png" data-full><img src="../../assets/screenshots/app-roles-guide.png" width="960" height="1012" loading="lazy" decoding="async" alt="The actual noXa Roles dialog showing a Member role and its permission controls with fictional demo data."></a><figcaption>Actual desktop Roles dialog · Fictional demonstration policy, not the default installation policy.</figcaption></figure>
+<p>Only the owner can grant Administrator or transfer ownership. Keep administration limited to trusted operators and use dedicated moderation roles for routine work. See the <a href="../roles-permissions/">roles and channel access guide</a> for inheritance and hierarchy.</p><figure class="guide-figure"><a class="image-link" href="../../assets/screenshots/app-channel-access.png" data-full><img src="../../assets/screenshots/app-channel-access.png" width="690" height="1036" loading="lazy" decoding="async" alt="noXa channel permissions matrix with Member and everyone role settings"></a><figcaption>Channel access uses a separate policy from global role grants · Actual client interface with fictional local demo data.</figcaption></figure></section>
+<section id="networking" aria-labelledby="networking-heading"><h2 id="networking-heading">6. Configure reachable voice and file connections</h2><p>A successful control login does not prove that voice works. WebRTC media uses its own UDP sockets. The legacy UDP keepalive port <code>12334</code> is not the voice transport.</p>
+<div class="table-scroll" role="region" aria-label="Reference table" tabindex="0"><table><thead><tr><th>Port</th><th>Purpose</th><th>Exposure</th></tr></thead><tbody><tr><td>TCP 12333</td><td>Desktop TLS control</td><td>Reachable by your members</td></tr><tr><td>TCP 12336</td><td>TLS file transfer</td><td>Reachable for client uploads and downloads</td></tr><tr><td>Configured UDP media port</td><td>WebRTC voice, camera and screen sharing</td><td>Forward the same published port</td></tr><tr><td>UDP 12334</td><td>Optional legacy keepalive</td><td>Only if your deployment uses it</td></tr><tr><td>TCP 12335 / 12338</td><td>Raw Query / gRPC administration</td><td>Keep private; gRPC must remain loopback-only</td></tr><tr><td>TCP 12337</td><td>Health, metrics, events, hooks and file links</td><td>Keep private; expose selected authenticated paths through HTTPS</td></tr><tr><td>TCP 12339</td><td>Optional Query over SSH</td><td>Publish deliberately when enabled</td></tr></tbody></table></div>
+<p>For Docker bridge networking or a port-forwarded server, create <code>compose.media.yml</code> with a fixed UDP listener. <code>203.0.113.10</code> is a documentation address: replace it with your real public IPv4 address.</p>
+<pre><code>services:
+  noxa:
+    environment:
+      NOXA_WEBRTC_UDP_ADDR: ":12367"
+      NOXA_WEBRTC_EXTERNAL_IPS: "203.0.113.10"
+    ports:
+      - "12367:12367/udp"</code></pre>
+<pre><code>docker compose -f docker-compose.yml -f compose.media.yml up -d noxa</code></pre>
+<p>Use the same override on subsequent Compose commands. Forward UDP <code>12367</code> at the router and allow it through the host firewall. Advertising an external IP does not create a forwarding rule. Configure STUN/TURN for restrictive networks and test from a different network. Private/LAN WebRTC destinations require an explicit, narrow <code>NOXA_WEBRTC_ALLOWED_REMOTE_CIDRS</code> allowlist.</p></section>
+<section id="production-check" aria-labelledby="production-check-heading"><h2 id="production-check-heading">7. Prepare for real users</h2><ul><li>Replace development database credentials, set <code>NOXA_DEV_MODE=false</code>, and use <code>sslmode=verify-full</code>. The current production validator requires verified database TLS. Set up PostgreSQL certificates and trust correctly; changing <code>POSTGRES_SSLMODE</code> alone does not enable database TLS.</li><li>Choose an admission policy: a strong server password, or deliberate anonymous admission with <code>NOXA_ALLOW_ANONYMOUS=true</code>. Authentication and roles still control protected actions.</li><li>Set a strong Redis password for a non-loopback Redis service. Keep control and file-transfer TLS enabled.</li><li>Pass extra settings explicitly in the Compose service’s <code>environment</code> section when the supplied Compose file does not reference them. A new line in <code>.env</code> is not automatically an application setting.</li><li>Back up the database, matching chat and PII keys, files, recordings, TLS identity and configuration. Complete an isolated restore drill.</li><li>Verify ordinary member login, channel visibility, voice both ways, screen sharing, and an upload/download from outside the host network.</li></ul>
+<p>For the browser client, configure an HTTPS domain and the web listener separately. Follow <a href="../mobile/">the mobile and browser guide</a>; passkeys belong to that origin.</p></section>
+      <section class="guide-related" aria-labelledby="next-heading"><h2 id="next-heading">Keep going</h2><ul><li><a href="../configuration/">Configure networking, TLS and server limits</a></li><li><a href="../roles-permissions/">Roles, members, and channel access</a></li><li><a href="../operations/">Back up, update and troubleshoot a server</a></li></ul></section>
+      <aside class="guide-sources" aria-label="Source documentation"><p>Based on the current noXa documentation. Public alpha features and menu labels can change; use the client and server from the same release.</p><ul><li><a href="https://github.com/arumes31/noxa#new-server-setup">Repository setup reference</a></li><li><a href="https://github.com/arumes31/noxa/blob/main/docker-compose.yml">Docker Compose services</a></li><li><a href="https://github.com/arumes31/noxa/blob/main/scripts/provision-database-roles.sql">Database role provisioning script</a></li></ul><a href="https://github.com/arumes31/noxa/issues">Suggest a correction</a></aside>
+    </main>
+  </div>
+  <footer class="wrap site-footer">
+    <a class="footer-brand" href="../../" aria-label="noXa home"><span class="wordmark">no<span>X</span>a</span></a>
+    <nav aria-label="Footer navigation"><a href="../../guides/">All guides</a><a href="../../guides/server-setup/">Server setup</a><a href="https://github.com/arumes31/noxa/releases">Releases</a><a href="https://github.com/arumes31/noxa/issues">Report an issue</a></nav>
+  </footer>
+  <dialog class="lightbox" aria-label="Product screenshot" aria-describedby="image-caption"><button type="button" aria-label="Close image" autofocus>×</button><img alt=""><p id="image-caption">noXa client · Fictional demo data</p></dialog>
+</body>
+</html>
