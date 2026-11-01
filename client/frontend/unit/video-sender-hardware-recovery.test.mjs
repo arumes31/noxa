@@ -234,3 +234,29 @@ test("admitted HEVC software encoding uses the same bounded source recovery and 
         assert.equal(f.calls.length, admitted ? 1 : 0);
     }
 });
+
+
+test("even H264 frame sizes need not be multiples of four for hardware recovery", async () => {
+    for (const [width, height] of [[1622, 1080], [1620, 1082]]) {
+        const f = fixture();
+        f.track.getSettings = () => ({ width, height });
+        const recover = createVideoSenderRecovery(f.options);
+        for (const at of [0, 5000, 10000]) {
+            f.time(at); await recover(f.pc, f.stats({ frameWidth: width, frameHeight: height }));
+        }
+        assert.equal(f.calls.length, 1, `${width}x${height} can recover after a positive hardware capability result`);
+    }
+});
+
+test("even-frame recovery still rejects odd dimensions and unsupported hardware", async () => {
+    for (const [width, height, supported] of [[1623, 1080, true], [1620, 1081, true], [1622, 1080, false]]) {
+        const f = fixture();
+        f.track.getSettings = () => ({ width, height });
+        f.options.capable = async () => supported;
+        const recover = createVideoSenderRecovery(f.options);
+        for (const at of [0, 5000, 10000, 15000]) {
+            f.time(at); await recover(f.pc, f.stats({ frameWidth: width, frameHeight: height }));
+        }
+        assert.equal(f.calls.length, 0);
+    }
+});
