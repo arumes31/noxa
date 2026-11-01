@@ -3,8 +3,8 @@ import { test, expect, chooseShareOption } from "./fixtures.js";
 // Native control replies and capability evidence are synthetic. The publication
 // lifecycle, negotiation callback, RTP sender, encoders and receiver are real.
 // A powerEfficient capability stub is not evidence of actual GPU execution.
-// Encrypted channel media (Task 2) publishes VP8 only: even a server that
-// supports codec refresh never moves an encrypted publication to H.264.
+// A failed initial H264 hardware query keeps VP8 selected for this source.
+// Encrypted codec refresh remains disabled; another capture can retry.
 for (const supported of [true, false]) test(`encrypted live publication keeps VP8 ${supported ? "although the server offers H264 refresh" : "on a server without refresh"}`, async ({ page }) => {
     await page.route("**/codec-refresh-fixture", route => route.fulfill({ contentType: "text/html", body: `<!doctype html>
         <button id="voice-screen">Share</button><button id="voice-video">Camera</button>
@@ -103,9 +103,9 @@ for (const supported of [true, false]) test(`encrypted live publication keeps VP
         });
         expect(before.audioPackets).toBeGreaterThan(0);
         expect(before.audioEmitted).toBeGreaterThan(0);
-        expect(before.queries).toBe(0); // encrypted media never probes H.264/HEVC hardware
+        expect(before.queries).toBe(1); // H264 is queried once; HEVC is excluded under E2EE
         expect(before.requests).toHaveLength(1);
-        expect(before.requests[0]).toMatchObject({ generation: "0", codecs: ["vp8"], quality_mode: "source" });
+        expect(before.requests[0]).toMatchObject({ generation: "0", codecs: ["vp8"], quality_mode: "source", encrypted_codecs: "noxa-media-e2ee-h264-v1" });
         await page.evaluate(() => codecFixture.advance());
         await page.evaluate(() => codecFixture.refresh());
         await expect.poll(() => page.evaluate(async () => (await codecFixture.read()).vp8)).toBeGreaterThan(before.vp8 + 20);
@@ -120,6 +120,7 @@ for (const supported of [true, false]) test(`encrypted live publication keeps VP
             encodings: transceiver.sender.getParameters().encodings.length, transceivers: state.pc.getTransceivers().length,
             notices: codecFixture.notices, generation: (await import("/src/stream-publication.js")).publicationSnapshot()[0]?.generation };
         });
+        expect(await page.evaluate(() => codecFixture.queries)).toBe(1);
         expect(after.same).toBe(true);
         expect(after.videos).toBe(1); expect(after.encodings).toBe(1); expect(after.transceivers).toBe(2);
         expect(after.generation).toBe("42"); expect(after.notices).toEqual([]);

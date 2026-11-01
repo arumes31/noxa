@@ -15,6 +15,9 @@ import "errors"
 const (
 	CapabilityMediaE2EE = "noxa-media-e2ee-v1"
 	MediaE2EEVersion    = CapabilityMediaE2EE
+	// Stream declarations opt into the validated H264 transform. Older v1
+	// workers advertised runtime H264 support but only decrypted VP8.
+	MediaE2EECodecVersion = "noxa-media-e2ee-h264-v1"
 )
 
 // Error message prefixes (the rest of the message is an English

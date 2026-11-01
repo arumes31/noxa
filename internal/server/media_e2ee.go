@@ -13,7 +13,7 @@ package server
 //     refused before the voice backend sees the offer;
 //   - server recording, whisper (cross-scope audio without keys) and
 //     plaintext stream previews are refused;
-//   - the SFU negotiates only Opus and VP8, the encrypted codecs whose
+//   - the SFU negotiates only Opus, VP8 and H264, the encrypted codecs whose
 //     packetization and dimension admission are proven (webrtc.MediaPolicy).
 //
 // Metadata (membership, packet sizes and timing, the VP8 keyframe header
@@ -91,14 +91,15 @@ func (s *TCPServer) announceMediaDevice(client *Client) {
 }
 
 // mediaE2EECodecs keeps only codecs that are proven end-to-end encrypted
-// through the SFU (VP8); H.264/HEVC are not offered while media is encrypted.
+// through the SFU. H264 requires the updated frame-cipher declaration; a
+// legacy client's browser capabilities do not imply encrypted H264 support.
 func (s *TCPServer) mediaE2EECodecs(msg *netproto.VideoStreamControl) {
 	if !s.mediaE2EERequired() {
 		return
 	}
 	kept := msg.Codecs[:0]
 	for _, codec := range msg.Codecs {
-		if strings.EqualFold(codec, "vp8") {
+		if strings.EqualFold(codec, "vp8") || strings.EqualFold(codec, "h264") && msg.EncryptedCodecs == netproto.MediaE2EECodecVersion {
 			kept = append(kept, codec)
 		}
 	}

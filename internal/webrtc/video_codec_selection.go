@@ -39,7 +39,7 @@ func videoCodecCapabilities(codecs []string) (uint8, bool) {
 // Caller holds Router.mu and watchMu. Only an aggregate choice is disclosed;
 // viewers (including invisible members) and their capabilities remain private.
 func (r *Router) publicationCodecLocked(key publicationKey, generation uint64) string {
-	if r.videoPolicy.bounds != (VideoBounds{}) || r.videoRecordingConsumerLocked(key) {
+	if r.videoPolicy.bounds != (VideoBounds{}) && !r.mediaPolicy.E2EE || r.videoRecordingConsumerLocked(key) {
 		return "vp8"
 	}
 	common := r.publicationCodecCapabilities[key]

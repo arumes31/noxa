@@ -44,10 +44,12 @@ let factory = null;
 // objects without encoded transforms). Production never sets it.
 export function useChannelMediaFactory(fn) { factory = fn || null; }
 
-export async function startChannelMedia({ tabID, channelID, roster = [], adapter, onError = () => {} }) {
+export async function startChannelMedia({ tabID, channelID, roster = [], adapter, hardwareVideoRequired = true, onError = () => {} }) {
     stopChannelMedia();
     const session = factory ? factory({ tabID, channelID }) : new MediaSession({
         adapter: adapter || desktopMediaAdapter(tabID),
+        hardwareVideoRequired,
+        onHardwareUnavailable: error => window.__noxa?.toast?.(t(error?.message === "hardware_unverified" ? "e2ee.reason.hardware_unverified" : "e2ee.reason.hardware_encoder"), "warn"),
         onStatus: status => { if (current === session || status.state === "off") publish(status); },
         onError: error => { if (current === session) onError(error); },
         // Encoded-streams receivers ask the SFU for a keyframe after their

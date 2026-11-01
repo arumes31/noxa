@@ -64,7 +64,7 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 	case "keyframe":
 		// An encrypted receiver's explicit keyframe request (Task 2b): only a
 		// publication the requester currently receives (checked by the router).
-		if len(frame.Payload) > 4096 || msg.PublisherID == "" || msg.PublisherID == client.ID || (msg.Slot != webrtc.SlotCam && msg.Slot != webrtc.SlotScreen) ||
+		if len(frame.Payload) > 4096 || msg.PublisherID == "" || (msg.Slot != webrtc.SlotCam && msg.Slot != webrtc.SlotScreen) ||
 			!msg.Active || len(msg.JPEG) != 0 {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid keyframe request scope")
 		}

@@ -58,3 +58,12 @@ test("keyframe requests name only a video publication of a receiver binding", ()
     assert.deepEqual(keyframeTarget("c1|screen"), { publisher: "c1", slot: "screen" });
     for (const pid of ["", "c1", "c1|mic", "c1|screenaudio", "|cam"]) assert.equal(keyframeTarget(pid), null, pid);
 });
+
+test("a worker failure during startup keeps the original error after session cleanup", async () => {
+ class FailedWorker {postMessage(){queueMicrotask(()=>this.onerror?.());}terminate(){}}
+ const scope={Worker:FailedWorker,crypto:{subtle:{}},RTCRtpScriptTransform:function(){}};
+ let errors=0;
+ const session=new MediaSession({scope,workerURL:"worker-test.js",onError:()=>errors++,adapter:{status:async()=>({supported:true,principal:"u",device:"d",clientID:"c"}),send:async()=>({ok:true})}});
+ await assert.rejects(session.start(1),e=>e instanceof MediaSessionError && e.reason==="worker" && !/null/.test(e.message));
+ assert.equal(errors,1);assert.equal(session.media,null);
+});

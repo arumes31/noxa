@@ -206,6 +206,7 @@ func (p *pubTrack) slots(kind webrtc.RTPCodecType) map[string]*pubSlot {
 // or a publisher's slot set changes, the server renegotiates with affected
 // subscribers (see voice.go renegotiation orchestration).
 type Router struct {
+	mediaPolicy      MediaPolicy
 	timingMu         sync.Mutex
 	timingDiagnostic *upstreamTimingSession
 	logger           *zap.Logger
@@ -1756,8 +1757,12 @@ func (r *Router) recordingVideoSlotLocked(publisherID string) string {
 // under the slot so subscribers can select layers and PLIs can be routed back
 // to this publisher.
 func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
+	r.mu.RLock()
+	encrypted := r.mediaPolicy.E2EE
+	r.mu.RUnlock()
 	policy := r.videoPolicySnapshot()
 	dimensions := vp8BoundsInspector{bounds: policy.bounds}
+	encryptedDimensions := h264BoundsInspector{bounds: policy.bounds, encrypted: true}
 	boundsRevision := policy.boundsRevision
 	var currentCodec func() webrtc.RTPCodecParameters
 	if codec, ok := track.(interface {
@@ -1765,7 +1770,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 	}); ok {
 		currentCodec = codec.Codec
 	}
-	if policy.bounds != (VideoBounds{}) && (currentCodec == nil || !strings.EqualFold(currentCodec().MimeType, webrtc.MimeTypeVP8)) {
+	if policy.bounds != (VideoBounds{}) && (currentCodec == nil || !strings.EqualFold(currentCodec().MimeType, webrtc.MimeTypeVP8) && (!encrypted || !strings.EqualFold(currentCodec().MimeType, webrtc.MimeTypeH264))) {
 		return
 	}
 	if !r.allowVideo(clientID) {
@@ -1867,7 +1872,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		}
 		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000}
 	}
-	var h264Frame h264ForwardFrame
+	h264Frame := h264ForwardFrame{encrypted: encrypted}
 	var h264RecoveryPending bool
 	var h265Frame h265ForwardFrame
 	var h265RecoveryPending bool
@@ -1922,11 +1927,12 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		policy = r.videoPolicySnapshot()
 		if boundsRevision != policy.boundsRevision {
 			dimensions = vp8BoundsInspector{bounds: policy.bounds}
-			h264Frame = h264ForwardFrame{onReject: h264Frame.onReject}
+			h264Frame = h264ForwardFrame{encrypted: encrypted, onReject: h264Frame.onReject}
 			h265Frame = h265ForwardFrame{}
 			boundsRevision = policy.boundsRevision
+			encryptedDimensions = h264BoundsInspector{bounds: policy.bounds, encrypted: true}
 		}
-		if policy.bounds != (VideoBounds{}) {
+		if policy.bounds != (VideoBounds{}) && (!encrypted || !strings.EqualFold(mime, webrtc.MimeTypeH264)) {
 			// Pion updates codec metadata on payload-type changes during ReadRTP.
 			if currentCodec == nil || !strings.EqualFold(mime, webrtc.MimeTypeVP8) {
 				// An admitted track can switch to VP8 during renegotiation.
@@ -1947,7 +1953,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			// Never complete an access unit across a rejected format transition.
 			// Quarantine its timestamp too: a later Baseline-labelled slice alone
 			// cannot make that rejected unit complete. Preserve the diagnostics hook.
-			h264Frame = h264ForwardFrame{onReject: h264Frame.onReject,
+			h264Frame = h264ForwardFrame{encrypted: encrypted, onReject: h264Frame.onReject,
 				rejected: true, rejectedSSRC: pkt.SSRC, rejectedTimestamp: pkt.Timestamp}
 			h264RecoveryPending = true
 			h265Frame = h265ForwardFrame{rejected: true, rejectedSSRC: pkt.SSRC, rejectedTimestamp: pkt.Timestamp}
@@ -1958,7 +1964,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		if hasAdmittedCodec && !sameVideoCodec(lastAdmittedCodec, codec) {
 			ownedSource.gop.invalidate()
 			oldH264, oldH265 := h264Frame, h265Frame
-			h264Frame = h264ForwardFrame{onReject: oldH264.onReject}
+			h264Frame = h264ForwardFrame{encrypted: encrypted, onReject: oldH264.onReject}
 			h265Frame = h265ForwardFrame{}
 			if len(oldH264.packets) > 0 {
 				h264Frame.rejected = true
@@ -1975,7 +1981,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		lastAdmittedCodec, hasAdmittedCodec = codec, true
 		now := enqueuedAt // Reorder emission time; kernel/read arrival is recorded separately.
 		if strings.EqualFold(mime, webrtc.MimeTypeH265) {
-			h264Frame = h264ForwardFrame{onReject: h264Frame.onReject}
+			h264Frame = h264ForwardFrame{encrypted: encrypted, onReject: h264Frame.onReject}
 			h264RecoveryPending = false
 			packets, keyframe, lost := h265Frame.push(pkt, now)
 			if dispatchRecovery && len(packets) > 0 {
@@ -2009,6 +2015,24 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 		h265RecoveryPending = false
 		if strings.EqualFold(mime, webrtc.MimeTypeH264) {
 			packets, keyframe, lost := h264Frame.push(pkt, now)
+			if encrypted && len(packets) > 0 && !isVideoPadding(pkt) {
+				var admitted *h264AccessUnit
+				for _, packet := range packets {
+					unit, err := encryptedDimensions.push(packet, now)
+					if err != nil {
+						admitted = nil
+						break
+					}
+					if unit != nil {
+						admitted = unit
+					}
+				}
+				if admitted == nil {
+					ownedSource.gop.invalidate()
+					r.requestKeyframeAsync(clientID, slot, rid, keyframeH264Assembly)
+					return
+				}
+			}
 			if dispatchRecovery && len(packets) > 0 {
 				if !keyframe {
 					dispatch.discardRecovery(len(packets))
@@ -2042,7 +2066,7 @@ func (r *Router) ReadVideoLoop(clientID, slot string, track VideoTrackReader) {
 			ownedSource.gop.observe(mime, packets, keyframe, lost, now)
 			return
 		}
-		h264Frame = h264ForwardFrame{onReject: h264Frame.onReject}
+		h264Frame = h264ForwardFrame{encrypted: encrypted, onReject: h264Frame.onReject}
 		h264RecoveryPending = false
 		if dispatchRecovery {
 			if !strings.EqualFold(mime, webrtc.MimeTypeVP8) || isVideoPadding(pkt) || !dispatchVP8.accept(pkt) {
@@ -2625,9 +2649,21 @@ func (r *Router) rtcpRelayLoop(clientID string, sender *webrtc.RTPSender) {
 // authenticated frame was not a keyframe asks through signaling (Task 2b). It
 // takes exactly the viewer-feedback path of an RTCP PLI (GOP-cache refill
 // first, feedback gate, coalescing). A publication the viewer does not
-// receive requests nothing.
+// receive requests nothing. A publisher may also refresh its own active
+// source after its hardware gate opens, through the same rate-limited path.
 func (r *Router) RequestViewerKeyframe(subscriberID, publisherID, slot string) bool {
 	r.mu.RLock()
+	if subscriberID == publisherID {
+		r.watchMu.RLock()
+		_, published := r.publications[publicationKey{publisherID, slot}]
+		valid := published && r.clientChan[publisherID] > 0 && len(r.videoSources[publisherID][slot]) > 0
+		r.watchMu.RUnlock()
+		r.mu.RUnlock()
+		if valid {
+			r.requestKeyframeAsync(publisherID, slot, "", keyframeExplicit)
+		}
+		return valid
+	}
 	var sender *webrtc.RTPSender
 	if tracks := r.pubTracks[subscriberID][publisherID]; tracks != nil {
 		if output := tracks.video[slot]; output != nil {

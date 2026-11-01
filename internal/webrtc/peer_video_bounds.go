@@ -77,7 +77,7 @@ func (w *PeerConnectionWrapper) setVideoBoundsCodecPreferences() error {
 			}
 			slices.SortStableFunc(codecs, func(a, b webrtc.RTPCodecParameters) int { return rank(a) - rank(b) })
 		}
-		codecs = admittedVideoFormats(codecs, w.videoBounds != (VideoBounds{}))
+		codecs = admittedVideoFormats(codecs, w.videoBounds != (VideoBounds{}) && !w.mediaPolicy.E2EE)
 		if len(codecs) == 0 {
 			inactive := transceiver.Direction() == webrtc.RTPTransceiverDirectionInactive
 			if offeredInactive, offered := inactiveOffers[transceiver.Mid()]; offered {

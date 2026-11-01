@@ -16,9 +16,10 @@ import (
 // candidates and the local/remote SDP through buffered channels for the
 // signaling layer to consume.
 type PeerConnectionWrapper struct {
-	pc       *webrtc.PeerConnection
-	clientID string
-	logger   *zap.Logger
+	mediaPolicy MediaPolicy
+	pc          *webrtc.PeerConnection
+	clientID    string
+	logger      *zap.Logger
 	// Immutable codec bounds captured when the engine creates this peer.
 	videoBounds             VideoBounds
 	egress                  *mediaEgressRegistry

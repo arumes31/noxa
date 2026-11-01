@@ -265,3 +265,20 @@ func TestReportE2EEAvailabilityWarnsWithoutTLS(t *testing.T) {
 		t.Fatalf("startup warning: %+v", all)
 	}
 }
+
+func TestMediaE2EEH264RequiresCipherCodecDeclaration(t *testing.T) {
+	s := &TCPServer{mediaE2EE: true}
+	for _, version := range []string{"", "unknown", netproto.MediaE2EECodecVersion} {
+		for _, action := range []string{"publish", "watch"} {
+			msg := netproto.VideoStreamControl{Action: action, Codecs: []string{"h265", "h264", "vp8"}, HEVCLevelID: 93, EncryptedCodecs: version}
+			s.mediaE2EECodecs(&msg)
+			want := []string{"vp8"}
+			if version == netproto.MediaE2EECodecVersion {
+				want = []string{"h264", "vp8"}
+			}
+			if !slices.Equal(msg.Codecs, want) || msg.HEVCLevelID != 0 {
+				t.Fatalf("%s %q: %+v", action, version, msg)
+			}
+		}
+	}
+}

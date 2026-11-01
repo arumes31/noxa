@@ -421,3 +421,31 @@ func TestVideoPublishGate(t *testing.T) {
 		t.Fatal("denied publisher registered a video source")
 	}
 }
+
+func TestOwnerKeyframeRequiresActivePublicationAndSource(t *testing.T) {
+	r := NewRouter(nil)
+	r.JoinChannel(1, "pub")
+	if r.RequestViewerKeyframe("pub", "pub", SlotScreen) {
+		t.Fatal("unpublished source requested keyframe")
+	}
+	generation, err := r.PublishVideo("pub", SlotScreen, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RequestViewerKeyframe("pub", "pub", SlotScreen) {
+		t.Fatal("absent RTP source requested keyframe")
+	}
+	registerVideoSource(r, "pub", SlotScreen, "", 9001)
+	if !r.RequestViewerKeyframe("pub", "pub", SlotScreen) {
+		t.Fatal("active owner could not refresh keyframe")
+	}
+	if r.RequestViewerKeyframe("other", "pub", SlotScreen) {
+		t.Fatal("unbound viewer requested keyframe")
+	}
+	if _, err = r.PublishVideo("pub", SlotScreen, generation, false); err != nil {
+		t.Fatal(err)
+	}
+	if r.RequestViewerKeyframe("pub", "pub", SlotScreen) {
+		t.Fatal("stopped publication requested keyframe")
+	}
+}

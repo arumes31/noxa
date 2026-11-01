@@ -10,10 +10,10 @@
 // There is no plaintext mode: start() throws MediaSessionError when the
 // runtime, the server or the session cannot encrypt, and the caller must not
 // create a peer connection then.
-import { MediaE2EE, MediaE2EEUnsupported, MEDIA_E2EE_VERSION, mediaE2EESupport } from "./media-e2ee.js";
+import { MediaE2EE, MediaE2EEUnsupported, MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, mediaE2EESupport } from "./media-e2ee.js";
 import { MediaKeyEngine, publicationPid, senderPid } from "./media-keys.js";
 
-export { MEDIA_E2EE_VERSION, mediaE2EESupport };
+export { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, mediaE2EESupport };
 
 export class MediaSessionError extends Error {
     constructor(reason, detail = "") { super(detail || reason); this.name = "MediaSessionError"; this.reason = reason; }
@@ -79,8 +79,9 @@ export function remoteTrackIDsByMid(sdp = "") {
 }
 
 export class MediaSession {
-    constructor({ adapter, onStatus = () => {}, onError = () => {}, onKeyframeNeeded = () => {}, api, workerURL, scope = globalThis }) {
+    constructor({ adapter, onStatus = () => {}, onError = () => {}, onKeyframeNeeded = () => {}, hardwareVideoRequired = true, onHardwareUnavailable = () => {}, api, workerURL, scope = globalThis }) {
         this.adapter = adapter; this.onStatus = onStatus; this.onError = onError; this.onKeyframeNeeded = onKeyframeNeeded;
+        this.hardwareVideoRequired = hardwareVideoRequired; this.onHardwareUnavailable = onHardwareUnavailable;
         this.api = api; this.workerURL = workerURL; this.scope = scope;
         this.media = null; this.engine = null; this.identity = null; this.closed = false;
     }
@@ -96,13 +97,14 @@ export class MediaSession {
         if (!status.principal || !status.device || !status.clientID) throw new MediaSessionError("no_device");
         if (this.roster?.find?.(c => String(c.client_id) === String(status.clientID))?.status === "invisible") throw new MediaSessionError("invisible");
         try {
-            this.media = new MediaE2EE({ api: this.api, workerURL: this.workerURL, scope: this.scope, onError: error => this.#fail(error),
-                onKeyframeNeeded: (receiver, pid) => { const target = keyframeTarget(pid); if (target) this.onKeyframeNeeded(target, receiver); } });
+            this.media = new MediaE2EE({ hardwareVideoRequired: this.hardwareVideoRequired, onHardwareUnavailable: this.onHardwareUnavailable, api: this.api, workerURL: this.workerURL, scope: this.scope, onError: error => this.#fail(error),
+                onKeyframeNeeded: (receiver, pid) => { const target = keyframeTarget(pid); if (target) { if (target.publisher === "self" && this.identity) target.publisher = this.identity.clientID; this.onKeyframeNeeded(target, receiver); } } });
         } catch (error) {
             throw new MediaSessionError(error instanceof MediaE2EEUnsupported ? "unsupported_runtime" : "worker", String(error?.message || error));
         }
-        try { await this.media.ready; } catch (error) { this.media.close(); throw new MediaSessionError("worker", String(error?.message || error)); }
-        if (this.closed) { this.media.close(); throw new MediaSessionError("closed"); }
+        const startingMedia = this.media;
+        try { await startingMedia.ready; } catch (error) { startingMedia.close(); throw new MediaSessionError("worker", String(error?.message || error)); }
+        if (this.closed) { startingMedia.close(); throw new MediaSessionError("closed"); }
         this.identity = { channelID: Number(channelID), clientID: String(status.clientID), principal: status.principal, device: status.device };
         this.#startEngine();
         return this;
@@ -191,6 +193,8 @@ export class MediaSession {
         }
         await Promise.all(work);
     }
+
+    releasePeer(pc) { return pc ? this.media?.releasePeer(pc) : Promise.resolve(); }
 
     setRoster(clients) { this.roster = clients; this.engine?.setRoster(clients); }
     receive(control) { return this.engine ? this.engine.receive(control) : { ok: false, reason: "inactive" }; }

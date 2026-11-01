@@ -3,9 +3,11 @@
 // receiver is protected the moment it exists (addTransceiver / addTrack /
 // track event), before any negotiation can carry its media. Unsupported
 // runtimes fail with an explicit error; there is no plaintext mode.
-import { MEDIA_E2EE_VERSION, SLOTS, validEpoch, validKid, validPid } from "./media-e2ee-core.js";
+import { sampleSenderStats } from "./peer-stats.js";
+import { hardwareVideoEvidence } from "./hardware-video.js";
+import { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, SLOTS, validEpoch, validKid, validPid } from "./media-e2ee-core.js";
 
-export { MEDIA_E2EE_VERSION, SLOTS };
+export { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, SLOTS };
 
 export class MediaE2EEUnsupported extends Error {
     constructor(reason) { super(`Encrypted media is not supported here (${reason})`); this.name = "MediaE2EEUnsupported"; this.reason = reason; }
@@ -26,7 +28,7 @@ let endpointCounter = 0;
 const nextEndpointID = prefix => `${prefix}:${(++endpointCounter).toString(36)}${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`;
 
 export class MediaE2EE {
-    constructor({ api, onError = () => {}, onKeyframeNeeded = () => {}, workerURL, scope = globalThis } = {}) {
+    constructor({ api, onError = () => {}, onKeyframeNeeded = () => {}, hardwareVideoRequired = true, onHardwareUnavailable = () => {}, workerURL, scope = globalThis } = {}) {
         const support = mediaE2EESupport(scope);
         if (!support.ok) throw new MediaE2EEUnsupported(support.reason);
         if (api && api !== support.api && !(api === "streams" && typeof scope.RTCRtpSender?.prototype?.createEncodedStreams === "function")) throw new MediaE2EEUnsupported(api);
@@ -37,6 +39,10 @@ export class MediaE2EE {
         this.scope = scope;
         this.onError = onError;
         this.onKeyframeNeeded = onKeyframeNeeded;
+        this.hardwareVideoRequired = hardwareVideoRequired;
+        this.onHardwareUnavailable = onHardwareUnavailable;
+        this.hardwareTimers = new Set();
+        this.hardwarePollers = new Map();
         this.closed = false;
         this.seq = 0;
         this.pending = new Map();
@@ -50,9 +56,12 @@ export class MediaE2EE {
             : new Worker(new URL("./media-e2ee.worker.js", import.meta.url), { type: "module" });
         this.byTrack = new WeakMap();   // receiver track -> receiver
         this.early = new WeakMap();     // receiver or track -> waiters before protection
+        this.bySenderId = new Map();
         this.byId = new Map();          // endpoint id -> receiver
         this.worker.onmessage = ({ data }) => {
             if (data?.event === "attach-failed") { this.onError(new Error(`Encrypted media transform failed: ${data.error}`)); return; }
+            if (data?.event === "hardware-check") { void this.hardwarePollers.get(data.id)?.(); return; }
+            if (data?.event === "hardware-ready") { const sender = this.bySenderId.get(data.id); if (sender) this.onKeyframeNeeded(sender, data.pid); return; }
             if (data?.event === "first-frame") { this.#authenticate(data.id, data.gen); return; }
             const pending = this.pending.get(data?.seq);
             if (!pending) return;
@@ -89,11 +98,12 @@ export class MediaE2EE {
         const known = this.endpoints.get(endpoint);
         if (known) return known.id;
         const id = nextEndpointID(operation === "encode" ? "tx" : "rx");
+        const hardwareRequired = this.hardwareVideoRequired && operation === "encode" && kind === "video";
         if (this.api === "script") {
-            endpoint.transform = new this.scope.RTCRtpScriptTransform(this.worker, { id, operation, kind });
+            endpoint.transform = new this.scope.RTCRtpScriptTransform(this.worker, { id, operation, kind, hardwareRequired });
         } else {
             const { readable, writable } = endpoint.createEncodedStreams();
-            this.worker.postMessage({ op: "attach", id, operation, kind, readable, writable }, [readable, writable]);
+            this.worker.postMessage({ op: "attach", id, operation, kind, readable, writable, hardwareRequired }, [readable, writable]);
         }
         const early = [...(this.early.get(endpoint) || []), ...(endpoint.track ? this.early.get(endpoint.track) || [] : [])];
         this.early.delete(endpoint); if (endpoint.track) this.early.delete(endpoint.track);
@@ -103,7 +113,95 @@ export class MediaE2EE {
             if (endpoint.track) { endpoint.track.enabled = false; this.byTrack.set(endpoint.track, endpoint); }
             this.byId.set(id, endpoint);
         }
+        if (hardwareRequired) {
+            this.bySenderId.set(id, endpoint);
+            const entry = this.endpoints.get(endpoint);
+            entry.hardwareRequired = true;
+            const replace = endpoint.replaceTrack?.bind(endpoint);
+            if (replace) endpoint.replaceTrack = track => this.#queue(entry, async () => {
+                this.#owns(endpoint, entry);
+                if (entry.pid !== "self|screen") return replace(track);
+                const pid = entry.pid;
+                entry.invalidated = true;
+                // Revoke and fence the old source in the worker BEFORE the
+                // native sender can expose a replacement. Publication keys stay.
+                await this.#bind(endpoint, "");
+                this.#owns(endpoint, entry);
+                try { await replace(track); }
+                catch (error) {
+                    // A rejected replacement keeps the old track, but its
+                    // hardware proof must be collected again too.
+                    await this.#bind(endpoint, pid);
+                    entry.invalidated = false;
+                    throw error;
+                }
+                await this.#bind(endpoint, pid);
+                entry.invalidated = false;
+            });
+        }
         return id;
+    }
+
+    #owns(endpoint, entry) {
+        if (this.closed || this.endpoints.get(endpoint) !== entry) throw new Error("Encrypted media endpoint ended");
+    }
+
+    #queue(entry, operation) {
+        const result = (entry.queue || Promise.resolve()).then(operation);
+        entry.queue = result.catch(() => {});
+        return result;
+    }
+
+    #watchHardware(sender, id) {
+        let track = null, started = null, checking = false, scheduled = null;
+        const stopUnverified = (entry, reason) => {
+            if (this.closed || this.endpoints.get(sender) !== entry || entry.invalidated || entry?.pid !== "self|screen" ||
+                track !== sender.track || track?.readyState === "ended" ||
+                sender.getParameters?.().encodings?.every(e => e.active === false)) return;
+            track.stop();
+            // stop() does not dispatch ended; the owner must clear the share.
+            track.dispatchEvent?.(new Event("ended"));
+            this.onHardwareUnavailable(new Error(reason));
+        };
+        const poll = async () => {
+            if (this.closed || checking) return;
+            checking = true;
+            const entry = this.endpoints.get(sender);
+            try {
+                // The mandatory policy applies to screen/Studio streams. Camera
+                // calls retain their existing behavior and microphone is separate.
+                if (entry?.invalidated || !sender.track || sender.track.readyState === "ended" || entry?.pid !== "self|screen") return;
+                if (track !== sender.track) { track = sender.track; started = null; }
+                const active = sender.getParameters?.().encodings?.some(e => e.active !== false);
+                if (active === false) { started = null; return; } // no viewer demand
+                if (started === null) started = performance.now();
+                const cryptor = await this.stats(sender);
+                if (!cryptor.endpoint?.activeEpoch) { started = null; return; }
+                const source = track;
+                const report = await sampleSenderStats(sender, { fresh: true });
+                if (this.closed || entry.invalidated || this.endpoints.get(sender) !== entry || source !== sender.track || source !== track || entry.sourceTag !== source.id) return;
+                const evidence = hardwareVideoEvidence(report, track.id);
+                await this.request("hardwareProof", { id, pid: entry.pid, sourceTag: track.id, enabled: evidence === "hardware" });
+                if (evidence === "software" || evidence !== "hardware" && performance.now() - started > 10000) {
+                    stopUnverified(entry, evidence === "software" ? "hardware_encoder" : "hardware_unverified");
+                }
+            } catch {
+                // Proof still expires in the worker. Rejected stats/proof
+                // requests must also stop an unverified capture, not poll forever.
+                if (started !== null && performance.now() - started > 10000) stopUnverified(entry, "hardware_unverified");
+            } finally {
+                checking = false;
+                if (scheduled !== null) { clearTimeout(scheduled); this.hardwareTimers.delete(scheduled); }
+                if (!this.closed && sender.track?.readyState !== "ended" && entry?.pid === "self|screen") {
+                    const timer = setTimeout(() => { this.hardwareTimers.delete(timer); void poll(); }, 300);
+                    scheduled = timer;
+                    this.hardwareTimers.add(timer);
+                } else this.hardwarePollers.delete(id);
+            }
+        };
+        this.hardwarePollers.set(id, poll);
+        const timer = setTimeout(() => { this.hardwareTimers.delete(timer); void poll(); }, 0);
+        this.hardwareTimers.add(timer);
     }
 
     #authenticate(id, gen) {
@@ -184,6 +282,27 @@ export class MediaE2EE {
         return pc;
     }
 
+    // A transport replacement retains publication keys and replay windows,
+    // but a closed peer must no longer own endpoints or hardware proof.
+    async releasePeer(pc) {
+        this.peers.delete(pc);
+        const detached = [];
+        for (const tr of pc?.getTransceivers?.() || []) for (const endpoint of [tr.sender, tr.receiver]) {
+            const entry = endpoint && this.endpoints.get(endpoint);
+            if (!entry) continue;
+            entry.pid = ""; entry.gen++; entry.waiters.length = 0;
+            this.endpoints.delete(endpoint); this.byId.delete(entry.id); this.bySenderId.delete(entry.id);
+            if (endpoint.track) this.byTrack.delete(endpoint.track);
+            this.hardwarePollers.delete(entry.id);
+            detached.push(entry.id);
+        }
+        try {
+            // A large peer can own hundreds of endpoints. Stay well below the
+            // worker request budget, and finish before replacement endpoints attach.
+            for (let i = 0; i < detached.length; i += 8) await Promise.all(detached.slice(i, i + 8).map(id => this.request("detach", {id})));
+        } catch (error) { this.fail(error); throw error; }
+    }
+
     // Covers transceivers created by a remote offer before its track event.
     syncPeer(pc) {
         for (const transceiver of pc.getTransceivers?.() || []) {
@@ -192,22 +311,31 @@ export class MediaE2EE {
         }
     }
 
-    async bind(endpoint, pid) {
+    bind(endpoint, pid) {
+        const entry = this.endpoints.get(endpoint);
+        return entry?.hardwareRequired ? this.#queue(entry, () => this.#bind(endpoint, pid)) : this.#bind(endpoint, pid);
+    }
+
+    async #bind(endpoint, pid) {
         const entry = this.endpoints.get(endpoint);
         if (!entry || (pid !== "" && !validPid(pid))) throw new Error("Invalid encrypted media binding");
-        if (entry.pid === pid && !entry.binding) return;
+        const sourceTag = endpoint.track?.id || "";
+        if (entry.pid === pid && entry.sourceTag === sourceTag && !entry.binding && !entry.invalidated) return;
         // Recorded only once the worker accepted it: a failed or timed-out
         // bind is retried by the next bind instead of being skipped forever.
         if (entry.operation === "decode" && entry.pid !== pid) {
             entry.authenticated = false;
             if (endpoint.track) endpoint.track.enabled = false;
         }
-        const binding = this.request("bind", { id: entry.id, pid });
+        const binding = this.request("bind", { id: entry.id, pid, sourceTag });
         entry.binding = binding;
         try {
             const result = await binding;
+            this.#owns(endpoint, entry);
             if (entry.binding === binding) {
-                entry.pid = pid; entry.gen = result?.gen || 0;
+                entry.pid = pid; entry.sourceTag = sourceTag; entry.gen = result?.gen || 0;
+                if (pid) entry.invalidated = false;
+                if (this.hardwareVideoRequired && pid === "self|screen" && entry.operation === "encode" && entry.kind === "video" && !this.hardwarePollers.has(entry.id)) this.#watchHardware(endpoint, entry.id);
                 if (result?.authenticated && entry.operation === "decode") this.#authenticate(entry.id, entry.gen);
             }
         } catch (error) {
@@ -232,6 +360,10 @@ export class MediaE2EE {
     close() {
         if (this.closed) return;
         this.closed = true;
+        for (const timer of this.hardwareTimers) clearTimeout(timer);
+        this.hardwareTimers.clear();
+        this.hardwarePollers.clear();
+        this.bySenderId.clear();
         try { this.worker.terminate(); } catch { /* already gone */ }
         for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error("Encrypted media session ended")); }
         this.pending.clear();
