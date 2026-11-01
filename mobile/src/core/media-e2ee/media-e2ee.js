@@ -153,73 +153,88 @@ export class MediaE2EE {
     }
 
     #watchHardware(sender, id) {
-        let track = null, started = null, hardwareSeen = false, recoveringSoftware = false, checking = false, scheduled = null;
-        const stopUnverified = (entry, reason) => {
-            if (this.closed || this.endpoints.get(sender) !== entry || entry.invalidated || entry?.pid !== "self|screen" ||
-                track !== sender.track || track?.readyState === "ended" ||
-                sender.getParameters?.().encodings?.every(e => e.active === false)) return;
-            track.stop();
+        const owner = this.endpoints.get(sender), generation = owner.gen;
+        let track = null, started = null, hardwareSeen = false, recoveringSoftware = false, checking = false, watching = true;
+        let scheduled = null, deadline = null, deadlineAt = null;
+        const clearTimer = timer => { if (timer !== null) { clearTimeout(timer); this.hardwareTimers.delete(timer); } };
+        const clearDeadline = () => { clearTimer(deadline); deadline = deadlineAt = null; };
+        const stopWatch = () => {
+            watching = false; clearTimer(scheduled); scheduled = null; clearDeadline();
+            if (this.hardwarePollers.get(id) === poll) this.hardwarePollers.delete(id);
+            if (owner.stopHardwareWatch === stopWatch) delete owner.stopHardwareWatch;
+        };
+        const current = source => watching && !this.closed && this.endpoints.get(sender) === owner && !owner.invalidated &&
+            owner.gen === generation && owner.pid === "self|screen" && source === sender.track && source === track &&
+            source?.readyState !== "ended" && owner.sourceTag === source?.id;
+        const active = () => sender.getParameters?.().encodings?.some(e => e.active !== false) !== false;
+        const stopUnverified = reason => {
+            if (!current(track) || !active()) return;
+            stopWatch(); track.stop();
             // stop() does not dispatch ended; the owner must clear the share.
             track.dispatchEvent?.(new Event("ended"));
             this.onHardwareUnavailable(new Error(reason));
         };
-        const poll = async () => {
-            if (this.closed || checking) return;
-            checking = true;
-            const entry = this.endpoints.get(sender);
-            try {
-                // The mandatory policy applies to screen/Studio streams. Camera
-                // calls retain their existing behavior and microphone is separate.
-                if (entry?.invalidated || !sender.track || sender.track.readyState === "ended" || entry?.pid !== "self|screen") return;
-                if (track !== sender.track) { track = sender.track; started = null; hardwareSeen = false; recoveringSoftware = false; }
-                const active = sender.getParameters?.().encodings?.some(e => e.active !== false);
-                if (active === false) { started = null; recoveringSoftware = false; return; } // no viewer demand
-                if (started === null) started = performance.now();
-                const cryptor = await this.stats(sender);
-                if (!cryptor.endpoint?.activeEpoch) { started = null; recoveringSoftware = false; return; }
-                const source = track;
-                const report = await sampleSenderStats(sender, { fresh: true });
-                if (this.closed || entry.invalidated || this.endpoints.get(sender) !== entry || source !== sender.track || source !== track || entry.sourceTag !== source.id) return;
-                const evidence = hardwareVideoEvidence(report, track.id);
-                // Capture lifetime follows sampled evidence even if the worker
-                // rejects this first revocation. This never grants upload proof.
-                if (evidence === "software" && hardwareSeen) recoveringSoftware = true;
-                await this.request("hardwareProof", { id, pid: entry.pid, sourceTag: track.id, enabled: evidence === "hardware" });
-                if (evidence === "hardware") {
-                    // Measure loss of proof, not the total age of a good stream.
-                    started = null;
-                    hardwareSeen = true;
-                    recoveringSoftware = false;
-                } else {
-                    // The worker has already revoked permission to send frames.
-                    // An established hardware source gets a bounded chance for
-                    // the sender recovery scheduler (10 s evidence) to restart
-                    // its encoder without losing the user's selected window.
-                    // Initial software-only admission still fails immediately.
-                    // Restarting encoders may temporarily omit the stats row.
-                    // Neither that nor a failed poll shortens an admitted retry.
-                    const grace = recoveringSoftware ? 20000 : 10000;
-                    if (evidence === "software" && !hardwareSeen || performance.now() - started > grace) {
-                        stopUnverified(entry, evidence === "software" ? "hardware_encoder" : "hardware_unverified");
-                    }
-                }
-            } catch {
-                // Proof still expires in the worker. Rejected stats/proof
-                // requests must also stop an unverified capture, not poll forever.
-                if (started !== null && performance.now() - started > (recoveringSoftware ? 20000 : 10000)) stopUnverified(entry, "hardware_unverified");
-            } finally {
-                checking = false;
-                if (scheduled !== null) { clearTimeout(scheduled); this.hardwareTimers.delete(scheduled); }
-                if (!this.closed && sender.track?.readyState !== "ended" && entry?.pid === "self|screen") {
-                    const timer = setTimeout(() => { this.hardwareTimers.delete(timer); void poll(); }, 300);
-                    scheduled = timer;
-                    this.hardwareTimers.add(timer);
-                } else this.hardwarePollers.delete(id);
-            }
+        const resetDeadline = () => { started = null; recoveringSoftware = false; clearDeadline(); };
+        const armDeadline = () => {
+            if (started === null) { clearDeadline(); return; }
+            const at = started + (recoveringSoftware ? 20000 : 10000);
+            if (performance.now() >= at) { stopUnverified("hardware_unverified"); return; }
+            if (deadlineAt === at) return;
+            clearDeadline(); deadlineAt = at;
+            const timer = setTimeout(() => {
+                this.hardwareTimers.delete(timer); deadline = deadlineAt = null;
+                if (!current(track)) return;
+                if (!active()) { resetDeadline(); return; }
+                armDeadline();
+            }, at - performance.now());
+            deadline = timer; this.hardwareTimers.add(timer);
         };
+        const poll = async () => {
+            if (!watching || this.closed) return;
+            if (!track) track = sender.track;
+            if (!current(track)) { stopWatch(); return; }
+            // Schedule independently of the awaited work. A stuck poll cannot
+            // hide a demand change or postpone the absolute capture deadline.
+            clearTimer(scheduled);
+            const timer = setTimeout(() => { this.hardwareTimers.delete(timer); scheduled = null; void poll(); }, 300);
+            scheduled = timer; this.hardwareTimers.add(timer);
+            if (!active()) { resetDeadline(); return; }
+            if (started === null) started = performance.now();
+            armDeadline();
+            if (!watching || checking) return;
+            checking = true;
+            const source = track;
+            try {
+                const cryptor = await this.stats(sender);
+                if (!current(source) || !active()) return;
+                if (!cryptor.endpoint?.activeEpoch) { resetDeadline(); return; }
+                const report = await sampleSenderStats(sender, { fresh: true });
+                if (!current(source) || !active()) return;
+                const evidence = hardwareVideoEvidence(report, source.id);
+                // Capture lifetime follows sampled evidence even if the worker
+                // rejects its revocation. This never grants upload permission.
+                if (evidence === "software" && hardwareSeen) recoveringSoftware = true;
+                armDeadline();
+                if (!watching) return;
+                const proof = this.request("hardwareProof", { id, pid: owner.pid, sourceTag: source.id, enabled: evidence === "hardware" });
+                if (evidence === "software" && !hardwareSeen) stopUnverified("hardware_encoder");
+                await proof;
+                if (!current(source) || !active()) return;
+                if (evidence === "hardware") {
+                    // Measure loss of proof, not total capture age. A positive
+                    // acknowledgement must still belong to this live source.
+                    resetDeadline(); hardwareSeen = true;
+                } else armDeadline();
+            } catch {
+                // The independent timer also covers never-settling requests.
+                // Worker-side hardware permission still expires independently.
+                if (current(source)) armDeadline();
+            } finally { checking = false; }
+        };
+        owner.stopHardwareWatch = stopWatch;
         this.hardwarePollers.set(id, poll);
         const timer = setTimeout(() => { this.hardwareTimers.delete(timer); void poll(); }, 0);
-        this.hardwareTimers.add(timer);
+        scheduled = timer; this.hardwareTimers.add(timer);
     }
 
     #authenticate(id, gen) {
@@ -311,6 +326,7 @@ export class MediaE2EE {
             entry.pid = ""; entry.gen++; entry.waiters.length = 0;
             this.endpoints.delete(endpoint); this.byId.delete(entry.id); this.bySenderId.delete(entry.id);
             if (endpoint.track) this.byTrack.delete(endpoint.track);
+            entry.stopHardwareWatch?.();
             this.hardwarePollers.delete(entry.id);
             detached.push(entry.id);
         }
@@ -339,6 +355,7 @@ export class MediaE2EE {
         if (!entry || (pid !== "" && !validPid(pid))) throw new Error("Invalid encrypted media binding");
         const sourceTag = endpoint.track?.id || "";
         if (entry.pid === pid && entry.sourceTag === sourceTag && !entry.binding && !entry.invalidated) return;
+        entry.stopHardwareWatch?.();
         // Recorded only once the worker accepted it: a failed or timed-out
         // bind is retried by the next bind instead of being skipped forever.
         if (entry.operation === "decode" && entry.pid !== pid) {
