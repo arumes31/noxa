@@ -1,5 +1,5 @@
 import { updateStartupBlocked } from "./update-transition.js";
-import { retainDisplayCapture, releaseDisplayCapture, stopDisplayCapture } from "./display-capture-lease.js";
+import { retainDisplayCapture, releaseDisplayCapture, stopDisplayCapture, transferDisplayCapture } from "./display-capture-lease.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
 import { captureCamera, applyCameraPreview } from "./camera-capture.js";
 import { captureMediaScope, mediaScopeIsCurrent } from "./media-controls.js";
@@ -688,7 +688,7 @@ export function createVideoPublication({ policy }) {
                     // The cropped track owns the capture from here; its own lease
                     // replaces the picker's one in startShare.
                     const cropped = cropDisplayStream(display, region);
-                    releaseDisplayCapture(display);
+                    transferDisplayCapture(display, cropped.stream);
                     display = cropped.stream;
                 }
                 const started = await startShare({ surface, ...selected, audioMode: view.audio(), replacing, selectedDisplay: display });
@@ -785,9 +785,8 @@ export function createVideoPublication({ policy }) {
         if (regionSupported && surface !== "region" && surface !== "studio" && !displayStreamHasFrameGeometry(display)) {
             try {
                 const aligned = cropDisplayStream(display, { x: 0, y: 0, width: 1, height: 1 });
-                releaseDisplayCapture(display);
+                transferDisplayCapture(display, aligned.stream);
                 display = aligned.stream;
-                retainDisplayCapture(display);
             } catch (error) {
                 discardDisplay(display);
                 V().sysMsg(tLabel("desktop.screen.capture.failed") + error.message);

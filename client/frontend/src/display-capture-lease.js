@@ -63,14 +63,30 @@ export function createDisplayCaptureLeases({
     }
     function retain(track) {
         if (pageHidden || !track || track.kind !== "video" || track.readyState === "ended" || entries.has(track)) return;
-        const entry = { track, active: true, busy: false, id: null, app: null, warned: false, ended: () => release(track) };
+        const entry = { track, active: true, busy: false, id: null, app: null, warned: false };
+        entry.ended = () => release(entry.track);
         entries.set(track, entry);
         track.addEventListener("ended", entry.ended, { once: true });
         entry.timer = every(() => { void maintain(entry); });
         void maintain(entry);
     }
+    // A generated/cropped track replaces the raw capture's ownership without
+    // dropping wake protection or allocating a second native lease. Pending
+    // acquire/refresh operations continue to follow the same entry.
+    function transfer(source, target) {
+        if (source === target) return;
+        if (pageHidden || !target || target.kind !== "video" || target.readyState === "ended") { release(source); return; }
+        const entry = entries.get(source);
+        if (!entry) { retain(target); return; }
+        if (entries.has(target)) { release(source); return; }
+        source.removeEventListener("ended", entry.ended);
+        entries.delete(source);
+        entry.track = target;
+        entries.set(target, entry);
+        target.addEventListener("ended", entry.ended, { once: true });
+    }
     function releaseAll() { for (const track of entries.keys()) release(track); }
-    return { retain, release, releaseAll };
+    return { retain, release, transfer, releaseAll };
 }
 
 const displayLeases = createDisplayCaptureLeases();
@@ -86,4 +102,8 @@ export function stopDisplayCapture(stream) {
         displayLeases.release(track); // MediaStreamTrack.stop() does not emit ended.
         track.stop();
     }
+}
+
+export function transferDisplayCapture(source, target) {
+    displayLeases.transfer(source?.getVideoTracks()[0], target?.getVideoTracks()[0]);
 }
