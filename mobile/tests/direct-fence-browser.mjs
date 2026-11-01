@@ -4,17 +4,24 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { chromium } from "@playwright/test";
 
-test("real two-page IndexedDB fences retired DM sends, trust, imports and deletes", { timeout: 60000 }, async () => {
+test("real two-page IndexedDB fences retired DM sends, trust, imports and deletes", { timeout: 60000 }, async (t) => {
     const vite = await createServer({ configFile: false, root: fileURLToPath(new URL("../", import.meta.url)), server: { host: "127.0.0.1", port: 0 } });
     await vite.listen();
-    const browser = await chromium.launch();
+    let browser, launch, cleaning;
+    const cleanup = () => cleaning ||= (async () => {
+        try { await (browser || await launch)?.close(); }
+        finally { await vite.close(); }
+    })();
+    t.after(cleanup);
     try {
+        launch = chromium.launch(); browser = await launch;
         const context = await browser.newContext();
         const pages = await Promise.all([context.newPage(), context.newPage()]);
         for (const page of pages) {
             await page.route("**/__fence__", route => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>DM ownership test</title>" }));
             await page.goto(`http://127.0.0.1:${vite.httpServer.address().port}/__fence__`);
             await page.evaluate(async () => {
+                window.pauseCrypto = (await import("/tests/crypto-pause.mjs")).pauseCrypto;
                 window.dbmod = await import("/src/core/db.js");
                 window.idmod = await import("/src/core/identity-store.js");
                 window.cryptoMod = await import("/src/core/crypto.js");
@@ -45,7 +52,7 @@ test("real two-page IndexedDB fences retired DM sends, trust, imports and delete
             await dm.attachRatchet({ closed: false, project() {}, async history() { return []; }, send() { window.entered = true; return new Promise((_, reject) => { window.refuse = reject; }); } });
             window.sending = dm.send("peer", "old private message", "", { id: "old-op" }).then(() => "success", e => e.code);
         });
-        await old.waitForFunction(() => window.entered);
+        await old.waitForFunction(() => window.entered, undefined, { polling: 25, timeout: 10000 });
         await replace();
         assert.equal(await old.evaluate(async () => { refuse(Object.assign(new Error("fenced"), { code: "fenced" })); return sending; }), "fenced");
         await unchanged();
@@ -55,11 +62,10 @@ test("real two-page IndexedDB fences retired DM sends, trust, imports and delete
         // Hold an actual encrypted pin read, replace from another tab, resume.
         await old.evaluate(async () => {
             await createDM();
-            const decrypt = crypto.subtle.decrypt.bind(crypto.subtle);
-            crypto.subtle.decrypt = async (...args) => { window.readingPin = true; await new Promise(r => { window.releasePin = r; }); return decrypt(...args); };
-            window.pinWork = dm.setVerified("peer", false).then(() => "changed", e => e.code).finally(() => { crypto.subtle.decrypt = decrypt; });
+            window.releasePin = pauseCrypto(crypto.subtle, "decrypt", () => { window.readingPin = true; });
+            window.pinWork = dm.setVerified("peer", false).then(() => "changed", e => e.code).finally(() => releasePin());
         });
-        await old.waitForFunction(() => window.readingPin);
+        await old.waitForFunction(() => window.readingPin, undefined, { polling: 25, timeout: 10000 });
         await replace();
         assert.equal(await old.evaluate(async () => { releasePin(); return pinWork; }), "fenced");
         await unchanged();
@@ -77,7 +83,7 @@ test("real two-page IndexedDB fences retired DM sends, trust, imports and delete
             dm.conn.request = (_, request) => { actions.push(request.action); return new Promise(r => { window.releaseHistory = r; }); };
             window.importing = dm.importHistory().then(() => "imported", e => e.code);
         });
-        await old.waitForFunction(() => typeof window.releaseHistory === "function");
+        await old.waitForFunction(() => typeof window.releaseHistory === "function", undefined, { polling: 25, timeout: 10000 });
         await replace();
         assert.equal(await old.evaluate(async () => { releaseHistory(pageData); return importing; }), "fenced");
         assert.deepEqual(await old.evaluate(() => actions), ["history_get"]);
@@ -86,15 +92,13 @@ test("real two-page IndexedDB fences retired DM sends, trust, imports and delete
         // Same-account deletion must order behind an already encrypting save.
         await old.evaluate(async () => {
             await createDM();
-            const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
-            crypto.subtle.encrypt = async (...args) => { window.saving = true; await new Promise(r => { window.releaseSave = r; }); return encrypt(...args); };
+            window.releaseSave = pauseCrypto(crypto.subtle, "encrypt", () => { window.saving = true; });
             dm.showQueued("delete-peer", { id: "queued", text: "old", sentAt: 1 });
-            window.restoreEncrypt = () => { crypto.subtle.encrypt = encrypt; };
         });
-        await old.waitForFunction(() => window.saving);
+        await old.waitForFunction(() => window.saving, undefined, { polling: 25, timeout: 10000 });
         await old.evaluate(() => { window.deleting = dm.deleteHistory("delete-peer"); });
-        assert.equal(await old.evaluate(async () => { restoreEncrypt(); releaseSave(); await deleting; return await dbmod.getSealed(dbmod.Stores.dm, "delete-peer"); }), undefined);
+        assert.equal(await old.evaluate(async () => { releaseSave(); await deleting; return await dbmod.getSealed(dbmod.Stores.dm, "delete-peer"); }), undefined);
         await old.evaluate(() => { dm.showQueued("flush-peer", { id: "last", text: "keep me", sentAt: 2 }); dm.close(); });
-        await old.waitForFunction(async () => (await dbmod.getSealed(dbmod.Stores.dm, "flush-peer"))?.messages[0]?.body === "keep me");
-    } finally { await browser.close(); await vite.close(); }
+        await old.waitForFunction(async () => (await dbmod.getSealed(dbmod.Stores.dm, "flush-peer"))?.messages[0]?.body === "keep me", undefined, { polling: 25, timeout: 10000 });
+    } finally { await cleanup(); }
 });

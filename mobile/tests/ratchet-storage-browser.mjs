@@ -10,6 +10,9 @@ test(
   "real IndexedDB wrapping-key winner and identity logout fence",
   { timeout: 60000 },
   async (t) => {
+    let phase = "launch browser";
+    const stage = label => { phase = label; t.diagnostic(label); };
+    t.after(() => t.diagnostic(`Last storage phase: ${phase}`));
     const server = createServer(async (req, res) => {
       try {
         const p = new URL(req.url, "http://localhost").pathname;
@@ -52,6 +55,7 @@ test(
       await Promise.all(
         pages.map((p) => p.goto(`http://127.0.0.1:${server.address().port}`)),
       );
+      stage("Upgrade a real preexisting version 7 database without rewriting its data.");
       // Upgrade a real preexisting version 7 database without rewriting its data.
       await pages[0].evaluate(
         () =>
@@ -86,19 +90,16 @@ test(
             req.onerror = () => reject(req.error);
           }),
       );
+      stage("Hold both first-tab generateKey operations until both observed no key.");
       // Hold both first-tab generateKey operations until both observed no key.
       await Promise.all(
         pages.map((p) =>
           p.evaluate(async () => {
             globalThis.dbmod = await import("/src/core/db.js");
             globalThis.idmod = await import("/src/core/identity-store.js");
-            const original = crypto.subtle.generateKey.bind(crypto.subtle);
-            crypto.subtle.generateKey = async (...a) => {
-              globalThis.generating = true;
-              await new Promise((r) => (globalThis.releaseKey = r));
-              crypto.subtle.generateKey = original;
-              return original(...a);
-            };
+            const { pauseCrypto } = await import("/tests/crypto-pause.mjs");
+            globalThis.holdCrypto = (method, flag) => pauseCrypto(crypto.subtle, method, () => { globalThis[flag] = true; });
+            globalThis.releaseKey = holdCrypto("generateKey", "generating");
             globalThis.pending = (async () => {
               const db = await dbmod.openDB();
               try {
@@ -114,7 +115,7 @@ test(
         ),
       );
       await Promise.all(
-        pages.map((p) => p.waitForFunction(() => globalThis.generating)),
+        pages.map((p) => p.waitForFunction(() => globalThis.generating, undefined, { polling: 25, timeout: 10000 })),
       );
       await Promise.all(pages.map((p) => p.evaluate(() => releaseKey())));
       const records = await Promise.all(
@@ -157,6 +158,7 @@ test(
         }),
         "preserved",
       );
+      stage("A save paused in WebCrypto must not resurrect a device cleared by another tab.");
       // A save paused in WebCrypto must not resurrect a device cleared by another tab.
       await pages[0].evaluate(async () => {
         globalThis.identity = {
@@ -165,15 +167,7 @@ test(
           xPublic: new Uint8Array(32).fill(3),
           xSecret: new Uint8Array(32).fill(4),
         };
-        const original = crypto.subtle.encrypt.bind(crypto.subtle);
-        globalThis.restoreEncrypt = () => {
-          crypto.subtle.encrypt = original;
-        };
-        crypto.subtle.encrypt = async (...args) => {
-          globalThis.encrypting = true;
-          await new Promise((r) => (globalThis.releaseEncrypt = r));
-          return original(...args);
-        };
+        globalThis.releaseEncrypt = holdCrypto("encrypt", "encrypting");
         globalThis.saving = idmod
           .saveIdentity(identity, { nickname: "before logout" })
           .then(
@@ -181,13 +175,12 @@ test(
             (e) => ({ code: e.code }),
           );
       });
-      await pages[0].waitForFunction(() => globalThis.encrypting);
+      await pages[0].waitForFunction(() => globalThis.encrypting, undefined, { polling: 25, timeout: 10000 });
       await pages[1].evaluate(() => idmod.clearIdentity());
       await pages[0].evaluate(() => releaseEncrypt());
       assert.equal((await pages[0].evaluate(() => saving)).code, "fenced");
       assert.equal(await pages[1].evaluate(() => idmod.loadIdentity()), null);
       await pages[0].evaluate(async () => {
-        restoreEncrypt();
         await idmod.saveIdentity(
           identity,
           { nickname: "onboarded" },
@@ -229,12 +222,13 @@ test(
           (e) => ({ code: e.code }),
         );
       });
-      await pages[0].waitForFunction(() => globalThis.metaWaiting);
+      await pages[0].waitForFunction(() => globalThis.metaWaiting, undefined, { polling: 25, timeout: 10000 });
       await pages[1].evaluate(() => idmod.clearIdentity());
       await pages[0].evaluate(() => releaseMeta());
       assert.equal((await pages[0].evaluate(() => metaPending)).code, "fenced");
       await pages[0].evaluate(() => restoreComplete());
       assert.equal(await pages[1].evaluate(() => idmod.loadIdentity()), null);
+      stage("Explicit new onboarding is allowed with a fresh fence, old token is rejected.");
       // Explicit new onboarding is allowed with a fresh fence, old token is rejected.
       const oldToken = await pages[0].evaluate(() => idmod.beginIdentity());
       await pages[1].evaluate(() => idmod.clearIdentity());
@@ -270,6 +264,7 @@ test(
         ),
       );
       assert.deepEqual(firstStores[0], firstStores[1]);
+      stage("Real core snapshots, account publication, and authenticated receive candidates.");
       // Real core snapshots, account publication, and authenticated receive candidates.
       for (const page of pages)
         await page.evaluate(async () => {
@@ -455,6 +450,7 @@ test(
         ),
         "original readable message",
       );
+      stage("Two pages derive candidates from the same real stored ratchet revision.");
       // Two pages derive candidates from the same real stored ratchet revision.
       await Promise.all(
         pages.map((page, i) =>
@@ -510,6 +506,7 @@ test(
       );
       assert.equal(races.filter((x) => x === "committed").length, 1);
       assert.equal(races.filter((x) => x === "conflict").length, 1);
+      stage("Abort the real multi-record transaction after its first put; neither record survives.");
       // Abort the real multi-record transaction after its first put; neither record survives.
       assert.equal(
         await pages[0].evaluate(async () => {
@@ -550,6 +547,7 @@ test(
         ),
         0,
       );
+      stage("Trust updates fence both candidate commits and previously saved retry packets.");
       // Trust updates fence both candidate commits and previously saved retry packets.
       await pages[0].evaluate(async () => {
         await a.setTrust(
@@ -575,18 +573,12 @@ test(
         }),
         "revoked",
       );
+      stage("Logout during awaited ratchet encryption cannot recreate any ratchet record.");
       // Logout during awaited ratchet encryption cannot recreate any ratchet record.
       await pages[0].evaluate(async () => {
         globalThis.logoutSnap = await b.read([["trust", "alice"]]);
-        const original = crypto.subtle.encrypt.bind(crypto.subtle);
-        crypto.subtle.encrypt = async (...args) => {
-          globalThis.ratchetEncrypting = true;
-          await new Promise((r) => (globalThis.releaseRatchet = r));
-          return original(...args);
-        };
-        globalThis.undoEncrypt = () => {
-          crypto.subtle.encrypt = original;
-        };
+        globalThis.releaseRatchet = holdCrypto("encrypt", "ratchetEncrypting");
+        globalThis.capturedEncrypt = crypto.subtle.encrypt;
         globalThis.logoutWork = b
           .reserveClaim(
             logoutSnap,
@@ -599,14 +591,20 @@ test(
             (e) => e.code,
           );
       });
-      await pages[0].waitForFunction(() => globalThis.ratchetEncrypting);
+      await pages[0].waitForFunction(() => globalThis.ratchetEncrypting, undefined, { polling: 25, timeout: 10000 });
       await pages[1].evaluate(() => idmod.clearIdentity());
       await pages[0].evaluate(() => releaseRatchet());
-      // The control record encryption is a second asynchronous operation.
-      await pages[0].evaluate(() => {
-        undoEncrypt();
-        releaseRatchet();
-      });
+      // seal() captures crypto.subtle.encrypt before awaiting wrappingKey().
+      // A later control-record seal may therefore call the old method even
+      // after restoration. Its shared gate must already be open.
+      assert.equal(await pages[0].evaluate(async () => {
+        const db = await dbmod.openDB();
+        try {
+          const key = await dbmod.wrappingKey(db, false);
+          const result = await capturedEncrypt({ name: "AES-GCM", iv: crypto.getRandomValues(new Uint8Array(12)) }, key, new Uint8Array([1]));
+          return result.byteLength;
+        } finally { db.close(); }
+      }), 17);
       assert.equal(await pages[0].evaluate(() => logoutWork), "fenced");
       assert.equal(
         await pages[1].evaluate(async () => {
