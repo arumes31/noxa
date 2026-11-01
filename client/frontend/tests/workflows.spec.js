@@ -6799,6 +6799,8 @@ test("retries a missing or disconnected microphone without interrupting video or
     await page.evaluate(() => {
         const state = window.__noxa.state;
         window.__pcBeforeMicRetry = state.pc;
+        window.__micSenderBeforeRetry = state.pc.getTransceivers().find(t => t.receiver.track.kind === "audio").sender;
+        window.__transceiverCountBeforeRetry = state.pc.getTransceivers().length;
         state.screenSharing = true;
         state.shareStream = {
             getTracks: () => [{ stop: () => { window.__shareTracksStopped++; } }],
@@ -6818,7 +6820,9 @@ test("retries a missing or disconnected microphone without interrupting video or
         sharing: window.__noxa.state.screenSharing,
         shareTracksStopped: window.__shareTracksStopped,
         unpublishedShare: window.__calls.SetScreenShareForTab || 0,
-        slots: window.__callArgs.ChannelOfferMockForTab.at(-1)[2].map(({ slot }) => slot),
+        slots: window.__callArgs.ChannelOfferMockForTab.at(-1)[2].map(({ slot }) => slot).sort(),
+        sameMicrophoneSender: window.__noxa.state.pc.getSenders().includes(window.__micSenderBeforeRetry) && window.__micSenderBeforeRetry.track?.kind === "audio",
+        sameTransceiverCount: window.__noxa.state.pc.getTransceivers().length === window.__transceiverCountBeforeRetry,
     }))).toEqual({
         samePeerConnection: true,
         audioTracks: 1,
@@ -6827,6 +6831,8 @@ test("retries a missing or disconnected microphone without interrupting video or
         shareTracksStopped: 0,
         unpublishedShare: 0,
         slots: ["cam", "mic"],
+        sameMicrophoneSender: true,
+        sameTransceiverCount: true,
     });
 
     const capturesBeforeLoss = await page.evaluate(() => window.__getUserMediaCalls);
@@ -6838,10 +6844,15 @@ test("retries a missing or disconnected microphone without interrupting video or
     await expect(page.getByRole("button", { name: "Choose microphone…" })).toBeVisible();
     await expect(page.locator("#ptt-btn")).toBeDisabled();
     expect(await page.evaluate(() => window.__getUserMediaCalls)).toBe(capturesBeforeLoss);
+    await expect.poll(() => page.evaluate(() => window.__micSenderBeforeRetry.track)).toBeNull();
     expect(await page.evaluate(() => ({ ended: window.__lostTrack.readyState, samePeer: window.__noxa.state.pc === window.__pcBeforeMicRetry, camera: window.__cameraTrack.readyState, sharing: window.__noxa.state.screenSharing }))).toEqual({ ended: "ended", samePeer: true, camera: "live", sharing: true });
     await retry.click();
     await expect(page.locator("#mic-status")).toBeEmpty();
     expect(await page.evaluate(() => window.__getUserMediaCalls)).toBe(capturesBeforeLoss + 1);
+    expect(await page.evaluate(() => ({
+        sameSender: window.__noxa.state.pc.getSenders().includes(window.__micSenderBeforeRetry) && window.__micSenderBeforeRetry.track?.kind === "audio",
+        count: window.__noxa.state.pc.getTransceivers().length,
+    }))).toEqual({ sameSender: true, count: 2 });
 
     await page.evaluate(() => { window.__noxa.state.screenSharing = false; });
     await page.getByRole("button", { name: "Camera on — click to turn off", exact: true }).click();
