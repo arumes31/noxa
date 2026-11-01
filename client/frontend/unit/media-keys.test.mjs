@@ -520,14 +520,16 @@ test("controls of an epoch always carry that epoch's own keys (retries, preempti
 
 test("key delivery recovers after more than five failures without a channel rejoin", async () => {
     let attempts = 0;
-    const states = [];
-    const e = new MediaKeyEngine({ media: fakeMedia(), timers: fastTimers, sendTimeoutMs: Infinity,
+    const states = [], delays=[];
+    const timers={...fastTimers,setTimeout(fn,ms){if(ms>=10000)delays.push(ms);return fastTimers.setTimeout(fn,ms);}};
+    const e = new MediaKeyEngine({ media: fakeMedia(), timers, sendTimeoutMs: Infinity,
         onStatus: state => states.push(state),
         send: async () => ({ ok: ++attempts > 8, code: "device_unavailable" }) });
     try {
         e.setRoster([member("c1", "u1", "d1")]); e.start(me);
         await flush(140);
         assert.equal(attempts, 9);
+        assert.deepEqual(delays,[10000,20000,30000,40000,50000,60000,60000,60000]);
         assert.equal(e.status().state, "encrypted");
         assert.ok(states.some(s => s.failed?.some(f => f.reason === "device_unavailable")));
     } finally { e.stop(); }
@@ -540,7 +542,11 @@ test("a newly announced epoch is not ready until installed, including reordered 
     const client="c-new-epoch", sender="u-new-epoch", device="d-new-epoch";
     e.setRoster([member(client,sender,device)]);e.start(me);await flush();
     const incoming=epoch=>{const c=control(epoch,{client,sender,device});c.data.members=sent[0].body.data.members;return c;};
-    const ready=()=>e.status().participants[0].received;
+    const ready=()=>{
+        const received=e.status().participants[0].received;
+        assert.equal(e.publisherStatus(client)?.ready,received);
+        return received;
+    };
     try {
         e.receive(incoming(10000));await flush();assert.equal(ready(),true);
         media.setKey=async(...args)=>{if(args[0]===publicationPid(client,"mic"))await new Promise(r=>pending.push(r));return original(...args);};
@@ -549,5 +555,21 @@ test("a newly announced epoch is not ready until installed, including reordered 
         pending[1]();await flush();assert.equal(ready(),true);
         pending[0]();await flush();assert.equal(ready(),true,"old completion cannot replace current installed epoch");
         assert.equal(e.publisherStatus(client).epoch,10002);
+    } finally {e.stop();}
+});
+
+
+test("duplicate sessions share key delivery but retain distinct publication readiness", async () => {
+    const {e,sent}=engine();
+    e.setRoster([member("c1","u1","d1"),member("c2","u1","d1")]);e.start(me);
+    try {
+        await flush();assert.equal(sent.length,1);
+        assert.deepEqual(e.status().participants.map(p=>[p.clientID,p.sent,p.received]),[["c1",true,false],["c2",true,false]]);
+        const incoming=client=>{const c=control(client==="c1"?30000:30001,{client,sender:"u1",device:"d1"});c.data.members=sent[0].body.data.members;return c;};
+        e.receive(incoming("c1"));await flush();
+        assert.deepEqual(e.status().participants.map(p=>p.received),[true,false]);
+        e.receive(incoming("c2"));await flush();
+        assert.deepEqual(e.status().participants.map(p=>p.received),[true,true]);
+        assert.equal(sent.length,1);
     } finally {e.stop();}
 });

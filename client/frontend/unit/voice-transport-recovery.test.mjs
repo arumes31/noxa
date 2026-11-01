@@ -4,14 +4,14 @@ import { createVoiceTransportRecovery, voiceTransportFailed } from "../src/voice
 
 function fixture(rebuild) {
     let clock = 0, enabled = true, sequence = 0;
-    const jobs = new Map(), calls = [];
+    const jobs = new Map(), calls = [], aborted = [];
     const peer = () => ({ connectionState: "failed", iceConnectionState: "failed" });
     const state = { pc: peer(), activeTabID: "tab", serverGeneration: 1, sessionGeneration: 1, myChannelID: 16, myClientID: "self", muted: true, deafened: true };
-    const recovery = createVoiceTransportRecovery({ state, allowed: () => enabled, now: () => clock,
+    const recovery = createVoiceTransportRecovery({ state, abort: () => {aborted.push(state.pc);state.pc=null;}, allowed: () => enabled, now: () => clock,
         timers: { setTimeout(fn, delay) { const id = ++sequence; jobs.set(id, {fn, delay}); return id; }, clearTimeout(id) { jobs.delete(id); } },
         rebuild: async (pc, current) => { calls.push(pc); await rebuild?.({state, peer, current}); },
     });
-    return {state, peer, calls, jobs, recovery, enable: value => {enabled = value;},
+    return {state, peer, calls, jobs, aborted, recovery, enable: value => {enabled = value;},
         async next() { const [id, job] = jobs.entries().next().value; jobs.delete(id); clock += job.delay; await job.fn(); return job.delay; },
         delay: () => jobs.values().next().value?.delay,
     };
@@ -83,9 +83,31 @@ test("stale async completion cannot clear another scope's in-flight operation", 
     const f = fixture(() => new Promise(resolve => finishes.push(resolve)));
     f.recovery.schedule(f.state.pc); const first = f.next();
     f.state.sessionGeneration++; f.state.pc = f.peer();
-    f.recovery.schedule(f.state.pc); const second = f.next();
+    f.recovery.schedule(f.state.pc);
+    const secondJob=[...f.jobs.entries()].at(-1);f.jobs.delete(secondJob[0]);const second=secondJob[1].fn();
     finishes[0](); await first;
     assert.equal(f.recovery.schedule(f.state.pc), false);
     f.enable(false); finishes[1](); await second;
     assert.equal(f.calls.length, 2); assert.equal(f.jobs.size, 0);
+});
+
+
+test("hung replacement is cancelled after 30 seconds and can retry without changing mute", async () => {
+    const f=fixture(()=>new Promise(()=>{}));
+    f.recovery.schedule(f.state.pc);const attempt=f.next();
+    assert.equal(f.delay(),30000);await f.next();await attempt;
+    assert.equal(f.aborted.length,1);assert.equal(f.state.pc,null);
+    assert.equal(f.calls.length,1);assert.equal(f.delay(),1000);
+    assert.equal(f.state.muted,true);assert.equal(f.state.deafened,true);
+    f.enable(false);await f.next();assert.equal(f.jobs.size,0);
+});
+
+test("a late startup timeout cannot abort a new voice scope or a connected replacement", async () => {
+    for(const mode of ["scope","connected"]){
+        const f=fixture(()=>new Promise(()=>{}));f.recovery.schedule(f.state.pc);const attempt=f.next();
+        if(mode==="scope")f.state.sessionGeneration++;
+        else f.state.pc={connectionState:"connected",iceConnectionState:"connected"};
+        await f.next();await attempt;
+        assert.equal(f.aborted.length,0,mode);assert.equal(f.jobs.size,0,mode);
+    }
 });

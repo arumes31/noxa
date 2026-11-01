@@ -1752,3 +1752,18 @@ test("start sharing reports an unready voice connection without losing the selec
     await expect(page.locator(".sh-preview")).toBeVisible();
     expect(await page.evaluate(()=>window.__media.offers)).toEqual([]);
 });
+
+
+test("hardware capture failure clears the desktop share owner and publication",async({page})=>{
+    await page.locator("#voice-screen").click();
+    await page.getByRole("button",{name:"Choose screen or window…",exact:true}).click();
+    await page.getByRole("dialog").getByRole("button",{name:"Start sharing",exact:true}).click();
+    await expect.poll(()=>page.evaluate(()=>!!window.__noxa.state.screenSharing)).toBe(true);
+    await page.evaluate(()=>{
+        const track=window.__noxa.state.shareStream.getVideoTracks()[0];
+        track.stop();track.dispatchEvent(new Event("ended"));
+    });
+    await expect.poll(()=>page.evaluate(()=>!!window.__noxa.state.screenSharing)).toBe(false);
+    await expect.poll(()=>page.evaluate(()=>window.__media.video.trackSlots().map(t=>t.slot))).toEqual(["cam"]);
+    expect(await page.evaluate(()=>window.__media.camera.readyState)).toBe("live");
+});

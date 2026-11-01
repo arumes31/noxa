@@ -247,10 +247,11 @@ const call = (id, fn, ...args) => pages[id].evaluate(([fn, args]) => window.e2ee
 const report = id => call(id, "report");
 const frames = async (viewer, pid) => (await report(viewer)).receivers[pid]?.frames || 0;
 async function growing(viewer, pid, label, { min = 20, video = false } = {}) {
-    const start = await frames(viewer, pid);
+    const initial = (await report(viewer)).receivers[pid];
+    const start = initial?.frames || 0, decoded = initial?.decoded || 0;
     return poll(label, async () => {
         const r = (await report(viewer)).receivers[pid];
-        return { ok: !!r && r.frames - start >= min && (!video || r.decoded > 0), r };
+        return { ok: !!r && r.frames - start >= min && (!video || r.decoded > decoded), r };
     }, { timeout: 40000 });
 }
 
@@ -263,7 +264,7 @@ try {
       await api("/watch",{ID:"B",Publisher:"A",Slot:"screen"});
       await growing("B","A|screen","H264 decrypts and decodes through SFU",{video:true,min:30});
       const epoch=await call("A","epoch");
-      await open("C","desktop","script");await call("C","join");
+      await open("C","pwa","script");await call("C","join");
       await api("/watch",{ID:"C",Publisher:"A",Slot:"screen"});
       await growing("C","A|screen","H264 reaches joining viewer",{video:true,min:30});
       await growing("B","A|screen","existing viewer survives rekey",{video:true,min:20});
@@ -274,10 +275,12 @@ try {
       for(const id of ["B","C"]){const r=(await report(id)).receivers["A|screen"];if(r.codec.toLowerCase()!=="video/h264")throw new Error("wrong H264 test codec "+r.codec);}
       await api("/hide",{ID:"A",Hide:"C"});
       await poll("removal rekey",async()=>({ok:(await call("A","status")).recipients===1 && (await call("A","epoch"))>controls.at(-1).epoch}));
+      const removalEpoch=await call("A","epoch");
       await new Promise(r=>setTimeout(r,4000));const before=(await report("C")).receivers["A|screen"];
       await growing("B","A|screen","remaining viewer keeps decoding",{video:true,min:30});
       const after=(await report("C")).receivers["A|screen"];
-      if(after.frames!==before.frames || after.bytes<=before.bytes)throw new Error("removed viewer proof failed "+JSON.stringify({before,after}));
+      const lateToC=(await api("/controls")).some(c=>c.from==="dev-A" && c.to==="dev-C" && c.epoch>=removalEpoch);
+      if(after.frames!==before.frames || after.bytes<=before.bytes || lateToC)throw new Error("removed viewer proof failed "+JSON.stringify({before,after,lateToC}));
       for(const id of ["A","B","C"]){const audit=await call(id,"audit");if(audit.violations.length)throw new Error("unprotected receiver");}
       log("H264: two viewers, one upload; join/removal rekey and both transform APIs passed",JSON.stringify(upload));
       if(pageErrors.length)throw new Error(pageErrors.join("; "));

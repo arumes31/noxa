@@ -3,6 +3,7 @@
 // receiver is protected the moment it exists (addTransceiver / addTrack /
 // track event), before any negotiation can carry its media. Unsupported
 // runtimes fail with an explicit error; there is no plaintext mode.
+import { sampleSenderStats } from "./peer-stats.js";
 import { hardwareVideoEvidence } from "./hardware-video.js";
 import { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, SLOTS, validEpoch, validKid, validPid } from "./media-e2ee-core.js";
 
@@ -112,14 +113,49 @@ export class MediaE2EE {
             if (endpoint.track) { endpoint.track.enabled = false; this.byTrack.set(endpoint.track, endpoint); }
             this.byId.set(id, endpoint);
         }
-        if (hardwareRequired) this.bySenderId.set(id, endpoint);
+        if (hardwareRequired) {
+            this.bySenderId.set(id, endpoint);
+            const entry = this.endpoints.get(endpoint);
+            entry.hardwareRequired = true;
+            const replace = endpoint.replaceTrack?.bind(endpoint);
+            if (replace) endpoint.replaceTrack = track => this.#queue(entry, async () => {
+                this.#owns(endpoint, entry);
+                if (entry.pid !== "self|screen") return replace(track);
+                const pid = entry.pid;
+                entry.invalidated = true;
+                // Revoke and fence the old source in the worker BEFORE the
+                // native sender can expose a replacement. Publication keys stay.
+                await this.#bind(endpoint, "");
+                this.#owns(endpoint, entry);
+                try { await replace(track); }
+                catch (error) {
+                    // A rejected replacement keeps the old track, but its
+                    // hardware proof must be collected again too.
+                    await this.#bind(endpoint, pid);
+                    entry.invalidated = false;
+                    throw error;
+                }
+                await this.#bind(endpoint, pid);
+                entry.invalidated = false;
+            });
+        }
         return id;
+    }
+
+    #owns(endpoint, entry) {
+        if (this.closed || this.endpoints.get(endpoint) !== entry) throw new Error("Encrypted media endpoint ended");
+    }
+
+    #queue(entry, operation) {
+        const result = (entry.queue || Promise.resolve()).then(operation);
+        entry.queue = result.catch(() => {});
+        return result;
     }
 
     #watchHardware(sender, id) {
         let track = null, started = null, checking = false, scheduled = null;
         const stopUnverified = (entry, reason) => {
-            if (this.closed || this.endpoints.get(sender) !== entry || entry?.pid !== "self|screen" ||
+            if (this.closed || this.endpoints.get(sender) !== entry || entry.invalidated || entry?.pid !== "self|screen" ||
                 track !== sender.track || track?.readyState === "ended" ||
                 sender.getParameters?.().encodings?.every(e => e.active === false)) return;
             track.stop();
@@ -134,15 +170,16 @@ export class MediaE2EE {
             try {
                 // The mandatory policy applies to screen/Studio streams. Camera
                 // calls retain their existing behavior and microphone is separate.
-                if (!sender.track || sender.track.readyState === "ended" || entry?.pid !== "self|screen") return;
+                if (entry?.invalidated || !sender.track || sender.track.readyState === "ended" || entry?.pid !== "self|screen") return;
                 if (track !== sender.track) { track = sender.track; started = null; }
                 const active = sender.getParameters?.().encodings?.some(e => e.active !== false);
                 if (active === false) { started = null; return; } // no viewer demand
                 if (started === null) started = performance.now();
                 const cryptor = await this.stats(sender);
                 if (!cryptor.endpoint?.activeEpoch) { started = null; return; }
-                const report = typeof sender.getStats === "function" ? await sender.getStats() : new Map();
-                if (this.closed || track !== sender.track) return;
+                const source = track;
+                const report = await sampleSenderStats(sender, { fresh: true });
+                if (this.closed || entry.invalidated || this.endpoints.get(sender) !== entry || source !== sender.track || source !== track || entry.sourceTag !== source.id) return;
                 const evidence = hardwareVideoEvidence(report, track.id);
                 await this.request("hardwareProof", { id, pid: entry.pid, sourceTag: track.id, enabled: evidence === "hardware" });
                 if (evidence === "software" || evidence !== "hardware" && performance.now() - started > 10000) {
@@ -274,11 +311,16 @@ export class MediaE2EE {
         }
     }
 
-    async bind(endpoint, pid) {
+    bind(endpoint, pid) {
+        const entry = this.endpoints.get(endpoint);
+        return entry?.hardwareRequired ? this.#queue(entry, () => this.#bind(endpoint, pid)) : this.#bind(endpoint, pid);
+    }
+
+    async #bind(endpoint, pid) {
         const entry = this.endpoints.get(endpoint);
         if (!entry || (pid !== "" && !validPid(pid))) throw new Error("Invalid encrypted media binding");
         const sourceTag = endpoint.track?.id || "";
-        if (entry.pid === pid && entry.sourceTag === sourceTag && !entry.binding) return;
+        if (entry.pid === pid && entry.sourceTag === sourceTag && !entry.binding && !entry.invalidated) return;
         // Recorded only once the worker accepted it: a failed or timed-out
         // bind is retried by the next bind instead of being skipped forever.
         if (entry.operation === "decode" && entry.pid !== pid) {
@@ -289,8 +331,10 @@ export class MediaE2EE {
         entry.binding = binding;
         try {
             const result = await binding;
+            this.#owns(endpoint, entry);
             if (entry.binding === binding) {
                 entry.pid = pid; entry.sourceTag = sourceTag; entry.gen = result?.gen || 0;
+                if (pid) entry.invalidated = false;
                 if (this.hardwareVideoRequired && pid === "self|screen" && entry.operation === "encode" && entry.kind === "video" && !this.hardwarePollers.has(entry.id)) this.#watchHardware(endpoint, entry.id);
                 if (result?.authenticated && entry.operation === "decode") this.#authenticate(entry.id, entry.gen);
             }

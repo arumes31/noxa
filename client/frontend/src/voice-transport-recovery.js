@@ -4,7 +4,7 @@ export function voiceTransportFailed(pc) {
     return !!pc && (["failed", "disconnected"].includes(pc.connectionState) ||
         ["failed", "disconnected"].includes(pc.iceConnectionState));
 }
-export function createVoiceTransportRecovery({ state, rebuild, allowed = () => true, now = () => performance.now(), timers = globalThis }) {
+export function createVoiceTransportRecovery({ state, rebuild, abort = () => {}, allowed = () => true, now = () => performance.now(), timers = globalThis }) {
     let scope = "", pending = null, busy = null, attempts = 0, next = 0;
     const key = () => JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration, state.myChannelID, state.myClientID]);
     const unready = pc => !pc || (pc.connectionState !== "closed" && pc.iceConnectionState !== "closed" &&
@@ -29,9 +29,21 @@ export function createVoiceTransportRecovery({ state, rebuild, allowed = () => t
             // A replacement peer never resets this budget. A stable connection
             // naturally outlives the cooldown; changing voice scope starts fresh.
             next = now() + [30000, 60000, 120000][Math.min(attempts++, 2)];
-            try { await rebuild(pc, () => current(pc, owner) && allowed()); }
+            let watchdog;
+            const deadline = new Promise(resolve => {
+                watchdog = timers.setTimeout(() => {
+                    // A hung browser/native operation must release the recovery
+                    // budget. Abort only the startup this scope still owns.
+                    try {
+                        if (busy === operation && key() === owner && allowed() && unready(state.pc)) abort();
+                    } catch { /* Startup cancellation must not strand recovery. */ }
+                    finally { resolve(); }
+                }, 30000);
+            });
+            try { await Promise.race([rebuild(pc, () => current(pc, owner) && allowed()), deadline]); }
             catch { /* Startup reports its own error; keep recovery bounded. */ }
             finally {
+                timers.clearTimeout(watchdog);
                 if (busy === operation) {
                     busy = null;
                     if (key() === owner && unready(state.pc)) schedule(state.pc);

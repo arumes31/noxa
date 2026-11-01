@@ -204,6 +204,11 @@ const channelAudioAttached = (track, id = remoteTrackID(state.pc, track)) => rem
     trackUserReceivers.owns(id, track) && state.trackUsers.get(id)?.track_id === id;
 const recoverVoiceTransport = createVoiceTransportRecovery({ state,
     allowed: () => !updateStartupBlocked() && intentionalVoiceDisconnectScope !== voiceConnectionScope(),
+    abort: () => {
+        // Cancellation releases startup ownership and fences any late capture.
+        pauseShareForReconnect();
+        resetVoiceSession({ retainMedia: true });
+    },
     rebuild: async (_pc, current) => {
         if (!current()) return;
         // Retain only the already authorized screen/Studio capture. A fresh
@@ -215,7 +220,7 @@ const recoverVoiceTransport = createVoiceTransportRecovery({ state,
 });
 const recoverVoice = createVoiceRecovery({ state,
         attached: channelAudioAttached,
-        canReceive: publisher => (channelMedia()?.engine?.publisherStatus(publisher)?.epoch || 0) > 0,
+        canReceive: publisher => channelMedia()?.engine?.publisherStatus(publisher)?.ready === true,
         repair: pc => reconcileRemoteMedia(pc),
         resync: pc => renegotiate(pc),
         rebuild: async pc => {
@@ -2302,11 +2307,6 @@ function ensureVoiceForChannel() {
     }
     if (voiceStartPromise) return voiceStartPromise;
     if (state.pc) {
-        if (voiceTransportFailed(state.pc)) {
-            scheduleICERestart(state.pc);
-            setVoiceStatus("voice connecting…");
-            return Promise.resolve(false);
-        }
         if (!streamSessionIsCurrent(state.pc)) {
             cancelShareResume();
             // A channel move retains microphone voice, but publication and
@@ -2337,6 +2337,11 @@ function ensureVoiceForChannel() {
                 if (track.kind === "video") receiveStreamTrack(track, publisher, trackID);
                 else if (parsed.slot === SLOT_SCREEN_AUDIO) receiveShareAudio(track, parsed.clientID);
             }
+        }
+        if (voiceTransportFailed(state.pc)) {
+            scheduleICERestart(state.pc);
+            setVoiceStatus("voice connecting…");
+            return Promise.resolve(false);
         }
         setVoiceStatus("voice on");
         return Promise.resolve(true);

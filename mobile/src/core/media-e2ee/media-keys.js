@@ -607,7 +607,7 @@ export class MediaKeyEngine {
 
     publisherStatus(clientID) {
         const state = this.#publishers.get(String(clientID));
-        return state ? { device: state.device, epoch: state.epochs.at(-1) || 0, members: state.members, n: state.n } : null;
+        return state ? { device: state.device, epoch: state.epochs.at(-1) || 0, ready: !!state.announcedEpoch && state.epochs.includes(state.announcedEpoch), members: state.members, n: state.n } : null;
     }
 
     // Every per-recipient field refers to the ACTIVE epoch, the one my media
@@ -627,7 +627,8 @@ export class MediaKeyEngine {
             // Recipients of the active epoch that are still current.
             recipients: current.length,
             delivered: holders.length,
-            participants: this.#recipients.map(r => {
+            // Delivery is per device; incoming publications and member rows are per client.
+            participants: this.#roster.flatMap(c => recipientsOf([c], this.self)).map(r => {
                 const id = `${r.principal}\n${r.device}`;
                 const publisher = this.#publishers.get(r.clientID);
                 return { clientID: r.clientID, sent: !!tally?.ok.has(id),

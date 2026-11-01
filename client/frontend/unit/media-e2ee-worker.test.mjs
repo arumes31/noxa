@@ -349,6 +349,9 @@ test("screen content stays closed without fresh, source-bound hardware evidence"
         await new Promise(r=>setTimeout(r,1050));
         push(12000);await waitFrames(tx, 2);assert.equal(tx.out.length,2,"expired evidence closes upload");
         await call("hardwareProof",{id:tx.id,pid,sourceTag:"capture-a",enabled:true});
+        await call("bind",{id:tx.id,pid:"",sourceTag:"capture-a"});
+        await call("hardwareProof",{id:tx.id,pid,sourceTag:"capture-a",enabled:true});
+        push(13500);await waitFrames(tx, 2);assert.equal(tx.out.length,2,"revocation rejects late proof and source content before native replacement");
         await call("bind",{id:tx.id,pid,sourceTag:"capture-b"});
         push(15000);await waitFrames(tx, 3);assert.equal(tx.out.length,3,"new capture starts with its own neutral probe");
         assert.equal(tx.out.at(-1).data.byteLength,61);

@@ -10368,6 +10368,27 @@ test("does not construct stale attachment data URLs after channel or view change
     });
 });
 
+test("a channel move cleans old capture even while voice transport has failed", async ({page}) => {
+    const result=await page.evaluate(async()=>{
+        const v=window.__noxa, video=await import("/src/stream-controls.js");
+        v.state.myChannelID=42;
+        const pc=new RTCPeerConnection();v.state.pc=pc;
+        const camera=document.createElement("canvas").captureStream(1);
+        const share=document.createElement("canvas").captureStream(1);
+        const audio=new AudioContext(), mic=audio.createMediaStreamDestination().stream.getAudioTracks()[0];
+        v.state.localStream=new MediaStream([mic,...camera.getVideoTracks()]);
+        v.state.shareStream=share;v.state.screenSharing=true;
+        video.startStreamSession(pc,()=>{},()=>{});
+        Object.defineProperty(pc,"connectionState",{get:()=>"failed"});
+        v.state.myChannelID=43;
+        const connected=await v.ensureVoiceForChannel();
+        const result={connected,camera:camera.getVideoTracks()[0].readyState,share:share.getVideoTracks()[0].readyState,
+            microphone:mic.readyState,sharing:v.state.screenSharing,shareCleared:v.state.shareStream===null,retainedPeer:v.state.pc===pc};
+        v.resetVoiceSession();await audio.close();return result;
+    });
+    expect(result).toEqual({connected:false,camera:"ended",share:"ended",microphone:"live",sharing:false,shareCleared:true,retainedPeer:true});
+});
+
 test("contains disconnect and ICE-candidate rejections and reports ICE exhaustion once per outage", async ({ page }) => {
     test.setTimeout(60000);
     await page.evaluate(async () => {
@@ -10433,9 +10454,9 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
             }
             getSenders() { return this.senders; }
             getTransceivers() { return this.transceivers; }
-            async createOffer() { return { type: "offer", sdp: "ice-test" }; }
-            async setLocalDescription() {}
-            async setRemoteDescription() {}
+            async createOffer() { this.offered=true;return { type: "offer", sdp: "ice-test" }; }
+            async setLocalDescription() { this.localSet=true; }
+            async setRemoteDescription() { this.answerSet=true; }
             close() { this.iceConnectionState = "closed"; }
         }
         window.RTCPeerConnection = FakePeerConnection;
@@ -10479,6 +10500,9 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
         state.muted = true; state.deafened = true;
         await runNextICETimer();
         window.__transportReplacement = {
+            negotiated: !!state.pc.offered && !!state.pc.localSet && !!state.pc.answerSet,
+            encrypted: (await import("/src/channel-media.js")).channelMedia()?.status().state === "encrypted",
+            secureOffers: window.__secureOffers.length,
             replaced: state.pc !== pc,
             oldClosed: pc.iceConnectionState === "closed",
             freshICEReads: (window.__calls.GetICEServersForTab || 0) - iceReads,
@@ -10489,7 +10513,7 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
     expect(await page.evaluate(() => window.__calls.SendICECandidateForTab)).toBe(1);
     expect(await page.evaluate(() => window.__oldPeerIsolation)).toEqual({ pendingBeforeOldEvents: 1, pendingAfterOldEvents: 1 });
     expect(await page.evaluate(() => window.__iceRetryDelays)).toEqual([1000, 2000, 5000, 15000, 1000, 1000, 2000, 5000, 15000, 1000]);
-    expect(await page.evaluate(() => window.__transportReplacement)).toEqual({replaced: true, oldClosed: true, freshICEReads: 1, muted: true, deafened: true, mediaStarts: 2});
+    expect(await page.evaluate(() => window.__transportReplacement)).toEqual({negotiated:true, encrypted:true, secureOffers:11, replaced: true, oldClosed: true, freshICEReads: 1, muted: true, deafened: true, mediaStarts: 2});
     expect(await page.evaluate(() => window.__terminalToastsBeforeRecovery)).toBe(1);
     expect(await page.locator("#toasts .toast", { hasText: "Voice connection unstable" }).count()).toBe(2);
     expect(await page.locator("#toasts .toast", { hasText: "disconnect failed" }).count()).toBe(1);
