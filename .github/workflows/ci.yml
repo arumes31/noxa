@@ -414,6 +414,7 @@ jobs:
       - name: verify database backup and restore
         shell: bash
         env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
           PGHOST: localhost
           PGUSER: noxa
           PGPASSWORD: noxa
@@ -456,10 +457,14 @@ jobs:
             WHERE u.unique_id = 'backup-fixture' ORDER BY c.id, r.id, g.capability"
           source_fixture="$(psql --dbname="$source_db" --tuples-only --no-align --command="$fixture_query")"
           test -n "$source_fixture"
-          pg_dump --format=custom --no-owner --file="$backup" "$source_db"
+          # Hosted runners can ship newer PostgreSQL clients than this service.
+          # Use the pinned service's matching-major tools for the round trip.
+          docker exec -e PGHOST -e PGUSER -e PGPASSWORD "$POSTGRES_CONTAINER" \
+            pg_dump --format=custom --no-owner "$source_db" > "$backup"
           test -s "$backup"
           createdb "$restore_db"
-          pg_restore --exit-on-error --no-owner --dbname="$restore_db" "$backup"
+          docker exec -i -e PGHOST -e PGUSER -e PGPASSWORD "$POSTGRES_CONTAINER" \
+            pg_restore --exit-on-error --no-owner --dbname="$restore_db" < "$backup"
           NOXA_DATABASE_URL="postgres://noxa:noxa@localhost:5432/$restore_db?sslmode=disable" \
             go run ./cmd/migrate -timeout 2m
           source_ledger="$(psql --dbname="$source_db" --tuples-only --no-align \
