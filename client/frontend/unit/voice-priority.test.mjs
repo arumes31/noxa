@@ -22,7 +22,7 @@ test("video keeps its allocation weight but never shares the voice network class
 
 test("every microphone transceiver and channel-audio update applies voice priority", () => {
     const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
-    const micTransceivers = main.match(/addTransceiver\(sent,[\s\S]*?\}\)/g) || [];
+    const micTransceivers = main.match(/(?:addTransceiver\(sent,|microphoneSenders\.attach\(peerConnection, sent,)[\s\S]*?sendEncodings: \[voiceSendEncoding\(\)\]/g) || [];
     assert.equal(micTransceivers.length, 2, "both microphone publish paths are covered");
     for (const call of micTransceivers) assert.match(call, /sendEncodings: \[voiceSendEncoding\(\)\]/);
     const channelAudio = main.slice(main.indexOf("async function applyChannelAudio"), main.indexOf("// (25) A move into or out of a music channel"));
