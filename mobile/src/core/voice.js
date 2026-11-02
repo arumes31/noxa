@@ -538,11 +538,15 @@ export class Voice extends EventTarget {
             if (!current() || !track) return false;
             await this.#enqueue(async () => {
                 if (!current()) return;
-                track.enabled = this.#micOpen();
+                // A mute/deafen change can happen while replaceTrack awaits.
+                // Keep the new input closed until it belongs to this call, then
+                // apply the latest controls instead of an earlier snapshot.
+                track.enabled = false;
                 await transceiver.sender.replaceTrack(track);
                 if (!current()) return;
                 const old = this.mic;
                 this.mic = stream;
+                track.enabled = this.#micOpen();
                 installed = true;
                 this.microphoneError = null;
                 this.#watchMicrophone(track);

@@ -100,3 +100,17 @@ test("a changed microphone choice is applied after an in-flight retry", async t=
     assert.equal(input.length,1);release();await first;assert.equal(await second,true);
     assert.deepEqual(input,["default","new-device"]);assert.equal(f.voice.mic,secondStream);assert.equal(firstStream.getAudioTracks()[0].readyState,"ended");
 });
+
+
+for (const control of ["setMuted", "setDeafened"]) {
+    test(`${control} during replaceTrack keeps the new microphone closed`,async t=>{
+        const f=await fixture(t);await f.voice.join(2);
+        const stream=f.stream();f.setAcquire(async()=>stream);
+        let enter,release;const entered=new Promise(resolve=>{enter=resolve;});
+        f.peers[0].transceivers[0].sender.replaceTrack=async track=>{
+            assert.equal(track.enabled,false,"an unowned replacement starts closed");enter();await new Promise(resolve=>{release=resolve;});
+        };
+        const retry=f.voice.retryMicrophone();await entered;f.voice[control](true);release();
+        assert.equal(await retry,true);assert.equal(stream.getAudioTracks()[0].enabled,false);assert.equal(f.voice.transmitting,false);
+    });
+}
