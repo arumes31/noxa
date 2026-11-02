@@ -83,12 +83,13 @@ func runHandoffFixtureMain() bool {
 		os.Exit(status)
 	}
 	if name == "ack parent" || name == "ack helper" {
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			if _, err := os.Stat(filepath.Join(dir, name+"-release")); err == nil {
-				return true
-			}
-			time.Sleep(10 * time.Millisecond)
+		// These owned fixtures model processes retained until an explicit release,
+		// not a five-second lifetime starting before the host finishes disk/AV work.
+		// Keep a test-only watchdog; production handoff deadlines stay unchanged.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := waitHandoffFixtureMarker(ctx, filepath.Join(dir, name+"-release")); err != nil {
+			panic(err)
 		}
 		return true
 	}
@@ -516,11 +517,15 @@ func TestUpdateHandoffLostAcknowledgementIntegration(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	start := func(name, mode string) (*exec.Cmd, <-chan error) {
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, contents, 0700); err != nil {
+	// Finish both large executable copies before starting either fixture.
+	// A slow scanner must not consume the parent's lifetime while copying its helper.
+	for _, name := range []string{".noxa-previous-fixture.exe", "msedgewebview2.exe"} {
+		if err := os.WriteFile(filepath.Join(dir, name), contents, 0700); err != nil {
 			t.Fatal(err)
 		}
+	}
+	start := func(name, mode string) (*exec.Cmd, <-chan error) {
+		path := filepath.Join(dir, name)
 		cmd := exec.CommandContext(context.Background(), path)
 		cmd.Env = append(os.Environ(), handoffFixtureRootEnv+"="+dir, handoffFixtureCaseEnv+"="+mode)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -540,11 +545,11 @@ func TestUpdateHandoffLostAcknowledgementIntegration(t *testing.T) {
 		return cmd, exited
 	}
 	parent, parentExited := start(".noxa-previous-fixture.exe", "ack parent")
-	helper, helperExited := start("msedgewebview2.exe", "ack helper")
 	parentHandle, err := openUpdateProcess(updateProcessIdentity{PID: uint32(parent.Process.Pid)})
 	if err != nil {
 		t.Fatal(err)
 	}
+	helper, helperExited := start("msedgewebview2.exe", "ack helper")
 	snapshot := filepath.Join(dir, ".noxa-previous-snapshot.exe")
 	if err := os.WriteFile(snapshot, []byte("owned rollback snapshot"), 0600); err != nil {
 		t.Fatal(err)
