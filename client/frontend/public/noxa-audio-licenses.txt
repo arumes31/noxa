@@ -231,8 +231,18 @@ Supertonic 3 model/license; no runtime TTS, actor or character imitation.
 
 Presence announcement variations: nine additional original fixed sentences per
 user-presence event and language, rendered offline with Supertonic 3 presets
-F1-F5 and M1-M4. Together with the original ST13 line, each event has ten
-recorded variants. Model and runtime licenses above apply unchanged. Exact
+F1-F5 and M1-M4. Together with the original ST13 line, these form the ten
+baseline variants per event. Channel join/leave add the fantasy pool below. Model and runtime licenses above apply unchanged. Exact
 texts, preset definitions, style/model hashes, mastering measurements and
 automatic content-review results are recorded in tools/speech-lines.json,
 tools/voices/ and src/assets/speech/. No runtime synthesis is used.
+
+Fantasy channel arrival/departure alternatives: ten additional original lines
+per event and language, using synthetic dwarf, elf, goblin, gnome and troll
+styles. These are original archetypes, not game quotations or impersonations.
+Supertonic preset blends and offline pitch/roughness treatments are identified
+by tools/voices/{DWARF1,ELF1,GOBLIN1,GNOME1,TROLL1}.json. The same model and
+runtime licenses above apply; no additional voice engine is shipped.
+Join/leave now have twenty fixed alternatives each; other presence events
+retain their ten alternatives. All transcripts, WAV hashes and automatic
+content-review results remain in the speech provenance and catalog.

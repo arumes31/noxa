@@ -60,7 +60,7 @@ def verify_model(model_dir):
 
 
 def clip_voice(language, event):
-    """ST13 unless provenance assigns this clip a user-selected voice."""
+    """ST13 unless provenance assigns this clip a specific fixed voice."""
     chosen = PROVENANCE['authoring'][language].get('clip_voices', {}).get(event)
     if not chosen:
         return VOICE
@@ -116,10 +116,15 @@ def process_voice(samples, voice, rate):
     effect = voice.get('postprocess')
     if not effect:
         return samples
-    if effect != {'kind': 'cave-troll', 'pitch_ratio': 0.86, 'roughness': 0.10, 'growl_hz': 35}:
+    treatments = {
+        'cave-troll': (0.86, 0.10, 35), 'dwarf': (0.90, 0.04, 45),
+        'elf': (1.03, 0, 35), 'goblin': (1.12, 0.06, 65), 'gnome': (1.07, 0.02, 55),
+    }
+    expected = treatments.get(effect.get('kind'))
+    if expected is None or effect != dict(zip(('kind', 'pitch_ratio', 'roughness', 'growl_hz'), (effect['kind'], *expected))):
         raise ValueError('Unknown voice treatment')
-    # Slower/lower resampling plus mild amplitude modulation gives a synthetic
-    # growl while retaining consonants. Final mastering still enforces the same
+    # Offline pitch resampling and mild amplitude modulation characterize
+    # original fantasy voices while retaining consonants. Mastering enforces the same
     # duration, quiet peak/RMS, endpoint and DC limits as every other clip.
     source = np.arange(len(samples))
     lowered = np.interp(np.arange(0, len(samples), effect['pitch_ratio']), source, samples)

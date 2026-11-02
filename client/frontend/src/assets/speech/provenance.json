@@ -383,6 +383,86 @@
         "stream_watch_started_v09": {
           "voice": "M4",
           "definition": "tools/voices/M4.json"
+        },
+        "user_join_v10": {
+          "voice": "DWARF1",
+          "definition": "tools/voices/DWARF1.json"
+        },
+        "user_leave_v10": {
+          "voice": "DWARF1",
+          "definition": "tools/voices/DWARF1.json"
+        },
+        "user_join_v11": {
+          "voice": "DWARF1",
+          "definition": "tools/voices/DWARF1.json"
+        },
+        "user_leave_v11": {
+          "voice": "DWARF1",
+          "definition": "tools/voices/DWARF1.json"
+        },
+        "user_join_v12": {
+          "voice": "ELF1",
+          "definition": "tools/voices/ELF1.json"
+        },
+        "user_leave_v12": {
+          "voice": "ELF1",
+          "definition": "tools/voices/ELF1.json"
+        },
+        "user_join_v13": {
+          "voice": "ELF1",
+          "definition": "tools/voices/ELF1.json"
+        },
+        "user_leave_v13": {
+          "voice": "ELF1",
+          "definition": "tools/voices/ELF1.json"
+        },
+        "user_join_v14": {
+          "voice": "GOBLIN1",
+          "definition": "tools/voices/GOBLIN1.json"
+        },
+        "user_leave_v14": {
+          "voice": "GOBLIN1",
+          "definition": "tools/voices/GOBLIN1.json"
+        },
+        "user_join_v15": {
+          "voice": "GOBLIN1",
+          "definition": "tools/voices/GOBLIN1.json"
+        },
+        "user_leave_v15": {
+          "voice": "GOBLIN1",
+          "definition": "tools/voices/GOBLIN1.json"
+        },
+        "user_join_v16": {
+          "voice": "GNOME1",
+          "definition": "tools/voices/GNOME1.json"
+        },
+        "user_leave_v16": {
+          "voice": "GNOME1",
+          "definition": "tools/voices/GNOME1.json"
+        },
+        "user_join_v17": {
+          "voice": "GNOME1",
+          "definition": "tools/voices/GNOME1.json"
+        },
+        "user_leave_v17": {
+          "voice": "GNOME1",
+          "definition": "tools/voices/GNOME1.json"
+        },
+        "user_join_v18": {
+          "voice": "TROLL1",
+          "definition": "tools/voices/TROLL1.json"
+        },
+        "user_leave_v18": {
+          "voice": "TROLL1",
+          "definition": "tools/voices/TROLL1.json"
+        },
+        "user_join_v19": {
+          "voice": "TROLL1",
+          "definition": "tools/voices/TROLL1.json"
+        },
+        "user_leave_v19": {
+          "voice": "TROLL1",
+          "definition": "tools/voices/TROLL1.json"
         }
       }
     },
@@ -735,6 +815,86 @@
         "stream_watch_started_v09": {
           "voice": "M4",
           "definition": "tools/voices/M4.json"
+        },
+        "user_join_v10": {
+          "voice": "DWARF1",
+          "definition": "tools/voices/DWARF1.json"
+        },
+        "user_leave_v10": {
+          "voice": "DWARF1",
+          "definition": "tools/voices/DWARF1.json"
+        },
+        "user_join_v11": {
+          "voice": "DWARF1",
+          "definition": "tools/voices/DWARF1.json"
+        },
+        "user_leave_v11": {
+          "voice": "DWARF1",
+          "definition": "tools/voices/DWARF1.json"
+        },
+        "user_join_v12": {
+          "voice": "ELF1",
+          "definition": "tools/voices/ELF1.json"
+        },
+        "user_leave_v12": {
+          "voice": "ELF1",
+          "definition": "tools/voices/ELF1.json"
+        },
+        "user_join_v13": {
+          "voice": "ELF1",
+          "definition": "tools/voices/ELF1.json"
+        },
+        "user_leave_v13": {
+          "voice": "ELF1",
+          "definition": "tools/voices/ELF1.json"
+        },
+        "user_join_v14": {
+          "voice": "GOBLIN1",
+          "definition": "tools/voices/GOBLIN1.json"
+        },
+        "user_leave_v14": {
+          "voice": "GOBLIN1",
+          "definition": "tools/voices/GOBLIN1.json"
+        },
+        "user_join_v15": {
+          "voice": "GOBLIN1",
+          "definition": "tools/voices/GOBLIN1.json"
+        },
+        "user_leave_v15": {
+          "voice": "GOBLIN1",
+          "definition": "tools/voices/GOBLIN1.json"
+        },
+        "user_join_v16": {
+          "voice": "GNOME1",
+          "definition": "tools/voices/GNOME1.json"
+        },
+        "user_leave_v16": {
+          "voice": "GNOME1",
+          "definition": "tools/voices/GNOME1.json"
+        },
+        "user_join_v17": {
+          "voice": "GNOME1",
+          "definition": "tools/voices/GNOME1.json"
+        },
+        "user_leave_v17": {
+          "voice": "GNOME1",
+          "definition": "tools/voices/GNOME1.json"
+        },
+        "user_join_v18": {
+          "voice": "TROLL1",
+          "definition": "tools/voices/TROLL1.json"
+        },
+        "user_leave_v18": {
+          "voice": "TROLL1",
+          "definition": "tools/voices/TROLL1.json"
+        },
+        "user_join_v19": {
+          "voice": "TROLL1",
+          "definition": "tools/voices/TROLL1.json"
+        },
+        "user_leave_v19": {
+          "voice": "TROLL1",
+          "definition": "tools/voices/TROLL1.json"
         }
       }
     }

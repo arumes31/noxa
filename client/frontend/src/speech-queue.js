@@ -1,5 +1,5 @@
 // Fixed clip IDs only. This module has no text input, TTS or asset-generation path.
-import { VARIED_SPEECH_EVENTS, variedSpeechClip } from "./speech-variation.js";
+import { VARIED_SPEECH_EVENTS, speechVariantCount, variedSpeechClip } from "./speech-variation.js";
 import { soundVolume } from "./sound-engine.js";
 export const SPEECH_EVENTS = {
     microphone_muted: { priority: 3, category: "audio", family: "audio", muteException: true, effect: "mic_off", cooldown: 0 },
@@ -42,7 +42,7 @@ export const SPEECH_EVENTS = {
 // Language-specific alternatives of an event. They share its policy and
 // settings switch and are absent from languages without a recording.
 export const SPEECH_VARIANTS = { client_closing_night: "client_closing",
-    ...Object.fromEntries(VARIED_SPEECH_EVENTS.flatMap(event => Array.from({ length: 9 }, (_, index) =>
+    ...Object.fromEntries(VARIED_SPEECH_EVENTS.flatMap(event => Array.from({ length: speechVariantCount(event) - 1 }, (_, index) =>
         [`${event}_v${String(index + 1).padStart(2, "0")}`, event]))),
 };
 

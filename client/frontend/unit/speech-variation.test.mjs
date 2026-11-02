@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { VARIED_SPEECH_EVENTS, presenceSpeechKey, variedSpeechClip } from "../src/speech-variation.js";
+import { readFileSync } from "node:fs";
+import { VARIED_SPEECH_EVENTS, speechVariantCount, presenceSpeechKey, variedSpeechClip } from "../src/speech-variation.js";
 import { SpeechQueue } from "../src/speech-queue.js";
 import { SPEECH_ASSETS } from "../src/speech-catalog.js";
 
@@ -11,11 +12,11 @@ test("each presence event selects the same clip for all observers independent of
         const clips = observers.map(client => variedSpeechClip(event, presenceSpeechKey(client, 8)));
         assert.equal(new Set(clips).size, 1);
         const choices = new Set(Array.from({ length: 200 }, (_, i) => variedSpeechClip(event, presenceSpeechKey({ ...member, presence_token: "move-" + i }, 8))));
-        assert.equal(choices.size, 10, event);
+        assert.equal(choices.size, speechVariantCount(event), event);
         for (const language of ["de", "en"]) {
             const assets = [...choices].map(id => SPEECH_ASSETS[language][id]);
-            assert.ok(assets.every(Boolean), `${event}/${language}: all ten real assets required`);
-            assert.equal(new Set(assets.map(clip => clip.transcript)).size, 10, `${event}/${language}: distinct texts`);
+            assert.ok(assets.every(Boolean), `${event}/${language}: all real assets required`);
+            assert.equal(new Set(assets.map(clip => clip.transcript)).size, speechVariantCount(event), `${event}/${language}: distinct texts`);
         }
     }
 });
@@ -40,4 +41,14 @@ test("different observers play the same recorded voice and share the base event 
         assert.equal(queue.allowed("user_join", state.settings, false), false);
     }
     assert.equal(played.length, 3); assert.equal(new Set(played).size, 1);
+});
+
+test("new join and leave recordings cover five character voices in both languages", () => {
+    const metrics = JSON.parse(readFileSync(new URL("../src/assets/speech/metrics.json", import.meta.url)));
+    for (const language of ["de", "en"]) for (const event of ["user_join", "user_leave"]) {
+        const recordings = Array.from({ length: 10 }, (_, i) => metrics[`${language}/${event}_v${i + 10}`]);
+        assert.ok(recordings.every(Boolean));
+        assert.deepEqual([...new Set(recordings.map(recording => recording.voice))].sort(), ["DWARF1", "ELF1", "GNOME1", "GOBLIN1", "TROLL1"]);
+        assert.equal(new Set(recordings.map(recording => recording.sha256)).size, 10);
+    }
 });
