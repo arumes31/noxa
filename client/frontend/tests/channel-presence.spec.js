@@ -87,8 +87,8 @@ for (const language of ['en', 'de']) {
         await page.evaluate(() => { window.__noxa.speechQueue.clear(); window.__ownMove(7); });
         await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([`speech_${language}_moved_by_admin`, `speech_${language}_moved_by_admin`]);
     });
-    for (const [channel, event] of [[null, 'user_disconnected'], [0, 'user_leave'], [8, 'user_moved']]) {
-        test(`${language} live snapshot plays ${event} once`, async ({ page }) => {
+    for (const [channel, event] of [[null, 'user_leave'], [0, 'user_leave'], [8, 'user_leave']]) {
+        test(`${language} live snapshot to ${channel ?? "unseen"} plays ${event} once`, async ({ page }) => {
             const expected = await page.evaluate(async ({ channel, language, event }) => {
                 const { presenceSpeechKey, variedSpeechClip } = await import('/src/speech-variation.js');
                 const state = window.__noxa.state;
@@ -349,4 +349,16 @@ test('real microphone and headset buttons play confirmations after committing mu
         await expect(page.locator('#voice-mute')).toHaveAttribute('aria-pressed', String(flags.muted));
         await expect(page.locator('#voice-deafen')).toHaveAttribute('aria-pressed', String(flags.deafened));
     }
+});
+
+
+test('explicit legacy user_left retains the genuine disconnected announcement', async ({ page }) => {
+    const expected = await page.evaluate(async () => {
+        const { presenceSpeechKey, variedSpeechClip } = await import('/src/speech-variation.js');
+        const previous = window.__noxa.state.clients.find(client => client.client_id === 'peer');
+        const expected = 'speech_en_' + variedSpeechClip('user_disconnected', presenceSpeechKey(previous, 7));
+        for (const callback of window.__events.event) callback(JSON.stringify({ type: 'user_left', data: { client_id: 'peer' } }));
+        return expected;
+    });
+    await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([expected]);
 });

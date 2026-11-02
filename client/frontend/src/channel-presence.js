@@ -18,12 +18,15 @@ export function channelPresenceChanges(before, after) {
         if (next?.channel_id === after.channelID) continue;
         const moved = !!next?.channel_id;
         changes.push({ client, message: moved ? 'runtime.movedOut' : 'runtime.left',
-            soundEvent: next ? 'user_move_out' : 'user_leave',
-            speechEvent: !next ? 'user_disconnected' : moved ? 'user_moved' : 'user_leave' });
+            soundEvent: 'user_leave',
+            // A filtered snapshot can omit a private destination. Its absence does
+            // not prove disconnection; all observers of this departure hear
+            // the same neutral cue. Explicit events retain precise wording.
+            speechEvent: 'user_leave' });
     }
     for (const [id, client] of after.clients) {
         if (id === after.selfID || client.channel_id !== after.channelID || before.clients.get(id)?.channel_id === after.channelID) continue;
-        changes.push({ client, message: 'runtime.joined', soundEvent: before.clients.has(id) ? 'user_move_in' : 'user_join', speechEvent: 'user_join' });
+        changes.push({ client, message: 'runtime.joined', soundEvent: 'user_join', speechEvent: 'user_join' });
     }
     return changes;
 }
