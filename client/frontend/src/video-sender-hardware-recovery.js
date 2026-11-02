@@ -1,3 +1,4 @@
+import { hardwareVideoEvidence } from "./hardware-video.js";
 import { hardwareRecoveryCodec, knownSoftwareVideoEncoder } from "./video-hevc.js";
 import { createHardwareRecoveryScheduler } from "./video-hardware-recovery.js";
 import { publicationSnapshot, publicationUploadActive, withdrawPublicationHEVC } from "./stream-publication.js";
@@ -16,6 +17,22 @@ export function videoSenderCaptureSample(stats, stat, track) {
         source.timestamp > stat.timestamp || stat.timestamp - source.timestamp > 1000 ||
         !Number.isSafeInteger(source.frames) || source.frames < 0) return null;
     return { id: source.id, timestamp: source.timestamp, frames: source.frames };
+}
+
+// A runtime can identify its encoder as hardware while capture advances but
+// no encoded output appears. Missing dimensions are not observed geometry.
+// A restart may use the exact, even, unscaled capture box only in this narrow
+// zero-output state; hardware upload admission remains independently enforced.
+export function hardwareStartupGeometry(stats, stat, track, encoding) {
+    if (!encoding || stats.get(stat.codecId)?.mimeType?.toLowerCase() !== "video/h264" || stat.framesEncoded !== 0 || (stat.frameWidth != null && stat.frameWidth !== 0) ||
+        (stat.frameHeight != null && stat.frameHeight !== 0) || stat.qualityLimitationReason !== "none" ||
+        (!Number.isFinite(stat.targetBitrate) || !(stat.targetBitrate > 0)) || encoding?.active === false || (encoding?.scaleResolutionDownBy ?? 1) !== 1 ||
+        hardwareVideoEvidence(stats, track.id) !== "hardware") return null;
+    const capture = videoSenderCaptureSample(stats, stat, track), size = track.getSettings();
+    if (!capture || !(capture.frames > 0) || ![size.width, size.height].every(value =>
+        Number.isSafeInteger(value) && value > 0 && value <= 8192 && value % 4 === 0) ||
+        size.width < 640 || size.height < 360) return null;
+    return { width: size.width, height: size.height, capture };
 }
 
 export async function hardwareVideoEncodeAvailable(codec, stat, mediaCapabilities = globalThis.navigator?.mediaCapabilities) {
@@ -73,6 +90,7 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
             if (!hardwareRecoveryCodec(codec)) continue;
             const capture = videoSenderCaptureSample(stats, stat, p.track);
             const scale = parameters.encodings[0].scaleResolutionDownBy ?? 1;
+            const startup = p.slot === "screen" && !state.shareQualityUpdating ? hardwareStartupGeometry(stats, stat, p.track, parameters.encodings[0]) : null;
             const geometry = Number.isFinite(scale) && scale >= 1 && stat.frameWidth >= 640 && stat.frameHeight >= 360 &&
                 stat.frameWidth % 2 === 0 && stat.frameHeight % 2 === 0 &&
                 Number.isFinite(settings.width) && Number.isFinite(settings.height) &&
@@ -82,17 +100,19 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
                 Number.isSafeInteger(stat.frameWidth) && stat.frameWidth > 0 && Number.isSafeInteger(stat.frameHeight) && stat.frameHeight > 0 &&
                 stat.frameWidth <= settings.width && stat.frameHeight <= settings.height : geometry;
             candidates.push({ key: `send:${p.slot}:${generation}`, instance: `${stat.id}:${stat.ssrc}`,
-                config: JSON.stringify([codec.mimeType, codec.sdpFmtpLine, stat.frameWidth, stat.frameHeight, capture?.id ?? null]),
+                config: JSON.stringify([codec.mimeType, codec.sdpFmtpLine, startup?.width ?? stat.frameWidth, startup?.height ?? stat.frameHeight, capture?.id ?? null]),
                 timestamp: stat.timestamp, frames: stat.framesEncoded, capture,
-                hardware: stat.powerEfficientEncoder === true && recoveryGeometry,
+                hardware: !!startup || stat.powerEfficientEncoder === true && recoveryGeometry,
+                stalledHardware: !!startup,
                 software: stat.powerEfficientEncoder === false && knownSoftwareVideoEncoder(codec, stat.encoderImplementation) &&
                     ["none", "cpu", "bandwidth"].includes(stat.qualityLimitationReason) && recoveryGeometry && !state.shareQualityUpdating,
                 current, capable: async () => {
                     if (codec.mimeType.toLowerCase() === "video/h265") return true;
                     return capable(codec, stat);
                 }, recover: evidence => codec.mimeType.toLowerCase() === "video/h265" ? withdraw(p.slot, p.track, current) : retry(p.slot, p.track, current,
-                    evidence?.hardwareObserved && capture ? { sourceId: capture.id, codec: codec.mimeType,
-                        fmtp: codec.sdpFmtpLine, width: stat.frameWidth, height: stat.frameHeight } : null) });
+                    (evidence?.hardwareObserved || evidence?.hardwareStartup) && capture ? { sourceId: capture.id, codec: codec.mimeType,
+                        fmtp: codec.sdpFmtpLine, width: startup?.width ?? stat.frameWidth, height: startup?.height ?? stat.frameHeight,
+                        ...(evidence?.hardwareStartup ? { hardwareStartup: true } : {}) } : null) });
         }
         await scheduler(scope, candidates, stats, pc);
     };

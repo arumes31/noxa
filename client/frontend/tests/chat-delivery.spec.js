@@ -19,7 +19,7 @@ test.beforeEach(async ({ page }) => {
     if (window.__corrupt) throw new Error("cannot decrypt this outbox");
     if (r.action === "stage") {
      if (!window.__online && !r.queue_offline) throw new Error("offline");
-     window.__outbox.push({ ...r, tab, id: String(window.__calls.length), state: window.__online ? "held" : "queued", due_at: Date.now() + 5000 });
+     window.__outbox.push({ ...r, tab, id: String(window.__calls.length), state: window.__online ? "held" : "queued", due_at: Date.now() + (window.__noxa?.state.settings.chat_undo_seconds ?? 5) * 1000 });
     }
     if (r.action === "cancel") window.__outbox = window.__outbox.filter(entry => entry.tab !== tab || entry.id !== r.id);
     if (r.action === "send" || r.action === "retry") {
@@ -194,4 +194,38 @@ test("scrollbars use six-pixel rails without native arrow buttons", async ({ pag
   standard: getComputedStyle(log).scrollbarWidth,
  }));
  expect(styles).toEqual({ width: "6px", buttons: "none", standard: "auto" });
+});
+
+
+test("zero-delay messages are pumped immediately without advancing a maintenance timer", async ({ page }) => {
+ await page.clock.pauseAt(new Date());
+ await page.evaluate(() => { window.__noxa.state.settings.chat_undo_seconds = 0; });
+ await page.locator("#chat-text").fill("No five-second delay");
+ await page.locator("#chat-send").click();
+ await expect.poll(() => page.evaluate(() => window.__sent.length)).toBe(1);
+ await expect(page.locator(".chat-delivery-strip")).toBeHidden();
+ expect(await page.evaluate(() => window.__outbox.length)).toBe(0);
+});
+
+test("an immediate message staged during a finishing pump is sent without waiting for the timer", async ({ page }) => {
+ await page.clock.pauseAt(new Date());
+ await page.evaluate(() => {
+  window.__noxa.state.settings.chat_undo_seconds = 0;
+  const original = window.go.main.App, nativePump = original.PumpChatOutbox;
+  let pumps = 0;
+  window.go.main.App = new Proxy(original, { get(target, key) {
+   if (key !== "PumpChatOutbox") return target[key];
+   return async () => {
+    await nativePump();
+    if (++pumps === 1) await new Promise(resolve => { window.__releasePump = resolve; });
+   };
+  } });
+ });
+ await page.locator("#chat-text").fill("First immediate message"); await page.locator("#chat-send").click();
+ await expect.poll(() => page.evaluate(() => typeof window.__releasePump)).toBe("function");
+ await page.locator("#chat-text").fill("Second immediate message"); await page.locator("#chat-send").click();
+ await expect.poll(() => page.evaluate(() => window.__outbox.length)).toBe(1);
+ await page.evaluate(() => window.__releasePump());
+ await expect.poll(() => page.evaluate(() => window.__sent.length)).toBe(2);
+ expect(await page.evaluate(() => new Set(window.__sent.map(entry => entry.id)).size)).toBe(2);
 });

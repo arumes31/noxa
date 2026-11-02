@@ -260,3 +260,46 @@ test("even-frame recovery still rejects odd dimensions and unsupported hardware"
         assert.equal(f.calls.length, 0);
     }
 });
+
+function stalledHardware(f, changes = {}, source = {}) {
+    return withCapture(f, { framesEncoded: 0, framesPerSecond: 0, frameWidth: undefined, frameHeight: undefined,
+        powerEfficientEncoder: true, encoderImplementation: "MediaFoundationVideoEncodeAccelerator (Intel Quick Sync H.264 Encoder MFT)",
+        targetBitrate: 5058333, ...changes }, source);
+}
+
+test("first-frame hardware stall retries using bound capture without replenishing the publication budget", async () => {
+    const f = fixture(), proofs = [];
+    f.options.retry = async (slot, track, current, proof) => { assert.ok(current()); assert.equal(track, f.track); proofs.push(proof); };
+    f.options.capable = async () => assert.fail("identified runtime hardware is already known");
+    const recover = createVideoSenderRecovery(f.options);
+    for (let at = 0; at <= 35000; at += 5000) { f.time(at); await recover(f.pc, stalledHardware(f)); }
+    assert.equal(proofs.length, 1);
+    assert.deepEqual(proofs[0], {sourceId:"source",codec:"video/H264",fmtp:"packetization-mode=1;profile-level-id=42001f",width:1920,height:1080,hardwareStartup:true});
+    f.time(40000); await recover(f.pc, stalledHardware(f)); assert.equal(proofs.length, 2);
+    for (let at = 45000; at <= 155000; at += 5000) { f.time(at); await recover(f.pc, stalledHardware(f, {ssrc:456})); }
+    assert.equal(proofs.length, 2, "changing SSRC does not refill retries");
+    f.time(160000); await recover(f.pc, stalledHardware(f, {ssrc:456})); assert.equal(proofs.length, 3);
+});
+
+test("first-frame recovery rejects unproven, idle, ambiguous, adapted and obsolete capture", async () => {
+    for (const mode of ["unknown", "software", "idle", "stale", "future", "wrong-track", "missing", "duplicate", "scaled", "odd", "half-odd", "no-target", "limited", "already-encoded", "replaced", "paused", "quality", "scope"]) {
+        const f = fixture();
+        if(mode==="scaled")f.transceiver.sender.getParameters=()=>({encodings:[{active:true,scaleResolutionDownBy:2}]});
+        if(mode==="odd")f.track.getSettings=()=>({width:1921,height:1080});
+        if(mode==="half-odd")f.track.getSettings=()=>({width:1922,height:1080});
+        if(mode==="replaced")f.publication.generation="2";
+        if(mode==="paused")f.inactive();
+        if(mode==="quality")f.state.shareQualityUpdating=true;
+        if(mode==="scope")f.state.myChannelID=4;
+        const recover=createVideoSenderRecovery(f.options);
+        for(const at of [0,5000,10000,15000,20000]){
+            f.time(at);const stats=stalledHardware(f,mode==="unknown"?{encoderImplementation:"ExternalEncoder"}:mode==="software"?{powerEfficientEncoder:false}:mode==="no-target"?{targetBitrate:0}:mode==="limited"?{qualityLimitationReason:"bandwidth"}:mode==="already-encoded"?{framesEncoded:1}:{},mode==="idle"?{frames:10}:mode==="wrong-track"?{trackIdentifier:"other"}:{});
+            if(mode==="stale")stats.get("source").timestamp-=1001;
+            if(mode==="future")stats.get("source").timestamp++;
+            if(mode==="missing")stats.delete("source");
+            if(mode==="duplicate")stats.set("duplicate",{...stats.get("video"),id:"duplicate"});
+            await recover(f.pc,stats);
+        }
+        assert.equal(f.calls.length,0,mode);
+    }
+});
