@@ -30,7 +30,11 @@ test.beforeEach(async ({ page }) => {
    }
    if (method === "PumpChatOutbox") {
     if (window.__online) {
-     const due = window.__outbox.filter(entry => ["held", "queued"].includes(entry.state) && entry.due_at <= Date.now());
+     const tabs = new Set();
+     const due = window.__outbox.filter(entry => {
+      if (tabs.has(entry.tab) || !["held", "queued"].includes(entry.state) || entry.due_at > Date.now()) return false;
+      tabs.add(entry.tab); return true;
+     });
      window.__sent.push(...due); window.__outbox = window.__outbox.filter(entry => !due.includes(entry));
     }
     return;
@@ -223,9 +227,12 @@ test("an immediate message staged during a finishing pump is sent without waitin
  });
  await page.locator("#chat-text").fill("First immediate message"); await page.locator("#chat-send").click();
  await expect.poll(() => page.evaluate(() => typeof window.__releasePump)).toBe("function");
- await page.locator("#chat-text").fill("Second immediate message"); await page.locator("#chat-send").click();
- await expect.poll(() => page.evaluate(() => window.__outbox.length)).toBe(1);
+ for (const text of ["Second immediate message", "Third immediate message", "Fourth immediate message"]) {
+  await page.locator("#chat-text").fill(text); await page.locator("#chat-send").click();
+  await expect(page.locator("#chat-text")).toHaveValue("");
+ }
+ await expect.poll(() => page.evaluate(() => window.__outbox.length)).toBe(3);
  await page.evaluate(() => window.__releasePump());
- await expect.poll(() => page.evaluate(() => window.__sent.length)).toBe(2);
- expect(await page.evaluate(() => new Set(window.__sent.map(entry => entry.id)).size)).toBe(2);
+ await expect.poll(() => page.evaluate(() => window.__sent.length)).toBe(4);
+ expect(await page.evaluate(() => new Set(window.__sent.map(entry => entry.id)).size)).toBe(4);
 });

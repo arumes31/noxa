@@ -24,7 +24,7 @@ export function videoSenderCaptureSample(stats, stat, track) {
 // A restart may use the exact, even, unscaled capture box only in this narrow
 // zero-output state; hardware upload admission remains independently enforced.
 export function hardwareStartupGeometry(stats, stat, track, encoding) {
-    if (!encoding || stats.get(stat.codecId)?.mimeType?.toLowerCase() !== "video/h264" || stat.framesEncoded !== 0 || (stat.frameWidth != null && stat.frameWidth !== 0) ||
+    if (!encoding || stats.get(stat.codecId)?.mimeType?.toLowerCase() !== "video/h264" || (!Number.isSafeInteger(stat.framesEncoded) || stat.framesEncoded < 0) || (stat.frameWidth != null && stat.frameWidth !== 0) ||
         (stat.frameHeight != null && stat.frameHeight !== 0) || stat.qualityLimitationReason !== "none" ||
         (!Number.isFinite(stat.targetBitrate) || !(stat.targetBitrate > 0)) || encoding?.active === false || (encoding?.scaleResolutionDownBy ?? 1) !== 1 ||
         hardwareVideoEvidence(stats, track.id) !== "hardware") return null;
@@ -67,13 +67,14 @@ export async function hardwareVideoEncodeAvailable(codec, stat, mediaCapabilitie
 // Publication identity, rather than an RTP SSRC, owns the retry budget. A source
 // or channel change cannot apply a delayed reset to a different user's intent.
 export function createVideoSenderRecovery({ state, retry, snapshot = publicationSnapshot, uploadActive = publicationUploadActive,
-    scheduler = createHardwareRecoveryScheduler(), capable = hardwareVideoEncodeAvailable, withdraw = withdrawPublicationHEVC }) {
+    scheduler = createHardwareRecoveryScheduler(), capable = hardwareVideoEncodeAvailable, startupReady = () => true, withdraw = withdrawPublicationHEVC }) {
     return async (pc, stats) => {
         if (state.pc !== pc || pc.connectionState !== "connected" || pc.signalingState !== "stable") return;
         const scope = scopeKey(state), candidates = [];
         for (const { publication: p, generation } of snapshot()) {
             const transceiver = pc.getTransceivers().find(item => item.sender.track === p.track);
-            const current = () => state.pc === pc && scopeKey(state) === scope && pc.connectionState === "connected" &&
+            let startupEpoch = null;
+            const current = () => (startupEpoch === null || startupReady() === startupEpoch) && state.pc === pc && scopeKey(state) === scope && pc.connectionState === "connected" &&
                 p.pc === pc && !p.cancelled && p.generation === generation && generation !== "0" &&
                 p.scope.tabID === state.activeTabID && p.scope.generation === state.serverGeneration &&
                 p.scope.session === state.sessionGeneration && p.scope.clientID === state.myClientID && p.scope.channelID === state.myChannelID &&
@@ -91,6 +92,10 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
             const capture = videoSenderCaptureSample(stats, stat, p.track);
             const scale = parameters.encodings[0].scaleResolutionDownBy ?? 1;
             const startup = p.slot === "screen" && !state.shareQualityUpdating ? hardwareStartupGeometry(stats, stat, p.track, parameters.encodings[0]) : null;
+            if (startup) {
+                startupEpoch = startupReady();
+                if (startupEpoch !== true && !(Number.isSafeInteger(startupEpoch) && startupEpoch > 0)) continue;
+            }
             const geometry = Number.isFinite(scale) && scale >= 1 && stat.frameWidth >= 640 && stat.frameHeight >= 360 &&
                 stat.frameWidth % 2 === 0 && stat.frameHeight % 2 === 0 &&
                 Number.isFinite(settings.width) && Number.isFinite(settings.height) &&
@@ -100,7 +105,7 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
                 Number.isSafeInteger(stat.frameWidth) && stat.frameWidth > 0 && Number.isSafeInteger(stat.frameHeight) && stat.frameHeight > 0 &&
                 stat.frameWidth <= settings.width && stat.frameHeight <= settings.height : geometry;
             candidates.push({ key: `send:${p.slot}:${generation}`, instance: `${stat.id}:${stat.ssrc}`,
-                config: JSON.stringify([codec.mimeType, codec.sdpFmtpLine, startup?.width ?? stat.frameWidth, startup?.height ?? stat.frameHeight, capture?.id ?? null]),
+                config: JSON.stringify([codec.mimeType, codec.sdpFmtpLine, startup?.width ?? stat.frameWidth, startup?.height ?? stat.frameHeight, capture?.id ?? null, ...(startup ? [startupEpoch] : [])]),
                 timestamp: stat.timestamp, frames: stat.framesEncoded, capture,
                 hardware: !!startup || stat.powerEfficientEncoder === true && recoveryGeometry,
                 stalledHardware: !!startup,
@@ -112,7 +117,7 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
                 }, recover: evidence => codec.mimeType.toLowerCase() === "video/h265" ? withdraw(p.slot, p.track, current) : retry(p.slot, p.track, current,
                     (evidence?.hardwareObserved || evidence?.hardwareStartup) && capture ? { sourceId: capture.id, codec: codec.mimeType,
                         fmtp: codec.sdpFmtpLine, width: startup?.width ?? stat.frameWidth, height: startup?.height ?? stat.frameHeight,
-                        ...(evidence?.hardwareStartup ? { hardwareStartup: true } : {}) } : null) });
+                        ...(evidence?.hardwareStartup ? { hardwareStartup: true, framesEncoded: stat.framesEncoded } : {}) } : null) });
         }
         await scheduler(scope, candidates, stats, pc);
     };

@@ -1,3 +1,4 @@
+import { hardwareVideoEvidence } from "./hardware-video.js";
 import { updateStartupBlocked } from "./update-transition.js";
 import { retainDisplayCapture, releaseDisplayCapture, stopDisplayCapture, transferDisplayCapture } from "./display-capture-lease.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
@@ -417,6 +418,7 @@ export function createVideoPublication({ policy }) {
                         (row.kind === "video" || row.mediaType === "video"));
                     return video.length === 1 ? { ...video[0], codec: reports.get(video[0].codecId),
                         startupGeometry: hardwareStartupGeometry(reports, video[0], track, sender.getParameters().encodings?.[0]),
+                        hardwareEvidence: hardwareVideoEvidence(reports, track.id),
                         capture: videoSenderCaptureSample(reports, video[0], track) } : null;
                 };
                 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -428,7 +430,7 @@ export function createVideoPublication({ policy }) {
                 const dimensions = row => startup && row?.startupGeometry ? row.startupGeometry : { width: row?.frameWidth, height: row?.frameHeight };
                 const eligible = row => {
                     const geometry = dimensions(row);
-                    const implementation = startup ? row?.startupGeometry && row.powerEfficientEncoder === true && row.framesEncoded === 0 :
+                    const implementation = startup ? row?.startupGeometry && row.powerEfficientEncoder === true && row.framesEncoded === (captureRecovery.framesEncoded ?? 0) :
                         row?.powerEfficientEncoder === false && hardwareRecoveryCodec(row.codec) && (row.codec.mimeType.toLowerCase() === "video/h264" || knownSoftwareVideoEncoder(row.codec, row.encoderImplementation));
                     return row && implementation && hardwareRecoveryCodec(row.codec) &&
                         ["none", "cpu", "bandwidth"].includes(row.qualityLimitationReason) && geometry.width >= 640 && geometry.height >= 360 &&
@@ -443,7 +445,7 @@ export function createVideoPublication({ policy }) {
                     [before, after].every(row => row?.capture?.id === captureRecovery.sourceId &&
                         row.codec?.mimeType === captureRecovery.codec && row.codec?.sdpFmtpLine === captureRecovery.fmtp &&
                         dimensions(row).width === captureRecovery.width && dimensions(row).height === captureRecovery.height &&
-                        (startup ? row.startupGeometry && row.framesEncoded === 0 : knownSoftwareVideoEncoder(row.codec, row.encoderImplementation)) &&
+                        (startup ? row.startupGeometry && row.framesEncoded === (captureRecovery.framesEncoded ?? 0) : knownSoftwareVideoEncoder(row.codec, row.encoderImplementation)) &&
                         Number.isSafeInteger(row.framesEncoded) && row.framesEncoded >= 0) &&
                     after.framesEncoded >= before.framesEncoded && after.capture.frames > before.capture.frames &&
                     after.capture.timestamp > before.capture.timestamp && after.capture.timestamp - before.capture.timestamp <= 15000;
@@ -495,6 +497,7 @@ export function createVideoPublication({ policy }) {
                         if (current() && row?.timestamp > ready.timestamp && row.framesEncoded > ready.framesEncoded &&
                             row.id === first.id && row.codecId === first.codecId && row.ssrc === first.ssrc &&
                             row.frameWidth === recoverySize.width / 2 && row.frameHeight === recoverySize.height / 2 &&
+                            (!startup || row.hardwareEvidence === "hardware") &&
                             track.getSettings().width === size.width && track.getSettings().height === size.height) return true;
                     }
                     return false;

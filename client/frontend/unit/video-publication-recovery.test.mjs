@@ -457,3 +457,28 @@ test("first-frame stall reaches the shared scheduler and real pulse path with un
     assert.ok(f.writes.every(p => p.encodings.length === 1 && p.encodings[0].maxBitrate === 8000000));
     assert.equal(f.sender.track, f.track);
 });
+
+
+test("startup pulse never reports software or unidentified post-pulse output as hardware recovery", async () => {
+    for (const implementation of ["OpenH264", "ExternalEncoder"]) {
+        const options = { capture: {}, maxFramerate: 30, row: { framesEncoded: 102, frameWidth: undefined, frameHeight: undefined,
+            powerEfficientEncoder: true, encoderImplementation: "MediaFoundationVideoEncodeAccelerator", targetBitrate: 5000000 } };
+        options.onStats = scale => {
+            if (scale === 2) Object.assign(options.row, { framesEncoded: 103, frameWidth: 960, frameHeight: 540,
+                encoderImplementation: implementation, powerEfficientEncoder: implementation !== "OpenH264" });
+        };
+        const f = fixture(options);
+        assert.equal(await f.api.retryVideoHardware("screen", f.track, () => true, { ...captureProof, hardwareStartup: true, framesEncoded: 102 }), false);
+        assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
+        assert.equal(f.sender.track, f.track);
+    }
+});
+
+test("startup pulse can recover an encoder whose cumulative count froze across reinitialization", async () => {
+    const options = { capture: {}, maxFramerate: 30, row: { framesEncoded: 102, frameWidth: null, frameHeight: null,
+        powerEfficientEncoder: true, encoderImplementation: "MediaFoundationVideoEncodeAccelerator", targetBitrate: 5000000 } };
+    options.onStats = scale => { if (scale === 2) Object.assign(options.row, { framesEncoded: 103, frameWidth: 960, frameHeight: 540 }); };
+    const f = fixture(options);
+    assert.equal(await f.api.retryVideoHardware("screen", f.track, () => true, { ...captureProof, hardwareStartup: true, framesEncoded: 102 }), true);
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
+});

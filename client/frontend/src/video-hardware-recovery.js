@@ -47,7 +47,7 @@ function createPeerHardwareRecoveryScheduler(now) {
             const knownSoftwareInput = candidate.software && !candidate.hardware && entry?.hardware.has(candidate.config) &&
                 counter(candidate.frames) && counter(candidate.receivedFrames) && counter(candidate.receivedPackets);
             const capture = candidate.capture;
-            const startupHardware = candidate.stalledHardware === true && candidate.hardware === true && candidate.frames === 0 &&
+            const startupHardware = candidate.stalledHardware === true && candidate.hardware === true && counter(candidate.frames) &&
                 typeof capture?.id === "string" && capture.id.length > 0 && counter(capture.frames) && Number.isFinite(capture.timestamp);
             const knownSoftwareCapture = candidate.software && !candidate.hardware && entry?.hardware.has(candidate.config) &&
                 counter(candidate.frames) && typeof capture?.id === "string" && capture.id.length > 0 &&
@@ -74,6 +74,7 @@ function createPeerHardwareRecoveryScheduler(now) {
             const continuous = entry.instance === candidate.instance && entry.config === candidate.config &&
                 candidate.timestamp > entry.timestamp && candidate.timestamp - entry.timestamp <= 15000 &&
                 (candidate.frames > entry.frames || receiving || capturing);
+            const startupAdvancing = startupHardware && candidate.frames > entry.frames;
             entry.timestamp = candidate.timestamp;
             entry.instance = candidate.instance;
             entry.config = candidate.config;
@@ -82,6 +83,7 @@ function createPeerHardwareRecoveryScheduler(now) {
             entry.receivedPackets = counter(candidate.receivedPackets) ? candidate.receivedPackets : null;
             entry.capture = capture ? { ...capture } : null;
             if (!continuous) { entry.softwareSince = null; entry.healthySince = null; }
+            if (startupAdvancing) { entry.softwareSince = entry.healthySince = null; continue; }
             if (candidate.hardware && !startupHardware) {
                 entry.hardware.add(candidate.config);
                 if (entry.hardware.size > 8) entry.hardware.delete(entry.hardware.values().next().value);
