@@ -40,3 +40,12 @@ test('membership comparison normalizes numeric channel IDs without mutating inpu
     assert.equal(changes(before, after)[0].speechEvent, 'user_moved');
     assert.equal(before.clients[1].channel_id, '7');
 });
+
+
+test('arrival uses the committed new token and departure retains the shared previous token', () => {
+    const before = state([{ ...member('leaving'), presence_token: 'old-visit' }, { ...member('arriving', 8), presence_token: 'other-visit' }]);
+    const after = state([{ ...member('leaving', 8), presence_token: 'next-visit' }, { ...member('arriving'), presence_token: 'new-visit' }]);
+    const events = changes(before, after);
+    assert.equal(events.find(change => change.client.client_id === 'leaving').client.presence_token, 'old-visit');
+    assert.equal(events.find(change => change.client.client_id === 'arriving').client.presence_token, 'new-visit');
+});

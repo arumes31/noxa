@@ -172,10 +172,12 @@ https://opengameart.org/content/various-paper-sound-effects
 Archive SHA-256: aa1889414310c7cfdd8dc291c19d4e4fc21ec987e9238b0d961fb72449c263a4
 
 Speech: complete fixed noXa English and German sentences rendered offline.
-Both languages use the synthetic ST13 voice ("Eisbrecher"), chosen from the
+The base announcements use the synthetic ST13 voice ("Eisbrecher"), chosen from the
 ST01-ST20 auditions. ST13 is a weighted blend of the Supertonic 3 preset voice
 styles (M5 x 1.25, M1 x -0.25); no recording of a real person and no imitation of
 an identifiable character was used. The earlier EA60/AN06 recordings are retired.
+The two German closing messages use the unblended Supertonic 3 preset voices F5
+(daytime) and F1 (night), chosen by the user from closing-message auditions.
 Supertonic 3 model weights: Supertone Inc., OpenRAIL-M.
 https://huggingface.co/Supertone/supertonic-3
 Supertonic code: MIT License, Copyright (c) 2025 Supertone Inc.
@@ -195,7 +197,7 @@ Changes: generated complete noXa sentences, pronunciation respellings for German
 loanwords, resampling to 24 kHz, silence trimming, DC removal, endpoint fades and
 loudness normalization.
 Voice definition, model hashes, rendering settings and per-clip hashes:
-tools/voices/ST13.json
+tools/voices/ST13.json, tools/voices/F5.json, tools/voices/F1.json
 client/frontend/src/assets/speech/provenance.json
 client/frontend/src/assets/speech/metrics.json
 
@@ -222,3 +224,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Update announcement: TROLL1, a synthetic ST13-derived cave-troll voice with
+offline pitch/growl processing, original noXa recording under MIT. Same
+Supertonic 3 model/license; no runtime TTS, actor or character imitation.
+
+Presence announcement variations: nine additional original fixed sentences per
+user-presence event and language, rendered offline with Supertonic 3 presets
+F1-F5 and M1-M4. Together with the original ST13 line, each event has ten
+recorded variants. Model and runtime licenses above apply unchanged. Exact
+texts, preset definitions, style/model hashes, mastering measurements and
+automatic content-review results are recorded in tools/speech-lines.json,
+tools/voices/ and src/assets/speech/. No runtime synthesis is used.

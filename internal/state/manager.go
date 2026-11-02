@@ -1,6 +1,7 @@
 package state
 
 import (
+	"crypto/rand"
 	"errors"
 	"sort"
 	"sync"
@@ -272,6 +273,7 @@ func (m *Manager) removeChannelLocked(channelID int64) {
 			if c, ok := m.clients[clientID]; ok {
 				c.ChannelID = 0
 				c.ChannelEpoch++
+				c.PresenceToken = rand.Text()
 				c.HandRaisedOrder = 0
 				c.HandCalled = false
 			}
@@ -509,6 +511,7 @@ func (m *Manager) JoinChannel(clientID string, channelID int64) error {
 
 	c.ChannelID = channelID
 	c.ChannelEpoch++
+	c.PresenceToken = rand.Text()
 	c.HandRaisedOrder = 0
 	c.HandCalled = false
 	members, ok := m.membership[channelID]
@@ -557,6 +560,7 @@ func (m *Manager) LeaveChannel(clientID string) error {
 
 	c.ChannelID = 0
 	c.ChannelEpoch++
+	c.PresenceToken = rand.Text()
 	c.HandRaisedOrder = 0
 	c.HandCalled = false
 	m.logger.Debug("state: client left channel",
@@ -641,6 +645,7 @@ func (m *Manager) moveClient(clientID string, targetChannelID int64, enforceCapa
 	// Join target channel.
 	c.ChannelID = targetChannelID
 	c.ChannelEpoch++
+	c.PresenceToken = rand.Text()
 	c.HandRaisedOrder = 0
 	c.HandCalled = false
 	members, ok := m.membership[targetChannelID]

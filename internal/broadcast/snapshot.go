@@ -30,6 +30,8 @@ type ClientInfo struct {
 	ChannelID   int64                          `json:"channel_id"`
 	IsSpeaking  bool                           `json:"is_speaking"`
 	ConnectedAt time.Time                      `json:"connected_at"`
+	// PresenceToken is an opaque cue shared by observers of a visible session.
+	PresenceToken string `json:"presence_token,omitempty"`
 	// PrioritySpeaker marks TS3-style priority speakers (14); clients duck
 	// other publishers while a priority speaker in their channel talks.
 	HandCalled      bool   `json:"hand_called,omitempty"`
@@ -115,6 +117,7 @@ func clientToInfo(c *state.Client) ClientInfo {
 		UniqueID:        c.UniqueID,
 		Nickname:        c.Nickname,
 		ChannelID:       c.ChannelID,
+		PresenceToken:   c.PresenceToken,
 		IsSpeaking:      c.IsSpeaking,
 		ConnectedAt:     c.ConnectedAt,
 		PrioritySpeaker: c.PrioritySpeaker,
