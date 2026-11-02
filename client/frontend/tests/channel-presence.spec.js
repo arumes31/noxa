@@ -29,7 +29,7 @@ test.beforeEach(async ({ page }) => {
         };
         window.__membership = (peerChannel = 7, audioState = {}) => {
             const clients = [{ client_id: 'self', nickname: 'Self', channel_id: 7 }];
-            if (peerChannel !== null) clients.push({ client_id: 'peer', nickname: 'Peer', channel_id: peerChannel, ...audioState });
+            if (peerChannel !== null) clients.push({ client_id: 'peer', nickname: 'Peer', channel_id: peerChannel, presence_token: 'visit:' + peerChannel, ...audioState });
             const snapshot = { root_channels: [7, 8].map(id => ({ ChannelID: id, Name: 'Channel ' + id,
                 clients: clients.filter(client => client.channel_id === id) })), unassigned_clients: clients.filter(client => !client.channel_id) };
             for (const callback of window.__events.snapshot) callback(JSON.stringify(snapshot));
@@ -89,11 +89,19 @@ for (const language of ['en', 'de']) {
     });
     for (const [channel, event] of [[null, 'user_disconnected'], [0, 'user_leave'], [8, 'user_moved']]) {
         test(`${language} live snapshot plays ${event} once`, async ({ page }) => {
-            await page.evaluate(({ channel, language }) => { window.__noxa.state.settings.speech_language = language; window.__membership(channel); }, { channel, language });
-            await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([`speech_${language}_${event}`]);
+            const expected = await page.evaluate(async ({ channel, language, event }) => {
+                const { presenceSpeechKey, variedSpeechClip } = await import('/src/speech-variation.js');
+                const state = window.__noxa.state;
+                const previous = state.clients.find(client => client.client_id === 'peer');
+                const clip = variedSpeechClip(event, presenceSpeechKey(previous, state.myChannelID));
+                state.settings.speech_language = language;
+                window.__membership(channel);
+                return `speech_${language}_${clip}`;
+            }, { channel, language, event });
+            await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([expected]);
             await page.evaluate(channel => window.__membership(channel), channel);
             await page.waitForTimeout(300);
-            expect(await page.evaluate(() => window.__spoken)).toEqual([`speech_${language}_${event}`]);
+            expect(await page.evaluate(() => window.__spoken)).toEqual([expected]);
         });
     }
 }

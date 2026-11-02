@@ -182,7 +182,7 @@ export const SPEECH_ASSETS = {
         user_disconnected_v07: { url: new URL("./assets/speech/de/user_disconnected_v07.wav", import.meta.url).href, duration: 1.6732916666666666, transcript: "Ein Benutzer hat den Server verlassen." },
         user_disconnected_v08: { url: new URL("./assets/speech/de/user_disconnected_v08.wav", import.meta.url).href, duration: 1.20925, transcript: "Jemand ist jetzt offline." },
         user_disconnected_v09: { url: new URL("./assets/speech/de/user_disconnected_v09.wav", import.meta.url).href, duration: 2.3916666666666666, transcript: "Ein Benutzer ist jetzt vom Server getrennt." },
-        user_moved_v01: { url: new URL("./assets/speech/de/user_moved_v01.wav", import.meta.url).href, duration: 3.1530833333333335, transcript: "Ein Benutzer ist in den nächsten Channel weitergezogen." },
+        user_moved_v01: { url: new URL("./assets/speech/de/user_moved_v01.wav", import.meta.url).href, duration: 3.4137916666666666, transcript: "Ein Benutzer ist in einen anderen Channel weitergezogen." },
         user_moved_v02: { url: new URL("./assets/speech/de/user_moved_v02.wav", import.meta.url).href, duration: 2.550708333333333, transcript: "Jemand ist in einen anderen Channel gewechselt." },
         user_moved_v03: { url: new URL("./assets/speech/de/user_moved_v03.wav", import.meta.url).href, duration: 3.1900416666666667, transcript: "Ein Benutzer ist in einen anderen Channel gegangen." },
         user_moved_v04: { url: new URL("./assets/speech/de/user_moved_v04.wav", import.meta.url).href, duration: 1.7208333333333334, transcript: "Jemand hat den Channel gewechselt." },

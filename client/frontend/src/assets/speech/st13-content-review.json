@@ -1212,12 +1212,12 @@
     "reviewStatus": "accepted-automatic-content-review"
   },
   "de/user_moved_v01": {
-    "sha256": "56630a9d3965838986a4a4e5556b3439144f5f66eb1fe2f67ac11fa343e9f880",
-    "expected": "Ein Benutzer ist in den nächsten Channel weitergezogen.",
-    "renderText": "Ein Benutzer ist in den nächsten Tschännel weitergezogen.",
+    "sha256": "4f2af4bc5f5257aba7e9fccfdf56b78fda6cb76a27fe0bbe4ef2a67880379f9c",
+    "expected": "Ein Benutzer ist in einen anderen Channel weitergezogen.",
+    "renderText": "Ein Benutzer ist in einen anderen Tschännel weitergezogen.",
     "language": "de",
-    "automatic_transcript": "Ein Benutzer ist in den nächsten Channel weitergezogen.",
-    "duration": 3.153,
+    "automatic_transcript": "Ein Benutzer ist in einen anderen Channel weitergezogen.",
+    "duration": 3.414,
     "asr": "Whisper small (sherpa-onnx int8)",
     "note": "Automatic content review; not a human listening or timbre assessment.",
     "letterEdits": 0,

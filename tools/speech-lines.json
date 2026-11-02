@@ -181,7 +181,7 @@
     "user_disconnected_v07": "Ein Benutzer hat den Server verlassen.",
     "user_disconnected_v08": "Jemand ist jetzt offline.",
     "user_disconnected_v09": "Ein Benutzer ist jetzt vom Server getrennt.",
-    "user_moved_v01": "Ein Benutzer ist in den nächsten Channel weitergezogen.",
+    "user_moved_v01": "Ein Benutzer ist in einen anderen Channel weitergezogen.",
     "user_moved_v02": "Jemand ist in einen anderen Channel gewechselt.",
     "user_moved_v03": "Ein Benutzer ist in einen anderen Channel gegangen.",
     "user_moved_v04": "Jemand hat den Channel gewechselt.",
