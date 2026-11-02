@@ -1,7 +1,8 @@
 import { expect, test } from "@playwright/test";
 
 import { ChatSession } from "../src/core/chat-session.js";
-import { linkClaimTranscript, linkSAS, toBase64, toBase64URL, utf8 } from "../src/core/crypto.js";
+import { keyFingerprint, linkClaimTranscript, linkSAS, publicKeyPEM, toBase64, toBase64URL, utf8 } from "../src/core/crypto.js";
+import { announcedBinding, linkBindingTranscript } from "../src/core/link-binding.js";
 import { Msg } from "../src/core/frame.js";
 import { desktopSession, sign } from "./harness.mjs";
 
@@ -23,11 +24,14 @@ function nextDeviceEvent(conn, kind) {
     });
 }
 
-async function approve(desktop, event) {
+async function approve(desktop, event, { bind = false } = {}) {
     const list = await desktop.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
     const self = list.devices.find(d => d.current);
     const transcript = utf8(`noxa-device-approval-v1\n${desktop.uniqueID}\n${self.device_id}\n${event.ed25519_public_key}\n${event.x25519_public_key}`);
+    const binding = bind ? announcedBinding(desktop.auth.tls_fingerprint) : "";
+    if (bind) expect(binding).toMatch(/^tls-sha256:[0-9a-f]{64}$/);
     return desktop.conn.request(Msg.DeviceRequest, {
+        ...(binding ? { server_binding: binding, binding_signature: toBase64(sign(linkBindingTranscript(desktop.uniqueID, self.device_id, event.ed25519_public_key, event.x25519_public_key, binding), desktop.identity.edSecret)) } : {}),
         action: "link_decide", link_id: event.link_id, approve: true, signature: toBase64(sign(transcript, desktop.identity.edSecret)),
     }, Msg.DeviceResult, { accept: r => r.action === "link_decide" });
 }
@@ -110,3 +114,40 @@ test("a typed code works and a denial returns to the connect screen", async ({ p
     await expect(page.getByRole("button", { name: "Continue" })).toBeVisible();
     desktop.conn.close();
 });
+
+
+test("signed QR linking and relinking open secure messaging and survive a reload", async ({ page, browserName }) => {
+    const desktop = await desktopSession(server.controlAddr, browserName === "webkit" ? server.accounts.kai : server.accounts.rowan, { version: info.version });
+    const errors = []; page.on("pageerror", error => errors.push(error.message));
+    try {
+        await desktop.conn.request(Msg.DeviceRequest, { action: "list" }, Msg.DeviceResult, { accept: r => r.action === "list" });
+        for (let round = 0; round < 2; round++) {
+            const link = await desktop.conn.request(Msg.DeviceRequest, { action: "link_create" }, Msg.DeviceResult, { accept: r => r.action === "link_create" });
+            const secret = Uint8Array.from(Buffer.from(link.secret, "base64"));
+            const claimed = nextDeviceEvent(desktop.conn, "link_claimed");
+            const anchor = keyFingerprint(publicKeyPEM(desktop.identity.edPublic));
+            await page.goto(`${server.webURL}/link#id=${link.link_id}&k=${toBase64URL(secret)}&a=${encodeURIComponent(anchor)}`);
+            const event = await claimed;
+            await expect(page.locator(".sas")).toHaveText(linkSAS(secret, linkClaimTranscript(event.link_id, event.ed25519_public_key, event.x25519_public_key)));
+            expect((await approve(desktop, event, { bind: true })).state).toBe("approved");
+            await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible({ timeout: 30000 });
+            await expect.poll(() => secureState(page)).toEqual({ linked: true, guest: false, ready: true, error: "" });
+            await page.reload();
+            await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible({ timeout: 30000 });
+            await expect.poll(() => secureState(page)).toEqual({ linked: true, guest: false, ready: true, error: "" });
+        }
+        expect(errors).toEqual([]);
+    } finally { desktop.conn.close(); }
+});
+
+async function secureState(page) {
+    return page.evaluate(async () => {
+        const scripts = performance.getEntriesByType("resource").filter(r => r.name.includes("/app/assets/") && r.name.endsWith(".js"));
+        for (const script of scripts) {
+            const exports = await import(script.name);
+            const app = Object.values(exports).find(value => value && typeof value === "object" && "identity" in value && "meta" in value && "ratchet" in value && value.session?.conn);
+            if (app) return { linked: !!app.meta.linked, guest: !!app.meta.guest, ready: !!app.ratchet, error: app.ratchetError?.code || "" };
+        }
+        return null;
+    });
+}

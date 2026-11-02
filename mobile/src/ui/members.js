@@ -1,6 +1,7 @@
 // members.js — everyone online, grouped by channel, with status, roles and
 // the mobile badge (#/members/<channelID>). Tapping a member opens their
 // card. The given channel's members come first.
+import { guestBadge } from "./guest-badge.js";
 import { app } from "../app.js";
 import { statusOf } from "../core/presence.js";
 import { rolesOf } from "../core/social.js";
@@ -25,6 +26,7 @@ function memberRow(client, session) {
         h("span", { class: "row-title", style: roles[0]?.color ? `color:${roles[0].color}` : null }, client.nickname, self ? ` (${t("dm.you")})` : ""),
         sub ? h("span", { class: "row-sub" }, sub) : null,
         roles.length ? h("span", { class: "role-chips inline" }, roles.slice(0, 3).map(role => h("span", { class: "role-chip", style: role.color ? `--role:${role.color}` : null }, role.name))) : null),
+    guestBadge(client),
     client.on_mobile ? h("span", { class: "row-meta", title: t("presence.onMobile") }, t("presence.mobileBadge")) : null));
 }
 

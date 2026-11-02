@@ -6,7 +6,7 @@ import { Connection } from "../core/connection.js";
 import { claimLink, LinkState, linkWithPasskey, passkeysSupported, waitForDecision } from "../core/device.js";
 import { linkBindingFromStatus, verifyLinkBinding } from "../core/link-binding.js";
 import { t } from "../i18n.js";
-import { h, toast } from "./dom.js";
+import { h } from "./dom.js";
 import { icon } from "./icons.js";
 import { scanPairingQR } from "./qr-scanner.js";
 import { connectExtras, restoreSection, signInMessage } from "./account.js";
@@ -25,16 +25,20 @@ function isIOS() {
     return /iPhone|iPad/.test(navigator.userAgent) && !navigator.standalone;
 }
 
-export function renderConnect(root, { onSignedIn }) {
+export function renderConnect(root, { onSignedIn, errorMessage = "" }) {
     scanners.get(root)?.abort();
     const scanner = new AbortController();
     scanners.set(root, scanner);
     const scan = h("button", { class: "btn btn-block", type: "button", onclick: async () => {
-        const fence = await beginIdentity();
-        const link = await scanPairingQR({ signal: scanner.signal });
-        if (link && !scanner.signal.aborted && root.isConnected) runLink(root, link, { onSignedIn, fence });
+        try {
+            const fence = await beginIdentity();
+            const link = await scanPairingQR({ signal: scanner.signal });
+            if (link && !scanner.signal.aborted && root.isConnected) runLink(root, link, { onSignedIn, fence });
+        } catch (err) {
+            if (!scanner.signal.aborted && root.isConnected) error.textContent = signInMessage(err);
+        }
     } }, icon("camera"), t("connect.scan"));
-    const error = h("p", { class: "error", role: "alert" });
+    const error = h("p", { class: "error", role: "alert", tabindex: "-1" }, errorMessage);
     const code = h("input", {
         class: "input code", id: "link-code", inputmode: "text", autocomplete: "one-time-code", autocapitalize: "characters",
         spellcheck: "false", maxlength: "9", required: "", minlength: "8", placeholder: t("connect.codePlaceholder"), "aria-describedby": "link-hint",
@@ -115,6 +119,7 @@ export function renderConnect(root, { onSignedIn }) {
             restoreSection({ onSignedIn, error }),
             error),
         isIOS() ? h("p", { class: "hint connect-install" }, t("connect.install")) : null));
+    if (errorMessage) error.focus();
     return () => scanners.get(root)?.abort();
 }
 
@@ -166,7 +171,6 @@ export async function runLink(root, link, { onSignedIn, fence }) {
     }
 
     function fail(message) {
-        renderConnect(root, { onSignedIn });
-        toast(message, "warn");
+        renderConnect(root, { onSignedIn, errorMessage: message });
     }
 }

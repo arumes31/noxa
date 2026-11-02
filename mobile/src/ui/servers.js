@@ -1,5 +1,6 @@
 // servers.js — Server & channels (03): text and voice tree with members.
 import { showVoiceJoinError } from "./media-e2ee-text.js";
+import { guestBadge } from "./guest-badge.js";
 import { app } from "../app.js";
 import { t } from "../i18n.js";
 import { avatar, h } from "./dom.js";
@@ -72,6 +73,7 @@ export function renderServers(root) {
                         onclick: () => openProfile({ uid: client.unique_id, clientID: client.client_id, name: client.nickname }),
                     }, h("span", { class: "avatar-wrap" }, avatar(client.nickname, "sm", client.unique_id), statusDot(statusOf(client))),
                     h("span", { class: "row-main" }, h("span", { class: "row-sub" }, client.nickname), statusLine(client) ? h("span", { class: "row-sub member-status" }, statusLine(client)) : null),
+                    guestBadge(client),
                     client.on_mobile ? h("span", { class: "row-meta", title: t("presence.onMobile") }, t("presence.mobileBadge")) : null)))) : null))),
             addChannelButton(session))),
         nav("servers"));

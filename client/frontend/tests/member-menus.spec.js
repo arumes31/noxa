@@ -772,8 +772,29 @@ test("lobby drag blocks member moves while preserving voluntary joins and identi
     }, clientID);
     expect(await drag("alice")).toBe("alice-uid");
     expect(await page.evaluate(() => window.__moves)).toEqual([]);
-    await expect(page.getByText("Members in the lobby must join voice themselves.", { exact: true })).toBeVisible();
+    await expect(page.locator(".toast").filter({ hasText: /^Members in the lobby must join voice themselves\.$/ })).toBeVisible();
     expect(await drag("self")).toBe("me");
     await expect.poll(() => page.evaluate(() => window.__joins)).toEqual([["one", 2]]);
     expect(await page.evaluate(() => window.__moves)).toEqual([]);
+});
+
+
+test("guest account status stays readable independently of assigned roles and mobile state", async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 700 });
+    await page.evaluate(() => {
+        const v = window.__noxa;
+        Object.assign(v.state.clients.find(c => c.client_id === "alice"), { is_guest: true, on_mobile: true, roles: [{ id: 3, name: "Member", position: 1 }] });
+        v.state.clients.push({ client_id: "registered", unique_id: "registered", nickname: "Guest by name", channel_id: 1, is_guest: false });
+        v.renderTree();
+    });
+    const guest = page.locator('#channel-tree .client[data-clid="alice"]');
+    await expect(guest.locator('.guest-badge')).toHaveText("Guest");
+    await expect(guest.locator('.guest-badge')).toHaveAttribute("title", "Guest account");
+    await expect(guest).toHaveAttribute("aria-label", /Guest account/);
+    await expect(guest.locator('.on-mobile')).toHaveText("Mobile");
+    await expect(guest.locator('.role-chip:not(.on-mobile)')).toContainText("Member");
+    expect(await guest.locator('.guest-badge').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await expect(page.locator('[data-clid="registered"] .guest-badge')).toHaveCount(0);
+    await page.evaluate(() => { window.__noxa.state.clients.find(c => c.client_id === "alice").is_guest = false; window.__noxa.renderTree(); });
+    await expect(guest.locator('.guest-badge')).toHaveCount(0);
 });

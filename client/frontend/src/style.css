@@ -1719,6 +1719,7 @@ body.compact #voice-bar { justify-content: center; padding: 12px; }
     .client .group-badge .role-icon { color: var(--text-dim); margin-right: 0; }
     .client .client-sessions-count { display: none; }
 }
+.client .guest-badge { flex: 0 0 auto; max-width: none; padding: 0 4px; color: var(--text); border-style: dashed; }
 /* Device marker: a small phone glyph in a circle on the avatar's lower-right
    corner. Sizes are in px so they scale with the window's zoom factor. */
 .client .avatar-device {

@@ -52,3 +52,35 @@ test("enabled guest login asks for a name and an advertised server password", as
     await page.getByRole("button", { name: "Continue as guest", exact: true }).click();
     await expect(page.getByLabel("Display name", { exact: true })).toBeFocused();
 });
+
+
+test("link failures remain visible after transient notifications would have vanished", async ({ page }) => {
+    await page.goto("http://127.0.0.1:5175/app/");
+    await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeVisible();
+    await page.evaluate(async () => {
+        const { Connection } = await import("/app/src/core/connection.js");
+        const { runLink } = await import("/app/src/ui/connect.js");
+        const original = Connection.open;
+        Connection.open = async () => { throw new Error('Link failed <img src=x onerror=alert(1)>'); };
+        try { await runLink(document.querySelector("main").parentElement, { code: "ABCD-EFGH" }, { onSignedIn: () => { throw new Error("must not sign in"); } }); }
+        finally { Connection.open = original; }
+    });
+    const alert = page.getByRole("alert");
+    await expect(alert).toContainText("Link failed <img src=x onerror=alert(1)>");
+    await expect(alert).toBeFocused();
+    await page.clock.install(); await page.clock.fastForward(10000);
+    await expect(alert).toContainText("Link failed");
+    await expect(alert.locator("img")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeEnabled();
+});
+
+test("QR scan storage failures are explained without an unhandled rejection", async ({ page }) => {
+    const errors = []; page.on("pageerror", error => errors.push(error.message));
+    await page.goto("http://127.0.0.1:5175/app/");
+    await expect(page.getByRole("button", { name: "Scan QR code" })).toBeVisible();
+    await page.evaluate(() => { indexedDB.open = () => { throw new Error("Browser storage unavailable"); }; });
+    await page.getByRole("button", { name: "Scan QR code" }).click();
+    await expect(page.getByRole("alert")).toContainText("Browser storage unavailable");
+    await expect(page.locator(".qr-dialog")).toHaveCount(0);
+    expect(errors).toEqual([]);
+});
