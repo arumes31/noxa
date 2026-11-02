@@ -1,5 +1,28 @@
 import { captureFrameTransform } from "./share-frame-transform.js";
 
+// Timer tasks can run before already-posted worker replies after a UI stall.
+// Keep an independent watchdog for a hung worker, but give queued replies a
+// fresh delivery window when the renderer missed its regular check-ins.
+// The 30-second ceiling also bounds repeated stalls/background throttling.
+function captureDeadline(expire) {
+    let remaining = 5000, previous = performance.now(), timer, cancelled = false;
+    const hardDeadline = previous + 30000;
+    const schedule = () => {
+        const delay = Math.min(250, remaining);
+        timer = setTimeout(() => {
+            if (cancelled) return;
+            const now = performance.now(), elapsed = now - previous;
+            previous = now;
+            if (elapsed > delay + 250) remaining = 5000;
+            else remaining -= Math.max(delay, elapsed);
+            if (remaining <= 0 || now >= hardDeadline) expire();
+            else schedule();
+        }, delay);
+    };
+    schedule();
+    return () => { cancelled = true; clearTimeout(timer); };
+}
+
 // Transfer both stream endpoints once. Frames stay on the worker; only size
 // changes and constraint acknowledgements return to the UI thread. Stream
 // backpressure and the capture processor's one-frame buffer bound retention.
@@ -17,15 +40,15 @@ export function createCaptureFramePipe(readable, writable, { region, onLayout, o
     const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
     // A worker can fail before the first applyConstraints call.
     ready.catch(() => {});
-    let startupTimer;
+    let cancelStartup;
     const close = () => {
         if (closed) return;
         closed = true;
-        clearTimeout(startupTimer);
+        cancelStartup?.();
         worker.terminate();
         const error = new DOMException("capture ended", "AbortError");
         rejectReady(error);
-        for (const request of pending.values()) { clearTimeout(request.timer); request.reject(error); }
+        for (const request of pending.values()) { request.cancelDeadline(); request.reject(error); }
         pending.clear();
     };
     const fail = () => { if (!closed) { close(); onError(); } };
@@ -33,14 +56,14 @@ export function createCaptureFramePipe(readable, writable, { region, onLayout, o
     worker.onmessageerror = fail;
     worker.onmessage = ({ data }) => {
         if (closed) return;
-        if (data.op === "ready") { clearTimeout(startupTimer); resolveReady(); }
+        if (data.op === "ready") { cancelStartup?.(); resolveReady(); }
         else if (data.op === "layout") onLayout(data.layout);
         else if (data.op === "applied") {
             const request = pending.get(data.seq);
-            if (request) { pending.delete(data.seq); clearTimeout(request.timer); request.resolve(); }
+            if (request) { pending.delete(data.seq); request.cancelDeadline(); request.resolve(); }
         } else if (data.op === "error" || data.op === "ended") fail();
     };
-    startupTimer = setTimeout(fail, 5000);
+    cancelStartup = captureDeadline(fail);
     try { worker.postMessage({ op: "init", readable, writable, region }, [readable, writable]); }
     catch (error) { close(); throw error; }
     return {
@@ -49,8 +72,8 @@ export function createCaptureFramePipe(readable, writable, { region, onLayout, o
             await ready;
             if (closed) throw new DOMException("capture ended", "AbortError");
             return new Promise((resolve, reject) => {
-                const id = ++seq, timer = setTimeout(fail, 5000);
-                pending.set(id, { resolve, reject, timer });
+                const id = ++seq, cancelDeadline = captureDeadline(fail);
+                pending.set(id, { resolve, reject, cancelDeadline });
                 try { worker.postMessage({ op: "output", seq: id, output }); }
                 catch { fail(); }
             });

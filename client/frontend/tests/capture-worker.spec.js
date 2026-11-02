@@ -72,3 +72,27 @@ for (const mode of ['construction', 'transfer']) test(`capture ${mode} failure r
     },mode);
     expect(result).toEqual({sourceStops:1,source:'ended',output:'ended',error:mode==='construction'?'capture worker denied':'capture transfer denied'});
 });
+test('an applied output acknowledgement survives a UI task longer than its watchdog window', async ({ page }) => {
+    await fixture(page);
+    const result = await page.evaluate(async () => {
+        const { cropDisplayStream } = await import('/src/share-region.js');
+        const OriginalWorker = window.Worker;
+        let outputSent; const sent = new Promise(resolve => {outputSent=resolve;});
+        window.Worker = class extends OriginalWorker {
+            postMessage(message,...args) {super.postMessage(message,...args);if(message.op==='output')outputSent();}
+        };
+        const source = new MediaStreamTrackGenerator({kind:'video'});
+        source.getSettings=()=>({width:322,height:182});source.applyConstraints=async()=>{};
+        let stops=0;const stop=source.stop.bind(source);source.stop=()=>{stops++;stop();};
+        let track;
+        try {
+            track=cropDisplayStream(new MediaStream([source]),{x:0,y:0,width:1,height:1}).stream.getVideoTracks()[0];
+            const pending=track.applyConstraints({width:{max:320},height:{max:180}});
+            await sent;
+            const start=performance.now();while(performance.now()-start<6500){/* bounded UI stall */}
+            await pending;
+            return {source:source.readyState,output:track.readyState,stops,constraints:track.getConstraints()};
+        } finally {window.Worker=OriginalWorker;track?.stop();source.stop();}
+    });
+    expect(result).toEqual({source:'live',output:'live',stops:0,constraints:{width:{max:320},height:{max:180}}});
+});

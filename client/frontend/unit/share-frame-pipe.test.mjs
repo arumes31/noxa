@@ -40,9 +40,36 @@ test('closing capture during worker startup rejects waiting constraints',async t
 });
 test('a stalled worker has a bounded startup deadline',async t=>{
     t.mock.timers.enable({apis:['setTimeout']});const f=setup(t,{ready:false});const pending=f.pipe.setOutput({});const rejected=assert.rejects(pending,{name:'AbortError'});
-    t.mock.timers.tick(5001);await rejected;assert.equal(f.errors,1);assert.equal(f.worker.terminations,1);
+    for(let i=0;i<20;i++)t.mock.timers.tick(250);await rejected;assert.equal(f.errors,1);assert.equal(f.worker.terminations,1);
 });
 test('a stalled constraint acknowledgement ends capture instead of silently using stale bounds',async t=>{
     t.mock.timers.enable({apis:['setTimeout']});const f=setup(t);const pending=f.pipe.setOutput({width:320});await Promise.resolve();await Promise.resolve();const rejected=assert.rejects(pending,{name:'AbortError'});
-    t.mock.timers.tick(5001);await rejected;assert.equal(f.errors,1);assert.equal(f.worker.terminations,1);
+    for(let i=0;i<20;i++)t.mock.timers.tick(250);await rejected;assert.equal(f.errors,1);assert.equal(f.worker.terminations,1);
+});
+for (const phase of ['startup','output']) test(`queued ${phase} acknowledgement survives an overdue UI timer`,async t=>{
+    let clock=0;t.mock.method(performance,'now',()=>clock);t.mock.timers.enable({apis:['setTimeout']});
+    const f=setup(t,{ready:phase!=='startup'});let done=false;
+    const pending=f.pipe.setOutput({width:320}).then(()=>{done=true;});await Promise.resolve();await Promise.resolve();
+    clock=6500;t.mock.timers.tick(250);
+    assert.equal(f.worker.terminations,0,'a blocked UI must not expire a working worker');
+    if(phase==='startup'){f.worker.receive({op:'ready'});await Promise.resolve();await Promise.resolve();}
+    const request=f.worker.messages.find(x=>x.message.op==='output').message;
+    f.worker.receive({op:'applied',seq:request.seq});await pending;
+    assert.equal(done,true);assert.equal(f.errors,0);
+    t.mock.timers.tick(10000);assert.equal(f.worker.terminations,0,'cancelled timers cannot end the capture later');
+});
+
+test('an unresponsive worker still expires after a blocked UI becomes responsive',async t=>{
+    let clock=0;t.mock.method(performance,'now',()=>clock);t.mock.timers.enable({apis:['setTimeout']});
+    const f=setup(t,{ready:false});const pending=f.pipe.setOutput({});const rejected=assert.rejects(pending,{name:'AbortError'});
+    clock=6500;t.mock.timers.tick(250);assert.equal(f.errors,0);
+    for(let i=0;i<20;i++){clock+=250;t.mock.timers.tick(250);}
+    await rejected;assert.equal(f.errors,1);assert.equal(f.worker.terminations,1);
+});
+test('repeated UI stalls cannot retain an unresponsive worker past the hard ceiling',async t=>{
+    let clock=0;t.mock.method(performance,'now',()=>clock);t.mock.timers.enable({apis:['setTimeout']});
+    const f=setup(t,{ready:false});const pending=f.pipe.setOutput({});const rejected=assert.rejects(pending,{name:'AbortError'});
+    for(let i=0;i<29;i++){clock+=1000;t.mock.timers.tick(250);}
+    assert.equal(f.errors,0);clock=30000;t.mock.timers.tick(250);
+    await rejected;assert.equal(f.errors,1);assert.equal(f.worker.terminations,1);
 });
