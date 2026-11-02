@@ -3,6 +3,7 @@
 // them (message, call, poke, contact, block, notify when online), plus a
 // private note kept on this phone. Moderators also get the moderation
 // actions of ui/moderation.js (move, kick, ban, report) on the card.
+import { guestBadge } from "./guest-badge.js";
 import { app, startCall } from "../app.js";
 import { presenceOf } from "../core/presence.js";
 import {
@@ -107,6 +108,7 @@ export function openProfile({ uid = "", clientID = "", name = "" } = {}) {
                 h("div", { class: "row-main" },
                     h("h2", { class: "sheet-title" }, display),
                     h("p", { class: "profile-status" }, statusDot(status), " ", t(`status.${status}`), presence.message ? ` · ${presence.message}` : "",
+                        guestBadge(client),
                         presence.onMobile ? h("span", { class: "badge profile-mobile", title: t("presence.onMobile") }, t("presence.mobileBadge")) : null),
                     roles.length ? h("ul", { class: "role-chips", "aria-label": t("profile.roles") }, roles.map(role => h("li", { class: "role-chip", style: role.color ? `--role:${role.color}` : null }, role.name))) : null)),
             id ? h("div", { class: "profile-uid" },

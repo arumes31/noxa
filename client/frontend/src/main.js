@@ -232,7 +232,11 @@ const recoverVoice = createVoiceRecovery({ state,
         },
     });
 const hardwareRecovery = createHardwareRecoveryScheduler();
-const recoverVideoSender = createVideoSenderRecovery({ state, retry: retryVideoHardware, scheduler: hardwareRecovery });
+const recoverVideoSender = createVideoSenderRecovery({ state, retry: retryVideoHardware, scheduler: hardwareRecovery,
+    startupReady: () => {
+        const status = channelMedia()?.status();
+        return status && ["encrypted", "partial"].includes(status.state) ? status.epoch : 0;
+    } });
 const recoverVideoReceiver = createVideoReceiverRecovery({ state, watch: streamReceiverRecoveryTarget, scheduler: hardwareRecovery,
     supported: () => window.go?.main?.App.SupportsStreamReceiverRecoveryForTab?.(state.activeTabID) ?? false });
 startVoiceDiagnostics({

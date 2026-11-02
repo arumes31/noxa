@@ -1,3 +1,4 @@
+import { hardwareVideoEvidence } from "./hardware-video.js";
 import { updateStartupBlocked } from "./update-transition.js";
 import { retainDisplayCapture, releaseDisplayCapture, stopDisplayCapture, transferDisplayCapture } from "./display-capture-lease.js";
 // video-publication.js — camera/screen capture and publication lifecycle.
@@ -18,7 +19,7 @@ import { renderMicStatus } from "./audio.js";
 import { videoConstraints, trackFitsVideoLimits, capVideoEncodings, screenBitrateHeadroom } from "./media-limits.js";
 import { t as tLabel } from "./i18n.js";
 import { rememberVideoSenderProfile } from "./video-sender-stats.js";
-import { hardwareVideoEncodeAvailable, videoSenderCaptureSample } from "./video-sender-hardware-recovery.js";
+import { hardwareVideoEncodeAvailable, videoSenderCaptureSample, hardwareStartupGeometry } from "./video-sender-hardware-recovery.js";
 import { sampleSenderStats } from "./peer-stats.js";
 import { createScreenResolutionController } from "./screen-resolution.js";
 import { createScreenStartupAttempt } from "./video-startup-plan.js";
@@ -416,6 +417,8 @@ export function createVideoPublication({ policy }) {
                     const video = [...reports.values()].filter(row => row.type === "outbound-rtp" && !row.isRemote &&
                         (row.kind === "video" || row.mediaType === "video"));
                     return video.length === 1 ? { ...video[0], codec: reports.get(video[0].codecId),
+                        startupGeometry: hardwareStartupGeometry(reports, video[0], track, sender.getParameters().encodings?.[0]),
+                        hardwareEvidence: hardwareVideoEvidence(reports, track.id),
                         capture: videoSenderCaptureSample(reports, video[0], track) } : null;
                 };
                 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -423,30 +426,37 @@ export function createVideoPublication({ policy }) {
                 const parameters = sender.getParameters(), encoding = parameters.encodings?.[0];
                 const scale = encoding?.scaleResolutionDownBy ?? 1;
                 const size = track.getSettings();
-                const eligible = row => row && row.powerEfficientEncoder === false && hardwareRecoveryCodec(row.codec) && (row.codec.mimeType.toLowerCase() === "video/h264" || knownSoftwareVideoEncoder(row.codec, row.encoderImplementation)) &&
-                    ["none", "cpu", "bandwidth"].includes(row.qualityLimitationReason) && row.frameWidth >= 640 && row.frameHeight >= 360 &&
-                    row.frameWidth % 4 === 0 && row.frameHeight % 4 === 0 &&
-                    Number.isFinite(size.width) && Number.isFinite(size.height) &&
-                    row.frameWidth * scale <= size.width && row.frameHeight * scale <= size.height &&
-                    row.frameWidth * size.height === row.frameHeight * size.width;
-                // Only the publication scheduler's previously measured hardware
-                // configuration authorizes capture progress to replace output.
-                // Revalidate the bound source on fresh reads inside this queue.
+                const startup = captureRecovery?.hardwareStartup === true;
+                const dimensions = row => startup && row?.startupGeometry ? row.startupGeometry : { width: row?.frameWidth, height: row?.frameHeight };
+                const eligible = row => {
+                    const geometry = dimensions(row);
+                    const implementation = startup ? row?.startupGeometry && row.powerEfficientEncoder === true && row.framesEncoded === (captureRecovery.framesEncoded ?? 0) :
+                        row?.powerEfficientEncoder === false && hardwareRecoveryCodec(row.codec) && (row.codec.mimeType.toLowerCase() === "video/h264" || knownSoftwareVideoEncoder(row.codec, row.encoderImplementation));
+                    return row && implementation && hardwareRecoveryCodec(row.codec) &&
+                        ["none", "cpu", "bandwidth"].includes(row.qualityLimitationReason) && geometry.width >= 640 && geometry.height >= 360 &&
+                        geometry.width % 4 === 0 && geometry.height % 4 === 0 &&
+                        Number.isFinite(size.width) && Number.isFinite(size.height) &&
+                        geometry.width * scale <= size.width && geometry.height * scale <= size.height &&
+                        geometry.width * size.height === geometry.height * size.width;
+                };
+                // Revalidate the exact source and either previously working
+                // software-fallback geometry or the bounded first-frame stall.
                 const capturedProgress = (before, after) => captureRecovery &&
                     [before, after].every(row => row?.capture?.id === captureRecovery.sourceId &&
                         row.codec?.mimeType === captureRecovery.codec && row.codec?.sdpFmtpLine === captureRecovery.fmtp &&
-                        row.frameWidth === captureRecovery.width && row.frameHeight === captureRecovery.height &&
-                        knownSoftwareVideoEncoder(row.codec, row.encoderImplementation) &&
+                        dimensions(row).width === captureRecovery.width && dimensions(row).height === captureRecovery.height &&
+                        (startup ? row.startupGeometry && row.framesEncoded === (captureRecovery.framesEncoded ?? 0) : knownSoftwareVideoEncoder(row.codec, row.encoderImplementation)) &&
                         Number.isSafeInteger(row.framesEncoded) && row.framesEncoded >= 0) &&
                     after.framesEncoded >= before.framesEncoded && after.capture.frames > before.capture.frames &&
                     after.capture.timestamp > before.capture.timestamp && after.capture.timestamp - before.capture.timestamp <= 15000;
                 if (!current() || parameters.encodings?.length !== 1 || encoding.active === false || !Number.isFinite(scale) || scale < 1 || !eligible(first)) return false;
+                const recoverySize = dimensions(first);
                 // The shared bounded cache retains hung native queries; a later
                 // retry must not launch additional work for the same geometry.
                 const sourceRate = size.frameRate > 0 ? size.frameRate : 30;
                 const encodedRate = encoding.maxFramerate > 0 ? Math.min(sourceRate, encoding.maxFramerate) : sourceRate;
                 const supported = await Promise.all([1, 2].map(divisor => hardwareVideoEncodeAvailable(first.codec, {
-                    frameWidth: first.frameWidth / divisor, frameHeight: first.frameHeight / divisor,
+                    frameWidth: recoverySize.width / divisor, frameHeight: recoverySize.height / divisor,
                     framesPerSecond: encodedRate,
                 })));
                 if (supported.some(value => !value)) return false;
@@ -455,7 +465,7 @@ export function createVideoPublication({ policy }) {
                 if (!current() || !eligible(baseline) || baseline.id !== first.id || baseline.codecId !== first.codecId || baseline.ssrc !== first.ssrc ||
                     baseline.timestamp <= first.timestamp ||
                     !(baseline.framesEncoded > first.framesEncoded || capturedProgress(first, baseline)) ||
-                    baseline.frameWidth !== first.frameWidth || baseline.frameHeight !== first.frameHeight ||
+                    dimensions(baseline).width !== recoverySize.width || dimensions(baseline).height !== recoverySize.height ||
                     track.getSettings().width !== size.width || track.getSettings().height !== size.height) return false;
                 const originalScale = encoding.scaleResolutionDownBy;
                 const pulseScale = scale * 2;
@@ -465,7 +475,7 @@ export function createVideoPublication({ policy }) {
                     const ready = await sample();
                     if (!current() || !eligible(ready) || ready.id !== first.id || ready.codecId !== first.codecId || ready.ssrc !== first.ssrc ||
                         ready.timestamp <= baseline.timestamp || ready.framesEncoded < baseline.framesEncoded ||
-                        ready.frameWidth !== first.frameWidth || ready.frameHeight !== first.frameHeight ||
+                        dimensions(ready).width !== recoverySize.width || dimensions(ready).height !== recoverySize.height ||
                         (!(baseline.framesEncoded > first.framesEncoded) &&
                             (ready.timestamp <= baseline.timestamp || !capturedProgress(baseline, ready))) ||
                         track.getSettings().width !== size.width || track.getSettings().height !== size.height) return false;
@@ -486,7 +496,8 @@ export function createVideoPublication({ policy }) {
                         if (!row) break;
                         if (current() && row?.timestamp > ready.timestamp && row.framesEncoded > ready.framesEncoded &&
                             row.id === first.id && row.codecId === first.codecId && row.ssrc === first.ssrc &&
-                            row.frameWidth === first.frameWidth / 2 && row.frameHeight === first.frameHeight / 2 &&
+                            row.frameWidth === recoverySize.width / 2 && row.frameHeight === recoverySize.height / 2 &&
+                            (!startup || row.hardwareEvidence === "hardware") &&
                             track.getSettings().width === size.width && track.getSettings().height === size.height) return true;
                     }
                     return false;

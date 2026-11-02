@@ -30,6 +30,7 @@ const LEVEL_INTERVAL = 50;
 /** Outgoing bitrate caps of the data saver (bits/s). */
 export const LOW_AUDIO_BITRATE = 24000;
 export const LOW_VIDEO_BITRATE = 150000;
+const MIC_ACQUISITION_TIMEOUT = 30000;
 const MIC_SETTINGS = ["microphoneID", "echoCancellation", "noiseSuppression", "autoGainControl"];
 const VOLUME_SETTINGS = ["masterVolume", "userVolumes", "mutedUsers", "shareVolumes"];
 
@@ -101,6 +102,7 @@ export class Voice extends EventTarget {
         this.channelID = 0;
         this.pc = null;
         this.mic = null;
+        this.microphoneError = null;
         this.camera = null;
         this.muted = !!previous?.muted;
         this.deafened = !!previous?.deafened;
@@ -290,7 +292,7 @@ export class Voice extends EventTarget {
                     } else mic = stream;
                 }), cancelled]);
             } catch (error) {
-                if (generation === this.#joinGeneration) this.#emit("mic-error", error);
+                if (generation === this.#joinGeneration) { this.microphoneError = error; this.#emit("mic-error", error); }
             }
             if (generation !== this.#joinGeneration) return false;
             const iceServers = await Promise.race([
@@ -325,6 +327,7 @@ export class Voice extends EventTarget {
             if (generation !== this.#joinGeneration || this.#media !== media) { media.stop(); return false; }
             // Ownership moves to teardown only after all cancellable lookups finish.
             this.mic = mic;
+            if (mic) this.microphoneError = null;
             mic = null;
             const pc = media.protectPeer(new RTCPeerConnection(media.peerConfig({ iceServers })));
             // Renewed TURN credentials keep a long session's relay alive.
@@ -342,6 +345,7 @@ export class Voice extends EventTarget {
             pc.onconnectionstatechange = () => this.#emit("state");
             const track = this.mic?.getAudioTracks()[0];
             if (track) {
+                this.#watchMicrophone(track);
                 track.enabled = this.#micOpen();
                 this.#micTransceiver = pc.addTransceiver(track, { direction: "sendrecv", sendEncodings: [{ priority: "high", networkPriority: "high" }] });
             } else {
@@ -387,6 +391,9 @@ export class Voice extends EventTarget {
         this.whispering = false;
         this.whisperers.clear();
         this.echo = null;
+        const acquisition = this.#micAcquisition;
+        this.#micAcquisition = null;
+        acquisition?.cancel();
         this.#micTransceiver = null;
         this.#media?.stop();
         this.#media = null;
@@ -480,28 +487,110 @@ export class Voice extends EventTarget {
         return new MediaStream([clone]);
     }
 
-    /** Takes the microphone again with new settings and swaps it into the call. */
-    async #reacquire() {
-        if (!this.pc || !this.#micTransceiver) return;
-        const stream = await openMicrophone();
-        const track = stream.getAudioTracks()[0];
-        if (!this.pc || !track) {
-            stream.getTracks().forEach(t => t.stop());
-            return;
+    /** Whether a live input track is present, independent of mute and push-to-talk. */
+    get microphoneAvailable() {
+        const track = this.mic?.getAudioTracks?.()[0];
+        return track?.readyState === "live" && (!this.#micTransceiver || this.#micTransceiver.sender.track === track);
+    }
+
+    #watchMicrophone(track) {
+        track.addEventListener?.("ended", () => {
+            if (this.mic?.getAudioTracks?.().includes(track)) this.#emit("state");
+        }, { once: true });
+    }
+
+    /** Explicit user retry; mute/deafen choices are preserved. */
+    retryMicrophone() {
+        return this.#reacquire();
+    }
+
+    #micAcquisition = null;
+
+    /** Coalesce identical retries; a new device retires an unsettled capture. */
+    #reacquire() {
+        const pc = this.pc, transceiver = this.#micTransceiver;
+        if (!pc || !transceiver) return Promise.resolve(false);
+        const config = JSON.stringify(micConstraints(settings.all()));
+        const previous = this.#micAcquisition;
+        if (previous?.pc === pc && previous.config === config) return previous.promise;
+        previous?.cancel();
+        let cancel;
+        const operation = { pc, transceiver, config, cancelled: false, stream: null, promise: null,
+            cancellation: new Promise(resolve => { cancel = resolve; }) };
+        operation.cancel = () => {
+            operation.cancelled = true;
+            operation.stream?.getTracks().forEach(track => track.stop());
+            operation.stream = null;
+            cancel(null);
+        };
+        this.#micAcquisition = operation;
+        operation.promise = this.#replaceMicrophone(operation).catch(error => {
+            if (this.#micAcquisition === operation && this.pc === pc) {
+                this.microphoneError = error;
+                this.#emit("mic-error", error);
+                this.#emit("state");
+            }
+            throw error;
+        }).finally(() => {
+            if (this.#micAcquisition === operation) this.#micAcquisition = null;
+        });
+        return operation.promise;
+    }
+
+    async #replaceMicrophone(operation) {
+        const { pc, transceiver, config } = operation;
+        const current = () => !operation.cancelled && this.#micAcquisition === operation && this.pc === pc &&
+            this.#micTransceiver === transceiver && config === JSON.stringify(micConstraints(settings.all()));
+        let timeout;
+        // getUserMedia itself cannot be aborted. A retired/timed-out result is
+        // stopped immediately when the browser eventually grants it.
+        const capture = openMicrophone().then(stream => {
+            if (!current()) { stream.getTracks().forEach(track => track.stop()); return null; }
+            stream.getAudioTracks().forEach(track => { track.enabled = false; });
+            operation.stream = stream;
+            return stream;
+        });
+        let stream;
+        try {
+            stream = await Promise.race([capture, operation.cancellation, new Promise((_, reject) => {
+                timeout = setTimeout(() => {
+                    operation.cancelled = true;
+                    reject(new DOMException("Microphone access timed out. Check the browser permission prompt and try again.", "TimeoutError"));
+                }, MIC_ACQUISITION_TIMEOUT);
+            })]);
+        } finally { clearTimeout(timeout); }
+        if (!stream) return false;
+        let installed = false;
+        try {
+            const track = stream.getAudioTracks()[0];
+            if (!current() || !track) return false;
+            const install = this.#enqueue(async () => {
+                if (!current()) return;
+                await transceiver.sender.replaceTrack(track);
+                if (!current()) return;
+                const old = this.mic;
+                this.mic = stream;
+                operation.stream = null;
+                // Read mute/deafen again after replaceTrack, never before awaiting it.
+                track.enabled = this.#micOpen();
+                installed = true;
+                this.microphoneError = null;
+                this.#watchMicrophone(track);
+                old?.getTracks().forEach(t => t.stop());
+                this.#startMeter();
+                this.#emit("state");
+                if (transceiver.direction !== "sendrecv" || transceiver.currentDirection !== "sendrecv") {
+                    transceiver.direction = "sendrecv";
+                    await this.#offer();
+                }
+                if (current()) await this.#applyBitrate();
+            });
+            await Promise.race([install, operation.cancellation]);
+            return installed && current();
+        } finally {
+            if (!installed) stream.getTracks().forEach(track => track.stop());
+            if (operation.stream === stream) operation.stream = null;
         }
-        track.enabled = this.#micOpen();
-        const old = this.mic;
-        const transceiver = this.#micTransceiver;
-        await transceiver.sender.replaceTrack(track);
-        this.mic = stream;
-        old?.getTracks().forEach(t => t.stop());
-        if (transceiver.direction !== "sendrecv") {
-            transceiver.direction = "sendrecv";
-            await this.#enqueue(() => this.#offer());
-        }
-        this.#startMeter();
-        await this.#applyBitrate();
-        this.#emit("state");
     }
 
     #settingsChanged(changed) {
@@ -517,7 +606,7 @@ export class Voice extends EventTarget {
             this.#applyBitrate();
             this.applyQualities().catch(() => {});
         }
-        if (this.active && MIC_SETTINGS.some(has)) this.#reacquire().catch(error => this.#emit("mic-error", error));
+        if (this.active && MIC_SETTINGS.some(has)) this.retryMicrophone().catch(() => {});
     }
 
     /** Caps the outgoing bitrate when the data saver is on. */
@@ -785,7 +874,7 @@ export class Voice extends EventTarget {
 
     /** Whether the microphone is sending right now. */
     get transmitting() {
-        return !!this.mic && this.#micOpen();
+        return this.microphoneAvailable && this.#micOpen();
     }
 
     /** quiet: the gate toggles often, so only a real change is announced, as "transmit". */

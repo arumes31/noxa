@@ -998,3 +998,38 @@ func TestNormalizeSettingsUsesOnlyMidnight(t *testing.T) {
 		}
 	}
 }
+
+func TestImmediateChatDefaultAndLegacyUndoMigration(t *testing.T) {
+	if got := DefaultSettings().ChatUndoSeconds; got != 0 {
+		t.Fatalf("default undo seconds = %d, want immediate send", got)
+	}
+	for _, test := range []struct {
+		name                   string
+		version, seconds, want int
+	}{
+		{"old default", 14, 5, 0}, {"already immediate", 14, 0, 0},
+		{"custom delay", 14, 10, 10}, {"custom long delay", 14, 30, 30},
+		{"new explicit opt in", settingsVersion, 5, 5},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := DefaultSettings()
+			s.SettingsVersion = test.version
+			s.ChatUndoSeconds = test.seconds
+			file := filepath.Join(t.TempDir(), "settings.json")
+			raw, err := json.Marshal(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(file, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got := loadSettingsAt(file)
+			if got.ChatUndoSeconds != test.want {
+				t.Fatalf("undo seconds = %d, want %d", got.ChatUndoSeconds, test.want)
+			}
+			if next := migrateSettings(got); next.ChatUndoSeconds != test.want {
+				t.Fatal("migration was not stable")
+			}
+		})
+	}
+}

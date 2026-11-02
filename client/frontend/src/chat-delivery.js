@@ -9,7 +9,7 @@ const button = (key, action) => { const element = node("button", "", t(key)); el
 // UI owns no durable message payload. Go seals and scopes the queue and changes
 // "sending" durably before network I/O. Timers only request native pumping.
 export function createChatDelivery({ app, state, readScope, restore }) {
- let enabled = false, entries = [], owner = "", busy = false, dialog = null, signature = "", latestID = "", loadError = "";
+ let enabled = false, entries = [], owner = "", busy = false, pendingPumps = 0, dialog = null, signature = "", latestID = "", loadError = "";
  const ready = Promise.resolve().then(() => app().ChatDeliveryFeatures()).then(features => { enabled = features?.outbox === true; return enabled; }).catch(() => false);
  const launch = node("button", "icon-btn"); launch.id = "chat-outbox-open"; launch.type = "button"; launch.hidden = true;
  launch.innerHTML = icon("outbox"); launch.onclick = () => open();
@@ -60,7 +60,7 @@ export function createChatDelivery({ app, state, readScope, restore }) {
   launch.hidden = !enabled || !state().activeTabID;
   launch.setAttribute("aria-label", t("delivery.count", { count: entries.length })); launch.title = launch.getAttribute("aria-label");
   launch.dataset.count = String(entries.length);
-  const pending = entries.filter(entry => entry.state === "held" && currentEntry(entry)).at(-1);
+  const pending = entries.filter(entry => entry.state === "held" && entry.due_at > Date.now() && currentEntry(entry)).at(-1);
   latestID = pending?.id || ""; strip.hidden = !pending;
   if (pending) countdown.textContent = t("delivery.pending", { seconds: Math.max(0, Math.ceil((pending.due_at - Date.now()) / 1000)) });
   undo.textContent = t("delivery.undo"); now.textContent = t("delivery.now");
@@ -85,7 +85,7 @@ export function createChatDelivery({ app, state, readScope, restore }) {
    if (scope !== scopeKey()) return;
    entries = result.entries || []; render();
    if (editing && currentEntry(entry)) restore(entry);
-   if (action === "send" || action === "retry") void pump();
+   if (action === "send" || action === "retry") void pump(true);
   } catch (error) {
    if (scope !== scopeKey()) return;
    // An attempted secure message may still be delivered: removing it needs an
@@ -99,11 +99,20 @@ export function createChatDelivery({ app, state, readScope, restore }) {
    window.__noxa.toast(t("delivery.failed", { error: String(error) }), "warn");
   }
  }
- async function pump() {
-  if (busy || !await ready) return;
+ async function pump(immediate = false) {
+  if (!await ready) return;
+  // Each immediate action owns a pump request: native sends one due entry per
+  // server per call. Maintenance ticks coalesce while a native call is pending.
+  pendingPumps = immediate ? pendingPumps + 1 : Math.max(1, pendingPumps);
+  if (busy) return;
   busy = true;
-  try { await app().PumpChatOutbox(); } catch { /* Native failures remain in the encrypted queue. */ }
-  finally { busy = false; await refresh(); }
+  try {
+   while (pendingPumps > 0) {
+    pendingPumps--;
+    try { await app().PumpChatOutbox(); } catch { /* Native failures remain in the encrypted queue. */ }
+    await refresh();
+   }
+  } finally { busy = false; }
  }
  async function stage(scope, text, replyToID, queueOffline = false) {
   if (!await ready) return false;
@@ -111,6 +120,9 @@ export function createChatDelivery({ app, state, readScope, restore }) {
    text, reply_to_id: replyToID, queue_offline: queueOffline });
   if (!result?.available || !Array.isArray(result.entries)) throw new Error("Outbox response unavailable");
   if (scope.tabID === state().activeTabID && scope.generation === state().serverGeneration) { owner = scopeKey(); entries = result.entries; signature = ""; render(); }
+  // Do not wait for the one-second maintenance timer when Undo send is off.
+  // If another pump is finishing, retain a prompt follow-up for each staged entry.
+  if (!queueOffline && result.entries.some(entry => entry.state === "held" && entry.due_at <= Date.now())) void pump(true);
   return true;
  }
  function open() {

@@ -100,7 +100,7 @@ type HotkeyProfile struct {
 // serialized default changes, and add the repair to migrateSettings:
 // loading merges the file ONTO the defaults, so a field an older client always
 // wrote wins over the new default unless it is explicitly repaired.
-const settingsVersion = 14
+const settingsVersion = 15
 
 // Settings holds all user preferences.
 type Settings struct {
@@ -389,7 +389,7 @@ func DefaultSettings() Settings {
 		ChatTimestamps:            "absolute",
 		ChatDensity:               "comfortable",
 		ChatFontSize:              14,
-		ChatUndoSeconds:           5,
+		ChatUndoSeconds:           0,
 		ChatLayout:                "irc",
 		SysJoinLeave:              true,
 		SysKick:                   true,
@@ -520,6 +520,11 @@ func migrateSettings(s Settings) Settings {
 	}
 	if s.SettingsVersion < 11 && s.GamingOverlayPosition == "top-right" {
 		s.GamingOverlayPosition = "center-left"
+	}
+	if s.SettingsVersion < 15 && s.ChatUndoSeconds == 5 {
+		// The former default delayed every text message. Send immediately on
+		// upgrade; preserve other explicit delays and later opt-ins to 5 seconds.
+		s.ChatUndoSeconds = 0
 	}
 	s.SettingsVersion = settingsVersion
 	return s

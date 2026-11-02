@@ -397,6 +397,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         row.setAttribute("aria-label", [c.nickname || c.unique_id || t("runtime.user"),
             c.status && presenceLabel(c.status), speakingHere && t("runtime.speaking"),
             c.priority_speaker && t("runtime.priority"),
+            c.is_guest === true && t("runtime.guestAccount"),
             c.on_mobile && t("runtime.onMobile"),
             streamLabel,
             inVoice && c.client_id === state.myClientID && state.muted && t("runtime.muted"),
@@ -455,6 +456,13 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         // (310) group badge next to the name. Groups without an icon get a text
         // chip in the group colour instead of nothing — colour and hoisting are
         // settable on their own, so an icon is not what makes a group visible.
+        if (c.is_guest === true) {
+            const guest = document.createElement("span");
+            guest.className = "group-badge guest-badge";
+            guest.textContent = t("runtime.guestBadge");
+            guest.title = t("runtime.guestAccount");
+            row.appendChild(guest);
+        }
         if (g) {
             row.appendChild(roleChip(g));
         }

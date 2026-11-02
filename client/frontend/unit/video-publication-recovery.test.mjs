@@ -406,3 +406,79 @@ test("hardware recovery capability uses the RTP cap instead of doubled capture s
         assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
     }
 });
+
+
+test("identified hardware with no first frame can restart without fabricating encoded geometry", async () => {
+    const options = { capture: {}, maxFramerate:30, row: {framesEncoded:0,frameWidth:undefined,frameHeight:undefined,powerEfficientEncoder:true,
+        encoderImplementation:"MediaFoundationVideoEncodeAccelerator (Intel Quick Sync H.264 Encoder MFT)",targetBitrate:5000000} };
+    options.onStats=scale=>{if(scale===2)Object.assign(options.row,{framesEncoded:1,frameWidth:960,frameHeight:540});};
+    const f=fixture(options);
+    assert.equal(await f.api.retryVideoHardware("screen",f.track,()=>true,{...captureProof,hardwareStartup:true}),true);
+    assert.deepEqual(f.writes.map(p=>p.encodings[0].scaleResolutionDownBy),[2,1]);
+    assert.deepEqual(f.queries.map(q=>[q.video.width,q.video.height,q.video.framerate]),[[1920,1080,30],[960,540,30]]);
+    assert.equal(f.sender.track,f.track);
+    assert.ok(f.writes.every(p=>p.encodings.length===1&&p.encodings[0].maxBitrate===8000000));
+});
+
+test("first-frame pulse refuses missing proof, stopped capture, stale geometry and unproven implementations", async () => {
+    for(const mode of ["no-proof","wrong-source","idle","stale","unknown","software","adapted","late-output","no-hardware-support"]){
+        let reads=0;
+        const options={capture:{},row:{framesEncoded:0,frameWidth:undefined,frameHeight:undefined,powerEfficientEncoder:true,encoderImplementation:"MediaFoundationVideoEncodeAccelerator",targetBitrate:5000000}};
+        if(mode==="idle")options.capture.frames=1;
+        if(mode==="stale")options.capture.timestamp=-10000;
+        if(mode==="unknown")options.row.encoderImplementation="ExternalEncoder";
+        if(mode==="software")options.row.powerEfficientEncoder=false;
+        if(mode==="adapted")options.row.frameWidth=1280;
+        if(mode==="no-hardware-support")options.capable=false;
+        options.onStats=()=>{if(mode==="late-output"&&++reads===2)Object.assign(options.row,{framesEncoded:1,frameWidth:1920,frameHeight:1080});};
+        const f=fixture(options),proof=mode==="no-proof"?null:{...captureProof,hardwareStartup:true,...(mode==="wrong-source"?{sourceId:"other"}:{})};
+        assert.equal(await f.api.retryVideoHardware("screen",f.track,()=>true,proof),false,mode);
+        assert.deepEqual(f.writes,[],mode);
+    }
+});
+
+
+test("first-frame stall reaches the shared scheduler and real pulse path with unchanged capture and budget", async () => {
+    let time = 0;
+    const options = { capture: {}, maxFramerate: 30, row: { framesEncoded: 0, frameWidth: undefined, frameHeight: undefined,
+        powerEfficientEncoder: true, encoderImplementation: "MediaFoundationVideoEncodeAccelerator", targetBitrate: 5000000 } };
+    options.onStats = scale => {
+        if (scale === 2) Object.assign(options.row, { framesEncoded: 1, frameWidth: 960, frameHeight: 540 });
+    };
+    const f = fixture(options);
+    const publication = { pc: f.pc, track: f.track, slot: "screen", generation: "1",
+        scope: { tabID: "a", generation: 1, session: 1, clientID: "me", channelID: 1 } };
+    const recover = createVideoSenderRecovery({ state: f.state, retry: f.api.retryVideoHardware,
+        snapshot: () => [{ publication, generation: "1" }], uploadActive: () => true,
+        scheduler: createHardwareRecoveryScheduler({ now: () => time }) });
+    for (const at of [0, 5000, 10000]) { time = at; await recover(f.pc, await f.sender.getStats()); }
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
+    assert.deepEqual(f.queries.map(q => [q.video.width, q.video.height, q.video.framerate]), [[1920, 1080, 30], [960, 540, 30]]);
+    assert.ok(f.writes.every(p => p.encodings.length === 1 && p.encodings[0].maxBitrate === 8000000));
+    assert.equal(f.sender.track, f.track);
+});
+
+
+test("startup pulse never reports software or unidentified post-pulse output as hardware recovery", async () => {
+    for (const implementation of ["OpenH264", "ExternalEncoder"]) {
+        const options = { capture: {}, maxFramerate: 30, row: { framesEncoded: 102, frameWidth: undefined, frameHeight: undefined,
+            powerEfficientEncoder: true, encoderImplementation: "MediaFoundationVideoEncodeAccelerator", targetBitrate: 5000000 } };
+        options.onStats = scale => {
+            if (scale === 2) Object.assign(options.row, { framesEncoded: 103, frameWidth: 960, frameHeight: 540,
+                encoderImplementation: implementation, powerEfficientEncoder: implementation !== "OpenH264" });
+        };
+        const f = fixture(options);
+        assert.equal(await f.api.retryVideoHardware("screen", f.track, () => true, { ...captureProof, hardwareStartup: true, framesEncoded: 102 }), false);
+        assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
+        assert.equal(f.sender.track, f.track);
+    }
+});
+
+test("startup pulse can recover an encoder whose cumulative count froze across reinitialization", async () => {
+    const options = { capture: {}, maxFramerate: 30, row: { framesEncoded: 102, frameWidth: null, frameHeight: null,
+        powerEfficientEncoder: true, encoderImplementation: "MediaFoundationVideoEncodeAccelerator", targetBitrate: 5000000 } };
+    options.onStats = scale => { if (scale === 2) Object.assign(options.row, { framesEncoded: 103, frameWidth: 960, frameHeight: 540 }); };
+    const f = fixture(options);
+    assert.equal(await f.api.retryVideoHardware("screen", f.track, () => true, { ...captureProof, hardwareStartup: true, framesEncoded: 102 }), true);
+    assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
+});
