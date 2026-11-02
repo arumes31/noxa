@@ -67,4 +67,3 @@ export function regionFrameLayout(frame, region, output = {}) {
         displayWidth: aligned(displayWidth * scale, Math.min(frame.displayWidth, bound(output.width))),
         displayHeight: aligned(displayHeight * scale, Math.min(frame.displayHeight, bound(output.height))) };
 }
-
