@@ -24,7 +24,9 @@ type Client struct {
 	Nickname     string
 	ChannelID    int64  // 0 means no channel
 	ChannelEpoch uint64 `json:"-"` // changes on every membership transition
-	IsSpeaking   bool
+	// PresenceToken is cosmetic and reveals no hidden movement count.
+	PresenceToken string `json:"-"`
+	IsSpeaking    bool
 	// LastSpokeAt records when speech last stopped, independently of network traffic.
 	LastSpokeAt time.Time `json:"-"`
 	// PrioritySpeaker marks TS3-style priority speakers (channel commanders):

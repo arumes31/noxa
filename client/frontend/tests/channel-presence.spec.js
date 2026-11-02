@@ -29,7 +29,7 @@ test.beforeEach(async ({ page }) => {
         };
         window.__membership = (peerChannel = 7, audioState = {}) => {
             const clients = [{ client_id: 'self', nickname: 'Self', channel_id: 7 }];
-            if (peerChannel !== null) clients.push({ client_id: 'peer', nickname: 'Peer', channel_id: peerChannel, ...audioState });
+            if (peerChannel !== null) clients.push({ client_id: 'peer', nickname: 'Peer', channel_id: peerChannel, presence_token: 'visit:' + peerChannel, ...audioState });
             const snapshot = { root_channels: [7, 8].map(id => ({ ChannelID: id, Name: 'Channel ' + id,
                 clients: clients.filter(client => client.channel_id === id) })), unassigned_clients: clients.filter(client => !client.channel_id) };
             for (const callback of window.__events.snapshot) callback(JSON.stringify(snapshot));
@@ -87,13 +87,21 @@ for (const language of ['en', 'de']) {
         await page.evaluate(() => { window.__noxa.speechQueue.clear(); window.__ownMove(7); });
         await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([`speech_${language}_moved_by_admin`, `speech_${language}_moved_by_admin`]);
     });
-    for (const [channel, event] of [[null, 'user_disconnected'], [0, 'user_leave'], [8, 'user_moved']]) {
-        test(`${language} live snapshot plays ${event} once`, async ({ page }) => {
-            await page.evaluate(({ channel, language }) => { window.__noxa.state.settings.speech_language = language; window.__membership(channel); }, { channel, language });
-            await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([`speech_${language}_${event}`]);
+    for (const [channel, event] of [[null, 'user_leave'], [0, 'user_leave'], [8, 'user_leave']]) {
+        test(`${language} live snapshot to ${channel ?? "unseen"} plays ${event} once`, async ({ page }) => {
+            const expected = await page.evaluate(async ({ channel, language, event }) => {
+                const { presenceSpeechKey, variedSpeechClip } = await import('/src/speech-variation.js');
+                const state = window.__noxa.state;
+                const previous = state.clients.find(client => client.client_id === 'peer');
+                const clip = variedSpeechClip(event, presenceSpeechKey(previous, state.myChannelID));
+                state.settings.speech_language = language;
+                window.__membership(channel);
+                return `speech_${language}_${clip}`;
+            }, { channel, language, event });
+            await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([expected]);
             await page.evaluate(channel => window.__membership(channel), channel);
             await page.waitForTimeout(300);
-            expect(await page.evaluate(() => window.__spoken)).toEqual([`speech_${language}_${event}`]);
+            expect(await page.evaluate(() => window.__spoken)).toEqual([expected]);
         });
     }
 }
@@ -307,4 +315,50 @@ test('idle mobile sessions stay out of Lobby and online counts each identity onc
     await page.evaluate(() => window.emitMobilePresence(0));
     await expect(page.locator('#channel-tree')).not.toContainText('Daniel mobile');
     await expect(page.locator('#channel-tree .hoist-head')).toHaveCount(0);
+});
+
+
+test('legacy user_joined forwards the server membership token to the recorded arrival', async ({ page }) => {
+    const expected = await page.evaluate(async () => {
+        const { presenceSpeechKey, variedSpeechClip } = await import('/src/speech-variation.js');
+        const member = { client_id: 'visitor', unique_id: 'visitor-uid', nickname: 'Visitor', channel_id: 7, presence_token: 'committed-arrival-token' };
+        const expected = 'speech_en_' + variedSpeechClip('user_join', presenceSpeechKey(member, 7));
+        for (const callback of window.__events.event) callback(JSON.stringify({ type: 'user_joined', data: member }));
+        return expected;
+    });
+    await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([expected]);
+    expect(await page.evaluate(() => window.__noxa.state.clients.find(client => client.client_id === 'visitor').presence_token)).toBe('committed-arrival-token');
+});
+
+test('real microphone and headset buttons play confirmations after committing mute state', async ({ page }) => {
+    await page.evaluate(() => {
+        window.__noxa.state.settings.activation_mode = 'ptt';
+        window.__noxa.showWorkspace(false);
+    });
+    const expected = [];
+    for (const [selector, event, flags] of [
+        ['#voice-mute', 'microphone_muted', { muted: true, deafened: false }],
+        ['#voice-mute', 'microphone_unmuted', { muted: false, deafened: false }],
+        ['#voice-deafen', 'sound_muted', { muted: true, deafened: true }],
+        ['#voice-deafen', 'sound_unmuted', { muted: false, deafened: false }],
+    ]) {
+        await page.locator(selector).click();
+        await expect.poll(() => page.evaluate(() => ({ muted: window.__noxa.state.muted, deafened: window.__noxa.state.deafened }))).toEqual(flags);
+        expected.push('speech_en_' + event);
+        await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual(expected);
+        await expect(page.locator('#voice-mute')).toHaveAttribute('aria-pressed', String(flags.muted));
+        await expect(page.locator('#voice-deafen')).toHaveAttribute('aria-pressed', String(flags.deafened));
+    }
+});
+
+
+test('explicit legacy user_left retains the genuine disconnected announcement', async ({ page }) => {
+    const expected = await page.evaluate(async () => {
+        const { presenceSpeechKey, variedSpeechClip } = await import('/src/speech-variation.js');
+        const previous = window.__noxa.state.clients.find(client => client.client_id === 'peer');
+        const expected = 'speech_en_' + variedSpeechClip('user_disconnected', presenceSpeechKey(previous, 7));
+        for (const callback of window.__events.event) callback(JSON.stringify({ type: 'user_left', data: { client_id: 'peer' } }));
+        return expected;
+    });
+    await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([expected]);
 });

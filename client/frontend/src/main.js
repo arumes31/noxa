@@ -1,3 +1,4 @@
+import { presenceSpeechKey } from "./speech-variation.js";
 import { initMobileAnnouncement } from "./mobile-announcement.js";
 import { initReadSync } from "./read-sync.js";
 import { initWindowControls } from "./window-controls.js";
@@ -1364,7 +1365,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     if (snapshotPresenceScope === previousPresence.scope) {
         for (const change of channelPresenceChanges(previousPresence, nextPresence)) {
             window.__noxaNotify?.notify("join_leave", t(change.message, { name: change.client.nickname || t("runtime.someone") }),
-                { channelID: state.myChannelID, className: "joins", kind: "info", soundEvent: change.soundEvent, speechEvent: change.speechEvent });
+                { channelID: state.myChannelID, className: "joins", kind: "info", soundEvent: change.soundEvent, speechEvent: change.speechEvent, speechKey: presenceSpeechKey(change.client, state.myChannelID) });
         }
     }
     snapshotPresenceScope = nextPresence.scope;
@@ -1518,8 +1519,9 @@ window.runtime.EventsOn("event", (json) => {
                 existing.nickname = d.nickname ?? existing.nickname;
                 existing.channel_id = joinedChannel;
                 existing.on_mobile = !!d.on_mobile;
+                existing.presence_token = d.presence_token ?? existing.presence_token;
             } else {
-                state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, is_speaking: false, on_mobile: !!d.on_mobile });
+                state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, presence_token: d.presence_token, is_speaking: false, on_mobile: !!d.on_mobile });
             }
             if (d.client_id !== state.myClientID) {
                 chatUI.sysJoinLeave(d.nickname || d.unique_id || "someone", "joined"); // (130/131)
@@ -1527,7 +1529,7 @@ window.runtime.EventsOn("event", (json) => {
                     // (385) joins in my channel dispatch through the matrix.
                     window.__noxaNotify?.notify("join_leave", t("runtime.joined", { name: d.nickname || t("runtime.someone") }),
                         { channelID: state.myChannelID, className: "joins", kind: "info",
-                            soundEvent: "user_join", noSound: actionSoundsSuppressed() });
+                            soundEvent: "user_join", speechKey: presenceSpeechKey(state.clients.find(client => client.client_id === d.client_id), joinedChannel), noSound: actionSoundsSuppressed() });
                 }
             }
             break;
@@ -1548,7 +1550,7 @@ window.runtime.EventsOn("event", (json) => {
                 if (was.client_id !== state.myClientID && was.channel_id === state.myChannelID && state.myChannelID !== 0) {
                     window.__noxaNotify?.notify("join_leave", t("runtime.left", { name: was.nickname || t("runtime.someone") }),
                         { channelID: state.myChannelID, className: "joins", kind: "info",
-                            soundEvent: "user_leave", speechEvent: "user_disconnected", noSound: actionSoundsSuppressed() });
+                            soundEvent: "user_leave", speechEvent: "user_disconnected", speechKey: presenceSpeechKey(was, was.channel_id), noSound: actionSoundsSuppressed() });
                 }
             }
             videoTrackRemoved(d.client_id);
@@ -1559,7 +1561,8 @@ window.runtime.EventsOn("event", (json) => {
             const c = state.clients.find((c) => c.client_id === d.client_id);
             const previousRemoteChannelID = Number(c?.channel_id) || 0;
             const nextChannelID = Number(d.channel_id) || 0;
-            if (c) c.channel_id = nextChannelID;
+            const previousSpeechKey = presenceSpeechKey(c, previousRemoteChannelID);
+            if (c) { c.channel_id = nextChannelID; c.presence_token = d.presence_token ?? c.presence_token; }
             if (d.client_id === state.myClientID) {
                 const previousChannelID = state.myChannelID;
                 const restored = restoredVoiceChannels.get(state.activeTabID);
@@ -1600,13 +1603,13 @@ window.runtime.EventsOn("event", (json) => {
                 && previousRemoteChannelID !== nextChannelID) {
                 window.__noxaNotify?.notify("join_leave", t("runtime.movedIn", { name: c.nickname || t("runtime.someone") }),
                     { channelID: state.myChannelID, className: "joins", kind: "info",
-                        soundEvent: "user_move_in", noSound: actionSoundsSuppressed() });
+                        soundEvent: "user_move_in", speechKey: presenceSpeechKey(c, nextChannelID), noSound: actionSoundsSuppressed() });
             } else if (c && previousRemoteChannelID === state.myChannelID && state.myChannelID !== 0
                 && previousRemoteChannelID !== nextChannelID) {
                 const forcedMove = nextChannelID > 0 && d.by_client_id && d.by_client_id !== d.client_id;
                 window.__noxaNotify?.notify("join_leave", t("runtime.movedOut", { name: c.nickname || t("runtime.someone") }),
                     { channelID: previousRemoteChannelID, className: "joins", kind: "info",
-                        soundEvent: "user_move_out", speechEvent: forcedMove ? "user_moved_out" : nextChannelID > 0 ? "user_moved" : "user_leave",
+                        speechKey: previousSpeechKey, soundEvent: "user_move_out", speechEvent: forcedMove ? "user_moved_out" : nextChannelID > 0 ? "user_moved" : "user_leave",
                         noSound: actionSoundsSuppressed() });
             }
             recomputeDucking();
@@ -1839,6 +1842,7 @@ window.runtime.EventsOn("event", (json) => {
             // (385) kicks dispatch through the notification matrix.
             window.__noxaNotify?.notify("kick", description + (d.reason ? t("runtime.reason", { reason: d.reason }) : ""),
                 { className: "messages", kind: "warn", soundEvent: d.ban ? "ban" : "kick", noSound: self,
+                    speechKey: JSON.stringify([d.client_id, d.channel_id, d.by_client_id, d.reason]),
                     speechEvent: !self && !d.ban ? (d.from_server ? "user_kicked" : "user_kicked_channel") : undefined });
             if (self && !actionSoundsSuppressed()) {
                 if (d.from_server || d.ban) {
@@ -1854,7 +1858,7 @@ window.runtime.EventsOn("event", (json) => {
             break;
         }
         case "stream_watch_started":
-            if (!actionSoundsSuppressed() && isCurrentPublication(d)) playEvent("stream_watch_started");
+            if (!actionSoundsSuppressed() && isCurrentPublication(d)) playAlert("stream_watch_started", { eventKey: JSON.stringify([d.publisher_id, d.slot, d.generation]) });
             return;
         case "stream_upload_changed":
             refreshStreamUploads(d);

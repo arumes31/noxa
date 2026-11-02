@@ -5,6 +5,7 @@ import { t } from "./i18n.js";
 // muted channels (387), and DND (347/348, still badging silently). Also the
 // buddy-online watcher (383), keyword highlights (388), channel watch
 // (389), and the alpha notice (215).
+import { presenceSpeechKey } from "./speech-variation.js";
 import { playAlert, playEvent } from "./sounds.js";
 import { closeDialog, isCurrentServerDialog, mountDialog, mountServerDialog } from "./modal.js";
 import { showIncomingPoke } from "./poke-ui.js";
@@ -112,7 +113,7 @@ export function notify(event, text, ctx = {}) {
             if (ctx.announce !== false) V().announceLive(text, kind === "warn" ? "assertive" : "polite");
         }
     }
-    if (row.sound && !ctx.noSound) playEventSound(event, ctx.soundEvent, ctx.speechEvent);
+    if (row.sound && !ctx.noSound) playEventSound(event, ctx.soundEvent, ctx.speechEvent, ctx.speechKey);
     if (row.flash) App().FlashWindow();
     if (row.native && !document.hasFocus()) App().Notify("noXa " + event, text.slice(0, 200));
 }
@@ -123,14 +124,14 @@ const CHANNEL_MESSAGE_QUIET_MS = 5 * 60 * 1000;
 let channelMessageSoundAt = -Infinity;
 
 // Precise action cues share the notification matrix's policy.
-function playEventSound(event, soundEvent = event, speechEvent) {
+function playEventSound(event, soundEvent = event, speechEvent, eventKey) {
     if (window.__noxaPolish?.dndActive?.()) return;
     const settings = V().state.settings;
     // Preserve the matrix and replay gates. The audio dispatcher applies each
     // action's speech preference or remaining effect preference independently.
     if (V().state.replayingTabID || settings?.event_sounds?.[event] === false) return;
     speechEvent ||= { user_join: "user_join", user_leave: "user_leave", user_move_in: "user_join", user_move_out: "user_leave" }[soundEvent];
-    if (speechEvent) playAlert(speechEvent, { effect: soundEvent });
+    if (speechEvent) playAlert(speechEvent, { effect: soundEvent, eventKey });
     else if (soundEvent === "channel_message") {
         const now = Date.now();
         if (document.hasFocus() && now - channelMessageSoundAt < CHANNEL_MESSAGE_QUIET_MS) return;
@@ -157,7 +158,7 @@ export function checkBuddyOnline() {
         const online = V().state.clients.find((x) => x.unique_id === c.unique_id);
         if (online) {
             buddyNotified.add(c.unique_id);
-            notify("buddy_online", (c.label || online.nickname || "contact") + " is online", { className: "joins", kind: "info" });
+            notify("buddy_online", (c.label || online.nickname || "contact") + " is online", { className: "joins", kind: "info", speechEvent: "buddy_online", speechKey: presenceSpeechKey(online, online.channel_id) });
         }
     }
 }

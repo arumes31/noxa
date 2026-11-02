@@ -193,15 +193,19 @@ def letters(text):
 def review(args):
     out = Path(args.out)
     manifest = json.loads((out / 'manifest.json').read_text(encoding='utf-8'))
-    results = {}
+    previous = out / 'st13-content-review.json'
+    results = json.loads(previous.read_text(encoding='utf-8')) if previous.exists() else {}
     for language in ('en', 'de'):
-        keys = [key for key in manifest['clips'] if key.startswith(language + '/')]
+        keys = [key for key in manifest['clips'] if key.startswith(language + '/')
+                and (not args.events or key.split('/')[1] in args.events)]
+        if not keys:
+            continue
         files = [str(out / 'clips' / f'{key}.wav') for key in keys]
         whisper = Path(args.whisper_dir)
         log = subprocess.run([args.asr, f'--whisper-encoder={whisper}/small-encoder.int8.onnx',
             f'--whisper-decoder={whisper}/small-decoder.int8.onnx', f'--tokens={whisper}/small-tokens.txt',
             '--model-type=whisper', f'--whisper-language={language}', '--num-threads=2', *files],
-            check=True, capture_output=True, text=True)
+            check=True, capture_output=True, text=True, encoding="utf-8")
         log = log.stdout + log.stderr
         texts = [json.loads('"' + match + '"') for match in re.findall(r'"text": "((?:[^"\\]|\\.)*)"', log)]
         if len(texts) != len(keys):
@@ -254,6 +258,7 @@ def main():
     first.add_argument('--events', nargs='*')
     check = commands.add_parser('review')
     check.add_argument('--out', required=True)
+    check.add_argument('--events', nargs='*', help='Review only selected candidate events; preserve other pinned reviews')
     check.add_argument('--asr', required=True, help='sherpa-onnx-offline executable')
     check.add_argument('--whisper-dir', required=True)
     done = commands.add_parser('publish')
