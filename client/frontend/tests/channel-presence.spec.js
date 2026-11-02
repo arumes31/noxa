@@ -316,3 +316,37 @@ test('idle mobile sessions stay out of Lobby and online counts each identity onc
     await expect(page.locator('#channel-tree')).not.toContainText('Daniel mobile');
     await expect(page.locator('#channel-tree .hoist-head')).toHaveCount(0);
 });
+
+
+test('legacy user_joined forwards the server membership token to the recorded arrival', async ({ page }) => {
+    const expected = await page.evaluate(async () => {
+        const { presenceSpeechKey, variedSpeechClip } = await import('/src/speech-variation.js');
+        const member = { client_id: 'visitor', unique_id: 'visitor-uid', nickname: 'Visitor', channel_id: 7, presence_token: 'committed-arrival-token' };
+        const expected = 'speech_en_' + variedSpeechClip('user_join', presenceSpeechKey(member, 7));
+        for (const callback of window.__events.event) callback(JSON.stringify({ type: 'user_joined', data: member }));
+        return expected;
+    });
+    await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([expected]);
+    expect(await page.evaluate(() => window.__noxa.state.clients.find(client => client.client_id === 'visitor').presence_token)).toBe('committed-arrival-token');
+});
+
+test('real microphone and headset buttons play confirmations after committing mute state', async ({ page }) => {
+    await page.evaluate(() => {
+        window.__noxa.state.settings.activation_mode = 'ptt';
+        window.__noxa.showWorkspace(false);
+    });
+    const expected = [];
+    for (const [selector, event, flags] of [
+        ['#voice-mute', 'microphone_muted', { muted: true, deafened: false }],
+        ['#voice-mute', 'microphone_unmuted', { muted: false, deafened: false }],
+        ['#voice-deafen', 'sound_muted', { muted: true, deafened: true }],
+        ['#voice-deafen', 'sound_unmuted', { muted: false, deafened: false }],
+    ]) {
+        await page.locator(selector).click();
+        await expect.poll(() => page.evaluate(() => ({ muted: window.__noxa.state.muted, deafened: window.__noxa.state.deafened }))).toEqual(flags);
+        expected.push('speech_en_' + event);
+        await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual(expected);
+        await expect(page.locator('#voice-mute')).toHaveAttribute('aria-pressed', String(flags.muted));
+        await expect(page.locator('#voice-deafen')).toHaveAttribute('aria-pressed', String(flags.deafened));
+    }
+});
