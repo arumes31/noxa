@@ -84,3 +84,18 @@ test("QR scan storage failures are explained without an unhandled rejection", as
     await expect(page.locator(".qr-dialog")).toHaveCount(0);
     expect(errors).toEqual([]);
 });
+
+
+test("starting and cancelling a fresh QR scan clears an earlier failure", async ({ page }) => {
+    await page.goto("http://127.0.0.1:5175/app/");
+    await expect(page.getByRole("button", {name:"Scan QR code"})).toBeVisible();
+    await page.evaluate(()=>{window.__originalIDBOpen=indexedDB.open;indexedDB.open=()=>{throw new Error("Earlier storage error");};});
+    await page.getByRole("button", {name:"Scan QR code"}).click();
+    await expect(page.getByRole("alert")).toContainText("Earlier storage error");
+    await page.evaluate(()=>{indexedDB.open=window.__originalIDBOpen;});
+    await page.getByRole("button", {name:"Scan QR code"}).click();
+    await expect(page.locator(".qr-dialog")).toBeVisible();
+    await expect(page.getByRole("alert")).toBeEmpty();
+    await page.locator(".qr-dialog").getByRole("button",{name:"Cancel",exact:true}).click();
+    await expect(page.getByRole("alert")).toBeEmpty();
+});

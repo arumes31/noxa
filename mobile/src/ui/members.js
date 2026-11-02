@@ -18,7 +18,7 @@ function memberRow(client, session) {
     const sub = statusLine(client);
     return h("li", {}, h("button", {
         class: "row member-row", type: "button", dataset: { uid: client.unique_id || "" },
-        "aria-label": t("members.open", { name: client.nickname }),
+        "aria-label": [t("members.open", { name: client.nickname }), client.is_guest === true ? t("presence.guestAccount") : ""].filter(Boolean).join(", "),
         onclick: () => import("./profile.js").then(({ openProfile }) => openProfile({ uid: client.unique_id, clientID: client.client_id, name: client.nickname })),
     },
     h("span", { class: "avatar-wrap" }, avatar(client.nickname, "md", client.unique_id), statusDot(statusOf(client))),

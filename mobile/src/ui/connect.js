@@ -30,6 +30,7 @@ export function renderConnect(root, { onSignedIn, errorMessage = "" }) {
     const scanner = new AbortController();
     scanners.set(root, scanner);
     const scan = h("button", { class: "btn btn-block", type: "button", onclick: async () => {
+        error.textContent = "";
         try {
             const fence = await beginIdentity();
             const link = await scanPairingQR({ signal: scanner.signal });

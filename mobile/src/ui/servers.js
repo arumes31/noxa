@@ -69,7 +69,7 @@ export function renderServers(root) {
                 c.clients.length ? h("ul", { class: "list", style: "padding-left:44px" }, c.clients.map(client => memberRow(client,
                     h("button", {
                         class: "row member-row", type: "button", style: "min-height:44px",
-                        "aria-label": t("members.open", { name: client.nickname }),
+                        "aria-label": [t("members.open", { name: client.nickname }), client.is_guest === true ? t("presence.guestAccount") : ""].filter(Boolean).join(", "),
                         onclick: () => openProfile({ uid: client.unique_id, clientID: client.client_id, name: client.nickname }),
                     }, h("span", { class: "avatar-wrap" }, avatar(client.nickname, "sm", client.unique_id), statusDot(statusOf(client))),
                     h("span", { class: "row-main" }, h("span", { class: "row-sub" }, client.nickname), statusLine(client) ? h("span", { class: "row-sub member-status" }, statusLine(client)) : null),

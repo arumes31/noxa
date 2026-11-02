@@ -16,6 +16,7 @@ for (const view of ["servers", "members", "profile"]) {
         const badge = page.getByLabel("Guest account", { exact: true });
         await expect(badge).toHaveText("Guest");
         await expect(badge).toBeVisible();
+        if (view !== "profile") await expect(page.getByRole("button", { name: "Open Avery\'s profile, Guest account", exact: true })).toBeVisible();
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
         if (view !== "servers") await expect(page.locator('.role-chip').filter({ hasText: 'Member' })).toBeVisible();
         expect(await page.evaluate(async () => (await import("/app/src/app.js")).app.session.clients()[1].roles[0].name)).toBe("Member");
