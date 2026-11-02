@@ -151,3 +151,50 @@ async function secureState(page) {
         return null;
     });
 }
+
+
+test("microphone capture can recover on the same encrypted voice connection", async ({ page, browserName }) => {
+    test.skip(browserName !== "chromium", "Requires the Chromium fake microphone used by the voice harness");
+    await page.addInitScript(() => {
+        localStorage.setItem("noxa.settings", JSON.stringify({activation:"continuous",secureMessagingNoticeSeen:true}));
+        const getUserMedia=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        window.__micAttempts=0;
+        navigator.mediaDevices.getUserMedia=(...args)=>{
+            if(++window.__micAttempts===1) return Promise.reject(new DOMException("Microphone busy", "NotReadableError"));
+            return getUserMedia(...args);
+        };
+        window.__voicePeers=[];
+        const Peer=window.RTCPeerConnection;
+        window.RTCPeerConnection=new Proxy(Peer,{construct(target,args){const pc=Reflect.construct(target,args);window.__voicePeers.push(pc);return pc;}});
+    });
+    const desktop=await desktopSession(server.controlAddr,server.accounts.ivy,{version:info.version});
+    try {
+        await desktop.conn.request(Msg.DeviceRequest,{action:"list"},Msg.DeviceResult,{accept:r=>r.action==="list"});
+        const link=await desktop.conn.request(Msg.DeviceRequest,{action:"link_create"},Msg.DeviceResult,{accept:r=>r.action==="link_create"});
+        const secret=Uint8Array.from(Buffer.from(link.secret,"base64")), claimed=nextDeviceEvent(desktop.conn,"link_claimed");
+        const anchor=keyFingerprint(publicKeyPEM(desktop.identity.edPublic));
+        await page.goto(`${server.webURL}/link#id=${link.link_id}&k=${toBase64URL(secret)}&a=${encodeURIComponent(anchor)}`);
+        const event=await claimed;
+        await expect(page.locator(".sas")).toHaveText(linkSAS(secret,linkClaimTranscript(event.link_id,event.ed25519_public_key,event.x25519_public_key)));
+        expect((await approve(desktop,event,{bind:true})).state).toBe("approved");
+        await expect(page.getByRole("navigation",{name:"Main"})).toBeVisible({timeout:30000});
+        for(let i=0;i<4;i++) {
+            const dialog=page.getByRole("dialog").last();
+            if(!await dialog.isVisible())break;
+            const close=dialog.getByRole("button",{name:/^(Close|Not now)$/}).first();
+            if(await close.isVisible()) await close.click(); else break;
+        }
+        await page.getByRole("link",{name:"Servers",exact:true}).click();
+        await page.getByRole("button",{name:"Join Public1",exact:true}).click();
+        const warning=page.locator(".vc-mic-unavailable");
+        await expect(warning).toContainText("Others cannot hear you");
+        await warning.getByRole("button",{name:"Reconnect microphone",exact:true}).click();
+        await expect(warning).toBeHidden();
+        await expect.poll(()=>page.evaluate(async()=>{
+            const pc=window.__voicePeers[0];if(pc?.connectionState!=="connected")return false;
+            return [...(await pc.getStats()).values()].some(row=>row.type==="outbound-rtp"&&row.kind==="audio"&&row.packetsSent>10);
+        }),{timeout:30000}).toBe(true);
+        expect(await page.evaluate(()=>({peers:window.__voicePeers.length,microphones:window.__micAttempts}))).toEqual({peers:1,microphones:2});
+        await page.getByRole("button",{name:"Leave",exact:true}).click();
+    } finally {desktop.conn.close();}
+});
