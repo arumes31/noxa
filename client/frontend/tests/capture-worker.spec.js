@@ -28,9 +28,19 @@ test('capture alignment delivers frames while the owning UI thread is busy', asy
             await new Promise(r => setTimeout(r, 400)); const start = Date.now();
             while (Date.now() - start < 1200) { /* bounded UI load */ }
             const end = Date.now(), rows = await new Promise(resolve => { output.onmessage = event => resolve(event.data); output.postMessage({snapshot:true}); });
-            return { during: rows.filter(row => row.time > start + 100 && row.time < end - 100) };
+            await track.applyConstraints({ width: { max: 160 }, height: { max: 90 }, frameRate: { max: 30 } });
+            const deadline = performance.now() + 3000;
+            let resized = [];
+            while (!resized.length && performance.now() < deadline) {
+                await new Promise(resolve => setTimeout(resolve, 30));
+                const updated = await new Promise(resolve => { output.onmessage = event => resolve(event.data); output.postMessage({snapshot:true}); });
+                resized = updated.filter(row => row.width <= 160 && row.height <= 90);
+            }
+            return { during: rows.filter(row => row.time > start + 100 && row.time < end - 100), resized };
         } finally { track.stop(); for (const worker of workers) worker.terminate(); for (const url of urls) URL.revokeObjectURL(url); }
     });
+    expect(result.resized.length).toBeGreaterThan(0);
+    expect(result.resized.every(row => row.width % 2 === 0 && row.height % 2 === 0)).toBe(true);
     expect(result.during.length).toBeGreaterThanOrEqual(15);
     expect(result.during.every(row => row.width % 2 === 0 && row.height % 2 === 0 && row.width <= 320 && row.height <= 180)).toBe(true);
 });
