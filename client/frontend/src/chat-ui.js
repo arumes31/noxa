@@ -1,3 +1,4 @@
+import { joinChannelLocally } from "./local-join-intent.js";
 import { previewConversation, previewConversationFor, setPreviewConversation } from "./preview-privacy.js";
 import { createActivityHistory } from "./activity-history.js";
 import { blockedPreviewPlaceholder, resolvePreviewImage } from "./preview-source-policy.js";
@@ -1178,6 +1179,42 @@ const INLINE_MAX_B64 = 8 * 1024 * 1024; // ~6 MB of media rendered inline
 // attachFileRef takes the RAW capture and parses it here rather than in
 // renderBody, so the file key never crosses the split boundary. The key goes
 // straight into the Go call: never into textContent, an attribute or a src.
+// Automatic previews share one in-flight request per (server, scope,
+// storage, key): repeating one attachment in a message must not multiply the
+// native download and decryption work. A small concurrency cap bounds the
+// aggregate work a burst of preview references can start at once.
+const PREVIEW_DOWNLOAD_CONCURRENCY = 3;
+const previewDownloads = new Map();
+const previewQueue = [];
+let previewActive = 0;
+
+function runPreviewDownload(task) {
+    return new Promise((resolve, reject) => {
+        const start = () => {
+            previewActive++;
+            Promise.resolve().then(task).then(resolve, reject).finally(() => {
+                previewActive--;
+                previewQueue.shift()?.();
+            });
+        };
+        if (previewActive < PREVIEW_DOWNLOAD_CONCURRENCY) start();
+        else previewQueue.push(start);
+    });
+}
+
+function sharedPreviewDownload(source, ref) {
+    const key = source.previewKey?.(ref);
+    const pending = key && previewDownloads.get(key);
+    if (pending) return pending;
+    const request = runPreviewDownload(() => source.download(ref));
+    if (key) {
+        previewDownloads.set(key, request);
+        const forget = () => { if (previewDownloads.get(key) === request) previewDownloads.delete(key); };
+        request.then(forget, forget);
+    }
+    return request;
+}
+
 function attachFileRef(container, m, cap, source = null) {
     const ref = parseFileRef(cap);
     if (!ref.valid) {
@@ -1197,7 +1234,7 @@ function attachFileRef(container, m, cap, source = null) {
     const inlineVideo = VIDEO_EXTS.includes(ext);
     if (inlineImage || inlineVideo) {
         wrap.textContent = t(inlineVideo ? "chat.loadingVideo" : "chat.loadingImage", { name });
-        Promise.resolve().then(() => source.download(ref)).then((b64) => {
+        sharedPreviewDownload(source, ref).then((b64) => {
             // Check before touching the wrapper or constructing a renderer data
             // URL: a completed request belongs to the scope that launched it.
             if (!previewIsCurrent()) return;
@@ -1261,6 +1298,7 @@ function chatAttachmentSource(chID) {
     const saveScope = captureScope(() => readAttachmentSaveScope(chID));
     return {
         download: ref => app().DownloadChatAttachmentForTab(previewScope.tabID, chID, ref.storage, ref.key),
+        previewKey: ref => JSON.stringify([previewScope, chID, ref.storage, ref.key]),
         previewCurrent: wrap => inlineAttachmentScopeIsCurrent(previewScope, wrap),
         save: (ref, name) => app().SaveChatAttachmentForTab(saveScope.tabID, chID, ref.storage, ref.key, name),
         saveCurrent: () => attachmentSaveScopeIsCurrent(saveScope),
@@ -4733,7 +4771,7 @@ function openQS() {
         items.push({ label: "# " + ch.Name, hint: t("chat.channelHint"), concepts: ["channel", "voice"], action: async () => {
             if (generation !== st.serverGeneration) return;
             try {
-                const err = await app().JoinChannelForTab(tabID, ch.SystemKind === "home" ? 0 : ch.ChannelID);
+                const err = await joinChannelLocally(tabID, ch.SystemKind === "home" ? 0 : ch.ChannelID);
                 if (err && generation === st.serverGeneration) V().toast(err, "warn");
             } catch (err) {
                 if (generation === st.serverGeneration) V().toast(String(err), "warn");
@@ -5347,9 +5385,18 @@ function showMessageReferenceContext(name, messages, target, continueConversatio
     for (const message of messages) {
         const row = document.createElement("article"); row.className = "message-tool-result"; row.dataset.messageId = String(message.id);
         const author = document.createElement("strong"); author.textContent = message.from || "?";
+        // The same provenance decision as the chat log: a downgraded or
+        // unverified body keeps its warning badge, and a refused body is
+        // replaced by its refusal text instead of being rendered.
+        const badge = encryptionBadge(message);
+        const lock = encryptionBadgeElement(badge);
+        if (lock) author.append(" ", lock);
+        if (badge.kind === "warning") row.classList.add("missing-key");
         const body = document.createElement("p");
+        if (message.deleted) body.textContent = t("polish.deleted");
+        else if (badge.bodyKey) body.textContent = t(badge.bodyKey);
         // Attachment secrets remain inside the existing scoped renderer.
-        renderBody(body, message);
+        else renderBody(body, message);
         row.append(author, body); list.append(row);
         if (message === target) row.classList.add("message-reference-flash");
     }
