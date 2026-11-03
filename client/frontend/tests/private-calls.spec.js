@@ -470,6 +470,7 @@ async function mountCallRaceFixture(page) {
         };
         window.go = { main: { App: {
             PrivateCallForTab: async (_tab, request) => {
+                if (request.action === "start" && window.__holdStart) await window.__holdStart;
                 const response = { action: request.action, call: structuredClone(window.__call) };
                 if (request.action === "get" && window.__holdGets) return new Promise(resolve => window.__pendingGets.push({ resolve, response }));
                 return response;
@@ -538,9 +539,13 @@ test("cancelled incoming call cannot leave voice through an already open confirm
 });
 
 for (const knownCall of [false, true]) {
-    test(`offer preceding call-state refresh is replayed (${knownCall ? "sender still ringing" : "no local call yet"})`, async ({ page }) => {
+    test(`offer preceding call-state refresh is replayed (${knownCall ? "sender still ringing" : "start response still pending"})`, async ({ page }) => {
         await mountCallRaceFixture(page);
         if (knownCall) await page.evaluate(() => window.__callsModule.startPrivateCall("alice"));
+        else await page.evaluate(() => {
+            window.__holdStart = new Promise(resolve => { window.__releaseStart = resolve; });
+            window.__pendingStart = window.__callsModule.startPrivateCall("alice");
+        });
         await page.evaluate(async () => {
             // Alice has accepted on the server and produced an offer, while
             // Bob's local call-state get has not yet delivered that revision.
@@ -570,9 +575,21 @@ for (const knownCall of [false, true]) {
         });
         await expect.poll(() => page.evaluate(() => window.__answers.filter(answer => answer.type === "answer").length), { timeout: 5000 }).toBe(1);
         await expect.poll(() => page.evaluate(() => window.__peers.map(peer => peer.connectionState)), { timeout: 10000 }).toEqual(["connected"]);
+        if (!knownCall) await page.evaluate(async () => { window.__releaseStart(); await window.__pendingStart; });
         await page.evaluate(() => { window.__callsModule.stopPrivateCall(); window.__remoteOfferPeer.close(); });
     });
 }
+
+test("server-reported accepted state without a local start or Accept never captures the microphone", async ({ page }) => {
+    await mountCallRaceFixture(page);
+    await page.evaluate(async () => {
+        window.__call = window.__makeCall("call-forced", 2, true);
+        await window.__callsModule.privateCallChanged({ id: "call-forced" });
+    });
+    await expect(page.locator(".private-call-panel")).toHaveCount(1);
+    expect(await page.evaluate(() => ({ captures: window.__captures, peers: window.__peers.length }))).toEqual({ captures: 0, peers: 0 });
+    await page.evaluate(() => window.__callsModule.stopPrivateCall());
+});
 
 test("ICE configuration failure after capture releases microphone and closes the call", async ({ page }) => {
     await mountCallRaceFixture(page);

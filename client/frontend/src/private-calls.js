@@ -21,11 +21,31 @@ function rememberCall(key, revision) {
     callVersions.set(key, revision);
     if (callVersions.size > 256) callVersions.delete(callVersions.keys().next().value);
 }
+// Local consent to capture and publish the microphone. Server-reported
+// "accepted" state alone never grants it: only this user starting a call here
+// or pressing Accept does, bound to the call, tab and server generation.
+const callConsents = new Set();
+let startingScope = null;
+function grantCallConsent(key) {
+    callConsents.add(key);
+    if (callConsents.size > 256) callConsents.delete(callConsents.values().next().value);
+}
+function callConsented(call, tabID, generation, uid) {
+    const key = callKey(tabID, generation, call.id);
+    if (callConsents.has(key)) return true;
+    // The start response can race the first call event for the new call.
+    if (startingScope?.tabID === tabID && startingScope.generation === generation && call.caller === uid) {
+        grantCallConsent(key);
+        return true;
+    }
+    return false;
+}
+const ownerConsented = owner => callConsented(owner.call, owner.tabID, owner.generation, owner.uid);
 const label = uid => V().state.clients.find(client => client.unique_id === uid)?.nickname || uid;
 const blocked = uid => (V().state.settings?.blocked_users || []).includes(uid);
 const report = error => V().toast?.(t("call.failed", { error: String(error) }), "warn");
 const current = owner => session === owner && owner.tabID === V().state.activeTabID && owner.generation === V().state.serverGeneration;
-const acceptedPeer = (owner, uid) => current(owner) && !blocked(uid)
+const acceptedPeer = (owner, uid) => current(owner) && !blocked(uid) && ownerConsented(owner)
     && owner.call.participants.some(peer => peer.unique_id === owner.uid && peer.state === "accepted")
     && owner.call.participants.some(peer => peer.unique_id === uid && peer.state === "accepted");
 function failCall(owner, error) {
@@ -75,11 +95,13 @@ export async function startPrivateCall(target = "", conversationID = "") {
     const tabID = V().state.activeTabID, generation = V().state.serverGeneration;
     try {
         if (!await leaveChannelForCall(tabID, generation)) return;
+        startingScope = { tabID, generation };
         const result = await app().PrivateCallForTab(tabID, { action: "start", target, conversation_id: conversationID });
         if (V().state.activeTabID !== tabID || V().state.serverGeneration !== generation) { void app().StopPrivateCallForTab(tabID, result.call.id).catch(() => {}); return; }
+        grantCallConsent(callKey(tabID, generation, result.call.id));
         await applyCall(result.call, tabID, generation);
     } catch (error) { if (generation === V().state.serverGeneration) report(error); }
-    finally { starting = false; }
+    finally { starting = false; startingScope = null; }
 }
 
 // startPrivateVideoCall is the Messages view's video button: it starts (or
@@ -91,7 +113,7 @@ export async function startPrivateVideoCall(target = "", conversationID = "") {
     if (session && !sameCall(session)) { V().toast?.(t("call.busy"), "warn"); return; }
     if (!session) await startPrivateCall(target, conversationID);
     const owner = session;
-    if (owner && current(owner) && owner.call.participants.some(peer => peer.unique_id === owner.uid && peer.state === "accepted")) await owner.media.start("camera");
+    if (owner && current(owner) && ownerConsented(owner) && owner.call.participants.some(peer => peer.unique_id === owner.uid && peer.state === "accepted")) await owner.media.start("camera");
 }
 
 export function stopPrivateCall() {
@@ -178,7 +200,8 @@ async function applyCall(call, tabID, generation) {
         if (!accepted.some(member => member.unique_id === peerID) || blocked(peerID)) { closePeer(peer); owner.peers.delete(peerID); }
     }
     owner.media.updateGrid();
-    if (me.state !== "accepted" || accepted.length < 2) return;
+    // Remote state may revoke or update a consented call, never create consent.
+    if (me.state !== "accepted" || accepted.length < 2 || !ownerConsented(owner)) return;
     try {
         await ensureCapture(owner);
         if (!current(owner)) return;
@@ -219,6 +242,7 @@ function render(owner) {
         controls.append(action("call.accept", async () => {
             try {
                 if (!current(owner) || !await leaveChannelForCall(owner.tabID, owner.generation, () => current(owner)) || !current(owner)) return;
+                grantCallConsent(callKey(owner.tabID, owner.generation, owner.call.id));
                 const result = await app().PrivateCallForTab(owner.tabID, { action: "accept", id: owner.call.id });
                 if (current(owner)) await applyCall(result.call, owner.tabID, owner.generation);
             } catch (error) { if (current(owner)) report(error); }
@@ -578,7 +602,7 @@ async function applyCandidates(owner, uid, peer) {
 export async function privateCallSignal(signal) {
     if (blocked(signal.from)) return;
     const tabID = V().state.activeTabID, generation = V().state.serverGeneration;
-    const accepted = owner => owner && current(owner) && owner.call.id === signal.call_id
+    const accepted = owner => owner && current(owner) && owner.call.id === signal.call_id && ownerConsented(owner)
         && owner.call.participants.some(peer => peer.unique_id === owner.uid && peer.state === "accepted")
         && owner.call.participants.some(peer => peer.unique_id === signal.from && peer.state === "accepted");
     if (!accepted(session)) {
