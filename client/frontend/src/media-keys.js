@@ -583,7 +583,14 @@ export class MediaKeyEngine {
         this.#statusSoon();
         this.#scheduleMembershipCheck();
         const install = (async () => {
-            for (const slot of SLOTS) await this.media.setKey(publicationPid(value.client, slot), control.epoch, value.kid, value.keys[slot]);
+            for (const slot of SLOTS) {
+                // Revocation (roster removal, channel move, stop) can land
+                // between slot writes: never install a further slot for a
+                // publisher that has been forgotten. The completion handler
+                // below retires every slot of this epoch in that case.
+                if (gen !== this.#gen || this.#publishers.get(value.client) !== state) return;
+                await this.media.setKey(publicationPid(value.client, slot), control.epoch, value.kid, value.keys[slot]);
+            }
         })();
         install.then(() => {
             if (gen !== this.#gen || this.#publishers.get(value.client) !== state) {
@@ -603,7 +610,11 @@ export class MediaKeyEngine {
             }
             this.counters.applied++;
             this.#status();
-        }, () => this.#ignore("install"));
+        }, () => {
+            // A partial installation must not leave earlier slots usable.
+            for (const slot of SLOTS) this.media.retire(publicationPid(value.client, slot), control.epoch).catch(() => {});
+            return this.#ignore("install");
+        });
         return { ok: true, epoch: control.epoch };
     }
 

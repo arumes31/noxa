@@ -560,6 +560,25 @@ test("a newly announced epoch is not ready until installed, including reordered 
 });
 
 
+test("a publisher revoked mid-installation gets no further slot keys", async () => {
+    const media=fakeMedia(), original=media.setKey, pending=[];
+    const {e,sent}=engine({media});
+    const client="c-revoked", sender="u-revoked", device="d-revoked";
+    e.setRoster([member(client,sender,device)]);e.start(me);await flush();
+    const incoming=control(20000,{client,sender,device});incoming.data.members=sent[0].body.data.members;
+    try {
+        media.setKey=async(...args)=>{if(args[0]===publicationPid(client,"mic"))await new Promise(r=>pending.push(r));return original(...args);};
+        e.receive(incoming);await flush();
+        assert.equal(pending.length,1);
+        e.setRoster([]);await flush();
+        pending[0]();await flush();
+        const installed=media.log.filter(([op,pid,epoch])=>op==="key"&&epoch===20000).map(([,pid])=>pid);
+        assert.deepEqual(installed,[publicationPid(client,"mic")],"no slot after the first may be installed");
+        assert.ok(media.log.some(([op,pid,through])=>op==="retire"&&pid===publicationPid(client,"mic")&&through===20000));
+        assert.equal(e.publisherStatus(client)?.ready??false,false);
+    } finally {e.stop();}
+});
+
 test("duplicate sessions share key delivery but retain distinct publication readiness", async () => {
     const {e,sent}=engine();
     e.setRoster([member("c1","u1","d1"),member("c2","u1","d1")]);e.start(me);
