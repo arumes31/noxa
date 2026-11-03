@@ -8,6 +8,8 @@ import (
 	"github.com/pion/interceptor/pkg/report"
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
+
+	"noxa/internal/webrtc/nackgen"
 )
 
 // SetVideoBoundsForNewPeers replaces codec configuration for subsequently
@@ -116,12 +118,17 @@ func newEngineMediaPolicy(enableAV1 bool, bounds VideoBounds, policy MediaPolicy
 // Reports carrying the publisher's capture-time mapping instead of pion's
 // server-clock reports (media_timing.go).
 func registerEngineInterceptors(media *webrtc.MediaEngine, registry *interceptor.Registry, egress *mediaEgressRegistry) error {
-	if err := webrtc.ConfigureNackWithOptions(media, registry,
-		[]nack.GeneratorOption{nack.GeneratorSize(videoReorderPackets), nack.GeneratorMaxNacksPerPacket(26)},
-		nack.ResponderSize(videoRepairCachePackets),
-	); err != nil {
+	// pion's ConfigureNackWithOptions, except the generator is the bounded
+	// copy in nackgen: pion's prunes retry counters quadratically in this
+	// 16384-packet history, which a publisher can drive via sequence numbers.
+	responder, err := nack.NewResponderInterceptor(nack.ResponderSize(videoRepairCachePackets))
+	if err != nil {
 		return err
 	}
+	media.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack"}, webrtc.RTPCodecTypeVideo)
+	media.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack", Parameter: "pli"}, webrtc.RTPCodecTypeVideo)
+	registry.Add(responder)
+	registry.Add(nackgen.NewFactory(nackgen.Size(videoReorderPackets), nackgen.MaxNacksPerPacket(26)))
 	receiverReports, err := report.NewReceiverInterceptor()
 	if err != nil {
 		return err
