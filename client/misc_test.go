@@ -69,3 +69,27 @@ func TestLogChatIgnoresConfigDirectoryFailure(t *testing.T) {
 
 	(&App{}).LogChat("must not reach the filesystem")
 }
+
+func TestLogChatEscapesRecordSeparators(t *testing.T) {
+	closeDailyLogs()
+	t.Cleanup(closeDailyLogs)
+	originalDir, originalNow := miscUserConfigDir, chatLogNow
+	base := t.TempDir()
+	miscUserConfigDir = func() (string, error) { return base, nil }
+	chatLogNow = func() time.Time { return time.Date(2026, time.August, 22, 12, 34, 56, 0, time.UTC) }
+	t.Cleanup(func() {
+		miscUserConfigDir = originalDir
+		chatLogNow = originalNow
+	})
+
+	(&App{}).LogChat("[channel] mallory: hi\r\n[2026-08-22 12:34:57] [channel] alice: forged\\n\x1b[2J\u2028")
+	closeDailyLogs()
+	raw, err := os.ReadFile(filepath.Join(base, "noxa", "chat.log"))
+	if err != nil {
+		t.Fatalf("read chat log: %v", err)
+	}
+	want := `[2026-08-22 12:34:56] [channel] mallory: hi\r\n[2026-08-22 12:34:57] [channel] alice: forged\\n\u001b[2J\u2028` + "\n"
+	if got := string(raw); got != want {
+		t.Fatalf("chat log = %q, want %q", got, want)
+	}
+}

@@ -583,3 +583,19 @@ func TestChatPinsStripsCiphertextBeforeReturn(t *testing.T) {
 		t.Fatal("ciphertext or key material reached the webview")
 	}
 }
+
+func TestTextExportPathNeverWritesMarkup(t *testing.T) {
+	for input, want := range map[string]string{
+		"noxa-general.txt":     "noxa-general.txt",
+		`C:\exports\chat.html`: `C:\exports\chat.html.txt`,
+		"/tmp/chat.HTM":        "/tmp/chat.HTM.txt",
+		"chat.svg":             "chat.svg.txt",
+		"chat.log":             "chat.log",
+		"chat":                 "chat",
+		"report.mhtml":         "report.mhtml.txt",
+	} {
+		if got := textExportPath(input); got != want {
+			t.Errorf("textExportPath(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

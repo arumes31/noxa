@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -165,20 +166,40 @@ func dmExportMessages(msgs []DMEntry) ChatExportResult {
 
 // ExportChat saves text to a user-chosen file via the native save dialog.
 // Returns "" on success or when the user cancels, or the error.
+//
+// The transcript is plain text containing participant-controlled names and
+// bodies, so it is only ever written as a text file: a name the browser would
+// render as markup gets a .txt suffix instead of becoming executable HTML.
 func (a *App) ExportChat(defaultName, contents string) string {
 	path, err := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
-		DefaultFilename: defaultName,
+		DefaultFilename: textExportPath(defaultName),
 		Filters: []wailsRuntime.FileFilter{
-			{DisplayName: "Text / HTML", Pattern: "*.txt;*.html"},
+			{DisplayName: "Text", Pattern: "*.txt"},
 		},
 	})
 	if err != nil || path == "" {
 		return "" // cancelled
 	}
+	path = textExportPath(path)
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		return err.Error()
 	}
 	return ""
+}
+
+// markupExportExtensions are file types a browser or viewer interprets as
+// active markup rather than displaying as text.
+var markupExportExtensions = map[string]bool{
+	".htm": true, ".html": true, ".xhtml": true, ".xht": true, ".shtml": true,
+	".svg": true, ".svgz": true, ".xml": true, ".mht": true, ".mhtml": true, ".hta": true,
+}
+
+// textExportPath keeps a plaintext transcript out of markup file types.
+func textExportPath(path string) string {
+	if markupExportExtensions[strings.ToLower(filepath.Ext(path))] {
+		return path + ".txt"
+	}
+	return path
 }
 
 // Encrypted export container: magic || salt || nonce || secretbox. The key is
