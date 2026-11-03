@@ -30,6 +30,34 @@ func attachmentStorageName(blob []byte) string {
 	return hex.EncodeToString(sum[:])[:32] + ".vcx"
 }
 
+// errAttachmentContentMismatch reports ciphertext that does not hash to the
+// content-derived name carried in the (authenticated) message reference.
+var errAttachmentContentMismatch = errors.New("attachment content does not match its reference")
+
+// verifyAttachmentStorageName checks a downloaded sealed attachment against
+// its content-derived storage name. Per-chunk authentication alone does not
+// cover the record count, so a file server could otherwise drop trailing
+// records and have the prefix accepted as the complete attachment. Names that
+// are not content-derived (older uploads) cannot be checked and pass through.
+func verifyAttachmentStorageName(storage string, blob []byte) error {
+	if !isContentDerivedStorageName(storage) {
+		return nil
+	}
+	if attachmentStorageName(blob) != strings.ToLower(storage) {
+		return errAttachmentContentMismatch
+	}
+	return nil
+}
+
+func isContentDerivedStorageName(storage string) bool {
+	const hexLen = 32
+	if len(storage) != hexLen+len(".vcx") || !strings.EqualFold(storage[hexLen:], ".vcx") {
+		return false
+	}
+	_, err := hex.DecodeString(storage[:hexLen])
+	return err == nil
+}
+
 // safeDisplayName strips the two characters that would break the token
 // grammar. The name is only ever shown, never used to address storage.
 func safeDisplayName(name string) string {
@@ -189,6 +217,9 @@ func (a *App) chatAttachmentBytesAt(cm *connManager, location attachmentLocation
 	}
 	if keyB64 == "" {
 		return blob, nil
+	}
+	if err := verifyAttachmentStorageName(storage, blob); err != nil {
+		return nil, err
 	}
 	if bytes.HasPrefix(blob, attachmentGCMHeader) {
 		if len(blob) > maxSealedChatAttachmentBytes {
