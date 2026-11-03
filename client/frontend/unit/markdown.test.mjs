@@ -11,6 +11,15 @@ describe("escapeHTML", () => {
 });
 
 describe("renderMarkdown", () => {
+    it("never lets sender text reference internal stash fragments", () => {
+        const fragment = "`" + "x".repeat(64) + "`";
+        const forged = "0".repeat(50);
+        const html = renderMarkdown(fragment + forged);
+        assert.equal(html.match(/md-code/g).length, 1);
+        assert.ok(!html.includes("") && !html.includes(""));
+        assert.ok(html.length < 200);
+    });
+
     it("returns an empty string for empty input", () => {
         assert.equal(renderMarkdown(""), "");
         assert.equal(renderMarkdown(null), "");
