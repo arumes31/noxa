@@ -43,7 +43,7 @@ func (i *ICoreWebView2EnvironmentOptions3) PutIsCustomCrashReportingEnabled(valu
 
 	hr, _, _ := i.Vtbl.PutIsCustomCrashReportingEnabled.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)

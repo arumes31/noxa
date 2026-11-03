@@ -43,7 +43,7 @@ func (i *ICoreWebView2EnvironmentOptions5) PutEnableTrackingPrevention(value boo
 
 	hr, _, _ := i.Vtbl.PutEnableTrackingPrevention.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)

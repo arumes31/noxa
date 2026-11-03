@@ -9,7 +9,7 @@ import (
 )
 
 type ICoreWebView2_8Vtbl struct {
-	IUnknownVtbl
+	ICoreWebView2_7Vtbl
 	AddIsMutedChanged                   ComProc
 	RemoveIsMutedChanged                ComProc
 	GetIsMuted                          ComProc
@@ -87,7 +87,7 @@ func (i *ICoreWebView2_8) PutIsMuted(value bool) error {
 
 	hr, _, _ := i.Vtbl.PutIsMuted.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)

@@ -9,7 +9,7 @@ import (
 )
 
 type ICoreWebView2Settings6Vtbl struct {
-	IUnknownVtbl
+	ICoreWebView2Settings5Vtbl
 	GetIsSwipeNavigationEnabled ComProc
 	PutIsSwipeNavigationEnabled ComProc
 }
@@ -55,7 +55,7 @@ func (i *ICoreWebView2Settings6) PutIsSwipeNavigationEnabled(value bool) error {
 
 	hr, _, _ := i.Vtbl.PutIsSwipeNavigationEnabled.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)

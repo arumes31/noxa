@@ -9,7 +9,7 @@ import (
 )
 
 type ICoreWebView2Profile6Vtbl struct {
-	IUnknownVtbl
+	ICoreWebView2Profile5Vtbl
 	GetIsPasswordAutosaveEnabled ComProc
 	PutIsPasswordAutosaveEnabled ComProc
 	GetIsGeneralAutofillEnabled  ComProc
@@ -57,7 +57,7 @@ func (i *ICoreWebView2Profile6) PutIsPasswordAutosaveEnabled(value bool) error {
 
 	hr, _, _ := i.Vtbl.PutIsPasswordAutosaveEnabled.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)
@@ -85,7 +85,7 @@ func (i *ICoreWebView2Profile6) PutIsGeneralAutofillEnabled(value bool) error {
 
 	hr, _, _ := i.Vtbl.PutIsGeneralAutofillEnabled.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)

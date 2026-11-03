@@ -131,7 +131,7 @@ func (i *ICoreWebView2ContextMenuItem) PutIsEnabled(value bool) error {
 
 	hr, _, _ := i.Vtbl.PutIsEnabled.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)
@@ -159,7 +159,7 @@ func (i *ICoreWebView2ContextMenuItem) PutIsChecked(value bool) error {
 
 	hr, _, _ := i.Vtbl.PutIsChecked.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)

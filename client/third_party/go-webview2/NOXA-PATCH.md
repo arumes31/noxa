@@ -5,7 +5,8 @@ Source: github.com/wailsapp/go-webview2 v1.0.23 (upstream LICENSE retained).
 The packaged Windows client exited from Chromium.Focus while Save As was open:
 MoveFocus returned E_INVALIDARG and errorCallback called os.Exit(1).
 
-Aside from mechanical gofmt normalization required by CI, only Focus behavior is changed: ignore missing/shutting-down controllers and disabled
+Aside from mechanical gofmt normalization required by CI and the ABI corrections
+below, only Focus behavior is changed: ignore missing/shutting-down controllers and disabled
 owner windows; log and defer the E_INVALIDARG focus attempt. Other HRESULTs and
 other fatal-error sites retain upstream behavior. No permission policy changes.
 
@@ -25,3 +26,32 @@ fork's original v0.27.0 requirement. The application requires Go 1.27.2.
 Govulncheck found no call to NewNTUnicodeString in the standalone Windows
 scan, but the old standalone module imported the affected package.
 See https://pkg.go.dev/vuln/GO-2026-5024 for the affected range and fix.
+
+## WebView2 COM ABI corrections (security audit, 2026-11)
+
+The generated `pkg/webview2` bindings are not compiled into the noXa client
+(which uses `pkg/edge` through Wails), but they ship in this module, so their
+COM ABI defects were corrected rather than left as traps:
+
+- Boolean property setters (`Put*`, `Enable`) now pass a scalar Win32 BOOL
+  (0/1) by value. They previously passed the address of the Go bool, which the
+  native side reads as nonzero, so `false` meant `true`. The same fix applies
+  to the unused `pkg/edge` `ICoreWebView2Settings3/5` setters.
+- Derived interfaces (`ICoreWebView2_N`, `...Settings2+`, `...Profile2+`,
+  `...Frame2+`, `...PermissionRequestedEventArgs2+`, and the other 82 versioned
+  interfaces) now embed their base vtable, so every method dispatches to its
+  WebView2.h slot instead of an inherited getter. Their `GetICoreWebView2X()`
+  accessors now QueryInterface the owning object (profile, frame, event args,
+  settings, ...) instead of the ICoreWebView2 itself.
+- `ICoreWebView2CustomSchemeRegistration.SetAllowedOrigins/GetAllowedOrigins`
+  and `ICoreWebView2EnvironmentOptions4.Set/GetCustomSchemeRegistrations` take
+  and return slices, passing the count by value and a native pointer array.
+- Five completion-handler trampolines that took Go `string`/`bool` arguments
+  made `windows.NewCallback` panic during package init; they now take the raw
+  `LPCWSTR`/`BOOL` and convert.
+
+`pkg/webview2/noxa_abi_test.go` checks every vtable against a slot table
+generated from WebView2.h (Microsoft.Web.WebView2 1.0.4258.31) and exercises
+BOOL and array marshalling through fake COM objects:
+
+    go test ./pkg/webview2 -count=1

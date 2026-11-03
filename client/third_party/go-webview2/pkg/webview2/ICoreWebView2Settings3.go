@@ -9,7 +9,7 @@ import (
 )
 
 type ICoreWebView2Settings3Vtbl struct {
-	IUnknownVtbl
+	ICoreWebView2Settings2Vtbl
 	GetAreBrowserAcceleratorKeysEnabled ComProc
 	PutAreBrowserAcceleratorKeysEnabled ComProc
 }
@@ -55,7 +55,7 @@ func (i *ICoreWebView2Settings3) PutAreBrowserAcceleratorKeysEnabled(value bool)
 
 	hr, _, _ := i.Vtbl.PutAreBrowserAcceleratorKeysEnabled.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)

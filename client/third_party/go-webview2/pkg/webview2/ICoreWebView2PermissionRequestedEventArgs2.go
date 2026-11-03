@@ -9,7 +9,7 @@ import (
 )
 
 type ICoreWebView2PermissionRequestedEventArgs2Vtbl struct {
-	IUnknownVtbl
+	ICoreWebView2PermissionRequestedEventArgsVtbl
 	GetHandled ComProc
 	PutHandled ComProc
 }
@@ -55,7 +55,7 @@ func (i *ICoreWebView2PermissionRequestedEventArgs2) PutHandled(value bool) erro
 
 	hr, _, _ := i.Vtbl.PutHandled.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)

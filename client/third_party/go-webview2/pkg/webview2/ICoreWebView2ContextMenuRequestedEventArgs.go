@@ -101,7 +101,7 @@ func (i *ICoreWebView2ContextMenuRequestedEventArgs) PutHandled(value bool) erro
 
 	hr, _, _ := i.Vtbl.PutHandled.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)
