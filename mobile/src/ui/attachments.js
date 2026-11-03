@@ -1,8 +1,10 @@
 // attachments.js — encrypted attachments in message bodies. Images load
 // inline (setting inlineImages) and open in the lightbox; videos load on tap
 // into a native player; voice messages play inline; other files download. Decrypted media are cached by
-// storage name because the chat screens rebuild their log on every change.
+// location, storage name and key because the chat screens rebuild their log on every change.
+import { app } from "../app.js";
 import { fetchAttachment } from "../core/files.js";
+import { toBase64 } from "../core/crypto.js";
 import { formatSize, mediaKind, mimeOf } from "../core/message-format.js";
 import * as settings from "../core/settings.js";
 import { t } from "../i18n.js";
@@ -12,26 +14,47 @@ import { voiceNotePlayer } from "./voice-note.js";
 import "./rich-strings.js";
 
 const MAX_CACHED = 80;
-const cache = new Map(); // storage -> Promise<{url, blob}>
+const cache = new Map(); // location|storage|key -> Promise<{url, blob}>
+let cacheEpoch = 0;
 
-/** {url, blob} of a decrypted attachment, fetched once per storage name. */
+// Cached plaintext is found only with the same location, storage name AND
+// attachment key that decrypted it, never by storage name alone.
+function cacheKey(ref, channelID) {
+    const master = ref.master instanceof Uint8Array ? toBase64(ref.master) : String(ref.master ?? "");
+    return `${channelID}|${ref.storage}|${master}`;
+}
+
+/** {url, blob} of a decrypted attachment, fetched once per location, name and key. */
 export function attachmentURL(ref, { conn, channelID }) {
-    if (!cache.has(ref.storage)) {
+    const key = cacheKey(ref, channelID);
+    if (!cache.has(key)) {
+        const epoch = cacheEpoch;
         const pending = fetchAttachment(conn, channelID, ref)
             .then(plain => {
+                // A decryption that finishes after sign-out publishes nothing.
+                if (epoch !== cacheEpoch) throw new Error("attachment cache cleared");
                 const blob = new Blob([plain], { type: mimeOf(ref.name) });
                 return { url: URL.createObjectURL(blob), blob };
             })
-            .catch(error => { cache.delete(ref.storage); throw error; });
-        cache.set(ref.storage, pending);
+            .catch(error => { if (cache.get(key) === pending) cache.delete(key); throw error; });
+        cache.set(key, pending);
         if (cache.size > MAX_CACHED) {
             const [oldest, url] = cache.entries().next().value;
             cache.delete(oldest);
             url.then(entry => URL.revokeObjectURL(entry.url)).catch(() => {});
         }
     }
-    return cache.get(ref.storage);
+    return cache.get(key);
 }
+
+/** Drops every decrypted attachment and revokes its URL (sign-out, account replacement). */
+export function clearAttachmentCache() {
+    cacheEpoch++;
+    for (const pending of cache.values()) pending.then(entry => URL.revokeObjectURL(entry.url)).catch(() => {});
+    cache.clear();
+}
+app.addEventListener("signedout", clearAttachmentCache);
+app.addEventListener("account-replaced", clearAttachmentCache);
 
 let observer = null;
 /** Runs load() once the node scrolls near the viewport. */

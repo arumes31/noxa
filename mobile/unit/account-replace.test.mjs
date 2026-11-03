@@ -80,7 +80,7 @@ const sources = {
     "./core/crypto.js": { generateIdentity }, "./core/dm-trust.js": { signKeyRecord: () => "record" },
     "./core/device.js": { signIn: async () => ({ unique_id: world.signInAs, device_id: "phone-" + world.signInAs, client_id: "c1", capabilities: [...world.capabilities], tls_fingerprint: "ab".repeat(32) }) },
     "./core/identity-store.js": identityStore, "./core/outbox.js": outbox,
-    "./core/push.js": { announceRead: none, closeNotifications: none, reportVisibility: none, setBadge: none, syncPush: async () => ({}) },
+    "./core/push.js": { announceRead: none, closeAllNotifications: none, closeNotifications: none, reportVisibility: none, setBadge: none, syncPush: async () => ({}) },
     "./core/settings.js": { get: () => [] }, "./core/servers.js": { addServer: () => [] },
     "./notifier.js": { notifier: { install() {}, decide() { return { count: true }; }, read() {} } },
     "./core/conversation-prefs.js": { activityShared: () => false, isMuted: () => false, syncMuted: () => {}, watchCallLog: () => {}, resetCallLog: async () => {} },

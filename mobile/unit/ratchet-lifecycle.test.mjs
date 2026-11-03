@@ -87,7 +87,7 @@ test("app lifecycle owns, polls and fences the ratchet consumer across reconnect
                 try { await dm.send("bob", "queued while signing out", "", { id: "o1" }); flushResult = "sent"; } catch (e) { flushResult = e.code; }
             },
         },
-        "./core/push.js": { announceRead: none, closeNotifications: none, reportVisibility: none, setBadge: none, syncPush: async () => ({}) },
+        "./core/push.js": { announceRead: none, closeAllNotifications: none, closeNotifications: none, reportVisibility: none, setBadge: none, syncPush: async () => ({}) },
         "./core/settings.js": { get: () => [] }, "./core/servers.js": { addServer: () => [] },
         "./notifier.js": { notifier: { install() {}, decide() { return { count: true }; }, read() {} } },
         "./core/conversation-prefs.js": { activityShared: () => false, isMuted: () => false, syncMuted: () => {}, watchCallLog: () => {}, resetCallLog: async () => {} },

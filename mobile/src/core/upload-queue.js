@@ -16,14 +16,20 @@
 import { fileToken, MAX_ATTACHMENT_BYTES, sealAttachment, storageName, uploadStream } from "./files.js";
 
 let getConn = () => null;
+let getOwner = () => "";
 let sequence = 0;
 const items = [];
 const events = new EventTarget();
 let running = null;
 
-/** The control connection uploads use (set by the app once at start). */
-export function setUploadConnection(provider) {
+/**
+ * The control connection uploads use (set by the app once at start) and the
+ * account that owns new uploads: an item only ever runs, or is retried, for
+ * the account (and identity generation) that queued it.
+ */
+export function setUploadConnection(provider, owner = () => "") {
     getConn = provider;
+    getOwner = owner;
 }
 
 function changed(item) {
@@ -52,6 +58,7 @@ export function enqueueUpload(file, target) {
     const item = {
         id: `up-${++sequence}`,
         file,
+        owner: getOwner(),
         target: { channelID: Number(target?.channelID) || 0, folder: target?.folder || "", sealed: !!target?.sealed, name: target?.name || file.name || "file" },
         name: target?.name || file.name || "file",
         total: file.size || 0,
@@ -82,6 +89,7 @@ function canceledError() {
 }
 
 async function transfer(item, signal) {
+    if (getOwner() !== item.owner) throw new Error("the account changed; this upload was discarded");
     const conn = getConn();
     if (!conn?.open) throw new Error("not connected");
     const { channelID, folder, sealed, name } = item.target;
@@ -164,6 +172,14 @@ export function dismissUpload(id) {
 /** Removes every finished item. */
 export function clearFinished() {
     for (const item of items.filter(entry => entry.status === "done")) dismissUpload(item.id);
+}
+
+/**
+ * Sign-out or account replacement: aborts every upload and forgets every
+ * item, so no File of the previous account stays retryable.
+ */
+export function discardUploads() {
+    for (const item of items.slice()) dismissUpload(item.id);
 }
 
 /** Test support. */

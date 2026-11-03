@@ -115,6 +115,45 @@ export async function closeNotifications(tag) {
     }
 }
 
+// A notification's "Answer" in a closed app opens a fresh window. The worker
+// leaves a short-lived, single-use intent here; the page auto-accepts only
+// with it, never because of a URL parameter any site can link to.
+export const INTENT_CACHE = "noxa-intents";
+const ANSWER_INTENT_URL = "/app/__intents/answer.json";
+const ANSWER_INTENT_MS = 45000;
+
+/** Worker: records that the user chose Answer on call id. */
+export async function saveAnswerIntent(id) {
+    const cache = await caches.open(INTENT_CACHE);
+    await cache.put(ANSWER_INTENT_URL, new Response(JSON.stringify({ id, until: Date.now() + ANSWER_INTENT_MS }), { headers: { "content-type": "application/json" } }));
+}
+
+/** Page: consumes the intent; true only when it names call id and is fresh. */
+export async function takeAnswerIntent(id) {
+    try {
+        if (typeof caches === "undefined") return false;
+        const cache = await caches.open(INTENT_CACHE);
+        const response = await cache.match(ANSWER_INTENT_URL);
+        if (!response) return false;
+        await cache.delete(ANSWER_INTENT_URL);
+        const intent = await response.json();
+        return !!id && intent?.id === id && Number.isFinite(intent.until) && Date.now() <= intent.until;
+    } catch {
+        return false;
+    }
+}
+
+/** Closes every shown notification of this app (sign-out, account replacement). */
+export async function closeAllNotifications() {
+    if (!pushSupported()) return;
+    try {
+        const reg = await navigator.serviceWorker.getRegistration("/app/");
+        for (const notification of await reg?.getNotifications() || []) notification.close();
+    } catch {
+        // Notifications are best effort.
+    }
+}
+
 /** Shows the unread count on the app icon where the Badging API exists. */
 export function setBadge(count) {
     if (typeof navigator === "undefined") return;

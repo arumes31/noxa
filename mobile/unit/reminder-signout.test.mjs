@@ -11,7 +11,7 @@ async function fixture(stored = [], registration = async () => null) {
         './core/connection.js': { Connection: class {} }, './core/frame.js':{Msg:{}}, './core/olm-directory.js':{signBundle:()=>({})}, './core/olm-reset.js':{signReset:()=>({})}, './core/link-binding.js':{verifyLinkBinding:()=>'',announcedBinding:()=>''}, './core/dm-trust.js':{signKeyRecord:()=>''}, './core/ratchet-consumer.js':{RatchetConsumer:class{},connectionTransport:()=>({})}, './core/crypto.js': { generateIdentity: none }, './core/device.js': { signIn: none },
         './core/identity-store.js': { assertIdentityFence: none, beginIdentity: none, clearIdentity: none, loadIdentity: none, saveIdentity: none, updateMeta: none },
         './core/outbox.js': { enqueue: none, flush: none, showPending: none, waitingCount: none },
-        './core/push.js': { announceRead: none, closeNotifications: tag => closed.push(tag), reportVisibility: none, setBadge: none, syncPush: none },
+        './core/push.js': { announceRead: none, closeAllNotifications: () => closed.push('*'), closeNotifications: tag => closed.push(tag), reportVisibility: none, setBadge: none, syncPush: none },
         './core/settings.js': { get: () => [] }, './core/servers.js': { addServer: none },
         './notifier.js': { notifier: { install: none, decide: () => ({ count: true }), read: none } },
         './core/conversation-prefs.js': { activityShared: () => false, isMuted: () => false, syncMuted: none, watchCallLog: none, resetCallLog: none },
@@ -42,7 +42,8 @@ test('sign-out clears stored callback reminders, timers and displayed notificati
     assert.equal(f.timers.size, 0);
     assert.equal(f.storage.has('noxa.callReminders'), false);
     assert.equal(f.api.reminders().length, 0);
-    assert.deepEqual(f.closed, ['remind:private-peer']);
+    // The reminder itself and every other shown notification of the account.
+    assert.deepEqual(f.closed, ['remind:private-peer', '*']);
 });
 
 test('sign-out during service worker lookup cannot notify or restore old reminders', async () => {
@@ -71,7 +72,7 @@ test('sign-out during notification delivery closes it after delivery finishes', 
     resolve();
     await pending;
     assert.equal(f.closed.at(-1), 'remind:private-peer');
-    assert.equal(f.closed.length, 2);
+    assert.equal(f.closed.length, 3);
     assert.equal(f.storage.has('noxa.callReminders'), false);
 });
 

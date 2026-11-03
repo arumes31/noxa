@@ -6,7 +6,7 @@
 //     const [item] = uploadFiles([file], { channelID, sealed: true });
 //     const { token } = await item.done;
 import { app } from "../app.js";
-import { cancelUpload, clearFinished, dismissUpload, enqueueUpload, onUploadsChanged, retryUpload, setUploadConnection, uploads } from "../core/upload-queue.js";
+import { cancelUpload, clearFinished, discardUploads, dismissUpload, enqueueUpload, onUploadsChanged, retryUpload, setUploadConnection, uploads } from "../core/upload-queue.js";
 import { addStrings, t } from "../i18n.js";
 import { h, replaceContent } from "./dom.js";
 import { formatBytes } from "../core/channel-files.js";
@@ -47,7 +47,10 @@ addStrings({
     },
 });
 
-setUploadConnection(() => app.session?.conn);
+// Uploads belong to the account and identity generation that queued them.
+setUploadConnection(() => app.session?.conn, () => app.identityFence ? `${app.identityFence.generation}:${app.meta?.uniqueID || ""}` : "");
+app.addEventListener("signedout", discardUploads);
+app.addEventListener("account-replaced", discardUploads);
 
 let panel = null;
 let expanded = true;

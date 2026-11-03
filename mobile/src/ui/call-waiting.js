@@ -4,10 +4,11 @@
 //     every screen; Accept ends the current call and answers, Decline
 //     declines only the waiting call.
 //   * notification actions: "Answer" opens the call and accepts it once it
-//     rings on this session ("?answer=<id>" for a fresh window, a message
-//     from the service worker for a running one); "Decline" from a running
+//     rings on this session (a fresh window needs the worker's single-use
+//     answer intent, a running one gets a message from the service worker); "Decline" from a running
 //     app declines here (a closed app is handled by the service worker).
 import { app } from "../app.js";
+import { takeAnswerIntent } from "../core/push.js";
 import { t } from "../i18n.js";
 import { h, toast } from "./dom.js";
 import "./video-kit.js";
@@ -55,14 +56,18 @@ function renderBanner() {
 
 let answer = null; // {id, until}
 
-function takeAnswerParam() {
+async function takeAnswerParam() {
     const params = new URLSearchParams(location.search);
     const id = params.get("answer");
     if (!id) return;
     params.delete("answer");
     const query = params.toString();
     history.replaceState(history.state, "", `${location.pathname}${query ? `?${query}` : ""}${location.hash}`);
-    answerWhenRinging(id);
+    // Any site can link to "?answer=<id>": only the service worker's
+    // single-use intent (the user chose Answer on the notification) accepts
+    // automatically. Otherwise the call screen opens and waits for Answer.
+    if (await takeAnswerIntent(id)) answerWhenRinging(id);
+    else if (!location.hash.startsWith(`#/call/${id}`)) location.hash = `#/call/${id}`;
 }
 
 function answerWhenRinging(id) {
@@ -102,4 +107,4 @@ navigator.serviceWorker?.addEventListener("message", event => {
     else if (data.action === "decline") declineFromNotification(data.id).catch(() => {});
 });
 
-takeAnswerParam();
+takeAnswerParam().catch(() => {});
