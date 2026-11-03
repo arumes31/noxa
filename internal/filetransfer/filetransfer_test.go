@@ -691,3 +691,41 @@ func TestRateLimiter(t *testing.T) {
 		t.Errorf("limiter too slow: %v", elapsed)
 	}
 }
+
+func TestCrossChannelMoveSharesIdenticalTargetBlob(t *testing.T) {
+	ctx := context.Background()
+	fs := newFakeFileStore()
+	s := New(Config{Addr: ":0", RootDir: t.TempDir()}, fs, nil)
+	seed := func(channelID int64, name string) {
+		t.Helper()
+		p := s.filePath(channelID, "", name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("same bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := fs.AddFile(ctx, store.FileRecord{ChannelID: channelID, Name: name, Size: 10, SHA256: "sha-same", Uploader: "u"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed(7, "copy.txt")
+	seed(8, "existing.txt")
+	if err := s.MoveFile(ctx, 7, "", "copy.txt", 8, "", "moved.txt"); err != nil {
+		t.Fatalf("MoveFile: %v", err)
+	}
+	existing, err := os.Stat(s.filePath(8, "", "existing.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := os.Stat(s.filePath(8, "", "moved.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(existing, moved) {
+		t.Fatal("discounted move kept an independent physical copy")
+	}
+	if _, err := os.Stat(s.filePath(7, "", "copy.txt")); !os.IsNotExist(err) {
+		t.Fatal("source blob left behind")
+	}
+}

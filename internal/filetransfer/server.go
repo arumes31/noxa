@@ -45,6 +45,7 @@ import (
 	"noxa/internal/traffic"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -590,7 +591,7 @@ func (s *Server) MoveFile(ctx context.Context, channelID int64, folder, name str
 		}
 		return err
 	}
-	if err := s.moveBlobFn(root, oldPath, newPath); err != nil {
+	if err := s.placeMovedBlob(ctx, root, channelID, newChannelID, newFolder, newName, oldPath, newPath); err != nil {
 		rbCtx, rbCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer rbCancel()
 		rollbackErr := s.store.MoveFile(rbCtx, newChannelID, newFolder, newName, channelID, folder, name)
@@ -600,6 +601,62 @@ func (s *Server) MoveFile(ctx context.Context, channelID int64, folder, name str
 		return fmt.Errorf("moving file blob: %w", err)
 	}
 	return nil
+}
+
+// ErrNameAliasesExistingFile rejects a publication whose physical path the
+// storage filesystem resolves to a differently spelled existing object (for
+// example a case variant on a case-insensitive volume). Metadata ownership is
+// checked by exact name, so replacing that object would bypass it.
+var ErrNameAliasesExistingFile = errors.New("name conflicts with an existing file")
+
+// blobAlias reports whether path resolves to an existing object that the
+// directory does not list under exactly this spelling. allowed, when non-nil,
+// is the caller's own source object (a case-only rename of itself).
+func blobAlias(root *os.Root, path string, allowed os.FileInfo) (bool, error) {
+	info, err := root.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checking destination blob: %w", err)
+	}
+	if allowed != nil && os.SameFile(info, allowed) {
+		return false, nil
+	}
+	dir, err := root.Open(filepath.Dir(path))
+	if err != nil {
+		return false, fmt.Errorf("checking destination folder: %w", err)
+	}
+	defer func() { _ = dir.Close() }()
+	names, err := dir.Readdirnames(-1)
+	if err != nil {
+		return false, fmt.Errorf("listing destination folder: %w", err)
+	}
+	return !slices.Contains(names, filepath.Base(path)), nil
+}
+
+// placeMovedBlob publishes a moved blob. A cross-channel move whose content
+// already exists in the target channel was admitted with that content's bytes
+// discounted (checkMoveQuota), so it must share the existing physical blob, as
+// upload deduplication does, rather than keep an independent copy that the
+// hash-based quota would never charge.
+func (s *Server) placeMovedBlob(ctx context.Context, root *os.Root, source, target int64, folder, name, oldPath, newPath string) error {
+	if source != target {
+		if moved, err := s.store.GetFile(ctx, target, folder, name); err == nil {
+			if ex, err := s.store.FindFileBySHA(ctx, target, moved.SHA256, folder, name); err == nil && ex != nil {
+				existingPath := blobPath(target, ex.Folder, ex.Name)
+				if info, err := root.Lstat(existingPath); err == nil && info.Mode().IsRegular() {
+					if err := root.Link(existingPath, newPath); err == nil {
+						if err := root.Remove(oldPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+							s.logger.Warn("removing deduplicated move source failed", zap.String("path", oldPath), zap.Error(err))
+						}
+						return nil
+					}
+				}
+			}
+		}
+	}
+	return s.moveBlobFn(root, oldPath, newPath)
 }
 
 // moveBlob renames a blob, falling back to copy+unlink when the two paths sit
@@ -616,6 +673,11 @@ func moveBlob(root *os.Root, oldPath, newPath string) error {
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("source blob %q is not a regular file", oldPath)
+	}
+	if alias, err := blobAlias(root, newPath, info); err != nil {
+		return err
+	} else if alias {
+		return ErrNameAliasesExistingFile
 	}
 
 	err = root.Rename(oldPath, newPath)

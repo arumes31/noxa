@@ -238,6 +238,17 @@ func (s *Server) finalizeUpload(ctx context.Context, tr *transfer, root *os.Root
 		s.rotateVersions(ctx, tr, root)
 	}
 
+	// Rotation moved any exactly named predecessor away. An object still
+	// reachable at finalPath under another spelling belongs to a different
+	// metadata record, which the exact-name owner check above did not cover.
+	if alias, err := blobAlias(root, finalPath, nil); err != nil {
+		_ = root.Remove(tmpPath)
+		return err
+	} else if alias {
+		_ = root.Remove(tmpPath)
+		return ErrNameAliasesExistingFile
+	}
+
 	// Dedup (275): point at an identical existing blob instead of storing a
 	// second copy.
 	linked := false

@@ -38,6 +38,17 @@ type link struct {
 	path      string // path relative to the registry's confined root
 	name      string // download file name (Content-Disposition)
 	expires   time.Time
+	// identity is the file authorized at issuance. A token never follows its
+	// pathname to a different object: deletion, replacement or rewrite makes
+	// it stale even when another upload later reuses the same name.
+	identity os.FileInfo
+}
+
+// sameLinkedFile reports whether opened is still the exact file generation a
+// link was issued for: the same filesystem object, size and modification time.
+func sameLinkedFile(issued, opened os.FileInfo) bool {
+	return issued != nil && opened != nil && os.SameFile(issued, opened) &&
+		issued.Size() == opened.Size() && issued.ModTime().Equal(opened.ModTime())
 }
 
 // LinkRegistry tracks issued download links and serves them over HTTP. It
@@ -102,7 +113,8 @@ func (r *LinkRegistry) create(path, name string, principal *Principal, scope int
 	if err != nil {
 		return "", time.Time{}, errors.New("file not found on disk")
 	}
-	if err := f.Close(); err != nil {
+	identity, statErr := f.Stat()
+	if err := f.Close(); err != nil || statErr != nil {
 		return "", time.Time{}, errors.New("file not found on disk")
 	}
 	now := r.now()
@@ -122,7 +134,7 @@ func (r *LinkRegistry) create(path, name string, principal *Principal, scope int
 			continue
 		}
 		expires := now.Add(LinkTTL)
-		r.links[token] = link{path: path, name: name, expires: expires, principal: principal, scope: scope, folder: folder}
+		r.links[token] = link{path: path, name: name, expires: expires, principal: principal, scope: scope, folder: folder, identity: identity}
 		return token, expires, nil
 	}
 	return "", time.Time{}, errors.New("download link token collision limit exceeded")
@@ -202,6 +214,13 @@ func (r *LinkRegistry) openActive(token string) (link, *os.File, bool) {
 	f, err := openRegularBlob(root, l.path)
 	_ = root.Close()
 	if err != nil {
+		return link{}, nil, false
+	}
+	if info, err := f.Stat(); err != nil || !sameLinkedFile(l.identity, info) {
+		// The authorized file was deleted, replaced or rewritten. Retire the
+		// capability rather than disclosing whatever now occupies the path.
+		_ = f.Close()
+		delete(r.links, token)
 		return link{}, nil, false
 	}
 	r.active[f] = channel
