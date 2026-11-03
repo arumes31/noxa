@@ -152,7 +152,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 			}
 		}
 	case eventUserJoined, eventUserLeft, eventUserMoved, eventMediaDeviceChanged, eventChannelCreated, eventChannelDeleted, eventChannelUpdated, eventStatusChanged, eventNicknameChanged, eventMemberVoiceChanged, eventAudioStateChanged, eventVoiceQueueChanged:
-		return netproto.Encode(netproto.MsgSnapshot, s.roleSnapshotWithOwnMove(client, e))
+		return s.roleSnapshotFrame(client, e)
 	case eventAvatarChanged, eventSpeakingChanged, eventPrioritySpeakerChanged, eventPosition, eventScreenshareChanged:
 		var event struct {
 			ClientID  string `json:"client_id"`
@@ -207,7 +207,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		// Other members learn the new visible tree, without private reasons or
 		// the identities of moderators acting in channels they cannot see.
 		if event.ClientID != client.ID {
-			return netproto.Encode(netproto.MsgSnapshot, s.roleSnapshotWithOwnMove(client, e))
+			return s.roleSnapshotFrame(client, e)
 		}
 	case eventAnnouncement:
 		if !e.Evaluate(client.userID(), 0, authorization.ViewChannel).Allowed {

@@ -69,11 +69,47 @@ func (r *conversationActivityRevocations) recent(uid, group string, now time.Tim
 func (s *TCPServer) conversationActivityDeliverable(recipient string, data []byte) (bool, error) {
 	var event struct {
 		ConversationID string `json:"conversation_id"`
+		RelayedAt      int64  `json:"relayed_at"`
 	}
 	if err := json.Unmarshal(data, &event); err != nil {
 		return false, err
 	}
-	return event.ConversationID != "" && !s.conversationActivity.recent(recipient, event.ConversationID, time.Now()), nil
+	now := time.Now()
+	if event.ConversationID == "" || event.RelayedAt == 0 {
+		return false, nil
+	}
+	// The revocation record only outlives the queue if the queue is bounded:
+	// an event older than the window could otherwise outlast the record of a
+	// later leave/remove and reach a departed member.
+	if age := now.Sub(time.UnixMilli(event.RelayedAt)); age < 0 || age > conversationActivityRevocationWindow {
+		return false, nil
+	}
+	return !s.conversationActivity.recent(recipient, event.ConversationID, now), nil
+}
+
+// conversationActivityRelay stamps an activity event with its relay time so
+// delivery can enforce the queue-age bound conversationActivityDeliverable
+// relies on.
+type conversationActivityRelay[T any] struct {
+	Event     T
+	RelayedAt int64
+}
+
+func (r conversationActivityRelay[T]) MarshalJSON() ([]byte, error) {
+	raw, err := json.Marshal(r.Event)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	stamp, err := json.Marshal(r.RelayedAt)
+	if err != nil {
+		return nil, err
+	}
+	fields["relayed_at"] = stamp
+	return json.Marshal(fields)
 }
 
 // conversationReceiptStore is implemented by stores that keep shared read
@@ -168,12 +204,12 @@ func (s *TCPServer) relayConversationTyping(ctx context.Context, client *Client,
 	if !member {
 		return nil
 	}
-	return s.relayToMembers(audience, eventConversationTyping, netproto.ConversationTypingEvent{
+	return s.relayToMembers(audience, eventConversationTyping, conversationActivityRelay[netproto.ConversationTypingEvent]{Event: netproto.ConversationTypingEvent{
 		ConversationID: msg.ConversationID,
 		ClientID:       client.ID,
 		UniqueID:       uid,
 		Nickname:       client.nickname(),
-	})
+	}, RelayedAt: time.Now().UnixMilli()})
 }
 
 // shareConversationRead advances the caller's private cursor and shared read
@@ -200,7 +236,7 @@ func (s *TCPServer) shareConversationRead(ctx context.Context, backend conversat
 	if err != nil || !advanced {
 		return true, err
 	}
-	return true, s.relayToMembers(audience, eventConversationRead, netproto.ConversationReadEvent{
+	return true, s.relayToMembers(audience, eventConversationRead, conversationActivityRelay[netproto.ConversationReadEvent]{Event: netproto.ConversationReadEvent{
 		ConversationID: id, UniqueID: uid, ClientID: client.ID, MessageID: seen,
-	})
+	}, RelayedAt: time.Now().UnixMilli()})
 }

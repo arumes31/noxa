@@ -96,7 +96,9 @@ func (s *TCPServer) sendSnapshot(client *Client) error {
 		if client.sessionRevoked() {
 			return authorization.ErrRoleForbidden
 		}
-		return s.writeMessage(client, netproto.MsgSnapshot, buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID()))
+		snapshot := buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID())
+		client.recordSnapshot(snapshot)
+		return s.writeMessage(client, netproto.MsgSnapshot, snapshot)
 	})
 }
 

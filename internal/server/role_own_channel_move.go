@@ -1,9 +1,47 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/json"
+	"time"
+
 	"noxa/internal/authorization"
 	"noxa/internal/broadcast"
+	"noxa/internal/netproto"
 )
+
+// recordSnapshot remembers the recipient-visible content of a snapshot about
+// to be sent (ignoring GeneratedAt) and reports whether it differs from the
+// previous one. Event-driven deliveries skip unchanged snapshots so that
+// filtered-out activity (an invisible member's status, a hidden channel's
+// edit) is not revealed by the mere arrival and timing of a new snapshot.
+func (c *Client) recordSnapshot(snapshot *broadcast.TreeSnapshot) bool {
+	if snapshot == nil {
+		return true
+	}
+	content := *snapshot
+	content.GeneratedAt = time.Time{}
+	raw, err := json.Marshal(&content)
+	if err != nil {
+		return true
+	}
+	digest := sha256.Sum256(raw)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	changed := digest != c.lastSnapshotDigest
+	c.lastSnapshotDigest = digest
+	return changed
+}
+
+// roleSnapshotFrame encodes an event-driven snapshot for the recipient, or
+// returns nil when its authorized projection did not change.
+func (s *TCPServer) roleSnapshotFrame(client *Client, e *authorization.RoleEvaluator) (*netproto.Frame, error) {
+	snapshot := s.roleSnapshotWithOwnMove(client, e)
+	if !client.recordSnapshot(snapshot) {
+		return nil, nil
+	}
+	return netproto.Encode(netproto.MsgSnapshot, snapshot)
+}
 
 func (c *Client) rememberOwnChannelMove(from, to int64, forced bool) {
 	if from == to {
