@@ -274,6 +274,7 @@ func (s *Service) image(ctx context.Context, value string) (string, error) {
 	}
 	return raster(data)
 }
+
 // maxJPEGScans bounds progressive JPEG decoding work. Each scan revisits the
 // image's blocks, so tiny repeated scans in a 2 MiB file would otherwise
 // multiply decode CPU far beyond the pixel and byte limits. Common encoders
