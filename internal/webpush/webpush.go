@@ -276,7 +276,7 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, msg Message) error 
 	}
 	client := s.Client
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = defaultDeliveryClient()
 	}
 	resp, err := client.Do(req)
 	if err != nil {
