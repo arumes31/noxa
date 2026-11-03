@@ -167,19 +167,38 @@ func NewRoleEvaluator(p RolePolicy) (*RoleEvaluator, error) {
 		ch.Overrides = slices.Clone(ch.Overrides)
 		e.channels[ch.ChannelID] = ch
 	}
-	for id := range e.channels {
-		visited := map[int64]bool{}
-		for id != 0 {
-			ch, ok := e.channels[id]
-			if !ok || visited[id] {
-				return nil, fmt.Errorf("invalid channel parent chain")
-			}
-			visited[id] = true
-			id = ch.ParentID
-		}
+	if err := validateChannelAncestry(e.channels); err != nil {
+		return nil, err
 	}
 	e.policy = cloneRolePolicy(p)
 	return e, nil
+}
+
+// validateChannelAncestry rejects unknown parents and cycles in linear time:
+// every channel is walked at most once because completed chains are remembered.
+func validateChannelAncestry(channels map[int64]ChannelPolicy) error {
+	const (
+		walking = 1
+		valid   = 2
+	)
+	state := make(map[int64]uint8, len(channels))
+	var path []int64
+	for start := range channels {
+		path = path[:0]
+		for id := start; id != 0 && state[id] != valid; {
+			ch, ok := channels[id]
+			if !ok || state[id] == walking {
+				return fmt.Errorf("invalid channel parent chain")
+			}
+			state[id] = walking
+			path = append(path, id)
+			id = ch.ParentID
+		}
+		for _, id := range path {
+			state[id] = valid
+		}
+	}
+	return nil
 }
 
 // Policy returns an isolated copy of the revision held by this evaluator.

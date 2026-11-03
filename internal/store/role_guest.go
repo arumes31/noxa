@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/lib/pq"
+
 	"noxa/internal/authorization"
 )
 
@@ -37,6 +39,13 @@ func enrollRoleGuest(ctx context.Context, tx *sql.Tx, guest *roleGuestIdentity, 
 		VALUES($1,$2,$3) ON CONFLICT(unique_id) DO NOTHING RETURNING id`,
 		guest.uniqueID, guest.publicKey, guest.nickname).Scan(&guest.userID)
 	if errors.Is(err, sql.ErrNoRows) {
+		return authorization.ErrRoleInvalid
+	}
+	// Another account already owns this identity (for example the same public
+	// key). The statement failed before commit and the transaction rolls back,
+	// so this is rejected input, not an ambiguous policy write.
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
 		return authorization.ErrRoleInvalid
 	}
 	change.UserID = guest.userID

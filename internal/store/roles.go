@@ -119,6 +119,15 @@ func (s *Store) changeRolePolicy(ctx context.Context, actorID int64, change auth
 		return authorization.RolePolicy{}, err
 	}
 	if guest != nil {
+		// Reject callers without role-management authority before creating an
+		// account; ApplyRoleChange repeats the complete check afterwards.
+		e, err := authorization.NewRoleEvaluator(before)
+		if err != nil {
+			return authorization.RolePolicy{}, err
+		}
+		if !e.Evaluate(actorID, 0, authorization.ManageRoles).Allowed {
+			return authorization.RolePolicy{}, authorization.ErrRoleForbidden
+		}
 		if err := enrollRoleGuest(ctx, tx, guest, &change); err != nil {
 			return authorization.RolePolicy{}, err
 		}
@@ -271,6 +280,9 @@ func roleRows(ctx context.Context, tx *sql.Tx, query string, scan func(*sql.Rows
 }
 
 func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorization.RolePolicy) error {
+	if err := validateRolePolicySubjects(ctx, tx, before, after); err != nil {
+		return err
+	}
 	oldRoles := map[int64]authorization.Role{}
 	for _, r := range before.Roles {
 		oldRoles[r.ID] = r
@@ -373,6 +385,35 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE authorization_config SET revision=$1,default_member_role_id=NULLIF($2,0),owner_id=$3 WHERE singleton`, after.Revision, after.DefaultMemberRoleID, after.OwnerID)
 	return err
+}
+
+// validateRolePolicySubjects locks every account newly referenced by a member
+// assignment or member channel override. A missing account is rejected input
+// (ErrRoleInvalid) rather than a foreign-key failure, which Authority would
+// treat as an ambiguous commit and close authorization server-wide.
+func validateRolePolicySubjects(ctx context.Context, tx *sql.Tx, before, after authorization.RolePolicy) error {
+	oldMembers := make(map[int64][]int64, len(before.Members))
+	for _, m := range before.Members {
+		oldMembers[m.UserID] = m.RoleIDs
+	}
+	var overrides []authorization.RoleOverride
+	for _, m := range after.Members {
+		if old, ok := oldMembers[m.UserID]; ok && reflect.DeepEqual(old, m.RoleIDs) {
+			continue
+		}
+		overrides = append(overrides, authorization.RoleOverride{UserID: m.UserID})
+	}
+	oldChannels := make(map[int64]authorization.ChannelPolicy, len(before.Channels))
+	for _, ch := range before.Channels {
+		oldChannels[ch.ChannelID] = ch
+	}
+	for _, ch := range after.Channels {
+		if reflect.DeepEqual(oldChannels[ch.ChannelID], ch) {
+			continue
+		}
+		overrides = append(overrides, ch.Overrides...)
+	}
+	return validateChannelOverrideMembers(ctx, tx, overrides)
 }
 
 func appendRoleAudit(ctx context.Context, tx *sql.Tx, actorID int64, action string, entry AuditDetail) error {
