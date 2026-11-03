@@ -325,6 +325,20 @@ func TestKeyframeRequestOnQualityChange(t *testing.T) {
 	}
 }
 
+// activateTestWatch records a current publication and an active watch of it.
+func activateTestWatch(r *Router, subscriber, publisher, slot string) {
+	r.watchMu.Lock()
+	defer r.watchMu.Unlock()
+	if r.publications == nil {
+		r.publications = make(map[publicationKey]uint64)
+	}
+	if r.watches == nil {
+		r.watches = make(map[watchKey]videoWatch)
+	}
+	r.publications[publicationKey{publisher, slot}] = 1
+	r.watches[watchKey{subscriber, publisher, slot}] = videoWatch{publication: 1, epoch: 1, active: true}
+}
+
 // TestRelayKeyframeRequest verifies a subscriber's PLI is relayed to the
 // publisher owning the referenced SSRC.
 func TestRelayKeyframeRequest(t *testing.T) {
@@ -337,6 +351,12 @@ func TestRelayKeyframeRequest(t *testing.T) {
 	registerVideoSource(r, "pub", SlotCam, "f", 9001)
 	sender := &webrtc.RTPSender{}
 	r.pubTracks["viewer"] = map[string]*pubTrack{"pub": {video: map[string]*pubSlot{SlotCam: {sender: sender}}}}
+	// A sender binding without a current watch must not reach the publisher.
+	r.relayKeyframeRequest("viewer", sender)
+	if got := pub.pliCount(); got != 0 {
+		t.Fatalf("unwatched binding relayed %d PLIs", got)
+	}
+	activateTestWatch(r, "viewer", "pub", SlotCam)
 	r.relayKeyframeRequest("viewer", sender)
 	if got := pub.pliCount(); got != 1 {
 		t.Fatalf("relayed PLIs = %d, want 1", got)
@@ -377,6 +397,7 @@ func TestRelayKeyframeRequestUsesSubscriberBinding(t *testing.T) {
 	if ssrc == 9001 {
 		t.Fatal("test needs different publisher and subscriber SSRCs")
 	}
+	activateTestWatch(r, "viewer", "pub", SlotCam)
 	r.relayKeyframeRequest("viewer", sender)
 	if pub.pliCount() != 1 {
 		t.Fatal("subscriber's rewritten SSRC did not reach publisher")

@@ -2714,6 +2714,12 @@ func (r *Router) relayKeyframeRequest(subscriberID string, sender *webrtc.RTPSen
 			}
 		}
 	}
+	// A sender binding outlives the watch that justified it. Only a current
+	// active watch of the current publication may ask the publisher's shared
+	// encoder (or the GOP cache) for work.
+	if owner != "" && !r.activeWatchLocked(subscriberID, owner, sourceSlot) {
+		owner = ""
+	}
 	r.mu.RUnlock()
 	// One viewer's picture loss is repaired from the GOP cache: a fresh
 	// upstream keyframe would cost every other viewer bandwidth and quality.
@@ -2737,6 +2743,20 @@ func (r *Router) relayKeyframeRequest(subscriberID string, sender *webrtc.RTPSen
 		}
 		r.requestKeyframe(owner, sourceSlot, rid, keyframeViewerFeedback)
 	}
+}
+
+// activeWatchLocked reports whether subscriber currently and actively watches
+// the current publication of publisher's slot. Slots outside video watch
+// policy are always allowed. Requires r.mu (read); takes watchMu.
+func (r *Router) activeWatchLocked(subscriber, publisher, slot string) bool {
+	ws := watchSlot(slot)
+	if ws == "" {
+		return true
+	}
+	r.watchMu.RLock()
+	defer r.watchMu.RUnlock()
+	watch := r.watches[watchKey{subscriber, publisher, ws}]
+	return watch.active && watch.publication != 0 && r.publications[publicationKey{publisher, ws}] == watch.publication
 }
 
 // recordDeferredKeyframe counts a receiver request held back by its gate on
