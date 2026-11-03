@@ -142,3 +142,17 @@ func getACKStream(length int, size int, interval time.Duration) []cc.Acknowledgm
 
 	return res
 }
+
+func TestRateCalculatorBoundsHistoryForEqualArrivals(t *testing.T) {
+	c := newRateCalculator(500 * time.Millisecond)
+	base := time.Unix(1000, 0)
+	acks := make([]cc.Acknowledgment, 3*maxRateHistoryPackets)
+	for i := range acks {
+		acks[i] = cc.Acknowledgment{SequenceNumber: uint16(i), Size: 1200, Departure: base, Arrival: base}
+	}
+	c.add(acks, func(int) {})
+	c.add(acks, func(int) {})
+	if len(c.history) != maxRateHistoryPackets || c.sum != maxRateHistoryPackets*1200 {
+		t.Fatalf("history=%d sum=%d", len(c.history), c.sum)
+	}
+}
