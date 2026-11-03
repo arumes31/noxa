@@ -27,6 +27,10 @@ if [ -n "${BACKUP_EXTERNAL_DATABASE:-}" ]; then
 	PGUSER=$BACKUP_PGUSER
 	PGDATABASE=$BACKUP_PGDATABASE
 	PGSSLMODE=$BACKUP_PGSSLMODE
+	case "$PGDATABASE" in *=*|postgres://*|postgresql://*)
+		echo 'postgres-backup: BACKUP_PGDATABASE must be a plain database name' >&2
+		exit 1
+	;; esac
 	case "$PGSSLMODE" in verify-full) ;; *)
 		echo 'postgres-backup: external BACKUP_PGSSLMODE must be verify-full' >&2
 		exit 1

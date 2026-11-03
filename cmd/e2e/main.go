@@ -433,13 +433,13 @@ func main() {
 	flag.StringVar(&o.udpAddr, "udp-addr", "127.0.0.1"+config.DefaultUDPAddr, "UDP media address")
 	flag.StringVar(&o.fileAddr, "file-addr", "127.0.0.1"+config.DefaultFileAddr, "file-transfer address (fallback; the port from the init response wins)")
 	flag.StringVar(&o.aliceUID, "alice-uid", "", "alice's unique ID")
-	flag.StringVar(&o.alicePass, "alice-pass", "", "alice's password")
+	flag.StringVar(&o.alicePass, "alice-pass", os.Getenv("E2E_ALICE_PASS"), "alice's password (default $E2E_ALICE_PASS; prefer the environment so it stays out of the process list)")
 	flag.StringVar(&o.aliceNickname, "alice-nick", "alice", "alice's account nickname (nickname-login check)")
 	flag.StringVar(&o.bobUID, "bob-uid", "", "bob's unique ID")
-	flag.StringVar(&o.bobPass, "bob-pass", "", "bob's password")
+	flag.StringVar(&o.bobPass, "bob-pass", os.Getenv("E2E_BOB_PASS"), "bob's password (default $E2E_BOB_PASS)")
 	flag.StringVar(&o.adminUID, "admin-uid", "", "admin's unique ID (ServerQuery)")
-	flag.StringVar(&o.adminPass, "admin-pass", "", "admin's password")
-	flag.StringVar(&o.serverPass, "server-password", "", "global server password (if set)")
+	flag.StringVar(&o.adminPass, "admin-pass", os.Getenv("E2E_ADMIN_PASS"), "admin's password (default $E2E_ADMIN_PASS)")
+	flag.StringVar(&o.serverPass, "server-password", os.Getenv("E2E_SERVER_PASS"), "global server password (if set; default $E2E_SERVER_PASS)")
 	flag.Int64Var(&o.filePayload, "file-payload", 64*1024, "upload test payload size in bytes")
 	flag.BoolVar(&o.tlsVerify, "tls", false, "dial the control channel with TLS 1.3 and verify the server with system roots")
 	flag.StringVar(&o.tlsPin, "tls-fingerprint", "", "dial the control channel with TLS 1.3 and require this SHA-256 certificate fingerprint")
@@ -460,7 +460,7 @@ func main() {
 		{"admin-uid", o.adminUID}, {"admin-pass", o.adminPass},
 	} {
 		if req.val == "" {
-			fmt.Fprintf(os.Stderr, "e2e: -%s is required\n", req.name)
+			fmt.Fprintf(os.Stderr, "e2e: -%s (or its E2E_* environment variable) is required\n", req.name)
 			os.Exit(2)
 		}
 	}

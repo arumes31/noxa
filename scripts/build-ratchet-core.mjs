@@ -33,12 +33,32 @@ if (container) {
     packagePath = name => name;
 }
 const hash = createHash('sha256').update(wasm).digest('hex');
+// Dependency sources (and, in container mode, the bind-mounted cache they
+// were written to) are build-controlled. Never follow a symlink out of the
+// trusted roots when reading notices with host filesystem authority.
+const noticeRoots = container ? [path.join(root, '.tmp/ratchet-build'), rust].map(p => fs.realpathSync(p)) : [];
+function inside(p) { return noticeRoots.some(r => p === r || p.startsWith(r + path.sep)); }
+function noticeDir(dir) {
+    const real = fs.realpathSync(dir);
+    if (container && !inside(real)) throw new Error(`dependency directory escapes the build cache: ${dir}`);
+    return real;
+}
+function readNotice(file) {
+    const st = fs.lstatSync(file);
+    if (st.isSymbolicLink()) throw new Error(`refusing symlinked dependency notice: ${file}`);
+    if (!st.isFile()) return null;
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    try { return fs.readFileSync(fd, 'utf8'); } finally { fs.closeSync(fd); }
+}
 let licenses = 'noXa shared ratchet core: dependency notices\nIncludes runtime and build-time Rust dependencies. See Cargo.lock for registry checksums.\n\n';
 for (const pkg of metadata.packages.filter(p => p.name !== 'noxa-ratchet-core').sort((a,b) => `${a.name}@${a.version}`.localeCompare(`${b.name}@${b.version}`))) {
     licenses += `${pkg.name} ${pkg.version}\nLicense: ${pkg.license || 'see source'}\nSource: ${pkg.source}\n`;
-    const home = path.dirname(packagePath(pkg.manifest_path));
+    const home = noticeDir(path.dirname(packagePath(pkg.manifest_path)));
     const files = fs.readdirSync(home).filter(name => /^(LICENSE|COPYING|NOTICE)([._-]|$)/i.test(name)).sort();
-    for (const name of files) if (fs.statSync(path.join(home,name)).isFile()) licenses += `\n--- ${name} ---\n${fs.readFileSync(path.join(home,name),'utf8').replace(/\r\n/g,'\n')}\n`;
+    for (const name of files) {
+        const text = readNotice(path.join(home,name));
+        if (text !== null) licenses += `\n--- ${name} ---\n${text.replace(/\r\n/g,'\n')}\n`;
+    }
     licenses += '\n';
 }
 // Normalize layout only; retain the complete upstream notice text.

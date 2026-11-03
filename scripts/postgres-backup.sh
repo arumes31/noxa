@@ -23,6 +23,16 @@ mkdir -p "$backup_dir"
 work=$(mktemp -d "$staging_root/noxa-backup.XXXXXX")
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 database="${PGDATABASE:-noxa}"
+# libpq expands a --dbname value containing "=" or a postgres:// URI into
+# connection options, which could override the verified PGSSLMODE. Keep the
+# database a literal name: reject such values and pass the name only through
+# the PGDATABASE environment variable, which libpq does not expand.
+case "$database" in
+ *=*|postgres://*|postgresql://*)
+  echo 'postgres-backup: PGDATABASE must be a plain database name' >&2; exit 1;;
+esac
+PGDATABASE=$database
+export PGDATABASE
 database_id=$(printf '%s' "$database" | sha256sum | awk '{print substr($1, 1, 16)}')
 archive_prefix="postgres-${database_id}"
 target="$backup_dir/${archive_prefix}-${stamp}-${work##*.}.tar.gz.age"
@@ -56,7 +66,7 @@ mkdir "$work/keys"
 cp "$keys_dir/pii.key" "$keys_dir/chat_master.key" "$work/keys/"
 run_child pg_dump --format=custom --no-owner --no-privileges \
  --host="${PGHOST:?PGHOST is required}" --port="${PGPORT:?PGPORT is required}" \
- --username="${PGUSER:?PGUSER is required}" --dbname="$database" --file="$work/database.dump"
+ --username="${PGUSER:?PGUSER is required}" --file="$work/database.dump"
 # A rotation during the dump could make a copied key ring incomplete. Never
 # publish such a backup; retry at the next scheduled run with a stable ring.
 [ "$keys_before" = "$(keys_digest)" ] && [ "$keys_before" = "$(cd "$work/keys" && sha256sum pii.key chat_master.key)" ] || {
