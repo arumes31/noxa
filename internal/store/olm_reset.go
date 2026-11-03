@@ -88,7 +88,7 @@ func (s *Store) ResetOlmAccount(ctx context.Context, a OlmSource, r olmdir.Reset
 		return out, e
 	}
 	for _, k := range b.OneTimeKeys {
-		if _, e = tx.ExecContext(ctx, `INSERT INTO olm_directory_keys(device_id,generation,key_id,account_epoch,principal,server,bundle) VALUES($1,$2,$3,$4,$5,$6,$7)`, a.Device, b.Generation, k.ID, b.AccountEpoch, a.Principal, a.Server, bundle); e != nil {
+		if _, e = tx.ExecContext(ctx, `INSERT INTO olm_directory_keys(device_id,generation,key_id,account_epoch,principal,server,bundle) VALUES($1,$2,$3,$4,$5,$6,''::bytea)`, a.Device, b.Generation, k.ID, b.AccountEpoch, a.Principal, a.Server); e != nil {
 			return out, e
 		}
 	}

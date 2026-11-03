@@ -691,6 +691,52 @@ func (s *Store) PendingMessages(ctx context.Context, toUserID int64) ([]SpooledM
 	return out, rows.Err()
 }
 
+// PendingFilter selects the offline messages one session can open. A
+// per-device copy is eligible only for its device; account-wide copies are
+// sealed to the desktop key and never eligible for web sessions.
+type PendingFilter struct {
+	DeviceID string
+	Web      bool
+	AfterID  int64
+	Limit    int
+}
+
+// PendingMessagesFor returns one page of undelivered offline messages that
+// the described session can open, in id order after f.AfterID. Filtering in
+// the database keeps ineligible ciphertext (other devices' copies) from being
+// reloaded on every key publication.
+func (s *Store) PendingMessagesFor(ctx context.Context, toUserID int64, f PendingFilter) ([]SpooledMessage, error) {
+	if f.Limit <= 0 {
+		return nil, errors.New("querying offline messages: invalid page size")
+	}
+	const q = `SELECT om.id, om.from_user_id, om.from_unique_id, COALESCE(u.nickname, ''), om.message, om.sent_at,
+	                 om.sender_public_key, om.recipient_public_key, om.client_msg_id, om.from_device_id, om.to_device_id,
+	                 om.dm_action, om.ref_client_msg_id, om.peer_unique_id
+	          FROM offline_messages om
+	          LEFT JOIN users u ON u.id = om.from_user_id
+	          WHERE om.to_user_id = $1 AND om.delivered_at IS NULL AND om.id > $2
+	            AND ((om.to_device_id <> '' AND om.to_device_id = $3) OR (om.to_device_id = '' AND NOT $4))
+	          ORDER BY om.id
+	          LIMIT $5`
+	rows, err := s.db.QueryContext(ctx, q, toUserID, f.AfterID, f.DeviceID, f.Web, f.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying offline messages: %w", err)
+	}
+	defer closeRows(rows)
+
+	var out []SpooledMessage
+	for rows.Next() {
+		var m SpooledMessage
+		if err := rows.Scan(&m.ID, &m.FromUserID, &m.FromUniqueID, &m.FromName, &m.Message, &m.SentAt,
+			&m.SenderPublicKey, &m.RecipientPublicKey, &m.ClientMsgID, &m.SenderDeviceID, &m.RecipientDeviceID,
+			&m.DMAction, &m.RefClientMsgID, &m.PeerUniqueID); err != nil {
+			return nil, fmt.Errorf("scanning offline message: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // SetE2EPublicKey stores a user's X25519 public key (base64) for E2EE.
 func (s *Store) SetE2EPublicKey(ctx context.Context, userID int64, publicKey string) error {
 	const q = `UPDATE users SET e2e_public_key = $1 WHERE id = $2`

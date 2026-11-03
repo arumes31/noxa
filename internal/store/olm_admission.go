@@ -740,7 +740,7 @@ func (s *Store) finalizeOlmAttempt(ctx context.Context, a OlmSource, id string) 
 			var state, claimSource, claimPrincipal, server, keyID string
 			var targetBundle, sourceBundle []byte
 			var sourceEpoch, deadline int64
-			e = tx.QueryRowContext(ctx, `SELECT lifecycle,claimed_device,claimed_by,claimed_epoch,claim_until,server,key_id,bundle FROM olm_directory_keys WHERE device_id=$1 AND account_epoch=$2 AND request_id=$3 AND claimed_by=$4 AND claimed_device=$5 AND claimed_epoch=$6 AND server=$7 FOR UPDATE`, c.Device, c.AccountEpoch, c.ClaimID, a.Principal, a.Device, a.AccountEpoch, a.Server).Scan(&state, &claimSource, &claimPrincipal, &sourceEpoch, &deadline, &server, &keyID, &targetBundle)
+			e = tx.QueryRowContext(ctx, `SELECT lifecycle,claimed_device,claimed_by,claimed_epoch,claim_until,server,key_id,COALESCE(NULLIF(k.bundle,''::bytea),(SELECT p.bundle FROM olm_directory_publications p WHERE p.device_id=k.device_id AND p.generation=k.generation)) FROM olm_directory_keys k WHERE device_id=$1 AND account_epoch=$2 AND request_id=$3 AND claimed_by=$4 AND claimed_device=$5 AND claimed_epoch=$6 AND server=$7 FOR UPDATE`, c.Device, c.AccountEpoch, c.ClaimID, a.Principal, a.Device, a.AccountEpoch, a.Server).Scan(&state, &claimSource, &claimPrincipal, &sourceEpoch, &deadline, &server, &keyID, &targetBundle)
 			if errors.Is(e, sql.ErrNoRows) {
 				return empty, nil, ErrOlmConflict
 			}

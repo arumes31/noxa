@@ -140,7 +140,10 @@ func (s *Store) PublishOlmBundle(ctx context.Context, principal, id, server stri
 		return e
 	}
 	for _, k := range b.OneTimeKeys {
-		if _, e = tx.ExecContext(ctx, `INSERT INTO olm_directory_keys(device_id,generation,key_id,account_epoch,principal,server,bundle) VALUES($1,$2,$3,$4,$5,$6,$7)`, id, b.Generation, k.ID, b.AccountEpoch, principal, server, encoded); e != nil {
+		// The signed publication is stored once in olm_directory_publications;
+		// key rows reference it by (device_id, generation) instead of each
+		// carrying another copy of the complete bundle.
+		if _, e = tx.ExecContext(ctx, `INSERT INTO olm_directory_keys(device_id,generation,key_id,account_epoch,principal,server,bundle) VALUES($1,$2,$3,$4,$5,$6,''::bytea)`, id, b.Generation, k.ID, b.AccountEpoch, principal, server); e != nil {
 			return e
 		}
 	}
@@ -198,7 +201,7 @@ func (s *Store) ClaimOlmKey(ctx context.Context, principal, id, target, targetID
 		return out, ErrOlmAccountChanged
 	}
 	var claimedEpoch int64
-	e = tx.QueryRowContext(ctx, `SELECT k.device_id,k.key_id,k.bundle,k.lifecycle,k.claimed_device,k.claim_until,k.claimed_epoch FROM olm_directory_keys k WHERE claimed_by=$1 AND request_id=$2`, principal, requestID).Scan(&foundDevice, &out.KeyID, &encoded, &lifecycle, &claimDevice, &storedUntil, &claimedEpoch)
+	e = tx.QueryRowContext(ctx, `SELECT k.device_id,k.key_id,COALESCE(NULLIF(k.bundle,''::bytea),(SELECT p.bundle FROM olm_directory_publications p WHERE p.device_id=k.device_id AND p.generation=k.generation)),k.lifecycle,k.claimed_device,k.claim_until,k.claimed_epoch FROM olm_directory_keys k WHERE claimed_by=$1 AND request_id=$2`, principal, requestID).Scan(&foundDevice, &out.KeyID, &encoded, &lifecycle, &claimDevice, &storedUntil, &claimedEpoch)
 	if e == nil {
 		if foundDevice != targetID || claimDevice != id || storedUntil != claimUntil || claimedEpoch != sourceEpoch {
 			return out, ErrOlmConflict
