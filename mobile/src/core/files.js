@@ -185,17 +185,21 @@ function openTransferSocket(url) {
         };
         socket.onmessage = event => {
             buffer = concat(buffer, new Uint8Array(event.data));
-            while (buffer.length >= 6) {
-                const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-                const length = view.getUint32(0);
+            // Walk the frames with an offset and keep the unconsumed tail once,
+            // so many short frames never recopy the rest of the buffer.
+            const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+            let offset = 0;
+            while (buffer.length - offset >= 6) {
+                const length = view.getUint32(offset);
                 if (length < 2 || length > (1 << 20)) {
                     socket.close();
                     return;
                 }
-                if (buffer.length < 4 + length) break;
-                frames.push({ type: view.getUint16(4), payload: buffer.slice(6, 4 + length) });
-                buffer = buffer.slice(4 + length);
+                if (buffer.length - offset < 4 + length) break;
+                frames.push({ type: view.getUint16(offset + 4), payload: buffer.slice(offset + 6, offset + 4 + length) });
+                offset += 4 + length;
             }
+            if (offset) buffer = buffer.slice(offset);
             deliver();
         };
         socket.onclose = () => {
@@ -360,5 +364,11 @@ export async function uploadAttachment(conn, channelID, file) {
 export async function fetchAttachment(conn, channelID, ref) {
     const maxWire = HEADER.length + MAX_ATTACHMENT_BYTES + Math.ceil(MAX_ATTACHMENT_BYTES / CHUNK) * (4 + GCM_OVERHEAD);
     const blob = await downloadBlob(conn, channelID, ref.storage, maxWire);
-    return openAttachment(blob, ref.master);
+    // The name is content-derived and authenticated inside the message: a
+    // file server that serves other bytes (a truncated prefix, a renamed
+    // file) is refused before decryption.
+    if (storageName(blob) !== String(ref.storage || "").toLowerCase()) throw new Error("attachment does not match its message reference");
+    const plain = await openAttachment(blob, ref.master);
+    if (ref.size && plain.length !== ref.size) throw new Error("attachment size does not match its message reference");
+    return plain;
 }

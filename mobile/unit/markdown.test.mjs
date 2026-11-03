@@ -28,6 +28,15 @@ test("links are detected without trailing punctuation and listed once", () => {
     assert.equal(nodes.filter(n => n.type === "link").length, 3);
 });
 
+test("trailing punctuation is trimmed in linear time", () => {
+    const tail = ")".repeat(2000) + ".".repeat(2000);
+    const started = performance.now();
+    const links = linksIn(parseMarkdown(`https://example.com/x${tail}`));
+    assert.deepEqual(links, ["https://example.com/x"]);
+    assert.deepEqual(linksIn(parseMarkdown("https://e.com/a_(b)_(c)).")), ["https://e.com/a_(b)_(c)"]);
+    assert.ok(performance.now() - started < 1000);
+});
+
 test("shortcodes, custom emoji and mentions become nodes", () => {
     const nodes = parseMarkdown(":fire: :party: @rowan @nobody @everyone", { customEmoji: new Set(["party"]), mentionNames: new Map([["rowan", "uid-1"]]) });
     assert.deepEqual(nodes[0], { type: "emoji", name: "fire", char: "🔥" });
