@@ -2104,6 +2104,33 @@ func (c *ratchetConsumer) resetTrust(principal string) error {
 	return c.resetTrustRecords(principal)
 }
 
+// revokeDevice durably records that principal's device is revoked. The
+// durable store keeps a revoked trust record revoked (it can never be
+// re-pinned), so server directory data that still lists the device, or
+// replays its earlier approval, can no longer make this desktop encrypt to it:
+// trust() fails such a target with "revoked" and the whole send fails closed.
+func (c *ratchetConsumer) revokeDevice(principal, device string) error {
+	if principal == "" || device == "" {
+		return rfail("invalid")
+	}
+	id := ratchetTrustID(principal, device)
+	ref := durable.Ref{Kind: durable.Trust, ID: id}
+	return c.casRetry(func() error {
+		s, err := c.read(ref)
+		if err != nil {
+			return err
+		}
+		rev, revoked, saved, err := readTrust(s, id)
+		if revoked {
+			return nil
+		}
+		if rev == 0 || err != nil {
+			saved = ratchetTrustValue{Principal: principal, Device: device}
+		}
+		return c.d.Store.SetTrust(s, id, ratchetJSON(saved), true)
+	})
+}
+
 func (c *ratchetConsumer) resetTrustRecords(principal string) error {
 	refs, err := c.refs(durable.Trust)
 	if err != nil {

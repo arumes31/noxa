@@ -281,7 +281,7 @@ export function openDeviceLinkDialog({ quickGuide = false, fromHelp = false } = 
                 info.append(el("span", "device-row-warning", t("devices.unconfirmed")));
                 actions.append(button(t("devices.confirm"), "dlg-ok", async () => {
                     try {
-                        await app().ConfirmDeviceForTab(tabID, device.device_id);
+                        await app().ConfirmDeviceForTab(tabID, device.device_id, device.ed25519_public_key || "", device.x25519_public_key || "");
                         v.toast(t("devices.confirmed", { name: device.name }));
                     } catch (error) { v.toast(t("devices.failed", { error: error?.message || String(error) }), "warn"); }
                     if (live()) refreshList();
