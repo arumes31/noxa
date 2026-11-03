@@ -1,4 +1,5 @@
 // channel-tree.js — channel/member rendering and tree interaction.
+import { joinChannelLocally } from "./local-join-intent.js";
 import { joinFailure, moveFailure, unreadLabel } from "./client-usability-model.js";
 import { isUserMuted } from "./audio.js";
 import * as chatUI from "./chat-ui.js";
@@ -238,7 +239,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             window.__noxa.closeDirectMessages?.();
             if (!isHome) void chatUI.openChannelTab(ch.ChannelID);
             try {
-                const err = await window.go.main.App.JoinChannelForTab(tabID, isHome ? 0 : ch.ChannelID);
+                const err = await joinChannelLocally(tabID, isHome ? 0 : ch.ChannelID);
                 if (err && generation === state.serverGeneration) toast(joinFailure(err), "warn", "alert", { bypassDND: true });
             } catch (err) {
                 if (generation === state.serverGeneration) toast(joinFailure(err), "warn", "alert", { bypassDND: true });
@@ -287,7 +288,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             }
             try {
                 const err = target.client_id === state.myClientID
-                    ? await window.go.main.App.JoinChannelForTab(tabID, isHome ? 0 : ch.ChannelID)
+                    ? await joinChannelLocally(tabID, isHome ? 0 : ch.ChannelID)
                     : await window.go.main.App.MoveClientForTab(tabID, target.client_id, ch.ChannelID);
                 if (err && generation === state.serverGeneration) toast(moveFailure(err), "warn");
             } catch (err) {

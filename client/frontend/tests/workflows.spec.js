@@ -9104,7 +9104,14 @@ test.describe("per-tab automatic reconnect", () => {
             window.__moveRestored(7);
         });
         expect(await page.evaluate(() => ({ muted: window.__noxa.state.muted, deafened: window.__noxa.state.deafened }))).toEqual({ muted: true, deafened: true });
+        // A later server-initiated move still preserves deafen; only an
+        // explicit local join clears it.
         await page.evaluate(() => window.__moveRestored(8));
+        expect(await page.evaluate(() => window.__noxa.state.deafened)).toBe(true);
+        await page.evaluate(async () => {
+            await window.__noxa.joinChannelLocally(window.__noxa.state.activeTabID, 9);
+            window.__moveRestored(9);
+        });
         expect(await page.evaluate(() => window.__noxa.state.deafened)).toBe(false);
     });
 
@@ -9531,7 +9538,7 @@ test("starts voice silently when channel speech is disabled", async ({ page }) =
     await expect(page.locator("#mic-status")).toBeEmpty();
 });
 
-test("undeafens after a confirmed channel join but preserves deafen on duplicate and remote events", async ({ page }) => {
+test("undeafens after a confirmed local channel join but preserves deafen on duplicate, remote and server-initiated moves", async ({ page }) => {
     await showB3Workspace(page);
     const emitMove = (clientID, channelID) => page.evaluate(({ clientID, channelID }) => {
         for (const callback of window.__events.event || []) callback(JSON.stringify({
@@ -9542,12 +9549,18 @@ test("undeafens after a confirmed channel join but preserves deafen on duplicate
     await emitMove("mia", 3);
     await emitMove("daniel", 2);
     await expect(page.getByRole("button", { name: "Undeafen", exact: true })).toHaveAttribute("aria-pressed", "true");
+    // A server-reported move the user did not request keeps local deafen.
+    await emitMove("daniel", 4);
+    expect(await page.evaluate(() => window.__noxa.state.deafened)).toBe(true);
+    const joinLocally = (channelID) => page.evaluate((channelID) => window.__noxa.joinChannelLocally(window.__noxa.state.activeTabID, channelID), channelID);
+    await joinLocally(3);
     await emitMove("daniel", 3);
     await expect(page.getByRole("button", { name: "Deafen", exact: true })).toHaveAttribute("aria-pressed", "false");
     expect(await page.locator("#remote-video").evaluate((element) => element.muted)).toBe(false);
     await page.evaluate(() => window.__noxa.setDeafened(true));
     await emitMove("daniel", 0);
     expect(await page.evaluate(() => window.__noxa.state.deafened)).toBe(true);
+    await joinLocally(2);
     await emitMove("daniel", 2);
     expect(await page.evaluate(() => window.__noxa.state.deafened)).toBe(false);
 });
