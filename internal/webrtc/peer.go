@@ -1,7 +1,9 @@
 package webrtc
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -125,6 +127,28 @@ func (w *PeerConnectionWrapper) RemoteSDP() <-chan webrtc.SessionDescription {
 	return w.remoteSDP
 }
 
+// maxRemoteSSRCAttributes bounds the a=ssrc and a=ssrc-group lines a client
+// description may carry. Pion collects receiver SSRCs with repeated linear
+// scans, so a 1 MiB signaling frame of SSRC attributes would cost quadratic
+// work under the channel-control lock. A browser publishing every slot with
+// simulcast and RTX uses a few dozen.
+const maxRemoteSSRCAttributes = 512
+
+// ErrSDPTooManySSRCs rejects a remote description over the SSRC budget.
+var ErrSDPTooManySSRCs = errors.New("webrtc: session description declares too many SSRCs")
+
+func checkRemoteSDPBudget(sdp string) error {
+	n := 0
+	for line := range strings.Lines(sdp) {
+		if strings.HasPrefix(strings.TrimSpace(line), "a=ssrc") {
+			if n++; n > maxRemoteSSRCAttributes {
+				return ErrSDPTooManySSRCs
+			}
+		}
+	}
+	return nil
+}
+
 // HandleOffer sets the remote description (an offer SDP), creates an answer,
 // sets the local description, and returns the answer SDP string.
 func (w *PeerConnectionWrapper) HandleOffer(sdp string) (string, error) {
@@ -146,6 +170,9 @@ func (w *PeerConnectionWrapper) handleOffer(sdp string, bounds *VideoBounds) (re
 			resultErr = fmt.Errorf("%w: %v", ErrPeerReset, resultErr)
 		}
 	}()
+	if err := checkRemoteSDPBudget(sdp); err != nil {
+		return "", err
+	}
 	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdp}
 	if err := w.pc.SetRemoteDescription(offer); err != nil {
 		return "", fmt.Errorf("setting remote offer: %w", err)
@@ -188,6 +215,9 @@ func (w *PeerConnectionWrapper) HandleAnswer(sdp string) error {
 	defer w.signalMu.Unlock()
 	w.beginSignaling()
 	defer w.endSignaling()
+	if err := checkRemoteSDPBudget(sdp); err != nil {
+		return err
+	}
 	answer := webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp}
 	if err := w.pc.SetRemoteDescription(answer); err != nil {
 		return fmt.Errorf("setting remote answer: %w", err)
