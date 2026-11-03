@@ -59,6 +59,9 @@ func historyMessagesSince(store dmHistoryStore, since int64, ownUID string) []ne
 			if e.SentAt < since || !openedChatText(e.Body) {
 				continue
 			}
+			if e.Protocol == "" && !transferableLegacyEntry(e) {
+				continue
+			}
 			m := netproto.HistoryMessage{
 				Peer: peer.UniqueID, PeerNickname: peer.Nickname, From: e.FromUniqueID, FromNickname: e.FromNickname,
 				Body: e.Body, SentAt: e.SentAt, Self: e.Self, ClientMsgID: e.ClientMsgID,
@@ -85,6 +88,19 @@ func historyMessagesSince(store dmHistoryStore, since int64, ownUID string) []ne
 		out = out[:netproto.MaxHistoryMessages]
 	}
 	return out
+}
+
+// transferableLegacyEntry: the receiving device imports legacy records as
+// verified, so only records this desktop itself verified travel. A peer body
+// opened with the server-held key (downgraded) or never verified could be
+// server-forged; signing it into a transfer would launder it into an
+// apparently authenticated peer message. Own sends are authored here.
+func transferableLegacyEntry(e DMEntry) bool {
+	verified, mode := dmEncState(e)
+	if mode == dmModeDowngraded {
+		return false
+	}
+	return verified || e.Self
 }
 
 // transferableRatchetEntry: a readable record of the authenticated archive,

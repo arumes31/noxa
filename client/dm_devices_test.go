@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -462,4 +463,47 @@ func testHistoryEnv(t *testing.T) historyChunkEnv {
 	t.Helper()
 	return historyChunkEnv{Source: "desk", Target: "phone", Transfer: "transfer-1",
 		Sign: func(b []byte) ([]byte, error) { return ed25519.Sign(historyTestKey, b), nil }}
+}
+
+// A pending identity change, or a different settled identity, withdraws a
+// contact's cached device authority immediately instead of at cache expiry.
+func TestCachedPeerDevicesFollowTheCurrentPin(t *testing.T) {
+	cm, _, _ := deviceCopyManager(t)
+	peerPhone := newTestDevice(t, "peer-phone", "web")
+	path, _, err := cm.peerPinPath("peer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified := strings.Repeat("ab", 32)
+	if err := writeDMPin(path, dmIdentityPin{Version: 1, Fingerprint: verified}); err != nil {
+		t.Fatal(err)
+	}
+	cache := func() {
+		_, epoch, _ := cm.dmDevices.get("peer", time.Now())
+		cm.dmDevices.putPinned("peer", []dmTrustedDevice{{DeviceID: peerPhone.id, X25519: peerPhone.xPublic}}, epoch, time.Now(), verified)
+	}
+	cache()
+	if devices, err := cm.dmDeviceList("peer", false); err != nil || len(devices) != 1 {
+		t.Fatalf("settled pin: devices=%v err=%v", devices, err)
+	}
+
+	newKey, _ := genPair(t)
+	pending := signedTestRecord(t, "peer", newKey, mustTempIdentity(t))
+	if err := writeDMPin(path, dmIdentityPin{Version: 1, Fingerprint: verified, Pending: pending}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cm.dmDeviceList("peer", false); !errors.Is(err, errDMIdentityChanged) {
+		t.Fatalf("pending change: err=%v, want %v", err, errDMIdentityChanged)
+	}
+	if _, _, ok := cm.dmDevices.get("peer", time.Now()); ok {
+		t.Fatal("withdrawn authority stayed cached")
+	}
+
+	if err := writeDMPin(path, dmIdentityPin{Version: 1, Fingerprint: strings.Repeat("cd", 32), Retired: []string{verified}}); err != nil {
+		t.Fatal(err)
+	}
+	cache()
+	if _, err := cm.dmDeviceList("peer", false); !errors.Is(err, errDMIdentityChanged) {
+		t.Fatalf("replaced identity: err=%v, want %v", err, errDMIdentityChanged)
+	}
 }

@@ -252,7 +252,14 @@ func TestRatchetDMProjectionMixedLegacy(t *testing.T) {
 	// b2-review P3-4: legacy entries stored without a sender are exported
 	// with one (own -> this account, otherwise the peer), never as "".
 	hs := mustStore(t, app, id)
-	if err := hs.save(dmLog{Peer: "carl", Messages: []DMEntry{{Self: true, Body: "own legacy", SentAt: 49, ClientMsgID: "x1"}, {Body: "peer legacy", SentAt: 50, ClientMsgID: "x2"}}}); err != nil {
+	if err := hs.save(dmLog{Peer: "carl", Messages: []DMEntry{
+		{Self: true, Body: "own legacy", SentAt: 49, ClientMsgID: "x1"},
+		{Body: "peer legacy", SentAt: 50, ClientMsgID: "x2", EncVerified: true, EncMode: "e2e"},
+		// Unverified and downgraded peer bodies may be server-forged: the
+		// importer would show them as verified, so they never travel.
+		{Body: "unverified legacy", SentAt: 51, ClientMsgID: "x3"},
+		{Body: "downgraded legacy", SentAt: 52, ClientMsgID: "x4", EncMode: dmModeDowngraded},
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	senders := map[string]string{}
@@ -261,7 +268,7 @@ func TestRatchetDMProjectionMixedLegacy(t *testing.T) {
 			senders[m.ClientMsgID] = m.From
 		}
 	}
-	if senders["x1"] != "me" || senders["x2"] != "carl" {
+	if senders["x1"] != "me" || senders["x2"] != "carl" || len(senders) != 2 {
 		t.Fatalf("legacy senders: %v", senders)
 	}
 	// Edit/delete routing picks the new-protocol own record.
