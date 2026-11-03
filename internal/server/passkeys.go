@@ -396,6 +396,7 @@ func (s *TCPServer) finishPasskeyLogin(ctx context.Context, client *Client, rp *
 	d, err := s.deps.Devices.AddDevice(ctx, store.NewDevice{
 		Principal: account.principal, UserID: userID, Kind: store.DeviceKindWeb, Name: name,
 		Ed25519Public: r.Ed25519PublicKey, X25519Public: r.X25519PublicKey, ApprovedBy: registeringDevice, PasskeyProof: loginProof,
+		RequireCredentialID: credential.ID,
 	}, s.cfg.Web.DeviceLimit())
 	if err != nil {
 		return s.deviceFailure(ctx, client, err)
