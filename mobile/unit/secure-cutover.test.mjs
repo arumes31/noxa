@@ -37,3 +37,27 @@ test("no legacy send: direct/group sends and legacy changes fail with the blocki
     await assert.rejects(groups.send("g1", "hi group"), e => e.code === "server_binding_unavailable" && e.retryable === false);
     assert.equal(frames.length, 0, "nothing transported");
 });
+
+test("an upgraded session ignores legacy edit/delete copies; a legacy session still applies them", async () => {
+    const { sealDM, toBase64 } = await import("../src/core/crypto.js");
+    const bob = nacl.box.keyPair();
+    for (const upgraded of [true, false]) {
+        const frames = [];
+        const own = "me-" + Math.random().toString(36).slice(2);
+        const s = session(own, frames);
+        const dm = new DirectMessages(s, {});
+        await dm.ready;
+        if (upgraded) dm.secureRequired = () => Object.assign(new Error("not ready"), { code: "secure_unavailable" });
+        dm.devicesOf = async () => ({ trust: "ok", devices: [{ deviceID: "bob-dev", x25519B64: toBase64(bob.publicKey), x25519: bob.publicKey }] });
+        dm.conversation("bob").messages.push({ id: "L2", from: "bob", self: false, body: "original", sentAt: 1, verified: true });
+        s.dispatchEvent(new CustomEvent("direct", { detail: {
+            recipient_device_id: s.deviceID, from_unique_id: "bob", to_unique_id: own, from: "Bob",
+            sender_device_id: "bob-dev", sender_device_key: toBase64(bob.publicKey),
+            dm_action: "delete", ref_client_msg_id: "L2", text: sealDM("replayed", me.publicKey, bob.secretKey),
+        } }));
+        const message = () => dm.conversations.get("bob").messages.find(m => m.id === "L2");
+        for (let i = 0; i < 40 && !message().deleted; i++) await new Promise(resolve => setTimeout(resolve, 50));
+        assert.equal(!!message().deleted, !upgraded, upgraded ? "legacy change ignored" : "legacy change applied");
+        dm.close();
+    }
+});

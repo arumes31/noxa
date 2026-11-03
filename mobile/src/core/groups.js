@@ -306,7 +306,15 @@ export class Groups extends EventTarget {
     }
 
     async #store(id, page) {
-        const opened = await Promise.all(page.map(message => this.#open(id, message)));
+        // Server history carries only legacy records: numeric IDs, never the
+        // "olm:"/"local:" IDs of authenticated ratchet messages, and none of
+        // the state only an authenticated change may set. A server record
+        // therefore can never replace or mark an authenticated message.
+        const legacy = page.filter(message => Number.isSafeInteger(message?.id) && message.id > 0).map(message => {
+            const { protocol, key, local, pending, queued, failed, edited, deleted, unattributed, ...record } = message;
+            return record;
+        });
+        const opened = await Promise.all(legacy.map(message => this.#open(id, message)));
         const byID = new Map((this.messages.get(id) || []).map(m => [m.id, m]));
         const typing = this.typing.get(id);
         for (const message of opened) {
