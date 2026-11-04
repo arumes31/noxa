@@ -87,7 +87,7 @@ func publishedVideoSections(offerSDP, answerSDP string) ([]publishedVideoSection
 		if media.MediaName.Media != "video" {
 			continue
 		}
-		direction := mediaDirection(media)
+		direction := mediaDirection(&offer, media)
 		if direction != "sendonly" && direction != "sendrecv" {
 			continue
 		}
@@ -101,7 +101,7 @@ func publishedVideoSections(offerSDP, answerSDP string) ([]publishedVideoSection
 		if reply, ok := answers[mid]; ok && mid != "" {
 			section.answered = true
 			section.answerPort = reply.MediaName.Port.Value
-			section.answerDirection = mediaDirection(reply)
+			section.answerDirection = mediaDirection(&answer, reply)
 			section.answerFormats = videoFormats(reply)
 		}
 		sections = append(sections, section)
@@ -109,25 +109,47 @@ func publishedVideoSections(offerSDP, answerSDP string) ([]publishedVideoSection
 	return sections, nil
 }
 
-func mediaDirection(media *sdp.MediaDescription) string {
-	for _, direction := range []string{"sendrecv", "sendonly", "recvonly", "inactive"} {
-		if _, ok := media.Attribute(direction); ok {
-			return direction
-		}
+// mediaDirection returns a section's direction. A section without its own
+// direction attribute inherits the session-level one (RFC 8866, 6.7).
+func mediaDirection(session *sdp.SessionDescription, media *sdp.MediaDescription) string {
+	if direction := directionIn(media.Attributes); direction != "" {
+		return direction
+	}
+	if direction := directionIn(session.Attributes); direction != "" {
+		return direction
 	}
 	return "sendrecv"
 }
 
+func directionIn(attributes []sdp.Attribute) string {
+	for _, attribute := range attributes {
+		switch attribute.Key {
+		case "sendrecv", "sendonly", "recvonly", "inactive":
+			return attribute.Key
+		}
+	}
+	return ""
+}
+
+// msidTrackID returns the MSID track ID from the media-level a=msid, falling
+// back to an SSRC-level "a=ssrc:<ssrc> msid:<stream> <track>" attribute.
 func msidTrackID(media *sdp.MediaDescription) string {
-	value, ok := media.Attribute("msid")
-	if !ok {
+	if value, ok := media.Attribute("msid"); ok {
+		if fields := strings.Fields(value); len(fields) >= 2 {
+			return fields[1]
+		}
 		return ""
 	}
-	fields := strings.Fields(value)
-	if len(fields) < 2 {
-		return ""
+	for _, attribute := range media.Attributes {
+		if attribute.Key != "ssrc" {
+			continue
+		}
+		fields := strings.Fields(attribute.Value)
+		if len(fields) == 3 && strings.HasPrefix(fields[1], "msid:") {
+			return fields[2]
+		}
 	}
-	return fields[1]
+	return ""
 }
 
 // videoFormats renders each payload as "pt name/clock [fmtp]" in offer order.
