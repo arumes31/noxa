@@ -60,78 +60,6 @@
           "voice": "TROLL1",
           "definition": "tools/voices/TROLL1.json"
         },
-        "user_join_v01": {
-          "voice": "F1",
-          "definition": "tools/voices/F1.json"
-        },
-        "user_join_v02": {
-          "voice": "F2",
-          "definition": "tools/voices/F2.json"
-        },
-        "user_join_v03": {
-          "voice": "F3",
-          "definition": "tools/voices/F3.json"
-        },
-        "user_join_v04": {
-          "voice": "F4",
-          "definition": "tools/voices/F4.json"
-        },
-        "user_join_v05": {
-          "voice": "F5",
-          "definition": "tools/voices/F5.json"
-        },
-        "user_join_v06": {
-          "voice": "M1",
-          "definition": "tools/voices/M1.json"
-        },
-        "user_join_v07": {
-          "voice": "M2",
-          "definition": "tools/voices/M2.json"
-        },
-        "user_join_v08": {
-          "voice": "M3",
-          "definition": "tools/voices/M3.json"
-        },
-        "user_join_v09": {
-          "voice": "M4",
-          "definition": "tools/voices/M4.json"
-        },
-        "user_leave_v01": {
-          "voice": "F1",
-          "definition": "tools/voices/F1.json"
-        },
-        "user_leave_v02": {
-          "voice": "F2",
-          "definition": "tools/voices/F2.json"
-        },
-        "user_leave_v03": {
-          "voice": "F3",
-          "definition": "tools/voices/F3.json"
-        },
-        "user_leave_v04": {
-          "voice": "F4",
-          "definition": "tools/voices/F4.json"
-        },
-        "user_leave_v05": {
-          "voice": "F5",
-          "definition": "tools/voices/F5.json"
-        },
-        "user_leave_v06": {
-          "voice": "M1",
-          "definition": "tools/voices/M1.json"
-        },
-        "user_leave_v07": {
-          "voice": "M2",
-          "definition": "tools/voices/M2.json"
-        },
-        "user_leave_v08": {
-          "voice": "M3",
-          "definition": "tools/voices/M3.json"
-        },
-        "user_leave_v09": {
-          "voice": "M4",
-          "definition": "tools/voices/M4.json"
-        },
         "user_disconnected_v01": {
           "voice": "F1",
           "definition": "tools/voices/F1.json"
@@ -384,85 +312,77 @@
           "voice": "M4",
           "definition": "tools/voices/M4.json"
         },
-        "user_join_v10": {
-          "voice": "DWARF1",
-          "definition": "tools/voices/DWARF1.json"
+        "client_closing_v01": {
+          "voice": "M1",
+          "definition": "tools/voices/M1.json"
         },
-        "user_leave_v10": {
-          "voice": "DWARF1",
-          "definition": "tools/voices/DWARF1.json"
+        "client_closing_v02": {
+          "voice": "F1",
+          "definition": "tools/voices/F1.json"
         },
-        "user_join_v11": {
-          "voice": "DWARF1",
-          "definition": "tools/voices/DWARF1.json"
+        "client_closing_v03": {
+          "voice": "M2",
+          "definition": "tools/voices/M2.json"
         },
-        "user_leave_v11": {
-          "voice": "DWARF1",
-          "definition": "tools/voices/DWARF1.json"
+        "client_closing_v04": {
+          "voice": "F2",
+          "definition": "tools/voices/F2.json"
         },
-        "user_join_v12": {
-          "voice": "ELF1",
-          "definition": "tools/voices/ELF1.json"
+        "client_closing_v05": {
+          "voice": "M3",
+          "definition": "tools/voices/M3.json"
         },
-        "user_leave_v12": {
-          "voice": "ELF1",
-          "definition": "tools/voices/ELF1.json"
+        "client_closing_v06": {
+          "voice": "F3",
+          "definition": "tools/voices/F3.json"
         },
-        "user_join_v13": {
-          "voice": "ELF1",
-          "definition": "tools/voices/ELF1.json"
+        "client_closing_v07": {
+          "voice": "M4",
+          "definition": "tools/voices/M4.json"
         },
-        "user_leave_v13": {
-          "voice": "ELF1",
-          "definition": "tools/voices/ELF1.json"
+        "client_closing_v08": {
+          "voice": "F4",
+          "definition": "tools/voices/F4.json"
         },
-        "user_join_v14": {
-          "voice": "GOBLIN1",
-          "definition": "tools/voices/GOBLIN1.json"
+        "client_closing_v09": {
+          "voice": "F5",
+          "definition": "tools/voices/F5.json"
         },
-        "user_leave_v14": {
-          "voice": "GOBLIN1",
-          "definition": "tools/voices/GOBLIN1.json"
+        "client_closing_v10": {
+          "voice": "M1",
+          "definition": "tools/voices/M1.json"
         },
-        "user_join_v15": {
-          "voice": "GOBLIN1",
-          "definition": "tools/voices/GOBLIN1.json"
+        "client_closing_v11": {
+          "voice": "F1",
+          "definition": "tools/voices/F1.json"
         },
-        "user_leave_v15": {
-          "voice": "GOBLIN1",
-          "definition": "tools/voices/GOBLIN1.json"
+        "client_closing_v12": {
+          "voice": "M2",
+          "definition": "tools/voices/M2.json"
         },
-        "user_join_v16": {
-          "voice": "GNOME1",
-          "definition": "tools/voices/GNOME1.json"
+        "client_closing_v13": {
+          "voice": "F2",
+          "definition": "tools/voices/F2.json"
         },
-        "user_leave_v16": {
-          "voice": "GNOME1",
-          "definition": "tools/voices/GNOME1.json"
+        "client_closing_v14": {
+          "voice": "M3",
+          "definition": "tools/voices/M3.json"
         },
-        "user_join_v17": {
-          "voice": "GNOME1",
-          "definition": "tools/voices/GNOME1.json"
+        "client_closing_v15": {
+          "voice": "F3",
+          "definition": "tools/voices/F3.json"
         },
-        "user_leave_v17": {
-          "voice": "GNOME1",
-          "definition": "tools/voices/GNOME1.json"
+        "client_closing_v16": {
+          "voice": "M4",
+          "definition": "tools/voices/M4.json"
         },
-        "user_join_v18": {
-          "voice": "TROLL1",
-          "definition": "tools/voices/TROLL1.json"
+        "client_closing_v17": {
+          "voice": "F4",
+          "definition": "tools/voices/F4.json"
         },
-        "user_leave_v18": {
-          "voice": "TROLL1",
-          "definition": "tools/voices/TROLL1.json"
-        },
-        "user_join_v19": {
-          "voice": "TROLL1",
-          "definition": "tools/voices/TROLL1.json"
-        },
-        "user_leave_v19": {
-          "voice": "TROLL1",
-          "definition": "tools/voices/TROLL1.json"
+        "client_closing_v18": {
+          "voice": "F5",
+          "definition": "tools/voices/F5.json"
         }
       }
     },
@@ -478,91 +398,9 @@
       "sample_rate": 24000,
       "review": "Whisper small transcript must match every intended word; re-render a clip that does not. Listening review is separate.",
       "clip_voices": {
-        "client_closing": {
-          "voice": "F5",
-          "definition": "tools/voices/F5.json",
-          "audition": "T07"
-        },
-        "client_closing_night": {
-          "voice": "F1",
-          "definition": "tools/voices/F1.json",
-          "audition": "N30"
-        },
         "client_updating": {
           "voice": "TROLL1",
           "definition": "tools/voices/TROLL1.json"
-        },
-        "user_join_v01": {
-          "voice": "F1",
-          "definition": "tools/voices/F1.json"
-        },
-        "user_join_v02": {
-          "voice": "F2",
-          "definition": "tools/voices/F2.json"
-        },
-        "user_join_v03": {
-          "voice": "F3",
-          "definition": "tools/voices/F3.json"
-        },
-        "user_join_v04": {
-          "voice": "F4",
-          "definition": "tools/voices/F4.json"
-        },
-        "user_join_v05": {
-          "voice": "F5",
-          "definition": "tools/voices/F5.json"
-        },
-        "user_join_v06": {
-          "voice": "M1",
-          "definition": "tools/voices/M1.json"
-        },
-        "user_join_v07": {
-          "voice": "M2",
-          "definition": "tools/voices/M2.json"
-        },
-        "user_join_v08": {
-          "voice": "M3",
-          "definition": "tools/voices/M3.json"
-        },
-        "user_join_v09": {
-          "voice": "M4",
-          "definition": "tools/voices/M4.json"
-        },
-        "user_leave_v01": {
-          "voice": "F1",
-          "definition": "tools/voices/F1.json"
-        },
-        "user_leave_v02": {
-          "voice": "F2",
-          "definition": "tools/voices/F2.json"
-        },
-        "user_leave_v03": {
-          "voice": "F3",
-          "definition": "tools/voices/F3.json"
-        },
-        "user_leave_v04": {
-          "voice": "F4",
-          "definition": "tools/voices/F4.json"
-        },
-        "user_leave_v05": {
-          "voice": "F5",
-          "definition": "tools/voices/F5.json"
-        },
-        "user_leave_v06": {
-          "voice": "M1",
-          "definition": "tools/voices/M1.json"
-        },
-        "user_leave_v07": {
-          "voice": "M2",
-          "definition": "tools/voices/M2.json"
-        },
-        "user_leave_v08": {
-          "voice": "M3",
-          "definition": "tools/voices/M3.json"
-        },
-        "user_leave_v09": {
-          "voice": "M4",
-          "definition": "tools/voices/M4.json"
         },
         "user_disconnected_v01": {
           "voice": "F1",
@@ -816,85 +654,77 @@
           "voice": "M4",
           "definition": "tools/voices/M4.json"
         },
-        "user_join_v10": {
-          "voice": "DWARF1",
-          "definition": "tools/voices/DWARF1.json"
+        "client_closing_v01": {
+          "voice": "M1",
+          "definition": "tools/voices/M1.json"
         },
-        "user_leave_v10": {
-          "voice": "DWARF1",
-          "definition": "tools/voices/DWARF1.json"
+        "client_closing_v02": {
+          "voice": "F1",
+          "definition": "tools/voices/F1.json"
         },
-        "user_join_v11": {
-          "voice": "DWARF1",
-          "definition": "tools/voices/DWARF1.json"
+        "client_closing_v03": {
+          "voice": "M2",
+          "definition": "tools/voices/M2.json"
         },
-        "user_leave_v11": {
-          "voice": "DWARF1",
-          "definition": "tools/voices/DWARF1.json"
+        "client_closing_v04": {
+          "voice": "F2",
+          "definition": "tools/voices/F2.json"
         },
-        "user_join_v12": {
-          "voice": "ELF1",
-          "definition": "tools/voices/ELF1.json"
+        "client_closing_v05": {
+          "voice": "M3",
+          "definition": "tools/voices/M3.json"
         },
-        "user_leave_v12": {
-          "voice": "ELF1",
-          "definition": "tools/voices/ELF1.json"
+        "client_closing_v06": {
+          "voice": "F3",
+          "definition": "tools/voices/F3.json"
         },
-        "user_join_v13": {
-          "voice": "ELF1",
-          "definition": "tools/voices/ELF1.json"
+        "client_closing_v07": {
+          "voice": "M4",
+          "definition": "tools/voices/M4.json"
         },
-        "user_leave_v13": {
-          "voice": "ELF1",
-          "definition": "tools/voices/ELF1.json"
+        "client_closing_v08": {
+          "voice": "F4",
+          "definition": "tools/voices/F4.json"
         },
-        "user_join_v14": {
-          "voice": "GOBLIN1",
-          "definition": "tools/voices/GOBLIN1.json"
+        "client_closing_v09": {
+          "voice": "F5",
+          "definition": "tools/voices/F5.json"
         },
-        "user_leave_v14": {
-          "voice": "GOBLIN1",
-          "definition": "tools/voices/GOBLIN1.json"
+        "client_closing_v10": {
+          "voice": "M1",
+          "definition": "tools/voices/M1.json"
         },
-        "user_join_v15": {
-          "voice": "GOBLIN1",
-          "definition": "tools/voices/GOBLIN1.json"
+        "client_closing_v11": {
+          "voice": "F1",
+          "definition": "tools/voices/F1.json"
         },
-        "user_leave_v15": {
-          "voice": "GOBLIN1",
-          "definition": "tools/voices/GOBLIN1.json"
+        "client_closing_v12": {
+          "voice": "M2",
+          "definition": "tools/voices/M2.json"
         },
-        "user_join_v16": {
-          "voice": "GNOME1",
-          "definition": "tools/voices/GNOME1.json"
+        "client_closing_v13": {
+          "voice": "F2",
+          "definition": "tools/voices/F2.json"
         },
-        "user_leave_v16": {
-          "voice": "GNOME1",
-          "definition": "tools/voices/GNOME1.json"
+        "client_closing_v14": {
+          "voice": "M3",
+          "definition": "tools/voices/M3.json"
         },
-        "user_join_v17": {
-          "voice": "GNOME1",
-          "definition": "tools/voices/GNOME1.json"
+        "client_closing_v15": {
+          "voice": "F3",
+          "definition": "tools/voices/F3.json"
         },
-        "user_leave_v17": {
-          "voice": "GNOME1",
-          "definition": "tools/voices/GNOME1.json"
+        "client_closing_v16": {
+          "voice": "M4",
+          "definition": "tools/voices/M4.json"
         },
-        "user_join_v18": {
-          "voice": "TROLL1",
-          "definition": "tools/voices/TROLL1.json"
+        "client_closing_v17": {
+          "voice": "F4",
+          "definition": "tools/voices/F4.json"
         },
-        "user_leave_v18": {
-          "voice": "TROLL1",
-          "definition": "tools/voices/TROLL1.json"
-        },
-        "user_join_v19": {
-          "voice": "TROLL1",
-          "definition": "tools/voices/TROLL1.json"
-        },
-        "user_leave_v19": {
-          "voice": "TROLL1",
-          "definition": "tools/voices/TROLL1.json"
+        "client_closing_v18": {
+          "voice": "F5",
+          "definition": "tools/voices/F5.json"
         }
       }
     }

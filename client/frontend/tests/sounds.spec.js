@@ -142,12 +142,12 @@ test("real AudioContext startup can resume from a later activated caller without
     }
 });
 
-// German says good night from 20:00 until 04:59; English keeps one closing line.
-for (const [language, hour, clip] of [["en", 12, "client_closing"], ["de", 12, "client_closing"],
-    ["en", 22, "client_closing"], ["de", 22, "client_closing_night"]]) {
-    test(`native close waits for the ${language} goodbye recording at ${hour}:00 to finish`, async ({ page }) => {
-        await page.clock.setFixedTime(new Date(2026, 9, 24, hour, 0));
-        const result = await page.evaluate(async ({ language, clip }) => {
+// Closing picks one of twenty goodbye recordings at random.
+for (const [language, random, clip] of [["en", 0, "client_closing"], ["de", 0, "client_closing"],
+    ["en", 0.999, "client_closing_v19"], ["de", 0.999, "client_closing_v19"]]) {
+    test(`native close waits for the random ${language} goodbye ${clip} to finish`, async ({ page }) => {
+        const result = await page.evaluate(async ({ language, random, clip }) => {
+            Math.random = () => random;
             window.__noxa = { state: { replayingTabID: "connecting-server", settings: { play_sounds: true, spoken_messages: true, speech_language: language, speech_volume: 75 } } };
             window.__noxaPolish = { dndActive: () => false };
             const { soundEngine, clearSpeech } = await import("/src/sounds.js");
@@ -180,7 +180,7 @@ for (const [language, hour, clip] of [["en", 12, "client_closing"], ["de", 12, "
             await soundEngine.dispose();
             return { ready, played, completions, immediateCompletions, endedAtClose, elapsed, active,
                 duration: SPEECH_ASSETS[language][clip].duration };
-        }, { language, clip });
+        }, { language, random, clip });
         expect(result.ready).toBe(true);
         expect(result.played).toEqual([`speech_${language}_${clip}`]);
         expect(result.immediateCompletions).toBe(0);
@@ -188,7 +188,7 @@ for (const [language, hour, clip] of [["en", 12, "client_closing"], ["de", 12, "
         expect(result.endedAtClose).toBe(true);
         expect(result.active).toBe(0);
         expect(result.elapsed).toBeGreaterThanOrEqual(result.duration * 1000 - 100);
-        expect(result.elapsed).toBeLessThan(4000);
+        expect(result.elapsed).toBeLessThan(result.duration * 1000 + 2000);
     });
 }
 
