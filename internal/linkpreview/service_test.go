@@ -175,3 +175,31 @@ func TestResolvedDialRejectsMixedDNSAndPinsPublicAddress(t *testing.T) {
 		}
 	}
 }
+
+func TestRasterRejectsExcessiveJPEGScans(t *testing.T) {
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 32, 32)), nil); err != nil {
+		t.Fatal(err)
+	}
+	valid := buf.Bytes()
+	if !jpegScansWithin(valid, maxJPEGScans) {
+		t.Fatal("baseline JPEG rejected")
+	}
+	sos := bytes.Index(valid, []byte{0xFF, 0xDA})
+	eoi := bytes.LastIndex(valid, []byte{0xFF, 0xD9})
+	if sos < 0 || eoi < sos {
+		t.Fatal("encoder output lacks SOS/EOI")
+	}
+	scan := valid[sos:eoi]
+	forged := append([]byte{}, valid[:sos]...)
+	for range maxJPEGScans + 1 {
+		forged = append(forged, scan...)
+	}
+	forged = append(forged, 0xFF, 0xD9)
+	if jpegScansWithin(forged, maxJPEGScans) {
+		t.Fatal("JPEG with too many scans accepted")
+	}
+	if _, err := raster(forged); err == nil {
+		t.Fatal("raster decoded JPEG with too many scans")
+	}
+}

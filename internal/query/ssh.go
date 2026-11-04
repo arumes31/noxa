@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -31,6 +32,15 @@ import (
 )
 
 const handshakeTimeout = 30 * time.Second
+
+// Session-channel bounds. A credentialed integration needs one or two
+// channels; each accepted channel holds a goroutine and SSH library state.
+// A channel must issue shell or exec within channelSetupTimeout.
+const (
+	maxSSHChannelsPerConn = 8
+	maxSSHChannels        = 256
+	channelSetupTimeout   = 30 * time.Second
+)
 
 // SSHServer is the SSH front end for a ServerQuery Server. It shares the
 // backend, the limits and the brute-force lockout state of the base server.
@@ -52,6 +62,11 @@ type SSHServer struct {
 
 	mu    sync.Mutex
 	conns map[net.Conn]struct{}
+
+	// channels counts accepted session channels across all connections.
+	channels atomic.Int64
+	// setupTimeout is channelSetupTimeout; tests shorten it.
+	setupTimeout time.Duration
 }
 
 // NewSSH constructs an SSH transport in front of base.
@@ -233,21 +248,48 @@ func (s *SSHServer) serve(ctx context.Context, nConn net.Conn, cfg *ssh.ServerCo
 		zap.String("remote", hostOnly(nConn.RemoteAddr().String())))
 
 	var roleWrites sync.Mutex
+	perConn := new(atomic.Int64)
 	for newChan := range chans {
 		if newChan.ChannelType() != "session" {
 			_ = newChan.Reject(ssh.UnknownChannelType, "only session channels are supported")
 			continue
 		}
+		if !s.reserveChannel(perConn) {
+			_ = newChan.Reject(ssh.ResourceShortage, "too many session channels")
+			continue
+		}
 		ch, reqs, err := newChan.Accept()
 		if err != nil {
+			s.releaseChannel(perConn)
 			return
 		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
+			defer s.releaseChannel(perConn)
 			s.serveChannel(ctx, sshConn, nConn, ch, reqs, principal, &roleWrites)
 		}()
 	}
+}
+
+// reserveChannel admits one session channel within the per-connection and
+// process-wide bounds.
+func (s *SSHServer) reserveChannel(perConn *atomic.Int64) bool {
+	if perConn.Add(1) > maxSSHChannelsPerConn {
+		perConn.Add(-1)
+		return false
+	}
+	if s.channels.Add(1) > maxSSHChannels {
+		s.channels.Add(-1)
+		perConn.Add(-1)
+		return false
+	}
+	return true
+}
+
+func (s *SSHServer) releaseChannel(perConn *atomic.Int64) {
+	perConn.Add(-1)
+	s.channels.Add(-1)
 }
 
 // serveChannel runs the command loop for one SSH session channel. It supports
@@ -275,15 +317,30 @@ func (s *SSHServer) serveChannel(ctx context.Context, sshConn *ssh.ServerConn, n
 		sshModelRequired: true,
 	}
 
+	// A channel that never starts a shell or exec is closed rather than held.
+	timeout := s.setupTimeout
+	if timeout <= 0 {
+		timeout = channelSetupTimeout
+	}
+	setup := time.AfterFunc(timeout, func() { _ = ch.Close() })
+	defer setup.Stop()
+	started := func() bool { return setup.Stop() }
+
 	for req := range reqs {
 		switch req.Type {
 		case "shell":
+			if !started() {
+				return
+			}
 			_ = req.Reply(true, nil)
 			_, _ = io.WriteString(ch, banner+"\n"+bannerHint+"\n")
 			s.base.runSession(ctx, sess)
 			s.exit(ch)
 			return
 		case "exec":
+			if !started() {
+				return
+			}
 			_ = req.Reply(true, nil)
 			s.base.execute(ctx, sess, execCommand(req.Payload))
 			s.exit(ch)

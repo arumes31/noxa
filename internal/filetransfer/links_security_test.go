@@ -188,3 +188,48 @@ func TestDownloadLinkExpiresAtDeadline(t *testing.T) {
 		t.Fatalf("expired link status = %d, want 404", recorder.Code)
 	}
 }
+
+func TestDownloadLinkRejectsReplacedFileAtSamePath(t *testing.T) {
+	registry, rel := newTestLinkRegistry(t, []byte("attacker-owned"))
+	token, _, err := registry.Create(rel, "shared.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(registry.rootDir, filepath.FromSlash(rel))
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	// Another uploader publishes a different file under the reused name.
+	replacement := path + ".tmp"
+	if err := os.WriteFile(replacement, []byte("victim-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	registry.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/dl/"+token, nil))
+	if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "victim-secret") {
+		t.Fatalf("stale link served replacement: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if _, ok := registry.take(token); ok {
+		t.Fatal("stale link was not retired")
+	}
+}
+
+func TestDownloadLinkRejectsRewrittenFile(t *testing.T) {
+	registry, rel := newTestLinkRegistry(t, []byte("original"))
+	token, _, err := registry.Create(rel, "shared.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(registry.rootDir, filepath.FromSlash(rel))
+	if err := os.WriteFile(path, []byte("rewritten in place"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	registry.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/dl/"+token, nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("rewritten file served: status=%d", rec.Code)
+	}
+}

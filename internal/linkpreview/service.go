@@ -274,12 +274,64 @@ func (s *Service) image(ctx context.Context, value string) (string, error) {
 	}
 	return raster(data)
 }
+
+// maxJPEGScans bounds progressive JPEG decoding work. Each scan revisits the
+// image's blocks, so tiny repeated scans in a 2 MiB file would otherwise
+// multiply decode CPU far beyond the pixel and byte limits. Common encoders
+// emit about ten scans for a progressive colour image.
+const maxJPEGScans = 64
+
+// jpegScansWithin walks JPEG marker segments and reports whether the stream
+// is well formed up to its scans and contains at most limit SOS segments.
+func jpegScansWithin(data []byte, limit int) bool {
+	if len(data) < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+		return false
+	}
+	scans := 0
+	for i := 2; i+4 <= len(data); {
+		if data[i] != 0xFF {
+			return false
+		}
+		marker := data[i+1]
+		switch {
+		case marker == 0xFF: // fill byte
+			i++
+			continue
+		case marker == 0xD9: // EOI
+			return true
+		case marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7):
+			i += 2
+			continue
+		}
+		length := int(data[i+2])<<8 | int(data[i+3])
+		if length < 2 || i+2+length > len(data) {
+			return false
+		}
+		i += 2 + length
+		if marker != 0xDA {
+			continue
+		}
+		if scans++; scans > limit {
+			return false
+		}
+		// Skip entropy-coded data: inside it 0xFF is only followed by a
+		// stuffed 0x00 or a restart marker.
+		for i+1 < len(data) && (data[i] != 0xFF || data[i+1] == 0x00 || (data[i+1] >= 0xD0 && data[i+1] <= 0xD7)) {
+			i++
+		}
+	}
+	return true
+}
+
 func raster(data []byte) (string, error) {
 	config, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || config.Width <= 0 || config.Height <= 0 || config.Width > 4096 || config.Height > 4096 || int64(config.Width)*int64(config.Height) > 4*1024*1024 {
 		return "", errUnavailable
 	}
 	if format != "jpeg" && format != "png" && format != "gif" && format != "webp" {
+		return "", errUnavailable
+	}
+	if format == "jpeg" && !jpegScansWithin(data, maxJPEGScans) {
 		return "", errUnavailable
 	}
 	decoded, _, err := image.Decode(bytes.NewReader(data))

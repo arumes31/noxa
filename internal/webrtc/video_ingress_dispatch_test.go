@@ -477,3 +477,44 @@ func TestVideoDispatchQueuedWatchAndPolicyRevocation(t *testing.T) {
 		})
 	}
 }
+
+func TestVideoDispatchStorageGrowsWithDemandAndReleasesWhenIdle(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		entered, release := make(chan struct{}), make(chan struct{})
+		d := newVideoIngressDispatch(func() bool { return true }, func(p *rtp.Packet, _ pion.RTPCodecCapability, _ time.Time, _ bool) {
+			if p.SequenceNumber == 0 {
+				close(entered)
+				<-release
+			}
+		})
+		storage := func() int {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			return len(d.queue)
+		}
+		d.enqueue(dispatchPacket(0), pion.RTPCodecCapability{})
+		<-entered
+		if got := storage(); got != videoDispatchInitialPackets {
+			t.Fatalf("first packet reserved %d descriptors, want %d", got, videoDispatchInitialPackets)
+		}
+		for i := 1; i <= videoDispatchInitialPackets+1; i++ {
+			if !d.enqueue(dispatchPacket(uint16(i)), pion.RTPCodecCapability{}) {
+				t.Fatalf("packet %d dropped", i)
+			}
+		}
+		if got := storage(); got != 2*videoDispatchInitialPackets {
+			t.Fatalf("storage=%d after growth, want %d", got, 2*videoDispatchInitialPackets)
+		}
+		close(release)
+		synctest.Wait()
+		time.Sleep(videoDispatchIdleRelease + time.Millisecond)
+		synctest.Wait()
+		if got := storage(); got != 0 {
+			t.Fatalf("idle storage=%d, want released", got)
+		}
+		if !d.enqueue(dispatchPacket(100), pion.RTPCodecCapability{}) {
+			t.Fatal("released dispatcher rejected new packet")
+		}
+		d.finish(true)
+	})
+}

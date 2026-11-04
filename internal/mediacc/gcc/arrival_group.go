@@ -10,6 +10,12 @@ import (
 	"noxa/internal/mediacc/cc"
 )
 
+// maxArrivalGroupPackets bounds the acknowledgements one group retains. Only
+// the first is consulted for timing; the rest are diagnostics. Receiver-chosen
+// arrival times (or duplicated acknowledgements) can keep extending a group,
+// which must not grow memory without limit.
+const maxArrivalGroupPackets = 256
+
 type arrivalGroup struct {
 	packets   []cc.Acknowledgment
 	departure time.Time
@@ -25,7 +31,9 @@ func newArrivalGroup(a cc.Acknowledgment) arrivalGroup {
 }
 
 func (g *arrivalGroup) add(a cc.Acknowledgment) {
-	g.packets = append(g.packets, a)
+	if len(g.packets) < maxArrivalGroupPackets {
+		g.packets = append(g.packets, a)
+	}
 	g.arrival = a.Arrival
 	if a.Departure.After(g.departure) {
 		g.departure = a.Departure

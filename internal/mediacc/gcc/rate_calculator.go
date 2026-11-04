@@ -9,6 +9,13 @@ import (
 	"noxa/internal/mediacc/cc"
 )
 
+// maxRateHistoryPackets bounds retained acknowledgements independently of the
+// receiver-reported arrival times that define the window: equal or barely
+// advancing timestamps (including duplicated acknowledgements) would otherwise
+// grow history, and the per-report deliveryRatio scan, without limit. 4096
+// covers the 500 ms window above 60 Mbit/s of full-size packets.
+const maxRateHistoryPackets = 4096
+
 type rateCalculator struct {
 	window      time.Duration
 	history     []cc.Acknowledgment
@@ -44,6 +51,10 @@ func (c *rateCalculator) add(acks []cc.Acknowledgment, onRateUpdate func(int)) {
 		}
 		c.history = append(c.history, next)
 		c.sum += next.Size
+		if len(c.history) > maxRateHistoryPackets {
+			c.sum -= c.history[0].Size
+			c.history = c.history[1:]
+		}
 		if !c.initialized {
 			c.initialized = true
 			onRateUpdate(next.Size * 8)

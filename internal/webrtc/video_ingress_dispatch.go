@@ -19,6 +19,12 @@ const videoDispatchPackets = videoReorderPackets
 const videoDispatchBytes = videoReorderBytes
 const videoDispatchLifetime = 250 * time.Millisecond
 
+// Descriptor storage starts small and doubles up to videoDispatchPackets. A
+// queue that stays empty for videoDispatchIdleRelease releases its storage, so
+// sparsely used layers do not pin a burst-sized ring indefinitely.
+const videoDispatchInitialPackets = 64
+const videoDispatchIdleRelease = 2 * time.Second
+
 type videoDispatchPacket struct {
 	packet        *rtp.Packet
 	codec         pion.RTPCodecCapability
@@ -79,9 +85,7 @@ func (d *videoIngressDispatch) enqueue(packet *rtp.Packet, codec pion.RTPCodecCa
 		d.overflow++
 		return false
 	}
-	if d.queue == nil {
-		d.queue = make([]videoDispatchPacket, d.limits.packets)
-	}
+	d.reserve()
 	codec.RTCPFeedback = slices.Clone(codec.RTCPFeedback)
 	d.queue[(d.head+d.count)%len(d.queue)] = videoDispatchPacket{packet.Clone(), codec, d.now(), size, d.gap}
 	d.gap = false
@@ -89,6 +93,47 @@ func (d *videoIngressDispatch) enqueue(packet *rtp.Packet, codec pion.RTPCodecCa
 	d.bytes += size
 	d.signal()
 	return true
+}
+
+// Grow descriptor storage with demand instead of reserving the full packet
+// bound for every accepted layer: a publisher may declare many sparsely used
+// RIDs, and each would otherwise pin limits.packets descriptors. Requires mu.
+func (d *videoIngressDispatch) reserve() {
+	if d.count < len(d.queue) {
+		return
+	}
+	size := min(d.limits.packets, max(videoDispatchInitialPackets, 2*len(d.queue)))
+	grown := make([]videoDispatchPacket, size)
+	for i := range d.count {
+		grown[i] = d.queue[(d.head+i)%len(d.queue)]
+	}
+	d.queue, d.head = grown, 0
+}
+
+// idle waits for work, releasing descriptor storage once the queue has stayed
+// empty for videoDispatchIdleRelease. It reports whether storage was released
+// or nothing was held (the caller then blocks on wake without a timer).
+func (d *videoIngressDispatch) idle() bool {
+	d.mu.Lock()
+	held := d.queue != nil
+	d.mu.Unlock()
+	if !held {
+		return true
+	}
+	timer := time.NewTimer(videoDispatchIdleRelease)
+	defer timer.Stop()
+	select {
+	case <-d.wake:
+		// The caller's loop rechecks count and closed under mu.
+		return false
+	case <-timer.C:
+	}
+	d.mu.Lock()
+	if d.count == 0 {
+		d.queue, d.head = nil, 0
+	}
+	d.mu.Unlock()
+	return false
 }
 
 func (d *videoIngressDispatch) signal() {
@@ -134,6 +179,9 @@ func (d *videoIngressDispatch) run() {
 			d.mu.Unlock()
 			if closed {
 				return
+			}
+			if !d.idle() {
+				continue
 			}
 			<-d.wake
 			continue

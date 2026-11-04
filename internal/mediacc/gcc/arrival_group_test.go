@@ -129,3 +129,15 @@ func TestArrivalGroup(t *testing.T) {
 		})
 	}
 }
+
+func TestArrivalGroupBoundsRetainedPackets(t *testing.T) {
+	base := time.Unix(1000, 0)
+	ack := cc.Acknowledgment{Departure: base, Arrival: base, Size: 1200}
+	g := newArrivalGroup(ack)
+	for range 4 * maxArrivalGroupPackets {
+		g.add(ack)
+	}
+	if len(g.packets) != maxArrivalGroupPackets {
+		t.Fatalf("retained %d packets", len(g.packets))
+	}
+}

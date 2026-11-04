@@ -3,10 +3,13 @@ package query
 import (
 	"context"
 	"encoding/binary"
+	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -188,5 +191,90 @@ func TestExecCommand(t *testing.T) {
 				t.Fatalf("execCommand() = %q, want %q", got, test.expected)
 			}
 		})
+	}
+}
+
+func dialTestSSH(t *testing.T, addr string) *ssh.Client {
+	t.Helper()
+	client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
+		User:            "integration",
+		Auth:            []ssh.AuthMethod{ssh.Password("pw")},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("ssh dial: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+func TestSSHLimitsSessionChannelsPerConnection(t *testing.T) {
+	addr := startSSHQuery(t, &roleQueryBackend{})
+	client := dialTestSSH(t, addr)
+	for i := range maxSSHChannelsPerConn {
+		if _, _, err := client.OpenChannel("session", nil); err != nil {
+			t.Fatalf("channel %d rejected: %v", i, err)
+		}
+	}
+	_, _, err := client.OpenChannel("session", nil)
+	var open *ssh.OpenChannelError
+	if !errors.As(err, &open) || open.Reason != ssh.ResourceShortage {
+		t.Fatalf("channel beyond limit err=%v, want resource shortage", err)
+	}
+}
+
+func TestSSHReservationReleasesCapacity(t *testing.T) {
+	srv := NewSSH("", "", New("", nil, &roleQueryBackend{}))
+	perConn := new(atomic.Int64)
+	for range maxSSHChannelsPerConn {
+		if !srv.reserveChannel(perConn) {
+			t.Fatal("reservation within limit refused")
+		}
+	}
+	if srv.reserveChannel(perConn) {
+		t.Fatal("reservation beyond per-connection limit admitted")
+	}
+	srv.releaseChannel(perConn)
+	if !srv.reserveChannel(perConn) {
+		t.Fatal("released capacity not reusable")
+	}
+	if got := srv.channels.Load(); got != maxSSHChannelsPerConn {
+		t.Fatalf("process channel count=%d", got)
+	}
+}
+
+func TestSSHClosesChannelWithoutShellOrExec(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	srv := NewSSH(addr, filepath.Join(t.TempDir(), "host.key"), New("", nil, &roleQueryBackend{}))
+	srv.setupTimeout = 100 * time.Millisecond
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Start(context.Background()) }()
+	t.Cleanup(func() { _ = srv.Close(); <-errCh })
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr); err == nil {
+			_ = c.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	client := dialTestSSH(t, addr)
+	ch, reqs, err := client.OpenChannel("session", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go ssh.DiscardRequests(reqs)
+	done := make(chan struct{})
+	go func() { _, _ = io.Copy(io.Discard, ch); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("idle session channel was not closed")
 	}
 }

@@ -149,7 +149,7 @@ func run(parent context.Context, options Options, progress func(Progress), durat
 	// read while waiting for the first SDP answer.
 	c.guard = func(frame *netproto.Frame) error { return validateEchoFrame(frame, auth.ClientID, info.EchoChannelID) }
 	pcConfig := pion.Configuration{}
-	for _, ice := range auth.ICEServers {
+	for _, ice := range boundedICEServers(auth.ICEServers) {
 		pcConfig.ICEServers = append(pcConfig.ICEServers, pion.ICEServer{URLs: ice.URLs, Username: ice.Username, Credential: ice.Credential})
 	}
 	pc, err := pion.NewPeerConnection(pcConfig)
@@ -226,6 +226,10 @@ func run(parent context.Context, options Options, progress func(Progress), durat
 	if err := netproto.Decode(frame, &answer); err != nil {
 		return Result{}, err
 	}
+	var candidates candidateBudget
+	if err := candidates.admitSDP(answer.SDP); err != nil {
+		return Result{}, err
+	}
 	if err := pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer.SDP}); err != nil {
 		return Result{}, err
 	}
@@ -237,7 +241,7 @@ func run(parent context.Context, options Options, progress func(Progress), durat
 	go func() {
 		defer close(readerDone)
 		defer cancel()
-		_ = readSignals(c, pc, auth.ClientID, info.EchoChannelID, privateReady)
+		_ = readSignals(c, pc, auth.ClientID, info.EchoChannelID, privateReady, &candidates)
 	}()
 	defer func() { _ = c.Close(); <-readerDone }()
 	select {
@@ -348,7 +352,7 @@ func ownEcho(nodes []*broadcast.ChannelNode, client string, channel int64) bool 
 	return false
 }
 
-func readSignals(c *control, pc *pion.PeerConnection, client string, channel int64, privateReady chan struct{}) error {
+func readSignals(c *control, pc *pion.PeerConnection, client string, channel int64, privateReady chan struct{}, candidates *candidateBudget) error {
 	var confirmed sync.Once
 	for {
 		var frame *netproto.Frame
@@ -383,6 +387,9 @@ func readSignals(c *control, pc *pion.PeerConnection, client string, channel int
 			if netproto.Decode(frame, &candidate) != nil {
 				return errors.New("invalid media candidate")
 			}
+			if err := candidates.admit(candidate.Candidate); err != nil {
+				return err
+			}
 			line := candidate.SDPMLineIndex
 			if err := pc.AddICECandidate(pion.ICECandidateInit{Candidate: candidate.Candidate, SDPMid: &candidate.SDPMid, SDPMLineIndex: &line}); err != nil {
 				return err
@@ -391,6 +398,9 @@ func readSignals(c *control, pc *pion.PeerConnection, client string, channel int
 			var offer netproto.WebRTCOffer
 			if netproto.Decode(frame, &offer) != nil {
 				return errors.New("invalid media offer")
+			}
+			if err := candidates.admitSDP(offer.SDP); err != nil {
+				return err
 			}
 			if err := pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeOffer, SDP: offer.SDP}); err != nil {
 				return err
