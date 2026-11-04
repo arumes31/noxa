@@ -11,13 +11,27 @@ const intents = new Map(); // tabID -> { channelID, at }
 
 /** Records that the user explicitly asked to join channelID on tabID. 0 asks for the server's default (home) channel. */
 export function noteLocalChannelJoin(tabID, channelID, now = Date.now()) {
-    if (!tabID) return;
-    intents.set(tabID, { channelID: Number(channelID) || 0, at: now });
+    if (!tabID) return null;
+    const intent = { channelID: Number(channelID) || 0, at: now };
+    intents.set(tabID, intent);
+    return intent;
 }
 
-/** Forgets a recorded intent, e.g. after the join request failed. */
-export function forgetLocalChannelJoin(tabID) {
-    intents.delete(tabID);
+/**
+ * Forgets a recorded intent, e.g. after the join request failed. With an
+ * intent token only that intent is removed, so an older failed join cannot
+ * delete the intent of a newer join on the same tab.
+ */
+export function forgetLocalChannelJoin(tabID, intent = null) {
+    if (!intent || intents.get(tabID) === intent) intents.delete(tabID);
+}
+
+/**
+ * A self move into channel 0 (home/no channel) completes a default-channel
+ * request: retire it so it cannot authorize a later server-initiated move.
+ */
+export function settleLocalChannelJoinAt(tabID, channelID) {
+    if ((Number(channelID) || 0) === 0 && intents.get(tabID)?.channelID === 0) intents.delete(tabID);
 }
 
 /**
@@ -40,13 +54,13 @@ export function consumeLocalChannelJoin(tabID, channelID, now = Date.now()) {
 
 /** Records the intent, then performs the native join. */
 export async function joinChannelLocally(tabID, channelID) {
-    noteLocalChannelJoin(tabID, channelID);
+    const intent = noteLocalChannelJoin(tabID, channelID);
     try {
         const error = await window.go.main.App.JoinChannelForTab(tabID, channelID);
-        if (error) forgetLocalChannelJoin(tabID);
+        if (error) forgetLocalChannelJoin(tabID, intent);
         return error;
     } catch (error) {
-        forgetLocalChannelJoin(tabID);
+        forgetLocalChannelJoin(tabID, intent);
         throw error;
     }
 }

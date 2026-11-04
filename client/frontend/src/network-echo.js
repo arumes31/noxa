@@ -1,3 +1,4 @@
+import { joinChannelLocally } from "./local-join-intent.js";
 import { t } from "./i18n.js";
 import { closeDialog } from "./modal.js";
 import "./network-echo.css";
@@ -46,7 +47,7 @@ function showSession(owner) {
         if (!current(owner) || owner.pending) return;
         owner.pending = true; owner.error = ""; back.disabled = true; status.textContent = t("echo.pending");
         try {
-            const error = await app().JoinChannelForTab(owner.scope.tab, owner.previous);
+            const error = await joinChannelLocally(owner.scope.tab, owner.previous);
             if (!current(owner)) { dispose(owner); return; }
             if (error) throw new Error(error);
             if (await confirmedChannel(owner, owner.previous)) dispose(owner);
@@ -85,7 +86,7 @@ export function createNetworkEchoTest() {
             if (!available(info)) throw new Error(unavailable(info));
             owner.channel = info.echo_channel_id;
             if (owner.previous === owner.channel) owner.previous = 0;
-            const error = await app().JoinChannelForTab(owner.scope.tab, owner.channel);
+            const error = await joinChannelLocally(owner.scope.tab, owner.channel);
             if (!current(owner)) { dispose(owner); return; }
             if (error) throw new Error(error);
             if (!await confirmedChannel(owner, owner.channel)) { dispose(owner); return; }

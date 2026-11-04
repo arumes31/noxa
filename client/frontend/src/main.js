@@ -1,4 +1,4 @@
-import { consumeLocalChannelJoin, joinChannelLocally } from "./local-join-intent.js";
+import { consumeLocalChannelJoin, joinChannelLocally, settleLocalChannelJoinAt } from "./local-join-intent.js";
 import { presenceSpeechKey } from "./speech-variation.js";
 import { initMobileAnnouncement } from "./mobile-announcement.js";
 import { initReadSync } from "./read-sync.js";
@@ -1586,6 +1586,7 @@ window.runtime.EventsOn("event", (json) => {
                 // started here may clear it, never a server-reported move.
                 if (nextChannelID > 0 && nextChannelID !== previousChannelID && !actionSoundsSuppressed() && !automaticRestore
                     && consumeLocalChannelJoin(state.activeTabID, nextChannelID)) setDeafened(false);
+                settleLocalChannelJoinAt(state.activeTabID, nextChannelID);
                 let playedOwnCue = false;
                 if (!actionSoundsSuppressed()) {
                     if (nextChannelID > 0 && nextChannelID !== previousChannelID) {
