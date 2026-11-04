@@ -150,7 +150,9 @@ func (s *TCPServer) handlePasskeyRequest(ctx context.Context, client *Client, r 
 		options := []webauthn.LoginOption{webauthn.WithUserVerification(protocol.VerificationRequired)}
 		var nonce []byte
 		if r.Ed25519PublicKey != "" || r.X25519PublicKey != "" {
-			if _, err := auth.LoadPublicKey(r.Ed25519PublicKey); err != nil {
+			// The challenge binds the key spelling; require the canonical one
+			// AddDevice stores, so other clients can verify the proof.
+			if canonical, ok := store.CanonicalDeviceKey(r.Ed25519PublicKey); !ok || canonical != r.Ed25519PublicKey {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid device key")
 			}
 			x, err := base64.StdEncoding.DecodeString(r.X25519PublicKey)

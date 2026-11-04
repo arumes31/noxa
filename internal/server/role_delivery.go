@@ -62,7 +62,13 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 		if err != nil || frame == nil {
 			return err
 		}
-		return s.writeFrameInContext(ctx, client, frame)
+		if err := s.writeFrameInContext(ctx, client, frame); err != nil {
+			return err
+		}
+		if frame.Type == uint16(netproto.MsgSnapshot) {
+			client.commitStagedSnapshot()
+		}
+		return nil
 	})
 	// An unavailable policy closes protected delivery, not the control socket.
 	// The mutation handler still owes its saved-but-pending acknowledgement.

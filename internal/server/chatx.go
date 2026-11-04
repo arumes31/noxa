@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/url"
 	"regexp"
 	"sort"
@@ -22,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"go.uber.org/zap"
@@ -600,7 +602,7 @@ func normalizeList(raw string) string {
 // that merely NAMED a blocked domain, and accepted
 // "http://evil.tld/?q=good.example" because a whitelist entry appeared
 // somewhere in the body.
-var linkURLRe = regexp.MustCompile(`(?i)https?://[^\s<>"'\])}]+`)
+var linkURLRe = regexp.MustCompile(`(?i)https?://(?:\[[0-9a-f:.%]+\][^\s<>"'\])}]*|[^\s<>"'\])}]+)`)
 
 // linkHosts returns the lowercased hostname of every link in body, in order.
 // An unparseable URL yields "" — it still reads as a link to a human, so it
@@ -633,6 +635,11 @@ func canonicalLinkHost(host string) string {
 	host = strings.Trim(strings.ToLower(host), ".")
 	if host == "" {
 		return ""
+	}
+	// IP literals (IPv6 hosts contain colons, which the IDNA lookup profile
+	// rejects) have no Unicode form to canonicalize.
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String()
 	}
 	ascii, err := idna.Lookup.ToASCII(host)
 	if err != nil {
@@ -750,14 +757,15 @@ func mentionsNickname(lowerBody, nickname string) bool {
 			return false
 		}
 		rest = rest[i+len(needle):]
-		if rest == "" || !isMentionTokenByte(rest[0]) {
+		next, _ := utf8.DecodeRuneInString(rest)
+		if rest == "" || !isMentionTokenRune(next) {
 			return true
 		}
 	}
 }
 
-func isMentionTokenByte(b byte) bool {
-	return b == '_' || b == '-' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+func isMentionTokenRune(r rune) bool {
+	return r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r)
 }
 
 // recipientCanViewChannel reports whether userID may view the channel a

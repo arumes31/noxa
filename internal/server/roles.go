@@ -63,7 +63,10 @@ func (s *TCPServer) roleInspectionAllowed(ctx context.Context, client *Client, c
 	if channelID > 0 {
 		capability = authorization.ManageChannelAccess
 	}
-	if channelID < 0 || client.userID() < 1 {
+	if channelID < 0 {
+		return authorization.ErrRoleInvalid
+	}
+	if client.userID() < 1 {
 		return authorization.ErrRoleForbidden
 	}
 	return s.withRolePolicy(ctx, func(ctx context.Context) error {

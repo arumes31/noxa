@@ -339,22 +339,38 @@ func authorizeOverrideChanges(before *RoleEvaluator, actorID, channelID int64, o
 }
 
 // authorizeMemberChannelGains rejects role membership changes that give the
-// target a channel capability through channel overrides (an allowing override
-// on an added role, or a denying override on a removed role) that the actor
-// cannot delegate in that channel. Server-wide grants are checked separately.
+// target a channel capability through channel overrides of a changed role (an
+// allowing override on an added role, or a denying override on a removed role)
+// that the actor cannot use in that channel. Every channel capability is
+// compared in each affected channel, because one override can make dependent
+// grants effective (an allowed ViewChannel unlocks an existing ReadHistory).
+// Server-wide grants are checked separately.
 func authorizeMemberChannelGains(before, after *RoleEvaluator, actorID, targetID int64, changed map[int64]bool) error {
 	if actorID == before.policy.OwnerID {
 		return nil
 	}
+	var channelCapabilities []Capability
+	for _, info := range Capabilities() {
+		if info.Channel {
+			channelCapabilities = append(channelCapabilities, info.Key)
+		}
+	}
 	for id := range after.channels {
+		affected := false
 		for _, override := range after.effectiveOverrides(id) {
-			if !changed[override.RoleID] {
+			if changed[override.RoleID] {
+				affected = true
+				break
+			}
+		}
+		if !affected {
+			continue
+		}
+		for _, capability := range channelCapabilities {
+			if before.Evaluate(targetID, id, capability).Allowed || !after.Evaluate(targetID, id, capability).Allowed {
 				continue
 			}
-			if before.Evaluate(targetID, id, override.Capability).Allowed || !after.Evaluate(targetID, id, override.Capability).Allowed {
-				continue
-			}
-			if !before.Evaluate(actorID, id, override.Capability).Allowed {
+			if !before.Evaluate(actorID, id, capability).Allowed {
 				return ErrRoleForbidden
 			}
 		}

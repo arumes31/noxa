@@ -41,11 +41,10 @@ func enrollRoleGuest(ctx context.Context, tx *sql.Tx, guest *roleGuestIdentity, 
 	if errors.Is(err, sql.ErrNoRows) {
 		return authorization.ErrRoleInvalid
 	}
-	// Another account already owns this identity (for example the same public
-	// key). The statement failed before commit and the transaction rolls back,
+	// Another account already owns this public key. The statement failed before commit and the transaction rolls back,
 	// so this is rejected input, not an ambiguous policy write.
 	var pqErr *pq.Error
-	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+	if errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "idx_users_public_key_unique" {
 		return authorization.ErrRoleInvalid
 	}
 	change.UserID = guest.userID

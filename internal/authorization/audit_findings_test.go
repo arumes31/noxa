@@ -42,6 +42,25 @@ func TestMemberRolesSetChecksChannelOverrideGains(t *testing.T) {
 	}
 }
 
+// An override on ViewChannel can make an existing ReadHistory grant effective;
+// the manager must hold every capability that becomes effective.
+func TestMemberRolesSetChecksDependentChannelGains(t *testing.T) {
+	p := roleFixture()
+	p.Roles[0].Permissions = append(p.Roles[0].Permissions, ReadHistory) // @everyone
+	p.Roles[1].Permissions = nil
+	p.Members = []RoleMember{{UserID: 2, RoleIDs: []int64{30}}, {UserID: 5, RoleIDs: []int64{}}}
+	p.Channels = append(p.Channels, ChannelPolicy{ChannelID: 103, Overrides: []RoleOverride{
+		{RoleID: 10, Capability: ViewChannel, Effect: Deny},
+		{RoleID: 20, Capability: ViewChannel, Effect: Allow},
+		{RoleID: 30, Capability: ViewChannel, Effect: Allow},
+		{RoleID: 30, Capability: ReadHistory, Effect: Deny},
+	}})
+	_, err := ApplyRoleChange(p, 2, RoleChange{Kind: MemberRolesSet, UserID: 5, RoleIDs: []int64{20}, ExpectedRevision: p.Revision})
+	if !errors.Is(err, ErrRoleForbidden) {
+		t.Fatalf("dependent ReadHistory gain: err = %v, want ErrRoleForbidden", err)
+	}
+}
+
 func TestMemberRolesSetRejectsOversizedAndDuplicateLists(t *testing.T) {
 	p := roleFixture()
 	for name, ids := range map[string][]int64{

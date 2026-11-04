@@ -63,7 +63,9 @@ type Client struct {
 
 	mu                 sync.RWMutex
 	lastOwnChannelMove *broadcast.OwnChannelMove // recipient-only cause, protected by mu
-	lastSnapshotDigest [32]byte                  // digest of the last snapshot sent, protected by mu
+	lastSnapshotDigest [32]byte                  // digest of the last snapshot written, protected by mu
+	snapshotStagedDigest [32]byte                // digest awaiting a successful write, protected by mu
+	snapshotStaged       bool                    // snapshotStagedDigest is valid, protected by mu
 	authRequests       int
 	requestBudget      sessionRequestBudget
 	authed             bool

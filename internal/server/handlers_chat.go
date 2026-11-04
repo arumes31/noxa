@@ -370,7 +370,10 @@ func (s *TCPServer) pendingForSession(ctx context.Context, client *Client, userI
 	if !ok {
 		return s.deps.Spool.PendingMessages(ctx, userID)
 	}
-	filter := store.PendingFilter{DeviceID: client.currentDeviceID(), Web: client.isWebTransport(), Limit: spoolPageSize}
+	// Spooled recipient keys are stored canonical (canonicalDMKey), as is the
+	// session key, so eligibility can be decided in SQL.
+	recipientKey, _ := s.senderDMKey(client)
+	filter := store.PendingFilter{DeviceID: client.currentDeviceID(), Web: client.isWebTransport(), RecipientKey: recipientKey, Limit: spoolPageSize}
 	var out []store.SpooledMessage
 	for len(out) < spoolDeliveryBudget {
 		page, err := spool.PendingMessagesFor(ctx, userID, filter)

@@ -87,6 +87,22 @@ func TestCanonicalDeviceKeyLookup(t *testing.T) {
 	if _, err := s.AddDevice(t.Context(), NewDevice{Principal: "canon", Kind: DeviceKindWeb, Name: "Again", Ed25519Public: canonical}, 10); !errors.Is(err, ErrDeviceKeyInUse) {
 		t.Fatalf("re-adding revoked key: %v", err)
 	}
+
+	// A device stored before canonicalization still matches its own spelling.
+	legacyPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := strings.TrimSuffix(string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: legacyPub})), "\n")
+	if _, err := s.DB().ExecContext(t.Context(), `INSERT INTO user_devices(device_id,principal,kind,name,ed25519_public) VALUES('legacy-dev','canon','web','Old',$1)`, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := s.DeviceByKey(t.Context(), legacy); err != nil || found.DeviceID != "legacy-dev" {
+		t.Fatalf("legacy spelling lookup: %+v, %v", found, err)
+	}
+	if _, err := s.AddDevice(t.Context(), NewDevice{Principal: "canon", Kind: DeviceKindWeb, Name: "Dup", Ed25519Public: legacy}, 10); !errors.Is(err, ErrDeviceKeyInUse) {
+		t.Fatalf("duplicate of legacy spelling: %v", err)
+	}
 }
 
 func TestAddDeviceRequiresAuthorizingPasskey(t *testing.T) {
@@ -112,6 +128,11 @@ func TestPendingMessagesForFiltersBySession(t *testing.T) {
 	if err := s.SpoolMessage(ctx, sender, recipient, "s", "account-wide"); err != nil {
 		t.Fatal(err)
 	}
+	for _, key := range []string{"other-desktop-key", "my-desktop-key"} {
+		if err := s.SpoolMessage(ctx, sender, recipient, "s", "bound-"+key, DMKeyBinding{SenderPublicKey: "sender-key", RecipientPublicKey: key}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for i, device := range []string{"phone", "tablet", "phone"} {
 		if err := s.SpoolMessage(ctx, sender, recipient, "s", fmt.Sprintf("copy-%d", i), DMKeyBinding{RecipientDeviceID: device}); err != nil {
 			t.Fatal(err)
@@ -135,6 +156,9 @@ func TestPendingMessagesForFiltersBySession(t *testing.T) {
 	}
 	if got := strings.Join(bodies(PendingFilter{DeviceID: "phone", Web: true, Limit: 1}), ","); got != "copy-0,copy-2" {
 		t.Fatalf("web phone: %s", got)
+	}
+	if got := strings.Join(bodies(PendingFilter{RecipientKey: "my-desktop-key", Limit: 1}), ","); got != "account-wide,bound-my-desktop-key" {
+		t.Fatalf("desktop with key: %s", got)
 	}
 	if got := strings.Join(bodies(PendingFilter{Limit: 10}), ","); got != "account-wide" {
 		t.Fatalf("desktop without device: %s", got)

@@ -125,7 +125,10 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 		return Device{}, fmt.Errorf("adding device: invalid kind %q", d.Kind)
 	}
 	// Store the canonical spelling so lookups by any equivalent PEM encoding
-	// find this record (opaque test keys are kept verbatim).
+	// find this record (opaque test keys are kept verbatim). The original
+	// spelling is still checked for duplicates below, covering rows stored
+	// before canonicalization.
+	submitted := d.Ed25519Public
 	if canonical, ok := canonicalDeviceKey(d.Ed25519Public); ok {
 		d.Ed25519Public = canonical
 	}
@@ -153,7 +156,7 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 		}
 	}
 	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_devices WHERE ed25519_public=$1)`, d.Ed25519Public).Scan(&exists); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_devices WHERE ed25519_public=$1 OR ed25519_public=$2)`, d.Ed25519Public, submitted).Scan(&exists); err != nil {
 		return Device{}, fmt.Errorf("adding device: %w", err)
 	}
 	if exists {
@@ -192,10 +195,14 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 // DeviceByKey returns the device registered with the identity key, revoked
 // or not.
 func (s *Store) DeviceByKey(ctx context.Context, ed25519Public string) (Device, error) {
-	if canonical, ok := canonicalDeviceKey(ed25519Public); ok {
-		ed25519Public = canonical
+	// Match the canonical spelling, and also the exact input so devices stored
+	// before canonicalization keep matching their own key.
+	canonical := ed25519Public
+	if c, ok := canonicalDeviceKey(ed25519Public); ok {
+		canonical = c
 	}
-	d, err := scanDevice(s.db.QueryRowContext(ctx, `SELECT `+deviceColumns+` FROM user_devices WHERE ed25519_public=$1`, ed25519Public))
+	d, err := scanDevice(s.db.QueryRowContext(ctx, `SELECT `+deviceColumns+` FROM user_devices WHERE ed25519_public=$1 OR ed25519_public=$2
+		ORDER BY ed25519_public=$1 DESC LIMIT 1`, canonical, ed25519Public))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrDeviceNotFound
 	}
@@ -211,6 +218,10 @@ func (s *Store) DeviceByKey(ctx context.Context, ed25519Public string) (Device, 
 // padding bits, so device registration, lookup and revocation must compare the
 // canonical encoding: otherwise an equivalent spelling of a revoked key would
 // miss its device record. ok is false for input that is not such a key.
+// CanonicalDeviceKey returns the canonical PEM spelling of an Ed25519 public
+// key, as stored by AddDevice.
+func CanonicalDeviceKey(publicKeyPEM string) (string, bool) { return canonicalDeviceKey(publicKeyPEM) }
+
 func canonicalDeviceKey(publicKeyPEM string) (string, bool) {
 	block, _ := pem.Decode([]byte(publicKeyPEM))
 	if block == nil || block.Type != "PUBLIC KEY" || len(block.Headers) != 0 || len(block.Bytes) != ed25519.PublicKeySize {

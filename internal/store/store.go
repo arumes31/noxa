@@ -697,6 +697,10 @@ func (s *Store) PendingMessages(ctx context.Context, toUserID int64) ([]SpooledM
 type PendingFilter struct {
 	DeviceID string
 	Web      bool
+	// RecipientKey is the session's canonical DM key. Key-bound account-wide
+	// copies are eligible only when sealed to it, so rows for another desktop
+	// key never fill a page (and cannot starve later deliverable messages).
+	RecipientKey string
 	AfterID  int64
 	Limit    int
 }
@@ -715,10 +719,12 @@ func (s *Store) PendingMessagesFor(ctx context.Context, toUserID int64, f Pendin
 	          FROM offline_messages om
 	          LEFT JOIN users u ON u.id = om.from_user_id
 	          WHERE om.to_user_id = $1 AND om.delivered_at IS NULL AND om.id > $2
-	            AND ((om.to_device_id <> '' AND om.to_device_id = $3) OR (om.to_device_id = '' AND NOT $4))
+	            AND ((om.to_device_id <> '' AND om.to_device_id = $3)
+	              OR (om.to_device_id = '' AND NOT $4 AND ((om.sender_public_key = '' AND om.recipient_public_key = '')
+	                  OR ($6 <> '' AND om.recipient_public_key = $6))))
 	          ORDER BY om.id
 	          LIMIT $5`
-	rows, err := s.db.QueryContext(ctx, q, toUserID, f.AfterID, f.DeviceID, f.Web, f.Limit)
+	rows, err := s.db.QueryContext(ctx, q, toUserID, f.AfterID, f.DeviceID, f.Web, f.Limit, f.RecipientKey)
 	if err != nil {
 		return nil, fmt.Errorf("querying offline messages: %w", err)
 	}
