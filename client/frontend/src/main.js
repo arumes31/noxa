@@ -1,3 +1,4 @@
+import { consumeLocalChannelJoin, joinChannelLocally, settleLocalChannelJoinAt } from "./local-join-intent.js";
 import { presenceSpeechKey } from "./speech-variation.js";
 import { initMobileAnnouncement } from "./mobile-announcement.js";
 import { initReadSync } from "./read-sync.js";
@@ -110,6 +111,9 @@ const P = () => window.__noxaPerms;
 window.__noxaChat = chatUI;
 
 const $ = (id) => document.getElementById(id);
+// Server-supplied channel capacity is rendered into markup; accept only a
+// non-negative safe integer so a string can never become HTML.
+const channelCapacity = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0);
 const updateTransitionReady = initializeUpdateTransition();
 initLoginBackground();
 const publishTrayVoice = createTrayVoiceSync((...flags) => window.go.main.App.SetTrayVoiceState(...flags));
@@ -556,7 +560,7 @@ async function connectFromLogin() {
                 await window.go.main.App.ChannelInviteForTab(tabID, { action: "resolve", channel_id: invitation.channelID, token: invitation.token });
                 if (!await tabIsActive(tabID)) return;
                 if (state.serverGeneration !== finalizationGeneration || state.sessionGeneration !== sessionGeneration) return;
-                const error = await window.go.main.App.JoinChannelForTab(tabID, invitation.channelID);
+                const error = await joinChannelLocally(tabID, invitation.channelID);
                 if (error) throw new Error(error);
             } catch { if (state.serverGeneration === finalizationGeneration) toast(t("midnight.inviteJoinFailed"), "warn"); }
         }
@@ -1488,7 +1492,7 @@ function flattenChannel(node) {
         ClientCount: node.ClientCount || 0, // (303) [n/max]
         Topic: node.Topic || "",
         Description: node.Description || "",
-        MaxClients: node.MaxClients || 0,
+        MaxClients: channelCapacity(node.MaxClients),
         OpusBitrate: node.OpusBitrate || 0,
         OpusFEC: !!node.OpusFEC,
         OpusDTX: !!node.OpusDTX,
@@ -1578,7 +1582,11 @@ window.runtime.EventsOn("event", (json) => {
                     && d.by_client_id && d.by_client_id !== state.myClientID;
                 state.myChannelID = nextChannelID;
                 syncTrayVoice();
-                if (nextChannelID > 0 && nextChannelID !== previousChannelID && !actionSoundsSuppressed() && !automaticRestore) setDeafened(false);
+                // Deafen is a local privacy control: only a join this user
+                // started here may clear it, never a server-reported move.
+                if (nextChannelID > 0 && nextChannelID !== previousChannelID && !actionSoundsSuppressed() && !automaticRestore
+                    && consumeLocalChannelJoin(state.activeTabID, nextChannelID)) setDeafened(false);
+                settleLocalChannelJoinAt(state.activeTabID, nextChannelID);
                 let playedOwnCue = false;
                 if (!actionSoundsSuppressed()) {
                     if (nextChannelID > 0 && nextChannelID !== previousChannelID) {
@@ -1682,7 +1690,7 @@ window.runtime.EventsOn("event", (json) => {
                 ch.Recording = !!d.recording;
                 ch.Topic = d.topic || "";
                 ch.Description = d.description || "";
-                ch.MaxClients = d.max_clients || 0;
+                ch.MaxClients = channelCapacity(d.max_clients);
                 ch.OpusBitrate = d.opus_bitrate || 0;
                 ch.OpusFEC = !!d.opus_fec;
                 ch.OpusDTX = !!d.opus_dtx;
@@ -3651,7 +3659,7 @@ window.__noxa = {
     completeUpdateReconnect: result => completeReconnect({ addr: result.addr, nick: result.nick,
         displayName: result.displayName || "", bookmark: result.bookmark || "", pw: "", spw: "" }, null, result.tab_id),
     state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT, noteActivity,
-    setDeafened, refreshPermissions, applyVoiceState, applyOutputSettings, applyLiveAudioSettings,
+    setDeafened, joinChannelLocally, refreshPermissions, applyVoiceState, applyOutputSettings, applyLiveAudioSettings,
     startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor, prepareChannelMicrophone, readRemoteAudioLevel,
     connectFromLogin, renderTree, setChannelExpanded, setDetailsOpen, setDirectTargetVisible,
     trayUnread, syncTrayUnread,

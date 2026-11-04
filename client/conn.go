@@ -379,8 +379,14 @@ func (m *connManager) dialEndpoint(ctx context.Context, addr, trustAddr string) 
 	if !allowPlain {
 		return nil, fmt.Errorf("TLS connection failed: %v", tlsErr)
 	}
-	if ks != nil && ks.pinned(canonicalAddr) {
-		return nil, fmt.Errorf("TLS connection failed for a server pinned over TLS; refusing plaintext fallback: %v", tlsErr)
+	if ks != nil {
+		pinned, err := ks.pinned(canonicalAddr)
+		if err != nil {
+			return nil, fmt.Errorf("TLS connection failed and the TLS trust store cannot confirm the server is unpinned; refusing plaintext fallback: %w", err)
+		}
+		if pinned {
+			return nil, fmt.Errorf("TLS connection failed for a server pinned over TLS; refusing plaintext fallback: %v", tlsErr)
+		}
 	}
 
 	m.mu.Lock()

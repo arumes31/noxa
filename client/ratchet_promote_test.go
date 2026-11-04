@@ -115,3 +115,41 @@ func TestRatchetConsumerPromotesPinOnlyThroughSignedChain(t *testing.T) {
 		t.Fatalf("queries = %d", queries)
 	}
 }
+
+// A device revocation made on this desktop is durable: the directory may keep
+// serving the device's unchanged key and approval, but trust (and therefore
+// every send that targets it) fails with "revoked" from then on.
+func TestRatchetConsumerRefusesLocallyRevokedDevice(t *testing.T) {
+	noxaPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	c, err := newTestRatchetConsumer(t, func(netproto.OlmAdmissionRequest) (json.RawMessage, error) { return json.RawMessage("[]"), nil }, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.d.DeviceKey = func(context.Context, string, string) (ed25519.PublicKey, error) { return noxaPub, nil }
+	if _, err := c.trust("me", "phone"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.revokeDevice("me", "phone"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.revokeDevice("me", "phone"); err != nil {
+		t.Fatalf("revoking twice: %v", err)
+	}
+	if _, err := c.trust("me", "phone"); ratchetCode(err) != "revoked" {
+		t.Fatalf("revoked device trust: %v", err)
+	}
+	// A device never seen before can be revoked ahead of any directory use.
+	if err := c.revokeDevice("me", "tablet"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.trust("me", "tablet"); ratchetCode(err) != "revoked" {
+		t.Fatalf("pre-revoked device trust: %v", err)
+	}
+	// An account reset re-pins other devices but never un-revokes.
+	if err := c.resetTrustRecords("me"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.trust("me", "phone"); ratchetCode(err) != "revoked" {
+		t.Fatalf("revocation survived reset: %v", err)
+	}
+}

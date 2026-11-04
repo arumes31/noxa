@@ -368,3 +368,42 @@ func TestSafeAttachmentFilename(t *testing.T) {
 		}
 	}
 }
+
+func TestChatAttachmentRejectsTruncatedContentAddressedCiphertext(t *testing.T) {
+	key := randKey(t)
+	plain := bytes.Repeat([]byte("x"), attachmentChunkSize*2+10)
+	blob, err := sealFile(plain, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storage := attachmentStorageName(blob)
+	keyB64 := base64.StdEncoding.EncodeToString(key[:])
+	// Drop the final complete record: every remaining chunk still
+	// authenticates, so only the content-derived name can detect it.
+	lastRecord := attachmentChunkLengthBytes + 10 + attachmentChunkCiphertextOverhead
+	truncated := append([]byte(nil), blob[:len(blob)-lastRecord]...)
+	if got, err := openFileLimited(truncated, key, maxChatAttachmentBytes); err != nil || len(got) != attachmentChunkSize*2 {
+		t.Fatalf("precondition: truncated prefix should still decrypt, got %d bytes, %v", len(got), err)
+	}
+
+	a := appWithCM(newConnManager(context.Background()))
+	served := truncated
+	a.chatAttachmentFetch = func(*connManager, int64, string, string) ([]byte, error) {
+		return append([]byte(nil), served...), nil
+	}
+	if _, err := a.chatAttachmentBytes(7, storage, keyB64); !errors.Is(err, errAttachmentContentMismatch) {
+		t.Fatalf("truncated attachment error = %v, want %v", err, errAttachmentContentMismatch)
+	}
+	if _, err := a.chatAttachmentBytes(7, strings.ToUpper(storage[:32])+".vcx", keyB64); !errors.Is(err, errAttachmentContentMismatch) {
+		t.Fatalf("upper-case reference error = %v, want %v", err, errAttachmentContentMismatch)
+	}
+	served = blob
+	got, err := a.chatAttachmentBytes(7, storage, keyB64)
+	if err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("complete attachment = %d bytes, %v", len(got), err)
+	}
+	// Names that are not content-derived predate the scheme and stay readable.
+	if got, err := a.chatAttachmentBytes(7, "legacy-name.vcx", keyB64); err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("non-content-derived name = %d bytes, %v", len(got), err)
+	}
+}

@@ -303,6 +303,7 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 	if old != nil {
 		go old.stop()
 	}
+	m.syncOwnRevocationsOnStart(consumer)
 	poll := cfg.Poll
 	if poll <= 0 {
 		poll = 5 * time.Second

@@ -96,7 +96,9 @@ export function renderMarkdown(text) {
         return "\u0001" + (stash.length - 1) + "\u0002";
     };
 
-    let t = String(text);
+    // \u0001/\u0002 delimit internal stash references. Strip them from the
+    // input so sender text can never name (and repeat) a stashed fragment.
+    let t = String(text).replace(/[\u0001\u0002]/g, "");
     // Fenced code blocks (```lang\n...```) first — their content is opaque.
     t = t.replace(/```(\w*)\r?\n?([\s\S]*?)(?:```|$)/g, (_m, lang, code) => {
         const language = (lang || detectLanguage(code)).toLowerCase();

@@ -268,12 +268,16 @@ func TestFingerprintMismatchMessageIncludesPresentedFingerprint(t *testing.T) {
 
 func TestDialTransportPlaintextFallbackRefusedForPinnedServer(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		pinned    bool
-		wantPlain bool
+		name         string
+		pinned       bool
+		corruptStore bool
+		wantPlain    bool
 	}{
 		{name: "unpinned development server", wantPlain: true},
 		{name: "server pinned over TLS", pinned: true},
+		// A TLS failure before certificate verification never consults the
+		// store; the fallback decision itself must notice it is unusable.
+		{name: "unreadable trust store", corruptStore: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -296,7 +300,13 @@ func TestDialTransportPlaintextFallbackRefusedForPinnedServer(t *testing.T) {
 				}
 			}()
 
-			store := loadKnownServersAt(filepath.Join(t.TempDir(), "known_servers.json"))
+			storePath := filepath.Join(t.TempDir(), "known_servers.json")
+			if test.corruptStore {
+				if err := os.WriteFile(storePath, []byte("{not-json"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			store := loadKnownServersAt(storePath)
 			if test.pinned {
 				if err := store.trust(listener.Addr().String(), "pinned-fingerprint"); err != nil {
 					t.Fatal(err)
@@ -314,6 +324,9 @@ func TestDialTransportPlaintextFallbackRefusedForPinnedServer(t *testing.T) {
 			}
 			if !test.wantPlain && (err == nil || conn != nil) {
 				t.Fatal("pinned server was downgraded to plaintext")
+			}
+			if test.corruptStore && !errors.Is(err, errTrustStoreUnavailable) {
+				t.Fatalf("unusable trust store error = %v, want %v", err, errTrustStoreUnavailable)
 			}
 			// The TLS attempt is always made first.
 			select {

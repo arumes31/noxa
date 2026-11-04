@@ -46,6 +46,9 @@ type dmTrustedDevice struct {
 type dmDeviceListEntry struct {
 	devices   []dmTrustedDevice
 	expiresAt time.Time
+	// pin is the contact identity fingerprint the list was verified under
+	// (empty for this account's own list).
+	pin string
 }
 
 // dmDeviceCache holds verified device lists per account. Its zero value is
@@ -58,16 +61,25 @@ type dmDeviceCache struct {
 }
 
 func (c *dmDeviceCache) get(uid string, now time.Time) ([]dmTrustedDevice, uint64, bool) {
+	devices, epoch, _, ok := c.getPinned(uid, now)
+	return devices, epoch, ok
+}
+
+func (c *dmDeviceCache) getPinned(uid string, now time.Time) ([]dmTrustedDevice, uint64, string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[uid]
 	if !ok || !entry.expiresAt.After(now) {
-		return nil, c.epoch, false
+		return nil, c.epoch, "", false
 	}
-	return entry.devices, c.epoch, true
+	return entry.devices, c.epoch, entry.pin, true
 }
 
 func (c *dmDeviceCache) put(uid string, devices []dmTrustedDevice, epoch uint64, now time.Time) {
+	c.putPinned(uid, devices, epoch, now, "")
+}
+
+func (c *dmDeviceCache) putPinned(uid string, devices []dmTrustedDevice, epoch uint64, now time.Time, pin string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.epoch != epoch {
@@ -79,7 +91,7 @@ func (c *dmDeviceCache) put(uid string, devices []dmTrustedDevice, epoch uint64,
 	if len(c.entries) >= pubKeyCacheCapacity {
 		clear(c.entries)
 	}
-	c.entries[uid] = dmDeviceListEntry{devices: devices, expiresAt: now.Add(dmDeviceTTL)}
+	c.entries[uid] = dmDeviceListEntry{devices: devices, expiresAt: now.Add(dmDeviceTTL), pin: pin}
 }
 
 func (c *dmDeviceCache) forget(uids ...string) {
@@ -143,22 +155,33 @@ func (m *connManager) dmDevicesActive() bool {
 // is checked against this identity.
 func (m *connManager) dmDeviceList(uid string, force bool) ([]dmTrustedDevice, error) {
 	now := time.Now()
-	devices, epoch, ok := m.dmDevices.get(uid, now)
-	if ok && !force {
-		return devices, nil
-	}
-	id, err := m.identity()
-	if err != nil {
-		return nil, err
-	}
 	m.mu.Lock()
 	conn, ownUID := m.conn, m.uniqueID
 	m.mu.Unlock()
 	var pinPath, pinServer string
 	if uid != ownUID {
+		var err error
 		if pinPath, pinServer, err = m.peerPinPath(uid); err != nil {
 			return nil, err
 		}
+	}
+	devices, epoch, cachedPin, ok := m.dmDevices.getPinned(uid, now)
+	if ok && !force {
+		if uid == ownUID {
+			return m.withoutOwnRevokedDevices(devices)
+		}
+		// Cached authority is only as good as the contact's current pin: a
+		// pending identity change (recorded by any manager sharing this pin
+		// namespace) or a different settled identity withdraws it at once.
+		if err := cachedDevicesStillPinned(pinPath, cachedPin); err != nil {
+			m.dmDevices.forget(uid)
+			return nil, err
+		}
+		return devices, nil
+	}
+	id, err := m.identity()
+	if err != nil {
+		return nil, err
 	}
 	resp, err := m.requestDeviceDirectory(conn, uid)
 	if err != nil {
@@ -166,6 +189,7 @@ func (m *connManager) dmDeviceList(uid string, force bool) ([]dmTrustedDevice, e
 	}
 	var signing ed25519.PublicKey
 	var encryption [32]byte
+	verifiedPin := ""
 	if uid == ownUID {
 		if signing, err = auth.LoadPublicKey(id.PublicKey); err != nil {
 			return nil, err
@@ -185,14 +209,34 @@ func (m *connManager) dmDeviceList(uid string, force bool) ([]dmTrustedDevice, e
 			return nil, err
 		}
 		signing = record.SigningKey
+		verifiedPin = record.Fingerprint()
 	}
 	devices, err = verifyDMDevices(uid, signing, encryption, resp.Devices)
 	if err != nil {
 		log.Printf("dm devices: refusing the device list of %s: %v", uid, err)
 		return nil, err
 	}
-	m.dmDevices.put(uid, devices, epoch, now)
+	m.dmDevices.putPinned(uid, devices, epoch, now, verifiedPin)
+	if uid == ownUID {
+		return m.withoutOwnRevokedDevices(devices)
+	}
 	return devices, nil
+}
+
+// cachedDevicesStillPinned reports whether a cached peer device list may still
+// be used: the persistent pin must be settled and, when the entry recorded the
+// identity it was verified under, still name that identity.
+func cachedDevicesStillPinned(pinPath, cachedPin string) error {
+	dmTrustMu.Lock()
+	pin, err := readDMPin(pinPath)
+	dmTrustMu.Unlock()
+	if err != nil {
+		return err
+	}
+	if pin.Pending != "" || (cachedPin != "" && pin.Fingerprint != cachedPin) {
+		return errDMIdentityChanged
+	}
+	return nil
 }
 
 // requestDeviceDirectory asks the key directory for uid's record and device

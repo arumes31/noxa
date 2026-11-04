@@ -1,3 +1,4 @@
+import { joinChannelLocally } from "./local-join-intent.js";
 import { attachRelayActions } from "./relay-actions.js";
 import { originalAvatarSource } from "./avatar-playback.js";
 import { escapeHTML as escapeTranslation } from "./markdown.js";
@@ -712,7 +713,7 @@ function openChannelMenu(x, y, channel, trigger) {
         closeMenu();
         if (generation !== V().state.serverGeneration || tabID !== V().state.activeTabID) return;
         try {
-            const error = await window.go.main.App.JoinChannelForTab(tabID, isCurrent ? 0 : channel.ChannelID);
+            const error = await joinChannelLocally(tabID, isCurrent ? 0 : channel.ChannelID);
             if (error && generation === V().state.serverGeneration) V().toast(error, "warn");
         } catch (error) { if (generation === V().state.serverGeneration) V().toast(String(error), "warn"); }
     };
@@ -764,7 +765,7 @@ function openChannelMenu(x, y, channel, trigger) {
             closeMenu();
             if (generation !== V().state.serverGeneration) return;
             try {
-                const err = await window.go.main.App.JoinChannelForTab(tabID, Number(a.dataset.act.slice(7)));
+                const err = await joinChannelLocally(tabID, Number(a.dataset.act.slice(7)));
                 if (err && generation === V().state.serverGeneration) V().toast(err, "warn");
             } catch (err) {
                 if (generation === V().state.serverGeneration) V().toast(String(err), "warn");

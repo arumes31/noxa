@@ -15,6 +15,8 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -581,5 +583,50 @@ func TestChatPinsStripsCiphertextBeforeReturn(t *testing.T) {
 	}
 	if m.BodyEnc != "" || m.KeyID != 0 || resp.Keys != nil {
 		t.Fatal("ciphertext or key material reached the webview")
+	}
+}
+
+func TestTextExportPathNeverWritesMarkup(t *testing.T) {
+	for input, want := range map[string]string{
+		"noxa-general.txt":     "noxa-general.txt",
+		`C:\exports\chat.html`: `C:\exports\chat.html.txt`,
+		"/tmp/chat.HTM":        "/tmp/chat.HTM.txt",
+		"chat.svg":             "chat.svg.txt",
+		"chat.log":             "chat.log.txt",
+		"chat.bat":             "chat.bat.txt",
+		"chat.TXT":             "chat.TXT",
+		"chat":                 "chat.txt",
+		"report.mhtml":         "report.mhtml.txt",
+	} {
+		if got := textExportPath(input); got != want {
+			t.Errorf("textExportPath(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestWriteTextExportNeverReplacesARewrittenPath(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "chat.html.txt")
+	if err := os.WriteFile(existing, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextExport(filepath.Join(dir, "chat.html"), "transcript"); err == nil {
+		t.Fatal("a rewritten path replaced an existing file")
+	}
+	if raw, _ := os.ReadFile(existing); string(raw) != "keep" {
+		t.Fatalf("existing file = %q", raw)
+	}
+	if err := writeTextExport(filepath.Join(dir, "new.html"), "transcript"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(dir, "new.html.txt")); string(raw) != "transcript" {
+		t.Fatalf("new export = %q", raw)
+	}
+	// The dialog confirmed overwriting the exact path it returned.
+	if err := writeTextExport(existing, "replaced"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(existing); string(raw) != "replaced" {
+		t.Fatalf("confirmed overwrite = %q", raw)
 	}
 }

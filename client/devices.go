@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"strings"
@@ -173,8 +175,11 @@ func (m *connManager) markUnconfirmedDevices(views []DeviceView) {
 
 // ConfirmDeviceForTab endorses an unconfirmed device of this account: this
 // trusted desktop signs the device's keys (DeviceApprovalTranscript), so
-// contacts accept it for direct messages.
-func (a *App) ConfirmDeviceForTab(tabID, deviceID string) (netproto.DeviceInfo, error) {
+// contacts accept it for direct messages. The caller passes the signing and
+// encryption keys of the record the user reviewed: the device list is fetched
+// again from the server before signing, and a record whose keys changed since
+// it was shown is refused rather than endorsed.
+func (a *App) ConfirmDeviceForTab(tabID, deviceID, ed25519Public, x25519Public string) (netproto.DeviceInfo, error) {
 	cm, err := a.requireTabCM(tabID)
 	if err != nil {
 		return netproto.DeviceInfo{}, err
@@ -204,6 +209,9 @@ func (a *App) ConfirmDeviceForTab(tabID, deviceID string) (netproto.DeviceInfo, 
 	signingKey := target.Ed25519Public
 	if signingKey == "" {
 		return netproto.DeviceInfo{}, errors.New("this server does not share the device's signing key; update the server to confirm devices")
+	}
+	if ed25519Public == "" || x25519Public == "" || signingKey != ed25519Public || target.X25519Public != x25519Public {
+		return netproto.DeviceInfo{}, errors.New("the device's keys changed since they were shown; review the device again before confirming it")
 	}
 	if netproto.KeyFingerprint(signingKey) != target.Fingerprint {
 		return netproto.DeviceInfo{}, errors.New("the device's key does not match its fingerprint")
@@ -258,8 +266,39 @@ func (a *App) RevokeDeviceForTab(tabID, deviceID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = cm.deviceRequest(netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: deviceID})
-	return err
+	if _, err = cm.deviceRequest(netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: deviceID}); err != nil {
+		return err
+	}
+	return cm.persistOwnDeviceRevocation(deviceID)
+}
+
+// persistOwnDeviceRevocation records a revocation this user made here,
+// independently of server metadata, so a relay replaying the device's earlier
+// approval cannot get new messages encrypted to it. The local record filters
+// this account's device list for every send path (legacy copies and the
+// ratchet's device-key lookup); the ratchet store additionally gets a
+// permanent revoked trust record now, or when its next session starts. Only
+// locally initiated revocations are persisted: server-sent revocation events
+// are not authenticated, and the record is permanent.
+func (m *connManager) persistOwnDeviceRevocation(deviceID string) error {
+	m.mu.Lock()
+	principal, selfDevice := m.uniqueID, m.deviceID
+	m.mu.Unlock()
+	defer m.forgetDMDevices(principal)
+	if deviceID == "" || deviceID == selfDevice || principal == "" {
+		return nil
+	}
+	if err := m.recordOwnDeviceRevocation(deviceID); err != nil {
+		return fmt.Errorf("the server signed the device out, but this desktop could not record the revocation: %w", err)
+	}
+	consumer, err := m.ratchetConsumerOn(nil)
+	if err != nil {
+		return nil // applied by syncOwnRevocationsOnStart with the next session
+	}
+	if err := consumer.revokeDevice(principal, deviceID); err != nil {
+		log.Printf("devices: recording the revocation of %s in secure messaging failed (retried at the next session): %v", deviceID, err)
+	}
+	return nil
 }
 
 // CreateDeviceLinkForTab starts "PWA / Mobile login".

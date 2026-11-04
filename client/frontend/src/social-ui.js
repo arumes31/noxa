@@ -302,7 +302,7 @@ function initHoverCards() {
                 showHoverCard(e.clientX + 12, e.clientY + 12, `
                     <div class="hc-head"><b># ${esc(ch.Name)}</b></div>
                     ${ch.Topic ? `<div class="hc-line">${esc(ch.Topic)}</div>` : ""}
-                    <div class="hc-line">${esc(t("runtime.clientsValue", { count: ch.ClientCount }))}${ch.MaxClients ? "/" + ch.MaxClients : ""}${ch.HasPassword ? " · 🔒" : ""}</div>
+                    <div class="hc-line">${esc(t("runtime.clientsValue", { count: ch.ClientCount }))}${Number.isSafeInteger(ch.MaxClients) && ch.MaxClients > 0 ? "/" + esc(String(ch.MaxClients)) : ""}${ch.HasPassword ? " · 🔒" : ""}</div>
                     <div class="hc-line">${esc(t("runtime.codecValue", { codec: "Opus " + quality }))}${ch.OpusStereo ? " stereo" : ""}${ch.OpusFEC ? " +FEC" : ""}</div>`);
             }, 500);
         }

@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -165,20 +167,56 @@ func dmExportMessages(msgs []DMEntry) ChatExportResult {
 
 // ExportChat saves text to a user-chosen file via the native save dialog.
 // Returns "" on success or when the user cancels, or the error.
+//
+// The transcript is plain text containing participant-controlled names and
+// bodies, so it is only ever written as a text file: a name the browser would
+// render as markup gets a .txt suffix instead of becoming executable HTML.
 func (a *App) ExportChat(defaultName, contents string) string {
 	path, err := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
-		DefaultFilename: defaultName,
+		DefaultFilename: textExportPath(defaultName),
 		Filters: []wailsRuntime.FileFilter{
-			{DisplayName: "Text / HTML", Pattern: "*.txt;*.html"},
+			{DisplayName: "Text", Pattern: "*.txt"},
 		},
 	})
 	if err != nil || path == "" {
 		return "" // cancelled
 	}
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+	if err := writeTextExport(path, contents); err != nil {
 		return err.Error()
 	}
 	return ""
+}
+
+// writeTextExport writes the transcript to the dialog's path, or to its .txt
+// form. The dialog's overwrite confirmation only covered the path it
+// returned, so a rewritten path never replaces an existing file.
+func writeTextExport(chosen, contents string) error {
+	path := textExportPath(chosen)
+	if path == chosen {
+		return os.WriteFile(path, []byte(contents), 0o600)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- user-chosen export path from the native save dialog.
+	if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("%s already exists; choose a .txt file name", filepath.Base(path))
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = f.WriteString(contents); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// textExportPath keeps a plaintext transcript in a .txt file: any other
+// extension (markup such as .html, or executable types such as .bat) could
+// make a viewer or shell interpret participant-controlled text.
+func textExportPath(path string) string {
+	if strings.EqualFold(filepath.Ext(path), ".txt") {
+		return path
+	}
+	return path + ".txt"
 }
 
 // Encrypted export container: magic || salt || nonce || secretbox. The key is

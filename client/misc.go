@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -42,7 +43,34 @@ func (a *App) LogChat(line string) {
 	if err != nil {
 		return
 	}
-	appendDailyLog(dir, "chat.log", fmt.Sprintf("[%s] %s\n", chatLogNow().Format("2006-01-02 15:04:05"), line))
+	appendDailyLog(dir, "chat.log", fmt.Sprintf("[%s] %s\n", chatLogNow().Format("2006-01-02 15:04:05"), escapeLogRecord(line)))
+}
+
+// escapeLogRecord keeps one chat message on one physical log line. Sender
+// names and message bodies are remote-controlled, so CR, LF and other control
+// characters are escaped here, at the native logging boundary, rather than
+// trusted to every caller: an embedded newline could otherwise forge further
+// timestamped records attributed to other speakers.
+func escapeLogRecord(text string) string {
+	var b strings.Builder
+	b.Grow(len(text))
+	for _, r := range text {
+		switch {
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case unicode.IsControl(r) || r == ' ' || r == ' ':
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // OpenLogFolder reveals the config folder in the OS file manager

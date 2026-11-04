@@ -135,19 +135,21 @@ func (k *knownServers) verify(addr, fp string) (trustStatus, error) {
 }
 
 // pinned reports whether addr already has a TLS fingerprint on record. A
-// pinned server proved it speaks TLS, so it must never be downgraded.
-func (k *knownServers) pinned(addr string) bool {
+// pinned server proved it speaks TLS, so it must never be downgraded. An
+// unusable store is an error, never "not pinned": only a successful lookup
+// may establish that a plaintext fallback cannot bypass an existing pin.
+func (k *knownServers) pinned(addr string) (bool, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.loadErr != nil {
-		return false
+		return false, k.loadErr
 	}
 	key, err := normalizeServerAddr(addr)
 	if err != nil {
-		return false
+		return false, trustStoreUnavailable("normalize address %q: %v", addr, err)
 	}
 	_, ok := k.Servers[key]
-	return ok
+	return ok, nil
 }
 
 // secureEqualFold compares normalized fingerprints without a data-dependent
