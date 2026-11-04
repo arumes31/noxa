@@ -781,3 +781,20 @@ func TestProductionDatabaseRejectsAmbiguousTLSOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Managed TURN issues per-session leases and must not have a static secret,
+// so it must not be reported as disabled. Static coturn mode still is.
+func TestWarningsTURNSecretOnlyForStaticTURN(t *testing.T) {
+	const disabled = "turn.uris is configured but turn.secret is empty"
+	cfg := loadDefaultConfig(t)
+	cfg.TURN.URIs = []string{"turn:203.0.113.1:12340?transport=udp"}
+	cfg.TURN.Secret = ""
+	cfg.TURN.Managed = true
+	if warnings := strings.Join(cfg.Warnings(), "\n"); strings.Contains(warnings, disabled) {
+		t.Fatalf("managed TURN reported as disabled: %q", warnings)
+	}
+	cfg.TURN.Managed = false
+	if warnings := strings.Join(cfg.Warnings(), "\n"); !strings.Contains(warnings, disabled) {
+		t.Fatalf("static TURN without a secret not reported: %q", warnings)
+	}
+}
