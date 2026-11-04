@@ -9552,7 +9552,11 @@ test("undeafens after a confirmed local channel join but preserves deafen on dup
     // A server-reported move the user did not request keeps local deafen.
     await emitMove("daniel", 4);
     expect(await page.evaluate(() => window.__noxa.state.deafened)).toBe(true);
-    const joinLocally = (channelID) => page.evaluate((channelID) => window.__noxa.joinChannelLocally(window.__noxa.state.activeTabID, channelID), channelID);
+    const joinLocally = (channelID) => page.evaluate((channelID) => {
+        const state = window.__noxa.state;
+        state.activeTabID ||= "server-a";
+        return window.__noxa.joinChannelLocally(state.activeTabID, channelID);
+    }, channelID);
     await joinLocally(3);
     await emitMove("daniel", 3);
     await expect(page.getByRole("button", { name: "Deafen", exact: true })).toHaveAttribute("aria-pressed", "false");
