@@ -177,9 +177,9 @@ ST01-ST20 auditions. ST13 is a weighted blend of the Supertonic 3 preset voice
 styles (M5 x 1.25, M1 x -0.25); no recording of a real person and no imitation of
 an identifiable character was used. The earlier EA60/AN06 recordings are retired.
 Closing goodbyes: twenty original gamer-style goodbye lines per language, one
-played at random when the client closes. The first uses ST13; the others use the
-unblended Supertonic 3 preset voices F1-F5 and M1-M4. They are original lines,
-not game quotations or impersonations.
+played at random when the client closes. The first and the twentieth use ST13;
+the other eighteen use the unblended Supertonic 3 preset voices F1-F5 and M1-M4.
+They are original lines, not game quotations or impersonations.
 Supertonic 3 model weights: Supertone Inc., OpenRAIL-M.
 https://huggingface.co/Supertone/supertonic-3
 Supertonic code: MIT License, Copyright (c) 2025 Supertone Inc.

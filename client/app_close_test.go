@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -167,4 +170,31 @@ func TestShutdownCancelsPendingCloseNotification(t *testing.T) {
 		synctest.Wait()
 		app.CompleteClose()
 	})
+}
+
+// The native close fallback must not cut off any recorded goodbye.
+func TestCloseTimeoutOutlastsEveryGoodbyeRecording(t *testing.T) {
+	raw, err := os.ReadFile("frontend/src/assets/speech/metrics.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metrics map[string]struct {
+		Duration float64 `json:"duration"`
+	}
+	if err := json.Unmarshal(raw, &metrics); err != nil {
+		t.Fatal(err)
+	}
+	longest, clips := time.Duration(0), 0
+	for key, metric := range metrics {
+		if _, event, ok := strings.Cut(key, "/"); ok && strings.HasPrefix(event, "client_closing") {
+			clips++
+			longest = max(longest, time.Duration(metric.Duration*float64(time.Second)))
+		}
+	}
+	if clips == 0 {
+		t.Fatal("no goodbye recordings found")
+	}
+	if longest+closeAudioSetupAllowance > closeNotificationTimeout {
+		t.Fatalf("close timeout %v does not cover the longest goodbye %v plus %v setup", closeNotificationTimeout, longest, closeAudioSetupAllowance)
+	}
 }
