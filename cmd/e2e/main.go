@@ -426,7 +426,7 @@ func e2eOpenDM(blobB64 string, senderPub, recipientPriv [32]byte) (string, error
 
 // passwordEnv names the environment variables that supply account passwords,
 // keeping them out of the process argument vector.
-var passwordEnv = map[string]string{
+var passwordEnv = map[string]string{ // #nosec G101 -- environment variable names, not credentials.
 	"alice-pass":      "E2E_ALICE_PASS",
 	"bob-pass":        "E2E_BOB_PASS",
 	"admin-pass":      "E2E_ADMIN_PASS",
