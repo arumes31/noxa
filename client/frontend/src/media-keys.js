@@ -430,7 +430,11 @@ export class MediaKeyEngine {
         // successor that receivers pre-derive.
         const epoch = head ? previous + 1 : Math.max(this.#epoch + 2, (issuedEpochs.get(selfKey) || 0) + 2, this.now());
         issuedEpochs.set(selfKey, epoch);
-        const kid = ((head ? head.kid : this.#kid) + 1) % 16;
+        // A fresh epoch also skips the successor's key slot: a device that
+        // pre-derived the successor (one just removed, too) then has no key
+        // in that slot at all, and drops the new frames as "nokey" instead
+        // of attempting them with the wrong key.
+        const kid = (head ? head.kid + 1 : this.#kid + 2) % 16;
         // Every device that received a key of this chain can derive its later
         // epochs: a ratchet is allowed only while all of them stay recipients.
         const chain = new Set([...(head ? head.chain : []), ...recipientIDs]);

@@ -122,6 +122,7 @@ test("a removal always starts a fresh chain; later joins ratchet only from it", 
     e.setRoster([a, c]); await flush(80); // d2 leaves; it holds the chain
     const removal = sent.at(-1).body;
     assert.ok(removal.epoch >= ratchet.epoch + 2, "fresh after a removal");
+    assert.equal(removal.data.kid, (ratchet.data.kid + 2) % 16, "skips the key slot of the successor the removed device pre-derived");
     const derived = await ratchetKeys(keysOf(ratchet));
     assert.notDeepEqual(unb64(removal.data.keys.mic), [...derived.mic], "not derivable by the removed device");
     assert.equal(sent.filter(x => x.device === "d2" && x.body.epoch >= removal.epoch).length, 0, "the departed device gets nothing newer");
