@@ -677,7 +677,7 @@ test("channel messages ring in the background and at most every five minutes whi
 });
 
 
-for (const event of ["user_join", "user_leave"]) test(`three independent observers dispatch the same fantasy ${event} voice through notification policy`, async ({ page, newIsolatedPage }) => {
+for (const event of ["user_join", "user_leave"]) test(`three independent observers dispatch the single ${event} recording through notification policy`, async ({ page, newIsolatedPage }) => {
     const pages = [page, await newIsolatedPage(), await newIsolatedPage()];
     const results = [];
     for (let index = 0; index < pages.length; index++) {
@@ -692,7 +692,7 @@ for (const event of ["user_join", "user_leave"]) test(`three independent observe
                     notify_matrix: { join_leave: { toast: false, sound: true, flash: false, native: false } } } } };
             window.__noxaPolish = { dndActive: () => false, recordNotification: () => {} };
             const { soundEngine, speechQueue } = await import("/src/sounds.js");
-            const { presenceSpeechKey, variedSpeechClip } = await import("/src/speech-variation.js");
+            const { presenceSpeechKey } = await import("/src/speech-variation.js");
             const { notify } = await import("/src/notifications.js");
             const ctx = soundEngine.context(), setSinkId = ctx.setSinkId.bind(ctx);
             ctx.setSinkId = () => setSinkId({ type: "none" });
@@ -702,12 +702,8 @@ for (const event of ["user_join", "user_leave"]) test(`three independent observe
             speechQueue.enqueue = (...args) => { const accepted = enqueue(...args); attempts.push({ event: args[0], accepted }); return accepted; };
             let finished; const playback = new Promise(resolve => { finished = resolve; });
             soundEngine.play = (id, options) => { const started = play(id, options); if (started) played.push(id); finished({ started, id, reason: soundEngine.blockReason(id, options) }); return started; };
-            let key;
-            for (let n = 0; n < 100; n++) {
-                const candidate = presenceSpeechKey({ client_id: "common-member", presence_token: `fantasy-${n}` }, 8);
-                if (/_v1[0-9]$/.test(variedSpeechClip(event, candidate))) { key = candidate; break; }
-            }
-            if (!key) throw Error("No fantasy event fixture found");
+            // Each observer sees a different membership key; join/leave must not vary.
+            const key = presenceSpeechKey({ client_id: "common-member", presence_token: `membership-${index}` }, 8);
             notify("join_leave", "A membership transition", { channelID: 8, className: "joins", speechEvent: event,
                 soundEvent: event === "user_join" ? "user_move_in" : "user_move_out", speechKey: key });
             const outcome = await Promise.race([playback, new Promise(resolve => setTimeout(() => resolve({ timeout: true }), 4000))]);
@@ -719,5 +715,5 @@ for (const event of ["user_join", "user_leave"]) test(`three independent observe
     expect(results.map(result => result.outcome)).toEqual(results.map(result => expect.objectContaining({ started: true })));
     expect(results.every(result => result.played.length === 1)).toBe(true);
     expect(new Set(results.map(result => result.played[0])).size).toBe(1);
-    expect(results[0].played[0]).toMatch(/^speech_de_user_(join|leave)_v1[0-9]$/);
+    expect(results[0].played[0]).toBe(`speech_de_${event}`);
 });
