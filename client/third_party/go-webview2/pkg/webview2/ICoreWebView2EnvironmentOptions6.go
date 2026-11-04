@@ -43,7 +43,7 @@ func (i *ICoreWebView2EnvironmentOptions6) PutAreBrowserExtensionsEnabled(value 
 
 	hr, _, _ := i.Vtbl.PutAreBrowserExtensionsEnabled.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)

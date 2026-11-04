@@ -9,7 +9,7 @@ import (
 )
 
 type ICoreWebView2ObjectCollectionVtbl struct {
-	IUnknownVtbl
+	ICoreWebView2ObjectCollectionViewVtbl
 	RemoveValueAtIndex ComProc
 	InsertValueAtIndex ComProc
 }

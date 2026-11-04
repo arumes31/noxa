@@ -4,6 +4,7 @@ package webview2
 
 import (
 	"golang.org/x/sys/windows"
+	"runtime"
 	"syscall"
 	"unsafe"
 )
@@ -65,7 +66,7 @@ func (i *ICoreWebView2CustomSchemeRegistration) PutTreatAsSecure(value bool) err
 
 	hr, _, _ := i.Vtbl.PutTreatAsSecure.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)
@@ -73,35 +74,56 @@ func (i *ICoreWebView2CustomSchemeRegistration) PutTreatAsSecure(value bool) err
 	return nil
 }
 
-func (i *ICoreWebView2CustomSchemeRegistration) GetAllowedOrigins() (uint32, *string, error) {
+func (i *ICoreWebView2CustomSchemeRegistration) GetAllowedOrigins() ([]string, error) {
 
 	var allowedOriginsCount uint32
-	var allowedOrigins *string
+	var allowedOrigins **uint16
 
 	hr, _, _ := i.Vtbl.GetAllowedOrigins.Call(
 		uintptr(unsafe.Pointer(i)),
 		uintptr(unsafe.Pointer(&allowedOriginsCount)),
-		uintptr(unsafe.Pointer(allowedOrigins)),
+		uintptr(unsafe.Pointer(&allowedOrigins)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
-		return 0, nil, syscall.Errno(hr)
+		return nil, syscall.Errno(hr)
 	}
-	return allowedOriginsCount, allowedOrigins, nil
+	if allowedOrigins == nil {
+		return nil, nil
+	}
+	// The callee allocates the array and every string with CoTaskMemAlloc.
+	ptrs := unsafe.Slice(allowedOrigins, allowedOriginsCount)
+	origins := make([]string, 0, len(ptrs))
+	for _, p := range ptrs {
+		origins = append(origins, UTF16PtrToString(p))
+		CoTaskMemFree(unsafe.Pointer(p))
+	}
+	CoTaskMemFree(unsafe.Pointer(allowedOrigins))
+	return origins, nil
 }
 
-func (i *ICoreWebView2CustomSchemeRegistration) SetAllowedOrigins(allowedOriginsCount uint32, allowedOrigins string) error {
+// SetAllowedOrigins passes the origin count by value and a native array of
+// UTF-16 string pointers, as ICoreWebView2CustomSchemeRegistration requires.
+func (i *ICoreWebView2CustomSchemeRegistration) SetAllowedOrigins(allowedOrigins []string) error {
 
-	// Convert string 'allowedOrigins' to *uint16
-	_allowedOrigins, err := UTF16PtrFromString(allowedOrigins)
-	if err != nil {
-		return err
+	ptrs := make([]*uint16, len(allowedOrigins))
+	for n, origin := range allowedOrigins {
+		p, err := UTF16PtrFromString(origin)
+		if err != nil {
+			return err
+		}
+		ptrs[n] = p
+	}
+	var array uintptr
+	if len(ptrs) > 0 {
+		array = uintptr(unsafe.Pointer(&ptrs[0]))
 	}
 
 	hr, _, _ := i.Vtbl.SetAllowedOrigins.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&allowedOriginsCount)),
-		uintptr(unsafe.Pointer(_allowedOrigins)),
+		uintptr(uint32(len(ptrs))),
+		array,
 	)
+	runtime.KeepAlive(ptrs)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)
 	}
@@ -128,7 +150,7 @@ func (i *ICoreWebView2CustomSchemeRegistration) PutHasAuthorityComponent(hasAuth
 
 	hr, _, _ := i.Vtbl.PutHasAuthorityComponent.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&hasAuthorityComponent)),
+		uintptr(boolToInt(hasAuthorityComponent)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)

@@ -9,7 +9,7 @@ import (
 )
 
 type ICoreWebView2PermissionRequestedEventArgs3Vtbl struct {
-	IUnknownVtbl
+	ICoreWebView2PermissionRequestedEventArgs2Vtbl
 	GetSavesInProfile ComProc
 	PutSavesInProfile ComProc
 }
@@ -55,7 +55,7 @@ func (i *ICoreWebView2PermissionRequestedEventArgs3) PutSavesInProfile(value boo
 
 	hr, _, _ := i.Vtbl.PutSavesInProfile.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)

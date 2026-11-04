@@ -9,7 +9,7 @@ import (
 )
 
 type ICoreWebView2Settings8Vtbl struct {
-	IUnknownVtbl
+	ICoreWebView2Settings7Vtbl
 	GetIsReputationCheckingRequired ComProc
 	PutIsReputationCheckingRequired ComProc
 }
@@ -55,7 +55,7 @@ func (i *ICoreWebView2Settings8) PutIsReputationCheckingRequired(value bool) err
 
 	hr, _, _ := i.Vtbl.PutIsReputationCheckingRequired.Call(
 		uintptr(unsafe.Pointer(i)),
-		uintptr(unsafe.Pointer(&value)),
+		uintptr(boolToInt(value)),
 	)
 	if windows.Handle(hr) != windows.S_OK {
 		return syscall.Errno(hr)
