@@ -23,6 +23,14 @@ mkdir -p "$backup_dir"
 work=$(mktemp -d "$staging_root/noxa-backup.XXXXXX")
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 database="${PGDATABASE:-noxa}"
+# libpq expands a --dbname value containing "=" or a postgres:// URI into
+# connection options, which could override the verified PGSSLMODE. Reject such
+# values so the explicit --dbname below is always a literal database name (it
+# still takes precedence over a service-file dbname).
+case "$database" in
+ *=*|postgres://*|postgresql://*)
+  echo 'postgres-backup: PGDATABASE must be a plain database name' >&2; exit 1;;
+esac
 database_id=$(printf '%s' "$database" | sha256sum | awk '{print substr($1, 1, 16)}')
 archive_prefix="postgres-${database_id}"
 target="$backup_dir/${archive_prefix}-${stamp}-${work##*.}.tar.gz.age"

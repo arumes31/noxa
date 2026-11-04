@@ -30,10 +30,13 @@ if [ ${#missing[@]} -ne 0 ]; then
 	exit 2
 fi
 
+# Passwords stay in the environment (E2E_*_PASS, read by cmd/e2e) so they
+# never appear in the process argument vector visible to other local users.
+export E2E_ALICE_PASS E2E_BOB_PASS E2E_ADMIN_PASS
 exec go run ./cmd/e2e -tls-insecure -chaos \
-	-alice-uid "$E2E_ALICE_UID" -alice-pass "$E2E_ALICE_PASS" \
-	-bob-uid "$E2E_BOB_UID" -bob-pass "$E2E_BOB_PASS" \
-	-admin-uid "$E2E_ADMIN_UID" -admin-pass "$E2E_ADMIN_PASS" \
+	-alice-uid "$E2E_ALICE_UID" \
+	-bob-uid "$E2E_BOB_UID" \
+	-admin-uid "$E2E_ADMIN_UID" \
 	-chaos-stop-cmd "${CHAOS_STOP_CMD:-docker compose stop postgres}" \
 	-chaos-start-cmd "${CHAOS_START_CMD:-docker compose start postgres}" \
 	"$@"

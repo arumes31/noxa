@@ -424,6 +424,28 @@ func e2eOpenDM(blobB64 string, senderPub, recipientPriv [32]byte) (string, error
 	return string(plain), nil
 }
 
+// passwordEnv names the environment variables that supply account passwords,
+// keeping them out of the process argument vector.
+var passwordEnv = map[string]string{ // #nosec G101 -- environment variable names, not credentials.
+	"alice-pass":      "E2E_ALICE_PASS",
+	"bob-pass":        "E2E_BOB_PASS",
+	"admin-pass":      "E2E_ADMIN_PASS",
+	"server-password": "E2E_SERVER_PASS",
+}
+
+// applyPasswordEnv fills password flags not given on the command line from
+// their environment variables. The flags keep empty registered defaults so
+// usage output never prints a secret; an explicit flag (even empty) wins.
+func applyPasswordEnv(targets map[string]*string) {
+	set := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	for name, dst := range targets {
+		if !set[name] {
+			*dst = os.Getenv(passwordEnv[name])
+		}
+	}
+}
+
 func main() {
 	var o options
 	flag.StringVar(&o.authorizationModel, "authorization-model", netproto.AuthorizationModelRolesV1, "required authorization model (roles-v1)")
@@ -433,13 +455,13 @@ func main() {
 	flag.StringVar(&o.udpAddr, "udp-addr", "127.0.0.1"+config.DefaultUDPAddr, "UDP media address")
 	flag.StringVar(&o.fileAddr, "file-addr", "127.0.0.1"+config.DefaultFileAddr, "file-transfer address (fallback; the port from the init response wins)")
 	flag.StringVar(&o.aliceUID, "alice-uid", "", "alice's unique ID")
-	flag.StringVar(&o.alicePass, "alice-pass", "", "alice's password")
+	flag.StringVar(&o.alicePass, "alice-pass", "", "alice's password (or $E2E_ALICE_PASS; prefer the environment so it stays out of the process list)")
 	flag.StringVar(&o.aliceNickname, "alice-nick", "alice", "alice's account nickname (nickname-login check)")
 	flag.StringVar(&o.bobUID, "bob-uid", "", "bob's unique ID")
-	flag.StringVar(&o.bobPass, "bob-pass", "", "bob's password")
+	flag.StringVar(&o.bobPass, "bob-pass", "", "bob's password (or $E2E_BOB_PASS)")
 	flag.StringVar(&o.adminUID, "admin-uid", "", "admin's unique ID (ServerQuery)")
-	flag.StringVar(&o.adminPass, "admin-pass", "", "admin's password")
-	flag.StringVar(&o.serverPass, "server-password", "", "global server password (if set)")
+	flag.StringVar(&o.adminPass, "admin-pass", "", "admin's password (or $E2E_ADMIN_PASS)")
+	flag.StringVar(&o.serverPass, "server-password", "", "global server password (if set; or $E2E_SERVER_PASS)")
 	flag.Int64Var(&o.filePayload, "file-payload", 64*1024, "upload test payload size in bytes")
 	flag.BoolVar(&o.tlsVerify, "tls", false, "dial the control channel with TLS 1.3 and verify the server with system roots")
 	flag.StringVar(&o.tlsPin, "tls-fingerprint", "", "dial the control channel with TLS 1.3 and require this SHA-256 certificate fingerprint")
@@ -448,6 +470,10 @@ func main() {
 	flag.StringVar(&o.chaosStopCmd, "chaos-stop-cmd", "docker compose stop postgres", "command that takes the database down (split on whitespace, run without a shell)")
 	flag.StringVar(&o.chaosStartCmd, "chaos-start-cmd", "docker compose start postgres", "command that brings the database back up (split on whitespace, run without a shell)")
 	flag.Parse()
+	applyPasswordEnv(map[string]*string{
+		"alice-pass": &o.alicePass, "bob-pass": &o.bobPass,
+		"admin-pass": &o.adminPass, "server-password": &o.serverPass,
+	})
 	e2eTLSMode = controlTLSMode{verify: o.tlsVerify, pin: o.tlsPin, insecure: o.tlsInsecure}
 	if _, _, err := controlTLSConfig(o.addr, e2eTLSMode); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: %v\n", err)
@@ -460,7 +486,11 @@ func main() {
 		{"admin-uid", o.adminUID}, {"admin-pass", o.adminPass},
 	} {
 		if req.val == "" {
-			fmt.Fprintf(os.Stderr, "e2e: -%s is required\n", req.name)
+			if env, ok := passwordEnv[req.name]; ok {
+				fmt.Fprintf(os.Stderr, "e2e: -%s or $%s is required\n", req.name, env)
+			} else {
+				fmt.Fprintf(os.Stderr, "e2e: -%s is required\n", req.name)
+			}
 			os.Exit(2)
 		}
 	}

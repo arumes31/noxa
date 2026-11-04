@@ -38,6 +38,21 @@ case "$symlink_output" in
 		;;
 esac
 
+# A connection-string-looking database name must never reach libpq, where it
+# could override the enforced verify-full TLS mode.
+if dbname_output=$(docker run --rm --entrypoint sh 	-e BACKUP_EXTERNAL_DATABASE=1 -e BACKUP_POSTGRES_PASSWORD=container-test-password 	-e BACKUP_PGHOST=db.example -e BACKUP_PGPORT=5432 -e BACKUP_PGUSER=noxa 	-e 'BACKUP_PGDATABASE=dbname=noxa sslmode=disable' -e BACKUP_PGSSLMODE=verify-full 	"$image" -c 'exec postgres-backup-entrypoint.sh true' 2>&1); then
+	echo 'test-backup-image: accepted a connection-option database name' >&2
+	exit 1
+fi
+case "$dbname_output" in
+	*'BACKUP_PGDATABASE must be a plain database name'*) ;;
+	*)
+		echo 'test-backup-image: database-name check failed for an unexpected reason' >&2
+		echo "$dbname_output" >&2
+		exit 1
+		;;
+esac
+
 echo 'backup image harness passed'
 
 
