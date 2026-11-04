@@ -105,19 +105,27 @@ func (s *TCPServer) buildRoleChannelState(ctx context.Context, p authorization.R
 				return netproto.RoleChannelState{}, err
 			}
 		}
+		// Use the pinned evaluator to discard destinations the actor cannot
+		// manage before building any full-policy preview, so the expensive
+		// per-destination work only runs for actually permitted moves.
+		canSync := e.Evaluate(actor, query.ChannelID, authorization.ManageChannelAccess).Allowed
 		for _, candidate := range append([]*state.Channel{{ChannelID: 0}}, s.deps.State.ListChannels()...) {
 			if err := ctx.Err(); err != nil {
 				return netproto.RoleChannelState{}, err
 			}
-			if !e.Evaluate(actor, candidate.ChannelID, authorization.ViewChannel).Allowed {
+			if !e.Evaluate(actor, candidate.ChannelID, authorization.ViewChannel).Allowed ||
+				!e.Evaluate(actor, candidate.ChannelID, authorization.ManageChannels).Allowed {
 				continue
 			}
 			change := authorization.ChannelTreeChange{Kind: authorization.ChannelMove, ChannelID: query.ChannelID, ParentID: candidate.ChannelID, ExpectedRevision: p.Revision}
 			if _, err := authorization.ApplyChannelTreeChange(p, actor, change); err != nil {
 				continue
 			}
-			change.SyncToParent = true
-			_, syncErr := authorization.ApplyChannelTreeChange(p, actor, change)
+			syncErr := authorization.ErrRoleForbidden
+			if canSync {
+				change.SyncToParent = true
+				_, syncErr = authorization.ApplyChannelTreeChange(p, actor, change)
+			}
 			response.Destinations = append(response.Destinations, netproto.RoleChannelOption{ID: candidate.ChannelID, Name: candidate.Name, CanSync: syncErr == nil})
 		}
 		sort.Slice(response.Destinations, func(i, j int) bool { return response.Destinations[i].ID < response.Destinations[j].ID })

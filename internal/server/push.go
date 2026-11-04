@@ -557,7 +557,7 @@ func (s *TCPServer) pushMentions(ctx context.Context, client *Client, channelID 
 		s.push.mu.Lock()
 		candidates := make(map[string]pushAccount)
 		for principal, account := range s.push.reachable {
-			if !targets[principal] && account.nickname != "" && strings.Contains(lower, "@"+strings.ToLower(account.nickname)) {
+			if !targets[principal] && mentionsNickname(lower, account.nickname) {
 				candidates[principal] = account
 			}
 		}

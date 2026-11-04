@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/url"
 	"regexp"
 	"sort"
@@ -22,9 +23,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"go.uber.org/zap"
+	"golang.org/x/net/idna"
 
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
@@ -599,7 +602,7 @@ func normalizeList(raw string) string {
 // that merely NAMED a blocked domain, and accepted
 // "http://evil.tld/?q=good.example" because a whitelist entry appeared
 // somewhere in the body.
-var linkURLRe = regexp.MustCompile(`(?i)https?://[^\s<>"'\])}]+`)
+var linkURLRe = regexp.MustCompile(`(?i)https?://(?:\[[0-9a-f:.%]+\][^\s<>"'\])}]*|[^\s<>"'\])}]+)`)
 
 // linkHosts returns the lowercased hostname of every link in body, in order.
 // An unparseable URL yields "" — it still reads as a link to a human, so it
@@ -618,9 +621,31 @@ func linkHosts(body string) []string {
 		}
 		// Hostname drops the port and any user:pass@ prefix, so
 		// "http://good.example@evil.tld/" is correctly read as evil.tld.
-		out = append(out, strings.Trim(strings.ToLower(u.Hostname()), "."))
+		out = append(out, canonicalLinkHost(u.Hostname()))
 	}
 	return out
+}
+
+// canonicalLinkHost converts a hostname to the ASCII (punycode) form a browser
+// navigates to, using the IDNA lookup profile, so Unicode spellings such as
+// fullwidth letters or ideographic full stops cannot evade a blacklist entry
+// for the equivalent ASCII host. A hostname that cannot be converted yields ""
+// and is handled like any other unparseable link.
+func canonicalLinkHost(host string) string {
+	host = strings.Trim(strings.ToLower(host), ".")
+	if host == "" {
+		return ""
+	}
+	// IP literals (IPv6 hosts contain colons, which the IDNA lookup profile
+	// rejects) have no Unicode form to canonicalize.
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String()
+	}
+	ascii, err := idna.Lookup.ToASCII(host)
+	if err != nil {
+		return ""
+	}
+	return strings.Trim(strings.ToLower(ascii), ".")
 }
 
 // hostInList reports whether host equals a list entry or is a subdomain of
@@ -630,7 +655,9 @@ func hostInList(host string, list []string) bool {
 		return false
 	}
 	for _, e := range list {
-		if e = strings.Trim(e, "."); e == "" {
+		if canonical := canonicalLinkHost(e); canonical != "" {
+			e = canonical
+		} else if e = strings.Trim(e, "."); e == "" {
 			continue
 		}
 		if host == e || strings.HasSuffix(host, "."+e) {
@@ -658,7 +685,9 @@ func (s *TCPServer) moderateBody(ctx context.Context, body string) error {
 	}
 	hosts := linkHosts(body)
 	for _, h := range hosts {
-		if hostInList(h, black) {
+		// A link whose host cannot be canonicalized might still resolve to a
+		// blocked destination in a browser, so it cannot pass a blacklist.
+		if (h == "" && len(black) > 0) || hostInList(h, black) {
 			return errors.New("message contains a blocked link")
 		}
 	}
@@ -714,6 +743,48 @@ func (s *TCPServer) handleChatFilterSet(ctx context.Context, client *Client, f *
 // mentionRe matches @word mentions (letters, digits, _, -).
 var mentionRe = regexp.MustCompile(`@([A-Za-z0-9_\-]+)`)
 
+// mentionsNickname reports whether lowerBody (already lower-cased) contains
+// "@nickname" as a complete mention token, so "@bob" does not also notify
+// "bo".
+func mentionsNickname(lowerBody, nickname string) bool {
+	if nickname == "" {
+		return false
+	}
+	needle := "@" + strings.ToLower(nickname)
+	for rest := lowerBody; ; {
+		i := strings.Index(rest, needle)
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len(needle):]
+		next, _ := utf8.DecodeRuneInString(rest)
+		if rest == "" || !isMentionTokenRune(next) {
+			return true
+		}
+	}
+}
+
+func isMentionTokenRune(r rune) bool {
+	return r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r)
+}
+
+// recipientCanViewChannel reports whether userID may view the channel a
+// mention originates from. Global-scope (channel 0) mentions need no channel
+// access. It fails closed when the policy is unavailable.
+func (s *TCPServer) recipientCanViewChannel(ctx context.Context, userID, channelID int64) bool {
+	if channelID == 0 {
+		return true
+	}
+	allowed := false
+	_ = s.withRolePolicy(ctx, func(ctx context.Context) error {
+		if lease, ok := ctx.Value(roleLeaseKey{}).(roleLease); ok {
+			allowed = lease.evaluator.Evaluate(userID, channelID, authorization.ViewChannel).Allowed
+		}
+		return nil
+	})
+	return allowed
+}
+
 // parseMentions resolves @nickname mentions to unique IDs of online users
 // (105). Mass mentions require MentionEveryone.
 func (s *TCPServer) parseMentions(ctx context.Context, client *Client, channelID int64, body string) []string {
@@ -723,7 +794,8 @@ func (s *TCPServer) parseMentions(ctx context.Context, client *Client, channelID
 	out := map[string]bool{}
 	addMention := func(member *state.Client) {
 		if !s.roleAllowed(ctx, client, member.ChannelID, authorization.ViewChannel) ||
-			(s.deps.State.PresenceHidden(member) && !s.roleAllowed(ctx, client, 0, authorization.ViewConnectionInfo)) {
+			(s.deps.State.PresenceHidden(member) && !s.roleAllowed(ctx, client, 0, authorization.ViewConnectionInfo)) ||
+			!s.recipientCanViewChannel(ctx, member.UserID, channelID) {
 			return
 		}
 		out[member.UniqueID] = true
@@ -756,7 +828,7 @@ func (s *TCPServer) parseMentions(ctx context.Context, client *Client, channelID
 			if c.Nickname == "" {
 				continue
 			}
-			if strings.Contains(lower, "@"+strings.ToLower(c.Nickname)) {
+			if mentionsNickname(lower, c.Nickname) {
 				addMention(c)
 			}
 		}
@@ -1185,6 +1257,9 @@ func (s *TCPServer) handleChatReact(ctx context.Context, client *Client, f *netp
 
 func (s *TCPServer) chatReactAllowed(ctx context.Context, client *Client, msg netproto.ChatReact, stored *store.ChatMessage) error {
 	counts, added, err := s.deps.Chat.ToggleReaction(ctx, msg.MessageID, client.UniqueID, msg.Emoji)
+	if errors.Is(err, store.ErrReactionLimit) {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
+	}
 	if err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "reaction failed")
 	}

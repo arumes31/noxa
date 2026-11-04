@@ -61,15 +61,18 @@ type Client struct {
 	// talkDecision caches the last uncontended Speak evaluation (canTalk).
 	talkDecision atomic.Pointer[talkDecision]
 
-	mu                 sync.RWMutex
-	lastOwnChannelMove *broadcast.OwnChannelMove // recipient-only cause, protected by mu
-	authRequests       int
-	requestBudget      sessionRequestBudget
-	authed             bool
-	revoked            bool   // role-mode removal closes protected work before socket cleanup
-	disconnectCleaned  bool   // membership/media cleanup is idempotent
-	bot                bool   // authenticated account metadata, not a capability
-	authorizationModel string // negotiated before any authentication path
+	mu                   sync.RWMutex
+	lastOwnChannelMove   *broadcast.OwnChannelMove // recipient-only cause, protected by mu
+	lastSnapshotDigest   [32]byte                  // digest of the last snapshot written, protected by mu
+	snapshotStagedDigest [32]byte                  // digest awaiting a successful write, protected by mu
+	snapshotStaged       bool                      // snapshotStagedDigest is valid, protected by mu
+	authRequests         int
+	requestBudget        sessionRequestBudget
+	authed               bool
+	revoked              bool   // role-mode removal closes protected work before socket cleanup
+	disconnectCleaned    bool   // membership/media cleanup is idempotent
+	bot                  bool   // authenticated account metadata, not a capability
+	authorizationModel   string // negotiated before any authentication path
 	// rulesPending gates a session that still owes the operator's rules an
 	// answer (215). It is per connection, not per account, because a guest
 	// has no users row to record an acceptance against.

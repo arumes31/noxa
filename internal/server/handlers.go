@@ -96,7 +96,16 @@ func (s *TCPServer) sendSnapshot(client *Client) error {
 		if client.sessionRevoked() {
 			return authorization.ErrRoleForbidden
 		}
-		return s.writeMessage(client, netproto.MsgSnapshot, buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID()))
+		// Serialize with queued deliveries (which hold roleMetadataMu) so the
+		// recorded digest always matches the client's latest snapshot.
+		s.roleMetadataMu.Lock()
+		defer s.roleMetadataMu.Unlock()
+		snapshot := buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID())
+		if err := s.writeMessage(client, netproto.MsgSnapshot, snapshot); err != nil {
+			return err
+		}
+		client.recordSnapshot(snapshot)
+		return nil
 	})
 }
 

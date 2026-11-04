@@ -59,7 +59,19 @@ func (s *Store) PasskeyUserHandle(ctx context.Context, principal string) ([]byte
 
 // AddPasskey stores a verified credential for an active device.
 func (s *Store) AddPasskey(ctx context.Context, p Passkey) error {
-	result, err := s.db.ExecContext(ctx, `INSERT INTO webauthn_credentials
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("adding passkey: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Device revocation holds the same roster lock while it marks the device
+	// revoked and deletes its passkeys. Taking it first makes the activity
+	// check below and the insert one step relative to revocation, so a
+	// concurrent revocation can never miss a freshly added credential.
+	if _, err := lockOlmRosters(ctx, tx, []string{p.Principal}); err != nil {
+		return fmt.Errorf("adding passkey: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `INSERT INTO webauthn_credentials
 		(credential_id, principal, user_handle, device_id, name, credential, dm_certificate)
 		SELECT $1, $2, $3, $4, $5, $6, $7 FROM user_devices
 		WHERE device_id=$4 AND principal=$2 AND revoked_at IS NULL`,
@@ -69,6 +81,9 @@ func (s *Store) AddPasskey(ctx context.Context, p Passkey) error {
 	}
 	if n, err := result.RowsAffected(); err != nil || n != 1 {
 		return ErrDeviceNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("adding passkey: %w", err)
 	}
 	return nil
 }
@@ -112,12 +127,25 @@ func (s *Store) RecordPasskeyUse(ctx context.Context, credentialID, credential [
 
 // DeletePasskey removes one of the account's passkeys.
 func (s *Store) DeletePasskey(ctx context.Context, principal string, credentialID []byte) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM webauthn_credentials WHERE principal=$1 AND credential_id=$2`, principal, credentialID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("deleting passkey: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Serialize with passkey-authorized device creation (AddDevice with
+	// RequireCredentialID), which rechecks the credential under this lock.
+	if _, err := lockOlmRosters(ctx, tx, []string{principal}); err != nil {
+		return fmt.Errorf("deleting passkey: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM webauthn_credentials WHERE principal=$1 AND credential_id=$2`, principal, credentialID)
 	if err != nil {
 		return fmt.Errorf("deleting passkey: %w", err)
 	}
 	if n, err := result.RowsAffected(); err != nil || n != 1 {
 		return ErrPasskeyNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("deleting passkey: %w", err)
 	}
 	return nil
 }

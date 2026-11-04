@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"strconv"
@@ -73,6 +75,10 @@ type NewDevice struct {
 	ApprovedBy        string
 	ApprovalSignature []byte
 	PasskeyProof      []byte
+	// RequireCredentialID, when set, is the passkey that authorized this
+	// device. AddDevice rechecks under the roster lock (also held by passkey
+	// deletion and device revocation) that the credential still exists.
+	RequireCredentialID []byte
 }
 
 const deviceColumns = `device_id, principal, COALESCE(user_id, 0), kind, name, ed25519_public,
@@ -118,6 +124,14 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 	if d.Kind != DeviceKindDesktop && d.Kind != DeviceKindWeb {
 		return Device{}, fmt.Errorf("adding device: invalid kind %q", d.Kind)
 	}
+	// Store the canonical spelling so lookups by any equivalent PEM encoding
+	// find this record (opaque test keys are kept verbatim). The original
+	// spelling is still checked for duplicates below, covering rows stored
+	// before canonicalization.
+	submitted := d.Ed25519Public
+	if canonical, ok := canonicalDeviceKey(d.Ed25519Public); ok {
+		d.Ed25519Public = canonical
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Device{}, fmt.Errorf("adding device: %w", err)
@@ -131,8 +145,18 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 	if _, err = lockOlmRosters(ctx, tx, []string{d.Principal}); err != nil {
 		return Device{}, err
 	}
+	if d.RequireCredentialID != nil {
+		var present bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM webauthn_credentials WHERE principal=$1 AND credential_id=$2)`,
+			d.Principal, d.RequireCredentialID).Scan(&present); err != nil {
+			return Device{}, fmt.Errorf("adding device: %w", err)
+		}
+		if !present {
+			return Device{}, ErrPasskeyNotFound
+		}
+	}
 	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_devices WHERE ed25519_public=$1)`, d.Ed25519Public).Scan(&exists); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_devices WHERE ed25519_public=$1 OR ed25519_public=$2)`, d.Ed25519Public, submitted).Scan(&exists); err != nil {
 		return Device{}, fmt.Errorf("adding device: %w", err)
 	}
 	if exists {
@@ -171,7 +195,14 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 // DeviceByKey returns the device registered with the identity key, revoked
 // or not.
 func (s *Store) DeviceByKey(ctx context.Context, ed25519Public string) (Device, error) {
-	d, err := scanDevice(s.db.QueryRowContext(ctx, `SELECT `+deviceColumns+` FROM user_devices WHERE ed25519_public=$1`, ed25519Public))
+	// Match the canonical spelling, and also the exact input so devices stored
+	// before canonicalization keep matching their own key.
+	canonical := ed25519Public
+	if c, ok := canonicalDeviceKey(ed25519Public); ok {
+		canonical = c
+	}
+	d, err := scanDevice(s.db.QueryRowContext(ctx, `SELECT `+deviceColumns+` FROM user_devices WHERE ed25519_public=$1 OR ed25519_public=$2
+		ORDER BY ed25519_public=$1 DESC LIMIT 1`, canonical, ed25519Public))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrDeviceNotFound
 	}
@@ -179,6 +210,24 @@ func (s *Store) DeviceByKey(ctx context.Context, ed25519Public string) (Device, 
 		return Device{}, fmt.Errorf("loading device: %w", err)
 	}
 	return d, nil
+}
+
+// canonicalDeviceKey re-encodes a PEM Ed25519 public key from its decoded
+// bytes. Verification and key-derived account IDs use the decoded key, and PEM
+// decoding tolerates surrounding text, headers, line wrapping and base64
+// padding bits, so device registration, lookup and revocation must compare the
+// canonical encoding: otherwise an equivalent spelling of a revoked key would
+// miss its device record. ok is false for input that is not such a key.
+// CanonicalDeviceKey returns the canonical PEM spelling of an Ed25519 public
+// key, as stored by AddDevice.
+func CanonicalDeviceKey(publicKeyPEM string) (string, bool) { return canonicalDeviceKey(publicKeyPEM) }
+
+func canonicalDeviceKey(publicKeyPEM string) (string, bool) {
+	block, _ := pem.Decode([]byte(publicKeyPEM))
+	if block == nil || block.Type != "PUBLIC KEY" || len(block.Headers) != 0 || len(block.Bytes) != ed25519.PublicKeySize {
+		return "", false
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: block.Bytes})), true
 }
 
 // DeviceByID returns the principal's device, revoked or not.

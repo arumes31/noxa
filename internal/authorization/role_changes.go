@@ -177,21 +177,48 @@ func ApplyRoleChange(p RolePolicy, actorID int64, change RoleChange) (RolePolicy
 		if !e.CanManageMember(actorID, change.UserID) {
 			return RolePolicy{}, ErrRoleForbidden
 		}
+		// Bound and deduplicate the request before any comparison so validation
+		// work stays linear while the shared authorization gate is held.
+		if len(change.RoleIDs) > len(p.Roles) {
+			return RolePolicy{}, ErrRoleInvalid
+		}
+		requested := make(map[int64]bool, len(change.RoleIDs))
+		for _, id := range change.RoleIDs {
+			if requested[id] {
+				return RolePolicy{}, ErrRoleInvalid
+			}
+			requested[id] = true
+		}
 		old := e.members[change.UserID]
+		current := make(map[int64]bool, len(old))
+		for _, id := range old {
+			current[id] = true
+		}
+		changed := map[int64]bool{}
 		for _, id := range append(slices.Clone(old), change.RoleIDs...) {
-			if slices.Contains(old, id) == slices.Contains(change.RoleIDs, id) {
+			if current[id] == requested[id] {
 				continue
 			}
+			changed[id] = true
 			if !e.CanManageRole(actorID, id) {
 				return RolePolicy{}, ErrRoleForbidden
 			}
-			if slices.Contains(change.RoleIDs, id) && !canGrantCapabilities(e, actorID, 0, e.roles[id].Permissions) {
+			if requested[id] && !canGrantCapabilities(e, actorID, 0, e.roles[id].Permissions) {
 				return RolePolicy{}, ErrRoleForbidden
 			}
 		}
 		next.Members = slices.DeleteFunc(next.Members, func(m RoleMember) bool { return m.UserID == change.UserID })
 		if len(change.RoleIDs) > 0 {
 			next.Members = append(next.Members, RoleMember{UserID: change.UserID, RoleIDs: slices.Clone(change.RoleIDs)})
+		}
+		if len(changed) > 0 && !owner {
+			candidate, err := NewRoleEvaluator(next)
+			if err != nil {
+				return RolePolicy{}, fmt.Errorf("%w: %v", ErrRoleInvalid, err)
+			}
+			if err := authorizeMemberChannelGains(e, candidate, actorID, change.UserID, changed); err != nil {
+				return RolePolicy{}, err
+			}
 		}
 	case OwnerTransfer:
 		if !owner {
@@ -283,11 +310,19 @@ func authorizeChangedChannelAccess(before, after *RoleEvaluator, actorID int64) 
 }
 
 func authorizeOverrideChanges(before *RoleEvaluator, actorID, channelID int64, oldOverrides, newOverrides []RoleOverride) error {
-	if actorID == before.policy.OwnerID {
+	if actorID == before.policy.OwnerID || slices.Equal(oldOverrides, newOverrides) {
 		return nil
 	}
+	oldSet := make(map[RoleOverride]bool, len(oldOverrides))
+	for _, override := range oldOverrides {
+		oldSet[override] = true
+	}
+	newSet := make(map[RoleOverride]bool, len(newOverrides))
+	for _, override := range newOverrides {
+		newSet[override] = true
+	}
 	for _, override := range append(slices.Clone(oldOverrides), newOverrides...) {
-		if slices.Contains(oldOverrides, override) && slices.Contains(newOverrides, override) {
+		if oldSet[override] && newSet[override] {
 			continue
 		}
 		if !before.Evaluate(actorID, channelID, ManageChannelAccess).Allowed || !before.Evaluate(actorID, channelID, override.Capability).Allowed {
@@ -298,6 +333,46 @@ func authorizeOverrideChanges(before *RoleEvaluator, actorID, channelID int64, o
 		}
 		if override.UserID != 0 && !before.CanManageMember(actorID, override.UserID) {
 			return ErrRoleForbidden
+		}
+	}
+	return nil
+}
+
+// authorizeMemberChannelGains rejects role membership changes that give the
+// target a channel capability through channel overrides of a changed role (an
+// allowing override on an added role, or a denying override on a removed role)
+// that the actor cannot use in that channel. Every channel capability is
+// compared in each affected channel, because one override can make dependent
+// grants effective (an allowed ViewChannel unlocks an existing ReadHistory).
+// Server-wide grants are checked separately.
+func authorizeMemberChannelGains(before, after *RoleEvaluator, actorID, targetID int64, changed map[int64]bool) error {
+	if actorID == before.policy.OwnerID {
+		return nil
+	}
+	var channelCapabilities []Capability
+	for _, info := range Capabilities() {
+		if info.Channel {
+			channelCapabilities = append(channelCapabilities, info.Key)
+		}
+	}
+	for id := range after.channels {
+		affected := false
+		for _, override := range after.effectiveOverrides(id) {
+			if changed[override.RoleID] {
+				affected = true
+				break
+			}
+		}
+		if !affected {
+			continue
+		}
+		for _, capability := range channelCapabilities {
+			if before.Evaluate(targetID, id, capability).Allowed || !after.Evaluate(targetID, id, capability).Allowed {
+				continue
+			}
+			if !before.Evaluate(actorID, id, capability).Allowed {
+				return ErrRoleForbidden
+			}
 		}
 	}
 	return nil

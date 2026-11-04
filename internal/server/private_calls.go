@@ -184,15 +184,22 @@ func projectCall(call netproto.CallSession, client *Client) netproto.CallSession
 
 // callTargets lists the sessions a callee can ring on. bindable is the one
 // session to bind at once when it is the account's only way to answer.
-func (s *TCPServer) callTargets(e *authorization.RoleEvaluator, caller *Client, uid string) (sessions []*Client, offline bool) {
+// callTargets returns the callee's sessions the caller may ring. hidden
+// reports that the callee is online but every session failed the caller's
+// visibility or connect authorization: such an account must not be reached
+// through push either, or push availability would override the rejection.
+func (s *TCPServer) callTargets(e *authorization.RoleEvaluator, caller *Client, uid string) (sessions []*Client, hidden bool) {
 	for _, target := range s.sessionsOf(uid) {
-		if !target.isAuthed() || target.userID() <= 0 || target.rulesBlocked() || s.privateCallByClient[target.ID] != "" ||
-			!s.rolePokeTargetVisible(e, caller, target.ID) || !e.Evaluate(target.userID(), 0, authorization.Connect).Allowed {
+		if !target.isAuthed() || target.userID() <= 0 || target.rulesBlocked() || s.privateCallByClient[target.ID] != "" {
+			continue
+		}
+		if !s.rolePokeTargetVisible(e, caller, target.ID) || !e.Evaluate(target.userID(), 0, authorization.Connect).Allowed {
+			hidden = true
 			continue
 		}
 		sessions = append(sessions, target)
 	}
-	return sessions, len(sessions) == 0
+	return sessions, hidden && len(sessions) == 0
 }
 
 // pushReachable reports whether a callee has phones that push can ring.
@@ -236,7 +243,10 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 			if uid == client.UniqueID {
 				continue
 			}
-			sessions, offline := s.callTargets(e, client, uid)
+			sessions, hidden := s.callTargets(e, client, uid)
+			if hidden {
+				continue
+			}
 			phones := s.pushReachable(uid)
 			switch {
 			case len(sessions) == 1 && !phones:
@@ -247,7 +257,7 @@ func (s *TCPServer) startPrivateCall(ctx context.Context, client *Client, reques
 					return call, errCallKeyUnavailable
 				}
 				call.Participants = append(call.Participants, netproto.CallParticipant{UniqueID: uid, ClientID: target.ID, State: "ringing", PublicKey: key, DeviceID: target.currentDeviceID()})
-			case !offline || phones:
+			case len(sessions) > 0 || phones:
 				call.Participants = append(call.Participants, netproto.CallParticipant{UniqueID: uid, State: "ringing"})
 			}
 		}

@@ -33,6 +33,12 @@ func (s *TCPServer) handleRoleMembers(ctx context.Context, client *Client, f *ne
 	if !ok {
 		return s.roleError(ctx, client, authorization.ErrRolesNotConfigured)
 	}
+	// Reject callers who cannot inspect members against the pinned evaluator
+	// before the roster store loads and validates the complete policy. The
+	// store repeats the check transactionally.
+	if err := s.roleInspectionAllowed(ctx, client, query.ChannelID); err != nil {
+		return s.roleError(ctx, client, err)
+	}
 	page, err := roster.RoleMembers(ctx, client.userID(), query)
 	if err != nil {
 		return s.roleError(ctx, client, err)
@@ -47,6 +53,29 @@ func (s *TCPServer) handleRoleMembers(ctx context.Context, client *Client, f *ne
 		}
 	}
 	return s.writeMessage(client, netproto.MsgRoleMembers, page)
+}
+
+// roleInspectionAllowed checks ManageRoles (server scope) or
+// ManageChannelAccess (channel scope) against the current pinned evaluator,
+// without copying the policy.
+func (s *TCPServer) roleInspectionAllowed(ctx context.Context, client *Client, channelID int64) error {
+	capability := authorization.ManageRoles
+	if channelID > 0 {
+		capability = authorization.ManageChannelAccess
+	}
+	if channelID < 0 {
+		return authorization.ErrRoleInvalid
+	}
+	if client.userID() < 1 {
+		return authorization.ErrRoleForbidden
+	}
+	return s.withRolePolicy(ctx, func(ctx context.Context) error {
+		lease, ok := ctx.Value(roleLeaseKey{}).(roleLease)
+		if !ok || !lease.evaluator.Evaluate(client.userID(), channelID, capability).Allowed {
+			return authorization.ErrRoleForbidden
+		}
+		return nil
+	})
 }
 
 func (s *TCPServer) readRolePolicy(ctx context.Context) (authorization.RolePolicy, *authorization.RoleEvaluator, error) {
@@ -93,6 +122,9 @@ func (s *TCPServer) handleRoleQuery(ctx context.Context, client *Client, f *netp
 	var query netproto.RoleQuery
 	if err := netproto.Decode(f, &query); err != nil || query.ChannelID < 0 {
 		return s.roleError(ctx, client, authorization.ErrRoleInvalid)
+	}
+	if err := s.roleInspectionAllowed(ctx, client, query.ChannelID); err != nil {
+		return s.roleError(ctx, client, err)
 	}
 	p, e, err := s.readRolePolicy(ctx)
 	if err != nil {
@@ -220,11 +252,18 @@ func (s *TCPServer) handleAccessCheck(ctx context.Context, client *Client, f *ne
 	if err := netproto.Decode(f, &query); err != nil || query.UserID < 0 || query.ChannelID < 0 {
 		return s.roleError(ctx, client, authorization.ErrRoleInvalid)
 	}
-	_, e, err := s.readRolePolicy(ctx)
-	if err != nil {
-		return s.roleError(ctx, client, err)
-	}
-	response, err := buildAccessCheck(e, client.userID(), query)
+	// Evaluate against the pinned evaluator directly; access checks never
+	// need a copy of the full policy.
+	var response netproto.AccessCheckResult
+	err := s.withRolePolicy(ctx, func(ctx context.Context) error {
+		lease, ok := ctx.Value(roleLeaseKey{}).(roleLease)
+		if !ok {
+			return authorization.ErrAuthorizationUnavailable
+		}
+		var err error
+		response, err = buildAccessCheck(lease.evaluator, client.userID(), query)
+		return err
+	})
 	if err != nil {
 		return s.roleError(ctx, client, err)
 	}

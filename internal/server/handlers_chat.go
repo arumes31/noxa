@@ -350,6 +350,45 @@ func (s *TCPServer) pushDirect(client *Client, toUniqueID string) {
 	s.pushNotify(toUniqueID, pushNotice{Kind: pushKindDM, Tag: netproto.ReadScopeDM + ":" + client.uniqueID(), From: client.nickname()})
 }
 
+// spoolPageSize and spoolDeliveryBudget bound the database and heap work of
+// one delivery pass; anything beyond the budget is delivered on the next pass.
+const (
+	spoolPageSize       = 256
+	spoolDeliveryBudget = 4096
+)
+
+// sessionPendingSpool is implemented by spools that can select, in the
+// database, only the offline messages a given session can open.
+type sessionPendingSpool interface {
+	PendingMessagesFor(ctx context.Context, toUserID int64, f store.PendingFilter) ([]store.SpooledMessage, error)
+}
+
+// pendingForSession loads the client's eligible offline messages in bounded
+// pages. Spools without session filtering fall back to the full mailbox.
+func (s *TCPServer) pendingForSession(ctx context.Context, client *Client, userID int64) ([]store.SpooledMessage, error) {
+	spool, ok := s.deps.Spool.(sessionPendingSpool)
+	if !ok {
+		return s.deps.Spool.PendingMessages(ctx, userID)
+	}
+	// Spooled recipient keys are stored canonical (canonicalDMKey), as is the
+	// session key, so eligibility can be decided in SQL.
+	recipientKey, _ := s.senderDMKey(client)
+	filter := store.PendingFilter{DeviceID: client.currentDeviceID(), Web: client.isWebTransport(), RecipientKey: recipientKey, Limit: spoolPageSize}
+	var out []store.SpooledMessage
+	for len(out) < spoolDeliveryBudget {
+		page, err := spool.PendingMessagesFor(ctx, userID, filter)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page...)
+		if len(page) < filter.Limit {
+			break
+		}
+		filter.AfterID = page[len(page)-1].ID
+	}
+	return out, nil
+}
+
 // deliverSpooled sends any spooled offline messages for the user to the
 // client as offline chat events and marks them delivered.
 func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID int64) {
@@ -362,7 +401,7 @@ func (s *TCPServer) deliverSpooled(ctx context.Context, client *Client, userID i
 	lock.Lock()
 	defer lock.Unlock()
 	deviceKey, _ := s.senderDMKey(client)
-	msgs, err := s.deps.Spool.PendingMessages(ctx, userID)
+	msgs, err := s.pendingForSession(ctx, client, userID)
 	if err != nil {
 		s.logger.Warn("loading spooled messages failed",
 			zap.String("client_id", client.ID),

@@ -52,6 +52,45 @@ var assetStorageLocks sync.Map // map[string]*assetLockSet
 type assetLockSet struct {
 	namespaces assetLockTable
 	bases      assetLockTable
+	validated  assetValidationCache
+}
+
+// assetValidationCache remembers the outcome of fully decoding a stored image,
+// keyed by its path and file identity (size, mode and modification time).
+// Listing a large catalog then decodes only new or changed files instead of
+// every image on every request. A changed file misses the cache and is
+// validated again; the cache is bounded and simply resets when full.
+type assetValidationCache struct {
+	mu      sync.Mutex
+	entries map[string]assetValidation
+}
+
+type assetValidation struct {
+	size    int64
+	mode    fs.FileMode
+	modTime int64
+	valid   bool
+}
+
+const maxAssetValidationEntries = 8192
+
+func (c *assetValidationCache) lookup(rel string, info fs.FileInfo) (valid, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.entries[rel]
+	if !ok || v.size != info.Size() || v.mode != info.Mode() || v.modTime != info.ModTime().UnixNano() {
+		return false, false
+	}
+	return v.valid, true
+}
+
+func (c *assetValidationCache) store(rel string, info fs.FileInfo, valid bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil || len(c.entries) >= maxAssetValidationEntries {
+		c.entries = make(map[string]assetValidation)
+	}
+	c.entries[rel] = assetValidation{size: info.Size(), mode: info.Mode(), modTime: info.ModTime().UnixNano(), valid: valid}
 }
 
 // assetLockTable evicts an identity after its final holder or waiter releases
@@ -635,6 +674,7 @@ func (s assetStorage) listImages(dir string) ([]assetImage, error) {
 		return nil, err
 	}
 
+	cache := &s.lockSet().validated
 	byBase := make(map[string]assetImage, len(entries))
 	for _, entry := range entries {
 		format, ok := assetFormatForExtension(filepath.Ext(entry.Name()))
@@ -646,16 +686,24 @@ func (s assetStorage) listImages(dir string) ([]assetImage, error) {
 			continue
 		}
 		rel := filepath.Join(dir, entry.Name())
-		if _, err := regularAssetInfo(root, rel); err != nil {
+		info, err := regularAssetInfo(root, rel)
+		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, errUnsafeAsset) {
 				continue
 			}
 			return nil, err
 		}
-		raw, err := readRegularAsset(root, rel, maxImageBytes)
-		if err != nil || validateImageForDirectory(raw, format.extension, dir) != nil {
+		valid, cached := cache.lookup(rel, info)
+		if !cached {
+			raw, err := readRegularAsset(root, rel, maxImageBytes)
 			// Directory contents are untrusted. A malformed or oversized
 			// preferred variant must not hide a valid lower-ranked one.
+			valid = err == nil && validateImageForDirectory(raw, format.extension, dir) == nil
+			if err == nil {
+				cache.store(rel, info, valid)
+			}
+		}
+		if !valid {
 			continue
 		}
 		candidate := assetImage{

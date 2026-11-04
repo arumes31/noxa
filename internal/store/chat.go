@@ -330,17 +330,27 @@ func (s *Store) pruneReactionCacheLocked(now time.Time) {
 	})
 }
 
+// Reaction limits keep a message's aggregated reaction map, which every
+// toggle and history page carries in full, far below the protocol frame limit.
+const (
+	MaxReactionsPerUser         = 20
+	MaxReactionLabelsPerMessage = 64
+)
+
+// ErrReactionLimit rejects a reaction that would exceed the per-user or
+// per-message reaction limits.
+var ErrReactionLimit = errors.New("too many reactions on this message")
+
 func (s *Store) ToggleReaction(ctx context.Context, messageID int64, uniqueID, emoji string) (map[string]int, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("beginning reaction toggle: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	// Serialize toggles for this exact tuple across goroutines and replicas.
-	// Quote the text fields to keep the tuple unambiguous without NUL bytes,
-	// which PostgreSQL rejects in text parameters.
+	// Serialize toggles for this message across goroutines and replicas so
+	// the per-message reaction limits below cannot be raced past.
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
-		fmt.Sprintf("%d:%q:%q", messageID, uniqueID, emoji)); err != nil {
+		fmt.Sprintf("reactions:%d", messageID)); err != nil {
 		return nil, false, fmt.Errorf("locking reaction: %w", err)
 	}
 	const del = `DELETE FROM chat_reactions WHERE message_id = $1 AND unique_id = $2 AND emoji = $3`
@@ -350,6 +360,26 @@ func (s *Store) ToggleReaction(ctx context.Context, messageID int64, uniqueID, e
 	}
 	added := false
 	if n, _ := res.RowsAffected(); n == 0 {
+		// Bound the reaction map: every toggle aggregates and broadcasts the
+		// whole map, so unbounded distinct labels would grow each later frame.
+		var labels, mine int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(DISTINCT emoji), COUNT(*) FILTER (WHERE unique_id = $2)
+			FROM chat_reactions WHERE message_id = $1`, messageID, uniqueID).Scan(&labels, &mine); err != nil {
+			return nil, false, fmt.Errorf("counting reactions: %w", err)
+		}
+		if mine >= MaxReactionsPerUser {
+			return nil, false, ErrReactionLimit
+		}
+		if labels >= MaxReactionLabelsPerMessage {
+			var exists bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM chat_reactions WHERE message_id = $1 AND emoji = $2)`,
+				messageID, emoji).Scan(&exists); err != nil {
+				return nil, false, fmt.Errorf("counting reactions: %w", err)
+			}
+			if !exists {
+				return nil, false, ErrReactionLimit
+			}
+		}
 		const ins = `INSERT INTO chat_reactions (message_id, unique_id, emoji) VALUES ($1, $2, $3)`
 		if _, err := tx.ExecContext(ctx, ins, messageID, uniqueID, emoji); err != nil {
 			return nil, false, fmt.Errorf("adding reaction: %w", err)

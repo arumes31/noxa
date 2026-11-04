@@ -62,7 +62,13 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 		if err != nil || frame == nil {
 			return err
 		}
-		return s.writeFrameInContext(ctx, client, frame)
+		if err := s.writeFrameInContext(ctx, client, frame); err != nil {
+			return err
+		}
+		if frame.Type == uint16(netproto.MsgSnapshot) {
+			client.commitStagedSnapshot()
+		}
+		return nil
 	})
 	// An unavailable policy closes protected delivery, not the control socket.
 	// The mutation handler still owes its saved-but-pending acknowledgement.
@@ -151,8 +157,12 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 				return nil, err
 			}
 		}
-	case eventUserJoined, eventUserLeft, eventUserMoved, eventMediaDeviceChanged, eventChannelCreated, eventChannelDeleted, eventChannelUpdated, eventStatusChanged, eventNicknameChanged, eventMemberVoiceChanged, eventAudioStateChanged, eventVoiceQueueChanged:
-		return netproto.Encode(netproto.MsgSnapshot, s.roleSnapshotWithOwnMove(client, e))
+	case eventStatusChanged:
+		// Status changes of members the recipient cannot see (an invisible
+		// user) must not be revealed by the arrival of an identical snapshot.
+		return s.roleSnapshotFrame(client, e)
+	case eventUserJoined, eventUserLeft, eventUserMoved, eventMediaDeviceChanged, eventChannelCreated, eventChannelDeleted, eventChannelUpdated, eventNicknameChanged, eventMemberVoiceChanged, eventAudioStateChanged, eventVoiceQueueChanged:
+		return s.roleSnapshotFullFrame(client, e)
 	case eventAvatarChanged, eventSpeakingChanged, eventPrioritySpeakerChanged, eventPosition, eventScreenshareChanged:
 		var event struct {
 			ClientID  string `json:"client_id"`
@@ -207,7 +217,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		// Other members learn the new visible tree, without private reasons or
 		// the identities of moderators acting in channels they cannot see.
 		if event.ClientID != client.ID {
-			return netproto.Encode(netproto.MsgSnapshot, s.roleSnapshotWithOwnMove(client, e))
+			return s.roleSnapshotFullFrame(client, e)
 		}
 	case eventAnnouncement:
 		if !e.Evaluate(client.userID(), 0, authorization.ViewChannel).Allowed {

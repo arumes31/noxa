@@ -319,13 +319,25 @@ func (s *TCPServer) attachSessionDevice(ctx context.Context, client *Client, pri
 		return ""
 	}
 	d, err := s.deps.Devices.DeviceByKey(ctx, key)
-	if err != nil || !d.Active() || d.Principal != principal {
+	if err != nil || d.Principal != principal {
+		return ""
+	}
+	// The session is already published. Attach the device ID before the
+	// final activity check: a revocation that committed earlier is seen by the
+	// re-read below, and one that commits later finds this session through its
+	// device ID in afterDevicesRevoked. Either way the session cannot escape.
+	client.setDeviceID(d.DeviceID)
+	if d.Active() {
+		d, err = s.deps.Devices.DeviceByKey(ctx, key)
+	}
+	if err != nil || !d.Active() {
+		client.revokeSession()
+		_ = client.Conn.Close()
 		return ""
 	}
 	if err := s.deps.Devices.TouchDevice(ctx, d.DeviceID, time.Now()); err != nil {
 		s.logger.Warn("recording device activity failed", zap.Error(err))
 	}
-	client.setDeviceID(d.DeviceID)
 	return d.DeviceID
 }
 
@@ -483,6 +495,8 @@ func (s *TCPServer) deviceFailure(ctx context.Context, client *Client, err error
 			"this account has the maximum number of devices; remove one under Devices & passkeys")
 	case errors.Is(err, store.ErrDeviceKeyInUse):
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "this device key is already registered")
+	case errors.Is(err, store.ErrPasskeyNotFound):
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "the passkey was removed")
 	}
 	s.logger.Warn("device request failed", zap.String("client_id", client.ID), zap.Error(err))
 	return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "device request failed")

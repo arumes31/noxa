@@ -1,9 +1,92 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/json"
+	"time"
+
 	"noxa/internal/authorization"
 	"noxa/internal/broadcast"
+	"noxa/internal/netproto"
 )
+
+// snapshotDigest hashes the recipient-visible content of a snapshot,
+// ignoring GeneratedAt.
+func snapshotDigest(snapshot *broadcast.TreeSnapshot) ([32]byte, bool) {
+	if snapshot == nil {
+		return [32]byte{}, false
+	}
+	content := *snapshot
+	content.GeneratedAt = time.Time{}
+	raw, err := json.Marshal(&content)
+	if err != nil {
+		return [32]byte{}, false
+	}
+	return sha256.Sum256(raw), true
+}
+
+// recordSnapshot remembers a snapshot that was successfully written to the
+// client. Event-driven status deliveries skip unchanged snapshots so filtered
+// activity (an invisible member's status) is not revealed by the arrival and
+// timing of an identical snapshot.
+func (c *Client) recordSnapshot(snapshot *broadcast.TreeSnapshot) {
+	digest, ok := snapshotDigest(snapshot)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.snapshotStaged = false
+	if ok {
+		c.lastSnapshotDigest = digest
+	} else {
+		c.lastSnapshotDigest = [32]byte{}
+	}
+}
+
+// snapshotUnchanged reports whether snapshot matches the last one written.
+func (c *Client) snapshotUnchanged(snapshot *broadcast.TreeSnapshot) bool {
+	digest, ok := snapshotDigest(snapshot)
+	if !ok {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return digest == c.lastSnapshotDigest
+}
+
+// stageSnapshot holds a snapshot digest until its frame is written; the
+// delivery path commits it only after a successful write (it runs under
+// roleMetadataMu, so stage and commit cannot interleave across deliveries).
+func (c *Client) stageSnapshot(snapshot *broadcast.TreeSnapshot) {
+	digest, ok := snapshotDigest(snapshot)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.snapshotStagedDigest, c.snapshotStaged = digest, ok
+}
+
+func (c *Client) commitStagedSnapshot() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.snapshotStaged {
+		c.lastSnapshotDigest, c.snapshotStaged = c.snapshotStagedDigest, false
+	}
+}
+
+// roleSnapshotFullFrame always encodes a snapshot and stages its digest.
+func (s *TCPServer) roleSnapshotFullFrame(client *Client, e *authorization.RoleEvaluator) (*netproto.Frame, error) {
+	snapshot := s.roleSnapshotWithOwnMove(client, e)
+	client.stageSnapshot(snapshot)
+	return netproto.Encode(netproto.MsgSnapshot, snapshot)
+}
+
+// roleSnapshotFrame encodes an event-driven snapshot for the recipient, or
+// returns nil when its authorized projection did not change.
+func (s *TCPServer) roleSnapshotFrame(client *Client, e *authorization.RoleEvaluator) (*netproto.Frame, error) {
+	snapshot := s.roleSnapshotWithOwnMove(client, e)
+	if client.snapshotUnchanged(snapshot) {
+		return nil, nil
+	}
+	client.stageSnapshot(snapshot)
+	return netproto.Encode(netproto.MsgSnapshot, snapshot)
+}
 
 func (c *Client) rememberOwnChannelMove(from, to int64, forced bool) {
 	if from == to {

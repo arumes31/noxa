@@ -55,6 +55,10 @@ func (s *TCPServer) sendPendingRules(ctx context.Context, client *Client, guest 
 			zap.String("client_id", client.ID),
 			zap.Error(err),
 		)
+		// Fail closed: without a successful lookup the session cannot be
+		// shown to owe nothing, and the gate starts open. Ending the
+		// connection lets the client retry instead of skipping the rules.
+		_ = client.Conn.Close()
 		return
 	}
 	if !pending {
