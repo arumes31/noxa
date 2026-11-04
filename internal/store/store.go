@@ -701,8 +701,8 @@ type PendingFilter struct {
 	// copies are eligible only when sealed to it, so rows for another desktop
 	// key never fill a page (and cannot starve later deliverable messages).
 	RecipientKey string
-	AfterID  int64
-	Limit    int
+	AfterID      int64
+	Limit        int
 }
 
 // PendingMessagesFor returns one page of undelivered offline messages that
