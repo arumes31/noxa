@@ -168,7 +168,7 @@ func (m *connManager) dmDeviceList(uid string, force bool) ([]dmTrustedDevice, e
 	devices, epoch, cachedPin, ok := m.dmDevices.getPinned(uid, now)
 	if ok && !force {
 		if uid == ownUID {
-			return devices, nil
+			return m.withoutOwnRevokedDevices(devices)
 		}
 		// Cached authority is only as good as the contact's current pin: a
 		// pending identity change (recorded by any manager sharing this pin
@@ -217,6 +217,9 @@ func (m *connManager) dmDeviceList(uid string, force bool) ([]dmTrustedDevice, e
 		return nil, err
 	}
 	m.dmDevices.putPinned(uid, devices, epoch, now, verifiedPin)
+	if uid == ownUID {
+		return m.withoutOwnRevokedDevices(devices)
+	}
 	return devices, nil
 }
 

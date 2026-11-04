@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/url"
@@ -268,30 +269,36 @@ func (a *App) RevokeDeviceForTab(tabID, deviceID string) error {
 	if _, err = cm.deviceRequest(netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: deviceID}); err != nil {
 		return err
 	}
-	cm.persistOwnDeviceRevocation(deviceID)
-	return nil
+	return cm.persistOwnDeviceRevocation(deviceID)
 }
 
-// persistOwnDeviceRevocation records a revocation this user made here in the
-// local secure-messaging store, independently of server metadata, so a relay
-// replaying the device's earlier approval cannot get new messages encrypted
-// to it. Only locally initiated revocations are persisted: server-sent
-// revocation events are not authenticated, and the record is permanent.
-func (m *connManager) persistOwnDeviceRevocation(deviceID string) {
+// persistOwnDeviceRevocation records a revocation this user made here,
+// independently of server metadata, so a relay replaying the device's earlier
+// approval cannot get new messages encrypted to it. The local record filters
+// this account's device list for every send path (legacy copies and the
+// ratchet's device-key lookup); the ratchet store additionally gets a
+// permanent revoked trust record now, or when its next session starts. Only
+// locally initiated revocations are persisted: server-sent revocation events
+// are not authenticated, and the record is permanent.
+func (m *connManager) persistOwnDeviceRevocation(deviceID string) error {
 	m.mu.Lock()
 	principal, selfDevice := m.uniqueID, m.deviceID
 	m.mu.Unlock()
-	m.forgetDMDevices(principal)
+	defer m.forgetDMDevices(principal)
 	if deviceID == "" || deviceID == selfDevice || principal == "" {
-		return
+		return nil
+	}
+	if err := m.recordOwnDeviceRevocation(deviceID); err != nil {
+		return fmt.Errorf("the server signed the device out, but this desktop could not record the revocation: %w", err)
 	}
 	consumer, err := m.ratchetConsumerOn(nil)
 	if err != nil {
-		return // no secure-messaging session: nothing can be encrypted to it here
+		return nil // applied by syncOwnRevocationsOnStart with the next session
 	}
 	if err := consumer.revokeDevice(principal, deviceID); err != nil {
-		log.Printf("devices: recording the revocation of %s failed: %v", deviceID, err)
+		log.Printf("devices: recording the revocation of %s in secure messaging failed (retried at the next session): %v", deviceID, err)
 	}
+	return nil
 }
 
 // CreateDeviceLinkForTab starts "PWA / Mobile login".
