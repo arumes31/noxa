@@ -857,6 +857,13 @@ func run() (retErr error) {
 			return fmt.Errorf("starting managed TURN: %w", err)
 		}
 		defer func() { _ = closeRelay() }()
+		turnCfg := managedTURNConfig(cfg)
+		logger.Info("managed TURN relay listening",
+			zap.String("listen_addr", turnCfg.ListenAddr),
+			zap.String("tls_proxy_listen_addr", turnCfg.TLSProxyListenAddr),
+			zap.String("public_ip", turnCfg.PublicIP),
+			zap.String("realm", turnCfg.Realm),
+			zap.Strings("uris", turnCfg.URIs))
 		go tcpServer.MaintainRelayAuthorization(ctx)
 	}
 	go tcpServer.MaintainDeviceExpiry(ctx)

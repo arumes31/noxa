@@ -830,7 +830,8 @@ func (c *Config) Warnings() []string {
 	if c.TURN.Secret != "" && len(c.TURN.URIs) == 0 {
 		warnings = append(warnings, "turn.secret is configured but turn.uris is empty; TURN is disabled")
 	}
-	if c.TURN.Secret == "" && len(c.TURN.URIs) > 0 {
+	// Managed TURN issues per-session leases and requires an empty static secret.
+	if !c.TURN.Managed && c.TURN.Secret == "" && len(c.TURN.URIs) > 0 {
 		warnings = append(warnings, "turn.uris is configured but turn.secret is empty; TURN is disabled")
 	}
 	if c.TURN.Secret != "" && len(c.TURN.Secret) < 16 {
