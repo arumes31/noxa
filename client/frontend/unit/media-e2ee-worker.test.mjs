@@ -626,3 +626,31 @@ for (const via of ["post", "script"]) test(`key rotation during initial AES disc
         await call("detach", { id: f.tx.id });
     }
 });
+
+test("join ratchet: a pre-installed successor decrypts at once and survives a later fresh epoch", async () => {
+    // Sender on epoch 40; the receiver holds 40 and the pre-derived 41.
+    const tx = await sender("tx|ratchet", 40, 0, key(0x40));
+    const rx = endpoint("decode", "audio");
+    await call("key", { pid: "rat|mic", epoch: 40, kid: 0, key: key(0x40) });
+    await call("key", { pid: "rat|mic", epoch: 41, kid: 1, key: key(0x41) });
+    await call("bind", { id: rx.id, pid: "rat|mic" });
+    tx.push(audio(30, 960)); await settle();
+    // A join: the sender installs and activates 41 immediately.
+    await call("key", { pid: "tx|ratchet", epoch: 41, kid: 1, key: key(0x41) });
+    await call("activate", { pid: "tx|ratchet", epoch: 41 });
+    tx.push(audio(30, 1920)); await settle();
+    assert.equal(tx.out.length, 2);
+    rx.push(clone(tx.out[0])); rx.push(clone(tx.out[1])); await waitFrames(rx, 2);
+    assert.equal(rx.out.length, 2, "the first frame under the successor decrypts without any new delivery");
+    // The sender's own control for 41 arrives later: same key, nothing changes.
+    assert.deepEqual(await call("key", { pid: "rat|mic", epoch: 41, kid: 1, key: key(0x41) }), { installed: false });
+    // Pre-derived 42 plus a fresh 50 (same key slot as 42, which it retires)
+    // and its successor 51: the in-use epoch 41 stays live.
+    await call("key", { pid: "rat|mic", epoch: 42, kid: 2, key: key(0x42) });
+    await call("key", { pid: "rat|mic", epoch: 50, kid: 2, key: key(0x50) });
+    await call("key", { pid: "rat|mic", epoch: 51, kid: 3, key: key(0x51) });
+    tx.push(audio(30, 2880)); await settle();
+    rx.push(clone(tx.out[2])); await waitFrames(rx, 3);
+    assert.equal(rx.out.length, 3, "the sender's current epoch keeps decrypting while a fresh one is pending");
+    await assert.rejects(call("key", { pid: "rat|mic", epoch: 42, kid: 2, key: key(0x42) }), /retired/, "the replaced successor never returns");
+});
