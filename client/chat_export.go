@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,26 +181,42 @@ func (a *App) ExportChat(defaultName, contents string) string {
 	if err != nil || path == "" {
 		return "" // cancelled
 	}
-	path = textExportPath(path)
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+	if err := writeTextExport(path, contents); err != nil {
 		return err.Error()
 	}
 	return ""
 }
 
-// markupExportExtensions are file types a browser or viewer interprets as
-// active markup rather than displaying as text.
-var markupExportExtensions = map[string]bool{
-	".htm": true, ".html": true, ".xhtml": true, ".xht": true, ".shtml": true,
-	".svg": true, ".svgz": true, ".xml": true, ".mht": true, ".mhtml": true, ".hta": true,
+// writeTextExport writes the transcript to the dialog's path, or to its .txt
+// form. The dialog's overwrite confirmation only covered the path it
+// returned, so a rewritten path never replaces an existing file.
+func writeTextExport(chosen, contents string) error {
+	path := textExportPath(chosen)
+	if path == chosen {
+		return os.WriteFile(path, []byte(contents), 0o600)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- user-chosen export path from the native save dialog.
+	if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("%s already exists; choose a .txt file name", filepath.Base(path))
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = f.WriteString(contents); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
-// textExportPath keeps a plaintext transcript out of markup file types.
+// textExportPath keeps a plaintext transcript in a .txt file: any other
+// extension (markup such as .html, or executable types such as .bat) could
+// make a viewer or shell interpret participant-controlled text.
 func textExportPath(path string) string {
-	if markupExportExtensions[strings.ToLower(filepath.Ext(path))] {
-		return path + ".txt"
+	if strings.EqualFold(filepath.Ext(path), ".txt") {
+		return path
 	}
-	return path
+	return path + ".txt"
 }
 
 // Encrypted export container: magic || salt || nonce || secretbox. The key is
