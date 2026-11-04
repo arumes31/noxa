@@ -3,7 +3,7 @@ import { SoundEngine } from "./sound-engine.js";
 import { SOUND_DEFINITIONS, SOUND_URLS } from "./sound-catalog.js";
 import { SPOKEN_ACTIONS, EFFECT_EVENTS as SOUND_EVENTS } from "./notification-audio.js";
 import { SPEECH_ASSETS } from "./speech-catalog.js";
-import { SpeechQueue, SPEECH_EVENTS, SPEECH_VARIANTS, speechLanguage } from "./speech-queue.js";
+import { SpeechQueue, SPEECH_EVENTS, SPEECH_VARIANTS, CLOSING_SPEECH_CLIPS, speechLanguage } from "./speech-queue.js";
 export { SPEECH_EVENTS, speechEventEnabled } from "./speech-queue.js";
 export { EFFECT_EVENTS as SOUND_EVENTS, EFFECT_GROUPS as SOUND_EVENT_GROUPS } from "./notification-audio.js";
 
@@ -44,10 +44,13 @@ export function reconcileNotificationMute() {
     soundEngine.reconcile();
 }
 export function clearSpeech(category) { speechQueue.clear(category); }
-// From 20:00 until 04:59 a language with a night recording says good night.
-export function closingClip(language, date = new Date()) {
-    const night = date.getHours() >= 20 || date.getHours() < 5;
-    return night && SPEECH_ASSETS[language]?.client_closing_night ? "client_closing_night" : "client_closing";
+// Closing plays one of the recorded goodbyes at random. Only the closing
+// user hears it, so the choice does not need to match other observers.
+export function closingClip(language, random = Math.random) {
+    const clips = CLOSING_SPEECH_CLIPS.filter(clip => SPEECH_ASSETS[language]?.[clip]);
+    if (!clips.length) return "client_closing";
+    const index = Math.min(clips.length - 1, Math.floor(Math.max(0, Number(random()) || 0) * clips.length));
+    return clips[index];
 }
 export async function playUpdateAnnouncement(current = () => true) {
     const event = "client_updating", settings = V()?.state.settings;
@@ -77,10 +80,10 @@ export async function playUpdateAnnouncement(current = () => true) {
         for (const entry of soundEngine.active) if (entry.family === id) soundEngine.retire(entry);
     }
 }
-export async function playClosingAnnouncement({ now = new Date() } = {}) {
+export async function playClosingAnnouncement({ random = Math.random } = {}) {
     const settings = V()?.state.settings;
     const language = speechLanguage(settings, navigator.language);
-    const id = "speech_" + language + "_" + closingClip(language, now);
+    const id = "speech_" + language + "_" + closingClip(language, random);
     if (!speechQueue.allowed("client_closing", settings, false)
         || !soundEngine.allowed(id, { settings, volume: settings?.speech_volume ?? 100 })) return;
     stopPreviews();

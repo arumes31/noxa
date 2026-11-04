@@ -43,12 +43,16 @@ test("different observers play the same recorded voice and share the base event 
     assert.equal(played.length, 3); assert.equal(new Set(played).size, 1);
 });
 
-test("new join and leave recordings cover five character voices in both languages", () => {
-    const metrics = JSON.parse(readFileSync(new URL("../src/assets/speech/metrics.json", import.meta.url)));
-    for (const language of ["de", "en"]) for (const event of ["user_join", "user_leave"]) {
-        const recordings = Array.from({ length: 10 }, (_, i) => metrics[`${language}/${event}_v${i + 10}`]);
-        assert.ok(recordings.every(Boolean));
-        assert.deepEqual([...new Set(recordings.map(recording => recording.voice))].sort(), ["DWARF1", "ELF1", "GNOME1", "GOBLIN1", "TROLL1"]);
-        assert.equal(new Set(recordings.map(recording => recording.sha256)).size, 10);
+test("channel join and leave always play their single base recording", () => {
+    for (const event of ["user_join", "user_leave"]) {
+        assert.equal(VARIED_SPEECH_EVENTS.includes(event), false);
+        assert.equal(speechVariantCount(event), 1);
+        for (let i = 0; i < 200; i++) {
+            assert.equal(variedSpeechClip(event, presenceSpeechKey({ client_id: "member", presence_token: "move-" + i }, 8)), event);
+        }
+        for (const language of ["de", "en"]) {
+            assert.ok(SPEECH_ASSETS[language][event], `${language}/${event}`);
+            assert.deepEqual(Object.keys(SPEECH_ASSETS[language]).filter(id => id.startsWith(event + "_v")), [], `${language}/${event}: no variants`);
+        }
     }
 });

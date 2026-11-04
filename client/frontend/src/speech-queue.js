@@ -41,7 +41,10 @@ export const SPEECH_EVENTS = {
 
 // Language-specific alternatives of an event. They share its policy and
 // settings switch and are absent from languages without a recording.
-export const SPEECH_VARIANTS = { client_closing_night: "client_closing",
+export const CLOSING_SPEECH_CLIPS = Object.freeze(["client_closing",
+    ...Array.from({ length: 19 }, (_, index) => `client_closing_v${String(index + 1).padStart(2, "0")}`)]);
+export const SPEECH_VARIANTS = {
+    ...Object.fromEntries(CLOSING_SPEECH_CLIPS.slice(1).map(clip => [clip, "client_closing"])),
     ...Object.fromEntries(VARIED_SPEECH_EVENTS.flatMap(event => Array.from({ length: speechVariantCount(event) - 1 }, (_, index) =>
         [`${event}_v${String(index + 1).padStart(2, "0")}`, event]))),
 };

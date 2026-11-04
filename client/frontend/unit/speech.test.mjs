@@ -142,9 +142,7 @@ test("every announcement in both languages is a reviewed recording of its respel
         assert.ok(["accepted-automatic-content-review", "accepted-user-listening-review"].includes(review[key].reviewStatus), key);
         if (review[key].reviewStatus === "accepted-user-listening-review") assert.match(review[key].note, /selected this exact recording after listening/, key);
     }
-    assert.deepEqual(Object.keys(provenance.authoring.de.clip_voices).filter(event => !event.match(/_v\d{2}$/)), ["client_closing", "client_closing_night", "client_updating"]);
-    assert.equal(metrics["de/client_closing"].voice, "F5");
-    assert.equal(metrics["de/client_closing_night"].voice, "F1");
+    assert.deepEqual(Object.keys(provenance.authoring.de.clip_voices).filter(event => !event.match(/_v\d{2}$/)), ["client_updating"]);
     assert.deepEqual(Object.keys(provenance.authoring.en.clip_voices).filter(event => !event.match(/_v\d{2}$/)), ["client_updating"]);
     for (const language of ["en", "de"]) {
         assert.equal(metrics[`${language}/client_updating`].voice, "TROLL1");
@@ -152,17 +150,23 @@ test("every announcement in both languages is a reviewed recording of its respel
     }
 });
 
-test("German closing says good night from 20:00 until 04:59; English keeps one closing line", async () => {
+test("closing picks one of twenty distinct goodbye recordings at random in both languages", async () => {
     const { closingClip } = await import("../src/sounds.js");
-    const at = (hour, minute = 0) => new Date(2026, 9, 24, hour, minute);
-    assert.equal(SPEECH_ASSETS.de.client_closing.transcript, "noXa verabschiedet sich. Bis gleich.");
-    assert.equal(SPEECH_ASSETS.de.client_closing_night.transcript, "Gute Nacht, schlaf gut und träum süß.");
-    for (const [hour, minute, clip] of [[5, 0, "client_closing"], [12, 0, "client_closing"], [19, 59, "client_closing"],
-        [20, 0, "client_closing_night"], [23, 30, "client_closing_night"], [0, 0, "client_closing_night"], [4, 59, "client_closing_night"]]) {
-        assert.equal(closingClip("de", at(hour, minute)), clip, `de ${hour}:${minute}`);
-        assert.equal(closingClip("en", at(hour, minute)), "client_closing", `en ${hour}:${minute}`);
+    const { CLOSING_SPEECH_CLIPS, SPEECH_VARIANTS } = await import("../src/speech-queue.js");
+    assert.equal(CLOSING_SPEECH_CLIPS.length, 20);
+    for (const clip of CLOSING_SPEECH_CLIPS.slice(1)) assert.equal(SPEECH_VARIANTS[clip], "client_closing", clip);
+    for (const language of ["en", "de"]) {
+        const assets = CLOSING_SPEECH_CLIPS.map(clip => SPEECH_ASSETS[language][clip]);
+        assert.ok(assets.every(Boolean), `${language}: every goodbye recorded`);
+        assert.equal(new Set(assets.map(clip => clip.transcript)).size, 20, `${language}: distinct goodbyes`);
+        assert.equal(SPEECH_ASSETS[language].client_closing_night, undefined);
+        assert.equal(closingClip(language, () => 0), "client_closing");
+        assert.equal(closingClip(language, () => 0.999999), "client_closing_v19");
+        assert.equal(closingClip(language, () => 1), "client_closing_v19", "out-of-range random stays in bounds");
+        assert.equal(closingClip(language, () => Number.NaN), "client_closing");
+        const picked = new Set(Array.from({ length: 20 }, (_, i) => closingClip(language, () => (i + 0.5) / 20)));
+        assert.equal(picked.size, 20, `${language}: every goodbye reachable`);
     }
-    assert.equal(SPEECH_ASSETS.en.client_closing_night, undefined);
 });
 
 test("preview never interrupts a live critical announcement", () => {

@@ -176,8 +176,10 @@ The base announcements use the synthetic ST13 voice ("Eisbrecher"), chosen from 
 ST01-ST20 auditions. ST13 is a weighted blend of the Supertonic 3 preset voice
 styles (M5 x 1.25, M1 x -0.25); no recording of a real person and no imitation of
 an identifiable character was used. The earlier EA60/AN06 recordings are retired.
-The two German closing messages use the unblended Supertonic 3 preset voices F5
-(daytime) and F1 (night), chosen by the user from closing-message auditions.
+Closing goodbyes: twenty original gamer-style goodbye lines per language, one
+played at random when the client closes. The first and the twentieth use ST13;
+the other eighteen use the unblended Supertonic 3 preset voices F1-F5 and M1-M4.
+They are original lines, not game quotations or impersonations.
 Supertonic 3 model weights: Supertone Inc., OpenRAIL-M.
 https://huggingface.co/Supertone/supertonic-3
 Supertonic code: MIT License, Copyright (c) 2025 Supertone Inc.
@@ -232,17 +234,13 @@ Supertonic 3 model/license; no runtime TTS, actor or character imitation.
 Presence announcement variations: nine additional original fixed sentences per
 user-presence event and language, rendered offline with Supertonic 3 presets
 F1-F5 and M1-M4. Together with the original ST13 line, these form the ten
-baseline variants per event. Channel join/leave add the fantasy pool below. Model and runtime licenses above apply unchanged. Exact
+variants per event. Channel join/leave always use their single ST13 line.
+Model and runtime licenses above apply unchanged. Exact
 texts, preset definitions, style/model hashes, mastering measurements and
 automatic content-review results are recorded in tools/speech-lines.json,
 tools/voices/ and src/assets/speech/. No runtime synthesis is used.
 
-Fantasy channel arrival/departure alternatives: ten additional original lines
-per event and language, using synthetic dwarf, elf, goblin, gnome and troll
-styles. These are original archetypes, not game quotations or impersonations.
-Supertonic preset blends and offline pitch/roughness treatments are identified
-by tools/voices/{DWARF1,ELF1,GOBLIN1,GNOME1,TROLL1}.json. The same model and
-runtime licenses above apply; no additional voice engine is shipped.
-Join/leave now have twenty fixed alternatives each; other presence events
-retain their ten alternatives. All transcripts, WAV hashes and automatic
-content-review results remain in the speech provenance and catalog.
+Fantasy voices: synthetic troll style (and dwarf, elf, goblin and gnome styles
+kept for future use) defined by tools/voices/{DWARF1,ELF1,GOBLIN1,GNOME1,TROLL1}.json.
+Original archetypes, not game quotations or impersonations; the same model and
+runtime licenses above apply and no additional voice engine is shipped.

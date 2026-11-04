@@ -6,7 +6,13 @@ import (
 )
 
 // A missing or stalled renderer must never leave the application unable to exit.
-const closeNotificationTimeout = 4 * time.Second
+// Normal closes finish when the goodbye ends; this fallback must still outlast
+// the longest recorded goodbye plus preload and output setup.
+const closeNotificationTimeout = 6500 * time.Millisecond
+
+// closeAudioSetupAllowance is the headroom the timeout keeps above the longest
+// goodbye recording for decoding, output selection and playback start.
+const closeAudioSetupAllowance = 1500 * time.Millisecond
 
 // ReadyForCloseNotifications enables the goodbye handshake after the frontend
 // has subscribed to app_closing. Closing during startup remains immediate.
