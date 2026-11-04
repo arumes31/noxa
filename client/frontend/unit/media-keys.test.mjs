@@ -106,14 +106,38 @@ test("a recipient whose control fails is reported and retried, never sent plaint
 test("stale async completions after stop never activate a key", async () => {
     let release;
     const gate = new Promise(r => { release = r; });
-    const { e, media } = engine({ send: async () => { await gate; return { ok: true }; } });
+    let gated = false;
+    const media = fakeMedia();
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, activateMaxWaitMs: Infinity,
+        send: async () => { if (gated) await gate; return { ok: true }; } });
     e.setRoster([member("c1", "u1", "d1")]);
     e.start(me);
+    await flush();
+    const before = media.log.filter(([op]) => op === "activate").length;
+    gated = true;
+    e.publicationsChanged(); // a replacement epoch waits for its deliveries
     await flush();
     e.stop();
     release();
     await flush();
-    assert.equal(media.log.filter(([op]) => op === "activate").length, 0);
+    assert.equal(media.log.filter(([op]) => op === "activate").length, before);
+});
+
+test("the first epoch activates at once: a joiner is heard as soon as each key lands", async () => {
+    let release;
+    const gate = new Promise(r => { release = r; });
+    const media = fakeMedia();
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, activateMaxWaitMs: Infinity, send: async () => { await gate; return { ok: true }; } });
+    e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2")]);
+    e.start(me);
+    await flush();
+    assert.equal(media.log.filter(([op]) => op === "activate").length, 4, "every slot is active before any delivery settled");
+    assert.equal(e.status().state, "encrypted");
+    assert.equal(e.status().waiting, 2);
+    release();
+    await flush();
+    assert.equal(e.status().delivered, 2);
+    e.stop();
 });
 
 function control(epoch, { client = "c1", sender = "u1", device = "d1", channel = 5, kid = 0, fill = 1 } = {}) {
@@ -178,7 +202,11 @@ test("a removal activates its new epoch sooner than other rekeys", async () => {
     e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2")]);
     e.start(me);
     await flush();
-    assert.ok(delays.includes(2500), "ordinary activation waits for receivers to drain");
+    assert.ok(!delays.includes(2500), "the first epoch has nothing to wait for");
+    delays.length = 0;
+    e.publicationsChanged();
+    await flush();
+    assert.ok(delays.includes(2500), "replacing an active epoch waits for receivers to drain");
     delays.length = 0;
     e.setRoster([member("c1", "u1", "d1")]);
     await flush();
@@ -199,12 +227,14 @@ test("a removal during distribution aborts that epoch and rekeys without the rem
     const gate = new Promise(r => { release = r; });
     const sent = [];
     const media = fakeMedia();
-    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, send: async c => { sent.push(c); if (sent.length <= 2) await gate; return { ok: true }; } });
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, activateMaxWaitMs: Infinity, send: async c => { sent.push(c); if (sent.length > 2 && sent.length <= 5) await gate; return { ok: true }; } });
     e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2")]);
     e.start({ ...me, principal: "u-me-abort", device: "d-me-abort" });
     await flush();
-    const first = sent[0].body.epoch;
-    e.setRoster([member("c1", "u1", "d1")]); // d2 kicked while the first epoch is in flight
+    e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2"), member("c3", "u3", "d3")]); // a join: a replacement epoch
+    await flush();
+    const first = sent[2].body.epoch;
+    e.setRoster([member("c1", "u1", "d1"), member("c3", "u3", "d3")]); // d2 kicked while that epoch is in flight
     release();
     await flush(80);
     const activated = media.log.filter(([op]) => op === "activate").map(([, , epoch]) => epoch);
@@ -283,7 +313,7 @@ test("a removal preempts an in-flight rekey: its epoch is retired, the previous 
     const gate = new Promise(r => { release = r; });
     const sent = [];
     const media = fakeMedia();
-    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, send: async c => { sent.push(c); if (sent.length > 2 && sent.length <= 4) await gate; return { ok: true }; } });
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, activateMaxWaitMs: Infinity, send: async c => { sent.push(c); if (sent.length > 2 && sent.length <= 4) await gate; return { ok: true }; } });
     e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2")]);
     e.start({ ...me, principal: "u-keep", device: "d-keep" });
     await flush(40);

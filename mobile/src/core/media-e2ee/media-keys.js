@@ -3,20 +3,36 @@
 // purpose "control": one target device, at most once, never stored at rest,
 // never shown as chat/activity/history). The server and SFU see ciphertext.
 //
-// Sender: a fresh random key per publication slot and epoch. A new epoch is
-// created when the voice session starts, when the set of recipient devices
-// changes (join/leave/kick/revoke/reconnect), when a local publication
-// starts or stops, and every RENEW_MS. Keys go only to the CURRENT recipient
-// devices; a new joiner never receives an earlier epoch, a departed device
-// never receives a later one. The new epoch is activated only after its
-// controls were admitted (or failed per recipient: those devices simply
-// cannot decrypt), so nothing is ever sent without encryption.
+// Sender: a new epoch is created when the voice session starts, when the set
+// of recipient devices changes (join/leave/kick/revoke/reconnect), when a
+// local publication starts or stops, and every RENEW_MS. Keys go only to the
+// CURRENT recipient devices; a new joiner never receives an earlier epoch, a
+// departed device never receives a later one. Nothing is ever sent without
+// encryption.
+//
+// Fresh epochs (start, removal, renewal) carry new random keys. A fresh epoch
+// that replaces an active one is activated only after its controls were
+// admitted plus a drain delay (or failed per recipient, or a bounded wait), so
+// listeners keep hearing the previous epoch meanwhile. The very first epoch
+// activates at once: nobody can decrypt this sender before it anyway, so
+// waiting only delays when a new joiner is heard.
+//
+// Ratchet epochs (join or publication change, nobody removed): epoch e+1's
+// keys are HKDF(epoch e's keys), one-way, so the joiner still cannot decrypt
+// anything earlier. Every receiver that holds epoch e has already installed
+// e+1 (it pre-derives the successor of each sender's newest key), so the
+// sender switches at once: existing listeners are never interrupted by a
+// join, and the joiner hears this sender as soon as its one control lands.
+// A ratchet is used only when every device that ever held a key of the
+// current chain is still a recipient and announced ratchet support (the
+// RATCHET_FEATURE tag on its own controls' session); otherwise the epoch is
+// fresh. Any removal always starts a fresh chain.
 //
 // Receiver: a control is used only if it is for this channel, from the
 // device the roster names for that publisher's client, and newer than every
 // epoch already seen from that device. Older or replayed controls (expired
-// retries included) can never restore a retired epoch. A small grace keeps
-// the previous epoch for late packets.
+// retries included) can never restore a retired epoch. The previous epoch is
+// kept until the sender has certainly switched, plus a grace for late packets.
 import { SLOTS } from "./media-e2ee-core.js";
 
 export const MEDIA_KEY_KIND = "media-key";
@@ -36,9 +52,26 @@ export const REMOVAL_ACTIVATE_DELAY_MS = 1000;
 // server delays deliveries. Recipients still waiting get the key when their
 // delivery completes (a brief gap for them, shown in the status).
 export const REMOVAL_ACTIVATE_DEADLINE_MS = 2000;
+// A fresh epoch replacing an active one activates at the latest this long
+// after its distribution started, even if some deliveries are still pending:
+// one slow or unreachable device never holds every listener on the old epoch
+// (those devices catch up when their delivery completes).
+export const ACTIVATE_MAX_WAIT_MS = 8_000;
 const STATUS_THROTTLE_MS = 250;
 const RETRY_REKEY_MAX_MS = 2_000;
 export const RECEIVE_GRACE_MS = 10_000;
+// A receiver keeps a sender's previous epoch until that sender has certainly
+// switched to the newer one (it may wait up to ACTIVATE_MAX_WAIT_MS +
+// ACTIVATE_DELAY_MS after sending it), plus the late-packet grace. Retiring
+// it on arrival of the newer key cut listeners off while the sender still
+// waited for slow deliveries.
+export const SWITCH_GRACE_MS = ACTIVATE_MAX_WAIT_MS + ACTIVATE_DELAY_MS + RECEIVE_GRACE_MS;
+// Session tag a sender appends to its control's session ("<random>.r1"): it
+// pre-derives every sender's successor epoch and never numbers a fresh epoch
+// e+1, so ratchet epochs need no wait. Older clients treat the session as
+// opaque text, so the tag is backward compatible.
+export const RATCHET_FEATURE = "r1";
+const RATCHET_INFO = "noxa-media-ratchet-v1";
 export const SENDER_RETIRE_MS = 1_500;
 export const DEBOUNCE_MS = 200;
 // The removal bound: the sender encrypts only under an epoch never sent to a
@@ -108,6 +141,22 @@ export function channelDevices(roster, channelID) {
 // wall clock stepped back (review 2a-A P3-3 / B P3-4).
 const issuedEpochs = new Map();   // principal\ndevice -> last epoch I issued
 const acceptedEpochs = new Map(); // principal\ndevice -> last epoch I accepted
+
+// Feature tags carried in a control's session ("<random>.<tag>.<tag>").
+export function sessionFeatures(session) {
+    return typeof session === "string" ? session.split(".").slice(1) : [];
+}
+
+// The successor (ratchet) keys of one epoch: per slot HKDF-SHA-256 over the
+// slot key. One-way: holding the successor never reveals the earlier key.
+export async function ratchetKeys(keys) {
+    const out = {};
+    for (const slot of SLOTS) {
+        const ikm = await crypto.subtle.importKey("raw", keys[slot], "HKDF", false, ["deriveBits"]);
+        out[slot] = new Uint8Array(await crypto.subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: new TextEncoder().encode(`${RATCHET_INFO}|${slot}`) }, ikm, 256));
+    }
+    return out;
+}
 
 export async function membershipDigest(entries) {
     const lines = [...new Set(entries.map(e => `${e.principal}\n${e.device}\n`))].sort().join("");
@@ -193,9 +242,9 @@ export class MediaKeyEngine {
     #publishers = new Map(); #pending = []; #failed = new Map(); #reason = ""; #pendingRemovals = []; #seq = 0; #removalDebounce = false; #runFailures = 0; #runRetry = 0; #paused = false; #activating = []; #interrupt = null; #activeRecipients = []; #deliveries = new Map(); #statusTimer = 0;
     #rosterAt = 0; #settle = 0; #mismatch = [];
 
-    constructor({ media, send, onStatus = () => {}, now = () => Date.now(), timers = globalThis, random = n => crypto.getRandomValues(new Uint8Array(n)), uuid = () => crypto.randomUUID(), sendTimeoutMs = SEND_TIMEOUT_MS }) {
+    constructor({ media, send, onStatus = () => {}, now = () => Date.now(), timers = globalThis, random = n => crypto.getRandomValues(new Uint8Array(n)), uuid = () => crypto.randomUUID(), sendTimeoutMs = SEND_TIMEOUT_MS, activateMaxWaitMs = ACTIVATE_MAX_WAIT_MS }) {
         this.media = media; this.send = send; this.onStatus = onStatus; this.now = now;
-        this.timers = timers; this.random = random; this.uuid = uuid; this.sendTimeoutMs = sendTimeoutMs;
+        this.timers = timers; this.random = random; this.uuid = uuid; this.sendTimeoutMs = sendTimeoutMs; this.activateMaxWaitMs = activateMaxWaitMs;
         this.self = null; this.session = "";
         this.counters = { ignored: {}, applied: 0, sent: 0, failed: 0, epochs: 0 };
     }
@@ -208,7 +257,7 @@ export class MediaKeyEngine {
         if (!channelID || !clientID || !principal || !device) throw new Error("encrypted media needs a signed-in device");
         this.self = { channelID: Number(channelID), clientID: String(clientID), principal: String(principal), device: String(device) };
         this.#epoch = issuedEpochs.get(`${this.self.principal}\n${this.self.device}`) || 0;
-        this.session = b64url(this.random(16));
+        this.session = `${b64url(this.random(16))}.${RATCHET_FEATURE}`;
         const gen = ++this.#gen;
         this.#renew = this.timers.setInterval(() => { if (gen === this.#gen) this.#schedule("renewal", 0); }, RENEW_MS);
         this.#schedule("start", 0);
@@ -366,15 +415,25 @@ export class MediaKeyEngine {
         // recipient snapshot below; removals with a lower sequence are excluded.
         const created = ++this.#seq;
         const urgent = this.#pendingRemovals.length > 0;
+        const reason = this.#reason;
         this.#reason = ""; this.#busyOrPending = false;
         const previous = this.activeEpoch || 0;
         if (this.#invisible()) { this.onInvisible?.(); return; }
         const selfKey = `${self.principal}\n${self.device}`;
-        const epoch = Math.max(this.#epoch + 1, (issuedEpochs.get(selfKey) || 0) + 1, this.now());
-        issuedEpochs.set(selfKey, epoch);
-        const kid = (this.#kid + 1) % 16;
-        const keys = Object.fromEntries(SLOTS.map(slot => [slot, this.random(32)]));
         const recipients = this.#recipients = recipientsOf(this.#roster, self);
+        const recipientIDs = recipients.map(r => `${r.principal}\n${r.device}`);
+        // A ratchet continues the active epoch's chain; anything else is fresh.
+        const head = this.#ratchetHead(reason, recipientIDs, selfKey);
+        const keys = head ? await ratchetKeys(head.keys) : Object.fromEntries(SLOTS.map(slot => [slot, this.random(32)]));
+        if (gen !== this.#gen) return;
+        // Fresh epochs skip e+1: that number is reserved for the ratchet
+        // successor that receivers pre-derive.
+        const epoch = head ? previous + 1 : Math.max(this.#epoch + 2, (issuedEpochs.get(selfKey) || 0) + 2, this.now());
+        issuedEpochs.set(selfKey, epoch);
+        const kid = ((head ? head.kid : this.#kid) + 1) % 16;
+        // Every device that received a key of this chain can derive its later
+        // epochs: a ratchet is allowed only while all of them stay recipients.
+        const chain = new Set([...(head ? head.chain : []), ...recipientIDs]);
         const members = await membershipDigest([...recipients, self]);
         for (const slot of SLOTS) {
             if (gen !== this.#gen) return; // a stale rekey never installs into a newer engine's worker
@@ -389,13 +448,37 @@ export class MediaKeyEngine {
         this.#failed.clear(); this.#sentTo.clear();
         // Per-epoch material: a retry of an older epoch always sends that
         // epoch's own keys (never a newer, preempted epoch's).
-        this.#deliveries.set(epoch, { ok: new Set(), failed: new Map(), kid, keys, members, count: recipients.length + 1 });
+        this.#deliveries.set(epoch, { ok: new Set(), failed: new Map(), kid, keys, members, count: recipients.length + 1, chain });
         const distribution = this.#distribute(gen, recipients, epoch);
         const delay = ms => new Promise(resolve => this.timers.setTimeout(resolve, ms));
         // The removals this epoch covers: detected before it was created
         // (recipientsOf already excludes those devices).
         const covered = this.#pendingRemovals.filter(r => r.seq < created);
-        if (urgent && covered.length) {
+        // A removal preempts an epoch that has not activated yet: its own epoch
+        // follows immediately; the previous active epoch stays until then.
+        const preempted = () => {
+            // Never activated: its keys leave the worker; the previous
+            // active epoch stays live until the removal epoch activates.
+            for (const slot of SLOTS) { this.media.retireOne(senderPid(slot), epoch).catch(() => {}); this.media.retireOne(publicationPid(self.clientID, slot), epoch).catch(() => {}); }
+            if (this.#epoch === epoch) {
+                this.#epoch = previous || epoch;
+                this.#sentTo.clear(); this.#failed.clear();
+                this.timers.clearTimeout(this.#retry); // the removal epoch follows at once
+                const restored = this.#deliveries.get(this.#epoch);
+                if (restored) { this.#kid = restored.kid; this.#keys = restored.keys; this.#members = restored.members; }
+            }
+            this.#deliveries.delete(epoch);
+            this.#again = true;
+        };
+        if (!previous || head) {
+            // Nothing to wait for: before the first epoch nobody can decrypt
+            // this sender at all, and a ratchet epoch is already installed at
+            // every receiver of the previous one. Deliveries continue in the
+            // background; the joiner hears this sender once its key lands.
+            // A removal seen since this epoch was created still preempts it
+            // (the removed device may hold this chain).
+            if (this.#pendingRemovals.some(r => r.seq > created)) { preempted(); return; }
+        } else if (urgent && covered.length) {
             // Activate after the deliveries plus a short delay, or at the
             // earliest covered removal's deadline, whichever comes first.
             // Late deliveries keep running and are recorded as they settle.
@@ -403,25 +486,12 @@ export class MediaKeyEngine {
             // removal, so it already includes the coalescing debounce).
             await Promise.race([distribution.then(() => delay(REMOVAL_ACTIVATE_DELAY_MS)), ...covered.map(r => r.reached)]);
         } else {
-            // A removal preempts this wait at once: its own epoch follows
-            // immediately; the previous active epoch stays until then.
-            const preempted = () => {
-                // Never activated: its keys leave the worker; the previous
-                // active epoch stays live until the removal epoch activates.
-                for (const slot of SLOTS) { this.media.retireOne(senderPid(slot), epoch).catch(() => {}); this.media.retireOne(publicationPid(self.clientID, slot), epoch).catch(() => {}); }
-                if (this.#epoch === epoch) {
-                    this.#epoch = previous || epoch;
-                    this.#sentTo.clear(); this.#failed.clear();
-                    this.timers.clearTimeout(this.#retry); // the removal epoch follows at once
-                    const restored = this.#deliveries.get(this.#epoch);
-                    if (restored) { this.#kid = restored.kid; this.#keys = restored.keys; this.#members = restored.members; }
-                }
-                this.#deliveries.delete(epoch);
-                this.#again = true;
-            };
+            // A removal preempts this wait at once (see preempted above).
             if (this.#pendingRemovals.some(r => r.seq > created)) { preempted(); return; }
             const interrupted = this.#interrupted();
-            const done = await Promise.race([distribution.then(() => delay(ACTIVATE_DELAY_MS)).then(() => true), interrupted.then(() => false)]);
+            // Deliveries settle, or the bounded wait elapses, then the drain delay.
+            const settled = Number.isFinite(this.activateMaxWaitMs) ? Promise.race([distribution, delay(this.activateMaxWaitMs)]) : distribution;
+            const done = await Promise.race([settled.then(() => delay(ACTIVATE_DELAY_MS)).then(() => true), interrupted.then(() => false)]);
             if (!done) { if (gen === this.#gen) preempted(); return; }
         }
         if (gen !== this.#gen || this.#epoch !== epoch) return;
@@ -472,6 +542,36 @@ export class MediaKeyEngine {
         }
         this.#status();
         distribution.then(() => { if (gen === this.#gen && this.#epoch === epoch) { this.#status(); this.#scheduleRetry(gen, epoch); } });
+    }
+
+    // The active epoch's material when the next epoch may be its ratchet
+    // successor, or null for a fresh epoch. Only for a join or a publication
+    // change: never with a removal pending, never while paused, only when the
+    // active epoch is also the newest one issued (a preempted later epoch may
+    // have reached receivers), and only when every device that holds a key of
+    // this chain is still a recipient and pre-derives successors.
+    #ratchetHead(reason, recipientIDs, selfKey) {
+        if ((reason !== "membership" && reason !== "publication") || this.#pendingRemovals.length || this.#paused) return null;
+        const active = this.activeEpoch || 0;
+        if (!active || this.#epoch !== active || (issuedEpochs.get(selfKey) || 0) !== active) return null;
+        const head = this.#deliveries.get(active);
+        if (!head?.chain || !head.keys) return null;
+        const current = new Set(recipientIDs);
+        for (const id of head.chain) {
+            if (!current.has(id)) return null;
+            const [principal, device] = id.split("\n");
+            if (!this.#ratchetCapable(principal, device)) return null;
+        }
+        return head;
+    }
+
+    // Whether that recipient device announced ratchet support on its own
+    // controls (its publisher state, bound to the same principal and device).
+    #ratchetCapable(principal, device) {
+        for (const state of this.#publishers.values()) {
+            if (state.principal === principal && state.device === device) return sessionFeatures(state.session).includes(RATCHET_FEATURE);
+        }
+        return false;
     }
 
     #scheduleRetry(gen, epoch) {
@@ -574,6 +674,11 @@ export class MediaKeyEngine {
         if (control.epoch <= last) return this.#ignore("stale");
         acceptedEpochs.set(line, control.epoch);
         let state = this.#publishers.get(value.client);
+        // A pre-derived successor this control does not continue (a fresh
+        // epoch, or a new sender session) is retired before the new key lands.
+        const staleNext = state?.next && state.next !== control.epoch ? state.next : 0;
+        if (state) state.next = 0;
+        if (staleNext) for (const slot of SLOTS) this.media.retireOne(publicationPid(value.client, slot), staleNext).catch(() => {});
         if (!state || state.device !== control.senderDevice) {
             state = { principal: control.sender, device: control.senderDevice, epochs: [], members: value.members, n: value.n };
             this.#publishers.set(value.client, state);
@@ -604,12 +709,16 @@ export class MediaKeyEngine {
             state.epochs = state.epochs.slice(-1);
             if (previous.length) {
                 const through = Math.max(...previous);
+                // The sender may still be encrypting under the previous epoch
+                // while it waits for other deliveries: keep it until the sender
+                // has certainly switched (a ratchet switch is immediate anyway).
                 this.timers.setTimeout(() => {
                     for (const slot of SLOTS) this.media.retire(publicationPid(value.client, slot), through).catch(() => {});
-                }, RECEIVE_GRACE_MS);
+                }, SWITCH_GRACE_MS);
             }
             this.counters.applied++;
             this.#status();
+            if (control.epoch === state.announcedEpoch && sessionFeatures(value.session).includes(RATCHET_FEATURE)) void this.#preinstallSuccessor(gen, value.client, state, control.epoch, value.kid, value.keys);
         }, () => {
             // A partial installation must not leave earlier slots usable;
             // retire only the failed epoch, keeping the previous one live.
@@ -617,6 +726,32 @@ export class MediaKeyEngine {
             return this.#ignore("install");
         });
         return { ok: true, epoch: control.epoch };
+    }
+
+    // Installs the ratchet successor (epoch+1) of a sender's newest key, so a
+    // join on that sender's side switches without any wait or gap here. It is
+    // decrypt-only material derived from a key this device already holds; it
+    // is never accepted as a newer epoch until the sender's own control for
+    // it arrives, and a fresh epoch retires it.
+    async #preinstallSuccessor(gen, client, state, epoch, kid, keys) {
+        let next;
+        try { next = await ratchetKeys(keys); } catch { return; }
+        if (gen !== this.#gen || this.#publishers.get(client) !== state || state.announcedEpoch !== epoch || state.next) return;
+        const successor = epoch + 1;
+        if (successor <= (acceptedEpochs.get(`${state.principal}\n${state.device}`) || 0)) return;
+        state.next = successor;
+        try {
+            for (const slot of SLOTS) {
+                if (gen !== this.#gen || this.#publishers.get(client) !== state || state.next !== successor) return;
+                await this.media.setKey(publicationPid(client, slot), successor, (kid + 1) % 16, next[slot]);
+            }
+        } catch {
+            // Best effort: the sender's own control installs the rest. The
+            // slots already installed hold the correct successor keys and stay
+            // tracked in state.next, so a fresh epoch still retires them. Never
+            // retire the successor here: the worker would then refuse that
+            // sender's real control for it.
+        }
     }
 
     // The account whose verified device delivered the key this publisher's

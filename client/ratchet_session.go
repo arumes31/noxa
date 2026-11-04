@@ -327,6 +327,7 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 		}
 		last := ""
 		for {
+			drainedAt := time.Now()
 			list, err := consumer.drain()
 			if err == nil {
 				// Placeholders are announced only when the list changes.
@@ -343,11 +344,15 @@ func (m *connManager) startRatchet(conn net.Conn) error {
 			case <-m.ratchetWake:
 				// Doorbell-triggered drains are spaced (at most one per
 				// doorbellDrainInterval) so rings can never use up this
-				// session's own admission budget.
-				select {
-				case <-s.quit:
-					return
-				case <-time.After(doorbellDrainInterval):
+				// session's own admission budget. A ring after a quiet
+				// period drains at once, so a voice join's media key is
+				// installed without a fixed extra delay.
+				if wait := doorbellDrainWait(time.Since(drainedAt)); wait > 0 {
+					select {
+					case <-s.quit:
+						return
+					case <-time.After(wait):
+					}
 				}
 			case <-time.After(poll):
 			}

@@ -119,3 +119,21 @@ func TestConnectionBenchmarkDeclinedUnderMediaE2EE(t *testing.T) {
 		t.Fatal(errConnectionBenchmarkE2EE)
 	}
 }
+
+// A ring after a quiet period drains at once; rings close together are still
+// spaced by doorbellDrainInterval.
+func TestDoorbellDrainWaitOnlyEnforcesTheSpacing(t *testing.T) {
+	for _, tc := range []struct {
+		since, want time.Duration
+	}{
+		{0, doorbellDrainInterval},
+		{100 * time.Millisecond, doorbellDrainInterval - 100*time.Millisecond},
+		{doorbellDrainInterval, 0},
+		{5 * time.Second, 0},
+		{-time.Millisecond, doorbellDrainInterval},
+	} {
+		if got := doorbellDrainWait(tc.since); got != tc.want {
+			t.Fatalf("doorbellDrainWait(%v) = %v, want %v", tc.since, got, tc.want)
+		}
+	}
+}

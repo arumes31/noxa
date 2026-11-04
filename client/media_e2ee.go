@@ -154,6 +154,15 @@ const olmPendingEvent = "olm_pending"
 // doorbellDrainInterval spaces doorbell-triggered drains.
 const doorbellDrainInterval = 250 * time.Millisecond
 
+// doorbellDrainWait is how long a ring waits before draining, given the time
+// since the previous drain started: only what is left of the spacing.
+func doorbellDrainWait(sinceLastDrain time.Duration) time.Duration {
+	if sinceLastDrain >= doorbellDrainInterval {
+		return 0
+	}
+	return doorbellDrainInterval - max(sinceLastDrain, 0)
+}
+
 // isOlmDoorbell reports whether an event frame is the doorbell.
 func isOlmDoorbell(payload []byte) bool {
 	var env struct {

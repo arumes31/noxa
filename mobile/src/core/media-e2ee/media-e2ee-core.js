@@ -33,7 +33,8 @@ const IV_LENGTH = 12;
 const OVERHEAD = 16 + IV_LENGTH + 2; // GCM tag + IV + trailer
 const MIN_ENCRYPTED = 1 + OVERHEAD;
 const KEYRING = 16;
-const MAX_LIVE_EPOCHS = 3;
+// previous (switch grace) + current + newly delivered + its pre-derived ratchet successor.
+const MAX_LIVE_EPOCHS = 4;
 const MAX_PIDS = 512;
 const MAX_ENDPOINTS = 512;
 const MAX_RETIRED_MARKERS = 4096;
