@@ -153,7 +153,10 @@ test('actual onboarding entries retain flow-start generation across other-tab lo
           },change);
           await page.evaluate(async()=>{release();await flow;});
           // The scanner starts runLink after it returns; let that actual flow finish.
-          if(kind==='scan') await page.waitForFunction(()=>globalThis.message);
+          if(kind==='scan') {
+            await page.waitForFunction(()=>document.querySelector('#root [role=alert]')?.textContent);
+            assert.match(await page.locator('#root [role=alert]').innerText(), /fenced/);
+          }
           const result=await page.evaluate(async()=>({
             stored:await ids.loadIdentity().then(record=>record?(record.meta.owner||'onboarding'):null),
             marker:await ids.loadIdentity().then(record=>record?.identity.edPublic[0]??null),

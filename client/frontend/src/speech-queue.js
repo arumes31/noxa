@@ -1,10 +1,11 @@
 // Fixed clip IDs only. This module has no text input, TTS or asset-generation path.
+import { VARIED_SPEECH_EVENTS, speechVariantCount, variedSpeechClip } from "./speech-variation.js";
 import { soundVolume } from "./sound-engine.js";
 export const SPEECH_EVENTS = {
-    microphone_muted: { priority: 3, category: "audio", family: "microphone", effect: "mic_off", cooldown: 0 },
-    microphone_unmuted: { priority: 3, category: "audio", family: "microphone", effect: "mic_on", cooldown: 0 },
-    sound_muted: { priority: 3, category: "audio", family: "deafen", effect: "deafen_on", cooldown: 0 },
-    sound_unmuted: { priority: 3, category: "audio", family: "deafen", effect: "deafen_off", cooldown: 0 },
+    microphone_muted: { priority: 3, category: "audio", family: "audio", muteException: true, effect: "mic_off", cooldown: 0 },
+    microphone_unmuted: { priority: 3, category: "audio", family: "audio", muteException: true, effect: "mic_on", cooldown: 0 },
+    sound_muted: { priority: 3, category: "audio", family: "audio", muteException: true, effect: "deafen_on", cooldown: 0 },
+    sound_unmuted: { priority: 3, category: "audio", family: "audio", muteException: true, effect: "deafen_off", cooldown: 0 },
     client_closing: { priority: 8, category: "application" },
     client_updating: { priority: 8, category: "application" },
     banned: { priority: 7, category: "admin", effect: "ban", matrix: "kick" },
@@ -40,7 +41,10 @@ export const SPEECH_EVENTS = {
 
 // Language-specific alternatives of an event. They share its policy and
 // settings switch and are absent from languages without a recording.
-export const SPEECH_VARIANTS = { client_closing_night: "client_closing" };
+export const SPEECH_VARIANTS = { client_closing_night: "client_closing",
+    ...Object.fromEntries(VARIED_SPEECH_EVENTS.flatMap(event => Array.from({ length: speechVariantCount(event) - 1 }, (_, index) =>
+        [`${event}_v${String(index + 1).padStart(2, "0")}`, event]))),
+};
 
 export function speechLanguage(settings, systemLanguage = "en") {
     if (["en", "de"].includes(settings?.speech_language)) return settings.speech_language;
@@ -67,7 +71,7 @@ export class SpeechQueue {
         const def = SPEECH_EVENTS[event];
         if (!def || !settings || this.isDND(settings) || settings.spoken_messages === false) return false;
         if (!preview && (settings.play_sounds === false || (def.category !== "application" && this.getState()?.replayingTabID))) return false;
-        if (!preview && (this.getState()?.muted || this.getState()?.deafened) && event !== "poke") return false;
+        if (!preview && (this.getState()?.muted || this.getState()?.deafened) && event !== "poke" && !def.muteException) return false;
         if (!speechEventEnabled(settings, event, effect)) return false;
         if (def.matrix && (settings.notify_matrix?.[def.matrix]?.sound === false || settings.event_sounds?.[def.matrix] === false)) return false;
         if (event === "permission_denied" && settings.speech_permissions === false) return false;
@@ -84,7 +88,7 @@ export class SpeechQueue {
         return (this.current && !this.current.preview) || this.pending.some(item => !item.preview);
     }
 
-    enqueue(event, { settings, preview = false, delay = 150, effect, onEnded } = {}) {
+    enqueue(event, { settings, preview = false, delay = 150, effect, onEnded, eventKey } = {}) {
         if (!Object.hasOwn(SPEECH_EVENTS, event)) return false;
         if (preview && this.hasLiveSpeech()) return false;
         if (!preview) this.stopPreview();
@@ -114,7 +118,7 @@ export class SpeechQueue {
                 if (obsolete(this.current)) this.stopCurrent();
             }
         }
-        const item = { event, scope, priority: def.priority, settings, preview, onEnded, effect: effect || def.effect,
+        const item = { event, clipEvent: preview ? event : variedSpeechClip(event, eventKey), scope, priority: def.priority, settings, preview, onEnded, effect: effect || def.effect,
             ready: now + delay, expires: now + 8000 };
         // Spoken actions never play an effect, even when their recording is
         // disabled, silent or unavailable.
@@ -151,9 +155,9 @@ export class SpeechQueue {
             if (item.ready > now) { this.timer = this.schedule(() => this.pump(), item.ready - now); return; }
             this.pending.shift();
             const language = speechLanguage(settings, this.systemLanguage());
-            const clip = this.assets[language]?.[item.event];
+            const clip = this.assets[language]?.[item.clipEvent];
             if (!clip) { item.onEnded?.(); continue; } // No other-language or generated fallback.
-            const id = "speech_" + language + "_" + item.event;
+            const id = "speech_" + language + "_" + item.clipEvent;
             this.current = { ...item, id };
             const playing = this.current;
             const played = this.engine.play(id, { preview: item.preview, settings, scope: item.scope, volume: settings.speech_volume ?? 100,

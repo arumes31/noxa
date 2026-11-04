@@ -167,7 +167,7 @@ jobs:
         run: go test -tags integration -count=1 -timeout=4m -run '^TestBrowser(ScreenSingleSource|SingleCodecSwitch)$' -v ./internal/webrtc
       - name: Verify end-to-end encrypted channel media and Studio output through the SFU
         working-directory: .
-        run: go test -tags integration -count=1 -timeout=12m -run '^TestBrowser(E2EE(H264)?ChannelMediaThroughSFU|StudioOutputThroughSFU)$' -v ./internal/webrtc
+        run: go test -tags integration -count=1 -timeout=12m -run '^TestBrowser(E2EE(H264)?ChannelMediaThroughSFU|StudioOutputThroughSFU|FirstVideoOfferCollisionPreservesExtensions)$' -v ./internal/webrtc
 
   frontend-e2e-shard:
     name: Browser tests (${{ matrix.shard }}/4)
@@ -517,7 +517,7 @@ jobs:
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

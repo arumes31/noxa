@@ -142,10 +142,10 @@ test("every announcement in both languages is a reviewed recording of its respel
         assert.ok(["accepted-automatic-content-review", "accepted-user-listening-review"].includes(review[key].reviewStatus), key);
         if (review[key].reviewStatus === "accepted-user-listening-review") assert.match(review[key].note, /selected this exact recording after listening/, key);
     }
-    assert.deepEqual(Object.keys(provenance.authoring.de.clip_voices), ["client_closing", "client_closing_night", "client_updating"]);
+    assert.deepEqual(Object.keys(provenance.authoring.de.clip_voices).filter(event => !event.match(/_v\d{2}$/)), ["client_closing", "client_closing_night", "client_updating"]);
     assert.equal(metrics["de/client_closing"].voice, "F5");
     assert.equal(metrics["de/client_closing_night"].voice, "F1");
-    assert.deepEqual(Object.keys(provenance.authoring.en.clip_voices), ["client_updating"]);
+    assert.deepEqual(Object.keys(provenance.authoring.en.clip_voices).filter(event => !event.match(/_v\d{2}$/)), ["client_updating"]);
     for (const language of ["en", "de"]) {
         assert.equal(metrics[`${language}/client_updating`].voice, "TROLL1");
         assert.equal(metrics[`${language}/client_updating`].postprocess.kind, "cave-troll");
@@ -612,7 +612,7 @@ for (const flag of ["muted", "deafened"]) {
         const f = fixture();
         f.queue.enqueue("user_join", { delay: 1000 });
         f.state[flag] = true;
-        for (const event of Object.keys(SPEECH_EVENTS)) assert.equal(f.queue.allowed(event, f.state.settings, false), event === "poke", event);
+        for (const event of Object.keys(SPEECH_EVENTS)) assert.equal(f.queue.allowed(event, f.state.settings, false), (event === "poke" || SPEECH_EVENTS[event].muteException === true), event);
         f.queue.reconcile();
         assert.equal(f.queue.pending.length, 0);
         assert.equal(f.queue.enqueue("poke", { delay: 0 }), true);
@@ -621,3 +621,34 @@ for (const flag of ["muted", "deafened"]) {
         assert.equal(f.played.length, 1);
     });
 }
+
+
+test("mute state confirmations remain audible after the actual state changes while all notification gates remain effective", () => {
+    for (const [event, flags] of [["microphone_muted", { muted: true }], ["microphone_unmuted", { deafened: true }],
+        ["sound_muted", { muted: true, deafened: true }], ["sound_unmuted", { muted: true }]]) {
+        const f = fixture(); Object.assign(f.state, flags);
+        assert.equal(f.queue.enqueue(event, { delay: 0 }), true, event);
+        assert.equal(f.played[0].id, "speech_en_" + event);
+        f.queue.reconcile(); assert.equal(f.queue.current.event, event);
+        f.state.settings.play_sounds = false;
+        assert.equal(f.queue.allowed(event, f.state.settings, false), false);
+        f.state.settings.play_sounds = true; f.state.settings.spoken_messages = false;
+        assert.equal(f.queue.allowed(event, f.state.settings, false), false);
+        f.state.settings.spoken_messages = true; f.state.settings.speech_events = { [event]: false };
+        assert.equal(f.queue.allowed(event, f.state.settings, false), false);
+        f.state.settings.speech_events = {}; f.dnd(true);
+        assert.equal(f.queue.allowed(event, f.state.settings, false), false);
+    }
+});
+
+
+test("rapid full mute replaces an already playing microphone confirmation and late callbacks cannot resurrect it", () => {
+    const f = fixture();
+    f.queue.enqueue("microphone_unmuted", { delay: 0 });
+    const stale = f.played[0].options.onEnded;
+    Object.assign(f.state, { muted: true, deafened: true });
+    assert.equal(f.queue.enqueue("sound_muted", { delay: 0 }), true);
+    assert.equal(f.queue.current.event, "sound_muted"); stale();
+    assert.equal(f.queue.current.event, "sound_muted");
+    f.queue.reconcile(); assert.equal(f.queue.current.event, "sound_muted");
+});

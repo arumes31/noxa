@@ -145,3 +145,34 @@ func TestHomeSystemKindSurvivesWireSnapshot(t *testing.T) {
 		t.Fatalf("invalid home wire snapshot: %s", data)
 	}
 }
+
+func TestPresenceTokenSharedWithoutExposingMembershipEpoch(t *testing.T) {
+	sm := newTestManager()
+	sm.AddChannel(&state.Channel{ChannelID: 8, Name: "Public"})
+	sm.AddClient(&state.Client{ClientID: "member", UniqueID: "member-uid"})
+	if err := sm.JoinChannel("member", 8); err != nil {
+		t.Fatal(err)
+	}
+	first := BuildSnapshot(sm, false, "observer-a").RootChannels[0].Clients[0]
+	second := BuildSnapshot(sm, true, "observer-b").RootChannels[0].Clients[0]
+	if first.PresenceToken == "" || first.PresenceToken != second.PresenceToken {
+		t.Fatal("observers need the same committed token")
+	}
+	raw, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "epoch") || strings.Contains(string(raw), "revision") {
+		t.Fatal("private movement counter leaked")
+	}
+	if err := sm.LeaveChannel("member"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.JoinChannel("member", 8); err != nil {
+		t.Fatal(err)
+	}
+	again := BuildSnapshot(sm, false, "observer-a").RootChannels[0].Clients[0]
+	if again.PresenceToken == first.PresenceToken {
+		t.Fatal("a new membership must have a fresh choice")
+	}
+}

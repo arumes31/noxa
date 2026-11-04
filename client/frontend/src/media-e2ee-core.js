@@ -39,6 +39,9 @@ const MAX_ENDPOINTS = 512;
 const MAX_RETIRED_MARKERS = 4096;
 const FENCE = "noxa-fence";
 export const HARDWARE_PROOF_MS = 1000;
+export const INITIAL_KEYFRAME_HOLD_MS = 1000;
+// Bound the one retained plaintext frame separately from the cipher's frame limit.
+export const MAX_INITIAL_KEYFRAME_BYTES = 1024 * 1024;
 // 2 x the 5-minute renewal plus grace.
 export const MAX_RECEIVE_EPOCH_AGE = 12 * 60 * 1000;
 const PID_RE = /^[\x21-\x7e]{1,160}$/;
@@ -114,6 +117,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
     async function retireEpoch(pid, epoch) {
         const state = pids.get(pid); const entry = state?.epochs.get(epoch);
         if (!entry) return;
+        for (const ep of endpoints.values()) if (ep.pid === pid && ep.hardwareHold?.scope.epoch === epoch) cancelHardwareHold(ep);
         state.epochs.delete(epoch);
         state.retired = Math.max(state.retired, epoch);
         if (state.active === epoch) state.active = 0;
@@ -145,6 +149,52 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
         return installed;
     }
 
+    function cancelHardwareHold(ep) { ep.hardwareHold?.finish("cancelled"); }
+
+    function hardwareScopeCurrent(ep, scope) {
+        const state = pids.get(scope.pid);
+        return endpoints.get(ep.id) === ep && ep.ready && !ep.abort.signal.aborted &&
+            ep.gen === scope.gen && ep.pid === scope.pid && ep.sourceTag === scope.sourceTag &&
+            state?.active === scope.epoch && state.epochs.get(scope.epoch) === scope.entry &&
+            ep.kids.get(scope.kid) === scope.epoch;
+    }
+
+    function dropInitialFrame(ep, input) {
+        // A key change during AES can discard the IDR after pre-admission
+        // cleared needsKeyframe. Revalidate hardware and request a fresh IDR
+        // through the normal proof path, without another hold/probe grace.
+        if (input.heldOriginal && ep.ready && !ep.abort.signal.aborted && ep.gen === input.gen &&
+            ep.pid === input.pid && ep.sourceTag === input.initialScope.sourceTag) {
+            ep.hardwareUntil = 0;
+            ep.needsKeyframe = true;
+        }
+        return drop(ep, "stale");
+    }
+    // Stream backpressure retains one bounded original keyframe here, before
+    // encryption. The independent operation queue can still deliver proof,
+    // rotate keys or revoke the source; it must never await this promise.
+    function waitForInitialHardwareProof(ep) {
+        const state = pids.get(ep.pid), epoch = state?.active, entry = state?.epochs.get(epoch);
+        const scope = { gen: ep.gen, pid: ep.pid, sourceTag: ep.sourceTag, epoch, kid: entry?.kid, entry };
+        if (!entry || !hardwareScopeCurrent(ep, scope)) return Promise.resolve({ reason: "cancelled", scope });
+        return new Promise(resolve => {
+            let timer;
+            const held = { scope, deadline: performance.now() + INITIAL_KEYFRAME_HOLD_MS, finish: null };
+            const aborted = () => held.finish("cancelled");
+            held.finish = reason => {
+                if (ep.hardwareHold !== held) return;
+                ep.hardwareHold = null;
+                clearTimeout(timer);
+                ep.abort.signal.removeEventListener("abort", aborted);
+                resolve({ reason, scope, deadline: held.deadline });
+            };
+            ep.hardwareHold = held;
+            ep.abort.signal.addEventListener("abort", aborted, { once: true });
+            timer = setTimeout(() => held.finish("timeout"), INITIAL_KEYFRAME_HOLD_MS);
+            if (ep.abort.signal.aborted) aborted();
+        });
+    }
+
     function attach(id, operation, kind, readable, writable, transformer = null, hardwareRequired = false) {
         if (typeof id !== "string" || !ENDPOINT_RE.test(id) || (operation !== "encode" && operation !== "decode") || (kind !== "audio" && kind !== "video")) throw new Error("invalid media endpoint");
         if (endpoints.has(id)) throw new Error("media endpoint already attached");
@@ -156,7 +206,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
         const libraryID = available >= 0 ? freeLibrarySlots.splice(available, 1)[0].id : (librarySlots < MAX_ENDPOINTS ? `slot:${++librarySlots}` : "");
         if (!libraryID) throw new Error("media cryptor capacity reached");
         const abort = new AbortController();
-        const ep = { id, operation, kind, libraryID, abort, lk: `ep:${libraryID}`, pid: "", gen: 0, ready: false, kids: new Map(), dropped: {}, frames: 0, authenticated: false, transformer, hardwareRequired, hardwareUntil: 0, hardwareCheckAt: 0, hardwareProbed: false, hardwareProven: false, needsKeyframe: false, sourceTag: "" };
+        const ep = { id, operation, kind, libraryID, abort, lk: `ep:${libraryID}`, pid: "", gen: 0, ready: false, kids: new Map(), dropped: {}, frames: 0, authenticated: false, transformer, hardwareRequired, hardwareUntil: 0, hardwareCheckAt: 0, hardwareProbed: false, hardwareProven: false, hardwareHoldAttempted: false, hardwareHold: null, needsKeyframe: false, sourceTag: "" };
         endpoints.set(id, ep);
         if (pendingBinds.has(id)) {
             const binding = pendingBinds.get(id);
@@ -166,7 +216,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
         lk("enable", { participantIdentity: ep.lk, enabled: true });
         const inputs = new WeakMap();
         const pre = new TransformStream({
-            transform(frame, controller) {
+            async transform(frame, controller) {
                 if (!ep.ready || !ep.pid) return drop(ep, "unbound");
                 const n = frame.data?.byteLength || 0;
                 if (n === 0) return drop(ep, "empty");
@@ -180,6 +230,18 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                         ep.hardwareCheckAt = performance.now() + 300;
                         send({ event: "hardware-check", id: ep.id });
                     }
+                    let initialScope = null, heldOriginal = false;
+                    if (ep.hardwareRequired && ep.pid === "self|screen" && performance.now() >= ep.hardwareUntil &&
+                        !ep.hardwareProbed && !ep.hardwareProven && !ep.hardwareHoldAttempted && frame.type === "key" &&
+                        n <= MAX_INITIAL_KEYFRAME_BYTES && mediaFrameEnvelope(frame)) {
+                        ep.hardwareHoldAttempted = true;
+                        const outcome = await waitForInitialHardwareProof(ep);
+                        if (outcome.reason === "cancelled" || !hardwareScopeCurrent(ep, outcome.scope)) return drop(ep, "stale");
+                        if ((outcome.reason === "proof" && performance.now() >= outcome.deadline) ||
+                            (outcome.reason !== "proof" && ep.hardwareProven)) return drop(ep, "hardware");
+                        initialScope = outcome.scope;
+                        heldOriginal = outcome.reason === "proof";
+                    }
                     if (ep.hardwareRequired && ep.pid === "self|screen" && performance.now() >= ep.hardwareUntil) {
                         if (ep.hardwareProbed || ep.hardwareProven) return drop(ep, "hardware");
                         const probe = hardwareProbeFrame(frame);
@@ -192,7 +254,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                     }
                     const envelope = mediaFrameEnvelope(frame);
                     if (!envelope) return drop(ep, "codec");
-                    inputs.set(frame, { gen: ep.gen, pid: ep.pid, n: envelope.size });
+                    inputs.set(frame, { gen: ep.gen, pid: ep.pid, n: envelope.size, initialScope, heldOriginal });
                     return controller.enqueue(frame);
                 }
                 const envelope = mediaFrameEnvelope(frame, true);
@@ -216,10 +278,13 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
                 const input = inputs.get(frame); inputs.delete(frame);
                 if (!input || input.gen !== ep.gen || input.pid !== ep.pid || !ep.ready) return drop(ep, "stale");
                 if (ep.operation === "encode") {
+                    if (input.initialScope && (!hardwareScopeCurrent(ep, input.initialScope) ||
+                        input.heldOriginal && performance.now() >= ep.hardwareUntil)) return dropInitialFrame(ep, input);
                     const envelope = mediaFrameEnvelope(frame, true);
                     if (!envelope) return drop(ep, "unencrypted");
                     const bytes = envelope.tail;
                     if (envelope.size !== input.n + OVERHEAD || bytes[bytes.length - 2] !== IV_LENGTH || !liveEpoch(ep.pid, ep.kids.get(bytes[bytes.length - 1]))) return drop(ep, "unencrypted");
+                    if (input.initialScope && ep.kids.get(bytes[bytes.length - 1]) !== input.initialScope.epoch) return dropInitialFrame(ep, input);
                     stats.encrypted++; ep.frames++;
                     return controller.enqueue(frame);
                 }
@@ -267,6 +332,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
             pendingBinds.delete(id);
             const ep = endpoints.get(id);
             if (!ep) return {};
+            cancelHardwareHold(ep);
             ep.ready = false; ep.gen++; ep.pid = ""; ep.kids.clear();
             ep.hardwareUntil = 0;
             ep.abort.abort(new DOMException("noXa endpoint detached", "AbortError"));
@@ -289,6 +355,8 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
             ep.hardwareUntil = enabled ? performance.now() + HARDWARE_PROOF_MS : 0;
             if (enabled) {
                 ep.hardwareProven = true;
+                const held = ep.hardwareHold;
+                if (held && hardwareScopeCurrent(ep, held.scope)) held.finish(performance.now() < held.deadline ? "proof" : "timeout");
                 if (!wasActive) {
                     ep.needsKeyframe = true;
                     try { ep.transformer?.generateKeyFrame?.()?.catch?.(() => {}); } catch { /* legacy API uses the owner hook */ }
@@ -312,8 +380,9 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
             // the previous reply (timeout) adopts it instead of waiting for a
             // first-frame event that was already sent (review P3-1).
             if (ep.pid === pid && ep.ready && ep.sourceTag === sourceTag) return { gen: ep.gen, authenticated: ep.authenticated };
+            cancelHardwareHold(ep);
             const changed = ep.pid !== pid;
-            ep.ready = false; ep.gen++; ep.hardwareUntil = 0; ep.hardwareProbed = false; ep.hardwareProven = false; ep.needsKeyframe = false; ep.sourceTag = sourceTag; ep.pid = pid; ep.authenticated = false;
+            ep.ready = false; ep.gen++; ep.hardwareUntil = 0; ep.hardwareProbed = false; ep.hardwareProven = false; ep.hardwareHoldAttempted = false; ep.needsKeyframe = false; ep.sourceTag = sourceTag; ep.pid = pid; ep.authenticated = false;
             const gen = ep.gen;
             // Key slots are only meaningful within one publication: on any pid
             // change every slot is scrubbed, so a colliding (kid, epoch) of the
@@ -367,6 +436,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
             const state = pids.get(pid); const entry = state?.epochs.get(epoch);
             if (!entry) throw new Error("unknown media epoch");
             if (state.active && epoch < state.active) throw new Error("media epoch is older than the active one");
+            if (state.active !== epoch) for (const ep of endpoints.values()) if (ep.pid === pid) cancelHardwareHold(ep);
             state.active = epoch;
             for (const ep of endpoints.values()) {
                 if (ep.pid === pid && ep.operation === "encode") lk("setKey", { participantIdentity: ep.lk, key: entry.key, keyIndex: entry.kid, updateCurrentKeyIndex: true });
@@ -392,6 +462,7 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
         },
         async forget({ pid }) {
             if (!validPid(pid)) throw new Error("invalid media pid");
+            for (const ep of endpoints.values()) if (ep.pid === pid) cancelHardwareHold(ep);
             const state = pids.get(pid);
             for (const epoch of [...(state?.epochs.keys() || [])]) await retireEpoch(pid, epoch);
             pids.delete(pid);

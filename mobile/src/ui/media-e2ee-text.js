@@ -3,9 +3,11 @@
 // runtime alerts use the same reason codes (core/media-e2ee/media-session.js).
 import { t, addStrings } from "../i18n.js";
 import { mediaErrorReason } from "../core/media-e2ee/media-session.js";
+import { sheet, toast } from "./dom.js";
 
 addStrings({
     en: {
+        "e2ee.voiceUnavailableTitle": "Voice needs encryption setup",
         "e2ee.media.keying": "Setting up end-to-end encryption…",
         "e2ee.media.encrypted": "End-to-end encrypted · keys held by {count} device(s): {names}",
         "e2ee.media.mismatch": "Warning: {names} sees different channel members than you. Someone may be receiving keys you cannot see.",
@@ -23,6 +25,8 @@ addStrings({
         "e2ee.reason.keyless_guest": "Voice is end-to-end encrypted. Guest sessions without a key identity cannot join voice.",
         "e2ee.reason.no_device": "This session has no secure device yet, so encryption keys cannot be exchanged.",
         "e2ee.reason.secure_unavailable": "Secure messaging is not active on this device, so encryption keys cannot be exchanged.",
+        "e2ee.reason.link_required": "To use encrypted voice, scan the QR code in your own desktop account under Connections → PWA / Mobile login. Signing in with a passkey alone does not restore encryption setup.",
+        "e2ee.reason.binding_changed": "The confirmed server identity does not match. Check the connection on your desktop, then scan a new PWA / Mobile login QR code.",
         "e2ee.reason.unsupported_runtime": "This browser cannot encrypt voice and video. Use a current Chrome, Edge, Firefox or Safari.",
         "e2ee.reason.worker": "The encryption worker could not start. Voice stays off.",
         "e2ee.reason.unavailable": "End-to-end encrypted voice is unavailable on this server right now.",
@@ -33,6 +37,7 @@ addStrings({
         "e2ee.reason.closed": "The encrypted voice session ended.",
     },
     de: {
+        "e2ee.voiceUnavailableTitle": "Verschlüsselung für Sprache einrichten",
         "e2ee.media.keying": "Ende-zu-Ende-Verschlüsselung wird eingerichtet…",
         "e2ee.media.encrypted": "Ende-zu-Ende-verschlüsselt · Schlüssel bei {count} Gerät(en): {names}",
         "e2ee.media.mismatch": "Warnung: {names} sieht andere Kanalmitglieder als du. Möglicherweise erhält jemand Schlüssel, den du nicht siehst.",
@@ -50,6 +55,8 @@ addStrings({
         "e2ee.reason.keyless_guest": "Sprache ist Ende-zu-Ende-verschlüsselt. Gastsitzungen ohne Schlüsselidentität können nicht beitreten.",
         "e2ee.reason.no_device": "Diese Sitzung hat noch kein sicheres Gerät; Schlüssel können nicht ausgetauscht werden.",
         "e2ee.reason.secure_unavailable": "Sichere Nachrichten sind auf diesem Gerät nicht aktiv; Schlüssel können nicht ausgetauscht werden.",
+        "e2ee.reason.link_required": "Scanne für verschlüsselte Sprache den QR-Code in deinem eigenen Desktop-Konto unter Connections → PWA / Mobile login. Eine Passkey-Anmeldung allein stellt die Verschlüsselungseinrichtung nicht wieder her.",
+        "e2ee.reason.binding_changed": "Die bestätigte Serveridentität stimmt nicht überein. Prüfe die Verbindung am Desktop und scanne danach einen neuen QR-Code unter PWA / Mobile login.",
         "e2ee.reason.unsupported_runtime": "Dieser Browser kann Sprache und Video nicht verschlüsseln. Nutze einen aktuellen Chrome, Edge, Firefox oder Safari.",
         "e2ee.reason.worker": "Der Verschlüsselungs-Worker konnte nicht starten. Sprache bleibt aus.",
         "e2ee.reason.unavailable": "Ende-zu-Ende-verschlüsselte Sprache ist auf diesem Server gerade nicht verfügbar.",
@@ -65,6 +72,23 @@ addStrings({
 export function mediaErrorText(error) {
     const reason = mediaErrorReason(error);
     return reason ? t(`e2ee.reason.${reason}`) : String(error?.message || error || "");
+}
+
+let trustNotice = null;
+/** Keep the first setup instruction until dismissed; overlapping failures share
+ * its promise, and a later attempt can show its current reason after dismissal. */
+export function showVoiceJoinError(error) {
+    const reason = mediaErrorReason(error);
+    if (reason === "link_required" || reason === "binding_changed") {
+        if (!trustNotice) {
+            trustNotice = sheet(t("e2ee.voiceUnavailableTitle"), mediaErrorText(error), [
+                { label: t("common.close"), value: true, primary: true },
+            ]).finally(() => { trustNotice = null; });
+        }
+        return trustNotice;
+    }
+    toast(t("voice.joinFailed", { error: mediaErrorText(error) }), "warn");
+    return Promise.resolve();
 }
 
 /** An account in the app's fingerprint form: 4-character blocks, the first

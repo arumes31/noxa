@@ -15,7 +15,7 @@ for (const [language, clips] of Object.entries(SPEECH_ASSETS)) {
         const id = "speech_" + language + "_" + event;
         const policy = SPEECH_EVENTS[event] || SPEECH_EVENTS[SPEECH_VARIANTS[event]];
         definitions[id] = { duration: clip.duration, priority: policy.priority, cooldown: 0, category: "Speech",
-            muteException: event === "poke", application: policy.category === "application" };
+            muteException: event === "poke" || policy.muteException === true, application: policy.category === "application" };
         urls[id] = clip.url;
     }
 }

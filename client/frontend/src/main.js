@@ -1,3 +1,4 @@
+import { presenceSpeechKey } from "./speech-variation.js";
 import { initMobileAnnouncement } from "./mobile-announcement.js";
 import { initReadSync } from "./read-sync.js";
 import { initWindowControls } from "./window-controls.js";
@@ -17,8 +18,8 @@ import { createLoginMemory } from './login-memory.js';
 import { createLoginFeedback, connectFailureCategory, connectFailureIsDefinitive, loginFailure } from './login-errors.js';
 import { describeDeniedError } from './permission-denied.js';
 import { initLoginBackground } from './login-background.js';
-import { watchMicrophone } from "./microphone-recovery.js";
-import { voiceSendEncoding, applyVoicePriority } from "./voice-priority.js";
+import { watchMicrophone, createMicrophoneSenderOwner } from "./microphone-recovery.js";
+import { voiceSendEncoding, setVoiceSenderParameters } from "./voice-priority.js";
 import { createRemoteAudio } from './remote-audio.js';
 import { startVoiceDiagnostics, noteVoiceActivity } from './voice-diagnostics.js';
 import { updateMemberMediaIndicators } from "./member-media-indicator.js";
@@ -231,7 +232,11 @@ const recoverVoice = createVoiceRecovery({ state,
         },
     });
 const hardwareRecovery = createHardwareRecoveryScheduler();
-const recoverVideoSender = createVideoSenderRecovery({ state, retry: retryVideoHardware, scheduler: hardwareRecovery });
+const recoverVideoSender = createVideoSenderRecovery({ state, retry: retryVideoHardware, scheduler: hardwareRecovery,
+    startupReady: () => {
+        const status = channelMedia()?.status();
+        return status && ["encrypted", "partial"].includes(status.state) ? status.epoch : 0;
+    } });
 const recoverVideoReceiver = createVideoReceiverRecovery({ state, watch: streamReceiverRecoveryTarget, scheduler: hardwareRecovery,
     supported: () => window.go?.main?.App.SupportsStreamReceiverRecoveryForTab?.(state.activeTabID) ?? false });
 startVoiceDiagnostics({
@@ -1364,7 +1369,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     if (snapshotPresenceScope === previousPresence.scope) {
         for (const change of channelPresenceChanges(previousPresence, nextPresence)) {
             window.__noxaNotify?.notify("join_leave", t(change.message, { name: change.client.nickname || t("runtime.someone") }),
-                { channelID: state.myChannelID, className: "joins", kind: "info", soundEvent: change.soundEvent, speechEvent: change.speechEvent });
+                { channelID: state.myChannelID, className: "joins", kind: "info", soundEvent: change.soundEvent, speechEvent: change.speechEvent, speechKey: presenceSpeechKey(change.client, state.myChannelID) });
         }
     }
     snapshotPresenceScope = nextPresence.scope;
@@ -1427,7 +1432,7 @@ function syncOwnChannel({ audible = true, ownMove } = {}) {
     }
     if (playedCue && initialCuePending) state.pendingInitialChannelCueTabID = "";
     expandMyBranch();
-    applyChannelAudio();
+    refreshChannelAudio();
     chatUI.onMyChannelChanged();
     window.__noxaFiles?.onChannelChanged?.();
     renderTree();
@@ -1518,8 +1523,9 @@ window.runtime.EventsOn("event", (json) => {
                 existing.nickname = d.nickname ?? existing.nickname;
                 existing.channel_id = joinedChannel;
                 existing.on_mobile = !!d.on_mobile;
+                existing.presence_token = d.presence_token ?? existing.presence_token;
             } else {
-                state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, is_speaking: false, on_mobile: !!d.on_mobile });
+                state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, presence_token: d.presence_token, is_speaking: false, on_mobile: !!d.on_mobile });
             }
             if (d.client_id !== state.myClientID) {
                 chatUI.sysJoinLeave(d.nickname || d.unique_id || "someone", "joined"); // (130/131)
@@ -1527,7 +1533,7 @@ window.runtime.EventsOn("event", (json) => {
                     // (385) joins in my channel dispatch through the matrix.
                     window.__noxaNotify?.notify("join_leave", t("runtime.joined", { name: d.nickname || t("runtime.someone") }),
                         { channelID: state.myChannelID, className: "joins", kind: "info",
-                            soundEvent: "user_join", noSound: actionSoundsSuppressed() });
+                            soundEvent: "user_join", speechKey: presenceSpeechKey(state.clients.find(client => client.client_id === d.client_id), joinedChannel), noSound: actionSoundsSuppressed() });
                 }
             }
             break;
@@ -1548,7 +1554,7 @@ window.runtime.EventsOn("event", (json) => {
                 if (was.client_id !== state.myClientID && was.channel_id === state.myChannelID && state.myChannelID !== 0) {
                     window.__noxaNotify?.notify("join_leave", t("runtime.left", { name: was.nickname || t("runtime.someone") }),
                         { channelID: state.myChannelID, className: "joins", kind: "info",
-                            soundEvent: "user_leave", speechEvent: "user_disconnected", noSound: actionSoundsSuppressed() });
+                            soundEvent: "user_leave", speechEvent: "user_disconnected", speechKey: presenceSpeechKey(was, was.channel_id), noSound: actionSoundsSuppressed() });
                 }
             }
             videoTrackRemoved(d.client_id);
@@ -1559,7 +1565,8 @@ window.runtime.EventsOn("event", (json) => {
             const c = state.clients.find((c) => c.client_id === d.client_id);
             const previousRemoteChannelID = Number(c?.channel_id) || 0;
             const nextChannelID = Number(d.channel_id) || 0;
-            if (c) c.channel_id = nextChannelID;
+            const previousSpeechKey = presenceSpeechKey(c, previousRemoteChannelID);
+            if (c) { c.channel_id = nextChannelID; c.presence_token = d.presence_token ?? c.presence_token; }
             if (d.client_id === state.myClientID) {
                 const previousChannelID = state.myChannelID;
                 const restored = restoredVoiceChannels.get(state.activeTabID);
@@ -1591,7 +1598,7 @@ window.runtime.EventsOn("event", (json) => {
                     state.pendingInitialChannelCueTabID = "";
                 }
                 expandMyBranch(); // (302)
-                applyChannelAudio();
+                refreshChannelAudio();
                 chatUI.onMyChannelChanged(); // (103/111) load history + header for the new channel
                 window.__noxaFiles?.onChannelChanged?.(); // (256) file browser follows the channel
                 recordRecentChannel(nextChannelID); // (320) recent channels
@@ -1600,13 +1607,13 @@ window.runtime.EventsOn("event", (json) => {
                 && previousRemoteChannelID !== nextChannelID) {
                 window.__noxaNotify?.notify("join_leave", t("runtime.movedIn", { name: c.nickname || t("runtime.someone") }),
                     { channelID: state.myChannelID, className: "joins", kind: "info",
-                        soundEvent: "user_move_in", noSound: actionSoundsSuppressed() });
+                        soundEvent: "user_move_in", speechKey: presenceSpeechKey(c, nextChannelID), noSound: actionSoundsSuppressed() });
             } else if (c && previousRemoteChannelID === state.myChannelID && state.myChannelID !== 0
                 && previousRemoteChannelID !== nextChannelID) {
                 const forcedMove = nextChannelID > 0 && d.by_client_id && d.by_client_id !== d.client_id;
                 window.__noxaNotify?.notify("join_leave", t("runtime.movedOut", { name: c.nickname || t("runtime.someone") }),
                     { channelID: previousRemoteChannelID, className: "joins", kind: "info",
-                        soundEvent: "user_move_out", speechEvent: forcedMove ? "user_moved_out" : nextChannelID > 0 ? "user_moved" : "user_leave",
+                        speechKey: previousSpeechKey, soundEvent: "user_move_out", speechEvent: forcedMove ? "user_moved_out" : nextChannelID > 0 ? "user_moved" : "user_leave",
                         noSound: actionSoundsSuppressed() });
             }
             recomputeDucking();
@@ -1685,7 +1692,7 @@ window.runtime.EventsOn("event", (json) => {
                 // a re-parent moves the row, so the cached ancestry has to
                 // follow it or the next edit dialog offers a stale parent.
                 ch.ParentID = d.parent_id || 0;
-                if (d.channel_id === state.myChannelID) applyChannelAudio();
+                if (d.channel_id === state.myChannelID) refreshChannelAudio();
                 chatUI.refreshHeader();
             }
             break;
@@ -1839,6 +1846,7 @@ window.runtime.EventsOn("event", (json) => {
             // (385) kicks dispatch through the notification matrix.
             window.__noxaNotify?.notify("kick", description + (d.reason ? t("runtime.reason", { reason: d.reason }) : ""),
                 { className: "messages", kind: "warn", soundEvent: d.ban ? "ban" : "kick", noSound: self,
+                    speechKey: JSON.stringify([d.client_id, d.channel_id, d.by_client_id, d.reason]),
                     speechEvent: !self && !d.ban ? (d.from_server ? "user_kicked" : "user_kicked_channel") : undefined });
             if (self && !actionSoundsSuppressed()) {
                 if (d.from_server || d.ban) {
@@ -1854,7 +1862,7 @@ window.runtime.EventsOn("event", (json) => {
             break;
         }
         case "stream_watch_started":
-            if (!actionSoundsSuppressed() && isCurrentPublication(d)) playEvent("stream_watch_started");
+            if (!actionSoundsSuppressed() && isCurrentPublication(d)) playAlert("stream_watch_started", { eventKey: JSON.stringify([d.publisher_id, d.slot, d.generation]) });
             return;
         case "stream_upload_changed":
             refreshStreamUploads(d);
@@ -2212,6 +2220,7 @@ function stopVoiceForDisconnect() {
 }
 let stopRemoteMedia = () => {};
 let stopWatchingMicrophone = () => {};
+const microphoneSenders = createMicrophoneSenderOwner();
 let lostMicrophoneName = "";
 
 function watchCurrentMicrophone() {
@@ -2226,9 +2235,7 @@ function watchCurrentMicrophone() {
         lost.enabled = false;
         stream.removeTrack(lost); lost.stop();
         stopMicMeter(); stopVoiceMonitor(); setPTT(false);
-        for (const sender of pc.getSenders()) {
-            if (sender.track === sent) void sender.replaceTrack(null).catch(() => {});
-        }
+        void microphoneSenders.detach(pc, sent).catch(() => {});
         setMicState("disconnected");
     });
 }
@@ -2566,10 +2573,10 @@ async function startVoiceAttempt(expectedEpoch, startup) {
             stopOwnedVoiceMedia(media, mediaOwner);
             return false;
         }
-        pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream], sendEncodings: [voiceSendEncoding()] });
+        microphoneSenders.remember(pc, pc.addTransceiver(sent, { direction: "sendrecv", streams: [state.localStream], sendEncodings: [voiceSendEncoding()] }));
         applyVoiceState();
     } else {
-        pc.addTransceiver("audio", { direction: "recvonly" });
+        microphoneSenders.remember(pc, pc.addTransceiver("audio", { direction: "recvonly" }));
     }
     watchCurrentMicrophone();
 
@@ -2650,7 +2657,7 @@ async function startVoiceAttempt(expectedEpoch, startup) {
         return false;
     }
 
-    applyChannelAudio();
+    refreshChannelAudio();
     resetCameraState();
     // (88) re-apply the persisted low-bandwidth mode to the fresh session.
     if (state.settings?.low_bandwidth) setLowBandwidth(true, false);
@@ -2662,6 +2669,15 @@ async function startVoiceAttempt(expectedEpoch, startup) {
     return true;
 }
 
+// Event/startup owners report failed audio updates without an unhandled
+// rejection. Explicit microphone retry and settings owners await them instead.
+function refreshChannelAudio() {
+    const pc = state.pc, epoch = voiceSessionEpoch;
+    void applyChannelAudio().then(error => { if (error) throw error; }).catch(error => {
+        if (state.pc === pc && voiceSessionEpoch === epoch) sysMsg(t("settings.audioApplyFailed", { error: error?.message || String(error) }));
+    });
+}
+
 // (24) applyChannelAudio applies the current channel's Opus settings to the
 // outgoing audio: a maxBitrate cap on the sender encoding (0 = server
 // default 32000 bits/s, i.e. no explicit cap) and a contentHint on the local
@@ -2670,23 +2686,19 @@ async function applyChannelAudio() {
     if (!state.pc) return;
     const ch = state.channels.find((c) => c.ChannelID === state.myChannelID);
     if (!ch) return;
-    const bitrate = ch.OpusBitrate || 0;
-    const sender = state.pc.getSenders().find((s) => s.track && s.track.kind === "audio");
-    if (sender) {
-        const p = sender.getParameters();
-        if (p.encodings?.length) {
-            p.encodings[0].maxBitrate = bitrate > 0 ? bitrate : undefined;
-            // Voice stays in the highest allocation and network class.
-            // These parameters belong to the existing channel-audio update owner.
-            applyVoicePriority(p);
-            await sender.setParameters(p).catch(() => {});
-        }
-    }
+    const pc = state.pc, stream = state.localStream, epoch = voiceSessionEpoch, channelID = state.myChannelID;
+    const current = () => state.pc === pc && state.localStream === stream && voiceSessionEpoch === epoch && state.myChannelID === channelID;
+    const sender = pc.getSenders().find((s) => s.track && s.track.kind === "audio");
+    if (sender) await setVoiceSenderParameters(sender, ch.OpusBitrate || 0);
+    if (!current()) return;
     // (25) A move into or out of a music channel needs a fresh capture: the
     // stereo/DSP constraints cannot be changed on a live track.
-    const { track, changed, error } = await applyCaptureProfile(state.pc, state.localStream, ch, {
-        prepare: replaceMicrophoneGate, sendTrack: microphoneSendTrack, dispose: disposeMicrophoneGate,
+    const { track, changed, error } = await applyCaptureProfile(pc, stream, ch, {
+        prepare: replaceMicrophoneGate, sendTrack: microphoneSendTrack, dispose: disposeMicrophoneGate, current,
+        replace: (sender, next, valid) => microphoneSenders.replace(pc, sender, next, () => current() && valid()),
+        detach: (_sender, next) => microphoneSenders.detach(pc, next),
     });
+    if (!current()) return error;
     if (changed) {
         watchCurrentMicrophone();
         startVoiceMonitor();
@@ -3090,15 +3102,15 @@ async function retryMicrophoneCapture() {
     audioTrack.enabled = false;
     localStream.addTrack(audioTrack);
     markCaptureProfile(audioTrack, state.channels.find((channel) => channel.ChannelID === state.myChannelID));
-    let transceiver = null;
+    let sent = null;
     try {
-        const sent = await prepareChannelMicrophone(audioTrack);
+        sent = await prepareChannelMicrophone(audioTrack);
         if (!current()) throw new DOMException("voice session changed", "AbortError");
-        transceiver = peerConnection.addTransceiver(sent, {
+        await microphoneSenders.attach(peerConnection, sent, {
             direction: "sendrecv",
             streams: [localStream],
             sendEncodings: [voiceSendEncoding()],
-        });
+        }, current);
         await renegotiate(peerConnection, generation);
         if (!current()) throw new DOMException("voice session changed", "AbortError");
         await applyChannelAudio();
@@ -3114,10 +3126,7 @@ async function retryMicrophoneCapture() {
         localStream.removeTrack(audioTrack);
         disposeMicrophoneGate(audioTrack);
         audioTrack.stop();
-        await transceiver?.sender?.replaceTrack(null).catch(() => {});
-        try {
-            if (transceiver) transceiver.direction = "inactive";
-        } catch { /* the peer connection may already be closed */ }
+        if (sent) await microphoneSenders.detach(peerConnection, sent).catch(() => {});
         if (!current()) return false;
         setMicState(state.micState === "denied" ? "denied" : "none");
         sysMsg(t("runtime.micRetryFailed", { error: error?.message || error }));
