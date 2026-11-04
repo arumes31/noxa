@@ -1188,9 +1188,16 @@ const previewDownloads = new Map();
 const previewQueue = [];
 let previewActive = 0;
 
-function runPreviewDownload(task) {
+function runPreviewDownload(task, wanted = () => true) {
     return new Promise((resolve, reject) => {
-        const start = () => {
+        const start = (queued = false) => {
+            // A queued preview whose every requester left the view (tab or
+            // server switch) never takes a download slot from current ones.
+            if (queued && !wanted()) {
+                resolve(null);
+                previewQueue.shift()?.();
+                return;
+            }
             previewActive++;
             Promise.resolve().then(task).then(resolve, reject).finally(() => {
                 previewActive--;
@@ -1198,18 +1205,23 @@ function runPreviewDownload(task) {
             });
         };
         if (previewActive < PREVIEW_DOWNLOAD_CONCURRENCY) start();
-        else previewQueue.push(start);
+        else previewQueue.push(() => start(true));
     });
 }
 
-function sharedPreviewDownload(source, ref) {
+function sharedPreviewDownload(source, ref, isCurrent = () => true) {
     const key = source.previewKey?.(ref);
     const pending = key && previewDownloads.get(key);
-    if (pending) return pending;
-    const request = runPreviewDownload(() => source.download(ref));
+    if (pending) {
+        pending.waiters.add(isCurrent);
+        return pending.request;
+    }
+    const waiters = new Set([isCurrent]);
+    const request = runPreviewDownload(() => source.download(ref), () => [...waiters].some(current => current()));
     if (key) {
-        previewDownloads.set(key, request);
-        const forget = () => { if (previewDownloads.get(key) === request) previewDownloads.delete(key); };
+        const entry = { request, waiters };
+        previewDownloads.set(key, entry);
+        const forget = () => { if (previewDownloads.get(key) === entry) previewDownloads.delete(key); };
         request.then(forget, forget);
     }
     return request;
@@ -1234,7 +1246,7 @@ function attachFileRef(container, m, cap, source = null) {
     const inlineVideo = VIDEO_EXTS.includes(ext);
     if (inlineImage || inlineVideo) {
         wrap.textContent = t(inlineVideo ? "chat.loadingVideo" : "chat.loadingImage", { name });
-        sharedPreviewDownload(source, ref).then((b64) => {
+        sharedPreviewDownload(source, ref, previewIsCurrent).then((b64) => {
             // Check before touching the wrapper or constructing a renderer data
             // URL: a completed request belongs to the scope that launched it.
             if (!previewIsCurrent()) return;
