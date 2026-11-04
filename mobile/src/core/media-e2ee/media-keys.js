@@ -611,8 +611,9 @@ export class MediaKeyEngine {
             this.counters.applied++;
             this.#status();
         }, () => {
-            // A partial installation must not leave earlier slots usable.
-            for (const slot of SLOTS) this.media.retire(publicationPid(value.client, slot), control.epoch).catch(() => {});
+            // A partial installation must not leave earlier slots usable;
+            // retire only the failed epoch, keeping the previous one live.
+            for (const slot of SLOTS) this.media.retireOne(publicationPid(value.client, slot), control.epoch).catch(() => {});
             return this.#ignore("install");
         });
         return { ok: true, epoch: control.epoch };
