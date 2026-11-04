@@ -1479,9 +1479,9 @@ func (s *TCPServer) writeMessageInContext(ctx context.Context, client *Client, m
 }
 
 func (s *TCPServer) writeFrameInContext(ctx context.Context, client *Client, frame *netproto.Frame) error {
-	// Waiting for a busy writer is bounded like the write itself: a broadcast
-	// queued behind a stalled connection holds the authorization lease, and an
-	// unbounded wait would block revocation (kicks, role changes) behind it.
+	// Waiting for a busy writer and the write itself share one ceiling: a
+	// broadcast queued behind a stalled connection holds the authorization
+	// lease, and an unbounded wait would block revocation (kicks, role changes).
 	lockCtx := ctx
 	if s.deps != nil && s.deps.Authority != nil {
 		var cancel context.CancelFunc
@@ -1492,7 +1492,7 @@ func (s *TCPServer) writeFrameInContext(ctx context.Context, client *Client, fra
 		return err
 	}
 	defer client.wmu.Unlock()
-	return s.writeFrameLocked(ctx, client, frame)
+	return s.writeFrameLocked(lockCtx, client, frame)
 }
 
 // roleWriteCeiling bounds each role-mode write, including waiting for the
