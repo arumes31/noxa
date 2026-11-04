@@ -25,22 +25,18 @@ function rememberCall(key, revision) {
 // "accepted" state alone never grants it: only this user starting a call here
 // or pressing Accept does, bound to the call, tab and server generation.
 const callConsents = new Set();
-let startingScope = null;
+// The start in flight: signals that arrive before its response wait for it,
+// so consent is only ever bound to the call ID the start actually returned.
+let pendingStart = null;
 function grantCallConsent(key) {
+    // A call stopped locally never regains consent (stopPrivateCall marks it).
+    if (callVersions.get(key) === Infinity) return false;
     callConsents.add(key);
     if (callConsents.size > 256) callConsents.delete(callConsents.values().next().value);
+    return true;
 }
-function callConsented(call, tabID, generation, uid) {
-    const key = callKey(tabID, generation, call.id);
-    if (callConsents.has(key)) return true;
-    // The start response can race the first call event for the new call.
-    if (startingScope?.tabID === tabID && startingScope.generation === generation && call.caller === uid) {
-        grantCallConsent(key);
-        return true;
-    }
-    return false;
-}
-const ownerConsented = owner => callConsented(owner.call, owner.tabID, owner.generation, owner.uid);
+const callConsented = (call, tabID, generation) => callConsents.has(callKey(tabID, generation, call.id));
+const ownerConsented = owner => callConsented(owner.call, owner.tabID, owner.generation);
 const label = uid => V().state.clients.find(client => client.unique_id === uid)?.nickname || uid;
 const blocked = uid => (V().state.settings?.blocked_users || []).includes(uid);
 const report = error => V().toast?.(t("call.failed", { error: String(error) }), "warn");
@@ -95,13 +91,23 @@ export async function startPrivateCall(target = "", conversationID = "") {
     const tabID = V().state.activeTabID, generation = V().state.serverGeneration;
     try {
         if (!await leaveChannelForCall(tabID, generation)) return;
-        startingScope = { tabID, generation };
-        const result = await app().PrivateCallForTab(tabID, { action: "start", target, conversation_id: conversationID });
-        if (V().state.activeTabID !== tabID || V().state.serverGeneration !== generation) { void app().StopPrivateCallForTab(tabID, result.call.id).catch(() => {}); return; }
-        grantCallConsent(callKey(tabID, generation, result.call.id));
-        await applyCall(result.call, tabID, generation);
+        let finish;
+        pendingStart = { tabID, generation, done: new Promise(resolve => { finish = resolve; }) };
+        const ownStart = pendingStart;
+        try {
+            const result = await app().PrivateCallForTab(tabID, { action: "start", target, conversation_id: conversationID });
+            if (V().state.activeTabID !== tabID || V().state.serverGeneration !== generation) { void app().StopPrivateCallForTab(tabID, result.call.id).catch(() => {}); return; }
+            if (!grantCallConsent(callKey(tabID, generation, result.call.id))) return;
+            await applyCall(result.call, tabID, generation);
+            // A call event for this call may already have applied a newer
+            // revision before consent existed: re-run it now that it does.
+            if (session?.call.id === result.call.id && current(session)) await applyCall(session.call, tabID, generation);
+        } finally {
+            if (pendingStart === ownStart) pendingStart = null;
+            finish();
+        }
     } catch (error) { if (generation === V().state.serverGeneration) report(error); }
-    finally { starting = false; startingScope = null; }
+    finally { starting = false; }
 }
 
 // startPrivateVideoCall is the Messages view's video button: it starts (or
@@ -122,6 +128,7 @@ export function stopPrivateCall() {
     session = null;
     window.dispatchEvent(new Event("noxa-private-call-changed"));
     rememberCall(callKey(owner.tabID, owner.generation, owner.call.id), Infinity);
+    callConsents.delete(callKey(owner.tabID, owner.generation, owner.call.id));
     clearInterval(owner.poll);
     clearInterval(owner.audioTick);
     owner.stopWatchingMicrophone?.();
@@ -602,6 +609,10 @@ async function applyCandidates(owner, uid, peer) {
 export async function privateCallSignal(signal) {
     if (blocked(signal.from)) return;
     const tabID = V().state.activeTabID, generation = V().state.serverGeneration;
+    // An offer can precede our own start response: let the start bind consent
+    // to its returned call ID first, then judge the signal.
+    const start = pendingStart;
+    if (start && start.tabID === tabID && start.generation === generation) await start.done;
     const accepted = owner => owner && current(owner) && owner.call.id === signal.call_id && ownerConsented(owner)
         && owner.call.participants.some(peer => peer.unique_id === owner.uid && peer.state === "accepted")
         && owner.call.participants.some(peer => peer.unique_id === signal.from && peer.state === "accepted");

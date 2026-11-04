@@ -573,18 +573,55 @@ for (const knownCall of [false, true]) {
             for (const pending of window.__pendingGets.splice(0)) pending.resolve(pending.response);
             await window.__refresh;
         });
+        if (!knownCall) {
+            // Consent binds to the call ID the start returns: nothing is
+            // captured until that response arrives.
+            expect(await page.evaluate(() => window.__captures)).toBe(0);
+            await page.evaluate(async () => { window.__releaseStart(); await window.__pendingStart; });
+        }
         await expect.poll(() => page.evaluate(() => window.__answers.filter(answer => answer.type === "answer").length), { timeout: 5000 }).toBe(1);
         await expect.poll(() => page.evaluate(() => window.__peers.map(peer => peer.connectionState)), { timeout: 10000 }).toEqual(["connected"]);
-        if (!knownCall) await page.evaluate(async () => { window.__releaseStart(); await window.__pendingStart; });
         await page.evaluate(() => { window.__callsModule.stopPrivateCall(); window.__remoteOfferPeer.close(); });
     });
 }
+
+test("pending start does not consent to a different caller-owned accepted call", async ({ page }) => {
+    await mountCallRaceFixture(page);
+    await page.evaluate(() => {
+        window.__holdStart = new Promise(resolve => { window.__releaseStart = resolve; });
+        window.__pendingStart = window.__callsModule.startPrivateCall("alice");
+    });
+    await page.evaluate(async () => {
+        window.__call = window.__makeCall("call-unrelated", 2, true);
+        await window.__callsModule.privateCallChanged({ id: "call-unrelated" });
+    });
+    expect(await page.evaluate(() => ({ captures: window.__captures, peers: window.__peers.length }))).toEqual({ captures: 0, peers: 0 });
+});
+
+test("a locally stopped call never regains consent from a late start response", async ({ page }) => {
+    await mountCallRaceFixture(page);
+    await page.evaluate(async () => {
+        window.__call = window.__makeCall("call-stopped", 2, true);
+        await window.__callsModule.startPrivateCall("alice");
+    });
+    await expect.poll(() => page.evaluate(() => window.__captures)).toBe(1);
+    await page.evaluate(async () => {
+        window.__callsModule.stopPrivateCall();
+        await window.__callsModule.privateCallChanged({ id: "call-stopped" });
+    });
+    expect(await page.evaluate(() => ({ captures: window.__captures, panels: document.querySelectorAll(".private-call-panel").length }))).toEqual({ captures: 1, panels: 0 });
+});
 
 test("server-reported accepted state without a local start or Accept never captures the microphone", async ({ page }) => {
     await mountCallRaceFixture(page);
     await page.evaluate(async () => {
         window.__call = window.__makeCall("call-forced", 2, true);
         await window.__callsModule.privateCallChanged({ id: "call-forced" });
+        // The incoming-signal path applies the same consent gate.
+        await window.__callsModule.privateCallSignal({
+            call_id: "call-forced", from: "alice", to: "bob", body: btoa("x".repeat(64)),
+            description: { call_id: "call-forced", from: "alice", to: "bob", type: "offer", sdp: "v=0" },
+        });
     });
     await expect(page.locator(".private-call-panel")).toHaveCount(1);
     expect(await page.evaluate(() => ({ captures: window.__captures, peers: window.__peers.length }))).toEqual({ captures: 0, peers: 0 });
