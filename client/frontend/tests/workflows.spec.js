@@ -4841,8 +4841,12 @@ for (const scenario of [
     { name: "own server kick", event: "kicked", from_server: true, self: true },
     { name: "own channel kick", event: "kicked_channel", from_server: false, self: true },
 ]) test(`${scenario.name} plays the corresponding spoken announcement`, async ({ page }) => {
-    await page.evaluate(async scenario => {
+    const expected = await page.evaluate(async scenario => {
         const { state, soundEngine, speechQueue } = window.__noxa;
+        const { presenceSpeechKey, variedSpeechClip } = await import('/src/speech-variation.js');
+        const key = scenario.forcedMove && !scenario.self
+            ? presenceSpeechKey({ client_id: 'speech-other', presence_token: 'member-visit' }, 7)
+            : !scenario.self && !scenario.leave && !scenario.move ? JSON.stringify(['speech-other', null, null, null]) : undefined;
         Object.assign(state.settings, { language: "en", speech_language: scenario.language || "en", play_sounds: true, effects_enabled: false,
             spoken_messages: true, speech_volume: 100, speech_channel: true, speech_admin: true,
             speech_removal: true, event_sounds: {}, speech_events: {}, notify_matrix: {}, dnd_enabled: false });
@@ -4866,7 +4870,7 @@ for (const scenario of [
                 state.myChannelID = 7;
                 state.clients = [
                     { client_id: "speech-self", nickname: "Alice", channel_id: 7 },
-                    { client_id: "speech-other", nickname: "Bob", channel_id: 7 },
+                    { client_id: "speech-other", nickname: "Bob", channel_id: 7, presence_token: "member-visit" },
                 ];
                 for (const cb of window.__events.event) cb(JSON.stringify({ type: "user_moved", data: {
                     client_id: scenario.self ? "speech-self" : "speech-other", channel_id: 8, by_client_id: "moderator" } }));
@@ -4879,8 +4883,9 @@ for (const scenario of [
             }
         };
         window.__dispatchSpokenEvent();
+        return `speech_${scenario.language || "en"}_${variedSpeechClip(scenario.event, key)}`;
     }, scenario);
-    await expect.poll(() => page.evaluate(() => window.__spokenEvents)).toEqual([`speech_${scenario.language || "en"}_${scenario.event}`]);
+    await expect.poll(() => page.evaluate(() => window.__spokenEvents)).toEqual([expected]);
     await page.evaluate(event => {
         window.__noxa.speechQueue.clear(); window.__spokenEvents = [];
         window.__noxa.speechQueue.last.clear();
@@ -4892,13 +4897,14 @@ for (const scenario of [
 });
 
 test("channel joins and leaves play bundled speech and respect notification preferences", async ({ page }) => {
-    await page.evaluate(async () => {
+    const expected = await page.evaluate(async () => {
         const { state, soundEngine, speechQueue } = window.__noxa;
+        const { presenceSpeechKey, variedSpeechClip } = await import('/src/speech-variation.js');
         Object.assign(state.settings, { language: "en", play_sounds: true, effects_enabled: false,
             spoken_messages: true, speech_volume: 100, event_sounds: {}, speech_events: {}, notify_matrix: {}, dnd_enabled: false });
         state.myClientID = "client-a"; state.myChannelID = 7; state.replayingTabID = "";
         state.clients = [{ client_id: "client-a", unique_id: "user-a", nickname: "Alice", channel_id: 7 },
-            { client_id: "client-b", unique_id: "user-b", nickname: "Bob", channel_id: 2 }];
+            { client_id: "client-b", unique_id: "user-b", nickname: "Bob", channel_id: 2, presence_token: "initial-away" }];
         await soundEngine.preload(); await soundEngine.resume(); speechQueue.clear();
         window.__channelSpeech = [];
         const play = soundEngine.play.bind(soundEngine);
@@ -4908,13 +4914,15 @@ test("channel joins and leaves play bundled speech and respect notification pref
             return played;
         };
         window.__moveSpeechPeer = (channel_id, by_client_id) => {
-            for (const cb of window.__events.event) cb(JSON.stringify({ type: "user_moved", data: { client_id: "client-b", channel_id, by_client_id } }));
+            for (const cb of window.__events.event) cb(JSON.stringify({ type: "user_moved", data: { client_id: "client-b", channel_id, by_client_id, presence_token: channel_id === 7 ? "joined-visit" : "away-visit" } }));
         };
         window.__moveSpeechPeer(7);
+        const key = presenceSpeechKey({ client_id: 'client-b', presence_token: 'joined-visit' }, 7);
+        return { join: 'speech_en_' + variedSpeechClip('user_join', key), move: 'speech_en_' + variedSpeechClip('user_moved', key) };
     });
-    await expect.poll(() => page.evaluate(() => window.__channelSpeech)).toEqual(["speech_en_user_join"]);
+    await expect.poll(() => page.evaluate(() => window.__channelSpeech)).toEqual([expected.join]);
     await page.evaluate(() => { window.__noxa.speechQueue.clear(); window.__moveSpeechPeer(2, "client-b"); });
-    await expect.poll(() => page.evaluate(() => window.__channelSpeech)).toEqual(["speech_en_user_join", "speech_en_user_moved"]);
+    await expect.poll(() => page.evaluate(() => window.__channelSpeech)).toEqual([expected.join, expected.move]);
     await page.evaluate(() => {
         const { state, speechQueue } = window.__noxa;
         speechQueue.clear(); window.__channelSpeech = [];
@@ -6799,6 +6807,8 @@ test("retries a missing or disconnected microphone without interrupting video or
     await page.evaluate(() => {
         const state = window.__noxa.state;
         window.__pcBeforeMicRetry = state.pc;
+        window.__micSenderBeforeRetry = state.pc.getTransceivers().find(t => t.receiver.track.kind === "audio").sender;
+        window.__transceiverCountBeforeRetry = state.pc.getTransceivers().length;
         state.screenSharing = true;
         state.shareStream = {
             getTracks: () => [{ stop: () => { window.__shareTracksStopped++; } }],
@@ -6818,7 +6828,9 @@ test("retries a missing or disconnected microphone without interrupting video or
         sharing: window.__noxa.state.screenSharing,
         shareTracksStopped: window.__shareTracksStopped,
         unpublishedShare: window.__calls.SetScreenShareForTab || 0,
-        slots: window.__callArgs.ChannelOfferMockForTab.at(-1)[2].map(({ slot }) => slot),
+        slots: window.__callArgs.ChannelOfferMockForTab.at(-1)[2].map(({ slot }) => slot).sort(),
+        sameMicrophoneSender: window.__noxa.state.pc.getSenders().includes(window.__micSenderBeforeRetry) && window.__micSenderBeforeRetry.track?.kind === "audio",
+        sameTransceiverCount: window.__noxa.state.pc.getTransceivers().length === window.__transceiverCountBeforeRetry,
     }))).toEqual({
         samePeerConnection: true,
         audioTracks: 1,
@@ -6827,6 +6839,8 @@ test("retries a missing or disconnected microphone without interrupting video or
         shareTracksStopped: 0,
         unpublishedShare: 0,
         slots: ["cam", "mic"],
+        sameMicrophoneSender: true,
+        sameTransceiverCount: true,
     });
 
     const capturesBeforeLoss = await page.evaluate(() => window.__getUserMediaCalls);
@@ -6838,10 +6852,15 @@ test("retries a missing or disconnected microphone without interrupting video or
     await expect(page.getByRole("button", { name: "Choose microphone…" })).toBeVisible();
     await expect(page.locator("#ptt-btn")).toBeDisabled();
     expect(await page.evaluate(() => window.__getUserMediaCalls)).toBe(capturesBeforeLoss);
+    await expect.poll(() => page.evaluate(() => window.__micSenderBeforeRetry.track)).toBeNull();
     expect(await page.evaluate(() => ({ ended: window.__lostTrack.readyState, samePeer: window.__noxa.state.pc === window.__pcBeforeMicRetry, camera: window.__cameraTrack.readyState, sharing: window.__noxa.state.screenSharing }))).toEqual({ ended: "ended", samePeer: true, camera: "live", sharing: true });
     await retry.click();
     await expect(page.locator("#mic-status")).toBeEmpty();
     expect(await page.evaluate(() => window.__getUserMediaCalls)).toBe(capturesBeforeLoss + 1);
+    expect(await page.evaluate(() => ({
+        sameSender: window.__noxa.state.pc.getSenders().includes(window.__micSenderBeforeRetry) && window.__micSenderBeforeRetry.track?.kind === "audio",
+        count: window.__noxa.state.pc.getTransceivers().length,
+    }))).toEqual({ sameSender: true, count: 2 });
 
     await page.evaluate(() => { window.__noxa.state.screenSharing = false; });
     await page.getByRole("button", { name: "Camera on — click to turn off", exact: true }).click();
@@ -12253,6 +12272,8 @@ for (const language of ["en", "de"]) {
 test("viewer-start speech belongs to the current publication, preserves gates and limits repeated notices", async ({ page }) => {
     const result = await page.evaluate(async () => {
         const { state, soundEngine, speechQueue } = window.__noxa;
+        const { variedSpeechClip } = await import('/src/speech-variation.js');
+        const expected = 'speech_en_' + variedSpeechClip('stream_watch_started', JSON.stringify(['publisher', 'cam', '90']));
         state.pc = {}; state.myClientID = "publisher"; state.myChannelID = 1;
         state.replayingTabID = "";
         state.settings = { ...state.settings, play_sounds: true, effects_enabled: true, sound_volume: 100,
@@ -12289,12 +12310,12 @@ test("viewer-start speech belongs to the current publication, preserves gates an
         state.settings.speech_volume = 0; counts.speechZero = await emit(); state.settings.speech_volume = 100;
         counts.enabledAgain = await emit();
         await p.stopPublication("cam"); counts.stoppedPublication = await emit(); track.stop(); speechQueue.clear();
-        return { counts, heard };
+        return { counts, heard, expected };
     });
     expect(result.counts).toEqual({ first: 1, beforeCooldown: 1, atCooldown: 2, staleGeneration: 2, otherPublisher: 2, otherSlot: 2,
         masterMuted: 2, legacyMuted: 2, speechEventMuted: 2, dnd: 2, history: 2, effectsIndependent: 3,
         speechDisabled: 3, speechZero: 3, enabledAgain: 4, stoppedPublication: 4 });
-    expect(result.heard).toEqual(Array(4).fill("speech_en_stream_watch_started"));
+    expect(result.heard).toEqual(Array(4).fill(result.expected));
 });
 
 for (const { width, mode, language, fontSize } of [

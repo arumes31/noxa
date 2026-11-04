@@ -172,7 +172,7 @@ https://opengameart.org/content/various-paper-sound-effects
 Archive SHA-256: aa1889414310c7cfdd8dc291c19d4e4fc21ec987e9238b0d961fb72449c263a4
 
 Speech: complete fixed noXa English and German sentences rendered offline.
-Both languages use the synthetic ST13 voice ("Eisbrecher"), chosen from the
+The base announcements use the synthetic ST13 voice ("Eisbrecher"), chosen from the
 ST01-ST20 auditions. ST13 is a weighted blend of the Supertonic 3 preset voice
 styles (M5 x 1.25, M1 x -0.25); no recording of a real person and no imitation of
 an identifiable character was used. The earlier EA60/AN06 recordings are retired.
@@ -228,3 +228,21 @@ SOFTWARE.
 Update announcement: TROLL1, a synthetic ST13-derived cave-troll voice with
 offline pitch/growl processing, original noXa recording under MIT. Same
 Supertonic 3 model/license; no runtime TTS, actor or character imitation.
+
+Presence announcement variations: nine additional original fixed sentences per
+user-presence event and language, rendered offline with Supertonic 3 presets
+F1-F5 and M1-M4. Together with the original ST13 line, these form the ten
+baseline variants per event. Channel join/leave add the fantasy pool below. Model and runtime licenses above apply unchanged. Exact
+texts, preset definitions, style/model hashes, mastering measurements and
+automatic content-review results are recorded in tools/speech-lines.json,
+tools/voices/ and src/assets/speech/. No runtime synthesis is used.
+
+Fantasy channel arrival/departure alternatives: ten additional original lines
+per event and language, using synthetic dwarf, elf, goblin, gnome and troll
+styles. These are original archetypes, not game quotations or impersonations.
+Supertonic preset blends and offline pitch/roughness treatments are identified
+by tools/voices/{DWARF1,ELF1,GOBLIN1,GNOME1,TROLL1}.json. The same model and
+runtime licenses above apply; no additional voice engine is shipped.
+Join/leave now have twenty fixed alternatives each; other presence events
+retain their ten alternatives. All transcripts, WAV hashes and automatic
+content-review results remain in the speech provenance and catalog.

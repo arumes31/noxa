@@ -24,6 +24,7 @@ func outboxTestApp(t *testing.T) (*App, *connManager) {
 }
 func TestChatOutboxSealedPersistenceAndDestinationIsolation(t *testing.T) {
 	a, cm := outboxTestApp(t)
+	a.settings.ChatUndoSeconds = 5 // Explicitly test an opted-in undo window.
 	request := ChatOutboxRequest{Action: "stage", Scope: "channel", Target: "7", Text: "outbox-private-canary", ReplyToID: 31}
 	result, err := a.ChatOutboxForTab("a", request)
 	if err != nil || len(result.Entries) != 1 {
@@ -104,51 +105,61 @@ func TestChatOutboxRequiresExplicitOfflineOptInAndStopsUncertainRetries(t *testi
 	}
 }
 func TestChatOutboxSendIsDelayedAndSingleFlight(t *testing.T) {
-	var sends atomic.Int32
-	a, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
-		if netproto.MessageType(frame.Type) != netproto.MsgChatSend {
-			return 0, nil, false
-		}
-		sends.Add(1)
-		var msg netproto.ChatSend
-		if err := netproto.Decode(frame, &msg); err != nil {
-			t.Error(err)
-		}
-		return netproto.MsgChatAccepted, netproto.ChatAccepted{ClientMsgID: msg.ClientMsgID, ChannelID: msg.ChannelID, Disposition: netproto.ChatStored, MessageID: 5}, true
-	})
-	a.settingsPath = filepath.Join(t.TempDir(), "settings.json")
-	a.settings = DefaultSettings()
-	a.tabs = map[string]*tabState{"a": {cm: cm}}
-	a.activeID = "a"
-	cm.mu.Lock()
-	cm.addr = "example.com:12333"
-	cm.fingerprint = "cert-a"
-	cm.clientID = "self"
-	cm.authorizationModel = netproto.AuthorizationModelRolesV1
-	cm.mu.Unlock()
-	cm.scopeKeys.put(7, 1, randKey(t))
-	result, err := a.ChatOutboxForTab("a", ChatOutboxRequest{Action: "stage", Scope: "channel", Target: "7", Text: "delayed"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.PumpChatOutbox()
-	if sends.Load() != 0 {
-		t.Fatal("sent during undo window")
-	}
-	if _, err := a.ChatOutboxForTab("a", ChatOutboxRequest{Action: "send", ID: result.Entries[0].ID}); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan struct{})
-	go func() { a.PumpChatOutbox(); close(done) }()
-	a.PumpChatOutbox()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("pump stuck")
-	}
-	result, err = a.ChatOutboxForTab("a", ChatOutboxRequest{Action: "list"})
-	if err != nil || len(result.Entries) != 0 || sends.Load() != 1 {
-		t.Fatalf("send result %+v count %d err %v", result, sends.Load(), err)
+	for _, mode := range []struct {
+		name    string
+		seconds int
+	}{{"immediate default", 0}, {"explicit undo window", 5}} {
+		t.Run(mode.name, func(t *testing.T) {
+			var sends atomic.Int32
+			a, cm := newPipedApp(t, func(frame *netproto.Frame) (netproto.MessageType, any, bool) {
+				if netproto.MessageType(frame.Type) != netproto.MsgChatSend {
+					return 0, nil, false
+				}
+				sends.Add(1)
+				var msg netproto.ChatSend
+				if err := netproto.Decode(frame, &msg); err != nil {
+					t.Error(err)
+				}
+				return netproto.MsgChatAccepted, netproto.ChatAccepted{ClientMsgID: msg.ClientMsgID, ChannelID: msg.ChannelID, Disposition: netproto.ChatStored, MessageID: 5}, true
+			})
+			a.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+			a.settings = DefaultSettings()
+			a.settings.ChatUndoSeconds = mode.seconds
+			a.tabs = map[string]*tabState{"a": {cm: cm}}
+			a.activeID = "a"
+			cm.mu.Lock()
+			cm.addr = "example.com:12333"
+			cm.fingerprint = "cert-a"
+			cm.clientID = "self"
+			cm.authorizationModel = netproto.AuthorizationModelRolesV1
+			cm.mu.Unlock()
+			cm.scopeKeys.put(7, 1, randKey(t))
+			result, err := a.ChatOutboxForTab("a", ChatOutboxRequest{Action: "stage", Scope: "channel", Target: "7", Text: "delayed"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode.seconds > 0 {
+				a.PumpChatOutbox()
+				if sends.Load() != 0 {
+					t.Fatal("sent during undo window")
+				}
+				if _, err := a.ChatOutboxForTab("a", ChatOutboxRequest{Action: "send", ID: result.Entries[0].ID}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			done := make(chan struct{})
+			go func() { a.PumpChatOutbox(); close(done) }()
+			a.PumpChatOutbox()
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("pump stuck")
+			}
+			result, err = a.ChatOutboxForTab("a", ChatOutboxRequest{Action: "list"})
+			if err != nil || len(result.Entries) != 0 || sends.Load() != 1 {
+				t.Fatalf("send result %+v count %d err %v", result, sends.Load(), err)
+			}
+		})
 	}
 }
 func TestChatOutboxInterruptedSendingRequiresManualReview(t *testing.T) {
@@ -211,5 +222,17 @@ func TestChatOutboxCorruptionCanBeBackedUpWithoutLosingCiphertext(t *testing.T) 
 	}
 	if _, err := a.ChatOutboxForTab("a", ChatOutboxRequest{Action: "stage", Scope: "global", Text: "usable again"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestChatOutboxDefaultDoesNotDelayOnlineMessages(t *testing.T) {
+	a, _ := outboxTestApp(t)
+	result, err := a.ChatOutboxForTab("a", ChatOutboxRequest{Action: "stage", Scope: "channel", Target: "7", Text: "send without an artificial wait"})
+	if err != nil || len(result.Entries) != 1 {
+		t.Fatalf("stage: %+v %v", result, err)
+	}
+	entry := result.Entries[0]
+	if entry.DueAt != entry.CreatedAt {
+		t.Fatalf("default message was delayed by %d milliseconds", entry.DueAt-entry.CreatedAt)
 	}
 }

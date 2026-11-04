@@ -4,7 +4,7 @@
 // the centre shows a tab bar above the regular screen modules, and the
 // details pane lists the members of what is on screen. Below 900 px the
 // phone screens render into #app unchanged.
-import { mediaErrorText } from "./media-e2ee-text.js";
+import { showVoiceJoinError } from "./media-e2ee-text.js";
 import "./layout.css";
 import { app, joinVoice, leaveVoice, startCall, startGroupCall } from "../app.js";
 import * as tabs from "../core/chat-tabs.js";
@@ -414,7 +414,7 @@ async function joinChannel(channel) {
     try {
         await joinVoice(channel.id);
     } catch (error) {
-        toast(t("voice.joinFailed", { error: mediaErrorText(error) }), "warn");
+        await showVoiceJoinError(error);
     } finally {
         joining = false;
     }

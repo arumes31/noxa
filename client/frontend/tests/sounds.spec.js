@@ -360,6 +360,8 @@ test("microphone and deafen actions dispatch their spoken recordings, never clic
         const played = [], play = soundEngine.play.bind(soundEngine);
         soundEngine.play = (id, options) => { const started = play(id, options); if (started) played.push(id); return started; };
         for (const action of ["mic_off", "mic_on", "deafen_on", "deafen_off"]) {
+            // Real setters commit mute/deafen before dispatching their confirmation.
+            Object.assign(window.__noxa.state, { muted: action !== "mic_on", deafened: action === "deafen_on" });
             playEvent(action);
             await new Promise(resolve => setTimeout(resolve, 200));
             speechQueue.clear();
@@ -672,4 +674,50 @@ test("channel messages ring in the background and at most every five minutes whi
     });
     expect(result.rang).toEqual(["first", "background", "background again", "focused +5m"]);
     expect(result.dm).toBe(true);
+});
+
+
+for (const event of ["user_join", "user_leave"]) test(`three independent observers dispatch the same fantasy ${event} voice through notification policy`, async ({ page, newIsolatedPage }) => {
+    const pages = [page, await newIsolatedPage(), await newIsolatedPage()];
+    const results = [];
+    for (let index = 0; index < pages.length; index++) {
+        const observer = pages[index];
+        // A same-origin empty document avoids booting native client bindings.
+        await observer.route("**/__presence_audio_test__", route => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Audio observer</title><button>Enable audio</button>" }));
+        await observer.goto(new URL("/__presence_audio_test__", page.url()).href);
+        await observer.getByRole("button", { name: "Enable audio" }).click();
+        results.push(await observer.evaluate(async ({ index, event }) => {
+            window.__noxa = { state: { activeTabID: "observer-" + index, serverGeneration: index + 1,
+                settings: { play_sounds: true, spoken_messages: true, speech_language: "de", speech_volume: 100,
+                    notify_matrix: { join_leave: { toast: false, sound: true, flash: false, native: false } } } } };
+            window.__noxaPolish = { dndActive: () => false, recordNotification: () => {} };
+            const { soundEngine, speechQueue } = await import("/src/sounds.js");
+            const { presenceSpeechKey, variedSpeechClip } = await import("/src/speech-variation.js");
+            const { notify } = await import("/src/notifications.js");
+            const ctx = soundEngine.context(), setSinkId = ctx.setSinkId.bind(ctx);
+            ctx.setSinkId = () => setSinkId({ type: "none" });
+            await soundEngine.preload(); await soundEngine.resume();
+            const played = []; const play = soundEngine.play.bind(soundEngine);
+            const attempts = []; const enqueue = speechQueue.enqueue.bind(speechQueue);
+            speechQueue.enqueue = (...args) => { const accepted = enqueue(...args); attempts.push({ event: args[0], accepted }); return accepted; };
+            let finished; const playback = new Promise(resolve => { finished = resolve; });
+            soundEngine.play = (id, options) => { const started = play(id, options); if (started) played.push(id); finished({ started, id, reason: soundEngine.blockReason(id, options) }); return started; };
+            let key;
+            for (let n = 0; n < 100; n++) {
+                const candidate = presenceSpeechKey({ client_id: "common-member", presence_token: `fantasy-${n}` }, 8);
+                if (/_v1[0-9]$/.test(variedSpeechClip(event, candidate))) { key = candidate; break; }
+            }
+            if (!key) throw Error("No fantasy event fixture found");
+            notify("join_leave", "A membership transition", { channelID: 8, className: "joins", speechEvent: event,
+                soundEvent: event === "user_join" ? "user_move_in" : "user_move_out", speechKey: key });
+            const outcome = await Promise.race([playback, new Promise(resolve => setTimeout(() => resolve({ timeout: true }), 4000))]);
+            const diagnostics = { attempts, pending: speechQueue.pending.map(item => ({ event: item.event, clipEvent: item.clipEvent })),
+                allowed: speechQueue.allowed(event, window.__noxa.state.settings, false), assets: Object.keys(speechQueue.assets.de).length };
+            speechQueue.clear(); await soundEngine.dispose(); return { played, outcome: { ...outcome, ...diagnostics } };
+        }, { index, event }));
+    }
+    expect(results.map(result => result.outcome)).toEqual(results.map(result => expect.objectContaining({ started: true })));
+    expect(results.every(result => result.played.length === 1)).toBe(true);
+    expect(new Set(results.map(result => result.played[0])).size).toBe(1);
+    expect(results[0].played[0]).toMatch(/^speech_de_user_(join|leave)_v1[0-9]$/);
 });

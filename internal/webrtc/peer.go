@@ -221,18 +221,31 @@ func (w *PeerConnectionWrapper) CreateOffer() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("creating offer: %w", err)
 	}
+	remoteSDP := ""
+	if remote := w.pc.RemoteDescription(); remote != nil {
+		remoteSDP = remote.SDP
+	}
+	wireOffer := offer
+	wireOffer.SDP, err = stabilizeOfferExtensions(offer.SDP, remoteSDP)
+	if err != nil {
+		return "", err
+	}
+	// Pion requires the exact SDP returned by CreateOffer as its local offer.
+	// The remote answer installs the wire IDs in the media engine before RTP
+	// bindings start; the browser regression verifies those negotiated bindings.
 	if err := w.pc.SetLocalDescription(offer); err != nil {
 		return "", fmt.Errorf("setting local offer: %w", err)
 	}
 	select {
-	case w.localSDP <- offer:
+	case w.localSDP <- wireOffer:
 	default:
 	}
 	w.logger.Info("webrtc renegotiation offer created",
 		zap.String("client_id", w.clientID),
-		zap.Int("sdp_len", len(offer.SDP)),
+		zap.Int("sdp_len", len(wireOffer.SDP)),
+		zap.Bool("extensions_remapped", wireOffer.SDP != offer.SDP),
 	)
-	return offer.SDP, nil
+	return wireOffer.SDP, nil
 }
 
 // SignalingState reports the current signaling state. (Pion cannot roll back

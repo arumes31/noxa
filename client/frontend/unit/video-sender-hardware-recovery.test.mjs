@@ -234,3 +234,96 @@ test("admitted HEVC software encoding uses the same bounded source recovery and 
         assert.equal(f.calls.length, admitted ? 1 : 0);
     }
 });
+
+
+test("even H264 frame sizes need not be multiples of four for hardware recovery", async () => {
+    for (const [width, height] of [[1622, 1080], [1620, 1082]]) {
+        const f = fixture();
+        f.track.getSettings = () => ({ width, height });
+        const recover = createVideoSenderRecovery(f.options);
+        for (const at of [0, 5000, 10000]) {
+            f.time(at); await recover(f.pc, f.stats({ frameWidth: width, frameHeight: height }));
+        }
+        assert.equal(f.calls.length, 1, `${width}x${height} can recover after a positive hardware capability result`);
+    }
+});
+
+test("even-frame recovery still rejects odd dimensions and unsupported hardware", async () => {
+    for (const [width, height, supported] of [[1623, 1080, true], [1620, 1081, true], [1622, 1080, false]]) {
+        const f = fixture();
+        f.track.getSettings = () => ({ width, height });
+        f.options.capable = async () => supported;
+        const recover = createVideoSenderRecovery(f.options);
+        for (const at of [0, 5000, 10000, 15000]) {
+            f.time(at); await recover(f.pc, f.stats({ frameWidth: width, frameHeight: height }));
+        }
+        assert.equal(f.calls.length, 0);
+    }
+});
+
+function stalledHardware(f, changes = {}, source = {}) {
+    return withCapture(f, { framesEncoded: 0, framesPerSecond: 0, frameWidth: undefined, frameHeight: undefined,
+        powerEfficientEncoder: true, encoderImplementation: "MediaFoundationVideoEncodeAccelerator (Intel Quick Sync H.264 Encoder MFT)",
+        targetBitrate: 5058333, ...changes }, source);
+}
+
+test("first-frame hardware stall retries using bound capture without replenishing the publication budget", async () => {
+    const f = fixture(), proofs = [];
+    f.options.retry = async (slot, track, current, proof) => { assert.ok(current()); assert.equal(track, f.track); proofs.push(proof); };
+    f.options.capable = async () => assert.fail("identified runtime hardware is already known");
+    const recover = createVideoSenderRecovery(f.options);
+    for (let at = 0; at <= 35000; at += 5000) { f.time(at); await recover(f.pc, stalledHardware(f)); }
+    assert.equal(proofs.length, 1);
+    assert.deepEqual(proofs[0], {sourceId:"source",codec:"video/H264",fmtp:"packetization-mode=1;profile-level-id=42001f",width:1920,height:1080,hardwareStartup:true,framesEncoded:0});
+    f.time(40000); await recover(f.pc, stalledHardware(f)); assert.equal(proofs.length, 2);
+    for (let at = 45000; at <= 155000; at += 5000) { f.time(at); await recover(f.pc, stalledHardware(f, {ssrc:456})); }
+    assert.equal(proofs.length, 2, "changing SSRC does not refill retries");
+    f.time(160000); await recover(f.pc, stalledHardware(f, {ssrc:456})); assert.equal(proofs.length, 3);
+});
+
+test("first-frame recovery rejects unproven, idle, ambiguous, adapted and obsolete capture", async () => {
+    for (const mode of ["unknown", "software", "idle", "stale", "future", "wrong-track", "missing", "duplicate", "scaled", "odd", "half-odd", "no-target", "limited", "advancing-output", "replaced", "paused", "quality", "scope"]) {
+        const f = fixture();
+        if(mode==="scaled")f.transceiver.sender.getParameters=()=>({encodings:[{active:true,scaleResolutionDownBy:2}]});
+        if(mode==="odd")f.track.getSettings=()=>({width:1921,height:1080});
+        if(mode==="half-odd")f.track.getSettings=()=>({width:1922,height:1080});
+        if(mode==="replaced")f.publication.generation="2";
+        if(mode==="paused")f.inactive();
+        if(mode==="quality")f.state.shareQualityUpdating=true;
+        if(mode==="scope")f.state.myChannelID=4;
+        const recover=createVideoSenderRecovery(f.options);
+        for(const at of [0,5000,10000,15000,20000]){
+            f.time(at);const stats=stalledHardware(f,mode==="unknown"?{encoderImplementation:"ExternalEncoder"}:mode==="software"?{powerEfficientEncoder:false}:mode==="no-target"?{targetBitrate:0}:mode==="limited"?{qualityLimitationReason:"bandwidth"}:mode==="advancing-output"?{framesEncoded:at+1}:{},mode==="idle"?{frames:10}:mode==="wrong-track"?{trackIdentifier:"other"}:{});
+            if(mode==="stale")stats.get("source").timestamp-=1001;
+            if(mode==="future")stats.get("source").timestamp++;
+            if(mode==="missing")stats.delete("source");
+            if(mode==="duplicate")stats.set("duplicate",{...stats.get("video"),id:"duplicate"});
+            await recover(f.pc,stats);
+        }
+        assert.equal(f.calls.length,0,mode);
+    }
+});
+
+
+test("a restarted hardware encoder can retain a frozen cumulative count before its first new output", async () => {
+    const f = fixture(), proofs = [];
+    f.options.retry = async (_slot, _track, current, proof) => { assert.ok(current()); proofs.push(proof); };
+    const recover = createVideoSenderRecovery(f.options);
+    for (const at of [0, 5000, 10000]) { f.time(at); await recover(f.pc, stalledHardware(f, { framesEncoded: 102, frameWidth: null, frameHeight: null })); }
+    assert.equal(proofs.length, 1);
+    assert.equal(proofs[0].framesEncoded, 102);
+    assert.equal(proofs[0].hardwareStartup, true);
+});
+
+test("hardware startup recovery waits for ready E2EE and resets dwell on a key epoch change", async () => {
+    const f = fixture(); let epoch = 1;
+    f.options.startupReady = () => epoch;
+    const recover = createVideoSenderRecovery(f.options);
+    for (const at of [0, 5000]) { f.time(at); await recover(f.pc, stalledHardware(f)); }
+    epoch = 0; f.time(10000); await recover(f.pc, stalledHardware(f));
+    assert.equal(f.calls.length, 0, "key setup must not restart the encoder");
+    epoch = 2;
+    for (const at of [15000, 20000]) { f.time(at); await recover(f.pc, stalledHardware(f)); }
+    assert.equal(f.calls.length, 0, "the earlier key epoch cannot supply dwell time");
+    f.time(25000); await recover(f.pc, stalledHardware(f)); assert.equal(f.calls.length, 1);
+});

@@ -1,7 +1,7 @@
 // voice.js — Voice room (09): join a channel, speaking tiles, mute,
 // deafen, push-to-talk, whisper, raised hands, priority speaker, the
 // channel's chat, audio output, data used and watching streams.
-import { mediaErrorText, mediaStatusText, tileAccount } from "./media-e2ee-text.js";
+import { mediaErrorText, mediaStatusText, tileAccount, showVoiceJoinError } from "./media-e2ee-text.js";
 import { app, leaveVoice } from "../app.js";
 import * as settings from "../core/settings.js";
 import { joinWithPassword, lockBadge } from "./server-tools.js";
@@ -33,7 +33,7 @@ function channelList(root, session) {
                 h("button", { class: "row", type: "button", style: `padding-left:${10 + c.depth * 14}px`, onclick: async event => {
                     const button = event.currentTarget;
                     button.disabled = true;
-                    try { await joinWithPassword(c); } catch (error) { toast(t("voice.joinFailed", { error: mediaErrorText(error) }), "warn"); }
+                    try { await joinWithPassword(c); } catch (error) { await showVoiceJoinError(error); }
                     button.disabled = false;
                 } },
                     icon("voice"),
@@ -112,10 +112,20 @@ export function renderVoice(root) {
         e2eeState.classList.toggle("warn", voice.mediaStatus?.state === "partial");
     };
     const renderMicState = () => {
+        micWarning.hidden = voice.microphoneAvailable !== false && !voice.microphoneError;
+        micErrorDetail.textContent = voice.microphoneError?.message ? t("vc.micError", { error: voice.microphoneError.message }) : "";
         const on = voice.transmitting;
         micState.classList.toggle("on", on);
         micState.textContent = on ? t("vc.micLive") : t("vc.micClosed");
     };
+    const micRetry = h("button", { class: "btn", type: "button", onclick: async () => {
+        micRetry.disabled = true;
+        try { await voice.retryMicrophone(); } catch { /* The voice-level notice retains the failure. */ }
+        finally { micRetry.disabled = false; }
+    } }, t("vc.micRetry"));
+    const micErrorDetail = h("p", { class: "hint" });
+    const micWarning = h("div", { class: "vc-notice vc-mic-unavailable", role: "alert" },
+        h("p", {}, t("vc.micRecoveryHint")), micErrorDetail, micRetry);
     const queueBox = h("section", { class: "card vc-queue", "aria-label": t("vc.queueTitle") });
     const muteButton = h("button", { class: "btn", type: "button", onclick: () => voice.setMuted(!voice.muted) });
     const deafenButton = h("button", { class: "btn", type: "button", onclick: () => voice.setDeafened(!voice.deafened) });
@@ -262,6 +272,7 @@ export function renderVoice(root) {
         h("div", { class: "screen-body" },
             echoBar,
             notices,
+            micWarning,
             micState,
             e2eeState,
             tiles,

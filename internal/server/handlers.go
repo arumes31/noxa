@@ -37,6 +37,7 @@ type userEvent struct {
 	ByClientID    string `json:"by_client_id,omitempty"`
 	OnMobile      bool   `json:"on_mobile,omitempty"`
 	MediaDevice   string `json:"media_device,omitempty"`
+	PresenceToken string `json:"presence_token,omitempty"`
 }
 
 // channelEvent is the payload of channel_created / channel_deleted events.
@@ -104,6 +105,14 @@ func (s *TCPServer) sendSnapshot(client *Client) error {
 func (s *TCPServer) broadcastEvent(eventType string, payload any) {
 	if s.deps == nil || s.deps.Broadcast == nil {
 		return
+	}
+	// Legacy events and role-filtered snapshots must name the same committed
+	// membership token. Never derive this from per-recipient send time.
+	if member, ok := payload.(userEvent); ok && s.deps.State != nil {
+		if current, exists := s.deps.State.GetClient(member.ClientID); exists {
+			member.PresenceToken = current.PresenceToken
+			payload = member
+		}
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

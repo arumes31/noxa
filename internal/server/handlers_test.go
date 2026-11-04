@@ -2327,6 +2327,11 @@ func TestMoveEventsCarryCommittedChannelAndActor(t *testing.T) {
 	// A user joining their own channel is its own session/client actor.
 	send(t, userConn, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
 	selfMove := nextMove()
+	memberState, _ := env.state.GetClient(userID)
+	if selfMove.PresenceToken == "" || selfMove.PresenceToken != memberState.PresenceToken {
+		t.Fatal("legacy move cue must match the committed snapshot token")
+	}
+
 	if selfMove.ClientID != userID || selfMove.FromChannelID != 0 || selfMove.ChannelID != 1 || selfMove.ByClientID != userID {
 		t.Fatalf("self move = %+v, want session %s from 0 to 1 by itself", selfMove, userID)
 	}
@@ -2334,6 +2339,11 @@ func TestMoveEventsCarryCommittedChannelAndActor(t *testing.T) {
 	// A control-channel administrator moves a distinct target session.
 	send(t, adminConn, netproto.MsgMoveClient, netproto.MoveClient{ClientID: userID, ChannelID: 2})
 	adminMove := nextMove()
+	memberState, _ = env.state.GetClient(userID)
+	if adminMove.PresenceToken == "" || adminMove.PresenceToken != memberState.PresenceToken || adminMove.PresenceToken == selfMove.PresenceToken {
+		t.Fatal("move cue must change once for every recipient")
+	}
+
 	if adminMove.ClientID != userID || adminMove.FromChannelID != 1 || adminMove.ChannelID != 2 || adminMove.ByClientID != adminID {
 		t.Fatalf("admin move = %+v, want target %s from 1 to 2 by %s", adminMove, userID, adminID)
 	}

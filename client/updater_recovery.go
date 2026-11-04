@@ -233,10 +233,10 @@ func stopUpdatedClient(process *os.Process, exited <-chan error) error {
 }
 
 func restoreFailedClientUpdate(pending *appliedClientUpdate, cause error) error {
-	oldHash, oldErr := hashUpdateExecutable(pending.previous)
-	newHash, newErr := hashUpdateExecutable(pending.target)
+	oldHash, oldErr := hashClientUpdateForRecovery(pending.previous)
+	newHash, newErr := hashClientUpdateForRecovery(pending.target)
 	if oldErr != nil || newErr != nil || oldHash != pending.oldHash || newHash != pending.newHash {
-		return fmt.Errorf("%w; executable files changed, so automatic restoration was stopped; previous executable retained at %s", cause, pending.previous)
+		return fmt.Errorf("%w; executable verification failed, so automatic restoration was stopped; previous executable retained at %s", cause, pending.previous)
 	}
 	// Both names are updater-owned and on the executable's volume. Moving the
 	// mapped old executable back is supported on Windows; no profile data moves.
@@ -244,12 +244,22 @@ func restoreFailedClientUpdate(pending *appliedClientUpdate, cause error) error 
 	if _, err := os.Lstat(failedPath); !os.IsNotExist(err) {
 		return fmt.Errorf("%w; recovery destination is unavailable; previous executable retained at %s", cause, pending.previous)
 	}
-	if err := os.Rename(pending.target, failedPath); err != nil {
+	if err := renameClientUpdateForRecovery(pending.target, failedPath, pending.newHash); err != nil {
 		return fmt.Errorf("%w; could not move failed update: %v; previous executable retained at %s", cause, err, pending.previous)
 	}
-	if err := os.Rename(pending.previous, pending.target); err != nil {
-		restoreErr := os.Rename(failedPath, pending.target)
+	if err := renameClientUpdateForRecovery(pending.previous, pending.target, pending.oldHash); err != nil {
+		restoreErr := renameClientUpdateForRecovery(failedPath, pending.target, pending.newHash)
 		return fmt.Errorf("%w; could not restore previous executable: %v; reinstating update: %v; previous executable retained at %s", cause, err, restoreErr, pending.previous)
+	}
+	return completeClientUpdateRecovery(pending, failedPath, cause)
+}
+
+func completeClientUpdateRecovery(pending *appliedClientUpdate, failedPath string, cause error) error {
+	restored, err := hashClientUpdateForRecovery(pending.target)
+	if err != nil || restored != pending.oldHash {
+		// The old name has already moved. Retain pending state and the failed
+		// image; never acknowledge or relaunch an uncertain restored executable.
+		return fmt.Errorf("%w; restored executable could not be verified at %s; failed update retained at %s; automatic recovery stopped", cause, pending.target, failedPath)
 	}
 	if !pending.retainFailedImage {
 		_ = os.Remove(failedPath)

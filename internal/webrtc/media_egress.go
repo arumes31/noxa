@@ -55,9 +55,43 @@ func (s *pubSlot) enqueueMedia(pkt *rtp.Packet, ticket mediaTicket) (bool, error
 	if !allowed {
 		return false, nil
 	}
+	// Audio has one persistent recipient SSRC even when its claimed source
+	// changes. Serialize header translation with admission, independently of
+	// video and other recipients. Preserve original timing for Sender Reports.
+	if ticket.delivery.Slot == SlotMic || ticket.delivery.Slot == SlotScreenAudio {
+		s.audioMu.Lock()
+		defer s.audioMu.Unlock()
+		previous := s.audioContinuity
+		committed := false
+		defer func() {
+			if !committed {
+				s.audioContinuity = previous
+			}
+		}()
+		ticket.timingSSRC, ticket.timingTimestamp = pkt.SSRC, pkt.Timestamp
+		now := time.Now()
+		var preferred uint32
+		var havePreferred bool
+		if previous.seen && ticket.router != nil && (previous.epoch != ticket.delivery.SourceEpoch || previous.ssrc != pkt.SSRC) {
+			preferred, havePreferred = ticket.router.sourceTiming.preservingOffset(ticket.delivery.SenderID, previous.ssrc, previous.timestampOffset, pkt.SSRC, pkt.Timestamp, now)
+		}
+		translated, ok := s.audioContinuity.translate(pkt, ticket.delivery.SourceEpoch, s.track.Codec().ClockRate, now, preferred, havePreferred)
+		if !ok {
+			return false, nil
+		}
+		packet, ok := s.egress.prepare(translated, ticket)
+		if !ok {
+			return false, nil
+		}
+		// Once handed to Pion, a write may have reached SRTP even when it
+		// returns an error. Never reuse that reserved sequence for new media.
+		committed = true
+		err := s.WriteRTP(&packet)
+		return err == nil, err
+	}
 	s.startVideoProbe(pkt, ticket)
 	if ticket.timingSSRC == 0 {
-		// Untranslated media (audio): the outbound timestamp is the source's.
+		// Media without an earlier timing annotation retains its source clock.
 		ticket.timingSSRC, ticket.timingTimestamp = pkt.SSRC, pkt.Timestamp
 	}
 	packet, ok := s.egress.prepare(pkt, ticket)
