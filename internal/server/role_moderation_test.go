@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -223,5 +224,59 @@ func TestRoleModerationProtectsOwnerAndTargetsDestinationAccess(t *testing.T) {
 		if err != nil {
 			t.Fatalf("kicked connection did not close cleanly: %v", err)
 		}
+	}
+}
+
+// A presence broadcast queued for a stalled connection holds the shared role
+// lease while it waits for that connection's writer. The wait is bounded by
+// roleWriteCeiling, so a kick (exclusive policy) still completes.
+func TestRoleKickNotBlockedByBroadcastToStalledTarget(t *testing.T) {
+	backend := serverRoleFixture()
+	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect}
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority })
+	defer env.stop()
+	env.state.AddChannel(testChannel(1))
+	member, memberID := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = member.Close() }()
+	owner, _ := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = owner.Close() }()
+	for _, conn := range []net.Conn{member, owner} {
+		send(t, conn, netproto.MsgPing, netproto.Ping{})
+		readOfType(t, conn, netproto.MsgPong)
+	}
+	target, ok := env.srv.clientByID(memberID)
+	if !ok {
+		t.Fatal("member missing")
+	}
+	target.wmu.Lock()
+	defer target.wmu.Unlock()
+	// The owner's join is broadcast to the stalled member; its writer blocks
+	// on wmu while holding the role lease and metadata lock.
+	send(t, owner, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
+	send(t, owner, netproto.MsgPing, netproto.Ping{})
+	readOfType(t, owner, netproto.MsgPong)
+	time.Sleep(200 * time.Millisecond)
+
+	started := time.Now()
+	send(t, owner, netproto.MsgKickClient, netproto.KickClient{ClientID: memberID, FromServer: true, AckRequested: true})
+	frame := readOfType(t, owner, netproto.MsgClientRemoved)
+	var removed netproto.ClientRemoved
+	if err := json.Unmarshal(frame.Payload, &removed); err != nil {
+		t.Fatal(err)
+	}
+	if removed.ClientID != memberID {
+		t.Fatalf("wrong kick acknowledgement: %+v", removed)
+	}
+	elapsed := time.Since(started)
+	t.Logf("kick completed after %v", elapsed)
+	if elapsed > roleWriteCeiling+3*time.Second {
+		t.Fatalf("kick waited %v behind a stalled broadcast", elapsed)
+	}
+	if _, ok := env.srv.clientByID(memberID); ok {
+		t.Fatal("kicked member remains registered")
 	}
 }
