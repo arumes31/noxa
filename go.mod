@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	filippo.io/edwards25519 v1.2.0
-	github.com/bluenviron/mediacommon/v2 v2.9.6
+	github.com/bluenviron/mediacommon/v2 v2.9.7
 	github.com/fxamacker/cbor/v2 v2.9.6
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/google/uuid v1.6.0
