@@ -22,9 +22,14 @@ function fakeMedia() {
             keys.set(`${pid}#${epoch}`, { kid, key: [...key] }); log.push(["key", pid, epoch, kid]);
         },
         async activate(pid, epoch) { log.push(["activate", pid, epoch]); },
-        async retire(pid, through) { retired.set(pid, Math.max(retired.get(pid) || 0, through)); log.push(["retire", pid, through]); },
-        async retireOne(pid, epoch) { log.push(["retireOne", pid, epoch]); },
-        async forget(pid) { log.push(["forget", pid]); },
+        // Retirement removes key material like the real worker does, so a key
+        // still present in `keys` really is usable.
+        async retire(pid, through) {
+            retired.set(pid, Math.max(retired.get(pid) || 0, through)); log.push(["retire", pid, through]);
+            for (const k of [...keys.keys()]) { const [p, e] = k.split("#"); if (p === pid && Number(e) <= through) keys.delete(k); }
+        },
+        async retireOne(pid, epoch) { keys.delete(`${pid}#${epoch}`); log.push(["retireOne", pid, epoch]); },
+        async forget(pid) { for (const k of [...keys.keys()]) if (k.split("#")[0] === pid) keys.delete(k); log.push(["forget", pid]); },
     };
 }
 
@@ -231,4 +236,97 @@ test("end to end: a listener already holds the key a sender switches to on a joi
     assert.deepEqual(held.key, own.key);
     assert.equal(held.kid, own.kid);
     S.stop(); L.stop();
+});
+
+test("a back-to-back join waits for the previous ratchet to land: fresh epoch instead of a second ratchet", async () => {
+    const { e, sent, hold } = gatedEngine();
+    const a = member("c1", "u1", "d1"), b = member("c2", "u2", "d2");
+    e.setRoster([a]);
+    e.start({ ...me, principal: "u-b2b", device: "d-b2b" });
+    await flush();
+    announce(e, "c1", "u1", "d1", 9_400_000_000_000); announce(e, "c2", "u2", "d2", 9_400_000_000_000);
+    await flush();
+    const first = sent[0].body.epoch;
+    const gate = hold(); // the first ratchet's controls are not delivered yet
+    e.setRoster([a, b]); await flush();
+    const ratchet = sent.at(-1).body.epoch;
+    assert.equal(ratchet, first + 1);
+    e.setRoster([a, b, member("c3", "u3", "d3")]); await flush();
+    const next = sent.at(-1).body.epoch;
+    assert.ok(next >= ratchet + 2, "d1 may not have pre-derived the next successor yet: fresh");
+    gate.release(); await flush(80);
+    e.stop();
+});
+
+test("a pending renewal is never turned into a ratchet by a join in the same window", async () => {
+    let tick = null;
+    const timers = { setTimeout: fn => setTimeout(fn, 0), clearTimeout, setInterval: fn => { tick = fn; return 1; }, clearInterval: () => {} };
+    const { e, sent } = gatedEngine({ timers });
+    const a = member("c1", "u1", "d1");
+    e.setRoster([a]);
+    e.start({ ...me, principal: "u-renew", device: "d-renew" });
+    await flush();
+    announce(e, "c1", "u1", "d1", 9_500_000_000_000); announce(e, "c2", "u2", "d2", 9_500_000_000_000);
+    await flush();
+    const first = sent[0].body.epoch;
+    tick();                                   // renewal pending ...
+    e.setRoster([a, member("c2", "u2", "d2")]); // ... and a join coalesces into it
+    await flush(80);
+    const later = sent.filter(x => x.body.epoch > first);
+    assert.ok(later.length && later.every(x => x.body.epoch >= first + 2), "renewal stays a fresh random epoch");
+    e.stop();
+});
+
+test("listeners that pre-derived a ratchet epoch count as key holders at once", async () => {
+    const { e, sent, hold } = gatedEngine();
+    const a = member("c1", "u1", "d1");
+    e.setRoster([a]);
+    e.start({ ...me, principal: "u-inh", device: "d-inh" });
+    await flush();
+    announce(e, "c1", "u1", "d1", 9_600_000_000_000);
+    await flush();
+    const gate = hold();
+    e.setRoster([a, member("c2", "u2", "d2")]); await flush();
+    assert.equal(sent.at(-1).body.epoch, sent[0].body.epoch + 1);
+    const st = e.status();
+    assert.deepEqual(st.keyHolders.map(k => k.device), ["d1"], "d1 already holds the successor");
+    assert.equal(st.waiting, 1, "only the joiner waits");
+    assert.equal(st.participants.find(p => p.clientID === "c1").sent, true);
+    gate.release(); await flush();
+    e.stop();
+});
+
+test("a failed delivery is retried once the epoch is active, before the rest of the distribution settles", async () => {
+    const media = fakeMedia();
+    const sent = [];
+    let release;
+    const slow = new Promise(r => { release = r; });
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, activateMaxWaitMs: Infinity,
+        send: async c => {
+            sent.push(c);
+            if (c.device === "d1" && sent.filter(x => x.device === "d1").length === 1) throw Object.assign(new Error("x"), { code: "device_unavailable" });
+            if (c.device === "d2") await slow; // never settles during the check
+            return { ok: true };
+        } });
+    e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2")]);
+    e.start({ ...me, principal: "u-retry", device: "d-retry" });
+    await flush(80);
+    assert.ok(sent.filter(c => c.device === "d1").length >= 2, "d1 retried while d2 is still pending");
+    release(); await flush();
+    e.stop();
+});
+
+test("a legacy session sharing a ratchet-capable device blocks the ratchet", async () => {
+    const { e, sent } = gatedEngine();
+    const a = member("c1", "u1", "d1"), twin = member("c1b", "u1", "d1");
+    e.setRoster([a, twin]);
+    e.start({ ...me, principal: "u-twin", device: "d-twin" });
+    await flush();
+    announce(e, "c1", "u1", "d1", 9_700_000_000_000);
+    announce(e, "c1b", "u1", "d1", 9_700_000_000_001, "legacy");
+    await flush();
+    const first = sent[0].body.epoch;
+    e.setRoster([a, twin, member("c2", "u2", "d2")]); await flush(80);
+    assert.ok(sent.at(-1).body.epoch >= first + 2, "fresh: the legacy session did not pre-derive");
+    e.stop();
 });
