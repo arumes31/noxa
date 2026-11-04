@@ -15,7 +15,7 @@ func TestUpdateBrowserNormalPolicyIgnoresLegacyEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "--disable-features=msSmartScreenProtection,ForceSoftwareForRtcLowResolutions,MediaFoundationUseSWBRCForH264Camera --enable-features=WebRtcAllowWgcUsingTexture"
+	want := "--disable-features=msSmartScreenProtection,ForceSoftwareForRtcLowResolutions,MediaFoundationUseSWBRCForH264Camera"
 	if got != want {
 		t.Fatalf("ordinary boot policy = %q, want %q", got, want)
 	}

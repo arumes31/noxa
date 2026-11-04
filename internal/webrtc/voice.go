@@ -600,6 +600,7 @@ func (v *Voice) HandleOffer(clientID, offerSDP string, onLocalCandidate func(can
 					if cfg := v.channelAudioFor(clientID); !cfg.IsZero() {
 						answer = RewriteOpusFMTP(answer, cfg)
 					}
+					v.logPublishedVideoNegotiation(clientID, offerSDP, answer)
 					// An answer can only carry tracks the client offered m-lines
 					// for. Output tracks added (or rebuilt) since the last server
 					// offer must follow in one; the client re-offer is also the
@@ -652,6 +653,7 @@ func (v *Voice) HandleOffer(clientID, offerSDP string, onLocalCandidate func(can
 	if cfg := v.channelAudioFor(clientID); !cfg.IsZero() {
 		answer = RewriteOpusFMTP(answer, cfg)
 	}
+	v.logPublishedVideoNegotiation(clientID, offerSDP, answer)
 	// Publisher tracks beyond the client's offered m-lines (and changes
 	// deferred while the initial answer was pending) follow in a server offer.
 	if v.router.unannouncedOutputs(clientID, answer) > 0 {
