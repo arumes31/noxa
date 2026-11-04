@@ -36,7 +36,7 @@ for (const phase of ['identity validation', 'metadata update']) {
   './core/device.js':{signIn:async()=>({unique_id:'alice',device_id:'phone',client_id:'c1'})},
   './core/identity-store.js':{assertIdentityFence:async()=>{if(phase==='identity validation')await holdOnce()},beginIdentity:none,clearIdentity:none,loadIdentity:none,saveIdentity:none,updateMeta:async()=>{if(phase==='metadata update')await holdOnce()}},
   './core/outbox.js':{enqueue:none,flush:async()=>{},showPending:async()=>{},waitingCount:async()=>0},
-  './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:async()=>({})},
+  './core/push.js':{announceRead:none,closeAllNotifications:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:async()=>({})},
   './core/settings.js':{get:()=>[]},'./core/servers.js':{addServer:()=>[]},
   './notifier.js':{notifier:{install(){},decide(){return {count:true}},read(){}}},
   './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{},resetCallLog:()=>{}},
@@ -102,7 +102,7 @@ for (const existingGuest of [false, true]) {
    './core/device.js': {signIn:async(conn,identity)=>{attempted=identity;throw new Error("invalid server password")}},
    './core/identity-store.js': {assertIdentityFence: none, beginIdentity: ()=>({generation:1,active:true}), clearIdentity:()=>writes.push("clear"),loadIdentity:none,saveIdentity:()=>writes.push("save"),updateMeta:()=>writes.push("update")},
    './core/outbox.js': {enqueue:none,flush:none,showPending:none,waitingCount:none},
-   './core/push.js': {announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:none},
+   './core/push.js': {announceRead:none,closeAllNotifications:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:none},
    './core/settings.js':{get:()=>[]},'./core/servers.js':{addServer:()=>[]},
    './notifier.js': {notifier:{install(){},decide(){return {count:true}},read(){}}},
    './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{},resetCallLog:()=>{}},
@@ -123,13 +123,14 @@ for (const existingGuest of [false, true]) {
  });
 }
 
-test('guest snapshot received while saving identity subscribes to channels', async () => {
+test('guest snapshot received while saving identity subscribes to channels; a fresh guest drops the replaced account memory', async () => {
  const conn = new FakeConnection();
  conn.request=async(type,body)=>{seen.push(...body.channel_ids);return {channel_ids:body.channel_ids}};
  let release, entered;
  const blocked = new Promise(r => {release=r});
  const atUpdate = new Promise(r => {entered=r});
  const seen = [];
+ let closedAll = 0, replaced = 0;
  class DirectMessages extends EventTarget {
    constructor(session) { super(); this.ready=Promise.resolve();  }
    async importHistory() {} close() {}
@@ -143,7 +144,7 @@ test('guest snapshot received while saving identity subscribes to channels', asy
   './core/device.js':{signIn:async()=>({unique_id:'alice',device_id:'phone',client_id:'c1'})},
   './core/identity-store.js':{assertIdentityFence:none,beginIdentity:none,clearIdentity:none,loadIdentity:none,saveIdentity:async()=>{entered();await blocked},updateMeta:none},
   './core/outbox.js':{enqueue:none,flush:async()=>{},showPending:async()=>{},waitingCount:async()=>0},
-  './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:async()=>({})},
+  './core/push.js':{announceRead:none,closeAllNotifications:()=>{closedAll++},closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:async()=>({})},
   './core/settings.js':{get:()=>[]},'./core/servers.js':{addServer:()=>[]},
   './notifier.js':{notifier:{install(){},decide(){return {count:true}},read(){}}},
   './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{},resetCallLog:()=>{}},
@@ -153,12 +154,15 @@ test('guest snapshot received while saving identity subscribes to channels', asy
  const mod=new vm.SourceTextModule(await fs.readFile(new URL('../src/app.js',import.meta.url),'utf8'),{context});
  await mod.link(spec=>new vm.SyntheticModule(Object.keys(sources[spec]),function(){for(const [k,v] of Object.entries(sources[spec]))this.setExport(k,v)},{context}));
  await mod.evaluate();
+ mod.namespace.app.addEventListener('account-replaced',()=>{replaced++});
  const connecting=mod.namespace.connect({guest:{nickname:'Guest',serverPassword:''}});
  await atUpdate;
  conn.deliver(Msg.Snapshot,{root_channels:[{ChannelID:1,Name:'Lobby',SystemKind:'home'},{ChannelID:2,Name:'Public1'}]});
  release();
  await connecting;
  assert.deepEqual(seen,[2]);
+ assert.equal(replaced,1);
+ assert.equal(closedAll,1);
 });
 
 
@@ -170,7 +174,7 @@ test('foreground and restored-page events probe an apparently online session', a
   './core/connection.js':{Connection:class{}},'./core/frame.js':{Msg:{}}, './core/olm-directory.js':{signBundle:()=>({})}, './core/olm-reset.js':{signReset:()=>({})}, './core/link-binding.js':{verifyLinkBinding:()=>'',announcedBinding:()=>''}, './core/dm-trust.js':{signKeyRecord:()=>''}, './core/ratchet-consumer.js':{RatchetConsumer:class{},connectionTransport:()=>({})}, './core/crypto.js':{generateIdentity},'./core/device.js':{signIn:none},
   './core/identity-store.js':{assertIdentityFence:none,beginIdentity:none,clearIdentity:none,loadIdentity:none,saveIdentity:none,updateMeta:none},
   './core/outbox.js':{enqueue:none,flush:none,showPending:none,waitingCount:none},
-  './core/push.js':{announceRead:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:none},
+  './core/push.js':{announceRead:none,closeAllNotifications:none,closeNotifications:none,reportVisibility:none,setBadge:none,syncPush:none},
   './core/settings.js':{get:()=>[]},'./core/servers.js':{addServer:()=>[]},
   './notifier.js':{notifier:{install(){},decide(){return {count:true}},read(){}}},
   './core/conversation-prefs.js':{activityShared:()=>false,isMuted:()=>false,syncMuted:()=>{},watchCallLog:()=>{},resetCallLog:()=>{}},

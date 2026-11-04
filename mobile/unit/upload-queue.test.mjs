@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { _resetUploads, cancelUpload, dismissUpload, enqueueUpload, onUploadsChanged, pendingUploads, retryUpload, setUploadConnection, uploads } from "../src/core/upload-queue.js";
+import { _resetUploads, cancelUpload, discardUploads, dismissUpload, enqueueUpload, onUploadsChanged, pendingUploads, retryUpload, setUploadConnection, uploads } from "../src/core/upload-queue.js";
 
 const file = (name, size = 3) => new File([new Uint8Array(size)], name);
 globalThis.location ??= { protocol: "http:", host: "127.0.0.1" };
@@ -51,5 +51,26 @@ test("queued uploads cancel without starting", async () => {
     release?.({});
     await settle();
     assert.equal(first.status, "canceled");
+    _resetUploads();
+});
+
+test("an upload never runs for a different account than the one that queued it", async () => {
+    _resetUploads();
+    let owner = "1:alice";
+    const requests = [];
+    setUploadConnection(() => ({ open: true, request: (...args) => { requests.push(args); return Promise.reject(new Error("offline")); } }), () => owner);
+    const item = enqueueUpload(file("private.txt"), { channelID: 2 });
+    await settle();
+    assert.equal(item.status, "error");
+    const sent = requests.length;
+    owner = "2:bob";
+    retryUpload(item.id);
+    await settle();
+    assert.equal(item.status, "error");
+    assert.match(item.error, /account changed/);
+    assert.equal(requests.length, sent, "nothing sent for the replacement account");
+    discardUploads();
+    assert.deepEqual(uploads(), []);
+    setUploadConnection(() => null);
     _resetUploads();
 });

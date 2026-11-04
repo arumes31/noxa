@@ -29,3 +29,23 @@ test('revoked group sender remains verifiable without entering the live director
  assert.equal(await dm.historicalSenderKey('alice','phone',phone.x25519_public_key,[phone,first]),null);
  groups.close();
 });
+
+test('server history records cannot replace or mark authenticated ratchet messages', async () => {
+ const recipient=generateIdentity();
+ const dm={devicesOf:async()=>({trust:'ok',devices:[]}),historicalSenderKey:async()=>null};
+ const page=[{id:'olm:k1',body:'',from_unique_id:'alice'},{id:2,body:'',from_unique_id:'alice',protocol:'noxa-olm-v1',key:'k2',edited:true}];
+ const session=new EventTarget();Object.assign(session,{uniqueID:'bob',identity:recipient,conn:{request:async()=>({messages:page})}});
+ const groups=new Groups(session,dm);
+ groups.messages.set('group',[{id:'olm:k1',key:'k1',protocol:'noxa-olm-v1',reference:'r1',conversation_id:'group',from_unique_id:'alice',text:'authentic',created_at:1}]);
+ await groups.loadOlder('group');
+ const list=groups.messages.get('group');
+ const ratchet=list.find(m=>m.id==='olm:k1');
+ assert.equal(ratchet.text,'authentic');
+ assert.equal(!!ratchet.deleted,false);
+ const legacy=list.find(m=>m.id===2);
+ assert.equal(legacy.deleted,true);
+ assert.equal(legacy.protocol,undefined);
+ assert.equal(legacy.key,undefined);
+ assert.equal(list.length,2);
+ groups.close();
+});

@@ -2,7 +2,7 @@
 // (Web Share Target). The service worker receives the POST to /app/share,
 // keeps text and files here, sealed like the other stores, and redirects to
 // #/share, where the user picks a conversation. Only the latest share is kept.
-import { openDB, run, seal, Stores, unseal } from "./db.js";
+import { fencedWrite, identityFence, openDB, run, seal, Stores, unseal } from "./db.js";
 
 const KEY = "pending";
 export const MAX_SHARED_FILES = 10;
@@ -23,13 +23,18 @@ export function shareText({ title = "", text = "", url = "" } = {}) {
 export async function putShare({ text = "", files = [] }) {
     const db = await openDB();
     try {
+        // The identity generation before the files are read and sealed: a
+        // sign-out or account replacement meanwhile fences the write, so a
+        // share never lands in the next account. Sharing before sign-in
+        // (no active identity) stays allowed.
+        const fence = await identityFence(db);
         const sealedFiles = [];
         for (const file of files.slice(0, MAX_SHARED_FILES)) {
             const record = await seal(db, new Uint8Array(await file.arrayBuffer()));
             sealedFiles.push({ name: file.name || "shared", type: file.type || "", record });
         }
         const value = { at: Date.now(), text: await seal(db, encoder.encode(text)), files: sealedFiles };
-        await run(db, Stores.share, "readwrite", store => store.put(value, KEY));
+        await fencedWrite(db, [Stores.share], fence, tx => tx.objectStore(Stores.share).put(value, KEY), { onboarding: true });
     } finally {
         db.close();
     }

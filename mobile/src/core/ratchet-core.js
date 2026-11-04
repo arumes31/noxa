@@ -33,6 +33,12 @@ async function loadBytes(signal) {
     return bytes;
 }
 
+function privateCopy(bytes) {
+    if (bytes instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && bytes instanceof SharedArrayBuffer)) return new Uint8Array(bytes.slice(0));
+    if (ArrayBuffer.isView(bytes)) return new Uint8Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    return new Uint8Array(bytes);
+}
+
 /**
  * Load and authenticate the bundled core. bytes is useful to offline packagers
  * and tests; it must match the same embedded hash. No alternate core is accepted.
@@ -43,7 +49,10 @@ export async function createRatchetCore({ bytes, signal } = {}) {
     const timeout = AbortSignal.timeout(TIMEOUT);
     const loadingSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
     loadingSignal.throwIfAborted();
-    const binary = bytes ? new Uint8Array(bytes) : await loadBytes(loadingSignal);
+    // A private snapshot: new Uint8Array(ArrayBuffer) is only a view the
+    // caller can still write while the digest is awaited, so hash and
+    // compile a copy nobody else holds.
+    const binary = bytes ? privateCopy(bytes) : await loadBytes(loadingSignal);
     loadingSignal.throwIfAborted();
     if (!binary.length || binary.length > MAX_WASM) throw new Error("invalid ratchet core size");
     const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", binary));

@@ -10,7 +10,8 @@ import { Groups } from "./core/groups.js";
 import { MUTED_CACHE, MUTED_URL } from "./core/conversation-prefs.js";
 import { SYNC_TAG, enqueue, flush, pending } from "./core/outbox.js";
 import { Msg } from "./core/frame.js";
-import { announceRead } from "./core/push.js";
+import { INTENT_CACHE, announceRead, saveAnswerIntent } from "./core/push.js";
+import { currentFence } from "./core/db.js";
 import { putShare, shareText } from "./core/share-store.js";
 
 const VERSION = "noxa-shell-v3";
@@ -21,7 +22,7 @@ self.addEventListener("install", event => {
 });
 
 self.addEventListener("activate", event => {
-    event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== MUTED_CACHE).map(k => caches.delete(k)))));
+    event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== MUTED_CACHE && k !== INTENT_CACHE).map(k => caches.delete(k)))));
 });
 
 // The page asks before activating a new version so it never swaps code mid-call.
@@ -143,6 +144,26 @@ async function closeTag(tag) {
     for (const notification of await self.registration.getNotifications({ tag })) notification.close();
 }
 
+/** The local identity generation notifications are bound to (0 when signed out). */
+async function identityGeneration() {
+    try {
+        const fence = await currentFence();
+        return fence?.active ? fence.generation : 0;
+    } catch {
+        return 0;
+    }
+}
+
+/**
+ * Whether a notification still belongs to the account signed in now: its
+ * actions (reply, mark read, answer, decline) never run as a replacement
+ * account after sign-out or an account switch.
+ */
+async function currentNotification(data) {
+    const generation = await identityGeneration();
+    return generation > 0 && data?.generation === generation;
+}
+
 async function onPush(push) {
     if (push.kind === "clear") {
         await closeTag(push.tag);
@@ -173,7 +194,7 @@ async function onPush(push) {
         ...(quiet ? {} : { vibrate: text.call ? [400, 200, 400, 200, 400] : [120] }),
         // iOS shows no actions; Android gets Answer and Decline on calls, Reply and Mark as read on messages.
         actions: text.call ? [{ action: "answer", title: words().answer }, { action: "decline", title: words().decline }] : messageActions(push),
-        data: { url: routeFor(push.tag), tag: push.tag },
+        data: { url: routeFor(push.tag), tag: push.tag, generation: await identityGeneration() },
     });
     await updateBadge();
 }
@@ -222,7 +243,12 @@ function replyTarget(tag) {
  * Reply or mark read from the notification: an open app does it itself;
  * otherwise the worker signs in briefly like the outbox flush.
  */
-async function notificationAction(action, tag, reply) {
+async function notificationAction(action, tag, reply, data) {
+    if (!await currentNotification(data)) {
+        await closeTag(tag);
+        await updateBadge();
+        return;
+    }
     const [scope, id = ""] = String(tag).split(/:(.*)/s);
     const target = action === "reply" ? replyTarget(tag) : null;
     if (target && reply) await enqueue(target, reply.slice(0, 4000));
@@ -245,12 +271,18 @@ self.addEventListener("notificationclick", event => {
     const typed = typeof event.reply === "string" ? event.reply.trim() : "";
     // A reply without inline text (unsupported browser) opens the conversation.
     if (event.action === "read" || (event.action === "reply" && typed)) {
-        event.waitUntil(notificationAction(event.action, tag, typed).catch(() => {}));
+        event.waitUntil(notificationAction(event.action, tag, typed, event.notification.data).catch(() => {}));
         return;
     }
-    const url = event.notification.data?.url || "/app/#/home";
-    const call = callID(event.notification.data?.tag);
+    let url = event.notification.data?.url || "/app/#/home";
+    let call = callID(event.notification.data?.tag);
     event.waitUntil((async () => {
+        // A stale notification (another account now) only opens the app.
+        if (call && !await currentNotification(event.notification.data)) {
+            if (event.action === "decline") return;
+            call = "";
+            url = "/app/#/home";
+        }
         const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
         const open = windows.find(client => new URL(client.url).pathname.startsWith("/app/"));
         if (call && event.action === "decline") {
@@ -262,8 +294,11 @@ self.addEventListener("notificationclick", event => {
             if (call && event.action === "answer") open.postMessage({ type: "call-action", action: "answer", id: call });
             await open.focus();
         } else {
-            // A fresh window accepts once the call rings on its session.
-            await self.clients.openWindow(call && event.action === "answer" ? `/app/?answer=${encodeURIComponent(call)}${new URL(url, self.location.origin).hash}` : url);
+            // A fresh window accepts once the call rings on its session, and
+            // only with the single-use intent left here for it.
+            const answer = call && event.action === "answer";
+            if (answer) await saveAnswerIntent(call);
+            await self.clients.openWindow(answer ? `/app/?answer=${encodeURIComponent(call)}${new URL(url, self.location.origin).hash}` : url);
         }
         await updateBadge();
     })());
@@ -326,6 +361,11 @@ async function signedIn(work = async () => true) {
         // Offline DMs are replayed immediately after authentication.
         const dm = new DirectMessages(session, stored.meta, { fence: stored.fence });
         const groups = new Groups(session, dm);
+        // The worker runs no ratchet consumer: private messages are never sent
+        // here with legacy (static-key) encryption. They stay queued until
+        // the app sends them over noxa-olm-v1; channel messages still go.
+        dm.secureRequired = () => Object.assign(new Error("secure messaging needs the app to be open"), { code: "secure_unavailable" });
+        groups.secureRequired = dm.secureRequired;
         try {
             if (!await work(session)) return;
             const waiting = (await pending()).filter(entry => !entry.expired && !entry.failed);
@@ -352,10 +392,13 @@ async function syncOutbox() {
         for (const client of windows) client.postMessage({ type: "flush-outbox" });
         return;
     }
-    const waiting = (await pending()).filter(entry => !entry.expired && !entry.failed);
+    // Only channel messages are sent in the background (private ones wait for
+    // the app's secure session), so only they make the browser retry.
+    const background = entry => !entry.expired && !entry.failed && entry.kind === "channel";
+    const waiting = (await pending()).filter(background);
     if (!waiting.length) return;
     await signedIn();
-    const left = (await pending()).filter(entry => !entry.expired && !entry.failed);
+    const left = (await pending()).filter(background);
     if (left.length) throw new Error(`${left.length} messages still waiting`);
 }
 

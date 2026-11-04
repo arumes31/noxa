@@ -36,6 +36,7 @@ export async function linkPhone(page, desktop, webURL, expect) {
     const secret = Uint8Array.from(Buffer.from(link.secret, "base64"));
     const claimed = nextDeviceEvent(desktop.conn, "link_claimed");
     await page.goto(`${webURL}/link#id=${link.link_id}&k=${toBase64URL(secret)}`);
+    await page.getByRole("button", { name: "Continue" }).click();
     const event = await claimed;
     const sas = linkSAS(secret, linkClaimTranscript(event.link_id, event.ed25519_public_key, event.x25519_public_key));
     // A refused claim returns to Connect with a toast; surface its text instead of a bare timeout.

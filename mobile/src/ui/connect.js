@@ -124,6 +124,25 @@ export function renderConnect(root, { onSignedIn, errorMessage = "" }) {
     return () => scanners.get(root)?.abort();
 }
 
+/**
+ * Asks before a pairing link opened from a URL is claimed: any site can
+ * send this browser to /link, so the account it would adopt (and the stored
+ * account it would replace) needs the user's consent here. current names
+ * the stored account, or is empty when this browser has none.
+ */
+export function confirmLink(root, { current = "" } = {}) {
+    return new Promise(resolve => {
+        const answer = value => resolve(value);
+        root.replaceChildren(h("main", { class: "connect" }, brand(),
+            h("section", { class: "card connect-card", role: "dialog", "aria-labelledby": "link-confirm-heading" },
+                h("h2", { id: "link-confirm-heading" }, t("link.confirmTitle")),
+                h("p", { class: "hint" }, t("link.confirmBody")),
+                current ? h("p", { class: "error", role: "alert" }, t("link.confirmReplace", { name: current })) : null,
+                h("button", { class: "btn btn-primary btn-block", type: "button", onclick: () => answer(true) }, t("link.confirmContinue")),
+                h("button", { class: "btn btn-block", type: "button", onclick: () => answer(false) }, t("link.cancel")))));
+    });
+}
+
 /** Claims a link and waits for the desktop's decision. */
 export async function runLink(root, link, { onSignedIn, fence }) {
     scanners.get(root)?.abort();

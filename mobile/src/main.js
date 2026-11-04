@@ -292,9 +292,16 @@ async function boot() {
     if (link) {
         // The secret must not linger in history or be re-claimed on reload.
         history.replaceState(null, "", "/app/");
-        const { runLink } = await screens.connect();
-        await runLink(root, link, { onSignedIn });
-        return;
+        // Nothing is claimed until the user confirms, naming the stored
+        // account the link would replace. An unreadable stored identity
+        // must not block re-linking.
+        await loadDevice().catch(() => null);
+        const { confirmLink, runLink } = await screens.connect();
+        const current = app.identity ? (app.meta.nickname || app.meta.uniqueID || "?") : "";
+        if (await confirmLink(root, { current })) {
+            await runLink(root, link, { onSignedIn });
+            return;
+        }
     }
     await loadDevice();
     if (app.identity && (app.meta.linked || (app.meta.guest && app.info.guest_login && !app.info.server_password_required))) {

@@ -102,6 +102,29 @@ function pushParagraphs(out, text, options) {
 }
 
 /**
+ * Drops trailing punctuation from a matched URL: . , ; : ! ? always, and a
+ * closing parenthesis only when it is unbalanced. Parentheses are counted
+ * once and updated while trimming, so the work stays linear in the URL.
+ */
+function trimURL(link) {
+    let open = 0, close = 0;
+    for (const c of link) {
+        if (c === "(") open++;
+        else if (c === ")") close++;
+    }
+    let end = link.length;
+    while (end > 0) {
+        const c = link[end - 1];
+        if (c === ")") {
+            if (open >= close) break;
+            close--;
+        } else if (!".,;:!?".includes(c)) break;
+        end--;
+    }
+    return link.slice(0, end);
+}
+
+/**
  * Parses inline markup. options.customEmoji is a Set of names the server
  * knows; those become custom-emoji nodes, other :names: use the built-in map.
  * options.mentionNames maps "@name" strings to unique IDs for mention nodes.
@@ -121,8 +144,7 @@ export function parseInline(text, options = {}) {
         if (next === code) nodes.push({ type: "inline-code", code: code[1] });
         else {
             // A trailing ) or . after a URL is usually punctuation, not part of it.
-            let link = url[0];
-            while (/[.,;:!?)]$/.test(link) && !(link.endsWith(")") && (link.match(/\(/g) || []).length >= (link.match(/\)/g) || []).length)) link = link.slice(0, -1);
+            const link = trimURL(url[0]);
             nodes.push({ type: "link", url: link });
             rest = rest.slice(next.index + link.length);
             continue;

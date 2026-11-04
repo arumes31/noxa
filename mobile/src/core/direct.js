@@ -558,6 +558,11 @@ export class DirectMessages extends EventTarget {
         const own = from === this.ownUID;
         const nickname = own ? "" : data.from;
         if (data.dm_action) {
+            // Legacy history is read-only in an upgraded session: a legacy
+            // copy authenticates only its text, not the relay-supplied action
+            // and target, so a replayed copy could otherwise edit or delete
+            // another message. Authenticated changes arrive via the ratchet.
+            if (this.secureRequired) return;
             if (text !== null) this.#applyChange(peer, { action: data.dm_action, ref: data.ref_client_msg_id, from, text });
             return;
         }

@@ -72,6 +72,8 @@ test("message pushes carry Reply and Mark-as-read on Android, calls carry Answer
     assert.deepEqual(shown[0].actions.map(a => a.action), ["reply", "read"]);
     assert.equal(shown[0].actions[0].type, "text");
     assert.equal(shown[0].data.url, "/app/#/dm/uid-1");
+    // Bound to the identity generation that received it.
+    assert.equal(shown[0].data.generation, 1);
 
     await push({ kind: "call", tag: "call:c-9", from: "Ivy", video: true });
     assert.equal(shown[1].body, "Incoming video call");
@@ -110,7 +112,7 @@ test("notification actions: decline and answer reach an open app, a closed app o
     const messages = [];
     const open = { visibilityState: "hidden", url: "https://chat.example/app/#/home", postMessage: m => messages.push(m), focus: async () => {} };
     windows.push(open);
-    const notification = { close() {}, data: { url: "/app/#/call/c-9", tag: "call:c-9" } };
+    const notification = { close() {}, data: { url: "/app/#/call/c-9", tag: "call:c-9", generation: 1 } };
     await dispatch("notificationclick", { notification, action: "decline" });
     assert.deepEqual(messages, [{ type: "call-action", action: "decline", id: "c-9" }]);
     messages.length = 0;
@@ -119,13 +121,35 @@ test("notification actions: decline and answer reach an open app, a closed app o
     windows.length = 0;
     await dispatch("notificationclick", { notification, action: "answer" });
     assert.deepEqual(opened, ["/app/?answer=c-9#/call/c-9"]);
+    // The fresh window auto-accepts only with this single-use intent.
+    const intent = await (await fakeCache.match("/app/__intents/answer.json")).json();
+    assert.equal(intent.id, "c-9");
+    assert.ok(intent.until > Date.now());
+});
+
+test("actions of a notification from another identity generation do nothing", async () => {
+    for (const entry of await pending()) await remove(entry.id);
+    opened.length = 0;
+    const messages = [];
+    const open = { visibilityState: "hidden", url: "https://chat.example/app/#/home", postMessage: m => messages.push(m), focus: async () => {} };
+    windows.push(open);
+    const stale = { close() {}, data: { url: "/app/#/dm/uid-1", tag: "dm:uid-1", generation: 7 } };
+    await dispatch("notificationclick", { notification: stale, action: "reply", reply: "as the wrong account" });
+    await dispatch("notificationclick", { notification: stale, action: "read" });
+    assert.equal((await pending()).length, 0);
+    assert.deepEqual(messages, []);
+    const staleCall = { close() {}, data: { url: "/app/#/call/c-1", tag: "call:c-1" } };
+    await dispatch("notificationclick", { notification: staleCall, action: "decline" });
+    await dispatch("notificationclick", { notification: staleCall, action: "answer" });
+    assert.deepEqual(messages, [{ type: "open", url: "/app/#/home" }]);
+    windows.length = 0;
 });
 
 test("an inline reply is queued in the outbox and the open app is asked to send and mark read", async () => {
     for (const entry of await pending()) await remove(entry.id);
     const messages = [];
     windows.push({ visibilityState: "hidden", url: "https://chat.example/app/#/home", postMessage: m => messages.push(m), focus: async () => {} });
-    const notification = { close() {}, data: { url: "/app/#/dm/uid-1", tag: "dm:uid-1" } };
+    const notification = { close() {}, data: { url: "/app/#/dm/uid-1", tag: "dm:uid-1", generation: 1 } };
     await dispatch("notificationclick", { notification, action: "reply", reply: "on my way" });
     const waiting = await pending();
     assert.equal(waiting.length, 1);

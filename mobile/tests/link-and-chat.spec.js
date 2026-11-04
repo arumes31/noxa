@@ -46,6 +46,7 @@ test("a phone links by QR, compares the code, signs in and chats with the deskto
 
     page.on("pageerror", error => console.log("pageerror:", error.message));
     await page.goto(`${server.webURL}/link#id=${link.link_id}&k=${toBase64URL(secret)}`);
+    await page.getByRole("button", { name: "Continue" }).click();
     const event = await claimed;
     expect(event.platform).toContain("Android");
     const desktopSAS = linkSAS(secret, linkClaimTranscript(event.link_id, event.ed25519_public_key, event.x25519_public_key));
@@ -127,6 +128,7 @@ test("signed QR linking and relinking open secure messaging and survive a reload
             const claimed = nextDeviceEvent(desktop.conn, "link_claimed");
             const anchor = keyFingerprint(publicKeyPEM(desktop.identity.edPublic));
             await page.goto(`${server.webURL}/link#id=${link.link_id}&k=${toBase64URL(secret)}&a=${encodeURIComponent(anchor)}`);
+            await page.getByRole("button", { name: "Continue" }).click();
             const event = await claimed;
             await expect(page.locator(".sas")).toHaveText(linkSAS(secret, linkClaimTranscript(event.link_id, event.ed25519_public_key, event.x25519_public_key)));
             expect((await approve(desktop, event, { bind: true })).state).toBe("approved");
@@ -174,6 +176,7 @@ test("microphone capture can recover on the same encrypted voice connection", as
         const secret=Uint8Array.from(Buffer.from(link.secret,"base64")), claimed=nextDeviceEvent(desktop.conn,"link_claimed");
         const anchor=keyFingerprint(publicKeyPEM(desktop.identity.edPublic));
         await page.goto(`${server.webURL}/link#id=${link.link_id}&k=${toBase64URL(secret)}&a=${encodeURIComponent(anchor)}`);
+        await page.getByRole("button", { name: "Continue" }).click();
         const event=await claimed;
         await expect(page.locator(".sas")).toHaveText(linkSAS(secret,linkClaimTranscript(event.link_id,event.ed25519_public_key,event.x25519_public_key)));
         expect((await approve(desktop,event,{bind:true})).state).toBe("approved");

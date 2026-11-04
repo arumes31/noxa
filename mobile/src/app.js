@@ -17,7 +17,7 @@ import { signIn } from "./core/device.js";
 import { signKeyRecord } from "./core/dm-trust.js";
 import { assertIdentityFence, beginIdentity, clearIdentity, loadIdentity, saveIdentity, updateMeta } from "./core/identity-store.js";
 import { enqueue, flush as flushOutbox, showPending, waitingCount } from "./core/outbox.js";
-import { announceRead, closeNotifications, reportVisibility, setBadge, syncPush } from "./core/push.js";
+import { announceRead, closeAllNotifications, closeNotifications, reportVisibility, setBadge, syncPush } from "./core/push.js";
 import { get as setting } from "./core/settings.js";
 import { addServer } from "./core/servers.js";
 import { notifier } from "./notifier.js";
@@ -123,6 +123,8 @@ export async function rememberLinkedIdentity(identity, meta, fence) {
 /** Drops the in-memory state of a replaced account (its stores are already cleared). */
 async function resetAccountMemory() {
     clearReminders();
+    // Shown notifications name the departed account's contacts and channels.
+    await closeAllNotifications();
     await resetCallLog();
     await app.saved?.clear();
     app.unread.clear();
@@ -135,6 +137,7 @@ export async function forgetDevice(fence) {
     connectionGeneration++;
     stopRatchet();
     clearReminders();
+    await closeAllNotifications();
     app.groups?.close();
     app.groups = null;
     app.calls?.close();
@@ -555,6 +558,13 @@ export async function connect({ guest = null, fence } = {}) {
             // Retain early channel frames locally. Replacement and its original
             // flow generation check commit atomically before publishing a session.
             fence = await saveIdentity(identity, meta, { onboarding: !reuseGuest, replaceAccount: !reuseGuest, fence });
+            // A fresh guest replaced the stored account: drop its in-memory
+            // state (activity previews, unread, notifications) before the
+            // guest session is published.
+            if (!reuseGuest) {
+                await resetAccountMemory();
+                checkAttempt();
+            }
         } else if (meta.priorPrincipal) {
             // Linked without knowing the account (typed code, passkey): if it
             // is not the account whose data is stored, that data is replaced

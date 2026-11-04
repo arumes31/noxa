@@ -63,3 +63,14 @@ for (const [name, reply, code] of [
         assert.equal(error.code, code);
     });
 }
+
+test("ratchet core snapshots caller-owned ArrayBuffer input before verifying it", async () => {
+    const file = await readFile(new URL("../../internal/e2ee/ratchet/core.wasm", import.meta.url));
+    const buffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
+    const pending = createRatchetCore({ bytes: buffer });
+    // Writes through the caller's reference while the digest is awaited must
+    // not reach the verified and compiled bytes.
+    new Uint8Array(buffer).fill(0);
+    const core = await pending;
+    core.close();
+});
