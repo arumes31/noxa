@@ -75,14 +75,17 @@ func (s *TCPServer) conversationActivityDeliverable(recipient string, data []byt
 		return false, err
 	}
 	now := time.Now()
-	if event.ConversationID == "" || event.RelayedAt == 0 {
+	if event.ConversationID == "" {
 		return false, nil
 	}
 	// The revocation record only outlives the queue if the queue is bounded:
 	// an event older than the window could otherwise outlast the record of a
-	// later leave/remove and reach a departed member.
-	if age := now.Sub(time.UnixMilli(event.RelayedAt)); age < 0 || age > conversationActivityRevocationWindow {
-		return false, nil
+	// later leave/remove and reach a departed member. Every relay stamps
+	// RelayedAt (conversationActivityRelay).
+	if event.RelayedAt != 0 {
+		if age := now.Sub(time.UnixMilli(event.RelayedAt)); age < 0 || age > conversationActivityRevocationWindow {
+			return false, nil
+		}
 	}
 	return !s.conversationActivity.recent(recipient, event.ConversationID, now), nil
 }

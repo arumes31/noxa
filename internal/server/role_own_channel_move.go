@@ -33,6 +33,13 @@ func (c *Client) recordSnapshot(snapshot *broadcast.TreeSnapshot) bool {
 	return changed
 }
 
+// roleSnapshotFullFrame always encodes a snapshot, recording its digest.
+func (s *TCPServer) roleSnapshotFullFrame(client *Client, e *authorization.RoleEvaluator) (*netproto.Frame, error) {
+	snapshot := s.roleSnapshotWithOwnMove(client, e)
+	client.recordSnapshot(snapshot)
+	return netproto.Encode(netproto.MsgSnapshot, snapshot)
+}
+
 // roleSnapshotFrame encodes an event-driven snapshot for the recipient, or
 // returns nil when its authorized projection did not change.
 func (s *TCPServer) roleSnapshotFrame(client *Client, e *authorization.RoleEvaluator) (*netproto.Frame, error) {

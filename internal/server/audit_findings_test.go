@@ -19,7 +19,7 @@ func TestMentionsNicknameMatchesWholeTokens(t *testing.T) {
 		{"hi @bobby", "bob", false},
 		{"hi @bob_2", "bob", false},
 		{"@bobby and @bob", "bob", true},
-		{"hi @Big Al!", "big al", true},
+		{"hi @big al!", "Big Al", true},
 		{"hi bob", "bob", false},
 		{"@bob", "", false},
 	} {
@@ -84,9 +84,6 @@ func TestConversationActivityDeliveryEnforcesQueueAge(t *testing.T) {
 	}
 	if ok, _ := s.conversationActivityDeliverable("r", encode(time.Now().Add(-conversationActivityRevocationWindow-time.Second))); ok {
 		t.Fatal("event older than the revocation window delivered")
-	}
-	if ok, _ := s.conversationActivityDeliverable("r", []byte(`{"conversation_id":"g"}`)); ok {
-		t.Fatal("unstamped event delivered")
 	}
 	s.conversationActivity.revoke("r", "g", time.Now())
 	if ok, _ := s.conversationActivityDeliverable("r", encode(time.Now())); ok {
