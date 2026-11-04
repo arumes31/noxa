@@ -9,6 +9,15 @@ import (
 	"testing"
 )
 
+func postRequest(t *testing.T, target string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, target, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return req
+}
+
 func noProxy(*http.Request) (*url.URL, error) { return nil, nil }
 
 func TestDeliveryClientRejectsNonPublicDestinations(t *testing.T) {
@@ -16,7 +25,7 @@ func TestDeliveryClientRejectsNonPublicDestinations(t *testing.T) {
 		t.Error("delivery reached a loopback service")
 	}))
 	defer internal.Close()
-	resp, err := newDeliveryClient(noProxy).Post(internal.URL, "application/octet-stream", nil)
+	resp, err := newDeliveryClient(noProxy).Do(postRequest(t, internal.URL))
 	if err == nil {
 		_ = resp.Body.Close()
 	}
@@ -38,7 +47,7 @@ func TestDeliveryClientDoesNotFollowRedirects(t *testing.T) {
 	// Exercise only the redirect policy: the loopback test servers would
 	// otherwise be refused by the address check.
 	client.Transport = http.DefaultTransport
-	resp, err := client.Post(redirector.URL, "application/octet-stream", nil)
+	resp, err := client.Do(postRequest(t, redirector.URL))
 	if err == nil {
 		_ = resp.Body.Close()
 	}

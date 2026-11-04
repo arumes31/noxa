@@ -208,7 +208,7 @@ func TestDownloadLinkRejectsReplacedFileAtSamePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	registry.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/dl/"+token, nil))
+	registry.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/dl/"+token, nil))
 	if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "victim-secret") {
 		t.Fatalf("stale link served replacement: status=%d body=%q", rec.Code, rec.Body.String())
 	}
@@ -228,7 +228,7 @@ func TestDownloadLinkRejectsRewrittenFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	registry.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/dl/"+token, nil))
+	registry.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/dl/"+token, nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("rewritten file served: status=%d", rec.Code)
 	}
