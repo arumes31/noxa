@@ -12,32 +12,30 @@ func TestHardwareBrowserArguments(t *testing.T) {
 	const hardwareFeature = "ForceSoftwareForRtcLowResolutions"
 	const cameraRateControlFeature = "MediaFoundationUseSWBRCForH264Camera"
 	const feature = hardwareFeature + "," + cameraRateControlFeature
-	const textureFeature = "WebRtcAllowWgcUsingTexture"
-	const textureSwitch = "--enable-features=" + textureFeature
 	for _, tt := range []struct {
 		name      string
 		fragments []string
 		want      []string
 	}{
-		{"default", nil, []string{"--disable-features=" + feature, textureSwitch}},
+		{"default", nil, []string{"--disable-features=" + feature}},
 		{"actual Wails defaults", []string{"--disable-features=msSmartScreenProtection"},
-			[]string{"--disable-features=msSmartScreenProtection," + feature, textureSwitch}},
+			[]string{"--disable-features=msSmartScreenProtection," + feature}},
 		{"repeated switches and duplicate features", []string{"--disable-features=msSmartScreenProtection,RendererCodeIntegrity", "--disable-features=" + feature + ",msSmartScreenProtection", "--remote-debugging-port=9661"},
-			[]string{"--disable-features=msSmartScreenProtection,RendererCodeIntegrity," + feature, textureSwitch, "--remote-debugging-port=9661"}},
+			[]string{"--disable-features=msSmartScreenProtection,RendererCodeIntegrity," + feature, "--remote-debugging-port=9661"}},
 		{"Chromium Windows switch aliases", []string{"--DISABLE-FEATURES=Alpha -disable-features=Beta /Disable-Features=Gamma --other=Keep"},
-			[]string{"--disable-features=Alpha,Beta,Gamma," + feature, textureSwitch, "--other=Keep"}},
+			[]string{"--disable-features=Alpha,Beta,Gamma," + feature, "--other=Keep"}},
 		{"Windows quoting and fragment whitespace", []string{"  --disable-features=\"Alpha, Beta\"\t--lang=de-DE  ", `"--disable-features=Gamma" --custom="C:\a folder\file"`, `--message="a \"quoted\" value"`},
-			[]string{"--disable-features=Alpha,Beta,Gamma," + feature, textureSwitch, "--lang=de-DE", `--custom=C:\a folder\file`, `--message=a "quoted" value`}},
+			[]string{"--disable-features=Alpha,Beta,Gamma," + feature, "--lang=de-DE", `--custom=C:\a folder\file`, `--message=a "quoted" value`}},
 		{"other switches and empty arguments survive", []string{`--enable-features=Other --disable-features= --disable-features "" --disable-features-extra=Keep --foo=first --foo=last`},
-			[]string{"--disable-features=" + feature, "--enable-features=Other," + textureFeature, "", "--disable-features-extra=Keep", "--foo=first", "--foo=last"}},
+			[]string{"--disable-features=" + feature, "--enable-features=Other", "", "--disable-features-extra=Keep", "--foo=first", "--foo=last"}},
 		{"switch terminator preserves positional text", []string{"-- --disable-features=Positional"},
-			[]string{"--disable-features=" + feature, textureSwitch, "--", "--disable-features=Positional"}},
+			[]string{"--disable-features=" + feature, "--", "--disable-features=Positional"}},
 		// The controller workaround must merge with an explicit caller policy,
 		// without selecting a software codec or changing unrelated GPU switches.
 		{"existing camera controller policy is deduplicated", []string{`"--disable-features=MediaFoundationUseSWBRCForH264Camera, msSmartScreenProtection"`, "--disable-features=" + cameraRateControlFeature, "--enable-features=Other --use-angle=d3d11"},
-			[]string{"--disable-features=" + cameraRateControlFeature + ",msSmartScreenProtection," + hardwareFeature, "--enable-features=Other," + textureFeature, "--use-angle=d3d11"}},
+			[]string{"--disable-features=" + cameraRateControlFeature + ",msSmartScreenProtection," + hardwareFeature, "--enable-features=Other", "--use-angle=d3d11"}},
 		{"controller-looking positional argument stays positional", []string{`--message="keep quoted text" -- --disable-features=` + cameraRateControlFeature},
-			[]string{"--disable-features=" + feature, textureSwitch, "--message=keep quoted text", "--", "--disable-features=" + cameraRateControlFeature}},
+			[]string{"--disable-features=" + feature, "--message=keep quoted text", "--", "--disable-features=" + cameraRateControlFeature}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			before := append([]string(nil), tt.fragments...)
@@ -84,14 +82,16 @@ func TestWindowCaptureFeaturesPreserveCallerPolicy(t *testing.T) {
 		name            string
 		fragments, want []string
 	}{
-		{"merge enable lists", []string{"--enable-features=Other,Alpha --enable-features=Alpha,Beta"}, []string{required, "--enable-features=Other,Alpha,Beta," + texture}},
-		{"enable aliases", []string{"/ENABLE-FEATURES=Other -enable-features=Beta --Enable-Features=Other"}, []string{required, "--enable-features=Other,Beta," + texture}},
+		{"merge enable lists", []string{"--enable-features=Other,Alpha --enable-features=Alpha,Beta"}, []string{required, "--enable-features=Other,Alpha,Beta"}},
+		{"enable aliases", []string{"/ENABLE-FEATURES=Other -enable-features=Beta --Enable-Features=Other"}, []string{required, "--enable-features=Other,Beta"}},
+		{"texture capture stays off by default", nil, []string{required}},
+		{"explicit texture opt-in", []string{"--enable-features=" + texture}, []string{required, "--enable-features=" + texture}},
 		{"explicit texture opt-out", []string{"--disable-features=" + texture}, []string{"--disable-features=" + texture + ",ForceSoftwareForRtcLowResolutions,MediaFoundationUseSWBRCForH264Camera"}},
 		{"opt-out retains other enabled features", []string{"--enable-features=Other --disable-features=" + texture}, []string{"--disable-features=" + texture + ",ForceSoftwareForRtcLowResolutions,MediaFoundationUseSWBRCForH264Camera", "--enable-features=Other"}},
 		{"parameterized caller enable", []string{"--enable-features=" + texture + ":option/value,Other"}, []string{required, "--enable-features=" + texture + ":option/value,Other"}},
 		{"trial caller enable", []string{"--enable-features=" + texture + "<CallerTrial"}, []string{required, "--enable-features=" + texture + "<CallerTrial"}},
 		{"parameterized opt-out", []string{"--disable-features=" + texture + "<CallerTrial"}, []string{"--disable-features=" + texture + "<CallerTrial,ForceSoftwareForRtcLowResolutions,MediaFoundationUseSWBRCForH264Camera"}},
-		{"positional opt-out is not a switch", []string{"-- --disable-features=" + texture + " --enable-features=Positional"}, []string{required, "--enable-features=" + texture, "--", "--disable-features=" + texture, "--enable-features=Positional"}},
+		{"positional opt-out is not a switch", []string{"-- --disable-features=" + texture + " --enable-features=Positional"}, []string{required, "--", "--disable-features=" + texture, "--enable-features=Positional"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			command, err := hardwareBrowserArguments(tc.fragments)

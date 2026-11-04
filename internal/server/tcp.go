@@ -1479,12 +1479,25 @@ func (s *TCPServer) writeMessageInContext(ctx context.Context, client *Client, m
 }
 
 func (s *TCPServer) writeFrameInContext(ctx context.Context, client *Client, frame *netproto.Frame) error {
-	if err := client.wmu.LockContext(ctx); err != nil {
+	// Waiting for a busy writer and the write itself share one ceiling: a
+	// broadcast queued behind a stalled connection holds the authorization
+	// lease, and an unbounded wait would block revocation (kicks, role changes).
+	lockCtx := ctx
+	if s.deps != nil && s.deps.Authority != nil {
+		var cancel context.CancelFunc
+		lockCtx, cancel = context.WithTimeout(ctx, roleWriteCeiling)
+		defer cancel()
+	}
+	if err := client.wmu.LockContext(lockCtx); err != nil {
 		return err
 	}
 	defer client.wmu.Unlock()
-	return s.writeFrameLocked(ctx, client, frame)
+	return s.writeFrameLocked(lockCtx, client, frame)
 }
+
+// roleWriteCeiling bounds each role-mode write, including waiting for the
+// connection's writer, so no write holds an authorization lease indefinitely.
+const roleWriteCeiling = 5 * time.Second
 
 // writeFrameLocked requires client.wmu. Authentication takes that lock before
 // reading its configuration baseline, so queued updates cannot overtake it.
@@ -1497,7 +1510,7 @@ func (s *TCPServer) writeFrameLocked(ctx context.Context, client *Client, frame 
 	// authorization lease indefinitely and prevent revocation.
 	deadline, _ := ctx.Deadline()
 	if s.deps != nil && s.deps.Authority != nil {
-		ceiling := time.Now().Add(5 * time.Second)
+		ceiling := time.Now().Add(roleWriteCeiling)
 		if deadline.IsZero() || ceiling.Before(deadline) {
 			deadline = ceiling
 		}

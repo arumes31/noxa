@@ -19,7 +19,6 @@ func hardwareBrowserArguments(fragments []string) (string, error) {
 	}
 	const disabledSwitch = "--disable-features"
 	const enabledSwitch = "--enable-features"
-	const captureTextureFeature = "WebRtcAllowWgcUsingTexture"
 	const hardwareFeature = "ForceSoftwareForRtcLowResolutions"
 	var features, enabledFeatures, retained []string
 	seen := make(map[string]bool)
@@ -37,12 +36,6 @@ func hardwareBrowserArguments(fragments []string) (string, error) {
 			seenEnabled[feature] = true
 			enabledFeatures = append(enabledFeatures, feature)
 		}
-	}
-	featureName := func(feature string) string {
-		if i := strings.IndexAny(feature, "<:"); i >= 0 {
-			return feature[:i]
-		}
-		return feature
 	}
 
 	switches := true
@@ -87,20 +80,11 @@ func hardwareBrowserArguments(fragments []string) (string, error) {
 	// sharing. This also changes trusted-rate-controller behavior and affects
 	// cameras; the measured improvement is NVIDIA-specific, not a vendor guarantee.
 	addFeature("MediaFoundationUseSWBRCForH264Camera")
-	// WGC can deliver GPU textures directly instead of reading every captured
-	// window back to CPU memory. Chromium guards this path to Windows 11 24H2+
-	// while actual encoder hardware proof remains a separate admission check.
-	// Preserve an explicit opt-out and caller-supplied feature parameters.
-	textureConfigured := false
-	for _, feature := range append(append([]string(nil), features...), enabledFeatures...) {
-		if featureName(feature) == captureTextureFeature {
-			textureConfigured = true
-			break
-		}
-	}
-	if !textureConfigured {
-		addEnabled(captureTextureFeature)
-	}
+	// WebRtcAllowWgcUsingTexture (WGC delivering GPU textures instead of CPU
+	// frames) is deliberately not enabled by default. With it enabled, an NVIDIA
+	// sender reported zero captured frames feeding the H.264 Media Foundation
+	// encoder, so screen shares never started. Callers may still opt in via an
+	// explicit --enable-features switch, which is passed through unchanged.
 	// Place the merged switch before a possible -- terminator. Positional
 	// arguments after it, even ones resembling switches, remain untouched.
 	merged := []string{disabledSwitch + "=" + strings.Join(features, ",")}

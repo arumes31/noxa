@@ -50,6 +50,11 @@ func TestRoleReconciliationRevokesAllSubsystemsBeforeReturning(t *testing.T) {
 			}
 			owner, ownerID := dialAuthed(t, env.addr, "user-uid")
 			defer func() { _ = owner.Close() }()
+			// The server finishes the Authenticate handler (subscription state,
+			// announcement) after the auth response. Fence on a ping so the policy
+			// change cannot fail that tail and drop the owner's session.
+			send(t, owner, netproto.MsgPing, netproto.Ping{})
+			readOfType(t, owner, netproto.MsgPong)
 			for _, id := range []string{info.ClientID, ownerID} {
 				if err := env.state.MoveClient(id, 1); err != nil {
 					t.Fatal(err)
