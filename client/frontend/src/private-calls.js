@@ -40,7 +40,10 @@ const ownerConsented = owner => callConsented(owner.call, owner.tabID, owner.gen
 const label = uid => V().state.clients.find(client => client.unique_id === uid)?.nickname || uid;
 const blocked = uid => (V().state.settings?.blocked_users || []).includes(uid);
 const report = error => V().toast?.(t("call.failed", { error: String(error) }), "warn");
-const current = owner => session === owner && owner.tabID === V().state.activeTabID && owner.generation === V().state.serverGeneration;
+// A call belongs to one connection session too: a same-tab disconnect or
+// reconnect (sessionGeneration) ends it and releases capture and peers.
+const current = owner => session === owner && owner.tabID === V().state.activeTabID && owner.generation === V().state.serverGeneration
+    && owner.sessionGeneration === V().state.sessionGeneration;
 const acceptedPeer = (owner, uid) => current(owner) && !blocked(uid) && ownerConsented(owner)
     && owner.call.participants.some(peer => peer.unique_id === owner.uid && peer.state === "accepted")
     && owner.call.participants.some(peer => peer.unique_id === uid && peer.state === "accepted");
@@ -158,7 +161,12 @@ async function applyCall(call, tabID, generation) {
     rememberCall(key, call.ended_at ? Infinity : call.revision);
     const uid = sessionUserID(V().state);
     const me = call.participants.find(peer => peer.unique_id === uid);
-    if (!me) return;
+    if (!me) {
+        // The server no longer lists this user (pruned, kicked or ended):
+        // the call is over here, so its capture and peers must stop.
+        if (session?.call.id === call.id) { session.call = call; stopPrivateCall(); }
+        return;
+    }
     // (441) another device of this account answered: stop ringing here at
     // once. The server projects our participant as "elsewhere"; no decline
     // or leave is sent, the call continues on the other device.
@@ -179,7 +187,7 @@ async function applyCall(call, tabID, generation) {
     if (session && session.call.id !== call.id) return;
     if (!session) {
         const panel = node("aside"); panel.className = "private-call-panel"; panel.setAttribute("aria-label", t("call.active"));
-        session = { call, tabID, generation, uid, panel, peers: new Map(), stream: null, capture: null, ice: [], muted: false, deafened: false, pollBusy: false, signals: Promise.resolve(), queuedSignals: 0, nextSignalAt: 0 };
+        session = { call, tabID, generation, sessionGeneration: V().state.sessionGeneration, uid, panel, peers: new Map(), stream: null, capture: null, ice: [], muted: false, deafened: false, pollBusy: false, signals: Promise.resolve(), queuedSignals: 0, nextSignalAt: 0 };
         session.media = createCallMedia(session, { current, acceptedPeer, label, report, render });
         document.body.append(panel);
         if (me.state === "ringing") window.__noxaNotify?.notify("poke", t("call.incomingFrom", { name: label(call.caller) }), { uid: call.caller });

@@ -46,7 +46,7 @@ export const SETTINGS_CATEGORIES = Object.freeze([
         "notify_matrix", "dnd_enabled", "dnd_from", "dnd_to", "notify_join_leave", "notify_connection",
         "warn_muted_talking", "warn_empty_channel",
     ] },
-    { id: "whisper", icon: "whisper", rail: "more", keys: ["whisper_active", "whisper_clients", "whisper_channels"] },
+    { id: "whisper", icon: "whisper", rail: "more", keys: ["whisper_active", "whisper_clients", "whisper_channels", "whisper_channels_server"] },
     // Runtime server configuration (admins) is edited live on the server, not
     // in the local settings file, so it owns no local keys besides reconnect.
     { id: "connection", icon: "signal", rail: "more", keys: ["reconnect_on_loss"] },
@@ -90,7 +90,7 @@ export const SETTINGS_OUTSIDE_DIALOG = Object.freeze({
 });
 
 // Lists and maps the user curates by hand survive "Reset to default".
-export const RESET_PRESERVES = Object.freeze(new Set(["hotkey_profiles", "keywords", "whisper_clients", "whisper_channels"]));
+export const RESET_PRESERVES = Object.freeze(new Set(["hotkey_profiles", "keywords", "whisper_clients", "whisper_channels", "whisper_channels_server"]));
 
 // Page ids used before the redesign. Menus and older callers still pass
 // them; each maps to its new page and, where useful, a section on it.

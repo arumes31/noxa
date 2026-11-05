@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestSettingsRoundTrip verifies defaults, save, and reload.
@@ -865,6 +866,15 @@ func TestAutoAwayMessage(t *testing.T) {
 	a.settings.AutoAwayMessage = strings.Repeat("x", 400)
 	if got := len(a.autoAwayMessage()); got != 200 {
 		t.Errorf("away message length = %d, want the server limit of 200", got)
+	}
+	// The limit is bytes: a multibyte message is cut on a rune boundary.
+	a.settings.AutoAwayMessage = strings.Repeat("é", 150) // 300 bytes
+	if got := a.autoAwayMessage(); len(got) > 200 || !utf8.ValidString(got) || got != strings.Repeat("é", 100) {
+		t.Errorf("multibyte away message = %d bytes, valid=%v", len(got), utf8.ValidString(got))
+	}
+	a.settings.AutoAwayMessage = "x" + strings.Repeat("é", 150) // odd byte offset
+	if got := a.autoAwayMessage(); len(got) != 199 || !utf8.ValidString(got) {
+		t.Errorf("odd-offset away message = %d bytes, valid=%v", len(got), utf8.ValidString(got))
 	}
 }
 

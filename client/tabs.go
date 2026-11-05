@@ -69,6 +69,30 @@ type tabState struct {
 // otherwise grow it without limit).
 const journalCap = 2000
 
+// journalByteCap bounds the payload bytes a tab's replay buffer retains: a
+// frame can be up to netproto.MaxFrameSize, so the entry cap alone would let
+// a server pin gigabytes per tab.
+const journalByteCap = 16 << 20
+
+// trimJournal drops the oldest entries beyond journalCap or journalByteCap,
+// always keeping the newest one.
+func trimJournal(journal []journalEntry) []journalEntry {
+	start := max(len(journal)-journalCap, 0)
+	total, keep := 0, len(journal)
+	for keep > start {
+		next := total + len(journal[keep-1].payload)
+		if next > journalByteCap && keep < len(journal) {
+			break
+		}
+		total = next
+		keep--
+	}
+	// Release the dropped payloads now, not when the backing array is next
+	// reallocated.
+	clear(journal[:keep])
+	return journal[keep:]
+}
+
 // tabSink routes a tab's events through the App relay instead of directly
 // to the Wails runtime.
 type tabSink struct {
@@ -155,10 +179,7 @@ func (a *App) relayTabEventFrom(tabID string, owner *connManager, name string, p
 		ts.journal = ts.journal[:0]
 		ts.journal = append(ts.journal, journalEntry{name, text})
 	case "subscriptions", "server_rules", "event":
-		ts.journal = append(ts.journal, journalEntry{name, text})
-		if len(ts.journal) > journalCap {
-			ts.journal = ts.journal[len(ts.journal)-journalCap:]
-		}
+		ts.journal = trimJournal(append(ts.journal, journalEntry{name, text}))
 		if !active && name == "event" {
 			mention = a.countBadge(ts, text, nickname)
 		}
@@ -553,6 +574,12 @@ func (a *App) ConnectNamedBookmarkTabWithID(bookmark, addr, nickname, displayNam
 		return ConnectTabResult{Error: err}
 	}
 	a.tabsMu.Lock()
+	if a.tabs[id] != ts {
+		// Closed while dialing: never revive an orphan authenticated session.
+		a.tabsMu.Unlock()
+		ts.cm.disconnect()
+		return ConnectTabResult{Error: errTabClosedWhileConnecting}
+	}
 	ts.info.Addr = addr
 	ts.info.Nickname = nickname
 	ts.bookmark = bookmark
@@ -594,6 +621,11 @@ func (a *App) ConnectGuestBookmarkTabWithID(bookmark, addr, nickname string) Con
 		return ConnectTabResult{Error: err}
 	}
 	a.tabsMu.Lock()
+	if a.tabs[id] != ts {
+		a.tabsMu.Unlock()
+		ts.cm.disconnect()
+		return ConnectTabResult{Error: errTabClosedWhileConnecting}
+	}
 	ts.info.Addr = addr
 	ts.info.Nickname = nickname
 	ts.bookmark = bookmark
@@ -602,6 +634,9 @@ func (a *App) ConnectGuestBookmarkTabWithID(bookmark, addr, nickname string) Con
 	a.activate(id)
 	return ConnectTabResult{TabID: id}
 }
+
+// errTabClosedWhileConnecting: the tab was closed before its dial finished.
+const errTabClosedWhileConnecting = "the tab was closed while connecting"
 
 func fingerprintMismatchMessage(cm *connManager) string {
 	_, presented, _ := cm.securitySnapshot()
@@ -764,9 +799,16 @@ func appWithCM(cm *connManager) *App {
 	return a
 }
 
-// removeTab deletes a tab from the registry.
+// removeTab deletes a tab from the registry. A tab that became active while
+// it was connecting (closing a neighbour selects it) is closed properly so
+// the active binding moves to a remaining tab.
 func (a *App) removeTab(tabID string) {
 	a.tabsMu.Lock()
+	if a.activeID == tabID && a.tabs[tabID] != nil {
+		a.tabsMu.Unlock()
+		a.closeTab(tabID, false)
+		return
+	}
 	delete(a.tabs, tabID)
 	for i, id := range a.tabOrder {
 		if id == tabID {

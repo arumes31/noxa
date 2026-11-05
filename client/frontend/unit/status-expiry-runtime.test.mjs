@@ -38,5 +38,14 @@ test("runtime keeps offline expiry and retries on its original server", async t 
     assert.equal(scheduler.current(), null);
     assert.equal(storage.has("noxa.status.expiry"), false);
     assert.equal(state.myStatus, "");
+    // Password accounts: the session account (roster ID), not the local
+    // identity, owns the status and is what the record names.
+    state.myUniqueID = "local-key"; state.myStatus = "away";
+    state.clients = [{ client_id: "alice-client", unique_id: "acct-1", status: "away" }];
+    scheduler.set({ uniqueID: "acct-1", tabID: "a", server: "alpha", status: "away", expiresAt: Date.now() + 1000 });
+    t.mock.timers.tick(1000);
+    await setImmediate(); await setImmediate();
+    assert.equal(scheduler.current(), null);
+    assert.equal(state.myStatus, "", "the session account's status was cleared");
     scheduler.dispose();
 });

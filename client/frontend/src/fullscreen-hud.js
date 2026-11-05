@@ -97,7 +97,19 @@ export function createFullscreenHud(stage) {
 
     const autoHide = createAutoHide({ onChange: visible => applyVisibility(visible) });
     const peek = createChatPeek({ onChange: () => renderPeek() });
-    const quick = createQuickReply({ onChange: () => renderQuick() });
+    const quick = createQuickReply({ onChange: snap => { dropDraftOnRetarget(snap); renderQuick(); } });
+
+    // A draft belongs to the conversation it was typed for: switching the
+    // reply target (Alt+R, the channel drawer, a voice move) discards it
+    // instead of sending private text to someone else.
+    let draftTarget = "";
+    function dropDraftOnRetarget(snap) {
+        const target = snap?.target;
+        const key = target ? JSON.stringify([target.kind, target.kind === "dm" ? target.uid : target.id]) : "";
+        if (key === draftTarget) return;
+        draftTarget = key;
+        if (parts.input) parts.input.value = "";
+    }
 
     // This HUD outlives server tabs and reconnects; message IDs are local to
     // a server. Drop cached history and drafts before using a new scope.
@@ -808,6 +820,7 @@ export function createFullscreenHud(stage) {
         const text = parts.input.value.trim();
         const error = hud.querySelector(".fs-quick-error");
         if (!snap.open || !text || sending) return;
+        if (closeStaleChannelDrawer()) return;
         const state = V()?.state || {};
         const api = app();
         const legacySend = api?.SendChatForTab;
@@ -872,7 +885,7 @@ export function createFullscreenHud(stage) {
             while (channelRing.length > CHANNEL_RING) channelRing.shift();
             if (!host || self) return;
             if (window.__noxaNotify?.channelOverride?.(channel)?.muted) return;
-            if (quick.state.target?.kind === "channel") {
+            if (quick.state.target?.kind === "channel" && !closeStaleChannelDrawer()) {
                 quick.channelMessage({ name, text, badge, self: false });
                 return;
             }
@@ -887,8 +900,18 @@ export function createFullscreenHud(stage) {
         quick.receive({ uid, name, ...chatPreview(d) });
     }
 
+    // The channel drawer follows the voice channel: after a move it never
+    // shows or sends to the channel the user has left.
+    function closeStaleChannelDrawer() {
+        const target = quick.state.target;
+        if (target?.kind !== "channel" || target.id === V()?.state?.myChannelID) return false;
+        closeQuick(false);
+        return true;
+    }
+
     function voiceChanged() {
         if (!host) return;
+        closeStaleChannelDrawer();
         renderSpeakers();
         renderWhisper();
         if (!parts.quick.hidden) { quickKey = ""; renderQuick(); }

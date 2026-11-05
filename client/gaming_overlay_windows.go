@@ -16,6 +16,9 @@ import (
 	"noxa/internal/safecast"
 )
 
+// wdaExcludeFromCapture is SetWindowDisplayAffinity's WDA_EXCLUDEFROMCAPTURE.
+const wdaExcludeFromCapture = 0x11
+
 var (
 	overlayGDI             = windows.NewLazySystemDLL("gdi32.dll")
 	overlayRegister        = user32.NewProc("RegisterClassExW")
@@ -38,6 +41,7 @@ var (
 	overlayEnumMonitors    = user32.NewProc("EnumDisplayMonitors")
 	overlayMonitorInfo     = user32.NewProc("GetMonitorInfoW")
 	overlayCursorPos       = user32.NewProc("GetCursorPos")
+	overlayDisplayAffinity = user32.NewProc("SetWindowDisplayAffinity")
 	overlayMonitorMu       sync.Mutex
 	overlayMonitorList     []GamingOverlayMonitor
 	overlayMonitorCallback = syscall.NewCallback(collectOverlayMonitor)
@@ -215,6 +219,12 @@ func (w *nativeOverlay) run(ready chan<- error) {
 		return
 	}
 	defer func() { _, _, _ = overlayDestroy.Call(hwnd) }()
+	// Keep the overlay's chat peek and names out of screen shares and
+	// recordings (WDA_EXCLUDEFROMCAPTURE, Windows 10 2004+). Older systems
+	// reject it; the overlay then simply stays capturable as before.
+	if overlayDisplayAffinity.Find() == nil {
+		_, _, _ = overlayDisplayAffinity.Call(hwnd, wdaExcludeFromCapture)
+	}
 	overlayWindows.Store(hwnd, w)
 	defer overlayWindows.Delete(hwnd)
 	ready <- nil

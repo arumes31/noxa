@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { applyChannelPreset, channelOverrideChanges, setChannelOverride } from "../src/channel-access-state.js";
+import { applyChannelPreset, channelOverrideChanges, presetGrantable, setChannelOverride } from "../src/channel-access-state.js";
 
 const presetContract = JSON.parse(readFileSync(new URL("../../../testdata/channel-access-presets.json", import.meta.url), "utf8"));
 for (const preset of presetContract.presets) test(`${preset.key} matches the evaluator privacy contract and preserves exceptions`, () => {
@@ -37,4 +37,14 @@ test("sync differences include changed, removed and added subjects", () => {
     assert.equal(changes.find((row) => row.user_id === 2).after, "inherit");
     assert.equal(changes.find((row) => row.role_id === 3).before, "inherit");
     assert.deepEqual(channelOverrideChanges(before, [...before].reverse()), []);
+});
+
+test("a preset is offered only when every capability it changes is grantable", () => {
+    const grantable = ["view_channel", "connect", "speak"];
+    assert.equal(presetGrantable([], 1, "listenOnly", grantable), false, "share_camera/share_screen are not grantable");
+    assert.equal(presetGrantable([], 1, "listenOnly", [...grantable, "share_camera", "share_screen"]), true);
+    // An override that already matches is not a change the server checks.
+    const already = [{ role_id: 1, capability: "share_camera", effect: "deny" }, { role_id: 1, capability: "share_screen", effect: "deny" }];
+    assert.equal(presetGrantable(already, 1, "listenOnly", grantable), true);
+    assert.equal(presetGrantable([], 1, "private", grantable), true);
 });

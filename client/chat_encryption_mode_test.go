@@ -160,4 +160,12 @@ func TestExportLinesNameTheEncryption(t *testing.T) {
 			t.Fatalf("DM export %q lacks %q", dm, want)
 		}
 	}
+	// Tombstones and edits keep their markers in a DM export.
+	changed := dmExportMessages([]DMEntry{
+		{FromNickname: "f", Deleted: true, SentAt: 2, EncVerified: true, EncMode: "e2e"},
+		{FromNickname: "g", Body: "fixed", Edited: true, EditedAt: 3, SentAt: 2, EncVerified: true, EncMode: "e2e"},
+	}).Text
+	if !strings.Contains(changed, "f: (deleted)") || !strings.Contains(changed, "g: fixed (edited)") {
+		t.Fatalf("DM export lost deletion/edit markers: %q", changed)
+	}
 }

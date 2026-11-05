@@ -4,8 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestConfigDirCreatesAppDirectory(t *testing.T) {
@@ -91,5 +93,16 @@ func TestLogChatEscapesRecordSeparators(t *testing.T) {
 	want := `[2026-08-22 12:34:56] [channel] mallory: hi\r\n[2026-08-22 12:34:57] [channel] alice: forged\\n\u001b[2J\u2028` + "\n"
 	if got := string(raw); got != want {
 		t.Fatalf("chat log = %q, want %q", got, want)
+	}
+}
+
+func TestClampLogLine(t *testing.T) {
+	if got := clampLogLine("short"); got != "short" {
+		t.Fatalf("clampLogLine(short) = %q", got)
+	}
+	long := "x" + strings.Repeat("é", maxChatLogLine)
+	got := clampLogLine(long)
+	if !strings.HasSuffix(got, " [truncated]") || !utf8.ValidString(got) || len(got) > maxChatLogLine+len(" [truncated]") {
+		t.Fatalf("clampLogLine(long) = %d bytes, valid=%v", len(got), utf8.ValidString(got))
 	}
 }

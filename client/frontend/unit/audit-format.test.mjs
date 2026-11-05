@@ -37,3 +37,13 @@ test("ordinary edits identify unchanged roles, channels and members", () => {
     assert.equal(auditResource("roles.channel_edit", { after: { access: { channel_id: 3 }, settings: { Name: "Lobby" } } }), "Channel Lobby (#3)");
     assert.equal(auditResource("roles.member_roles_set", { after: { user_id: 7, role_ids: [20] } }), "Member (#7)");
 });
+
+test("fields sharing a label stay distinct and a mentionable-only change is shown", () => {
+    setLanguage("en");
+    const before = { name: "Helper", mentionable: false, deletion_protected: false, future_a: 1, future_b: 2 };
+    const after = { name: "Helper", mentionable: true, deletion_protected: false, future_a: 3, future_b: 2 };
+    assert.deepEqual(auditChanges(before, after), [
+        { label: "Allow mentions", before: "No", after: "Yes" },
+        { label: "Setting", before: "1", after: "3" },
+    ]);
+});

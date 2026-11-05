@@ -169,19 +169,26 @@ func (t *tray) disconnectActive() {
 
 // toggleWindow shows or hides the main window (287).
 func (t *tray) toggleWindow() {
+	// The visible flag and the menu title change together under t.mu:
+	// systray's MenuItem.SetTitle is unsynchronized, and the minimize-to-tray
+	// watcher updates the same item (trayMarkHidden).
 	t.mu.Lock()
 	t.visible = !t.visible
 	visible := t.visible
+	ready := t.app.ctx != nil
+	if ready && visible {
+		t.miShowHide.SetTitle("Hide noXa")
+	} else if ready {
+		t.miShowHide.SetTitle("Show noXa")
+	}
 	t.mu.Unlock()
-	if t.app.ctx == nil {
+	if !ready {
 		return
 	}
 	if visible {
 		wailsRuntime.WindowShow(t.app.ctx)
-		t.miShowHide.SetTitle("Hide noXa")
 	} else {
 		wailsRuntime.WindowHide(t.app.ctx)
-		t.miShowHide.SetTitle("Show noXa")
 	}
 }
 
@@ -193,8 +200,8 @@ func trayMarkHidden() {
 		return
 	}
 	trayCtl.mu.Lock()
+	defer trayCtl.mu.Unlock()
 	trayCtl.visible = false
-	trayCtl.mu.Unlock()
 	if trayCtl.miShowHide != nil {
 		trayCtl.miShowHide.SetTitle("Show noXa")
 	}

@@ -4,6 +4,7 @@
 import { t } from "./i18n.js";
 import { createStatusExpiryScheduler } from "./status-expiry.js";
 import { capturePresenceScope, setPresence } from "./presence.js";
+import { sessionUserID } from "./session-identity.js";
 
 const STORAGE_KEY = "noxa.status.expiry";
 const V = () => window.__noxa;
@@ -32,7 +33,9 @@ async function expire(record) {
     if (!target) return false;
     if (target.id === state.activeTabID) {
         if (!state.myClientID) return false;
-        if (record.uniqueID && record.uniqueID !== state.myUniqueID) return true;
+        // The status belongs to the session's account (password accounts can
+        // differ from the local identity), never to whoever is on the tab now.
+        if (record.uniqueID && record.uniqueID !== sessionUserID(state)) return true;
         if (!state.myStatus) return true;
         if (!await setPresence("online", "", capturePresenceScope())) return false;
     } else {
@@ -71,7 +74,7 @@ export function armStatusExpiry({ status, message, expiresAt }) {
     const active = initStatusExpiry();
     if (!expiresAt || !status || status === "online") { active.clear(); return null; }
     const state = V()?.state;
-    const record = active.set({ uniqueID: state?.myUniqueID || "", tabID: state?.activeTabID || "", server: "", status, message, expiresAt });
+    const record = active.set({ uniqueID: state ? sessionUserID(state) : "", tabID: state?.activeTabID || "", server: "", status, message, expiresAt });
     // The server address lets the expiry survive a closed/reopened tab.
     void activeTabAddr().then(addr => {
         const current = active.current();

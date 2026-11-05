@@ -13,7 +13,7 @@ var specModifiers = map[string]hotkey.Modifier{
 }
 
 // X11 keysyms. Physical punctuation codes need the Windows polling backend.
-func platformSpecKey(name string) (hotkey.Key, bool) {
+func platformSpecKey(name string) ([]hotkey.Modifier, hotkey.Key, bool) {
 	keys := map[string]hotkey.Key{
 		"backspace": 0xff08, "pageup": 0xff55, "pagedown": 0xff56, "home": 0xff50, "end": 0xff57,
 		"insert": 0xff63, "capslock": 0xffe5, "numlock": 0xff7f, "scrolllock": 0xff14,
@@ -24,5 +24,5 @@ func platformSpecKey(name string) (hotkey.Key, bool) {
 		"f21": 0xffd2, "f22": 0xffd3, "f23": 0xffd4, "f24": 0xffd5,
 	}
 	key, ok := keys[name]
-	return key, ok
+	return nil, key, ok
 }

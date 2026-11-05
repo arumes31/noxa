@@ -222,7 +222,7 @@ func TestDownloadDestinationReservationNormalizesPathAliases(t *testing.T) {
 	defer release()
 	aliases := []string{dir + string(filepath.Separator) + "child" + string(filepath.Separator) + ".." + string(filepath.Separator) + "report.bin"}
 	aliases = append(aliases, dest+partSuffix)
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		aliases = append(aliases, strings.ToUpper(dest))
 	}
 	for _, alias := range aliases {

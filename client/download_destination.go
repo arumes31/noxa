@@ -24,7 +24,10 @@ func reserveDownloadDestination(path string) (func(), error) {
 		return nil, fmt.Errorf("resolve download directory: %w", err)
 	}
 	key := filepath.Join(dir, filepath.Base(abs))
-	if runtime.GOOS == "windows" {
+	// Windows and default macOS (APFS/HFS+) volumes are case-insensitive:
+	// "Report.pdf" and "report.pdf" share one partial file. Folding on a
+	// case-sensitive volume only over-reserves, which is harmless.
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		key = strings.ToLower(key)
 	}
 	keys := []string{key, key + partSuffix}

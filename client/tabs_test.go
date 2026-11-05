@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -754,5 +755,53 @@ func TestSetHotkeyValidation(t *testing.T) {
 	}
 	if a.settings.HotkeyZen != "Ctrl+Shift+Z" {
 		t.Fatalf("spec = %q", a.settings.HotkeyZen)
+	}
+}
+
+// The replay journal is bounded by payload bytes, not just entry count.
+func TestTrimJournalBoundsPayloadBytes(t *testing.T) {
+	big := strings.Repeat("x", journalByteCap/4+1)
+	var journal []journalEntry
+	for i := 0; i < 10; i++ {
+		journal = trimJournal(append(journal, journalEntry{name: "event", payload: big}))
+	}
+	total := 0
+	for _, e := range journal {
+		total += len(e.payload)
+	}
+	if len(journal) != 3 || total > journalByteCap {
+		t.Fatalf("journal = %d entries / %d bytes, want 3 within %d", len(journal), total, journalByteCap)
+	}
+	huge := strings.Repeat("y", journalByteCap+1)
+	journal = trimJournal(append(journal, journalEntry{name: "event", payload: huge}))
+	if len(journal) != 1 || journal[0].payload != huge {
+		t.Fatalf("newest oversized entry was not kept alone: %d entries", len(journal))
+	}
+	small := make([]journalEntry, journalCap+5)
+	if got := len(trimJournal(small)); got != journalCap {
+		t.Fatalf("entry cap = %d, want %d", got, journalCap)
+	}
+}
+
+// A connecting tab that became active (closing its neighbour selected it)
+// and then fails must not leave the active binding on a deleted tab.
+func TestRemoveTabRebindsActiveTab(t *testing.T) {
+	a := newTabApp(t)
+	keptID, kept := a.newTab()
+	failedID, _ := a.newTab()
+	a.activate(failedID)
+	a.removeTab(failedID)
+	a.tabsMu.Lock()
+	_, present := a.tabs[failedID]
+	activeID := a.activeID
+	a.tabsMu.Unlock()
+	if present || activeID != keptID || a.cmLoad() != kept.cm {
+		t.Fatalf("after removing the active tab: present=%v active=%q", present, activeID)
+	}
+	// A background tab is simply removed.
+	otherID, _ := a.newTab()
+	a.removeTab(otherID)
+	if len(a.ListTabs()) != 1 {
+		t.Fatalf("tabs = %+v", a.ListTabs())
 	}
 }

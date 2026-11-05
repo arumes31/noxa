@@ -56,7 +56,9 @@ func historyMessagesSince(store dmHistoryStore, since int64, ownUID string) []ne
 			continue
 		}
 		for _, e := range entries {
-			if e.SentAt < since || !openedChatText(e.Body) {
+			// A tombstone (deleted, body cleared) never travels: the format
+			// has no deletion flag, so it would import as a blank message.
+			if e.SentAt < since || e.Deleted || strings.TrimSpace(e.Body) == "" || !openedChatText(e.Body) {
 				continue
 			}
 			if e.Protocol == "" && !transferableLegacyEntry(e) {

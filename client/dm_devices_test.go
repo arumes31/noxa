@@ -507,3 +507,24 @@ func TestCachedPeerDevicesFollowTheCurrentPin(t *testing.T) {
 		t.Fatalf("replaced identity: err=%v, want %v", err, errDMIdentityChanged)
 	}
 }
+
+// Low-order and non-canonical X25519 encodings are refused wherever a device
+// key is parsed (a low-order key makes nacl/box's shared key a constant).
+func TestParseDeviceX25519RejectsWeakKeys(t *testing.T) {
+	pub, _, err := box.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := parseDeviceX25519(base64.StdEncoding.EncodeToString(pub[:])); !ok {
+		t.Fatal("a generated key was refused")
+	}
+	one := make([]byte, 32)
+	one[0] = 1 // u = 1, a low-order point
+	high := append([]byte(nil), pub[:]...)
+	high[31] |= 0x80 // non-canonical top bit
+	for name, raw := range map[string][]byte{"zero": make([]byte, 32), "low order": one, "non-canonical": high, "short": pub[:31]} {
+		if _, ok := parseDeviceX25519(base64.StdEncoding.EncodeToString(raw)); ok {
+			t.Errorf("%s key accepted", name)
+		}
+	}
+}
