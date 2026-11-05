@@ -1,7 +1,9 @@
 package server
 
 import (
+	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -34,11 +36,35 @@ func routeRead(t *testing.T, s *TCPServer, method, query, remote string) *httpte
 	server.HandleLocalGET("/debug/stream-route", s.StreamRouteDiagnosticsHandler())
 	request := httptest.NewRequestWithContext(t.Context(), method, "/debug/stream-route"+query, nil)
 	request.RemoteAddr = remote
-	request.Header.Set("Forwarded", "for=127.0.0.1")
-	request.Header.Set("X-Forwarded-For", "127.0.0.1")
+	forgeLoopbackForwarding(request)
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	return response
+}
+
+// forgeLoopbackForwarding makes a remote caller claim a loopback origin.
+// Loopback peers are left untouched: a loopback peer that sends forwarding
+// headers is a same-host proxy and is refused separately.
+func forgeLoopbackForwarding(request *http.Request) {
+	if peer, err := netip.ParseAddrPort(request.RemoteAddr); err == nil && peer.Addr().IsLoopback() {
+		return
+	}
+	request.Header.Set("Forwarded", "for=127.0.0.1")
+	request.Header.Set("X-Forwarded-For", "127.0.0.1")
+}
+
+func TestStreamRouteHandlerRefusesSameHostProxy(t *testing.T) {
+	s, voice := routeHandlerFixture()
+	server := health.New("127.0.0.1:0", nil, nil)
+	server.HandleLocalGET("/debug/stream-route", s.StreamRouteDiagnosticsHandler())
+	request := httptest.NewRequestWithContext(t.Context(), "GET", "/debug/stream-route"+validRouteQuery, nil)
+	request.RemoteAddr = "127.0.0.1:123"
+	request.Header.Set("X-Forwarded-For", "198.51.100.7")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || voice.calls != 0 {
+		t.Fatalf("proxied request: status %d, calls %d", response.Code, voice.calls)
+	}
 }
 
 const validRouteQuery = "?publisher_id=pub&slot=screen&generation=23&ssrc=42"

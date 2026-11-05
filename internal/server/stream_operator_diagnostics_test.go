@@ -50,8 +50,7 @@ func operatorDiagnosticRead(t *testing.T, s *TCPServer, method, query, remote st
 	listener.HandleLocalGET("/debug/streams", s.StreamOperatorDiagnosticsHandler())
 	request := httptest.NewRequestWithContext(t.Context(), method, "/debug/streams"+query, nil)
 	request.RemoteAddr = remote
-	request.Header.Set("X-Forwarded-For", "127.0.0.1")
-	request.Header.Set("Forwarded", "for=127.0.0.1")
+	forgeLoopbackForwarding(request)
 	response := httptest.NewRecorder()
 	listener.Handler().ServeHTTP(response, request)
 	return response

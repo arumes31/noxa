@@ -2,13 +2,12 @@ package server
 
 import (
 	"encoding/json"
-	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
 
+	"noxa/internal/health"
 	"noxa/internal/webrtc"
 )
 
@@ -47,9 +46,9 @@ func streamTimingQuery(raw string) (webrtc.StreamTimingRequest, bool) {
 func (s *TCPServer) StreamTimingDiagnosticsHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		address, parseErr := netip.ParseAddr(host)
-		if err != nil || parseErr != nil || !address.IsLoopback() {
+		// A same-host reverse proxy also connects from loopback; requests it
+		// relays carry forwarding headers and are refused.
+		if !health.DirectLoopback(r) {
 			http.Error(w, "local operator only", http.StatusForbidden)
 			return
 		}

@@ -64,3 +64,36 @@ func TestMoveBlobRejectsAliasButAllowsCaseOnlySelfRename(t *testing.T) {
 		t.Fatalf("case-only self rename: %v", err)
 	}
 }
+
+func TestBlobAliasDetectsDifferentlySpelledFolder(t *testing.T) {
+	root := caseInsensitiveRoot(t)
+	if err := root.MkdirAll(filepath.Join("7", "docs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.WriteFile(filepath.Join("7", "docs", "report.pdf"), []byte("victim"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The file name is listed exactly inside the folder, but the folder itself
+	// is reached through a case variant whose record lives elsewhere.
+	if alias, err := blobAlias(root, filepath.Join("7", "DOCS", "report.pdf"), nil); err != nil || !alias {
+		t.Fatalf("folder alias over existing file alias=%v err=%v, want alias", alias, err)
+	}
+	if alias, err := blobAlias(root, filepath.Join("7", "DOCS", "new.pdf"), nil); err != nil || !alias {
+		t.Fatalf("folder alias for new file alias=%v err=%v, want alias", alias, err)
+	}
+	if alias, err := blobAlias(root, filepath.Join("7", "docs", "new.pdf"), nil); err != nil || alias {
+		t.Fatalf("exact folder alias=%v err=%v", alias, err)
+	}
+	if alias, err := blobAlias(root, filepath.Join("7", "other", "new.pdf"), nil); err != nil || alias {
+		t.Fatalf("missing folder alias=%v err=%v", alias, err)
+	}
+	if err := root.WriteFile(filepath.Join("7", "mine.txt"), []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := moveBlob(root, filepath.Join("7", "mine.txt"), filepath.Join("7", "DOCS", "report.pdf")); !errors.Is(err, ErrNameAliasesExistingFile) {
+		t.Fatalf("move into folder alias err=%v", err)
+	}
+	if body, _ := root.ReadFile(filepath.Join("7", "docs", "report.pdf")); string(body) != "victim" {
+		t.Fatalf("victim blob replaced: %q", body)
+	}
+}

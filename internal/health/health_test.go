@@ -343,3 +343,72 @@ func TestCredentialTransportTrustsOnlyImmediateConfiguredProxy(t *testing.T) {
 		})
 	}
 }
+
+// A same-host reverse proxy reaches the listener from loopback; its
+// forwarding headers must keep remote callers off loopback-only endpoints.
+func TestHandleLocalGETRefusesSameHostProxy(t *testing.T) {
+	srv := New("127.0.0.1:0", nil, nil)
+	srv.HandleLocalGET("/metrics", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, tc := range []struct {
+		name, header, value string
+		want                int
+	}{
+		{"direct loopback", "", "", http.StatusNoContent},
+		{"x-forwarded-for", "X-Forwarded-For", "198.51.100.7", http.StatusForbidden},
+		{"forwarded", "Forwarded", "for=198.51.100.7", http.StatusForbidden},
+		{"x-forwarded-proto", "X-Forwarded-Proto", "https", http.StatusForbidden},
+		{"x-forwarded-host", "X-Forwarded-Host", "noxa.example", http.StatusForbidden},
+		{"x-real-ip", "X-Real-IP", "198.51.100.7", http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil)
+			r.RemoteAddr = "127.0.0.1:4000"
+			if tc.header != "" {
+				r.Header.Set(tc.header, tc.value)
+			}
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
+// Behind a trusted proxy, downstream limiters and ban checks must see the
+// forwarding client rather than the proxy.
+func TestRequireSecureCredentialsExposesForwardedClient(t *testing.T) {
+	var seen string
+	handler := RequireSecureCredentials(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.RemoteAddr
+		w.WriteHeader(http.StatusNoContent)
+	}), netip.MustParsePrefix("172.18.0.0/24"))
+	for _, tc := range []struct {
+		name, remote, xff, want string
+	}{
+		{"trusted proxy", "172.18.0.2:1234", "203.0.113.9", "203.0.113.9:0"},
+		{"spoofed left hop ignored", "172.18.0.2:1234", "10.9.9.9, 203.0.113.9", "203.0.113.9:0"},
+		{"proxy chain", "172.18.0.2:1234", "203.0.113.9, 172.18.0.5", "203.0.113.9:0"},
+		{"malformed hop keeps proxy", "172.18.0.2:1234", "bogus", "172.18.0.2:1234"},
+		{"no forwarded-for", "172.18.0.2:1234", "", "172.18.0.2:1234"},
+		{"untrusted peer keeps own address", "198.51.100.4:1234", "203.0.113.9", "198.51.100.4:1234"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seen = ""
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/events", nil)
+			r.RemoteAddr = tc.remote
+			r.TLS = &tls.ConnectionState{}
+			r.Header.Set("X-Forwarded-Proto", "https")
+			if tc.xff != "" {
+				r.Header.Set("X-Forwarded-For", tc.xff)
+			}
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, r)
+			if w.Code != http.StatusNoContent || seen != tc.want {
+				t.Fatalf("status %d remote %q, want 204 %q", w.Code, seen, tc.want)
+			}
+		})
+	}
+}
