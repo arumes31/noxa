@@ -45,6 +45,9 @@ func (s *TCPServer) sendSessionChat(ctx context.Context, client *Client, f *netp
 	if msg.ToUniqueID != "" && msg.ToClientID != "" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "choose a single direct-message destination")
 	}
+	if !boundedChatIDs(msg) {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "chat identifier too long")
+	}
 	if msg.AckRequested && !validAcknowledgedChat(msg) {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid acknowledged chat destination or reference")
 	}
@@ -305,6 +308,9 @@ func (s *TCPServer) sendDirectByUniqueID(ctx context.Context, client *Client, ms
 	// E2EE DMs are spooled as ciphertext the server cannot read; the sender's
 	// unique ID travels along so the recipient can fetch the public key.
 	if err := s.deps.Spool.SpoolMessage(ctx, client.userID(), target.ID, client.UniqueID, msg.Text, binding...); err != nil {
+		if errors.Is(err, store.ErrSpoolFull) {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, store.ErrSpoolFull.Error())
+		}
 		s.logger.Warn("spooling message failed",
 			zap.String("client_id", client.ID),
 			zap.Error(err),

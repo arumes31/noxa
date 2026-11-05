@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -240,5 +241,23 @@ func TestFingerprintIsDomainSeparated(t *testing.T) {
 	}
 	if rotated.Fingerprint() == fp {
 		t.Fatal("fingerprint did not follow the newest kek")
+	}
+}
+
+// A ring readable by other local accounts, or a non-file path, is refused
+// rather than silently trusted.
+func TestLoadKEKRingRejectsUnsafeKeyFile(t *testing.T) {
+	if _, err := LoadKEKRing(t.TempDir(), "", false); !errors.Is(err, errKeyFilePermissions) {
+		t.Fatalf("directory: err = %v, want errKeyFilePermissions", err)
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not enforced on Windows")
+	}
+	path := writeRing(t, "1:"+b64Key(3))
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadKEKRing(path, "", false); !errors.Is(err, errKeyFilePermissions) {
+		t.Fatalf("0644 ring: err = %v, want errKeyFilePermissions", err)
 	}
 }

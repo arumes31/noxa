@@ -125,10 +125,21 @@ func (s *Server) execute(ctx context.Context, sess *session, line string) bool {
 	return s.executeRoleCommand(ctx, sess, b, cmd)
 }
 
+// responseWriteTimeout bounds every reply. A client that stops reading
+// would otherwise park the session in Write forever (the idle timeout only
+// covers reads) and keep one of the MaxConns slots. (A variable only so
+// tests can shorten it.)
+var responseWriteTimeout = 10 * time.Second
+
 // write sends lines to the client. It returns false when the write fails.
 func (s *Server) write(sess *session, text string) bool {
-	_, err := io.WriteString(sess.w, text)
-	return err == nil
+	if sess.setWriteDeadline == nil || sess.closeTransport == nil {
+		_, err := io.WriteString(sess.w, text)
+		return err == nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), responseWriteTimeout)
+	defer cancel()
+	return writeIntegrationResponse(ctx, sess, text) == nil
 }
 
 // cmdLogin authenticates the session. Brute-force protection is scoped by
@@ -149,7 +160,7 @@ func (s *Server) cmdLogin(ctx context.Context, sess *session, cmd command) bool 
 		return s.write(sess, errorLine(errInsufficientPermissions, authorizationModelUpgrade))
 	}
 	uniqueID, password := cmd.positional[0], cmd.positional[1]
-	sourceScope := auth.LoginFailureScope("query:"+sess.remoteIP, "")
+	sourceScope := auth.LoginFailureScope("query:"+auth.SourceAddressKey(sess.remoteIP), "")
 	principalScope := auth.LoginFailureScope("", uniqueID)
 	attempt, allowed := s.ReserveLoginAttempt(sourceScope, principalScope)
 	if !allowed {

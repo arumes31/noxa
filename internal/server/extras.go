@@ -20,6 +20,9 @@ import (
 // maxImageBytes is the maximum decoded size of an avatar or channel icon.
 const maxImageBytes = 256 * 1024
 
+// maxComplaintReasonBytes bounds a complaint's free-text reason.
+const maxComplaintReasonBytes = 2048
+
 // Event types for the Phase 9 features.
 const (
 	eventAvatarChanged       = "avatar_changed"
@@ -326,6 +329,11 @@ func (s *TCPServer) fileSessionComplaint(ctx context.Context, client *Client, f 
 	}
 	if msg.Reason == "" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "reason must not be empty")
+	}
+	// Every row is listed back to administrators in full; an unbounded reason
+	// would let any reporter store close to a frame per complaint.
+	if len(msg.Reason) > maxComplaintReasonBytes || len(msg.TargetUniqueID) > maxUniqueIDBytes {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "complaint reason too long")
 	}
 
 	if _, err := s.deps.Auth.LookupUser(ctx, msg.TargetUniqueID); err != nil {

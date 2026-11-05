@@ -212,24 +212,68 @@ func generate(hosts []string) (tls.Certificate, error) {
 	}, nil
 }
 
-// writePEM persists the certificate chain and private key in PEM form.
+// writePEM persists the certificate chain and private key in PEM form. Both
+// are staged in full before either is published, and a failure while
+// publishing removes the half already in place: Ensure refuses a partial pair
+// forever, so an interrupted first generation must leave nothing behind.
 func writePEM(cert tls.Certificate, certFile, keyFile string) error {
 	var certPEM []byte
 	for _, der := range cert.Certificate {
 		certPEM = append(certPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
-	}
-	// #nosec G306 -- certificates contain public material and are intentionally
-	// world-readable; the private key below remains restricted to 0600.
-	if err := os.WriteFile(certFile, certPEM, 0o644); err != nil {
-		return fmt.Errorf("writing certificate: %w", err)
 	}
 	keyDER, err := x509.MarshalECPrivateKey(cert.PrivateKey.(*ecdsa.PrivateKey))
 	if err != nil {
 		return fmt.Errorf("marshaling private key: %w", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Dir(keyFile), 0o700); err != nil {
+		return fmt.Errorf("creating TLS key dir: %w", err)
+	}
+	keyTemp, err := stagePEM(keyFile, keyPEM, 0o600)
+	if err != nil {
 		return fmt.Errorf("writing private key: %w", err)
 	}
+	defer func() { _ = os.Remove(keyTemp) }()
+	// Certificates contain public material and are intentionally world-readable.
+	certTemp, err := stagePEM(certFile, certPEM, 0o644)
+	if err != nil {
+		return fmt.Errorf("writing certificate: %w", err)
+	}
+	defer func() { _ = os.Remove(certTemp) }()
+	if err := os.Rename(keyTemp, keyFile); err != nil {
+		return fmt.Errorf("writing private key: %w", err)
+	}
+	if err := os.Rename(certTemp, certFile); err != nil {
+		_ = os.Remove(keyFile)
+		return fmt.Errorf("writing certificate: %w", err)
+	}
 	return nil
+}
+
+// stagePEM writes data to a synced temporary file beside path and returns its
+// name.
+func stagePEM(path string, data []byte, mode os.FileMode) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	err = f.Chmod(mode)
+	if err != nil && runtime.GOOS == "windows" {
+		err = nil // Windows has no POSIX modes; the file inherits its ACL.
+	}
+	if err == nil {
+		_, err = f.Write(data)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(name)
+		return "", err
+	}
+	return name, nil
 }

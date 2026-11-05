@@ -5,6 +5,7 @@ import (
 	"net"
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
+	"noxa/internal/state"
 	"testing"
 )
 
@@ -117,5 +118,28 @@ func TestVoiceQueueModerationRespectsHierarchyAtomically(t *testing.T) {
 		if a.HandCalled || a.HandRaisedOrder != 0 {
 			t.Fatal("owner failed to clear queue")
 		}
+	}
+}
+
+// Only an actual queue transition in the request's channel triggers the
+// structural broadcast; repeated raises and lowers do not.
+func TestSameVoiceQueueDetectsTransitionsOnly(t *testing.T) {
+	members := func(order uint64, called bool, otherOrder uint64) []*state.Client {
+		return []*state.Client{
+			{ClientID: "a", ChannelID: 1, HandRaisedOrder: order, HandCalled: called},
+			{ClientID: "b", ChannelID: 2, HandRaisedOrder: otherOrder},
+		}
+	}
+	if !sameVoiceQueue(members(3, false, 0), members(3, false, 0), 1) {
+		t.Fatal("identical queue reported as changed")
+	}
+	if !sameVoiceQueue(members(3, false, 0), members(3, false, 9), 1) {
+		t.Fatal("another channel's queue counted as a change")
+	}
+	if sameVoiceQueue(members(0, false, 0), members(3, false, 0), 1) || sameVoiceQueue(members(0, false, 0), members(0, true, 0), 1) {
+		t.Fatal("queue transition not detected")
+	}
+	if sameVoiceQueue(members(0, false, 0), members(0, false, 0)[:1], 2) {
+		t.Fatal("member leaving the channel not detected")
 	}
 }

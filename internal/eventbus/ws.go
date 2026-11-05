@@ -125,7 +125,7 @@ func newWSHandler(bus *Bus, logger *zap.Logger, cfg wsHandlerConfig) http.Handle
 		var attempt *auth.LoginAttempt
 		principalScope := auth.LoginFailureScope("", user)
 		if cfg.loginLimiter != nil {
-			sourceScope := auth.LoginFailureScope("ws:"+remoteIPKey(r.RemoteAddr), "")
+			sourceScope := auth.LoginFailureScope("ws:"+auth.SourceAddressKey(remoteIPKey(r.RemoteAddr)), "")
 			var allowed bool
 			attempt, allowed = cfg.loginLimiter.Reserve(sourceScope, principalScope)
 			if !allowed {
@@ -340,7 +340,8 @@ func newWSAuthLimiter(cfg wsHandlerConfig) *wsAuthLimiter {
 
 func (l *wsAuthLimiter) allow(remoteAddr string) (bool, time.Duration) {
 	now := l.now()
-	key := remoteIPKey(remoteAddr)
+	// IPv6 sources share one budget per /64, the block one host controls.
+	key := auth.SourceAddressKey(remoteIPKey(remoteAddr))
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

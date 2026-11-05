@@ -189,16 +189,31 @@ func (c *boundedPacketConn) SetDeadline(t time.Time) error {
 type boundedUDPConn struct {
 	transport.UDPConn
 	writes socketWriteGate
+	dscp   voiceDSCP
+}
+
+// writeAddressed marks addressed voice packets like the shared mux does, so
+// a direct (non-mux) candidate path gets the same Wi-Fi/QoS priority.
+func (c *boundedUDPConn) writeAddressed(b []byte, addr net.Addr, write func() (int, error)) (int, error) {
+	voice := isVoiceRTP(b)
+	return c.writes.writePriority(voice, c.UDPConn.SetWriteDeadline, func() (int, error) {
+		if voice {
+			if n, ok, err := writeVoiceMarked(&c.dscp, c.UDPConn, b, addr); ok {
+				return n, err
+			}
+		}
+		return write()
+	})
 }
 
 func (c *boundedUDPConn) Write(b []byte) (int, error) {
 	return c.writes.writePriority(isVoiceRTP(b), c.UDPConn.SetWriteDeadline, func() (int, error) { return c.UDPConn.Write(b) })
 }
 func (c *boundedUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) {
-	return c.writes.writePriority(isVoiceRTP(b), c.UDPConn.SetWriteDeadline, func() (int, error) { return c.UDPConn.WriteTo(b, addr) })
+	return c.writeAddressed(b, addr, func() (int, error) { return c.UDPConn.WriteTo(b, addr) })
 }
 func (c *boundedUDPConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
-	return c.writes.writePriority(isVoiceRTP(b), c.UDPConn.SetWriteDeadline, func() (int, error) { return c.UDPConn.WriteToUDP(b, addr) })
+	return c.writeAddressed(b, addr, func() (int, error) { return c.UDPConn.WriteToUDP(b, addr) })
 }
 func (c *boundedUDPConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error) {
 	n, err = c.writes.writePriority(isVoiceRTP(b), c.UDPConn.SetWriteDeadline, func() (int, error) { var e error; n, oobn, e = c.UDPConn.WriteMsgUDP(b, oob, addr); return n, e })

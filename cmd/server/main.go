@@ -290,6 +290,9 @@ func resetChatKeys(ctx context.Context, dbStore *store.Store, logger *zap.Logger
 	// exists would decrypt to nothing, undetectably and forever.
 	stmts := []string{
 		`UPDATE chat_messages SET body = '', body_enc = '', key_id = 0, deleted_at = COALESCE(deleted_at, NOW())`,
+		// Discussion posts are sealed with the same scope keys. key_id keeps
+		// its CHECK (> 0); the tombstone and empty body make it inert.
+		`UPDATE discussion_messages SET body_enc = '', deleted_at = COALESCE(deleted_at, NOW())`,
 		`UPDATE server_settings SET value = '', key_id = 0 WHERE key IN ('motd', 'announcement')`,
 		`DELETE FROM chat_scope_keys`,
 		`DELETE FROM chat_scope_seq`,

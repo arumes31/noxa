@@ -86,3 +86,34 @@ func TestWebhookRevokeSerializesWithInflightPostAndChannelScope(t *testing.T) {
 		t.Fatalf("revoked err=%v", err)
 	}
 }
+
+// Requests rejected by the authorize callback still consume the rate limit.
+func TestWebhookRejectedDeliveriesCountTowardRate(t *testing.T) {
+	s := pollTestStore(t)
+	var user, ch int64
+	if err := s.db.QueryRowContext(t.Context(), `INSERT INTO users(unique_id,nickname) VALUES('hook-rate-owner','Hook owner') RETURNING id`).Scan(&user); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRowContext(t.Context(), `INSERT INTO channels(name,channel_type) VALUES('Hook rate',2) RETURNING id`).Scan(&ch); err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256([]byte("rate-secret"))
+	created, err := s.ManageWebhook(t.Context(), netproto.WebhookRequest{Action: "create", ChannelID: ch, Name: "CI"}, user, hash[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied := errors.New("moderation rejected")
+	for i := 0; i < 5; i++ {
+		_, _, _, _, err := s.DeliverWebhook(t.Context(), created.ID, hash[:], func(WebhookIdentity) (string, uint32, error) { return "", 0, denied })
+		if !errors.Is(err, denied) {
+			t.Fatalf("delivery %d: err = %v, want the authorize error", i, err)
+		}
+	}
+	_, _, _, _, err = s.DeliverWebhook(t.Context(), created.ID, hash[:], func(WebhookIdentity) (string, uint32, error) {
+		t.Error("rate-limited callback ran")
+		return "cipher", 1, nil
+	})
+	if !errors.Is(err, ErrWebhookRate) {
+		t.Fatalf("sixth delivery err = %v, want ErrWebhookRate", err)
+	}
+}

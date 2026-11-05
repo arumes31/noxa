@@ -99,3 +99,32 @@ func TestPrivateCallRejectsUnpublishedDeviceBeforeInviting(t *testing.T) {
 		})
 	}
 }
+
+// A session already bound to one live call cannot accept a second call that
+// rang it unbound: the second binding would orphan the first.
+func TestPrivateCallSessionCannotAcceptTwoCalls(t *testing.T) {
+	env, _ := privateCallsTestEnv(t)
+	defer env.stop()
+	callerA, _ := dialCallAuthed(t, env, "admin-uid")
+	defer func() { _ = callerA.Close() }()
+	callerB, _ := dialCallAuthed(t, env, "admin-uid")
+	defer func() { _ = callerB.Close() }()
+	first, _ := dialCallAuthed(t, env, "user-uid")
+	defer func() { _ = first.Close() }()
+	second, secondID := dialCallAuthed(t, env, "user-uid")
+	defer func() { _ = second.Close() }()
+	callOne := privateCallRequest(t, callerA, netproto.CallRequest{Action: "start", Target: "user-uid"})
+	callTwo := privateCallRequest(t, callerB, netproto.CallRequest{Action: "start", Target: "user-uid"})
+	if ringing, _ := callTwo.Participant("user-uid"); ringing.ClientID != "" {
+		t.Fatalf("second call bound before answering: %+v", ringing)
+	}
+	privateCallRequest(t, second, netproto.CallRequest{Action: "accept", ID: callOne.ID})
+	send(t, second, netproto.MsgCallRequest, netproto.CallRequest{Action: "accept", ID: callTwo.ID})
+	if failure := readError(t, second); failure.Code != errCodePermissionDenied || !strings.Contains(failure.Message, "another call") {
+		t.Fatalf("second accept = %+v", failure)
+	}
+	current := privateCallRequest(t, callerA, netproto.CallRequest{Action: "get", ID: callOne.ID})
+	if peer, _ := current.Participant("user-uid"); peer.ClientID != secondID || peer.State != "accepted" {
+		t.Fatalf("first call binding changed: %+v", peer)
+	}
+}

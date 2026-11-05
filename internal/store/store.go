@@ -638,6 +638,20 @@ type DMKeyBinding struct {
 	PeerUniqueID string
 }
 
+// Offline mailbox quotas. A mailbox is one recipient's account-wide rows or
+// one recipient device's copies; undelivered rows never expire, so without a
+// bound any registered sender could grow a victim's backlog indefinitely. The
+// per-sender share keeps one sender from filling the whole mailbox.
+// (Variables only so tests can scale them down.)
+var (
+	MaxPendingPerMailbox = 10000
+	MaxPendingPerSender  = 2000
+)
+
+// ErrSpoolFull rejects an offline message whose recipient mailbox, or the
+// sender's share of it, is full.
+var ErrSpoolFull = errors.New("recipient mailbox is full")
+
 // SpoolMessage stores an offline message for later delivery. For E2EE direct
 // messages, message is base64 ciphertext the server cannot read and
 // fromUniqueID lets a legacy recipient fetch the sender's public key. A binding
@@ -650,13 +664,40 @@ func (s *Store) SpoolMessage(ctx context.Context, fromUserID, toUserID int64, fr
 	if len(bindings) == 1 {
 		binding = bindings[0]
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("spooling offline message: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Serialize spooling into one mailbox (account-wide rows, or one device's
+	// copies) so concurrent senders cannot race past the quota below.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		fmt.Sprintf("offline-spool:%d:%q", toUserID, binding.RecipientDeviceID)); err != nil {
+		return fmt.Errorf("spooling offline message: %w", err)
+	}
+	var mailbox, fromSender int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE from_user_id = $3) FROM (
+			SELECT from_user_id FROM offline_messages
+			WHERE to_user_id = $1 AND to_device_id = $2 AND delivered_at IS NULL
+			LIMIT $4) pending`,
+		toUserID, binding.RecipientDeviceID, fromUserID, MaxPendingPerMailbox).Scan(&mailbox, &fromSender); err != nil {
+		return fmt.Errorf("counting offline messages: %w", err)
+	}
+	// A sender filling only their own mailbox harms nobody else, so the
+	// per-sender share applies to other accounts only.
+	if mailbox >= MaxPendingPerMailbox || (fromUserID != toUserID && fromSender >= MaxPendingPerSender) {
+		return ErrSpoolFull
+	}
 	const q = `INSERT INTO offline_messages
 	          (from_user_id, to_user_id, from_unique_id, message, sender_public_key, recipient_public_key, client_msg_id,
 	           from_device_id, to_device_id, dm_action, ref_client_msg_id, peer_unique_id)
 	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
-	if _, err := s.db.ExecContext(ctx, q, fromUserID, toUserID, fromUniqueID, message,
+	if _, err := tx.ExecContext(ctx, q, fromUserID, toUserID, fromUniqueID, message,
 		binding.SenderPublicKey, binding.RecipientPublicKey, binding.ClientMsgID,
 		binding.SenderDeviceID, binding.RecipientDeviceID, binding.DMAction, binding.RefClientMsgID, binding.PeerUniqueID); err != nil {
+		return fmt.Errorf("spooling offline message: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("spooling offline message: %w", err)
 	}
 	return nil

@@ -285,3 +285,32 @@ func TestUDPWorkerRecoversOnePacketPanicAndContinues(t *testing.T) {
 }
 
 type udpPanic struct{ secret string }
+
+// A Shutdown that wins the race with Start leaves no bound socket behind:
+// Start closes the socket it bound and returns.
+func TestUDPShutdownBeforeStartReleasesSocket(t *testing.T) {
+	addr := freeUDPPort(t)
+	s := NewUDP(&config.Config{UDPAddr: addr}, testLogger())
+	if err := s.Shutdown(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.Start(context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Start after Shutdown: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start after Shutdown did not return")
+	}
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		t.Fatalf("socket still bound after Start returned: %v", err)
+	}
+	_ = again.Close()
+}

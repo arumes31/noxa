@@ -158,7 +158,12 @@ func (s *Store) RecordPushResult(ctx context.Context, endpoint string, ok bool, 
 		return fmt.Errorf("recording push failure: %w", err)
 	}
 	if failures >= maxFailures {
-		return s.DeletePushEndpoint(ctx, endpoint)
+		// Re-check the threshold in the DELETE itself: a concurrent success
+		// or re-subscription resets failures, and must not be deleted by
+		// this stale decision.
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM push_subscriptions WHERE endpoint=$1 AND failures>=$2`, endpoint, maxFailures); err != nil {
+			return fmt.Errorf("deleting push endpoint: %w", err)
+		}
 	}
 	return nil
 }

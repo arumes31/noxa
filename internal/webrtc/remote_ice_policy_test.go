@@ -120,3 +120,28 @@ func TestRemoteICEPolicySignaling(t *testing.T) {
 		})
 	}
 }
+
+// IPv6 translation and tunnelling prefixes are judged by the IPv4 address
+// they deliver to, so they cannot smuggle loopback or private destinations.
+func TestRemoteICEPolicyEmbeddedIPv4(t *testing.T) {
+	policy, err := remoteICEPolicy([]string{"192.168.5.0/24"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ip := range []string{
+		"64:ff9b::7f00:1",       // NAT64 -> 127.0.0.1
+		"64:ff9b::a9fe:a9fe",    // NAT64 -> 169.254.169.254
+		"64:ff9b:1::a00:1",      // local-use NAT64, unknown layout
+		"2002:a00:1::1",         // 6to4 -> 10.0.0.1
+		"2001:0:1:2::80ff:fffe", // Teredo -> 127.0.0.1 (inverted)
+	} {
+		if policy(net.ParseIP(ip)) {
+			t.Errorf("accepted %s", ip)
+		}
+	}
+	for _, ip := range []string{"64:ff9b::808:808", "2002:808:808::1", "64:ff9b::c0a8:501"} {
+		if !policy(net.ParseIP(ip)) {
+			t.Errorf("blocked %s", ip)
+		}
+	}
+}

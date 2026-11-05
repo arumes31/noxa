@@ -70,11 +70,15 @@ const (
 	maxBasicAuthorizationBytes = 1024
 	maxHeaderListBytes         = 4 * 1024
 	maxReceiveMessageBytes     = 1 << 20
-	defaultStreamLifetime      = time.Hour
-	defaultShutdownTimeout     = 30 * time.Second
-	serverKeepaliveTime        = 2 * time.Minute
-	serverKeepaliveTimeout     = 20 * time.Second
-	minimumClientPingInterval  = 5 * time.Minute
+	// maxConcurrentStreams is advertised in SETTINGS_MAX_CONCURRENT_STREAMS.
+	// grpc-go otherwise allows 2^32-1 streams per connection, each of which
+	// may hold a goroutine in request decode before authentication runs.
+	maxConcurrentStreams      = 128
+	defaultStreamLifetime     = time.Hour
+	defaultShutdownTimeout    = 30 * time.Second
+	serverKeepaliveTime       = 2 * time.Minute
+	serverKeepaliveTimeout    = 20 * time.Second
+	minimumClientPingInterval = 5 * time.Minute
 )
 
 // LoginLimiter is the ServerQuery brute-force limiter shared by every admin
@@ -110,6 +114,7 @@ func New(addr string, backend query.Backend, bus *eventbus.Bus, logger *zap.Logg
 		grpc.StatsHandler(&s.delivery),
 		grpc.MaxRecvMsgSize(maxReceiveMessageBytes),
 		grpc.MaxHeaderListSize(maxHeaderListBytes),
+		grpc.MaxConcurrentStreams(maxConcurrentStreams),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			Time:    serverKeepaliveTime,
 			Timeout: serverKeepaliveTimeout,

@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"net"
+
+	"noxa/internal/auth"
 )
 
 // ErrConnectionRejected reports that the server is not running or the
@@ -23,7 +25,7 @@ func (s *TCPServer) ServeExternalConn(ctx context.Context, conn net.Conn) error 
 		_ = conn.Close()
 		return ErrConnectionRejected
 	}
-	ip := remoteIP(conn)
+	ip := auth.SourceAddressKey(remoteIP(conn))
 	if len(s.preauth) >= maxPreauthConnections || s.preauthByIP[ip] >= maxPreauthPerIP {
 		s.lifecycleMu.Unlock()
 		_ = conn.Close()

@@ -5,6 +5,8 @@ package query
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ErrTokenNotFound is returned when a token key does not exist.
@@ -36,9 +38,34 @@ var escapeReplacer = strings.NewReplacer(
 	"\t", `\t`,
 )
 
-// escape encodes a value for the query protocol.
+// escape encodes a value for the query protocol. Control characters without
+// a protocol escape (ESC, BEL, DEL, C1 controls ...) are dropped: values such
+// as channel topics are user-controlled and reach administrators' terminals,
+// where raw escape sequences would be interpreted.
 func escape(s string) string {
-	return escapeReplacer.Replace(s)
+	s = escapeReplacer.Replace(s)
+	// Removing a control can join the bytes around it into a new one (an
+	// invalid lead byte followed by a continuation byte), so repeat until
+	// none remain; every pass shrinks s.
+	for strings.IndexFunc(s, unicode.IsControl) >= 0 {
+		s = dropControls(s)
+	}
+	return s
+}
+
+// dropControls removes control characters, keeping invalid UTF-8 bytes as
+// they are (strings.Map would widen each to U+FFFD).
+func dropControls(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError || !unicode.IsControl(r) {
+			b.WriteString(s[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
 }
 
 // unescape decodes a TS3-style escaped value. Unknown escape sequences keep

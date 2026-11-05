@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -58,12 +59,12 @@ func LoadKEKRing(path, envB64 string, allowCreate bool) (*KEKRing, error) {
 	if path == "" {
 		return nil, errors.New("chat master key: chat_master_key_file is empty and NOXA_CHAT_MASTER_KEY is unset")
 	}
-	// #nosec G304 -- path is an administrator-selected master-key location,
-	// intentionally outside a fixed application data root.
-	raw, err := os.ReadFile(path)
+	raw, err := readKeyFile(path)
 	switch {
 	case err == nil:
 		return parseRing(bytes.NewReader(raw), path)
+	case errors.Is(err, errKeyFilePermissions):
+		return nil, err
 	case !errors.Is(err, fs.ErrNotExist):
 		return nil, fmt.Errorf("reading chat master key %s: %w", path, err)
 	case !allowCreate:
@@ -72,6 +73,34 @@ func LoadKEKRing(path, envB64 string, allowCreate bool) (*KEKRing, error) {
 			"to abandon all chat history instead, run with --reset-chat-keys", path)
 	}
 	return createRing(path)
+}
+
+// errKeyFilePermissions marks a key file other local accounts could read or
+// that is not a regular file. The ring defends against database read access;
+// a key readable beside the dump would defeat it, so it fails closed like the
+// PII key.
+var errKeyFilePermissions = errors.New("chat master key file is unsafe")
+
+func readKeyFile(path string) ([]byte, error) {
+	// #nosec G304 -- path is an administrator-selected master-key location,
+	// intentionally outside a fixed application data root.
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: %s is not a regular file", errKeyFilePermissions, path)
+	}
+	// Windows has no POSIX mode bits to check; the file inherits its ACL.
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("%w: %s permissions %o are too broad; want 0600", errKeyFilePermissions, path, info.Mode().Perm())
+	}
+	return io.ReadAll(f)
 }
 
 // parseRing reads "<decimal id>:<base64 32 raw bytes>" lines. A bare base64

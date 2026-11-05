@@ -772,11 +772,15 @@ type ICECandidate struct {
 	SDPMLineIndex uint16 `json:"sdp_mline_index,omitempty"`
 }
 
+// MaxWhisperTargets bounds each WhisperSet target list. Every entry is
+// resolved and authorized while the server-wide role lock is held.
+const MaxWhisperTargets = 64
+
 // WhisperSet configures the calling client's whisper list and mode. UniqueIDs
 // are target users (resolved to online connections at set time); ChannelIDs
 // are target channels whose members receive the audio. While Active is true,
 // the client's outgoing audio is routed to the whisper targets instead of
-// their channel.
+// their channel. Each target list holds at most MaxWhisperTargets entries.
 type WhisperSet struct {
 	AckRequested bool     `json:"ack_requested,omitempty"`
 	UniqueIDs    []string `json:"unique_ids,omitempty"`

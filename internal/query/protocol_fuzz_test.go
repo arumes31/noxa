@@ -1,6 +1,10 @@
 package query
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"unicode"
+)
 
 const maxFuzzQueryInput = 64 << 10
 
@@ -26,8 +30,16 @@ func FuzzEscapeUnescape(f *testing.F) {
 		if len(encoded) > 2*len(input) {
 			t.Fatalf("escape expanded %d bytes to %d bytes", len(input), len(encoded))
 		}
-		if got := unescape(encoded); got != input {
-			t.Fatalf("unescape(escape(%q)) = %q", input, got)
+		// Control characters without a protocol escape are dropped.
+		// Control characters without a protocol escape are dropped, so only
+		// inputs free of them must round-trip exactly.
+		if !strings.ContainsFunc(input, func(r rune) bool { return unicode.IsControl(r) && !strings.ContainsRune(escapedControls, r) }) {
+			if got := unescape(encoded); got != input {
+				t.Fatalf("unescape(escape(%q)) = %q", input, got)
+			}
+		}
+		if strings.IndexFunc(encoded, unicode.IsControl) >= 0 {
+			t.Fatalf("escape(%q) = %q carries a raw control character", input, encoded)
 		}
 
 		// unescape is also called directly on untrusted query tokens. It may
@@ -37,3 +49,5 @@ func FuzzEscapeUnescape(f *testing.F) {
 		}
 	})
 }
+
+const escapedControls = "\n\r\t"
