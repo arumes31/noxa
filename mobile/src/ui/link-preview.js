@@ -2,14 +2,35 @@
 // server fetches the page (it never hands out remote URLs: thumbnails are
 // data URLs it re-encoded), so the phone never contacts the linked site.
 // Failures show nothing.
+import { app } from "../app.js";
 import { previewRequest, safeURL } from "../core/message-format.js";
 import * as settings from "../core/settings.js";
 import { t } from "../i18n.js";
 import { h } from "./dom.js";
 import "./rich-strings.js";
 
-const results = new Map(); // url -> result, or null after a failure
+const MAX_RESULTS = 200;
+const results = new Map(); // url -> result, or null after a failure (oldest first)
 const collapsed = new Set(); // urls the user folded away
+
+function remember(url, result) {
+    results.delete(url);
+    results.set(url, result);
+    while (results.size > MAX_RESULTS) {
+        const oldest = results.keys().next().value;
+        results.delete(oldest);
+        collapsed.delete(oldest);
+    }
+}
+
+/** Forgets every preview (sign-out, account replacement, Clear cached images). */
+export function clearLinkPreviews() {
+    results.clear();
+    collapsed.clear();
+}
+app.addEventListener("signedout", clearLinkPreviews);
+app.addEventListener("account-replaced", clearLinkPreviews);
+app.addEventListener("clear-media-cache", clearLinkPreviews);
 
 export function previewsEnabled(session, conversation) {
     return conversation === "channel" && !!session?.capabilities?.has("server_link_previews_v1") && !!settings.get("linkPreviews");
@@ -68,11 +89,11 @@ export function linkPreview(session, url, conversation) {
         return card;
     }
     session.linkPreview(request.provider, request.resource, conversation).then(result => {
-        results.set(url, result || null);
+        remember(url, result || null);
         if (result) fill(card, url, result);
         else card.remove();
     }, () => {
-        results.set(url, null);
+        remember(url, null);
         card.remove();
     });
     return card;

@@ -509,9 +509,11 @@ export class ChatSession extends EventTarget {
             this.#store(scope, { clientMsgID, id: accepted.message_id, pending: false });
             return accepted;
         } catch (error) {
-            // A lost connection or a rate limit leaves the message for the outbox to retry.
+            // A lost connection, a rate limit or the rules gate (accepting
+            // the rules flushes the outbox again) leaves the message queued.
             const limited = error instanceof ProtocolError && /rate limit/i.test(error.message);
-            const retryable = !(error instanceof ProtocolError) || limited;
+            const gated = error instanceof ProtocolError && /accept the server rules/i.test(error.message);
+            const retryable = !(error instanceof ProtocolError) || limited || gated;
             this.#store(scope, { clientMsgID, failed: !retryable, queued: retryable, pending: false, error: error.message });
             throw Object.assign(error, { retryable, retryAfterMS: limited ? error.retryAfterMS || 3000 : undefined });
         }

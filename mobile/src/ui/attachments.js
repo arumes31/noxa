@@ -55,6 +55,8 @@ export function clearAttachmentCache() {
 }
 app.addEventListener("signedout", clearAttachmentCache);
 app.addEventListener("account-replaced", clearAttachmentCache);
+// Settings → Clear cached images also drops the decrypted in-memory copies.
+app.addEventListener("clear-media-cache", clearAttachmentCache);
 
 let observer = null;
 /** Runs load() once the node scrolls near the viewport. */

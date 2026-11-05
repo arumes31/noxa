@@ -661,9 +661,15 @@ export class DirectMessages extends EventTarget {
             // A receipt may already have overtaken the acceptance.
             this.#add(peer, nickname, { ...message, pending: false, receipt: current?.receipt || "sent" });
         } catch (error) {
-            // Lost connections leave the message for the outbox; refusals fail it.
-            const retryable = !(error instanceof ProtocolError) && !error.code;
+            // Lost connections, the per-user rate limit and the rules gate
+            // leave the message for the outbox (as channel sends do); other
+            // refusals fail it.
+            const protocol = error instanceof ProtocolError;
+            const limited = protocol && /rate limit/i.test(error.message);
+            const gated = protocol && /accept the server rules/i.test(error.message);
+            const retryable = (!protocol && !error.code) || limited || gated;
             this.#add(peer, nickname, { ...message, pending: false, failed: !retryable, queued: retryable });
+            if (limited) error.retryAfterMS ||= 3000;
             throw Object.assign(error, { retryable });
         }
     }
