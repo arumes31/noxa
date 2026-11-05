@@ -694,7 +694,8 @@ func (s *TCPServer) Start(ctx context.Context) error {
 			_ = conn.Close()
 			continue
 		}
-		ip := remoteIP(conn)
+		// Count an IPv6 /64 as one source; the stored key is what release uses.
+		ip := auth.SourceAddressKey(remoteIP(conn))
 		if len(s.preauth) >= maxPreauthConnections || s.preauthByIP[ip] >= maxPreauthPerIP {
 			s.lifecycleMu.Unlock()
 			_ = conn.Close()

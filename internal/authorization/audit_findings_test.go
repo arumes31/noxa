@@ -95,3 +95,23 @@ func TestChannelAncestryValidationIsLinear(t *testing.T) {
 		t.Fatal("unknown parent accepted")
 	}
 }
+
+// Deleting a lower role removes its denying channel overrides; that gain is
+// checked like removing the role from each of its members.
+func TestRoleDeleteChecksChannelOverrideGains(t *testing.T) {
+	p := roleFixture()
+	p.Channels = append(p.Channels, ChannelPolicy{ChannelID: 103, Overrides: []RoleOverride{
+		{RoleID: 20, Capability: ViewChannel, Effect: Deny},
+	}})
+	change := RoleChange{Kind: RoleDelete, RoleID: 20, ExpectedRevision: p.Revision}
+	if _, err := ApplyRoleChange(p, 2, change); !errors.Is(err, ErrRoleForbidden) {
+		t.Fatalf("deleting own denying role: err = %v, want ErrRoleForbidden", err)
+	}
+	if _, err := ApplyRoleChange(p, 1, change); err != nil {
+		t.Fatalf("owner deletion: %v", err)
+	}
+	// Without a resulting gain the manager may still delete the role.
+	if _, err := ApplyRoleChange(roleFixture(), 2, change); err != nil {
+		t.Fatalf("deletion without channel gain: %v", err)
+	}
+}

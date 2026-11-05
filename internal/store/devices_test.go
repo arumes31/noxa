@@ -1,6 +1,8 @@
 package store
 
 import (
+	"crypto/ed25519"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"sync"
@@ -195,5 +197,57 @@ func TestDevicePasskeyProofRoundTrip(t *testing.T) {
 	got, err := s.DeviceByKey(t.Context(), input.Ed25519Public)
 	if err != nil || string(got.PasskeyProof) != string(input.PasskeyProof) || d.DeviceID != got.DeviceID {
 		t.Fatalf("proof round trip: %+v, %v", got, err)
+	}
+}
+
+func testIdentityKey(t *testing.T) string {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub}))
+}
+
+func TestAddDeviceRejectsAnotherAccountsIdentityKey(t *testing.T) {
+	s := pollTestStore(t)
+	ctx := t.Context()
+	stamp := time.Now().UnixNano()
+	attacker := fmt.Sprintf("attacker-%d", stamp)
+
+	pub := testIdentityKey(t)
+	bound := fmt.Sprintf("bound-owner-%d", stamp)
+	if _, err := s.DB().ExecContext(ctx, `INSERT INTO users(unique_id,nickname,public_key) VALUES($1,$1,$2)`, bound, pub); err != nil {
+		t.Fatal(err)
+	}
+	shadow := newTestDevice(attacker, 0)
+	shadow.Ed25519Public = pub
+	if _, err := s.AddDevice(ctx, shadow, 3); !errors.Is(err, ErrDeviceKeyInUse) {
+		t.Fatalf("bound identity key as another principal's device err = %v, want ErrDeviceKeyInUse", err)
+	}
+	// The account itself may still register its own identity key.
+	own := newTestDevice(bound, 0)
+	own.Ed25519Public = pub
+	if _, err := s.AddDevice(ctx, own, 3); err != nil {
+		t.Fatalf("own identity key as own device: %v", err)
+	}
+
+	other := testIdentityKey(t)
+	keyDerived, ok := deviceKeyUniqueID(other)
+	if !ok {
+		t.Fatal("test key did not derive an account ID")
+	}
+	if _, err := s.DB().ExecContext(ctx, `INSERT INTO users(unique_id,nickname) VALUES($1,$1)`, keyDerived); err != nil {
+		t.Fatal(err)
+	}
+	shadow = newTestDevice(attacker, 1)
+	shadow.Ed25519Public = other
+	if _, err := s.AddDevice(ctx, shadow, 3); !errors.Is(err, ErrDeviceKeyInUse) {
+		t.Fatalf("key-derived account's key as another principal's device err = %v, want ErrDeviceKeyInUse", err)
+	}
+	keyed := newTestDevice(keyDerived, 0)
+	keyed.Ed25519Public = other
+	if _, err := s.AddDevice(ctx, keyed, 3); err != nil {
+		t.Fatalf("key-derived account's own key as own device: %v", err)
 	}
 }

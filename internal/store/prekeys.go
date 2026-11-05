@@ -13,6 +13,11 @@ import (
 
 const maxPreKeysPerPublish = 200
 
+// maxStoredOneTimePreKeys bounds a user's unconsumed one-time prekeys, so
+// repeated publications with fresh key IDs cannot grow e2ee_prekeys without
+// limit.
+const maxStoredOneTimePreKeys = 1000
+
 var ErrNoPreKeyBundle = errors.New("no prekey bundle available")
 
 type PreKey struct {
@@ -67,6 +72,9 @@ func (s *Store) PublishPreKeyBundle(ctx context.Context, userID int64, bundle Pr
 	if err := upsertPreKeys(ctx, tx, userID, oneTime); err != nil {
 		return fmt.Errorf("publishing one-time prekeys: %w", err)
 	}
+	if err := checkStoredPreKeys(ctx, tx, userID); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -91,8 +99,11 @@ func (s *Store) ConsumePreKeyBundle(ctx context.Context, userID int64) (*PreKeyB
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// FOR SHARE holds the bundle generation until the one-time prekey is
+	// taken: a concurrent publication cannot commit in between and pair the
+	// old identity with a new generation's one-time key.
 	const bundleQuery = `SELECT identity_dh, signing_public, signed_prekey_id, signed_prekey, signature
-	                     FROM e2ee_prekey_bundles WHERE user_id=$1`
+	                     FROM e2ee_prekey_bundles WHERE user_id=$1 FOR SHARE`
 	var bundle PreKeyBundle
 	var signedID int64
 	if err := tx.QueryRowContext(ctx, bundleQuery, userID).Scan(&bundle.IdentityDH, &bundle.SigningPublic,
@@ -147,11 +158,25 @@ func (s *Store) PublishPreKeys(ctx context.Context, userID int64, keys []PreKey)
 	if err := upsertPreKeys(ctx, tx, userID, keys); err != nil {
 		return fmt.Errorf("publishing prekeys: %w", err)
 	}
+	if err := checkStoredPreKeys(ctx, tx, userID); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
 type preKeyExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func checkStoredPreKeys(ctx context.Context, tx *sql.Tx, userID int64) error {
+	var stored int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM e2ee_prekeys WHERE user_id=$1 AND one_time AND consumed_at IS NULL`, userID).Scan(&stored); err != nil {
+		return fmt.Errorf("counting stored prekeys: %w", err)
+	}
+	if stored > maxStoredOneTimePreKeys {
+		return fmt.Errorf("too many stored one-time prekeys: %d (max %d)", stored, maxStoredOneTimePreKeys)
+	}
+	return nil
 }
 
 func validatePreKeys(keys []PreKey) error {
@@ -175,10 +200,13 @@ func upsertPreKeys(ctx context.Context, execer preKeyExecer, userID int64, keys 
 		values = append(values, fmt.Sprintf("($1, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3))
 		args = append(args, int64(key.KeyID), key.PublicKey, key.Signature, key.OneTime)
 	}
+	// A consumed key ID stays consumed: republishing it must not make a used
+	// one-time key (or a new key under its ID) consumable again.
 	q := `INSERT INTO e2ee_prekeys (user_id, key_id, public_key, signature, one_time) VALUES ` +
 		strings.Join(values, ",") + ` ON CONFLICT (user_id, key_id) DO UPDATE SET
 		public_key=EXCLUDED.public_key, signature=EXCLUDED.signature,
-		one_time=EXCLUDED.one_time, consumed_at=NULL`
+		one_time=EXCLUDED.one_time
+		WHERE e2ee_prekeys.consumed_at IS NULL`
 	_, err := execer.ExecContext(ctx, q, args...)
 	return err
 }

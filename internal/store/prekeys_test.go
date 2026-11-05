@@ -64,3 +64,44 @@ func TestPublishAndConsumePreKeyBundle(t *testing.T) {
 		t.Fatalf("ConsumePreKeyBundle() error = %v, want ErrOutOfRange", err)
 	}
 }
+
+func TestPublishPreKeysKeepsConsumedKeysAndBoundsStoredKeys(t *testing.T) {
+	s := testDBStore(t)
+	ctx := context.Background()
+	userID := seedTestUser(t, s, fmt.Sprintf("prekey-bound-%d", time.Now().UnixNano()))
+	key := func(id uint32) PreKey {
+		k, _ := e2ee.GenerateX25519()
+		return PreKey{KeyID: id, PublicKey: k.Public, OneTime: true}
+	}
+	if err := s.PublishPreKeys(ctx, userID, []PreKey{key(1)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumePreKey(ctx, userID); err != nil {
+		t.Fatal(err)
+	}
+	// Republishing a consumed key ID must not make it consumable again.
+	if err := s.PublishPreKeys(ctx, userID, []PreKey{key(1)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConsumePreKey(ctx, userID); !errors.Is(err, ErrNoPreKeyBundle) {
+		t.Fatalf("consume after republishing a consumed key ID = %v, want ErrNoPreKeyBundle", err)
+	}
+
+	next := uint32(100)
+	batch := func() []PreKey {
+		keys := make([]PreKey, maxPreKeysPerPublish)
+		for i := range keys {
+			keys[i] = key(next)
+			next++
+		}
+		return keys
+	}
+	for range maxStoredOneTimePreKeys / maxPreKeysPerPublish {
+		if err := s.PublishPreKeys(ctx, userID, batch()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.PublishPreKeys(ctx, userID, batch()); err == nil || !strings.Contains(err.Error(), "too many stored one-time prekeys") {
+		t.Fatalf("publish beyond the stored limit error = %v", err)
+	}
+}

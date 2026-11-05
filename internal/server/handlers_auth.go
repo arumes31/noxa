@@ -77,8 +77,9 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	// Reject banned clients before verifying any password. IP bans apply to
 	// everyone, including guests, while account bans apply to the presented ID.
 	ip := remoteIP(client.Conn)
-	serverPasswordScope := auth.LoginFailureScope("tcp-server-password:"+ip, "")
-	accountSourceScope := auth.LoginFailureScope("tcp:"+ip, "")
+	source := auth.SourceAddressKey(ip)
+	serverPasswordScope := auth.LoginFailureScope("tcp-server-password:"+source, "")
+	accountSourceScope := auth.LoginFailureScope("tcp:"+source, "")
 	principalScope := auth.LoginFailureScope("", msg.Username)
 	if reason, err := s.banRejectReason(ctx, client, msg.Username, ip); err != nil {
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
@@ -162,6 +163,9 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	client.mu.Unlock()
 	// Bind the client's identity key so future challenge logins work.
 	if msg.PublicKey != "" {
+		if canonical, err := auth.CanonicalPublicKey(msg.PublicKey); err == nil {
+			msg.PublicKey = canonical
+		}
 		if err := s.deps.Auth.BindPublicKey(ctx, user.ID, msg.PublicKey); err != nil {
 			s.logger.Warn("public key binding failed",
 				zap.String("client_id", client.ID),
@@ -217,8 +221,7 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "no pending challenge"})
 	}
 
-	ip := remoteIP(client.Conn)
-	sourceScope := auth.LoginFailureScope("tcp:"+ip, "")
+	sourceScope := auth.LoginFailureScope("tcp:"+auth.SourceAddressKey(remoteIP(client.Conn)), "")
 	principalScope := auth.LoginFailureScope("", msg.UniqueID)
 	attempt, allowed := s.loginLimiter.Reserve(sourceScope, principalScope)
 	if !allowed {
@@ -264,7 +267,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	}
 
 	ip := remoteIP(client.Conn)
-	sourceScope := auth.LoginFailureScope("tcp:"+ip, "")
+	sourceScope := auth.LoginFailureScope("tcp:"+auth.SourceAddressKey(ip), "")
 	principalScope := auth.LoginFailureScope("", msg.PublicKey)
 	uniqueID, err := auth.UniqueIDFromPublicKey(msg.PublicKey)
 	if err != nil {
@@ -278,6 +281,12 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid public key"})
 	}
 	principalScope = auth.LoginFailureScope("", uniqueID)
+	// Continue with the one canonical spelling, so device lookups, key
+	// binding lookups and the session key never depend on how the PEM was
+	// formatted.
+	if canonical, err := auth.CanonicalPublicKey(msg.PublicKey); err == nil {
+		msg.PublicKey = canonical
+	}
 
 	// A guest could bypass the Authenticate-time unique-ID ban check by
 	// withholding the ID until now; re-check with the derived ID.

@@ -79,3 +79,58 @@ func TestIntegrationDevicesRequireAdministrator(t *testing.T) {
 		t.Fatalf("second revoke err = %v", err)
 	}
 }
+
+// Administrator is a capability bypass, not a hierarchy bypass: a delegated
+// administrator integration cannot list, revoke or reset the owner's devices.
+func TestIntegrationDevicesRespectMemberHierarchy(t *testing.T) {
+	db := integrationManagementStore(t)
+	a := auth.New(db, zap.NewNop())
+	adminUID, err := a.RegisterUser(t.Context(), "device-delegate", "integration-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerUID, err := a.RegisterUser(t.Context(), "device-owner", "owner-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB().ExecContext(t.Context(), "UPDATE users SET integration_enabled=TRUE WHERE unique_id=$1", adminUID); err != nil {
+		t.Fatal(err)
+	}
+	principal, err := a.AuthenticateIntegration(t.Context(), adminUID, "integration-password", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := a.LookupUser(t.Context(), ownerUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := serverRoleFixture()
+	backend.policy.OwnerID = owner.ID
+	backend.policy.Roles = append(backend.policy.Roles, authorization.Role{ID: 40, Name: "Admin", Position: 1, Permissions: []authorization.Capability{authorization.Administrator}})
+	backend.policy.Members = []authorization.RoleMember{{UserID: principal.UserID(), RoleIDs: []int64{40}}}
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(&config.Config{}, zap.NewNop(), &Deps{Authority: authority, Auth: a, Devices: db})
+	call := func(request netproto.IntegrationDeviceRequest) error {
+		return srv.WithIntegrationDevices(t.Context(), principal, request, func(context.Context, netproto.IntegrationDeviceResult) error { return nil })
+	}
+	keys := newLinkTestKeys(t)
+	if _, err := db.AddDevice(t.Context(), store.NewDevice{Principal: ownerUID, UserID: owner.ID, Kind: store.DeviceKindDesktop, Name: "Owner", Ed25519Public: keys.public}, 10); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"list", "reset"} {
+		if err := call(netproto.IntegrationDeviceRequest{Action: action, UniqueID: ownerUID}); !errors.Is(err, authorization.ErrRoleForbidden) {
+			t.Fatalf("%s owner devices err = %v, want ErrRoleForbidden", action, err)
+		}
+	}
+	active, err := db.ListDevices(t.Context(), ownerUID, false)
+	if err != nil || len(active) != 1 {
+		t.Fatalf("owner devices after refused reset = %+v, %v", active, err)
+	}
+	// Lower-ranked principals (here an account-less linked guest) stay manageable.
+	if err := call(netproto.IntegrationDeviceRequest{Action: "list", UniqueID: "guest-principal-" + adminUID}); err != nil {
+		t.Fatalf("list lower-ranked principal: %v", err)
+	}
+}

@@ -42,6 +42,14 @@ func (s *TCPServer) moveRoleMember(ctx context.Context, e *authorization.RoleEva
 	if source, exists := s.deps.State.GetChannel(before.ChannelID); exists && source.SystemKind == "home" {
 		return authorization.ErrRoleForbidden
 	}
+	// A forced move delivers the destination's media and chat keys, so it
+	// must not get around the channel password: the mover (or the member)
+	// needs the right to bypass it, as a password-less join would.
+	if !isHome && exists && destination.PasswordHash != "" &&
+		!e.Evaluate(actorID, msg.ChannelID, authorization.BypassChannelPassword).Allowed &&
+		!e.Evaluate(target.userID(), msg.ChannelID, authorization.BypassChannelPassword).Allowed {
+		return authorization.ErrRoleForbidden
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

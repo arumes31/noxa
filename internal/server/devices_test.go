@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -155,7 +156,7 @@ func newLinkTestKeys(t *testing.T) linkTestKeys {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return linkTestKeys{public: public, private: private, uniqueID: uniqueID, x25519: base64.StdEncoding.EncodeToString(make([]byte, 32))}
+	return linkTestKeys{public: public, private: private, uniqueID: uniqueID, x25519: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))}
 }
 
 func startDeviceTestEnv(t *testing.T) (*testEnv, *fakeDevices) {
