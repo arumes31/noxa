@@ -105,3 +105,52 @@ func TestPublishPreKeysKeepsConsumedKeysAndBoundsStoredKeys(t *testing.T) {
 		t.Fatalf("publish beyond the stored limit error = %v", err)
 	}
 }
+
+// Parallel publications for one account must not each pass the stored-key
+// quota by counting before the other commits.
+func TestPublishPreKeysConcurrentQuota(t *testing.T) {
+	s := testDBStore(t)
+	ctx := context.Background()
+	userID := seedTestUser(t, s, fmt.Sprintf("prekey-race-%d", time.Now().UnixNano()))
+	next := uint32(1)
+	batch := func(n int) []PreKey {
+		keys := make([]PreKey, n)
+		for i := range keys {
+			k, _ := e2ee.GenerateX25519()
+			keys[i] = PreKey{KeyID: next, PublicKey: k.Public, OneTime: true}
+			next++
+		}
+		return keys
+	}
+	headroom := maxPreKeysPerPublish / 2
+	for stored := 0; stored < maxStoredOneTimePreKeys-headroom; stored += headroom {
+		if err := s.PublishPreKeys(ctx, userID, batch(headroom)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two batches that each fit alone but not together.
+	first, second := batch(headroom), batch(headroom)
+	errs := make(chan error, 2)
+	for _, keys := range [][]PreKey{first, second} {
+		go func() { errs <- s.PublishPreKeys(ctx, userID, keys) }()
+	}
+	var failed int
+	for range 2 {
+		if err := <-errs; err != nil {
+			if !strings.Contains(err.Error(), "too many stored one-time prekeys") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Fatalf("%d of 2 concurrent publications failed, want exactly 1", failed)
+	}
+	var stored int
+	if err := s.DB().QueryRowContext(ctx, `SELECT count(*) FROM e2ee_prekeys WHERE user_id=$1 AND one_time AND consumed_at IS NULL`, userID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != maxStoredOneTimePreKeys {
+		t.Fatalf("stored = %d, want %d", stored, maxStoredOneTimePreKeys)
+	}
+}

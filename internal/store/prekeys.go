@@ -169,6 +169,13 @@ type preKeyExecer interface {
 }
 
 func checkStoredPreKeys(ctx context.Context, tx *sql.Tx, userID int64) error {
+	// Serialize the quota check per account until commit: under READ COMMITTED
+	// a concurrent publisher's count then runs after this transaction commits
+	// and sees both batches, so parallel publications cannot pass the limit.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		fmt.Sprintf("e2ee-prekeys:%d", userID)); err != nil {
+		return fmt.Errorf("locking stored prekeys: %w", err)
+	}
 	var stored int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM e2ee_prekeys WHERE user_id=$1 AND one_time AND consumed_at IS NULL`, userID).Scan(&stored); err != nil {
 		return fmt.Errorf("counting stored prekeys: %w", err)
