@@ -168,7 +168,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        directory: [client/frontend, website]
+        directory: [client/frontend, mobile, website]
 
     steps:
       - name: Checkout repository

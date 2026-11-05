@@ -61,6 +61,7 @@ export function pollCard(message, session) {
     let selection = [];
     let busy = false;
     let timer = 0;
+    let ticked = false;
     let stop = () => {};
 
     const closed = () => pollClosed(state, poll.closesAt);
@@ -119,7 +120,11 @@ export function pollCard(message, session) {
 
     function tick() {
         clearTimeout(timer);
-        if (!card.isConnected && state) { stop(); return; }
+        // The first tick may run before the card is attached; any later
+        // detached tick means the card left the screen (even when its first
+        // request failed and state is still null).
+        if (!card.isConnected && (state || ticked)) { stop(); return; }
+        ticked = true;
         render();
         const left = pollRemaining(poll.closesAt).total;
         if (poll.closesAt && left === 0 && state && !state.closed) { request(); return; }

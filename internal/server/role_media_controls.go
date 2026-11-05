@@ -71,7 +71,8 @@ func (s *TCPServer) writeVoiceSignal(client *Client, kind netproto.MessageType, 
 
 func (s *TCPServer) roleWhisperSet(ctx context.Context, client *Client, msg netproto.WhisperSet) error {
 	return s.roleChannelControl(ctx, client, authorization.Whisper, msg.Active, func(ctx context.Context, source int64) error {
-		s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
+		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
+		s.refreshRolePublishers(e)
 		if !msg.Active {
 			s.deps.Voice.SetWhisper(client.ID, nil, nil, false)
 			return s.acknowledgeMediaControl(client, msg.AckRequested, netproto.MediaControlSaved{
@@ -81,7 +82,9 @@ func (s *TCPServer) roleWhisperSet(ctx context.Context, client *Client, msg netp
 		clientIDs := make([]string, 0, len(msg.UniqueIDs))
 		for _, uid := range msg.UniqueIDs {
 			target, ok := s.clientByUniqueID(uid)
-			if !ok || target.rulesBlocked() {
+			// An invisible member answers exactly like an offline one unless
+			// the sender may see connection information.
+			if !ok || target.rulesBlocked() || !s.rolePokeTargetVisible(e, client, target.ID) {
 				return authorization.ErrRoleForbidden
 			}
 			destination, _, present := s.deps.State.ClientChannelState(target.ID)

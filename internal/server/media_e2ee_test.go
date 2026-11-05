@@ -282,3 +282,20 @@ func TestMediaE2EEH264RequiresCipherCodecDeclaration(t *testing.T) {
 		}
 	}
 }
+
+// An oversized whisper target list is refused before any target is resolved
+// under the server-wide role lock.
+func TestWhisperSetRejectsOversizedTargetLists(t *testing.T) {
+	env := startMediaE2EEEnv(t, false)
+	conn, userID := dialAuthed(t, env.addr, "user-uid")
+	t.Cleanup(func() { _ = conn.Close() })
+	placeVoiceTestClients(t, env, 1, userID)
+	targets := make([]string, netproto.MaxWhisperTargets+1)
+	for i := range targets {
+		targets[i] = "user-uid"
+	}
+	send(t, conn, netproto.MsgWhisperSet, netproto.WhisperSet{UniqueIDs: targets, Active: true})
+	if e := protocolError(t, conn); !strings.Contains(e.Message, "too many whisper targets") {
+		t.Fatalf("whisper: %+v", e)
+	}
+}

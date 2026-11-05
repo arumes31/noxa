@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"filippo.io/edwards25519"
 )
 
 // GenerateIdentityKeyPair generates a new Ed25519 key pair and returns the
@@ -40,7 +42,35 @@ func LoadPublicKey(publicKeyPEM string) (ed25519.PublicKey, error) {
 	if len(block.Bytes) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("invalid ed25519 public key length: got %d, want %d", len(block.Bytes), ed25519.PublicKeySize)
 	}
+	if smallOrderPublicKey(block.Bytes) {
+		return nil, errors.New("invalid ed25519 public key: small-order point")
+	}
 	return ed25519.PublicKey(block.Bytes), nil
+}
+
+// smallOrderPublicKey reports a key in the small torsion subgroup (such as the
+// identity encoding 01 00..00). crypto/ed25519 verification is cofactorless,
+// so for such a key anyone can forge signatures ([S]B == R): it is never an
+// identity credential. Encodings that are not points at all are left to
+// ed25519.Verify, which rejects them.
+func smallOrderPublicKey(raw []byte) bool {
+	point, err := new(edwards25519.Point).SetBytes(raw)
+	if err != nil {
+		return false
+	}
+	return new(edwards25519.Point).MultByCofactor(point).Equal(edwards25519.NewIdentityPoint()) == 1
+}
+
+// CanonicalPublicKey returns the one canonical PEM spelling of an Ed25519
+// public key. PEM decoding tolerates surrounding text, line endings and
+// wrapping, so every spelling of the same key must be reduced to this form
+// before it is stored or compared as text.
+func CanonicalPublicKey(publicKeyPEM string) (string, error) {
+	pub, err := LoadPublicKey(publicKeyPEM)
+	if err != nil {
+		return "", err
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub})), nil
 }
 
 // LoadPrivateKey parses a PEM-encoded Ed25519 private key and returns the raw

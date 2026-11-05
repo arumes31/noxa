@@ -3,7 +3,7 @@ import { icon } from "./icons.js";
 import { currentLanguage, t } from "./i18n.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog } from "./modal.js";
 import { roleButton, roleElement } from "./role-editor-view.js";
-import { applyChannelPreset, channelOverrideChanges, setChannelOverride } from "./channel-access-state.js";
+import { applyChannelPreset, channelOverrideChanges, presetGrantable, setChannelOverride } from "./channel-access-state.js";
 import { accessCheckPanel } from "./access-check-ui.js";
 import { channelImpactPanel } from "./channel-impact-ui.js";
 import { channelPermissionMatrix } from "./channel-permission-matrix.js";
@@ -96,7 +96,7 @@ export function openChannelAccess(channelID) {
             draft.overrides = applyChannelPreset(draft.overrides || [], snapshot.policy.everyone_id, preset);
             subject = { role_id: snapshot.policy.everyone_id };
             setDirty(); render();
-        }));
+        }, !presetGrantable(draft.overrides || [], snapshot.policy.everyone_id, preset, snapshot.grantable_capabilities || [])));
         form.append(roleElement("h4", "", t("roles.presets")), presets, roleElement("p", "role-hint", t("roles.presetHelp")));
         const label = roleElement("label", "role-field", t("roles.subject"));
         const subjects = roleElement("select", "dlg-input");

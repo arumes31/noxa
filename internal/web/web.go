@@ -420,6 +420,17 @@ type admissionEntry struct {
 	seen    time.Time
 }
 
+// admissionKey groups IPv6 sources by /64, the smallest prefix a client is
+// normally routed. Keying the exact address would let one host rotate
+// through its prefix for fresh connection and attempt buckets.
+func admissionKey(ip netip.Addr) netip.Addr {
+	ip = ip.Unmap().WithZone("")
+	if ip.Is6() {
+		return netip.PrefixFrom(ip, 64).Masked().Addr()
+	}
+	return ip
+}
+
 func newAdmission(perIP, perMinute int) *admission {
 	return &admission{perIP: perIP, perMinute: perMinute, entries: make(map[netip.Addr]*admissionEntry)}
 }
@@ -428,10 +439,11 @@ func (a *admission) admit(ip netip.Addr, now time.Time) (func(), bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.sweep(now)
-	entry := a.entries[ip]
+	key := admissionKey(ip)
+	entry := a.entries[key]
 	if entry == nil {
 		entry = &admissionEntry{limiter: rate.NewLimiter(rate.Limit(float64(a.perMinute)/60), a.perMinute)}
-		a.entries[ip] = entry
+		a.entries[key] = entry
 	}
 	entry.seen = now
 	if entry.open >= a.perIP || !entry.limiter.AllowN(now, 1) {

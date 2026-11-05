@@ -23,6 +23,17 @@ func (s *TCPServer) WithIntegrationDevices(ctx context.Context, principal auth.I
 		if !e.Evaluate(principal.UserID(), 0, authorization.Administrator).Allowed {
 			return authorization.ErrRoleForbidden
 		}
+		// Administrator bypasses capabilities, not the member hierarchy: the
+		// owner's and higher-ranked members' devices stay out of reach.
+		if request.UniqueID != principal.UniqueID() {
+			targetID, err := s.integrationDeviceTarget(ctx, request.UniqueID)
+			if err != nil {
+				return err
+			}
+			if !e.CanManageMember(principal.UserID(), targetID) {
+				return authorization.ErrRoleForbidden
+			}
+		}
 		actor := "integration:" + principal.UniqueID()
 		out := netproto.IntegrationDeviceResult{Action: request.Action, UniqueID: request.UniqueID}
 		switch request.Action {
@@ -55,4 +66,20 @@ func (s *TCPServer) WithIntegrationDevices(ctx context.Context, principal auth.I
 		}
 		return deliver(ctx, out)
 	})
+}
+
+// integrationDeviceTarget resolves a device principal to its account ID; a
+// principal without an account (a linked guest) has ID 0, the lowest rank.
+func (s *TCPServer) integrationDeviceTarget(ctx context.Context, uniqueID string) (int64, error) {
+	if s.deps.Auth == nil {
+		return 0, authorization.ErrAuthorizationUnavailable
+	}
+	user, err := s.deps.Auth.LookupUser(ctx, uniqueID)
+	if errors.Is(err, auth.ErrUserNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return user.ID, nil
 }

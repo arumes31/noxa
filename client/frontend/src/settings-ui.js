@@ -8,7 +8,7 @@ import { buildSettingsSearchIndex, searchSettings } from "./settings-search.js";
 import { capturedHotkey, hotkeyLabel } from "./hotkey-input.js";
 import { gamingOverlaySettings } from "./gaming-overlay-settings.js";
 import { securitySettings } from "./security-settings.js";
-import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
+import { bindWhisperChannels, captureMediaScope, mediaScopeIsCurrent, setWhisperRouting, whisperChannelsFor } from "./media-controls.js";
 import { currentLanguage, t } from "./i18n.js";
 import { copyToClipboard } from "./clipboard.js";
 import { createMicCheck } from "./mic-check-ui.js";
@@ -1155,12 +1155,14 @@ function pageWhisper() {
             if (v && !s.whisper_clients.includes(c.unique_id)) s.whisper_clients.push(c.unique_id);
             if (!v) s.whisper_clients = s.whisper_clients.filter((u) => u !== c.unique_id);
         })));
+    // Channel IDs are per server: only this server's list is shown/edited.
+    const server = st.lastConnect?.addr || "";
     const channelRows = st.channels.map(ch => row(ch.Name, checkbox(
-        (s.whisper_channels || []).includes(ch.ChannelID),
+        whisperChannelsFor(s, server).includes(ch.ChannelID),
         (v) => {
-            s.whisper_channels = s.whisper_channels || [];
-            if (v && !s.whisper_channels.includes(ch.ChannelID)) s.whisper_channels.push(ch.ChannelID);
-            if (!v) s.whisper_channels = s.whisper_channels.filter((id) => id !== ch.ChannelID);
+            const list = bindWhisperChannels(s, server);
+            if (v && !list.includes(ch.ChannelID)) list.push(ch.ChannelID);
+            if (!v) s.whisper_channels = list.filter((id) => id !== ch.ChannelID);
         })));
     return page(
         group(t("settings.whisper"), "whisper",
@@ -1559,7 +1561,7 @@ function openSettings(target = "general", options = {}) {
     const destination = resolveSettingsTarget(target, options);
     draft = JSON.parse(JSON.stringify(V().state.settings || {}));
     const whisperScope = captureMediaScope();
-    const whisperConfig = (s) => JSON.stringify([!!s?.whisper_active, s?.whisper_clients || [], s?.whisper_channels || []]);
+    const whisperConfig = (s) => JSON.stringify([!!s?.whisper_active, s?.whisper_clients || [], s?.whisper_channels || [], s?.whisper_channels_server || ""]);
     // Local persistence is independent of live routing. Keep failed live changes
     // pending so Apply can retry the same draft after a server rejection.
     let appliedWhisperConfig = whisperConfig(draft);
@@ -1805,7 +1807,7 @@ function openSettings(target = "general", options = {}) {
             if (whisperChanged && V().state.myClientID && mediaScopeIsCurrent(whisperScope)) {
                 const error = await setWhisperRouting({
                     clients: draft.whisper_active ? draft.whisper_clients || [] : [],
-                    channels: draft.whisper_active ? draft.whisper_channels || [] : [],
+                    channels: draft.whisper_active ? whisperChannelsFor(draft, V().state.lastConnect?.addr) : [],
                     active: !!draft.whisper_active,
                 }, whisperScope);
                 if (error) throw new Error(error);

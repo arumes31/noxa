@@ -947,3 +947,15 @@ func TestComplaintReviewBanPermission(t *testing.T) {
 }
 
 // --- token management (174) --------------------------------------------------
+
+// An oversized complaint reason is refused before anything is stored.
+func TestComplaintReasonIsBounded(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+
+	conn, _ := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = conn.Close() }()
+
+	send(t, conn, netproto.MsgComplaint, netproto.Complaint{TargetUniqueID: "admin-uid", Reason: strings.Repeat("x", maxComplaintReasonBytes+1)})
+	expectChatError(t, conn, "complaint reason too long")
+}

@@ -141,6 +141,14 @@ func (s *TCPServer) handlePrivateCall(ctx context.Context, client *Client, frame
 			if request.Action == "accept" && !s.roleAllowed(ctx, client, 0, authorization.Connect) {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "calling is not permitted")
 			}
+			// A session belongs to at most one live call: binding it to a
+			// second would overwrite the first binding, leaving that call
+			// with an accepted participant disconnect cleanup never removes.
+			if request.Action == "accept" {
+				if bound := s.privateCallByClient[client.ID]; bound != "" && bound != call.ID {
+					return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "this session is already in another call")
+				}
+			}
 			next, err := call.Change(client.UniqueID, request.Action, time.Now().Unix())
 			if err != nil {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())

@@ -14,6 +14,7 @@ import (
 
 const (
 	maxLogDirectoryBytes int64 = 50 << 20
+	maxActiveLogBytes    int64 = 10 << 20
 	pruneCheckBytes      int64 = 1 << 20
 )
 
@@ -25,7 +26,11 @@ type dailyLogWriter struct {
 	day        string
 	maxBytes   int64
 	sincePrune int64
-	now        func() time.Time
+	// size is the active file's length; rotateBytes (0 = off) rotates it
+	// within the day, so a flood still falls under maxBytes retention.
+	size        int64
+	rotateBytes int64
+	now         func() time.Time
 }
 
 func newDailyLogWriter(dir, baseName string) (*dailyLogWriter, error) {
@@ -41,7 +46,7 @@ func newDailyLogWriter(dir, baseName string) (*dailyLogWriter, error) {
 	}
 	w := &dailyLogWriter{
 		baseName: baseName, root: root,
-		maxBytes: maxLogDirectoryBytes, now: time.Now,
+		maxBytes: maxLogDirectoryBytes, rotateBytes: maxActiveLogBytes, now: time.Now,
 	}
 	if err := w.open(); err != nil {
 		_ = root.Close()
@@ -63,6 +68,10 @@ func (w *dailyLogWriter) open() error {
 		return err
 	}
 	w.file = f
+	w.size = 0
+	if info, err := f.Stat(); err == nil {
+		w.size = info.Size()
+	}
 	// Retention cleanup must not make an otherwise usable log writer fail.
 	// Rotation and the periodic write threshold will retry pruning later.
 	_ = w.prune()
@@ -75,7 +84,7 @@ func (w *dailyLogWriter) Write(p []byte) (int, error) {
 	if w.file == nil || w.root == nil {
 		return 0, os.ErrClosed
 	}
-	if w.now().Format("20060102") != w.day {
+	if w.now().Format("20060102") != w.day || (w.rotateBytes > 0 && w.size >= w.rotateBytes) {
 		if err := w.rotate(); err != nil {
 			return 0, err
 		}
@@ -85,6 +94,7 @@ func (w *dailyLogWriter) Write(p []byte) (int, error) {
 	n, err := w.file.Write(redactLogSecrets(p))
 	if err == nil {
 		w.sincePrune += int64(n)
+		w.size += int64(n)
 		n = len(p)
 	}
 	if err == nil && w.sincePrune >= pruneCheckBytes {
@@ -101,8 +111,13 @@ func (w *dailyLogWriter) rotate() error {
 	}
 	stem := strings.TrimSuffix(w.baseName, filepath.Ext(w.baseName))
 	rotated := fmt.Sprintf("%s-%s%s", stem, w.day, filepath.Ext(w.baseName))
-	if _, err := w.root.Stat(rotated); err == nil {
-		rotated = fmt.Sprintf("%s-%s-%d%s", stem, w.day, w.now().Unix(), filepath.Ext(w.baseName))
+	// Several size rotations can happen within one second during a flood;
+	// never let a later segment replace an earlier one.
+	for seq := w.now().Unix(); ; seq++ {
+		if _, err := w.root.Stat(rotated); err != nil {
+			break
+		}
+		rotated = fmt.Sprintf("%s-%s-%d%s", stem, w.day, seq, filepath.Ext(w.baseName))
 	}
 	_ = w.root.Rename(w.baseName, rotated)
 	return w.open()

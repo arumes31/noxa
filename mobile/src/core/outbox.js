@@ -112,6 +112,9 @@ export function flush(session, dm, groups = null) {
     const key = session && typeof session === "object" ? session : flushing;
     const running = flushing.get(key);
     if (running) return running;
+    // Until the server rules are accepted every send is refused; the
+    // "rules" listener (app.js) flushes again after acceptance.
+    if (session?.pendingRules) return Promise.resolve(0);
     const run = (async () => {
         let sent = 0;
         let nextHeld = Infinity;

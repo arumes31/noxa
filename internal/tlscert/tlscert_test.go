@@ -226,3 +226,23 @@ func TestNotAfterAndLeafRejectInvalidCertificate(t *testing.T) {
 		})
 	}
 }
+
+// A key file in a separate, not yet existing directory is created with the
+// certificate, so first generation never leaves a certificate without its key.
+func TestEnsureCreatesSeparateKeyDirectory(t *testing.T) {
+	root := t.TempDir()
+	certFile := filepath.Join(root, "certs", "cert.pem")
+	keyFile := filepath.Join(root, "private", "nested", "key.pem")
+	_, fp1, err := Ensure("", certFile, keyFile, []string{"noxa"})
+	if err != nil {
+		t.Fatalf("first Ensure: %v", err)
+	}
+	_, fp2, err := Ensure("", certFile, keyFile, []string{"noxa"})
+	if err != nil || fp1 != fp2 {
+		t.Fatalf("second Ensure = %q, %v; want the persisted pair %q", fp2, err, fp1)
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(root, "*", ".*.tmp-*"))
+	if len(leftovers) != 0 {
+		t.Fatalf("staging files left behind: %v", leftovers)
+	}
+}

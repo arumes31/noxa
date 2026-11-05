@@ -45,18 +45,41 @@ func foregroundKeyboardLayout() uintptr {
 	return layout
 }
 
-func platformSpecKey(name string) (hotkey.Key, bool) {
+func platformSpecKey(name string) ([]hotkey.Modifier, hotkey.Key, bool) {
 	if key, ok := windowsSpecKeys[name]; ok {
-		return key, true
+		return nil, key, true
 	}
 	// Accept old hand-authored DE/EN character bindings as well as new codes.
 	if utf8.RuneCountInString(name) == 1 && strings.ContainsRune("öäüß+-.,#;:!?\"'[]{}()=<>/\\`~^&*%$@€|", []rune(name)[0]) {
 		vk, _, _ := hotkeyScanCharacter.Call(uintptr([]rune(name)[0]), foregroundKeyboardLayout())
-		if uint16(vk) != 0xFFFF {
-			return hotkey.Key(vk & 0xFF), true
-		}
+		return scannedCharacterKey(uint16(vk))
 	}
-	return 0, false
+	return nil, 0, false
+}
+
+// scannedCharacterKey splits a VkKeyScanExW result: the low byte is the
+// virtual key and the high byte the shift state the character needs (1 =
+// Shift, 2 = Ctrl, 4 = Alt; Ctrl+Alt is AltGr). Dropping that state would
+// bind "!" to a plain "1" and fire the action on ordinary typing.
+func scannedCharacterKey(vk uint16) ([]hotkey.Modifier, hotkey.Key, bool) {
+	if vk == 0xFFFF {
+		return nil, 0, false
+	}
+	state := vk >> 8
+	if state&^7 != 0 {
+		return nil, 0, false // Hankaku or a reserved state: not a bindable chord
+	}
+	var mods []hotkey.Modifier
+	if state&1 != 0 {
+		mods = append(mods, hotkey.ModShift)
+	}
+	if state&2 != 0 {
+		mods = append(mods, hotkey.ModCtrl)
+	}
+	if state&4 != 0 {
+		mods = append(mods, hotkey.ModAlt)
+	}
+	return mods, hotkey.Key(vk & 0xFF), true
 }
 
 // specModifiers maps modifier names to hotkey modifiers on Windows.

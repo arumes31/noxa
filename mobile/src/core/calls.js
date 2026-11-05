@@ -54,6 +54,9 @@ export class Calls extends EventTarget {
     #connectedAt = 0;
     #video = false;
     #reported = "";
+    // Bumped when a call ends: media acquired for an earlier call (a
+    // permission prompt still open at hang-up) is stopped, never kept.
+    #epoch = 0;
 
     #emit(type, detail) {
         if (type === "error") console.warn("call:", detail?.message || detail);
@@ -169,8 +172,14 @@ export class Calls extends EventTarget {
 
     async setCamera(on) {
         if (on && !this.camera) {
+            const epoch = this.#epoch;
             const source = new CameraSource({ facingMode: this.facingMode, effect: setting("cameraEffect"), blurStrength: setting("blurStrength"), limits: this.session.mediaLimits });
             await source.start();
+            // The call ended, or another request started the camera, meanwhile.
+            if (epoch !== this.#epoch || this.camera) {
+                source.stop();
+                return;
+            }
             source.addEventListener("track", () => this.#cameraChanged());
             this.#source = source;
             this.camera = source.stream;
@@ -219,7 +228,13 @@ export class Calls extends EventTarget {
     /** Shares the screen into the call's screen slot (tablets and desktops). */
     async setScreen(on) {
         if (on && !this.screen) {
-            this.screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+            const epoch = this.#epoch;
+            const screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+            if (epoch !== this.#epoch || this.screen) {
+                for (const track of screen.getTracks()) track.stop();
+                return;
+            }
+            this.screen = screen;
             this.screen.getVideoTracks()[0]?.addEventListener("ended", () => this.setScreen(false).catch(() => {}));
         } else if (!on && this.screen) {
             for (const track of this.screen.getTracks()) track.stop();
@@ -270,7 +285,7 @@ export class Calls extends EventTarget {
         }
         this.#emit("state");
         if (me.state !== "accepted" || accepted.length < 2) return;
-        await this.#capture();
+        if (!(await this.#capture())) return;
         for (const participant of accepted) {
             if (participant.unique_id === this.uid) continue;
             const peer = await this.#ensurePeer(participant.unique_id);
@@ -336,6 +351,7 @@ export class Calls extends EventTarget {
     }
 
     #end() {
+        this.#epoch++;
         if (this.call && this.#tracked.get(this.call.id)) this.#record(this.call);
         this.#stopRenewal?.();
         this.#stopRenewal = null;
@@ -369,16 +385,26 @@ export class Calls extends EventTarget {
         this.#video = false;
     }
 
+    /** Acquires the microphone; false when the call ended meanwhile (nothing is kept). */
     async #capture() {
-        if (this.stream) return;
+        if (this.stream) return true;
+        const epoch = this.#epoch;
         try {
-            this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+            // Hung up during the permission prompt, or a concurrent capture won.
+            if (epoch !== this.#epoch || this.stream) {
+                for (const track of stream.getTracks()) track.stop();
+                return epoch === this.#epoch;
+            }
+            this.stream = stream;
             for (const track of this.stream.getAudioTracks()) track.enabled = !this.muted && !this.deafened;
         } catch (error) {
-            this.stream = new MediaStream();
+            if (epoch !== this.#epoch) return false;
+            this.stream ||= new MediaStream();
             this.#emit("error", error);
         }
         if (this.wantVideo && !this.camera) await this.setCamera(true).catch(error => this.#emit("error", error));
+        return epoch === this.#epoch;
     }
 
     // --- Peers --------------------------------------------------------------------
@@ -526,7 +552,7 @@ export class Calls extends EventTarget {
         }
         const from = this.call?.participants.find(p => p.unique_id === signal.from);
         if (!from || from.state !== "accepted" || this.me()?.state !== "accepted") return;
-        await this.#capture();
+        if (!(await this.#capture())) return;
         const peer = await this.#ensurePeer(signal.from);
         peer.chain = peer.chain.then(async () => {
             const key = await this.#peerKey(signal.from);

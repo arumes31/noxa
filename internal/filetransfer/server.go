@@ -61,6 +61,18 @@ import (
 // tests can shorten it (mirrors authCacheTTL in the auth package).
 var tokenTTL = 60 * time.Second
 
+// maxPendingTransfers caps issued but unconsumed transfer tokens. Expired
+// tokens are swept before the cap is enforced, so it only binds under a
+// sustained issuance burst across many sessions.
+const maxPendingTransfers = 16384
+
+// maxFolderLen bounds a virtual folder path in bytes.
+const maxFolderLen = 4096
+
+// ErrTooManyPendingTransfers is returned at issuance when the pending token
+// registry is full.
+var ErrTooManyPendingTransfers = errors.New("filetransfer: too many pending transfers")
+
 // ErrQuotaExceeded is returned at issuance or commit when the channel's file quota
 // would be exceeded.
 var ErrQuotaExceeded = errors.New("filetransfer: channel quota exceeded")
@@ -258,12 +270,14 @@ type Server struct {
 	// fileOpsMu serializes ownership checks with file mutations and drains
 	// them before physical channel cleanup. Tombstones are published separately
 	// under mu so revocation does not wait for filesystem work to drain.
-	fileOpsMu       sync.RWMutex
-	mu              sync.Mutex
-	accessGuard     AccessGuard
-	transfers       map[string]*transfer // keyed by token digest
-	activeTransfers map[string]*activeTransfer
-	deletedChannels map[int64]*channelCleanup
+	fileOpsMu   sync.RWMutex
+	mu          sync.Mutex
+	accessGuard AccessGuard
+	transfers   map[string]*transfer // keyed by token digest
+	// nextTransferSweep is when register next prunes expired tokens.
+	nextTransferSweep time.Time
+	activeTransfers   map[string]*activeTransfer
+	deletedChannels   map[int64]*channelCleanup
 }
 
 // New constructs a Server. The listener is created lazily in Start.
@@ -609,30 +623,55 @@ func (s *Server) MoveFile(ctx context.Context, channelID int64, folder, name str
 // checked by exact name, so replacing that object would bypass it.
 var ErrNameAliasesExistingFile = errors.New("name conflicts with an existing file")
 
-// blobAlias reports whether path resolves to an existing object that the
-// directory does not list under exactly this spelling. allowed, when non-nil,
-// is the caller's own source object (a case-only rename of itself).
+// blobAlias reports whether any existing component of path (folders as well
+// as the file itself) is reached under a spelling its parent directory does
+// not list exactly. A folder alias ("DOCS" for "docs") would otherwise let an
+// exactly listed file name replace a blob whose record lives under the other
+// folder spelling. allowed, when non-nil, is the caller's own source object
+// (a case-only rename of itself).
 func blobAlias(root *os.Root, path string, allowed os.FileInfo) (bool, error) {
 	info, err := root.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
+	switch {
+	case err == nil:
+		if allowed != nil && os.SameFile(info, allowed) {
+			return false, nil
+		}
+	case errors.Is(err, os.ErrNotExist):
+	default:
 		return false, fmt.Errorf("checking destination blob: %w", err)
 	}
-	if allowed != nil && os.SameFile(info, allowed) {
-		return false, nil
+	parent := "."
+	for _, part := range strings.Split(filepath.Clean(path), string(filepath.Separator)) {
+		next := filepath.Join(parent, part)
+		if _, err := root.Lstat(next); errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		} else if err != nil {
+			return false, fmt.Errorf("checking destination blob: %w", err)
+		}
+		listed, err := dirListsExactly(root, parent, part)
+		if err != nil {
+			return false, err
+		}
+		if !listed {
+			return true, nil
+		}
+		parent = next
 	}
-	dir, err := root.Open(filepath.Dir(path))
+	return false, nil
+}
+
+// dirListsExactly reports whether dir contains an entry spelled exactly name.
+func dirListsExactly(root *os.Root, dir, name string) (bool, error) {
+	f, err := root.Open(dir)
 	if err != nil {
 		return false, fmt.Errorf("checking destination folder: %w", err)
 	}
-	defer func() { _ = dir.Close() }()
-	names, err := dir.Readdirnames(-1)
+	defer func() { _ = f.Close() }()
+	names, err := f.Readdirnames(-1)
 	if err != nil {
 		return false, fmt.Errorf("listing destination folder: %w", err)
 	}
-	return !slices.Contains(names, filepath.Base(path)), nil
+	return slices.Contains(names, name), nil
 }
 
 // placeMovedBlob publishes a moved blob. A cross-channel move whose content
@@ -642,6 +681,13 @@ func blobAlias(root *os.Root, path string, allowed os.FileInfo) (bool, error) {
 // hash-based quota would never charge.
 func (s *Server) placeMovedBlob(ctx context.Context, root *os.Root, source, target int64, folder, name, oldPath, newPath string) error {
 	if source != target {
+		// The hard-link path below must not publish into an aliased folder
+		// either; moveBlob performs the same check on its own path.
+		if alias, err := blobAlias(root, newPath, nil); err != nil {
+			return err
+		} else if alias {
+			return ErrNameAliasesExistingFile
+		}
 		if moved, err := s.store.GetFile(ctx, target, folder, name); err == nil {
 			if ex, err := s.store.FindFileBySHA(ctx, target, moved.SHA256, folder, name); err == nil && ex != nil {
 				existingPath := blobPath(target, ex.Folder, ex.Name)
@@ -921,16 +967,35 @@ func (s *Server) register(tr *transfer) (string, string, error) {
 	}
 	tr.ID = id
 	tr.Token = token
-	tr.Expires = time.Now().Add(tokenTTL)
+	now := time.Now()
+	tr.Expires = now.Add(tokenTTL)
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, deleted := s.deletedChannels[tr.ChannelID]; deleted {
-		s.mu.Unlock()
 		return "", "", ErrChannelDeleted
 	}
+	// Tokens that are never presented would otherwise stay resident forever.
+	// A sweep at most once per TTL keeps the registry bounded by recent
+	// issuance; the cap bounds it even under a sustained burst.
+	if !now.Before(s.nextTransferSweep) || len(s.transfers) >= maxPendingTransfers {
+		s.pruneExpiredTransfersLocked(now)
+		s.nextTransferSweep = now.Add(tokenTTL)
+	}
+	if len(s.transfers) >= maxPendingTransfers {
+		return "", "", ErrTooManyPendingTransfers
+	}
 	s.transfers[tokenDigest(token)] = tr
-	s.mu.Unlock()
 	return id, token, nil
+}
+
+// pruneExpiredTransfersLocked drops issued tokens whose TTL has passed.
+func (s *Server) pruneExpiredTransfersLocked(now time.Time) {
+	for digest, tr := range s.transfers {
+		if now.After(tr.Expires) {
+			delete(s.transfers, digest)
+		}
+	}
 }
 
 // consume validates and consumes a token (single-use). It returns the
@@ -1087,10 +1152,15 @@ func isDOSDeviceNumber(value string) bool {
 
 // sanitizeFolder validates a virtual folder path (261): "" is the channel
 // root; otherwise '/'-separated segments, each a bare name — no traversal,
-// no backslashes, no leading/trailing/duplicate separators.
+// no backslashes, no leading/trailing/duplicate separators. The total length
+// is capped at a common PATH_MAX: longer folders cannot be stored on disk, and
+// pending transfer tokens retain the folder string.
 func sanitizeFolder(folder string) (string, error) {
 	if folder == "" {
 		return "", nil
+	}
+	if len(folder) > maxFolderLen {
+		return "", fmt.Errorf("%w: folder path too long", ErrInvalidName)
 	}
 	if strings.ContainsAny(folder, "\\") || strings.HasPrefix(folder, "/") ||
 		strings.HasSuffix(folder, "/") || strings.Contains(folder, "//") {

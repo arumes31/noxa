@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/pion/interceptor"
@@ -352,6 +353,11 @@ func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, 
 		var timeout net.Error
 		isTimeout := errors.As(outputError, &timeout) && timeout.Timeout()
 		voice := ticket.delivery.Slot == SlotMic || ticket.delivery.Slot == SlotScreenAudio
+		// Momentary socket-buffer exhaustion (ENOBUFS during a video burst)
+		// is as transient as a deadline for voice.
+		if voice && transientBufferError(outputError) {
+			isTimeout = true
+		}
 		if !isTimeout || !voice {
 			if failures, ok := s.backOff(isTimeout); ok && !isTimeout && failures == 1 {
 				log.Printf("webrtc: media output slot=%s write failed: %v; backing off and retrying", ticket.delivery.Slot, outputError)
@@ -361,6 +367,14 @@ func (s *mediaEgressStream) writeResultKind(header *rtp.Header, payload []byte, 
 		s.failures.Store(0)
 	}
 	return n, reason, err
+}
+
+// transientBufferError reports a write that failed only because the socket
+// send buffer was momentarily full. Windows reports WSAENOBUFS (10055) and
+// WSAEWOULDBLOCK (10035) as raw errnos that do not match the syscall names.
+func transientBufferError(err error) bool {
+	return errors.Is(err, syscall.ENOBUFS) || errors.Is(err, syscall.EAGAIN) ||
+		errors.Is(err, syscall.Errno(10055)) || errors.Is(err, syscall.Errno(10035))
 }
 
 // mediaEgressRetryMax caps the cooldown after repeated non-timeout failures.

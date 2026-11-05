@@ -4,6 +4,25 @@ const V = () => window.__noxa;
 let whisperRequest = null;
 let whisperRouting = null;
 
+// Whisper channel targets are channel IDs of one server. They are applied
+// only on the server they were chosen on: the same ID names an unrelated
+// channel elsewhere, and routing voice there would leak it.
+export function whisperChannelsFor(settings, server) {
+    const channels = settings?.whisper_channels || [];
+    return server && settings?.whisper_channels_server === server ? [...channels] : [];
+}
+
+// bindWhisperChannels makes the channel list belong to server before it is
+// edited there; a list chosen on another server (or unbound) starts empty.
+export function bindWhisperChannels(settings, server) {
+    if (settings.whisper_channels_server !== server) {
+        settings.whisper_channels = [];
+        settings.whisper_channels_server = server || "";
+    }
+    settings.whisper_channels = settings.whisper_channels || [];
+    return settings.whisper_channels;
+}
+
 export function currentWhisperRouting() {
     return whisperRouting && mediaScopeIsCurrent(whisperRouting.scope) ? whisperRouting : null;
 }

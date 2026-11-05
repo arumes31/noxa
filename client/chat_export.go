@@ -151,11 +151,17 @@ func (a *App) DMExportHistory(peer string) (ChatExportResult, error) {
 func dmExportMessages(msgs []DMEntry) ChatExportResult {
 	lines := make([]string, 0, len(msgs))
 	for _, m := range msgs {
+		editedAt := m.EditedAt
+		if m.Edited && editedAt == 0 {
+			editedAt = max(m.SentAt, 1) // edited without a recorded time
+		}
 		lines = append(lines, chatExportLine(netproto.ChatHistoryEntry{
 			FromUniqueID: m.FromUniqueID,
 			FromNickname: m.FromNickname,
 			Body:         m.Body,
 			SentAt:       m.SentAt,
+			EditedAt:     editedAt,
+			Deleted:      m.Deleted,
 		}, dmEncMode(m)))
 	}
 	text := ""
@@ -193,7 +199,10 @@ func (a *App) ExportChat(defaultName, contents string) string {
 func writeTextExport(chosen, contents string) error {
 	path := textExportPath(chosen)
 	if path == chosen {
-		return os.WriteFile(path, []byte(contents), 0o600)
+		// Replace atomically with a fresh 0600 file: an existing file's
+		// looser mode is not kept and a symlink at the path is replaced,
+		// not followed.
+		return writePrivateFileAtomic(path, []byte(contents))
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- user-chosen export path from the native save dialog.
 	if errors.Is(err, fs.ErrExist) {
@@ -294,7 +303,7 @@ func (a *App) ExportChatEncrypted(defaultName, contents, passphrase string) (str
 	if err != nil || path == "" {
 		return "", nil // cancelled
 	}
-	if err := os.WriteFile(path, blob, 0o600); err != nil {
+	if err := writePrivateFileAtomic(path, blob); err != nil {
 		return "", err
 	}
 	return path, nil

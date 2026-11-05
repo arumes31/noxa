@@ -104,7 +104,7 @@ import { initWorkspace, renderMember, renderVoiceHints, cancelMemberVolumePrevie
 import { initAppShell } from "./app-shell.js";
 import { createTrayVoiceSync, createTrayUnreadModel, trayInChannel } from "./tray-state.js";
 import { capturePresenceScope, presenceIsCurrent, desiredPresence, restorePresenceOnActivity, setPresence } from "./presence.js";
-import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting } from "./media-controls.js";
+import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting, whisperChannelsFor } from "./media-controls.js";
 import { bindImagePlaceholders } from "./markdown.js";
 
 const P = () => window.__noxaPerms;
@@ -1194,6 +1194,7 @@ window.runtime.EventsOn("disconnected", () => {
     state.supportsVoiceQueue = false;
     state.myClientID = "";
     resetVoiceSession();
+    stopPrivateCall(); // the call ended with the connection; release capture now
     state.selectedClientID = "";
     state.isGuest = true;
     state.myStatus = "";
@@ -1555,6 +1556,10 @@ window.runtime.EventsOn("event", (json) => {
                     }
                 }
                 chatUI.sysJoinLeave(was.nickname || was.unique_id || "someone", "left"); // (130/131)
+                // The avatar cache follows the roster, so user churn cannot grow
+                // it without bound; views that still show this user (DMs)
+                // fetch it again on demand.
+                if (was.unique_id && !state.clients.some((c) => c.unique_id === was.unique_id)) state.avatars.delete(was.unique_id);
                 if (was.client_id !== state.myClientID && was.channel_id === state.myChannelID && state.myChannelID !== 0) {
                     window.__noxaNotify?.notify("join_leave", t("runtime.left", { name: was.nickname || t("runtime.someone") }),
                         { channelID: state.myChannelID, className: "joins", kind: "info",
@@ -3417,6 +3422,13 @@ function setDeafened(on) {
     publishAudioState();
 }
 
+function isEditableElement(el) {
+    if (!el || el === document.body) return false;
+    if (el.isContentEditable || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
+    if (el.tagName !== "INPUT") return false;
+    return !["button", "checkbox", "radio", "range", "color", "file", "submit", "reset", "image"].includes((el.type || "text").toLowerCase());
+}
+
 let whisperReplyRequest = null;
 window.runtime.EventsOn("hotkey", async (action) => {
     if (updateStartupBlocked()) return;
@@ -3470,7 +3482,7 @@ window.runtime.EventsOn("hotkey", async (action) => {
         }
         const s = state.settings || {};
         const previous = {
-            clients: [...(s.whisper_clients || [])], channels: [...(s.whisper_channels || [])], active: !!s.whisper_active,
+            clients: [...(s.whisper_clients || [])], channels: whisperChannelsFor(s, state.lastConnect?.addr), active: !!s.whisper_active,
         };
         const target = state.lastWhispererUID;
         whisperReplyRequest = scope;
@@ -3485,7 +3497,10 @@ window.runtime.EventsOn("hotkey", async (action) => {
         sysMsg(t("runtime.whisperArmed", { name: uidName(target) }));
         return;
     }
-    if (document.hasFocus() && document.activeElement === $("chat-text")) return;
+    // Typing in any text field (chat, login, settings, filters) never opens
+    // the microphone. A release is always honoured, so focusing a field while
+    // talking cannot leave the microphone stuck open.
+    if (action === "ptt_down" && document.hasFocus() && isEditableElement(document.activeElement)) return;
     if (state.micState === "none" || state.micState === "denied") return;
     if ((state.settings?.activation_mode || "ptt") !== "ptt") return;
     setPTT(action === "ptt_down");
@@ -3605,8 +3620,9 @@ $("voice-lowbw").onclick = () => setLowBandwidth(!isLowBandwidth(), true);
 async function applyWhisperSettings() {
     const s = state.settings;
     if (!s || !s.whisper_active) return;
-    if ((s.whisper_clients?.length || 0) === 0 && (s.whisper_channels?.length || 0) === 0) return;
-    const error = await setWhisperRouting({ clients: s.whisper_clients || [], channels: s.whisper_channels || [], active: true });
+    const channels = whisperChannelsFor(s, state.lastConnect?.addr);
+    if ((s.whisper_clients?.length || 0) === 0 && channels.length === 0) return;
+    const error = await setWhisperRouting({ clients: s.whisper_clients || [], channels, active: true });
     if (error) sysMsg(t("runtime.whisperConfig", { error }));
 }
 

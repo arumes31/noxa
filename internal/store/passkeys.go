@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -11,6 +12,10 @@ import (
 
 // ErrPasskeyNotFound reports an unknown passkey or one of another account.
 var ErrPasskeyNotFound = errors.New("passkey not found")
+
+// ErrPasskeyHandleConflict rejects a passkey whose WebAuthn user handle
+// differs from the one the account's existing passkeys already use.
+var ErrPasskeyHandleConflict = errors.New("passkey user handle changed; retry the registration")
 
 // Passkey is a stored WebAuthn credential. Credential is the opaque,
 // verified credential record (JSON) the WebAuthn library round-trips.
@@ -70,6 +75,17 @@ func (s *Store) AddPasskey(ctx context.Context, p Passkey) error {
 	// concurrent revocation can never miss a freshly added credential.
 	if _, err := lockOlmRosters(ctx, tx, []string{p.Principal}); err != nil {
 		return fmt.Errorf("adding passkey: %w", err)
+	}
+	// One account, one WebAuthn user handle: a ceremony that began before a
+	// concurrent first registration committed carries a different fresh
+	// handle and must be retried rather than split the account's passkeys.
+	var existing []byte
+	err = tx.QueryRowContext(ctx, `SELECT user_handle FROM webauthn_credentials WHERE principal=$1 ORDER BY id LIMIT 1`, p.Principal).Scan(&existing)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("adding passkey: %w", err)
+	}
+	if err == nil && !bytes.Equal(existing, p.UserHandle) {
+		return ErrPasskeyHandleConflict
 	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO webauthn_credentials
 		(credential_id, principal, user_handle, device_id, name, credential, dm_certificate)

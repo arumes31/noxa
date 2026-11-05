@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { setWhisperRouting, currentWhisperRouting } from "../src/media-controls.js";
+import { setWhisperRouting, currentWhisperRouting, whisperChannelsFor, bindWhisperChannels } from "../src/media-controls.js";
 import { publishAudioState } from "../src/audio-state.js";
 
 test("audio state coalesces rapid toggles and reports a failed intent only once", async () => {
@@ -76,4 +76,19 @@ test("whisper routing only confirms current acknowledged recipients", async () =
     finish("");
     assert.equal(await pending, null);
     assert.equal(currentWhisperRouting(), null);
+});
+
+test("whisper channel IDs apply only on the server they were chosen on", () => {
+    const settings = { whisper_channels: [2, 3], whisper_channels_server: "a.example:12333" };
+    assert.deepEqual(whisperChannelsFor(settings, "a.example:12333"), [2, 3]);
+    assert.deepEqual(whisperChannelsFor(settings, "b.example:12333"), []);
+    assert.deepEqual(whisperChannelsFor({ whisper_channels: [2] }, "a.example:12333"), [], "an unbound legacy list is applied nowhere");
+    assert.deepEqual(whisperChannelsFor(settings, ""), []);
+    // Editing on another server starts that server's own list.
+    const list = bindWhisperChannels(settings, "b.example:12333");
+    assert.deepEqual(list, []);
+    assert.equal(settings.whisper_channels_server, "b.example:12333");
+    list.push(7);
+    assert.deepEqual(whisperChannelsFor(settings, "b.example:12333"), [7]);
+    assert.equal(bindWhisperChannels(settings, "b.example:12333"), settings.whisper_channels, "same server keeps its list");
 });

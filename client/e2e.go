@@ -1502,7 +1502,9 @@ func decodeEventObject(data json.RawMessage) (map[string]any, bool) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var obj map[string]any
-	if err := dec.Decode(&obj); err != nil {
+	// JSON null decodes to a nil map without error; callers write into the
+	// object, so null (or anything that is not an object) is refused.
+	if err := dec.Decode(&obj); err != nil || obj == nil {
 		return nil, false
 	}
 	return obj, true

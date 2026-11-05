@@ -245,7 +245,8 @@ func TestRatchetDMProjectionMixedLegacy(t *testing.T) {
 		exported = append(exported, strings.Join([]string{m.Protocol, m.Provenance, m.From, m.ClientMsgID, m.Body}, "|"))
 	}
 	sort.Strings(exported)
-	wantExport := []string{"noxa-olm-v1|authenticated|bob|m1|olm m1", "noxa-olm-v1|authenticated|me|n1|mine (edited)", "||bob|m1|", "||me|m2|legacy m2"}
+	// The deleted legacy m1 (a tombstone) is not exported as a blank message.
+	wantExport := []string{"noxa-olm-v1|authenticated|bob|m1|olm m1", "noxa-olm-v1|authenticated|me|n1|mine (edited)", "||me|m2|legacy m2"}
 	if strings.Join(exported, "\n") != strings.Join(wantExport, "\n") {
 		t.Fatalf("history export:\n%s\nwant:\n%s", strings.Join(exported, "\n"), strings.Join(wantExport, "\n"))
 	}

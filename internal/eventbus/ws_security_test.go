@@ -345,3 +345,22 @@ func TestWSLimitsConcurrentStreamsAndIncomingFrames(t *testing.T) {
 	}
 	waitForSubscribers(t, bus, 0)
 }
+
+// Addresses in one IPv6 /64 share a single authentication budget.
+func TestWSAuthLimiterGroupsIPv6Slash64(t *testing.T) {
+	now := time.Date(2026, time.August, 7, 12, 0, 0, 0, time.UTC)
+	cfg := testWSHandlerConfig(func() time.Time { return now })
+	cfg.maxAuthAttempts = 2
+	limiter := newWSAuthLimiter(cfg)
+	for _, addr := range []string{"[2001:db8:1:2::1]:1000", "[2001:db8:1:2:ffff::9]:1000"} {
+		if ok, _ := limiter.allow(addr); !ok {
+			t.Fatalf("%s denied within budget", addr)
+		}
+	}
+	if ok, _ := limiter.allow("[2001:db8:1:2::abcd]:1000"); ok {
+		t.Fatal("third address in the same /64 got a fresh budget")
+	}
+	if ok, _ := limiter.allow("[2001:db8:1:3::1]:1000"); !ok {
+		t.Fatal("a different /64 was throttled")
+	}
+}

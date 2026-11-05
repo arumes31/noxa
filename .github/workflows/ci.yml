@@ -486,7 +486,7 @@ jobs:
       security-events: write
 
   docker:
-    needs: [build-metadata, proto-contract, test, frontend-e2e, security-gate]
+    needs: [build-metadata, proto-contract, mobile-checks, test, frontend-e2e, security-gate]
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -573,7 +573,7 @@ jobs:
     uses: ./.github/workflows/golangci-lint.yml
 
   release-build:
-    needs: [build-metadata, proto-contract, test, frontend-e2e, client-windows, webview2, security-gate, release-lint]
+    needs: [build-metadata, proto-contract, mobile-checks, test, frontend-e2e, client-windows, webview2, security-gate, release-lint]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: windows-latest
     timeout-minutes: 45

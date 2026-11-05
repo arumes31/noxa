@@ -111,18 +111,23 @@ func (s *Store) DeliverWebhook(ctx context.Context, id int64, hash []byte, autho
 	if count >= 5 {
 		return hook, 0, "", 0, ErrWebhookRate
 	}
-	body, keyID, err = authorize(hook)
+	// Consume the rate unit before authorization: a request rejected by role
+	// or moderation checks still counts, and that consumption is committed.
+	_, err = tx.ExecContext(ctx, `UPDATE incoming_webhooks SET rate_reset=$2,rate_count=$3 WHERE id=$1`, id, reset, count+1)
 	if err != nil {
 		return hook, 0, "", 0, err
 	}
-	if body == "" || keyID == 0 {
-		return hook, 0, "", 0, ErrWebhookDenied
+	body, keyID, err = authorize(hook)
+	if err == nil && (body == "" || keyID == 0) {
+		err = ErrWebhookDenied
+	}
+	if err != nil {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return hook, 0, "", 0, errors.Join(err, commitErr)
+		}
+		return hook, 0, "", 0, err
 	}
 	err = tx.QueryRowContext(ctx, `INSERT INTO chat_messages(scope,channel_id,from_unique_id,from_nickname,body_enc,key_id) VALUES(1,$1,$2,$3,$4,$5) RETURNING id`, hook.ChannelID, "webhook:"+strconv.FormatInt(hook.ID, 10), hook.Name+" [Webhook]", body, keyID).Scan(&messageID)
-	if err != nil {
-		return hook, 0, "", 0, err
-	}
-	_, err = tx.ExecContext(ctx, `UPDATE incoming_webhooks SET rate_reset=$2,rate_count=$3 WHERE id=$1`, id, reset, count+1)
 	if err != nil {
 		return hook, 0, "", 0, err
 	}

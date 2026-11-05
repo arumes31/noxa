@@ -333,3 +333,25 @@ func TestManifestContentType(t *testing.T) {
 		t.Fatalf("manifest response: %d %v", resp.StatusCode, resp.Header)
 	}
 }
+
+// One IPv6 host can source from any address in its routed /64, so the
+// admission buckets must be shared across that prefix.
+func TestAdmissionGroupsIPv6ByPrefix(t *testing.T) {
+	a := newAdmission(1, 100)
+	now := time.Now()
+	if _, ok := a.admit(netip.MustParseAddr("2001:db8:1:2::1"), now); !ok {
+		t.Fatal("first connection refused")
+	}
+	if _, ok := a.admit(netip.MustParseAddr("2001:db8:1:2:ffff::9"), now); ok {
+		t.Fatal("rotated address in the same /64 got a fresh bucket")
+	}
+	if _, ok := a.admit(netip.MustParseAddr("2001:db8:1:3::1"), now); !ok {
+		t.Fatal("different /64 was refused")
+	}
+	if _, ok := a.admit(netip.MustParseAddr("198.51.100.1"), now); !ok {
+		t.Fatal("IPv4 address was refused")
+	}
+	if _, ok := a.admit(netip.MustParseAddr("198.51.100.2"), now); !ok {
+		t.Fatal("neighbouring IPv4 address shared a bucket")
+	}
+}

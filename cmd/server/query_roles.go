@@ -129,3 +129,11 @@ func (q *queryBackend) WithIntegrationCustomMetadata(ctx context.Context, princi
 func (q *queryBackend) ChangeIntegrationCustomMetadata(ctx context.Context, principal auth.IntegrationPrincipal, request netproto.CustomMetadataChange) (netproto.CustomMetadataResult, error) {
 	return q.tcp.ChangeIntegrationCustomMetadata(ctx, principal, request)
 }
+
+func (q *queryBackend) WithIntegrationMediaLimits(ctx context.Context, principal auth.IntegrationPrincipal, deliver func(context.Context, netproto.MediaLimitsChanged) error) error {
+	return q.tcp.WithIntegrationMediaLimits(ctx, principal, deliver)
+}
+
+func (q *queryBackend) SetIntegrationMediaLimits(ctx context.Context, principal auth.IntegrationPrincipal, limits netproto.MediaLimits) (netproto.MediaLimitsSaved, error) {
+	return q.tcp.SetIntegrationMediaLimits(ctx, principal, limits)
+}

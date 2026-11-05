@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // allowDefaultSettingsPath gates the fallback to the real
@@ -176,7 +177,11 @@ type Settings struct {
 	// Whisper lists (re-applied on connect and via the Whisper settings page).
 	WhisperClients  []string `json:"whisper_clients"`
 	WhisperChannels []int64  `json:"whisper_channels"`
-	WhisperActive   bool     `json:"whisper_active"`
+	// WhisperChannelsServer is the server address whose channel IDs
+	// WhisperChannels holds: channel IDs are per server, so the list is only
+	// applied there ("" = unbound legacy list, applied nowhere).
+	WhisperChannelsServer string `json:"whisper_channels_server,omitempty"`
+	WhisperActive         bool   `json:"whisper_active"`
 
 	// Misc.
 	DownloadFolder     string `json:"download_folder"`
@@ -416,12 +421,20 @@ func (a *App) autoAwayMessage() string {
 	if msg == "" {
 		msg = defaultAutoAwayMessage
 	}
-	runes := []rune(msg)
-	if len(runes) > 200 {
-		msg = string(runes[:200])
+	// The server limit is in bytes: cut on a rune boundary so a multibyte
+	// message is not rejected (and automatic away does not silently fail).
+	if len(msg) > maxAutoAwayMessageBytes {
+		cut := maxAutoAwayMessageBytes
+		for cut > 0 && !utf8.RuneStart(msg[cut]) {
+			cut--
+		}
+		msg = msg[:cut]
 	}
 	return msg
 }
+
+// maxAutoAwayMessageBytes is the server's status-message limit (bytes).
+const maxAutoAwayMessageBytes = 200
 
 // settingsPath returns the default settings file location.
 func settingsPath() (string, error) {

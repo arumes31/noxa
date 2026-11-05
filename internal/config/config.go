@@ -463,6 +463,15 @@ const maxTURNCredentialsTTL = 30 * 24 * time.Hour
 // Validate checks configuration values before any listener or resource is
 // created. It returns every independent problem so operators can fix a bad
 // deployment in one pass.
+// Upper bounds for duration settings. client_timeout_seconds matches the
+// runtime server-config range (and keeps the seconds-to-Duration conversion
+// far from overflow); a leave rotation coalesced for longer than an hour would
+// let a departed member keep reading new channel messages.
+const (
+	maxClientTimeoutSeconds = 86_400
+	maxChatKeyRotateMinSecs = 3_600
+)
+
 func (c *Config) Validate() error {
 	if c == nil {
 		return errors.New("config is nil")
@@ -545,8 +554,8 @@ func (c *Config) Validate() error {
 	if c.MaxClients <= 0 || c.MaxClients > 100_000 {
 		errs = append(errs, fmt.Errorf("max_clients %d must be between 1 and 100000", c.MaxClients))
 	}
-	if c.ClientTimeoutSeconds <= 0 {
-		errs = append(errs, fmt.Errorf("client_timeout_seconds %d must be positive", c.ClientTimeoutSeconds))
+	if c.ClientTimeoutSeconds <= 0 || c.ClientTimeoutSeconds > maxClientTimeoutSeconds {
+		errs = append(errs, fmt.Errorf("client_timeout_seconds %d must be between 1 and %d", c.ClientTimeoutSeconds, maxClientTimeoutSeconds))
 	}
 	if c.ShutdownTimeout <= 0 {
 		errs = append(errs, fmt.Errorf("shutdown_timeout %s must be positive", c.ShutdownTimeout))
@@ -647,8 +656,8 @@ func (c *Config) Validate() error {
 	default:
 		errs = append(errs, fmt.Errorf("chat_legacy_history %q must be encrypt or purge", c.ChatLegacyHistory))
 	}
-	if c.ChatKeyRotateMinSecs < 0 {
-		errs = append(errs, fmt.Errorf("chat_key_rotate_min_seconds %d must not be negative", c.ChatKeyRotateMinSecs))
+	if c.ChatKeyRotateMinSecs < 0 || c.ChatKeyRotateMinSecs > maxChatKeyRotateMinSecs {
+		errs = append(errs, fmt.Errorf("chat_key_rotate_min_seconds %d must be between 0 and %d", c.ChatKeyRotateMinSecs, maxChatKeyRotateMinSecs))
 	}
 	if c.ChatSearchMaxMessages <= 0 {
 		errs = append(errs, fmt.Errorf("chat_search_max_messages %d must be positive", c.ChatSearchMaxMessages))
@@ -883,10 +892,15 @@ func isLoopbackAddress(address string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// errDatabaseURLInvalid deliberately carries no parser detail: url.Parse
+// errors quote the raw value, which would print the database password.
+var errDatabaseURLInvalid = errors.New("database_url is invalid (check its syntax; details are withheld because the value may contain a password)")
+
 func validateDatabaseURL(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("database_url is invalid: %w", err)
+		// The parse error quotes the whole DSN, password included.
+		return errDatabaseURLInvalid
 	}
 	if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
 		return fmt.Errorf("database_url scheme %q must be postgres or postgresql", parsed.Scheme)
@@ -900,7 +914,8 @@ func validateDatabaseURL(raw string) error {
 func validateProductionDatabaseURL(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("database_url is invalid: %w", err)
+		// The parse error quotes the whole DSN, password included.
+		return errDatabaseURLInvalid
 	}
 	if parsed.User != nil {
 		password, hasPassword := parsed.User.Password()

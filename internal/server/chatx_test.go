@@ -40,6 +40,42 @@ func TestTypingTrackerCleanupIsRateLimited(t *testing.T) {
 	}
 }
 
+// A flood of distinct typing targets cannot grow the tracker past its hard
+// cap between cleanup passes; known keys keep their normal throttling.
+func TestTypingTrackerRefusesNewKeysAtCapacity(t *testing.T) {
+	tracker := newTypingTracker()
+	now := time.Now()
+	tracker.lastCleanup = now
+	for i := 0; i < typingTrackerMaxKeys; i++ {
+		tracker.last[fmt.Sprintf("recent-%d", i)] = now
+	}
+	if tracker.allow("new", now.Add(time.Second)) {
+		t.Fatal("new key admitted beyond the tracker cap")
+	}
+	if len(tracker.last) != typingTrackerMaxKeys {
+		t.Fatalf("tracker size = %d, want %d", len(tracker.last), typingTrackerMaxKeys)
+	}
+	if !tracker.allow("recent-0", now.Add(3*time.Second)) {
+		t.Fatal("known key throttled after its interval")
+	}
+}
+
+// Receipts and chat sends carry bounded identifiers whether or not an
+// acknowledgement was requested.
+func TestOversizedChatIdentifiersAreRejected(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+	alice, bob, _, _, _ := chatPair(t, env)
+	defer func() { _ = alice.Close() }()
+	defer func() { _ = bob.Close() }()
+
+	long := strings.Repeat("x", maxClientMsgIDBytes+1)
+	send(t, bob, netproto.MsgChatDelivered, netproto.ChatDelivered{ToUniqueID: "admin-uid", ClientMsgID: long})
+	expectChatError(t, bob, "receipt identifier too long")
+	send(t, bob, netproto.MsgChatSend, netproto.ChatSend{ToUniqueID: "admin-uid", Text: "c2VhbGVk", Enc: true, ClientMsgID: long})
+	expectChatError(t, bob, "chat identifier too long")
+}
+
 // chatPair sets up two authed, key-published clients in channel 1 and
 // returns them, bob's unsealed scope key, its generation, and bob's X25519
 // public key (needed with the private key from testX25519 to unseal further keys).

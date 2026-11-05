@@ -406,6 +406,7 @@ export class Voice extends EventTarget {
         for (const track of this.mic?.getTracks() || []) track.stop();
         this.mic = null;
         for (const track of this.camera?.getTracks() || []) track.stop();
+        this.#cameraStart = null;
         this.#cameraSource?.stop();
         this.#cameraSource = null;
         this.camera = null;
@@ -653,14 +654,31 @@ export class Voice extends EventTarget {
     #cameraGeneration = "0";
 
     #cameraSource = null;
+    // The camera start awaiting its permission prompt; stopCamera() and
+    // leaving clear it so a late grant is stopped instead of published.
+    #cameraStart = null;
     /** "user" (front) or "environment" (back) for the published camera. */
     facingMode = "user";
 
     /** Publishes the camera to the channel (VP8, which every viewer decodes). */
     async startCamera() {
-        if (!this.pc || this.camera) return;
+        if (!this.pc || this.camera || this.#cameraStart) return;
+        const pc = this.pc;
         const source = new CameraSource({ facingMode: this.facingMode, effect: setting("cameraEffect"), blurStrength: setting("blurStrength"), limits: this.session.mediaLimits });
-        const stream = await source.start();
+        const start = this.#cameraStart = { source };
+        let stream;
+        try {
+            stream = await source.start();
+        } catch (error) {
+            source.stop();
+            if (this.#cameraStart === start) this.#cameraStart = null;
+            throw error;
+        }
+        if (this.#cameraStart !== start || this.pc !== pc) {
+            source.stop();
+            return;
+        }
+        this.#cameraStart = null;
         const track = stream.getVideoTracks()[0];
         this.#cameraSource = source;
         // Flip or a changed effect yields a new track: swap it in place,
@@ -721,6 +739,7 @@ export class Voice extends EventTarget {
     }
 
     async stopCamera() {
+        this.#cameraStart = null;
         const stream = this.camera;
         this.camera = null;
         for (const track of stream?.getTracks() || []) track.stop();

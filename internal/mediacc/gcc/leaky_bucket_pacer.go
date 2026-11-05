@@ -103,6 +103,15 @@ func (p *LeakyBucketPacer) Write(header *rtp.Header, payload []byte, attributes 
 		return 0, errLeakyBucketPacerPoolCastFailed
 	}
 
+	// A payload larger than the pooled buffer gets its own buffer: copying
+	// into the pooled one would truncate it, and slicing it to the original
+	// size later would panic the pacer goroutine.
+	if len(payload) > cap(*buf) {
+		p.pool.Put(buf)
+		b := make([]byte, len(payload))
+		buf = &b
+	}
+	*buf = (*buf)[:len(payload)]
 	copy(*buf, payload)
 	hdr := header.Clone()
 

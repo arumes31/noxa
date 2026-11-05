@@ -465,6 +465,8 @@ func TestValidateRejectsUnsafeValues(t *testing.T) {
 			wantErr: "database_url sslmode",
 		},
 		{name: "negative udp rate", mutate: func(c *Config) { c.UDPRateLimitPPS = -1 }, wantErr: "udp_rate_limit_pps"},
+		{name: "excessive client timeout", mutate: func(c *Config) { c.ClientTimeoutSeconds = 86_401 }, wantErr: "client_timeout_seconds"},
+		{name: "excessive key rotation window", mutate: func(c *Config) { c.ChatKeyRotateMinSecs = 31_536_000 }, wantErr: "chat_key_rotate_min_seconds"},
 	}
 
 	for _, test := range tests {
@@ -476,6 +478,22 @@ func TestValidateRejectsUnsafeValues(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want text %q", err, test.wantErr)
 			}
 		})
+	}
+}
+
+// A malformed DSN must not echo its password through the parse error.
+func TestValidateDatabaseURLParseErrorOmitsPassword(t *testing.T) {
+	for _, dev := range []bool{true, false} {
+		cfg := cloneConfig(loadDefaultConfig(t))
+		cfg.DevMode = dev
+		cfg.DatabaseURL = "postgres://app:s3cr3t-pw@db:bad/noxa"
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "database_url is invalid") {
+			t.Fatalf("dev=%t: Validate() error = %v, want an invalid database_url", dev, err)
+		}
+		if strings.Contains(err.Error(), "s3cr3t-pw") {
+			t.Fatalf("dev=%t: error leaks the password: %v", dev, err)
+		}
 	}
 }
 

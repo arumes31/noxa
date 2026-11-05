@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
+	"noxa/internal/state"
 )
 
 const eventVoiceQueueChanged = "voice_queue_changed"
@@ -66,7 +68,11 @@ func (s *TCPServer) handleVoiceQueue(ctx context.Context, client *Client, frame 
 		if err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "voice queue member unavailable")
 		}
-		s.broadcastEvent(eventVoiceQueueChanged, struct{}{})
+		// A repeated raise or lower (or an empty clear) changes nothing; it
+		// must not cost every connected client a fresh snapshot.
+		if !sameVoiceQueue(members, s.deps.State.ListClients(), request.ChannelID) {
+			s.broadcastEvent(eventVoiceQueueChanged, struct{}{})
+		}
 		if moderating {
 			s.auditInChannels(ctx, client.uniqueID(), "voice_queue_moderated", target, "action="+request.Action, request.ChannelID)
 		}
@@ -76,4 +82,34 @@ func (s *TCPServer) handleVoiceQueue(ctx context.Context, client *Client, frame 
 		}
 		return s.writeCommittedReply(client, netproto.MsgVoiceQueueResult, netproto.VoiceQueueResult{ChannelID: request.ChannelID, Action: request.Action, ClientID: chosen})
 	})
+}
+
+// voiceQueueEntry is the queue-visible part of one channel member.
+type voiceQueueEntry struct {
+	order  uint64
+	called bool
+}
+
+// sameVoiceQueue reports whether the queue state of channelID's members is
+// identical in two member lists.
+func sameVoiceQueue(before, after []*state.Client, channelID int64) bool {
+	queue := func(members []*state.Client) map[string]voiceQueueEntry {
+		out := make(map[string]voiceQueueEntry)
+		for _, member := range members {
+			if member.ChannelID == channelID {
+				out[member.ClientID] = voiceQueueEntry{member.HandRaisedOrder, member.HandCalled}
+			}
+		}
+		return out
+	}
+	a, b := queue(before), queue(after)
+	if len(a) != len(b) {
+		return false
+	}
+	for id, entry := range a {
+		if other, ok := b[id]; !ok || other != entry {
+			return false
+		}
+	}
+	return true
 }

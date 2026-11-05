@@ -322,6 +322,51 @@ func TestFileRenameCrossChannelDenied(t *testing.T) {
 	}
 }
 
+// TestFileRenameCrossChannelRequiresSourceDownload verifies a file manager
+// without DownloadFiles on the source cannot relocate somebody else's file
+// into a channel whose read policy would let them fetch it.
+func TestFileRenameCrossChannelRequiresSourceDownload(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		caps     []authorization.Capability
+		wantMove bool
+	}{
+		{"manage without download", []authorization.Capability{authorization.ManageFiles, authorization.UploadFiles}, false},
+		{"manage with download", []authorization.Capability{authorization.ManageFiles, authorization.UploadFiles, authorization.DownloadFiles}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := startTestEnvWithCapabilities(t, tt.caps...)
+			defer env.stop()
+			env.ft.files = []store.FileRecord{{ChannelID: 1, Name: "secret.txt", Uploader: "victim-uid"}}
+			env.state.AddChannel(testChannel(1))
+			env.state.AddChannel(&state.Channel{ChannelID: 2, Name: "target"})
+
+			conn, _ := dialAuthed(t, env.addr, "user-uid")
+			defer closeFileTestResource(t, conn)
+
+			send(t, conn, netproto.MsgFileRename, netproto.FileRename{
+				ChannelID: 1, Name: "secret.txt", NewName: "secret.txt", NewChannelID: 2,
+			})
+			if tt.wantMove {
+				waitFor(t, "cross-channel move", func() bool {
+					env.ft.mu.Lock()
+					defer env.ft.mu.Unlock()
+					return len(env.ft.moved) == 1
+				})
+				return
+			}
+			if e := readError(t, conn); e.Code != errCodePermissionDenied {
+				t.Fatalf("error code = %d, want %d", e.Code, errCodePermissionDenied)
+			}
+			env.ft.mu.Lock()
+			defer env.ft.mu.Unlock()
+			if len(env.ft.moved) != 0 {
+				t.Fatalf("moves = %+v, want none", env.ft.moved)
+			}
+		})
+	}
+}
+
 // TestFileTransferInitDownload verifies a download token is issued.
 func TestFileTransferInitDownload(t *testing.T) {
 	env := startTestEnv(t, nil)

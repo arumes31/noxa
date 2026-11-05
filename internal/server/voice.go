@@ -245,6 +245,9 @@ func (s *TCPServer) handleWhisperSet(ctx context.Context, client *Client, f *net
 	if err := netproto.Decode(f, &msg); err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed whisper_set: "+err.Error())
 	}
+	if len(msg.UniqueIDs) > netproto.MaxWhisperTargets || len(msg.ChannelIDs) > netproto.MaxWhisperTargets {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "too many whisper targets")
+	}
 	if s.deps == nil || s.deps.Voice == nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "voice backend unavailable")
 	}

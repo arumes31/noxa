@@ -17,6 +17,13 @@ export function applyChannelPreset(overrides, everyoneID, preset) {
     return next;
 }
 
+// presetGrantable reports whether applying preset changes only capabilities
+// the manager may grant; the server rejects a changed override for any other.
+export function presetGrantable(overrides, everyoneID, preset, grantable = []) {
+    const changes = channelOverrideChanges(overrides, applyChannelPreset(overrides, everyoneID, preset));
+    return changes.every((change) => grantable.includes(change.capability));
+}
+
 export function channelOverrideChanges(before = [], after = []) {
     const key = (entry) => `${entry.role_id || 0}:${entry.user_id || 0}:${entry.capability}`;
     const previous = new Map(before.map((entry) => [key(entry), entry]));

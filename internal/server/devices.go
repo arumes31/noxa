@@ -3,6 +3,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -117,6 +118,14 @@ func (l *deviceLinks) codeLimiterLocked(ip string) *rate.Limiter {
 		l.codeFailures[ip] = limiter
 	}
 	return limiter
+}
+
+// validDeviceX25519 accepts canonical standard base64 of a non-zero 32-byte
+// key, the only form clients can encrypt device copies to.
+func validDeviceX25519(key string) bool {
+	raw, err := base64.StdEncoding.DecodeString(key)
+	return err == nil && len(raw) == 32 && base64.StdEncoding.EncodeToString(raw) == key &&
+		!bytes.Equal(raw, make([]byte, 32))
 }
 
 func randomLinkCode() (string, error) {
@@ -292,8 +301,10 @@ func (s *TCPServer) deviceLoginPrincipal(ctx context.Context, publicKey string) 
 }
 
 // sessionDeviceRejection refuses sessions whose identity key belongs to a
-// revoked device. It runs inside finishAuth's policy section.
-func (s *TCPServer) sessionDeviceRejection(ctx context.Context, client *Client) (string, error) {
+// revoked device of the account being signed in. It runs inside finishAuth's
+// policy section. A revoked row of another principal is not this account's
+// device and must not lock its owner out.
+func (s *TCPServer) sessionDeviceRejection(ctx context.Context, client *Client, principal string) (string, error) {
 	key := client.sessionKey()
 	if key == "" || s.deps == nil || s.deps.Devices == nil {
 		return "", nil
@@ -305,7 +316,7 @@ func (s *TCPServer) sessionDeviceRejection(ctx context.Context, client *Client) 
 	if err != nil {
 		return "", err
 	}
-	if !d.Active() {
+	if !d.Active() && d.Principal == principal {
 		return "this device was signed out; link it again", nil
 	}
 	return "", nil
@@ -319,6 +330,14 @@ func (s *TCPServer) attachSessionDevice(ctx context.Context, client *Client, pri
 		return ""
 	}
 	d, err := s.deps.Devices.DeviceByKey(ctx, key)
+	if err != nil && !errors.Is(err, store.ErrDeviceNotFound) {
+		// The session is already published: without knowing whether its key
+		// is a revoked device, a later revocation could not find it either.
+		s.logger.Warn("device lookup for new session failed", zap.String("client_id", client.ID), zap.Error(err))
+		client.revokeSession()
+		_ = client.Conn.Close()
+		return ""
+	}
 	if err != nil || d.Principal != principal {
 		return ""
 	}
@@ -680,8 +699,16 @@ func (s *TCPServer) handleLinkClaim(ctx context.Context, client *Client, r netpr
 			Action: r.Action, State: netproto.LinkStateExpired,
 		})
 	}
-	if _, err := auth.LoadPublicKey(r.Ed25519PublicKey); err != nil {
+	// The approval and binding transcripts sign these exact strings, and
+	// AddDevice stores the canonical Ed25519 spelling, so only canonical keys
+	// can produce an approval that later verifies against the stored device.
+	// The encryption key must be one every client can use: base64 of 32
+	// non-zero bytes (as the passkey path requires).
+	if canonical, err := auth.CanonicalPublicKey(r.Ed25519PublicKey); err != nil || canonical != r.Ed25519PublicKey {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid device key")
+	}
+	if !validDeviceX25519(r.X25519PublicKey) {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid encryption key")
 	}
 	if _, err := s.deps.Devices.DeviceByKey(ctx, r.Ed25519PublicKey); err == nil {
 		return unavailable()
@@ -696,7 +723,7 @@ func (s *TCPServer) handleLinkClaim(ctx context.Context, client *Client, r netpr
 	via := "qr"
 	if r.Code != "" {
 		via = "code"
-		limiter := s.links.codeLimiterLocked(ip)
+		limiter := s.links.codeLimiterLocked(auth.SourceAddressKey(ip))
 		if limiter.TokensAt(now) < 1 {
 			s.links.mu.Unlock()
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "too many wrong codes, try again later")
@@ -817,6 +844,22 @@ func (s *TCPServer) handleLinkDecide(ctx context.Context, client *Client, r netp
 	if claim.claimPlatform != "" {
 		name = claim.claimPlatform
 	}
+	// Only a confirmed device (the first device or one with an approval
+	// signature, as dmDevices and handleEndorse require) can vouch for the new
+	// device's keys. A device linked by an unconfirmed device is registered
+	// like a passkey-linked one: usable, but outside direct-message routing
+	// until a confirmed device endorses it.
+	creator, err := s.deps.Devices.DeviceByID(ctx, claim.principal, claim.creatorDeviceID)
+	if err != nil {
+		return s.deviceFailure(ctx, client, err)
+	}
+	if !creator.Active() {
+		return s.deviceFailure(ctx, client, store.ErrDeviceNotFound)
+	}
+	approval := r.Signature
+	if !creator.FirstDevice && len(creator.ApprovalSignature) == 0 {
+		approval = nil
+	}
 	d, err := s.deps.Devices.AddDevice(ctx, store.NewDevice{
 		Principal:         claim.principal,
 		UserID:            claim.userID,
@@ -825,7 +868,7 @@ func (s *TCPServer) handleLinkDecide(ctx context.Context, client *Client, r netp
 		Ed25519Public:     claim.claimKey,
 		X25519Public:      claim.claimX25519,
 		ApprovedBy:        claim.creatorDeviceID,
-		ApprovalSignature: r.Signature,
+		ApprovalSignature: approval,
 	}, s.cfg.Web.DeviceLimit())
 	if err != nil {
 		return s.deviceFailure(ctx, client, err)

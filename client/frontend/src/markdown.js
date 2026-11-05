@@ -139,15 +139,24 @@ export function renderMarkdown(text) {
 // per distinct (unescaped) URL.
 const imageURLs = new Map();
 const imageIDs = new Map();
+// Bounded: remote senders choose these URLs. The oldest placeholders stop
+// loading once evicted (their messages have long left the capped chat log).
+const IMAGE_ID_LIMIT = 2000;
+let nextImageID = 0;
 
 function imageID(escapedURL) {
     const url = escapedURL.replace(/&(lt|gt|quot|#39);/g, (_m, name) =>
         ({ lt: "<", gt: ">", quot: '"', "#39": "'" }[name])).replace(/&amp;/g, "&");
     let id = imageIDs.get(url);
     if (id === undefined) {
-        id = String(imageIDs.size + 1);
+        id = String(++nextImageID);
         imageIDs.set(url, id);
         imageURLs.set(id, url);
+        while (imageIDs.size > IMAGE_ID_LIMIT) {
+            const [oldURL, oldID] = imageIDs.entries().next().value;
+            imageIDs.delete(oldURL);
+            imageURLs.delete(oldID);
+        }
     }
     return id;
 }

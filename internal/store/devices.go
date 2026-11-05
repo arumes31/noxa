@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -162,6 +164,21 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 	if exists {
 		return Device{}, ErrDeviceKeyInUse
 	}
+	// A device key must not be another account's identity: device rows are
+	// resolved before accounts at key login, so registering someone else's
+	// identity key (bound to their account, or the key their key-derived
+	// account ID comes from) would sign its holder into this principal.
+	if derived, ok := deviceKeyUniqueID(d.Ed25519Public); ok {
+		var identity bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE unique_id <> $1
+			AND (unique_id = $2 OR public_key = $3 OR public_key = $4))`,
+			d.Principal, derived, d.Ed25519Public, submitted).Scan(&identity); err != nil {
+			return Device{}, fmt.Errorf("adding device: %w", err)
+		}
+		if identity {
+			return Device{}, ErrDeviceKeyInUse
+		}
+	}
 	var active int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM user_devices WHERE principal=$1 AND revoked_at IS NULL`, d.Principal).Scan(&active); err != nil {
 		return Device{}, fmt.Errorf("adding device: counting devices: %w", err)
@@ -230,6 +247,20 @@ func canonicalDeviceKey(publicKeyPEM string) (string, bool) {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: block.Bytes})), true
 }
 
+// deviceKeyUniqueID derives the account unique ID of an Ed25519 identity key
+// exactly as auth.UniqueIDFromPublicKey does (double base64 of SHA-256 of the
+// raw key); the store cannot import auth. ok is false for input that is not
+// such a key.
+func deviceKeyUniqueID(publicKeyPEM string) (string, bool) {
+	block, _ := pem.Decode([]byte(publicKeyPEM))
+	if block == nil || block.Type != "PUBLIC KEY" || len(block.Headers) != 0 || len(block.Bytes) != ed25519.PublicKeySize {
+		return "", false
+	}
+	digest := sha256.Sum256(block.Bytes)
+	first := base64.StdEncoding.EncodeToString(digest[:])
+	return base64.StdEncoding.EncodeToString([]byte(first)), true
+}
+
 // DeviceByID returns the principal's device, revoked or not.
 func (s *Store) DeviceByID(ctx context.Context, principal, deviceID string) (Device, error) {
 	d, err := scanDevice(s.db.QueryRowContext(ctx, `SELECT `+deviceColumns+` FROM user_devices WHERE principal=$1 AND device_id=$2`, principal, deviceID))
@@ -290,7 +321,8 @@ func (s *Store) RenameDevice(ctx context.Context, principal, deviceID, name stri
 
 // revokingDevices wraps a revoking UPDATE ... RETURNING * so the same
 // statement deletes the revoked devices' passkeys, push subscriptions and
-// pending history copies and returns their rows.
+// pending history copies, and the offline direct-message copies only that
+// device could open, and returns their rows.
 func revokingDevices(update string) string {
 	return endingDevices(update, true)
 }
@@ -304,7 +336,9 @@ func endingDevices(update string, removePasskeys bool) string {
 		` + drop + `
 		unsubscribed AS (DELETE FROM push_subscriptions p USING revoked WHERE p.device_id = revoked.device_id),
 		closed AS (` + closeEndedDeviceDeliveries + `),
-		forgotten AS (DELETE FROM device_history_chunks h USING revoked WHERE h.device_id = revoked.device_id)
+		forgotten AS (DELETE FROM device_history_chunks h USING revoked WHERE h.device_id = revoked.device_id),
+		unspooled AS (DELETE FROM offline_messages o USING revoked
+			WHERE o.to_user_id = revoked.user_id AND o.to_device_id = revoked.device_id AND o.delivered_at IS NULL)
 		SELECT ` + deviceColumns + ` FROM revoked ORDER BY created_at, id`
 }
 

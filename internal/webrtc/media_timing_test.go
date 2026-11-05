@@ -314,3 +314,16 @@ func waitAsyncKeyframeRequests(t *testing.T, r *Router) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// A source switch after a very long idle gap still advances the timestamp by
+// the elapsed 90 kHz ticks instead of overflowing into a one-tick step.
+func TestContinuitySwitchSurvivesLongIdleGap(t *testing.T) {
+	now := time.Now()
+	gap := 30*time.Hour + 500*time.Millisecond
+	v := videoContinuity{seen: true, ssrc: 1, timestamp: 1000, last: now.Add(-gap)}
+	pkt := &rtp.Packet{Header: rtp.Header{SSRC: 2, Timestamp: 0}}
+	want := uint32((int64(30*3600)*90000 + 45000) & 0xffffffff)
+	if got := v.switchTimestampOffset(pkt, now) - 1000; got != want {
+		t.Fatalf("timestamp step = %d, want %d", got, want)
+	}
+}

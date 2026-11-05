@@ -1,7 +1,7 @@
 // Generate crawlable documentation. Only the resulting public/ files are hosted.
-import { lstat, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { lstat, mkdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import serverGuides from './guides/server.mjs';
 import clientGuides from './guides/clients.mjs';
 
@@ -84,13 +84,18 @@ function shell({ title, description, path, depth, body, schema }) {
 
 // public/guides is exclusively generated. Refuse symlinks and verify its
 // resolved parent before removing stale pages from a renamed/removed guide.
+// Pages are generated into a staging sibling first; the previous output is
+// replaced only after every page was written, so a failed build leaves it intact.
 const publicPath = await realpath(publicDirectory);
 const guidesPath = resolve(publicPath, 'guides');
 if (dirname(guidesPath) !== publicPath) throw new Error('Guide output must be a direct child of public/');
 const oldGuides = await lstat(guidesPath).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
 if (oldGuides?.isSymbolicLink()) throw new Error('Refusing to replace a symlinked guide directory');
-await rm(guidesPath, { recursive: true, force: true });
+const stagingPath = resolve(publicPath, '.guides-staging');
+await rm(stagingPath, { recursive: true, force: true });
+const stagingDirectory = pathToFileURL(stagingPath + sep);
 
+try { // (not indented: template literals below are emitted verbatim)
 for (const guide of guides) {
   const path = `/guides/${guide.slug}/`;
   const sidebar = guides.map(item => `<a href="../${item.slug}/"${item.slug === guide.slug ? ' aria-current="page"' : ''}>${escape(item.title)}</a>`).join('\n');
@@ -109,14 +114,20 @@ for (const guide of guides) {
     { '@type': 'TechArticle', '@id': `${origin}${path}#article`, headline: guide.title, description: guide.summary, url: `${origin}${path}`, inLanguage: 'en', isPartOf: { '@id': `${origin}/#website` }, about: { '@id': `${origin}/#software` } },
     { '@type': 'BreadcrumbList', itemListElement: [{ '@type': 'ListItem', position: 1, name: 'Home', item: `${origin}/` }, { '@type': 'ListItem', position: 2, name: 'Guides', item: `${origin}/guides/` }, { '@type': 'ListItem', position: 3, name: guide.title, item: `${origin}${path}` }] },
   ] };
-  const directory = new URL(`guides/${guide.slug}/`, publicDirectory);
+  const directory = new URL(`${guide.slug}/`, stagingDirectory);
   await mkdir(directory, { recursive: true });
   await writeFile(new URL('index.html', directory), shell({ title: guide.title, description: guide.summary, path, depth: 2, body, schema }));
 }
 
 const hubBody = `<main class="wrap guides-hub" id="content" tabindex="-1"><nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../">Home</a><span aria-hidden="true">/</span><span aria-current="page">Guides</span></nav><header class="guide-intro"><p class="eyebrow">Learn your way around</p><h1>A home for every<br><em>how do I…?</em></h1><p class="guide-summary">Set up your server, bring your people together, and get more from noXa. Practical guides with real client screenshots and clear steps.</p></header><div class="guide-start"><div><span class="guide-category">New to noXa?</span><h2>Your first conversation starts here.</h2><p>Download the Windows client, choose a server, and get connected.</p></div><a class="btn" href="getting-started/">Get started <span aria-hidden="true">↗</span></a></div><div class="guide-grid">${guides.map(guideLink).join('\n')}</div><p class="guide-hub-note">noXa is in public alpha. Screenshots use fictional demo data. See the <a href="https://github.com/arumes31/noxa/releases">release notes</a> for changes in your version.</p></main>`;
-await mkdir(new URL('guides/', publicDirectory), { recursive: true });
-await writeFile(new URL('guides/index.html', publicDirectory), shell({ title: 'Setup, client & community guides', description: 'Learn to use and self-host noXa with step-by-step guides for server setup, voice, video, chat, roles, mobile, integrations, and troubleshooting.', path: '/guides/', depth: 1, body: hubBody, schema: { '@context': 'https://schema.org', '@type': 'CollectionPage', name: 'noXa Guides', url: `${origin}/guides/`, hasPart: guides.map(guide => ({ '@type': 'TechArticle', headline: guide.title, url: `${origin}/guides/${guide.slug}/` })) } }));
+await mkdir(stagingDirectory, { recursive: true });
+await writeFile(new URL('index.html', stagingDirectory), shell({ title: 'Setup, client & community guides', description: 'Learn to use and self-host noXa with step-by-step guides for server setup, voice, video, chat, roles, mobile, integrations, and troubleshooting.', path: '/guides/', depth: 1, body: hubBody, schema: { '@context': 'https://schema.org', '@type': 'CollectionPage', name: 'noXa Guides', url: `${origin}/guides/`, hasPart: guides.map(guide => ({ '@type': 'TechArticle', headline: guide.title, url: `${origin}/guides/${guide.slug}/` })) } }));
+} catch (error) {
+  await rm(stagingPath, { recursive: true, force: true });
+  throw error;
+}
+await rm(guidesPath, { recursive: true, force: true });
+await rename(stagingPath, guidesPath);
 const urls = ['/', '/guides/', ...guides.map(guide => `/guides/${guide.slug}/`)];
 await writeFile(new URL('sitemap.xml', publicDirectory), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map(path => `  <url><loc>${origin}${path}</loc></url>`).join('\n')}\n</urlset>\n`);
 console.log(`Generated ${guides.length} guides, the guide index, and sitemap in ${fileURLToPath(publicDirectory)}`);

@@ -118,7 +118,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		if rejection != "" {
 			return authorization.ErrRoleForbidden
 		}
-		rejection, err = s.sessionDeviceRejection(ctx, client)
+		rejection, err = s.sessionDeviceRejection(ctx, client, id.uniqueID)
 		if err != nil {
 			return err
 		}

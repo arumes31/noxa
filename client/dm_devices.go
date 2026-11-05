@@ -20,6 +20,7 @@ import (
 	"noxa/internal/auth"
 	"noxa/internal/devicetrust"
 	"noxa/internal/e2ee"
+	"noxa/internal/e2ee/olmdir"
 	"noxa/internal/netproto"
 )
 
@@ -130,11 +131,14 @@ func verifyDMDevices(principal string, signing ed25519.PublicKey, encryption [32
 	return out, nil
 }
 
-// parseDeviceX25519 decodes a directory X25519 key (base64 of 32 bytes).
+// parseDeviceX25519 decodes a directory X25519 key (base64 of 32 bytes). It
+// applies the directory's curve check (canonical, not low-order), so a key
+// nacl/box would turn into a constant shared secret is refused at every
+// entry point, not only by devicetrust.Verify.
 func parseDeviceX25519(encoded string) ([32]byte, bool) {
 	var key [32]byte
 	raw, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil || len(raw) != len(key) || bytes.Equal(raw, key[:]) {
+	if err != nil || len(raw) != len(key) || bytes.Equal(raw, key[:]) || !olmdir.ValidCurve(base64.RawStdEncoding.EncodeToString(raw)) {
 		return key, false
 	}
 	copy(key[:], raw)

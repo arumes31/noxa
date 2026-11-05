@@ -150,6 +150,24 @@ func ApplyRoleChange(p RolePolicy, actorID int64, change RoleChange) (RolePolicy
 		if next.DefaultMemberRoleID == change.RoleID {
 			next.DefaultMemberRoleID = 0
 		}
+		// Deleting a role removes its denying channel overrides, which can give
+		// its members (the actor included) channel capabilities, exactly as
+		// removing the role from each of them would.
+		if !owner && roleHasDenyOverride(p, change.RoleID) {
+			candidate, err := NewRoleEvaluator(next)
+			if err != nil {
+				return RolePolicy{}, fmt.Errorf("%w: %v", ErrRoleInvalid, err)
+			}
+			changed := map[int64]bool{change.RoleID: true}
+			for _, m := range p.Members {
+				if !slices.Contains(m.RoleIDs, change.RoleID) {
+					continue
+				}
+				if err := authorizeMemberChannelGains(e, candidate, actorID, m.UserID, changed); err != nil {
+					return RolePolicy{}, err
+				}
+			}
+		}
 	case RolesReorder:
 		if len(change.RoleIDs) != len(p.Roles) || len(change.RoleIDs) == 0 || change.RoleIDs[0] != p.EveryoneID {
 			return RolePolicy{}, ErrRoleInvalid
@@ -357,7 +375,8 @@ func authorizeMemberChannelGains(before, after *RoleEvaluator, actorID, targetID
 	}
 	for id := range after.channels {
 		affected := false
-		for _, override := range after.effectiveOverrides(id) {
+		// A deleted role's overrides exist only before the change.
+		for _, override := range append(slices.Clone(before.effectiveOverrides(id)), after.effectiveOverrides(id)...) {
 			if changed[override.RoleID] {
 				affected = true
 				break
@@ -376,6 +395,17 @@ func authorizeMemberChannelGains(before, after *RoleEvaluator, actorID, targetID
 		}
 	}
 	return nil
+}
+
+func roleHasDenyOverride(p RolePolicy, roleID int64) bool {
+	for _, ch := range p.Channels {
+		for _, o := range ch.Overrides {
+			if o.RoleID == roleID && o.Effect == Deny {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func addedCapabilities(before, after []Capability) []Capability {

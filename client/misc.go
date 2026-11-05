@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -43,7 +44,22 @@ func (a *App) LogChat(line string) {
 	if err != nil {
 		return
 	}
-	appendDailyLog(dir, "chat.log", fmt.Sprintf("[%s] %s\n", chatLogNow().Format("2006-01-02 15:04:05"), escapeLogRecord(line)))
+	appendDailyLog(dir, "chat.log", fmt.Sprintf("[%s] %s\n", chatLogNow().Format("2006-01-02 15:04:05"), escapeLogRecord(clampLogLine(line))))
+}
+
+// maxChatLogLine bounds one remote-controlled chat log record (bytes).
+const maxChatLogLine = 8 << 10
+
+// clampLogLine cuts an oversized record on a rune boundary and marks the cut.
+func clampLogLine(line string) string {
+	if len(line) <= maxChatLogLine {
+		return line
+	}
+	cut := maxChatLogLine
+	for cut > 0 && !utf8.RuneStart(line[cut]) {
+		cut--
+	}
+	return line[:cut] + " [truncated]"
 }
 
 // escapeLogRecord keeps one chat message on one physical log line. Sender

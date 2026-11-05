@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"golang.design/x/hotkey"
@@ -78,7 +79,14 @@ func parseHotkeySpec(spec string) ([]hotkey.Modifier, hotkey.Key, error) {
 	if k, ok := functionKeys[name]; ok {
 		return mods, k, nil
 	}
-	if k, ok := platformSpecKey(name); ok {
+	if extra, k, ok := platformSpecKey(name); ok {
+		// A character key may need modifiers of its own (e.g. Shift for
+		// "!"); the chord requires them in addition to the spec's.
+		for _, m := range extra {
+			if !slices.Contains(mods, m) {
+				mods = append(mods, m)
+			}
+		}
 		return mods, k, nil
 	}
 	if len(name) == 1 {

@@ -84,13 +84,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish website image
+      # Every event smoke-tests the locally loaded image BEFORE anything is
+      # published; the publish step below rebuilds from the same cache.
+      - name: Build website image for testing
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: website
           file: website/Dockerfile
-          load: ${{ github.event_name == 'pull_request' }}
-          push: ${{ github.event_name != 'pull_request' }}
+          load: true
+          push: false
           tags: |
             ghcr.io/${{ github.repository }}-website:sha-${{ github.sha }}
           labels: |
@@ -98,10 +100,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=website
           cache-to: type=gha,scope=website,mode=max
-          provenance: ${{ github.event_name != 'pull_request' }}
-          sbom: ${{ github.event_name != 'pull_request' }}
       - name: Check static image responses
-        if: github.event_name == 'pull_request'
         run: |
           docker run -d --name website --read-only --tmpfs /data:uid=10001,gid=10001 --tmpfs /config:uid=10001,gid=10001 --cap-drop ALL --security-opt no-new-privileges:true -p 127.0.0.1:8080:8080 "ghcr.io/${{ github.repository }}-website:sha-${{ github.sha }}"
           for attempt in $(seq 1 20); do
@@ -116,6 +115,21 @@ jobs:
       - name: Preserve website startup diagnostics
         if: failure()
         run: docker logs website || true
+      - name: Publish website image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: website
+          file: website/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}-website:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=website
+          provenance: true
+          sbom: true
       - name: Export published image for deployment
         if: github.event_name != 'pull_request'
         run: |

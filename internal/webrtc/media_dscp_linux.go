@@ -37,11 +37,18 @@ var voiceTOSControl = func() []byte {
 // packet is resent unmarked by the caller.
 type voiceDSCP struct{ disabled atomic.Bool }
 
+type udpMsgWriter interface {
+	WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error)
+	LocalAddr() net.Addr
+}
+
 func writeVoiceMarked(d *voiceDSCP, conn net.PacketConn, b []byte, addr net.Addr) (int, bool, error) {
 	if !mediaVoiceDSCP.Load() || d.disabled.Load() {
 		return 0, false, nil
 	}
-	udp, ok := conn.(*net.UDPConn)
+	// Any UDP socket (or metering wrapper around one) that can send control
+	// messages; an implementation that cannot mark fails once and disables it.
+	udp, ok := conn.(udpMsgWriter)
 	dst, isUDP := addr.(*net.UDPAddr)
 	if !ok || !isUDP || dst.IP.To4() == nil {
 		return 0, false, nil

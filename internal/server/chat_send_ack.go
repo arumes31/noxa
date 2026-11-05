@@ -7,8 +7,23 @@ import (
 	"noxa/internal/netproto"
 )
 
+// Identifier bounds shared by chat sends, receipts and typing relays. They are
+// copied into every broadcast and spool row, so an unbounded value would
+// multiply far beyond the body cap.
+const (
+	maxClientMsgIDBytes = 128
+	maxUniqueIDBytes    = 256
+)
+
+// boundedChatIDs reports whether every identifier a chat send carries fits
+// its bound, whether or not an acknowledgement was requested.
+func boundedChatIDs(msg netproto.ChatSend) bool {
+	return len(msg.ClientMsgID) <= maxClientMsgIDBytes && len(msg.RefClientMsgID) <= maxClientMsgIDBytes &&
+		len(msg.ToUniqueID) <= maxUniqueIDBytes && len(msg.ToClientID) <= maxUniqueIDBytes
+}
+
 func validAcknowledgedChat(msg netproto.ChatSend) bool {
-	if msg.ClientMsgID == "" || len(msg.ClientMsgID) > 128 {
+	if msg.ClientMsgID == "" || len(msg.ClientMsgID) > maxClientMsgIDBytes {
 		return false
 	}
 	if msg.ToUniqueID != "" || msg.ToClientID != "" {

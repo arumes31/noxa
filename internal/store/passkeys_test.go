@@ -128,3 +128,29 @@ func TestSignOutRetainsPasskeyUntilExplicitRevocation(t *testing.T) {
 		})
 	}
 }
+
+// Two registrations that each drew a fresh user handle cannot both persist:
+// the account keeps one WebAuthn user handle.
+func TestAddPasskeyRejectsSecondUserHandle(t *testing.T) {
+	s := pollTestStore(t)
+	ctx := t.Context()
+	principal := fmt.Sprintf("passkey-handle-%d", time.Now().UnixNano())
+	phone, err := s.AddDevice(ctx, newTestDevice(principal, 0), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := s.PasskeyUserHandle(ctx, principal)
+	second, _ := s.PasskeyUserHandle(ctx, principal)
+	if bytes.Equal(first, second) {
+		t.Fatal("fresh handles collided")
+	}
+	if err := s.AddPasskey(ctx, Passkey{CredentialID: []byte(principal + "-a"), Principal: principal, UserHandle: first, DeviceID: phone.DeviceID, Name: "a", Credential: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddPasskey(ctx, Passkey{CredentialID: []byte(principal + "-b"), Principal: principal, UserHandle: second, DeviceID: phone.DeviceID, Name: "b", Credential: []byte(`{}`)}); !errors.Is(err, ErrPasskeyHandleConflict) {
+		t.Fatalf("second handle err = %v, want ErrPasskeyHandleConflict", err)
+	}
+	if err := s.AddPasskey(ctx, Passkey{CredentialID: []byte(principal + "-c"), Principal: principal, UserHandle: first, DeviceID: phone.DeviceID, Name: "c", Credential: []byte(`{}`)}); err != nil {
+		t.Fatalf("same handle rejected: %v", err)
+	}
+}

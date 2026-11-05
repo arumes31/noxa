@@ -32,6 +32,28 @@ test('regeneration removes retired guides and preserves unrelated public files',
   }
 });
 
+test('a failed regeneration keeps the previous guides and leaves no staging directory', async () => {
+  const temporaryRoot = resolve(tmpdir());
+  const fixture = await mkdtemp(join(temporaryRoot, 'noxa-guides-'));
+  assert.equal(dirname(fixture), temporaryRoot);
+  try {
+    await mkdir(join(fixture, 'scripts/guides'), { recursive: true });
+    await mkdir(join(fixture, 'public/guides/server-setup'), { recursive: true });
+    await copyFile(new URL('../scripts/build-guides.mjs', import.meta.url), join(fixture, 'scripts/build-guides.mjs'));
+    await copyFile(new URL('../scripts/guides/clients.mjs', import.meta.url), join(fixture, 'scripts/guides/clients.mjs'));
+    // A guide that fails while its pages are generated (unknown related guide).
+    const server = (await readFile(new URL('../scripts/guides/server.mjs', import.meta.url), 'utf8'))
+      .replace(/related: \[/, "related: ['no-such-guide', ");
+    await writeFile(join(fixture, 'scripts/guides/server.mjs'), server);
+    await writeFile(join(fixture, 'public/guides/server-setup/index.html'), 'previous page');
+    assert.throws(() => execFileSync(process.execPath, [join(fixture, 'scripts/build-guides.mjs')], { stdio: 'pipe' }), /Unknown related guide/);
+    assert.equal(await readFile(join(fixture, 'public/guides/server-setup/index.html'), 'utf8'), 'previous page');
+    assert.equal(existsSync(join(fixture, 'public/.guides-staging')), false);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
 for (const capture of ['capture-client.mjs', 'capture-mobile.mjs']) test(`${capture} rejects an invalid source before screenshot outputs change`, async () => {
   const temporaryRoot = resolve(tmpdir());
   const fixture = await mkdtemp(join(temporaryRoot, 'noxa-capture-'));

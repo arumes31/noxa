@@ -47,7 +47,7 @@ func TestStreamTimingLocalExplicitOperation(t *testing.T) {
 			req.RemoteAddr = tc.remote
 			req.Header.Set("X-NoXa-Diagnostic", tc.header)
 			req.Header.Set("Origin", tc.origin)
-			req.Header.Set("X-Forwarded-For", "127.0.0.1")
+			forgeLoopbackForwarding(req)
 			out := httptest.NewRecorder()
 			server.StreamTimingDiagnosticsHandler().ServeHTTP(out, req)
 			if out.Code != tc.status {
@@ -85,5 +85,20 @@ func TestStreamTimingAuthRaceStopsArmedRecord(t *testing.T) {
 	server.StreamTimingDiagnosticsHandler().ServeHTTP(out, req)
 	if out.Code != 409 || len(voice.actions) != 2 || voice.actions[1] != "stop" {
 		t.Fatalf("status/actions %d %v", out.Code, voice.actions)
+	}
+}
+
+func TestStreamTimingRefusesSameHostProxy(t *testing.T) {
+	server, _ := routeHandlerFixture()
+	voice := &timingDiagnosticVoice{}
+	server.deps.Voice = voice
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/debug/stream-timing"+timingQueryFixture(), nil)
+	req.RemoteAddr = "127.0.0.1:12"
+	req.Header.Set("X-NoXa-Diagnostic", "upstream-timing")
+	req.Header.Set("X-Forwarded-For", "198.51.100.7")
+	out := httptest.NewRecorder()
+	server.StreamTimingDiagnosticsHandler().ServeHTTP(out, req)
+	if out.Code != http.StatusForbidden || len(voice.actions) != 0 {
+		t.Fatalf("proxied request: status %d actions %v", out.Code, voice.actions)
 	}
 }

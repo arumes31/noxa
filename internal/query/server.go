@@ -238,7 +238,13 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 
 	s.logger.Debug("query connection accepted", zap.String("remote", conn.RemoteAddr().String()))
 
+	if err := conn.SetWriteDeadline(time.Now().Add(responseWriteTimeout)); err != nil {
+		return
+	}
 	if _, err := io.WriteString(conn, banner+"\n"+bannerHint+"\n"); err != nil {
+		return
+	}
+	if err := conn.SetWriteDeadline(time.Time{}); err != nil {
 		return
 	}
 

@@ -553,6 +553,14 @@ func TestEventJSONHelpers(t *testing.T) {
 	if _, ok := decodeEventObject(json.RawMessage(`[`)); ok {
 		t.Fatal("decodeEventObject accepted malformed JSON")
 	}
+	if _, ok := decodeEventObject(json.RawMessage(`null`)); ok {
+		t.Fatal("decodeEventObject accepted null (a nil map callers would write into)")
+	}
+	// A server event with data:null passes through instead of panicking.
+	var m connManager
+	if got := m.decryptEventField("announcement", "text", json.RawMessage(`null`), "payload"); got != "payload" {
+		t.Fatalf("decryptEventField(null) = %q", got)
+	}
 
 	tests := []struct {
 		name string

@@ -118,7 +118,9 @@ func validateRegistrationPassword(password string) error {
 // false (with a nil error) on a password mismatch. Every call verifies.
 func (a *AuthService) AuthenticatePassword(ctx context.Context, uniqueID, password string) (bool, error) {
 	var hash string
-	const q = `SELECT password_hash FROM users WHERE unique_id = $1`
+	// Accounts without a password (enrolled identities) have a NULL hash; they
+	// take the same dummy-verification path as a wrong password.
+	const q = `SELECT COALESCE(password_hash, '') FROM users WHERE unique_id = $1`
 	err := a.store.DB().QueryRowContext(ctx, q, uniqueID).Scan(&hash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -345,8 +347,14 @@ func (a *AuthService) passwordVerifier() func(password, encodedHash string) erro
 // A key held by more than one account is refused rather than resolved to
 // whichever row the database returns first.
 func (a *AuthService) LookupUserByPublicKey(ctx context.Context, publicKey string) (*User, error) {
-	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot, COALESCE(identity_display_name, '') FROM users WHERE public_key = $1 LIMIT 2`
-	rows, err := a.store.DB().QueryContext(ctx, q, publicKey)
+	// Keys are stored canonically; the exact spelling still matches rows
+	// written before canonicalization.
+	canonical := publicKey
+	if c, err := CanonicalPublicKey(publicKey); err == nil {
+		canonical = c
+	}
+	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot, COALESCE(identity_display_name, '') FROM users WHERE public_key = $1 OR public_key = $2 LIMIT 2`
+	rows, err := a.store.DB().QueryContext(ctx, q, canonical, publicKey)
 	if err != nil {
 		return nil, fmt.Errorf("querying user by public key: %w", err)
 	}
@@ -382,12 +390,19 @@ func (a *AuthService) BindPublicKey(ctx context.Context, userID int64, publicKey
 	if err != nil {
 		return fmt.Errorf("binding public key: %w", err)
 	}
+	// Store one canonical spelling, so an equivalent PEM encoding of a key
+	// bound elsewhere cannot be bound a second time (the submitted spelling is
+	// also checked, covering rows written before canonicalization).
+	canonical, err := CanonicalPublicKey(publicKey)
+	if err != nil {
+		return fmt.Errorf("binding public key: %w", err)
+	}
 	const q = `UPDATE users SET public_key = $2
 		WHERE id = $1 AND NOT EXISTS (
 			SELECT 1 FROM users other
-			WHERE other.id <> $1 AND (other.public_key = $2 OR other.unique_id = $3)
+			WHERE other.id <> $1 AND (other.public_key = $2 OR other.public_key = $4 OR other.unique_id = $3)
 		)`
-	result, err := a.store.DB().ExecContext(ctx, q, userID, publicKey, derivedUniqueID)
+	result, err := a.store.DB().ExecContext(ctx, q, userID, canonical, derivedUniqueID, publicKey)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrPublicKeyInUse

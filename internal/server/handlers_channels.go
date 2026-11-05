@@ -197,7 +197,7 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 		return err
 	}
 	if passwordHash != "" {
-		source := auth.LoginFailureScope("channel:"+remoteIP(client.Conn), "")
+		source := auth.LoginFailureScope("channel:"+auth.SourceAddressKey(remoteIP(client.Conn)), "")
 		principal := auth.LoginFailureScope("channel", fmt.Sprintf("%s:%d", client.UniqueID, msg.ChannelID))
 		attempt, allowed := s.channelPasswordLimiter.Reserve(source, principal)
 		if !allowed {

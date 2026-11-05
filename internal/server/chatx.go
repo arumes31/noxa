@@ -255,14 +255,23 @@ type typingTracker struct {
 
 func newTypingTracker() *typingTracker { return &typingTracker{last: map[string]time.Time{}} }
 
+// Typing tracker bounds: cleanup starts above typingTrackerSoftLimit keys, and
+// a new key is refused (the indicator dropped) while the map holds
+// typingTrackerMaxKeys, so a flood of distinct targets cannot grow it without
+// limit between cleanup passes.
+const (
+	typingTrackerSoftLimit = 10_000
+	typingTrackerMaxKeys   = 50_000
+)
+
 func (t *typingTracker) allow(key string, now time.Time) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if previous := t.last[key]; !previous.IsZero() && now.Sub(previous) < 2*time.Second {
+	previous, known := t.last[key]
+	if known && now.Sub(previous) < 2*time.Second {
 		return false
 	}
-	t.last[key] = now
-	if len(t.last) > 10_000 && now.Sub(t.lastCleanup) >= 10*time.Second {
+	if len(t.last) > typingTrackerSoftLimit && now.Sub(t.lastCleanup) >= 10*time.Second {
 		for candidate, seen := range t.last {
 			if now.Sub(seen) > 10*time.Second {
 				delete(t.last, candidate)
@@ -270,6 +279,10 @@ func (t *typingTracker) allow(key string, now time.Time) bool {
 		}
 		t.lastCleanup = now
 	}
+	if !known && len(t.last) >= typingTrackerMaxKeys {
+		return false
+	}
+	t.last[key] = now
 	return true
 }
 
@@ -1162,6 +1175,9 @@ func (s *TCPServer) chatPinAllowed(ctx context.Context, client *Client, msg netp
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "message is not in this channel")
 		}
 		if err := s.deps.Chat.PinChatMessage(ctx, msg.ChannelID, msg.MessageID, client.UniqueID); err != nil {
+			if errors.Is(err, store.ErrPinLimit) {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, err.Error())
+			}
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "pin failed")
 		}
 	} else {
@@ -1327,6 +1343,12 @@ func (s *TCPServer) relaySessionTyping(ctx context.Context, client *Client, f *n
 	if msg.ConversationID != "" {
 		return s.relayConversationTyping(ctx, client, msg)
 	}
+	// The target becomes part of a rate-limiter key: an unbounded value
+	// would let one session retain megabytes per indicator. Dropped, not
+	// answered, like every other unentitled indicator.
+	if len(msg.ToUniqueID) > maxUniqueIDBytes {
+		return nil
+	}
 	typingScope := "global"
 	if msg.ToUniqueID != "" {
 		typingScope = "dm:" + msg.ToUniqueID
@@ -1417,6 +1439,9 @@ func (s *TCPServer) relaySessionReceipt(ctx context.Context, client *Client, toU
 	}
 	if clientMsgID == "" {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "client_msg_id is required")
+	}
+	if len(clientMsgID) > maxClientMsgIDBytes || len(toUniqueID) > maxUniqueIDBytes {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "receipt identifier too long")
 	}
 	payload, err := eventEnvelope(eventType, map[string]any{
 		"from_unique_id": client.UniqueID,

@@ -136,9 +136,9 @@ func (s *TCPServer) handleSetStatus(ctx context.Context, client *Client, f *netp
 		if status == "invisible" && !e.Evaluate(client.userID(), 0, authorization.Administrator).Allowed {
 			return s.roleError(ctx, client, authorization.ErrRoleForbidden)
 		}
+		previous, hadPrevious := s.deps.State.GetClient(client.ID)
 		if msg.PrivacyOnly {
-			previous, ok := s.deps.State.GetClient(client.ID)
-			if !ok {
+			if !hadPrevious {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session presence unavailable")
 			}
 			status, msg.Message = previous.Status, previous.StatusMessage
@@ -152,8 +152,14 @@ func (s *TCPServer) handleSetStatus(ctx context.Context, client *Client, f *netp
 		if !ok || current.Status != status || current.StatusMessage != msg.Message {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "session presence unavailable")
 		}
-		s.refreshRolePublishers(e)
-		s.broadcastEvent(eventStatusChanged, statusEvent{ClientID: client.ID, Status: status, Message: msg.Message})
+		// A repeated identical request changes nothing anyone can see, so it
+		// must not cost a publisher refresh and a snapshot per recipient.
+		unchanged := hadPrevious && previous.Status == current.Status &&
+			previous.StatusMessage == current.StatusMessage && previous.HideLobbyPresence == current.HideLobbyPresence
+		if !unchanged {
+			s.refreshRolePublishers(e)
+			s.broadcastEvent(eventStatusChanged, statusEvent{ClientID: client.ID, Status: status, Message: msg.Message})
+		}
 		if msg.AckRequested {
 			var lobbyPrivacy *bool
 			if msg.HideLobbyPresence != nil {

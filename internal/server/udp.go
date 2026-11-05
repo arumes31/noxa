@@ -66,6 +66,9 @@ type UDPServer struct {
 	cfg     *config.Config
 	logger  *zap.Logger
 	conn    *net.UDPConn
+	// connMu orders the socket handoff in Start with Shutdown, which may run
+	// first (or concurrently) from another goroutine.
+	connMu sync.Mutex
 
 	bufPool sync.Pool
 
@@ -124,7 +127,17 @@ func (s *UDPServer) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("udp listen on %s: %w", s.cfg.UDPAddr, err)
 	}
+	s.connMu.Lock()
+	select {
+	case <-s.stopCh:
+		// Shutdown already ran and found no socket to close.
+		s.connMu.Unlock()
+		_ = conn.Close()
+		return nil
+	default:
+	}
 	s.conn = conn
+	s.connMu.Unlock()
 	close(s.started)
 	s.logger.Info("UDP probe listener started", zap.String("addr", s.cfg.UDPAddr))
 
@@ -318,9 +331,12 @@ func (s *UDPServer) handlePing(remote *net.UDPAddr, _ []byte) {
 func (s *UDPServer) Shutdown() error {
 	var err error
 	s.stopOnce.Do(func() {
+		s.connMu.Lock()
 		close(s.stopCh)
-		if s.conn != nil {
-			err = s.conn.Close()
+		conn := s.conn
+		s.connMu.Unlock()
+		if conn != nil {
+			err = conn.Close()
 		}
 		if s.rateLimiter != nil {
 			s.rateLimiter.close()

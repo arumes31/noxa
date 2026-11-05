@@ -43,7 +43,10 @@ func (v *videoContinuity) switchTimestampOffset(pkt *rtp.Packet, now time.Time) 
 			return v.preferredOffset
 		}
 	}
-	elapsed := max(int64(1), now.Sub(v.last).Nanoseconds()*90000/int64(time.Second))
+	// Whole seconds and the remainder are scaled separately: nanoseconds
+	// times 90000 overflows int64 after an idle gap of about 28 hours.
+	gap := now.Sub(v.last)
+	elapsed := max(int64(1), int64(gap/time.Second)*90000+int64(gap%time.Second)*90000/int64(time.Second))
 	return v.timestamp + uint32(elapsed&0xffffffff) - pkt.Timestamp
 }
 

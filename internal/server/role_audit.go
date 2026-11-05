@@ -3,11 +3,15 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
 	"noxa/internal/store"
 )
+
+// auditWriteTimeout bounds one audit write.
+const auditWriteTimeout = 5 * time.Second
 
 func (s *TCPServer) auditInChannels(ctx context.Context, actor, action, target, detail string, channels ...int64) {
 	if s.deps == nil || s.deps.Groups == nil {
@@ -18,6 +22,10 @@ func (s *TCPServer) auditInChannels(ctx context.Context, actor, action, target, 
 		return
 	}
 	detail = string(body)
+	// Audits follow a committed action: a canceled or expired request context
+	// must not drop the record, so it gets its own bounded context.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditWriteTimeout)
+	defer cancel()
 	s.deps.Groups.AuditScoped(ctx, actor, action, target, detail, append([]int64{}, channels...))
 }
 

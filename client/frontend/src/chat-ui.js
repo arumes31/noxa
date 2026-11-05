@@ -4682,7 +4682,9 @@ export function resetView(options = {}) {
 // Join/leave system lines with collapsing (130/131)
 // ---------------------------------------------------------------------------
 
-const jl = { verb: null, names: [], ts: 0, el: null };
+const jl = { verb: null, names: [], more: 0, ts: 0, el: null };
+// A collapsed burst names at most this many people, then counts the rest.
+const JOIN_LEAVE_NAMES = 20;
 
 export function sysJoinLeave(nick, verb) {
     const s = V().state.settings;
@@ -4690,18 +4692,23 @@ export function sysJoinLeave(nick, verb) {
     const now = Date.now();
     // (131) consecutive same-verb lines inside 60s collapse into one line.
     if (jl.verb === verb && jl.el && jl.el.isConnected && now - jl.ts < 60000) {
-        jl.names.push(nick);
+        if (jl.names.length < JOIN_LEAVE_NAMES) jl.names.push(nick);
+        else jl.more++;
         jl.ts = now;
-        jl.el.textContent = "— " + jl.names.join(", ") + " " + verb + " —";
+        jl.el.textContent = "— " + jl.names.join(", ") + (jl.more ? ` +${jl.more}` : "") + " " + verb + " —";
         return;
     }
     jl.verb = verb;
     jl.names = [nick];
+    jl.more = 0;
     jl.ts = now;
     const el = document.createElement("div");
     el.className = "msg sys";
     el.textContent = "— " + nick + " " + verb + " —";
-    $("chat-log").appendChild(el);
+    const log = $("chat-log");
+    log.appendChild(el);
+    // Presence churn obeys the same row cap as chat messages.
+    trimLog(log, s?.chat_max_lines || 200);
     jl.el = el;
     if (atBottom) scrollToBottom();
 }

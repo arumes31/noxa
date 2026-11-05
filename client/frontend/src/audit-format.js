@@ -68,22 +68,25 @@ export function auditChanges(before, after, capabilities = []) {
         }
         return typeof value === "object" ? t("audit.unavailable") : String(value);
     };
-    const flatten = (state, prefix = "", rows = new Map()) => {
+    // Rows are keyed by the raw field path, never the translated label:
+    // fields without their own label share the generic "Setting" text and
+    // must not overwrite each other.
+    const flatten = (state, prefix = "", path = "", rows = new Map()) => {
         if (!state || typeof state !== "object") return rows;
         if (Array.isArray(state)) {
-            for (const role of state.filter(isRecord)) rows.set(`${t("audit.role")} ${role.name || ""} (#${role.id})`, String(role.position));
+            for (const role of state.filter(isRecord)) rows.set(`${path}role:${role.id}`, { label: `${t("audit.role")} ${role.name || ""} (#${role.id})`, text: String(role.position) });
             return rows;
         }
         for (const [raw, value] of Object.entries(state)) {
             const key = fieldKey(raw);
             const label = Object.hasOwn(auditEnglish, `audit.${key}`) ? t(`audit.${key}`) : t("audit.field");
-            if (key === "settings" || key === "access") flatten(value, `${prefix}${label} / `, rows);
-            else rows.set(prefix + label, valueText(key, value));
+            if (key === "settings" || key === "access") flatten(value, `${prefix}${label} / `, `${path}${key}/`, rows);
+            else rows.set(`${path}${key}`, { label: prefix + label, text: valueText(key, value) });
         }
         return rows;
     };
     const old = flatten(before), next = flatten(after);
     return [...new Set([...old.keys(), ...next.keys()])]
-        .filter((label) => old.get(label) !== next.get(label))
-        .map((label) => ({ label, before: old.get(label) || t("audit.none"), after: next.get(label) || t("audit.none") }));
+        .filter((key) => old.get(key)?.text !== next.get(key)?.text)
+        .map((key) => ({ label: (next.get(key) || old.get(key)).label, before: old.get(key)?.text || t("audit.none"), after: next.get(key)?.text || t("audit.none") }));
 }

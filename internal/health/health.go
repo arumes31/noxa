@@ -103,7 +103,8 @@ func (s *Server) HandleGET(pattern string, h http.Handler) {
 }
 
 // HandleLocalGET registers a GET-only endpoint that accepts direct loopback
-// callers only. Forwarded headers are intentionally ignored.
+// callers only. Forwarded headers never grant access; a loopback peer that
+// sends them is treated as a same-host proxy and refused.
 func (s *Server) HandleLocalGET(pattern string, h http.Handler) {
 	s.Handle(pattern, localGET(h))
 }
@@ -148,7 +149,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if remoteIsLoopback(r.RemoteAddr) {
+	if DirectLoopback(r) {
 		_, _ = fmt.Fprintf(w, `{"status":"ok","version":%q}`+"\n", version.String())
 		return
 	}
@@ -193,7 +194,7 @@ func getOnly(next http.Handler) http.Handler {
 
 func localGET(next http.Handler) http.Handler {
 	return getOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !remoteIsLoopback(r.RemoteAddr) {
+		if !DirectLoopback(r) {
 			http.Error(w, "endpoint is available on loopback only", http.StatusForbidden)
 			return
 		}
@@ -201,33 +202,90 @@ func localGET(next http.Handler) http.Handler {
 	}))
 }
 
+// forwardingHeaders are set by reverse proxies. A loopback peer that sends
+// any of them is a same-host proxy relaying a remote caller, not a local
+// operator.
+var forwardingHeaders = [...]string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host", "X-Real-Ip"}
+
+// DirectLoopback reports whether r came straight from a loopback peer rather
+// than through a same-host reverse proxy. Proxies that strip every
+// forwarding header remain indistinguishable; operator endpoints must not be
+// routed through such a proxy.
+func DirectLoopback(r *http.Request) bool {
+	if !remoteIsLoopback(r.RemoteAddr) {
+		return false
+	}
+	for _, name := range forwardingHeaders {
+		if len(r.Header.Values(name)) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // RequireSecureCredentials requires TLS, local access, or an HTTPS assertion
 // from an explicitly trusted immediate proxy. Forwarded client addresses and
 // Host never establish proxy trust. Proxies must overwrite this header.
+//
+// When the immediate peer is a trusted proxy, the request reaches next with
+// RemoteAddr set to the nearest untrusted X-Forwarded-For hop, so per-source
+// limits and IP bans downstream apply to the real client instead of the proxy.
 func RequireSecureCredentials(next http.Handler, trusted ...netip.Prefix) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		peer, err := netip.ParseAddrPort(r.RemoteAddr)
+		peerTrusted := err == nil && trustedAddr(peer.Addr().Unmap(), trusted)
 		proxyHTTPS := false
 		values := r.Header.Values("X-Forwarded-Proto")
-		if err == nil && len(values) == 1 && strings.EqualFold(values[0], "https") {
-			for _, network := range trusted {
-				if network.Bits() > 0 && network.Contains(peer.Addr().Unmap()) {
-					proxyHTTPS = true
-					break
-				}
-			}
+		if peerTrusted && len(values) == 1 && strings.EqualFold(values[0], "https") {
+			proxyHTTPS = true
 		}
 		// A local reverse proxy must not turn an HTTP request into local
 		// trusted access merely by forwarding it over loopback.
-		directLocal := remoteIsLoopback(r.RemoteAddr) && len(values) == 0 &&
-			r.Header.Get("Forwarded") == "" && r.Header.Get("X-Forwarded-For") == ""
-		if r.TLS == nil && !directLocal && !proxyHTTPS {
+		if r.TLS == nil && !DirectLoopback(r) && !proxyHTTPS {
 			w.Header().Set("Cache-Control", "no-store")
 			http.Error(w, "content and credentials require HTTPS", http.StatusForbidden)
 			return
 		}
+		if peerTrusted {
+			if client := forwardedClient(peer.Addr().Unmap(), r.Header.Values("X-Forwarded-For"), trusted); client != peer.Addr().Unmap() {
+				r = r.WithContext(r.Context())
+				r.RemoteAddr = netip.AddrPortFrom(client, 0).String()
+			}
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// forwardedClient walks X-Forwarded-For from the right, starting at a trusted
+// peer, and returns the first hop outside the trusted networks. A malformed
+// hop stops the walk at the last trusted address, as the web listener does.
+func forwardedClient(peer netip.Addr, forwardedFor []string, trusted []netip.Prefix) netip.Addr {
+	addr := peer
+	if len(forwardedFor) == 0 {
+		return addr
+	}
+	hops := strings.Split(strings.Join(forwardedFor, ","), ",")
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			return addr
+		}
+		hop = hop.Unmap()
+		if !trustedAddr(hop, trusted) {
+			return hop
+		}
+		addr = hop
+	}
+	return addr
+}
+
+func trustedAddr(addr netip.Addr, trusted []netip.Prefix) bool {
+	for _, network := range trusted {
+		if network.Bits() > 0 && network.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 func remoteIsLoopback(remoteAddr string) bool {

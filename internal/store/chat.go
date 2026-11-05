@@ -188,13 +188,45 @@ func (s *Store) DeleteChatMessage(ctx context.Context, id int64) error {
 
 // PinChatMessage pins a message in a channel (idempotent).
 func (s *Store) PinChatMessage(ctx context.Context, channelID, messageID int64, pinnedBy string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("pinning message: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Serialize pins per channel so concurrent pins cannot race past the cap.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		fmt.Sprintf("pins:%d", channelID)); err != nil {
+		return fmt.Errorf("locking pins: %w", err)
+	}
+	var count int
+	var already bool
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(bool_or(message_id = $2), false)
+		FROM pinned_messages WHERE channel_id = $1`, channelID, messageID).Scan(&count, &already); err != nil {
+		return fmt.Errorf("counting pins: %w", err)
+	}
+	if already {
+		return nil
+	}
+	if count >= MaxPinsPerChannel {
+		return ErrPinLimit
+	}
 	const q = `INSERT INTO pinned_messages (channel_id, message_id, pinned_by)
 	          VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`
-	if _, err := s.db.ExecContext(ctx, q, channelID, messageID, pinnedBy); err != nil {
+	if _, err := tx.ExecContext(ctx, q, channelID, messageID, pinnedBy); err != nil {
+		return fmt.Errorf("pinning message: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("pinning message: %w", err)
 	}
 	return nil
 }
+
+// MaxPinsPerChannel bounds a channel's pins: every pins request returns all
+// of them with their message bodies.
+const MaxPinsPerChannel = 100
+
+// ErrPinLimit rejects a pin beyond MaxPinsPerChannel.
+var ErrPinLimit = errors.New("this channel has the maximum number of pinned messages")
 
 // UnpinChatMessage removes a pin.
 func (s *Store) UnpinChatMessage(ctx context.Context, channelID, messageID int64) error {
@@ -217,8 +249,8 @@ type PinnedMessage struct {
 // ChatPins lists a channel's pins, oldest first.
 func (s *Store) ChatPins(ctx context.Context, channelID int64) ([]PinnedMessage, error) {
 	const q = `SELECT message_id, pinned_by, pinned_at FROM pinned_messages
-	          WHERE channel_id = $1 ORDER BY pinned_at`
-	rows, err := s.db.QueryContext(ctx, q, channelID)
+	          WHERE channel_id = $1 ORDER BY pinned_at LIMIT $2`
+	rows, err := s.db.QueryContext(ctx, q, channelID, MaxPinsPerChannel)
 	if err != nil {
 		return nil, fmt.Errorf("querying pins: %w", err)
 	}

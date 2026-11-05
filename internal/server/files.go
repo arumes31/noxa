@@ -197,6 +197,12 @@ func (s *TCPServer) handleFileRename(ctx context.Context, client *Client, f *net
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, err.Error())
 		}
 		if target != msg.ChannelID {
+			// A move hands the file to the destination channel's read policy.
+			// Without the source download right, a manager could relocate a
+			// file into a channel where they can read it.
+			if !s.roleAllowed(ctx, client, msg.ChannelID, authorization.DownloadFiles) {
+				return authorization.ErrRoleForbidden
+			}
 			if !s.roleAllowed(ctx, client, target, authorization.UploadFiles) {
 				return authorization.ErrRoleForbidden
 			}

@@ -33,6 +33,9 @@ func TestEscape(t *testing.T) {
 		"a\rb":     `a\rb`,
 		"a\tb":     `a\tb`,
 		" spaced ": `\sspaced\s`,
+		// Terminal control sequences are stripped, never passed through.
+		"a\x1b]0;pwned\x07b": `a]0;pwnedb`,
+		"a\x7fb\u009bc":      `abc`,
 	}
 	for in, want := range cases {
 		if got := escape(in); got != want {
