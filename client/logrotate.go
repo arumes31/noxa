@@ -111,8 +111,13 @@ func (w *dailyLogWriter) rotate() error {
 	}
 	stem := strings.TrimSuffix(w.baseName, filepath.Ext(w.baseName))
 	rotated := fmt.Sprintf("%s-%s%s", stem, w.day, filepath.Ext(w.baseName))
-	if _, err := w.root.Stat(rotated); err == nil {
-		rotated = fmt.Sprintf("%s-%s-%d%s", stem, w.day, w.now().Unix(), filepath.Ext(w.baseName))
+	// Several size rotations can happen within one second during a flood;
+	// never let a later segment replace an earlier one.
+	for seq := w.now().Unix(); ; seq++ {
+		if _, err := w.root.Stat(rotated); err != nil {
+			break
+		}
+		rotated = fmt.Sprintf("%s-%s-%d%s", stem, w.day, seq, filepath.Ext(w.baseName))
 	}
 	_ = w.root.Rename(w.baseName, rotated)
 	return w.open()
