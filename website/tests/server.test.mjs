@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { createPreviewServer } from '../scripts/serve.mjs';
 import { readdir, lstat } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { extname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import serverGuides from '../scripts/guides/server.mjs';
+import clientGuides from '../scripts/guides/clients.mjs';
 
 let server;
 let origin;
@@ -42,7 +44,10 @@ test('does not expose tooling, unavailable resources, or parent files', async ()
 test('Website artifact contains only public assets', async () => {
   const root = fileURLToPath(new URL('../public/', import.meta.url));
   const extensions = new Set(['.html', '.css', '.js', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.ico', '.woff2']);
-  const allowedDirectories = new Set(['assets', 'css', 'js', 'branding', 'screenshots', 'fonts', 'guides', 'getting-started', 'voice-video', 'messaging', 'roles-permissions', 'mobile', 'privacy-security', 'troubleshooting', 'server-setup', 'configuration', 'operations', 'integrations', 'studio']);
+  // Directories are allowed by their full path: asset folders only under
+  // assets/, and generated guide pages only directly under guides/.
+  const allowedDirectories = new Set(['assets', 'assets/css', 'assets/js', 'assets/branding', 'assets/screenshots', 'assets/fonts', 'guides',
+    ...[...clientGuides, ...serverGuides].map(guide => `guides/${guide.slug}`)]);
   const found = [];
   async function check(directory) {
     for (const name of await readdir(directory)) {
@@ -54,7 +59,8 @@ test('Website artifact contains only public assets', async () => {
       assert.equal(info.isSymbolicLink(), false, `Artifact contains symlink: ${name}`);
       assert.ok(!name.startsWith('.'), `Unexpected dotfile: ${name}`);
       if (info.isDirectory()) {
-        assert.ok(allowedDirectories.has(name), `Unexpected public directory: ${name}`);
+        const relativePath = relative(root, path).split(sep).join('/');
+        assert.ok(allowedDirectories.has(relativePath), `Unexpected public directory: ${relativePath}`);
         await check(path);
       } else {
         assert.ok((directory === root && ['robots.txt', 'sitemap.xml'].includes(name)) || (directory === join(root, 'assets', 'fonts') && name === 'OFL.txt') || extensions.has(extname(name)), `Unexpected public file: ${name}`);

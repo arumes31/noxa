@@ -119,7 +119,8 @@ do not require browser-side API calls or JavaScript.
 
 The page links to [all releases](https://github.com/arumes31/noxa/releases),
 [latest release details](https://github.com/arumes31/noxa/releases/latest), and
-the current [new-server setup guide](https://github.com/arumes31/noxa#new-server-setup).
+the generated [server setup guide](public/guides/server-setup/index.html)
+(`guides/server-setup/` on the site).
 “Latest” does not imply stable; the product remains labeled Public alpha.
 
 ## Guides and SEO

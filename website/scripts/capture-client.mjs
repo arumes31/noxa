@@ -3,8 +3,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -12,12 +13,17 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const sourceRoot = path.resolve(process.env.NOXA_CAPTURE_SOURCE_ROOT || root);
 // Validate provenance before opening a browser or replacing any output file.
 const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sourceRoot, encoding: 'utf8' }).trim();
+// HEAD alone does not identify uncommitted frontend edits that were captured.
+const sourceDirty = execFileSync('git', ['status', '--porcelain', '--', 'client/frontend'], { cwd: sourceRoot, encoding: 'utf8' }).trim() !== '';
 const frontend = path.join(sourceRoot, 'client/frontend');
 const require = createRequire(path.join(root, 'client/frontend/package.json'));
 const dependencyDirectory = realpathSync(path.join(root, 'client/frontend/node_modules'));
 const { chromium } = require('@playwright/test');
 const { createServer } = await import(pathToFileURL(require.resolve('vite')).href);
 const output = path.join(root, 'website/public/assets/screenshots');
+// Screenshots land in a scratch directory and replace the published ones only
+// after the whole run finished without runtime errors.
+const staging = await mkdtemp(path.join(os.tmpdir(), 'noxa-capture-'));
 const guidesOnly = process.argv.includes('--guides-only');
 const server = await createServer({ root: frontend, logLevel: 'error', server: {
   host: '127.0.0.1', port: 12367, strictPort: true,
@@ -113,7 +119,7 @@ try {
     await page.locator('#login-nick').fill('Rowan');
     await page.locator('#login-options').evaluate(node => { node.open = true; });
     await page.evaluate(() => document.fonts.ready);
-    await page.screenshot({ path: path.join(output, 'app-connect.jpg'), type: 'jpeg', quality: 85, animations: 'disabled' });
+    await page.screenshot({ path: path.join(staging, 'app-connect.jpg'), type: 'jpeg', quality: 85, animations: 'disabled' });
     await page.setViewportSize({ width: 1280, height: 800 });
   }
   await page.evaluate(async () => {
@@ -156,26 +162,26 @@ try {
   await page.locator('#chat-log [data-msg-id="4"]').waitFor();
   await page.locator('#toasts .toast').waitFor({ state: 'hidden' });
   await page.mouse.move(1270, 790);
-  if (!guidesOnly) await page.screenshot({ path: path.join(output, 'app-chat.png'), animations: 'disabled' });
+  if (!guidesOnly) await page.screenshot({ path: path.join(staging, 'app-chat.png'), animations: 'disabled' });
   await page.setViewportSize({ width: 1280, height: 1100 });
   if (guidesOnly) {
     await page.evaluate(() => window.__noxa.openSettings('capture'));
     await page.locator('#settings-overlay .settings-dialog').waitFor();
     await page.evaluate(() => document.fonts.ready);
-    await page.locator('#settings-overlay .settings-dialog').screenshot({ path: path.join(output, 'app-capture.png'), animations: 'disabled' });
+    await page.locator('#settings-overlay .settings-dialog').screenshot({ path: path.join(staging, 'app-capture.png'), animations: 'disabled' });
     await page.keyboard.press('Escape');
     await page.evaluate(() => window.__noxa.openSettings('connection'));
     await page.locator('#settings-overlay .settings-dialog').waitFor();
     await page.evaluate(() => document.fonts.ready);
-    await page.locator('#settings-overlay .settings-dialog').screenshot({ path: path.join(output, 'app-connection.png'), animations: 'disabled' });
+    await page.locator('#settings-overlay .settings-dialog').screenshot({ path: path.join(staging, 'app-connection.png'), animations: 'disabled' });
     await page.keyboard.press('Escape');
     await page.evaluate(async () => { const { openChannelAccess } = await import('/src/channel-access-ui.js'); openChannelAccess(2); });
     await page.locator('.channel-access-dialog .channel-access-content select').first().waitFor();
-    await page.locator('.channel-access-dialog').screenshot({ path: path.join(output, 'app-channel-access.png'), animations: 'disabled' });
+    await page.locator('.channel-access-dialog').screenshot({ path: path.join(staging, 'app-channel-access.png'), animations: 'disabled' });
     await page.keyboard.press('Escape');
     await page.evaluate(async () => { const { openStudio } = await import('/src/studio-ui.js'); openStudio(); });
     await page.locator('.studio-overlay .studio').waitFor();
-    await page.locator('.studio-overlay .studio').screenshot({ path: path.join(output, 'app-studio.png'), animations: 'disabled' });
+    await page.locator('.studio-overlay .studio').screenshot({ path: path.join(staging, 'app-studio.png'), animations: 'disabled' });
     await page.keyboard.press('Escape');
   }
   await page.evaluate(async () => {
@@ -185,9 +191,13 @@ try {
   const roles = page.getByRole('dialog', { name: 'Roles', exact: true });
   await roles.getByRole('button', { name: 'Member', exact: true }).click();
   await roles.locator('.roles-editor').evaluate(node => { node.scrollTop = 0; });
-  await roles.locator('.roles-dialog').screenshot({ path: path.join(output, guidesOnly ? 'app-roles-guide.png' : 'app-roles.png'), animations: 'disabled' });
+  await roles.locator('.roles-dialog').screenshot({ path: path.join(staging, guidesOnly ? 'app-roles-guide.png' : 'app-roles.png'), animations: 'disabled' });
   assert.deepEqual(errors, [], 'Client screenshot runtime errors');
-  const manifest = { sourceCommit,
+  for (const name of await readdir(staging)) await copyFile(path.join(staging, name), path.join(output, name));
+  const manifest = { sourceCommit, sourceDirty,
+    // Vite, Playwright and node_modules come from this checkout, even when
+    // NOXA_CAPTURE_SOURCE_ROOT points the captured source elsewhere.
+    ...(sourceRoot !== root ? { dependencyCommit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim() } : {}),
     browser: browser.version(), viewport: '1280x800', rolesViewport: '1280x1100', scale: 1, locale: 'en-GB', timezone: 'UTC',
     fixtureTime: '2026-10-24T18:35:00Z',
     fixture: 'website/scripts/capture-client.mjs', data: 'Fictional local-only demo data',
@@ -207,4 +217,5 @@ try {
 } finally {
   await browser?.close();
   await server.close();
+  await rm(staging, { recursive: true, force: true });
 }
