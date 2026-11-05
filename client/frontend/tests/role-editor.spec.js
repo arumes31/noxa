@@ -142,7 +142,9 @@ test.beforeEach(async ({ page }) => {
             { key: "manage_roles", group: "server", en: "Manage roles", de: "Rollen verwalten" },
             { key: "administrator", group: "server", en: "Administrator", de: "Administrator" },
         ];
-        window.__roleState = { actor_id: 1, capabilities: permissions, grantable_capabilities: permissions.map((c) => c.key), manageable_role_ids: [10, 20, 30],
+        // The Public preset also sets read_history and send_messages; presets
+        // are only enabled when every capability they change is grantable.
+        window.__roleState = { actor_id: 1, capabilities: permissions, grantable_capabilities: [...permissions.map((c) => c.key), "read_history", "send_messages"], manageable_role_ids: [10, 20, 30],
             effective_overrides: [], parent_overrides: [{ role_id: 10, capability: "view_channel", effect: "deny" }],
             policy: { revision: 1, owner_id: 1, everyone_id: 10, members: [], channels: [{ channel_id: 2, parent_id: 1, synced: false, overrides: [] }], roles: [
                 { id: 10, name: "@everyone", position: 0, permissions: ["view_channel", "connect"] },
