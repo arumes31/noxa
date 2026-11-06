@@ -177,12 +177,15 @@ export function securitySettings(settings) {
             const danger = details("security.danger");
             const reset = button("security.reset", async () => {
                 if (await ask("security.reset", t("security.resetAsk", { name: entry.name }), "security.resetConfirm", true) && current()) {
+                    window.__noxaNativeToast?.clearIdentity(entry.unique_id); // (501)
                     await run(() => app.ResetIdentity(entry.id, entry.unique_id), "security.resetDone");
                 }
             }, "danger-btn");
             const remove = button("security.delete", async () => {
                 if (await ask("security.delete", t("security.deleteAsk", { name: entry.name }), "security.deleteConfirm", true) && current()) {
                     let notice = "";
+                    // (501) Its notifications go before its history is erased.
+                    window.__noxaNativeToast?.clearIdentity(entry.unique_id);
                     await run(async () => {
                         const result = await app.DeleteIdentity(entry.id, true);
                         // Committed deletion whose store another window still holds:

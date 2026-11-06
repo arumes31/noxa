@@ -53,9 +53,18 @@ test("the notification settings offer Windows notifications and hidden previews"
     await expect(previews).toBeChecked();
     await windows.uncheck();
     await previews.uncheck();
-    await expect.poll(async () => (await calls(page, "ClearNativeToasts")).map(args => args[0])).toContain("");
+    // Unchecking alone keeps existing notifications (the dialog can still be cancelled).
+    await page.evaluate(() => {
+        document.hasFocus = () => false;
+        window.__noxaNotify.notify("dm", "Alice: hi", { uid: "alice-uid", reference: { kind: "dm", peer_id: "alice-uid" } });
+    });
+    await expect.poll(async () => (await calls(page, "ShowNativeToast")).length).toBe(1);
+    expect(await calls(page, "ClearNativeToasts")).toEqual([]);
     await page.locator("#set-apply").click();
     await expect.poll(() => page.evaluate(() => [window.__saved.windows_notifications, window.__saved.native_notification_previews])).toEqual([false, false]);
+    // The saved settings arrive as settings_update; only then are toasts removed.
+    await page.evaluate(() => { for (const fn of window.__events.settings_update || []) fn(structuredClone(window.__saved)); });
+    await expect.poll(async () => (await calls(page, "ClearNativeToasts")).map(args => args[0])).toContain("");
 });
 
 test("an unfocused DM becomes a toast and a quick reply goes through the DM composer", async ({ page }) => {

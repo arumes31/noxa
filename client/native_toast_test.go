@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/xml"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -272,5 +273,55 @@ func TestHandleToastActivationRoutesOnlyIssuedTokens(t *testing.T) {
 	a.handleToastActivation("noxa-toast:v1:open:"+testToastToken, nil, now)
 	if *raised != 2 || len(*emitted) != 2 || (*emitted)[1].Action != "open" || (*emitted)[1].Conversation != "tab-1|group:g" {
 		t.Fatalf("open: emitted=%+v raised=%d", *emitted, *raised)
+	}
+}
+
+func TestShowNativeToastRetiresReplacedTokensOnlyOnSuccess(t *testing.T) {
+	shown, _, _, _ := withToastSeams(t)
+	a := &App{}
+	a.toasts.available = true
+	first, second, other := toastRequest(), toastRequest(), toastRequest()
+	second.Token = strings.Repeat("1", 32)
+	other.Token, other.Conversation = strings.Repeat("2", 32), "tab-1|dm:someone-else"
+	for _, req := range []NativeToastRequest{first, other, second} {
+		if msg := a.ShowNativeToast(req); msg != "" {
+			t.Fatal(msg)
+		}
+	}
+	if len(*shown) != 3 {
+		t.Fatalf("shown %d", len(*shown))
+	}
+	if _, ok := a.toasts.take(first.Token, time.Now()); ok {
+		t.Fatal("the replaced toast's token still acts")
+	}
+	if _, ok := a.toasts.take(other.Token, time.Now()); !ok {
+		t.Fatal("another conversation's token was retired")
+	}
+	// A failed replacement keeps the toast on screen working.
+	nativeToastShow = func(string, wintoast.Toast) error { return errors.New("boom") }
+	third := toastRequest()
+	third.Token = strings.Repeat("3", 32)
+	if msg := a.ShowNativeToast(third); msg == "" {
+		t.Fatal("a failed show reported success")
+	}
+	if _, ok := a.toasts.take(third.Token, time.Now()); ok {
+		t.Fatal("the failed toast's token was kept")
+	}
+	if _, ok := a.toasts.take(second.Token, time.Now()); !ok {
+		t.Fatal("a failed replacement retired the visible toast's token")
+	}
+}
+
+func TestOpenActivationIsEmittedBeforeTheWindowIsRaised(t *testing.T) {
+	var order []string
+	oldRaise, oldEmit := nativeToastRaise, nativeToastEmit
+	nativeToastRaise = func(*App) { order = append(order, "raise") }
+	nativeToastEmit = func(*App, NativeToastActivation) { order = append(order, "emit") }
+	t.Cleanup(func() { nativeToastRaise, nativeToastEmit = oldRaise, oldEmit })
+	a := &App{}
+	a.toasts.issue(testToastToken, "c", time.Now())
+	a.handleToastActivation("noxa-toast:v1:open:"+testToastToken, nil, time.Now())
+	if strings.Join(order, ",") != "emit,raise" {
+		t.Fatalf("order = %v", order)
 	}
 }

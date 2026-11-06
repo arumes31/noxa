@@ -129,6 +129,19 @@ func (s *nativeToastState) take(token string, now time.Time) (string, bool) {
 	return entry.conversation, true
 }
 
+// settle finishes a show attempt for token: on success the conversation's
+// earlier tokens are retired (their toast was replaced), on failure only the
+// new token goes and the toast still on screen keeps working.
+func (s *nativeToastState) settle(token, conversation string, shown bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, entry := range s.tokens {
+		if (shown && key != token && entry.conversation == conversation) || (!shown && key == token) {
+			delete(s.tokens, key)
+		}
+	}
+}
+
 // forget drops every token of conversation ("" drops all).
 func (s *nativeToastState) forget(conversation string) {
 	s.mu.Lock()
@@ -287,10 +300,11 @@ func (a *App) initNativeToasts() {
 		}
 		return
 	}
+	// Stale toasts go before the first new one can be shown.
+	_ = nativeToastClear(nativeToastAppID)
 	a.toasts.mu.Lock()
 	a.toasts.available = true
 	a.toasts.mu.Unlock()
-	_ = nativeToastClear(nativeToastAppID)
 }
 
 // nativeToastIcon copies the app icon next to the profile so Action Center
@@ -333,7 +347,9 @@ func (a *App) ShowNativeToast(req NativeToastRequest) string {
 		return err.Error()
 	}
 	a.toasts.issue(req.Token, req.Conversation, time.Now())
-	if err := nativeToastShow(nativeToastAppID, wintoast.Toast{XML: content, Tag: conversationToastTag(req.Conversation), Group: nativeToastGroup}); err != nil {
+	err = nativeToastShow(nativeToastAppID, wintoast.Toast{XML: content, Tag: conversationToastTag(req.Conversation), Group: nativeToastGroup})
+	a.toasts.settle(req.Token, req.Conversation, err == nil)
+	if err != nil {
 		log.Printf("native notification failed: %v", err)
 		return "native notification failed"
 	}
@@ -364,12 +380,13 @@ func (a *App) handleToastActivation(arguments string, inputs []wintoast.UserData
 		return
 	}
 	conversation, ok := a.toasts.take(activation.Token, now)
+	if ok {
+		activation.Conversation = conversation
+		// Delivered before the window is raised, so the focus that raising
+		// causes cannot get ahead of the activation in the frontend.
+		nativeToastEmit(a, activation)
+	}
 	if activation.Action == "open" {
-		nativeToastRaise(a)
+		nativeToastRaise(a) // also for toasts of an earlier run
 	}
-	if !ok {
-		return // toast from an earlier run, already used, or forged
-	}
-	activation.Conversation = conversation
-	nativeToastEmit(a, activation)
 }

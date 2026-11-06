@@ -98,7 +98,7 @@ test("reply navigates first, then uses the conversation's own composer", async (
     reset();
     const order = [];
     window.__noxaPolish = { navigateNotification: async destination => { order.push(["navigate", destination.tabID, destination.reference.peer_id]); return true; } };
-    window.__noxaChat = { quickReplyToActive: (key, text) => { order.push(["reply", key, text]); return "sent"; } };
+    window.__noxaChat = { activeConversationKey: () => "dm:peer", quickReplyToActive: async (key, text) => { order.push(["reply", key, text]); return "sent"; } };
     const req = await issueDM();
     assert.equal(await handleActivation({ token: req.token, action: "reply", conversation: req.conversation, reply: "  on my way " }), "sent");
     assert.deepEqual(order, [["navigate", "tab-a", "peer"], ["reply", "dm:peer", "on my way"]]);
@@ -108,7 +108,7 @@ test("reply navigates first, then uses the conversation's own composer", async (
 test("a draft is never overwritten and a vanished conversation reports the reply as unsent", async () => {
     reset();
     window.__noxaPolish = { navigateNotification: async () => true };
-    window.__noxaChat = { quickReplyToActive: () => "draft" };
+    window.__noxaChat = { activeConversationKey: () => "dm:peer", quickReplyToActive: async () => "draft" };
     let req = await issueDM();
     assert.equal(await handleActivation({ token: req.token, action: "reply", conversation: req.conversation, reply: "x" }), "draft");
     assert.equal(toasts.at(-1)[0], "info");
@@ -159,7 +159,7 @@ test("viewing a conversation removes its toast once; switching off removes all",
     viewed("tab-a|dm:never-shown");
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.deepEqual(calls, [["clear", "tab-a|dm:peer"]]);
-    assert.equal(__test.issued.size, 0);
+    assert.equal(__test.issued.size, 1, "an activation already on its way still arrives");
     clearAll();
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.deepEqual(calls.at(-1), ["clear", ""]);
@@ -177,4 +177,96 @@ test("init subscribes to activations and clears the viewed conversation on focus
     listeners.get("focus")();
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.deepEqual(calls, [["clear", "tab-a|dm:peer"]]);
+});
+
+test("a failed send keeps the reply and says so", async () => {
+    reset();
+    window.__noxaPolish = { navigateNotification: async () => true };
+    window.__noxaChat = { activeConversationKey: () => "dm:peer", quickReplyToActive: async () => "kept" };
+    const req = await issueDM();
+    assert.equal(await handleActivation({ token: req.token, action: "reply", conversation: req.conversation, reply: "x" }), "kept");
+    assert.equal(toasts.at(-1)[0], "warn");
+});
+
+test("a reply is dropped when the server changed after navigation", async () => {
+    reset();
+    let delivered = 0;
+    window.__noxaPolish = { navigateNotification: async () => { window.__noxa.state.activeTabID = "tab-b"; return true; } };
+    window.__noxaChat = { activeConversationKey: () => "dm:peer", quickReplyToActive: async () => { delivered++; return "sent"; } };
+    const req = await issueDM();
+    window.__noxa.state.activeTabID = "tab-a";
+    const issuedReq = req;
+    window.__noxaPolish.navigateNotification = async () => { window.__noxa.state.activeTabID = "tab-b"; return true; };
+    const result = await handleActivation({ token: issuedReq.token, action: "reply", conversation: issuedReq.conversation, reply: "x" });
+    window.__noxa.state.activeTabID = "tab-a";
+    assert.equal(result, "unavailable");
+    assert.equal(delivered, 0);
+});
+
+test("availability is asked again after a negative answer", async () => {
+    reset();
+    available = false;
+    await showNativeNotification("dm", "Alice: hi", dmCtx);
+    assert.equal(calls[0][0], "notify");
+    available = true;
+    await showNativeNotification("dm", "Alice: hi", dmCtx);
+    assert.equal(calls.at(-1)[0], "show");
+});
+
+test("a replacement retires the replaced toast's token", async () => {
+    reset();
+    const first = await issueDM();
+    const second = await issueDM();
+    assert.equal(await handleActivation({ token: first.token, action: "read", conversation: first.conversation }), "ignored");
+    assert.ok(__test.issued.has(second.token));
+});
+
+test("a conversation viewed while its toast is submitted is cleared afterwards", async () => {
+    reset();
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const original = window.go.main.App.ShowNativeToast;
+    window.go.main.App.ShowNativeToast = async req => { calls.push(["show", req]); await gate; return ""; };
+    const pending = showNativeNotification("dm", "Alice: hi", dmCtx);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    viewed("tab-a|dm:peer");
+    release();
+    await pending;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    window.go.main.App.ShowNativeToast = original;
+    assert.deepEqual(calls.at(-1), ["clear", "tab-a|dm:peer"]);
+});
+
+test("deleting an identity removes only its toasts; saving the setting off removes all", async () => {
+    reset();
+    await issueDM();
+    window.__noxa.state.myUniqueID = "other";
+    calls.length = 0;
+    await showNativeNotification("dm", "Bob: hi", { uid: "bob", reference: { kind: "dm", peer_id: "bob" } });
+    window.__noxa.state.myUniqueID = "me";
+    calls.length = 0;
+    mod.clearIdentity("me");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(calls, [["clear", "tab-a|dm:peer"]]);
+    assert.equal(__test.issued.size, 1, "the other identity's toast stays");
+    initNativeToasts();
+    calls.length = 0;
+    listeners.get("settings_update")({ windows_notifications: true });
+    listeners.get("settings_update")({ windows_notifications: false });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(calls, [["clear", ""]]);
+});
+
+test("mark as read on another tab advances only a group's read marker for the same identity", async () => {
+    reset();
+    const app = window.go.main.App;
+    app.DMHistoryContextForTab = async tab => ({ tab_id: tab, identity_uid: "me" });
+    app.ConversationForTab = async (tab, command) => { calls.push(["conversation", tab, command]); return {}; };
+    calls.length = 0;
+    await showNativeNotification("dm", "Group: new", { reference: { kind: "group", group_id: "g1", message_id: 7 } });
+    const req = calls[0][1];
+    window.__noxa.state.activeTabID = "tab-b";
+    assert.equal(await handleActivation({ token: req.token, action: "read", conversation: req.conversation }), "read");
+    window.__noxa.state.activeTabID = "tab-a";
+    assert.deepEqual(calls.at(-1), ["conversation", "tab-a", { action: "mark_read", id: "g1", read_message_id: 7 }]);
 });

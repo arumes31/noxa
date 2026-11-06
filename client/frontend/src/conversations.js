@@ -461,6 +461,7 @@ export function initConversations() {
         const older = button("group.older"); older.disabled = true;
         content.append(older, messages);
         const composer = el("form", "group-composer");
+        composer.dataset.groupId = group.id; // (501) quick reply checks the target
         const input = el("textarea", ""); input.rows = 2; input.maxLength = 8192; input.required = true; input.value = drafts.get(group.id) || ""; input.setAttribute("aria-label", t("group.message"));
         input.dataset.groupId = group.id;
         // Typing is announced while composing: debounced, at most one ping
@@ -808,19 +809,25 @@ export function initConversations() {
         // (501) Quick reply: the text goes through this group's own composer
         // (same encryption and delivery as typed text). An unsent draft is
         // never replaced: the reply is appended to it and not sent.
-        quickReply: (id, text) => {
+        // Returns "sent", "draft", "kept" (sending failed; the text stays in
+        // the composer) or false.
+        quickReply: async (id, text) => {
             const form = panel.querySelector("form.group-composer");
             const input = form?.querySelector("textarea");
-            if (!visible() || selected !== id || !form || !input || !String(text).trim()) return false;
-            if (input.value.trim()) {
-                input.value = input.value.replace(/\s+$/, "") + "\n" + text;
+            if (!visible() || selected !== id || !form || form.dataset.groupId !== id || !input || !String(text).trim()) return false;
+            // An unsent text, staged files or a send in progress make it a draft:
+            // submitting now would send the attachments or be ignored.
+            if (mutationPending || input.value.trim() || (stagedFiles.get(id) || []).length) {
+                input.value = input.value.trim() ? input.value.replace(/\s+$/, "") + "\n" + text : text;
                 input.dispatchEvent(new Event("input", { bubbles: true }));
                 return "draft";
             }
             input.value = text;
             input.dispatchEvent(new Event("input", { bubbles: true }));
             form.requestSubmit();
-            return "sent";
+            // The submit handler runs asynchronously; wait for it to settle.
+            for (let waited = 0; mutationPending && waited < 15000; waited += 100) await new Promise(resolve => setTimeout(resolve, 100));
+            return input.isConnected && input.value.includes(text) ? "kept" : "sent";
         },
         destroy: () => { ++generation; window.clearInterval(sidebarPoll); window.removeEventListener("noxa-language-changed", languageChanged); window.removeEventListener("focus", focusChanged); document.removeEventListener("visibilitychange", focusChanged); setVisible(false); panel.remove(); drafts.clear(); stagedFiles.clear(); memberForms.clear(); references.clear(); },
     };

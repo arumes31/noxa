@@ -58,7 +58,7 @@ import { initGamingOverlay, noteOverlayChat } from "./gaming-overlay.js";
 import { initChannelUndocking } from "./call-undocking.js";
 import { initStudio, disposeStudio } from "./studio-ui.js";
 import { refreshVoicePlayback } from "./voice-messages.js";
-import { discussionChanged } from "./discussions.js";
+import { discussionChanged, viewedDiscussionThread } from "./discussions.js";
 import { initClientInfo } from "./clientinfo.js";
 import { initUpdater, startupAutoCheck, reconnectAutoCheck } from "./updater.js";
 import { showConnectSplash } from "./connect-splash.js";
@@ -114,6 +114,7 @@ const P = () => window.__noxaPerms;
 window.__noxaChat = chatUI;
 // (501) Windows notification actions reach private groups through this.
 window.__noxaGroups = Object.freeze({ markPrivateGroupRead, quickReplyToPrivateGroup, viewedConversationID });
+window.__noxaDiscussions = Object.freeze({ viewedDiscussionThread });
 
 const $ = (id) => document.getElementById(id);
 // Server-supplied channel capacity is rendered into markup; accept only a
