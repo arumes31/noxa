@@ -1,4 +1,5 @@
 import { joinChannelLocally } from "./local-join-intent.js";
+import { AUDIO_MIME, TEXT_MAX_B64, decodeTextPreview, previewKind } from "./attachment-preview.js";
 import { previewConversation, previewConversationFor, setPreviewConversation } from "./preview-privacy.js";
 import { createActivityHistory } from "./activity-history.js";
 import { blockedPreviewPlaceholder, resolvePreviewImage } from "./preview-source-policy.js";
@@ -1296,10 +1297,67 @@ function attachFileRef(container, m, cap, source = null) {
                 wrap.textContent = "📎 " + name + t("chat.downloadFailed");
             }
         });
+    } else if (previewKind(ext) && !(ref.meta?.size > (previewKind(ext) === "text" ? TEXT_MAX_B64 * 0.75 : INLINE_MAX_B64 * 0.75))) {
+        attachFilePreview(wrap, source, ref, name, ext, previewIsCurrent);
     } else {
         wrap.appendChild(downloadChip(source, ref, name, ""));
     }
     container.appendChild(wrap);
+}
+
+// (575) Audio plays inline; text and code show their first lines, expandable
+// to the whole file. Decryption happens in the native layer as for images;
+// text is rendered only through textContent. The download chip stays below.
+function attachFilePreview(wrap, source, ref, name, ext, previewIsCurrent) {
+    const kind = previewKind(ext);
+    wrap.textContent = t("chat.loadingFile", { name });
+    sharedPreviewDownload(source, ref, previewIsCurrent).then((b64) => {
+        if (!previewIsCurrent()) return;
+        wrap.textContent = "";
+        const chip = downloadChip(source, ref, name, "");
+        if (!b64 || b64.length > (kind === "text" ? TEXT_MAX_B64 : INLINE_MAX_B64)) {
+            wrap.appendChild(chip);
+            return;
+        }
+        if (kind === "audio") {
+            const audio = document.createElement("audio");
+            audio.className = "msg-audio";
+            audio.controls = true;
+            audio.preload = "metadata";
+            audio.src = `data:${AUDIO_MIME[ext]};base64,${b64}`;
+            audio.title = name;
+            wrap.append(audio, chip);
+            return;
+        }
+        const text = decodeTextPreview(b64);
+        if (!text) {
+            wrap.appendChild(chip); // binary despite its extension
+            return;
+        }
+        const pre = document.createElement("pre");
+        pre.className = "msg-text-file";
+        pre.textContent = text.head;
+        pre.setAttribute("aria-label", t("chat.filePreview", { name }));
+        wrap.appendChild(pre);
+        if (text.truncated) {
+            const more = document.createElement("button");
+            more.type = "button";
+            more.className = "msg-text-more";
+            more.textContent = t("chat.showAllLines", { count: text.lines });
+            more.onclick = () => {
+                if (!previewIsCurrent()) return;
+                pre.textContent = text.text;
+                pre.classList.add("expanded");
+                more.remove();
+            };
+            wrap.appendChild(more);
+        }
+        wrap.appendChild(chip);
+    }).catch((err) => {
+        if (!previewIsCurrent()) return;
+        wrap.textContent = "";
+        wrap.appendChild(downloadChip(source, ref, name, String(err).includes("too large to preview") ? t("chat.tooLargePreview") : ""));
+    });
 }
 
 // chatAttachmentSource binds channel and DM attachments (scope 0) to the chat

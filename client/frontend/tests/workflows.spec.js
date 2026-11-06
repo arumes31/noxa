@@ -2069,7 +2069,7 @@ test.describe("tab-bound chat sending and attachments", () => {
         test(`native activation cannot redirect ${kind}`, async ({ page }) => {
             if (kind === "upload") await attach(page);
             if (["reply", "save"].includes(kind)) {
-                await page.evaluate(kind => window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 71, channel_id: 1, from: "Me", text: kind === "save" ? "[file:original.vcx#dGVzdA==#original.txt]" : "parent" }), kind);
+                await page.evaluate(kind => window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 71, channel_id: 1, from: "Me", text: kind === "save" ? "[file:original.vcx#dGVzdA==#original.zip]" : "parent" }), kind);
                 if (kind === "reply") await page.locator('#chat-log button[title="reply"]').evaluate(button => button.click());
             }
             await page.evaluate(() => { window.__sendScope.nativeTab = "server-b"; });
@@ -2230,7 +2230,7 @@ test.describe("tab-bound chat sending and attachments", () => {
     }
     test("detached attachment save controls cannot invoke the native dialog", async ({ page }) => {
         await page.evaluate(() => {
-            window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 71, channel_id: 1, from: "Me", text: "[file:original.vcx#dGVzdA==#original.txt]" });
+            window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 71, channel_id: 1, from: "Me", text: "[file:original.vcx#dGVzdA==#original.zip]" });
             const button = document.querySelector(".msg-file .file-chip");
             button.remove();
             button.click();
@@ -2243,8 +2243,18 @@ test.describe("tab-bound chat sending and attachments", () => {
         await page.locator(".msg-file .file-chip").click();
         expect(await page.evaluate(() => window.__sendScope.effects)).toEqual([
             ["DownloadChatAttachment", "server-a", 1, "photo.vcx", "dGVzdA=="],
+            // (575) a text attachment is downloaded for its inline preview too
+            ["DownloadChatAttachment", "server-a", 1, "doc.vcx", "dGVzdA=="],
             ["SaveChatAttachment", "server-a", 1, "doc.vcx", "dGVzdA==", "doc.txt"],
         ]);
+    });
+    test("text and audio attachments preview inline beside their download", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 75, channel_id: 1, from: "Me", text: "[file:notes.vcx#dGVzdA==#notes.txt] [file:clip.vcx#dGVzdA==#clip.mp3] [file:tool.vcx#dGVzdA==#tool.exe]" }));
+        const message = page.locator('.msg[data-msg-id="75"]');
+        await expect(message.locator("pre.msg-text-file")).toHaveText("hello");
+        await expect(message.locator("audio.msg-audio")).toHaveAttribute("src", "data:audio/mpeg;base64,aGVsbG8=");
+        await expect(message.locator(".msg-file .file-chip")).toHaveCount(3);
+        await expect(message.locator(".msg-file", { hasText: "tool.exe" }).locator("pre, audio")).toHaveCount(0);
     });
     test("clearing a direct target during upload stops follow-up delivery", async ({ page }) => {
         await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));

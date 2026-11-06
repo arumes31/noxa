@@ -79,6 +79,7 @@ func TestIntegrationWebhookTCPManagementHTTPEncryptedDeliveryAndRevocation(t *te
 	}
 	httpServer := httptest.NewServer(env.srv.IncomingWebhookHandler())
 	defer httpServer.Close()
+	var headers http.Header
 	post := func(token, body string, want int) int64 {
 		t.Helper()
 		req, err := http.NewRequestWithContext(t.Context(), "POST", fmt.Sprintf("%s/hooks/%d", httpServer.URL, created.ID), strings.NewReader(body))
@@ -92,6 +93,7 @@ func TestIntegrationWebhookTCPManagementHTTPEncryptedDeliveryAndRevocation(t *te
 			t.Fatal(err)
 		}
 		defer func() { _ = res.Body.Close() }()
+		headers = res.Header
 		raw, _ := io.ReadAll(res.Body)
 		if res.StatusCode != want {
 			t.Fatalf("post status=%d want%d body=%s", res.StatusCode, want, raw)
@@ -103,7 +105,13 @@ func TestIntegrationWebhookTCPManagementHTTPEncryptedDeliveryAndRevocation(t *te
 		return out.MessageID
 	}
 	post(strings.Repeat("a", 43), `{"content":"Unauthorized"}`, 401)
+	if headers.Get("X-RateLimit-Limit") != "" {
+		t.Fatalf("unidentified request carried rate headers: %v", headers)
+	}
 	message := post(created.Token, `{"content":"Build passed"}`, 201)
+	if headers.Get("X-RateLimit-Limit") != "5" || headers.Get("X-RateLimit-Remaining") != "4" || headers.Get("X-RateLimit-Reset") == "" {
+		t.Fatalf("rate headers after first post: %v", headers)
+	}
 	row, err := db.GetChatMessage(t.Context(), message)
 	if err != nil {
 		t.Fatal(err)
@@ -119,6 +127,10 @@ func TestIntegrationWebhookTCPManagementHTTPEncryptedDeliveryAndRevocation(t *te
 		post(created.Token, `{"content":"Another build"}`, 201)
 	}
 	post(created.Token, `{"content":"Too fast"}`, 429)
+	if headers.Get("X-RateLimit-Remaining") != "0" || headers.Get("Retry-After") == "" ||
+		(headers.Get("Retry-After") != headers.Get("X-RateLimit-Reset") && headers.Get("X-RateLimit-Reset") != "0") {
+		t.Fatalf("rate headers when limited: %v", headers)
+	}
 	if _, err := db.DB().ExecContext(t.Context(), `UPDATE incoming_webhooks SET rate_reset=NOW()-INTERVAL '1 second'`); err != nil {
 		t.Fatal(err)
 	}

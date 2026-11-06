@@ -16,7 +16,16 @@ var ErrWebhookRate = errors.New("webhook rate limit exceeded")
 type WebhookIdentity struct {
 	ID, ChannelID, CreatorID int64
 	CreatorUID, Name         string
+	// Rate state after this delivery attempt, for rate-limit headers.
+	RateRemaining int
+	RateReset     time.Time
 }
+
+// WebhookRateLimit deliveries are allowed per hook in each WebhookRateWindow.
+const (
+	WebhookRateLimit  = 5
+	WebhookRateWindow = 3 * time.Second
+)
 
 func (s *Store) ManageWebhook(ctx context.Context, r netproto.WebhookRequest, creator int64, hash []byte) (_ netproto.WebhookResult, retErr error) {
 	out := netproto.WebhookResult{Action: r.Action, ChannelID: r.ChannelID, Hooks: []netproto.WebhookEntry{}}
@@ -106,11 +115,13 @@ func (s *Store) DeliverWebhook(ctx context.Context, id int64, hash []byte, autho
 	now := time.Now()
 	if now.After(reset) {
 		count = 0
-		reset = now.Add(3 * time.Second)
+		reset = now.Add(WebhookRateWindow)
 	}
-	if count >= 5 {
+	hook.RateReset = reset
+	if count >= WebhookRateLimit {
 		return hook, 0, "", 0, ErrWebhookRate
 	}
+	hook.RateRemaining = WebhookRateLimit - count - 1
 	// Consume the rate unit before authorization: a request rejected by role
 	// or moderation checks still counts, and that consumption is committed.
 	_, err = tx.ExecContext(ctx, `UPDATE incoming_webhooks SET rate_reset=$2,rate_count=$3 WHERE id=$1`, id, reset, count+1)

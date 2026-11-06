@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -320,26 +321,25 @@ func (s *TCPServer) deliverPush(ctx context.Context, sub store.PushSubscription,
 	case pushKindClear:
 		msg.TTL = time.Hour
 	}
-	select {
-	case s.push.sem <- struct{}{}:
-		defer func() { <-s.push.sem }()
-	case <-ctx.Done():
-		return
-	}
-	err = s.deps.Push.Send(ctx, webpush.Subscription{Endpoint: sub.Endpoint, P256dh: sub.P256dh, Auth: sub.Auth}, msg)
+	err = s.sendPushWithRetry(ctx, webpush.Subscription{Endpoint: sub.Endpoint, P256dh: sub.P256dh, Auth: sub.Auth}, msg)
 	switch {
 	case errors.Is(err, webpush.ErrGone):
+		s.metricsSink().IncPushDelivery("gone")
 		if err := pushes.DeletePushEndpoint(ctx, sub.Endpoint); err != nil {
 			s.logger.Warn("dropping expired push subscription failed", zap.Error(err))
 		}
 		return
+	case errors.Is(err, context.Canceled):
+		return // shutdown or a superseded notice, not a delivery failure
 	case err != nil:
-		s.logger.Debug("push delivery failed", zap.String("device_id", sub.DeviceID), zap.Error(err))
+		s.metricsSink().IncPushDelivery("failed")
+		s.logger.Info("push delivery failed", zap.String("device_id", sub.DeviceID), zap.Error(err))
 		if err := pushes.RecordPushResult(ctx, sub.Endpoint, false, pushMaxFailures); err != nil {
 			s.logger.Warn("recording push failure failed", zap.Error(err))
 		}
 		return
 	}
+	s.metricsSink().IncPushDelivery("ok")
 	_ = pushes.RecordPushResult(ctx, sub.Endpoint, true, pushMaxFailures)
 	key := pushKey{sub.DeviceID, n.Tag}
 	now := time.Now()
@@ -593,4 +593,61 @@ func (s *TCPServer) pushMentions(ctx context.Context, client *Client, channelID 
 		s.pushNotify(uid, pushNotice{Kind: pushKindMention, Tag: tag, From: client.nickname(), Place: place})
 		sent++
 	}
+}
+
+// pushRetryDelays are the waits before each retry when the push service
+// gives no Retry-After. Retries stay inside the caller's deadline.
+var pushRetryDelays = []time.Duration{2 * time.Second, 6 * time.Second}
+
+// sendPushWithRetry sends once and retries a temporary failure (429, 5xx or
+// a network error) up to len(pushRetryDelays) times, honouring Retry-After.
+// The send slot is held only while a request is in flight. A wait that would
+// pass the context deadline ends the attempts with the last error.
+func (s *TCPServer) sendPushWithRetry(ctx context.Context, sub webpush.Subscription, msg webpush.Message) error {
+	for attempt := 0; ; attempt++ {
+		err := s.sendPushOnce(ctx, sub, msg)
+		if err == nil || attempt >= len(pushRetryDelays) || !pushRetryable(err) {
+			return err
+		}
+		delay := pushRetryDelays[attempt]
+		var status *webpush.StatusError
+		if errors.As(err, &status) && status.RetryAfter > 0 {
+			delay = status.RetryAfter
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < delay {
+			return err
+		}
+		s.metricsSink().IncPushDelivery("retry")
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
+	}
+}
+
+func (s *TCPServer) sendPushOnce(ctx context.Context, sub webpush.Subscription, msg webpush.Message) error {
+	select {
+	case s.push.sem <- struct{}{}:
+		defer func() { <-s.push.sem }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.deps.Push.Send(ctx, sub, msg)
+}
+
+// pushRetryable reports a failure worth retrying: a temporary status from the
+// push service, or a transport error that is not the caller giving up.
+func pushRetryable(err error) bool {
+	if errors.Is(err, webpush.ErrGone) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var status *webpush.StatusError
+	if errors.As(err, &status) {
+		return status.Retryable()
+	}
+	var network net.Error
+	return errors.As(err, &network)
 }

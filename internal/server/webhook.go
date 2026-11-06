@@ -131,6 +131,7 @@ func (s *TCPServer) IncomingWebhookHandler() http.Handler {
 			fail(401)
 			return
 		}
+		var rate store.WebhookIdentity
 		err = s.withRolePolicy(ctx, func(ctx context.Context) error {
 			s.roleMetadataMu.Lock()
 			defer s.roleMetadataMu.Unlock()
@@ -163,6 +164,7 @@ func (s *TCPServer) IncomingWebhookHandler() http.Handler {
 				key, body, err := s.chatKeys.seal(ctx, hook.ChannelID, payload.Content)
 				return body, key, err
 			})
+			rate = hook
 			if err != nil {
 				return err
 			}
@@ -179,7 +181,8 @@ func (s *TCPServer) IncomingWebhookHandler() http.Handler {
 			case errors.Is(err, store.ErrWebhookDenied):
 				fail(401)
 			case errors.Is(err, store.ErrWebhookRate):
-				w.Header().Set("Retry-After", "3")
+				reset := setWebhookRateHeaders(w, rate, time.Now())
+				w.Header().Set("Retry-After", strconv.Itoa(max(1, reset)))
 				fail(429)
 			case errors.Is(err, authorization.ErrRoleInvalid):
 				fail(400)
@@ -188,8 +191,25 @@ func (s *TCPServer) IncomingWebhookHandler() http.Handler {
 			}
 			return
 		}
+		setWebhookRateHeaders(w, rate, time.Now())
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]int64{"message_id": messageID})
 	})
+}
+
+// setWebhookRateHeaders reports a hook's per-window delivery budget (814):
+// the limit, what is left after this request and the seconds until the
+// window resets. It returns that reset delay. A request rejected before the
+// hook was identified carries no headers.
+func setWebhookRateHeaders(w http.ResponseWriter, rate store.WebhookIdentity, now time.Time) int {
+	if rate.ID == 0 || rate.RateReset.IsZero() {
+		return 0
+	}
+	reset := int((rate.RateReset.Sub(now) + time.Second - 1) / time.Second)
+	reset = max(reset, 0)
+	w.Header().Set("X-RateLimit-Limit", strconv.Itoa(store.WebhookRateLimit))
+	w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(max(rate.RateRemaining, 0)))
+	w.Header().Set("X-RateLimit-Reset", strconv.Itoa(reset))
+	return reset
 }

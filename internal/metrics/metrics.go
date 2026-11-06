@@ -35,6 +35,7 @@ type Sink interface {
 	IncAuthFailure(transport, reason string)
 	IncRecordingError(operation string)
 	IncChatCryptoFailure(operation string)
+	IncPushDelivery(result string)
 }
 
 // RegisterDBPool exports database/sql pool pressure so MaxOpenConns,
@@ -85,6 +86,7 @@ type Metrics struct {
 	authFailures      *prometheus.CounterVec
 	recordingErrors   *prometheus.CounterVec
 	chatCryptoFailure *prometheus.CounterVec
+	pushDeliveries    *prometheus.CounterVec
 	readinessDuration *prometheus.HistogramVec
 	broadcastDuration prometheus.Histogram
 	broadcastBacklog  prometheus.Histogram
@@ -131,6 +133,10 @@ func New() *Metrics {
 			Namespace: "noxa", Name: "auth_failures_total",
 			Help: "Rejected authentication attempts by transport and stable reason.",
 		}, []string{"transport", "reason"}),
+		pushDeliveries: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "noxa", Name: "push_deliveries_total",
+			Help: "Web Push delivery attempts by result: ok, retry, gone or failed.",
+		}, []string{"result"}),
 		recordingErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "noxa", Name: "recording_errors_total",
 			Help: "Recording lifecycle failures by stable operation.",
@@ -188,7 +194,7 @@ func New() *Metrics {
 		}, func() float64 { return nonNegative(m.currentRecorderSessionCount()) }),
 		m.udpPackets, m.udpDropped, m.udpRateLimited, m.tcpConnections,
 		m.chatMessages, m.rtpForwarded, m.fileTransfers, m.authFailures,
-		m.recordingErrors, m.chatCryptoFailure, m.readinessDuration,
+		m.recordingErrors, m.chatCryptoFailure, m.pushDeliveries, m.readinessDuration,
 		m.broadcastDuration, m.broadcastBacklog, m.buildInfo,
 	)
 	m.buildInfo.WithLabelValues(version.String(), version.Commit).Set(1)
@@ -227,6 +233,14 @@ func (m *Metrics) IncFileTransfer(direction, result string) {
 }
 func (m *Metrics) IncAuthFailure(transport, reason string) {
 	m.authFailures.WithLabelValues(authTransportLabel(transport), authFailureReasonLabel(reason)).Inc()
+}
+func (m *Metrics) IncPushDelivery(result string) {
+	switch result {
+	case "ok", "retry", "gone", "failed":
+	default:
+		result = "unknown"
+	}
+	m.pushDeliveries.WithLabelValues(result).Inc()
 }
 func (m *Metrics) IncRecordingError(operation string) {
 	m.recordingErrors.WithLabelValues(recordingOperationLabel(operation)).Inc()
@@ -460,3 +474,4 @@ func (Noop) IncFileTransfer(string, string) {}
 func (Noop) IncAuthFailure(string, string)  {}
 func (Noop) IncRecordingError(string)       {}
 func (Noop) IncChatCryptoFailure(string)    {}
+func (Noop) IncPushDelivery(string)         {}

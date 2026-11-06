@@ -342,6 +342,7 @@ graph TD
 * **Message tools**: Emoji reactions, replies, pins, polls, voice messages, typing indicators, read receipts, and mentions. Inbox, history search, and saved messages are scoped to the current server; history search decrypts and matches bodies in the native client.
 * **Chat navigation**: Channel and direct-message tabs stay on one row, with an **All chats** menu for overflow. Right-click to pin or reorder, or drag within the pinned/unpinned section. Arrow keys move focus, Enter opens a chat, and Ctrl+Shift+Left/Right reorders it. Order and pins are saved locally, encrypted and separated by server and identity; closing a tab removes its pin. **Recently closed** in All chats and **Ctrl+Shift+T** reopen explicitly closed chats from the current session (up to ten); channel access is checked again. This list resets when the server or identity changes.
 * **Chat media**: Enlarging an attached video keeps the same player, playback position, volume, speed and pause state. Animated images and chat videos pause offscreen or after a minute without window focus; only visible media resumes, and manually paused videos stay paused.
+* **Attachment previews**: Text and code files (up to ~384 KB, UTF-8 only) show their first 40 lines inline with **Show all**, audio files (MP3, M4A, AAC, Ogg/Opus, WAV, FLAC) play inline, and images and videos preview as before. Previews are decrypted locally and text is never interpreted as markup; the download button stays next to each preview.
 * **Threads and forums**: Persistent posts/replies, tags, following, unread state, archive/reopen, resolved questions, and pinned posts, under the parent channel's access rules.
 * **Incoming webhooks**: Revocable, channel-scoped integration tokens; posts remain subject to the creator's current access.
 * **Moderation**: Role-controlled message and thread moderation, domain allow/block lists, word filters, duplicate suppression, and rate limits. Server-side content filtering does not inspect E2EE direct-message bodies.
@@ -1305,6 +1306,13 @@ and restore drills, and keep their incident runbook outside the deployment being
 operated. Update these local procedures when architecture, telemetry or recovery
 steps change. The `docs/` directory and `docker/secrets/` are local-only and ignored
 by Git; keep operator notes and credentials out of the public repository.
+
+`noxa_push_deliveries_total{result}` counts Web Push attempts: `ok`, `retry`
+(a 429/5xx or network failure retried up to twice within the 20-second send
+budget, honouring `Retry-After`), `gone` (expired subscription, removed) and
+`failed`. Incoming webhook responses carry `X-RateLimit-Limit` (5 per
+3 seconds per hook), `X-RateLimit-Remaining` and `X-RateLimit-Reset`
+(seconds); a 429 also sets `Retry-After` to the real reset time.
 
 ### Voice diagnostics
 

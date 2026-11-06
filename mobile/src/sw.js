@@ -10,7 +10,7 @@ import { Groups } from "./core/groups.js";
 import { MUTED_CACHE, MUTED_URL } from "./core/conversation-prefs.js";
 import { SYNC_TAG, enqueue, flush, pending } from "./core/outbox.js";
 import { Msg } from "./core/frame.js";
-import { INTENT_CACHE, announceRead, saveAnswerIntent } from "./core/push.js";
+import { INTENT_CACHE, announceRead, registerSubscription, saveAnswerIntent } from "./core/push.js";
 import { currentFence } from "./core/db.js";
 import { putShare, shareText } from "./core/share-store.js";
 
@@ -322,13 +322,34 @@ self.addEventListener("notificationclose", event => {
     event.waitUntil(updateBadge());
 });
 
-// The app re-registers the new subscription with the server when it next
-// connects; here we only make sure a subscription exists.
+// (701) A rotated subscription is reported to the server right away through
+// a short-lived device session, so pushes keep arriving while the app stays
+// closed. The app also re-registers on its next connect, so a failure here
+// only delays delivery until then.
 self.addEventListener("pushsubscriptionchange", event => {
     const options = event.oldSubscription?.options;
-    if (!options?.applicationServerKey) return;
-    event.waitUntil(self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: options.applicationServerKey }).catch(() => {}));
+    event.waitUntil((async () => {
+        let sub = event.newSubscription || null;
+        if (!sub && options?.applicationServerKey) {
+            sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: options.applicationServerKey }).catch(() => null);
+        }
+        if (sub) await reportSubscription(sub).catch(() => {});
+    })());
 });
+
+/** Registers a rotated push subscription through a short-lived session. */
+async function reportSubscription(sub) {
+    const stored = await loadIdentity();
+    if (!stored?.meta?.linked) return;
+    const info = await (await fetch("/api/v1/web/info", { cache: "no-store" })).json();
+    const conn = await Connection.open();
+    try {
+        await signIn(conn, stored.identity, { version: info.version || "0.0.0" });
+        await registerSubscription(conn, sub);
+    } finally {
+        conn.close();
+    }
+}
 
 
 // --- Background Sync: send the outbox while the app is closed ---------------
