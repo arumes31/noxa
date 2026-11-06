@@ -193,3 +193,58 @@ func TestVAPIDRequiresSubject(t *testing.T) {
 		t.Fatal("empty subject accepted")
 	}
 }
+
+func TestStatusErrorCarriesRetryAfter(t *testing.T) {
+	v, err := LoadOrCreateVAPID(filepath.Join(t.TempDir(), "vapid.pem"), "mailto:ops@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, retryAfter := http.StatusTooManyRequests, "7"
+	push := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if retryAfter != "" {
+			w.Header().Set("Retry-After", retryAfter)
+		}
+		w.WriteHeader(status)
+	}))
+	defer push.Close()
+	sub, _ := testSubscription(t, push.URL+"/send/x")
+	sender := &Sender{VAPID: v, Client: push.Client()}
+	send := func() *StatusError {
+		t.Helper()
+		var se *StatusError
+		if err := sender.Send(context.Background(), sub, Message{Payload: []byte("x")}); !errors.As(err, &se) {
+			t.Fatalf("error = %v, want *StatusError", err)
+		}
+		return se
+	}
+	if se := send(); se.Status != 429 || se.RetryAfter != 7*time.Second || !se.Retryable() {
+		t.Fatalf("429 = %+v retryable=%v", se, se.Retryable())
+	}
+	status, retryAfter = http.StatusServiceUnavailable, "99999"
+	if se := send(); se.RetryAfter != maxRetryAfter || !se.Retryable() {
+		t.Fatalf("503 = %+v, want capped Retry-After", se)
+	}
+	status, retryAfter = http.StatusBadRequest, ""
+	if se := send(); se.RetryAfter != 0 || se.Retryable() {
+		t.Fatalf("400 = %+v, must not be retryable", se)
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	cases := map[string]time.Duration{
+		"":                              0,
+		"30":                            30 * time.Second,
+		"-5":                            0,
+		"soon":                          0,
+		"Fri, 06 Nov 2026 12:00:45 GMT": 45 * time.Second,
+		"Fri, 06 Nov 2026 11:00:00 GMT": 0,
+		"600":                           10 * time.Minute,
+		"999999999999":                  10 * time.Minute, // would overflow Duration unclamped
+	}
+	for value, want := range cases {
+		if got := parseRetryAfter(value, now); got != want {
+			t.Errorf("parseRetryAfter(%q) = %s, want %s", value, got, want)
+		}
+	}
+}

@@ -43,6 +43,42 @@ const MaxPayload = recordSize - 86 - 16 - 1
 // ErrGone reports a subscription the push service no longer knows.
 var ErrGone = errors.New("webpush: subscription expired or unsubscribed")
 
+// maxRetryAfter bounds a push service's Retry-After hint.
+const maxRetryAfter = 10 * time.Minute
+
+// StatusError is a push service rejection other than an expired
+// subscription. RetryAfter is the service's hint (zero when absent).
+type StatusError struct {
+	Status     int
+	RetryAfter time.Duration
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("webpush: push service answered %d", e.Status)
+}
+
+// Retryable reports a temporary condition: rate limiting or a server error.
+func (e *StatusError) Retryable() bool {
+	return e.Status == http.StatusTooManyRequests || e.Status >= 500
+}
+
+// parseRetryAfter reads delay-seconds or an HTTP date, bounded to
+// maxRetryAfter; anything else is zero.
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	var delay time.Duration
+	if seconds, err := strconv.Atoi(value); err == nil {
+		// Clamp before converting: a huge value would overflow Duration.
+		delay = time.Duration(min(max(seconds, 0), int(maxRetryAfter/time.Second))) * time.Second
+	} else if at, err := http.ParseTime(value); err == nil {
+		delay = at.Sub(now)
+	}
+	return min(max(delay, 0), maxRetryAfter)
+}
+
 // Subscription is a browser PushSubscription.
 type Subscription struct {
 	Endpoint string
@@ -290,6 +326,6 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, msg Message) error 
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return nil
 	default:
-		return fmt.Errorf("webpush: push service answered %d", resp.StatusCode)
+		return &StatusError{Status: resp.StatusCode, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), now())}
 	}
 }

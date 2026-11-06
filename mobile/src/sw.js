@@ -10,7 +10,7 @@ import { Groups } from "./core/groups.js";
 import { MUTED_CACHE, MUTED_URL } from "./core/conversation-prefs.js";
 import { SYNC_TAG, enqueue, flush, pending } from "./core/outbox.js";
 import { Msg } from "./core/frame.js";
-import { INTENT_CACHE, announceRead, saveAnswerIntent } from "./core/push.js";
+import { INTENT_CACHE, announceRead, registerSubscription, saveAnswerIntent } from "./core/push.js";
 import { currentFence } from "./core/db.js";
 import { putShare, shareText } from "./core/share-store.js";
 
@@ -322,13 +322,61 @@ self.addEventListener("notificationclose", event => {
     event.waitUntil(updateBadge());
 });
 
-// The app re-registers the new subscription with the server when it next
-// connects; here we only make sure a subscription exists.
+// (701) A rotated subscription is reported to the server right away through
+// a short-lived device session, so pushes keep arriving while the app stays
+// closed. The app also re-registers on its next connect, so a failure here
+// only delays delivery until then.
 self.addEventListener("pushsubscriptionchange", event => {
     const options = event.oldSubscription?.options;
-    if (!options?.applicationServerKey) return;
-    event.waitUntil(self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: options.applicationServerKey }).catch(() => {}));
+    event.waitUntil((async () => {
+        let sub = event.newSubscription || null;
+        if (!sub && options?.applicationServerKey) {
+            sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: options.applicationServerKey }).catch(() => null);
+        }
+        if (!sub) return;
+        try {
+            await reportSubscription(sub);
+        } catch {
+            // Offline or the server was unreachable: Background Sync retries
+            // with the then-current subscription, also while the app is closed.
+            await self.registration.sync?.register(PUSH_SYNC_TAG).catch(() => {});
+        }
+    })());
 });
+
+const PUSH_SYNC_TAG = "noxa-push-subscription";
+
+/** Reports the browser's current push subscription again (Background Sync). */
+async function syncPushSubscription() {
+    const sub = await self.registration.pushManager.getSubscription();
+    if (sub) await reportSubscription(sub);
+}
+
+// The signing identity of a report must still be the stored one when it is
+// sent; an account switch or sign-out meanwhile cancels the report.
+const sameIdentity = (a, b) => !!a?.edPublic && !!b?.edPublic &&
+    a.edPublic.length === b.edPublic.length && a.edPublic.every((byte, i) => byte === b.edPublic[i]);
+
+/**
+ * Registers a rotated push subscription through a short-lived session. It
+ * sends nothing when the subscription was replaced meanwhile (an older report
+ * must not replace a newer one) or the stored account changed while it
+ * signed in.
+ */
+async function reportSubscription(sub) {
+    const stored = await loadIdentity();
+    if (!stored?.meta?.linked) return;
+    const info = await (await fetch("/api/v1/web/info", { cache: "no-store" })).json();
+    const conn = await Connection.open();
+    try {
+        await signIn(conn, stored.identity, { version: info.version || "0.0.0" });
+        const [current, latest] = await Promise.all([self.registration.pushManager.getSubscription(), loadIdentity()]);
+        if (current?.endpoint !== sub.endpoint || !latest?.meta?.linked || !sameIdentity(latest.identity, stored.identity)) return;
+        await registerSubscription(conn, sub);
+    } finally {
+        conn.close();
+    }
+}
 
 
 // --- Background Sync: send the outbox while the app is closed ---------------
@@ -404,4 +452,5 @@ async function syncOutbox() {
 
 self.addEventListener("sync", event => {
     if (event.tag === SYNC_TAG) event.waitUntil(syncOutbox());
+    else if (event.tag === PUSH_SYNC_TAG) event.waitUntil(syncPushSubscription());
 });
