@@ -118,6 +118,10 @@ func (q *queryBackend) SetIntegrationChatFilters(ctx context.Context, principal 
 	return q.tcp.SetIntegrationChatFilters(ctx, principal, patch)
 }
 
+func (q *queryBackend) BroadcastIntegrationAlert(ctx context.Context, principal auth.IntegrationPrincipal, request netproto.ServerBroadcast) (netproto.ServerBroadcastResult, error) {
+	return q.tcp.BroadcastIntegrationAlert(ctx, principal, request)
+}
+
 func (q *queryBackend) SetIntegrationServerText(ctx context.Context, principal auth.IntegrationPrincipal, request netproto.ServerTextSet) (netproto.ServerTextResult, error) {
 	return q.tcp.SetIntegrationServerText(ctx, principal, request)
 }

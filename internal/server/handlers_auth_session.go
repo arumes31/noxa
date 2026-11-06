@@ -244,6 +244,13 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		return err
 	}
 
+	// A shutdown announced before this login still applies to it.
+	if payload, ok := s.pendingShutdownEvent(time.Now()); ok {
+		if err := s.writeRoleBroadcastInContext(ctx, client, payload); err != nil {
+			return err
+		}
+	}
+
 	// (133) active announcement, if any — after the snapshot so clients
 	// process it as the first live event. It stays here rather than moving
 	// behind key publish: deliverScopeKey skips clients that never published

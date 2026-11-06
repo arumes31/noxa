@@ -281,6 +281,11 @@ export class ChatSession extends EventTarget {
                 return;
             case "announcement": {
                 const text = data.enc ? this.decrypt(0, data.key_id, data.text) : data.text || "";
+                if (data.transient) {
+                    // A one-time broadcast leaves the stored announcement alone.
+                    if (text) this.#emit("broadcast", { text, at: Date.now() });
+                    return;
+                }
                 this.announcement = text ? { text, at: Date.now() } : null;
                 this.#emit("announcement", this.announcement);
                 return;

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +61,9 @@ type Server struct {
 	// MaxConcurrentLoginKDF caps concurrent password verifications across all
 	// ServerQuery, SSH, and gRPC admin login attempts. Defaults to 8.
 	MaxConcurrentLoginKDF int
+	// AllowedPrefixes restricts source addresses for the raw and SSH
+	// listeners. Empty allows every source.
+	AllowedPrefixes []netip.Prefix
 
 	listener net.Listener
 
@@ -174,6 +178,12 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 		}
 
+		if !s.sourceAllowed(conn) {
+			s.logger.Warn("query connection refused: source not in query_allowed_cidrs",
+				zap.String("remote", conn.RemoteAddr().String()))
+			_ = conn.Close()
+			continue
+		}
 		if !s.registerConn(conn) {
 			s.logger.Warn("query connection refused: too many connections",
 				zap.String("remote", conn.RemoteAddr().String()))
@@ -207,6 +217,25 @@ func (s *Server) Close() error {
 	})
 	s.wg.Wait()
 	return err
+}
+
+// sourceAllowed reports whether conn's remote address is permitted by
+// AllowedPrefixes. Refused sources get no banner or error line.
+func (s *Server) sourceAllowed(conn net.Conn) bool {
+	if len(s.AllowedPrefixes) == 0 {
+		return true
+	}
+	addrPort, err := netip.ParseAddrPort(conn.RemoteAddr().String())
+	if err != nil {
+		return false
+	}
+	addr := addrPort.Addr().Unmap().WithZone("")
+	for _, prefix := range s.AllowedPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // registerConn adds conn to the active set if below the cap.

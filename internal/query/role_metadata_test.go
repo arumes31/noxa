@@ -24,6 +24,20 @@ type metadataQueryBackend struct {
 	filterCalls int
 	textCalls   int
 	customCalls int
+	broadcasts  []string
+}
+
+func (b *metadataQueryBackend) BroadcastIntegrationAlert(ctx context.Context, _ auth.IntegrationPrincipal, request netproto.ServerBroadcast) (netproto.ServerBroadcastResult, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.err != nil {
+		return netproto.ServerBroadcastResult{}, b.err
+	}
+	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 10*time.Second {
+		return netproto.ServerBroadcastResult{}, fmt.Errorf("missing bounded operation context")
+	}
+	b.broadcasts = append(b.broadcasts, request.Text)
+	return netproto.ServerBroadcastResult{ContentHash: fmt.Sprintf("%x", sha256.Sum256([]byte(request.Text)))}, nil
 }
 
 func (b *metadataQueryBackend) SetIntegrationServerText(ctx context.Context, _ auth.IntegrationPrincipal, request netproto.ServerTextSet) (netproto.ServerTextResult, error) {
@@ -213,6 +227,25 @@ func TestRoleMetadataQueryAndSSH(t *testing.T) {
 				if got := lastErr(t, execute(invalid)); !strings.HasPrefix(got, "error id=512 ") {
 					t.Fatal(got)
 				}
+			}
+			alert := "Restart | in 5 min\nsave your work ü"
+			var broadcastResult netproto.ServerBroadcastResult
+			broadcastCommand := inspectionCommand(t, "broadcast", netproto.ServerBroadcast{Text: alert})
+			decode(broadcastCommand, &broadcastResult)
+			if broadcastResult.ContentHash != fmt.Sprintf("%x", sha256.Sum256([]byte(alert))) {
+				t.Fatalf("broadcast acknowledgement: %+v", broadcastResult)
+			}
+			for _, invalid := range []string{`broadcast`, `broadcast data={}`, `broadcast data={"text":"   "}`, inspectionCommand(t, "broadcast", netproto.ServerBroadcast{Text: strings.Repeat("x", netproto.MaxServerBroadcastBytes+1)}), broadcastCommand + " extra=1", broadcastCommand + " extra"} {
+				if got := lastErr(t, execute(invalid)); !strings.HasPrefix(got, "error id=512 ") {
+					t.Fatal(got)
+				}
+			}
+			b.mu.Lock()
+			broadcasts := append([]string(nil), b.broadcasts...)
+			b.broadcasts = nil
+			b.mu.Unlock()
+			if len(broadcasts) != 1 || broadcasts[0] != alert {
+				t.Fatalf("backend broadcasts = %q, want exactly the one valid alert", broadcasts)
 			}
 			customRead := inspectionCommand(t, "customquery", netproto.CustomMetadataQuery{UniqueID: "target|uid", AfterKey: "before", Limit: 1})
 			var customPage netproto.CustomMetadataPage

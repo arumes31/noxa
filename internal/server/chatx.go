@@ -1693,6 +1693,26 @@ func (s *TCPServer) serverSettingPlain(ctx context.Context, key string) string {
 	return plain
 }
 
+// sealGlobalText encrypts operator text under the global chat scope, as
+// stored announcements are. label names the text in logs and errors.
+func (s *TCPServer) sealGlobalText(ctx context.Context, label, value string) (string, uint32, error) {
+	if s.chatKeys == nil || !s.chatKeys.configured() {
+		return "", 0, errChatKeysUnconfigured
+	}
+	// Global is a fixed, known scope; the boot-time mint normally beat us
+	// here, and ensuring it is the documented authorised third site.
+	if _, _, err := s.chatKeys.EnsureScope(ctx, globalChatScope); err != nil {
+		s.logger.Warn("ensuring global chat key failed", zap.String("key", label), zap.Error(err))
+		return "", 0, fmt.Errorf("ensuring global chat key for %s: %w", label, err)
+	}
+	id, ct, err := s.chatKeys.seal(ctx, globalChatScope, value)
+	if err != nil {
+		s.logger.Warn("sealing server setting failed", zap.String("key", label), zap.Error(err))
+		return "", 0, fmt.Errorf("sealing %s: %w", label, err)
+	}
+	return ct, id, nil
+}
+
 // Authorization belongs to the native boundary or integration lease.
 // Keep edits ordered with re-seal write-back; a saved edit gets its own audit
 // attempt and never returns a later protected read as its acknowledgement.
@@ -1717,19 +1737,9 @@ func (s *TCPServer) setServerSettingAndAnnounce(ctx context.Context, key, value,
 	}
 	keyID := uint32(0)
 	if sealedSetting(key) && value != "" {
-		if s.chatKeys == nil || !s.chatKeys.configured() {
-			return errChatKeysUnconfigured
-		}
-		// Global is a fixed, known scope; the boot-time mint normally beat us
-		// here, and ensuring it is the documented authorised third site.
-		if _, _, err := s.chatKeys.EnsureScope(ctx, globalChatScope); err != nil {
-			s.logger.Warn("ensuring global chat key failed", zap.String("key", key), zap.Error(err))
-			return fmt.Errorf("ensuring global chat key for %s: %w", key, err)
-		}
-		id, ct, err := s.chatKeys.seal(ctx, globalChatScope, value)
+		ct, id, err := s.sealGlobalText(ctx, key, value)
 		if err != nil {
-			s.logger.Warn("sealing server setting failed", zap.String("key", key), zap.Error(err))
-			return fmt.Errorf("sealing %s: %w", key, err)
+			return err
 		}
 		value, keyID = ct, id
 	}
