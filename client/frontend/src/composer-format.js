@@ -29,7 +29,42 @@ export function toggleFormat(value, start, end, marker) {
         selected[m] !== marker[0] && selected[selected.length - m - 1] !== marker[0]) {
         return { value: value.slice(0, start) + selected.slice(m, -m) + value.slice(end), start, end: end - 2 * m };
     }
-    return { value: value.slice(0, start) + marker + selected + marker + value.slice(end), start: start + m, end: end + m };
+    return wrapSelection(value, start, end, marker);
+}
+
+const MARKER_CHARS = "*_~`";
+const isSpace = ch => /\s/.test(ch);
+
+// wrapSelection adds markers the renderer (markdown.js) can show: emphasis
+// never spans lines, so each line is wrapped on its own; spaces stay outside
+// the markers; italic only renders on whole words, so an italic selection
+// grows to the word around it; and a segment that already contains the
+// marker character is left as it is, because the renderer would show it
+// literally. null means nothing could be wrapped.
+function wrapSelection(value, start, end, marker) {
+    if (marker === "*") {
+        while (start > 0 && !isSpace(value[start - 1]) && value[start - 1] !== "(" && !MARKER_CHARS.includes(value[start - 1])) start--;
+        while (end < value.length && !isSpace(value[end]) && value[end] !== ")" && !MARKER_CHARS.includes(value[end])) end++;
+    }
+    const lines = value.slice(start, end).split("\n");
+    let changed = false;
+    let first = null;
+    const wrapped = lines.map(line => {
+        const lead = line.match(/^\s*/)[0];
+        const core = line.trim();
+        if (!core || core.includes(marker[0])) return line;
+        changed = true;
+        first ||= { offset: lead.length, length: core.length };
+        return lead + marker + core + marker + line.slice(lead.length + core.length);
+    });
+    if (!changed) return null;
+    const text = wrapped.join("\n");
+    const next = value.slice(0, start) + text + value.slice(end);
+    if (lines.length === 1) {
+        const at = start + first.offset + marker.length;
+        return { value: next, start: at, end: at + first.length };
+    }
+    return { value: next, start, end: start + text.length };
 }
 
 /** Shortcut format for a keydown (Ctrl/Cmd + B/I/U), or null. */

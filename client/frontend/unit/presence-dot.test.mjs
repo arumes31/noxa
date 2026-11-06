@@ -28,3 +28,11 @@ test("the dot wraps the avatar and is hidden from assistive technology", () => {
     assert.equal(dot.dataset.presence, "busy");
     assert.equal(dot.attrs["aria-hidden"], "true");
 });
+
+test("each presence gets its own dot state; invisible renders offline", () => {
+    for (const [status, state] of [["", "online"], ["away", "away"], ["offline", "offline"], ["invisible", "offline"]]) {
+        const dot = withPresenceDot({ tagName: "span" }, status, fakeDocument()).children[1];
+        assert.equal(dot.dataset.presence, state, status || "(none)");
+        assert.equal(dot.attrs["aria-hidden"], "true");
+    }
+});

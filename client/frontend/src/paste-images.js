@@ -25,6 +25,24 @@ const defaultDecode = file => createImageBitmap(file);
 const defaultCanvas = (width, height) => new OffscreenCanvas(width, height);
 
 export const WEBP_QUALITY = 0.92;
+// Larger images are attached as pasted instead of being decoded for WebP.
+export const MAX_CONVERT_PIXELS = 50_000_000;
+
+/**
+ * Width and height from a PNG (IHDR) or BMP (DIB) header, or null when the
+ * header is not recognised. Reads only the first bytes of the file.
+ */
+export async function imageHeaderSize(file) {
+    const bytes = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+        return { width: view.getUint32(16), height: view.getUint32(20) };
+    }
+    if (bytes.length >= 26 && bytes[0] === 0x42 && bytes[1] === 0x4d) {
+        return { width: Math.abs(view.getInt32(18, true)), height: Math.abs(view.getInt32(22, true)) };
+    }
+    return null;
+}
 const MIN_SAVING = 0.9; // keep the WebP only below 90% of the original size
 
 /** High-quality WebP of a pasted PNG/BMP when clearly smaller; otherwise file. */
@@ -32,6 +50,8 @@ export async function webpFromPaste(file, { decode = defaultDecode, makeCanvas =
     if (!CONVERTIBLE.has(file?.type)) return file;
     let bitmap = null;
     try {
+        const size = await imageHeaderSize(file);
+        if (!size || !(size.width * size.height <= MAX_CONVERT_PIXELS)) return file;
         bitmap = await decode(file);
         if (!(bitmap.width > 0 && bitmap.height > 0)) return file;
         const canvas = makeCanvas(bitmap.width, bitmap.height);

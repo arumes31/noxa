@@ -557,6 +557,13 @@ function persistSettings() {
     }, 1200);
 }
 
+function saveSettingsNow() {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = null;
+    const s = V().state.settings;
+    if (s) app().SaveSettings(s);
+}
+
 function hashStr(s) {
     let h = 5381;
     for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
@@ -930,9 +937,14 @@ async function confirmOwnDelete(dialog) {
     const settings = V().state.settings;
     if (settings?.skip_own_delete_confirm) return true;
     const answer = await confirmWithOption({ ...dialog, optionLabel: t("chat.deleteDontAsk") });
-    if (answer.confirmed && answer.checked && settings) {
-        settings.skip_own_delete_confirm = true;
-        persistSettings();
+    if (answer.confirmed && answer.checked) {
+        // Save at once: a settings_update from another connection during the
+        // usual persist delay would replace the object and drop the choice.
+        const current = V().state.settings;
+        if (current) {
+            current.skip_own_delete_confirm = true;
+            saveSettingsNow();
+        }
     }
     return answer.confirmed;
 }

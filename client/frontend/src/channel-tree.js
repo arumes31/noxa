@@ -91,6 +91,8 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             root.appendChild(empty);
         }
         const byParent = voiceChannelTree(state.channels);
+        // Unread rollups count every subchannel, also those the filter hides.
+        unfilteredTree = voiceChannelTree(state.channels);
         // (319) live tree filter: matching channels/users stay; a channel stays
         // when it or a descendant or one of its users matches.
         if (state.treeFilter) {
@@ -166,6 +168,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         expandingChannel = null;
     }
 
+    let unfilteredTree = null;
     function renderChannel(parentEl, ch, byParent, depth) {
         const tabID = state.activeTabID, generation = state.serverGeneration;
         const node = document.createElement("div");
@@ -320,8 +323,9 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         if (expandable) el.setAttribute("aria-expanded", String(!collapsed));
         // (620) A collapsed channel's badge includes its subchannels' unread
         // messages; the label says so, the count stays on one badge.
-        if (collapsed && (byParent.get(ch.ChannelID) || []).length > 0) {
-            const below = descendantUnread(ch.ChannelID, byParent, (id) => chatUI.unreadFor(id));
+        const allChildren = unfilteredTree || byParent;
+        if (collapsed && (allChildren.get(ch.ChannelID) || []).length > 0) {
+            const below = descendantUnread(ch.ChannelID, allChildren, (id) => chatUI.unreadFor(id));
             if (below.n > 0) {
                 const total = combineUnread(chatUI.unreadFor(ch.ChannelID), below);
                 el.querySelector(".ch-unread")?.remove();
@@ -422,7 +426,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         row.setAttribute("role", "treeitem"); // (343)
         row.setAttribute("aria-selected", String(state.multiSelect.has(c.client_id)));
         row.setAttribute("aria-label", [c.nickname || c.unique_id || t("runtime.user"),
-            c.status && presenceLabel(c.status), speakingHere && t("runtime.speaking"),
+            presenceLabel(c.status), speakingHere && t("runtime.speaking"),
             c.priority_speaker && t("runtime.priority"),
             c.is_guest === true && t("runtime.guestAccount"),
             c.on_mobile && t("runtime.onMobile"),
