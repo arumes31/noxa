@@ -113,7 +113,9 @@ func (s *Store) DeliverWebhook(ctx context.Context, id int64, hash []byte, autho
 		return hook, 0, "", 0, err
 	}
 	now := time.Now()
-	if now.After(reset) {
+	// A reset further ahead than one window cannot come from this clock (for
+	// example the database default on a new hook): start a fresh window.
+	if now.After(reset) || reset.After(now.Add(WebhookRateWindow)) {
 		count = 0
 		reset = now.Add(WebhookRateWindow)
 	}

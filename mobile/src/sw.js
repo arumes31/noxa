@@ -333,11 +333,36 @@ self.addEventListener("pushsubscriptionchange", event => {
         if (!sub && options?.applicationServerKey) {
             sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: options.applicationServerKey }).catch(() => null);
         }
-        if (sub) await reportSubscription(sub).catch(() => {});
+        if (!sub) return;
+        try {
+            await reportSubscription(sub);
+        } catch {
+            // Offline or the server was unreachable: Background Sync retries
+            // with the then-current subscription, also while the app is closed.
+            await self.registration.sync?.register(PUSH_SYNC_TAG).catch(() => {});
+        }
     })());
 });
 
-/** Registers a rotated push subscription through a short-lived session. */
+const PUSH_SYNC_TAG = "noxa-push-subscription";
+
+/** Reports the browser's current push subscription again (Background Sync). */
+async function syncPushSubscription() {
+    const sub = await self.registration.pushManager.getSubscription();
+    if (sub) await reportSubscription(sub);
+}
+
+// The signing identity of a report must still be the stored one when it is
+// sent; an account switch or sign-out meanwhile cancels the report.
+const sameIdentity = (a, b) => !!a?.edPublic && !!b?.edPublic &&
+    a.edPublic.length === b.edPublic.length && a.edPublic.every((byte, i) => byte === b.edPublic[i]);
+
+/**
+ * Registers a rotated push subscription through a short-lived session. It
+ * sends nothing when the subscription was replaced meanwhile (an older report
+ * must not replace a newer one) or the stored account changed while it
+ * signed in.
+ */
 async function reportSubscription(sub) {
     const stored = await loadIdentity();
     if (!stored?.meta?.linked) return;
@@ -345,6 +370,8 @@ async function reportSubscription(sub) {
     const conn = await Connection.open();
     try {
         await signIn(conn, stored.identity, { version: info.version || "0.0.0" });
+        const [current, latest] = await Promise.all([self.registration.pushManager.getSubscription(), loadIdentity()]);
+        if (current?.endpoint !== sub.endpoint || !latest?.meta?.linked || !sameIdentity(latest.identity, stored.identity)) return;
         await registerSubscription(conn, sub);
     } finally {
         conn.close();
@@ -425,4 +452,5 @@ async function syncOutbox() {
 
 self.addEventListener("sync", event => {
     if (event.tag === SYNC_TAG) event.waitUntil(syncOutbox());
+    else if (event.tag === PUSH_SYNC_TAG) event.waitUntil(syncPushSubscription());
 });

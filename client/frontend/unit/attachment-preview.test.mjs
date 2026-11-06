@@ -29,3 +29,9 @@ test("binary or malformed content is not previewed", () => {
     assert.equal(decodeTextPreview(Buffer.from([0xff, 0xfe, 0xfd]).toString("base64")), null, "invalid UTF-8");
     assert.equal(decodeTextPreview("%%%not-base64"), null);
 });
+
+test("a NUL byte anywhere, also after the first 8 KB, keeps the file a download", () => {
+    const text = "a".repeat(20000) + "\u0000" + "tail";
+    assert.equal(decodeTextPreview(b64(text)), null);
+    assert.ok(decodeTextPreview(b64("a".repeat(20000))));
+});

@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
+	"net/url"
 	"os"
 	"sync"
 	"testing"
@@ -121,6 +124,11 @@ func TestPushRetryableClassifiesErrors(t *testing.T) {
 		context.DeadlineExceeded:                              false,
 		context.Canceled:                                      false,
 		webpush.ErrGone:                                       false,
+		// Certificate failures are wrapped in *url.Error, itself a net.Error,
+		// but a retry cannot make them verify.
+		&url.Error{Op: "Post", URL: "https://push.example", Err: x509.UnknownAuthorityError{}}:                                                     false,
+		&url.Error{Op: "Post", URL: "https://push.example", Err: &tls.CertificateVerificationError{Err: x509.HostnameError{Host: "push.example"}}}: false,
+		&url.Error{Op: "Post", URL: "https://push.example", Err: &net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded}}:                            true,
 	}
 	for err, want := range cases {
 		if got := pushRetryable(err); got != want {

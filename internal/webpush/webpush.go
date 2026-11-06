@@ -71,7 +71,8 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 	}
 	var delay time.Duration
 	if seconds, err := strconv.Atoi(value); err == nil {
-		delay = time.Duration(seconds) * time.Second
+		// Clamp before converting: a huge value would overflow Duration.
+		delay = time.Duration(min(max(seconds, 0), int(maxRetryAfter/time.Second))) * time.Second
 	} else if at, err := http.ParseTime(value); err == nil {
 		delay = at.Sub(now)
 	}

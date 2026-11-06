@@ -239,6 +239,8 @@ func TestParseRetryAfter(t *testing.T) {
 		"soon":                          0,
 		"Fri, 06 Nov 2026 12:00:45 GMT": 45 * time.Second,
 		"Fri, 06 Nov 2026 11:00:00 GMT": 0,
+		"600":                           10 * time.Minute,
+		"999999999999":                  10 * time.Minute, // would overflow Duration unclamped
 	}
 	for value, want := range cases {
 		if got := parseRetryAfter(value, now); got != want {

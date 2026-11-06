@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"noxa/internal/auth"
@@ -126,10 +127,19 @@ func TestIntegrationWebhookTCPManagementHTTPEncryptedDeliveryAndRevocation(t *te
 	for i := 0; i < 4; i++ {
 		post(created.Token, `{"content":"Another build"}`, 201)
 	}
-	post(created.Token, `{"content":"Too fast"}`, 429)
-	if headers.Get("X-RateLimit-Remaining") != "0" || headers.Get("Retry-After") == "" ||
-		(headers.Get("Retry-After") != headers.Get("X-RateLimit-Reset") && headers.Get("X-RateLimit-Reset") != "0") {
-		t.Fatalf("rate headers when limited: %v", headers)
+	// Controlled reset times: the window ends 1.5 s or 0.2 s from now.
+	for _, tc := range []struct {
+		in        time.Duration
+		want      string
+		wantReset string
+	}{{1500 * time.Millisecond, "2", "2"}, {200 * time.Millisecond, "1", "1"}} {
+		if _, err := db.DB().ExecContext(t.Context(), `UPDATE incoming_webhooks SET rate_reset=$1, rate_count=5 WHERE id=$2`, time.Now().Add(tc.in), created.ID); err != nil {
+			t.Fatal(err)
+		}
+		post(created.Token, `{"content":"Too fast"}`, 429)
+		if headers.Get("X-RateLimit-Remaining") != "0" || headers.Get("Retry-After") != tc.want || headers.Get("X-RateLimit-Reset") != tc.wantReset {
+			t.Fatalf("reset in %s: rate headers %v, want Retry-After %s and reset %s", tc.in, headers, tc.want, tc.wantReset)
+		}
 	}
 	if _, err := db.DB().ExecContext(t.Context(), `UPDATE incoming_webhooks SET rate_reset=NOW()-INTERVAL '1 second'`); err != nil {
 		t.Fatal(err)

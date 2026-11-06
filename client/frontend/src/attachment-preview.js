@@ -34,7 +34,7 @@ export function decodeTextPreview(b64, maxLines = TEXT_PREVIEW_LINES) {
     } catch {
         return null;
     }
-    if (bytes.subarray(0, 8192).includes(0)) return null;
+    if (bytes.includes(0)) return null; // a NUL anywhere means binary
     let text;
     try {
         text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);

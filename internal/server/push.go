@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -204,7 +206,7 @@ func (s *TCPServer) pushNotify(principal string, n pushNotice) {
 				s.schedulePush(sub, n)
 				continue
 			}
-			s.deliverPush(ctx, sub, n)
+			s.deliverPushWithin(sub, n)
 		}
 	}()
 }
@@ -294,6 +296,18 @@ func (s *TCPServer) schedulePush(sub store.PushSubscription, n pushNotice) {
 	s.push.pending[key] = p
 }
 
+// deliverPushWithin gives one subscription its own send budget, so retries
+// for a slow device cannot use up the time of the devices after it.
+func (s *TCPServer) deliverPushWithin(sub store.PushSubscription, n pushNotice) {
+	ctx, cancel := context.WithTimeout(context.Background(), pushSendDeadline)
+	defer cancel()
+	s.deliverPush(ctx, sub, n)
+}
+
+// pushRecordTimeout bounds bookkeeping after a send, which may run after the
+// send's own deadline has passed.
+const pushRecordTimeout = 5 * time.Second
+
 func (s *TCPServer) deliverPush(ctx context.Context, sub store.PushSubscription, n pushNotice) {
 	pushes, ok := s.pushStore()
 	if !ok {
@@ -322,10 +336,12 @@ func (s *TCPServer) deliverPush(ctx context.Context, sub store.PushSubscription,
 		msg.TTL = time.Hour
 	}
 	err = s.sendPushWithRetry(ctx, webpush.Subscription{Endpoint: sub.Endpoint, P256dh: sub.P256dh, Auth: sub.Auth}, msg)
+	recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), pushRecordTimeout)
+	defer cancelRecord()
 	switch {
 	case errors.Is(err, webpush.ErrGone):
 		s.metricsSink().IncPushDelivery("gone")
-		if err := pushes.DeletePushEndpoint(ctx, sub.Endpoint); err != nil {
+		if err := pushes.DeletePushEndpoint(recordCtx, sub.Endpoint); err != nil {
 			s.logger.Warn("dropping expired push subscription failed", zap.Error(err))
 		}
 		return
@@ -334,13 +350,13 @@ func (s *TCPServer) deliverPush(ctx context.Context, sub store.PushSubscription,
 	case err != nil:
 		s.metricsSink().IncPushDelivery("failed")
 		s.logger.Info("push delivery failed", zap.String("device_id", sub.DeviceID), zap.Error(err))
-		if err := pushes.RecordPushResult(ctx, sub.Endpoint, false, pushMaxFailures); err != nil {
-			s.logger.Warn("recording push failure failed", zap.Error(err))
+		if recordErr := pushes.RecordPushResult(recordCtx, sub.Endpoint, false, pushMaxFailures); recordErr != nil {
+			s.logger.Warn("recording push failure failed", zap.Error(recordErr), zap.NamedError("delivery_error", err))
 		}
 		return
 	}
 	s.metricsSink().IncPushDelivery("ok")
-	_ = pushes.RecordPushResult(ctx, sub.Endpoint, true, pushMaxFailures)
+	_ = pushes.RecordPushResult(recordCtx, sub.Endpoint, true, pushMaxFailures)
 	key := pushKey{sub.DeviceID, n.Tag}
 	now := time.Now()
 	s.push.mu.Lock()
@@ -398,7 +414,7 @@ func (s *TCPServer) pushClear(principal, tag, skipDevice string) {
 			_, wasShown := s.push.shown[key]
 			s.push.mu.Unlock()
 			if wasShown && sub.DeviceID != skipDevice && !silentPushRevokes(sub.Endpoint) {
-				s.deliverPush(ctx, sub, pushNotice{Kind: pushKindClear, Tag: tag})
+				s.deliverPushWithin(sub, pushNotice{Kind: pushKindClear, Tag: tag})
 			}
 		}
 	}()
@@ -647,6 +663,14 @@ func pushRetryable(err error) bool {
 	var status *webpush.StatusError
 	if errors.As(err, &status) {
 		return status.Retryable()
+	}
+	// A certificate the push service presents will not verify on a retry.
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	var verification *tls.CertificateVerificationError
+	if errors.As(err, &unknownAuthority) || errors.As(err, &hostname) || errors.As(err, &invalid) || errors.As(err, &verification) {
+		return false
 	}
 	var network net.Error
 	return errors.As(err, &network)

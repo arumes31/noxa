@@ -132,6 +132,7 @@ func (s *TCPServer) IncomingWebhookHandler() http.Handler {
 			return
 		}
 		var rate store.WebhookIdentity
+		var slowWait time.Duration
 		err = s.withRolePolicy(ctx, func(ctx context.Context) error {
 			s.roleMetadataMu.Lock()
 			defer s.roleMetadataMu.Unlock()
@@ -155,8 +156,11 @@ func (s *TCPServer) IncomingWebhookHandler() http.Handler {
 				}
 				if ch, ok := s.deps.State.GetChannel(hook.ChannelID); !ok {
 					return "", 0, store.ErrWebhookDenied
-				} else if ch.SlowModeSeconds > 0 && !evaluator.Evaluate(hook.CreatorID, hook.ChannelID, authorization.BypassSlowmode).Allowed && s.chatSlow.check("webhook:"+strconv.FormatInt(hook.ID, 10), hook.ChannelID, ch.SlowModeSeconds, time.Now()) > 0 {
-					return "", 0, store.ErrWebhookRate
+				} else if ch.SlowModeSeconds > 0 && !evaluator.Evaluate(hook.CreatorID, hook.ChannelID, authorization.BypassSlowmode).Allowed {
+					if wait := s.chatSlow.check("webhook:"+strconv.FormatInt(hook.ID, 10), hook.ChannelID, ch.SlowModeSeconds, time.Now()); wait > 0 {
+						slowWait = wait
+						return "", 0, store.ErrWebhookRate
+					}
 				}
 				if _, _, err = s.chatKeys.EnsureScope(ctx, hook.ChannelID); err != nil {
 					return "", 0, err
@@ -182,7 +186,9 @@ func (s *TCPServer) IncomingWebhookHandler() http.Handler {
 				fail(401)
 			case errors.Is(err, store.ErrWebhookRate):
 				reset := setWebhookRateHeaders(w, rate, time.Now())
-				w.Header().Set("Retry-After", strconv.Itoa(max(1, reset)))
+				// Slow mode can ask for a longer wait than the hook's window.
+				slow := int((slowWait + time.Second - 1) / time.Second)
+				w.Header().Set("Retry-After", strconv.Itoa(max(1, reset, slow)))
 				fail(429)
 			case errors.Is(err, authorization.ErrRoleInvalid):
 				fail(400)
