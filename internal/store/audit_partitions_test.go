@@ -82,7 +82,7 @@ func TestAuditLogPartitionMigrationKeepsRowsIDsAndGrants(t *testing.T) {
 	farFuture := now.AddDate(3, 0, 0) // beyond the 12 prepared months: DEFAULT
 	for i, at := range []time.Time{old, old.Add(time.Hour), now.AddDate(0, -1, 0), now, farFuture} {
 		if _, err := s.db.ExecContext(ctx, `INSERT INTO public.audit_log (actor_unique_id, action, target, detail, created_at, scope_channel_ids)
-			VALUES ($1, 'test.action', 'target', 'detail', $2, '{}')`, fmt.Sprintf("actor-%d", i), at); err != nil {
+			VALUES ($1, 'test.action', $3, $4, $2, ARRAY[$5::bigint, 9])`, fmt.Sprintf("actor-%d", i), at, fmt.Sprintf("target-%d", i), fmt.Sprintf("detail %d", i), i+1); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -162,7 +162,7 @@ func TestAuditLogPartitionMigrationKeepsRowsIDsAndGrants(t *testing.T) {
 func auditIDs(t *testing.T, s *Store) string {
 	t.Helper()
 	var ids string
-	if err := s.db.QueryRowContext(context.Background(), `SELECT coalesce(string_agg(id::text || '@' || to_char(created_at AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISS'), ',' ORDER BY id), '') FROM public.audit_log`).Scan(&ids); err != nil {
+	if err := s.db.QueryRowContext(context.Background(), `SELECT coalesce(string_agg(concat_ws('|', id, to_char(created_at AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISSUS'), actor_unique_id, action, target, detail, coalesce(scope_channel_ids::text, 'NULL')), ',' ORDER BY id), '') FROM public.audit_log`).Scan(&ids); err != nil {
 		t.Fatal(err)
 	}
 	return ids
