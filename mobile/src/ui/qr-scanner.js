@@ -53,6 +53,14 @@ export function scanQR({ signal, labels, accept }) {
         const hidden = () => { if (document.hidden) stop(); };
         close.onclick = abort;
         dialog.addEventListener("cancel", event => { event.preventDefault(); stop(); });
+        // Escape closes only the scanner, not a sheet that listens on the
+        // document below it (the safety panel).
+        dialog.addEventListener("keydown", event => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            stop();
+        });
         document.body.append(dialog);
         dialog.showModal();
         signal?.addEventListener("abort", abort, { once: true });

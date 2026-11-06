@@ -1541,8 +1541,9 @@ stays available, also when the camera is unavailable or denied.
 
 The desktop code carries the pairwise safety number (both X25519 identity keys);
 the phone's code carries both account fingerprints it shows. The two check
-different keys, so a desktop and a phone report each other's code as coming from
-the other app and the contact is compared by reading the numbers instead.
+different keys, so neither the codes nor the displayed values can be compared
+across apps: a desktop and a phone report each other's code as coming from the
+other app, and comparing aloud only works between contacts using the same app.
 Bundled libraries: jsQR 1.4.0 (Apache-2.0) and, on the phone, qrcode-generator
 1.4.4 (MIT); their notices ship in `frontend-licenses.txt`.
 

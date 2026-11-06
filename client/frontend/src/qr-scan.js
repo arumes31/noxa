@@ -18,10 +18,29 @@ export async function createQRDecoder({ win = globalThis, loadJsQR = () => impor
             const formats = typeof Detector.getSupportedFormats === "function" ? await Detector.getSupportedFormats() : ["qr_code"];
             if (formats.includes("qr_code")) {
                 const detector = new Detector({ formats: ["qr_code"] });
-                return async video => (await detector.detect(video))[0]?.rawValue || "";
+                // A native detector that rejects a frame (some platforms list
+                // qr_code but cannot run it) hands over to jsQR for good. A
+                // failed jsQR load is forgotten so the next frame retries it.
+                let fallback = null;
+                let pending = null;
+                let nativeFailed = false;
+                return async (video, frame) => {
+                    if (fallback) return fallback(video, frame);
+                    if (!nativeFailed) {
+                        try {
+                            return (await detector.detect(video))[0]?.rawValue || "";
+                        } catch { nativeFailed = true; }
+                    }
+                    pending ||= jsQRDecoder(loadJsQR).then(decode => { fallback = decode; return decode; }, error => { pending = null; throw error; });
+                    return (await pending)(video, frame);
+                };
             }
         } catch { /* fall back to jsQR */ }
     }
+    return jsQRDecoder(loadJsQR);
+}
+
+async function jsQRDecoder(loadJsQR) {
     const { default: decode } = await loadJsQR();
     return async (video, { canvas, context }) => {
         if (!video.videoWidth) return "";
@@ -40,7 +59,7 @@ export async function createQRDecoder({ win = globalThis, loadJsQR = () => impor
  * with the accepted value, or null when cancelled or the camera failed.
  * labels: { title, hint, cancel, unavailable }.
  */
-export function scanQR({ labels, accept, doc = document, media = globalThis.navigator?.mediaDevices, decoder = createQRDecoder }) {
+export function scanQR({ labels, accept, doc = document, media = globalThis.navigator?.mediaDevices, decoder = createQRDecoder, mount = null }) {
     return new Promise(resolve => {
         let stream = null, timer = null, finished = false;
         const overlay = doc.createElement("div");
@@ -86,6 +105,7 @@ export function scanQR({ labels, accept, doc = document, media = globalThis.navi
         const finish = (value = null) => {
             if (finished) return;
             finished = true;
+            removal?.disconnect();
             stopCamera();
             overlay.remove();
             doc.removeEventListener("keydown", onKey, true);
@@ -107,7 +127,14 @@ export function scanQR({ labels, accept, doc = document, media = globalThis.navi
         overlay.addEventListener("click", event => { if (event.target === overlay) finish(); });
         doc.addEventListener("keydown", onKey, true);
         doc.addEventListener("visibilitychange", onHidden);
-        doc.body.append(overlay);
+        // mount registers the overlay with a dialog lifecycle (for example
+        // closing on a server change). Whoever removes it, the camera stops
+        // and the scan resolves.
+        if (mount) mount(overlay);
+        else doc.body.append(overlay);
+        const removal = typeof MutationObserver === "function" ? new MutationObserver(() => { if (!overlay.isConnected) finish(); }) : null;
+        removal?.observe(doc.body, { childList: true, subtree: true });
+        if (!overlay.isConnected) { finish(); return; }
         cancel.focus();
 
         (async () => {

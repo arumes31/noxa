@@ -24,7 +24,8 @@ async function open(page, camera) {
         window.__saved = [];
         window.__tracksStopped = 0;
         window.__codes = [];
-        window.runtime = { EventsOn: () => () => {}, EventsEmit() {}, WindowIsFullscreen: async () => false };
+        window.__events = {};
+        window.runtime = { EventsOn: (name, fn) => { (window.__events[name] ||= []).push(fn); return () => {}; }, EventsEmit() {}, WindowIsFullscreen: async () => false };
         const settings = { language: "en", onboarding_done: true, alpha_dismissed: "test", bookmarks: [], chat_max_lines: 200 };
         window.go = { main: { App: new Proxy({}, { get(_target, method) { return async (...args) => {
             if (method === "GetSettings") return structuredClone(settings);
@@ -135,5 +136,21 @@ test("a denied camera explains the fallback and closing stops scanning", async (
     await expect(scanner).toHaveCount(0);
     await expect(scan).toBeFocused();
     await expect(dialog.getByRole("button", { name: "Mark verified" })).toBeVisible();
+    expect(await page.evaluate(() => window.__saved.length)).toBe(0);
+});
+
+test("a server change while scanning closes the scanner and stops the camera", async ({ page }) => {
+    const dialog = await open(page, "detector");
+    await dialog.getByRole("button", { name: "Scan their code" }).click();
+    const scanner = page.getByRole("dialog", { name: "Scan your contact's safety code" });
+    await expect(scanner).toBeVisible();
+    await expect.poll(() => page.evaluate(() => !!window.__constraints)).toBe(true);
+    await page.evaluate(() => { for (const cb of window.__events.tab_reset || []) cb("other-server"); });
+    await expect(scanner).toHaveCount(0);
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => window.__tracksStopped)).toBeGreaterThan(0);
+    // A code arriving afterwards changes nothing.
+    await page.evaluate(code => window.__codes.push(code), code("bob", "me"));
+    await page.waitForTimeout(500);
     expect(await page.evaluate(() => window.__saved.length)).toBe(0);
 });

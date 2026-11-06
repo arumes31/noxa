@@ -71,3 +71,35 @@ test("third-party notices cover the desktop's QR decoder", () => {
     assert.match(desktop, /^jsqr 1\.4\.0 \(Apache-2\.0\)$/m);
     assert.match(desktop, /Apache License/);
 });
+
+test("a native detector that rejects frames hands over to jsQR; a failed load retries", async () => {
+    const { createQRDecoder } = await import("../src/qr-scan.js");
+    let detects = 0, loads = 0, failLoad = true;
+    const win = { BarcodeDetector: class {
+        static async getSupportedFormats() { return ["qr_code"]; }
+        async detect() { detects++; throw new Error("not supported on this platform"); }
+    } };
+    const loadJsQR = async () => {
+        loads++;
+        if (failLoad) { failLoad = false; throw new Error("chunk failed"); }
+        return { default: () => ({ data: "decoded by jsQR" }) };
+    };
+    const decode = await createQRDecoder({ win, loadJsQR });
+    const video = { videoWidth: 4, videoHeight: 4 };
+    const frame = { canvas: {}, context: { drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(64), width: 4, height: 4 }) } };
+    await assert.rejects(decode(video, frame), /chunk failed/);
+    assert.equal(await decode(video, frame), "decoded by jsQR", "the load is retried after a failure");
+    assert.equal(await decode(video, frame), "decoded by jsQR");
+    assert.equal(detects, 1, "the native detector is not asked again");
+    assert.equal(loads, 2);
+});
+
+test("a working native detector is used without loading jsQR", async () => {
+    const { createQRDecoder } = await import("../src/qr-scan.js");
+    const win = { BarcodeDetector: class {
+        static async getSupportedFormats() { return ["qr_code"]; }
+        async detect() { return [{ rawValue: "native" }]; }
+    } };
+    const decode = await createQRDecoder({ win, loadJsQR: async () => { throw new Error("must not load"); } });
+    assert.equal(await decode({}, {}), "native");
+});

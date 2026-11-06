@@ -77,7 +77,7 @@ export async function showSafetyNumber(peer, name, onChange) {
             return;
         }
         try {
-            await dm.setVerified(peer, true);
+            await dm.setVerified(peer, true, { fingerprint: contact.fingerprint });
             input.checked = true;
             result.className = "safety-scan-result ok";
             result.textContent = t("safety.scanMatch", { name });
