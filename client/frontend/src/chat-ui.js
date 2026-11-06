@@ -1,4 +1,6 @@
 import { joinChannelLocally } from "./local-join-intent.js";
+import { openImageEditor } from "./image-editor.js";
+import { isEditable } from "./image-editor-model.js";
 import { AUDIO_MIME, TEXT_MAX_B64, decodeTextPreview, previewKind } from "./attachment-preview.js";
 import { clipboardFiles, preparePastedFiles } from "./paste-images.js";
 import { mountComposerFormat } from "./composer-format.js";
@@ -3872,6 +3874,7 @@ function renderFilePreview() {
             chip.textContent = "📎 " + f.name;
             item.appendChild(chip);
         }
+        if (isEditable(f)) item.appendChild(editStagedButton(f));
         const x = document.createElement("button");
         x.textContent = "✕";
         x.title = t("chat.remove");
@@ -3882,6 +3885,29 @@ function renderFilePreview() {
         item.appendChild(x);
         row.appendChild(item);
     });
+}
+
+// (605) Edit opens the image editor for a staged image; the result replaces
+// that staged file only while it is still staged in the same conversation.
+function editStagedButton(f) {
+    const edit = document.createElement("button");
+    edit.className = "file-preview-edit";
+    edit.textContent = "✎";
+    edit.title = t("chat.imageEditor.edit", { name: f.name });
+    edit.setAttribute("aria-label", edit.title);
+    edit.onclick = async () => {
+        const scope = captureScope(readSendScope);
+        const edited = await openImageEditor(f, {
+            maxBytes: ATTACH_MAX_BYTES,
+            isCurrent: () => scopeIsCurrent(scope, readSendScope) && pendingFiles.includes(f),
+            toast: (message, kind) => V().toast(message, kind),
+        });
+        const at = pendingFiles.indexOf(f);
+        if (!edited || at < 0 || !scopeIsCurrent(scope, readSendScope)) return;
+        pendingFiles[at] = edited;
+        renderFilePreview();
+    };
+    return edit;
 }
 
 function insertAtCursor(text, input = $("chat-text")) {
