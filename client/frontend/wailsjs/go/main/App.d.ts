@@ -99,6 +99,8 @@ export function CheckAccessForTab(arg1:string,arg2:netproto.AccessCheck):Promise
 
 export function CheckForUpdate():Promise<main.UpdateInfo>;
 
+export function ClearNativeToasts(arg1:string):Promise<void>;
+
 export function ClientID():Promise<string>;
 
 export function ClientVersion():Promise<string>;
@@ -331,6 +333,8 @@ export function MoveClient(arg1:string,arg2:number):Promise<string>;
 
 export function MoveClientForTab(arg1:string,arg2:string,arg3:number):Promise<string>;
 
+export function NativeToastsAvailable():Promise<boolean>;
+
 export function Notify(arg1:string,arg2:string):Promise<string>;
 
 export function OpenDownloadFolderForTab(arg1:string,arg2:string):Promise<string>;
@@ -538,6 +542,8 @@ export function SetVideoQuality(arg1:string):Promise<string>;
 export function SetVideoQualityForTab(arg1:string,arg2:string):Promise<string>;
 
 export function SetWindowOpacity(arg1:number):Promise<string>;
+
+export function ShowNativeToast(arg1:main.NativeToastRequest):Promise<string>;
 
 export function StartConnectionBenchmark(arg1:string):Promise<main.ConnectionBenchmarkStatus>;
 

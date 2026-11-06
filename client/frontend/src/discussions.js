@@ -33,6 +33,11 @@ const field = (key, input) => {
 };
 const requestID = () => crypto.randomUUID();
 
+// (501) The discussion thread on screen, for its Windows notification.
+export function viewedDiscussionThread() {
+    const threadID = active?.thread?.() || 0;
+    return threadID && document.hasFocus() ? { channelID: active.channelID, threadID } : null;
+}
 export function closeDiscussions() { if (active) closeDialog(active.overlay, "navigate"); }
 export function resetDiscussions() { closeDiscussions(); channelBoards.clear(); }
 export async function discussionChanged(event) {
@@ -150,6 +155,7 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
             }
             if (selected) {
                 mode = "thread";
+                if (document.hasFocus()) window.__noxaNativeToast?.viewed(tabID + "|thread:" + channelID + ":" + selected);
                 const merged = append ? [...(result.messages || []), ...messages] : [...(result.messages || [])];
                 messages = [...new Map(merged.map(message => [message.id, message])).values()].sort((a, b) => a.id - b.id);
             } else {
@@ -326,7 +332,7 @@ export function openDiscussions(channelID, source = null, initialThreadID = 0, t
         };
         content.append(form);
     };
-    active = { overlay, channelID, refresh, changed(event) {
+    active = { overlay, channelID, refresh, thread: () => (mode === "thread" ? selected : 0), changed(event) {
         if (Number(event.thread_id) === selected) {
             if (event.deleted) {
                 requestSequence++;

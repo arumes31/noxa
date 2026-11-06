@@ -1278,6 +1278,12 @@ function pageNotifications() {
     chatLevel.value = s.chat_notification_level || "all";
     chatLevel.onchange = () => { s.chat_notification_level = chatLevel.value; };
     delivery.appendChild(row(t("settings.chat.notification.category"), chatLevel));
+    // (501) Windows Action Center notifications with quick reply.
+    // Switching off removes existing toasts once saved (settings_update).
+    delivery.appendChild(row(t("settings.windowsNotifications"), checkbox(s.windows_notifications !== false, v => { s.windows_notifications = v; }),
+        "", { key: "windows_notifications", help: t("settings.windowsNotificationsHelp") }));
+    delivery.appendChild(row(t("settings.nativeNotificationPreviews"), checkbox(s.native_notification_previews !== false, v => { s.native_notification_previews = v; }),
+        "", { key: "native_notification_previews", help: t("settings.nativeNotificationPreviewsHelp") }));
     delivery.appendChild(hint(t("settings.per.channel.mute.and.notification.matrix.outputs.still.apply.after.this.cat")));
     // (385) notification matrix: rows = events, columns = outputs. The rows
     // are the dispatcher's own event list, so every event it can fire has

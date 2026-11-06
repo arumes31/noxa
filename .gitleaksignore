@@ -44,3 +44,7 @@ db4dc5ffbf444d7af421662f3ddb6c877d1ff511:.gitleaksignore:generic-api-key:16
 
 # Public bridge method name in the encryption-tooltip test, not a credential.
 e73af7b0af468464abe08bfec06b55b632d7a26d:client/frontend/tests/encryption-tooltip.spec.js:generic-api-key:24
+
+# Windows toast test token (501): a fixed 32-hex-character test value,
+# not a credential; later commits build it at runtime instead.
+6dcbc66b69fd55089c1d69a0ecd8e9ca62da86c0:client/native_toast_test.go:generic-api-key:12

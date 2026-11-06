@@ -204,6 +204,76 @@ function getStore(key) {
     return store.get(key);
 }
 
+// (501) Windows notification helpers. The key matches native-toast.js
+// ("dm:<peer>" or "ch:<channel>"). By default only a chat that is actually on
+// screen counts (not behind Files, hidden or unfocused); { visible: false }
+// asks for the selected view regardless.
+export function activeConversationKey({ visible = true } = {}) {
+    if (isPrivateGroupActive()) return null;
+    const key = activeKey();
+    return !visible || chatSurfaceVisible(key) ? key : null;
+}
+
+// quickReplyToActive sends text through the normal composer if expectedKey is
+// the selected view. An unsent draft (text or staged files) is never
+// replaced: the reply is appended to it and left for the user. Returns
+// "sent", "draft", "kept" (the send failed; the reply stays in the composer)
+// or false.
+export async function quickReplyToActive(expectedKey, text) {
+    const input = $("chat-text");
+    if (!input || activeConversationKey({ visible: false }) !== expectedKey || !String(text).trim()) return false;
+    if (activeSend || input.value.trim() || pendingFiles.length) {
+        // The DM/channel composer is a single-line input: join with a space.
+        const separator = input.value.trim() ? (input.tagName === "TEXTAREA" ? "\n" : " ") : "";
+        input.value = input.value.replace(/\s+$/, "") + separator + text;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        return "draft";
+    }
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    try {
+        await sendMessage();
+    } catch {
+        return "kept";
+    }
+    const failed = !$("chat-send-error")?.classList.contains("hidden");
+    return failed || input.value.includes(text) ? "kept" : "sent";
+}
+
+// markConversationSeen clears local unread state for a notification's
+// conversation without opening it. Read receipts stay tied to actually
+// viewing a direct conversation, so none is sent here; a channel's read
+// position follows the notified message, like reading it elsewhere.
+export function markConversationSeen(reference) {
+    if (reference?.kind === "dm" && typeof reference.peer_id === "string") {
+        const tab = pmTabs.get(reference.peer_id);
+        if (!tab) return false;
+        tab.unread = 0;
+        renderTabs();
+        return true;
+    }
+    if ((reference?.kind === "channel" || reference?.kind === "thread") && Number.isSafeInteger(reference.channel_id)) {
+        const chID = reference.channel_id;
+        const settings = V().state.settings;
+        const messageID = Number(reference.message_id) || 0;
+        if (settings && messageID > 0) {
+            settings.last_read_channels ||= {};
+            const next = mergeReadMarker(settings.last_read_channels[chID], messageID);
+            if (next > (Number(settings.last_read_channels[chID]) || 0)) {
+                settings.last_read_channels[chID] = next;
+                persistSettings();
+            }
+        }
+        markRead("ch:" + chID);
+        unread.delete(chID);
+        reportRead("channel", chID);
+        V().renderTree?.();
+        renderTabs();
+        return true;
+    }
+    return false;
+}
+
 function activeKey() {
     const st = V().state;
     if (view.kind === "global") return "ch:0";
@@ -2955,6 +3025,8 @@ function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
         resetNewCount();
     }
     if (!suppressMarkRead && !anchor) markRead(key);
+    // (501) A conversation on screen no longer needs its Windows notification.
+    if (chatSurfaceVisible(key)) window.__noxaNativeToast?.viewed(V().state.activeTabID + "|" + key);
 }
 
 function lastReadFor(key) {

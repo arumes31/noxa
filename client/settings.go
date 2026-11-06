@@ -298,6 +298,11 @@ type Settings struct {
 	// so a settings file predating the option keeps the protected default.
 	IdentityKeyProtection string `json:"identity_key_protection,omitempty"`
 
+	// (501) Windows Action Center notifications; nil means on. Previews off
+	// shows "New message" without sender or text.
+	WindowsNotifications       *bool `json:"windows_notifications,omitempty"`
+	NativeNotificationPreviews *bool `json:"native_notification_previews,omitempty"`
+
 	// Notifications (wave 9).
 	NotifyMatrix   map[string]NotifyChannels  `json:"notify_matrix,omitempty"`  // (385) event -> outputs
 	ChannelNotify  map[string]ChannelOverride `json:"channel_notify,omitempty"` // (386-389) "addr#channelID" -> override
