@@ -42,6 +42,8 @@ describe("Batch 7C frontend hardening contracts", () => {
         assert.match(main, /await window\.go\.main\.App\.DisconnectTab\(sourceTabID\);[\s\S]{0,600}catch \{[\s\S]{0,600}toast\(t\("runtime.disconnectFailed"\), "warn", "conn"\)/);
         assert.match(main, /void window\.go\.main\.App\.SendICECandidateForTab\([\s\S]{0,180}\)\.catch\(\(\) => \{\}\)/);
         assert.match(main, /const ICE_BACKOFF_MS = \[1000, 2000, 5000, 15000\]/);
+        assert.match(main, /const ICE_FIRST_RESTART_MS = \{ failed: 0, disconnected: 500 \}/);
+        assert.match(main, /window\.addEventListener\("online", nudgeICERestart\)/);
         assert.match(main, /let iceFailureNotified = false/);
         assert.match(main, /if \(!iceFailureNotified\) \{[\s\S]{0,180}toast\(t\("runtime.voiceUnstable"\)/);
         assert.doesNotMatch(main, /sysMsg\("ice restart failed/);

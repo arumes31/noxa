@@ -990,6 +990,8 @@ function scheduleReconnect() {
 if (typeof window !== "undefined") {
     const retryNow = () => {
         if (!app.identity || app.paused) return;
+        // A voice peer waiting out an ICE back-off retries at once.
+        app.voice?.networkChanged?.();
         if (!app.online) {
             reconnectAttempt = 0;
             scheduleReconnect();
@@ -1000,6 +1002,7 @@ if (typeof window !== "undefined") {
         }
     };
     window.addEventListener("online", retryNow);
+    navigator.connection?.addEventListener?.("change", () => app.voice?.networkChanged?.());
     window.addEventListener("pageshow", event => { if (event.persisted) retryNow(); });
     document.addEventListener("visibilitychange", () => {
         if (app.session && !app.meta.guest) reportVisibility(app.session.conn);

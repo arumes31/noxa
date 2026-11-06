@@ -106,6 +106,7 @@ import { createTrayVoiceSync, createTrayUnreadModel, trayInChannel } from "./tra
 import { capturePresenceScope, presenceIsCurrent, desiredPresence, restorePresenceOnActivity, setPresence } from "./presence.js";
 import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting, whisperChannelsFor } from "./media-controls.js";
 import { bindImagePlaceholders } from "./markdown.js";
+import { createResumeDetector } from "./resume-detector.js";
 
 const P = () => window.__noxaPerms;
 window.__noxaChat = chatUI;
@@ -2796,9 +2797,12 @@ $("voice-prio").onclick = async () => {
 };
 
 // (59) ICE restart ladder: on failed/disconnected, re-offer with iceRestart
-// after 1s, 2s, 5s, then 15s; a connected/completed state resets the ladder.
-// Re-offers retain the existing peer. Exhaustion must create a fresh peer
-// (new DTLS identity) rather than keep the failed transport forever.
+// at once (failed) or after 500 ms (disconnected, which often recovers by
+// itself), then after 1s, 2s, 5s and 15s; a connected/completed state resets
+// the ladder. Re-offers retain the existing peer and its media keys.
+// Exhaustion must create a fresh peer (new DTLS identity) rather than keep the
+// failed transport forever. A network change restarts a waiting ladder.
+const ICE_FIRST_RESTART_MS = { failed: 0, disconnected: 500 };
 const ICE_BACKOFF_MS = [1000, 2000, 5000, 15000];
 let iceFailures = 0;
 let iceTimer = null;
@@ -2848,7 +2852,7 @@ function resetICERestart(pc) {
 function scheduleICERestart(pc) {
     if (state.pc !== pc || !claimICERestart(pc) || !ownsICERestart(pc)) return;
     if (iceTimer !== null) return;
-    if (iceFailures >= ICE_BACKOFF_MS.length) {
+    if (iceFailures > ICE_BACKOFF_MS.length) {
         if (!iceFailureNotified) {
             iceFailureNotified = true;
             toast(t("runtime.voiceUnstable"), "warn", "conn");
@@ -2856,7 +2860,11 @@ function scheduleICERestart(pc) {
         recoverVoiceTransport.schedule(pc);
         return;
     }
-    const delay = ICE_BACKOFF_MS[iceFailures++];
+    const failed = pc.connectionState === "failed" || pc.iceConnectionState === "failed";
+    const delay = iceFailures === 0
+        ? ICE_FIRST_RESTART_MS[failed ? "failed" : "disconnected"]
+        : ICE_BACKOFF_MS[iceFailures - 1];
+    iceFailures++;
     let timer = null;
     timer = setTimeout(async () => {
         if (!ownsICERestart(pc) || iceTimer !== timer) return;
@@ -2885,6 +2893,32 @@ function scheduleICERestart(pc) {
     }
     iceTimer = timer;
 }
+
+// The OS reporting a network change is the earliest sign a restart can
+// succeed; a ladder waiting out a long back-off restarts from the first step.
+// An exhausted ladder belongs to transport recovery and is left alone.
+function nudgeICERestart() {
+    const pc = state.pc;
+    if (!pc || !voiceTransportFailed(pc) || !ownsICERestart(pc) || iceTimer === null) return;
+    clearTimeout(iceTimer);
+    iceTimer = null;
+    iceFailures = 0;
+    scheduleICERestart(pc);
+}
+window.addEventListener("online", nudgeICERestart);
+navigator.connection?.addEventListener?.("change", nudgeICERestart);
+
+// After sleep the control connection and the voice transport are usually dead
+// but not yet detected (45 s read timeout, ICE consent checks). Check every
+// server at once and restart ICE on the existing peer, which keeps its media
+// keys; a dead control connection then reconnects through the usual path.
+function recoverAfterResume() {
+    window.go?.main?.App?.ProbeConnections?.()?.catch?.(() => {});
+    const pc = state.pc;
+    if (!pc || state.myChannelID <= 0 || pc.iceConnectionState === "closed") return;
+    void renegotiate(pc, state.serverGeneration, { iceRestart: true }, () => state.pc === pc).catch(() => {});
+}
+createResumeDetector({ onResume: recoverAfterResume });
 
 function teardownVoice({ retainMedia = false } = {}) {
     stopRemoteMedia();

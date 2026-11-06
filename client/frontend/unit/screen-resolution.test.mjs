@@ -13,11 +13,12 @@ function fixture(options = {}) {
     }, update };
 }
 
-test("brief LTE bursts keep resolution; sustained throughput loss lowers it continuously", () => {
+test("sustained throughput loss snaps 1080p to 720p, then lowers it gradually", () => {
     const f = fixture();
-    for (let i = 0; i < 4; i++) assert.equal(f.tick(), 1);
-    assert.equal(f.tick(), 1.08);
-    assert.ok(Math.abs(f.tick() - 1.1664) < 1e-9);
+    assert.equal(f.tick(), 1); // first sample only establishes a baseline
+    assert.equal(f.tick(), 1.5); // 5 s of pressure: 1080 -> 720 in one step
+    assert.equal(f.tick(), 1.5); // the encoder gets a full period at 720p
+    assert.ok(Math.abs(f.tick() - 1.62) < 1e-9); // 10 s more: gradual steps
     for (let i = 0; i < 100; i++) f.tick();
     assert.equal(f.tick(), 2); // 1080 / 540, never 180p
     assert.equal(f.tick({ encodeFPS: 30 }), 1.6);
@@ -35,12 +36,42 @@ test("latency, loss, CPU overload and a quiet desktop alone do not downscale", (
     }
 });
 
+test("brief bursts under five seconds keep the selected resolution", () => {
+    const f = fixture();
+    f.tick();
+    for (let i = 0; i < 10; i++) {
+        assert.equal(f.tick({ ms: 4000 }), 1);
+        assert.equal(f.tick({ ms: 1000, encodeFPS: 30, reason: "none" }), 1);
+    }
+});
+
+test("sources at or below 720p skip the snap and keep the gradual 10 s rule", () => {
+    for (const size of [{ width: 1280, height: 720 }, { width: 960, height: 540 }]) {
+        const f = fixture(size);
+        f.tick();
+        assert.equal(f.tick(), 1);
+        if (size.height === 720) {
+            assert.equal(f.tick(), 1.08);
+        } else {
+            for (let i = 0; i < 20; i++) assert.equal(f.tick(), 1); // already at the 540 floor
+        }
+    }
+});
+
+test("1440p and 4K sources also snap to a 720p short side", () => {
+    for (const [size, want] of [[{ width: 2560, height: 1440 }, 2], [{ width: 3840, height: 2160 }, 3]]) {
+        const f = fixture(size);
+        f.tick();
+        assert.equal(f.tick(), want);
+    }
+});
+
 test("missing, reset, repeated and long-gap stats cannot manufacture sustained congestion", () => {
     const f = fixture();
-    for (let i = 0; i < 4; i++) f.tick();
+    f.tick();
     assert.equal(f.tick({ ms: 0 }), 1);
     assert.equal(f.tick({ ms: 15000 }), 1);
-    for (let i = 0; i < 3; i++) assert.equal(f.tick(), 1);
+    assert.equal(f.tick({ ms: 4000 }), 1);
     assert.equal(f.tick({ encoded: 0 }), 1);
     assert.equal(f.update({ sample: null, scale: 1.5, width: 1920, height: 1080 }), 1.5);
     assert.equal(f.tick({ captured: NaN }), 1);
@@ -52,6 +83,8 @@ test("explicit frame cap and portrait/source geometry are respected", () => {
     for (let i = 0; i < 30; i++) assert.equal(capped.tick({ captureFPS: 60, encodeFPS: 15 }), 1);
     for (const options of [{ width: 1080, height: 1920 }, { width: 1920, height: 1080 }]) {
         const f = fixture(options);
+        f.tick();
+        assert.equal(f.tick(), 1.5);
         for (let i = 0; i < 80; i++) f.tick();
         assert.equal(f.tick(), 2);
     }
@@ -61,10 +94,11 @@ test("explicit frame cap and portrait/source geometry are respected", () => {
 
 test("intermittent recovery restarts the full downgrade grace period", () => {
     const f = fixture();
-    for (let i = 0; i < 4; i++) f.tick();
+    f.tick();
+    assert.equal(f.tick({ ms: 4000 }), 1);
     assert.equal(f.tick({ encodeFPS: 30, reason: "none" }), 1);
-    for (let i = 0; i < 3; i++) assert.equal(f.tick(), 1);
-    assert.equal(f.tick(), 1.08);
+    assert.equal(f.tick({ ms: 4000 }), 1);
+    assert.equal(f.tick(), 1.5);
 });
 
 test("a downscaled moving share restores sharp text when capture becomes static", () => {

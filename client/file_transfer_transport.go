@@ -83,6 +83,7 @@ func pinnedTLSConfig(certDER []byte, fingerprint string) (*tls.Config, error) {
 	roots.AddCert(leaf)
 	return &tls.Config{
 		MinVersion:       tls.VersionTLS13,
+		CurvePreferences: tlscert.CurvePreferences(),
 		RootCAs:          roots,
 		ServerName:       serverName,
 		VerifyConnection: pinFingerprint(fingerprint),

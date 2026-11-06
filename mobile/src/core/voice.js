@@ -16,6 +16,7 @@
 // push-to-talk with a release delay) and the data saver. Received audio is
 // mixed per member through Web Audio (core/voice-audio.js).
 import { Msg } from "./frame.js";
+import { createIceRestartLadder, iceTransportState } from "./ice-ladder.js";
 import { get as setting } from "./settings.js";
 import { CameraSource, capSender, preferReceiveCodecs, watchCodecNames, wireQuality } from "./video.js";
 import * as settings from "./settings.js";
@@ -342,7 +343,13 @@ export class Voice extends EventTarget {
                 this.conn.send(Msg.ICECandidate, { candidate: event.candidate.candidate, sdp_mid: event.candidate.sdpMid ?? "", sdp_mline_index: event.candidate.sdpMLineIndex ?? 0 });
             };
             pc.ontrack = () => this.#reconcile();
-            pc.onconnectionstatechange = () => this.#emit("state");
+            const ladder = createIceRestartLadder({
+                state: () => (this.pc === pc ? iceTransportState(pc) : ""),
+                restart: () => this.#enqueue(() => this.#offer({ iceRestart: true })),
+            });
+            this.#iceLadder = ladder;
+            pc.onconnectionstatechange = () => { ladder.update(); this.#emit("state"); };
+            pc.oniceconnectionstatechange = () => ladder.update();
             const track = this.mic?.getAudioTracks()[0];
             if (track) {
                 this.#watchMicrophone(track);
@@ -378,6 +385,12 @@ export class Voice extends EventTarget {
     }
 
     #stopRenewal = null;
+    #iceLadder = null;
+
+    /** The network changed (back online): retry a waiting ICE restart now. */
+    networkChanged() {
+        this.#iceLadder?.nudge();
+    }
 
     #teardown() {
         ++this.#joinGeneration;
@@ -400,6 +413,8 @@ export class Voice extends EventTarget {
         this.mediaStatus = { state: "off" };
         this.#stopRenewal?.();
         this.#stopRenewal = null;
+        this.#iceLadder?.stop();
+        this.#iceLadder = null;
         clearInterval(this.#statsTimer);
         this.pc?.close();
         this.pc = null;

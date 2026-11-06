@@ -1,3 +1,4 @@
+import { vendorLabel } from "./encoder-vendor.js";
 import { saveStreamDiagnostics } from "./stream-diagnostic-export.js";
 import { redactPairingSecrets } from "./secret-redaction.js";
 import { diagnosticSample, mountStreamDiagnosticRecording } from "./stream-diagnostic-recording.js";
@@ -147,7 +148,7 @@ function renderDetails(s) {
         ["share.keyframes", display(sample?.key_frames_delta)], ["share.frameBytes", display(sample?.frame_bytes, " B")],
         ["share.encodeTime", display(sample?.encode_ms, " ms")], ["share.sendDelay", display(sample?.send_delay_ms, " ms")],
         ["share.sampleWindow", display(sample?.sample_ms ? sample.sample_ms / 1000 : null, " s")],
-        ["share.encoder", sample ? `${sample.codec} · ${sample.encoder_implementation}` : "—"],
+        ["share.encoder", sample ? `${sample.codec} · ${sample.encoder_implementation}${vendorLabel(sample.encoder_vendor)}` : "—"],
         ["share.encoderReason", sample?.quality_reason || "—"],
         ["share.powerEfficient", t(sample?.power_efficient === true ? "streams.reportedYes" : sample?.power_efficient === false ? "streams.reportedNo" : "streams.notReported")]];
     const list = details.querySelector("dl");

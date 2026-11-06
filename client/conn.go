@@ -208,6 +208,7 @@ type connManager struct {
 	// The defaults keep an idle connected control channel alive while making a
 	// peer that stops responding fail in bounded time. Tests may shorten them.
 	heartbeatInterval   time.Duration
+	probeUntil          time.Time // pending liveness probe; any frame clears it
 	readTimeout         time.Duration
 	writeTimeout        time.Duration
 	requestDrainTimeout time.Duration
@@ -304,6 +305,7 @@ func (m *connManager) dialEndpoint(ctx context.Context, addr, trustAddr string) 
 		// #nosec G402 -- VerifyConnection enforces the TOFU pin on every full or resumed handshake.
 		InsecureSkipVerify: true,
 		MinVersion:         tls.VersionTLS13,
+		CurvePreferences:   tlscert.CurvePreferences(),
 		VerifyConnection: func(state tls.ConnectionState) error {
 			if len(state.PeerCertificates) == 0 {
 				return fmt.Errorf("server presented no TLS certificate")
@@ -941,12 +943,6 @@ func (m *connManager) writeConn(conn net.Conn, mt netproto.MessageType, msg any)
 	return err
 }
 
-func (m *connManager) readDeadline() time.Duration {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.readTimeout
-}
-
 func (m *connManager) heartbeatPeriod() time.Duration {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1144,8 +1140,8 @@ func (m *connManager) readLoop(conn net.Conn) {
 	m.mu.Unlock()
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	for {
-		if timeout := m.readDeadline(); timeout > 0 {
-			_ = conn.SetReadDeadline(time.Now().Add(timeout))
+		if deadline := m.nextReadDeadline(); !deadline.IsZero() {
+			_ = conn.SetReadDeadline(deadline)
 		}
 		f, err := netproto.ReadFrame(conn)
 		if err != nil {
@@ -1155,6 +1151,7 @@ func (m *connManager) readLoop(conn net.Conn) {
 			m.terminateConn(conn, true, netproto.ControlReadCloseReason(err))
 			return
 		}
+		m.clearProbe()
 		m.dispatchFrom(conn, epoch, f)
 	}
 }

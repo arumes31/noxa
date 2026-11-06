@@ -634,7 +634,7 @@ func (s *TCPServer) Start(ctx context.Context) error {
 		ln = traffic.WrapListener(ln, s.deps.Traffic)
 	}
 	if s.cfg.TLSEnabled {
-		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
+		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13, CurvePreferences: tlscert.CurvePreferences()})
 	}
 
 	// Start and Shutdown only serialize the state transition itself. Listener

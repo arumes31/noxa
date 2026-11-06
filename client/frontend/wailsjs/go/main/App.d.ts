@@ -359,6 +359,8 @@ export function PreviewGamingOverlay(arg1:main.Settings):Promise<string>;
 
 export function PrivateCallForTab(arg1:string,arg2:netproto.CallRequest):Promise<netproto.CallResult>;
 
+export function ProbeConnections():Promise<number>;
+
 export function PublishPositionForTab(arg1:string,arg2:netproto.PositionUpdate):Promise<string>;
 
 export function Quit():Promise<void>;
