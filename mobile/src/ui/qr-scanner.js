@@ -12,13 +12,29 @@ export function pairingLinkFromQR(value, origin = location.origin) {
 }
 
 export function scanPairingQR({ signal } = {}) {
+    return scanQR({
+        signal,
+        labels: { title: t("connect.scan"), hint: t("connect.scanHint"), cancel: t("link.cancel"), unavailable: t("connect.scanUnavailable") },
+        accept: value => {
+            const link = pairingLinkFromQR(value);
+            return link ? { done: true, value: link } : { message: t("connect.scanInvalid") };
+        },
+    });
+}
+
+/**
+ * Scans QR codes until accept(text) returns { done: true, value }; { message }
+ * keeps scanning with that status. Resolves with the value, or null when
+ * cancelled or the camera failed. Decoding stays on this device.
+ */
+export function scanQR({ signal, labels, accept }) {
     return new Promise(resolve => {
         let stream, timer, finished = false;
         const video = h("video", { autoplay: true, playsinline: true, muted: true, class: "qr-camera" });
-        const status = h("p", { class: "hint", role: "status" }, t("connect.scanHint"));
-        const close = h("button", { type: "button", class: "btn btn-block" }, t("link.cancel"));
+        const status = h("p", { class: "hint", role: "status" }, labels.hint);
+        const close = h("button", { type: "button", class: "btn btn-block" }, labels.cancel);
         const dialog = h("dialog", { class: "qr-dialog", "aria-labelledby": "qr-title" },
-            h("h2", { id: "qr-title" }, t("connect.scan")), video, status, close);
+            h("h2", { id: "qr-title" }, labels.title), video, status, close);
         const previousFocus = document.activeElement;
         const stop = (result = null) => {
             if (finished) return;
@@ -66,9 +82,9 @@ export function scanPairingQR({ signal } = {}) {
                             const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
                             const qr = decode(pixels.data, pixels.width, pixels.height);
                             if (qr) {
-                                const link = pairingLinkFromQR(qr.data);
-                                if (link) { stop(link); return; }
-                                status.textContent = t("connect.scanInvalid");
+                                const verdict = accept(qr.data) || {};
+                                if (verdict.done) { stop(verdict.value); return; }
+                                if (verdict.message) status.textContent = verdict.message;
                             }
                         }
                         timer = setTimeout(scan, 200);
@@ -81,7 +97,7 @@ export function scanPairingQR({ signal } = {}) {
             stream?.getTracks().forEach(track => track.stop());
             video.srcObject = null;
             video.hidden = true;
-            status.textContent = t("connect.scanUnavailable");
+            status.textContent = labels.unavailable;
         }
     });
 }

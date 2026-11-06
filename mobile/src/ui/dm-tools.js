@@ -8,6 +8,9 @@ import { t } from "../i18n.js";
 import { clock, h, sheet, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import { downloadText, panel, safeFileName } from "./conversation-tools.js";
+import { SafetyScan, SafetyScheme, buildSafetyPayload, checkSafetyScan, fingerprintPairDigest } from "../core/safety-qr.js";
+import { qrSvg } from "./qr-image.js";
+import { scanQR } from "./qr-scanner.js";
 
 /** A fingerprint in groups of four for reading aloud. */
 function grouped(fingerprint) {
@@ -38,11 +41,58 @@ export async function showSafetyNumber(peer, name, onChange) {
     const fingerprint = (label, value) => h("div", { class: "safety-row" },
         h("span", { class: "section-label" }, label),
         h("p", { class: "safety-number mono" }, grouped(value)));
+    // (205) Both phones show a code for the pair; scanning the contact's code
+    // compares both fingerprints at once. Only a match verifies.
+    const me = session.uniqueID;
+    const digest = trusted && contact.fingerprint && own.fingerprint
+        ? await fingerprintPairDigest({ uniqueID: me, fingerprint: own.fingerprint }, { uniqueID: peer, fingerprint: contact.fingerprint }).catch(() => "")
+        : "";
+    let code = null;
+    if (digest) {
+        try {
+            code = qrSvg(buildSafetyPayload({ scheme: SafetyScheme.fingerprint, me, peer, digest }), t("safety.qrAlt", { name }));
+        } catch { code = null; }
+    }
+    const result = h("p", { class: "safety-scan-result", role: "status", hidden: true });
+    const scan = code ? h("button", { type: "button", class: "btn btn-block" }, t("safety.scan")) : null;
+    if (scan) scan.onclick = async () => {
+        const pair = { scheme: SafetyScheme.fingerprint, me, peer, digest };
+        const messages = {
+            [SafetyScan.invalid]: t("safety.scanInvalid"),
+            [SafetyScan.wrongPair]: t("safety.scanWrongPair", { name }),
+            [SafetyScan.otherScheme]: t("safety.scanOtherScheme"),
+        };
+        const verdict = await scanQR({
+            labels: { title: t("safety.scanTitle", { name }), hint: t("safety.scanHint", { name }), cancel: t("link.cancel"), unavailable: t("safety.scanUnavailable") },
+            accept: text => {
+                const outcome = checkSafetyScan(text, pair);
+                return outcome === SafetyScan.match || outcome === SafetyScan.mismatch ? { done: true, value: outcome } : { message: messages[outcome] };
+            },
+        });
+        if (!verdict) return;
+        result.hidden = false;
+        if (verdict !== SafetyScan.match) {
+            result.className = "safety-scan-result error";
+            result.textContent = t("safety.scanMismatch", { name });
+            return;
+        }
+        try {
+            await dm.setVerified(peer, true);
+            input.checked = true;
+            result.className = "safety-scan-result ok";
+            result.textContent = t("safety.scanMatch", { name });
+            onChange?.();
+        } catch (error) {
+            toast(t("common.error", { error: error.message }), "warn");
+        }
+    };
     panel(t("safety.title"), h("div", { class: "safety" },
         h("p", { class: "hint" }, t("safety.hint", { name })),
         fingerprint(t("safety.contact", { name }), contact.fingerprint),
         fingerprint(t("safety.own"), own.fingerprint),
         trusted ? null : h("p", { class: "error" }, t(contact.trust === Trust.changed ? "safety.changed" : "safety.unavailable", { name })),
+        code ? h("figure", { class: "safety-qr" }, code, h("figcaption", { class: "hint" }, t("safety.qrHint", { name }))) : null,
+        scan, result,
         h("label", { class: "toggle" },
             h("span", { class: "row-main" }, h("span", { class: "row-title" }, t("safety.verify")), h("span", { class: "row-sub" }, t("safety.verifyHint"))),
             input)));

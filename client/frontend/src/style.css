@@ -1170,6 +1170,14 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
 .e2ee-status.warn { color: var(--warn); }
 .e2ee-status.ok { color: var(--ok); }
 .safety-number { white-space: pre-wrap; user-select: all; font-size: .9rem; }
+/* (205) safety-number QR and scanner */
+.safety-qr { margin: 8px 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.safety-qr-image { width: 180px; height: 180px; image-rendering: pixelated; background: #fff; padding: 8px; border-radius: 8px; }
+.safety-qr figcaption { font-size: .8571rem; color: var(--text-dim); text-align: center; }
+.safety-scan-result.warn, .qr-scan-status.warn { color: var(--danger); }
+.qr-scan { width: min(420px, 100%); }
+.qr-scan-video { width: 100%; max-height: 50vh; border-radius: 8px; background: #000; object-fit: cover; }
+.qr-scan-status { min-height: 2.6em; }
 .md-emoji { width: 20px; height: 20px; vertical-align: -4px; object-fit: contain; }
 
 /* link preview card (94) */

@@ -989,7 +989,7 @@ features:
   passphrase-encrypted), and a camera/photo/file attach sheet.
 - **Direct messages and private groups:** end-to-end encrypted, with
   attachments, voice messages, typing and read receipts (can be turned off),
-  safety numbers, muting, missed-call lines, and group management (rename,
+  safety numbers (compared aloud or by scanning each other's QR code), muting, missed-call lines, and group management (rename,
   invite, remove, roles, owner, leave, delete).
 - **Voice and calls:** voice channels with push-to-talk or voice activation,
   microphone settings and test, per-member volume, whispering, priority
@@ -1517,6 +1517,26 @@ not add forward secrecy: current message bodies still use static X25519 and
 XSalsa20-Poly1305. Channel passwords restrict voice entry; chat and files use the
 channel's Permissions policy.
 
+
+#### Safety codes (QR)
+
+Next to the safety number, the desktop's encryption details and the phone's
+**Safety number** sheet show a QR code, and **Scan their code** opens the camera
+to read the contact's code. The code holds `noxa-sn:v1:<scheme>:<shown by>:<shown to>:<digest>`
+and nothing secret. A scan verifies the contact only when the code was shown by
+that contact, for you, and its SHA-256 digest equals yours; a different digest
+is reported as a mismatch and never saved, and a code for another conversation
+keeps the scanner open. Frames are decoded on the device (BarcodeDetector where
+available, otherwise the bundled jsQR); the camera opens only from the button,
+without audio, and stops when the scanner closes. Comparing the numbers aloud
+stays available, also when the camera is unavailable or denied.
+
+The desktop code carries the pairwise safety number (both X25519 identity keys);
+the phone's code carries both account fingerprints it shows. The two check
+different keys, so a desktop and a phone report each other's code as coming from
+the other app and the contact is compared by reading the numbers instead.
+Bundled libraries: jsQR 1.4.0 (Apache-2.0) and, on the phone, qrcode-generator
+1.4.4 (MIT); their notices ship in `frontend-licenses.txt`.
 
 ### Runtime database privilege separation
 
