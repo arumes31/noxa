@@ -1162,6 +1162,15 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
 .tk-kw { color: var(--accent); }
 .md-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); cursor: pointer; }
 .md-link:hover { border-bottom-style: solid; }
+/* (575) inline text/code and audio attachment previews */
+.msg-text-file {
+    margin: 4px 0; padding: 8px 10px; max-width: min(640px, 100%); max-height: 320px; overflow: auto;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    font-family: var(--font-mono); font-size: 0.8214rem; line-height: 1.45; white-space: pre; tab-size: 4;
+}
+.msg-text-file.expanded { max-height: 70vh; }
+.msg-text-more { display: block; margin: 0 0 4px; padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; font-size: .8571rem; }
+.msg-audio { display: block; width: min(360px, 100%); margin: 4px 0; }
 .md-img { max-width: 320px; max-height: 200px; border-radius: 8px; display: block; margin: 4px 0; }
 .md-img-load { display: inline-flex; align-items: center; gap: 4px; margin: 4px 0; padding: 4px 10px; border: 1px dashed var(--accent); border-radius: 8px; background: transparent; color: var(--accent); font: inherit; cursor: pointer; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .md-table-wrap { overflow-x: auto; margin: 5px 0; }

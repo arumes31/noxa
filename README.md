@@ -347,6 +347,7 @@ graph TD
 * **Message tools**: Emoji reactions, replies, pins, polls, voice messages, typing indicators, read receipts, and mentions. Inbox, history search, and saved messages are scoped to the current server; history search decrypts and matches bodies in the native client.
 * **Chat navigation**: Channel and direct-message tabs stay on one row, with an **All chats** menu for overflow. Right-click to pin or reorder, or drag within the pinned/unpinned section. Arrow keys move focus, Enter opens a chat, and Ctrl+Shift+Left/Right reorders it. Order and pins are saved locally, encrypted and separated by server and identity; closing a tab removes its pin. **Recently closed** in All chats and **Ctrl+Shift+T** reopen explicitly closed chats from the current session (up to ten); channel access is checked again. This list resets when the server or identity changes.
 * **Chat media**: Enlarging an attached video keeps the same player, playback position, volume, speed and pause state. Animated images and chat videos pause offscreen or after a minute without window focus; only visible media resumes, and manually paused videos stay paused.
+* **Attachment previews**: Text and code files (up to ~384 KB, UTF-8 only) show their first 40 lines inline with **Show all**, audio files (MP3, M4A, AAC, Ogg/Opus, WAV, FLAC) play inline, and images and videos preview as before. Previews are decrypted locally and text is never interpreted as markup; the download button stays next to each preview.
 * **Composer and attachments**: Selecting text in the message box shows a formatting toolbar (bold, italic, underline, strikethrough, code; also Ctrl+B/I/U) that inserts the usual markdown. Pasted PNG/BMP screenshots are re-encoded as high-quality WebP (quality 0.92) before encryption when that saves at least 10%; GIF, JPEG and WebP are attached unchanged. Attachments have their own right-click menu (save, open full size, copy file name). Deleting your own message offers **Don't ask again** (Settings → Chat restores the question); deleting another member's message as a moderator always asks.
 * **Presence at a glance**: Member avatars in the channel tree carry a status dot whose shape and colour differ (online filled, away crescent, busy with a bar, offline ring); invisible members look offline. A collapsed channel's unread badge includes its subchannels.
 * **Code, emoji and pins**: Fenced code blocks show line numbers and a copy button (the copy never includes the numbers); highlight.js (BSD-3-Clause, about 190 languages, bundled locally and loaded on first use) colours blocks whose language it knows, e.g. ```` ```rust ````. The emoji picker searches shortcodes in English and German keywords, keeps recently used emoji and lets you pin favorites (right-click or Alt+click). Pinned messages open as a side drawer; jumping to a pin or a quoted reply that is older than the loaded history opens a window of 100 messages around it in one request. While you read that window, new messages wait behind a **Jump to present** pill; scrolling down pages forward until the window meets the present (servers without window support fall back to paging older history, up to about 1,000 messages back).
@@ -1340,6 +1341,13 @@ and restore drills, and keep their incident runbook outside the deployment being
 operated. Update these local procedures when architecture, telemetry or recovery
 steps change. The `docs/` directory and `docker/secrets/` are local-only and ignored
 by Git; keep operator notes and credentials out of the public repository.
+
+`noxa_push_deliveries_total{result}` counts Web Push attempts: `ok`, `retry`
+(a 429/5xx or network failure retried up to twice within the 20-second send
+budget, honouring `Retry-After`), `gone` (expired subscription, removed) and
+`failed`. Incoming webhook responses carry `X-RateLimit-Limit` (5 per
+3 seconds per hook), `X-RateLimit-Remaining` and `X-RateLimit-Reset`
+(seconds); a 429 also sets `Retry-After` to the real reset time.
 
 `noxa_control_disconnects_total{transport, reason}` counts closed control
 connections (`tcp` or `ws`) by fixed reason: `eof`, `unexpected_eof`,

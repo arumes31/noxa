@@ -1,4 +1,5 @@
 import { joinChannelLocally } from "./local-join-intent.js";
+import { AUDIO_MIME, TEXT_MAX_B64, decodeTextPreview, previewKind } from "./attachment-preview.js";
 import { clipboardFiles, preparePastedFiles } from "./paste-images.js";
 import { mountComposerFormat } from "./composer-format.js";
 import { MAX_FAVORITES, MAX_RECENT, emojiIndex, recordEmojiUse, searchEmoji, storedEmoji, toggleFavorite } from "./emoji-picker-model.js";
@@ -1359,11 +1360,98 @@ function attachFileRef(container, m, cap, source = null) {
                 wrap.textContent = "📎 " + name + t("chat.downloadFailed");
             }
         });
+    } else if (previewKind(ext) && !(ref.meta?.size > (previewKind(ext) === "text" ? TEXT_MAX_B64 * 0.75 : INLINE_MAX_B64 * 0.75))) {
+        attachFilePreview(wrap, source, ref, name, ext, previewIsCurrent);
     } else {
         wrap.appendChild(downloadChip(source, ref, name, ""));
     }
     mountAttachmentMenu(wrap, source, ref, name);
     container.appendChild(wrap);
+}
+
+// (575) Audio plays inline; text and code show their first lines, expandable
+// to the whole file. Decryption happens in the native layer as for images;
+// text is rendered only through textContent. The download chip stays below.
+// Expanded text previews by preview key, bounded so a long session does not
+// grow without limit.
+const expandedTextPreviews = new Set();
+function rememberExpandedPreview(key) {
+    expandedTextPreviews.delete(key);
+    expandedTextPreviews.add(key);
+    if (expandedTextPreviews.size > 200) expandedTextPreviews.delete(expandedTextPreviews.values().next().value);
+}
+
+// Recently shown text attachments (base64, at most TEXT_MAX_B64 each): a
+// refreshed row renders them again without another download.
+const textPreviewCache = new Map();
+function rememberTextPreview(key, b64) {
+    textPreviewCache.delete(key);
+    textPreviewCache.set(key, b64);
+    if (textPreviewCache.size > 16) textPreviewCache.delete(textPreviewCache.keys().next().value);
+}
+
+function attachFilePreview(wrap, source, ref, name, ext, previewIsCurrent) {
+    const kind = previewKind(ext);
+    wrap.textContent = t("chat.loadingFile", { name });
+    const cacheKey = kind === "text" ? source.previewKey?.(ref) || "" : "";
+    const cached = cacheKey ? textPreviewCache.get(cacheKey) : undefined;
+    (cached !== undefined ? Promise.resolve(cached) : sharedPreviewDownload(source, ref, previewIsCurrent)).then((b64) => {
+        if (cacheKey && cached === undefined && b64 && b64.length <= TEXT_MAX_B64) rememberTextPreview(cacheKey, b64);
+        if (!previewIsCurrent()) return;
+        wrap.textContent = "";
+        const chip = downloadChip(source, ref, name, "");
+        if (!b64 || b64.length > (kind === "text" ? TEXT_MAX_B64 : INLINE_MAX_B64)) {
+            wrap.appendChild(chip);
+            return;
+        }
+        if (kind === "audio") {
+            const audio = document.createElement("audio");
+            audio.className = "msg-audio";
+            audio.controls = true;
+            audio.preload = "metadata";
+            audio.src = `data:${AUDIO_MIME[ext]};base64,${b64}`;
+            audio.title = name;
+            wrap.append(audio, chip);
+            return;
+        }
+        const text = decodeTextPreview(b64);
+        if (!text) {
+            wrap.appendChild(chip); // binary despite its extension
+            return;
+        }
+        const pre = document.createElement("pre");
+        pre.className = "msg-text-file";
+        pre.setAttribute("aria-label", t("chat.filePreview", { name }));
+        wrap.appendChild(pre);
+        // A message refresh (edit, reaction) rebuilds the row: a preview the
+        // user expanded stays expanded.
+        const expandKey = source.previewKey?.(ref) || "";
+        if (text.truncated && expandKey && expandedTextPreviews.has(expandKey)) {
+            pre.textContent = text.text;
+            pre.classList.add("expanded");
+        } else {
+            pre.textContent = text.head;
+        }
+        if (text.truncated && !pre.classList.contains("expanded")) {
+            const more = document.createElement("button");
+            more.type = "button";
+            more.className = "msg-text-more";
+            more.textContent = t("chat.showAllLines", { count: text.lines });
+            more.onclick = () => {
+                if (!previewIsCurrent()) return;
+                pre.textContent = text.text;
+                pre.classList.add("expanded");
+                if (expandKey) rememberExpandedPreview(expandKey);
+                more.remove();
+            };
+            wrap.appendChild(more);
+        }
+        wrap.appendChild(chip);
+    }).catch((err) => {
+        if (!previewIsCurrent()) return;
+        wrap.textContent = "";
+        wrap.appendChild(downloadChip(source, ref, name, String(err).includes("too large to preview") ? t("chat.tooLargePreview") : ""));
+    });
 }
 
 // (647) Attachment actions: save, open full size (loaded images and videos)
@@ -2980,11 +3068,21 @@ function renderVirtualWindow({ force = false } = {}) {
             setSpacers(win.before, win.after);
             return;
         }
+        // A moving window keeps the rows it already shows: rebuilding them
+        // would restart their previews and change their heights again. A
+        // forced render (new row list, search) rebuilds everything.
+        const keep = new Map();
+        if (!force) {
+            for (let row = v.top.nextElementSibling; row && row !== v.bottom; row = row.nextElementSibling) {
+                // Rows refreshed in place (edits, reactions) lost the flag.
+                if (row.dataset.scrollKey) keep.set(row.dataset.scrollKey, row);
+            }
+        }
         force = false;
         while (v.top.nextSibling && v.top.nextSibling !== v.bottom) v.top.nextSibling.remove();
         const fragment = document.createDocumentFragment();
         for (let k = win.start; k < win.end; k++) {
-            const el = renderItem(v.visible[k]);
+            const el = keep.get(v.visible[k].key) || renderItem(v.visible[k]);
             el.dataset.virtualRow = "true";
             fragment.appendChild(el);
         }
@@ -2994,7 +3092,7 @@ function renderVirtualWindow({ force = false } = {}) {
         setSpacers(win.before, win.after);
         groupMessages(log); // grouping changes row heights: measure after it
         const q = searchQ.toLowerCase();
-        if (q) for (const body of log.querySelectorAll("[data-virtual-row] .msg-text")) markIn(body, q);
+        if (q) for (const body of log.querySelectorAll("[data-virtual-row] .msg-text")) if (!body.querySelector("mark")) markIn(body, q);
         if (measureVirtualRows()) setSpacers(v.prefix[v.start], v.prefix[v.keys.length] - v.prefix[v.end]);
         if (atBottom && v.end === v.keys.length) log.scrollTop = log.scrollHeight;
         else if (anchor) {
@@ -5284,6 +5382,8 @@ export function resetView(options = {}) {
     jl.el = null;
     customEmoji = [];
     emojiURLs.clear();
+    textPreviewCache.clear();
+    expandedTextPreviews.clear();
     emojiURLRequests.clear(); // late replies from the old server stay with their callers
     customDirty = true;
     for (const b of offlineBatch.values()) {

@@ -24,16 +24,18 @@ test.beforeEach(async ({ page }) => {
     await page.waitForFunction(() => !!window.__noxaShell && !!window.__noxaChat);
 });
 
-async function setupHistory(page, { latest, firstPage = 0, around = null, after = null }) {
+async function setupHistory(page, { latest, firstPage = 0, around = null, after = null, bodies = {} }) {
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.evaluate(({ latest, firstPage, around, after }) => {
+    await page.evaluate(({ latest, firstPage, around, after, bodies }) => {
         const v = window.__noxa;
         v.showWorkspace(false);
         Object.assign(v.state, { activeTabID: "server-a", myClientID: "member-a", myChannelID: 1, channels: [{ ChannelID: 1, Name: "Room" }] });
         v.state.settings.chat_max_lines = 5000;
-        const message = id => ({ id, from_unique_id: id % 3 ? "bene" : "joshi", from_nickname: id % 3 ? "Bene" : "Joshi", body: (id % 1000 === 7 ? "needle " : "") + `history ${id}` + (id % 10 === 0 ? "\nsecond line" : ""), sent_at: 1700000000 + id * 60, enc_verified: true, enc_mode: "server" });
+        const message = id => ({ id, from_unique_id: id % 3 ? "bene" : "joshi", from_nickname: id % 3 ? "Bene" : "Joshi", body: bodies[id] ?? ((id % 1000 === 7 ? "needle " : "") + `history ${id}` + (id % 10 === 0 ? "\nsecond line" : "")), sent_at: 1700000000 + id * 60, enc_verified: true, enc_mode: "server" });
         const range = (from, to) => { const out = []; for (let id = to; id >= from; id--) out.push(message(id)); return out; }; // newest first
-        const f = window.__virtual = { calls: [], pins: { pins: [] } };
+        const f = window.__virtual = { calls: [], downloads: [], pins: { pins: [] } };
+        // A 60-line text file, so its preview is truncated with "Show all".
+        const textFile = btoa(Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n"));
         const app = window.go.main.App;
         window.go.main.App = new Proxy(app, { get(target, key) {
             if (key === "ChatHistoryForTab") return async (tab, ch, before, limit) => {
@@ -53,9 +55,10 @@ async function setupHistory(page, { latest, firstPage = 0, around = null, after 
                 return { after_id: id, messages: from > to ? [] : range(from, to) };
             };
             if (key === "ChatPinsForTab") return async () => structuredClone(f.pins);
+            if (key === "DownloadChatAttachmentForTab") return async (tab, ch, storage) => { f.downloads.push(storage); return textFile; };
             return target[key];
         } });
-    }, { latest, firstPage, around, after });
+    }, { latest, firstPage, around, after, bodies });
 }
 
 async function openChannel(page) {
@@ -229,4 +232,30 @@ test("servers without window support fall back to paging older history", async (
     await jumpViaPin(page, 120);
     await expect(page.locator('#chat-log .msg[data-msg-id="120"]')).toHaveClass(/flash/);
     expect(await page.evaluate(() => window.__virtual.calls.map(call => call[0] === "history" ? call[1] : call[0]))).toEqual([0, "around-old", 151]);
+});
+
+test("attachment previews load only for rendered rows and keep their expanded state across the window", async ({ page }) => {
+    await setupHistory(page, { latest: [1, 600], bodies: { 5: "[file:early.vcx#dGVzdA==#early.txt]", 590: "[file:late.vcx#dGVzdA==#late.txt]" } });
+    await openChannel(page);
+    const late = page.locator('#chat-log .msg[data-msg-id="590"]');
+    await expect(late.locator("pre.msg-text-file")).toContainText("line 40");
+    // The off-screen attachment at the top was never fetched.
+    expect(await page.evaluate(() => window.__virtual.downloads)).toEqual(["late.vcx"]);
+
+    await late.locator(".msg-text-more").click();
+    await expect(late.locator("pre.msg-text-file")).toHaveClass(/expanded/);
+    await expect(late.locator("pre.msg-text-file")).toContainText("line 60");
+
+    // Scrolling the row out of the window and back rebuilds it: it stays
+    // expanded and renders from the preview cache, without a new download.
+    await page.evaluate(() => { const log = document.getElementById("chat-log"); log.scrollTop = 0; log.dispatchEvent(new Event("scroll")); });
+    await expect(page.locator('#chat-log .msg[data-msg-id="590"]')).toHaveCount(0);
+    await expect(page.locator('#chat-log .msg[data-msg-id="5"] pre.msg-text-file')).toContainText("line 1");
+    expect(await page.evaluate(() => window.__virtual.downloads)).toEqual(["late.vcx", "early.vcx"]);
+    await page.evaluate(() => { const log = document.getElementById("chat-log"); log.scrollTop = log.scrollHeight; log.dispatchEvent(new Event("scroll")); });
+    const again = page.locator('#chat-log .msg[data-msg-id="590"] pre.msg-text-file');
+    await expect(again).toHaveClass(/expanded/);
+    await expect(again).toContainText("line 60");
+    await expect(page.locator('#chat-log .msg[data-msg-id="590"] .msg-text-more')).toHaveCount(0);
+    expect(await page.evaluate(() => window.__virtual.downloads)).toEqual(["late.vcx", "early.vcx"]);
 });
