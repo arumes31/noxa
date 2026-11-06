@@ -6,6 +6,7 @@ import {
     closeDialog,
     closeServerDialogs,
     confirmDialog,
+    confirmWithOption,
     dialogFocusableSelector,
     dialogStackInsertionIndex,
     initModalSystem,
@@ -548,6 +549,22 @@ test("shared modal lifecycle handles focus, cancellation, removal, and restorati
         assert.equal(await cancelled, false);
         flushFrames();
         assert.equal(document.activeElement, launcher);
+
+        const optional = confirmWithOption({ title: "Delete message?", optionLabel: "Don't ask again", danger: true });
+        flushFrames();
+        const optionDialog = topDialog();
+        assert.equal(optionDialog.querySelector(".dlg-option").querySelector(":scope > span").textContent, "Don't ask again");
+        optionDialog.querySelector(".dlg-option-input").checked = true;
+        optionDialog.querySelector(".dlg-ok").onclick();
+        assert.deepEqual(await optional, { confirmed: true, checked: true });
+        flushFrames();
+
+        const declined = confirmWithOption({ title: "Delete message?", optionLabel: "Don't ask again" });
+        flushFrames();
+        topDialog().querySelector(".dlg-option-input").checked = true;
+        document.dispatchEvent(keyEvent("Escape"));
+        assert.deepEqual(await declined, { confirmed: false, checked: false }, "a cancelled dialog never stores the option");
+        flushFrames();
 
         const reset = promptDialog({ title: "Server-owned prompt", serverScoped: true });
         flushFrames();

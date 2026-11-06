@@ -1,6 +1,7 @@
 // channel-tree.js — channel/member rendering and tree interaction.
 import { joinChannelLocally } from "./local-join-intent.js";
 import { joinFailure, moveFailure, unreadLabel } from "./client-usability-model.js";
+import { combineUnread, descendantUnread } from "./channel-unread.js";
 import { isUserMuted } from "./audio.js";
 import * as chatUI from "./chat-ui.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
@@ -18,6 +19,7 @@ import { memberScreenStream } from "./stream-controls.js";
 import { renderWorkspace } from "./workspace-ui.js";
 import { captureScope, scopeIsCurrent } from "./scoped-actions.js";
 import { createSpeakingAvatars, speakingAvatar } from "./speaking-avatar.js";
+import { withPresenceDot } from "./presence-dot.js";
 import { voiceChannelTree } from "./channel-order.js";
 
 const memberNameOrder = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
@@ -89,6 +91,8 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             root.appendChild(empty);
         }
         const byParent = voiceChannelTree(state.channels);
+        // Unread rollups count every subchannel, also those the filter hides.
+        unfilteredTree = voiceChannelTree(state.channels);
         // (319) live tree filter: matching channels/users stay; a channel stays
         // when it or a descendant or one of its users matches.
         if (state.treeFilter) {
@@ -147,8 +151,13 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         target?.focus({ preventScroll: true });
     }
 
+    // The channel the user just expanded; only its contents animate in, so
+    // routine re-renders (presence, speaking) never replay the animation.
+    let expandingChannel = null;
+
     function setChannelExpanded(channelID, expanded) {
         if (expanded) {
+            expandingChannel = channelID;
             state.collapsedChannels.delete(channelID);
             state.expandedVirtual.add(channelID);
         } else {
@@ -156,8 +165,10 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             state.expandedVirtual.delete(channelID);
         }
         renderTree();
+        expandingChannel = null;
     }
 
+    let unfilteredTree = null;
     function renderChannel(parentEl, ch, byParent, depth) {
         const tabID = state.activeTabID, generation = state.serverGeneration;
         const node = document.createElement("div");
@@ -310,6 +321,23 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         const expandable = state.clients.some((c) => visibleInChannelTree(c) && c.channel_id === (ch.SystemKind === "home" ? 0 : ch.ChannelID)) ||
             (byParent.get(ch.ChannelID) || []).length > 0;
         if (expandable) el.setAttribute("aria-expanded", String(!collapsed));
+        // (620) A collapsed channel's badge includes its subchannels' unread
+        // messages; the label says so, the count stays on one badge.
+        const allChildren = unfilteredTree || byParent;
+        if (collapsed && (allChildren.get(ch.ChannelID) || []).length > 0) {
+            const below = descendantUnread(ch.ChannelID, allChildren, (id) => chatUI.unreadFor(id));
+            if (below.n > 0) {
+                const total = combineUnread(chatUI.unreadFor(ch.ChannelID), below);
+                el.querySelector(".ch-unread")?.remove();
+                const badge = document.createElement("span");
+                badge.className = "ch-unread rollup" + (total.mention ? " mention" : total.replies ? " reply" : "");
+                badge.title = unreadLabel(total.n, total.mentions, total.replies) + " · " + t("runtime.unreadInSubchannels");
+                badge.setAttribute("aria-label", badge.title);
+                badge.textContent = (total.mention ? "@ " : total.replies ? "↩ " : "") + (total.n > 99 ? "99+" : total.n);
+                el.appendChild(badge);
+            }
+        }
+        const animateIn = expandingChannel === ch.ChannelID;
         el.querySelector(".ch-disclosure").onclick = (event) => {
             event.stopPropagation();
             if (expandable) setChannelExpanded(ch.ChannelID, collapsed);
@@ -325,6 +353,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 // stay separately addressable (drag, move, Client Info); the
                 // online count deduplicates accounts (member-presence.js).
                 for (const c of members) list.appendChild(clientRow(c));
+                if (animateIn) list.classList.add("expanding");
                 node.appendChild(list);
             }
             const children = byParent.get(ch.ChannelID) || [];
@@ -334,6 +363,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
                 branch.setAttribute("role", "group");
                 branch.setAttribute("aria-label", t("runtime.subchannels", { name: ch.Name }));
                 for (const child of children) renderChannel(branch, child, byParent, depth + 1);
+                if (animateIn) branch.classList.add("expanding");
                 node.appendChild(branch);
             }
         }
@@ -396,7 +426,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         row.setAttribute("role", "treeitem"); // (343)
         row.setAttribute("aria-selected", String(state.multiSelect.has(c.client_id)));
         row.setAttribute("aria-label", [c.nickname || c.unique_id || t("runtime.user"),
-            c.status && presenceLabel(c.status), speakingHere && t("runtime.speaking"),
+            presenceLabel(c.status), speakingHere && t("runtime.speaking"),
             c.priority_speaker && t("runtime.priority"),
             c.is_guest === true && t("runtime.guestAccount"),
             c.on_mobile && t("runtime.onMobile"),
@@ -435,7 +465,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
         const g = P().primaryGroup(c.unique_id);
         // A clipped name shows in full on hover; the role list stays visible either way.
         titleWhenTruncated(name, fullName, g ? `${t("roles.title")}: ${(c.roles || []).map((r) => r.name).join(", ")}` : "");
-        row.appendChild(speakingHere ? speakingAvatar(av) : av);
+        row.appendChild(withPresenceDot(speakingHere ? speakingAvatar(av) : av, c.status));
         row.appendChild(name);
         if (sharing) {
             // "● LIVE": the badge carries its state in text, not colour alone.

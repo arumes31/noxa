@@ -2259,6 +2259,41 @@ test.describe("tab-bound chat sending and attachments", () => {
             ["SaveChatAttachment", "server-a", 1, "doc.vcx", "dGVzdA==", "doc.txt"],
         ]);
     });
+    test("right-clicking an attachment adds its actions to the message menu", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 73, channel_id: 1, from: "Me", text: "[file:photo.vcx#dGVzdA==#photo.png] [file:doc.vcx#dGVzdA==#doc.txt]" }));
+        await expect(page.locator(".msg-img")).toHaveAttribute("src", "data:image/png;base64,aGVsbG8=");
+        await page.locator(".msg-file .file-chip").click({ button: "right" });
+        const menu = page.locator(".msg-context-menu");
+        await expect(menu).toBeVisible();
+        await expect(menu.locator(".ctx-action").nth(0)).toHaveText("Save as…");
+        await expect(menu.locator(".ctx-action").nth(1)).toHaveText("Copy file name");
+        await expect(menu.locator(".msg-quick-reactions button")).toHaveCount(8);
+        await menu.locator(".ctx-action", { hasText: "Save as…" }).click();
+        await expect(menu).toHaveCount(0);
+        expect((await page.evaluate(() => window.__sendScope.effects)).at(-1)).toEqual(["SaveChatAttachment", "server-a", 1, "doc.vcx", "dGVzdA==", "doc.txt"]);
+        await page.locator(".msg-img").click({ button: "right" });
+        await expect(menu.locator(".ctx-action").nth(1)).toHaveText("Open full size");
+        await page.keyboard.press("Escape");
+        await expect(menu).toHaveCount(0);
+        // Right-clicking the message text keeps the plain message menu.
+        await page.locator('.msg[data-msg-id="73"]').click({ button: "right", position: { x: 4, y: 4 } });
+        await expect(menu.locator(".ctx-action", { hasText: "Save as…" })).toHaveCount(0);
+    });
+    test("a pasted PNG screenshot is staged as WebP", async ({ page }) => {
+        await page.evaluate(async () => {
+            const canvas = new OffscreenCanvas(320, 200);
+            const ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#123456"; ctx.fillRect(0, 0, 320, 200);
+            ctx.fillStyle = "#fff"; ctx.font = "20px sans-serif"; ctx.fillText("screenshot text", 20, 100);
+            const png = await canvas.convertToBlob({ type: "image/png" });
+            const data = new DataTransfer();
+            data.items.add(new File([png], "shot.png", { type: "image/png" }));
+            document.getElementById("chat-text").dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+        });
+        await expect(page.locator(".file-preview")).toHaveCount(1);
+        await expect(page.locator(".file-preview img")).toHaveAttribute("alt", /^shot.*\.webp$/);
+        await expect(page.locator(".file-preview img")).toHaveAttribute("src", /^data:image\/webp;base64,/);
+    });
     test("clearing a direct target during upload stops follow-up delivery", async ({ page }) => {
         await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
         await attach(page);

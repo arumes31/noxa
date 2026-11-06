@@ -319,6 +319,26 @@ test("selected wins: stream codec, bandwidth and isolated diagnostics", async ({
     await page.screenshot({ path: ".cache/selected-wins-compact.png" });
 });
 
+test("the composer formats a selection from the toolbar and Ctrl+B", async ({ page }) => {
+    const input = page.locator("#chat-text");
+    const toolbar = page.locator(".composer-format");
+    await input.fill("make this bold");
+    await expect(toolbar).toBeHidden();
+    await input.evaluate(el => { el.focus(); el.setSelectionRange(10, 14); el.dispatchEvent(new Event("select")); });
+    await expect(toolbar).toBeVisible();
+    await expect(toolbar.getByRole("button", { name: "Bold (Ctrl+B)" })).toHaveAttribute("title", "Bold (Ctrl+B)");
+    await toolbar.getByRole("button", { name: "Bold (Ctrl+B)" }).click();
+    await expect(input).toHaveValue("make this **bold**");
+    await expect(input).toBeFocused();
+    await input.press("Control+b");
+    await expect(input).toHaveValue("make this bold");
+    await input.evaluate(el => el.setSelectionRange(0, 4));
+    await input.press("Control+i");
+    await expect(input).toHaveValue("*make* this bold");
+    await input.evaluate(el => el.blur());
+    await expect(toolbar).toBeHidden();
+});
+
 test("the emoji picker searches in English and German and keeps recents and favorites", async ({ page }) => {
     await page.locator("#chat-emoji").click();
     const panel = page.locator(".emoji-panel");

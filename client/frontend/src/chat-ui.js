@@ -1,4 +1,6 @@
 import { joinChannelLocally } from "./local-join-intent.js";
+import { clipboardFiles, preparePastedFiles } from "./paste-images.js";
+import { mountComposerFormat } from "./composer-format.js";
 import { MAX_FAVORITES, MAX_RECENT, emojiIndex, recordEmojiUse, searchEmoji, storedEmoji, toggleFavorite } from "./emoji-picker-model.js";
 import { previewConversation, previewConversationFor, setPreviewConversation } from "./preview-privacy.js";
 import { createActivityHistory } from "./activity-history.js";
@@ -39,7 +41,7 @@ import { DOWNGRADED, encModeFrom, encryptionBadge, UNOPENED_BODIES } from "./mes
 import { chatEnglish } from "./chat-messages.js";
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
 import { pickIcon } from "./image-tools.js";
-import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
+import { closeDialog, confirmDialog, confirmWithOption, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
 import { imageDataURL } from "./safe-media.js";
 import { parseRuntimeObject } from "./runtime-json.js";
 import { parseFileRef, transformCustomEmoji } from "./chat-parsers.js";
@@ -556,6 +558,13 @@ function persistSettings() {
     }, 1200);
 }
 
+function saveSettingsNow() {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = null;
+    const s = V().state.settings;
+    if (s) app().SaveSettings(s);
+}
+
 function hashStr(s) {
     let h = 5381;
     for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
@@ -821,6 +830,16 @@ function renderMsg(m) {
             const menu = document.createElement("div"); menu.className = "ctx-menu msg-context-menu";
             const scope = captureScope(readExportScope);
             menu.appendChild(quickReactionBar(m, menu, el, scope));
+            // (647) Right-clicking an attachment adds its actions first.
+            const attachment = event.target?.closest?.("[data-attachment]");
+            const attachmentActions = attachment?.attachmentActions?.() || [];
+            if (attachmentActions.length) {
+                appendContextActions(menu, attachmentActions, () => el.isConnected && exportScopeIsCurrent(scope));
+                const divider = document.createElement("div");
+                divider.className = "ctx-divider";
+                divider.setAttribute("role", "separator");
+                menu.append(divider);
+            }
             for (const action of actions.querySelectorAll("button")) {
                 const item = document.createElement("button"); item.className = "ctx-action";
                 const reaction = action.dataset.action === "react";
@@ -933,9 +952,27 @@ function startDMEdit(m, peer) {
     input.onblur = finish;
 }
 
+// confirmOwnDelete asks before deleting one of your own messages, offering
+// "Don't ask again"; the choice is reversible in Settings > Chat.
+async function confirmOwnDelete(dialog) {
+    const settings = V().state.settings;
+    if (settings?.skip_own_delete_confirm) return true;
+    const answer = await confirmWithOption({ ...dialog, optionLabel: t("chat.deleteDontAsk") });
+    if (answer.confirmed && answer.checked) {
+        // Save at once: a settings_update from another connection during the
+        // usual persist delay would replace the object and drop the choice.
+        const current = V().state.settings;
+        if (current) {
+            current.skip_own_delete_confirm = true;
+            saveSettingsNow();
+        }
+    }
+    return answer.confirmed;
+}
+
 async function deleteDM(m, peer) {
     const scope = captureScope(readExportScope);
-    const confirmed = await confirmDialog({
+    const confirmed = await confirmOwnDelete({
         title: t("chat.deleteTitle"),
         message: t("chat.dmDeleteMessageHelp"),
         confirmLabel: t("chat.deleteConfirm"),
@@ -1320,7 +1357,64 @@ function attachFileRef(container, m, cap, source = null) {
     } else {
         wrap.appendChild(downloadChip(source, ref, name, ""));
     }
+    mountAttachmentMenu(wrap, source, ref, name);
     container.appendChild(wrap);
+}
+
+// (647) Attachment actions: save, open full size (loaded images and videos)
+// and copy the file name. Inside a message with its own context menu they are
+// added to the top of that menu (quick reactions stay one right-click away);
+// elsewhere the attachment opens a menu of its own.
+function mountAttachmentMenu(wrap, source, ref, name) {
+    wrap.dataset.attachment = "true";
+    wrap.attachmentActions = () => {
+        if (!source.saveCurrent()) return [];
+        const actions = [{ label: t("chat.attachmentSave"), run: async () => {
+            try {
+                const path = await source.save(ref, name);
+                if (path && source.saveCurrent()) V().toast(t("chat.saved", { name }));
+            } catch (e) {
+                if (source.saveCurrent()) V().toast(t("chat.saveFailed", { error: String(e) }), "warn");
+            }
+        } }];
+        const media = wrap.querySelector("img.msg-img, video.msg-video");
+        if (media) actions.push({ label: t("chat.attachmentOpen"), run: () => openLightbox(media) });
+        actions.push({ label: t("chat.attachmentCopyName"), run: () => { void copyToClipboard(name, { success: t("chat.attachmentNameCopied") }); } });
+        return actions;
+    };
+    const openMenu = event => {
+        if (wrap.closest('.msg[aria-haspopup="menu"]')) return; // the message menu includes these actions
+        event.preventDefault();
+        event.stopPropagation();
+        const actions = wrap.attachmentActions();
+        if (!actions.length) return;
+        closeReactStrip();
+        const menu = document.createElement("div");
+        menu.className = "ctx-menu attachment-context-menu";
+        menu.setAttribute("aria-label", t("chat.attachmentMenu", { name }));
+        appendContextActions(menu, actions, () => wrap.isConnected && source.saveCurrent());
+        mountContextMenu(menu, { trigger: wrap.querySelector("button, img, video") || wrap, x: event.clientX, y: event.clientY });
+    };
+    wrap.addEventListener("contextmenu", openMenu);
+    wrap.addEventListener("keydown", event => { if (contextMenuKey(event)) openMenu(event); });
+}
+
+// appendContextActions adds { label, run } items that close the menu first and
+// run only while current() still holds.
+function appendContextActions(menu, actions, current) {
+    for (const action of actions) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "ctx-action";
+        button.textContent = action.label;
+        button.onclick = event => {
+            event.stopPropagation();
+            const live = menu.isConnected && current();
+            closeContextMenu(menu, true);
+            if (live) action.run();
+        };
+        menu.append(button);
+    }
 }
 
 // chatAttachmentSource binds channel and DM attachments (scope 0) to the chat
@@ -1649,14 +1743,15 @@ function startEdit(m) {
 
 async function deleteMsg(m) {
     const scope = captureScope(readExportScope);
-    const confirmed = await confirmDialog({
+    const dialog = {
         title: t("chat.deleteTitle"),
         message: t("chat.deleteHelp"),
         confirmLabel: t("chat.deleteConfirm"),
         danger: true,
         serverScoped: true,
-    });
-    if (!confirmed) return;
+    };
+    // Moderating someone else's message always asks.
+    if (!(m.self ? await confirmOwnDelete(dialog) : await confirmDialog(dialog))) return;
     await runChatMutation(scope, () => app().ChatDeleteMessageForTab(scope.tabID, m.id), t("chat.action.delete"));
     // The chat_deleted broadcast renders the tombstone.
 }
@@ -5375,20 +5470,15 @@ export function initChat() {
 
     // File paste + drop + picker (98/100).
     $("chat-text").addEventListener("paste", (e) => {
-        const files = [...(e.clipboardData?.files || [])];
-        if (files.length === 0) {
-            for (const item of [...(e.clipboardData?.items || [])]) {
-                if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
-                const raw = item.getAsFile();
-                if (!raw) continue;
-                const ext = item.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
-                files.push(raw.name ? raw : new File([raw], `clipboard-${Date.now()}.${ext}`, { type: item.type }));
-            }
-        }
-        if (files.length) {
-            e.preventDefault();
-            stageFiles(files);
-        }
+        const files = clipboardFiles(e.clipboardData);
+        if (!files.length) return;
+        e.preventDefault();
+        // (529) Screenshots become lossless WebP first; the chat must still be
+        // the one the user pasted into when conversion finishes.
+        const scope = captureScope(readSendScope);
+        void preparePastedFiles(files).then(converted => {
+            if (scopeIsCurrent(scope, readSendScope)) stageFiles(converted);
+        });
     });
     const wrap = $("chat-wrap");
     let dragDepth = 0; // dragenter/leave fire per child; a counter avoids flicker
@@ -5442,6 +5532,9 @@ export function initChat() {
         noteTyping();
     });
     $("chat-text").addEventListener("blur", resetTypingOut);
+    // (619) Formatting toolbar for selected text, above the composer row.
+    const formatBar = mountComposerFormat($("chat-text"), id => t(`chat.format.${id}`));
+    $("chat-input-row").before(formatBar);
 
     // Read receipts need a focused window (124).
     window.addEventListener("focus", sendPendingReads);

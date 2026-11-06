@@ -269,6 +269,7 @@ type Settings struct {
 	SysKick               bool             `json:"sys_kick"`                // show kick system lines (default on)
 	LastReadChannels      map[string]int64 `json:"last_read_channels"`      // channelID -> last-read message id (121)
 	DismissedAnnouncement string           `json:"dismissed_announcement"`  // hash of the dismissed announcement (132)
+	SkipOwnDeleteConfirm  bool             `json:"skip_own_delete_confirm"` // delete own messages without asking (moderation always asks)
 
 	// Emoji picker (607): most recent first, favorites in the user's order.
 	EmojiRecents   []string `json:"emoji_recents,omitempty"`
