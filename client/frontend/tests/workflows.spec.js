@@ -3276,8 +3276,9 @@ test.describe("tab-bound custom emoji", () => {
         await page.locator("#chat-emoji").click();
         await expect(page.locator('.emoji-panel img[alt=":new:"]')).toBeVisible();
         await page.evaluate(() => window.__emoji.release());
-        await expect.poll(() => page.evaluate(() => window.__emoji.completed.filter(n => n === "EmojiGet").length)).toBe(2);
-        expect(await page.evaluate(() => window.__emoji.calls.some(c => c.name === "EmojiGet" && c.tabID === "server-b" && c.args[0] === "hello"))).toBe(false);
+        // wave and hello load in parallel on server-a, then new on server-b.
+        await expect.poll(() => page.evaluate(() => window.__emoji.completed.filter(n => n === "EmojiGet").length)).toBe(3);
+        expect(await page.evaluate(() => window.__emoji.calls.some(c => c.name === "EmojiGet" && c.tabID === "server-b" && c.args[0] !== "new"))).toBe(false);
         await expect(page.locator('.emoji-panel img[alt=":wave:"]')).toHaveCount(0);
     });
 });

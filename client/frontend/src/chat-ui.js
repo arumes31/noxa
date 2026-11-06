@@ -686,7 +686,7 @@ async function emojiURL(name) {
     try {
         return await request;
     } finally {
-        emojiURLRequests.delete(name);
+        if (emojiURLRequests.get(name) === request) emojiURLRequests.delete(name);
     }
 }
 
@@ -1515,24 +1515,27 @@ function openReactStrip(m, anchorEl) {
         reactStrip.appendChild(b);
     }
     // Custom server emoji join the strip once loaded.
-    ensureCustomEmoji().then(async () => {
+    ensureCustomEmoji().then(() => {
         if (!currentStrip()) return;
+        // Images load in parallel so one slow emoji does not hold back the
+        // rest; each fills its own slot to keep the server's order.
         for (const e of customEmoji.slice(0, 8)) {
-            if (!currentStrip()) return;
-            const url = await emojiURL(e.name);
-            if (!currentStrip()) return;
-            if (!url) continue;
             const b = document.createElement("button");
-            const img = document.createElement("img");
-            img.src = url;
-            img.alt = ":" + e.name + ":";
-            b.appendChild(img);
-            b.onclick = () => {
-                if (!currentStrip()) return;
-                closeReactStrip();
-                toggleReaction(m, ":" + e.name + ":");
-            };
+            b.hidden = true;
             strip.appendChild(b);
+            emojiURL(e.name).then(url => {
+                if (!currentStrip() || !url) { b.remove(); return; }
+                const img = document.createElement("img");
+                img.src = url;
+                img.alt = ":" + e.name + ":";
+                b.appendChild(img);
+                b.onclick = () => {
+                    if (!currentStrip()) return;
+                    closeReactStrip();
+                    toggleReaction(m, ":" + e.name + ":");
+                };
+                b.hidden = false;
+            });
         }
     });
     const r = anchorEl.getBoundingClientRect();
@@ -3873,7 +3876,7 @@ function toggleEmojiPanel(target = null) {
     const grid = document.createElement("div");
     grid.className = "emoji-grid";
     emojiPanel.appendChild(grid);
-    ensureCustomEmoji().then(async () => {
+    ensureCustomEmoji().then(() => {
         if (!currentPanel()) return;
         // A search typed before the server list arrived now includes it.
         if (search.value.trim()) runSearch();
@@ -3885,11 +3888,13 @@ function toggleEmojiPanel(target = null) {
             return;
         }
         for (const e of customEmoji) {
-            if (!currentPanel()) return;
-            const url = await emojiURL(e.name);
-            if (!currentPanel()) return;
-            if (!url) continue;
-            grid.appendChild(emojiButton(":" + e.name + ":"));
+            const slot = document.createElement("span");
+            slot.hidden = true;
+            grid.appendChild(slot);
+            emojiURL(e.name).then(url => {
+                if (!currentPanel() || !url) { slot.remove(); return; }
+                slot.replaceWith(emojiButton(":" + e.name + ":"));
+            });
         }
     });
 
@@ -4793,6 +4798,7 @@ export function resetView(options = {}) {
     jl.el = null;
     customEmoji = [];
     emojiURLs.clear();
+    emojiURLRequests.clear(); // late replies from the old server stay with their callers
     customDirty = true;
     for (const b of offlineBatch.values()) {
         if (b.timer) clearTimeout(b.timer);
