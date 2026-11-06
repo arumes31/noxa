@@ -1,0 +1,356 @@
+name: strix-full-coverage
+
+# Temporary, manual full-coverage security assessment. Results are encrypted
+# with an RSA public key before they are uploaded, so exploit details never
+# land in this public repository's logs or artifacts.
+on:
+  push:
+    branches:
+      - strix-full-coverage
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: strix-full-coverage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare scan matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Read scan configuration
+        id: matrix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          areas = {
+              "auth-identity": """
+          White-box security review focused on authentication and identity. Prioritize
+          internal/auth, internal/authorization, internal/deviceproof, internal/tlscert,
+          internal/netproto, internal/state, identity methods in internal/store, and the
+          authentication handlers in internal/server. Trace the TLS control handshake
+          (Ed25519 challenge, Argon2id, TOFU pinning), session tokens, device proofs,
+          nickname/identifier login, brute-force rate limiting, PII key handling, and
+          capability checks. Look for IDOR/BOLA, timing oracles, user enumeration, token
+          replay, privilege escalation, and cross-tenant access. Re-test any security
+          findings documented in pen.md or docs/ that are still in scope. Validate
+          findings with concrete proofs of concept where feasible. Do not modify tracked
+          files; use /tmp for harnesses and PoCs.
+          """,
+              "admin-protocols": """
+          White-box security review of the administration surfaces: internal/query (raw
+          ServerQuery), internal/grpcserver, the integration, custom-metadata and
+          clientinfo handlers in internal/server, proto/, v1/, cmd/role-setup and
+          cmd/adduser. Focus on object-level authorization (IDOR/BOLA), capability
+          bypass, command parsing and injection, rate limits, information disclosure, and
+          consistency between the raw query, SSH and gRPC paths. Re-test the customquery,
+          customchange and clientinfo findings from pen.md if still present. Validate
+          with concrete proofs of concept against unit harnesses or a locally started
+          server. Do not modify tracked files; use /tmp for harnesses and PoCs.
+          """,
+              "http-file-transfer": """
+          White-box security review of HTTP and file surfaces: internal/health,
+          internal/filetransfer, internal/web, internal/webpush, internal/linkpreview,
+          internal/broadcast, internal/integrationevents and internal/retention. Focus on
+          path traversal, token authorization and replay, cross-channel file access, SSRF
+          in link previews and webhooks, signature verification, open redirects, XSS in
+          preview rendering, download origin and Host handling, plaintext credential
+          acceptance, and denial-of-service limits. Validate with concrete proofs of
+          concept. Do not modify tracked files; use /tmp for harnesses and PoCs.
+          """,
+              "webrtc-media": """
+          White-box security review of real-time media: internal/webrtc,
+          internal/mediacc, internal/turn, internal/recorder,
+          internal/connectionbenchmark, internal/traffic and the media paths in client/.
+          Focus on unauthorized publish/subscribe, channel and whisper routing bypass,
+          SSRF and ICE/TURN credential abuse, RTP/SDP parsing bugs, recorder path
+          traversal and command injection, resource exhaustion, and media E2EE gaps.
+          Validate with concrete proofs of concept where feasible. Do not modify tracked
+          files; use /tmp for harnesses and PoCs.
+          """,
+              "store-db": """
+          White-box security review of persistence and state: internal/store,
+          internal/retention, internal/rules, internal/channels, internal/state,
+          internal/eventbus, internal/redisx, internal/chatcrypto, internal/e2ee,
+          migrations and SQL. Focus on SQL injection, tenant and channel isolation, race
+          conditions and TOCTOU, transaction boundaries, PII and secret storage, key
+          handling, Redis authentication and TLS, migration safety, and audit-log
+          integrity. Validate with concrete proofs of concept. Do not modify tracked
+          files; use /tmp for harnesses and PoCs.
+          """,
+              "desktop-client": """
+          White-box security review of the desktop client: the client/ Go bridge and Wails
+          bindings, client/frontend/src JavaScript, updater and release verification,
+          local file handling, clipboard and deep links, markdown and chat rendering, CSP,
+          direct-message encryption (X25519 with XSalsa20-Poly1305), screen capture and
+          audio device handling. Focus on XSS and DOM injection, IPC and bridge privilege
+          boundaries, local file read/write, update signature bypass, secret leakage, and
+          unsafe deserialization. Validate with concrete proofs of concept. Do not modify
+          tracked files; use /tmp for harnesses and PoCs.
+          """,
+              "mobile-website": """
+          White-box and black-box security review of mobile/ (PWA, service worker, push,
+          QR pairing) and website/ (static site, Node preview server, Playwright tests,
+          guides). Focus on DOM XSS, service-worker scope and poisoning, push subscription
+          leakage, QR and pairing authentication, path traversal and header handling in
+          website/scripts/serve.mjs, open redirects, and dependency risks. Validate with
+          concrete proofs of concept. Do not modify tracked files; use /tmp for harnesses
+          and PoCs.
+          """,
+              "infra-supply-chain": """
+          White-box security review of infrastructure and supply chain: Dockerfile,
+          docker/, docker-compose*.yml, .github/workflows, scripts/, go.mod and go.sum,
+          client/go.mod, mobile/package.json, website/package.json, release signing and
+          update manifests. Focus on container escape and hardening gaps, secrets in build
+          arguments or layers, CI command injection and pull_request_target risks, action
+          pinning, dependency confusion, artifact integrity, and release signing bypass.
+          Validate with concrete proofs of concept. Do not modify tracked files; use /tmp
+          for harnesses and PoCs.
+          """,
+          }
+
+          selected = str(json.load(open("strix-scan.json", encoding="utf-8")).get("areas", "all")).strip()
+          if selected == "all":
+              keys = list(areas)
+          else:
+              keys = [item.strip() for item in selected.split(",") if item.strip()]
+
+          unknown = [item for item in keys if item not in areas]
+          if unknown:
+              sys.exit("unknown scan areas: " + ", ".join(unknown))
+          if not keys:
+              sys.exit("no scan areas selected")
+
+          matrix = {
+              "include": [
+                  {"area": key, "instruction": " ".join(areas[key].split())}
+                  for key in keys
+              ]
+          }
+          print("Selected areas: " + ", ".join(keys))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write("matrix=" + json.dumps(matrix, separators=(",", ":")) + "\n")
+          PY
+
+  scan:
+    name: Strix ${{ matrix.area }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      LLM_TIMEOUT: "3600"
+      LITELLM_REQUEST_TIMEOUT: "3600"
+      LLM_PREFLIGHT_TIMEOUT: "180"
+      STRIX_MEMORY_COMPRESSOR_TIMEOUT: "3600"
+      STRIX_SANDBOX_EXECUTION_TIMEOUT: "3600"
+      STRIX_SANDBOX_CONNECT_TIMEOUT: "3600"
+      STRIX_LLM: ${{ secrets.STRIX_LLM }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_API_BASE: https://nimbusroute.wowcraft.pw/v1
+      REPORT_PUBLIC_KEY: |
+        -----BEGIN PUBLIC KEY-----
+        MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAmVJxZ/u3oR5sjbHcN2Sx
+        z9osriFCWuXIDk23Lm3+NCFXqulahXpx2Ez5DOBIzi77R239MlhQnnA3LmXxG4iN
+        o6SizLRMDHPfFzKuTmQX8du1B4wJPju/ePj0Yrltm5ogrirLJkxEQpnS3cwwBuwe
+        APK11RIoF8fS4VfctDhEBWwDo8rH2LOOgDRV4SyYNGsUaGR7AqrWnm36JO6MIVf/
+        1eZENSCPuiPSLxbT+8CSOF3V9hIIIGSey5AfOr2gFuN2vTArflC593ne2JfVI4xs
+        kfAv4ArlmA1HDgUo4bkPpCRBcNmJz6lWWNPmkjVKWDb/aRnQx6ViqLg8Cs4U9X40
+        hrIVDplFxZI4+3DxXVmN+w34xh6AFUYGaGHW0kfwaFnCmZiRWbmX0es0uSPUkxg+
+        U6029dBpn1U0Uq0Ab8xqUravdDlQAvH/8rwEzsdl4bFL37Ra9PpFc22rp+UO72yb
+        kC/9/xPrfI5DJfTDafbpCNQjfmCVIYzqyDo2jzeeHYPqGnkiwyP4WcFYB5OUXOpg
+        CQ5eaUBg97+E55huantoAa4zQoEHBx1TY0napAg5GLVGKS10i4UZ+nBfA4daMdQT
+        tqPfaEKL9lo/rcS5dwXOo+W9/vJCQWw7xLBll1o8D8BtYzX9YBXcffHK0mJe+o5X
+        yDeNX79Lx+HXXMBSK9+71M8CAwEAAQ==
+        -----END PUBLIC KEY-----
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        timeout-minutes: 5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check scan credentials
+        id: configuration
+        shell: bash
+        env:
+          STRIX_LLM: ${{ secrets.STRIX_LLM }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          if [[ -n "$STRIX_LLM" && -n "$LLM_API_KEY" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Strix credentials are unavailable."
+            exit 1
+          fi
+
+      - name: Install Strix
+        id: install
+        if: steps.configuration.outputs.ready == 'true'
+        timeout-minutes: 10
+        env:
+          STRIX_VERSION: "1.7.0"
+          STRIX_SHA256: b8cd7e84d63cbeff6726301a9e08fddedf40fc6a4edcdb4edda8a853b3312de6
+        shell: bash
+        run: |
+          install_dir="$RUNNER_TEMP/strix-$STRIX_VERSION"
+          mkdir -p "$install_dir"
+          archive="$install_dir/strix.tar.gz"
+          curl --fail --silent --show-error --location --retry 2 --max-time 120 \
+            --output "$archive" \
+            "https://github.com/usestrix/strix/releases/download/v$STRIX_VERSION/strix-$STRIX_VERSION-linux-x86_64.tar.gz"
+          printf '%s  %s\n' "$STRIX_SHA256" "$archive" | sha256sum --check --status
+          tar -xzf "$archive" -C "$install_dir"
+          install -m 755 "$install_dir/strix-$STRIX_VERSION-linux-x86_64" "$install_dir/strix"
+          echo "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Run Strix
+        id: scan
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 65
+        shell: bash
+        env:
+          AREA: ${{ matrix.area }}
+          INSTRUCTION: ${{ matrix.instruction }}
+        run: |
+          set -uo pipefail
+
+          scan_mode=$(python3 -c 'import json; print(json.load(open("strix-scan.json", encoding="utf-8"))["scan_mode"])')
+          max_budget=$(python3 -c 'import json; print(json.load(open("strix-scan.json", encoding="utf-8"))["max_budget"])')
+          max_turns=$(python3 -c 'import json; print(json.load(open("strix-scan.json", encoding="utf-8"))["max_turns"])')
+
+          log="$RUNNER_TEMP/strix-$AREA.log"
+          work="$RUNNER_TEMP/secure-report-$AREA"
+          rm -rf "$work"
+          mkdir -p "$work"
+
+          set +e
+          timeout --signal=TERM --kill-after=30s 60m \
+            strix -n -t ./ --scope-mode full --scan-mode "$scan_mode" \
+            --max-budget "$max_budget" --max-turns "$max_turns" \
+            --instruction "$INSTRUCTION" > "$log" 2>&1
+          result=$?
+          set -e
+
+          run_dir=""
+          if [ -d "$PWD/strix_runs" ]; then
+            run_dir=$(find "$PWD/strix_runs" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)
+          fi
+
+          findings=0
+          status="unknown"
+          if [ -n "$run_dir" ]; then
+            if [ -d "$run_dir/vulnerabilities" ]; then
+              findings=$(find "$run_dir/vulnerabilities" -maxdepth 1 -name '*.md' -type f | wc -l | tr -d ' ')
+            fi
+            if [ -f "$run_dir/run.json" ]; then
+              status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("status", "unknown"))' "$run_dir/run.json" 2>/dev/null || echo unknown)
+            fi
+          fi
+
+          python3 - "$work/summary.json" "$AREA" "$result" "$status" "$findings" "$scan_mode" "$max_budget" "$max_turns" <<'PY'
+          import json
+          import sys
+          out, area, result, status, findings, mode, budget, turns = sys.argv[1:9]
+          with open(out, "w", encoding="utf-8") as handle:
+              json.dump({
+                  "area": area,
+                  "exit_code": int(result),
+                  "status": status,
+                  "findings": int(findings),
+                  "scan_mode": mode,
+                  "max_budget": budget,
+                  "max_turns": turns,
+              }, handle, indent=2)
+          PY
+
+          cat "$work/summary.json"
+          echo "exit_code=$result" >> "$GITHUB_OUTPUT"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "findings=$findings" >> "$GITHUB_OUTPUT"
+
+          sudo chown -R "$(id -u):$(id -g)" "$PWD/strix_runs" 2>/dev/null || true
+          cp "$log" "$work/strix.log"
+          if [ -d "$PWD/strix_runs" ]; then
+            cp -R "$PWD/strix_runs" "$work/strix_runs"
+          fi
+          tar -czf "$work/reports-$AREA.tar.gz" -C "$work" summary.json strix.log strix_runs 2>/dev/null \
+            || tar -czf "$work/reports-$AREA.tar.gz" -C "$work" summary.json strix.log
+
+          cat > "$work/encrypt.mjs" <<'JS'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+          const [inputPath, publicKeyPath] = process.argv.slice(2);
+          const publicKey = fs.readFileSync(publicKeyPath, 'utf8');
+          const key = crypto.randomBytes(32);
+          const nonce = crypto.randomBytes(12);
+          const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
+          const plaintext = fs.readFileSync(inputPath);
+          const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+          const tag = cipher.getAuthTag();
+          fs.writeFileSync(inputPath + '.enc', Buffer.concat([nonce, tag, ciphertext]));
+          const wrapped = crypto.publicEncrypt(
+            { key: publicKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
+            key,
+          );
+          fs.writeFileSync(inputPath + '.key.enc', wrapped);
+          JS
+
+          printf '%s\n' "$REPORT_PUBLIC_KEY" > "$work/public.pem"
+          node "$work/encrypt.mjs" "$work/reports-$AREA.tar.gz" "$work/public.pem"
+
+          mkdir -p "$GITHUB_WORKSPACE/secure-report"
+          cp "$work/reports-$AREA.tar.gz.enc" "$work/reports-$AREA.tar.gz.key.enc" "$GITHUB_WORKSPACE/secure-report/"
+
+          rm -f "$work/reports-$AREA.tar.gz" "$work/public.pem" "$work/summary.json" "$work/strix.log" "$work/encrypt.mjs"
+          rm -rf "$work/strix_runs"
+
+      - name: Upload encrypted report
+        if: always() && steps.install.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: strix-${{ matrix.area }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: secure-report/*
+          if-no-files-found: warn
+          retention-days: 1
+
+      - name: Report scan outcome
+        if: always() && steps.configuration.outputs.ready == 'true'
+        shell: bash
+        run: |
+          code="${{ steps.scan.outputs.exit_code }}"
+          if [ -z "$code" ]; then
+            echo "::error::Strix did not run for ${{ matrix.area }}."
+            exit 1
+          fi
+          echo "Area: ${{ matrix.area }}"
+          echo "Exit code: $code"
+          echo "Status: ${{ steps.scan.outputs.status }}"
+          echo "Findings: ${{ steps.scan.outputs.findings }}"
+          case "$code" in
+            0) echo "Result: clean" ;;
+            2) echo "Result: findings reported" ;;
+            124|137) echo "::warning::Timed out; partial encrypted report uploaded." ;;
+            *) echo "::error::Scan failed; encrypted report and logs uploaded."; exit 1 ;;
+          esac
