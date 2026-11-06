@@ -1146,14 +1146,14 @@ func auditPartitionWarner(st *store.Store, logger *zap.Logger) func(context.Cont
 		if now.Sub(lastWarn) < 24*time.Hour && !lastWarn.IsZero() {
 			return nil
 		}
-		ready, defaultRows, ok, err := st.AuditPartitionCoverage(ctx, now)
+		ready, defaultHasRows, ok, err := st.AuditPartitionCoverage(ctx, now)
 		if err != nil || !ok {
 			return err
 		}
-		if !ready || defaultRows > 0 {
+		if !ready || defaultHasRows {
 			lastWarn = now
 			logger.Warn("audit_log needs partition maintenance; run noxa-migrate offline",
-				zap.Bool("next_month_partition", ready), zap.Int64("default_partition_rows", defaultRows))
+				zap.Bool("next_month_partition", ready), zap.Bool("default_partition_has_rows", defaultHasRows))
 		}
 		return nil
 	}

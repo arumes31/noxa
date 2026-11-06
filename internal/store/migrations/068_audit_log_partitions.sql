@@ -18,29 +18,52 @@
 
 -- Copies a table's privileges (minus the owner's) onto another table, after
 -- removing whatever the destination was granted by default privileges, so a
--- partition carries exactly the grants of its parent. Invoker rights: only the
--- owner running noxa-migrate can use it.
+-- partition carries exactly the grants of its parent: table privileges with
+-- their grant options, and column privileges for columns of the same name.
+-- Invoker rights: only the owner running noxa-migrate can use it.
 CREATE OR REPLACE FUNCTION public.noxa_copy_table_acl(src regclass, dst regclass)
 RETURNS void LANGUAGE plpgsql AS $fn$
 DECLARE
     r RECORD;
 BEGIN
     FOR r IN
-        SELECT a.grantee FROM pg_catalog.pg_class c, pg_catalog.aclexplode(c.relacl) a
+        SELECT DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS who
+        FROM pg_catalog.pg_class c, pg_catalog.aclexplode(c.relacl) a
         WHERE c.oid = dst AND a.grantee <> c.relowner
-        GROUP BY a.grantee
     LOOP
-        EXECUTE pg_catalog.format('REVOKE ALL ON %s FROM %s', dst,
-            CASE WHEN r.grantee = 0 THEN 'PUBLIC' ELSE pg_catalog.quote_ident(r.grantee::regrole::text) END);
+        EXECUTE pg_catalog.format('REVOKE ALL ON %s FROM %s', dst, r.who);
     END LOOP;
     FOR r IN
-        SELECT a.grantee, pg_catalog.string_agg(DISTINCT a.privilege_type, ', ') AS privileges
+        SELECT DISTINCT att.attname, CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS who
+        FROM pg_catalog.pg_attribute att, pg_catalog.aclexplode(att.attacl) a, pg_catalog.pg_class c
+        WHERE att.attrelid = dst AND c.oid = dst AND att.attnum > 0 AND NOT att.attisdropped
+          AND att.attacl IS NOT NULL AND a.grantee <> c.relowner
+    LOOP
+        EXECUTE pg_catalog.format('REVOKE ALL (%I) ON %s FROM %s', r.attname, dst, r.who);
+    END LOOP;
+    -- regrole::text is already quoted where an identifier needs it.
+    FOR r IN
+        SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS who,
+               a.is_grantable, pg_catalog.string_agg(DISTINCT a.privilege_type, ', ') AS privileges
         FROM pg_catalog.pg_class c, pg_catalog.aclexplode(c.relacl) a
         WHERE c.oid = src AND a.grantee <> c.relowner
-        GROUP BY a.grantee
+        GROUP BY 1, 2
     LOOP
-        EXECUTE pg_catalog.format('GRANT %s ON %s TO %s', r.privileges, dst,
-            CASE WHEN r.grantee = 0 THEN 'PUBLIC' ELSE pg_catalog.quote_ident(r.grantee::regrole::text) END);
+        EXECUTE pg_catalog.format('GRANT %s ON %s TO %s%s', r.privileges, dst, r.who,
+            CASE WHEN r.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END);
+    END LOOP;
+    FOR r IN
+        SELECT att.attname, CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS who,
+               a.is_grantable, pg_catalog.string_agg(DISTINCT a.privilege_type, ', ') AS privileges
+        FROM pg_catalog.pg_attribute att, pg_catalog.aclexplode(att.attacl) a, pg_catalog.pg_class c
+        WHERE att.attrelid = src AND c.oid = src AND att.attnum > 0 AND NOT att.attisdropped
+          AND att.attacl IS NOT NULL AND a.grantee <> c.relowner
+          AND EXISTS (SELECT 1 FROM pg_catalog.pg_attribute d WHERE d.attrelid = dst
+                      AND d.attname = att.attname AND d.attnum > 0 AND NOT d.attisdropped)
+        GROUP BY 1, 2, 3
+    LOOP
+        EXECUTE pg_catalog.format('GRANT %s (%I) ON %s TO %s%s', r.privileges, r.attname, dst, r.who,
+            CASE WHEN r.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END);
     END LOOP;
 END
 $fn$;
@@ -85,17 +108,26 @@ BEGIN
     CREATE TABLE public.audit_log_default PARTITION OF public.audit_log DEFAULT;
     PERFORM public.noxa_copy_table_acl('public.audit_log'::regclass, 'public.audit_log_default'::regclass);
 
-    -- One partition per month from the oldest row through twelve months ahead.
-    SELECT pg_catalog.date_trunc('month', LEAST(COALESCE(min(created_at), pg_catalog.now()), pg_catalog.now()) AT TIME ZONE 'UTC')::date
-        INTO first_month FROM public.audit_log_unpartitioned;
-    last_month := (pg_catalog.date_trunc('month', pg_catalog.now() AT TIME ZONE 'UTC') + interval '12 months')::date;
-    m := first_month;
-    WHILE m <= last_month LOOP
+    -- A partition for every month that holds rows (no empty months between an
+    -- old outlier and today), plus the current month and twelve ahead. Rows
+    -- after that window stay in the DEFAULT partition until noxa-migrate
+    -- gives them a month of their own.
+    first_month := pg_catalog.date_trunc('month', pg_catalog.now() AT TIME ZONE 'UTC')::date;
+    last_month := (first_month + interval '12 months')::date;
+    FOR m IN
+        SELECT month FROM (
+            SELECT DISTINCT pg_catalog.date_trunc('month', created_at AT TIME ZONE 'UTC')::date AS month
+            FROM public.audit_log_unpartitioned
+            UNION
+            SELECT pg_catalog.generate_series(first_month, last_month, interval '1 month')::date
+        ) months
+        WHERE month <= last_month
+        ORDER BY month
+    LOOP
         part := 'audit_log_' || pg_catalog.to_char(m, 'YYYYMM');
         EXECUTE pg_catalog.format('CREATE TABLE public.%I PARTITION OF public.audit_log FOR VALUES FROM (%L) TO (%L)',
             part, (m::timestamp AT TIME ZONE 'UTC'), ((m + interval '1 month')::timestamp AT TIME ZONE 'UTC'));
         PERFORM public.noxa_copy_table_acl('public.audit_log'::regclass, ('public.' || pg_catalog.quote_ident(part))::regclass);
-        m := (m + interval '1 month')::date;
     END LOOP;
 
     INSERT INTO public.audit_log (id, actor_unique_id, action, target, detail, created_at, scope_channel_ids)

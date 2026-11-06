@@ -65,11 +65,20 @@ func TestAuditLogPartitionMigrationKeepsRowsIDsAndGrants(t *testing.T) {
 		_, _ = s.db.ExecContext(context.Background(), `DROP OWNED BY `+role)
 		_, _ = s.db.ExecContext(context.Background(), `DROP ROLE IF EXISTS `+role)
 	})
-	if _, err := s.db.ExecContext(ctx, `GRANT SELECT, INSERT ON public.audit_log TO `+role); err != nil {
-		t.Fatal(err)
+	// Mixed grant options and a column grant must survive the conversion.
+	for _, stmt := range []string{
+		`GRANT SELECT ON public.audit_log TO ` + role + ` WITH GRANT OPTION`,
+		`GRANT INSERT ON public.audit_log TO ` + role,
+		`GRANT UPDATE (detail) ON public.audit_log TO ` + role,
+	} {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
 	}
 	now := time.Now().UTC()
-	old := now.AddDate(-2, 0, 0)
+	// Both old rows share one month, two years back; the months between it and
+	// last month hold no rows and must get no partition.
+	old := monthStart(now.AddDate(-2, 0, 0)).Add(24 * time.Hour)
 	farFuture := now.AddDate(3, 0, 0) // beyond the 12 prepared months: DEFAULT
 	for i, at := range []time.Time{old, old.Add(time.Hour), now.AddDate(0, -1, 0), now, farFuture} {
 		if _, err := s.db.ExecContext(ctx, `INSERT INTO public.audit_log (actor_unique_id, action, target, detail, created_at, scope_channel_ids)
@@ -107,15 +116,26 @@ func TestAuditLogPartitionMigrationKeepsRowsIDsAndGrants(t *testing.T) {
 	}
 	// Grants of the old table reach the parent and every partition.
 	for _, table := range []string{"audit_log", "audit_log_default", oldPart, auditPartitionFor(monthStart(now))} {
-		var sel, ins, upd bool
+		var sel, selGrant, ins, insGrant, upd, updDetail, updAction bool
 		if err := s.db.QueryRowContext(context.Background(), `SELECT has_table_privilege($1, 'public.'||quote_ident($2), 'SELECT'),
+			has_table_privilege($1, 'public.'||quote_ident($2), 'SELECT WITH GRANT OPTION'),
 			has_table_privilege($1, 'public.'||quote_ident($2), 'INSERT'),
-			has_table_privilege($1, 'public.'||quote_ident($2), 'UPDATE')`, role, table).Scan(&sel, &ins, &upd); err != nil {
+			has_table_privilege($1, 'public.'||quote_ident($2), 'INSERT WITH GRANT OPTION'),
+			has_table_privilege($1, 'public.'||quote_ident($2), 'UPDATE'),
+			has_column_privilege($1, 'public.'||quote_ident($2), 'detail', 'UPDATE'),
+			has_column_privilege($1, 'public.'||quote_ident($2), 'action', 'UPDATE')`, role, table).Scan(&sel, &selGrant, &ins, &insGrant, &upd, &updDetail, &updAction); err != nil {
 			t.Fatal(err)
 		}
-		if !sel || !ins || upd {
-			t.Fatalf("%s grants for test role: select=%v insert=%v update=%v", table, sel, ins, upd)
+		if !sel || !selGrant || !ins || insGrant || upd || !updDetail || updAction {
+			t.Fatalf("%s grants: select=%v grantable=%v insert=%v grantable=%v update=%v update(detail)=%v update(action)=%v",
+				table, sel, selGrant, ins, insGrant, upd, updDetail, updAction)
 		}
+	}
+	// No partitions for the empty months after the old outlier.
+	gap := auditPartitionFor(monthStart(old).AddDate(0, 3, 0))
+	var gapExists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT to_regclass('public.' || $1) IS NOT NULL`, gap).Scan(&gapExists); err != nil || gapExists {
+		t.Fatalf("partition %s for an empty month exists=%v (%v)", gap, gapExists, err)
 	}
 	// Both old indexes exist on the partitioned parent.
 	var indexes string
@@ -171,9 +191,9 @@ func TestMaintainAuditPartitionsCreatesMovesAndDropsOnlyOld(t *testing.T) {
 	if n := auditCount(t, s, auditPartitionFor(future)); n != 1 {
 		t.Fatalf("%s holds %d rows", auditPartitionFor(future), n)
 	}
-	ready, defaultRows, ok, err := s.AuditPartitionCoverage(ctx, now)
-	if err != nil || !ok || !ready || defaultRows != 0 {
-		t.Fatalf("coverage = %v %d %v %v", ready, defaultRows, ok, err)
+	ready, defaultHasRows, ok, err := s.AuditPartitionCoverage(ctx, now)
+	if err != nil || !ok || !ready || defaultHasRows {
+		t.Fatalf("coverage = %v %v %v %v", ready, defaultHasRows, ok, err)
 	}
 	// A second run creates nothing.
 	again, err := s.MaintainAuditPartitions(ctx, now.AddDate(0, 2, 0), 0)
@@ -232,5 +252,48 @@ func TestParseAuditPartition(t *testing.T) {
 		if _, ok := parseAuditPartition(bad); ok {
 			t.Fatalf("%s parsed", bad)
 		}
+	}
+}
+
+func TestMaintainAuditPartitionsRefusesConflictingTables(t *testing.T) {
+	s := testDedicatedDBStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	// A detached table that only carries a monthly name is not a partition:
+	// maintenance refuses to treat the month as covered, and so does the
+	// coverage check.
+	next := monthStart(now).AddDate(0, 1, 0)
+	name := auditPartitionFor(next)
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE public.`+auditQuoteIdent(name)+` RENAME TO audit_log_parked`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE public.audit_log DETACH PARTITION public.audit_log_parked`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE TABLE public.`+auditQuoteIdent(name)+` (id BIGINT)`); err != nil {
+		t.Fatal(err)
+	}
+	if ready, _, ok, err := s.AuditPartitionCoverage(ctx, now); err != nil || !ok || ready {
+		t.Fatalf("coverage with a stray table = ready %v ok %v err %v", ready, ok, err)
+	}
+	if _, err := s.MaintainAuditPartitions(ctx, now, 0); err == nil || !strings.Contains(err.Error(), "not audit_log's partition") {
+		t.Fatalf("maintenance with a stray table: %v", err)
+	}
+
+	// Retention trusts catalog bounds, not names: a partition named after an
+	// old month whose range is another month is left alone.
+	if _, err := s.db.ExecContext(ctx, `CREATE TABLE public.audit_log_200001 PARTITION OF public.audit_log
+		FOR VALUES FROM ('2000-02-01 00:00:00+00') TO ('2000-03-01 00:00:00+00')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DROP TABLE public.`+auditQuoteIdent(name)); err != nil {
+		t.Fatal(err)
+	}
+	report, err := s.MaintainAuditPartitions(ctx, now, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsString(report.Dropped, "audit_log_200001") {
+		t.Fatalf("dropped a partition whose bounds do not match its name: %+v", report)
 	}
 }

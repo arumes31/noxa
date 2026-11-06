@@ -94,7 +94,7 @@ func (s *Store) MaintainAuditPartitions(ctx context.Context, now time.Time, rete
 	}
 	if retentionMonths > 0 {
 		cutoff := current.AddDate(0, -retentionMonths, 0)
-		dropped, droppedRows, err := s.dropAuditPartitionsBefore(ctx, cutoff)
+		dropped, droppedRows, err := s.dropAuditPartitionsBefore(ctx, now, cutoff)
 		if err != nil {
 			return report, err
 		}
@@ -125,12 +125,20 @@ func (s *Store) ensureAuditPartition(ctx context.Context, month time.Time) (crea
 		return false, 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('public.' || quote_ident($1)) IS NOT NULL`, name).Scan(&exists); err != nil {
+	// One maintainer at a time: the check and the creation happen under the
+	// same lock.
+	if _, err := tx.ExecContext(ctx, auditPartitionLockSQL); err != nil {
+		return false, 0, fmt.Errorf("audit partitions: locking maintenance: %w", err)
+	}
+	state, err := auditPartitionStateOf(ctx, tx, name, from, to)
+	if err != nil {
 		return false, 0, err
 	}
-	if exists {
+	switch {
+	case state.attached && state.boundsMatch:
 		return false, 0, nil
+	case state.exists:
+		return false, 0, fmt.Errorf("audit partitions: table public.%s exists but is not audit_log's partition for %s; inspect it before running noxa-migrate again", name, month.Format("2006-01"))
 	}
 	// The default partition is locked first so no row of this month can
 	// arrive between the move and the attach.
@@ -170,28 +178,57 @@ func (s *Store) ensureAuditPartition(ctx context.Context, month time.Time) (crea
 	return true, moved, nil
 }
 
+// auditRowRetention is the server's own row retention for audit events
+// (PruneExpiredData); partition retention never drops a newer row.
+const auditRowRetention = 180 * 24 * time.Hour
+
 // dropAuditPartitionsBefore drops monthly partitions whose whole range ends
-// on or before cutoff. Each drop is audited in the same transaction.
-func (s *Store) dropAuditPartitionsBefore(ctx context.Context, cutoff time.Time) ([]string, int64, error) {
-	names, err := s.auditPartitionNames(ctx)
+// on or before cutoff. The catalog bounds, not only the name, must match the
+// month, and the partition must hold no row inside the server's 180-day
+// audit history. Each drop is audited in the same transaction.
+func (s *Store) dropAuditPartitionsBefore(ctx context.Context, now, cutoff time.Time) ([]string, int64, error) {
+	children, err := s.auditPartitionChildren(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
 	var dropped []string
 	var total int64
-	for _, name := range names {
-		month, ok := parseAuditPartition(name)
+	for _, child := range children {
+		month, ok := parseAuditPartition(child.name)
 		if !ok || month.AddDate(0, 1, 0).After(cutoff) {
 			continue
 		}
+		name := child.name
+		qualified := auditQuoteIdent(child.schema) + "." + auditQuoteIdent(child.name)
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return dropped, total, err
 		}
-		var count int64
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM public.`+auditQuoteIdent(name)).Scan(&count); err != nil {
+		if _, err := tx.ExecContext(ctx, auditPartitionLockSQL); err != nil {
 			_ = tx.Rollback()
 			return dropped, total, err
+		}
+		var boundsMatch bool
+		err = tx.QueryRowContext(ctx, `SELECT pg_get_expr(c.relpartbound, c.oid) = format('FOR VALUES FROM (%L) TO (%L)', $2::timestamptz, $3::timestamptz)
+			FROM pg_catalog.pg_class c JOIN pg_catalog.pg_inherits i ON i.inhrelid = c.oid
+			WHERE c.oid = $1::regclass AND i.inhparent = 'public.audit_log'::regclass`,
+			qualified, month, month.AddDate(0, 1, 0)).Scan(&boundsMatch)
+		if err != nil || !boundsMatch {
+			_ = tx.Rollback()
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return dropped, total, err
+			}
+			continue // detached meanwhile, or bounds differ from the name: leave it
+		}
+		var count int64
+		var newest sql.NullTime
+		if err := tx.QueryRowContext(ctx, `SELECT count(*), max(created_at) FROM `+qualified).Scan(&count, &newest); err != nil {
+			_ = tx.Rollback()
+			return dropped, total, err
+		}
+		if newest.Valid && !newest.Time.Before(now.Add(-auditRowRetention)) {
+			_ = tx.Rollback()
+			continue
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO public.audit_log (actor_unique_id, action, target, detail, scope_channel_ids)
 			VALUES ('system:noxa-migrate', 'audit.partition_dropped', $1, $2, '{}')`,
@@ -199,7 +236,7 @@ func (s *Store) dropAuditPartitionsBefore(ctx context.Context, cutoff time.Time)
 			_ = tx.Rollback()
 			return dropped, total, fmt.Errorf("audit partitions: recording drop of %s: %w", name, err)
 		}
-		if _, err := tx.ExecContext(ctx, `DROP TABLE public.`+auditQuoteIdent(name)); err != nil {
+		if _, err := tx.ExecContext(ctx, `DROP TABLE `+qualified); err != nil {
 			_ = tx.Rollback()
 			return dropped, total, fmt.Errorf("audit partitions: dropping %s: %w", name, err)
 		}
@@ -212,23 +249,55 @@ func (s *Store) dropAuditPartitionsBefore(ctx context.Context, cutoff time.Time)
 	return dropped, total, nil
 }
 
-func (s *Store) auditPartitionNames(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT c.relname FROM pg_catalog.pg_inherits i
+type auditPartitionChild struct{ schema, name string }
+
+// auditPartitionChildren lists the partitions actually attached to
+// audit_log, schema-qualified.
+func (s *Store) auditPartitionChildren(ctx context.Context) ([]auditPartitionChild, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT n.nspname, c.relname FROM pg_catalog.pg_inherits i
 		JOIN pg_catalog.pg_class c ON c.oid = i.inhrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 		WHERE i.inhparent = to_regclass('public.audit_log') ORDER BY c.relname`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	var names []string
+	var children []auditPartitionChild
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var child auditPartitionChild
+		if err := rows.Scan(&child.schema, &child.name); err != nil {
 			return nil, err
 		}
-		names = append(names, name)
+		children = append(children, child)
 	}
-	return names, rows.Err()
+	return children, rows.Err()
+}
+
+// auditPartitionLockSQL serializes partition maintenance across processes.
+const auditPartitionLockSQL = `SELECT pg_advisory_xact_lock(hashtext('noxa.audit_log.partitions'))`
+
+type auditQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+type auditPartitionState struct {
+	exists      bool // a table public.<name> exists
+	attached    bool // it is a partition of public.audit_log
+	boundsMatch bool // with exactly the month's range
+}
+
+func auditPartitionStateOf(ctx context.Context, q auditQueryer, name string, from, to time.Time) (auditPartitionState, error) {
+	var st auditPartitionState
+	err := q.QueryRowContext(ctx, `SELECT t.oid IS NOT NULL,
+		COALESCE(i.inhparent = 'public.audit_log'::regclass, false),
+		COALESCE(pg_get_expr(c.relpartbound, c.oid) = format('FOR VALUES FROM (%L) TO (%L)', $2::timestamptz, $3::timestamptz), false)
+		FROM (SELECT to_regclass('public.' || quote_ident($1)) AS oid) t
+		LEFT JOIN pg_catalog.pg_class c ON c.oid = t.oid
+		LEFT JOIN pg_catalog.pg_inherits i ON i.inhrelid = t.oid`, name, from, to).Scan(&st.exists, &st.attached, &st.boundsMatch)
+	if err != nil {
+		return st, fmt.Errorf("audit partitions: inspecting %s: %w", name, err)
+	}
+	return st, nil
 }
 
 func parseAuditPartition(name string) (time.Time, bool) {
@@ -245,24 +314,27 @@ func parseAuditPartition(name string) (time.Time, bool) {
 }
 
 // AuditPartitionCoverage reports, for the serving process, whether next
-// month's audit partition exists and how many rows sit in the DEFAULT
-// partition. Both mean noxa-migrate should run soon; neither breaks inserts.
-// ok is false when audit_log is not partitioned.
-func (s *Store) AuditPartitionCoverage(ctx context.Context, now time.Time) (nextMonthReady bool, defaultRows int64, ok bool, err error) {
+// month's audit partition is attached with the right range and whether any
+// row sits in the DEFAULT partition (a bounded presence check, not a count).
+// Either means noxa-migrate should run soon; neither breaks inserts. ok is
+// false when audit_log is not partitioned.
+func (s *Store) AuditPartitionCoverage(ctx context.Context, now time.Time) (nextMonthReady, defaultHasRows, ok bool, err error) {
 	if s == nil || s.db == nil {
-		return false, 0, false, nil
+		return false, false, false, nil
 	}
 	partitioned, err := s.auditLogPartitioned(ctx)
 	if err != nil || !partitioned {
-		return false, 0, false, err
+		return false, false, false, err
 	}
-	next := auditPartitionFor(monthStart(now).AddDate(0, 1, 0))
-	err = s.db.QueryRowContext(ctx, `SELECT to_regclass('public.' || quote_ident($1)) IS NOT NULL,
-		(SELECT count(*) FROM public.audit_log_default)`, next).Scan(&nextMonthReady, &defaultRows)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = nil
+	next := monthStart(now).AddDate(0, 1, 0)
+	state, err := auditPartitionStateOf(ctx, s.db, auditPartitionFor(next), next, next.AddDate(0, 1, 0))
+	if err != nil {
+		return false, false, false, err
 	}
-	return nextMonthReady, defaultRows, err == nil, err
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM public.audit_log_default)`).Scan(&defaultHasRows); err != nil {
+		return false, false, false, err
+	}
+	return state.attached && state.boundsMatch, defaultHasRows, true, nil
 }
 
 func auditQuoteIdent(name string) string {
