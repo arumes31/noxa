@@ -2848,6 +2848,7 @@ function onICEStateChange(pc) {
     }
 }
 
+let iceFirstForDisconnected = false;
 function resetICERestart(pc) {
     recoverVoiceTransport.cancel(pc);
     if (!ownsICERestart(pc)) return;
@@ -2860,6 +2861,13 @@ function resetICERestart(pc) {
 
 function scheduleICERestart(pc) {
     if (state.pc !== pc || !claimICERestart(pc) || !ownsICERestart(pc)) return;
+    const failed = pc.connectionState === "failed" || pc.iceConnectionState === "failed";
+    // A failure while the first ("disconnected") grace step waits restarts now.
+    if (iceTimer !== null && failed && iceFailures === 1 && iceFirstForDisconnected) {
+        clearTimeout(iceTimer);
+        iceTimer = null;
+        iceFailures = 0;
+    }
     if (iceTimer !== null) return;
     if (iceFailures > ICE_BACKOFF_MS.length) {
         if (!iceFailureNotified) {
@@ -2869,7 +2877,7 @@ function scheduleICERestart(pc) {
         recoverVoiceTransport.schedule(pc);
         return;
     }
-    const failed = pc.connectionState === "failed" || pc.iceConnectionState === "failed";
+    iceFirstForDisconnected = iceFailures === 0 && !failed;
     const delay = iceFailures === 0
         ? ICE_FIRST_RESTART_MS[failed ? "failed" : "disconnected"]
         : ICE_BACKOFF_MS[iceFailures - 1];
