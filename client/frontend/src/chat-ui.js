@@ -1,4 +1,7 @@
 import { joinChannelLocally } from "./local-join-intent.js";
+import { SafetyScan, SafetyScheme, checkSafetyScan } from "./safety-qr.js";
+import { scanQR } from "./qr-scan.js";
+import { AUDIO_MIME, TEXT_MAX_B64, decodeTextPreview, previewKind } from "./attachment-preview.js";
 import { clipboardFiles, preparePastedFiles } from "./paste-images.js";
 import { mountComposerFormat } from "./composer-format.js";
 import { MAX_FAVORITES, MAX_RECENT, emojiIndex, recordEmojiUse, searchEmoji, storedEmoji, toggleFavorite } from "./emoji-picker-model.js";
@@ -1354,11 +1357,98 @@ function attachFileRef(container, m, cap, source = null) {
                 wrap.textContent = "📎 " + name + t("chat.downloadFailed");
             }
         });
+    } else if (previewKind(ext) && !(ref.meta?.size > (previewKind(ext) === "text" ? TEXT_MAX_B64 * 0.75 : INLINE_MAX_B64 * 0.75))) {
+        attachFilePreview(wrap, source, ref, name, ext, previewIsCurrent);
     } else {
         wrap.appendChild(downloadChip(source, ref, name, ""));
     }
     mountAttachmentMenu(wrap, source, ref, name);
     container.appendChild(wrap);
+}
+
+// (575) Audio plays inline; text and code show their first lines, expandable
+// to the whole file. Decryption happens in the native layer as for images;
+// text is rendered only through textContent. The download chip stays below.
+// Expanded text previews by preview key, bounded so a long session does not
+// grow without limit.
+const expandedTextPreviews = new Set();
+function rememberExpandedPreview(key) {
+    expandedTextPreviews.delete(key);
+    expandedTextPreviews.add(key);
+    if (expandedTextPreviews.size > 200) expandedTextPreviews.delete(expandedTextPreviews.values().next().value);
+}
+
+// Recently shown text attachments (base64, at most TEXT_MAX_B64 each): a
+// refreshed row renders them again without another download.
+const textPreviewCache = new Map();
+function rememberTextPreview(key, b64) {
+    textPreviewCache.delete(key);
+    textPreviewCache.set(key, b64);
+    if (textPreviewCache.size > 16) textPreviewCache.delete(textPreviewCache.keys().next().value);
+}
+
+function attachFilePreview(wrap, source, ref, name, ext, previewIsCurrent) {
+    const kind = previewKind(ext);
+    wrap.textContent = t("chat.loadingFile", { name });
+    const cacheKey = kind === "text" ? source.previewKey?.(ref) || "" : "";
+    const cached = cacheKey ? textPreviewCache.get(cacheKey) : undefined;
+    (cached !== undefined ? Promise.resolve(cached) : sharedPreviewDownload(source, ref, previewIsCurrent)).then((b64) => {
+        if (cacheKey && cached === undefined && b64 && b64.length <= TEXT_MAX_B64) rememberTextPreview(cacheKey, b64);
+        if (!previewIsCurrent()) return;
+        wrap.textContent = "";
+        const chip = downloadChip(source, ref, name, "");
+        if (!b64 || b64.length > (kind === "text" ? TEXT_MAX_B64 : INLINE_MAX_B64)) {
+            wrap.appendChild(chip);
+            return;
+        }
+        if (kind === "audio") {
+            const audio = document.createElement("audio");
+            audio.className = "msg-audio";
+            audio.controls = true;
+            audio.preload = "metadata";
+            audio.src = `data:${AUDIO_MIME[ext]};base64,${b64}`;
+            audio.title = name;
+            wrap.append(audio, chip);
+            return;
+        }
+        const text = decodeTextPreview(b64);
+        if (!text) {
+            wrap.appendChild(chip); // binary despite its extension
+            return;
+        }
+        const pre = document.createElement("pre");
+        pre.className = "msg-text-file";
+        pre.setAttribute("aria-label", t("chat.filePreview", { name }));
+        wrap.appendChild(pre);
+        // A message refresh (edit, reaction) rebuilds the row: a preview the
+        // user expanded stays expanded.
+        const expandKey = source.previewKey?.(ref) || "";
+        if (text.truncated && expandKey && expandedTextPreviews.has(expandKey)) {
+            pre.textContent = text.text;
+            pre.classList.add("expanded");
+        } else {
+            pre.textContent = text.head;
+        }
+        if (text.truncated && !pre.classList.contains("expanded")) {
+            const more = document.createElement("button");
+            more.type = "button";
+            more.className = "msg-text-more";
+            more.textContent = t("chat.showAllLines", { count: text.lines });
+            more.onclick = () => {
+                if (!previewIsCurrent()) return;
+                pre.textContent = text.text;
+                pre.classList.add("expanded");
+                if (expandKey) rememberExpandedPreview(expandKey);
+                more.remove();
+            };
+            wrap.appendChild(more);
+        }
+        wrap.appendChild(chip);
+    }).catch((err) => {
+        if (!previewIsCurrent()) return;
+        wrap.textContent = "";
+        wrap.appendChild(downloadChip(source, ref, name, String(err).includes("too large to preview") ? t("chat.tooLargePreview") : ""));
+    });
 }
 
 // (647) Attachment actions: save, open full size (loaded images and videos)
@@ -2100,11 +2190,17 @@ async function openE2EEDiagnostics() {
             <dt>${t("chat.pendingHandshakes")}</dt><dd>${d.pending_key_pulls || 0}</dd>
         </dl>
         ${peer ? `<label>${t("chat.safetyNumber")}</label><pre class="safety-number">${escapeHTML(d.safety_number || t("chat.keyUnavailable"))}</pre>` : ""}
-        <div class="dlg-buttons">${peer && d.safety_number ? `<button class="dlg-ok verify-safety">${t("chat.markVerified")}</button>` : ""}<button class="dlg-cancel">${t("chat.close")}</button></div>
+        ${peer && d.safety_qr ? `<figure class="safety-qr"><img class="safety-qr-image" alt="${escapeHTML(t("chat.safetyQrAlt"))}" /><figcaption>${escapeHTML(t("chat.safetyQrHint"))}</figcaption></figure>
+        <p class="safety-scan-result" role="status" hidden></p>` : ""}
+        <div class="dlg-buttons">${peer && d.safety_qr && d.safety_digest && d.own_unique_id ? `<button class="dlg-btn scan-safety">${t("chat.safetyScan")}</button>` : ""}${peer && d.safety_number ? `<button class="dlg-ok verify-safety">${t("chat.markVerified")}</button>` : ""}<button class="dlg-cancel">${t("chat.close")}</button></div>
     </div>`;
+    // A data URL from the native layer; set as a property, never as markup.
+    const qrImage = overlay.querySelector(".safety-qr-image");
+    if (qrImage && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(d.safety_qr)) qrImage.src = d.safety_qr;
+    else overlay.querySelector(".safety-qr")?.remove();
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    overlay.querySelector(".verify-safety")?.addEventListener("click", async () => {
+    const markVerified = async () => {
         const settings = V().state.settings;
         const previous = settings.e2ee_verified;
         settings.e2ee_verified = { ...(previous || {}), [peer]: d.safety_number };
@@ -2120,6 +2216,38 @@ async function openE2EEDiagnostics() {
         if (!isCurrentServerDialog(overlay)) return;
         overlay.remove();
         V().toast(t("chat.safetyVerified"));
+    };
+    overlay.querySelector(".verify-safety")?.addEventListener("click", markVerified);
+    // (205) Scanning the contact's code compares the full digest. Only a
+    // match verifies; a mismatch is reported and never saved.
+    overlay.querySelector(".scan-safety")?.addEventListener("click", async () => {
+        const pair = { scheme: SafetyScheme.pairwise, me: d.own_unique_id, peer, digest: d.safety_digest };
+        const messages = {
+            [SafetyScan.invalid]: t("chat.safetyScanInvalid"),
+            [SafetyScan.wrongPair]: t("chat.safetyScanWrongPair"),
+            [SafetyScan.otherScheme]: t("chat.safetyScanOtherScheme"),
+        };
+        const verdict = await scanQR({
+            labels: { title: t("chat.safetyScanTitle"), hint: t("chat.safetyScanHint"), cancel: t("chat.close"), unavailable: t("chat.safetyScanUnavailable") },
+            // Closes with the server's dialogs, e.g. when the connection drops.
+            mount: mountServerDialog,
+            accept: text => {
+                const result = checkSafetyScan(text, pair);
+                return result === SafetyScan.match || result === SafetyScan.mismatch ? { done: true, value: result } : { message: messages[result] };
+            },
+        });
+        if (!verdict || !isCurrentServerDialog(overlay)) return;
+        const result = overlay.querySelector(".safety-scan-result");
+        if (verdict === SafetyScan.match) {
+            await markVerified();
+            return;
+        }
+        if (result) {
+            result.hidden = false;
+            result.className = "safety-scan-result warn";
+            result.textContent = t("chat.safetyScanMismatch");
+        }
+        V().toast(t("chat.safetyScanMismatch"), "warn");
     });
     mountServerDialog(overlay);
 }
@@ -4902,6 +5030,8 @@ export function resetView(options = {}) {
     jl.el = null;
     customEmoji = [];
     emojiURLs.clear();
+    textPreviewCache.clear();
+    expandedTextPreviews.clear();
     emojiURLRequests.clear(); // late replies from the old server stay with their callers
     customDirty = true;
     for (const b of offlineBatch.values()) {

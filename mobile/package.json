@@ -23,6 +23,7 @@
     "@noble/hashes": "2.4.0",
     "jsqr": "1.4.0",
     "livekit-client": "2.23.0",
+    "qrcode-generator": "1.4.4",
     "tweetnacl": "1.0.3"
   },
   "devDependencies": {

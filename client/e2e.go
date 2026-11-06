@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,12 +46,18 @@ type E2EEDiagnostics struct {
 	// Cipher describes the active secure-messaging path of this connection
 	// (empty when none is active); Protocol is its wire name and Unavailable
 	// the reason no path is active.
-	Cipher           string `json:"cipher"`
-	Protocol         string `json:"protocol,omitempty"`
-	Active           bool   `json:"active"`
-	Unavailable      string `json:"unavailable,omitempty"`
-	PeerUniqueID     string `json:"peer_unique_id,omitempty"`
-	SafetyNumber     string `json:"safety_number,omitempty"`
+	Cipher       string `json:"cipher"`
+	Protocol     string `json:"protocol,omitempty"`
+	Active       bool   `json:"active"`
+	Unavailable  string `json:"unavailable,omitempty"`
+	PeerUniqueID string `json:"peer_unique_id,omitempty"`
+	SafetyNumber string `json:"safety_number,omitempty"`
+	// SafetyDigest is the full SHA-256 the safety number comes from, as hex;
+	// SafetyQR shows it with both unique IDs as a PNG data URL (205) and
+	// OwnUniqueID is the account a scanned code must be addressed to.
+	SafetyDigest     string `json:"safety_digest,omitempty"`
+	SafetyQR         string `json:"safety_qr,omitempty"`
+	OwnUniqueID      string `json:"own_unique_id,omitempty"`
 	PeerKeyAvailable bool   `json:"peer_key_available"`
 	CachedPeers      int    `json:"cached_peers"`
 	ScopeKeys        int    `json:"scope_keys"`
@@ -178,6 +185,17 @@ func (m *connManager) e2eeDiagnostics(peerUniqueID string) (E2EEDiagnostics, err
 	}
 	d.SafetyNumber = strings.Join(groups, " ")
 	d.PeerKeyAvailable = true
+	d.SafetyDigest = hex.EncodeToString(digest[:])
+	m.mu.Lock()
+	d.OwnUniqueID = m.uniqueID
+	m.mu.Unlock()
+	// The QR is a convenience next to the digits: without it the numbers
+	// can still be compared by reading them aloud.
+	if payload, err := safetyQRPayload(d.OwnUniqueID, peerUniqueID, digest[:]); err == nil {
+		if image, err := safetyQRImage(payload); err == nil {
+			d.SafetyQR = image
+		}
+	}
 	return d, nil
 }
 
