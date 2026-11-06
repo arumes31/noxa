@@ -83,8 +83,8 @@ func NewWithVideoBounds(logger *zap.Logger, iceServers []string, enableAV1 bool,
 // MediaPolicy selects what the SFU negotiates. With E2EE (mandatory channel
 // media encryption) only Opus, VP8 and H264 are registered: their encrypted
 // frames keep the clear header the router's packetization, keyframe and
-// dimension admission rely on (VP8 keyframes keep 10 clear bytes). H.264 and
-// HEVC are not offered until encrypted packet/codec admission is proven.
+// dimension admission rely on (VP8 keyframes keep 10 clear bytes; H264 keeps
+// its NAL and slice headers). VP9, AV1 and HEVC are not offered.
 type MediaPolicy struct{ E2EE bool }
 
 // NewWithMediaPolicy is NewWithVideoBounds with an explicit codec policy.

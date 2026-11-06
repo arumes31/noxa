@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 	"noxa/internal/authorization"
 	"noxa/internal/filetransfer"
+	"noxa/internal/netproto"
 	"noxa/internal/state"
 )
 
@@ -64,6 +65,8 @@ func (s *TCPServer) kickRoleMember(ctx context.Context, e *authorization.RoleEva
 // removeRoleSession requires exclusive policy, metadata and target locks. It
 // performs teardown after its caller has authorized and committed removal.
 func (s *TCPServer) removeRoleSession(ctx context.Context, target *Client, event kickEvent) (pending bool) {
+	// Before any teardown: the peer may close as soon as it is told.
+	target.markCloseCause(netproto.ControlCloseKicked)
 	target.revokeSession()
 	if s.deps.Relay != nil {
 		s.deps.Relay.Revoke(target.ID)

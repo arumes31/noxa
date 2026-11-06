@@ -338,3 +338,25 @@ test("the composer formats a selection from the toolbar and Ctrl+B", async ({ pa
     await input.evaluate(el => el.blur());
     await expect(toolbar).toBeHidden();
 });
+
+test("the emoji picker searches in English and German and keeps recents and favorites", async ({ page }) => {
+    await page.locator("#chat-emoji").click();
+    const panel = page.locator(".emoji-panel");
+    const search = panel.locator(".emoji-search");
+    await expect(search).toBeFocused();
+    await search.fill("herz");
+    await expect(panel.locator(".emoji-results .emoji-choice").first()).toHaveText("❤️");
+    await search.press("Enter");
+    await expect(page.locator("#chat-text")).toHaveValue(/❤️/);
+    // The picker stays open for more choices; reopen it to see the recents.
+    await page.locator("#chat-emoji").click();
+    await expect(panel).toHaveCount(0);
+    await page.locator("#chat-emoji").click();
+    await expect(panel.locator(".emoji-recent .emoji-choice")).toHaveText(["❤️"]);
+    await panel.locator(".emoji-recent .emoji-choice").click({ button: "right" });
+    await expect(panel.locator(".emoji-favorites .emoji-choice")).toHaveText(["❤️"]);
+    await search.fill("zzznothing");
+    await expect(panel.locator(".emoji-results")).toContainText("No matching emoji");
+    await expect.poll(() => page.evaluate(() => window.__saved.emoji_favorites)).toEqual(["❤️"]);
+    expect(await page.evaluate(() => window.__saved.emoji_recents)).toEqual(["❤️"]);
+});

@@ -8,6 +8,7 @@ import (
 	"net"
 
 	"noxa/internal/auth"
+	"noxa/internal/netproto"
 )
 
 // ErrConnectionRejected reports that the server is not running or the
@@ -29,6 +30,7 @@ func (s *TCPServer) ServeExternalConn(ctx context.Context, conn net.Conn) error 
 	if len(s.preauth) >= maxPreauthConnections || s.preauthByIP[ip] >= maxPreauthPerIP {
 		s.lifecycleMu.Unlock()
 		_ = conn.Close()
+		s.metricsSink().IncControlDisconnect("ws", string(netproto.ControlClosePreauthRejected))
 		return ErrConnectionRejected
 	}
 	s.preauth[conn] = ip

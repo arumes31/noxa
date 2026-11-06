@@ -106,6 +106,7 @@ import { createTrayVoiceSync, createTrayUnreadModel, trayInChannel } from "./tra
 import { capturePresenceScope, presenceIsCurrent, desiredPresence, restorePresenceOnActivity, setPresence } from "./presence.js";
 import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting, whisperChannelsFor } from "./media-controls.js";
 import { bindImagePlaceholders } from "./markdown.js";
+import { bindCodeBlocks } from "./code-blocks.js";
 
 const P = () => window.__noxaPerms;
 window.__noxaChat = chatUI;
@@ -433,6 +434,7 @@ $("login-overlay").addEventListener("keydown", (event) => {
 // Markdown images stay click-to-load on every surface (chat, DMs, forums,
 // channel descriptions) so remote hosts never see unsolicited fetches.
 bindImagePlaceholders(document);
+bindCodeBlocks(document);
 
 document.querySelector(".login-card").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1846,6 +1848,15 @@ window.runtime.EventsOn("event", (json) => {
         case "announcement":
             chatUI.onAnnouncement(d);
             return;
+        case "server_shutdown_scheduled": {
+            const seconds = Math.max(1, Math.round(Number(d?.seconds) || 0));
+            // Minutes only when exact, so the warning never overstates the time left.
+            const text = seconds >= 60 && seconds % 60 === 0
+                ? t("runtime.shutdownScheduledMinutes", { minutes: seconds / 60 })
+                : t("runtime.shutdownScheduledSeconds", { seconds });
+            toast(text, "warn", "conn");
+            return;
+        }
         case "server_shutdown":
             if (!actionSoundsSuppressed()) {
                 playAlert("server_shutdown");

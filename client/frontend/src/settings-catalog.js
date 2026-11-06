@@ -75,6 +75,8 @@ export const SETTINGS_OUTSIDE_DIALOG = Object.freeze({
     e2ee_verified: "safety-number verification dialog",
     last_read_channels: "chat read markers",
     dismissed_announcement: "announcement banner",
+    emoji_recents: "emoji picker",
+    emoji_favorites: "emoji picker",
     contacts: "contacts list",
     blocked_users: "member context menu",
     muted_conversations: "conversation menu",

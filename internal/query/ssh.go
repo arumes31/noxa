@@ -123,6 +123,12 @@ func (s *SSHServer) Start(ctx context.Context) error {
 				return fmt.Errorf("query ssh accept: %w", err)
 			}
 		}
+		if !s.base.sourceAllowed(conn) {
+			s.logger.Warn("query ssh connection refused: source not in query_allowed_cidrs",
+				zap.String("remote", conn.RemoteAddr().String()))
+			_ = conn.Close()
+			continue
+		}
 		if !s.base.registerConn(conn) {
 			s.logger.Warn("query ssh connection refused: too many connections",
 				zap.String("remote", conn.RemoteAddr().String()))

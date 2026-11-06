@@ -147,14 +147,18 @@ and every five minutes, so a newcomer cannot decrypt earlier media and a
 departed device cannot decrypt later media. There is no unencrypted fallback:
 an old client, a keyless guest session, a browser without encoded transforms
 or a server without the device directory gets an explicit message and no
-media. Only Opus and VP8 are used while media is encrypted (H.264/HEVC
-publication is off). The server cannot start recordings (an existing
+media. While media is encrypted the SFU negotiates Opus, VP8 and H.264
+Baseline (profile 42001f); H.264 is used only by publishers that declare the
+encrypted H.264 frame format (the desktop does, the mobile app publishes VP8),
+and VP9, AV1 and HEVC are off. The server cannot start recordings (an existing
 recording can still be stopped and keeps its files and retention), whisper is
 unavailable, stream previews are not uploaded (a stream shows its picture once
 watched), and the connection benchmark is unavailable. The echo test channel
 returns your own encrypted media, decrypted with your own key.
 Limits: the server still sees who is in a channel, packet sizes and timing,
-and the clear VP8 keyframe header (dimensions); every participant who receives
+the clear VP8 keyframe header (dimensions) and, for H.264, every NAL unit
+before the first slice (SPS, PPS and SEI: profile, level, dimensions and any
+encoder metadata); every participant who receives
 the keys can record what they receive (the app has no call recorder, external
 recorders cannot be prevented); a key is shared by everyone in the channel, so frames prove channel
 membership, not which member sent them: with the server's help, any
@@ -175,9 +179,9 @@ the same device counts as its own participant.
   under the channel key or in plaintext.
 * *Stream previews (thumbnails)* are made locally on each device that watches
   a stream; nothing is uploaded, so the server never holds a picture.
-* *Video codecs* are VP8 (and Opus for audio) only. H.264/HEVC need encrypted
-  packetization through the SFU that has not been demonstrated end to end, so
-  they are not offered.
+* *Video codecs* are VP8 and H.264 Baseline (Opus for audio).
+  H.264 keeps its slice headers in the clear so the SFU can packetize and
+  admit keyframes; HEVC, VP9 and AV1 are not offered.
 * *The connection benchmark* stays declined: it would send unencrypted test
   media through the SFU.
 * *Key controls already handed to the secure-messaging transport* are not
@@ -231,8 +235,8 @@ the keys for that participant.
   channel voice at all.**
 - **Server recording cannot be started** while channel media is encrypted;
   an existing recording can still be stopped and keeps its files and
-  retention. Whisper, uploaded stream previews, H.264/HEVC publication and
-  the connection benchmark are unavailable (see above).
+  retention. Whisper, uploaded stream previews, HEVC publication and the
+  connection benchmark are unavailable (see above).
 - Plan certificate rotations as a secure-messaging change too (see
   [Certificate trust and rotation](#certificate-rotation)).
 
@@ -325,7 +329,7 @@ graph TD
 * **Screen-share audio choices**: In channel shares and private calls, choose **No audio**, **Shared application**, or **System audio**. Application audio requires a window and a supported capture runtime; enable audio in the system picker. It can include other windows of the same application. If application-only capture is unavailable or cannot be confirmed, video still starts without audio and a short notification explains the fallback. System audio is only shared when explicitly selected.
 * **Screen-share resolution**: The channel share dialog offers 720p, 1080p, 1440p, 4K, **Original source resolution**, and **Custom** dimensions (160–8192 pixels, 15/30/60 fps). The encoder has 50 Mbps of headroom instead of Chromium's implicit ~2.5 Mbps default; this is a ceiling, not a target or minimum. Screen-share presets preserve resolution while actual frame rate can adapt to network and encoder capacity, without an additional system-CPU-triggered 500 kbps cap. Server limits and explicit Low bandwidth mode still apply.
 * **Live share controls**: **Change quality** adjusts a running channel share's resolution and frame rate without reopening the capture picker or changing its source/audio. It updates the one encoding received by every viewer. Watched-stream details show measured resolution, decoded frames per second, codec and payload bitrate separately from the sender's selected settings.
-* **Shared video codec**: camera and screen publications use one sender encoding and upload. Channel media is always end-to-end encrypted on this release (see Encryption), so every channel publication is VP8 today; the HEVC/H.264 selection described next is not used while that is the case. On a capable server, HEVC Main 8-bit is preferred when native hardware-support queries succeed and every active viewer supports the publisher's exact level. Otherwise the whole publication uses compatible H.264 Baseline or VP8; the SFU forwards without transcoding. Server recording and explicit server dimension bounds retain VP8 compatibility. Hardware predictions are checked against runtime encoder/decoder statistics, with bounded recovery and codec re-admission after a fallback.
+* **Shared video codec**: camera and screen publications use one sender encoding and upload. Channel media is always end-to-end encrypted on this release (see Encryption), so channel publications use VP8 or, from the desktop, encrypted H.264 Baseline; the HEVC selection described next applies only to unencrypted media. On a capable server, HEVC Main 8-bit is preferred when native hardware-support queries succeed and every active viewer supports the publisher's exact level. Otherwise the whole publication uses compatible H.264 Baseline or VP8; the SFU forwards without transcoding. Server recording and explicit server dimension bounds retain VP8 compatibility. Hardware predictions are checked against runtime encoder/decoder statistics, with bounded recovery and codec re-admission after a fallback.
 * **Stream diagnostics for viewers**: Any authorized viewer can compare sender capture/encoding/transmission, server ingress/forwarding and local reception/decoding in **Stream details**. A plain-language health summary explains the available evidence and suggests an action for the sender or viewer; live share controls show the sender's summary too. Bitrate, retransmission share, keyframes, frame size and processing delays help locate bottlenecks. Updated senders are required for sender measurements; missing or stale data stays unknown.
 * **Priority speaker**: Non-priority publishers in the current voice channel are ducked to 25% gain (about −12 dB) while a priority speaker talks.
 * **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries. Unavailable while channel media is end-to-end encrypted (a whisper would leave the channel key scope).
@@ -344,6 +348,7 @@ graph TD
 * **Chat media**: Enlarging an attached video keeps the same player, playback position, volume, speed and pause state. Animated images and chat videos pause offscreen or after a minute without window focus; only visible media resumes, and manually paused videos stay paused.
 * **Composer and attachments**: Selecting text in the message box shows a formatting toolbar (bold, italic, underline, strikethrough, code; also Ctrl+B/I/U) that inserts the usual markdown. Pasted PNG/BMP screenshots are re-encoded as high-quality WebP (quality 0.92) before encryption when that saves at least 10%; GIF, JPEG and WebP are attached unchanged. Attachments have their own right-click menu (save, open full size, copy file name). Deleting your own message offers **Don't ask again** (Settings → Chat restores the question); deleting another member's message as a moderator always asks.
 * **Presence at a glance**: Member avatars in the channel tree carry a status dot whose shape and colour differ (online filled, away crescent, busy with a bar, offline ring); invisible members look offline. A collapsed channel's unread badge includes its subchannels.
+* **Code, emoji and pins**: Fenced code blocks show line numbers and a copy button (the copy never includes the numbers); highlight.js (BSD-3-Clause, about 190 languages, bundled locally and loaded on first use) colours blocks whose language it knows, e.g. ```` ```rust ````. The emoji picker searches shortcodes in English and German keywords, keeps recently used emoji and lets you pin favorites (right-click or Alt+click). Pinned messages open as a side drawer; jumping to a pin or a quoted reply that is older than the loaded history pages it into view (up to about 1,000 messages back).
 * **Threads and forums**: Persistent posts/replies, tags, following, unread state, archive/reopen, resolved questions, and pinned posts, under the parent channel's access rules.
 * **Incoming webhooks**: Revocable, channel-scoped integration tokens; posts remain subject to the creator's current access.
 * **Moderation**: Role-controlled message and thread moderation, domain allow/block lists, word filters, duplicate suppression, and rate limits. Server-side content filtering does not inspect E2EE direct-message bodies.
@@ -777,6 +782,7 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_QUERY_ALLOW_REMOTE` | `false` | Explicitly permit a non-loopback raw ServerQuery bind; prefer SSH instead |
 | `NOXA_QUERY_SSH_ENABLED` | `false` | Enable the SSH-wrapped ServerQuery listener |
 | `NOXA_QUERY_SSH_ADDR` | `:12339` | SSH ServerQuery listener address |
+| `NOXA_QUERY_ALLOWED_CIDRS` | empty | Comma-separated canonical CIDRs (e.g. `10.0.0.0/8,192.0.2.10/32`) allowed to connect to raw and SSH ServerQuery; other sources are closed before the banner. Empty allows every source the bind address reaches |
 | `NOXA_FILE_ADDR` | `:12336` | File transfer upload/download listener address |
 | `NOXA_HEALTH_ADDR` | `:12337` | Health/readiness HTTP listener, also serving `/events`, `/hooks/` and `/dl/` links; plaintext unless `NOXA_HEALTH_TLS_ENABLED=true`, so otherwise bind loopback or proxy it behind HTTPS |
 | `NOXA_HEALTH_TLS_ENABLED` | `false` | Serve the health listener over TLS with the control certificate (requires `NOXA_TLS_ENABLED`); download links then use `https://` |
@@ -784,6 +790,7 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_METRICS_ALLOW_REMOTE` | `false` | Permit remote `/metrics` requests; without this opt-in, only IPv4/IPv6 loopback is accepted |
 | `NOXA_PPROF_ENABLED` | `false` | Enable runtime `/debug/pprof/` diagnostics; every pprof endpoint remains GET-only and direct-loopback-only |
 | `NOXA_SHUTDOWN_TIMEOUT` | `30s` | Positive total grace period shared by all services during orderly shutdown |
+| `NOXA_SHUTDOWN_GRACE_PERIOD` | `0s` | Announcement window before an orderly shutdown (max `10m`). After the first SIGTERM/interrupt, readiness turns unhealthy, clients get a countdown (repeated at 5 min, 1 min, 30 s and 10 s left, and sent to sessions that log in during the period) and the server keeps serving; a second signal skips the rest of the wait, and the orderly shutdown then completes within `NOXA_SHUTDOWN_TIMEOUT`. Keep your orchestrator's stop timeout (e.g. Compose `stop_grace_period`) above grace period plus shutdown timeout |
 | `NOXA_DATABASE_URL` | `postgres://...` | PostgreSQL connection URL |
 | `NOXA_REDIS_ADDR` | `localhost:6379` | Optional Redis address for pub/sub fanout |
 | `NOXA_REDIS_ENABLED` | `true` | Set `false` to run without Redis; the supplied Compose stack starts Redis by default |
@@ -1137,6 +1144,7 @@ enabling Query SSH.
 | `membermove` | `data=<escaped_JSON_with_client_id_and_destination_channel_id>` | Move a member under current channel and hierarchy checks |
 | `memberkick` | `data=<escaped_JSON_with_client_id>` | Remove a member from the server |
 | `memberban` | `data=<escaped_JSON_with_client_id_and_duration_seconds>` | Ban a connected member |
+| `broadcast` | `data=<escaped_JSON_with_text>` | Send a one-time encrypted alert (up to 2048 bytes of text, and the escaped command must fit the 4096-byte line limit) to every connected member allowed to view the server (server-level `view_channel`); requires `manage_server`, is audited and is not stored or replayed. Delivery is best effort, like other server-wide events |
 
 Provision integration accounts offline with `adduser -integration`; this enables
 login but grants no roles. Current capabilities and hierarchy apply to every
@@ -1307,6 +1315,15 @@ and restore drills, and keep their incident runbook outside the deployment being
 operated. Update these local procedures when architecture, telemetry or recovery
 steps change. The `docs/` directory and `docker/secrets/` are local-only and ignored
 by Git; keep operator notes and credentials out of the public repository.
+
+`noxa_control_disconnects_total{transport, reason}` counts closed control
+connections (`tcp` or `ws`) by fixed reason: `eof`, `unexpected_eof`,
+`local_close`, `read_timeout`, `read_error`, `write_timeout`, `write_error`,
+`protocol_error`, `frame_too_large`, `auth_timeout`, `preauth_rejected`,
+`server_inactivity`, `kicked`, `shutdown`, `panic` and others. A rise in
+`auth_timeout` or `preauth_rejected` points at stalled handshakes or a
+connection flood; `protocol_error` and `frame_too_large` at incompatible or
+misbehaving clients.
 
 ### Voice diagnostics
 

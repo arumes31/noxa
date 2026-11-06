@@ -41,6 +41,10 @@ type Frame struct {
 // MaxFrameSize.
 var ErrFrameTooLarge = errors.New("netproto: frame too large")
 
+// ErrInvalidFrameLength is returned when a peer announces a frame shorter
+// than its two-byte type header.
+var ErrInvalidFrameLength = errors.New("netproto: invalid frame length")
+
 // ReadFrame reads a single frame from r. It blocks until a complete frame is
 // available, the connection is closed, or an error occurs.
 func ReadFrame(r io.Reader) (*Frame, error) {
@@ -57,7 +61,7 @@ func ReadFrameLimit(r io.Reader, limit uint32) (*Frame, error) {
 
 	length := binary.BigEndian.Uint32(header[:])
 	if length < 2 {
-		return nil, fmt.Errorf("netproto: invalid frame length %d (must be >= 2)", length)
+		return nil, fmt.Errorf("%w %d (must be >= 2)", ErrInvalidFrameLength, length)
 	}
 	if length > MaxFrameSize || length > limit {
 		return nil, ErrFrameTooLarge

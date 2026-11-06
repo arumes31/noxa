@@ -117,6 +117,10 @@ body {
     background: var(--bg-panel); border: 1px solid var(--border);
     box-shadow: var(--shadow); font-size: 0.9286rem;
     animation: toast-in .25s ease;
+    /* Long alerts (e.g. a 2048-byte broadcast) stay bounded and wrap; the
+       notification center keeps the full text. */
+    max-width: min(420px, calc(100vw - 28px)); max-height: 40vh; overflow: hidden;
+    overflow-wrap: anywhere; white-space: pre-wrap;
 }
 .toast.warn { border-color: rgba(240, 179, 90, 0.35); color: var(--warn); }
 .toast.out { opacity: 0; transform: translateX(12px); transition: opacity .3s ease, transform .3s ease; }
@@ -1126,7 +1130,29 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
     margin: 6px 0; padding: 8px 10px; border-radius: 8px; overflow-x: auto;
     background: var(--bg); border: 1px solid var(--border);
     font-family: var(--font-mono); font-size: 0.8571rem; line-height: 1.5;
+    position: relative; display: flex; align-items: flex-start;
 }
+.md-pre > code { flex: 1 1 auto; min-width: 0; padding-right: 28px; }
+/* (603) line numbers stay out of selection and copy */
+.md-gutter {
+    flex: 0 0 auto; margin-right: 10px; padding-right: 8px; border-right: 1px solid var(--border);
+    color: var(--text-faint); text-align: right; user-select: none; white-space: pre;
+}
+.md-copy {
+    position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; padding: 0;
+    border: 1px solid var(--border); border-radius: 5px; background: var(--bg-panel); color: var(--text-dim);
+    cursor: pointer; opacity: 0; transition: opacity .12s;
+}
+.md-pre:hover .md-copy, .md-copy:focus-visible { opacity: 1; }
+@media (hover: none) { .md-copy { opacity: 1; } }
+/* highlight.js token colours, mapped onto the theme tokens */
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-type, .hljs-literal { color: var(--accent); }
+.hljs-string, .hljs-regexp, .hljs-attr, .hljs-template-variable { color: var(--warn); }
+.hljs-comment, .hljs-quote, .hljs-meta { color: var(--text-faint); font-style: italic; }
+.hljs-number, .hljs-symbol, .hljs-variable, .hljs-params { color: var(--ok, #58d68d); }
+.hljs-title, .hljs-section, .hljs-name, .hljs-tag { color: var(--text); font-weight: 600; }
+.hljs-deletion { color: var(--danger, #ff8fa3); }
+.hljs-addition { color: var(--ok, #58d68d); }
 .tk-str { color: var(--warn); }
 .tk-com { color: var(--text-faint); font-style: italic; }
 .tk-kw { color: var(--accent); }
@@ -1239,6 +1265,11 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
     padding: 8px; border-radius: 10px;
     background: var(--bg-panel); border: 1px solid var(--border); box-shadow: var(--shadow);
 }
+/* (607) search, favorites and recents */
+.emoji-search { width: 100%; box-sizing: border-box; margin: 0 0 6px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+.emoji-search:focus { border-color: var(--border-accent); outline: none; }
+.emoji-results.hidden, .emoji-sections.hidden { display: none; }
+.emoji-choice img { width: 20px; height: 20px; object-fit: contain; }
 .emoji-cat {
     margin: 6px 0 3px; font-size: 0.7143rem; font-weight: 700; letter-spacing: .08em;
     color: var(--text-faint);
@@ -1270,6 +1301,15 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
     padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-bottom: 6px;
 }
 .chat-pop-head button { border: 0; background: none; color: var(--text-faint); cursor: pointer; }
+/* (611) pinned messages open as a full-height drawer on the chat's right */
+.chat-pop.pins-panel {
+    top: 0; right: 0; bottom: 0; max-height: none; width: min(340px, 92%);
+    border-radius: 10px 0 0 10px; border-right: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+    :root:not([data-reduce-motion="1"]) .chat-pop.pins-panel { animation: pins-drawer-in 160ms ease-out; }
+}
+@keyframes pins-drawer-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 .pin-row {
     display: flex; align-items: center; gap: 6px;
     padding: 5px 6px; border-radius: 6px; font-size: 0.8571rem;

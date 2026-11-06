@@ -97,8 +97,16 @@ describe("renderMarkdown", () => {
     it("accepts an unterminated fenced block and trims its final newline", () => {
         assert.equal(
             renderMarkdown("```txt\nhello\n"),
-            '<pre class="md-pre language-txt"><code>hello</code></pre>',
+            '<pre class="md-pre language-txt" data-lang="txt"><code>hello</code><button type="button" class="md-copy" title="Copy code" aria-label="Copy code">⧉</button></pre>',
         );
+    });
+
+    it("numbers multi-line blocks outside the code element", () => {
+        const html = renderMarkdown("```go\na := 1\nb := 2\nc := 3\n```");
+        assert.match(html, /<span class="md-gutter" aria-hidden="true">1\n2\n3<\/span><code>/);
+        assert.match(html, /data-lang="go"/);
+        assert.doesNotMatch(html.split("<code>")[1], /md-gutter/, "line numbers never enter the copied code");
+        assert.doesNotMatch(renderMarkdown("```\none line\n```"), /md-gutter/);
     });
 
     it("never autolinks inside image placeholder attributes", () => {

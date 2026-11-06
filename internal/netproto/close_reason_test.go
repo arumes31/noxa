@@ -2,6 +2,7 @@ package netproto
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -25,6 +26,8 @@ func TestControlCloseReasonsDoNotFormatErrors(t *testing.T) {
 		{"deadline", os.ErrDeadlineExceeded, ControlCloseReadTimeout, ControlCloseWriteTimeout},
 		{"network_deadline", &net.OpError{Op: "private-operation", Net: "private-network", Err: os.ErrDeadlineExceeded}, ControlCloseReadTimeout, ControlCloseWriteTimeout},
 		{"unknown", errors.New("private endpoint/token/payload"), ControlCloseReadError, ControlCloseWriteError},
+		{"frame_too_large", ErrFrameTooLarge, ControlCloseFrameTooLarge, ControlCloseWriteError},
+		{"invalid_length", fmt.Errorf("%w 1", ErrInvalidFrameLength), ControlCloseProtocolError, ControlCloseWriteError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// errors.Is/As may inspect the cause; diagnostics must never call Error.
