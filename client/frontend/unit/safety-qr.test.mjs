@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
     SafetyScan, SafetyScheme, buildSafetyPayload, checkSafetyScan, fingerprintPairDigest, parseSafetyPayload,
 } from "../src/safety-qr.js";
-import { DESKTOP_PACKAGES, MOBILE_PACKAGES, frontendNotices } from "../../../tools/frontend-notices.mjs";
+import { DESKTOP_PACKAGES, frontendNotices } from "../../../tools/frontend-notices.mjs";
 
 const digest = "ab".repeat(32);
 const alice = { scheme: SafetyScheme.pairwise, me: "alice", peer: "bob", digest };
@@ -66,12 +66,8 @@ test("the desktop and mobile copies of the module are identical", () => {
     assert.equal(mobile.replace(/\r\n/g, "\n"), desktop.replace(/\r\n/g, "\n"));
 });
 
-test("third-party notices cover the QR libraries", () => {
+test("third-party notices cover the desktop's QR decoder", () => {
     const desktop = frontendNotices(fileURLToPath(new URL("../node_modules/", import.meta.url)), DESKTOP_PACKAGES);
     assert.match(desktop, /^jsqr 1\.4\.0 \(Apache-2\.0\)$/m);
     assert.match(desktop, /Apache License/);
-    const mobile = frontendNotices(fileURLToPath(new URL("../../../mobile/node_modules/", import.meta.url)), MOBILE_PACKAGES);
-    assert.match(mobile, /^qrcode-generator 1\.4\.4 \(MIT\)$/m);
-    assert.match(mobile, /Copyright \(c\) 2009 Kazuhiko Arase/);
-    assert.match(mobile, /Permission is hereby granted/);
 });

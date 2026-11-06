@@ -3,6 +3,8 @@ import { test } from "node:test";
 import decode from "jsqr";
 import { SafetyScan, SafetyScheme, buildSafetyPayload, checkSafetyScan, fingerprintPairDigest } from "../src/core/safety-qr.js";
 import { qrModules } from "../src/ui/qr-image.js";
+import { fileURLToPath } from "node:url";
+import { MOBILE_PACKAGES, frontendNotices } from "../../tools/frontend-notices.mjs";
 
 // Renders modules into RGBA pixels with a quiet zone, as a camera would see
 // the code, and decodes them with the same jsQR the scanner uses.
@@ -43,4 +45,12 @@ test("both phones compute the same digest, so codes for the pair match", async (
 test("a desktop code is reported as another scheme", () => {
     const desktop = buildSafetyPayload({ scheme: SafetyScheme.pairwise, me: "bob", peer: "alice", digest: "ab".repeat(32) });
     assert.equal(checkSafetyScan(desktop, { scheme: SafetyScheme.fingerprint, me: "alice", peer: "bob", digest: "ab".repeat(32) }), SafetyScan.otherScheme);
+});
+
+test("third-party notices cover the QR libraries the app bundles", () => {
+    const notices = frontendNotices(fileURLToPath(new URL("../node_modules/", import.meta.url)), MOBILE_PACKAGES);
+    assert.match(notices, /^jsqr 1\.4\.0 \(Apache-2\.0\)$/m);
+    assert.match(notices, /^qrcode-generator 1\.4\.4 \(MIT\)$/m);
+    assert.match(notices, /Copyright \(c\) 2009 Kazuhiko Arase/);
+    assert.match(notices, /Permission is hereby granted/);
 });

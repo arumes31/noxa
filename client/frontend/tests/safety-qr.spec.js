@@ -1,9 +1,10 @@
 import { createRequire } from "node:module";
 import { expect, test } from "./fixtures.js";
 
-// The mobile app's QR encoder draws real codes for the jsQR path.
+// qrcode-generator (a dev dependency, as in the mobile app) draws real codes
+// for the jsQR path.
 const require = createRequire(import.meta.url);
-const qrcode = require("../../../mobile/node_modules/qrcode-generator/qrcode.js");
+const qrcode = require("qrcode-generator");
 function modules(text) {
     const code = qrcode(0, "M");
     code.addData(text, "Byte");
