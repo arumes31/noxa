@@ -588,6 +588,7 @@ func run() (retErr error) {
 	stopRetention := retention.Start(ctx, logger,
 		retention.Task{Name: "delivered DMs and audit", Run: dbStore.PruneExpiredData},
 		retention.Task{Name: "recordings", Run: rec.PruneExpiredRecordings},
+		retention.Task{Name: "audit partition coverage", Run: auditPartitionWarner(dbStore, logger)},
 	)
 	defer stopRetention()
 
@@ -1132,5 +1133,28 @@ func runShutdownGrace(grace time.Duration, announce func(time.Duration), skip <-
 		return false
 	case <-skip:
 		return true
+	}
+}
+
+// auditPartitionWarner (301) warns at most daily when next month's audit_log
+// partition is missing or rows reached the DEFAULT partition. Inserts keep
+// working either way; only noxa-migrate (owner privileges) can add
+// partitions.
+func auditPartitionWarner(st *store.Store, logger *zap.Logger) func(context.Context, time.Time) error {
+	var lastWarn time.Time
+	return func(ctx context.Context, now time.Time) error {
+		if now.Sub(lastWarn) < 24*time.Hour && !lastWarn.IsZero() {
+			return nil
+		}
+		ready, defaultRows, ok, err := st.AuditPartitionCoverage(ctx, now)
+		if err != nil || !ok {
+			return err
+		}
+		if !ready || defaultRows > 0 {
+			lastWarn = now
+			logger.Warn("audit_log needs partition maintenance; run noxa-migrate offline",
+				zap.Bool("next_month_partition", ready), zap.Int64("default_partition_rows", defaultRows))
+		}
+		return nil
 	}
 }

@@ -94,6 +94,18 @@ func run(ctx context.Context, timeout time.Duration) (runErr error) {
 		return fmt.Errorf("applying migrations: %w", err)
 	}
 
+	// (301) The serving role cannot create partitions, so every migrate run
+	// keeps audit_log partitioned ahead and applies partition retention.
+	partitionCtx, cancelPartitions := context.WithTimeout(ctx, timeout)
+	report, err := s.MaintainAuditPartitions(partitionCtx, time.Now(), cfg.AuditPartitionRetentionMonths)
+	cancelPartitions()
+	if err != nil {
+		return fmt.Errorf("maintaining audit_log partitions: %w", err)
+	}
+	logger.Info("audit_log partitions maintained",
+		zap.Strings("created", report.Created), zap.Int64("moved_rows", report.MovedRows),
+		zap.Strings("dropped", report.Dropped), zap.Int64("dropped_rows", report.DroppedRows))
+
 	logger.Info("fresh-version schema ready")
 	return nil
 }

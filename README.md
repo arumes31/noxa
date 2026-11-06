@@ -1492,6 +1492,14 @@ The server runs bounded housekeeping at startup and every five minutes:
 
 Each pass removes at most 500 rows per database table and 128 recording files, and scans at most 128 recording directory entries. Existing backlogs therefore expire gradually. Housekeeping uses indexed queries, skips locked rows, has a bounded execution context, and runs independently of chat and audio requests. Shutdown cancels and joins the worker before closing storage. These limits apply to the live database and recording directory; independently retained backups are not rewritten.
 
+#### Audit log partitions
+
+`audit_log` is partitioned by month (UTC) since migration `068_audit_log_partitions.sql`. **Upgrading to this release needs the offline `/out/migrate` run described under [Runtime database privilege separation](#runtime-database-privilege-separation)** — the server refuses to start against the old schema. The migration copies every audit row into the partitioned table inside one transaction (same ids, same id sequence; the table is locked while it runs, which takes about a second per few hundred thousand rows) and fails if the row count differs.
+
+The serving role cannot create tables, so `/out/migrate` maintains the partitions: every run creates the partitions for the current month and the next 12 months, and moves any rows that reached the `audit_log_default` partition into a monthly partition of their own. Inserts never fail for a missing month; they land in the default partition, and the server logs a daily warning (`audit_log needs partition maintenance`) when next month's partition is missing or the default partition holds rows. Running `/out/migrate` at least once a year, as every upgrade does, is enough.
+
+`audit_partition_retention_months` (default `0`, keep every partition) lets `/out/migrate` drop whole monthly partitions that ended more than that many months before the current month; it must be `0` or at least `6`, so it never removes audit rows the 180-day row retention above would keep. Each dropped partition is recorded in the audit log (`audit.partition_dropped`, with the number of rows it held). Chat messages are not partitioned: reactions, pins, polls and discussions reference messages by id, and PostgreSQL only allows such references to a partitioned table through a key that includes the partition column.
+
 ### Direct-message identity verification
 
 Updated desktop clients require a signed encryption identity for direct messages,
