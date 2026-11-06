@@ -47,7 +47,7 @@ func runAuditPartitionMigration(t *testing.T, s *Store) {
 func auditCount(t *testing.T, s *Store, table string) int64 {
 	t.Helper()
 	var n int64
-	if err := s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM public.` + auditQuoteIdent(table)).Scan(&n); err != nil {
+	if err := s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM public.`+auditQuoteIdent(table)).Scan(&n); err != nil {
 		t.Fatalf("counting %s: %v", table, err)
 	}
 	return n
@@ -62,8 +62,8 @@ func TestAuditLogPartitionMigrationKeepsRowsIDsAndGrants(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_, _ = s.db.ExecContext(context.Background(), `DROP OWNED BY ` + role)
-		_, _ = s.db.ExecContext(context.Background(), `DROP ROLE IF EXISTS ` + role)
+		_, _ = s.db.ExecContext(context.Background(), `DROP OWNED BY `+role)
+		_, _ = s.db.ExecContext(context.Background(), `DROP ROLE IF EXISTS `+role)
 	})
 	if _, err := s.db.ExecContext(ctx, `GRANT SELECT, INSERT ON public.audit_log TO `+role); err != nil {
 		t.Fatal(err)

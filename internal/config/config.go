@@ -104,18 +104,18 @@ type Config struct {
 	// or interrupt: connected clients receive server_shutdown_scheduled with
 	// the remaining seconds, and the server keeps serving until it elapses.
 	// A second signal skips the rest. Zero (default) shuts down immediately.
-	ShutdownGracePeriod  time.Duration `mapstructure:"shutdown_grace_period"`
+	ShutdownGracePeriod time.Duration `mapstructure:"shutdown_grace_period"`
 	// AuditPartitionRetentionMonths (301) lets noxa-migrate drop whole
 	// monthly audit_log partitions that ended more than this many months
 	// ago. 0 keeps every partition; otherwise at least 6, so it never cuts
 	// into the 180 days of audit history the server keeps row by row.
-	AuditPartitionRetentionMonths int `mapstructure:"audit_partition_retention_months"`
-	MaxClients           int           `mapstructure:"max_clients"`
-	ClientTimeoutSeconds int           `mapstructure:"client_timeout_seconds"`
-	DefaultOpusBitrate   int           `mapstructure:"default_opus_bitrate"`
-	DefaultOpusFEC       bool          `mapstructure:"default_opus_fec"`
-	DefaultOpusDTX       bool          `mapstructure:"default_opus_dtx"`
-	DefaultOpusStereo    bool          `mapstructure:"default_opus_stereo"`
+	AuditPartitionRetentionMonths int  `mapstructure:"audit_partition_retention_months"`
+	MaxClients                    int  `mapstructure:"max_clients"`
+	ClientTimeoutSeconds          int  `mapstructure:"client_timeout_seconds"`
+	DefaultOpusBitrate            int  `mapstructure:"default_opus_bitrate"`
+	DefaultOpusFEC                bool `mapstructure:"default_opus_fec"`
+	DefaultOpusDTX                bool `mapstructure:"default_opus_dtx"`
+	DefaultOpusStereo             bool `mapstructure:"default_opus_stereo"`
 	// VideoMaxBitrate caps relayed video RTP bits/s per publisher, across camera,
 	// screen and simulcast layers, with a one-second burst. Zero is unlimited.
 	VideoMaxBitrate int `mapstructure:"video_max_bitrate"`
