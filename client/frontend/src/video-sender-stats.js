@@ -31,6 +31,17 @@ function encoderImplementation(value) {
     return "unknown";
 }
 
+// The GPU vendor behind a hardware encoder, for diagnosing which encoder the
+// platform chose. Only the coarse vendor leaves this function, never the
+// device or driver description.
+export function encoderVendor(value) {
+    if (typeof value !== "string") return "";
+    if (/nvidia|nvenc|geforce|quadro/i.test(value)) return "nvidia";
+    if (/\bamd|radeon|\bamf\b/i.test(value)) return "amd";
+    if (/intel|quick ?sync|\bqsv\b/i.test(value)) return "intel";
+    return "";
+}
+
 // Copy only diagnostic parameters; RTCRtpParameters can contain identifiers.
 export function videoSenderEncodingSettings(sender) {
     try {
@@ -155,6 +166,7 @@ export function collectVideoSenders(stats, previousStats, sources = [], previous
             quality_reason: ["none", "cpu", "bandwidth", "other"].includes(stat.qualityLimitationReason) ? stat.qualityLimitationReason : "unknown",
             codec: codecs.has(codec) ? codec : "unknown",
             encoder_implementation: encoderImplementation(stat.encoderImplementation),
+            encoder_vendor: encoderVendor(stat.encoderImplementation),
             power_efficient: typeof stat.powerEfficientEncoder === "boolean" ? stat.powerEfficientEncoder : null,
             frames_encoded: counter(stat.framesEncoded), frames_sent: counter(stat.framesSent), packets_sent: counter(stat.packetsSent),
             bytes_sent: counter(stat.bytesSent),

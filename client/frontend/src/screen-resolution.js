@@ -1,6 +1,15 @@
 // One source encoding, with a floating-point scale rather than resolution tiers.
 // Use the publisher's own capture/encode counters. RTT, packet loss and a single
 // subscriber's capacity are deliberately not resolution signals.
+//
+// Response to sustained bandwidth pressure: after SNAP_AFTER_MS a source above
+// 720p (short side) drops straight to 720p, which usually restores the frame
+// rate in one step. If pressure persists for STEP_AFTER_MS more, the scale keeps
+// growing gradually down to the 540-pixel floor. Five healthy seconds step back.
+export const SNAP_AFTER_MS = 5000;
+export const STEP_AFTER_MS = 10000;
+export const SNAP_SHORT_SIDE = 720;
+
 export function createScreenResolutionController() {
     let previous = null, pressureMS = 0, healthyMS = 0;
     return ({ sample, scale = 1, width, height, fps = 60 }) => {
@@ -35,8 +44,15 @@ export function createScreenResolutionController() {
         healthyMS = healthy ? healthyMS + elapsed : 0;
         // Preserve at least the source's short side or 540 pixels, whichever is
         // smaller. Explicit low-bandwidth mode remains a separate user choice.
-        const maxScale = Math.max(1, Math.min(width, height) / 540);
-        if (pressureMS >= 20000) return Math.max(1, Math.min(maxScale, scale * 1.08 ** (Math.min(elapsed, 5000) / 5000)));
+        const shortSide = Math.min(width, height);
+        const maxScale = Math.max(1, shortSide / 540);
+        const snapScale = Math.min(maxScale, shortSide / SNAP_SHORT_SIDE);
+        if (pressureMS >= SNAP_AFTER_MS && snapScale > scale + 0.001) {
+            // Give the encoder a full period at 720p before judging it again.
+            pressureMS = 0;
+            return snapScale;
+        }
+        if (pressureMS >= STEP_AFTER_MS) return Math.max(1, Math.min(maxScale, scale * 1.08 ** (Math.min(elapsed, 5000) / 5000)));
         if (healthyMS >= 5000) return Math.max(1, scale * 0.8 ** (Math.min(elapsed, 5000) / 5000));
         return scale;
     };

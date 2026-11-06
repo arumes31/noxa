@@ -10565,7 +10565,7 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
         const iceTimers = [];
         const delays = [];
         window.setTimeout = (callback, delay, ...args) => {
-            if ([1000, 2000, 5000, 15000].includes(delay)) {
+            if ([0, 500, 1000, 2000, 5000, 15000].includes(delay)) {
                 const timer = { delay, ran: false, cancelled: false, callback: () => callback(...args) };
                 delays.push(delay);
                 iceTimers.push(timer);
@@ -10646,7 +10646,7 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
             pendingBeforeOldEvents,
             pendingAfterOldEvents: iceTimers.filter((entry) => !entry.ran && !entry.cancelled).length,
         };
-        for (let i = 0; i < 4; i++) await runNextICETimer();
+        for (let i = 0; i < 5; i++) await runNextICETimer();
         window.__terminalToastsBeforeRecovery = [...document.querySelectorAll("#toasts .toast")]
             .filter((toast) => toast.textContent.includes("Voice connection unstable")).length;
         await window.__noxa.ensureVoiceForChannel();
@@ -10655,7 +10655,7 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
         window.__inPlaceVoiceStatus=document.querySelector("#voice-status").dataset.state;
         pc.iceConnectionState = "failed";
         pc.oniceconnectionstatechange();
-        for (let i = 0; i < 4; i++) await runNextICETimer();
+        for (let i = 0; i < 5; i++) await runNextICETimer();
         window.__iceRetryDelays = delays.slice();
         const iceReads = window.__calls.GetICEServersForTab || 0;
         state.muted = true; state.deafened = true;
@@ -10674,8 +10674,10 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
     expect(await page.evaluate(() => window.__calls.DisconnectTab)).toBe(1);
     expect(await page.evaluate(() => window.__calls.SendICECandidateForTab)).toBe(1);
     expect(await page.evaluate(() => window.__oldPeerIsolation)).toEqual({ pendingBeforeOldEvents: 1, pendingAfterOldEvents: 1 });
-    expect(await page.evaluate(() => window.__iceRetryDelays)).toEqual([1000, 2000, 5000, 15000, 1000, 1000, 2000, 5000, 15000, 1000]);
-    expect(await page.evaluate(() => window.__transportReplacement)).toEqual({offer:{type:"offer",sdp:"ice-test"},answer:{type:"answer",sdp:"ice-answer"},negotiated:true, encrypted:true, secureOffers:11, replaced: true, oldClosed: true, freshICEReads: 1, muted: true, deafened: true, mediaStarts: 2});
+    // A failed transport restarts at once, then backs off; the trailing 1000 is
+    // transport recovery replacing the peer after the ladder is exhausted.
+    expect(await page.evaluate(() => window.__iceRetryDelays)).toEqual([0, 1000, 2000, 5000, 15000, 1000, 0, 1000, 2000, 5000, 15000, 1000]);
+    expect(await page.evaluate(() => window.__transportReplacement)).toEqual({offer:{type:"offer",sdp:"ice-test"},answer:{type:"answer",sdp:"ice-answer"},negotiated:true, encrypted:true, secureOffers:13, replaced: true, oldClosed: true, freshICEReads: 1, muted: true, deafened: true, mediaStarts: 2});
     expect(await page.evaluate(() => window.__inPlaceVoiceStatus)).toBe("connected");
     expect(await page.evaluate(() => window.__terminalToastsBeforeRecovery)).toBe(1);
     expect(await page.locator("#toasts .toast", { hasText: "Voice connection unstable" }).count()).toBe(2);

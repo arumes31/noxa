@@ -1,3 +1,4 @@
+import { vendorLabel } from "./encoder-vendor.js";
 import { t } from "./i18n.js";
 import { formatBitrate } from "./connection-stats.js";
 import { summarizeStreamHealth, renderStreamHealth } from "./stream-health.js";
@@ -73,7 +74,7 @@ export function renderStreamPath(element, remote, receiver, { extraAgeMS = 0, re
         ["loss", format(receiver?.lossPercent, "%", 2)],
         ["dropped", format(receiver?.droppedFPS, " fps")],
         ["feedback", `${format(receiver?.nacks, "", 0)} / ${format(receiver?.plis, "", 0)}`],
-        ["encoder", sender ? `${sender.codec || "—"} · ${sender.encoder_implementation || "—"}` : "—"],
+        ["encoder", sender ? `${sender.codec || "—"} · ${sender.encoder_implementation || "—"}${vendorLabel(sender.encoder_vendor)}` : "—"],
         ["decoder", receiver?.decoder || "—"],
         ["encoderEfficient", t(sender?.power_efficient === true ? "streams.reportedYes" : sender?.power_efficient === false ? "streams.reportedNo" : "streams.notReported")],
         ["decoderEfficient", t(receiver?.powerEfficientDecoder === true ? "streams.reportedYes" : receiver?.powerEfficientDecoder === false ? "streams.reportedNo" : "streams.notReported")],

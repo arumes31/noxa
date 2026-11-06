@@ -1,4 +1,5 @@
 import test from "node:test";
+import * as iceLadder from "../src/core/ice-ladder.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import vm from "node:vm";
@@ -35,7 +36,7 @@ async function fixture(t, { captureTimeout = 30000 } = {}) {
     const values = {};
     const settings = {get: key => key === "activation" ? "continuous" : values[key], all: () => ({...values}), onChange: () => () => {}};
     const imports = {
-        "./frame.js": {Msg}, "./settings.js": settings, "./video.js": {},
+        "./frame.js": {Msg}, "./settings.js": settings, "./video.js": {}, "./ice-ladder.js": iceLadder,
         "./voice-audio.js": {Mixer:class {close() {} detach() {}}, LevelMeter:class {}, installAudioUnlock() {}},
         "./voice-gate.js": gates,
         "./media-e2ee/media-session.js": {MediaSession:Media, MediaSessionError:class extends Error {}, MEDIA_E2EE_VERSION:"test-encrypted", MEDIA_E2EE_CODEC_VERSION:"test"},
