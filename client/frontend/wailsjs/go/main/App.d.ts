@@ -73,6 +73,10 @@ export function ChatFilterSetForTab(arg1:string,arg2:string,arg3:string,arg4:str
 
 export function ChatHistory(arg1:number,arg2:number,arg3:number):Promise<netproto.ChatHistoryResponse>;
 
+export function ChatHistoryAfterForTab(arg1:string,arg2:number,arg3:number,arg4:number):Promise<netproto.ChatHistoryResponse>;
+
+export function ChatHistoryAroundForTab(arg1:string,arg2:number,arg3:number,arg4:number):Promise<netproto.ChatHistoryResponse>;
+
 export function ChatHistoryForTab(arg1:string,arg2:number,arg3:number,arg4:number):Promise<netproto.ChatHistoryResponse>;
 
 export function ChatPinMessage(arg1:number,arg2:number,arg3:boolean):Promise<string>;

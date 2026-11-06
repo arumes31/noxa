@@ -35,8 +35,34 @@ func (a *App) ChatHistoryForTab(tabID string, channelID, beforeID int64, limit i
 // every page: an active-tab switch midway through a scan would otherwise mix
 // two servers and their unrelated key generations.
 func chatHistoryWith(m *connManager, channelID, beforeID int64, limit int) (netproto.ChatHistoryResponse, error) {
-	f, err := m.request(netproto.MsgChatHistory, netproto.MsgChatHistoryResponse,
-		netproto.ChatHistory{ChannelID: channelID, BeforeID: beforeID, Limit: limit}, 10*time.Second)
+	return chatHistoryRequest(m, netproto.ChatHistory{ChannelID: channelID, BeforeID: beforeID, Limit: limit})
+}
+
+// ChatHistoryAroundForTab fetches a window of history centred on aroundID
+// (601), for jumping to a message far older than the loaded messages. A
+// response without AroundID comes from a server without window support and
+// holds the latest page instead.
+func (a *App) ChatHistoryAroundForTab(tabID string, channelID, aroundID int64, limit int) (netproto.ChatHistoryResponse, error) {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.ChatHistoryResponse{}, err
+	}
+	return chatHistoryRequest(m, netproto.ChatHistory{ChannelID: channelID, AroundID: aroundID, Limit: limit})
+}
+
+// ChatHistoryAfterForTab pages forwards from afterID (601), towards the
+// present, after a jump opened a window in older history.
+func (a *App) ChatHistoryAfterForTab(tabID string, channelID, afterID int64, limit int) (netproto.ChatHistoryResponse, error) {
+	m, err := a.requireTabCM(tabID)
+	if err != nil {
+		return netproto.ChatHistoryResponse{}, err
+	}
+	return chatHistoryRequest(m, netproto.ChatHistory{ChannelID: channelID, AfterID: afterID, Limit: limit})
+}
+
+func chatHistoryRequest(m *connManager, req netproto.ChatHistory) (netproto.ChatHistoryResponse, error) {
+	channelID := req.ChannelID
+	f, err := m.request(netproto.MsgChatHistory, netproto.MsgChatHistoryResponse, req, 10*time.Second)
 	if err != nil {
 		return netproto.ChatHistoryResponse{}, err
 	}

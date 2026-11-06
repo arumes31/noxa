@@ -307,6 +307,10 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 /* (128) no font-size here: #chat-log carries --chat-font-size, and a rule on
    .msg outranks it by specificity, which made the chat font-size setting inert. */
 .msg { display: flex; align-items: baseline; gap: 8px; margin: 3px 0; }
+/* (601) Spacers stand in for the rows of a long log outside the rendered
+   window; the window keeps its own scroll anchor, so the browser's is off. */
+.chat-virtual-spacer { pointer-events: none; }
+#chat-log.chat-virtual { overflow-anchor: none; }
 .msg-time { color: var(--text-faint); font-size: 0.7857rem; flex: 0 0 auto; white-space: nowrap; }
 .msg-from { color: var(--text-dim); font-weight: 600; flex: 0 0 auto; }
 .msg-from.self { color: var(--accent); }

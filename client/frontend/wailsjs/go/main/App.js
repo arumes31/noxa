@@ -138,6 +138,14 @@ export function ChatHistory(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChatHistory'](arg1, arg2, arg3);
 }
 
+export function ChatHistoryAfterForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ChatHistoryAfterForTab'](arg1, arg2, arg3, arg4);
+}
+
+export function ChatHistoryAroundForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ChatHistoryAroundForTab'](arg1, arg2, arg3, arg4);
+}
+
 export function ChatHistoryForTab(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ChatHistoryForTab'](arg1, arg2, arg3, arg4);
 }

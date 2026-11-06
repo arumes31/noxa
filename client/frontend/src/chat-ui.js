@@ -23,6 +23,7 @@ import { openChatMediaLightbox } from "./chat-media-lightbox.js";
 import { createChatUploadQueue } from "./chat-upload-queue.js";
 import { createUnreadTabEffects } from "./chat-unread.js";
 import { createChatTabs } from "./chat-tabs.js";
+import { VIRTUAL_MIN_ROWS, buildPrefix, computeWindow, createHeightCache } from "./virtual-log.js";
 import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
 import { initMessageTools, saveMessageReference, openHistorySearch } from "./message-tools.js";
 import { roleMentionChoices, roleMentionLabel, mentionFlags } from "./role-mentions.js";
@@ -739,6 +740,11 @@ export function encryptionBadgeElement(badge) {
 // promises, so the channel info panel and the README cannot drift apart.
 export const CHAT_ENCRYPTION_HELP = chatEnglish["chat.encryptionHelp"];
 
+function ensureRenderKey(m) {
+    m.renderKey ||= m.id ? "message-" + m.id : m.clientMsgID ? "client-" + m.clientMsgID : crypto.randomUUID();
+    return m.renderKey;
+}
+
 function renderMsg(m) {
     const el = document.createElement("div");
     el.className = "msg rich";
@@ -747,8 +753,7 @@ function renderMsg(m) {
     if (m.self) el.classList.add("own");
     if (m.direct && m.offline) el.classList.add("offline-direct");
     if (m.id) el.dataset.msgId = m.id;
-    m.renderKey ||= m.id ? "message-" + m.id : m.clientMsgID ? "client-" + m.clientMsgID : crypto.randomUUID();
-    el.dataset.scrollKey = m.renderKey;
+    el.dataset.scrollKey = ensureRenderKey(m);
     el.dataset.ts = m.ts;
     const badge = encryptionBadge(m);
     el.dataset.authorGroup = m.deleted || !m.fromUID ? "" : JSON.stringify([m.fromUID, m.from, m.self, m.direct, m.channelID, badge.kind]);
@@ -1847,6 +1852,8 @@ function scrollToQuote(quoteEl) {
 function flashMsg(id) {
     const find = () => document.querySelector(`#chat-log .msg[data-msg-id="${id}"]`);
     let el = find();
+    // (601) In a long log the row may exist only in the store.
+    if (!el && virtualRevealMessage(id)) el = find();
     if (!el) return false;
     // An active search may hide the target: clear it rather than report a
     // jump to an invisible row.
@@ -1857,9 +1864,14 @@ function flashMsg(id) {
     if (!el || el.classList.contains("hidden")) return false;
     el.scrollIntoView({ block: "center" });
     el.classList.add("flash");
-    setTimeout(() => el.classList.remove("flash"), 1200);
+    flashing = { id: Number(id), until: Date.now() + 1200 };
+    setTimeout(() => {
+        el.classList.remove("flash");
+        document.querySelector(`#chat-log .msg[data-msg-id="${id}"]`)?.classList.remove("flash");
+    }, 1200);
     return true;
 }
+let flashing = null; // { id, until }: the jump highlight survives a re-render (601)
 
 // ---------------------------------------------------------------------------
 // Threads (108)
@@ -2712,6 +2724,12 @@ function scrollToBottom() {
     const log = $("chat-log");
     atBottom = true;
     log.scrollTop = log.scrollHeight;
+    if (virtual) {
+        // Not forced: re-rendering unchanged rows would feed the row
+        // ResizeObserver, which calls back here.
+        renderVirtualWindow();
+        log.scrollTop = log.scrollHeight;
+    }
 }
 
 function resetNewCount() {
@@ -2721,8 +2739,14 @@ function resetNewCount() {
 
 function showNewPill() {
     const pill = $("chat-newpill");
-    pill.textContent = t(newCount === 1 ? "chat.newOne" : "chat.newMany", { count: newCount }) + " ↓";
-    pill.setAttribute("aria-label", t("chat.jumpNew", { count: newCount }));
+    if (getStore(activeKey()).detached && !newCount) {
+        // (601) Viewing a window of older history.
+        pill.textContent = t("chat.jumpPresent") + " ↓";
+        pill.setAttribute("aria-label", t("chat.jumpPresent"));
+    } else {
+        pill.textContent = t(newCount === 1 ? "chat.newOne" : "chat.newMany", { count: newCount }) + " ↓";
+        pill.setAttribute("aria-label", t("chat.jumpNew", { count: newCount }));
+    }
     pill.classList.remove("hidden");
 }
 
@@ -2740,9 +2764,11 @@ function restoreScrollAnchor(log, anchor) {
     else log.scrollTop = anchor.scrollTop;
 }
 
-function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
+function renderView(keepScrollFrom, { suppressMarkRead = false, skipThread = false } = {}) {
     const log = $("chat-log");
     const anchor = log.dataset.viewKey === activeKey() ? captureScrollAnchor(log) : null;
+    virtual = null;
+    log.classList.remove("chat-virtual");
     log.innerHTML = "";
     const key = activeKey();
     log.dataset.viewKey = key;
@@ -2798,34 +2824,262 @@ function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
 
     // (121) "— new messages —" divider at the first message newer than the
     // persisted last-read pointer (fresh loads of a channel view).
-    const lastRead = lastReadFor(key);
-    let dividerPlaced = false;
-
-    for (const m of st.msgs) {
-        if (!dividerPlaced && lastRead !== null && m.id > lastRead && !m.self) {
-            const div = document.createElement("div");
-            div.className = "chat-new-divider";
-            div.textContent = t("polish.newMessages");
-            log.appendChild(div);
-            dividerPlaced = true;
-        }
-        log.appendChild(renderMsg(m));
-    }
+    const items = logItems(st.msgs, lastReadFor(key));
+    // (601) Long logs render only the rows near the viewport.
+    if (items.length >= VIRTUAL_MIN_ROWS) mountVirtual(log, key, items);
+    else for (const item of items) log.appendChild(renderItem(item));
 
     applySearchFilter();
     updateHeader();
-    renderThreadPanel(); // (108) the open chain follows the loaded window
+    if (!skipThread) renderThreadPanel(); // (108) the open chain follows the loaded window
 
     if (anchor) {
+        if (virtual) placeVirtualAt(anchor.id, anchor.offset);
         restoreScrollAnchor(log, anchor);
     } else if (keepScrollFrom !== undefined) {
         log.scrollTop = log.scrollHeight - keepScrollFrom;
+        if (virtual) {
+            renderVirtualWindow({ force: true });
+            log.scrollTop = log.scrollHeight - keepScrollFrom;
+        }
     } else {
         scrollToBottom();
         resetNewCount();
     }
+    if (st.detached) showNewPill();
     if (!suppressMarkRead && !anchor) markRead(key);
 }
+
+// logItems lists the rows of a log in order: messages, plus the "— new
+// messages —" divider (121) before the first message newer than the
+// persisted last-read pointer.
+function logItems(msgs, lastRead) {
+    const items = [];
+    let dividerPlaced = false;
+    for (const m of msgs) {
+        if (!dividerPlaced && lastRead !== null && m.id > lastRead && !m.self) {
+            items.push({ key: "chat-new-divider", divider: true });
+            dividerPlaced = true;
+        }
+        items.push({ key: ensureRenderKey(m), m });
+    }
+    return items;
+}
+
+function renderItem(item) {
+    if (!item.divider) {
+        const el = renderMsg(item.m);
+        // A row re-rendered during its jump highlight keeps it.
+        if (flashing && flashing.id === item.m.id && Date.now() < flashing.until) el.classList.add("flash");
+        return el;
+    }
+    const div = document.createElement("div");
+    div.className = "chat-new-divider";
+    div.dataset.scrollKey = item.key;
+    div.textContent = t("polish.newMessages");
+    return div;
+}
+
+// ---------------------------------------------------------------------------
+// Virtualized log (601)
+// ---------------------------------------------------------------------------
+// A long log keeps every message in its store but renders only the rows near
+// the viewport between two spacers whose heights stand in for the rest.
+// Heights are measured after rendering and cached by row key; the maths lives
+// in virtual-log.js. Off-screen rows do not exist in the DOM, so their
+// attachment previews and link cards are not fetched until scrolled to.
+
+let virtual = null; // { key, items, visible, keys, index, prefix, start, end, top, bottom, query }
+const rowHeights = createHeightCache();
+let virtualFrame = 0;
+
+function mountVirtual(log, key, items) {
+    const spacer = () => {
+        const el = document.createElement("div");
+        el.className = "chat-virtual-spacer";
+        el.setAttribute("aria-hidden", "true");
+        return el;
+    };
+    const top = spacer();
+    const bottom = spacer();
+    log.append(top, bottom);
+    log.classList.add("chat-virtual");
+    virtual = { key, items, visible: items, keys: [], index: new Map(), prefix: null, start: 0, end: 0, top, bottom, query: null };
+    setVirtualRows(items);
+    top.style.height = virtual.prefix[virtual.keys.length] + "px";
+    bottom.style.height = "0px";
+}
+
+function setVirtualRows(rows) {
+    const v = virtual;
+    v.visible = rows;
+    v.keys = rows.map(row => row.key);
+    v.index = new Map(v.keys.map((key, i) => [key, i]));
+    v.prefix = buildPrefix(v.keys, rowHeights);
+    v.start = v.end = 0;
+}
+
+function contentTop(log, el) {
+    return el.getBoundingClientRect().top - log.getBoundingClientRect().top + log.scrollTop;
+}
+
+// measureVirtualRows caches the height of every rendered row: the distance to
+// the next row (or spacer), so margins and inserted day separators count.
+function measureVirtualRows() {
+    const v = virtual;
+    let changed = false;
+    // A log without layout (hidden view) measures every row as 0 px.
+    if (!$("chat-log").clientHeight) return false;
+    let row = v.top.nextElementSibling;
+    // The first row of a window that starts mid-list has no predecessor to
+    // group with (groupMessages), so it is taller than in place: skip it.
+    if (v.start > 0) {
+        row = row?.nextElementSibling;
+        while (row && row !== v.bottom && !row.dataset.scrollKey) row = row.nextElementSibling;
+    }
+    while (row && row !== v.bottom) {
+        let next = row.nextElementSibling;
+        while (next && next !== v.bottom && !next.dataset.scrollKey) next = next.nextElementSibling;
+        const key = row.dataset.scrollKey;
+        const height = next ? next.getBoundingClientRect().top - row.getBoundingClientRect().top : 0;
+        if (key && height > 0) changed = rowHeights.set(key, height) || changed;
+        row = next;
+    }
+    if (changed) v.prefix = buildPrefix(v.keys, rowHeights);
+    return changed;
+}
+
+function firstVisibleRow(log) {
+    const top = log.getBoundingClientRect().top;
+    for (let row = virtual.top.nextElementSibling; row && row !== virtual.bottom; row = row.nextElementSibling) {
+        if (!row.dataset.scrollKey) continue;
+        const rect = row.getBoundingClientRect();
+        if (rect.bottom > top) return { key: row.dataset.scrollKey, offset: rect.top - top };
+    }
+    return null;
+}
+
+// renderVirtualWindow renders the rows for the current scroll position. The
+// first visible row keeps its place on screen across the swap, and a log
+// scrolled to the newest message stays there.
+function renderVirtualWindow({ force = false } = {}) {
+    const v = virtual;
+    const log = $("chat-log");
+    if (!v || !v.top.isConnected || v.key !== activeKey()) return;
+    measureVirtualRows();
+    const anchor = firstVisibleRow(log);
+    // Rendering measures the new rows, which corrects the offsets the window
+    // was chosen from; a second pass renders the rows those offsets name.
+    for (let pass = 0; pass < 3; pass++) {
+        const listTop = contentTop(log, v.top);
+        // At the bottom the window ends at the last row, whatever a stale
+        // scrollTop from a taller estimate says.
+        const scrollTop = atBottom ? Math.max(0, v.prefix[v.keys.length] - log.clientHeight) : log.scrollTop - listTop;
+        const win = computeWindow({ prefix: v.prefix, scrollTop, viewport: log.clientHeight });
+        if (!force && win.start === v.start && win.end === v.end) {
+            setSpacers(win.before, win.after);
+            return;
+        }
+        force = false;
+        while (v.top.nextSibling && v.top.nextSibling !== v.bottom) v.top.nextSibling.remove();
+        const fragment = document.createDocumentFragment();
+        for (let k = win.start; k < win.end; k++) {
+            const el = renderItem(v.visible[k]);
+            el.dataset.virtualRow = "true";
+            fragment.appendChild(el);
+        }
+        v.top.after(fragment);
+        v.start = win.start;
+        v.end = win.end;
+        setSpacers(win.before, win.after);
+        groupMessages(log); // grouping changes row heights: measure after it
+        const q = searchQ.toLowerCase();
+        if (q) for (const body of log.querySelectorAll("[data-virtual-row] .msg-text")) markIn(body, q);
+        if (measureVirtualRows()) setSpacers(v.prefix[v.start], v.prefix[v.keys.length] - v.prefix[v.end]);
+        if (atBottom && v.end === v.keys.length) log.scrollTop = log.scrollHeight;
+        else if (anchor) {
+            const row = log.querySelector(`[data-scroll-key="${CSS.escape(anchor.key)}"]`);
+            if (row) log.scrollTop += row.getBoundingClientRect().top - log.getBoundingClientRect().top - anchor.offset;
+        }
+    }
+}
+
+// setSpacers writes spacer heights only when they change, so an unchanged
+// window does not trigger resize observers.
+function setSpacers(before, after) {
+    const top = Math.round(before) + "px", bottom = Math.round(after) + "px";
+    if (virtual.top.style.height !== top) virtual.top.style.height = top;
+    if (virtual.bottom.style.height !== bottom) virtual.bottom.style.height = bottom;
+}
+
+function scheduleVirtualWindow() {
+    if (!virtual || virtualFrame) return;
+    virtualFrame = requestAnimationFrame(() => {
+        virtualFrame = 0;
+        renderVirtualWindow();
+    });
+}
+
+// placeVirtualAt scrolls so the row with key sits offset pixels below the top
+// of the viewport, rendering the window around it. Returns false when the row
+// is not in the (search-filtered) list.
+function placeVirtualAt(key, offset) {
+    const v = virtual;
+    const i = v?.index.get(key);
+    if (i === undefined) return false;
+    const log = $("chat-log");
+    log.scrollTop = contentTop(log, v.top) + v.prefix[i] - offset;
+    atBottom = false;
+    renderVirtualWindow({ force: true });
+    const row = log.querySelector(`[data-scroll-key="${CSS.escape(key)}"]`);
+    if (row) log.scrollTop += row.getBoundingClientRect().top - log.getBoundingClientRect().top - offset;
+    return !!row;
+}
+
+function virtualRevealMessage(id) {
+    const v = virtual;
+    if (!v) return false;
+    const item = v.items.find(entry => entry.m?.id === Number(id));
+    if (!item) return false;
+    if (!v.index.has(item.key) && searchQ) closeSearch();
+    return placeVirtualAt(item.key, $("chat-log").clientHeight / 3);
+}
+
+function virtualSearchText(item) {
+    const m = item.m;
+    return ((m.from || "") + " " + (m.text || "") + " " + previewLine(m)).toLowerCase();
+}
+
+// While printing, every row of a virtual log is rendered (newest
+// PRINT_MAX_ROWS), then the window is restored.
+const PRINT_MAX_ROWS = 5000;
+function renderVirtualForPrint() {
+    const v = virtual;
+    if (!v || v.printing) return;
+    v.printing = { bottom: atBottom, anchor: atBottom ? null : firstVisibleRow($("chat-log")) };
+    while (v.top.nextSibling && v.top.nextSibling !== v.bottom) v.top.nextSibling.remove();
+    const fragment = document.createDocumentFragment();
+    for (const item of v.visible.slice(-PRINT_MAX_ROWS)) {
+        const el = renderItem(item);
+        el.dataset.virtualRow = "true";
+        fragment.appendChild(el);
+    }
+    v.top.after(fragment);
+    v.top.style.height = v.bottom.style.height = "0px";
+    v.start = v.end = -1;
+}
+
+function restoreVirtualAfterPrint() {
+    const v = virtual;
+    if (!v?.printing) return;
+    const { bottom, anchor } = v.printing;
+    v.printing = null;
+    while (v.top.nextSibling && v.top.nextSibling !== v.bottom) v.top.nextSibling.remove();
+    setSpacers(v.prefix[v.keys.length], 0);
+    if (!bottom && anchor && placeVirtualAt(anchor.key, anchor.offset)) return;
+    scrollToBottom();
+}
+
 
 function lastReadFor(key) {
     if (!key.startsWith("ch:")) return null;
@@ -2839,6 +3093,7 @@ function markRead(key) {
     if (isPrivateGroupActive()) return;
     if (!key.startsWith("ch:")) return;
     const st = getStore(key);
+    if (st.detached) return; // (601) the newest messages are not loaded
     const newest = st.msgs.length ? st.msgs[st.msgs.length - 1].id : 0;
     if (!newest) return;
     const s = V().state.settings;
@@ -2915,6 +3170,82 @@ async function loadPage(key, beforeID) {
 // window contiguous with the newest message, which live updates rely on, so
 // the search is bounded to MAX_JUMP_PAGES pages.
 const MAX_JUMP_PAGES = 20;
+// (601) A jump further back than the loaded messages asks the server for a
+// window around the target. The window is detached from the present: live
+// messages wait in a bounded buffer while it pages forward (ChatHistoryAfter)
+// or until "Jump to present" reloads the newest page.
+const AROUND_WINDOW = 100;
+const DETACHED_BUFFER = 500;
+
+async function loadAroundWindow(key, st, id, scope) {
+    if (typeof app().ChatHistoryAroundForTab !== "function") return false;
+    const chID = Number(key.slice(3));
+    const resp = await app().ChatHistoryAroundForTab(scope.tabID, chID, id, AROUND_WINDOW);
+    // Older servers answer with the latest page and no echo.
+    if (Number(resp?.around_id) !== id) return false;
+    const page = (resp.messages || []).map((x) => attribute(normalize(x, chID))).reverse();
+    if (!page.length) return false;
+    const known = new Set(st.msgs.map(m => m.id));
+    const oldest = st.msgs.find(m => m.id)?.id || 0;
+    if (oldest && page[page.length - 1].id >= oldest) {
+        // The window reaches the loaded messages: one contiguous list.
+        st.msgs = page.filter(m => !known.has(m.id)).concat(st.msgs).sort((a, b) => a.id && b.id ? a.id - b.id : a.ts - b.ts);
+    } else {
+        st.msgs = page;
+        st.detached = true;
+        st.pendingLive = [];
+        st.pendingOverflow = false;
+    }
+    st.end = false;
+    st.truncated = st.truncated || !!resp.truncated;
+    return true;
+}
+
+// maybeLoadNewer pages a detached window towards the present. Reaching it
+// merges the buffered live messages and reattaches the store.
+async function maybeLoadNewer() {
+    const key = activeKey();
+    const st = getStore(key);
+    if (!st.detached || st.loading || view.kind === "dm") return;
+    const scope = captureScope(readChatServerScope);
+    const stillHere = () => chatServerIsCurrent(scope) && activeKey() === key && store.get(key) === st;
+    const chID = Number(key.slice(3));
+    const newest = st.msgs.findLast(m => m.id)?.id || 0;
+    st.loading = true;
+    let page = null;
+    try {
+        const resp = await app().ChatHistoryAfterForTab(scope.tabID, chID, newest, PAGE);
+        if (Number(resp?.after_id) === newest) page = (resp.messages || []).map((x) => attribute(normalize(x, chID))).reverse();
+    } catch { /* stay detached; the next scroll retries */ } finally {
+        st.loading = false;
+    }
+    if (!stillHere() || !st.detached) return;
+    if (!page) { returnToPresent(key); return; }
+    const known = new Set(st.msgs.map(m => m.id));
+    st.msgs = st.msgs.concat(page.filter(m => !known.has(m.id)));
+    if (page.length < PAGE) {
+        if (st.pendingOverflow) { returnToPresent(key); return; }
+        const all = new Set(st.msgs.map(m => m.id));
+        st.msgs = st.msgs.concat((st.pendingLive || []).filter(m => !m.id || !all.has(m.id)))
+            .sort((a, b) => a.id && b.id ? a.id - b.id : a.ts - b.ts);
+        st.detached = false;
+        st.pendingLive = [];
+        newCount = 0;
+    }
+    atBottom = false; // keep the reading position across the render
+    renderView();
+}
+
+// returnToPresent drops a detached window and reloads the newest page.
+function returnToPresent(key = activeKey()) {
+    const st = getStore(key);
+    if (!st.detached) return false;
+    Object.assign(st, { msgs: [], loaded: false, loading: false, end: false, truncated: false, detached: false, pendingLive: [], pendingOverflow: false });
+    resetNewCount();
+    if (activeKey() === key) renderView();
+    return true;
+}
+
 async function jumpToMessage(id, unavailableKey = "chat.messageUnavailable") {
     const unavailable = () => { V().toast(t(unavailableKey), "info", "alert"); return false; };
     if (flashMsg(id)) return true;
@@ -2929,6 +3260,18 @@ async function jumpToMessage(id, unavailableKey = "chat.messageUnavailable") {
     const stillHere = () => chatServerIsCurrent(scope) && activeKey() === key && store.get(key) === st;
     st.loading = true;
     V().toast(t("chat.jumpLoading"), "info", "alert", { announce: false, record: false });
+    let windowed = false;
+    try {
+        windowed = await loadAroundWindow(key, st, id, scope);
+    } catch {
+        // Fall back to paging below.
+    }
+    if (windowed) {
+        st.loading = false;
+        if (!stillHere()) return false;
+        renderView();
+        return flashMsg(id) || unavailable();
+    }
     try {
         for (let page = 0; page < MAX_JUMP_PAGES && !st.end; page++) {
             const loaded = await loadPage(key, oldestID());
@@ -3066,7 +3409,8 @@ export function addChat(d) {
     const channelMuted = !!window.__noxaNotify?.channelOverride?.(chID)?.muted;
     const live = key === activeKey() && !isPrivateGroupActive();
     if (live) {
-        if (position === "append") appendLive(m);
+        if (position === "detached") { newCount++; showNewPill(); }
+        else if (position === "append") appendLive(m);
         else renderView();
     } else if (!m.self && !channelMuted) {
         // (104) unread badge for a non-selected channel. A muted channel (387)
@@ -3100,11 +3444,21 @@ function pushMsg(key, m) {
         upgradeEncryption(duplicate, m);
         return "duplicate";
     }
+    // (601) A jump opened a window in older history: live messages wait in
+    // a bounded buffer until the window pages forward to the present.
+    if (st.detached) {
+        if (!(st.pendingLive ||= []).some(existing => m.id && existing.id === m.id)) st.pendingLive.push(m);
+        if (st.pendingLive.length > DETACHED_BUFFER) { st.pendingLive.shift(); st.pendingOverflow = true; }
+        return "detached";
+    }
     const index = m.id ? st.msgs.findIndex((existing) => existing.id && existing.id > m.id) : -1;
     if (index >= 0) st.msgs.splice(index, 0, m);
     else st.msgs.push(m);
     const max = V().state.settings?.chat_max_lines || 200;
-    while (st.msgs.length > Math.max(max, PAGE)) st.msgs.shift();
+    // Scrollback the user is reading stays loaded; the cap applies again once
+    // they are back at the newest message.
+    const reading = key === activeKey() && !atBottom;
+    while (!reading && st.msgs.length > Math.max(max, PAGE)) st.msgs.shift();
     return index >= 0 ? "insert" : "append";
 }
 
@@ -3139,7 +3493,8 @@ export function upgradeEncryption(existing, m) {
 // and a separator left without a message after it is removed with them.
 export function trimLog(log, max) {
     const isSeparator = el => !!el?.classList?.contains("dm-day");
-    const rows = [...log.children].filter(child => !isSeparator(child));
+    // (601) The virtual window manages its own rows and spacers.
+    const rows = [...log.children].filter(child => !isSeparator(child) && !child.classList?.contains("chat-virtual-spacer") && !child.dataset?.virtualRow);
     for (const row of rows.slice(0, Math.max(0, rows.length - max))) row.remove();
     for (const separator of [...log.children].filter(isSeparator)) {
         const next = separator.nextElementSibling;
@@ -3149,6 +3504,15 @@ export function trimLog(log, max) {
 
 function appendLive(m) {
     const log = $("chat-log");
+    if (virtual || getStore(activeKey()).msgs.length >= VIRTUAL_MIN_ROWS) {
+        // (601) Rebuilding a virtual log renders only its window, so a full
+        // render is cheap and keeps the row list and spacers consistent.
+        const wasAtBottom = atBottom;
+        renderView(undefined, { suppressMarkRead: !wasAtBottom, skipThread: true });
+        refreshThreadFor(m.id);
+        if (!wasAtBottom) { newCount++; showNewPill(); }
+        return;
+    }
     const anchor = captureScrollAnchor(log);
     log.appendChild(renderMsg(m));
     const max = V().state.settings?.chat_max_lines || 200;
@@ -3537,6 +3901,8 @@ export async function sendMessage() {
     }
     $("chat-send-error").classList.add("hidden");
     $("chat-send-error").querySelector(".chat-offline-queue")?.remove();
+    // (601) A sent message belongs at the present, not in an older window.
+    returnToPresent();
     const captured = captureScope(readSendScope);
     if (captured.sendScope === "direct" && !captured.target) {
         V().toast(t("chat.chooseRecipient"), "warn");
@@ -4277,6 +4643,22 @@ function closeSearch() {
 function applySearchFilter() {
     const log = $("chat-log");
     const q = searchQ.toLowerCase();
+    if (virtual && !virtual.top.isConnected) virtual = null; // the log was cleared elsewhere
+    if (virtual) {
+        // (601) Filter the rows themselves: hidden rows would still need to
+        // exist in the DOM. Matches cover author, text and attachment names.
+        const total = virtual.items.filter(item => !item.divider).length;
+        if (virtual.query !== q) {
+            virtual.query = q;
+            setVirtualRows(q ? virtual.items.filter(item => !item.divider && virtualSearchText(item).includes(q)) : virtual.items);
+            if (q) { log.scrollTop = log.scrollHeight; atBottom = true; }
+            renderVirtualWindow({ force: true });
+        }
+        const count = $("chat-search-count");
+        count.textContent = t("polish.matches", { count: q ? virtual.visible.length : total, total });
+        count.classList.toggle("hidden", !q);
+        return;
+    }
     clearMarks(log);
     let matches = 0;
     const messages = log.querySelectorAll(".msg.rich");
@@ -4924,6 +5306,9 @@ export function resetView(options = {}) {
         typingTimer = null;
     }
     renderTyping();
+    virtual = null;
+    rowHeights.clear();
+    $("chat-log").classList.remove("chat-virtual");
     $("chat-log").innerHTML = "";
     $("pm-tabs").innerHTML = "";
     $("pm-tabs").classList.add("hidden");
@@ -5352,6 +5737,7 @@ export function initChat() {
     const rememberChatLayout = () => { lastViewportHeight = log.clientHeight; lastContentHeight = log.scrollHeight; };
     const followLatest = () => {
         if (atBottom) scrollToBottom();
+        else scheduleVirtualWindow(); // (601) a row changed height
         rememberChatLayout();
     };
     const chatResize = new ResizeObserver(followLatest);
@@ -5401,12 +5787,17 @@ export function initChat() {
             markRead(activeKey());
         }
         if (log.scrollTop < 40) maybeLoadOlder();
+        if (atBottom && getStore(activeKey()).detached) void maybeLoadNewer();
+        scheduleVirtualWindow();
     });
     $("chat-newpill").onclick = () => {
+        if (returnToPresent()) return;
         scrollToBottom();
         resetNewCount();
         atBottom = true;
     };
+    window.addEventListener("beforeprint", renderVirtualForPrint);
+    window.addEventListener("afterprint", restoreVirtualAfterPrint);
 
     // Click delegation: external links (93), reply quotes (107).
     log.addEventListener("click", (e) => {

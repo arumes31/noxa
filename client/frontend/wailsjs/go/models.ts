@@ -2197,6 +2197,8 @@ export namespace netproto {
 	export class ChatHistoryResponse {
 	    channel_id: number;
 	    messages: ChatHistoryEntry[];
+	    around_id?: number;
+	    after_id?: number;
 	    keys?: ChannelKey[];
 	    refused?: number[];
 	    truncated?: boolean;
@@ -2209,6 +2211,8 @@ export namespace netproto {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.channel_id = source["channel_id"];
 	        this.messages = this.convertValues(source["messages"], ChatHistoryEntry);
+	        this.around_id = source["around_id"];
+	        this.after_id = source["after_id"];
 	        this.keys = this.convertValues(source["keys"], ChannelKey);
 	        this.refused = source["refused"];
 	        this.truncated = source["truncated"];
