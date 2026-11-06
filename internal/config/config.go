@@ -99,12 +99,12 @@ type Config struct {
 	PprofEnabled bool `mapstructure:"pprof_enabled"`
 	// ShutdownTimeout is the total grace period shared by every server
 	// component during an orderly shutdown.
-	ShutdownTimeout      time.Duration `mapstructure:"shutdown_timeout"`
+	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
 	// ShutdownGracePeriod delays an orderly shutdown after the first SIGTERM
 	// or interrupt: connected clients receive server_shutdown_scheduled with
 	// the remaining seconds, and the server keeps serving until it elapses.
 	// A second signal skips the rest. Zero (default) shuts down immediately.
-	ShutdownGracePeriod time.Duration `mapstructure:"shutdown_grace_period"`
+	ShutdownGracePeriod  time.Duration `mapstructure:"shutdown_grace_period"`
 	MaxClients           int           `mapstructure:"max_clients"`
 	ClientTimeoutSeconds int           `mapstructure:"client_timeout_seconds"`
 	DefaultOpusBitrate   int           `mapstructure:"default_opus_bitrate"`

@@ -833,8 +833,8 @@ func TestValidateQueryAllowedCIDRs(t *testing.T) {
 		}
 	}
 	invalid := [][]string{
-		{"10.0.0.1"},           // bare address
-		{"10.0.0.1/8"},         // host bits set
+		{"10.0.0.1"},            // bare address
+		{"10.0.0.1/8"},          // host bits set
 		{"::ffff:10.0.0.0/104"}, // IPv4-mapped IPv6
 		{"not-a-cidr"},
 	}
