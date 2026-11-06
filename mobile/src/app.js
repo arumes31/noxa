@@ -1002,7 +1002,7 @@ if (typeof window !== "undefined") {
         }
     };
     window.addEventListener("online", retryNow);
-    navigator.connection?.addEventListener?.("change", () => app.voice?.networkChanged?.());
+    globalThis.navigator?.connection?.addEventListener?.("change", () => app.voice?.networkChanged?.());
     window.addEventListener("pageshow", event => { if (event.persisted) retryNow(); });
     document.addEventListener("visibilitychange", () => {
         if (app.session && !app.meta.guest) reportVisibility(app.session.conn);
