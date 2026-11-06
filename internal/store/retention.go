@@ -25,8 +25,10 @@ func (s *Store) PruneExpiredData(ctx context.Context, now time.Time) error {
 		{`DELETE FROM offline_messages WHERE id IN (
 			SELECT id FROM offline_messages WHERE delivered_at < $1
 			ORDER BY delivered_at, id LIMIT 500 FOR UPDATE SKIP LOCKED)`, now.UTC().Add(-30 * 24 * time.Hour)},
-		{`DELETE FROM audit_log WHERE id IN (
-			SELECT id FROM audit_log WHERE created_at < $1
+		// (id, created_at) is the partitioned table's key and lets the
+		// delete prune partitions.
+		{`DELETE FROM audit_log WHERE (id, created_at) IN (
+			SELECT id, created_at FROM audit_log WHERE created_at < $1
 			ORDER BY created_at, id LIMIT 500 FOR UPDATE SKIP LOCKED)`, now.UTC().Add(-180 * 24 * time.Hour)},
 		{`DELETE FROM audit_log_daily WHERE (day, action, target) IN (
 			SELECT day, action, target FROM audit_log_daily WHERE day < $1

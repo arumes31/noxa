@@ -129,6 +129,9 @@ test("safety number, mute, privacy and retrying a message that was not sent", as
     const pem = key => `-----BEGIN PUBLIC KEY-----\n${toBase64(key)}\n-----END PUBLIC KEY-----\n`;
     await expect(dialog).toContainText(keyFingerprint(pem(tao.identity.edPublic)));
     await expect(dialog).toContainText(keyFingerprint(pem(dot.identity.edPublic)));
+    // (205) The pair's QR code and the scanner are offered next to the numbers.
+    await expect(dialog.getByRole("img", { name: /QR code of the fingerprints/ })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Scan their code" })).toBeVisible();
     await dialog.getByRole("switch", { name: /Mark as verified/ }).check();
     await dialog.getByRole("button", { name: "Close" }).click();
     await expect(page.getByRole("note")).toContainText("Verified");

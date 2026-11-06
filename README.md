@@ -349,6 +349,7 @@ graph TD
 * **Chat media**: Enlarging an attached video keeps the same player, playback position, volume, speed and pause state. Animated images and chat videos pause offscreen or after a minute without window focus; only visible media resumes, and manually paused videos stay paused.
 * **Attachment previews**: Text and code files (up to ~384 KB, UTF-8 only) show their first 40 lines inline with **Show all**, audio files (MP3, M4A, AAC, Ogg/Opus, WAV, FLAC) play inline, and images and videos preview as before. Previews are decrypted locally and text is never interpreted as markup; the download button stays next to each preview.
 * **Composer and attachments**: Selecting text in the message box shows a formatting toolbar (bold, italic, underline, strikethrough, code; also Ctrl+B/I/U) that inserts the usual markdown. Pasted PNG/BMP screenshots are re-encoded as high-quality WebP (quality 0.92) before encryption when that saves at least 10%; GIF, JPEG and WebP are attached unchanged. Attachments have their own right-click menu (save, open full size, copy file name). Deleting your own message offers **Don't ask again** (Settings → Chat restores the question); deleting another member's message as a moderator always asks.
+* **Image editor for attachments**: A staged PNG, JPEG, WebP or BMP image has an **Edit** button (✎) that opens an editor before sending: crop (free, 1:1, 4:3, 3:2, 16:9; arrow keys move the crop area, Shift+arrow keys resize it, Enter applies), rotate 90°, **Redact** (an opaque black box for text and numbers that must stay secret), **Pixelate** (cosmetic, e.g. for faces; pixelated text can sometimes be guessed), pen, arrow, rectangle and text in any colour, with undo/redo (Ctrl+Z / Ctrl+Y). The result is a new encoding of the flattened pixels made on your device before encryption: redacted areas cannot be recovered from it, and metadata of the original (EXIF, including GPS) is dropped. Photos stay JPEG at quality 0.92; screenshots stay PNG unless WebP is at least 10% smaller. Images above 50 MP are exported scaled down to 50 MP, and editing never blocks plain sending. Cancel (or Escape, which asks first when something was changed) keeps the staged file as it was. Animated GIF, WebP and PNG (APNG) images are not offered for editing, since re-encoding would keep only one frame.
 * **Presence at a glance**: Member avatars in the channel tree carry a status dot whose shape and colour differ (online filled, away crescent, busy with a bar, offline ring); invisible members look offline. A collapsed channel's unread badge includes its subchannels.
 * **Code, emoji and pins**: Fenced code blocks show line numbers and a copy button (the copy never includes the numbers); highlight.js (BSD-3-Clause, about 190 languages, bundled locally and loaded on first use) colours blocks whose language it knows, e.g. ```` ```rust ````. The emoji picker searches shortcodes in English and German keywords, keeps recently used emoji and lets you pin favorites (right-click or Alt+click). Pinned messages open as a side drawer; jumping to a pin or a quoted reply that is older than the loaded history pages it into view (up to about 1,000 messages back).
 * **Threads and forums**: Persistent posts/replies, tags, following, unread state, archive/reopen, resolved questions, and pinned posts, under the parent channel's access rules.
@@ -991,7 +992,7 @@ features:
   passphrase-encrypted), and a camera/photo/file attach sheet.
 - **Direct messages and private groups:** end-to-end encrypted, with
   attachments, voice messages, typing and read receipts (can be turned off),
-  safety numbers, muting, missed-call lines, and group management (rename,
+  safety numbers (compared aloud or by scanning each other's QR code), muting, missed-call lines, and group management (rename,
   invite, remove, roles, owner, leave, delete).
 - **Voice and calls:** voice channels with push-to-talk or voice activation,
   microphone settings and test, per-member volume, whispering, priority
@@ -1501,6 +1502,14 @@ The server runs bounded housekeeping at startup and every five minutes:
 
 Each pass removes at most 500 rows per database table and 128 recording files, and scans at most 128 recording directory entries. Existing backlogs therefore expire gradually. Housekeeping uses indexed queries, skips locked rows, has a bounded execution context, and runs independently of chat and audio requests. Shutdown cancels and joins the worker before closing storage. These limits apply to the live database and recording directory; independently retained backups are not rewritten.
 
+#### Audit log partitions
+
+`audit_log` is partitioned by month (UTC) since migration `068_audit_log_partitions.sql`. **Upgrading to this release needs the offline `/out/migrate` run described under [Runtime database privilege separation](#runtime-database-privilege-separation)** — the server refuses to start against the old schema. The migration copies every audit row into the partitioned table inside one transaction (same ids, same id sequence; the table is locked while it runs, which takes about a second per few hundred thousand rows) and fails if the row count differs.
+
+The serving role cannot create tables, so `/out/migrate` maintains the partitions: every run creates the partitions for the current month and the next 12 months, and moves any rows that reached the `audit_log_default` partition into a monthly partition of their own. Inserts never fail for a missing month; they land in the default partition, and the server logs a daily warning (`audit_log needs partition maintenance`) when next month's partition is missing or the default partition holds rows. Running `/out/migrate` at least once a year, as every upgrade does, is enough.
+
+`audit_partition_retention_months` (default `0`, keep every partition) lets `/out/migrate` drop whole monthly partitions that ended more than that many months before the current month; it must be `0` or at least `6`, so it never removes audit rows the 180-day row retention above would keep. Each dropped partition is recorded in the audit log (`audit.partition_dropped`, with the number of rows it held). Chat messages are not partitioned: reactions, pins, polls and discussions reference messages by id, and PostgreSQL only allows such references to a partitioned table through a key that includes the partition column.
+
 ### Direct-message identity verification
 
 Updated desktop clients require a signed encryption identity for direct messages,
@@ -1526,6 +1535,27 @@ not add forward secrecy: current message bodies still use static X25519 and
 XSalsa20-Poly1305. Channel passwords restrict voice entry; chat and files use the
 channel's Permissions policy.
 
+
+#### Safety codes (QR)
+
+Next to the safety number, the desktop's encryption details and the phone's
+**Safety number** sheet show a QR code, and **Scan their code** opens the camera
+to read the contact's code. The code holds `noxa-sn:v1:<scheme>:<shown by>:<shown to>:<digest>`
+and nothing secret. A scan verifies the contact only when the code was shown by
+that contact, for you, and its SHA-256 digest equals yours; a different digest
+is reported as a mismatch and never saved, and a code for another conversation
+keeps the scanner open. Frames are decoded on the device (BarcodeDetector where
+available, otherwise the bundled jsQR); the camera opens only from the button,
+without audio, and stops when the scanner closes. Comparing the numbers aloud
+stays available, also when the camera is unavailable or denied.
+
+The desktop code carries the pairwise safety number (both X25519 identity keys);
+the phone's code carries both account fingerprints it shows. The two check
+different keys, so neither the codes nor the displayed values can be compared
+across apps: a desktop and a phone report each other's code as coming from the
+other app, and comparing aloud only works between contacts using the same app.
+Bundled libraries: jsQR 1.4.0 (Apache-2.0) and, on the phone, qrcode-generator
+1.4.4 (MIT); their notices ship in `frontend-licenses.txt`.
 
 ### Runtime database privilege separation
 
