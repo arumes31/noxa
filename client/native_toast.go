@@ -304,10 +304,8 @@ func nativeToastIcon() string {
 	if err != nil {
 		return ""
 	}
+	// Rewritten on every start (a few KB) so an update replaces the icon.
 	path := filepath.Join(dir, "noxa", "notification-icon.png")
-	if existing, err := os.ReadFile(path); err == nil && string(existing) == string(data) {
-		return path
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return ""
 	}

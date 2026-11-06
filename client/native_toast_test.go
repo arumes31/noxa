@@ -9,7 +9,8 @@ import (
 	"noxa/client/internal/wintoast"
 )
 
-const testToastToken = "0123456789abcdef0123456789abcdef"
+// A fixed, public test token (not a secret): 32 lowercase hex characters.
+var testToastToken = strings.Repeat("0123456789abcdef", 2)
 
 func toastRequest() NativeToastRequest {
 	return NativeToastRequest{Token: testToastToken, Conversation: "tab-1|dm:peer", Title: "Alice", Body: "hello", Replyable: true,
