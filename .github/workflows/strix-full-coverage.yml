@@ -159,7 +159,8 @@ jobs:
     env:
       LLM_TIMEOUT: "3600"
       LITELLM_REQUEST_TIMEOUT: "3600"
-      LLM_PREFLIGHT_TIMEOUT: "180"
+      LLM_PREFLIGHT_TIMEOUT: "300"
+      LLM_DISABLE_STREAMING: "true"
       STRIX_MEMORY_COMPRESSOR_TIMEOUT: "3600"
       STRIX_SANDBOX_EXECUTION_TIMEOUT: "3600"
       STRIX_SANDBOX_CONNECT_TIMEOUT: "3600"
@@ -245,13 +246,28 @@ jobs:
           rm -rf "$work"
           mkdir -p "$work"
 
-          set +e
-          timeout --signal=TERM --kill-after=30s 60m \
-            strix -n -t ./ --scope-mode full --scan-mode "$scan_mode" \
-            --max-budget "$max_budget" --max-turns "$max_turns" \
-            --instruction "$INSTRUCTION" > "$log" 2>&1
-          result=$?
-          set -e
+          attempt=0
+          result=1
+          while [ "$attempt" -lt 2 ]; do
+            attempt=$((attempt + 1))
+            started=$SECONDS
+            set +e
+            timeout --signal=TERM --kill-after=30s 60m \
+              strix -n -t ./ --scope-mode full --scan-mode "$scan_mode" \
+              --max-budget "$max_budget" --max-turns "$max_turns" \
+              --instruction "$INSTRUCTION" >> "$log" 2>&1
+            result=$?
+            set -e
+            if [ "$result" -ne 1 ]; then
+              break
+            fi
+            if [ $((SECONDS - started)) -ge 300 ]; then
+              break
+            fi
+            echo "Retrying Strix after a fast failure (attempt $attempt)." >> "$log"
+            sleep 20
+          done
+          echo "attempts=$attempt" >> "$GITHUB_OUTPUT"
 
           run_dir=""
           if [ -d "$PWD/strix_runs" ]; then
