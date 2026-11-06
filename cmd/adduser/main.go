@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	adduser -nickname <name> -password-stdin [-bot] [-integration] [-db <dsn>] [-migration-timeout 5m]
+//	adduser -nickname <name> -password-stdin [-bot] [-integration [-integration-scopes a,b]] [-db <dsn>] [-migration-timeout 5m]
 //
 // The database DSN comes from -db, then NOXA_DATABASE_URL. Migrations are
 // applied (idempotent). The database process lease requires the server to be
@@ -39,6 +39,7 @@ func runMain() int {
 	passwordStdin := flag.Bool("password-stdin", false, "read one password line from standard input (required)")
 	bot := flag.Bool("bot", false, "mark an account as a bot (identity only; grants no permissions)")
 	integration := flag.Bool("integration", false, "allow role-mode integration login (grants no permissions)")
+	scopeList := flag.String("integration-scopes", "", "comma-separated integration scope ceiling, e.g. messages:manage,events:read (default: no ceiling)")
 	dsn := flag.String("db", "", "database DSN (default: NOXA_DATABASE_URL; required when unset)")
 	migrationTimeout := flag.Duration("migration-timeout", 5*time.Minute,
 		"maximum time to wait for the migration lock and apply migrations")
@@ -49,6 +50,11 @@ func runMain() int {
 		return 1
 	}
 
+	scopes, err := parseScopes(*scopeList, *integration)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "adduser: %v\n", err)
+		return 1
+	}
 	password, err := readPassword(os.Stdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "adduser: %v\n", err)
@@ -56,7 +62,7 @@ func runMain() int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, *nickname, password, *bot, *integration, *dsn, *migrationTimeout); err != nil {
+	if err := run(ctx, *nickname, password, *bot, *integration, scopes, *dsn, *migrationTimeout); err != nil {
 		if errors.Is(err, auth.ErrUserExists) {
 			fmt.Printf("user %q already exists (no changes made)\n", *nickname)
 			return 0
@@ -71,6 +77,7 @@ func run(
 	ctx context.Context,
 	nickname, password string,
 	bot, integration bool,
+	scopes []string,
 	dsn string,
 	migrationTimeout time.Duration,
 ) (retErr error) {
@@ -138,6 +145,11 @@ func run(
 		if _, err := dbStore.DB().ExecContext(ctx, `UPDATE users SET integration_enabled = TRUE WHERE unique_id = $1`, uniqueID); err != nil {
 			return fmt.Errorf("enabling integration identity: %w", err)
 		}
+		if scopes != nil {
+			if _, err := authSvc.SetIntegrationScopes(ctx, uniqueID, false, scopes); err != nil {
+				return fmt.Errorf("storing integration scopes: %w", err)
+			}
+		}
 	}
 	if err := lease.Check(ctx); err != nil {
 		return fmt.Errorf("checking offline role process lease after registration: %w", err)
@@ -169,4 +181,23 @@ func readPassword(input io.Reader) (string, error) {
 		return "", errors.New("password must be one non-empty line within the supported length")
 	}
 	return value, nil
+}
+
+// parseScopes reads -integration-scopes. nil means no ceiling.
+func parseScopes(list string, integration bool) ([]string, error) {
+	if strings.TrimSpace(list) == "" {
+		return nil, nil
+	}
+	if !integration {
+		return nil, errors.New("-integration-scopes requires -integration")
+	}
+	var scopes []string
+	for _, scope := range strings.Split(list, ",") {
+		scopes = append(scopes, strings.TrimSpace(scope))
+	}
+	normalized, err := auth.NormalizeIntegrationScopes(scopes)
+	if err != nil {
+		return nil, fmt.Errorf("invalid -integration-scopes (known: %s)", strings.Join(auth.IntegrationScopes, ","))
+	}
+	return normalized, nil
 }

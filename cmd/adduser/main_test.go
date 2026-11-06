@@ -8,7 +8,7 @@ import (
 )
 
 func TestRunRejectsInvalidMigrationBounds(t *testing.T) {
-	if err := run(context.Background(), "name", "password", false, false, "postgres://unused", 0); err == nil ||
+	if err := run(context.Background(), "name", "password", false, false, nil, "postgres://unused", 0); err == nil ||
 		!strings.Contains(err.Error(), "positive") {
 		t.Fatalf("run(zero timeout) error = %v, want timeout validation", err)
 	}
@@ -57,5 +57,21 @@ func TestPasswordStdinPreservesSpacesAndRejectsExcessInput(t *testing.T) {
 	}
 	if _, err := readPassword(strings.NewReader(strings.Repeat("x", auth.MaxPasswordBytes) + "\r\n")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestParseScopes(t *testing.T) {
+	if got, err := parseScopes("", false); err != nil || got != nil {
+		t.Fatalf("unset = %v, %v", got, err)
+	}
+	got, err := parseScopes(" events:read , messages:manage", true)
+	if err != nil || len(got) != 2 || got[0] != "events:read" {
+		t.Fatalf("list = %v, %v", got, err)
+	}
+	if _, err := parseScopes("events:read", false); err == nil {
+		t.Fatal("scopes accepted without -integration")
+	}
+	if _, err := parseScopes("events:read,bogus", true); err == nil {
+		t.Fatal("unknown scope accepted")
 	}
 }

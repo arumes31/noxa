@@ -43,6 +43,9 @@ func (s *Server) roleStreamAuth(service any, stream grpc.ServerStream, info *grp
 	if err != nil {
 		return roleStatus(err)
 	}
+	if !methodAllowedByScope(p, info.FullMethod) {
+		return errOutsideScopes
+	}
 	select {
 	case s.roleStreamSlots <- struct{}{}:
 		defer func() { <-s.roleStreamSlots }()

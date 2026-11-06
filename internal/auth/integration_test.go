@@ -129,3 +129,69 @@ func TestIntegrationIdentityEligibilityAndRevocation(t *testing.T) {
 		t.Fatalf("replacement account inherited old session: %v", err)
 	}
 }
+
+func TestIntegrationScopeCeiling(t *testing.T) {
+	svc, db := testAuthServiceWithStore(t)
+	ctx := t.Context()
+	nick := uniqueNickname("scoped")
+	const password = "integration-password"
+	const ip = "192.0.2.79"
+	uid, err := svc.RegisterUser(ctx, nick, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.DB().ExecContext(context.Background(), "DELETE FROM users WHERE unique_id = $1", uid)
+	})
+	if _, err := svc.SetIntegrationScopes(ctx, uid, false, []string{ScopeServerRead}); !errors.Is(err, ErrIntegrationNotFound) {
+		t.Fatalf("scopes set on a non-integration account: %v", err)
+	}
+	if _, err := db.DB().ExecContext(ctx, "UPDATE users SET integration_enabled = TRUE WHERE unique_id = $1", uid); err != nil {
+		t.Fatal(err)
+	}
+	full, err := svc.AuthenticateIntegration(ctx, uid, password, ip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, scoped := full.Scopes(); scoped || !full.AllowsScope(ScopeMembersBan) {
+		t.Fatal("legacy account lost full access")
+	}
+	state, err := svc.SetIntegrationScopes(ctx, uid, false, []string{ScopeMessagesManage, ScopeServerRead})
+	if err != nil || state.Full || len(state.Scopes) != 2 || state.Scopes[0] != ScopeServerRead {
+		t.Fatalf("set = %+v, %v", state, err)
+	}
+	if err := svc.ValidateIntegration(ctx, full); !errors.Is(err, ErrIntegrationDenied) {
+		t.Fatalf("a session from before the ceiling change stayed valid: %v", err)
+	}
+	scopedPrincipal, err := svc.AuthenticateIntegration(ctx, uid, password, ip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scopedPrincipal.AllowsScope(ScopeServerRead) || scopedPrincipal.AllowsScope(ScopeMembersBan) {
+		t.Fatal("ceiling not loaded at sign-in")
+	}
+	if err := svc.ValidateIntegration(ctx, scopedPrincipal); err != nil {
+		t.Fatal(err)
+	}
+	read, err := svc.GetIntegrationScopes(ctx, uid)
+	if err != nil || read.Full || len(read.Scopes) != 2 {
+		t.Fatalf("get = %+v, %v", read, err)
+	}
+	if _, err := svc.SetIntegrationScopes(ctx, uid, false, []string{"bogus"}); !errors.Is(err, ErrIntegrationScopeInvalid) {
+		t.Fatalf("unknown scope stored: %v", err)
+	}
+	empty, err := svc.SetIntegrationScopes(ctx, uid, false, []string{})
+	if err != nil || empty.Full || len(empty.Scopes) != 0 {
+		t.Fatalf("empty ceiling = %+v, %v", empty, err)
+	}
+	none, err := svc.AuthenticateIntegration(ctx, uid, password, ip)
+	if err != nil || none.AllowsScope(ScopeServerRead) {
+		t.Fatalf("empty ceiling allowed a scope: %v", err)
+	}
+	if cleared, err := svc.SetIntegrationScopes(ctx, uid, true, nil); err != nil || !cleared.Full {
+		t.Fatalf("clear = %+v, %v", cleared, err)
+	}
+	if err := svc.ValidateIntegration(ctx, none); !errors.Is(err, ErrIntegrationDenied) {
+		t.Fatalf("a scoped session survived clearing the ceiling: %v", err)
+	}
+}

@@ -57,7 +57,8 @@ func (s *Server) roleUnaryAuth(ctx context.Context, req any, info *grpc.UnarySer
 		noxav1.Control_ListClients_FullMethodName, noxav1.Control_GetChannelInfo_FullMethodName, noxav1.Control_ListAuditLog_FullMethodName,
 		noxav1.Control_ListComplaints_FullMethodName, noxav1.Control_ClearComplaints_FullMethodName, noxav1.Control_GetServerRules_FullMethodName, noxav1.Control_SetServerConfig_FullMethodName,
 		noxav1.Control_GetChatFilters_FullMethodName, noxav1.Control_SetChatFilters_FullMethodName,
-		noxav1.Control_SetServerText_FullMethodName, noxav1.Control_ListCustomMetadata_FullMethodName, noxav1.Control_ChangeCustomMetadata_FullMethodName:
+		noxav1.Control_SetServerText_FullMethodName, noxav1.Control_ListCustomMetadata_FullMethodName, noxav1.Control_ChangeCustomMetadata_FullMethodName,
+		noxav1.Control_BulkDeleteMessages_FullMethodName, noxav1.Control_GetIntegrationScopes_FullMethodName, noxav1.Control_SetIntegrationScopes_FullMethodName:
 		var err error
 		identifier, password, err = s.basicCredentials(ctx)
 		if err != nil {
@@ -72,6 +73,10 @@ func (s *Server) roleUnaryAuth(ctx context.Context, req any, info *grpc.UnarySer
 	}
 	if info.FullMethod == noxav1.Control_Authenticate_FullMethodName {
 		return &noxav1.AuthenticateResponse{Success: true, UserId: p.UniqueID()}, nil
+	}
+	// (807) The scope ceiling applies before the handler runs any effect.
+	if !methodAllowedByScope(p, info.FullMethod) {
+		return nil, errOutsideScopes
 	}
 	return handler(context.WithValue(ctx, integrationPrincipalKey{}, p), req)
 }

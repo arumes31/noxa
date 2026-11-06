@@ -44,11 +44,21 @@ const roleHelpText = "authorization_model=roles-v1\n" +
 	"chatfilterquery\nchatfilterset data=<escaped_partial_chat_filters>\n" +
 	"servertextset data=<escaped_JSON_with_key_and_value>\n" +
 	"broadcast data=<escaped_JSON_with_text>\n" +
+	"messagebulkdelete data=<escaped_JSON_with_channel_id_and_message_ids>\n" +
+	"integrationscopes data=<escaped_JSON_with_unique_id>\n" +
+	"integrationscopesset data=<escaped_JSON_with_unique_id_and_scopes_or_full>\n" +
 	"customquery data=<escaped_JSON_with_unique_id_and_optional_after_key_and_limit>\n" +
 	"customchange data=<escaped_JSON_with_unique_id_key_and_value_or_delete>\n" +
 	"Other protected commands are unavailable with roles-v1 authorization.\n"
 
 func (s *Server) executeRoleCommand(ctx context.Context, sess *session, backend RoleIntegrationBackend, cmd command) bool {
+	// (807) The scope ceiling is checked before any parsing or effect.
+	if !commandAllowedByScope(sess.principal, cmd.name) {
+		return s.write(sess, errorLine(errInsufficientPermissions, "command outside this integration's scopes"))
+	}
+	if cmd.name == "messagebulkdelete" || cmd.name == "integrationscopes" || cmd.name == "integrationscopesset" {
+		return s.executeRoleBots(ctx, sess, backend, cmd)
+	}
 	if cmd.name == "medialimits" || cmd.name == "medialimitsset" {
 		return s.executeRoleMediaLimits(ctx, sess, backend, cmd)
 	}

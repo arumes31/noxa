@@ -31,7 +31,7 @@ func TestProvisionIntegrationIdentity(t *testing.T) {
 			t.Cleanup(func() {
 				_, _ = db.DB().ExecContext(context.Background(), "DELETE FROM users WHERE nickname = $1", nickname)
 			})
-			if err := run(t.Context(), nickname, "integration-password", false, enabled, dsn, time.Minute); err != nil {
+			if err := run(t.Context(), nickname, "integration-password", false, enabled, nil, dsn, time.Minute); err != nil {
 				t.Fatal(err)
 			}
 			var got, bot bool
@@ -45,7 +45,7 @@ func TestProvisionIntegrationIdentity(t *testing.T) {
 				}
 			}
 			read()
-			if err := run(t.Context(), nickname, "different-password", true, !enabled, dsn, time.Minute); !errors.Is(err, auth.ErrUserExists) {
+			if err := run(t.Context(), nickname, "different-password", true, !enabled, nil, dsn, time.Minute); !errors.Is(err, auth.ErrUserExists) {
 				t.Fatalf("duplicate provisioning: %v", err)
 			}
 			read()
