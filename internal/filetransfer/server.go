@@ -42,6 +42,7 @@ import (
 	"io"
 	"net"
 	"noxa/internal/netproto"
+	"noxa/internal/tlscert"
 	"noxa/internal/traffic"
 	"os"
 	"path/filepath"
@@ -1296,8 +1297,9 @@ func (s *Server) Start(ctx context.Context) error {
 	ln = traffic.WrapListener(ln, s.cfg.Traffic)
 	if s.cfg.TLSEnabled {
 		ln = tls.NewListener(ln, &tls.Config{
-			Certificates: []tls.Certificate{s.cfg.Cert},
-			MinVersion:   tls.VersionTLS13,
+			Certificates:     []tls.Certificate{s.cfg.Cert},
+			MinVersion:       tls.VersionTLS13,
+			CurvePreferences: tlscert.CurvePreferences(),
 		})
 	}
 	s.lifecycleMu.Lock()

@@ -710,6 +710,10 @@ export function PrivateCallForTab(arg1, arg2) {
   return window['go']['main']['App']['PrivateCallForTab'](arg1, arg2);
 }
 
+export function ProbeConnections() {
+  return window['go']['main']['App']['ProbeConnections']();
+}
+
 export function PublishPositionForTab(arg1, arg2) {
   return window['go']['main']['App']['PublishPositionForTab'](arg1, arg2);
 }

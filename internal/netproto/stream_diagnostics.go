@@ -51,6 +51,9 @@ type VideoSenderDiagnostics struct {
 	BytesSent                   *float64 `json:"bytes_sent"`
 	RetransmittedPackets        *float64 `json:"retransmitted_packets"`
 	RetransmittedBytes          *float64 `json:"retransmitted_bytes"`
+	// EncoderVendor is the GPU vendor of a hardware encoder ("nvidia", "amd",
+	// "intel"), never the device or driver text. Empty when unknown.
+	EncoderVendor string `json:"encoder_vendor,omitempty"`
 }
 
 func (r VideoSenderDiagnostics) Valid() bool {
@@ -69,6 +72,11 @@ func (r VideoSenderDiagnostics) Valid() bool {
 	}
 	switch r.Codec {
 	case "", "unknown", "video/vp8", "video/vp9", "video/h264", "video/h265", "video/av1":
+	default:
+		return false
+	}
+	switch r.EncoderVendor {
+	case "", "nvidia", "amd", "intel":
 	default:
 		return false
 	}

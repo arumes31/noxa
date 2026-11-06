@@ -33,6 +33,7 @@ import (
 	"noxa/internal/config"
 	"noxa/internal/health"
 	"noxa/internal/netproto"
+	"noxa/internal/tlscert"
 	"noxa/internal/version"
 )
 
@@ -203,7 +204,7 @@ func (s *Server) tlsConfig() (*tls.Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("web: loading TLS certificate: %w", err)
 		}
-		return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
+		return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12, CurvePreferences: tlscert.CurvePreferences()}, nil
 	case s.cfg.ACME:
 		manager := &autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
@@ -213,6 +214,7 @@ func (s *Server) tlsConfig() (*tls.Config, error) {
 		}
 		cfg := manager.TLSConfig()
 		cfg.MinVersion = tls.VersionTLS12
+		cfg.CurvePreferences = tlscert.CurvePreferences()
 		return cfg, nil
 	default:
 		// A trusted reverse proxy terminates TLS.
