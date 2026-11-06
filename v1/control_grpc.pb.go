@@ -56,6 +56,9 @@ const (
 	Control_ListComplaints_FullMethodName        = "/voicx.v1.Control/ListComplaints"
 	Control_ClearComplaints_FullMethodName       = "/voicx.v1.Control/ClearComplaints"
 	Control_GetServerRules_FullMethodName        = "/voicx.v1.Control/GetServerRules"
+	Control_BulkDeleteMessages_FullMethodName    = "/voicx.v1.Control/BulkDeleteMessages"
+	Control_GetIntegrationScopes_FullMethodName  = "/voicx.v1.Control/GetIntegrationScopes"
+	Control_SetIntegrationScopes_FullMethodName  = "/voicx.v1.Control/SetIntegrationScopes"
 	Control_StartFileTransfer_FullMethodName     = "/voicx.v1.Control/StartFileTransfer"
 	Control_GetFileTransferStatus_FullMethodName = "/voicx.v1.Control/GetFileTransferStatus"
 	Control_CancelFileTransfer_FullMethodName    = "/voicx.v1.Control/CancelFileTransfer"
@@ -137,6 +140,15 @@ type ControlClient interface {
 	ClearComplaints(ctx context.Context, in *ClearComplaintsRequest, opts ...grpc.CallOption) (*ClearComplaintsResponse, error)
 	// GetServerRules includes acceptance counts for exactly the returned wording.
 	GetServerRules(ctx context.Context, in *GetServerRulesRequest, opts ...grpc.CallOption) (*GetServerRulesResponse, error)
+	// BulkDeleteMessages deletes up to 100 messages of one channel (0 = server
+	// chat) in one transaction. Others' messages need ManageMessages there; one
+	// message the caller may not delete rejects the request. Scope messages:manage.
+	BulkDeleteMessages(ctx context.Context, in *BulkDeleteMessagesRequest, opts ...grpc.CallOption) (*BulkDeleteMessagesResponse, error)
+	// GetIntegrationScopes and SetIntegrationScopes read and replace an
+	// integration account's scope ceiling (ManageServer, scope server:manage).
+	// Scopes only narrow what the account's roles allow.
+	GetIntegrationScopes(ctx context.Context, in *GetIntegrationScopesRequest, opts ...grpc.CallOption) (*GetIntegrationScopesResponse, error)
+	SetIntegrationScopes(ctx context.Context, in *SetIntegrationScopesRequest, opts ...grpc.CallOption) (*SetIntegrationScopesResponse, error)
 	// File transfer RPCs intentionally return UNIMPLEMENTED. Transfer tokens are
 	// minted only by the control channel after a per-client permission check.
 	StartFileTransfer(ctx context.Context, in *StartFileTransferRequest, opts ...grpc.CallOption) (*StartFileTransferResponse, error)
@@ -525,6 +537,36 @@ func (c *controlClient) GetServerRules(ctx context.Context, in *GetServerRulesRe
 	return out, nil
 }
 
+func (c *controlClient) BulkDeleteMessages(ctx context.Context, in *BulkDeleteMessagesRequest, opts ...grpc.CallOption) (*BulkDeleteMessagesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BulkDeleteMessagesResponse)
+	err := c.cc.Invoke(ctx, Control_BulkDeleteMessages_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetIntegrationScopes(ctx context.Context, in *GetIntegrationScopesRequest, opts ...grpc.CallOption) (*GetIntegrationScopesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetIntegrationScopesResponse)
+	err := c.cc.Invoke(ctx, Control_GetIntegrationScopes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) SetIntegrationScopes(ctx context.Context, in *SetIntegrationScopesRequest, opts ...grpc.CallOption) (*SetIntegrationScopesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetIntegrationScopesResponse)
+	err := c.cc.Invoke(ctx, Control_SetIntegrationScopes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) StartFileTransfer(ctx context.Context, in *StartFileTransferRequest, opts ...grpc.CallOption) (*StartFileTransferResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StartFileTransferResponse)
@@ -631,6 +673,15 @@ type ControlServer interface {
 	ClearComplaints(context.Context, *ClearComplaintsRequest) (*ClearComplaintsResponse, error)
 	// GetServerRules includes acceptance counts for exactly the returned wording.
 	GetServerRules(context.Context, *GetServerRulesRequest) (*GetServerRulesResponse, error)
+	// BulkDeleteMessages deletes up to 100 messages of one channel (0 = server
+	// chat) in one transaction. Others' messages need ManageMessages there; one
+	// message the caller may not delete rejects the request. Scope messages:manage.
+	BulkDeleteMessages(context.Context, *BulkDeleteMessagesRequest) (*BulkDeleteMessagesResponse, error)
+	// GetIntegrationScopes and SetIntegrationScopes read and replace an
+	// integration account's scope ceiling (ManageServer, scope server:manage).
+	// Scopes only narrow what the account's roles allow.
+	GetIntegrationScopes(context.Context, *GetIntegrationScopesRequest) (*GetIntegrationScopesResponse, error)
+	SetIntegrationScopes(context.Context, *SetIntegrationScopesRequest) (*SetIntegrationScopesResponse, error)
 	// File transfer RPCs intentionally return UNIMPLEMENTED. Transfer tokens are
 	// minted only by the control channel after a per-client permission check.
 	StartFileTransfer(context.Context, *StartFileTransferRequest) (*StartFileTransferResponse, error)
@@ -756,6 +807,15 @@ func (UnimplementedControlServer) ClearComplaints(context.Context, *ClearComplai
 }
 func (UnimplementedControlServer) GetServerRules(context.Context, *GetServerRulesRequest) (*GetServerRulesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetServerRules not implemented")
+}
+func (UnimplementedControlServer) BulkDeleteMessages(context.Context, *BulkDeleteMessagesRequest) (*BulkDeleteMessagesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BulkDeleteMessages not implemented")
+}
+func (UnimplementedControlServer) GetIntegrationScopes(context.Context, *GetIntegrationScopesRequest) (*GetIntegrationScopesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetIntegrationScopes not implemented")
+}
+func (UnimplementedControlServer) SetIntegrationScopes(context.Context, *SetIntegrationScopesRequest) (*SetIntegrationScopesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetIntegrationScopes not implemented")
 }
 func (UnimplementedControlServer) StartFileTransfer(context.Context, *StartFileTransferRequest) (*StartFileTransferResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StartFileTransfer not implemented")
@@ -1453,6 +1513,60 @@ func _Control_GetServerRules_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_BulkDeleteMessages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BulkDeleteMessagesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).BulkDeleteMessages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_BulkDeleteMessages_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).BulkDeleteMessages(ctx, req.(*BulkDeleteMessagesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetIntegrationScopes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetIntegrationScopesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetIntegrationScopes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetIntegrationScopes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetIntegrationScopes(ctx, req.(*GetIntegrationScopesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_SetIntegrationScopes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetIntegrationScopesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).SetIntegrationScopes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_SetIntegrationScopes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).SetIntegrationScopes(ctx, req.(*SetIntegrationScopesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_StartFileTransfer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(StartFileTransferRequest)
 	if err := dec(in); err != nil {
@@ -1661,6 +1775,18 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetServerRules",
 			Handler:    _Control_GetServerRules_Handler,
+		},
+		{
+			MethodName: "BulkDeleteMessages",
+			Handler:    _Control_BulkDeleteMessages_Handler,
+		},
+		{
+			MethodName: "GetIntegrationScopes",
+			Handler:    _Control_GetIntegrationScopes_Handler,
+		},
+		{
+			MethodName: "SetIntegrationScopes",
+			Handler:    _Control_SetIntegrationScopes_Handler,
 		},
 		{
 			MethodName: "StartFileTransfer",

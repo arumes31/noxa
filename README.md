@@ -1146,6 +1146,29 @@ enabling Query SSH.
 | `memberkick` | `data=<escaped_JSON_with_client_id>` | Remove a member from the server |
 | `memberban` | `data=<escaped_JSON_with_client_id_and_duration_seconds>` | Ban a connected member |
 | `broadcast` | `data=<escaped_JSON_with_text>` | Send a one-time encrypted alert (up to 2048 bytes of text, and the escaped command must fit the 4096-byte line limit) to every connected member allowed to view the server (server-level `view_channel`); requires `manage_server`, is audited and is not stored or replayed. Delivery is best effort, like other server-wide events |
+| `messagebulkdelete` | `data=<escaped_JSON_with_channel_id_and_message_ids>` | Delete up to 100 messages of one channel (`channel_id` 0 = server chat) in one transaction and return `deleted` and `not_found` IDs. Own messages need `view_channel`, other members' messages `manage_messages` in that channel; one message the account may not delete rejects the whole request. Members get the usual delete events; deleting others' messages is audited |
+| `integrationscopes` / `integrationscopesset` | `data=<escaped_JSON_with_unique_id>` / `data={"unique_id":…,"scopes":[…]}` or `{"unique_id":…,"full":true}` | Read or replace an integration account's scope ceiling (needs `manage_server`, audited) |
+
+**Integration scopes.** An integration account can be limited to a scope
+ceiling, so a bot gets only the APIs it needs. Scopes never grant anything:
+every call still needs the role permission it checks. Without a ceiling an
+account keeps its current access. Scopes: `server:read`, `server:manage`,
+`roles:read`, `roles:manage`, `channels:manage`, `members:voice`,
+`members:move`, `members:kick`, `members:ban`, `devices:manage`, `audit:read`,
+`complaints:manage`, `events:read` (gRPC `Events.Subscribe` and the event
+WebSocket) and `messages:manage`. Every ServerQuery command and gRPC method maps
+to one scope (an empty ceiling allows nothing); signing in (`login`, gRPC
+`Authenticate`) needs none. Set them with
+`adduser -integration -integration-scopes messages:manage,events:read`, the
+`integrationscopesset` command or the gRPC `SetIntegrationScopes` RPC. A scoped
+caller can only hand out scopes it holds and cannot clear a ceiling. A change
+signs the account's open integration sessions out: they must log in again.
+
+**Voice bots.** `internal/botvoice` reads Opus packets from an Ogg/Opus file
+and paces them as RTP for a WebRTC audio track (the publisher `cmd/loadtest`
+uses). It cannot publish on servers with `noxa-media-e2ee-v1`: media keys go
+only to enrolled noXa devices over Olm ratchet controls, which bots do not have
+yet, so `botvoice.CheckServer` refuses such servers.
 
 Provision integration accounts offline with `adduser -integration`; this enables
 login but grants no roles. Current capabilities and hierarchy apply to every

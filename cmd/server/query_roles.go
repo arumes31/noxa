@@ -141,3 +141,15 @@ func (q *queryBackend) WithIntegrationMediaLimits(ctx context.Context, principal
 func (q *queryBackend) SetIntegrationMediaLimits(ctx context.Context, principal auth.IntegrationPrincipal, limits netproto.MediaLimits) (netproto.MediaLimitsSaved, error) {
 	return q.tcp.SetIntegrationMediaLimits(ctx, principal, limits)
 }
+
+func (q *queryBackend) BulkDeleteIntegrationMessages(ctx context.Context, principal auth.IntegrationPrincipal, request netproto.MessageBulkDelete) (netproto.MessageBulkDeleteResult, error) {
+	return q.tcp.BulkDeleteIntegrationMessages(ctx, principal, request)
+}
+
+func (q *queryBackend) GetIntegrationScopes(ctx context.Context, principal auth.IntegrationPrincipal, request netproto.IntegrationScopesQuery) (netproto.IntegrationScopes, error) {
+	return q.tcp.GetIntegrationScopes(ctx, principal, request)
+}
+
+func (q *queryBackend) SetIntegrationScopes(ctx context.Context, principal auth.IntegrationPrincipal, request netproto.IntegrationScopesSet) (netproto.IntegrationScopes, error) {
+	return q.tcp.SetIntegrationScopes(ctx, principal, request)
+}

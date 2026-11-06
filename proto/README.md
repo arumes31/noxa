@@ -61,6 +61,6 @@ neither `protoc` nor local `protoc-gen-*` binaries are needed.
 | Service | Status |
 |---------|--------|
 | `Events` | Served: `Subscribe` streams from the server-side event bus. |
-| `Control` | Served: auth, channel create/delete/list, permission query. Authentication returns only `user_id`; it does not mint a session token. The file-transfer RPCs intentionally return `Unimplemented` — transfer tokens are minted by the control channel after a per-client permission check. |
+| `Control` | Served: auth, channel create/delete/list, permission query, role-aware moderation and configuration, `BulkDeleteMessages` (up to 100 messages of one channel) and `Get`/`SetIntegrationScopes`. Each integration RPC needs one scope from the account's optional scope ceiling (see the top-level README); scopes only narrow what the roles allow. `Authenticate` needs no scope: it only checks credentials and returns the account ID. Authentication returns only `user_id`; it does not mint a session token. The file-transfer RPCs intentionally return `Unimplemented` — transfer tokens are minted by the control channel after a per-client permission check. |
 | `Chat` | Deprecated and intentionally unserved: chat is end-to-end/scope-key encrypted on the control channel. |
 | `Signaling` | Deprecated and intentionally unserved: WebRTC signaling stays on the control channel. |

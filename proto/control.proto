@@ -79,6 +79,15 @@ service Control {
   rpc ClearComplaints(ClearComplaintsRequest) returns (ClearComplaintsResponse);
   // GetServerRules includes acceptance counts for exactly the returned wording.
   rpc GetServerRules(GetServerRulesRequest) returns (GetServerRulesResponse);
+  // BulkDeleteMessages deletes up to 100 messages of one channel (0 = server
+  // chat) in one transaction. Others' messages need ManageMessages there; one
+  // message the caller may not delete rejects the request. Scope messages:manage.
+  rpc BulkDeleteMessages(BulkDeleteMessagesRequest) returns (BulkDeleteMessagesResponse);
+  // GetIntegrationScopes and SetIntegrationScopes read and replace an
+  // integration account's scope ceiling (ManageServer, scope server:manage).
+  // Scopes only narrow what the account's roles allow.
+  rpc GetIntegrationScopes(GetIntegrationScopesRequest) returns (GetIntegrationScopesResponse);
+  rpc SetIntegrationScopes(SetIntegrationScopesRequest) returns (SetIntegrationScopesResponse);
   // File transfer RPCs intentionally return UNIMPLEMENTED. Transfer tokens are
   // minted only by the control channel after a per-client permission check.
   rpc StartFileTransfer(StartFileTransferRequest) returns (StartFileTransferResponse);
@@ -877,4 +886,43 @@ enum Permission {
   PERMISSION_CREATE_CHANNEL = 8;
   PERMISSION_DELETE_CHANNEL = 9;
   PERMISSION_TRANSFER_FILE = 10;
+}
+
+// --- Bot integrations ---
+
+message BulkDeleteMessagesRequest {
+  int64 channel_id = 1;
+  repeated int64 message_ids = 2;
+}
+
+message BulkDeleteMessagesResponse {
+  // Deleted and not found (missing, already deleted or in another channel),
+  // each in request order.
+  repeated int64 deleted_ids = 1;
+  repeated int64 not_found_ids = 2;
+}
+
+message GetIntegrationScopesRequest {
+  string unique_id = 1;
+}
+
+message GetIntegrationScopesResponse {
+  string unique_id = 1;
+  // full means no ceiling: every integration API the roles allow.
+  bool full = 2;
+  repeated string scopes = 3;
+}
+
+message SetIntegrationScopesRequest {
+  string unique_id = 1;
+  // full clears the ceiling; scopes must then be empty. Otherwise scopes is
+  // the complete new list (may be empty, which allows nothing).
+  bool full = 2;
+  repeated string scopes = 3;
+}
+
+message SetIntegrationScopesResponse {
+  string unique_id = 1;
+  bool full = 2;
+  repeated string scopes = 3;
 }

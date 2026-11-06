@@ -157,6 +157,11 @@ func newWSHandler(bus *Bus, logger *zap.Logger, cfg wsHandlerConfig) http.Handle
 		if attempt != nil {
 			attempt.Succeed(principalScope)
 		}
+		// (807) A scoped integration needs events:read for the event stream.
+		if !principal.AllowsScope(auth.ScopeEventsRead) {
+			http.Error(w, "event stream outside this integration's scopes", http.StatusForbidden)
+			return
+		}
 		if !isWebSocketUpgrade(r.Header) {
 			http.Error(w, "websocket upgrade required", http.StatusBadRequest)
 			return

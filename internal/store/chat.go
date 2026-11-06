@@ -678,3 +678,57 @@ func (s *Store) ValidateChatNoPlaintext(ctx context.Context) error {
 	}
 	return nil
 }
+
+// BulkDeleteChatMessages tombstones the live messages among ids that belong
+// to channelID, in one transaction. authorize receives their authors (message
+// id -> sender unique ID) while the rows are locked; an error from it rolls
+// everything back. It returns the deleted ids in ascending order.
+func (s *Store) BulkDeleteChatMessages(ctx context.Context, channelID int64, ids []int64, authorize func(map[int64]string) error) ([]int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bulk deleting chat messages: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, `SELECT id, from_unique_id FROM chat_messages
+		WHERE channel_id = $1 AND id = ANY($2) AND deleted_at IS NULL
+		ORDER BY id FOR UPDATE`, channelID, pq.Array(ids))
+	if err != nil {
+		return nil, fmt.Errorf("locking chat messages: %w", err)
+	}
+	authors := make(map[int64]string, len(ids))
+	live := make([]int64, 0, len(ids))
+	for rows.Next() {
+		var id int64
+		var author string
+		if err := rows.Scan(&id, &author); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("reading chat messages: %w", err)
+		}
+		authors[id] = author
+		live = append(live, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("reading chat messages: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("reading chat messages: %w", err)
+	}
+	if len(live) == 0 {
+		return []int64{}, nil
+	}
+	if authorize != nil {
+		if err := authorize(authors); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE chat_messages
+		SET body = '', body_enc = '', key_id = 0, deleted_at = NOW()
+		WHERE id = ANY($1)`, pq.Array(live)); err != nil {
+		return nil, fmt.Errorf("bulk deleting chat messages: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("bulk deleting chat messages: %w", err)
+	}
+	return live, nil
+}

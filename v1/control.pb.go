@@ -6782,6 +6782,339 @@ func (x *QueryPermissionsResponse) GetIsAdmin() bool {
 	return false
 }
 
+type BulkDeleteMessagesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ChannelId     int64                  `protobuf:"varint,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	MessageIds    []int64                `protobuf:"varint,2,rep,packed,name=message_ids,json=messageIds,proto3" json:"message_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BulkDeleteMessagesRequest) Reset() {
+	*x = BulkDeleteMessagesRequest{}
+	mi := &file_control_proto_msgTypes[98]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BulkDeleteMessagesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BulkDeleteMessagesRequest) ProtoMessage() {}
+
+func (x *BulkDeleteMessagesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[98]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BulkDeleteMessagesRequest.ProtoReflect.Descriptor instead.
+func (*BulkDeleteMessagesRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{98}
+}
+
+func (x *BulkDeleteMessagesRequest) GetChannelId() int64 {
+	if x != nil {
+		return x.ChannelId
+	}
+	return 0
+}
+
+func (x *BulkDeleteMessagesRequest) GetMessageIds() []int64 {
+	if x != nil {
+		return x.MessageIds
+	}
+	return nil
+}
+
+type BulkDeleteMessagesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Deleted and not found (missing, already deleted or in another channel),
+	// each in request order.
+	DeletedIds    []int64 `protobuf:"varint,1,rep,packed,name=deleted_ids,json=deletedIds,proto3" json:"deleted_ids,omitempty"`
+	NotFoundIds   []int64 `protobuf:"varint,2,rep,packed,name=not_found_ids,json=notFoundIds,proto3" json:"not_found_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BulkDeleteMessagesResponse) Reset() {
+	*x = BulkDeleteMessagesResponse{}
+	mi := &file_control_proto_msgTypes[99]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BulkDeleteMessagesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BulkDeleteMessagesResponse) ProtoMessage() {}
+
+func (x *BulkDeleteMessagesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[99]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BulkDeleteMessagesResponse.ProtoReflect.Descriptor instead.
+func (*BulkDeleteMessagesResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{99}
+}
+
+func (x *BulkDeleteMessagesResponse) GetDeletedIds() []int64 {
+	if x != nil {
+		return x.DeletedIds
+	}
+	return nil
+}
+
+func (x *BulkDeleteMessagesResponse) GetNotFoundIds() []int64 {
+	if x != nil {
+		return x.NotFoundIds
+	}
+	return nil
+}
+
+type GetIntegrationScopesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UniqueId      string                 `protobuf:"bytes,1,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetIntegrationScopesRequest) Reset() {
+	*x = GetIntegrationScopesRequest{}
+	mi := &file_control_proto_msgTypes[100]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetIntegrationScopesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetIntegrationScopesRequest) ProtoMessage() {}
+
+func (x *GetIntegrationScopesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[100]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetIntegrationScopesRequest.ProtoReflect.Descriptor instead.
+func (*GetIntegrationScopesRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{100}
+}
+
+func (x *GetIntegrationScopesRequest) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+type GetIntegrationScopesResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	UniqueId string                 `protobuf:"bytes,1,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	// full means no ceiling: every integration API the roles allow.
+	Full          bool     `protobuf:"varint,2,opt,name=full,proto3" json:"full,omitempty"`
+	Scopes        []string `protobuf:"bytes,3,rep,name=scopes,proto3" json:"scopes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetIntegrationScopesResponse) Reset() {
+	*x = GetIntegrationScopesResponse{}
+	mi := &file_control_proto_msgTypes[101]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetIntegrationScopesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetIntegrationScopesResponse) ProtoMessage() {}
+
+func (x *GetIntegrationScopesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[101]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetIntegrationScopesResponse.ProtoReflect.Descriptor instead.
+func (*GetIntegrationScopesResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{101}
+}
+
+func (x *GetIntegrationScopesResponse) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *GetIntegrationScopesResponse) GetFull() bool {
+	if x != nil {
+		return x.Full
+	}
+	return false
+}
+
+func (x *GetIntegrationScopesResponse) GetScopes() []string {
+	if x != nil {
+		return x.Scopes
+	}
+	return nil
+}
+
+type SetIntegrationScopesRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	UniqueId string                 `protobuf:"bytes,1,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	// full clears the ceiling; scopes must then be empty. Otherwise scopes is
+	// the complete new list (may be empty, which allows nothing).
+	Full          bool     `protobuf:"varint,2,opt,name=full,proto3" json:"full,omitempty"`
+	Scopes        []string `protobuf:"bytes,3,rep,name=scopes,proto3" json:"scopes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetIntegrationScopesRequest) Reset() {
+	*x = SetIntegrationScopesRequest{}
+	mi := &file_control_proto_msgTypes[102]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetIntegrationScopesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetIntegrationScopesRequest) ProtoMessage() {}
+
+func (x *SetIntegrationScopesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[102]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetIntegrationScopesRequest.ProtoReflect.Descriptor instead.
+func (*SetIntegrationScopesRequest) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{102}
+}
+
+func (x *SetIntegrationScopesRequest) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *SetIntegrationScopesRequest) GetFull() bool {
+	if x != nil {
+		return x.Full
+	}
+	return false
+}
+
+func (x *SetIntegrationScopesRequest) GetScopes() []string {
+	if x != nil {
+		return x.Scopes
+	}
+	return nil
+}
+
+type SetIntegrationScopesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UniqueId      string                 `protobuf:"bytes,1,opt,name=unique_id,json=uniqueId,proto3" json:"unique_id,omitempty"`
+	Full          bool                   `protobuf:"varint,2,opt,name=full,proto3" json:"full,omitempty"`
+	Scopes        []string               `protobuf:"bytes,3,rep,name=scopes,proto3" json:"scopes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetIntegrationScopesResponse) Reset() {
+	*x = SetIntegrationScopesResponse{}
+	mi := &file_control_proto_msgTypes[103]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetIntegrationScopesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetIntegrationScopesResponse) ProtoMessage() {}
+
+func (x *SetIntegrationScopesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[103]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetIntegrationScopesResponse.ProtoReflect.Descriptor instead.
+func (*SetIntegrationScopesResponse) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{103}
+}
+
+func (x *SetIntegrationScopesResponse) GetUniqueId() string {
+	if x != nil {
+		return x.UniqueId
+	}
+	return ""
+}
+
+func (x *SetIntegrationScopesResponse) GetFull() bool {
+	if x != nil {
+		return x.Full
+	}
+	return false
+}
+
+func (x *SetIntegrationScopesResponse) GetScopes() []string {
+	if x != nil {
+		return x.Scopes
+	}
+	return nil
+}
+
 var File_control_proto protoreflect.FileDescriptor
 
 const file_control_proto_rawDesc = "" +
@@ -7337,7 +7670,30 @@ const file_control_proto_rawDesc = "" +
 	"\x18QueryPermissionsResponse\x12.\n" +
 	"\agranted\x18\x01 \x03(\x0e2\x14.voicx.v1.PermissionR\agranted\x12,\n" +
 	"\x06denied\x18\x02 \x03(\x0e2\x14.voicx.v1.PermissionR\x06denied\x12\x19\n" +
-	"\bis_admin\x18\x03 \x01(\bR\aisAdmin:\x02\x18\x01*m\n" +
+	"\bis_admin\x18\x03 \x01(\bR\aisAdmin:\x02\x18\x01\"[\n" +
+	"\x19BulkDeleteMessagesRequest\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x01 \x01(\x03R\tchannelId\x12\x1f\n" +
+	"\vmessage_ids\x18\x02 \x03(\x03R\n" +
+	"messageIds\"a\n" +
+	"\x1aBulkDeleteMessagesResponse\x12\x1f\n" +
+	"\vdeleted_ids\x18\x01 \x03(\x03R\n" +
+	"deletedIds\x12\"\n" +
+	"\rnot_found_ids\x18\x02 \x03(\x03R\vnotFoundIds\":\n" +
+	"\x1bGetIntegrationScopesRequest\x12\x1b\n" +
+	"\tunique_id\x18\x01 \x01(\tR\buniqueId\"g\n" +
+	"\x1cGetIntegrationScopesResponse\x12\x1b\n" +
+	"\tunique_id\x18\x01 \x01(\tR\buniqueId\x12\x12\n" +
+	"\x04full\x18\x02 \x01(\bR\x04full\x12\x16\n" +
+	"\x06scopes\x18\x03 \x03(\tR\x06scopes\"f\n" +
+	"\x1bSetIntegrationScopesRequest\x12\x1b\n" +
+	"\tunique_id\x18\x01 \x01(\tR\buniqueId\x12\x12\n" +
+	"\x04full\x18\x02 \x01(\bR\x04full\x12\x16\n" +
+	"\x06scopes\x18\x03 \x03(\tR\x06scopes\"g\n" +
+	"\x1cSetIntegrationScopesResponse\x12\x1b\n" +
+	"\tunique_id\x18\x01 \x01(\tR\buniqueId\x12\x12\n" +
+	"\x04full\x18\x02 \x01(\bR\x04full\x12\x16\n" +
+	"\x06scopes\x18\x03 \x03(\tR\x06scopes*m\n" +
 	"\x0eBanPersistence\x12\x1f\n" +
 	"\x1bBAN_PERSISTENCE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15BAN_PERSISTENCE_SAVED\x10\x01\x12\x1f\n" +
@@ -7366,7 +7722,7 @@ const file_control_proto_rawDesc = "" +
 	"\x19PERMISSION_CREATE_CHANNEL\x10\b\x12\x1d\n" +
 	"\x19PERMISSION_DELETE_CHANNEL\x10\t\x12\x1c\n" +
 	"\x18PERMISSION_TRANSFER_FILE\x10\n" +
-	"\x1a\x02\x18\x012\xb6\x1a\n" +
+	"\x1a\x02\x18\x012\xe5\x1c\n" +
 	"\aControl\x12^\n" +
 	"\x10QueryPermissions\x12!.voicx.v1.QueryPermissionsRequest\x1a\".voicx.v1.QueryPermissionsResponse\"\x03\x88\x02\x01\x12U\n" +
 	"\rDeleteChannel\x12\x1e.voicx.v1.DeleteChannelRequest\x1a\x1f.voicx.v1.DeleteChannelResponse\"\x03\x88\x02\x01\x12U\n" +
@@ -7406,7 +7762,10 @@ const file_control_proto_rawDesc = "" +
 	"\fListAuditLog\x12\x1d.voicx.v1.ListAuditLogRequest\x1a\x1e.voicx.v1.ListAuditLogResponse\x12S\n" +
 	"\x0eListComplaints\x12\x1f.voicx.v1.ListComplaintsRequest\x1a .voicx.v1.ListComplaintsResponse\x12V\n" +
 	"\x0fClearComplaints\x12 .voicx.v1.ClearComplaintsRequest\x1a!.voicx.v1.ClearComplaintsResponse\x12S\n" +
-	"\x0eGetServerRules\x12\x1f.voicx.v1.GetServerRulesRequest\x1a .voicx.v1.GetServerRulesResponse\x12\\\n" +
+	"\x0eGetServerRules\x12\x1f.voicx.v1.GetServerRulesRequest\x1a .voicx.v1.GetServerRulesResponse\x12_\n" +
+	"\x12BulkDeleteMessages\x12#.voicx.v1.BulkDeleteMessagesRequest\x1a$.voicx.v1.BulkDeleteMessagesResponse\x12e\n" +
+	"\x14GetIntegrationScopes\x12%.voicx.v1.GetIntegrationScopesRequest\x1a&.voicx.v1.GetIntegrationScopesResponse\x12e\n" +
+	"\x14SetIntegrationScopes\x12%.voicx.v1.SetIntegrationScopesRequest\x1a&.voicx.v1.SetIntegrationScopesResponse\x12\\\n" +
 	"\x11StartFileTransfer\x12\".voicx.v1.StartFileTransferRequest\x1a#.voicx.v1.StartFileTransferResponse\x12h\n" +
 	"\x15GetFileTransferStatus\x12&.voicx.v1.GetFileTransferStatusRequest\x1a'.voicx.v1.GetFileTransferStatusResponse\x12_\n" +
 	"\x12CancelFileTransfer\x12#.voicx.v1.CancelFileTransferRequest\x1a$.voicx.v1.CancelFileTransferResponseB\x12Z\x10voicx/v1;voicxv1b\x06proto3"
@@ -7424,7 +7783,7 @@ func file_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 101)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 107)
 var file_control_proto_goTypes = []any{
 	(BanPersistence)(0),                   // 0: voicx.v1.BanPersistence
 	(FileTransferDirection)(0),            // 1: voicx.v1.FileTransferDirection
@@ -7528,14 +7887,20 @@ var file_control_proto_goTypes = []any{
 	(*DeleteChannelResponse)(nil),         // 99: voicx.v1.DeleteChannelResponse
 	(*QueryPermissionsRequest)(nil),       // 100: voicx.v1.QueryPermissionsRequest
 	(*QueryPermissionsResponse)(nil),      // 101: voicx.v1.QueryPermissionsResponse
-	nil,                                   // 102: voicx.v1.AuthenticateRequest.MetadataEntry
-	nil,                                   // 103: voicx.v1.Channel.MetadataEntry
-	nil,                                   // 104: voicx.v1.CreateChannelRequest.MetadataEntry
+	(*BulkDeleteMessagesRequest)(nil),     // 102: voicx.v1.BulkDeleteMessagesRequest
+	(*BulkDeleteMessagesResponse)(nil),    // 103: voicx.v1.BulkDeleteMessagesResponse
+	(*GetIntegrationScopesRequest)(nil),   // 104: voicx.v1.GetIntegrationScopesRequest
+	(*GetIntegrationScopesResponse)(nil),  // 105: voicx.v1.GetIntegrationScopesResponse
+	(*SetIntegrationScopesRequest)(nil),   // 106: voicx.v1.SetIntegrationScopesRequest
+	(*SetIntegrationScopesResponse)(nil),  // 107: voicx.v1.SetIntegrationScopesResponse
+	nil,                                   // 108: voicx.v1.AuthenticateRequest.MetadataEntry
+	nil,                                   // 109: voicx.v1.Channel.MetadataEntry
+	nil,                                   // 110: voicx.v1.CreateChannelRequest.MetadataEntry
 }
 var file_control_proto_depIdxs = []int32{
 	6,   // 0: voicx.v1.ListCustomMetadataResponse.entries:type_name -> voicx.v1.CustomMetadataEntry
-	102, // 1: voicx.v1.AuthenticateRequest.metadata:type_name -> voicx.v1.AuthenticateRequest.MetadataEntry
-	103, // 2: voicx.v1.Channel.metadata:type_name -> voicx.v1.Channel.MetadataEntry
+	108, // 1: voicx.v1.AuthenticateRequest.metadata:type_name -> voicx.v1.AuthenticateRequest.MetadataEntry
+	109, // 2: voicx.v1.Channel.metadata:type_name -> voicx.v1.Channel.MetadataEntry
 	13,  // 3: voicx.v1.ListChannelsResponse.channels:type_name -> voicx.v1.Channel
 	18,  // 4: voicx.v1.ListComplaintsResponse.entries:type_name -> voicx.v1.ComplaintRecord
 	23,  // 5: voicx.v1.ListAuditLogResponse.entries:type_name -> voicx.v1.AuditLogRecord
@@ -7568,7 +7933,7 @@ var file_control_proto_depIdxs = []int32{
 	84,  // 32: voicx.v1.ChangeChannelRequest.settings:type_name -> voicx.v1.RoleChannelSettings
 	1,   // 33: voicx.v1.StartFileTransferRequest.direction:type_name -> voicx.v1.FileTransferDirection
 	2,   // 34: voicx.v1.GetFileTransferStatusResponse.status:type_name -> voicx.v1.FileTransferStatus
-	104, // 35: voicx.v1.CreateChannelRequest.metadata:type_name -> voicx.v1.CreateChannelRequest.MetadataEntry
+	110, // 35: voicx.v1.CreateChannelRequest.metadata:type_name -> voicx.v1.CreateChannelRequest.MetadataEntry
 	3,   // 36: voicx.v1.QueryPermissionsResponse.granted:type_name -> voicx.v1.Permission
 	3,   // 37: voicx.v1.QueryPermissionsResponse.denied:type_name -> voicx.v1.Permission
 	100, // 38: voicx.v1.Control.QueryPermissions:input_type -> voicx.v1.QueryPermissionsRequest
@@ -7608,51 +7973,57 @@ var file_control_proto_depIdxs = []int32{
 	17,  // 72: voicx.v1.Control.ListComplaints:input_type -> voicx.v1.ListComplaintsRequest
 	20,  // 73: voicx.v1.Control.ClearComplaints:input_type -> voicx.v1.ClearComplaintsRequest
 	4,   // 74: voicx.v1.Control.GetServerRules:input_type -> voicx.v1.GetServerRulesRequest
-	90,  // 75: voicx.v1.Control.StartFileTransfer:input_type -> voicx.v1.StartFileTransferRequest
-	92,  // 76: voicx.v1.Control.GetFileTransferStatus:input_type -> voicx.v1.GetFileTransferStatusRequest
-	94,  // 77: voicx.v1.Control.CancelFileTransfer:input_type -> voicx.v1.CancelFileTransferRequest
-	101, // 78: voicx.v1.Control.QueryPermissions:output_type -> voicx.v1.QueryPermissionsResponse
-	99,  // 79: voicx.v1.Control.DeleteChannel:output_type -> voicx.v1.DeleteChannelResponse
-	97,  // 80: voicx.v1.Control.CreateChannel:output_type -> voicx.v1.CreateChannelResponse
-	12,  // 81: voicx.v1.Control.Authenticate:output_type -> voicx.v1.AuthenticateResponse
-	15,  // 82: voicx.v1.Control.ListChannels:output_type -> voicx.v1.ListChannelsResponse
-	83,  // 83: voicx.v1.Control.ChangeRoles:output_type -> voicx.v1.ChangeRolesResponse
-	87,  // 84: voicx.v1.Control.ChangeChannel:output_type -> voicx.v1.ChangeChannelResponse
-	89,  // 85: voicx.v1.Control.SetMemberVoice:output_type -> voicx.v1.SetMemberVoiceResponse
-	78,  // 86: voicx.v1.Control.MoveMember:output_type -> voicx.v1.MoveMemberResponse
-	77,  // 87: voicx.v1.Control.DisconnectMember:output_type -> voicx.v1.DisconnectMemberResponse
-	73,  // 88: voicx.v1.Control.KickMember:output_type -> voicx.v1.KickMemberResponse
-	75,  // 89: voicx.v1.Control.BanMember:output_type -> voicx.v1.BanMemberResponse
-	44,  // 90: voicx.v1.Control.GetServerInfo:output_type -> voicx.v1.GetServerInfoResponse
-	46,  // 91: voicx.v1.Control.GetClientInfo:output_type -> voicx.v1.GetClientInfoResponse
-	60,  // 92: voicx.v1.Control.GetServerConfig:output_type -> voicx.v1.GetServerConfigResponse
-	50,  // 93: voicx.v1.Control.GetMediaLimits:output_type -> voicx.v1.GetMediaLimitsResponse
-	51,  // 94: voicx.v1.Control.SetMediaLimits:output_type -> voicx.v1.SetMediaLimitsResponse
-	59,  // 95: voicx.v1.Control.SetServerConfig:output_type -> voicx.v1.SetServerConfigResponse
-	53,  // 96: voicx.v1.Control.GetChatFilters:output_type -> voicx.v1.GetChatFiltersResponse
-	57,  // 97: voicx.v1.Control.SetChatFilters:output_type -> voicx.v1.SetChatFiltersResponse
-	55,  // 98: voicx.v1.Control.SetServerText:output_type -> voicx.v1.SetServerTextResponse
-	7,   // 99: voicx.v1.Control.ListCustomMetadata:output_type -> voicx.v1.ListCustomMetadataResponse
-	9,   // 100: voicx.v1.Control.ChangeCustomMetadata:output_type -> voicx.v1.ChangeCustomMetadataResponse
-	63,  // 101: voicx.v1.Control.ListBans:output_type -> voicx.v1.ListBansResponse
-	68,  // 102: voicx.v1.Control.ListDevices:output_type -> voicx.v1.ListDevicesResponse
-	69,  // 103: voicx.v1.Control.RevokeDevice:output_type -> voicx.v1.RevokeDeviceResponse
-	70,  // 104: voicx.v1.Control.ResetDevices:output_type -> voicx.v1.ResetDevicesResponse
-	34,  // 105: voicx.v1.Control.GetRoleState:output_type -> voicx.v1.GetRoleStateResponse
-	37,  // 106: voicx.v1.Control.ListRoleMembers:output_type -> voicx.v1.ListRoleMembersResponse
-	40,  // 107: voicx.v1.Control.CheckAccess:output_type -> voicx.v1.CheckAccessResponse
-	43,  // 108: voicx.v1.Control.GetChannelOptions:output_type -> voicx.v1.GetChannelOptionsResponse
-	27,  // 109: voicx.v1.Control.ListClients:output_type -> voicx.v1.ListClientsResponse
-	29,  // 110: voicx.v1.Control.GetChannelInfo:output_type -> voicx.v1.GetChannelInfoResponse
-	24,  // 111: voicx.v1.Control.ListAuditLog:output_type -> voicx.v1.ListAuditLogResponse
-	19,  // 112: voicx.v1.Control.ListComplaints:output_type -> voicx.v1.ListComplaintsResponse
-	21,  // 113: voicx.v1.Control.ClearComplaints:output_type -> voicx.v1.ClearComplaintsResponse
-	10,  // 114: voicx.v1.Control.GetServerRules:output_type -> voicx.v1.GetServerRulesResponse
-	91,  // 115: voicx.v1.Control.StartFileTransfer:output_type -> voicx.v1.StartFileTransferResponse
-	93,  // 116: voicx.v1.Control.GetFileTransferStatus:output_type -> voicx.v1.GetFileTransferStatusResponse
-	95,  // 117: voicx.v1.Control.CancelFileTransfer:output_type -> voicx.v1.CancelFileTransferResponse
-	78,  // [78:118] is the sub-list for method output_type
-	38,  // [38:78] is the sub-list for method input_type
+	102, // 75: voicx.v1.Control.BulkDeleteMessages:input_type -> voicx.v1.BulkDeleteMessagesRequest
+	104, // 76: voicx.v1.Control.GetIntegrationScopes:input_type -> voicx.v1.GetIntegrationScopesRequest
+	106, // 77: voicx.v1.Control.SetIntegrationScopes:input_type -> voicx.v1.SetIntegrationScopesRequest
+	90,  // 78: voicx.v1.Control.StartFileTransfer:input_type -> voicx.v1.StartFileTransferRequest
+	92,  // 79: voicx.v1.Control.GetFileTransferStatus:input_type -> voicx.v1.GetFileTransferStatusRequest
+	94,  // 80: voicx.v1.Control.CancelFileTransfer:input_type -> voicx.v1.CancelFileTransferRequest
+	101, // 81: voicx.v1.Control.QueryPermissions:output_type -> voicx.v1.QueryPermissionsResponse
+	99,  // 82: voicx.v1.Control.DeleteChannel:output_type -> voicx.v1.DeleteChannelResponse
+	97,  // 83: voicx.v1.Control.CreateChannel:output_type -> voicx.v1.CreateChannelResponse
+	12,  // 84: voicx.v1.Control.Authenticate:output_type -> voicx.v1.AuthenticateResponse
+	15,  // 85: voicx.v1.Control.ListChannels:output_type -> voicx.v1.ListChannelsResponse
+	83,  // 86: voicx.v1.Control.ChangeRoles:output_type -> voicx.v1.ChangeRolesResponse
+	87,  // 87: voicx.v1.Control.ChangeChannel:output_type -> voicx.v1.ChangeChannelResponse
+	89,  // 88: voicx.v1.Control.SetMemberVoice:output_type -> voicx.v1.SetMemberVoiceResponse
+	78,  // 89: voicx.v1.Control.MoveMember:output_type -> voicx.v1.MoveMemberResponse
+	77,  // 90: voicx.v1.Control.DisconnectMember:output_type -> voicx.v1.DisconnectMemberResponse
+	73,  // 91: voicx.v1.Control.KickMember:output_type -> voicx.v1.KickMemberResponse
+	75,  // 92: voicx.v1.Control.BanMember:output_type -> voicx.v1.BanMemberResponse
+	44,  // 93: voicx.v1.Control.GetServerInfo:output_type -> voicx.v1.GetServerInfoResponse
+	46,  // 94: voicx.v1.Control.GetClientInfo:output_type -> voicx.v1.GetClientInfoResponse
+	60,  // 95: voicx.v1.Control.GetServerConfig:output_type -> voicx.v1.GetServerConfigResponse
+	50,  // 96: voicx.v1.Control.GetMediaLimits:output_type -> voicx.v1.GetMediaLimitsResponse
+	51,  // 97: voicx.v1.Control.SetMediaLimits:output_type -> voicx.v1.SetMediaLimitsResponse
+	59,  // 98: voicx.v1.Control.SetServerConfig:output_type -> voicx.v1.SetServerConfigResponse
+	53,  // 99: voicx.v1.Control.GetChatFilters:output_type -> voicx.v1.GetChatFiltersResponse
+	57,  // 100: voicx.v1.Control.SetChatFilters:output_type -> voicx.v1.SetChatFiltersResponse
+	55,  // 101: voicx.v1.Control.SetServerText:output_type -> voicx.v1.SetServerTextResponse
+	7,   // 102: voicx.v1.Control.ListCustomMetadata:output_type -> voicx.v1.ListCustomMetadataResponse
+	9,   // 103: voicx.v1.Control.ChangeCustomMetadata:output_type -> voicx.v1.ChangeCustomMetadataResponse
+	63,  // 104: voicx.v1.Control.ListBans:output_type -> voicx.v1.ListBansResponse
+	68,  // 105: voicx.v1.Control.ListDevices:output_type -> voicx.v1.ListDevicesResponse
+	69,  // 106: voicx.v1.Control.RevokeDevice:output_type -> voicx.v1.RevokeDeviceResponse
+	70,  // 107: voicx.v1.Control.ResetDevices:output_type -> voicx.v1.ResetDevicesResponse
+	34,  // 108: voicx.v1.Control.GetRoleState:output_type -> voicx.v1.GetRoleStateResponse
+	37,  // 109: voicx.v1.Control.ListRoleMembers:output_type -> voicx.v1.ListRoleMembersResponse
+	40,  // 110: voicx.v1.Control.CheckAccess:output_type -> voicx.v1.CheckAccessResponse
+	43,  // 111: voicx.v1.Control.GetChannelOptions:output_type -> voicx.v1.GetChannelOptionsResponse
+	27,  // 112: voicx.v1.Control.ListClients:output_type -> voicx.v1.ListClientsResponse
+	29,  // 113: voicx.v1.Control.GetChannelInfo:output_type -> voicx.v1.GetChannelInfoResponse
+	24,  // 114: voicx.v1.Control.ListAuditLog:output_type -> voicx.v1.ListAuditLogResponse
+	19,  // 115: voicx.v1.Control.ListComplaints:output_type -> voicx.v1.ListComplaintsResponse
+	21,  // 116: voicx.v1.Control.ClearComplaints:output_type -> voicx.v1.ClearComplaintsResponse
+	10,  // 117: voicx.v1.Control.GetServerRules:output_type -> voicx.v1.GetServerRulesResponse
+	103, // 118: voicx.v1.Control.BulkDeleteMessages:output_type -> voicx.v1.BulkDeleteMessagesResponse
+	105, // 119: voicx.v1.Control.GetIntegrationScopes:output_type -> voicx.v1.GetIntegrationScopesResponse
+	107, // 120: voicx.v1.Control.SetIntegrationScopes:output_type -> voicx.v1.SetIntegrationScopesResponse
+	91,  // 121: voicx.v1.Control.StartFileTransfer:output_type -> voicx.v1.StartFileTransferResponse
+	93,  // 122: voicx.v1.Control.GetFileTransferStatus:output_type -> voicx.v1.GetFileTransferStatusResponse
+	95,  // 123: voicx.v1.Control.CancelFileTransfer:output_type -> voicx.v1.CancelFileTransferResponse
+	81,  // [81:124] is the sub-list for method output_type
+	38,  // [38:81] is the sub-list for method input_type
 	38,  // [38:38] is the sub-list for extension type_name
 	38,  // [38:38] is the sub-list for extension extendee
 	0,   // [0:38] is the sub-list for field type_name
@@ -7674,7 +8045,7 @@ func file_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   101,
+			NumMessages:   107,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
