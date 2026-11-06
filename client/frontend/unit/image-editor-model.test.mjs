@@ -254,6 +254,9 @@ test("annotation sizes match between the small preview and the export, also afte
     // Same size relative to the raster: 4x the pixels at 4x the resolution.
     assert.ok(Math.abs(width(large) / large.width - width(small) / small.width) < 1e-9);
     assert.equal(strokeWidth(0.5), 1, "never thinner than one pixel");
+    // Small images are sized as if their shorter side were 400 pixels.
+    assert.equal(sizeUnit(320, 200, 1), 4);
+    assert.equal(sizeUnit(320, 200, 0.5), 2);
 });
 
 test("a 12000x8000 export stays within 50 MP after rounding", async () => {

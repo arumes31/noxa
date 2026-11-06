@@ -146,13 +146,17 @@ export function createHistory(initial = []) {
     };
 }
 
+/** Below this shorter side, sizes are computed as if the image were this big. */
+export const MIN_SIZING_SIDE = 400;
+
 /**
  * Size unit for a render: raster pixels per 1% of the original image's
- * shorter side. Crop and rotate keep it, so the same op has the same size in
+ * shorter side (at least MIN_SIZING_SIDE, so text and strokes stay legible on
+ * small images). Crop and rotate keep it, so the same op has the same size in
  * the small preview and the full-resolution export.
  */
 export function sizeUnit(originalWidth, originalHeight, rasterScale) {
-    return Math.max(0.01, Math.min(originalWidth, originalHeight) * rasterScale / 100);
+    return Math.max(0.01, Math.max(Math.min(originalWidth, originalHeight), MIN_SIZING_SIDE) * rasterScale / 100);
 }
 
 /** Pixelation block edge in pixels (2.5 units, at least 2). */
@@ -282,8 +286,9 @@ export function applyOp(canvas, op, makeCanvas, unit = Math.min(canvas.width, ca
         ctx.font = `600 ${size}px sans-serif`;
         ctx.textBaseline = "top";
         const at = px(op.at);
-        // An outline keeps the text readable on any background.
-        ctx.lineWidth = Math.max(2, size / 8);
+        // A thin outline keeps the text readable on any background without
+        // swallowing the fill.
+        ctx.lineWidth = Math.max(1, size / 12);
         ctx.strokeStyle = op.color === "#000000" ? "#ffffff" : "#000000";
         ctx.strokeText(op.text, at.x, at.y);
         ctx.fillText(op.text, at.x, at.y);

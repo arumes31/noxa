@@ -80,6 +80,22 @@ function stagedImage(page, points = []) {
     }, points);
 }
 
+// Green-dominant pixels (antialiased text fill included) in the box where
+// the annotation test places its text.
+function greenInTextBox(page) {
+    return page.evaluate(async () => {
+        const img = document.querySelector(".file-preview img");
+        const bitmap = await createImageBitmap(await (await fetch(img.src)).blob());
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(bitmap, 0, 0);
+        const { data } = ctx.getImageData(190, 16, 128, 30);
+        let n = 0;
+        for (let i = 0; i < data.length; i += 4) if (data[i + 1] > 120 && data[i + 1] > data[i] + 60 && data[i + 1] > data[i + 2] + 60) n++;
+        return n;
+    });
+}
+
 async function drag(page, from, to) {
     const box = await page.locator(".ie-canvas").boundingBox();
     const at = p => [box.x + box.width * p[0], box.y + box.height * p[1]];
@@ -165,6 +181,7 @@ test("rotate and keyboard crop change the exported size; undo and redo work", as
 
 test("annotations are drawn into the exported pixels", async ({ page }) => {
     await stageGradient(page);
+    const textBaseline = await greenInTextBox(page);
     await page.locator(".file-preview-edit").click();
     const dialog = page.locator(".image-editor");
     await dialog.locator(".ie-color").evaluate(input => { input.value = "#00ff00"; input.dispatchEvent(new Event("input", { bubbles: true })); });
@@ -186,20 +203,7 @@ test("annotations are drawn into the exported pixels", async ({ page }) => {
     expect(green(out.pixels[0])).toBe(true);
     expect(green(out.pixels[1])).toBe(true);
     // The text near (192, 20): count green pixels in its box.
-    const textGreen = await page.evaluate(async () => {
-        const img = document.querySelector(".file-preview img");
-        const bitmap = await createImageBitmap(await (await fetch(img.src)).blob());
-        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(bitmap, 0, 0);
-        const { data } = ctx.getImageData(192, 20, 120, 24);
-        let n = 0;
-        for (let i = 0; i < data.length; i += 4) if (data[i + 1] > 200 && data[i] < 80 && data[i + 2] < 80) n++;
-        return n;
-    });
-    // Text scales with the image (about 9 px here); the gradient there has no
-    // pure green, so any green pixels are the text's fill.
-    expect(textGreen).toBeGreaterThan(5);
+    expect(await greenInTextBox(page) - textBaseline).toBeGreaterThan(40);
 });
 
 test("cancel leaves the staged file untouched, asking first when edited", async ({ page }) => {
