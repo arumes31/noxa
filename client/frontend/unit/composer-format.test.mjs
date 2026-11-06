@@ -63,6 +63,7 @@ test("formatted selections render as formatting, never as literal markers", () =
     for (const [text, html] of cases) {
         const out = renderMarkdown(text);
         assert.ok(out.includes(html), `${JSON.stringify(text)} rendered ${out}`);
-        assert.ok(!/[*_~]/.test(out.replace(/<[^>]+>/g, "")), `literal marker left in ${out}`);
+        // No marker character may remain in any text between tags.
+        assert.ok(!/(?:^|>)[^<]*[*_~]/.test(out), `literal marker left in ${out}`);
     }
 });
