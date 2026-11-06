@@ -138,7 +138,14 @@ jobs:
 
           matrix = {
               "include": [
-                  {"area": key, "instruction": " ".join(areas[key].split())}
+                  {
+                      "area": key,
+                      "instruction": (
+                          "Work sequentially as a single agent; do not call create_agent "
+                          "or spawn subagents. Use the available tools yourself. "
+                          + " ".join(areas[key].split())
+                      ),
+                  }
                   for key in keys
               ]
           }
@@ -151,17 +158,25 @@ jobs:
     name: Strix ${{ matrix.area }}
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 80
+    timeout-minutes: 110
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 1
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
-      LLM_TIMEOUT: "3600"
-      LITELLM_REQUEST_TIMEOUT: "3600"
-      LLM_PREFLIGHT_TIMEOUT: "300"
+      LLM_TIMEOUT: "150"
+      LITELLM_REQUEST_TIMEOUT: "150"
+      LLM_PREFLIGHT_TIMEOUT: "180"
       LLM_DISABLE_STREAMING: "true"
-      STRIX_MEMORY_COMPRESSOR_TIMEOUT: "3600"
+      STRIX_LLM_MAX_RETRIES: "4"
+      STRIX_MEMORY_COMPRESSOR_TIMEOUT: "180"
+      STRIX_TOOL_OUTPUT_MAX_TOKENS: "2000"
+      STRIX_TOOL_OUTPUT_MAX_LINES: "100"
+      STRIX_TOOL_OUTPUT_MAX_BYTES: "16384"
+      STRIX_CONTEXT_AUTO_COMPACT: "true"
+      STRIX_CONTEXT_KEEP_TOKENS: "4000"
+      STRIX_CONTEXT_BUFFER_TOKENS: "4000"
+      STRIX_CONTEXT_FALLBACK_TOKENS: "96000"
       STRIX_SANDBOX_EXECUTION_TIMEOUT: "3600"
       STRIX_SANDBOX_CONNECT_TIMEOUT: "3600"
       STRIX_LLM: ${{ secrets.STRIX_LLM }}
@@ -229,7 +244,7 @@ jobs:
         id: scan
         if: steps.install.outcome == 'success'
         continue-on-error: true
-        timeout-minutes: 65
+        timeout-minutes: 95
         shell: bash
         env:
           AREA: ${{ matrix.area }}
@@ -252,7 +267,7 @@ jobs:
             attempt=$((attempt + 1))
             started=$SECONDS
             set +e
-            timeout --signal=TERM --kill-after=30s 60m \
+            timeout --signal=TERM --kill-after=30s 90m \
               strix -n -t ./ --scope-mode full --scan-mode "$scan_mode" \
               --max-budget "$max_budget" --max-turns "$max_turns" \
               --instruction "$INSTRUCTION" >> "$log" 2>&1

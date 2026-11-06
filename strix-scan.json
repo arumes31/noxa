@@ -1,6 +1,6 @@
 {
   "areas": "auth-identity",
   "scan_mode": "quick",
-  "max_budget": 3,
-  "max_turns": 100
+  "max_budget": 4,
+  "max_turns": 120
 }
