@@ -892,3 +892,24 @@ func TestValidateShutdownGracePeriod(t *testing.T) {
 		t.Errorf("Validate(max grace) error = %v", err)
 	}
 }
+
+func TestValidateAuditPartitionRetentionMonths(t *testing.T) {
+	base := loadDefaultConfig(t)
+	if base.AuditPartitionRetentionMonths != 0 {
+		t.Fatalf("default audit_partition_retention_months = %d, want 0", base.AuditPartitionRetentionMonths)
+	}
+	for _, months := range []int{-1, 1, MinAuditPartitionRetentionMonths - 1, 1201} {
+		cfg := cloneConfig(base)
+		cfg.AuditPartitionRetentionMonths = months
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "audit_partition_retention_months") {
+			t.Errorf("Validate(months=%d) error = %v", months, err)
+		}
+	}
+	for _, months := range []int{0, MinAuditPartitionRetentionMonths, 24} {
+		cfg := cloneConfig(base)
+		cfg.AuditPartitionRetentionMonths = months
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate(months=%d) error = %v", months, err)
+		}
+	}
+}
