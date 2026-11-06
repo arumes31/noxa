@@ -53,7 +53,7 @@ test('text channels list under Text, never in the voice tree, and open their cha
 test('voice tree shows LIVE, lock and muted state in text and icons', async ({ page }) => {
     const jinx = page.locator('#channel-tree .client[data-clid="jinx"]');
     await expect(jinx.locator('.client-stream-state')).toHaveText('LIVE');
-    await expect(jinx).toHaveAccessibleName('Jinx, Sharing a stream, Connecting…');
+    await expect(jinx).toHaveAccessibleName('Jinx, online, Sharing a stream, Connecting…');
     await expect(jinx.locator('.member-media-indicator')).toHaveAttribute('data-state', 'connecting');
     await expect(page.locator('#channel-tree .channel[data-chid="3"] .ch-access-lock')).toHaveCount(1);
     await expect(page.locator('#channel-tree .client[data-clid="sable"] .status-icons')).toHaveAttribute('aria-label', /muted/i);

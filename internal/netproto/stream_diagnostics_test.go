@@ -140,3 +140,18 @@ func TestVideoSenderCaptureDimensionsRemainOptionalAndSeparate(t *testing.T) {
 		}
 	}
 }
+
+func TestVideoSenderEncoderVendorIsAllowlisted(t *testing.T) {
+	for _, vendor := range []string{"", "nvidia", "amd", "intel"} {
+		r := VideoSenderDiagnostics{SSRC: 123, RID: "f", Slot: "screen", Generation: 9, Codec: "video/vp8", QualityReason: "none", EncoderImplementation: "MediaFoundationVideoEncoder", EncoderVendor: vendor}
+		if !r.Valid() {
+			t.Errorf("vendor %q rejected", vendor)
+		}
+	}
+	for _, vendor := range []string{"NVIDIA", "qualcomm", "NVIDIA GeForce RTX 4090 driver 560.94"} {
+		r := VideoSenderDiagnostics{SSRC: 123, RID: "f", Slot: "screen", Generation: 9, Codec: "video/vp8", QualityReason: "none", EncoderImplementation: "MediaFoundationVideoEncoder", EncoderVendor: vendor}
+		if r.Valid() {
+			t.Errorf("vendor %q accepted", vendor)
+		}
+	}
+}

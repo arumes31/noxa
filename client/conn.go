@@ -207,7 +207,11 @@ type connManager struct {
 
 	// The defaults keep an idle connected control channel alive while making a
 	// peer that stops responding fail in bounded time. Tests may shorten them.
-	heartbeatInterval   time.Duration
+	heartbeatInterval time.Duration
+	probeUntil        time.Time // pending liveness probe; any frame clears it
+	// deadlineMu serializes computing and applying the read deadline between
+	// the read loop and a liveness probe. Lock it before mu, never inside.
+	deadlineMu          sync.Mutex
 	readTimeout         time.Duration
 	writeTimeout        time.Duration
 	requestDrainTimeout time.Duration
@@ -304,6 +308,7 @@ func (m *connManager) dialEndpoint(ctx context.Context, addr, trustAddr string) 
 		// #nosec G402 -- VerifyConnection enforces the TOFU pin on every full or resumed handshake.
 		InsecureSkipVerify: true,
 		MinVersion:         tls.VersionTLS13,
+		CurvePreferences:   tlscert.CurvePreferences(),
 		VerifyConnection: func(state tls.ConnectionState) error {
 			if len(state.PeerCertificates) == 0 {
 				return fmt.Errorf("server presented no TLS certificate")
@@ -633,6 +638,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.mu.Lock()
 	m.conn = conn
 	m.connEpoch++
+	m.probeUntil = time.Time{} // a probe belongs to the connection it was sent on
 	m.rulesPending = false
 	m.addr = addr
 	m.clientID = resp.ClientID
@@ -779,6 +785,7 @@ func (m *connManager) detachLocked() (net.Conn, []chan requestResult, []net.Conn
 	m.closed = true
 	m.conn = nil
 	m.connEpoch++
+	m.probeUntil = time.Time{}
 	// A start failure belongs to its connection only.
 	m.ratchetStartErr, m.ratchetStartAt = nil, time.Time{}
 	// Controls are fenced to their connection: one queued before a reconnect
@@ -939,12 +946,6 @@ func (m *connManager) writeConn(conn net.Conn, mt netproto.MessageType, msg any)
 	// only for a completed wire write.
 	m.teeFrameIfEnabled("out", f, debugFrames)
 	return err
-}
-
-func (m *connManager) readDeadline() time.Duration {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.readTimeout
 }
 
 func (m *connManager) heartbeatPeriod() time.Duration {
@@ -1144,9 +1145,11 @@ func (m *connManager) readLoop(conn net.Conn) {
 	m.mu.Unlock()
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
 	for {
-		if timeout := m.readDeadline(); timeout > 0 {
-			_ = conn.SetReadDeadline(time.Now().Add(timeout))
-		}
+		// A zero deadline is applied too: it clears an answered probe's
+		// deadline when no read timeout is configured.
+		m.deadlineMu.Lock()
+		_ = conn.SetReadDeadline(m.nextReadDeadline())
+		m.deadlineMu.Unlock()
 		f, err := netproto.ReadFrame(conn)
 		if err != nil {
 			// Intentional closes (Disconnect/CloseTab) end the loop quietly;
@@ -1155,6 +1158,7 @@ func (m *connManager) readLoop(conn net.Conn) {
 			m.terminateConn(conn, true, netproto.ControlReadCloseReason(err))
 			return
 		}
+		m.clearProbe()
 		m.dispatchFrom(conn, epoch, f)
 	}
 }

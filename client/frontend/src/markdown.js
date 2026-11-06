@@ -1,4 +1,5 @@
 import { previewImage } from "./preview-image.js";
+import { t as translate } from "./i18n.js";
 // markdown.js — (91/92/93) XSS-safe mini-markdown renderer for chat.
 // Discipline: user text is HTML-escaped FIRST; every transform below only
 // injects markup built from already-escaped content. Code spans/blocks are
@@ -41,6 +42,21 @@ function highlight(escaped) {
         .replace(KEYWORDS, `<span class="tk-kw">$1</span>`)
         .replace(/(&quot;[^\n]*?&quot;|&#39;[^\n]*?&#39;)/g, `<span class="tk-str">$1</span>`)
         .replace(/(\/\/[^\n]*|\/\*[\s\S]*?\*\/)/g, `<span class="tk-com">$1</span>`);
+}
+
+// (603) Line numbers for multi-line blocks. The gutter is outside <code>, so
+// copying or selecting the code never includes the numbers.
+function codeGutter(body) {
+    const lines = body.split("\n").length;
+    if (lines < 2) return "";
+    return `<span class="md-gutter" aria-hidden="true">${Array.from({ length: lines }, (_, i) => i + 1).join("\n")}</span>`;
+}
+
+// (603) Copy button; code-blocks.js handles the click (no inline handlers
+// under the CSP).
+function copyCodeButton() {
+    const label = escapeHTML(translate("chat.copyCode"));
+    return `<button type="button" class="md-copy" title="${label}" aria-label="${label}">⧉</button>`;
 }
 
 function detectLanguage(code) {
@@ -101,8 +117,10 @@ export function renderMarkdown(text) {
     let t = String(text).replace(/[\u0001\u0002]/g, "");
     // Fenced code blocks (```lang\n...```) first — their content is opaque.
     t = t.replace(/```(\w*)\r?\n?([\s\S]*?)(?:```|$)/g, (_m, lang, code) => {
-        const language = (lang || detectLanguage(code)).toLowerCase();
-        return push(`<pre class="md-pre language-${escapeHTML(language)}"><code>${highlight(escapeHTML(code.replace(/\n$/, "")))}</code></pre>`);
+        const language = escapeHTML((lang || detectLanguage(code)).toLowerCase());
+        const body = code.replace(/\n$/, "");
+        return push(`<pre class="md-pre language-${language}" data-lang="${language}">${codeGutter(body)}` +
+            `<code>${highlight(escapeHTML(body))}</code>${copyCodeButton()}</pre>`);
     });
     // Inline code spans.
     t = t.replace(/`([^`\n]+)`/g, (_m, code) =>

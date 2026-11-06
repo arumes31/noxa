@@ -37,7 +37,7 @@ export const SETTINGS_CATEGORIES = Object.freeze([
     ] },
     { id: "chat", icon: "chat", rail: "more", keys: [
         "chat_timestamps", "chat_density", "chat_layout", "chat_font_size", "sys_join_leave", "sys_kick",
-        "chat_max_lines", "keywords", "chat_undo_seconds",
+        "chat_max_lines", "keywords", "chat_undo_seconds", "skip_own_delete_confirm",
     ] },
     { id: "notifications", icon: "bell", rail: "more", keys: [
         "play_sounds", "sound_volume", "effects_enabled", "duck_effects_while_speaking", "spoken_messages",
@@ -75,6 +75,8 @@ export const SETTINGS_OUTSIDE_DIALOG = Object.freeze({
     e2ee_verified: "safety-number verification dialog",
     last_read_channels: "chat read markers",
     dismissed_announcement: "announcement banner",
+    emoji_recents: "emoji picker",
+    emoji_favorites: "emoji picker",
     contacts: "contacts list",
     blocked_users: "member context menu",
     muted_conversations: "conversation menu",

@@ -1209,7 +1209,9 @@ function pageChat() {
             row(t("settings.show.kick.system.lines"), checkbox(s.sys_kick !== false, (v) => { s.sys_kick = v; }), "", { key: "sys_kick" })),
         group(t("settings.group.history"), "history",
             row(t("settings.chat.max.lines"), numberInput(s.chat_max_lines, 10, 5000, (v) => { s.chat_max_lines = v; }), "", { key: "chat_max_lines" }),
-            row(t("settings.keywords"), kw, "", { key: "keywords" })),
+            row(t("settings.keywords"), kw, "", { key: "keywords" }),
+            row(t("settings.confirmOwnDelete"), checkbox(!s.skip_own_delete_confirm, (v) => { s.skip_own_delete_confirm = !v; }), "",
+                { key: "skip_own_delete_confirm", help: t("settings.confirmOwnDeleteHelp") })),
     );
 }
 
