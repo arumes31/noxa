@@ -29,3 +29,25 @@ func (s *Server) executeRoleText(ctx context.Context, sess *session, backend Rol
 		return deliverIntegrationCommit(ctx, deliver, result)
 	})
 }
+
+type RoleBroadcastBackend interface {
+	BroadcastIntegrationAlert(context.Context, auth.IntegrationPrincipal, netproto.ServerBroadcast) (netproto.ServerBroadcastResult, error)
+}
+
+func (s *Server) executeRoleBroadcast(ctx context.Context, sess *session, backend RoleIntegrationBackend, cmd command) bool {
+	b, ok := backend.(RoleBroadcastBackend)
+	if !ok {
+		return s.write(sess, errorLine(errInsufficientPermissions, "server broadcast unavailable"))
+	}
+	var request netproto.ServerBroadcast
+	if len(cmd.args) != 1 || len(cmd.positional) != 0 || decodeRoleRequest(cmd.args["data"], &request) != nil || !request.Valid() {
+		return s.write(sess, errorLine(errInvalidParameter, "expected data=<escaped JSON with non-empty text up to 2048 bytes>"))
+	}
+	return s.executeIntegrationJSON(ctx, sess, 10*time.Second, func(ctx context.Context, deliver func(context.Context, any) error) error {
+		result, err := b.BroadcastIntegrationAlert(ctx, sess.principal, request)
+		if err != nil {
+			return err
+		}
+		return deliverIntegrationCommit(ctx, deliver, result)
+	})
+}

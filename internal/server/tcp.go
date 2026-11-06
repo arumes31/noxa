@@ -117,12 +117,13 @@ type Client struct {
 	x25519Key string
 	// Retained only after successful guest proof, for explicit role enrollment.
 	verifiedGuestKey string
-	authSigningKey   string              // bound to the successful authentication attempt
-	deviceID         string              // linked device of this session, if registered
-	deviceIndex      *deviceSessionIndex // set by register; keeps the device -> sessions index current
-	webTransport     atomic.Bool         // connected through the mobile web app
-	inputAt          time.Time           // last input a desktop reported (activity)
-	webHidden        bool                // the web app reported it is in the background
+	authSigningKey   string                                      // bound to the successful authentication attempt
+	deviceID         string                                      // linked device of this session, if registered
+	deviceIndex      *deviceSessionIndex                         // set by register; keeps the device -> sessions index current
+	webTransport     atomic.Bool                                 // connected through the mobile web app
+	closeCause       atomic.Pointer[netproto.ControlCloseReason] // first server-side close cause
+	inputAt          time.Time                                   // last input a desktop reported (activity)
+	webHidden        bool                                        // the web app reported it is in the background
 	passkey          *passkeyCeremony
 	dmKeyRecord      string // signed directory record; never used for scope-key sealing
 
@@ -447,8 +448,9 @@ type TCPServer struct {
 	// startedAt feeds the public server-info uptime (313).
 	startedAt time.Time
 
-	stopOnce sync.Once
-	stopCh   chan struct{}
+	stopOnce   sync.Once
+	stopCh     chan struct{}
+	shutdownAt atomic.Int64 // unix nanos of an announced shutdown, 0 if none
 }
 
 type tcpLifecycleState uint8
@@ -699,6 +701,7 @@ func (s *TCPServer) Start(ctx context.Context) error {
 		if len(s.preauth) >= maxPreauthConnections || s.preauthByIP[ip] >= maxPreauthPerIP {
 			s.lifecycleMu.Unlock()
 			_ = conn.Close()
+			s.metricsSink().IncControlDisconnect(controlTransport(conn), string(netproto.ControlClosePreauthRejected))
 			continue
 		}
 		s.preauth[conn] = ip
@@ -790,6 +793,11 @@ func (s *TCPServer) beginShutdown() {
 		startup.cancel()
 	}
 
+	s.mu.RLock()
+	for _, client := range s.clients {
+		client.markCloseCause(netproto.ControlCloseShutdown)
+	}
+	s.mu.RUnlock()
 	close(s.stopCh)
 	go func() {
 		var shutdownErr error
@@ -951,6 +959,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 	s.configMu.RUnlock()
 	authDeadline := time.Now().Add(authTimeout)
 	if err := conn.SetDeadline(authDeadline); err != nil {
+		s.metricsSink().IncControlDisconnect(controlTransport(conn), string(netproto.ControlCloseLocal))
 		return
 	}
 	authCtx, cancelAuth := context.WithDeadline(ctx, authDeadline)
@@ -964,6 +973,23 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		lastActive: time.Now(),
 	}
 	client.webTransport.Store(web)
+	var closeReason netproto.ControlCloseReason
+	defer func() {
+		reason := closeReason
+		recovered := recover()
+		if recovered != nil {
+			reason = netproto.ControlClosePanic
+		} else if cause := client.closeCause.Load(); cause != nil {
+			reason = *cause
+		}
+		if reason == "" {
+			reason = netproto.ControlCloseLocal
+		}
+		s.metricsSink().IncControlDisconnect(controlTransport(conn), string(reason))
+		if recovered != nil {
+			panic(recovered) // serveConn owns panic logging and isolation
+		}
+	}()
 	s.register(client)
 	defer func() {
 		if s.deps != nil && s.deps.Authority != nil {
@@ -1001,8 +1027,10 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 	for {
 		select {
 		case <-ctx.Done():
+			closeReason = netproto.ControlCloseShutdown
 			return
 		case <-s.stopCh:
+			closeReason = netproto.ControlCloseShutdown
 			return
 		default:
 		}
@@ -1013,20 +1041,25 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		}
 		frame, err := netproto.ReadFrameLimit(conn, limit)
 		if err != nil {
+			closeReason = netproto.ControlReadCloseReason(err)
+			if closeReason == netproto.ControlCloseReadTimeout && !authDeadline.IsZero() {
+				closeReason = netproto.ControlCloseAuthTimeout
+			}
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				s.logger.Info("client disconnected",
-					zap.String("reason", string(netproto.ControlReadCloseReason(err))),
+					zap.String("reason", string(closeReason)),
 				)
 				return
 			}
 			s.logger.Warn("read frame error",
-				zap.String("reason", string(netproto.ControlReadCloseReason(err))),
+				zap.String("reason", string(closeReason)),
 			)
 			return
 		}
 
 		client.noteReceived(len(frame.Payload))
 		if !authDeadline.IsZero() && !time.Now().Before(authDeadline) {
+			closeReason = netproto.ControlCloseAuthTimeout
 			return
 		}
 
@@ -1035,6 +1068,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 			requestCtx = authCtx
 		}
 		if err := s.dispatch(requestCtx, client, frame); err != nil {
+			closeReason = dispatchCloseReason(err)
 			s.logger.Warn("dispatch error",
 				zap.String("client_id", client.ID),
 				zap.String("msg_type", netproto.MessageType(frame.Type).String()),
@@ -1346,6 +1380,7 @@ func (s *TCPServer) pingLoop(client *Client, stop <-chan struct{}) {
 			s.configMu.RUnlock()
 			last := client.lastActivity()
 			if idle := time.Since(last); timeout > 0 && !last.IsZero() && idle > time.Duration(timeout)*time.Second {
+				client.markCloseCause(netproto.ControlCloseServerInactivity)
 				s.logger.Info("control connection closed",
 					zap.String("reason", string(netproto.ControlCloseServerInactivity)),
 					zap.Int64("idle_ms", idle.Milliseconds()),
@@ -1454,6 +1489,30 @@ func (s *TCPServer) onDisconnect(client *Client) {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+// dispatchCloseReason separates a failed reply write from a request the
+// server refused to process.
+func dispatchCloseReason(err error) netproto.ControlCloseReason {
+	var networkError net.Error
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.As(err, &networkError) {
+		return netproto.ControlWriteCloseReason(err)
+	}
+	return netproto.ControlCloseProtocolError
+}
+
+// markCloseCause records why the server is closing this connection. The
+// first cause wins, so a later generic close cannot overwrite a specific one.
+func (c *Client) markCloseCause(reason netproto.ControlCloseReason) {
+	c.closeCause.CompareAndSwap(nil, &reason)
+}
+
+// controlTransport is the bounded metric label for a control connection.
+func controlTransport(conn net.Conn) string {
+	if _, web := conn.(webTransportConn); web {
+		return "ws"
+	}
+	return "tcp"
+}
 
 // metricsSink returns the configured metrics sink, or a no-op when none is
 // wired.

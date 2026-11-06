@@ -14,7 +14,8 @@ import { PresenceWatch, isBlocked } from "./core/social.js";
 import { EVENT_SOUNDS, SoundEngine } from "./core/sounds.js";
 import { audioContext } from "./core/voice-audio.js";
 import { lang, t } from "./i18n.js";
-import { h, refreshAvatars, setAvatarSource } from "./ui/dom.js";
+import { shutdownNotice } from "./shutdown-notice.js";
+import { h, refreshAvatars, setAvatarSource, toast } from "./ui/dom.js";
 import "./ui/social-strings.js";
 import "./ui/social.css";
 
@@ -144,6 +145,7 @@ class Notifier {
         session.addEventListener("poke", event => this.#poke(event.detail));
         session.addEventListener("whisper", event => this.#whisper(event.detail));
         session.addEventListener("kicked", event => this.#kicked(event.detail));
+        session.addEventListener("broadcast", event => toast(event.detail.text, "warn"));
         session.addEventListener("snapshot", () => this.#presence());
         session.addEventListener("server-event", event => this.#serverEvent(event.detail));
         if (session.snapshot) this.#presence();
@@ -176,6 +178,10 @@ class Notifier {
 
     #serverEvent({ type, data }) {
         const session = this.session;
+        if (type === "server_shutdown_scheduled" || type === "server_shutdown") {
+            toast(shutdownNotice(type, data), "warn");
+            return;
+        }
         if (type === "avatar_changed" && data.unique_id) {
             session?.forgetAvatar(data.unique_id);
             refreshAvatars(data.unique_id);

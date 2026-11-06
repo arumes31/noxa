@@ -311,8 +311,24 @@ func resetChatKeys(ctx context.Context, dbStore *store.Store, logger *zap.Logger
 }
 
 func run() (retErr error) {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Services run on ctx. A signal cancels it, after the optional shutdown
+	// grace hook (installed once serving) has announced and waited.
+	ctx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	var beforeStop atomic.Pointer[func()]
+	go func() {
+		select {
+		case <-signalCtx.Done():
+		case <-ctx.Done():
+			return
+		}
+		if hook := beforeStop.Load(); hook != nil {
+			(*hook)()
+		}
+		cancelRun()
+	}()
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -874,6 +890,11 @@ func run() (retErr error) {
 	qBackend := &queryBackend{tcp: tcpServer}
 	queryServer := query.New(cfg.QueryAddr, logger, qBackend)
 	queryServer.SetLoginLimiter(loginLimiter)
+	queryAllowed, err := config.ParseQueryAllowedCIDRs(cfg.QueryAllowedCIDRs)
+	if err != nil {
+		return err
+	}
+	queryServer.AllowedPrefixes = queryAllowed
 	queryServer.SetMetrics(m)
 	// (231) the event stream for bots, on the health listener next to
 	// /metrics. Integration roles govern the filtered stream.
@@ -935,6 +956,20 @@ func run() (retErr error) {
 		startService(serviceExits, "web listener", webServer.Start)
 	}
 	servingReady.Store(true)
+	if grace := cfg.ShutdownGracePeriod; grace > 0 {
+		hook := func() {
+			// Readiness drops first so load balancers stop sending new clients.
+			servingReady.Store(false)
+			skip := make(chan os.Signal, 1)
+			signal.Notify(skip, os.Interrupt, syscall.SIGTERM)
+			defer signal.Stop(skip)
+			logger.Info("shutdown grace period started; signal again to stop now", zap.Duration("grace", grace))
+			if skipped := runShutdownGrace(grace, tcpServer.AnnounceShutdown, skip); skipped {
+				logger.Info("second shutdown signal: skipping the remaining grace period")
+			}
+		}
+		beforeStop.Store(&hook)
+	}
 	logger.Info("noxa server running, waiting for shutdown signal")
 	var runErr error
 	select {
@@ -943,6 +978,7 @@ func run() (retErr error) {
 	case exit := <-serviceExits:
 		runErr = unexpectedServiceExit(exit)
 	}
+	beforeStop.Store(nil)
 	servingReady.Store(false)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
@@ -1062,4 +1098,39 @@ func registerEventBusMetrics(reg *prometheus.Registry, bus *eventbus.Bus, logger
 // queryBackend exposes the server's role-scoped integration operations.
 type queryBackend struct {
 	tcp *server.TCPServer
+}
+
+// shutdownReminders are the remaining times at which a running grace period
+// repeats its announcement, so clients that connected late still see it.
+var shutdownReminders = []time.Duration{5 * time.Minute, time.Minute, 30 * time.Second, 10 * time.Second}
+
+// runShutdownGrace announces the shutdown, repeats it at each reminder that
+// falls inside grace, and returns when grace elapses (false) or skip
+// receives (true).
+func runShutdownGrace(grace time.Duration, announce func(time.Duration), skip <-chan os.Signal) bool {
+	deadline := time.Now().Add(grace)
+	// Announcing fans out to every client; it must never delay the deadline
+	// or a second signal.
+	go announce(grace)
+	for _, remaining := range shutdownReminders {
+		if remaining >= grace {
+			continue
+		}
+		timer := time.NewTimer(time.Until(deadline.Add(-remaining)))
+		select {
+		case <-timer.C:
+			go announce(time.Until(deadline))
+		case <-skip:
+			timer.Stop()
+			return true
+		}
+	}
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return false
+	case <-skip:
+		return true
+	}
 }

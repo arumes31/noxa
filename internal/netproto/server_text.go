@@ -32,3 +32,22 @@ type ServerTextResult struct {
 	Key         string `json:"key"`
 	ContentHash string `json:"content_hash"`
 }
+
+// MaxServerBroadcastBytes bounds a one-time administrative alert.
+const MaxServerBroadcastBytes = 2048
+
+// ServerBroadcast is a one-time alert to every connected member. Unlike the
+// stored announcement it is not persisted or replayed on login.
+type ServerBroadcast struct {
+	Text string `json:"text"`
+}
+
+func (b ServerBroadcast) Valid() bool {
+	return strings.TrimSpace(b.Text) != "" && len(b.Text) <= MaxServerBroadcastBytes &&
+		utf8.ValidString(b.Text) && !strings.ContainsRune(b.Text, '\x00')
+}
+
+// ServerBroadcastResult confirms a sent alert without echoing its content.
+type ServerBroadcastResult struct {
+	ContentHash string `json:"content_hash"`
+}

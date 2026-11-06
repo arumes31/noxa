@@ -23,12 +23,33 @@ const (
 	ControlCloseProtocolError       ControlCloseReason = "protocol_error"
 	ControlClosePanic               ControlCloseReason = "panic"
 	ControlCloseServerInactivity    ControlCloseReason = "server_inactivity"
+	ControlCloseAuthTimeout         ControlCloseReason = "auth_timeout"
+	ControlCloseFrameTooLarge       ControlCloseReason = "frame_too_large"
+	ControlClosePreauthRejected     ControlCloseReason = "preauth_rejected"
+	ControlCloseShutdown            ControlCloseReason = "shutdown"
+	ControlCloseKicked              ControlCloseReason = "kicked"
 )
+
+// ControlCloseReasons lists every reason, for bounded metric labels.
+var ControlCloseReasons = []ControlCloseReason{
+	ControlCloseEOF, ControlCloseUnexpectedEOF, ControlCloseLocal,
+	ControlCloseReadTimeout, ControlCloseReadError, ControlCloseWriteTimeout,
+	ControlCloseWriteError, ControlCloseRequestTimeout, ControlCloseRequestDrainTimeout,
+	ControlCloseProtocolError, ControlClosePanic, ControlCloseServerInactivity,
+	ControlCloseAuthTimeout, ControlCloseFrameTooLarge, ControlClosePreauthRejected,
+	ControlCloseShutdown, ControlCloseKicked,
+}
 
 // ControlReadCloseReason classifies a failed framed read without formatting err.
 func ControlReadCloseReason(err error) ControlCloseReason {
 	if errors.Is(err, net.ErrClosed) {
 		return ControlCloseLocal
+	}
+	if errors.Is(err, ErrFrameTooLarge) {
+		return ControlCloseFrameTooLarge
+	}
+	if errors.Is(err, ErrInvalidFrameLength) {
+		return ControlCloseProtocolError
 	}
 	if errors.Is(err, io.EOF) {
 		return ControlCloseEOF
