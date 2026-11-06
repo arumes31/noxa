@@ -259,3 +259,20 @@ test("attachment previews load only for rendered rows and keep their expanded st
     await expect(page.locator('#chat-log .msg[data-msg-id="590"] .msg-text-more')).toHaveCount(0);
     expect(await page.evaluate(() => window.__virtual.downloads)).toEqual(["late.vcx", "early.vcx"]);
 });
+
+test("a jump lands on its row even when measuring the rows around it shifts every estimate", async ({ page }) => {
+    // Rows near the target are far taller than the ones measured first, so
+    // measuring them moves the estimated offset of every row above.
+    const tall = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+    const bodies = {};
+    for (let id = 1300; id <= 1700; id++) bodies[id] = `history ${id}\n${tall}`;
+    await setupHistory(page, { latest: [1, 5000], bodies });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="5000"]')).toBeVisible();
+    for (const id of [1500, 1350, 1680]) {
+        await page.evaluate(id => window.__noxaChat.jumpMessageReference({ kind: "channel", channel_id: 1, message_id: id }), id);
+        await expect(page.locator(`#chat-log .msg[data-msg-id="${id}"]`)).toHaveClass(/flash/);
+        await expect(page.locator(`#chat-log .msg[data-msg-id="${id}"]`)).toBeInViewport();
+        await expect(page.locator(".dlg-overlay")).toHaveCount(0);
+    }
+});

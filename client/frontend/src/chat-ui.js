@@ -3050,15 +3050,17 @@ function firstVisibleRow(log) {
 // renderVirtualWindow renders the rows for the current scroll position. The
 // first visible row keeps its place on screen across the swap, and a log
 // scrolled to the newest message stays there.
-function renderVirtualWindow({ force = false } = {}) {
+function renderVirtualWindow({ force = false, target = null } = {}) {
     const v = virtual;
     const log = $("chat-log");
     if (!v || !v.top.isConnected || v.key !== activeKey()) return;
     measureVirtualRows();
-    const anchor = firstVisibleRow(log);
+    // target ({ key, offset }) is a row that must end up rendered at that
+    // offset (a jump). Otherwise the first visible row keeps its place.
+    const anchor = target || firstVisibleRow(log);
     // Rendering measures the new rows, which corrects the offsets the window
     // was chosen from; a second pass renders the rows those offsets name.
-    for (let pass = 0; pass < 3; pass++) {
+    for (let pass = 0; pass < 4; pass++) {
         const listTop = contentTop(log, v.top);
         // At the bottom the window ends at the last row, whatever a stale
         // scrollTop from a taller estimate says.
@@ -3098,6 +3100,11 @@ function renderVirtualWindow({ force = false } = {}) {
         else if (anchor) {
             const row = log.querySelector(`[data-scroll-key="${CSS.escape(anchor.key)}"]`);
             if (row) log.scrollTop += row.getBoundingClientRect().top - log.getBoundingClientRect().top - anchor.offset;
+            // Measuring the new rows changes the estimate for every unmeasured
+            // row above, which can move a jump target out of the window it
+            // was rendered for: place it again from the corrected offsets and
+            // let the next pass render around it.
+            else if (target && v.index.has(target.key)) log.scrollTop = contentTop(log, v.top) + v.prefix[v.index.get(target.key)] - target.offset;
         }
     }
 }
@@ -3128,7 +3135,7 @@ function placeVirtualAt(key, offset) {
     const log = $("chat-log");
     log.scrollTop = contentTop(log, v.top) + v.prefix[i] - offset;
     atBottom = false;
-    renderVirtualWindow({ force: true });
+    renderVirtualWindow({ force: true, target: { key, offset } });
     const row = log.querySelector(`[data-scroll-key="${CSS.escape(key)}"]`);
     if (row) log.scrollTop += row.getBoundingClientRect().top - log.getBoundingClientRect().top - offset;
     return !!row;
