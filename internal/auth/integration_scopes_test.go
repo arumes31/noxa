@@ -19,8 +19,12 @@ func TestNormalizeIntegrationScopes(t *testing.T) {
 			t.Fatalf("%v accepted: %v", bad, err)
 		}
 	}
-	if len(IntegrationScopes) != len(slices.Compact(slices.Clone(IntegrationScopes))) {
-		t.Fatal("duplicate scope constant")
+	seen := map[string]bool{}
+	for _, scope := range IntegrationScopes {
+		if seen[scope] {
+			t.Fatalf("duplicate scope constant %q", scope)
+		}
+		seen[scope] = true
 	}
 }
 

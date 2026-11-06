@@ -24,6 +24,8 @@ type IntegrationPrincipal struct {
 	// scoped is false for an account without a scope ceiling (807).
 	scoped bool
 	scopes []string
+	// scopeRevision is the users.integration_scope_revision at sign-in.
+	scopeRevision int64
 }
 
 func (p IntegrationPrincipal) UserID() int64    { return p.userID }
@@ -45,7 +47,7 @@ func (a *AuthService) AuthenticateIntegration(ctx context.Context, identifier, p
 		return IntegrationPrincipal{}, ErrIntegrationDenied
 	}
 	p := IntegrationPrincipal{issuer: a, userID: u.ID, uniqueID: u.UniqueID, remoteIP: ip.Unmap().String()}
-	if p.scopes, p.scoped, err = a.loadIntegrationScopes(ctx, u.ID); err != nil {
+	if p.scopes, p.scoped, p.scopeRevision, err = a.loadIntegrationScopes(ctx, u.ID); err != nil {
 		return IntegrationPrincipal{}, err
 	}
 	if err := a.ValidateIntegration(ctx, p); err != nil {
@@ -55,8 +57,9 @@ func (a *AuthService) AuthenticateIntegration(ctx context.Context, identifier, p
 }
 
 // ValidateIntegration rechecks the account, its scope ceiling and server-wide
-// bans in one database snapshot. A ceiling changed since sign-in denies, so the
-// integration must authenticate again under the new scopes. Call inside the operation's authority lease, before its bounded
+// bans in one database snapshot. Any ceiling change since sign-in denies (the
+// revision only grows, so restoring an earlier ceiling does not revalidate an
+// old principal); the integration must authenticate again. Call inside the operation's authority lease, before its bounded
 // effect. Offline eligibility changes require a stopped serving process; live
 // bans must serialize with the protected operation.
 func (a *AuthService) ValidateIntegration(ctx context.Context, p IntegrationPrincipal) error {
@@ -66,7 +69,7 @@ func (a *AuthService) ValidateIntegration(ctx context.Context, p IntegrationPrin
 	const q = `SELECT EXISTS (
 		SELECT 1 FROM users u
 		WHERE u.id = $1 AND u.unique_id = $2 AND u.integration_enabled
-		AND u.integration_scopes IS NOT DISTINCT FROM $3::text[]
+		AND u.integration_scope_revision = $3
 		AND NOT EXISTS (
 			SELECT 1 FROM bans b WHERE b.channel_id IS NULL
 			AND b.ban_type = 1 AND b.value = $2
@@ -76,11 +79,7 @@ func (a *AuthService) ValidateIntegration(ctx context.Context, p IntegrationPrin
 		AND (expires_at IS NULL OR expires_at > NOW()))`
 	var eligible bool
 	var bannedIPs pq.StringArray
-	var scopes any // NULL for an unscoped principal
-	if p.scoped {
-		scopes = pq.StringArray(append([]string{}, p.scopes...))
-	}
-	if err := a.store.DB().QueryRowContext(ctx, q, p.userID, p.uniqueID, scopes).Scan(&eligible, &bannedIPs); err != nil {
+	if err := a.store.DB().QueryRowContext(ctx, q, p.userID, p.uniqueID, p.scopeRevision).Scan(&eligible, &bannedIPs); err != nil {
 		return fmt.Errorf("validating integration identity: %w", err)
 	}
 	if !eligible {

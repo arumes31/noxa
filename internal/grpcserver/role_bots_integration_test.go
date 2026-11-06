@@ -116,12 +116,14 @@ func TestRoleGRPCIntegrationScopesAndBulkDelete(t *testing.T) {
 	if _, err := bulk(ownerCtx(), 1, 1); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("duplicate ids accepted: %v", err)
 	}
-	var audits int
-	if err := db.DB().QueryRowContext(t.Context(), "SELECT COUNT(*) FROM audit_log WHERE action IN ('integration_scopes','message_bulk_delete')").Scan(&audits); err != nil {
-		t.Fatal(err)
-	}
-	if audits < 2 {
-		t.Fatalf("scope changes were not audited (%d rows)", audits)
+	for _, action := range []string{"integration_scopes", "message_bulk_delete"} {
+		var audits int
+		if err := db.DB().QueryRowContext(t.Context(), "SELECT COUNT(*) FROM audit_log WHERE action = $1", action).Scan(&audits); err != nil {
+			t.Fatal(err)
+		}
+		if audits == 0 {
+			t.Fatalf("no %s audit row", action)
+		}
 	}
 
 	// An empty ceiling allows nothing, even what the roles allow.

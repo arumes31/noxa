@@ -193,3 +193,38 @@ func TestCheckServer(t *testing.T) {
 		t.Fatalf("E2EE server accepted: %v", err)
 	}
 }
+
+type stallingWriter struct {
+	recorder
+	stallAt int
+}
+
+func (w *stallingWriter) WriteRTP(p *rtp.Packet) error {
+	if len(w.packets) == w.stallAt {
+		time.Sleep(250 * time.Millisecond)
+	}
+	return w.recorder.WriteRTP(p)
+}
+
+func TestStreamDoesNotBurstAfterAStall(t *testing.T) {
+	src := packets{}
+	for i := 0; i < 5; i++ {
+		src = append(src, Packet{Data: []byte{byte(i)}, Samples: 960})
+	}
+	w := stallingWriter{stallAt: 1}
+	if err := Stream(t.Context(), &src, &w, 0, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.at) != 5 {
+		t.Fatalf("wrote %d packets", len(w.at))
+	}
+	// The packet that waited out the stall goes at once; pacing then resumes.
+	for i := 3; i < 5; i++ {
+		if gap := w.at[i].Sub(w.at[i-1]); gap < 12*time.Millisecond {
+			t.Fatalf("packet %d followed after %v: backlog was burst", i, gap)
+		}
+	}
+	if w.packets[4].Timestamp != 4*960 {
+		t.Fatalf("RTP timestamp = %d", w.packets[4].Timestamp)
+	}
+}

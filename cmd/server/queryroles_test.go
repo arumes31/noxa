@@ -20,6 +20,7 @@ func TestQueryBackendExposesOnlyRoleIntegrationMethods(t *testing.T) {
 func TestQueryBackendImplementsEveryRoleFeature(t *testing.T) {
 	var (
 		_ query.RoleAuditBackend            = (*queryBackend)(nil)
+		_ query.RoleBotBackend              = (*queryBackend)(nil)
 		_ query.RoleBanInspectionBackend    = (*queryBackend)(nil)
 		_ query.RoleChannelBackend          = (*queryBackend)(nil)
 		_ query.RoleComplaintBackend        = (*queryBackend)(nil)

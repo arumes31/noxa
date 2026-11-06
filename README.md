@@ -1157,7 +1157,8 @@ account keeps its current access. Scopes: `server:read`, `server:manage`,
 `members:move`, `members:kick`, `members:ban`, `devices:manage`, `audit:read`,
 `complaints:manage`, `events:read` (gRPC `Events.Subscribe` and the event
 WebSocket) and `messages:manage`. Every ServerQuery command and gRPC method maps
-to one scope (an empty ceiling allows nothing). Set them with
+to one scope (an empty ceiling allows nothing); signing in (`login`, gRPC
+`Authenticate`) needs none. Set them with
 `adduser -integration -integration-scopes messages:manage,events:read`, the
 `integrationscopesset` command or the gRPC `SetIntegrationScopes` RPC. A scoped
 caller can only hand out scopes it holds and cannot clear a ceiling. A change

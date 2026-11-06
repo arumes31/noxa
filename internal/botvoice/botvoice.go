@@ -85,7 +85,11 @@ func NewOggOpusReader(r io.Reader) (*OggOpusReader, error) {
 	return o, nil
 }
 
-// PreSkip is the number of decoder samples to discard at the start.
+// PreSkip is the number of decoder samples the file asks to discard at the
+// start (encoder priming, typically 312 samples or 6.5 ms). Compressed Opus
+// cannot be trimmed without decoding and re-encoding, and RTP has no field
+// for it, so Stream sends those samples: listeners hear a few milliseconds of
+// near-silent priming before the audio. Encode with ffmpeg/opusenc as usual.
 func (o *OggOpusReader) PreSkip() uint32 { return o.preSkip }
 
 // Next returns the next audio packet, or io.EOF at the end of the stream.
@@ -217,8 +221,14 @@ type RTPWriter interface {
 	WriteRTP(*rtp.Packet) error
 }
 
+// maxPacingLag is how far behind schedule Stream may fall before it restarts
+// the schedule instead of sending the backlog as a burst.
+const maxPacingLag = 100 * time.Millisecond
+
 // Stream writes every packet of src to w as RTP, paced in real time from the
-// first packet. sequence, timestamp and ssrc are the starting identifiers
+// first packet. After a stall longer than maxPacingLag (a slow source or
+// writer) the schedule restarts from now, so late audio is not burst out; the
+// RTP timestamps still advance by the packets' durations. sequence, timestamp and ssrc are the starting identifiers
 // (pick them at random). It returns nil at the end of src, or the first
 // error, including ctx's.
 func Stream(ctx context.Context, src PacketSource, w RTPWriter, sequence uint16, timestamp, ssrc uint32) error {
@@ -236,6 +246,10 @@ func Stream(ctx context.Context, src PacketSource, w RTPWriter, sequence uint16,
 			return err
 		}
 		due := start.Add(time.Duration(elapsed) * time.Second / SampleRate)
+		if lag := -time.Until(due); lag > maxPacingLag {
+			start = time.Now().Add(-time.Duration(elapsed) * time.Second / SampleRate)
+			due = time.Now()
+		}
 		if wait := time.Until(due); wait > 0 {
 			timer.Reset(wait)
 			select {

@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lib/pq"
 	"go.uber.org/zap"
 
 	"noxa/internal/auth"
@@ -142,13 +143,14 @@ func run(
 	}
 
 	if integration {
-		if _, err := dbStore.DB().ExecContext(ctx, `UPDATE users SET integration_enabled = TRUE WHERE unique_id = $1`, uniqueID); err != nil {
-			return fmt.Errorf("enabling integration identity: %w", err)
-		}
+		// Enablement and the scope ceiling are one statement: an account can
+		// never become an integration without the ceiling it was given.
+		var ceiling any // NULL: no ceiling
 		if scopes != nil {
-			if _, err := authSvc.SetIntegrationScopes(ctx, uniqueID, false, scopes); err != nil {
-				return fmt.Errorf("storing integration scopes: %w", err)
-			}
+			ceiling = pq.StringArray(scopes)
+		}
+		if _, err := dbStore.DB().ExecContext(ctx, `UPDATE users SET integration_enabled = TRUE, integration_scopes = $2 WHERE unique_id = $1`, uniqueID, ceiling); err != nil {
+			return fmt.Errorf("enabling integration identity: %w", err)
 		}
 	}
 	if err := lease.Check(ctx); err != nil {

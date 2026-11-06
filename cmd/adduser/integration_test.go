@@ -51,4 +51,21 @@ func TestProvisionIntegrationIdentity(t *testing.T) {
 			read()
 		})
 	}
+	t.Run("scoped", func(t *testing.T) {
+		nickname := fmt.Sprintf("provision-scoped-%d", time.Now().UnixNano())
+		t.Cleanup(func() {
+			_, _ = db.DB().ExecContext(context.Background(), "DELETE FROM users WHERE nickname = $1", nickname)
+		})
+		if err := run(t.Context(), nickname, "integration-password", true, true, []string{auth.ScopeEventsRead}, dsn, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		var enabled bool
+		var scopes string
+		if err := db.DB().QueryRowContext(t.Context(), "SELECT integration_enabled, COALESCE(array_to_string(integration_scopes, ','), '<null>') FROM users WHERE nickname = $1", nickname).Scan(&enabled, &scopes); err != nil {
+			t.Fatal(err)
+		}
+		if !enabled || scopes != auth.ScopeEventsRead {
+			t.Fatalf("provisioned integration=%v scopes=%q", enabled, scopes)
+		}
+	})
 }

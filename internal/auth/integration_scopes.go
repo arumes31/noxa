@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -77,15 +78,16 @@ func (p IntegrationPrincipal) Scopes() ([]string, bool) {
 	return slices.Clone(p.scopes), p.scoped
 }
 
-// loadIntegrationScopes reads the stored ceiling. scoped is false for NULL.
-func (a *AuthService) loadIntegrationScopes(ctx context.Context, userID int64) (scopes []string, scoped bool, err error) {
+// loadIntegrationScopes reads the stored ceiling and its revision. scoped is
+// false for NULL.
+func (a *AuthService) loadIntegrationScopes(ctx context.Context, userID int64) (scopes []string, scoped bool, revision int64, err error) {
 	var list pq.StringArray
-	const q = `SELECT integration_scopes IS NOT NULL, COALESCE(integration_scopes, '{}') FROM users WHERE id = $1`
-	if err := a.store.DB().QueryRowContext(ctx, q, userID).Scan(&scoped, &list); err != nil {
-		return nil, false, fmt.Errorf("reading integration scopes: %w", err)
+	const q = `SELECT integration_scopes IS NOT NULL, COALESCE(integration_scopes, '{}'), integration_scope_revision FROM users WHERE id = $1`
+	if err := a.store.DB().QueryRowContext(ctx, q, userID).Scan(&scoped, &list, &revision); err != nil {
+		return nil, false, 0, fmt.Errorf("reading integration scopes: %w", err)
 	}
 	if !scoped {
-		return nil, false, nil
+		return nil, false, revision, nil
 	}
 	// Stored values pass through normalization, so an unknown historical
 	// value narrows instead of widening.
@@ -95,7 +97,7 @@ func (a *AuthService) loadIntegrationScopes(ctx context.Context, userID int64) (
 			known = append(known, scope)
 		}
 	}
-	return known, true, nil
+	return known, true, revision, nil
 }
 
 // IntegrationScopeState is an integration account's current ceiling.
@@ -110,9 +112,12 @@ func (a *AuthService) GetIntegrationScopes(ctx context.Context, uniqueID string)
 	var id int64
 	const q = `SELECT id FROM users WHERE unique_id = $1 AND integration_enabled`
 	if err := a.store.DB().QueryRowContext(ctx, q, uniqueID).Scan(&id); err != nil {
-		return IntegrationScopeState{}, ErrIntegrationNotFound
+		if errors.Is(err, sql.ErrNoRows) {
+			return IntegrationScopeState{}, ErrIntegrationNotFound
+		}
+		return IntegrationScopeState{}, fmt.Errorf("finding integration account: %w", err)
 	}
-	scopes, scoped, err := a.loadIntegrationScopes(ctx, id)
+	scopes, scoped, _, err := a.loadIntegrationScopes(ctx, id)
 	if err != nil {
 		return IntegrationScopeState{}, err
 	}
@@ -121,7 +126,8 @@ func (a *AuthService) GetIntegrationScopes(ctx context.Context, uniqueID string)
 
 // SetIntegrationScopes stores a ceiling (full=true clears it). Active
 // integration sessions of the account fail their next validation and must
-// sign in again, so a narrowed ceiling applies at once.
+// sign in again, so a narrowed ceiling applies at once. Every call increments
+// the account's scope revision, even when the list is unchanged.
 func (a *AuthService) SetIntegrationScopes(ctx context.Context, uniqueID string, full bool, scopes []string) (IntegrationScopeState, error) {
 	var value any
 	if !full {
@@ -134,7 +140,8 @@ func (a *AuthService) SetIntegrationScopes(ctx context.Context, uniqueID string,
 	} else {
 		scopes = nil
 	}
-	const q = `UPDATE users SET integration_scopes = $2 WHERE unique_id = $1 AND integration_enabled`
+	const q = `UPDATE users SET integration_scopes = $2, integration_scope_revision = integration_scope_revision + 1
+		WHERE unique_id = $1 AND integration_enabled`
 	res, err := a.store.DB().ExecContext(ctx, q, uniqueID, value)
 	if err != nil {
 		return IntegrationScopeState{}, fmt.Errorf("storing integration scopes: %w", err)

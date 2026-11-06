@@ -173,6 +173,16 @@ func TestIntegrationScopeCeiling(t *testing.T) {
 	if err := svc.ValidateIntegration(ctx, scopedPrincipal); err != nil {
 		t.Fatal(err)
 	}
+	// Restoring the same list is still a change: the older principal stays out.
+	if _, err := svc.SetIntegrationScopes(ctx, uid, false, []string{ScopeServerRead, ScopeMessagesManage}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ValidateIntegration(ctx, scopedPrincipal); !errors.Is(err, ErrIntegrationDenied) {
+		t.Fatalf("an earlier principal revalidated after the ceiling was restored: %v", err)
+	}
+	if scopedPrincipal, err = svc.AuthenticateIntegration(ctx, uid, password, ip); err != nil {
+		t.Fatal(err)
+	}
 	read, err := svc.GetIntegrationScopes(ctx, uid)
 	if err != nil || read.Full || len(read.Scopes) != 2 {
 		t.Fatalf("get = %+v, %v", read, err)
