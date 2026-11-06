@@ -207,11 +207,11 @@ type connManager struct {
 
 	// The defaults keep an idle connected control channel alive while making a
 	// peer that stops responding fail in bounded time. Tests may shorten them.
-	heartbeatInterval   time.Duration
-	probeUntil          time.Time // pending liveness probe; any frame clears it
+	heartbeatInterval time.Duration
+	probeUntil        time.Time // pending liveness probe; any frame clears it
 	// deadlineMu serializes computing and applying the read deadline between
 	// the read loop and a liveness probe. Lock it before mu, never inside.
-	deadlineMu sync.Mutex
+	deadlineMu          sync.Mutex
 	readTimeout         time.Duration
 	writeTimeout        time.Duration
 	requestDrainTimeout time.Duration
