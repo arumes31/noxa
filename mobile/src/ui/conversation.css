@@ -34,6 +34,12 @@
 
 /* Safety number and calls. */
 .safety { display: flex; flex-direction: column; gap: 6px; }
+/* (205) safety-code QR and scan result */
+.safety-qr { margin: 6px 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.safety-qr .qr-image { width: min(220px, 70vw); height: auto; border-radius: 8px; }
+.safety-qr figcaption { text-align: center; }
+.safety-scan-result { margin: 0; }
+.safety-scan-result.ok { color: var(--accent); }
 .safety .section-label { margin: 10px 0 2px; display: block; }
 .safety-number { margin: 0; font-size: 1.1rem; letter-spacing: .08em; color: var(--text); overflow-wrap: anywhere; }
 .call-history { display: flex; flex-direction: column; gap: 10px; }

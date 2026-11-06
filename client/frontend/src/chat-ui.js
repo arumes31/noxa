@@ -1,4 +1,6 @@
 import { joinChannelLocally } from "./local-join-intent.js";
+import { SafetyScan, SafetyScheme, checkSafetyScan } from "./safety-qr.js";
+import { scanQR } from "./qr-scan.js";
 import { AUDIO_MIME, TEXT_MAX_B64, decodeTextPreview, previewKind } from "./attachment-preview.js";
 import { clipboardFiles, preparePastedFiles } from "./paste-images.js";
 import { mountComposerFormat } from "./composer-format.js";
@@ -2188,11 +2190,17 @@ async function openE2EEDiagnostics() {
             <dt>${t("chat.pendingHandshakes")}</dt><dd>${d.pending_key_pulls || 0}</dd>
         </dl>
         ${peer ? `<label>${t("chat.safetyNumber")}</label><pre class="safety-number">${escapeHTML(d.safety_number || t("chat.keyUnavailable"))}</pre>` : ""}
-        <div class="dlg-buttons">${peer && d.safety_number ? `<button class="dlg-ok verify-safety">${t("chat.markVerified")}</button>` : ""}<button class="dlg-cancel">${t("chat.close")}</button></div>
+        ${peer && d.safety_qr ? `<figure class="safety-qr"><img class="safety-qr-image" alt="${escapeHTML(t("chat.safetyQrAlt"))}" /><figcaption>${escapeHTML(t("chat.safetyQrHint"))}</figcaption></figure>
+        <p class="safety-scan-result" role="status" hidden></p>` : ""}
+        <div class="dlg-buttons">${peer && d.safety_qr && d.safety_digest && d.own_unique_id ? `<button class="dlg-btn scan-safety">${t("chat.safetyScan")}</button>` : ""}${peer && d.safety_number ? `<button class="dlg-ok verify-safety">${t("chat.markVerified")}</button>` : ""}<button class="dlg-cancel">${t("chat.close")}</button></div>
     </div>`;
+    // A data URL from the native layer; set as a property, never as markup.
+    const qrImage = overlay.querySelector(".safety-qr-image");
+    if (qrImage && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(d.safety_qr)) qrImage.src = d.safety_qr;
+    else overlay.querySelector(".safety-qr")?.remove();
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    overlay.querySelector(".verify-safety")?.addEventListener("click", async () => {
+    const markVerified = async () => {
         const settings = V().state.settings;
         const previous = settings.e2ee_verified;
         settings.e2ee_verified = { ...(previous || {}), [peer]: d.safety_number };
@@ -2208,6 +2216,38 @@ async function openE2EEDiagnostics() {
         if (!isCurrentServerDialog(overlay)) return;
         overlay.remove();
         V().toast(t("chat.safetyVerified"));
+    };
+    overlay.querySelector(".verify-safety")?.addEventListener("click", markVerified);
+    // (205) Scanning the contact's code compares the full digest. Only a
+    // match verifies; a mismatch is reported and never saved.
+    overlay.querySelector(".scan-safety")?.addEventListener("click", async () => {
+        const pair = { scheme: SafetyScheme.pairwise, me: d.own_unique_id, peer, digest: d.safety_digest };
+        const messages = {
+            [SafetyScan.invalid]: t("chat.safetyScanInvalid"),
+            [SafetyScan.wrongPair]: t("chat.safetyScanWrongPair"),
+            [SafetyScan.otherScheme]: t("chat.safetyScanOtherScheme"),
+        };
+        const verdict = await scanQR({
+            labels: { title: t("chat.safetyScanTitle"), hint: t("chat.safetyScanHint"), cancel: t("chat.close"), unavailable: t("chat.safetyScanUnavailable") },
+            // Closes with the server's dialogs, e.g. when the connection drops.
+            mount: mountServerDialog,
+            accept: text => {
+                const result = checkSafetyScan(text, pair);
+                return result === SafetyScan.match || result === SafetyScan.mismatch ? { done: true, value: result } : { message: messages[result] };
+            },
+        });
+        if (!verdict || !isCurrentServerDialog(overlay)) return;
+        const result = overlay.querySelector(".safety-scan-result");
+        if (verdict === SafetyScan.match) {
+            await markVerified();
+            return;
+        }
+        if (result) {
+            result.hidden = false;
+            result.className = "safety-scan-result warn";
+            result.textContent = t("chat.safetyScanMismatch");
+        }
+        V().toast(t("chat.safetyScanMismatch"), "warn");
     });
     mountServerDialog(overlay);
 }
