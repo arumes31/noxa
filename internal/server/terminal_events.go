@@ -4,8 +4,29 @@ import (
 	"context"
 	"time"
 
+	"go.uber.org/zap"
+
 	"noxa/internal/netproto"
 )
+
+// eventShutdownScheduled announces an orderly shutdown in Seconds. Older
+// clients ignore unknown events; the final server_shutdown still follows.
+const eventShutdownScheduled = "server_shutdown_scheduled"
+
+type shutdownScheduledEvent struct {
+	Seconds int `json:"seconds"`
+}
+
+// AnnounceShutdown tells every connected session that the server stops in
+// after. It does not change the lifecycle; Shutdown remains the only stop.
+func (s *TCPServer) AnnounceShutdown(after time.Duration) {
+	seconds := int((after + time.Second - 1) / time.Second)
+	if seconds < 1 {
+		return
+	}
+	s.logger.Info("announcing scheduled shutdown", zap.Int("seconds", seconds))
+	s.broadcastEvent(eventShutdownScheduled, shutdownScheduledEvent{Seconds: seconds})
+}
 
 // sendTerminalEvent writes directly before closing a connection. A broadcast
 // queue alone can lose the reason when teardown wins the writer race. Keep

@@ -4506,6 +4506,13 @@ function askExportPassphrase() {
 // ---------------------------------------------------------------------------
 
 export function onAnnouncement(d) {
+    // A transient broadcast is a one-time alert: notify, but keep the stored
+    // announcement banner as it is.
+    if (d.transient) {
+        const alert = d.text || "";
+        if (alert) window.__noxaNotify?.notify("announcement", t("chat.announcement", { message: alert.slice(0, 200) }), { className: "messages", kind: "warn" });
+        return;
+    }
     const box = $("banner-box");
     box.innerHTML = "";
     const text = d.text || "";

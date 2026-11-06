@@ -816,3 +816,77 @@ func TestWarningsTURNSecretOnlyForStaticTURN(t *testing.T) {
 		t.Fatalf("static TURN without a secret not reported: %q", warnings)
 	}
 }
+
+func TestValidateQueryAllowedCIDRs(t *testing.T) {
+	base := loadDefaultConfig(t)
+	valid := [][]string{
+		nil,
+		{"10.0.0.0/8"},
+		{"192.0.2.10/32", "2001:db8::/32"},
+		{" 127.0.0.0/8 ", ""},
+	}
+	for _, entries := range valid {
+		cfg := cloneConfig(base)
+		cfg.QueryAllowedCIDRs = entries
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate(%q) error = %v", entries, err)
+		}
+	}
+	invalid := [][]string{
+		{"10.0.0.1"},           // bare address
+		{"10.0.0.1/8"},         // host bits set
+		{"::ffff:10.0.0.0/104"}, // IPv4-mapped IPv6
+		{"not-a-cidr"},
+	}
+	for _, entries := range invalid {
+		cfg := cloneConfig(base)
+		cfg.QueryAllowedCIDRs = entries
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "query_allowed_cidrs") {
+			t.Errorf("Validate(%q) error = %v, want query_allowed_cidrs rejection", entries, err)
+		}
+	}
+	prefixes, err := ParseQueryAllowedCIDRs([]string{"10.0.0.0/8", "", "2001:db8::/32"})
+	if err != nil || len(prefixes) != 2 {
+		t.Fatalf("ParseQueryAllowedCIDRs = %v, %v; want 2 prefixes", prefixes, err)
+	}
+}
+
+func TestServerOperationsEnvironment(t *testing.T) {
+	v := newConfigViper()
+	v.Set("dev_mode", true)
+	v.SetEnvPrefix("NOXA")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
+	t.Setenv("NOXA_QUERY_ALLOWED_CIDRS", "10.0.0.0/8,2001:db8::/32")
+	t.Setenv("NOXA_SHUTDOWN_GRACE_PERIOD", "45s")
+	cfg, err := decodeConfig(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.QueryAllowedCIDRs) != 2 || cfg.QueryAllowedCIDRs[1] != "2001:db8::/32" {
+		t.Fatalf("query_allowed_cidrs = %q", cfg.QueryAllowedCIDRs)
+	}
+	if cfg.ShutdownGracePeriod != 45*time.Second {
+		t.Fatalf("shutdown_grace_period = %s", cfg.ShutdownGracePeriod)
+	}
+}
+
+func TestValidateShutdownGracePeriod(t *testing.T) {
+	base := loadDefaultConfig(t)
+	if base.ShutdownGracePeriod != 0 {
+		t.Fatalf("default shutdown_grace_period = %s, want 0", base.ShutdownGracePeriod)
+	}
+	for _, grace := range []time.Duration{-time.Second, MaxShutdownGracePeriod + time.Second} {
+		cfg := cloneConfig(base)
+		cfg.ShutdownGracePeriod = grace
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "shutdown_grace_period") {
+			t.Errorf("Validate(grace=%s) error = %v", grace, err)
+		}
+	}
+	cfg := cloneConfig(base)
+	cfg.ShutdownGracePeriod = MaxShutdownGracePeriod
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate(max grace) error = %v", err)
+	}
+}

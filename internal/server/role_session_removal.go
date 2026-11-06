@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 	"noxa/internal/authorization"
 	"noxa/internal/filetransfer"
+	"noxa/internal/netproto"
 	"noxa/internal/state"
 )
 
@@ -95,6 +96,7 @@ func (s *TCPServer) removeRoleSession(ctx context.Context, target *Client, event
 		s.deps.Broadcast.Unregister(target.ID)
 	}
 	s.sendTerminalEventInContext(ctx, target, eventKicked, event)
+	target.markCloseCause(netproto.ControlCloseKicked)
 	_ = target.Conn.Close()
 	s.broadcastEvent(eventKicked, event)
 	if removalErr == nil && event.ChannelID > 0 {

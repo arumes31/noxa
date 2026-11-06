@@ -9019,6 +9019,35 @@ test.describe("per-tab automatic reconnect", () => {
         expect(await page.evaluate(() => window.__callArgs.DisconnectTab.at(-1))).toEqual(["tab-a"]);
     });
 
+    test("scheduled server shutdown shows the remaining time", async ({ page }) => {
+        await page.evaluate(() => {
+            window.__noxa.state.settings.notify_connection = true;
+            const emit = (seconds) => {
+                for (const callback of window.__events.event) {
+                    callback(JSON.stringify({ type: "server_shutdown_scheduled", data: { seconds } }));
+                }
+            };
+            emit(300);
+            emit(30);
+        });
+        await expect(page.locator("#toasts .toast").filter({ hasText: "shuts down in 5 min" })).toHaveCount(1);
+        await expect(page.locator("#toasts .toast").filter({ hasText: "shuts down in 30 s" })).toHaveCount(1);
+        // The countdown is informational: the session stays connected.
+        await expect(page.locator("#reconnect-cancel")).toBeHidden();
+    });
+
+    test("a transient broadcast leaves the stored announcement banner unchanged", async ({ page }) => {
+        const emit = (data) => page.evaluate((payload) => {
+            for (const callback of window.__events.event) callback(JSON.stringify({ type: "announcement", data: payload }));
+        }, data);
+        await emit({ text: "Maintenance tonight" });
+        await expect(page.locator("#banner-box .announce-banner")).toContainText("Maintenance tonight");
+        await emit({ text: "Restart in 5 minutes", transient: true });
+        await expect(page.locator("#banner-box .announce-banner")).toHaveCount(1);
+        await expect(page.locator("#banner-box .announce-banner")).toContainText("Maintenance tonight");
+        await expect(page.locator("#banner-box")).not.toContainText("Restart in 5 minutes");
+    });
+
     test("reconnect controls remain actionable in German", async ({ page }, testInfo) => {
         await page.evaluate(() => {
             window.__noxa.state.settings.language = "de";

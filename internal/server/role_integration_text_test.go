@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 	"noxa/internal/auth"
 	"noxa/internal/authorization"
+	"noxa/internal/broadcast"
 	"noxa/internal/chatcrypto"
 	"noxa/internal/config"
 	"noxa/internal/netproto"
@@ -156,5 +157,72 @@ func TestIntegrationServerTextAuthorityPersistenceAndEncryption(t *testing.T) {
 	}
 	if err := write(owner, "server_name", "Disabled"); !errors.Is(err, auth.ErrIntegrationDenied) {
 		t.Fatalf("disabled write: %v", err)
+	}
+}
+
+func TestIntegrationServerBroadcastIsSealedTransientAndAudited(t *testing.T) {
+	db := integrationManagementStore(t)
+	a := auth.New(db, zap.NewNop())
+	create := func(name string) auth.IntegrationPrincipal {
+		t.Helper()
+		uid, err := a.RegisterUser(t.Context(), name, "broadcast-password")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.DB().ExecContext(t.Context(), "UPDATE users SET integration_enabled=TRUE WHERE unique_id=$1", uid); err != nil {
+			t.Fatal(err)
+		}
+		p, err := a.AuthenticateIntegration(t.Context(), uid, "broadcast-password", "127.0.0.1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	member, owner := create("broadcast-member"), create("broadcast-owner")
+	backend := serverRoleFixture()
+	backend.policy.OwnerID = owner.UserID()
+	backend.policy.Roles[0].Permissions = nil
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	kek, err := chatcrypto.LoadKEKRing(filepath.Join(t.TempDir(), "kek.ring"), "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateManager := state.New(zap.NewNop())
+	fanout := broadcast.New(zap.NewNop(), stateManager)
+	var events []string
+	fanout.SetEventTap(func(eventType string, payload []byte) { events = append(events, eventType+" "+string(payload)) })
+	deps := &Deps{Auth: a, Authority: authority, Chat: db, Groups: db, ScopeKeys: db, ChatKEK: kek, State: stateManager, Broadcast: fanout}
+	srv := New(&config.Config{}, zap.NewNop(), deps)
+
+	const alert = "Private restart notice"
+	if _, err := srv.BroadcastIntegrationAlert(t.Context(), member, netproto.ServerBroadcast{Text: alert}); !errors.Is(err, authorization.ErrRoleForbidden) {
+		t.Fatalf("member without manage_server: %v", err)
+	}
+	if _, err := srv.BroadcastIntegrationAlert(t.Context(), owner, netproto.ServerBroadcast{Text: "  "}); !errors.Is(err, authorization.ErrRoleInvalid) {
+		t.Fatalf("blank alert: %v", err)
+	}
+	got, err := srv.BroadcastIntegrationAlert(t.Context(), owner, netproto.ServerBroadcast{Text: alert})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ContentHash != fmt.Sprintf("%x", sha256.Sum256([]byte(alert))) {
+		t.Fatalf("acknowledgement: %+v", got)
+	}
+	if len(events) != 1 || !strings.HasPrefix(events[0], "announcement ") || strings.Contains(events[0], alert) ||
+		!strings.Contains(events[0], `"transient":true`) || !strings.Contains(events[0], `"enc":true`) {
+		t.Fatalf("broadcast events = %q, want one sealed transient announcement", events)
+	}
+	if stored, _, err := db.GetServerSetting(t.Context(), "announcement"); err != nil || stored != "" {
+		t.Fatalf("broadcast persisted as the stored announcement: %q %v", stored, err)
+	}
+	entries, err := db.AuditList(t.Context(), 0, 20)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("audit entries: %d %v", len(entries), err)
+	}
+	if row := entries[0]; row.Action != "server_broadcast" || row.Actor != owner.UniqueID() || strings.Contains(row.Detail, alert) {
+		t.Fatalf("audit row: %+v", row)
 	}
 }

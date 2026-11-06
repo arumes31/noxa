@@ -1846,6 +1846,14 @@ window.runtime.EventsOn("event", (json) => {
         case "announcement":
             chatUI.onAnnouncement(d);
             return;
+        case "server_shutdown_scheduled": {
+            const seconds = Math.max(1, Math.round(Number(d?.seconds) || 0));
+            const text = seconds >= 90
+                ? t("runtime.shutdownScheduledMinutes", { minutes: Math.round(seconds / 60) })
+                : t("runtime.shutdownScheduledSeconds", { seconds });
+            toast(text, "warn", "conn");
+            return;
+        }
         case "server_shutdown":
             if (!actionSoundsSuppressed()) {
                 playAlert("server_shutdown");
