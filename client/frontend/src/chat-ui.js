@@ -1,4 +1,7 @@
 import { joinChannelLocally } from "./local-join-intent.js";
+import { clipboardFiles, preparePastedFiles } from "./paste-images.js";
+import { mountComposerFormat } from "./composer-format.js";
+import { MAX_FAVORITES, MAX_RECENT, emojiIndex, recordEmojiUse, searchEmoji, storedEmoji, toggleFavorite } from "./emoji-picker-model.js";
 import { previewConversation, previewConversationFor, setPreviewConversation } from "./preview-privacy.js";
 import { createActivityHistory } from "./activity-history.js";
 import { blockedPreviewPlaceholder, resolvePreviewImage } from "./preview-source-policy.js";
@@ -38,7 +41,7 @@ import { DOWNGRADED, encModeFrom, encryptionBadge, UNOPENED_BODIES } from "./mes
 import { chatEnglish } from "./chat-messages.js";
 import { renderMarkdown, escapeHTML, EMOJI } from "./markdown.js";
 import { pickIcon } from "./image-tools.js";
-import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
+import { closeDialog, confirmDialog, confirmWithOption, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
 import { imageDataURL } from "./safe-media.js";
 import { parseRuntimeObject } from "./runtime-json.js";
 import { parseFileRef, transformCustomEmoji } from "./chat-parsers.js";
@@ -555,6 +558,13 @@ function persistSettings() {
     }, 1200);
 }
 
+function saveSettingsNow() {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = null;
+    const s = V().state.settings;
+    if (s) app().SaveSettings(s);
+}
+
 function hashStr(s) {
     let h = 5381;
     for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
@@ -637,35 +647,55 @@ function markMentions(container) {
 // Custom server emoji (95)
 // ---------------------------------------------------------------------------
 
+let customEmojiRequest = null;
 async function ensureCustomEmoji() {
+    if (customEmojiRequest) return customEmojiRequest;
     if (!customDirty) return;
     const generation = V().state.serverGeneration;
     const tabID = V().state.activeTabID;
     customDirty = false;
+    customEmojiRequest = (async () => {
+        try {
+            const r = await app().EmojiListForTab(tabID);
+            if (generation !== V().state.serverGeneration) return;
+            customEmoji = r.emojis || [];
+        } catch {
+            if (generation !== V().state.serverGeneration) return;
+            customEmoji = [];
+        }
+    })();
     try {
-        const r = await app().EmojiListForTab(tabID);
-        if (generation !== V().state.serverGeneration) return;
-        customEmoji = r.emojis || [];
-    } catch {
-        if (generation !== V().state.serverGeneration) return;
-        customEmoji = [];
+        await customEmojiRequest;
+    } finally {
+        customEmojiRequest = null;
     }
 }
 
+// In-flight image requests, shared so a button rebuilt while one loads (for
+// example by a new search) still receives the image.
+const emojiURLRequests = new Map();
 async function emojiURL(name) {
     if (emojiURLs.has(name)) return emojiURLs.get(name);
+    if (emojiURLRequests.has(name)) return emojiURLRequests.get(name);
     const generation = V().state.serverGeneration;
     const tabID = V().state.activeTabID;
-    emojiURLs.set(name, ""); // marks "loading/failed until proven otherwise"
+    const request = (async () => {
+        try {
+            const d = await app().EmojiGetForTab(tabID, name);
+            if (generation !== V().state.serverGeneration) return "";
+            const u = imageDataURL(d);
+            emojiURLs.set(name, u || ""); // "" caches a failure for this session
+            return u || "";
+        } catch {
+            emojiURLs.set(name, "");
+            return "";
+        }
+    })();
+    emojiURLRequests.set(name, request);
     try {
-        const d = await app().EmojiGetForTab(tabID, name);
-        if (generation !== V().state.serverGeneration) return "";
-        const u = imageDataURL(d);
-        if (!u) return "";
-        emojiURLs.set(name, u);
-        return u;
-    } catch {
-        return "";
+        return await request;
+    } finally {
+        if (emojiURLRequests.get(name) === request) emojiURLRequests.delete(name);
     }
 }
 
@@ -800,6 +830,16 @@ function renderMsg(m) {
             const menu = document.createElement("div"); menu.className = "ctx-menu msg-context-menu";
             const scope = captureScope(readExportScope);
             menu.appendChild(quickReactionBar(m, menu, el, scope));
+            // (647) Right-clicking an attachment adds its actions first.
+            const attachment = event.target?.closest?.("[data-attachment]");
+            const attachmentActions = attachment?.attachmentActions?.() || [];
+            if (attachmentActions.length) {
+                appendContextActions(menu, attachmentActions, () => el.isConnected && exportScopeIsCurrent(scope));
+                const divider = document.createElement("div");
+                divider.className = "ctx-divider";
+                divider.setAttribute("role", "separator");
+                menu.append(divider);
+            }
             for (const action of actions.querySelectorAll("button")) {
                 const item = document.createElement("button"); item.className = "ctx-action";
                 const reaction = action.dataset.action === "react";
@@ -912,9 +952,27 @@ function startDMEdit(m, peer) {
     input.onblur = finish;
 }
 
+// confirmOwnDelete asks before deleting one of your own messages, offering
+// "Don't ask again"; the choice is reversible in Settings > Chat.
+async function confirmOwnDelete(dialog) {
+    const settings = V().state.settings;
+    if (settings?.skip_own_delete_confirm) return true;
+    const answer = await confirmWithOption({ ...dialog, optionLabel: t("chat.deleteDontAsk") });
+    if (answer.confirmed && answer.checked) {
+        // Save at once: a settings_update from another connection during the
+        // usual persist delay would replace the object and drop the choice.
+        const current = V().state.settings;
+        if (current) {
+            current.skip_own_delete_confirm = true;
+            saveSettingsNow();
+        }
+    }
+    return answer.confirmed;
+}
+
 async function deleteDM(m, peer) {
     const scope = captureScope(readExportScope);
-    const confirmed = await confirmDialog({
+    const confirmed = await confirmOwnDelete({
         title: t("chat.deleteTitle"),
         message: t("chat.dmDeleteMessageHelp"),
         confirmLabel: t("chat.deleteConfirm"),
@@ -1299,7 +1357,64 @@ function attachFileRef(container, m, cap, source = null) {
     } else {
         wrap.appendChild(downloadChip(source, ref, name, ""));
     }
+    mountAttachmentMenu(wrap, source, ref, name);
     container.appendChild(wrap);
+}
+
+// (647) Attachment actions: save, open full size (loaded images and videos)
+// and copy the file name. Inside a message with its own context menu they are
+// added to the top of that menu (quick reactions stay one right-click away);
+// elsewhere the attachment opens a menu of its own.
+function mountAttachmentMenu(wrap, source, ref, name) {
+    wrap.dataset.attachment = "true";
+    wrap.attachmentActions = () => {
+        if (!source.saveCurrent()) return [];
+        const actions = [{ label: t("chat.attachmentSave"), run: async () => {
+            try {
+                const path = await source.save(ref, name);
+                if (path && source.saveCurrent()) V().toast(t("chat.saved", { name }));
+            } catch (e) {
+                if (source.saveCurrent()) V().toast(t("chat.saveFailed", { error: String(e) }), "warn");
+            }
+        } }];
+        const media = wrap.querySelector("img.msg-img, video.msg-video");
+        if (media) actions.push({ label: t("chat.attachmentOpen"), run: () => openLightbox(media) });
+        actions.push({ label: t("chat.attachmentCopyName"), run: () => { void copyToClipboard(name, { success: t("chat.attachmentNameCopied") }); } });
+        return actions;
+    };
+    const openMenu = event => {
+        if (wrap.closest('.msg[aria-haspopup="menu"]')) return; // the message menu includes these actions
+        event.preventDefault();
+        event.stopPropagation();
+        const actions = wrap.attachmentActions();
+        if (!actions.length) return;
+        closeReactStrip();
+        const menu = document.createElement("div");
+        menu.className = "ctx-menu attachment-context-menu";
+        menu.setAttribute("aria-label", t("chat.attachmentMenu", { name }));
+        appendContextActions(menu, actions, () => wrap.isConnected && source.saveCurrent());
+        mountContextMenu(menu, { trigger: wrap.querySelector("button, img, video") || wrap, x: event.clientX, y: event.clientY });
+    };
+    wrap.addEventListener("contextmenu", openMenu);
+    wrap.addEventListener("keydown", event => { if (contextMenuKey(event)) openMenu(event); });
+}
+
+// appendContextActions adds { label, run } items that close the menu first and
+// run only while current() still holds.
+function appendContextActions(menu, actions, current) {
+    for (const action of actions) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "ctx-action";
+        button.textContent = action.label;
+        button.onclick = event => {
+            event.stopPropagation();
+            const live = menu.isConnected && current();
+            closeContextMenu(menu, true);
+            if (live) action.run();
+        };
+        menu.append(button);
+    }
 }
 
 // chatAttachmentSource binds channel and DM attachments (scope 0) to the chat
@@ -1494,24 +1609,27 @@ function openReactStrip(m, anchorEl) {
         reactStrip.appendChild(b);
     }
     // Custom server emoji join the strip once loaded.
-    ensureCustomEmoji().then(async () => {
+    ensureCustomEmoji().then(() => {
         if (!currentStrip()) return;
+        // Images load in parallel so one slow emoji does not hold back the
+        // rest; each fills its own slot to keep the server's order.
         for (const e of customEmoji.slice(0, 8)) {
-            if (!currentStrip()) return;
-            const url = await emojiURL(e.name);
-            if (!currentStrip()) return;
-            if (!url) continue;
             const b = document.createElement("button");
-            const img = document.createElement("img");
-            img.src = url;
-            img.alt = ":" + e.name + ":";
-            b.appendChild(img);
-            b.onclick = () => {
-                if (!currentStrip()) return;
-                closeReactStrip();
-                toggleReaction(m, ":" + e.name + ":");
-            };
+            b.hidden = true;
             strip.appendChild(b);
+            emojiURL(e.name).then(url => {
+                if (!currentStrip() || !url) { b.remove(); return; }
+                const img = document.createElement("img");
+                img.src = url;
+                img.alt = ":" + e.name + ":";
+                b.appendChild(img);
+                b.onclick = () => {
+                    if (!currentStrip()) return;
+                    closeReactStrip();
+                    toggleReaction(m, ":" + e.name + ":");
+                };
+                b.hidden = false;
+            });
         }
     });
     const r = anchorEl.getBoundingClientRect();
@@ -1625,14 +1743,15 @@ function startEdit(m) {
 
 async function deleteMsg(m) {
     const scope = captureScope(readExportScope);
-    const confirmed = await confirmDialog({
+    const dialog = {
         title: t("chat.deleteTitle"),
         message: t("chat.deleteHelp"),
         confirmLabel: t("chat.deleteConfirm"),
         danger: true,
         serverScoped: true,
-    });
-    if (!confirmed) return;
+    };
+    // Moderating someone else's message always asks.
+    if (!(m.self ? await confirmOwnDelete(dialog) : await confirmDialog(dialog))) return;
     await runChatMutation(scope, () => app().ChatDeleteMessageForTab(scope.tabID, m.id), t("chat.action.delete"));
     // The chat_deleted broadcast renders the tombstone.
 }
@@ -1714,18 +1833,28 @@ function scrollToQuote(quoteEl) {
     const st = getStore(activeKey());
     const self = st.msgs.find((x) => x.id === id);
     const target = self ? resolveParent(st.msgs, self) : null;
-    if (!target) {
-        V().toast(t("chat.quoteUnavailable"), "info", "alert");
+    if (target) {
+        flashMsg(target.id);
         return;
     }
-    flashMsg(target.id);
+    // The parent may be older than the loaded window.
+    if (self?.replyToID > 0) void jumpToMessage(self.replyToID, "chat.quoteUnavailable");
+    else V().toast(t("chat.quoteUnavailable"), "info", "alert");
 }
 
 // flashMsg scrolls a message into view and pulses it. Returns false when the
 // message is not in the rendered log (scrolled out of the loaded window).
 function flashMsg(id) {
-    const el = document.querySelector(`#chat-log .msg[data-msg-id="${id}"]`);
+    const find = () => document.querySelector(`#chat-log .msg[data-msg-id="${id}"]`);
+    let el = find();
     if (!el) return false;
+    // An active search may hide the target: clear it rather than report a
+    // jump to an invisible row.
+    if (el.classList.contains("hidden") && searchQ) {
+        closeSearch();
+        el = find();
+    }
+    if (!el || el.classList.contains("hidden")) return false;
     el.scrollIntoView({ block: "center" });
     el.classList.add("flash");
     setTimeout(() => el.classList.remove("flash"), 1200);
@@ -2781,6 +2910,40 @@ async function loadPage(key, beforeID) {
     return page.length;
 }
 
+// (611/635) jumpToMessage scrolls to a message, first paging older history
+// into the loaded window when the message is not there yet. Paging keeps the
+// window contiguous with the newest message, which live updates rely on, so
+// the search is bounded to MAX_JUMP_PAGES pages.
+const MAX_JUMP_PAGES = 20;
+async function jumpToMessage(id, unavailableKey = "chat.messageUnavailable") {
+    const unavailable = () => { V().toast(t(unavailableKey), "info", "alert"); return false; };
+    if (flashMsg(id)) return true;
+    if (view.kind === "dm" || !(id > 0)) return unavailable();
+    const key = activeKey();
+    const st = getStore(key);
+    const oldestID = () => st.msgs.find(m => m.id)?.id || 0;
+    // Inside the loaded range but not rendered (deleted or filtered), or no
+    // older history to search.
+    if (!st.loaded || st.loading || st.end || !oldestID() || id >= oldestID()) return unavailable();
+    const scope = captureScope(readChatServerScope);
+    const stillHere = () => chatServerIsCurrent(scope) && activeKey() === key && store.get(key) === st;
+    st.loading = true;
+    V().toast(t("chat.jumpLoading"), "info", "alert", { announce: false, record: false });
+    try {
+        for (let page = 0; page < MAX_JUMP_PAGES && !st.end; page++) {
+            const loaded = await loadPage(key, oldestID());
+            if (!stillHere() || !loaded || oldestID() <= id) break;
+        }
+    } catch {
+        // Keep what loaded; the result below reports whether it was enough.
+    } finally {
+        st.loading = false;
+    }
+    if (!stillHere()) return false;
+    renderView();
+    return flashMsg(id) || unavailable();
+}
+
 async function maybeLoadOlder() {
     if (view.kind === "dm") return;
     const scope = captureScope(readChatServerScope);
@@ -3663,23 +3826,109 @@ function toggleEmojiPanel(target = null) {
     emojiPanel.className = "emoji-panel";
     emojiPanel.onclick = (e) => e.stopPropagation();
 
-    for (const [cat, list] of EMOJI_CATS) {
+    // (607) Search, favorites and recents. Right-click (or Alt+click) an
+    // emoji to pin or unpin it as a favorite.
+    // Settings can be replaced while the picker is open (settings_update), so
+    // every action reads the current object.
+    const prefs = () => V().state.settings || {};
+    const sections = document.createElement("div");
+    sections.className = "emoji-sections";
+    const results = document.createElement("div");
+    results.className = "emoji-grid emoji-results hidden";
+    // Server emoji names belong to one server, so only unicode emoji are
+    // remembered across servers in recents and favorites.
+    const remembered = e => !/^:[^:\s]+:$/.test(e);
+    const choose = e => {
+        insert(e);
+        if (!remembered(e)) return;
+        const settings = prefs();
+        settings.emoji_recents = recordEmojiUse(settings.emoji_recents, e);
+        persistSettings();
+    };
+    const emojiButton = (e, title) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "emoji-choice";
+        b.dataset.emoji = e;
+        const custom = /^:[^:\s]+:$/.test(e);
+        if (custom) {
+            const img = document.createElement("img");
+            img.alt = e;
+            b.appendChild(img);
+            void emojiURL(e.slice(1, -1)).then(url => { if (url && currentPanel()) img.src = url; });
+        } else {
+            b.textContent = e;
+        }
+        const code = custom ? "" : Object.entries(EMOJI).find(([, v]) => v === e)?.[0];
+        b.title = title || (custom ? e : code ? `:${code}:` : e);
+        b.onclick = event => {
+            if (event.altKey && remembered(e)) { toggleFav(e); return; }
+            choose(e);
+        };
+        if (remembered(e)) b.oncontextmenu = event => { event.preventDefault(); toggleFav(e); };
+        return b;
+    };
+    const section = (label, list, className = "") => {
+        if (!list.length) return;
         const head = document.createElement("div");
         head.className = "emoji-cat";
-        head.textContent = t(cat);
-        emojiPanel.appendChild(head);
+        head.textContent = label;
         const grid = document.createElement("div");
-        grid.className = "emoji-grid";
-        for (const e of list) {
-            const b = document.createElement("button");
-            b.textContent = e;
-            const code = Object.entries(EMOJI).find(([, v]) => v === e)?.[0];
-            if (code) b.title = ":" + code + ":";
-            b.onclick = () => insert(e);
-            grid.appendChild(b);
+        grid.className = "emoji-grid" + (className ? " " + className : "");
+        for (const e of list) grid.appendChild(emojiButton(e));
+        sections.append(head, grid);
+    };
+    const renderSections = () => {
+        sections.replaceChildren();
+        const settings = prefs();
+        section(t("chat.emojiFavorites"), storedEmoji(settings.emoji_favorites, MAX_FAVORITES).filter(remembered), "emoji-favorites");
+        section(t("chat.emojiRecent"), storedEmoji(settings.emoji_recents, MAX_RECENT).filter(remembered), "emoji-recent");
+        for (const [cat, list] of EMOJI_CATS) section(t(cat), list);
+    };
+    const toggleFav = e => {
+        const settings = prefs();
+        const current = storedEmoji(settings.emoji_favorites, MAX_FAVORITES);
+        const pinned = current.includes(e);
+        if (!pinned && current.length >= MAX_FAVORITES) {
+            V().toast(t("chat.emojiFavoritesFull", { max: MAX_FAVORITES }), "warn");
+            return;
         }
-        emojiPanel.appendChild(grid);
-    }
+        settings.emoji_favorites = toggleFavorite(current, e);
+        persistSettings();
+        V().toast(t(pinned ? "chat.emojiUnpinned" : "chat.emojiPinned", { emoji: e }));
+        renderSections();
+    };
+    const search = document.createElement("input");
+    search.type = "search";
+    search.className = "emoji-search";
+    search.placeholder = t("chat.emojiSearch");
+    search.setAttribute("aria-label", t("chat.emojiSearch"));
+    search.title = t("chat.emojiFavoriteHint");
+    const runSearch = () => {
+        const query = search.value.trim();
+        results.classList.toggle("hidden", !query);
+        sections.classList.toggle("hidden", !!query);
+        results.replaceChildren();
+        if (!query) return;
+        const index = emojiIndex(EMOJI, customEmoji.map(e => e.name));
+        const found = searchEmoji(index, query).slice(0, 80);
+        if (!found.length) {
+            const none = document.createElement("div");
+            none.className = "set-hint";
+            none.textContent = t("chat.emojiNoResults");
+            results.appendChild(none);
+        }
+        for (const entry of found) results.appendChild(emojiButton(entry.emoji, ":" + entry.codes[0] + ":"));
+    };
+    search.addEventListener("input", runSearch);
+    search.addEventListener("keydown", event => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        results.querySelector(".emoji-choice")?.click();
+    });
+    emojiPanel.append(search, results, sections);
+    renderSections();
+    queueMicrotask(() => { if (currentPanel()) search.focus(); });
 
     // Custom server emoji, cached as data URLs.
     const head = document.createElement("div");
@@ -3722,8 +3971,10 @@ function toggleEmojiPanel(target = null) {
     const grid = document.createElement("div");
     grid.className = "emoji-grid";
     emojiPanel.appendChild(grid);
-    ensureCustomEmoji().then(async () => {
+    ensureCustomEmoji().then(() => {
         if (!currentPanel()) return;
+        // A search typed before the server list arrived now includes it.
+        if (search.value.trim()) runSearch();
         if (customEmoji.length === 0) {
             const hint = document.createElement("div");
             hint.className = "set-hint";
@@ -3732,18 +3983,13 @@ function toggleEmojiPanel(target = null) {
             return;
         }
         for (const e of customEmoji) {
-            if (!currentPanel()) return;
-            const url = await emojiURL(e.name);
-            if (!currentPanel()) return;
-            if (!url) continue;
-            const b = document.createElement("button");
-            b.title = ":" + e.name + ":";
-            const img = document.createElement("img");
-            img.src = url;
-            img.alt = ":" + e.name + ":";
-            b.appendChild(img);
-            b.onclick = () => insert(":" + e.name + ":");
-            grid.appendChild(b);
+            const slot = document.createElement("span");
+            slot.hidden = true;
+            grid.appendChild(slot);
+            emojiURL(e.name).then(url => {
+                if (!currentPanel() || !url) { slot.remove(); return; }
+                slot.replaceWith(emojiButton(":" + e.name + ":"));
+            });
         }
     });
 
@@ -3918,6 +4164,9 @@ async function togglePinsPanel() {
     if (view.kind === "dm") return;
     pinsPanel = document.createElement("div");
     pinsPanel.className = "chat-pop pins-panel";
+    // (611) a side drawer over the chat, named for assistive technology
+    pinsPanel.setAttribute("role", "complementary");
+    pinsPanel.setAttribute("aria-label", t("chat.pinnedTitle"));
     $("chat-wrap").appendChild(pinsPanel);
     await loadPinsPanel();
 }
@@ -3940,6 +4189,8 @@ async function loadPinsPanel() {
     head.textContent = t("chat.pinnedTitle");
     const x = document.createElement("button");
     x.textContent = "✕";
+    x.title = t("chat.closePins");
+    x.setAttribute("aria-label", t("chat.closePins"));
     x.onclick = () => { if (current()) closePinsPanel(); };
     head.appendChild(x);
     pinsPanel.appendChild(head);
@@ -3985,9 +4236,7 @@ async function loadPinsPanel() {
         jump.title = t("chat.messageJump");
         jump.onclick = () => {
             if (!current()) return;
-            if (!flashMsg(p.message_id)) {
-                V().toast(t("chat.messageUnavailable"), "info", "alert");
-            }
+            void jumpToMessage(p.message_id);
         };
         row.appendChild(jump);
         const unpin = document.createElement("button");
@@ -4653,6 +4902,7 @@ export function resetView(options = {}) {
     jl.el = null;
     customEmoji = [];
     emojiURLs.clear();
+    emojiURLRequests.clear(); // late replies from the old server stay with their callers
     customDirty = true;
     for (const b of offlineBatch.values()) {
         if (b.timer) clearTimeout(b.timer);
@@ -5220,20 +5470,15 @@ export function initChat() {
 
     // File paste + drop + picker (98/100).
     $("chat-text").addEventListener("paste", (e) => {
-        const files = [...(e.clipboardData?.files || [])];
-        if (files.length === 0) {
-            for (const item of [...(e.clipboardData?.items || [])]) {
-                if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
-                const raw = item.getAsFile();
-                if (!raw) continue;
-                const ext = item.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
-                files.push(raw.name ? raw : new File([raw], `clipboard-${Date.now()}.${ext}`, { type: item.type }));
-            }
-        }
-        if (files.length) {
-            e.preventDefault();
-            stageFiles(files);
-        }
+        const files = clipboardFiles(e.clipboardData);
+        if (!files.length) return;
+        e.preventDefault();
+        // (529) Screenshots become lossless WebP first; the chat must still be
+        // the one the user pasted into when conversion finishes.
+        const scope = captureScope(readSendScope);
+        void preparePastedFiles(files).then(converted => {
+            if (scopeIsCurrent(scope, readSendScope)) stageFiles(converted);
+        });
     });
     const wrap = $("chat-wrap");
     let dragDepth = 0; // dragenter/leave fire per child; a counter avoids flicker
@@ -5287,6 +5532,9 @@ export function initChat() {
         noteTyping();
     });
     $("chat-text").addEventListener("blur", resetTypingOut);
+    // (619) Formatting toolbar for selected text, above the composer row.
+    const formatBar = mountComposerFormat($("chat-text"), id => t(`chat.format.${id}`));
+    $("chat-input-row").before(formatBar);
 
     // Read receipts need a focused window (124).
     window.addEventListener("focus", sendPendingReads);

@@ -107,6 +107,7 @@ import { capturePresenceScope, presenceIsCurrent, desiredPresence, restorePresen
 import { captureMediaScope, mediaScopeIsCurrent, setWhisperRouting, whisperChannelsFor } from "./media-controls.js";
 import { bindImagePlaceholders } from "./markdown.js";
 import { createResumeDetector } from "./resume-detector.js";
+import { bindCodeBlocks } from "./code-blocks.js";
 
 const P = () => window.__noxaPerms;
 window.__noxaChat = chatUI;
@@ -434,6 +435,7 @@ $("login-overlay").addEventListener("keydown", (event) => {
 // Markdown images stay click-to-load on every surface (chat, DMs, forums,
 // channel descriptions) so remote hosts never see unsolicited fetches.
 bindImagePlaceholders(document);
+bindCodeBlocks(document);
 
 document.querySelector(".login-card").addEventListener("submit", (event) => {
     event.preventDefault();

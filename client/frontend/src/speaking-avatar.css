@@ -1,4 +1,4 @@
-.client > .avatar, .client > .speaking-avatar { margin-right: 6px; }
+.client > .avatar, .client > .speaking-avatar, .client > .presence-wrap { margin-right: 6px; }
 .client .speaking-avatar {
     position: relative; isolation: isolate; display: inline-block;
     flex: 0 0 26px; width: 26px; height: 26px;

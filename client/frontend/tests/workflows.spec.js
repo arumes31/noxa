@@ -2228,6 +2228,19 @@ test.describe("tab-bound chat sending and attachments", () => {
             expect(await page.evaluate(() => window.__sendScope.messages)).toEqual([]);
         });
     }
+    test("code blocks show line numbers, highlight lazily and copy only the code", async ({ page }) => {
+        await page.evaluate(() => {
+            window.runtime.ClipboardSetText = async value => { window.__copiedCode = value; return true; };
+            window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 74, channel_id: 1, from: "Dev", text: "```rust\nfn main() {\n    println!(\"hi\");\n}\n```" });
+        });
+        const pre = page.locator('.msg[data-msg-id="74"] pre.md-pre');
+        await expect(pre.locator(".md-gutter")).toHaveText("1\n2\n3");
+        await expect(pre).toHaveAttribute("data-hl", "done");
+        await expect(pre.locator("code.hljs .hljs-keyword").first()).toHaveText("fn");
+        await pre.hover();
+        await pre.locator(".md-copy").click();
+        await expect.poll(() => page.evaluate(() => window.__copiedCode)).toBe("fn main() {\n    println!(\"hi\");\n}");
+    });
     test("detached attachment save controls cannot invoke the native dialog", async ({ page }) => {
         await page.evaluate(() => {
             window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 71, channel_id: 1, from: "Me", text: "[file:original.vcx#dGVzdA==#original.txt]" });
@@ -2245,6 +2258,41 @@ test.describe("tab-bound chat sending and attachments", () => {
             ["DownloadChatAttachment", "server-a", 1, "photo.vcx", "dGVzdA=="],
             ["SaveChatAttachment", "server-a", 1, "doc.vcx", "dGVzdA==", "doc.txt"],
         ]);
+    });
+    test("right-clicking an attachment adds its actions to the message menu", async ({ page }) => {
+        await page.evaluate(() => window.__noxaChat.addChat({ enc_verified: true, enc_mode: "server", id: 73, channel_id: 1, from: "Me", text: "[file:photo.vcx#dGVzdA==#photo.png] [file:doc.vcx#dGVzdA==#doc.txt]" }));
+        await expect(page.locator(".msg-img")).toHaveAttribute("src", "data:image/png;base64,aGVsbG8=");
+        await page.locator(".msg-file .file-chip").click({ button: "right" });
+        const menu = page.locator(".msg-context-menu");
+        await expect(menu).toBeVisible();
+        await expect(menu.locator(".ctx-action").nth(0)).toHaveText("Save as…");
+        await expect(menu.locator(".ctx-action").nth(1)).toHaveText("Copy file name");
+        await expect(menu.locator(".msg-quick-reactions button")).toHaveCount(8);
+        await menu.locator(".ctx-action", { hasText: "Save as…" }).click();
+        await expect(menu).toHaveCount(0);
+        expect((await page.evaluate(() => window.__sendScope.effects)).at(-1)).toEqual(["SaveChatAttachment", "server-a", 1, "doc.vcx", "dGVzdA==", "doc.txt"]);
+        await page.locator(".msg-img").click({ button: "right" });
+        await expect(menu.locator(".ctx-action").nth(1)).toHaveText("Open full size");
+        await page.keyboard.press("Escape");
+        await expect(menu).toHaveCount(0);
+        // Right-clicking the message text keeps the plain message menu.
+        await page.locator('.msg[data-msg-id="73"]').click({ button: "right", position: { x: 4, y: 4 } });
+        await expect(menu.locator(".ctx-action", { hasText: "Save as…" })).toHaveCount(0);
+    });
+    test("a pasted PNG screenshot is staged as WebP", async ({ page }) => {
+        await page.evaluate(async () => {
+            const canvas = new OffscreenCanvas(320, 200);
+            const ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#123456"; ctx.fillRect(0, 0, 320, 200);
+            ctx.fillStyle = "#fff"; ctx.font = "20px sans-serif"; ctx.fillText("screenshot text", 20, 100);
+            const png = await canvas.convertToBlob({ type: "image/png" });
+            const data = new DataTransfer();
+            data.items.add(new File([png], "shot.png", { type: "image/png" }));
+            document.getElementById("chat-text").dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+        });
+        await expect(page.locator(".file-preview")).toHaveCount(1);
+        await expect(page.locator(".file-preview img")).toHaveAttribute("alt", /^shot.*\.webp$/);
+        await expect(page.locator(".file-preview img")).toHaveAttribute("src", /^data:image\/webp;base64,/);
     });
     test("clearing a direct target during upload stops follow-up delivery", async ({ page }) => {
         await page.evaluate(() => window.__noxaChat.openPM("peer", "Peer"));
@@ -2718,7 +2766,7 @@ test.describe("tab-bound chat history and pins", () => {
                     f.calls.push([method, tab, ...args]);
                     if (tab !== f.nativeTab) throw new Error("server changed");
                     f.effects.push([method, tab, ...args]);
-                    const result = structuredClone(method === "ChatPins" ? f.pins : (f.history || { messages: [] }));
+                    const result = structuredClone(method === "ChatPins" ? f.pins : (f.historyFor ? f.historyFor(args[1]) : f.history || { messages: [] }));
                     if (method === "ChatPins" && f.gate) { const gate = f.gate; f.gate = null; await gate; }
                     if (method === "ChatHistory" && f.historyGate) { const gate = f.historyGate; f.historyGate = null; await gate; }
                     if (f.reject) throw new Error("old private error");
@@ -2726,6 +2774,34 @@ test.describe("tab-bound chat history and pins", () => {
                 };
             } });
         });
+    });
+    test("jumping to a pinned message pages older history into view", async ({ page }) => {
+        await page.evaluate(() => {
+            const f = window.__chatReadScope;
+            const message = id => ({ id, from_unique_id: "bene", from_nickname: "Bene", body: `history ${id}`, sent_at: id, enc_verified: true, enc_mode: "server" });
+            // Pages of 50, newest first: 200..151, then 150..101, then 100..51.
+            f.historyFor = before => ({ messages: Array.from({ length: 50 }, (_, i) => (before || 201) - 1 - i).filter(id => id > 0).map(message) });
+            f.pins = { pins: [{ message_id: 60, message: { body: "history 60", from_nickname: "Bene" } }] };
+            window.__noxaChat.onMyChannelChanged();
+        });
+        await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toHaveCount(1);
+        await expect(page.locator('#chat-log .msg[data-msg-id="60"]')).toHaveCount(0);
+        await page.locator("#chat-pins-btn").evaluate(button => button.click());
+        await expect(page.locator(".pin-row")).toHaveCount(1);
+        await expect(page.locator(".pins-panel")).toHaveAttribute("role", "complementary");
+        // A search that would hide the target is cleared by the jump.
+        await page.evaluate(() => {
+            document.getElementById("chat-search-btn").click();
+            const search = document.getElementById("chat-search");
+            search.value = "history 200";
+            search.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        await page.locator('.pin-row button[title="jump to message"]').click();
+        await expect(page.locator('#chat-log .msg[data-msg-id="60"]')).toHaveClass(/flash/);
+        await expect(page.locator('#chat-log .msg[data-msg-id="60"]')).not.toHaveClass(/(^|\s)hidden(\s|$)/);
+        await expect(page.locator("#chat-search")).toHaveValue("");
+        const pages = await page.evaluate(() => window.__chatReadScope.calls.filter(call => call[0] === "ChatHistory").map(call => call[3]));
+        expect(pages).toEqual([0, 151, 101]);
     });
     test("native activation cannot redirect history or pin preload", async ({ page }) => {
         await page.evaluate(() => {
@@ -3235,8 +3311,9 @@ test.describe("tab-bound custom emoji", () => {
         await page.locator("#chat-emoji").click();
         await expect(page.locator('.emoji-panel img[alt=":new:"]')).toBeVisible();
         await page.evaluate(() => window.__emoji.release());
-        await expect.poll(() => page.evaluate(() => window.__emoji.completed.filter(n => n === "EmojiGet").length)).toBe(2);
-        expect(await page.evaluate(() => window.__emoji.calls.some(c => c.name === "EmojiGet" && c.tabID === "server-b" && c.args[0] === "hello"))).toBe(false);
+        // wave and hello load in parallel on server-a, then new on server-b.
+        await expect.poll(() => page.evaluate(() => window.__emoji.completed.filter(n => n === "EmojiGet").length)).toBe(3);
+        expect(await page.evaluate(() => window.__emoji.calls.some(c => c.name === "EmojiGet" && c.tabID === "server-b" && c.args[0] !== "new"))).toBe(false);
         await expect(page.locator('.emoji-panel img[alt=":wave:"]')).toHaveCount(0);
     });
 });
