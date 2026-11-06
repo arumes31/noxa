@@ -73,6 +73,11 @@ export async function syncPush(conn) {
     return state;
 }
 
+/** Registers a browser push subscription for this device (701). */
+export function registerSubscription(conn, sub) {
+    return deviceRequest(conn, { action: "push_subscribe", subscription: subscriptionKeys(sub) });
+}
+
 /** Asks for permission (needs a tap) and subscribes. */
 export async function enablePush(conn, state, preferences = {}) {
     const permission = await Notification.requestPermission();
