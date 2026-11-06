@@ -1,4 +1,5 @@
 import { joinChannelLocally } from "./local-join-intent.js";
+import { MAX_FAVORITES, MAX_RECENT, emojiIndex, recordEmojiUse, searchEmoji, storedEmoji, toggleFavorite } from "./emoji-picker-model.js";
 import { previewConversation, previewConversationFor, setPreviewConversation } from "./preview-privacy.js";
 import { createActivityHistory } from "./activity-history.js";
 import { blockedPreviewPlaceholder, resolvePreviewImage } from "./preview-source-policy.js";
@@ -1714,11 +1715,13 @@ function scrollToQuote(quoteEl) {
     const st = getStore(activeKey());
     const self = st.msgs.find((x) => x.id === id);
     const target = self ? resolveParent(st.msgs, self) : null;
-    if (!target) {
-        V().toast(t("chat.quoteUnavailable"), "info", "alert");
+    if (target) {
+        flashMsg(target.id);
         return;
     }
-    flashMsg(target.id);
+    // The parent may be older than the loaded window.
+    if (self?.replyToID > 0) void jumpToMessage(self.replyToID, "chat.quoteUnavailable");
+    else V().toast(t("chat.quoteUnavailable"), "info", "alert");
 }
 
 // flashMsg scrolls a message into view and pulses it. Returns false when the
@@ -2781,6 +2784,40 @@ async function loadPage(key, beforeID) {
     return page.length;
 }
 
+// (611/635) jumpToMessage scrolls to a message, first paging older history
+// into the loaded window when the message is not there yet. Paging keeps the
+// window contiguous with the newest message, which live updates rely on, so
+// the search is bounded to MAX_JUMP_PAGES pages.
+const MAX_JUMP_PAGES = 20;
+async function jumpToMessage(id, unavailableKey = "chat.messageUnavailable") {
+    const unavailable = () => { V().toast(t(unavailableKey), "info", "alert"); return false; };
+    if (flashMsg(id)) return true;
+    if (view.kind === "dm" || !(id > 0)) return unavailable();
+    const key = activeKey();
+    const st = getStore(key);
+    const oldestID = () => st.msgs.find(m => m.id)?.id || 0;
+    // Inside the loaded range but not rendered (deleted or filtered), or no
+    // older history to search.
+    if (!st.loaded || st.loading || st.end || !oldestID() || id >= oldestID()) return unavailable();
+    const scope = captureScope(readChatServerScope);
+    const stillHere = () => chatServerIsCurrent(scope) && activeKey() === key && store.get(key) === st;
+    st.loading = true;
+    V().toast(t("chat.jumpLoading"), "info", "alert", { announce: false, record: false });
+    try {
+        for (let page = 0; page < MAX_JUMP_PAGES && !st.end; page++) {
+            const loaded = await loadPage(key, oldestID());
+            if (!stillHere() || !loaded || oldestID() <= id) break;
+        }
+    } catch {
+        // Keep what loaded; the result below reports whether it was enough.
+    } finally {
+        st.loading = false;
+    }
+    if (!stillHere()) return false;
+    renderView();
+    return flashMsg(id) || unavailable();
+}
+
 async function maybeLoadOlder() {
     if (view.kind === "dm") return;
     const scope = captureScope(readChatServerScope);
@@ -3663,23 +3700,94 @@ function toggleEmojiPanel(target = null) {
     emojiPanel.className = "emoji-panel";
     emojiPanel.onclick = (e) => e.stopPropagation();
 
-    for (const [cat, list] of EMOJI_CATS) {
+    // (607) Search, favorites and recents. Right-click (or Alt+click) an
+    // emoji to pin or unpin it as a favorite.
+    const settings = V().state.settings || {};
+    const sections = document.createElement("div");
+    sections.className = "emoji-sections";
+    const results = document.createElement("div");
+    results.className = "emoji-grid emoji-results hidden";
+    const choose = e => {
+        insert(e);
+        settings.emoji_recents = recordEmojiUse(settings.emoji_recents, e);
+        persistSettings();
+    };
+    const emojiButton = (e, title) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "emoji-choice";
+        b.dataset.emoji = e;
+        const custom = /^:[^:\s]+:$/.test(e);
+        if (custom) {
+            const img = document.createElement("img");
+            img.alt = e;
+            b.appendChild(img);
+            void emojiURL(e.slice(1, -1)).then(url => { if (url && currentPanel()) img.src = url; });
+        } else {
+            b.textContent = e;
+        }
+        const code = custom ? "" : Object.entries(EMOJI).find(([, v]) => v === e)?.[0];
+        b.title = title || (custom ? e : code ? `:${code}:` : e);
+        b.onclick = event => {
+            if (event.altKey) { toggleFav(e); return; }
+            choose(e);
+        };
+        b.oncontextmenu = event => { event.preventDefault(); toggleFav(e); };
+        return b;
+    };
+    const section = (label, list, className = "") => {
+        if (!list.length) return;
         const head = document.createElement("div");
         head.className = "emoji-cat";
-        head.textContent = t(cat);
-        emojiPanel.appendChild(head);
+        head.textContent = label;
         const grid = document.createElement("div");
-        grid.className = "emoji-grid";
-        for (const e of list) {
-            const b = document.createElement("button");
-            b.textContent = e;
-            const code = Object.entries(EMOJI).find(([, v]) => v === e)?.[0];
-            if (code) b.title = ":" + code + ":";
-            b.onclick = () => insert(e);
-            grid.appendChild(b);
+        grid.className = "emoji-grid" + (className ? " " + className : "");
+        for (const e of list) grid.appendChild(emojiButton(e));
+        sections.append(head, grid);
+    };
+    const renderSections = () => {
+        sections.replaceChildren();
+        section(t("chat.emojiFavorites"), storedEmoji(settings.emoji_favorites, MAX_FAVORITES), "emoji-favorites");
+        section(t("chat.emojiRecent"), storedEmoji(settings.emoji_recents, MAX_RECENT), "emoji-recent");
+        for (const [cat, list] of EMOJI_CATS) section(t(cat), list);
+    };
+    const toggleFav = e => {
+        const pinned = storedEmoji(settings.emoji_favorites, MAX_FAVORITES).includes(e);
+        settings.emoji_favorites = toggleFavorite(settings.emoji_favorites, e);
+        persistSettings();
+        V().toast(t(pinned ? "chat.emojiUnpinned" : "chat.emojiPinned", { emoji: e }));
+        renderSections();
+    };
+    const search = document.createElement("input");
+    search.type = "search";
+    search.className = "emoji-search";
+    search.placeholder = t("chat.emojiSearch");
+    search.setAttribute("aria-label", t("chat.emojiSearch"));
+    search.title = t("chat.emojiFavoriteHint");
+    search.addEventListener("input", () => {
+        const query = search.value.trim();
+        results.classList.toggle("hidden", !query);
+        sections.classList.toggle("hidden", !!query);
+        results.replaceChildren();
+        if (!query) return;
+        const index = emojiIndex(EMOJI, customEmoji.map(e => e.name));
+        const found = searchEmoji(index, query).slice(0, 80);
+        if (!found.length) {
+            const none = document.createElement("div");
+            none.className = "set-hint";
+            none.textContent = t("chat.emojiNoResults");
+            results.appendChild(none);
         }
-        emojiPanel.appendChild(grid);
-    }
+        for (const entry of found) results.appendChild(emojiButton(entry.emoji, ":" + entry.codes[0] + ":"));
+    });
+    search.addEventListener("keydown", event => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        results.querySelector(".emoji-choice")?.click();
+    });
+    emojiPanel.append(search, results, sections);
+    renderSections();
+    queueMicrotask(() => { if (currentPanel()) search.focus(); });
 
     // Custom server emoji, cached as data URLs.
     const head = document.createElement("div");
@@ -3918,6 +4026,9 @@ async function togglePinsPanel() {
     if (view.kind === "dm") return;
     pinsPanel = document.createElement("div");
     pinsPanel.className = "chat-pop pins-panel";
+    // (611) a side drawer over the chat, named for assistive technology
+    pinsPanel.setAttribute("role", "complementary");
+    pinsPanel.setAttribute("aria-label", t("chat.pinnedTitle"));
     $("chat-wrap").appendChild(pinsPanel);
     await loadPinsPanel();
 }
@@ -3940,6 +4051,8 @@ async function loadPinsPanel() {
     head.textContent = t("chat.pinnedTitle");
     const x = document.createElement("button");
     x.textContent = "✕";
+    x.title = t("chat.closePins");
+    x.setAttribute("aria-label", t("chat.closePins"));
     x.onclick = () => { if (current()) closePinsPanel(); };
     head.appendChild(x);
     pinsPanel.appendChild(head);
@@ -3985,9 +4098,7 @@ async function loadPinsPanel() {
         jump.title = t("chat.messageJump");
         jump.onclick = () => {
             if (!current()) return;
-            if (!flashMsg(p.message_id)) {
-                V().toast(t("chat.messageUnavailable"), "info", "alert");
-            }
+            void jumpToMessage(p.message_id);
         };
         row.appendChild(jump);
         const unpin = document.createElement("button");

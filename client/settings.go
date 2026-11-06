@@ -270,6 +270,10 @@ type Settings struct {
 	LastReadChannels      map[string]int64 `json:"last_read_channels"`      // channelID -> last-read message id (121)
 	DismissedAnnouncement string           `json:"dismissed_announcement"`  // hash of the dismissed announcement (132)
 
+	// Emoji picker (607): most recent first, favorites in the user's order.
+	EmojiRecents   []string `json:"emoji_recents,omitempty"`
+	EmojiFavorites []string `json:"emoji_favorites,omitempty"`
+
 	// Social & meta (wave 8b).
 	Contacts           []Contact `json:"contacts,omitempty"`      // (316)
 	BlockedUsers       []string  `json:"blocked_users,omitempty"` // (317) unique IDs
@@ -604,7 +608,33 @@ func normalizeSettings(s Settings) Settings {
 	s.SidebarWidth = normalizePanelWidth(s.SidebarWidth)
 	s.DetailsWidth = normalizePanelWidth(s.DetailsWidth)
 	s.ChatMaxLines = clampSetting(s.ChatMaxLines, 10, 5000)
+	s.EmojiRecents = boundedEmojiList(s.EmojiRecents, 24)
+	s.EmojiFavorites = boundedEmojiList(s.EmojiFavorites, 48)
 	return s
+}
+
+// boundedEmojiList keeps at most max unique, short emoji entries (a unicode
+// emoji or a ":custom:" token), dropping anything else.
+func boundedEmojiList(list []string, max int) []string {
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]string, 0, min(len(list), max))
+	seen := make(map[string]struct{}, len(list))
+	for _, item := range list {
+		if item == "" || len(item) > 64 {
+			continue
+		}
+		if _, dup := seen[item]; dup {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+		if len(out) == max {
+			break
+		}
+	}
+	return out
 }
 
 func clampSetting(value, min, max int) int {
