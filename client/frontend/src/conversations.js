@@ -1,4 +1,5 @@
 import { t } from "./i18n.js";
+import { clipboardFiles, preparePastedFiles } from "./paste-images.js";
 import { mergeReadMarker } from "./read-markers.js";
 import { voiceMessageButton, renderVoiceMessage } from "./voice-messages.js";
 import { confirmDialog, promptDialog } from "./modal.js";
@@ -510,8 +511,13 @@ export function initConversations() {
         fileInput.onchange = () => { if (fileInput.files?.length) stage(fileInput.files); fileInput.value = ""; };
         gifInput.onchange = () => { if (gifInput.files?.length) stage(gifInput.files); gifInput.value = ""; };
         input.addEventListener("paste", event => {
-            const files = [...(event.clipboardData?.files || [])];
-            if (files.length) { event.preventDefault(); stage(files); }
+            const files = clipboardFiles(event.clipboardData);
+            if (!files.length) return;
+            event.preventDefault();
+            const token = viewToken, groupID = group.id;
+            void preparePastedFiles(files).then(converted => {
+                if (viewToken === token && selected === groupID) stage(converted);
+            });
         });
         for (const target of [composer, messages]) {
             target.addEventListener("dragover", event => event.preventDefault());

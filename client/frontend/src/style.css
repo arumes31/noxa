@@ -321,6 +321,16 @@ body:not(.details-collapsed) #details-toggle { display: none; }
     font-style: italic; font-size: 0.8571rem; margin: 6px 0;
 }
 #chat-input-row { display: flex; align-items: stretch; gap: 8px; min-width: 0; }
+/* (619) formatting toolbar for a selection in the composer */
+.composer-format { display: flex; gap: 2px; width: max-content; margin: 0 0 4px; padding: 2px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-panel); }
+.composer-format.hidden { display: none; }
+.composer-format-btn { min-width: 28px; height: 26px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent; color: var(--text); cursor: pointer; font-size: .9286rem; }
+.composer-format-btn:hover, .composer-format-btn:focus-visible { background: var(--bg-hover); }
+.composer-format-btn.fmt-bold { font-weight: 700; }
+.composer-format-btn.fmt-italic { font-style: italic; }
+.composer-format-btn.fmt-underline { text-decoration: underline; }
+.composer-format-btn.fmt-strike { text-decoration: line-through; }
+.composer-format-btn.fmt-code { font-family: var(--font-mono, monospace); font-size: .8571rem; }
 #chat-input-row input, #chat-input-row select {
     padding: 10px 12px; border-radius: 8px;
     border: 1px solid var(--border); background: var(--bg-raised);
@@ -940,6 +950,7 @@ body:not(.details-collapsed) #details-toggle { display: none; }
 .share-audio { display: flex; align-items: center; gap: 6px; margin: 10px 0; color: var(--text-dim); font-size: 0.9286rem; }
 .dlg-text { color: var(--text-dim); font-size: 1rem; margin: 0 0 14px; }
 .dlg-label { display: block; font-size: 0.7857rem; color: var(--text-faint); margin: 10px 0 4px; letter-spacing: .04em; }
+.dlg-option { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; font-size: .9286rem; color: var(--text-dim); cursor: pointer; }
 .dlg-input {
     width: 100%; box-sizing: border-box;
     background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
@@ -1119,7 +1130,29 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
     margin: 6px 0; padding: 8px 10px; border-radius: 8px; overflow-x: auto;
     background: var(--bg); border: 1px solid var(--border);
     font-family: var(--font-mono); font-size: 0.8571rem; line-height: 1.5;
+    position: relative; display: flex; align-items: flex-start;
 }
+.md-pre > code { flex: 1 1 auto; min-width: 0; padding-right: 28px; }
+/* (603) line numbers stay out of selection and copy */
+.md-gutter {
+    flex: 0 0 auto; margin-right: 10px; padding-right: 8px; border-right: 1px solid var(--border);
+    color: var(--text-faint); text-align: right; user-select: none; white-space: pre;
+}
+.md-copy {
+    position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; padding: 0;
+    border: 1px solid var(--border); border-radius: 5px; background: var(--bg-panel); color: var(--text-dim);
+    cursor: pointer; opacity: 0; transition: opacity .12s;
+}
+.md-pre:hover .md-copy, .md-copy:focus-visible { opacity: 1; }
+@media (hover: none) { .md-copy { opacity: 1; } }
+/* highlight.js token colours, mapped onto the theme tokens */
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-type, .hljs-literal { color: var(--accent); }
+.hljs-string, .hljs-regexp, .hljs-attr, .hljs-template-variable { color: var(--warn); }
+.hljs-comment, .hljs-quote, .hljs-meta { color: var(--text-faint); font-style: italic; }
+.hljs-number, .hljs-symbol, .hljs-variable, .hljs-params { color: var(--ok, #58d68d); }
+.hljs-title, .hljs-section, .hljs-name, .hljs-tag { color: var(--text); font-weight: 600; }
+.hljs-deletion { color: var(--danger, #ff8fa3); }
+.hljs-addition { color: var(--ok, #58d68d); }
 .tk-str { color: var(--warn); }
 .tk-com { color: var(--text-faint); font-style: italic; }
 .tk-kw { color: var(--accent); }
@@ -1241,6 +1274,11 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
     padding: 8px; border-radius: 10px;
     background: var(--bg-panel); border: 1px solid var(--border); box-shadow: var(--shadow);
 }
+/* (607) search, favorites and recents */
+.emoji-search { width: 100%; box-sizing: border-box; margin: 0 0 6px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+.emoji-search:focus { border-color: var(--border-accent); outline: none; }
+.emoji-results.hidden, .emoji-sections.hidden { display: none; }
+.emoji-choice img { width: 20px; height: 20px; object-fit: contain; }
 .emoji-cat {
     margin: 6px 0 3px; font-size: 0.7143rem; font-weight: 700; letter-spacing: .08em;
     color: var(--text-faint);
@@ -1272,6 +1310,15 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
     padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-bottom: 6px;
 }
 .chat-pop-head button { border: 0; background: none; color: var(--text-faint); cursor: pointer; }
+/* (611) pinned messages open as a full-height drawer on the chat's right */
+.chat-pop.pins-panel {
+    top: 0; right: 0; bottom: 0; max-height: none; width: min(340px, 92%);
+    border-radius: 10px 0 0 10px; border-right: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+    :root:not([data-reduce-motion="1"]) .chat-pop.pins-panel { animation: pins-drawer-in 160ms ease-out; }
+}
+@keyframes pins-drawer-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 .pin-row {
     display: flex; align-items: center; gap: 6px;
     padding: 5px 6px; border-radius: 6px; font-size: 0.8571rem;
@@ -1720,6 +1767,25 @@ body.compact #voice-bar { justify-content: center; padding: 12px; }
     max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .client.away .client-name, .client.busy .client-name { opacity: 0.6; }
+.ch-unread.rollup { outline: 1px dashed currentColor; outline-offset: 1px; }
+/* (648) Presence dot on member avatars. Shapes differ as well as colours:
+   online is filled, away a crescent, busy carries a bar, offline is a ring. */
+.presence-wrap { position: relative; display: inline-flex; flex: 0 0 auto; }
+.presence-dot {
+    position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px;
+    border-radius: 50%; box-sizing: border-box; border: 2px solid var(--bg-panel);
+    background: var(--ok, #58d68d); pointer-events: none;
+}
+.presence-dot[data-presence="away"] { background: var(--warn, #f6c779); box-shadow: inset -3px -1px 0 0 var(--bg-panel); }
+.presence-dot[data-presence="busy"] { background: var(--danger, #ff8fa3); }
+.presence-dot[data-presence="busy"]::after {
+    content: ""; position: absolute; left: 1px; right: 1px; top: 50%; height: 2px;
+    margin-top: -1px; border-radius: 1px; background: var(--bg-panel);
+}
+.presence-dot[data-presence="offline"] { background: var(--bg-panel); border-color: var(--text-faint); }
+@media (forced-colors: active) {
+    .presence-dot { forced-color-adjust: none; border-color: Canvas; }
+}
 /* Member rows: the display name truncates only after the secondary chips
    (role tag, session marker) gave up their width. Shrink weights are
    deliberately lopsided so the chips collapse first; the name keeps a floor. */
@@ -1835,6 +1901,13 @@ body.compact #voice-bar { justify-content: center; padding: 12px; }
     :root:not([data-reduce-motion="1"]) #center-tabs button,
     :root:not([data-reduce-motion="1"]) .srv-tab { transition: color 150ms, border-color 150ms, background 150ms; }
     :root:not([data-reduce-motion="1"]) .toast { animation: w8c-fade-in 150ms ease-out; }
+    /* (620) a just-expanded channel reveals its members and subchannels */
+    :root:not([data-reduce-motion="1"]) .channel-members.expanding,
+    :root:not([data-reduce-motion="1"]) .channel-children.expanding { animation: channel-expand 160ms ease-out; transform-origin: top; }
+}
+@keyframes channel-expand {
+    from { opacity: 0; transform: translateY(-4px) scaleY(.96); }
+    to { opacity: 1; transform: none; }
 }
 @keyframes w8c-fade-in {
     from { opacity: 0; transform: translateY(4px); }

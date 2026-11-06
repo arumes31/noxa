@@ -86,6 +86,7 @@ export const SETTINGS_SEARCH_TERMS = Object.freeze({
     chat_font_size: { de: ["Chat Schrift", "Nachrichten zu klein", "Chat zu groß"], en: ["chat text size", "messages too small", "chat too big"] },
     sys_join_leave: { de: ["Systemnachrichten", "beigetreten Zeile", "Beitritt anzeigen"], en: ["system messages", "join lines", "show joins"] },
     sys_kick: { de: ["Kick Nachricht", "Rauswurf anzeigen"], en: ["kick message", "show kicks"] },
+    skip_own_delete_confirm: { de: ["Löschen bestätigen", "Nachricht löschen nachfragen"], en: ["delete confirmation", "ask before deleting"] },
     chat_max_lines: { de: ["Verlauf Länge", "alte Nachrichten verschwinden"], en: ["history length", "old messages disappear"] },
     keywords: { de: ["Stichwort", "Erwähnung", "Hervorhebung", "Schlüsselwort", "Highlight"], en: ["keyword", "mention", "highlight", "watch word"] },
     chat_undo_seconds: { de: ["Nachricht zurückholen", "Rückgängig senden", "Senden abbrechen"], en: ["undo send", "take back message", "cancel sending"] },

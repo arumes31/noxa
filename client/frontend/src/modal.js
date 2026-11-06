@@ -342,7 +342,7 @@ function appendDialogText(parent, className, text) {
     return element;
 }
 
-function promiseDialog(options, { prompt = false } = {}) {
+function promiseDialog(options, { prompt = false, option = "" } = {}) {
     const cancelValue = prompt ? null : false;
     return new Promise((resolve) => {
         let result = cancelValue;
@@ -368,6 +368,20 @@ function promiseDialog(options, { prompt = false } = {}) {
             input.value = options.value ?? "";
             input.placeholder = options.placeholder || "";
             dialog.appendChild(input);
+        }
+
+        let optionInput = null;
+        if (option) {
+            const label = document.createElement("label");
+            label.className = "dlg-option";
+            optionInput = document.createElement("input");
+            optionInput.type = "checkbox";
+            optionInput.className = "dlg-option-input";
+            const text = document.createElement("span");
+            text.textContent = option;
+            label.appendChild(optionInput);
+            label.appendChild(text);
+            dialog.appendChild(label);
         }
 
         const buttons = document.createElement("div");
@@ -410,7 +424,7 @@ function promiseDialog(options, { prompt = false } = {}) {
             onClose: () => {
                 if (settled) return;
                 settled = true;
-                resolve(result);
+                resolve(optionInput ? { confirmed: result === true, checked: result === true && optionInput.checked } : result);
             },
         });
     });
@@ -425,6 +439,14 @@ export function promptDialog(options = {}) {
 
 export function confirmDialog(options = {}) {
     return promiseDialog(options);
+}
+
+/**
+ * A confirmation with one checkbox, e.g. "Don't ask again". Resolves to
+ * { confirmed, checked }; checked is only true when the user confirmed.
+ */
+export function confirmWithOption(options = {}) {
+    return promiseDialog(options, { option: options.optionLabel || "" });
 }
 
 function trapTab(event, record) {
