@@ -207,6 +207,20 @@ func trayMarkHidden() {
 	}
 }
 
+// trayMarkShown records that something other than the tray menu showed the
+// window (a notification click), so the next menu click hides it.
+func trayMarkShown() {
+	if trayCtl == nil {
+		return
+	}
+	trayCtl.mu.Lock()
+	defer trayCtl.mu.Unlock()
+	trayCtl.visible = true
+	if trayCtl.miShowHide != nil {
+		trayCtl.miShowHide.SetTitle("Hide noXa")
+	}
+}
+
 // updateTitle serializes native updates so an older state cannot overwrite a
 // newer transition. Identical presentations never touch the operating system.
 func (t *tray) updateTitle() {

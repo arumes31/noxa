@@ -200,6 +200,50 @@ function getStore(key) {
     return store.get(key);
 }
 
+// (501) Windows notification helpers. The key matches native-toast.js
+// ("dm:<peer>" or "ch:<channel>"); null while a private group is shown.
+export function activeConversationKey() {
+    return isPrivateGroupActive() ? null : activeKey();
+}
+
+// quickReplyToActive sends text through the normal composer if expectedKey is
+// on screen. An unsent draft is never replaced: the reply is appended to it
+// and left for the user. Returns "sent", "draft" or false.
+export function quickReplyToActive(expectedKey, text) {
+    const input = $("chat-text");
+    if (!input || activeConversationKey() !== expectedKey || !String(text).trim() || activeSend) return false;
+    if (input.value.trim() || pendingFiles.length) {
+        // The DM/channel composer is a single-line input: join with a space.
+        const separator = input.value.trim() ? (input.tagName === "TEXTAREA" ? "\n" : " ") : "";
+        input.value = input.value.replace(/\s+$/, "") + separator + text;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        return "draft";
+    }
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    void sendMessage();
+    return "sent";
+}
+
+// markConversationSeen clears local unread state for a notification's
+// conversation without opening it. Read receipts stay tied to actually
+// viewing a direct conversation, so none is sent here.
+export function markConversationSeen(reference) {
+    if (reference?.kind === "dm" && typeof reference.peer_id === "string") {
+        const tab = pmTabs.get(reference.peer_id);
+        if (!tab) return false;
+        tab.unread = 0;
+        renderTabs();
+        return true;
+    }
+    if ((reference?.kind === "channel" || reference?.kind === "thread") && Number.isSafeInteger(reference.channel_id)) {
+        markRead("ch:" + reference.channel_id);
+        V().renderTree?.();
+        return true;
+    }
+    return false;
+}
+
 function activeKey() {
     const st = V().state;
     if (view.kind === "global") return "ch:0";
@@ -2913,6 +2957,8 @@ function renderView(keepScrollFrom, { suppressMarkRead = false } = {}) {
         resetNewCount();
     }
     if (!suppressMarkRead && !anchor) markRead(key);
+    // (501) A conversation on screen no longer needs its Windows notification.
+    if (document.hasFocus() && !isPrivateGroupActive()) window.__noxaNativeToast?.viewed(V().state.activeTabID + "|" + key);
 }
 
 function lastReadFor(key) {

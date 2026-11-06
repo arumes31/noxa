@@ -190,6 +190,10 @@ export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
 }
 
+export function ClearNativeToasts(arg1) {
+  return window['go']['main']['App']['ClearNativeToasts'](arg1);
+}
+
 export function ClientID() {
   return window['go']['main']['App']['ClientID']();
 }
@@ -654,6 +658,10 @@ export function MoveClientForTab(arg1, arg2, arg3) {
   return window['go']['main']['App']['MoveClientForTab'](arg1, arg2, arg3);
 }
 
+export function NativeToastsAvailable() {
+  return window['go']['main']['App']['NativeToastsAvailable']();
+}
+
 export function Notify(arg1, arg2) {
   return window['go']['main']['App']['Notify'](arg1, arg2);
 }
@@ -1068,6 +1076,10 @@ export function SetVideoQualityForTab(arg1, arg2) {
 
 export function SetWindowOpacity(arg1) {
   return window['go']['main']['App']['SetWindowOpacity'](arg1);
+}
+
+export function ShowNativeToast(arg1) {
+  return window['go']['main']['App']['ShowNativeToast'](arg1);
 }
 
 export function StartConnectionBenchmark(arg1) {

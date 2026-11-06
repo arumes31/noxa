@@ -1208,6 +1208,32 @@ export namespace main {
 	        this.use_saved_server = source["use_saved_server"];
 	    }
 	}
+	export class NativeToastRequest {
+	    token: string;
+	    conversation: string;
+	    title: string;
+	    body: string;
+	    replyable: boolean;
+	    reply_label: string;
+	    read_label: string;
+	    placeholder: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NativeToastRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.token = source["token"];
+	        this.conversation = source["conversation"];
+	        this.title = source["title"];
+	        this.body = source["body"];
+	        this.replyable = source["replyable"];
+	        this.reply_label = source["reply_label"];
+	        this.read_label = source["read_label"];
+	        this.placeholder = source["placeholder"];
+	    }
+	}
 	export class NotifyChannels {
 	    toast: boolean;
 	    sound: boolean;

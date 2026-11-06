@@ -147,6 +147,8 @@ type App struct {
 	// selected identity is changed away and back before the UI catches up.
 	// It is guarded by identityMu.
 	identityGeneration uint64
+	// toasts holds Windows notification registration and issued tokens (501).
+	toasts nativeToastState
 }
 
 // NewApp creates a new App.
@@ -207,6 +209,8 @@ func (a *App) startup(ctx context.Context) {
 		a.knownServers = &knownServers{Servers: map[string]string{}, loadErr: trustStoreUnavailable("locate path: %v", err)}
 	}
 	a.registerHotkeys()
+	// (501) Windows Action Center notifications: per-user registration only.
+	go guardCrash("native notifications", a.initNativeToasts)
 	// (291) restore always-on-top.
 	a.settingsMu.Lock()
 	alwaysOnTop := a.settings.AlwaysOnTop

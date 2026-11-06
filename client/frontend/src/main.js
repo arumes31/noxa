@@ -39,7 +39,8 @@ import "./streams.css";
 import "./voice-diagnostics.css";
 import "./polls.css";
 import "./conversations.css";
-import { conversationChanged, conversationRead, conversationTyping } from "./conversations.js";
+import { conversationChanged, conversationRead, conversationTyping, markPrivateGroupRead, quickReplyToPrivateGroup, viewedConversationID } from "./conversations.js";
+import { initNativeToasts } from "./native-toast.js";
 import { initDirectMessages } from "./dm-view.js";
 import "./private-calls.css";
 import "./call-connection.css";
@@ -111,6 +112,8 @@ import { bindCodeBlocks } from "./code-blocks.js";
 
 const P = () => window.__noxaPerms;
 window.__noxaChat = chatUI;
+// (501) Windows notification actions reach private groups through this.
+window.__noxaGroups = Object.freeze({ markPrivateGroupRead, quickReplyToPrivateGroup, viewedConversationID });
 
 const $ = (id) => document.getElementById(id);
 // Server-supplied channel capacity is rendered into markup; accept only a
@@ -3793,6 +3796,7 @@ initSocialUI(); // wave-8b presence/contacts/hover (registers window.__noxaSocia
 initMetaUI();   // wave-8b debug/stats/onboarding (registers window.__noxaMeta)
 initPolishUI(); // wave-8c polish/a11y (registers window.__noxaPolish)
 initNotifications(); // wave-9 notification matrix (registers window.__noxaNotify)
+initNativeToasts(); // (501) Windows Action Center notifications
 chatUI.initChat(); // wave-5b chat UI (must run after __noxa exists)
 initDirectMessages(); // Direct › Messages view (after the chat composer exists)
 initWorkspace();

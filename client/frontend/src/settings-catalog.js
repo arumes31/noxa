@@ -43,7 +43,7 @@ export const SETTINGS_CATEGORIES = Object.freeze([
         "play_sounds", "sound_volume", "effects_enabled", "duck_effects_while_speaking", "spoken_messages",
         "speech_volume", "speech_language", "speech_connection", "speech_admin", "speech_removal",
         "speech_permissions", "speech_channel", "speech_events", "event_sounds", "chat_notification_level",
-        "notify_matrix", "dnd_enabled", "dnd_from", "dnd_to", "notify_join_leave", "notify_connection",
+        "notify_matrix", "windows_notifications", "native_notification_previews", "dnd_enabled", "dnd_from", "dnd_to", "notify_join_leave", "notify_connection",
         "warn_muted_talking", "warn_empty_channel",
     ] },
     { id: "whisper", icon: "whisper", rail: "more", keys: ["whisper_active", "whisper_clients", "whisper_channels", "whisper_channels_server"] },

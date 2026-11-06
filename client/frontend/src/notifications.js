@@ -9,6 +9,7 @@ import { presenceSpeechKey } from "./speech-variation.js";
 import { playAlert, playEvent } from "./sounds.js";
 import { closeDialog, isCurrentServerDialog, mountDialog, mountServerDialog } from "./modal.js";
 import { showIncomingPoke } from "./poke-ui.js";
+import { showNativeNotification } from "./native-toast.js";
 
 const V = () => window.__noxa;
 const App = () => window.go.main.App;
@@ -115,7 +116,8 @@ export function notify(event, text, ctx = {}) {
     }
     if (row.sound && !ctx.noSound) playEventSound(event, ctx.soundEvent, ctx.speechEvent, ctx.speechKey);
     if (row.flash) App().FlashWindow();
-    if (row.native && !document.hasFocus()) App().Notify("noXa " + event, text.slice(0, 200));
+    // (501) Windows toast with quick reply when enabled, else the tray balloon.
+    if (row.native && !document.hasFocus()) void showNativeNotification(event, text, ctx);
 }
 
 // Ordinary channel messages ring for every message while noXa is in the

@@ -178,6 +178,8 @@ export async function openConversationsAt(groupID, messageID = 0, destinationCur
 export function closeConversations() { workspace?.close(); }
 export function isPrivateGroupActive() { return !!workspace?.active(); }
 export function viewedConversationID() { return viewedGroup?.() || ""; }
+export function markPrivateGroupRead(id) { return workspace?.current() ? workspace.markRead(id) : Promise.resolve(false); }
+export function quickReplyToPrivateGroup(id, text) { return workspace?.current() ? workspace.quickReply(id, text) : false; }
 export function privateGroupViewToken() { return workspace?.token(); }
 // listedPrivateGroups is the Messages view's read-only snapshot of the last
 // authoritative list (dm-view.js); "noxa-private-groups-changed" announces a
@@ -254,6 +256,8 @@ export function initConversations() {
             count + (group.members.find(member => member.unique_id === uid())?.pending ? 0 : group.unread_count || 0), 0));
     };
     const markRead = async (group, messageID, token) => {
+        // (501) The group is on screen: its Windows notification can go.
+        if (visible() && selected === group.id && document.hasFocus()) window.__noxaNativeToast?.viewed(tabID + "|group:" + group.id);
         if (!messageID || messageID <= (group.read_message_id || 0)
             || !visible() || selected !== group.id || token !== generation || document.hidden || !document.hasFocus()) return;
         const previous = queuedReads.get(group.id);
@@ -791,6 +795,33 @@ export function initConversations() {
         open: () => V().openDirectMessages?.(),
         jump: async (id, messageID, destinationCurrent) => { saveDraft(); status.textContent = ""; selected = id; jumpTarget = messageID; setVisible(true); await refresh(false, destinationCurrent); if (current() && destinationCurrent() && selected !== id) status.textContent = t("messages.notFound"); },
         close: () => { saveDraft(); setVisible(false); },
+        // (501) "Mark as read" on a Windows notification: advance this
+        // account's read marker to the newest message the list reported.
+        markRead: async id => {
+            const group = listedGroups.find(listed => listed.id === id);
+            const latest = Number(group?.latest_message_id) || 0;
+            if (!group || !current() || latest <= (Number(group.read_message_id) || 0)) return false;
+            await request({ action: "mark_read", id, read_message_id: latest });
+            if (current()) void refresh(true);
+            return true;
+        },
+        // (501) Quick reply: the text goes through this group's own composer
+        // (same encryption and delivery as typed text). An unsent draft is
+        // never replaced: the reply is appended to it and not sent.
+        quickReply: (id, text) => {
+            const form = panel.querySelector("form.group-composer");
+            const input = form?.querySelector("textarea");
+            if (!visible() || selected !== id || !form || !input || !String(text).trim()) return false;
+            if (input.value.trim()) {
+                input.value = input.value.replace(/\s+$/, "") + "\n" + text;
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                return "draft";
+            }
+            input.value = text;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            form.requestSubmit();
+            return "sent";
+        },
         destroy: () => { ++generation; window.clearInterval(sidebarPoll); window.removeEventListener("noxa-language-changed", languageChanged); window.removeEventListener("focus", focusChanged); document.removeEventListener("visibilitychange", focusChanged); setVisible(false); panel.remove(); drafts.clear(); stagedFiles.clear(); memberForms.clear(); references.clear(); },
     };
     void refresh();
