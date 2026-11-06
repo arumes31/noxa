@@ -43,6 +43,7 @@ const roleHelpText = "authorization_model=roles-v1\n" +
 	"serverconfigset data=<escaped_complete_server_configuration>\n" +
 	"chatfilterquery\nchatfilterset data=<escaped_partial_chat_filters>\n" +
 	"servertextset data=<escaped_JSON_with_key_and_value>\n" +
+	"broadcast data=<escaped_JSON_with_text>\n" +
 	"customquery data=<escaped_JSON_with_unique_id_and_optional_after_key_and_limit>\n" +
 	"customchange data=<escaped_JSON_with_unique_id_key_and_value_or_delete>\n" +
 	"Other protected commands are unavailable with roles-v1 authorization.\n"
@@ -56,6 +57,9 @@ func (s *Server) executeRoleCommand(ctx context.Context, sess *session, backend 
 	}
 	if cmd.name == "servertextset" {
 		return s.executeRoleText(ctx, sess, backend, cmd)
+	}
+	if cmd.name == "broadcast" {
+		return s.executeRoleBroadcast(ctx, sess, backend, cmd)
 	}
 	if cmd.name == "chatfilterquery" || cmd.name == "chatfilterset" {
 		return s.executeRoleFilters(ctx, sess, backend, cmd)

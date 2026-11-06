@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"noxa/internal/netproto"
 	"noxa/internal/version"
 )
 
@@ -33,6 +34,7 @@ type Sink interface {
 	IncRTPForwarded(media string, n int)
 	IncFileTransfer(direction, result string)
 	IncAuthFailure(transport, reason string)
+	IncControlDisconnect(transport, reason string)
 	IncRecordingError(operation string)
 	IncChatCryptoFailure(operation string)
 }
@@ -83,6 +85,7 @@ type Metrics struct {
 	rtpForwarded      *prometheus.CounterVec
 	fileTransfers     *prometheus.CounterVec
 	authFailures      *prometheus.CounterVec
+	controlDisconnect *prometheus.CounterVec
 	recordingErrors   *prometheus.CounterVec
 	chatCryptoFailure *prometheus.CounterVec
 	readinessDuration *prometheus.HistogramVec
@@ -130,6 +133,10 @@ func New() *Metrics {
 		authFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "noxa", Name: "auth_failures_total",
 			Help: "Rejected authentication attempts by transport and stable reason.",
+		}, []string{"transport", "reason"}),
+		controlDisconnect: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "noxa", Name: "control_disconnects_total",
+			Help: "Closed control connections by transport and fixed close reason.",
 		}, []string{"transport", "reason"}),
 		recordingErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "noxa", Name: "recording_errors_total",
@@ -187,7 +194,7 @@ func New() *Metrics {
 			Help: "Currently active recording sessions.",
 		}, func() float64 { return nonNegative(m.currentRecorderSessionCount()) }),
 		m.udpPackets, m.udpDropped, m.udpRateLimited, m.tcpConnections,
-		m.chatMessages, m.rtpForwarded, m.fileTransfers, m.authFailures,
+		m.chatMessages, m.rtpForwarded, m.fileTransfers, m.authFailures, m.controlDisconnect,
 		m.recordingErrors, m.chatCryptoFailure, m.readinessDuration,
 		m.broadcastDuration, m.broadcastBacklog, m.buildInfo,
 	)
@@ -227,6 +234,9 @@ func (m *Metrics) IncFileTransfer(direction, result string) {
 }
 func (m *Metrics) IncAuthFailure(transport, reason string) {
 	m.authFailures.WithLabelValues(authTransportLabel(transport), authFailureReasonLabel(reason)).Inc()
+}
+func (m *Metrics) IncControlDisconnect(transport, reason string) {
+	m.controlDisconnect.WithLabelValues(controlTransportLabel(transport), controlCloseReasonLabel(reason)).Inc()
 }
 func (m *Metrics) IncRecordingError(operation string) {
 	m.recordingErrors.WithLabelValues(recordingOperationLabel(operation)).Inc()
@@ -397,6 +407,24 @@ func authFailureReasonLabel(value string) string {
 	}
 }
 
+func controlTransportLabel(value string) string {
+	switch value {
+	case "tcp", "ws":
+		return value
+	default:
+		return "unknown"
+	}
+}
+
+func controlCloseReasonLabel(value string) string {
+	for _, reason := range netproto.ControlCloseReasons {
+		if string(reason) == value {
+			return value
+		}
+	}
+	return "unknown"
+}
+
 func recordingOperationLabel(value string) string {
 	switch value {
 	case "start", "stop", "unexpected_exit":
@@ -450,13 +478,14 @@ func nonNegativeDurationSeconds(value time.Duration) float64 {
 // Noop is a Sink that discards everything, for tests and partial startups.
 type Noop struct{}
 
-func (Noop) IncUDPPackets(string)           {}
-func (Noop) IncUDPPacketsDropped()          {}
-func (Noop) IncUDPPacketsRateLimited()      {}
-func (Noop) IncTCPConnections()             {}
-func (Noop) IncChatMessage(string)          {}
-func (Noop) IncRTPForwarded(string, int)    {}
-func (Noop) IncFileTransfer(string, string) {}
-func (Noop) IncAuthFailure(string, string)  {}
-func (Noop) IncRecordingError(string)       {}
-func (Noop) IncChatCryptoFailure(string)    {}
+func (Noop) IncUDPPackets(string)                {}
+func (Noop) IncUDPPacketsDropped()               {}
+func (Noop) IncUDPPacketsRateLimited()           {}
+func (Noop) IncTCPConnections()                  {}
+func (Noop) IncChatMessage(string)               {}
+func (Noop) IncRTPForwarded(string, int)         {}
+func (Noop) IncFileTransfer(string, string)      {}
+func (Noop) IncAuthFailure(string, string)       {}
+func (Noop) IncControlDisconnect(string, string) {}
+func (Noop) IncRecordingError(string)            {}
+func (Noop) IncChatCryptoFailure(string)         {}

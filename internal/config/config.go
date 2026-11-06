@@ -52,6 +52,10 @@ type Config struct {
 	// QueryAllowRemote is an explicit acknowledgement that the plaintext
 	// ServerQuery listener may bind beyond loopback. Prefer QuerySSH instead.
 	QueryAllowRemote bool `mapstructure:"query_allow_remote"`
+	// QueryAllowedCIDRs restricts which source addresses may connect to the
+	// raw and SSH ServerQuery listeners. Empty allows every source the bind
+	// address can reach; the loopback rule for query_addr still applies.
+	QueryAllowedCIDRs []string `mapstructure:"query_allowed_cidrs"`
 	// ServerQuery over SSH (224): the same command set and the same
 	// credentials as QueryAddr, wrapped in an SSH transport. Off by default.
 	// QuerySSHHostKey is generated on first start and must persist, or every
@@ -95,7 +99,12 @@ type Config struct {
 	PprofEnabled bool `mapstructure:"pprof_enabled"`
 	// ShutdownTimeout is the total grace period shared by every server
 	// component during an orderly shutdown.
-	ShutdownTimeout      time.Duration `mapstructure:"shutdown_timeout"`
+	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
+	// ShutdownGracePeriod delays an orderly shutdown after the first SIGTERM
+	// or interrupt: connected clients receive server_shutdown_scheduled with
+	// the remaining seconds, and the server keeps serving until it elapses.
+	// A second signal skips the rest. Zero (default) shuts down immediately.
+	ShutdownGracePeriod  time.Duration `mapstructure:"shutdown_grace_period"`
 	MaxClients           int           `mapstructure:"max_clients"`
 	ClientTimeoutSeconds int           `mapstructure:"client_timeout_seconds"`
 	DefaultOpusBitrate   int           `mapstructure:"default_opus_bitrate"`
@@ -294,6 +303,7 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("health_allow_plaintext_credentials", false)
 	v.SetDefault("query_addr", DefaultQueryAddr)
 	v.SetDefault("query_allow_remote", false)
+	v.SetDefault("query_allowed_cidrs", []string{})
 	v.SetDefault("query_ssh_enabled", false)
 	v.SetDefault("query_ssh_addr", DefaultQuerySSHAddr)
 	v.SetDefault("query_ssh_host_key", "./data/keys/query_ssh_host.key")
@@ -319,6 +329,7 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("metrics_allow_remote", false)
 	v.SetDefault("pprof_enabled", false)
 	v.SetDefault("shutdown_timeout", 30*time.Second)
+	v.SetDefault("shutdown_grace_period", time.Duration(0))
 	v.SetDefault("max_clients", 1024)
 	v.SetDefault("echo_channel_enabled", true)
 	v.SetDefault("echo_channel_name", "Echo Test")
@@ -557,6 +568,9 @@ func (c *Config) Validate() error {
 	if c.ClientTimeoutSeconds <= 0 || c.ClientTimeoutSeconds > maxClientTimeoutSeconds {
 		errs = append(errs, fmt.Errorf("client_timeout_seconds %d must be between 1 and %d", c.ClientTimeoutSeconds, maxClientTimeoutSeconds))
 	}
+	if c.ShutdownGracePeriod < 0 || c.ShutdownGracePeriod > MaxShutdownGracePeriod {
+		errs = append(errs, fmt.Errorf("shutdown_grace_period %s must be between 0 and %s", c.ShutdownGracePeriod, MaxShutdownGracePeriod))
+	}
 	if c.ShutdownTimeout <= 0 {
 		errs = append(errs, fmt.Errorf("shutdown_timeout %s must be positive", c.ShutdownTimeout))
 	}
@@ -602,6 +616,9 @@ func (c *Config) Validate() error {
 	}
 	if c.TLSEnabled && !certConfigured && strings.TrimSpace(c.TLSDir) == "" {
 		errs = append(errs, errors.New("tls_dir must not be empty when TLS certificate files are not configured"))
+	}
+	if _, err := ParseQueryAllowedCIDRs(c.QueryAllowedCIDRs); err != nil {
+		errs = append(errs, err)
 	}
 	if c.QuerySSHEnabled && strings.TrimSpace(c.QuerySSHHostKey) == "" {
 		errs = append(errs, errors.New("query_ssh_host_key must not be empty when query_ssh_enabled=true"))
@@ -1032,3 +1049,28 @@ func (c *Config) Summary() string {
 		c.RedisEnabled, c.RedisTLSEnabled, c.ShutdownTimeout, c.MaxClients, c.WebRTC.EnableAV1, len(c.WebRTC.ICEServers),
 	)
 }
+
+// ParseQueryAllowedCIDRs parses the ServerQuery source allowlist. Entries must
+// be canonical IPv4/IPv6 CIDRs (host bits clear, no IPv4-mapped IPv6); a bare
+// address is rejected so a typo cannot silently widen or narrow the list.
+func ParseQueryAllowedCIDRs(raw []string) ([]netip.Prefix, error) {
+	prefixes := make([]netip.Prefix, 0, len(raw))
+	for _, entry := range raw {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(entry)
+		if err != nil || prefix.Addr().Is4In6() || prefix != prefix.Masked() {
+			return nil, fmt.Errorf("query_allowed_cidrs contains invalid CIDR %q (use canonical CIDRs such as 10.0.0.0/8 or 192.0.2.10/32)", entry)
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	if len(raw) > 0 && len(prefixes) == 0 {
+		return nil, errors.New("query_allowed_cidrs is set but contains no CIDR; remove it to allow every source")
+	}
+	return prefixes, nil
+}
+
+// MaxShutdownGracePeriod bounds the pre-shutdown announcement window.
+const MaxShutdownGracePeriod = 10 * time.Minute
