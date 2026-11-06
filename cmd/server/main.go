@@ -1109,7 +1109,9 @@ var shutdownReminders = []time.Duration{5 * time.Minute, time.Minute, 30 * time.
 // receives (true).
 func runShutdownGrace(grace time.Duration, announce func(time.Duration), skip <-chan os.Signal) bool {
 	deadline := time.Now().Add(grace)
-	announce(grace)
+	// Announcing fans out to every client; it must never delay the deadline
+	// or a second signal.
+	go announce(grace)
 	for _, remaining := range shutdownReminders {
 		if remaining >= grace {
 			continue
@@ -1117,7 +1119,7 @@ func runShutdownGrace(grace time.Duration, announce func(time.Duration), skip <-
 		timer := time.NewTimer(time.Until(deadline.Add(-remaining)))
 		select {
 		case <-timer.C:
-			announce(time.Until(deadline))
+			go announce(time.Until(deadline))
 		case <-skip:
 			timer.Stop()
 			return true

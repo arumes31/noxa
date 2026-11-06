@@ -49,10 +49,12 @@ func (s *TCPServer) BroadcastIntegrationAlert(ctx context.Context, principal aut
 		if err != nil {
 			return err
 		}
-		s.broadcastEvent(eventAnnouncement, map[string]any{"text": text, "enc": true, "key_id": keyID, "transient": true})
 		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		s.audit(auditCtx, principal.UniqueID(), "server_broadcast", "", fmt.Sprintf("bytes=%d", len(request.Text)))
+		// Delivery is best effort, like every server-wide event: a member whose
+		// outbound queue is full misses it, and the alert is not replayed.
+		s.broadcastEvent(eventAnnouncement, map[string]any{"text": text, "enc": true, "key_id": keyID, "transient": true})
 		hash := sha256.Sum256([]byte(request.Text))
 		result = netproto.ServerBroadcastResult{ContentHash: hex.EncodeToString(hash[:])}
 		return nil

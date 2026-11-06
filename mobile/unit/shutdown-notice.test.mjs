@@ -12,12 +12,14 @@ test("scheduled shutdown notices name the remaining time", () => {
     assert.match(shutdownNotice("server_shutdown_scheduled", { seconds: 30 }), /shuts down in 30 s/);
     assert.match(shutdownNotice("server_shutdown_scheduled", { seconds: 300 }), /shuts down in 5 min/);
     assert.match(shutdownNotice("server_shutdown_scheduled", { seconds: 89 }), /in 89 s/);
+    assert.match(shutdownNotice("server_shutdown_scheduled", { seconds: 90 }), /in 90 s/, "never rounds 90 s up to 2 min");
+    assert.match(shutdownNotice("server_shutdown_scheduled", { seconds: 60 }), /in 1 min/);
     assert.match(shutdownNotice("server_shutdown_scheduled", {}), /in 1 s/, "malformed data still yields a notice");
 });
 
-test("an immediate shutdown says reconnection is automatic", () => {
+test("an immediate shutdown makes no reconnect promise", () => {
     setLanguage("en");
-    assert.match(shutdownNotice("server_shutdown", {}), /shutting down\. noXa reconnects automatically/);
+    assert.equal(shutdownNotice("server_shutdown", {}), "The server is shutting down.");
 });
 
 test("German notices are translated", () => {

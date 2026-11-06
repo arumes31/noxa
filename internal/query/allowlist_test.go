@@ -2,10 +2,13 @@ package query
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -75,11 +78,7 @@ func TestQueryAllowlistRefusesSilently(t *testing.T) {
 		if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
 			t.Fatal(err)
 		}
-		data, _ := io.ReadAll(conn) // EOF or reset: either way no bytes may arrive
-		_ = conn.Close()
-		if len(data) != 0 {
-			t.Fatalf("refused source received %q, want no bytes", data)
-		}
+		assertClosedWithoutBytes(t, conn)
 	}
 	srv.mu.Lock()
 	active := len(srv.conns)
@@ -87,6 +86,33 @@ func TestQueryAllowlistRefusesSilently(t *testing.T) {
 	if active != 0 {
 		t.Fatalf("refused sources left %d registered connections", active)
 	}
+}
+
+// assertClosedWithoutBytes requires the server to close conn before sending
+// anything. A read timeout means the connection was left open: a failure.
+func assertClosedWithoutBytes(t *testing.T, conn net.Conn) {
+	t.Helper()
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(conn)
+	if len(data) != 0 {
+		t.Fatalf("refused source received %q, want no bytes", data)
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatal("refused connection stayed open")
+	}
+	if err != nil && !errors.Is(err, syscall.ECONNRESET) && !isConnReset(err) {
+		t.Fatalf("refused connection: %v, want EOF or reset", err)
+	}
+}
+
+// isConnReset recognises a reset on platforms whose error is not ECONNRESET
+// (Windows reports WSAECONNRESET / WSAECONNABORTED).
+func isConnReset(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "read"
 }
 
 func dialWhenListening(t *testing.T, addr string) net.Conn {
@@ -131,34 +157,47 @@ func TestSSHQueryAllowlistRefusesSource(t *testing.T) {
 		<-errCh
 	})
 
+	// A refused source must be closed before the SSH version banner: a raw
+	// read sees no bytes at all, not a banner followed by an auth failure.
+	assertClosedWithoutBytes(t, dialWhenListening(t, addr))
+}
+
+func TestSSHQueryAllowlistAdmitsListedSource(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	base := New("", nil, newFakeBackend())
+	base.AllowedPrefixes = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}
+	srv := NewSSH(addr, filepath.Join(t.TempDir(), "host.key"), base)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Start(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		_ = srv.Close()
+		<-errCh
+	})
+	conn := dialWhenListening(t, addr)
+	defer func() { _ = conn.Close() }()
 	cfg := &ssh.ClientConfig{
 		User:            "admin-uid",
 		Auth:            []ssh.AuthMethod{ssh.Password("pw")},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // test-only ephemeral host key
-		Timeout:         2 * time.Second,
+		Timeout:         3 * time.Second,
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		client, err := ssh.Dial("tcp", addr, cfg)
-		if err == nil {
-			_ = client.Close()
-			t.Fatal("SSH handshake succeeded from a source outside query_allowed_cidrs")
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		t.Fatalf("SSH handshake from an allowed source: %v", err)
+	}
+	go ssh.DiscardRequests(reqs)
+	go func() {
+		for ch := range chans {
+			_ = ch.Reject(ssh.Prohibited, "test")
 		}
-		var opErr *net.OpError
-		if !asOpError(err, &opErr) {
-			return // listener reachable; handshake refused as expected
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("SSH query listener never became reachable")
-}
-
-// asOpError reports whether err is a dial-level failure (listener not up yet).
-func asOpError(err error, target **net.OpError) bool {
-	op, ok := err.(*net.OpError)
-	if ok && op.Op == "dial" {
-		*target = op
-		return true
-	}
-	return false
+	}()
+	_ = sshConn.Close()
 }

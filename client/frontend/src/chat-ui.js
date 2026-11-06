@@ -4510,7 +4510,9 @@ export function onAnnouncement(d) {
     // announcement banner as it is.
     if (d.transient) {
         const alert = d.text || "";
-        if (alert) window.__noxaNotify?.notify("announcement", t("chat.announcement", { message: alert.slice(0, 200) }), { className: "messages", kind: "warn" });
+        // Not stored anywhere else, so the notification keeps the full text
+        // (the server caps a broadcast at 2048 bytes).
+        if (alert) window.__noxaNotify?.notify("announcement", t("chat.announcement", { message: alert }), { className: "messages", kind: "warn" });
         return;
     }
     const box = $("banner-box");

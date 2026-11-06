@@ -1693,9 +1693,6 @@ func (s *TCPServer) serverSettingPlain(ctx context.Context, key string) string {
 	return plain
 }
 
-// Authorization belongs to the native boundary or integration lease.
-// Keep edits ordered with re-seal write-back; a saved edit gets its own audit
-// attempt and never returns a later protected read as its acknowledgement.
 // sealGlobalText encrypts operator text under the global chat scope, as
 // stored announcements are. label names the text in logs and errors.
 func (s *TCPServer) sealGlobalText(ctx context.Context, label, value string) (string, uint32, error) {
@@ -1716,6 +1713,9 @@ func (s *TCPServer) sealGlobalText(ctx context.Context, label, value string) (st
 	return ct, id, nil
 }
 
+// Authorization belongs to the native boundary or integration lease.
+// Keep edits ordered with re-seal write-back; a saved edit gets its own audit
+// attempt and never returns a later protected read as its acknowledgement.
 func (s *TCPServer) setServerSettingAndAnnounce(ctx context.Context, key, value, actor string) error {
 	if s.deps == nil || s.deps.Chat == nil {
 		return errors.New("chat store unavailable")

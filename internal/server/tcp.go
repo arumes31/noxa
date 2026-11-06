@@ -448,8 +448,9 @@ type TCPServer struct {
 	// startedAt feeds the public server-info uptime (313).
 	startedAt time.Time
 
-	stopOnce sync.Once
-	stopCh   chan struct{}
+	stopOnce   sync.Once
+	stopCh     chan struct{}
+	shutdownAt atomic.Int64 // unix nanos of an announced shutdown, 0 if none
 }
 
 type tcpLifecycleState uint8
@@ -958,6 +959,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 	s.configMu.RUnlock()
 	authDeadline := time.Now().Add(authTimeout)
 	if err := conn.SetDeadline(authDeadline); err != nil {
+		s.metricsSink().IncControlDisconnect(controlTransport(conn), string(netproto.ControlCloseLocal))
 		return
 	}
 	authCtx, cancelAuth := context.WithDeadline(ctx, authDeadline)
@@ -1066,7 +1068,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 			requestCtx = authCtx
 		}
 		if err := s.dispatch(requestCtx, client, frame); err != nil {
-			closeReason = netproto.ControlCloseProtocolError
+			closeReason = dispatchCloseReason(err)
 			s.logger.Warn("dispatch error",
 				zap.String("client_id", client.ID),
 				zap.String("msg_type", netproto.MessageType(frame.Type).String()),
@@ -1488,8 +1490,16 @@ func (s *TCPServer) onDisconnect(client *Client) {
 
 // --- helpers ---------------------------------------------------------------
 
-// metricsSink returns the configured metrics sink, or a no-op when none is
-// wired.
+// dispatchCloseReason separates a failed reply write from a request the
+// server refused to process.
+func dispatchCloseReason(err error) netproto.ControlCloseReason {
+	var networkError net.Error
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.As(err, &networkError) {
+		return netproto.ControlWriteCloseReason(err)
+	}
+	return netproto.ControlCloseProtocolError
+}
+
 // markCloseCause records why the server is closing this connection. The
 // first cause wins, so a later generic close cannot overwrite a specific one.
 func (c *Client) markCloseCause(reason netproto.ControlCloseReason) {
@@ -1504,6 +1514,8 @@ func controlTransport(conn net.Conn) string {
 	return "tcp"
 }
 
+// metricsSink returns the configured metrics sink, or a no-op when none is
+// wired.
 func (s *TCPServer) metricsSink() metrics.Sink {
 	if s.deps == nil || s.deps.Metrics == nil {
 		return metrics.Noop{}

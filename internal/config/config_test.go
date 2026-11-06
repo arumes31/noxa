@@ -837,6 +837,8 @@ func TestValidateQueryAllowedCIDRs(t *testing.T) {
 		{"10.0.0.1/8"},          // host bits set
 		{"::ffff:10.0.0.0/104"}, // IPv4-mapped IPv6
 		{"not-a-cidr"},
+		{"", ""}, // NOXA_QUERY_ALLOWED_CIDRS="," must not silently allow everyone
+		{" "},
 	}
 	for _, entries := range invalid {
 		cfg := cloneConfig(base)

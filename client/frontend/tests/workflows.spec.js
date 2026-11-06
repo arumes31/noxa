@@ -9028,9 +9028,11 @@ test.describe("per-tab automatic reconnect", () => {
                 }
             };
             emit(300);
+            emit(90);
             emit(30);
         });
         await expect(page.locator("#toasts .toast").filter({ hasText: "shuts down in 5 min" })).toHaveCount(1);
+        await expect(page.locator("#toasts .toast").filter({ hasText: "shuts down in 90 s" })).toHaveCount(1);
         await expect(page.locator("#toasts .toast").filter({ hasText: "shuts down in 30 s" })).toHaveCount(1);
         // The countdown is informational: the session stays connected.
         await expect(page.locator("#reconnect-cancel")).toBeHidden();

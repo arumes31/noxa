@@ -1066,6 +1066,9 @@ func ParseQueryAllowedCIDRs(raw []string) ([]netip.Prefix, error) {
 		}
 		prefixes = append(prefixes, prefix)
 	}
+	if len(raw) > 0 && len(prefixes) == 0 {
+		return nil, errors.New("query_allowed_cidrs is set but contains no CIDR; remove it to allow every source")
+	}
 	return prefixes, nil
 }
 
