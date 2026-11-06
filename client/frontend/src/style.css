@@ -117,6 +117,10 @@ body {
     background: var(--bg-panel); border: 1px solid var(--border);
     box-shadow: var(--shadow); font-size: 0.9286rem;
     animation: toast-in .25s ease;
+    /* Long alerts (e.g. a 2048-byte broadcast) stay bounded and wrap; the
+       notification center keeps the full text. */
+    max-width: min(420px, calc(100vw - 28px)); max-height: 40vh; overflow: hidden;
+    overflow-wrap: anywhere; white-space: pre-wrap;
 }
 .toast.warn { border-color: rgba(240, 179, 90, 0.35); color: var(--warn); }
 .toast.out { opacity: 0; transform: translateX(12px); transition: opacity .3s ease, transform .3s ease; }

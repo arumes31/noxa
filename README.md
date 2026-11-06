@@ -156,7 +156,9 @@ unavailable, stream previews are not uploaded (a stream shows its picture once
 watched), and the connection benchmark is unavailable. The echo test channel
 returns your own encrypted media, decrypted with your own key.
 Limits: the server still sees who is in a channel, packet sizes and timing,
-and the clear VP8 keyframe header (dimensions); every participant who receives
+the clear VP8 keyframe header (dimensions) and, for H.264, every NAL unit
+before the first slice (SPS, PPS and SEI: profile, level, dimensions and any
+encoder metadata); every participant who receives
 the keys can record what they receive (the app has no call recorder, external
 recorders cannot be prevented); a key is shared by everyone in the channel, so frames prove channel
 membership, not which member sent them: with the server's help, any
@@ -785,7 +787,7 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_METRICS_ALLOW_REMOTE` | `false` | Permit remote `/metrics` requests; without this opt-in, only IPv4/IPv6 loopback is accepted |
 | `NOXA_PPROF_ENABLED` | `false` | Enable runtime `/debug/pprof/` diagnostics; every pprof endpoint remains GET-only and direct-loopback-only |
 | `NOXA_SHUTDOWN_TIMEOUT` | `30s` | Positive total grace period shared by all services during orderly shutdown |
-| `NOXA_SHUTDOWN_GRACE_PERIOD` | `0s` | Announcement window before an orderly shutdown (max `10m`). After the first SIGTERM/interrupt, readiness turns unhealthy, clients get a countdown (repeated at 5 min, 1 min, 30 s and 10 s left, and sent to sessions that log in during the period) and the server keeps serving; a second signal stops at once. Keep your orchestrator's stop timeout (e.g. Compose `stop_grace_period`) above grace period plus shutdown timeout |
+| `NOXA_SHUTDOWN_GRACE_PERIOD` | `0s` | Announcement window before an orderly shutdown (max `10m`). After the first SIGTERM/interrupt, readiness turns unhealthy, clients get a countdown (repeated at 5 min, 1 min, 30 s and 10 s left, and sent to sessions that log in during the period) and the server keeps serving; a second signal skips the rest of the wait, and the orderly shutdown then completes within `NOXA_SHUTDOWN_TIMEOUT`. Keep your orchestrator's stop timeout (e.g. Compose `stop_grace_period`) above grace period plus shutdown timeout |
 | `NOXA_DATABASE_URL` | `postgres://...` | PostgreSQL connection URL |
 | `NOXA_REDIS_ADDR` | `localhost:6379` | Optional Redis address for pub/sub fanout |
 | `NOXA_REDIS_ENABLED` | `true` | Set `false` to run without Redis; the supplied Compose stack starts Redis by default |
@@ -1139,7 +1141,7 @@ enabling Query SSH.
 | `membermove` | `data=<escaped_JSON_with_client_id_and_destination_channel_id>` | Move a member under current channel and hierarchy checks |
 | `memberkick` | `data=<escaped_JSON_with_client_id>` | Remove a member from the server |
 | `memberban` | `data=<escaped_JSON_with_client_id_and_duration_seconds>` | Ban a connected member |
-| `broadcast` | `data=<escaped_JSON_with_text>` | Send a one-time encrypted alert (up to 2048 bytes of text, and the escaped command must fit the 4096-byte line limit) to every connected member; requires `manage_server`, is audited and is not stored or replayed. Delivery is best effort, like other server-wide events |
+| `broadcast` | `data=<escaped_JSON_with_text>` | Send a one-time encrypted alert (up to 2048 bytes of text, and the escaped command must fit the 4096-byte line limit) to every connected member allowed to view the server (server-level `view_channel`); requires `manage_server`, is audited and is not stored or replayed. Delivery is best effort, like other server-wide events |
 
 Provision integration accounts offline with `adduser -integration`; this enables
 login but grants no roles. Current capabilities and hierarchy apply to every
