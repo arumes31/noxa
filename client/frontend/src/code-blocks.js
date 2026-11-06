@@ -12,7 +12,11 @@ const ALIASES = Object.freeze({ markup: "xml" });
 const SKIP = new Set(["", "plain", "txt", "text"]);
 
 let library = null;
-const loadLibrary = () => (library ||= import("highlight.js").then(module => module.default));
+// A failed chunk load is forgotten, so a later block can try again.
+const loadLibrary = () => (library ||= import("highlight.js").then(module => module.default, error => {
+    library = null;
+    throw error;
+}));
 
 /** Re-highlights one rendered block. Returns the state it ends in. */
 export async function upgradeCodeBlock(pre, load = loadLibrary) {

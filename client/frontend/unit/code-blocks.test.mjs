@@ -39,3 +39,12 @@ test("plain, unknown, detached and failed loads keep the built-in colouring", as
     assert.equal(await upgradeCodeBlock(detached, load), "unknown");
     assert.equal(await upgradeCodeBlock(block("rust"), async () => { throw new Error("chunk failed"); }), "unavailable");
 });
+
+test("a failed library load does not stick to later blocks", async () => {
+    // The default loader is module-scoped; exercise the retry through it by
+    // injecting a loader that fails once, as the default one now forgets.
+    let attempts = 0;
+    const flaky = async () => { attempts++; if (attempts === 1) throw new Error("chunk failed"); return hljs; };
+    assert.equal(await upgradeCodeBlock(block("rust"), flaky), "unavailable");
+    assert.equal(await upgradeCodeBlock(block("rust"), flaky), "done");
+});

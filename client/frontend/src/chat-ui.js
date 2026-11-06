@@ -638,35 +638,55 @@ function markMentions(container) {
 // Custom server emoji (95)
 // ---------------------------------------------------------------------------
 
+let customEmojiRequest = null;
 async function ensureCustomEmoji() {
+    if (customEmojiRequest) return customEmojiRequest;
     if (!customDirty) return;
     const generation = V().state.serverGeneration;
     const tabID = V().state.activeTabID;
     customDirty = false;
+    customEmojiRequest = (async () => {
+        try {
+            const r = await app().EmojiListForTab(tabID);
+            if (generation !== V().state.serverGeneration) return;
+            customEmoji = r.emojis || [];
+        } catch {
+            if (generation !== V().state.serverGeneration) return;
+            customEmoji = [];
+        }
+    })();
     try {
-        const r = await app().EmojiListForTab(tabID);
-        if (generation !== V().state.serverGeneration) return;
-        customEmoji = r.emojis || [];
-    } catch {
-        if (generation !== V().state.serverGeneration) return;
-        customEmoji = [];
+        await customEmojiRequest;
+    } finally {
+        customEmojiRequest = null;
     }
 }
 
+// In-flight image requests, shared so a button rebuilt while one loads (for
+// example by a new search) still receives the image.
+const emojiURLRequests = new Map();
 async function emojiURL(name) {
     if (emojiURLs.has(name)) return emojiURLs.get(name);
+    if (emojiURLRequests.has(name)) return emojiURLRequests.get(name);
     const generation = V().state.serverGeneration;
     const tabID = V().state.activeTabID;
-    emojiURLs.set(name, ""); // marks "loading/failed until proven otherwise"
+    const request = (async () => {
+        try {
+            const d = await app().EmojiGetForTab(tabID, name);
+            if (generation !== V().state.serverGeneration) return "";
+            const u = imageDataURL(d);
+            emojiURLs.set(name, u || ""); // "" caches a failure for this session
+            return u || "";
+        } catch {
+            emojiURLs.set(name, "");
+            return "";
+        }
+    })();
+    emojiURLRequests.set(name, request);
     try {
-        const d = await app().EmojiGetForTab(tabID, name);
-        if (generation !== V().state.serverGeneration) return "";
-        const u = imageDataURL(d);
-        if (!u) return "";
-        emojiURLs.set(name, u);
-        return u;
-    } catch {
-        return "";
+        return await request;
+    } finally {
+        emojiURLRequests.delete(name);
     }
 }
 
@@ -1727,8 +1747,16 @@ function scrollToQuote(quoteEl) {
 // flashMsg scrolls a message into view and pulses it. Returns false when the
 // message is not in the rendered log (scrolled out of the loaded window).
 function flashMsg(id) {
-    const el = document.querySelector(`#chat-log .msg[data-msg-id="${id}"]`);
+    const find = () => document.querySelector(`#chat-log .msg[data-msg-id="${id}"]`);
+    let el = find();
     if (!el) return false;
+    // An active search may hide the target: clear it rather than report a
+    // jump to an invisible row.
+    if (el.classList.contains("hidden") && searchQ) {
+        closeSearch();
+        el = find();
+    }
+    if (!el || el.classList.contains("hidden")) return false;
     el.scrollIntoView({ block: "center" });
     el.classList.add("flash");
     setTimeout(() => el.classList.remove("flash"), 1200);
@@ -3702,13 +3730,20 @@ function toggleEmojiPanel(target = null) {
 
     // (607) Search, favorites and recents. Right-click (or Alt+click) an
     // emoji to pin or unpin it as a favorite.
-    const settings = V().state.settings || {};
+    // Settings can be replaced while the picker is open (settings_update), so
+    // every action reads the current object.
+    const prefs = () => V().state.settings || {};
     const sections = document.createElement("div");
     sections.className = "emoji-sections";
     const results = document.createElement("div");
     results.className = "emoji-grid emoji-results hidden";
+    // Server emoji names belong to one server, so only unicode emoji are
+    // remembered across servers in recents and favorites.
+    const remembered = e => !/^:[^:\s]+:$/.test(e);
     const choose = e => {
         insert(e);
+        if (!remembered(e)) return;
+        const settings = prefs();
         settings.emoji_recents = recordEmojiUse(settings.emoji_recents, e);
         persistSettings();
     };
@@ -3729,10 +3764,10 @@ function toggleEmojiPanel(target = null) {
         const code = custom ? "" : Object.entries(EMOJI).find(([, v]) => v === e)?.[0];
         b.title = title || (custom ? e : code ? `:${code}:` : e);
         b.onclick = event => {
-            if (event.altKey) { toggleFav(e); return; }
+            if (event.altKey && remembered(e)) { toggleFav(e); return; }
             choose(e);
         };
-        b.oncontextmenu = event => { event.preventDefault(); toggleFav(e); };
+        if (remembered(e)) b.oncontextmenu = event => { event.preventDefault(); toggleFav(e); };
         return b;
     };
     const section = (label, list, className = "") => {
@@ -3747,13 +3782,20 @@ function toggleEmojiPanel(target = null) {
     };
     const renderSections = () => {
         sections.replaceChildren();
-        section(t("chat.emojiFavorites"), storedEmoji(settings.emoji_favorites, MAX_FAVORITES), "emoji-favorites");
-        section(t("chat.emojiRecent"), storedEmoji(settings.emoji_recents, MAX_RECENT), "emoji-recent");
+        const settings = prefs();
+        section(t("chat.emojiFavorites"), storedEmoji(settings.emoji_favorites, MAX_FAVORITES).filter(remembered), "emoji-favorites");
+        section(t("chat.emojiRecent"), storedEmoji(settings.emoji_recents, MAX_RECENT).filter(remembered), "emoji-recent");
         for (const [cat, list] of EMOJI_CATS) section(t(cat), list);
     };
     const toggleFav = e => {
-        const pinned = storedEmoji(settings.emoji_favorites, MAX_FAVORITES).includes(e);
-        settings.emoji_favorites = toggleFavorite(settings.emoji_favorites, e);
+        const settings = prefs();
+        const current = storedEmoji(settings.emoji_favorites, MAX_FAVORITES);
+        const pinned = current.includes(e);
+        if (!pinned && current.length >= MAX_FAVORITES) {
+            V().toast(t("chat.emojiFavoritesFull", { max: MAX_FAVORITES }), "warn");
+            return;
+        }
+        settings.emoji_favorites = toggleFavorite(current, e);
         persistSettings();
         V().toast(t(pinned ? "chat.emojiUnpinned" : "chat.emojiPinned", { emoji: e }));
         renderSections();
@@ -3764,7 +3806,7 @@ function toggleEmojiPanel(target = null) {
     search.placeholder = t("chat.emojiSearch");
     search.setAttribute("aria-label", t("chat.emojiSearch"));
     search.title = t("chat.emojiFavoriteHint");
-    search.addEventListener("input", () => {
+    const runSearch = () => {
         const query = search.value.trim();
         results.classList.toggle("hidden", !query);
         sections.classList.toggle("hidden", !!query);
@@ -3779,7 +3821,8 @@ function toggleEmojiPanel(target = null) {
             results.appendChild(none);
         }
         for (const entry of found) results.appendChild(emojiButton(entry.emoji, ":" + entry.codes[0] + ":"));
-    });
+    };
+    search.addEventListener("input", runSearch);
     search.addEventListener("keydown", event => {
         if (event.key !== "Enter") return;
         event.preventDefault();
@@ -3832,6 +3875,8 @@ function toggleEmojiPanel(target = null) {
     emojiPanel.appendChild(grid);
     ensureCustomEmoji().then(async () => {
         if (!currentPanel()) return;
+        // A search typed before the server list arrived now includes it.
+        if (search.value.trim()) runSearch();
         if (customEmoji.length === 0) {
             const hint = document.createElement("div");
             hint.className = "set-hint";
@@ -3844,14 +3889,7 @@ function toggleEmojiPanel(target = null) {
             const url = await emojiURL(e.name);
             if (!currentPanel()) return;
             if (!url) continue;
-            const b = document.createElement("button");
-            b.title = ":" + e.name + ":";
-            const img = document.createElement("img");
-            img.src = url;
-            img.alt = ":" + e.name + ":";
-            b.appendChild(img);
-            b.onclick = () => insert(":" + e.name + ":");
-            grid.appendChild(b);
+            grid.appendChild(emojiButton(":" + e.name + ":"));
         }
     });
 

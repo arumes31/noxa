@@ -2754,8 +2754,17 @@ test.describe("tab-bound chat history and pins", () => {
         await page.locator("#chat-pins-btn").evaluate(button => button.click());
         await expect(page.locator(".pin-row")).toHaveCount(1);
         await expect(page.locator(".pins-panel")).toHaveAttribute("role", "complementary");
+        // A search that would hide the target is cleared by the jump.
+        await page.evaluate(() => {
+            document.getElementById("chat-search-btn").click();
+            const search = document.getElementById("chat-search");
+            search.value = "history 200";
+            search.dispatchEvent(new Event("input", { bubbles: true }));
+        });
         await page.locator('.pin-row button[title="jump to message"]').click();
         await expect(page.locator('#chat-log .msg[data-msg-id="60"]')).toHaveClass(/flash/);
+        await expect(page.locator('#chat-log .msg[data-msg-id="60"]')).not.toHaveClass(/(^|\s)hidden(\s|$)/);
+        await expect(page.locator("#chat-search")).toHaveValue("");
         const pages = await page.evaluate(() => window.__chatReadScope.calls.filter(call => call[0] === "ChatHistory").map(call => call[3]));
         expect(pages).toEqual([0, 151, 101]);
     });
