@@ -484,9 +484,18 @@ export class DirectMessages extends EventTarget {
     }
 
     /** Marks a contact's identity as verified (compared in person) or not. */
-    async setVerified(uid, verified) {
+    /**
+     * Marks a contact (un)verified. With fingerprint, verification applies
+     * only while the pinned identity still has that fingerprint, so a scan of
+     * an earlier identity cannot verify its replacement.
+     */
+    async setVerified(uid, verified, { fingerprint } = {}) {
         const pinned = await this.#pin(uid);
         if (!pinned?.signingKey) throw new Error("no identity to verify");
+        if (verified && fingerprint !== undefined &&
+            keyFingerprint(`-----BEGIN PUBLIC KEY-----\n${pinned.signingKey}\n-----END PUBLIC KEY-----\n`) !== fingerprint) {
+            throw new Error("the contact's identity changed since the scan");
+        }
         await this.#put(Stores.pins, uid, { ...pinned, verified: !!verified });
         const cached = this.directory.get(uid);
         if (cached && cached.trust === Trust.ok) cached.verified = !!verified;

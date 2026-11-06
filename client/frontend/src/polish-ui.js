@@ -466,6 +466,6 @@ export function initPolishUI() {
     for (const event of ["snapshot", "tab_reset", "tab_identity", "disconnected"]) window.runtime.EventsOn(event, () => queueMicrotask(updateBellBadge));
     initActivityWorkspace(notifications);
     document.getElementById("notif-bell").onclick = () => window.__noxaActivity.open();
-    window.__noxaPolish = { toggleChatPopout, toggleZen, openNotifCenter, announce, recordNotification, dndActive, virtualizeEnabled, myBranchIDs };
+    window.__noxaPolish = { toggleChatPopout, toggleZen, openNotifCenter, announce, recordNotification, dndActive, virtualizeEnabled, myBranchIDs, navigateNotification };
     window.__noxaFakeTree = injectFakeTree;
 }

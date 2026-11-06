@@ -276,3 +276,30 @@ test("a jump lands on its row even when measuring the rows around it shifts ever
         await expect(page.locator(".dlg-overlay")).toHaveCount(0);
     }
 });
+
+test("a notification quick reply from an older window returns to the present and sends", async ({ page }) => {
+    await setupHistory(page, { latest: [151, 200], around: [50, 149], after: 200 });
+    await page.evaluate(() => {
+        const f = window.__virtual;
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "SendChatOperationForTab" || key === "SendChatForTab") return async (...args) => { f.calls.push(["send", ...args.slice(1)]); return ""; };
+            return target[key];
+        } });
+    });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeVisible();
+    await page.evaluate(() => { window.__virtual.pins = { pins: [{ message_id: 100, message: { body: "history 100", from_nickname: "Bene" } }] }; });
+    await page.locator("#chat-pins-btn").evaluate(button => button.click());
+    await page.locator('.pin-row button[title="jump to message"]').click();
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveClass(/flash/);
+    // The toast's "conversation" is the selected chat even while an older
+    // window is shown; the reply goes out and the newest page is back.
+    expect(await page.evaluate(() => window.__noxaChat.activeConversationKey({ visible: false }))).toBe("ch:1");
+    const result = await page.evaluate(() => window.__noxaChat.quickReplyToActive("ch:1", "on my way"));
+    expect(result).toBe("sent");
+    expect(await page.evaluate(() => window.__virtual.calls.filter(call => call[0] === "send").length)).toBe(1);
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeInViewport();
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveCount(0);
+    await expect(page.locator("#chat-newpill")).toBeHidden();
+});

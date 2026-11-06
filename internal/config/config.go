@@ -104,13 +104,18 @@ type Config struct {
 	// or interrupt: connected clients receive server_shutdown_scheduled with
 	// the remaining seconds, and the server keeps serving until it elapses.
 	// A second signal skips the rest. Zero (default) shuts down immediately.
-	ShutdownGracePeriod  time.Duration `mapstructure:"shutdown_grace_period"`
-	MaxClients           int           `mapstructure:"max_clients"`
-	ClientTimeoutSeconds int           `mapstructure:"client_timeout_seconds"`
-	DefaultOpusBitrate   int           `mapstructure:"default_opus_bitrate"`
-	DefaultOpusFEC       bool          `mapstructure:"default_opus_fec"`
-	DefaultOpusDTX       bool          `mapstructure:"default_opus_dtx"`
-	DefaultOpusStereo    bool          `mapstructure:"default_opus_stereo"`
+	ShutdownGracePeriod time.Duration `mapstructure:"shutdown_grace_period"`
+	// AuditPartitionRetentionMonths (301) lets noxa-migrate drop whole
+	// monthly audit_log partitions that ended more than this many months
+	// ago. 0 keeps every partition; otherwise at least 6, so it never cuts
+	// into the 180 days of audit history the server keeps row by row.
+	AuditPartitionRetentionMonths int  `mapstructure:"audit_partition_retention_months"`
+	MaxClients                    int  `mapstructure:"max_clients"`
+	ClientTimeoutSeconds          int  `mapstructure:"client_timeout_seconds"`
+	DefaultOpusBitrate            int  `mapstructure:"default_opus_bitrate"`
+	DefaultOpusFEC                bool `mapstructure:"default_opus_fec"`
+	DefaultOpusDTX                bool `mapstructure:"default_opus_dtx"`
+	DefaultOpusStereo             bool `mapstructure:"default_opus_stereo"`
 	// VideoMaxBitrate caps relayed video RTP bits/s per publisher, across camera,
 	// screen and simulcast layers, with a one-second burst. Zero is unlimited.
 	VideoMaxBitrate int `mapstructure:"video_max_bitrate"`
@@ -330,6 +335,7 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("pprof_enabled", false)
 	v.SetDefault("shutdown_timeout", 30*time.Second)
 	v.SetDefault("shutdown_grace_period", time.Duration(0))
+	v.SetDefault("audit_partition_retention_months", 0)
 	v.SetDefault("max_clients", 1024)
 	v.SetDefault("echo_channel_enabled", true)
 	v.SetDefault("echo_channel_name", "Echo Test")
@@ -567,6 +573,9 @@ func (c *Config) Validate() error {
 	}
 	if c.ClientTimeoutSeconds <= 0 || c.ClientTimeoutSeconds > maxClientTimeoutSeconds {
 		errs = append(errs, fmt.Errorf("client_timeout_seconds %d must be between 1 and %d", c.ClientTimeoutSeconds, maxClientTimeoutSeconds))
+	}
+	if n := c.AuditPartitionRetentionMonths; n != 0 && (n < MinAuditPartitionRetentionMonths || n > 1200) {
+		errs = append(errs, fmt.Errorf("audit_partition_retention_months %d must be 0 (keep everything) or between %d and 1200", n, MinAuditPartitionRetentionMonths))
 	}
 	if c.ShutdownGracePeriod < 0 || c.ShutdownGracePeriod > MaxShutdownGracePeriod {
 		errs = append(errs, fmt.Errorf("shutdown_grace_period %s must be between 0 and %s", c.ShutdownGracePeriod, MaxShutdownGracePeriod))
@@ -1071,6 +1080,10 @@ func ParseQueryAllowedCIDRs(raw []string) ([]netip.Prefix, error) {
 	}
 	return prefixes, nil
 }
+
+// MinAuditPartitionRetentionMonths keeps partition retention from removing
+// audit rows the server's own 180-day row retention would still keep.
+const MinAuditPartitionRetentionMonths = 6
 
 // MaxShutdownGracePeriod bounds the pre-shutdown announcement window.
 const MaxShutdownGracePeriod = 10 * time.Minute

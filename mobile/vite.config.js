@@ -2,10 +2,12 @@
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { mediaE2EENoticePlugin } from "../tools/media-e2ee-notices.mjs";
+import { MOBILE_PACKAGES, frontendNoticePlugin } from "../tools/frontend-notices.mjs";
 
 export default {
     base: "/app/",
-    plugins: [mediaE2EENoticePlugin(fileURLToPath(new URL("./node_modules/", import.meta.url))), {
+    plugins: [mediaE2EENoticePlugin(fileURLToPath(new URL("./node_modules/", import.meta.url))),
+        frontendNoticePlugin(fileURLToPath(new URL("./node_modules/", import.meta.url)), MOBILE_PACKAGES), {
         name: "ratchet-dependency-notices",
         generateBundle() {
             const notices = ["curves", "hashes"].map(name => {

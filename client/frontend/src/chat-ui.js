@@ -1,4 +1,8 @@
 import { joinChannelLocally } from "./local-join-intent.js";
+import { openImageEditor } from "./image-editor.js";
+import { isEditable } from "./image-editor-model.js";
+import { SafetyScan, SafetyScheme, checkSafetyScan } from "./safety-qr.js";
+import { scanQR } from "./qr-scan.js";
 import { AUDIO_MIME, TEXT_MAX_B64, decodeTextPreview, previewKind } from "./attachment-preview.js";
 import { clipboardFiles, preparePastedFiles } from "./paste-images.js";
 import { mountComposerFormat } from "./composer-format.js";
@@ -199,6 +203,76 @@ function getStore(key) {
         store.set(key, { msgs: [], hasMore: true, end: false, loading: false, loaded: false, truncated: false });
     }
     return store.get(key);
+}
+
+// (501) Windows notification helpers. The key matches native-toast.js
+// ("dm:<peer>" or "ch:<channel>"). By default only a chat that is actually on
+// screen counts (not behind Files, hidden or unfocused); { visible: false }
+// asks for the selected view regardless.
+export function activeConversationKey({ visible = true } = {}) {
+    if (isPrivateGroupActive()) return null;
+    const key = activeKey();
+    return !visible || chatSurfaceVisible(key) ? key : null;
+}
+
+// quickReplyToActive sends text through the normal composer if expectedKey is
+// the selected view. An unsent draft (text or staged files) is never
+// replaced: the reply is appended to it and left for the user. Returns
+// "sent", "draft", "kept" (the send failed; the reply stays in the composer)
+// or false.
+export async function quickReplyToActive(expectedKey, text) {
+    const input = $("chat-text");
+    if (!input || activeConversationKey({ visible: false }) !== expectedKey || !String(text).trim()) return false;
+    if (activeSend || input.value.trim() || pendingFiles.length) {
+        // The DM/channel composer is a single-line input: join with a space.
+        const separator = input.value.trim() ? (input.tagName === "TEXTAREA" ? "\n" : " ") : "";
+        input.value = input.value.replace(/\s+$/, "") + separator + text;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        return "draft";
+    }
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    try {
+        await sendMessage();
+    } catch {
+        return "kept";
+    }
+    const failed = !$("chat-send-error")?.classList.contains("hidden");
+    return failed || input.value.includes(text) ? "kept" : "sent";
+}
+
+// markConversationSeen clears local unread state for a notification's
+// conversation without opening it. Read receipts stay tied to actually
+// viewing a direct conversation, so none is sent here; a channel's read
+// position follows the notified message, like reading it elsewhere.
+export function markConversationSeen(reference) {
+    if (reference?.kind === "dm" && typeof reference.peer_id === "string") {
+        const tab = pmTabs.get(reference.peer_id);
+        if (!tab) return false;
+        tab.unread = 0;
+        renderTabs();
+        return true;
+    }
+    if ((reference?.kind === "channel" || reference?.kind === "thread") && Number.isSafeInteger(reference.channel_id)) {
+        const chID = reference.channel_id;
+        const settings = V().state.settings;
+        const messageID = Number(reference.message_id) || 0;
+        if (settings && messageID > 0) {
+            settings.last_read_channels ||= {};
+            const next = mergeReadMarker(settings.last_read_channels[chID], messageID);
+            if (next > (Number(settings.last_read_channels[chID]) || 0)) {
+                settings.last_read_channels[chID] = next;
+                persistSettings();
+            }
+        }
+        markRead("ch:" + chID);
+        unread.delete(chID);
+        reportRead("channel", chID);
+        V().renderTree?.();
+        renderTabs();
+        return true;
+    }
+    return false;
 }
 
 function activeKey() {
@@ -2200,11 +2274,17 @@ async function openE2EEDiagnostics() {
             <dt>${t("chat.pendingHandshakes")}</dt><dd>${d.pending_key_pulls || 0}</dd>
         </dl>
         ${peer ? `<label>${t("chat.safetyNumber")}</label><pre class="safety-number">${escapeHTML(d.safety_number || t("chat.keyUnavailable"))}</pre>` : ""}
-        <div class="dlg-buttons">${peer && d.safety_number ? `<button class="dlg-ok verify-safety">${t("chat.markVerified")}</button>` : ""}<button class="dlg-cancel">${t("chat.close")}</button></div>
+        ${peer && d.safety_qr ? `<figure class="safety-qr"><img class="safety-qr-image" alt="${escapeHTML(t("chat.safetyQrAlt"))}" /><figcaption>${escapeHTML(t("chat.safetyQrHint"))}</figcaption></figure>
+        <p class="safety-scan-result" role="status" hidden></p>` : ""}
+        <div class="dlg-buttons">${peer && d.safety_qr && d.safety_digest && d.own_unique_id ? `<button class="dlg-btn scan-safety">${t("chat.safetyScan")}</button>` : ""}${peer && d.safety_number ? `<button class="dlg-ok verify-safety">${t("chat.markVerified")}</button>` : ""}<button class="dlg-cancel">${t("chat.close")}</button></div>
     </div>`;
+    // A data URL from the native layer; set as a property, never as markup.
+    const qrImage = overlay.querySelector(".safety-qr-image");
+    if (qrImage && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(d.safety_qr)) qrImage.src = d.safety_qr;
+    else overlay.querySelector(".safety-qr")?.remove();
     overlay.querySelector(".dlg-cancel").onclick = () => overlay.remove();
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-    overlay.querySelector(".verify-safety")?.addEventListener("click", async () => {
+    const markVerified = async () => {
         const settings = V().state.settings;
         const previous = settings.e2ee_verified;
         settings.e2ee_verified = { ...(previous || {}), [peer]: d.safety_number };
@@ -2220,6 +2300,38 @@ async function openE2EEDiagnostics() {
         if (!isCurrentServerDialog(overlay)) return;
         overlay.remove();
         V().toast(t("chat.safetyVerified"));
+    };
+    overlay.querySelector(".verify-safety")?.addEventListener("click", markVerified);
+    // (205) Scanning the contact's code compares the full digest. Only a
+    // match verifies; a mismatch is reported and never saved.
+    overlay.querySelector(".scan-safety")?.addEventListener("click", async () => {
+        const pair = { scheme: SafetyScheme.pairwise, me: d.own_unique_id, peer, digest: d.safety_digest };
+        const messages = {
+            [SafetyScan.invalid]: t("chat.safetyScanInvalid"),
+            [SafetyScan.wrongPair]: t("chat.safetyScanWrongPair"),
+            [SafetyScan.otherScheme]: t("chat.safetyScanOtherScheme"),
+        };
+        const verdict = await scanQR({
+            labels: { title: t("chat.safetyScanTitle"), hint: t("chat.safetyScanHint"), cancel: t("chat.close"), unavailable: t("chat.safetyScanUnavailable") },
+            // Closes with the server's dialogs, e.g. when the connection drops.
+            mount: mountServerDialog,
+            accept: text => {
+                const result = checkSafetyScan(text, pair);
+                return result === SafetyScan.match || result === SafetyScan.mismatch ? { done: true, value: result } : { message: messages[result] };
+            },
+        });
+        if (!verdict || !isCurrentServerDialog(overlay)) return;
+        const result = overlay.querySelector(".safety-scan-result");
+        if (verdict === SafetyScan.match) {
+            await markVerified();
+            return;
+        }
+        if (result) {
+            result.hidden = false;
+            result.className = "safety-scan-result warn";
+            result.textContent = t("chat.safetyScanMismatch");
+        }
+        V().toast(t("chat.safetyScanMismatch"), "warn");
     });
     mountServerDialog(overlay);
 }
@@ -2936,6 +3048,8 @@ function renderView(keepScrollFrom, { suppressMarkRead = false, skipThread = fal
     }
     if (st.detached) showNewPill();
     if (!suppressMarkRead && !anchor) markRead(key);
+    // (501) A conversation on screen no longer needs its Windows notification.
+    if (chatSurfaceVisible(key)) window.__noxaNativeToast?.viewed(V().state.activeTabID + "|" + key);
 }
 
 // logItems lists the rows of a log in order: messages, plus the "— new
@@ -4255,6 +4369,7 @@ function renderFilePreview() {
             chip.textContent = "📎 " + f.name;
             item.appendChild(chip);
         }
+        if (isEditable(f)) item.appendChild(editStagedButton(f));
         const x = document.createElement("button");
         x.textContent = "✕";
         x.title = t("chat.remove");
@@ -4265,6 +4380,39 @@ function renderFilePreview() {
         item.appendChild(x);
         row.appendChild(item);
     });
+}
+
+// (605) Edit opens the image editor for a staged image; the result replaces
+// that staged file only while it is still staged in the same conversation.
+const editingStaged = new WeakSet();
+function editStagedButton(f) {
+    const edit = document.createElement("button");
+    edit.className = "file-preview-edit";
+    edit.textContent = "✎";
+    edit.title = t("chat.imageEditor.edit", { name: f.name });
+    edit.setAttribute("aria-label", edit.title);
+    edit.onclick = async () => {
+        // One editor per staged file; a second click while it loads or is
+        // open does nothing.
+        if (editingStaged.has(f)) return;
+        editingStaged.add(f);
+        const scope = captureScope(readSendScope);
+        let edited;
+        try {
+            edited = await openImageEditor(f, {
+                maxBytes: ATTACH_MAX_BYTES,
+                isCurrent: () => scopeIsCurrent(scope, readSendScope) && pendingFiles.includes(f),
+                toast: (message, kind) => V().toast(message, kind),
+            });
+        } finally {
+            editingStaged.delete(f);
+        }
+        const at = pendingFiles.indexOf(f);
+        if (!edited || at < 0 || !scopeIsCurrent(scope, readSendScope)) return;
+        pendingFiles[at] = edited;
+        renderFilePreview();
+    };
+    return edit;
 }
 
 function insertAtCursor(text, input = $("chat-text")) {
