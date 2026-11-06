@@ -25,6 +25,9 @@ export function iceTransportState(pc) {
  */
 export function createIceRestartLadder({ restart, state, onExhausted = () => {}, timers = globalThis }) {
     let attempts = 0, timer = null, stopped = false, exhausted = false;
+    // restarting: a restart is in flight; firstFor: the state a pending first
+    // step was scheduled for.
+    let restarting = false, firstFor = "";
 
     function clear() {
         if (timer !== null) timers.clearTimeout(timer);
@@ -32,8 +35,14 @@ export function createIceRestartLadder({ restart, state, onExhausted = () => {},
     }
 
     function schedule() {
-        if (stopped || timer !== null) return;
+        if (stopped || restarting) return;
         const current = state();
+        // A failure while the "disconnected" grace step waits restarts now.
+        if (timer !== null && current === "failed" && attempts === 1 && firstFor === "disconnected") {
+            clear();
+            attempts = 0;
+        }
+        if (timer !== null) return;
         if (current === "connected") { reset(); return; }
         if (current !== "failed" && current !== "disconnected") return;
         if (attempts > ICE_BACKOFF_MS.length) {
@@ -41,6 +50,7 @@ export function createIceRestartLadder({ restart, state, onExhausted = () => {},
             return;
         }
         const delay = attempts === 0 ? ICE_FIRST_RESTART_MS[current] : ICE_BACKOFF_MS[attempts - 1];
+        firstFor = attempts === 0 ? current : "";
         attempts++;
         const mine = timers.setTimeout(async () => {
             if (timer !== mine) return;
@@ -49,7 +59,8 @@ export function createIceRestartLadder({ restart, state, onExhausted = () => {},
             const now = state();
             if (now === "connected") { reset(); return; }
             if (now !== "failed" && now !== "disconnected") return;
-            try { await restart(); } catch { /* the next step retries */ }
+            restarting = true;
+            try { await restart(); } catch { /* the next step retries */ } finally { restarting = false; }
             // A persistent failure may not fire another state change.
             schedule();
         }, delay);
@@ -71,9 +82,10 @@ export function createIceRestartLadder({ restart, state, onExhausted = () => {},
         },
         /** A network change: restart a waiting ladder from the first step. */
         nudge() {
-            if (stopped || timer === null) return;
+            if (stopped) return;
             clear();
             attempts = 0;
+            exhausted = false;
             schedule();
         },
         stop() { stopped = true; clear(); },

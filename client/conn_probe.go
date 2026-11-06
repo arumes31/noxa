@@ -15,19 +15,27 @@ const resumeProbeTimeout = 5 * time.Second
 // normal deadline; a transport that died during sleep fails within timeout
 // instead of the regular 45-second read timeout, so reconnection starts early.
 func (m *connManager) probeLiveness(timeout time.Duration) bool {
+	if timeout <= 0 {
+		return false
+	}
+	// deadlineMu orders this update with the read loop's, so an older read
+	// deadline cannot replace the probe's shorter one.
+	m.deadlineMu.Lock()
 	m.mu.Lock()
 	conn := m.conn
-	m.mu.Unlock()
-	if conn == nil || timeout <= 0 {
+	if conn == nil {
+		m.mu.Unlock()
+		m.deadlineMu.Unlock()
 		return false
 	}
 	until := time.Now().Add(timeout)
-	m.mu.Lock()
 	m.probeUntil = until
 	m.mu.Unlock()
 	// The read loop also applies probeUntil before its next read; this covers
 	// a read that is already blocked.
-	if err := conn.SetReadDeadline(until); err != nil {
+	err := conn.SetReadDeadline(until)
+	m.deadlineMu.Unlock()
+	if err != nil {
 		return false
 	}
 	// A failed write already terminates the connection through writeConn.

@@ -214,6 +214,7 @@ func (s *Server) tlsConfig() (*tls.Config, error) {
 		}
 		cfg := manager.TLSConfig()
 		cfg.MinVersion = tls.VersionTLS12
+		cfg.CurvePreferences = tlscert.CurvePreferences()
 		return cfg, nil
 	default:
 		// A trusted reverse proxy terminates TLS.

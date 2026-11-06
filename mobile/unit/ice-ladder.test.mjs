@@ -87,3 +87,47 @@ test("transport state prefers closed, then failed, then disconnected", () => {
     assert.equal(iceTransportState({ connectionState: "connected", iceConnectionState: "completed" }), "connected");
     assert.equal(iceTransportState({ connectionState: "new", iceConnectionState: "checking" }), "");
 });
+
+test("a failure during the disconnected grace step restarts at once", async () => {
+    const f = ladderFixture("disconnected");
+    f.ladder.update();
+    assert.deepEqual(f.timers.delays(), [500]);
+    f.set("failed");
+    f.ladder.update();
+    assert.deepEqual(f.timers.delays(), [0], "the grace timer is replaced, not doubled");
+    await f.timers.runNext();
+    assert.equal(f.restarts(), 1);
+    assert.deepEqual(f.timers.delays(), [1000]);
+});
+
+test("state changes during an in-flight restart do not start another timer", async () => {
+    const timers = fakeTimers();
+    let release;
+    let restarts = 0;
+    const ladder = createIceRestartLadder({
+        state: () => "failed", timers,
+        restart: () => { restarts++; return new Promise(resolve => { release = resolve; }); },
+    });
+    ladder.update();
+    const run = timers.runNext();
+    ladder.update();
+    ladder.update();
+    assert.equal(timers.size(), 0, "nothing is scheduled while the restart runs");
+    release();
+    await run;
+    assert.equal(restarts, 1);
+    assert.deepEqual(timers.delays(), [1000]);
+});
+
+test("a network change restarts an exhausted ladder from its first step", async () => {
+    const f = ladderFixture("failed");
+    f.ladder.update();
+    for (let i = 0; i < 5; i++) await f.timers.runNext();
+    assert.equal(f.exhausted(), 1);
+    assert.equal(f.timers.size(), 0);
+    f.ladder.nudge();
+    assert.deepEqual(f.timers.delays(), [0]);
+    f.ladder.stop();
+    f.ladder.nudge();
+    assert.equal(f.timers.size(), 0, "a stopped ladder stays stopped");
+});

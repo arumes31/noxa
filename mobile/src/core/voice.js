@@ -335,7 +335,7 @@ export class Voice extends EventTarget {
             this.#stopRenewal = this.session.onRelayRenewal(servers => {
                 if (this.pc !== pc) return;
                 try { pc.setConfiguration({ iceServers: servers }); } catch { return; }
-                this.#enqueue(() => this.#offer({ iceRestart: true })).catch(() => {});
+                this.#enqueue(() => (this.pc === pc ? this.#offer({ iceRestart: true }) : undefined)).catch(() => {});
             });
             this.pc = pc;
             pc.onicecandidate = event => {
@@ -345,7 +345,9 @@ export class Voice extends EventTarget {
             pc.ontrack = () => this.#reconcile();
             const ladder = createIceRestartLadder({
                 state: () => (this.pc === pc ? iceTransportState(pc) : ""),
-                restart: () => this.#enqueue(() => this.#offer({ iceRestart: true })),
+                // A queued restart may run after leave() and rejoin: it only
+                // applies to the peer this ladder belongs to.
+                restart: () => this.#enqueue(() => (this.pc === pc ? this.#offer({ iceRestart: true }) : undefined)),
             });
             this.#iceLadder = ladder;
             pc.onconnectionstatechange = () => { ladder.update(); this.#emit("state"); };
@@ -799,7 +801,8 @@ export class Voice extends EventTarget {
             await pc.setLocalDescription({ type: "rollback" }).catch(() => {});
             // The server offered at the same time: answer it first (queued
             // behind us), then offer again.
-            if (/collision/i.test(error.message)) this.#enqueue(() => this.#offer());
+            // The retry keeps its options (an ICE restart stays one) and its peer.
+            if (/collision/i.test(error.message)) this.#enqueue(() => (this.pc === pc ? this.#offer(options) : undefined));
             else throw error;
         }
     }
