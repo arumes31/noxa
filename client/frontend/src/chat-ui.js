@@ -1,4 +1,6 @@
 import { joinChannelLocally } from "./local-join-intent.js";
+import { openImageEditor } from "./image-editor.js";
+import { isEditable } from "./image-editor-model.js";
 import { SafetyScan, SafetyScheme, checkSafetyScan } from "./safety-qr.js";
 import { scanQR } from "./qr-scan.js";
 import { AUDIO_MIME, TEXT_MAX_B64, decodeTextPreview, previewKind } from "./attachment-preview.js";
@@ -3912,6 +3914,7 @@ function renderFilePreview() {
             chip.textContent = "📎 " + f.name;
             item.appendChild(chip);
         }
+        if (isEditable(f)) item.appendChild(editStagedButton(f));
         const x = document.createElement("button");
         x.textContent = "✕";
         x.title = t("chat.remove");
@@ -3922,6 +3925,39 @@ function renderFilePreview() {
         item.appendChild(x);
         row.appendChild(item);
     });
+}
+
+// (605) Edit opens the image editor for a staged image; the result replaces
+// that staged file only while it is still staged in the same conversation.
+const editingStaged = new WeakSet();
+function editStagedButton(f) {
+    const edit = document.createElement("button");
+    edit.className = "file-preview-edit";
+    edit.textContent = "✎";
+    edit.title = t("chat.imageEditor.edit", { name: f.name });
+    edit.setAttribute("aria-label", edit.title);
+    edit.onclick = async () => {
+        // One editor per staged file; a second click while it loads or is
+        // open does nothing.
+        if (editingStaged.has(f)) return;
+        editingStaged.add(f);
+        const scope = captureScope(readSendScope);
+        let edited;
+        try {
+            edited = await openImageEditor(f, {
+                maxBytes: ATTACH_MAX_BYTES,
+                isCurrent: () => scopeIsCurrent(scope, readSendScope) && pendingFiles.includes(f),
+                toast: (message, kind) => V().toast(message, kind),
+            });
+        } finally {
+            editingStaged.delete(f);
+        }
+        const at = pendingFiles.indexOf(f);
+        if (!edited || at < 0 || !scopeIsCurrent(scope, readSendScope)) return;
+        pendingFiles[at] = edited;
+        renderFilePreview();
+    };
+    return edit;
 }
 
 function insertAtCursor(text, input = $("chat-text")) {
