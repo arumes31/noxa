@@ -8,11 +8,12 @@ import { t } from "./i18n.js";
 import { closeDialog, confirmDialog, mountDialog, promptDialog } from "./modal.js";
 import {
     ASPECTS, COLORS, MAX_PREVIEW_PIXELS, MIN_CROP, ExportTooLargeError, constrainCrop, createHistory,
-    dataURLType, exportEdited, exportName, fitScale, nudgeCrop, rectFromPoints, renderOps,
+    dataURLType, exportEdited, exportName, fitScale, nudgeCrop, rectFromPoints, renderOps, sizeUnit,
 } from "./image-editor-model.js";
 
 const TOOLS = Object.freeze([
     { id: "crop", icon: "⛶" },
+    { id: "redact", icon: "■" },
     { id: "pixelate", icon: "▦" },
     { id: "pen", icon: "✎" },
     { id: "arrow", icon: "➚" },
@@ -76,6 +77,7 @@ export async function openImageEditor(staged, { maxBytes = 0, isCurrent = () => 
     const previewScale = fitScale(fullWidth, fullHeight, MAX_PREVIEW_PIXELS);
     const previewBase = makeCanvas(fullWidth * previewScale, fullHeight * previewScale);
     previewBase.getContext("2d").drawImage(image, 0, 0, previewBase.width, previewBase.height);
+    const previewUnit = sizeUnit(fullWidth, fullHeight, previewBase.width / fullWidth);
 
     return new Promise(resolve => {
         const history = createHistory();
@@ -120,9 +122,9 @@ export async function openImageEditor(staged, { maxBytes = 0, isCurrent = () => 
         colorInput.setAttribute("aria-label", t("chat.imageEditor.color"));
         colorInput.oninput = () => { color = colorInput.value; };
         const undo = button("ie-undo", t("chat.imageEditor.undo"), "↶");
-        undo.onclick = () => { history.undo(); rebuild(); };
+        undo.onclick = () => { if (busy) return; history.undo(); rebuild(); };
         const redo = button("ie-redo", t("chat.imageEditor.redo"), "↷");
-        redo.onclick = () => { history.redo(); rebuild(); };
+        redo.onclick = () => { if (busy) return; history.redo(); rebuild(); };
         toolbar.append(rotate, colorInput, undo, redo);
 
         const cropBar = document.createElement("div");
@@ -227,7 +229,7 @@ export async function openImageEditor(staged, { maxBytes = 0, isCurrent = () => 
         function rebuild() {
             const base = makeCanvas(previewBase.width, previewBase.height);
             base.getContext("2d").drawImage(previewBase, 0, 0);
-            committed = renderOps(base, history.ops, makeCanvas);
+            committed = renderOps(base, history.ops, makeCanvas, previewUnit);
             canvas.width = committed.width;
             canvas.height = committed.height;
             canvas.style.aspectRatio = `${committed.width} / ${committed.height}`;
@@ -242,7 +244,7 @@ export async function openImageEditor(staged, { maxBytes = 0, isCurrent = () => 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             if (committed) ctx.drawImage(committed, 0, 0);
             if (!pending) return;
-            if (pending.type === "pixelate") {
+            if (pending.type === "pixelate" || pending.type === "redact") {
                 // Preview the region only; pixels change when the stroke ends.
                 ctx.save();
                 ctx.setLineDash([6, 4]);
@@ -253,7 +255,7 @@ export async function openImageEditor(staged, { maxBytes = 0, isCurrent = () => 
                 ctx.restore();
             } else {
                 // Shapes render through the same code as the export.
-                renderOps(canvas, [pending], makeCanvas);
+                renderOps(canvas, [pending], makeCanvas, previewUnit);
             }
         }
 
@@ -272,7 +274,7 @@ export async function openImageEditor(staged, { maxBytes = 0, isCurrent = () => 
             canvas.setPointerCapture?.(event.pointerId);
             if (tool === "pen") pending = { type: "pen", color, points: [p] };
             else if (tool === "arrow") pending = { type: "arrow", color, from: p, to: p };
-            else if (tool === "rect" || tool === "pixelate") pending = { type: tool, color, rect: rectFromPoints(p, p) };
+            else if (tool === "rect" || tool === "pixelate" || tool === "redact") pending = { type: tool, color, rect: rectFromPoints(p, p) };
             else if (tool === "crop") { crop = constrainCrop(rectFromPoints(p, p), aspect, rasterAspect()); placeCropBox(); }
             draw();
         });
@@ -299,7 +301,7 @@ export async function openImageEditor(staged, { maxBytes = 0, isCurrent = () => 
             if (!op) { draw(); return; }
             const big = r => r.w > 0.005 && r.h > 0.005;
             if (op.type === "pen" || (op.type === "arrow" && Math.hypot(op.to.x - from.x, op.to.y - from.y) > 0.01) ||
-                ((op.type === "rect" || op.type === "pixelate") && big(op.rect))) commit(op);
+                ((op.type === "rect" || op.type === "pixelate" || op.type === "redact") && big(op.rect))) commit(op);
             else draw();
         };
         canvas.addEventListener("pointerup", endStroke);
@@ -333,7 +335,7 @@ export async function openImageEditor(staged, { maxBytes = 0, isCurrent = () => 
             if (tool === "crop" && crop) finishCrop();
             if (!history.dirty) { closeDialog(overlay); return; }
             busy = true;
-            done.disabled = true;
+            done.disabled = undo.disabled = redo.disabled = true;
             hint.textContent = t("chat.imageEditor.saving");
             try {
                 const { blob } = await exportEdited({
@@ -348,6 +350,8 @@ export async function openImageEditor(staged, { maxBytes = 0, isCurrent = () => 
             } catch (error) {
                 busy = false;
                 done.disabled = false;
+                undo.disabled = !history.canUndo();
+                redo.disabled = !history.canRedo();
                 hint.textContent = "";
                 toast(t(error instanceof ExportTooLargeError ? "chat.imageEditor.tooLarge" : "chat.imageEditor.saveFailed"), "warn");
             }

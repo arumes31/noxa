@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-    ExportTooLargeError, MAX_EXPORT_PIXELS, constrainCrop, createHistory, dataURLType, exportEdited, exportName,
-    exportPlan, fitScale, isEditable, nudgeCrop, pixelRect, pixelateImageData, rasterSize, rectFromPoints, renderOps,
+    ExportTooLargeError, MAX_EXPORT_PIXELS, MIN_CROP, constrainCrop, createHistory, dataURLType, exportEdited, exportName,
+    exportPlan, fitScale, isAnimatedImage, isEditable, nudgeCrop, pixelRect, pixelateImageData, rasterSize, rectFromPoints,
+    renderOps, sizeUnit, strokeWidth,
 } from "../src/image-editor-model.js";
 
 const close = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
@@ -18,6 +19,7 @@ function fakeCanvas(width, height, log = []) {
         strokeRect(...a) { log.push(["strokeRect", ...a]); }, strokeText(text) { log.push(["strokeText", text]); },
         fillText(text) { log.push(["fillText", text, ctx.fillStyle]); },
         drawImage(...a) { log.push(["drawImage", a.length]); },
+        fillRect(...a) { log.push(["fillRect", ctx.fillStyle, ctx.globalAlpha, ...a]); },
         getImageData(x, y, w, h) {
             const data = new Uint8ClampedArray(w * h * 4);
             for (let row = 0; row < h; row++) for (let col = 0; col < w; col++) {
@@ -197,4 +199,67 @@ test("export bounds huge images and enforces the size limit", async () => {
     const fallback = await exportEdited({ source: {}, width: 10, height: 10, sourceType: "image/png", ops: [], makeCanvas: fakeCanvas,
         encode: async (c, type, q) => new Blob([new Uint8Array(type === "image/webp" && q === 0.85 ? 500 : 5000)], { type }), maxBytes: 1000 });
     assert.equal(fallback.blob.size, 500, "a lossy WebP fallback is used when it fits");
+});
+
+const b64 = bytes => Buffer.from(bytes).toString("base64");
+function webp(animated) {
+    const bytes = new Uint8Array(30);
+    bytes.set([...Buffer.from("RIFF")], 0);
+    bytes.set([...Buffer.from("WEBPVP8X")], 8);
+    bytes[20] = animated ? 0x02 : 0x00;
+    return bytes;
+}
+function png(chunk) {
+    const bytes = new Uint8Array(64);
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    bytes.set([...Buffer.from("IHDR")], 12);
+    bytes.set([...Buffer.from(chunk)], 37);
+    return bytes;
+}
+
+test("animated WebP and APNG are not offered for editing", () => {
+    assert.ok(isAnimatedImage("image/webp", webp(true)));
+    assert.ok(!isAnimatedImage("image/webp", webp(false)));
+    assert.ok(isAnimatedImage("image/png", png("acTL")));
+    assert.ok(!isAnimatedImage("image/png", png("IDAT")));
+    assert.ok(!isEditable({ dataURL: "data:image/webp;base64," + b64(webp(true)) }));
+    assert.ok(isEditable({ dataURL: "data:image/webp;base64," + b64(webp(false)) }));
+    assert.ok(!isEditable({ dataURL: "data:image/png;base64," + b64(png("acTL")) }));
+    assert.ok(isEditable({ dataURL: "data:image/png;base64," + b64(png("IDAT")) }));
+});
+
+test("an aspect-locked resize never takes either side under the minimum", () => {
+    // 1:1 crop on a 4:1 raster: fractional height is four times the width.
+    const rect = { x: 0, y: 0, w: MIN_CROP, h: MIN_CROP * 4 };
+    const shrunk = nudgeCrop(rect, "ArrowUp", { resize: true, aspect: 1, rasterAspect: 4 });
+    assert.ok(shrunk.w >= MIN_CROP && shrunk.h >= MIN_CROP);
+    assert.deepEqual(shrunk, rect, "the step is ignored");
+});
+
+test("redaction is an opaque black fill of the region", () => {
+    const canvas = fakeCanvas(100, 50);
+    renderOps(canvas, [{ type: "redact", rect: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } }], fakeCanvas);
+    // Covers whole pixels outward: 12.5..37.5 becomes rows 12..37.
+    assert.deepEqual(canvas.log.find(e => e[0] === "fillRect"), ["fillRect", "#000000", 1, 25, 12, 50, 26]);
+});
+
+test("annotation sizes match between the small preview and the export, also after a crop", () => {
+    // A 4000x3000 original shown at a quarter of its size, then cropped.
+    const preview = sizeUnit(4000, 3000, 0.25), full = sizeUnit(4000, 3000, 1);
+    assert.equal(full / preview, 4);
+    const ops = [{ type: "crop", rect: { x: 0, y: 0, w: 0.1, h: 0.1 } }, { type: "pen", color: "#fff", points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }];
+    const small = renderOps(fakeCanvas(1000, 750), ops, fakeCanvas, preview);
+    const large = renderOps(fakeCanvas(4000, 3000), ops, fakeCanvas, full);
+    const width = c => c.log.find(e => e[0] === "stroke")[2];
+    // Same size relative to the raster: 4x the pixels at 4x the resolution.
+    assert.ok(Math.abs(width(large) / large.width - width(small) / small.width) < 1e-9);
+    assert.equal(strokeWidth(0.5), 1, "never thinner than one pixel");
+});
+
+test("a 12000x8000 export stays within 50 MP after rounding", async () => {
+    const e = encoder({ "image/jpeg": 50 });
+    await exportEdited({ source: {}, width: 12_000, height: 8_000, sourceType: "image/jpeg", ops: [], makeCanvas: fakeCanvas, encode: e.encode });
+    const [, , w, h] = e.calls[0];
+    assert.ok(w * h <= MAX_EXPORT_PIXELS, `${w}x${h}`);
+    assert.ok(Math.abs(w / h - 1.5) < 0.001, "aspect kept");
 });

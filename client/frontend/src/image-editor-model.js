@@ -24,9 +24,41 @@ export function dataURLType(url) {
     return match ? match[1].toLowerCase() : "";
 }
 
-/** Whether a staged attachment can be opened in the editor. */
+/** The first bytes of a base64 data: URL (enough for container headers). */
+function dataURLHead(url, bytes = 512) {
+    const comma = String(url || "").indexOf(",");
+    if (comma < 0) return new Uint8Array(0);
+    try {
+        const chunk = url.slice(comma + 1, comma + 1 + Math.ceil(bytes / 3) * 4);
+        return Uint8Array.from(atob(chunk), c => c.charCodeAt(0));
+    } catch {
+        return new Uint8Array(0);
+    }
+}
+
+const ascii = (bytes, at, length) => String.fromCharCode(...bytes.subarray(at, at + length));
+
+/**
+ * Whether image bytes start an animation: a WebP with the VP8X animation
+ * flag, or a PNG with an acTL chunk (APNG; acTL must precede the image data).
+ */
+export function isAnimatedImage(type, bytes) {
+    if (type === "image/webp") {
+        return bytes.length >= 21 && ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 4) === "WEBP" &&
+            ascii(bytes, 12, 4) === "VP8X" && (bytes[20] & 0x02) !== 0;
+    }
+    if (type === "image/png") return ascii(bytes, 0, bytes.length).includes("acTL");
+    return false;
+}
+
+/**
+ * Whether a staged attachment can be opened in the editor. Animated images
+ * are not offered: re-encoding would silently keep only one frame.
+ */
 export function isEditable(staged) {
-    return !!staged?.dataURL && EDITABLE_TYPES.has(dataURLType(staged.dataURL));
+    if (!staged?.dataURL) return false;
+    const type = dataURLType(staged.dataURL);
+    return EDITABLE_TYPES.has(type) && !isAnimatedImage(type, dataURLHead(staged.dataURL));
 }
 
 /** Scale (<= 1) that fits width x height into maxPixels. */
@@ -77,7 +109,9 @@ export function nudgeCrop(rect, key, { resize = false, step = 0.01, aspect = 0, 
             // Resize along the axis that was pressed and derive the other.
             const ratio = aspect / rasterAspect;
             if (dx) next.h = next.w / ratio; else next.w = next.h * ratio;
-            return constrainCrop(next, aspect, rasterAspect);
+            const locked = constrainCrop(next, aspect, rasterAspect);
+            // A step that would push either side under the minimum is ignored.
+            return locked.w >= MIN_CROP && locked.h >= MIN_CROP ? locked : rect;
         }
         return next;
     }
@@ -112,9 +146,18 @@ export function createHistory(initial = []) {
     };
 }
 
-/** Pixelation block edge in pixels for a raster: coarse enough to be unreadable. */
-export function pixelBlock(width, height) {
-    return Math.max(8, Math.round(Math.min(width, height) * 0.025));
+/**
+ * Size unit for a render: raster pixels per 1% of the original image's
+ * shorter side. Crop and rotate keep it, so the same op has the same size in
+ * the small preview and the full-resolution export.
+ */
+export function sizeUnit(originalWidth, originalHeight, rasterScale) {
+    return Math.max(0.01, Math.min(originalWidth, originalHeight) * rasterScale / 100);
+}
+
+/** Pixelation block edge in pixels (2.5 units, at least 2). */
+export function pixelBlock(unit) {
+    return Math.max(2, Math.round(unit * 2.5));
 }
 
 /**
@@ -156,22 +199,22 @@ export function pixelRect(rect, width, height) {
     return { x, y, w: x2 - x, h: y2 - y };
 }
 
-/** Stroke width in pixels for a raster (relative, so preview and export match). */
-export function strokeWidth(width, height, weight = 1) {
-    return Math.max(2, Math.round(Math.min(width, height) * 0.006 * weight));
+/** Stroke width in pixels: 0.6 units, at least one pixel. */
+export function strokeWidth(unit) {
+    return Math.max(1, unit * 0.6);
 }
 
 /**
  * Draws ops on a 2D context. makeCanvas(w, h) returns a scratch canvas; the
  * returned canvas holds the result (rotate and crop return a new one).
  */
-export function renderOps(base, ops, makeCanvas) {
+export function renderOps(base, ops, makeCanvas, unit = Math.min(base.width, base.height) / 100) {
     let canvas = base;
-    for (const op of ops) canvas = applyOp(canvas, op, makeCanvas);
+    for (const op of ops) canvas = applyOp(canvas, op, makeCanvas, unit);
     return canvas;
 }
 
-export function applyOp(canvas, op, makeCanvas) {
+export function applyOp(canvas, op, makeCanvas, unit = Math.min(canvas.width, canvas.height) / 100) {
     const { width, height } = canvas;
     if (op.type === "rotate") {
         const next = makeCanvas(height, width);
@@ -188,18 +231,29 @@ export function applyOp(canvas, op, makeCanvas) {
         return next;
     }
     const ctx = canvas.getContext("2d");
+    if (op.type === "redact") {
+        // Opaque fill: nothing of the covered pixels remains.
+        const r = pixelRect(op.rect, width, height);
+        ctx.save();
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = "source-over";
+        ctx.fillStyle = "#000000";
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        ctx.restore();
+        return canvas;
+    }
     if (op.type === "pixelate") {
         const r = pixelRect(op.rect, width, height);
         if (r.w > 0 && r.h > 0) {
             const image = ctx.getImageData(r.x, r.y, r.w, r.h);
-            ctx.putImageData(pixelateImageData(image, pixelBlock(width, height)), r.x, r.y);
+            ctx.putImageData(pixelateImageData(image, pixelBlock(unit)), r.x, r.y);
         }
         return canvas;
     }
     const px = p => ({ x: p.x * width, y: p.y * height });
     ctx.save();
     ctx.strokeStyle = ctx.fillStyle = op.color || COLORS[0];
-    ctx.lineWidth = strokeWidth(width, height);
+    ctx.lineWidth = strokeWidth(unit);
     ctx.lineCap = ctx.lineJoin = "round";
     if (op.type === "pen" && op.points?.length) {
         ctx.beginPath();
@@ -224,7 +278,7 @@ export function applyOp(canvas, op, makeCanvas) {
         ctx.lineTo(b.x - head * Math.cos(angle + Math.PI / 7), b.y - head * Math.sin(angle + Math.PI / 7));
         ctx.stroke();
     } else if (op.type === "text" && op.text) {
-        const size = Math.max(12, Math.round(Math.min(width, height) * 0.045));
+        const size = Math.max(4, Math.round(unit * 4.5));
         ctx.font = `600 ${size}px sans-serif`;
         ctx.textBaseline = "top";
         const at = px(op.at);
@@ -269,10 +323,12 @@ export class ExportTooLargeError extends Error {}
  */
 export async function exportEdited({ source, width, height, sourceType, ops, makeCanvas, encode, maxBytes, maxPixels = MAX_EXPORT_PIXELS, webpQuality = 0.92 }) {
     const scale = fitScale(width, height, maxPixels);
-    const w = Math.max(1, Math.round(width * scale)), h = Math.max(1, Math.round(height * scale));
+    // Rounded down, so the integer size never exceeds maxPixels.
+    const w = Math.max(1, scale < 1 ? Math.floor(width * scale) : width);
+    const h = Math.max(1, scale < 1 ? Math.floor(height * scale) : height);
     const base = makeCanvas(w, h);
     base.getContext("2d").drawImage(source, 0, 0, w, h);
-    const canvas = renderOps(base, ops, makeCanvas);
+    const canvas = renderOps(base, ops, makeCanvas, sizeUnit(width, height, w / width));
     const plan = exportPlan(sourceType);
     let blob = await encode(canvas, plan.type, plan.quality);
     if (plan.tryWebP) {

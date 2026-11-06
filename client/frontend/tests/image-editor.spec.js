@@ -97,7 +97,7 @@ test("a staged image opens in the editor with labelled tools", async ({ page }) 
     await edit.click();
     const dialog = page.locator(".image-editor");
     await expect(dialog).toBeVisible();
-    for (const name of ["Crop", "Pixelate (redact)", "Pen", "Arrow", "Rectangle", "Text", "Rotate 90°", "Undo (Ctrl+Z)", "Redo (Ctrl+Y)"]) {
+    for (const name of ["Crop", "Redact (black box)", "Pixelate", "Pen", "Arrow", "Rectangle", "Text", "Rotate 90°", "Undo (Ctrl+Z)", "Redo (Ctrl+Y)"]) {
         await expect(dialog.getByRole("button", { name, exact: true })).toHaveAttribute("title", name);
     }
     await expect(dialog.getByRole("button", { name: "Pen", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -115,16 +115,18 @@ test("pixelating a region replaces those pixels in the staged file", async ({ pa
     const before = await stagedImage(page, [[20, 20], [21, 20]]);
     expect(contrast(before.pixels[0], before.pixels[1])).toBeGreaterThan(150);
     await page.locator(".file-preview-edit").click();
-    await page.getByRole("button", { name: "Pixelate (redact)", exact: true }).click();
+    await page.getByRole("button", { name: "Pixelate", exact: true }).click();
     await drag(page, [0.02, 0.02], [0.4, 0.4]);
     await page.getByRole("button", { name: "Done", exact: true }).click();
     await expect(page.locator(".image-editor")).toHaveCount(0);
     const after = await stagedImage(page, [[20, 20], [21, 20], [300, 180], [301, 180]]);
     expect([after.width, after.height]).toEqual([320, 200]);
-    // Inside: the stripes became one grey block (the export may be lossy).
-    expect(contrast(after.pixels[0], after.pixels[1])).toBeLessThan(25);
-    expect(after.pixels[0][0]).toBeGreaterThan(90);
-    expect(after.pixels[0][0]).toBeLessThan(170);
+    // Inside: black and white stripes became grey block averages (the
+    // export may be lossy), never the original black or white.
+    for (const pixel of after.pixels.slice(0, 2)) {
+        expect(pixel[0]).toBeGreaterThan(60);
+        expect(pixel[0]).toBeLessThan(200);
+    }
     // Outside: the stripes are still there.
     expect(contrast(after.pixels[2], after.pixels[3])).toBeGreaterThan(60);
     expect(after.alt).toMatch(/^shot.*\.(png|webp)$/);
@@ -149,9 +151,16 @@ test("rotate and keyboard crop change the exported size; undo and redo work", as
     await expect(box).toBeHidden();
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
     await expect(dialog).toHaveCount(0);
-    const out = await stagedImage(page);
+    // Output row y comes from source column 16 + y: one clockwise turn maps
+    // source x to the rotated row, and the crop starts 5% (16 rows) down.
+    const out = await stagedImage(page, [[50, 50], [50, 150]]);
     expect(out.width).toBe(100); // 200 * 0.5
     expect(out.height).toBe(288); // 320 * 0.9
+    for (const [i, row] of [[0, 50], [1, 150]]) {
+        const x = 16 + row;
+        expect(Math.abs(out.pixels[i][0] - (x % 256))).toBeLessThan(14);
+        expect(Math.abs(out.pixels[i][1] - ((x * 3) % 256))).toBeLessThan(14);
+    }
 });
 
 test("annotations are drawn into the exported pixels", async ({ page }) => {
@@ -171,11 +180,26 @@ test("annotations are drawn into the exported pixels", async ({ page }) => {
     await expect(dialog.getByRole("button", { name: "Undo (Ctrl+Z)" })).toBeEnabled();
     await dialog.getByRole("button", { name: "Done", exact: true }).click();
     await expect(dialog).toHaveCount(0);
-    const out = await stagedImage(page, [[80, 100]]);
-    const [r, g, b] = out.pixels[0];
-    expect(g).toBeGreaterThan(200); // the green rectangle's left edge
-    expect(r).toBeLessThan(80);
-    expect(b).toBeLessThan(80);
+    const green = ([r, g, b]) => g > 200 && r < 80 && b < 80;
+    // Rectangle edge at x=80; arrow midpoint at (80, 150).
+    const out = await stagedImage(page, [[80, 100], [80, 150]]);
+    expect(green(out.pixels[0])).toBe(true);
+    expect(green(out.pixels[1])).toBe(true);
+    // The text near (192, 20): count green pixels in its box.
+    const textGreen = await page.evaluate(async () => {
+        const img = document.querySelector(".file-preview img");
+        const bitmap = await createImageBitmap(await (await fetch(img.src)).blob());
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(bitmap, 0, 0);
+        const { data } = ctx.getImageData(192, 20, 120, 24);
+        let n = 0;
+        for (let i = 0; i < data.length; i += 4) if (data[i + 1] > 200 && data[i] < 80 && data[i + 2] < 80) n++;
+        return n;
+    });
+    // Text scales with the image (about 9 px here); the gradient there has no
+    // pure green, so any green pixels are the text's fill.
+    expect(textGreen).toBeGreaterThan(5);
 });
 
 test("cancel leaves the staged file untouched, asking first when edited", async ({ page }) => {
@@ -196,4 +220,27 @@ test("cancel leaves the staged file untouched, asking first when edited", async 
     await page.getByRole("dialog").filter({ hasText: "Discard changes?" }).getByRole("button", { name: "Discard" }).click();
     await expect(page.locator(".image-editor")).toHaveCount(0);
     expect((await stagedImage(page)).src).toBe(before.src);
+});
+
+test("redaction covers the region with opaque black", async ({ page }) => {
+    await stageGradient(page, "shot.png", true);
+    await page.locator(".file-preview-edit").click();
+    await page.getByRole("button", { name: "Redact (black box)", exact: true }).click();
+    await drag(page, [0.02, 0.02], [0.4, 0.4]);
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await expect(page.locator(".image-editor")).toHaveCount(0);
+    const out = await stagedImage(page, [[20, 20], [21, 20], [60, 40], [300, 180], [301, 180]]);
+    for (const pixel of out.pixels.slice(0, 3)) expect(Math.max(pixel[0], pixel[1], pixel[2])).toBeLessThan(12);
+    expect(Math.abs(out.pixels[3][0] - out.pixels[4][0])).toBeGreaterThan(60);
+});
+
+test("a second click on Edit does not open another editor", async ({ page }) => {
+    await stageGradient(page);
+    await page.locator(".file-preview-edit").click();
+    await page.locator(".file-preview-edit").click({ force: true }).catch(() => {});
+    await expect(page.locator(".image-editor")).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".image-editor")).toHaveCount(0);
+    await page.locator(".file-preview-edit").click();
+    await expect(page.locator(".image-editor")).toHaveCount(1, { timeout: 5000 });
 });
