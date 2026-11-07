@@ -157,7 +157,16 @@ export async function signIn(conn, identity, { version, nickname = "", serverPas
     if (first.algorithm) {
         // (#7) The server's anti-raid shield is raised: solve its challenge
         // (in a worker) and repeat the login on the same connection.
-        const nonce = await solvePow(first);
+        // A closed connection or cancelled login stops the search at once.
+        const abort = new AbortController();
+        const stop = () => abort.abort();
+        conn.addEventListener?.("close", stop, { once: true });
+        let nonce;
+        try {
+            nonce = await solvePow(first, { signal: abort.signal });
+        } finally {
+            conn.removeEventListener?.("close", stop);
+        }
         first = await conn.request(Msg.Authenticate, { ...authenticate, pow_prefix: first.prefix, pow_nonce: String(nonce) },
             [Msg.AuthChallenge, Msg.AuthResponse, Msg.PowChallenge], { timeout: 10000 });
         if (first.algorithm) throw signInError("proof of work rejected");

@@ -123,25 +123,35 @@ async function solveInline(prefix, difficulty, signal) {
 
 /**
  * Solves a PowChallenge and returns the nonce. Uses a module worker when the
- * browser has one, so a phone's UI never freezes; otherwise a chunked loop.
+ * browser has one, so a phone's UI never freezes; otherwise, or when the
+ * worker fails, a chunked loop on this thread. `worker` lets tests inject a
+ * constructor; the default uses the literal form Vite bundles.
  */
-export async function solvePow(challenge, { signal, worker = globalThis.Worker } = {}) {
+export async function solvePow(challenge, { signal, worker } = {}) {
     const prefix = challengePrefix(challenge);
     if (!prefix) throw new Error("the server asked for an unsupported proof of work");
-    if (typeof worker !== "function") return solveInline(prefix, challenge.difficulty, signal);
+    if (signal?.aborted) throw new Error("proof of work cancelled");
+    const Construct = worker === undefined ? globalThis.Worker : worker;
+    if (typeof Construct !== "function") return solveInline(prefix, challenge.difficulty, signal);
     let instance;
     try {
-        instance = new worker(new URL("./pow-worker.js", import.meta.url), { type: "module" });
+        instance = worker === undefined
+            ? new Worker(new URL("./pow-worker.js", import.meta.url), { type: "module" })
+            : new Construct(new URL("./pow-worker.js", import.meta.url), { type: "module" });
     } catch {
         return solveInline(prefix, challenge.difficulty, signal);
     }
+    let failed = false;
     try {
         return await new Promise((resolve, reject) => {
             instance.onmessage = event => resolve(event.data.nonce);
-            instance.onerror = () => reject(new Error("proof of work failed"));
+            instance.onerror = () => { failed = true; reject(new Error("proof of work worker failed")); };
             signal?.addEventListener("abort", () => reject(new Error("proof of work cancelled")), { once: true });
             instance.postMessage({ prefix, difficulty: challenge.difficulty });
         });
+    } catch (error) {
+        if (!failed || signal?.aborted) throw error;
+        return solveInline(prefix, challenge.difficulty, signal); // e.g. a blocked worker script
     } finally {
         instance.terminate();
     }

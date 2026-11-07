@@ -1,6 +1,6 @@
 // app.js — application state shared by the screens: server info, this
 // device's identity, the signed-in chat session and reconnection.
-import { takeShutdownJitterMs } from "./core/reconnect-hint.js";
+import { clearShutdownJitter, takeShutdownJitterMs } from "./core/reconnect-hint.js";
 import { ChatSession } from "./core/chat-session.js";
 import { DirectMessages } from "./core/direct.js";
 import { Calls } from "./core/calls.js";
@@ -627,6 +627,7 @@ export async function connect({ guest = null, fence } = {}) {
     activated = true;
     subscribeMissing();
     reconnectAttempt = 0;
+    clearShutdownJitter();
     setOnline(true);
     if (guest) {
         app.identity = identity;

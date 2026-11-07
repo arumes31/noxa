@@ -94,21 +94,23 @@ test("a restarting server's own delay replaces the backoff and keeps retrying (#
     t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     const decision = reconnectDecision({ error: "server is restarting; try again in 42 seconds", attempts: 3 });
     assert.deepEqual([decision.retry, decision.reason, decision.delay], [true, "restarting", 42000]);
+    const early = reconnectDecision({ error: "server is restarting; try again in 1 seconds", attempts: 3 });
+    assert.ok(early.delay >= 24000, "repeated refusals keep the backoff");
     let attempts = 0;
     const delays = [];
     const reconnects = createTabReconnects({
         enabled: () => true,
         delay: (attempt, entry) => { delays.push([attempt, entry.tabID]); return 10; },
-        connect: async () => (++attempts === 1 ? { error: "server is restarting; try again in 3 seconds" } : {}),
+        connect: async () => (++attempts === 1 ? { error: "server is restarting; try again in 30 seconds" } : {}),
         complete: async () => true,
     });
     reconnects.start("a", { addr: "x" });
     t.mock.timers.tick(10);
     for (let j = 0; j < 8; j++) await Promise.resolve();
     assert.equal(attempts, 1);
-    t.mock.timers.tick(2999);
+    t.mock.timers.tick(29999);
     for (let j = 0; j < 8; j++) await Promise.resolve();
-    assert.equal(attempts, 1, "waits the server's three seconds");
+    assert.equal(attempts, 1, "waits the server's thirty seconds");
     t.mock.timers.tick(1);
     for (let j = 0; j < 8; j++) await Promise.resolve();
     assert.equal(attempts, 2);

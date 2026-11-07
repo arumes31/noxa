@@ -99,6 +99,9 @@ func SolvePow(ctx context.Context, ch PowChallenge) (uint64, bool) {
 // raised: it cannot solve the challenge.
 const ReasonIngressShieldUpdate = "the server is under heavy load; update noXa to connect"
 
+// ReasonIngressShieldBusy refuses device linking while the shield is raised.
+const ReasonIngressShieldBusy = "the server is under heavy load; try again in a few minutes"
+
 // restartingReasonPrefix starts the retry-hint reason sent to clients that
 // announced ClientFeatureRetryHint while a shutdown is scheduled.
 const restartingReasonPrefix = "server is restarting; try again in "

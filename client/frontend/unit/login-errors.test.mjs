@@ -98,6 +98,7 @@ test("a restarting server is a retryable network condition with its delay (#52)"
     assert.equal(loginErrorsModule.connectFailureCategory(failure), "network");
     assert.equal(loginErrorsModule.connectFailureIsDefinitive(failure), false);
     assert.equal(loginFailure("server is restarting; try again in 9999999 seconds").kind, "unknown");
+    assert.equal(loginFailure("server is restarting; try again in 0 seconds").retryAfter, 1, "at least a second");
     const shield = loginFailure("the server is under heavy load; update noXa to connect");
     assert.equal(shield.kind, "version");
 });

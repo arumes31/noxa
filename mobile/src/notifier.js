@@ -180,7 +180,7 @@ class Notifier {
     #serverEvent({ type, data }) {
         const session = this.session;
         if (type === "server_shutdown_scheduled" || type === "server_shutdown") {
-            if (type === "server_shutdown_scheduled") noteShutdownJitter(data?.reconnect_jitter);
+            if (type === "server_shutdown_scheduled") noteShutdownJitter(data?.reconnect_jitter, data?.seconds);
             toast(shutdownNotice(type, data), "warn");
             return;
         }

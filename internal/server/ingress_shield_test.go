@@ -167,3 +167,64 @@ func TestIngressShieldAutoSurgeAndOverride(t *testing.T) {
 		t.Fatal("invalid override accepted")
 	}
 }
+
+func TestIngressShieldRollingWindowAndReraise(t *testing.T) {
+	env := startTestEnvDeps(t, nil, func(c *config.Config) {
+		c.IngressShield = config.IngressShieldAuto
+		c.IngressShieldArrivals = 10
+		c.IngressShieldDistinctIPs = 5
+	}, nil)
+	defer env.stop()
+	// Ten arrivals within 400 ms that straddle a whole-second boundary.
+	base := time.Unix(time.Now().Unix()+200, 0).Add(800 * time.Millisecond)
+	for i := range 10 {
+		env.srv.noteIngressArrival(fmt.Sprintf("203.0.113.%d", i%5), base.Add(time.Duration(i)*40*time.Millisecond))
+	}
+	if !env.srv.IngressShieldStatus(base.Add(time.Second)).Active {
+		t.Fatal("a surge split across a second boundary did not raise the shield")
+	}
+	// Arrivals spread over more than a second never form a surge.
+	env2 := startTestEnvDeps(t, nil, func(c *config.Config) {
+		c.IngressShield = config.IngressShieldAuto
+		c.IngressShieldArrivals = 10
+		c.IngressShieldDistinctIPs = 5
+	}, nil)
+	defer env2.stop()
+	slow := time.Unix(time.Now().Unix()+300, 0)
+	for i := range 20 {
+		env2.srv.noteIngressArrival(fmt.Sprintf("203.0.113.%d", i%5), slow.Add(time.Duration(i)*150*time.Millisecond))
+	}
+	if env2.srv.IngressShieldStatus(slow.Add(3 * time.Second)).Active {
+		t.Fatal("slow arrivals raised the shield")
+	}
+	// After the hold expires, a status read records the lowering, so a new
+	// surge is a new raise.
+	expired := base.Add(6 * time.Minute)
+	if env.srv.IngressShieldStatus(expired).Active {
+		t.Fatal("hold did not expire")
+	}
+	env.srv.shield.mu.Lock()
+	reported := env.srv.shield.reported
+	env.srv.shield.mu.Unlock()
+	if reported {
+		t.Fatal("expiry was not recorded")
+	}
+}
+
+func TestPowChallengeGrantsOneLoginWindow(t *testing.T) {
+	client := &Client{}
+	now := time.Now()
+	if _, err := client.issuePowChallenge(12, now); err != nil {
+		t.Fatal(err)
+	}
+	first := client.powLoginDeadline()
+	if !first.Equal(now.Add(powChallengeTTL)) {
+		t.Fatalf("window=%v", first)
+	}
+	if _, err := client.issuePowChallenge(12, now.Add(30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if !client.powLoginDeadline().Equal(first) {
+		t.Fatal("a second challenge extended the login window")
+	}
+}

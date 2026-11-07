@@ -17,7 +17,8 @@ export function reconnectDecision({ error = "", terminal = false, attempts = 0, 
     if (terminal) return { retry: false, reason: "terminal" };
     const failure = loginFailure(error);
     // (#52) A restarting server says when to come back.
-    if (failure.kind === "restarting") return { retry: true, reason: "restarting", failure, delay: failure.retryAfter * 1000 };
+    // Repeated refusals still back off: never sooner than the usual delay.
+    if (failure.kind === "restarting") return { retry: true, reason: "restarting", failure, delay: Math.max(failure.retryAfter * 1000, reconnectDelay(attempts + 1)) };
     if (connectFailureIsDefinitive(failure)) return { retry: false, reason: "authentication", failure };
     if (attempts >= maxAttempts) return { retry: false, reason: "exhausted", failure };
     return { retry: true, reason: "network", failure, delay: reconnectDelay(attempts + 1) };

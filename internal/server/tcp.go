@@ -766,6 +766,10 @@ func (s *TCPServer) Shutdown(ctx context.Context) error {
 	}
 	s.stopOnce.Do(s.beginShutdown)
 
+	// Shield transition audits are written asynchronously; let them finish
+	// before the caller closes the audit store.
+	defer s.drainShieldAudits(ctx)
+
 	select {
 	case <-s.shutdownDone:
 		return s.shutdownResult()
@@ -968,6 +972,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 	authCtx, cancelAuth := context.WithDeadline(ctx, authDeadline)
 	defer cancelAuth()
 	passkeyWindowGranted := false
+	powWindowGranted := false
 
 	_, web := conn.(webTransportConn)
 	client := &Client{
@@ -1099,6 +1104,24 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 				authCtx, cancelAuth = context.WithDeadline(ctx, authDeadline)
 				defer cancelAuth()
 				passkeyWindowGranted = true
+				if err := conn.SetDeadline(authDeadline); err != nil {
+					return
+				}
+			}
+		}
+		// (#7) Solving an anti-raid challenge takes time on slow devices: the
+		// first challenge on a connection extends the pre-auth deadline once,
+		// to its expiry; later challenges cannot renew it.
+		if !authDeadline.IsZero() && !powWindowGranted && !client.isAuthed() {
+			if deadline := client.powLoginDeadline(); deadline.After(authDeadline) {
+				if authCtx.Err() != nil {
+					return
+				}
+				cancelAuth()
+				authDeadline = deadline
+				authCtx, cancelAuth = context.WithDeadline(ctx, authDeadline)
+				defer cancelAuth()
+				powWindowGranted = true
 				if err := conn.SetDeadline(authDeadline); err != nil {
 					return
 				}

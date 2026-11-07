@@ -31,3 +31,19 @@ func TestSolvePowChallengeAnswersTheServer(t *testing.T) {
 		t.Fatal("oversized challenge solved")
 	}
 }
+
+func TestShutdownHintReachesEveryTab(t *testing.T) {
+	hint, ok := shutdownHint("tab-b", `{"type":"server_shutdown_scheduled","data":{"seconds":30,"reconnect_jitter":90}}`)
+	if !ok || hint.TabID != "tab-b" || hint.Seconds != 30 || hint.ReconnectJitter != 60 {
+		t.Fatalf("hint=%+v ok=%v", hint, ok)
+	}
+	for _, text := range []string{
+		`{"type":"server_shutdown_scheduled","data":{"seconds":30}}`,
+		`{"type":"chat","data":{"text":"\"server_shutdown_scheduled\""}}`,
+		`not json "server_shutdown_scheduled"`,
+	} {
+		if _, ok := shutdownHint("tab-a", text); ok {
+			t.Fatalf("hint from %s", text)
+		}
+	}
+}

@@ -29,8 +29,6 @@ import (
 const (
 	// powChallengeTTL bounds how long a challenge stays answerable.
 	powChallengeTTL = 60 * time.Second
-	// shieldSurgeIPsCap bounds the per-second distinct-address set.
-	shieldSurgeIPsCap = 4096
 )
 
 var (
@@ -50,13 +48,48 @@ const (
 )
 
 type ingressShield struct {
-	mu          sync.Mutex
-	second      int64
-	arrivals    int
-	ips         map[string]struct{}
+	mu sync.Mutex
+	// window holds the arrivals of the last second, oldest first, bounded by
+	// the arrival threshold; ips counts addresses within it.
+	window      []shieldArrival
+	ips         map[string]int
 	raisedUntil time.Time
 	override    string
 	reported    bool // last effective state that was logged and audited
+	// audits tracks transition audit writes so shutdown can drain them.
+	audits sync.WaitGroup
+}
+
+type shieldArrival struct {
+	at time.Time
+	ip string
+}
+
+// recordLocked adds an arrival to the rolling one-second window and reports
+// whether the window is a surge. The window keeps at most limit arrivals:
+// once that many arrived within a second the count threshold is met, and the
+// distinct addresses among the newest limit arrivals decide the rest.
+func (sh *ingressShield) recordLocked(ip string, now time.Time, settings config.IngressShieldSettings) bool {
+	if sh.ips == nil {
+		sh.ips = make(map[string]int)
+	}
+	drop := func() {
+		old := sh.window[0]
+		sh.window = sh.window[1:]
+		if sh.ips[old.ip]--; sh.ips[old.ip] <= 0 {
+			delete(sh.ips, old.ip)
+		}
+	}
+	cutoff := now.Add(-time.Second)
+	for len(sh.window) > 0 && !sh.window[0].at.After(cutoff) {
+		drop()
+	}
+	for len(sh.window) >= settings.Arrivals {
+		drop()
+	}
+	sh.window = append(sh.window, shieldArrival{at: now, ip: ip})
+	sh.ips[ip]++
+	return len(sh.window) >= settings.Arrivals && len(sh.ips) >= settings.DistinctIPs
 }
 
 // IngressShieldState is the shield's state for operators.
@@ -101,25 +134,18 @@ func (s *TCPServer) noteIngressArrival(ip string, now time.Time) {
 	settings := s.shieldSettings()
 	sh := &s.shield
 	sh.mu.Lock()
-	if settings.Mode == config.IngressShieldAuto {
-		sec := now.Unix()
-		if sec != sh.second {
-			sh.second, sh.arrivals = sec, 0
-			clear(sh.ips)
-		}
-		if sh.ips == nil {
-			sh.ips = make(map[string]struct{})
-		}
-		sh.arrivals++
-		if len(sh.ips) < shieldSurgeIPsCap {
-			sh.ips[ip] = struct{}{}
-		}
-		if sh.arrivals >= settings.Arrivals && len(sh.ips) >= settings.DistinctIPs {
-			sh.raisedUntil = now.Add(settings.Hold)
-		}
+	// An expired shield is recorded as lowered before a new surge raises it
+	// again, so every raise has its own transition.
+	expiredChanged, expiredActive := s.shieldTransitionLocked(settings, now)
+	surge := settings.Mode == config.IngressShieldAuto && sh.recordLocked(ip, now, settings)
+	if surge {
+		sh.raisedUntil = now.Add(settings.Hold)
 	}
 	changed, active := s.shieldTransitionLocked(settings, now)
 	sh.mu.Unlock()
+	if expiredChanged {
+		s.reportShieldChange(expiredActive, "expired")
+	}
 	if changed {
 		s.reportShieldChange(active, "surge")
 	}
@@ -152,10 +178,14 @@ func (s *TCPServer) ingressShieldActive(now time.Time) bool {
 func (s *TCPServer) IngressShieldStatus(now time.Time) IngressShieldState {
 	settings := s.shieldSettings()
 	s.shield.mu.Lock()
-	defer s.shield.mu.Unlock()
-	state := IngressShieldState{Mode: settings.Mode, Override: s.shield.override, Active: s.shield.activeLocked(settings, now), Difficulty: settings.Difficulty}
+	changed, active := s.shieldTransitionLocked(settings, now)
+	state := IngressShieldState{Mode: settings.Mode, Override: s.shield.override, Active: active, Difficulty: settings.Difficulty}
 	if settings.Mode == config.IngressShieldAuto && now.Before(s.shield.raisedUntil) {
 		state.Until = s.shield.raisedUntil
+	}
+	s.shield.mu.Unlock()
+	if changed {
+		s.reportShieldChange(active, "expired")
 	}
 	return state
 }
@@ -196,7 +226,11 @@ func (s *TCPServer) reportShieldChange(active bool, cause string) {
 	if s.deps == nil || s.deps.Groups == nil {
 		return
 	}
-	go s.audit(context.Background(), "system", "ingress_shield_"+event, "", "cause="+cause)
+	s.shield.audits.Add(1)
+	go func() {
+		defer s.shield.audits.Done()
+		s.audit(context.Background(), "system", "ingress_shield_"+event, "", "cause="+cause)
+	}()
 }
 
 // shutdownPendingSeconds is the time left before an announced shutdown, or
@@ -251,7 +285,7 @@ func (s *TCPServer) preauthGate(client *Client, f *netproto.Frame, mt netproto.M
 		// A device-link request or signature cannot start before a solved
 		// login on this connection while the shield is raised.
 		s.metricsSink().IncIngressShield("rejected")
-		_ = s.sendErrorFor(client, mt, errCodeMalformed, netproto.ReasonIngressShieldUpdate)
+		_ = s.sendErrorFor(client, mt, errCodeMalformed, netproto.ReasonIngressShieldBusy)
 		client.markCloseCause(netproto.ControlClosePreauthRejected)
 		return true, errIngressShieldRejected
 	}
@@ -299,6 +333,28 @@ type powState struct {
 	difficulty int
 	expires    time.Time
 	passed     bool
+	window     time.Time // pre-auth deadline granted by the first challenge
+}
+
+// powLoginDeadline is the extended pre-auth deadline for a connection that
+// received a challenge, or zero.
+func (c *Client) powLoginDeadline() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pow.window
+}
+
+// drainShieldAudits waits (bounded by ctx) for pending transition audits.
+func (s *TCPServer) drainShieldAudits(ctx context.Context) {
+	done := make(chan struct{})
+	go func() {
+		s.shield.audits.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 func (c *Client) powPassed() bool {
@@ -314,7 +370,14 @@ func (c *Client) issuePowChallenge(difficulty int, now time.Time) (netproto.PowC
 		return netproto.PowChallenge{}, err
 	}
 	c.mu.Lock()
-	c.pow = powState{prefix: prefix, difficulty: difficulty, expires: now.Add(powChallengeTTL)}
+	window := c.pow.window
+	if window.IsZero() {
+		// The first challenge on a connection grants one bounded login window
+		// (the read loop extends the pre-auth deadline once); later challenges
+		// on the same connection never extend it again.
+		window = now.Add(powChallengeTTL)
+	}
+	c.pow = powState{prefix: prefix, difficulty: difficulty, expires: now.Add(powChallengeTTL), window: window}
 	c.mu.Unlock()
 	return netproto.PowChallenge{
 		Algorithm: netproto.PowAlgorithm, Prefix: prefix, Difficulty: difficulty,

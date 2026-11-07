@@ -15,7 +15,7 @@ export function classifySignIn(error) {
     if (reason === "server is full") return { kind: "full" };
     // (#52) Sent during a server's shutdown grace period.
     const restarting = /^server is restarting; try again in ([0-9]{1,6}) seconds$/.exec(reason);
-    if (restarting) return { kind: "restarting", retryAfter: Math.min(Number(restarting[1]), 3600) };
+    if (restarting) return { kind: "restarting", retryAfter: Math.min(Math.max(Number(restarting[1]), 1), 3600) };
     if (reason === "the server is under heavy load; update noxa to connect") return { kind: "version" };
     if (reason === "guest login is disabled on this server") return { kind: "guestDisabled" };
     if (reason.startsWith("unsupported authorization model") || reason.startsWith("unsupported server authorization model")) return { kind: "version" };
