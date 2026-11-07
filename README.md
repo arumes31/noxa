@@ -795,7 +795,12 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_METRICS_ALLOW_REMOTE` | `false` | Permit remote `/metrics` requests; without this opt-in, only IPv4/IPv6 loopback is accepted |
 | `NOXA_PPROF_ENABLED` | `false` | Enable runtime `/debug/pprof/` diagnostics; every pprof endpoint remains GET-only and direct-loopback-only |
 | `NOXA_SHUTDOWN_TIMEOUT` | `30s` | Positive total grace period shared by all services during orderly shutdown |
-| `NOXA_SHUTDOWN_GRACE_PERIOD` | `0s` | Announcement window before an orderly shutdown (max `10m`). After the first SIGTERM/interrupt, readiness turns unhealthy, clients get a countdown (repeated at 5 min, 1 min, 30 s and 10 s left, and sent to sessions that log in during the period) and the server keeps serving; a second signal skips the rest of the wait, and the orderly shutdown then completes within `NOXA_SHUTDOWN_TIMEOUT`. Keep your orchestrator's stop timeout (e.g. Compose `stop_grace_period`) above grace period plus shutdown timeout |
+| `NOXA_SHUTDOWN_GRACE_PERIOD` | `0s` | Announcement window before an orderly shutdown (max `10m`). After the first SIGTERM/interrupt, readiness turns unhealthy, clients get a countdown (repeated at 5 min, 1 min, 30 s and 10 s left, with a reconnect window so clients return spread over 5–60 seconds after the restart) and connected sessions keep working. New logins are refused during the period: updated clients are told when to come back and retry then, older clients see a closed connection and retry as usual; a second signal skips the rest of the wait, and the orderly shutdown then completes within `NOXA_SHUTDOWN_TIMEOUT`. Keep your orchestrator's stop timeout (e.g. Compose `stop_grace_period`) above grace period plus shutdown timeout |
+| `NOXA_INGRESS_SHIELD` | `off` | Anti-raid shield: `off`, `auto` (raised by a connection surge) or `on`. While raised, every login first solves a SHA-256 proof-of-work challenge bound to its connection (desktop and web app solve it automatically, the web app in a background worker); clients without support are refused with "update noXa". The pre-auth connection caps still apply, and linking a new device waits until the shield is lowered |
+| `NOXA_INGRESS_SHIELD_ARRIVALS_PER_SECOND` | `30` | `auto` surge threshold: new control connections within one second |
+| `NOXA_INGRESS_SHIELD_DISTINCT_IPS` | `10` | `auto` surge threshold: distinct source addresses among them (IPv6 counted per /64) |
+| `NOXA_INGRESS_SHIELD_DIFFICULTY` | `18` | Proof-of-work leading zero bits, `12`–`24` (18 ≈ 260k hashes, well under a second on a phone) |
+| `NOXA_INGRESS_SHIELD_HOLD` | `5m` | How long an automatically raised shield stays up after the last surge second (`1m`–`1h`) |
 | `NOXA_DATABASE_URL` | `postgres://...` | PostgreSQL connection URL |
 | `NOXA_REDIS_ADDR` | `localhost:6379` | Optional Redis address for pub/sub fanout |
 | `NOXA_REDIS_ENABLED` | `true` | Set `false` to run without Redis; the supplied Compose stack starts Redis by default |
@@ -1150,6 +1155,7 @@ enabling Query SSH.
 | `memberkick` | `data=<escaped_JSON_with_client_id>` | Remove a member from the server |
 | `memberban` | `data=<escaped_JSON_with_client_id_and_duration_seconds>` | Ban a connected member |
 | `broadcast` | `data=<escaped_JSON_with_text>` | Send a one-time encrypted alert (up to 2048 bytes of text, and the escaped command must fit the 4096-byte line limit) to every connected member allowed to view the server (server-level `view_channel`); requires `manage_server`, is audited and is not stored or replayed. Delivery is best effort, like other server-wide events |
+| `ingressshield` / `ingressshieldset` | — / `data=<escaped_JSON_with_override>` | Show the anti-raid shield (mode, operator override, whether it is raised, until when, difficulty), or force it with `{"override":"on"}` / `{"override":"off"}` and return it to the configured mode with `{"override":"auto"}`; requires `manage_server`, and every change is audited |
 | `messagebulkdelete` | `data=<escaped_JSON_with_channel_id_and_message_ids>` | Delete up to 100 messages of one channel (`channel_id` 0 = server chat) in one transaction and return `deleted` and `not_found` IDs. Own messages need `view_channel`, other members' messages `manage_messages` in that channel; one message the account may not delete rejects the whole request. Members get the usual delete events; deleting others' messages is audited |
 | `integrationscopes` / `integrationscopesset` | `data=<escaped_JSON_with_unique_id>` / `data={"unique_id":…,"scopes":[…]}` or `{"unique_id":…,"full":true}` | Read or replace an integration account's scope ceiling (needs `manage_server`, audited) |
 
@@ -1350,6 +1356,12 @@ budget, honouring `Retry-After`), `gone` (expired subscription, removed) and
 `failed`. Incoming webhook responses carry `X-RateLimit-Limit` (5 per
 3 seconds per hook), `X-RateLimit-Remaining` and `X-RateLimit-Reset`
 (seconds); a 429 also sets `Retry-After` to the real reset time.
+
+`noxa_ingress_shield_events_total{event}` counts the anti-raid shield:
+`raised` and `lowered` (also written to the audit log with their cause),
+`challenged`, `solved` and `failed` logins, and `rejected` clients that cannot
+solve a challenge. A raised shield with few `solved` events means a flood
+that is not finishing logins.
 
 `noxa_control_disconnects_total{transport, reason}` counts closed control
 connections (`tcp` or `ws`) by fixed reason: `eof`, `unexpected_eof`,

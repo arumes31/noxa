@@ -51,3 +51,39 @@ func (s *Server) executeRoleBroadcast(ctx context.Context, sess *session, backen
 		return deliverIntegrationCommit(ctx, deliver, result)
 	})
 }
+
+// RoleIngressShieldBackend exposes the anti-raid shield (#7) to operators.
+type RoleIngressShieldBackend interface {
+	IntegrationIngressShield(context.Context, auth.IntegrationPrincipal) (netproto.IngressShieldStatus, error)
+	SetIntegrationIngressShield(context.Context, auth.IntegrationPrincipal, netproto.IngressShieldSet) (netproto.IngressShieldStatus, error)
+}
+
+func (s *Server) executeRoleIngressShield(ctx context.Context, sess *session, backend RoleIntegrationBackend, cmd command) bool {
+	b, ok := backend.(RoleIngressShieldBackend)
+	if !ok {
+		return s.write(sess, errorLine(errInsufficientPermissions, "ingress shield unavailable"))
+	}
+	if cmd.name == "ingressshield" {
+		if len(cmd.args) != 0 || len(cmd.positional) != 0 {
+			return s.write(sess, errorLine(errInvalidParameter, "ingressshield takes no parameters"))
+		}
+		return s.executeIntegrationJSON(ctx, sess, 10*time.Second, func(ctx context.Context, deliver func(context.Context, any) error) error {
+			status, err := b.IntegrationIngressShield(ctx, sess.principal)
+			if err != nil {
+				return err
+			}
+			return deliver(ctx, status)
+		})
+	}
+	var request netproto.IngressShieldSet
+	if len(cmd.args) != 1 || len(cmd.positional) != 0 || decodeRoleRequest(cmd.args["data"], &request) != nil || !request.Valid() {
+		return s.write(sess, errorLine(errInvalidParameter, `expected data=<escaped JSON {"override":"on"|"off"|"auto"}>`))
+	}
+	return s.executeIntegrationJSON(ctx, sess, 10*time.Second, func(ctx context.Context, deliver func(context.Context, any) error) error {
+		status, err := b.SetIntegrationIngressShield(ctx, sess.principal, request)
+		if err != nil {
+			return err
+		}
+		return deliverIntegrationCommit(ctx, deliver, status)
+	})
+}

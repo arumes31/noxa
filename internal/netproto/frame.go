@@ -35,6 +35,11 @@ const MaxPayloadSize = MaxFrameSize - 2
 type Frame struct {
 	Type    uint16
 	Payload []byte
+
+	// pooled is the buffer behind Payload for frames read with
+	// ReadFrameLimitPooled; Release returns it to its pool.
+	pooled *[]byte
+	tier   int
 }
 
 // ErrFrameTooLarge is returned when a peer announces a frame larger than

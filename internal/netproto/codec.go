@@ -134,6 +134,8 @@ const (
 // String returns a human-readable name for the message type.
 func (m MessageType) String() string {
 	switch m {
+	case MsgPowChallenge:
+		return "PowChallenge"
 	case MsgLinkPreviewRequest:
 		return "LinkPreviewRequest"
 	case MsgLinkPreviewResult:
@@ -472,6 +474,12 @@ func (m MessageType) String() string {
 // stable, key-derived unique ID even when no users row exists.
 type Authenticate struct {
 	HideLobbyPresence bool `json:"hide_lobby_presence,omitempty"`
+	// ClientFeatures announces optional client behaviour (ClientFeaturePow,
+	// ClientFeatureRetryHint). Missing means a legacy client.
+	ClientFeatures []string `json:"client_features,omitempty"`
+	// PowPrefix and PowNonce answer the connection's PowChallenge (#7).
+	PowPrefix []byte `json:"pow_prefix,omitempty"`
+	PowNonce  uint64 `json:"pow_nonce,omitempty,string"`
 	// ClientVersion is optional, self-reported build metadata, never authority.
 	ClientVersion string `json:"client_version,omitempty"`
 	// AuthorizationModels lists the replacement policy models this client supports.
