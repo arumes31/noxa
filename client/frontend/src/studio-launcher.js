@@ -12,7 +12,8 @@ export const studioModule = lazyModule(() => import("./studio-ui.js"));
 /** Opens the Studio, loading it first if needed. */
 export function openStudioLazy({ toast = window.__noxa?.toast, button = document.getElementById("voice-studio") } = {}) {
     const loaded = studioModule.current();
-    if (loaded) return loaded.openStudio();
+    // Opens synchronously once loaded; callers always get a promise.
+    if (loaded) return Promise.resolve(loaded.openStudio());
     button?.setAttribute("aria-busy", "true");
     return studioModule.load().then(module => module.openStudio(), error => {
         toast?.(t("studio.loadFailed", { error: String(error?.message || error) }), "warn");

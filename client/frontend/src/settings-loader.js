@@ -15,7 +15,8 @@ export const settingsModule = lazyModule(() => import("./settings-ui.js"));
  */
 export function openSettingsLazy(target = "general", options = {}, { toast = window.__noxa?.toast, doc = document } = {}) {
     const loaded = settingsModule.current();
-    if (loaded) return loaded.openSettings(target, options);
+    // Opens synchronously once loaded; callers always get a promise.
+    if (loaded) return Promise.resolve(loaded.openSettings(target, options));
     doc.body?.setAttribute("aria-busy", "true");
     doc.body?.classList.add("module-loading");
     return settingsModule.load().then(module => module.openSettings(target, options), error => {
