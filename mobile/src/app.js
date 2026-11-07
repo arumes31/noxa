@@ -1,5 +1,6 @@
 // app.js — application state shared by the screens: server info, this
 // device's identity, the signed-in chat session and reconnection.
+import { takeShutdownJitterMs } from "./core/reconnect-hint.js";
 import { ChatSession } from "./core/chat-session.js";
 import { DirectMessages } from "./core/direct.js";
 import { Calls } from "./core/calls.js";
@@ -972,8 +973,11 @@ function setOnline(online) {
     emit("online", online);
 }
 
-function scheduleReconnect() {
-    const delay = RECONNECT_STEPS[Math.min(reconnectAttempt, RECONNECT_STEPS.length - 1)];
+function scheduleReconnect(nextDelay) {
+    // (#52) The first attempt after a restart waits a random part of the
+    // window the shutdown announced; a restarting server names its own delay.
+    const step = RECONNECT_STEPS[Math.min(reconnectAttempt, RECONNECT_STEPS.length - 1)];
+    const delay = nextDelay ?? (reconnectAttempt === 0 ? step + takeShutdownJitterMs() : step);
     reconnectAttempt++;
     app.reconnects++;
     clearTimeout(reconnectTimer);
@@ -981,7 +985,8 @@ function scheduleReconnect() {
         if (!app.identity || app.paused) return;
         connect().catch(error => {
             // Revoked devices and servers that need an update never loop.
-            if (!error.revoked && error.kind !== "serverOutdated") scheduleReconnect();
+            if (error.kind === "restarting") scheduleReconnect(error.retryAfter * 1000);
+            else if (!error.revoked && error.kind !== "serverOutdated") scheduleReconnect();
         });
     }, delay);
 }

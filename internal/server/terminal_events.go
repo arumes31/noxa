@@ -15,6 +15,10 @@ const eventShutdownScheduled = "server_shutdown_scheduled"
 
 type shutdownScheduledEvent struct {
 	Seconds int `json:"seconds"`
+	// ReconnectJitter is a window in seconds: clients wait a random part of
+	// it before reconnecting after the restart, so they do not all return at
+	// once (#52). Older clients ignore it.
+	ReconnectJitter int `json:"reconnect_jitter,omitempty"`
 }
 
 // AnnounceShutdown tells every connected session that the server stops in
@@ -27,7 +31,7 @@ func (s *TCPServer) AnnounceShutdown(after time.Duration) {
 	}
 	s.shutdownAt.Store(time.Now().Add(after).UnixNano())
 	s.logger.Info("announcing scheduled shutdown", zap.Int("seconds", seconds))
-	s.broadcastEvent(eventShutdownScheduled, shutdownScheduledEvent{Seconds: seconds})
+	s.broadcastEvent(eventShutdownScheduled, shutdownScheduledEvent{Seconds: seconds, ReconnectJitter: s.reconnectJitterSeconds()})
 }
 
 func shutdownSeconds(after time.Duration) int {
@@ -45,7 +49,7 @@ func (s *TCPServer) pendingShutdownEvent(now time.Time) ([]byte, bool) {
 	if seconds < 1 {
 		return nil, false
 	}
-	payload, err := eventEnvelope(eventShutdownScheduled, shutdownScheduledEvent{Seconds: seconds})
+	payload, err := eventEnvelope(eventShutdownScheduled, shutdownScheduledEvent{Seconds: seconds, ReconnectJitter: s.reconnectJitterSeconds()})
 	return payload, err == nil
 }
 

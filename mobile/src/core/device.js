@@ -3,6 +3,7 @@
 //   2. poll until the creating desktop approves or denies,
 //   3. sign in with this device's own Ed25519 key.
 // Passkeys sign in a fresh device without a desktop.
+import { solvePow } from "./pow.js";
 import { Connection, ProtocolError } from "./connection.js";
 import {
     fromBase64URL, keyFingerprint, linkClaimTranscript, linkProof, linkSAS, normalizeLinkCode, publicKeyPEM, sign,
@@ -140,13 +141,27 @@ export function loginChallengeMessage(challenge) {
  * with the server's reason, e.g. a revoked device, classified in error.kind
  * (core/login-errors.js).
  */
+// Optional behaviour announced to the server (internal/netproto/pow.go).
+export const CLIENT_FEATURE_POW = "pow-v1";
+export const CLIENT_FEATURE_RETRY_HINT = "retry-hint-v1";
+
 export async function signIn(conn, identity, { version, nickname = "", serverPassword = "" } = {}) {
     const uniqueID = uniqueIDFromPublicKey(identity.edPublic);
     const x25519 = toBase64(identity.xPublic);
-    const first = await conn.request(Msg.Authenticate, {
+    const authenticate = {
         client_version: version, authorization_models: ["roles-v1"], username: uniqueID, anonymous: true,
         nickname, server_password: serverPassword, x25519_public_key: x25519,
-    }, [Msg.AuthChallenge, Msg.AuthResponse], { timeout: 10000 });
+        client_features: [CLIENT_FEATURE_POW, CLIENT_FEATURE_RETRY_HINT],
+    };
+    let first = await conn.request(Msg.Authenticate, authenticate, [Msg.AuthChallenge, Msg.AuthResponse, Msg.PowChallenge], { timeout: 10000 });
+    if (first.algorithm) {
+        // (#7) The server's anti-raid shield is raised: solve its challenge
+        // (in a worker) and repeat the login on the same connection.
+        const nonce = await solvePow(first);
+        first = await conn.request(Msg.Authenticate, { ...authenticate, pow_prefix: first.prefix, pow_nonce: String(nonce) },
+            [Msg.AuthChallenge, Msg.AuthResponse, Msg.PowChallenge], { timeout: 10000 });
+        if (first.algorithm) throw signInError("proof of work rejected");
+    }
     if (!first.challenge) throw signInError(first.reason);
     // Strict: sign only the advertised domain-separated scheme; an older
     // server gets no signature (never a raw fallback).

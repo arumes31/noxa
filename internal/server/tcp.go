@@ -52,6 +52,7 @@ const (
 
 // Client represents a single connected control-channel client.
 type Client struct {
+	pow      powState // anti-raid proof of work for this connection; guarded by mu
 	ID       string
 	Conn     net.Conn
 	Username string // nickname, once authenticated
@@ -451,6 +452,7 @@ type TCPServer struct {
 	stopOnce   sync.Once
 	stopCh     chan struct{}
 	shutdownAt atomic.Int64 // unix nanos of an announced shutdown, 0 if none
+	shield     ingressShield
 }
 
 type tcpLifecycleState uint8
@@ -709,6 +711,7 @@ func (s *TCPServer) Start(ctx context.Context) error {
 		s.acceptedConns[conn] = struct{}{}
 		s.connWG.Add(1)
 		s.lifecycleMu.Unlock()
+		s.noteIngressArrival(ip, time.Now())
 		s.logger.Debug("TCP connection accepted", zap.String("remote", conn.RemoteAddr().String()))
 		s.metricsSink().IncTCPConnections()
 		go s.serveConn(ctx, conn)
@@ -1039,7 +1042,10 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		if !client.isAuthed() {
 			limit = preauthFrameLimit
 		}
-		frame, err := netproto.ReadFrameLimit(conn, limit)
+		// The body buffer is pooled and released once dispatch returns:
+		// handlers decode payloads synchronously (encoding/json copies) and
+		// keep no reference to the frame (#3).
+		frame, err := netproto.ReadFrameLimitPooled(conn, limit)
 		if err != nil {
 			closeReason = netproto.ControlReadCloseReason(err)
 			if closeReason == netproto.ControlCloseReadTimeout && !authDeadline.IsZero() {
@@ -1059,6 +1065,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 
 		client.noteReceived(len(frame.Payload))
 		if !authDeadline.IsZero() && !time.Now().Before(authDeadline) {
+			frame.Release()
 			closeReason = netproto.ControlCloseAuthTimeout
 			return
 		}
@@ -1067,11 +1074,14 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		if !authDeadline.IsZero() {
 			requestCtx = authCtx
 		}
-		if err := s.dispatch(requestCtx, client, frame); err != nil {
+		err = s.dispatch(requestCtx, client, frame)
+		msgType := frame.Type
+		frame.Release()
+		if err != nil {
 			closeReason = dispatchCloseReason(err)
 			s.logger.Warn("dispatch error",
 				zap.String("client_id", client.ID),
-				zap.String("msg_type", netproto.MessageType(frame.Type).String()),
+				zap.String("msg_type", netproto.MessageType(msgType).String()),
 				zap.Error(err),
 			)
 			return
@@ -1121,6 +1131,12 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		client.mu.Unlock()
 		if exhausted {
 			return errors.New("authentication request budget exhausted")
+		}
+	}
+
+	if !client.isAuthed() {
+		if handled, err := s.preauthGate(client, f, mt, time.Now()); handled {
+			return err
 		}
 	}
 

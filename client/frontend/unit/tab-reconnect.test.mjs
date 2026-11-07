@@ -89,3 +89,29 @@ test("(314) the retry series stops after a rejected login even when the native r
     t.mock.timers.tick(0); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     assert.equal(attempts, 2);
 });
+
+test("a restarting server's own delay replaces the backoff and keeps retrying (#52)", async t => {
+    t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    const decision = reconnectDecision({ error: "server is restarting; try again in 42 seconds", attempts: 3 });
+    assert.deepEqual([decision.retry, decision.reason, decision.delay], [true, "restarting", 42000]);
+    let attempts = 0;
+    const delays = [];
+    const reconnects = createTabReconnects({
+        enabled: () => true,
+        delay: (attempt, entry) => { delays.push([attempt, entry.tabID]); return 10; },
+        connect: async () => (++attempts === 1 ? { error: "server is restarting; try again in 3 seconds" } : {}),
+        complete: async () => true,
+    });
+    reconnects.start("a", { addr: "x" });
+    t.mock.timers.tick(10);
+    for (let j = 0; j < 8; j++) await Promise.resolve();
+    assert.equal(attempts, 1);
+    t.mock.timers.tick(2999);
+    for (let j = 0; j < 8; j++) await Promise.resolve();
+    assert.equal(attempts, 1, "waits the server's three seconds");
+    t.mock.timers.tick(1);
+    for (let j = 0; j < 8; j++) await Promise.resolve();
+    assert.equal(attempts, 2);
+    assert.deepEqual(delays, [[1, "a"]], "the delay hook sees the tab and the first attempt only");
+    reconnects.cancelAll();
+});
