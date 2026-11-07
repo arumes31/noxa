@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -39,6 +40,7 @@ type fakeFileTransfer struct {
 	channelsRemoved []int64
 	fingerprint     string
 	tombstoneHook   func(int64)
+	resumeDigests   []string
 }
 
 func (f *fakeFileTransfer) SetAccessGuard(filetransfer.AccessGuard)                          {}
@@ -85,6 +87,16 @@ func (f *fakeFileTransfer) InitUpload(_ context.Context, channelID int64, folder
 	defer f.mu.Unlock()
 	f.uploads = append(f.uploads, ftCall{channelID, folder, name, size, uploader, uploaderQuotaMB})
 	return "tid-1", "tok-1", nil
+}
+
+// InitResumableUpload records the declared digest and reports a resume
+// point (39), so tests can see the handler choose the resumable path.
+func (f *fakeFileTransfer) InitResumableUpload(_ context.Context, channelID int64, folder, name string, size int64, uploader string, uploaderQuotaMB int64, sum string) (string, string, int64, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.uploads = append(f.uploads, ftCall{channelID, folder, name, size, uploader, uploaderQuotaMB})
+	f.resumeDigests = append(f.resumeDigests, sum)
+	return "tid-3", "tok-3", 7, true, nil
 }
 
 func (f *fakeFileTransfer) InitDownload(_ context.Context, channelID int64, folder, name string) (string, string, error) {
@@ -234,6 +246,40 @@ func TestFileTransferInitUpload(t *testing.T) {
 	defer env.ft.mu.Unlock()
 	if len(env.ft.uploads) != 1 || env.ft.uploads[0].name != "a.txt" || env.ft.uploads[0].size != 42 || env.ft.uploads[0].uploader != "user-uid" {
 		t.Fatalf("uploads = %+v", env.ft.uploads)
+	}
+}
+
+// TestFileTransferInitResumableUpload verifies a declared digest selects the
+// resumable path and the resume point reaches the client (39), while a
+// request without a digest still gets a plain token.
+func TestFileTransferInitResumableUpload(t *testing.T) {
+	env := startTestEnvWithCapabilities(t, authorization.UploadFiles)
+	defer env.stop()
+	env.state.AddChannel(testChannel(1))
+	conn, _ := dialAuthed(t, env.addr, "user-uid")
+	defer closeFileTestResource(t, conn)
+
+	sum := strings.Repeat("ab", 32)
+	send(t, conn, netproto.MsgFileTransferInit, netproto.FileTransferInit{ChannelID: 1, Direction: "upload", Name: "big.bin", Size: 42, SHA256: sum})
+	var resp netproto.FileTransferInitResponse
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgFileTransferInitResponse), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Resumable || resp.ResumeOffset != 7 || resp.Token != "tok-3" {
+		t.Fatalf("response = %+v", resp)
+	}
+	send(t, conn, netproto.MsgFileTransferInit, netproto.FileTransferInit{ChannelID: 1, Direction: "upload", Name: "small.bin", Size: 4})
+	resp = netproto.FileTransferInitResponse{}
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgFileTransferInitResponse), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Resumable || resp.ResumeOffset != 0 || resp.Token != "tok-1" {
+		t.Fatalf("plain response = %+v", resp)
+	}
+	env.ft.mu.Lock()
+	defer env.ft.mu.Unlock()
+	if len(env.ft.resumeDigests) != 1 || env.ft.resumeDigests[0] != sum || len(env.ft.uploads) != 2 || env.ft.uploads[0].uploader != "user-uid" {
+		t.Fatalf("calls = %+v digests = %v", env.ft.uploads, env.ft.resumeDigests)
 	}
 }
 
