@@ -1,6 +1,7 @@
 // settings-ui.js — the settings dialog: a centred modal with a category rail
 // on the left and grouped rows (label + help left, control right) per page.
 // Page ids, their saved keys and deep links live in settings-catalog.js.
+import { hotkeyErrors } from "./hotkey-status.js";
 import { icon } from "./icons.js";
 import { UPDATE_INTERVAL_HOURS, updateIntervalHours } from "./update-periodic.js";
 import { SETTINGS_CATEGORIES, resetPageDraft, resolveSettingsTarget } from "./settings-catalog.js";
@@ -993,9 +994,7 @@ function audioStatusPanel() {
     return wrap;
 }
 
-// hkErrors tracks the last activation error per action (301 conflict
-// detection), fed by hotkey_status events.
-const hkErrors = new Map();
+// Hotkey registration errors are recorded from startup (hotkey-status.js).
 let stopActiveHotkeyCapture = null;
 
 function cancelHotkeyCapture() {
@@ -1125,7 +1124,7 @@ function pageHotkeys() {
                 else if (prof) prof[profField] = "";
                 renderRows();
             };
-            if (hkErrors.has(action)) errEl.textContent = hkErrors.get(action);
+            if (hotkeyErrors.has(action)) errEl.textContent = hotkeyErrors.get(action);
             wrap.appendChild(row(label, cap, "", { key: field }));
             wrap.appendChild(unbind);
             wrap.appendChild(errEl);
@@ -1563,7 +1562,7 @@ function translateDialog(overlay) {
 // openSettings opens the dialog on a page. target is a page id (current or
 // pre-redesign, e.g. "capture"), "page/section", or { page, section,
 // setting }; options may add section / setting to focus a group or a row.
-function openSettings(target = "general", options = {}) {
+export function openSettings(target = "general", options = {}) {
     if (document.getElementById("settings-overlay")?.getAttribute("aria-busy") === "true") return;
     if (document.getElementById("settings-overlay")?.dataset.identityBusy === "true") return;
     const destination = resolveSettingsTarget(target, options);
@@ -1928,20 +1927,3 @@ export function settingsPages() {
     }));
 }
 
-export function initSettingsUI() {
-    window.__noxa.openSettings = openSettings;
-    window.__noxa.settingsPages = settingsPages;
-    // Deep links from UI that does not import this module:
-    // window.dispatchEvent(new CustomEvent("noxa-open-settings", { detail: { page: "overlay" } })).
-    window.addEventListener("noxa-open-settings", event => {
-        openSettings(event.detail || "general");
-    });
-    // (301) track registration errors for the hotkey map rows.
-    window.runtime.EventsOn("hotkey_status", (st) => {
-        if (st.error) hkErrors.set(st.action, st.error);
-        else hkErrors.delete(st.action);
-        for (const row of document.querySelectorAll(".hk-map-row")) {
-            if (row.dataset.hotkeyAction === st.action) row.querySelector(".hk-err").textContent = st.error || "";
-        }
-    });
-}

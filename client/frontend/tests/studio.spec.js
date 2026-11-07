@@ -88,7 +88,9 @@ test.beforeEach(async ({ page }) => {
         (await import("/src/modal.js")).initModalSystem();
         window.__studio = await import("/src/studio-ui.js");
         window.__video = await import("/src/video.js");
-        window.__studio.initStudio();
+        // The Studio button and startup sweep live in the eager launcher; the
+        // panel module above is the same instance the button loads on demand.
+        (await import("/src/studio-launcher.js")).initStudio();
         // Pixel probe: the average color at a point of the program or preview canvas.
         window.__pixel = (which, x = 0.5, y = 0.5) => {
             const session = window.__studio.studioSessionForTest();

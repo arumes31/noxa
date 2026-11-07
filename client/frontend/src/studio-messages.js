@@ -1,6 +1,7 @@
 export const studioEnglish = {
     "studio.title": "Studio",
     "studio.open": "Studio",
+    "studio.loadFailed": "The Studio could not be loaded: {error}",
     "studio.openHelp": "Compose scenes from captures, images and text and stream the program",
     "studio.close": "Close Studio",
     "studio.offAir": "Off air",
@@ -96,6 +97,7 @@ export const studioEnglish = {
 export const studioGerman = {
     "studio.title": "Studio",
     "studio.open": "Studio",
+    "studio.loadFailed": "Das Studio konnte nicht geladen werden: {error}",
     "studio.openHelp": "Szenen aus Aufnahmen, Bildern und Text zusammenstellen und das Programm streamen",
     "studio.close": "Studio schließen",
     "studio.offAir": "Nicht auf Sendung",

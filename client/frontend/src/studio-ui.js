@@ -25,7 +25,7 @@ import {
 } from "./studio-state.js";
 import { createCaptureRegistry } from "./studio-captures.js";
 import { createAssetStore, MAX_IMAGE_BYTES, StudioImageError } from "./studio-assets.js";
-import { studioLayoutKey, studioAssetDB, dropLegacyStudio, sweepOrphanStudio, studioStoredIdentities } from "./studio-storage.js";
+import { studioLayoutKey, studioAssetDB, dropLegacyStudio } from "./studio-storage.js";
 import { createStudioAudio } from "./studio-audio.js";
 import { StudioEngine, outputSize, STUDIO_FPS } from "./studio-compositor.js";
 import "./studio.css";
@@ -645,19 +645,6 @@ globalThis.addEventListener?.("noxa-identity-deleted", event => {
     if (session && event?.detail?.uid && session.uid === event.detail.uid) disposeStudio();
 });
 
-export function initStudio() {
-    // Finish a Studio wipe that an identity deletion could not complete
-    // (the webview closed after the native deletion committed).
-    // Identities are listed only when some Studio data is stored at all.
-    void studioStoredIdentities().then(owners => owners.length ? window.go?.main?.App?.ListIdentities?.() : null).then(entries => entries && sweepOrphanStudio(entries)).catch(() => {});
-    const bar = document.querySelector("#voice-bar .voice-buttons");
-    if (!bar || document.getElementById("voice-studio")) return;
-    const button = element("button", { type: "button", id: "voice-studio", class: "voice-control", onclick: () => openStudio() });
-    labelButton(button, "streamLive", t("studio.open"));
-    button.setAttribute("aria-label", t("studio.openHelp"));
-    button.title = t("studio.openHelp");
-    (bar.querySelector(".voice-secondary-actions") || bar).append(button);
-}
 
 // Test and diagnostics view of the current session (no media handles).
 export function studioDiagnostics() {
