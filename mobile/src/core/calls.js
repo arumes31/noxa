@@ -8,7 +8,11 @@
 //            "call-media" data channel carrying {camera, screen}
 //   signals  sealDM(JSON {call_id, from, to, type, sdp}) to the peer's
 //            verified call key; candidates go 16 per signal, 64 per peer
+//   e2ee     (#12) media frames are end-to-end encrypted with per-call keys
+//            sent over Olm (media-e2ee/call-media-e2ee.js); the data channel
+//            state carries {e2ee: CALL_E2EE_MARKER}; there is no plaintext mode
 import { openDM, sealDM } from "./crypto.js";
+import { CALL_E2EE_MARKER, CallMediaE2EE, announcesCallE2EE } from "./media-e2ee/call-media-e2ee.js";
 import { get as setting } from "./settings.js";
 import { CameraSource, callOutcome, callPeer, capSender, classifyCall } from "./video.js";
 
@@ -27,10 +31,21 @@ export function callRTCConfiguration(iceServers = []) {
 }
 
 export class Calls extends EventTarget {
-    constructor(session, dm) {
+    /**
+     * options.mediaAdapter: the encrypted-media adapter of the session
+     * (app.js mediaAdapter); without it calls cannot encrypt and fail closed.
+     * options.mediaFactory: tests only, replaces the media session.
+     */
+    constructor(session, dm, { mediaAdapter = null, mediaFactory = null } = {}) {
         super();
         this.session = session;
         this.dm = dm;
+        this.e2ee = new CallMediaE2EE({
+            adapter: mediaAdapter || { status: async () => ({ supported: false, reason: "server_outdated" }) },
+            sessionFactory: mediaFactory,
+            onStatus: () => this.#emit("state"),
+            onError: error => this.#emit("error", Object.assign(error instanceof Error ? error : new Error(String(error)), { code: error?.code || "e2ee" })),
+        });
         this.conn = session.conn;
         this.uid = session.uniqueID;
         this.call = null;
@@ -277,6 +292,7 @@ export class Calls extends EventTarget {
             return;
         }
         const accepted = call.participants.filter(p => p.state === "accepted");
+        this.e2ee.update(call);
         for (const [uid, peer] of this.peers) {
             if (!accepted.some(p => p.unique_id === uid)) {
                 this.#closePeer(peer);
@@ -285,6 +301,7 @@ export class Calls extends EventTarget {
         }
         this.#emit("state");
         if (me.state !== "accepted" || accepted.length < 2) return;
+        if (!(await this.#encrypt())) return;
         if (!(await this.#capture())) return;
         for (const participant of accepted) {
             if (participant.unique_id === this.uid) continue;
@@ -358,6 +375,7 @@ export class Calls extends EventTarget {
         this.rtc = null;
         for (const peer of this.peers.values()) this.#closePeer(peer);
         this.peers.clear();
+        this.e2ee.stop();
         this.#source?.stop();
         this.#source = null;
         for (const stream of [this.stream, this.camera, this.screen]) for (const track of stream?.getTracks() || []) track.stop();
@@ -409,6 +427,31 @@ export class Calls extends EventTarget {
 
     // --- Peers --------------------------------------------------------------------
 
+    /** Starts the call's encrypted media; false (and an error event) when it cannot. */
+    async #encrypt() {
+        const call = this.call;
+        try {
+            await this.e2ee.start(call);
+            return this.call?.id === call.id;
+        } catch (error) {
+            if (this.call?.id === call.id) {
+                this.#emit("error", Object.assign(error instanceof Error ? error : new Error(String(error)), { code: "e2ee", reason: error?.reason || "unavailable" }));
+                this.hangUp().catch(() => {});
+            }
+            return false;
+        }
+    }
+
+    /** A delivered media-key control whose scope is a private call (app.js). */
+    receiveMediaKey(control) { return this.e2ee.receive(control); }
+
+    /** Encryption state of the current call: off, keying, encrypted or partial. */
+    get encryption() { return this.e2ee.status()?.state || "off"; }
+
+    #clientOf(uid) {
+        return this.call?.participants.find(p => p.unique_id === uid)?.client_id || "";
+    }
+
     async #peerKey(uid) {
         const participant = this.call?.participants.find(p => p.unique_id === uid);
         if (!participant?.public_key) return null;
@@ -419,7 +462,8 @@ export class Calls extends EventTarget {
         if (this.peers.has(uid)) return this.peers.get(uid);
         this.rtc ||= callRTCConfiguration(await this.session.relayServers());
         this.#stopRenewal ||= this.session.onRelayRenewal(servers => this.#renew(servers));
-        const pc = new RTCPeerConnection(this.rtc);
+        // (#12) Every transceiver carries the frame transform from creation on.
+        const pc = this.e2ee.protectPeer(new RTCPeerConnection(this.e2ee.peerConfig(this.rtc)));
         const peer = { pc, started: false, chain: Promise.resolve(), local: [], remote: [], localCount: 0, remoteCount: 0, sent: false, timer: 0, audio: null, video: null, channel: null };
         this.peers.set(uid, peer);
         peer.connectTimer = setTimeout(() => {
@@ -478,6 +522,12 @@ export class Calls extends EventTarget {
         channel.onmessage = event => {
             try {
                 const state = JSON.parse(event.data);
+                if (!announcesCallE2EE(state)) {
+                    // An app without call encryption cannot be heard here.
+                    this.#emit("error", Object.assign(new Error("The other participant needs to update noXa: private calls are now end-to-end encrypted."), { code: "peer_outdated" }));
+                    this.hangUp().catch(() => {});
+                    return;
+                }
                 peer.remoteMedia = { camera: !!state.camera, screen: !!state.screen };
                 this.#emit("state");
             } catch {
@@ -487,7 +537,7 @@ export class Calls extends EventTarget {
     }
 
     #sendMediaState(peer) {
-        if (peer.channel?.readyState === "open") peer.channel.send(JSON.stringify({ camera: !!this.camera, screen: !!this.screen }));
+        if (peer.channel?.readyState === "open") peer.channel.send(JSON.stringify({ camera: !!this.camera, screen: !!this.screen, e2ee: CALL_E2EE_MARKER }));
     }
 
     async #syncMedia(uid, peer) {
@@ -502,6 +552,7 @@ export class Calls extends EventTarget {
     }
 
     #closePeer(peer) {
+        this.e2ee.releasePeer(peer.pc).catch(() => {});
         clearTimeout(peer.connectTimer);
         clearTimeout(peer.timer);
         peer.pc.close();
@@ -527,6 +578,7 @@ export class Calls extends EventTarget {
     }
 
     async #sendOffer(uid, peer) {
+        await this.e2ee.bindPeer(peer.pc, this.#clientOf(uid));
         await peer.pc.setLocalDescription(await peer.pc.createOffer());
         await this.#sendDescription(uid, peer);
     }
@@ -552,6 +604,7 @@ export class Calls extends EventTarget {
         }
         const from = this.call?.participants.find(p => p.unique_id === signal.from);
         if (!from || from.state !== "accepted" || this.me()?.state !== "accepted") return;
+        if (!(await this.#encrypt())) return;
         if (!(await this.#capture())) return;
         const peer = await this.#ensurePeer(signal.from);
         peer.chain = peer.chain.then(async () => {
@@ -579,6 +632,7 @@ export class Calls extends EventTarget {
                 const track = this.stream?.getAudioTracks()[0] || null;
                 if (microphone && microphone.sender.track !== track) await microphone.sender.replaceTrack(track);
                 await this.#syncMedia(signal.from, peer);
+                await this.e2ee.bindPeer(peer.pc, this.#clientOf(signal.from));
                 await peer.pc.setLocalDescription(await peer.pc.createAnswer());
                 await this.#sendDescription(signal.from, peer);
             } else if (description.type === "answer" && peer.pc.signalingState === "have-local-offer") {

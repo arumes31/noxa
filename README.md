@@ -73,8 +73,9 @@ system permissions determine the available voice, camera and notification tools.
 > **Encryption boundaries** (details in [Encryption](#encryption)): direct
 > messages and private groups are end-to-end encrypted with Olm (vodozemac),
 > and channel voice, video and screen sharing are end-to-end encrypted with a
-> key shared by the channel's members. Channel/global chat, forum bodies and
-> private calls are **not** end-to-end encrypted yet. Upgrading? Deploy the
+> key shared by the channel's members. Private calls (direct and group) are
+> end-to-end encrypted with per-call keys sent over Olm. Channel/global chat
+> and forum bodies are **not** end-to-end encrypted yet. Upgrading? Deploy the
 > server before or together with the clients: see
 > [Upgrading to end-to-end encryption](#e2ee-upgrade).
 
@@ -121,8 +122,8 @@ app:
   X25519 keys (NaCl box) and kept by the server for up to 24 hours, so it has
   no forward secrecy: someone who stores it and later obtains one of those
   long-term keys can read the copied history.
-- **Private-call signalling** still uses the static device keys (private-call
-  media is not end-to-end encrypted, see below).
+- **Private-call signalling** still uses the static device keys; private-call
+  media itself is end-to-end encrypted with per-call keys (see below).
 - **Guests.** A guest that signs in with an identity key (desktop password-less
   logins, browser guests) uses the same protocol for direct messages: its key
   is its own account root and registers its device itself. A browser guest has
@@ -226,6 +227,10 @@ the keys for that participant.
   channels (they are asked to update), cannot use end-to-end encrypted direct
   or group messages, and can send legacy direct messages only to contacts
   with a single desktop device.
+- **Private calls need current apps on both ends.** Call media is end-to-end
+  encrypted; a call between an updated and an older app ends with "needs to
+  update noXa" instead of carrying unencrypted media. No server change is
+  needed for this.
 - **Secure messaging and encrypted channel voice are always on.** There is no
   setting to turn them off. They need the server's database (the signed device
   directory and admission live there) and control-channel TLS (keys are bound
@@ -242,10 +247,22 @@ the keys for that participant.
 
 **What is not end-to-end encrypted (yet).** Channel and global chat, threads
 and forum bodies use server-managed scope keys: the server can decrypt them
-(it moderates at send time and stores history sealed). Private calls (direct
-or group calls outside channels) use WebRTC DTLS-SRTP to the server's media
-relay, so the server can access private-call media; they are labelled
-separately and are not covered by channel media encryption.
+(it moderates at send time and stores history sealed).
+
+**Private calls.** Direct and group calls outside channels are end-to-end
+encrypted with the same frame cipher as channel media (pinned LiveKit
+FrameCryptor, AES-GCM, VP8/H.264 video and Opus audio). Each participant
+device creates its own key epochs for the call and sends them as
+authenticated Olm controls to the devices that answered for the other
+accepted participants, and only to them: someone who leaves never receives a
+later epoch and someone who joins never an earlier one. The TURN relay and
+the server forward only ciphertext; the desktop additionally refuses to send a
+call key to any device the server's call state does not show as an accepted
+participant. Both apps must be current: a participant whose app does not
+announce call encryption ends the call with an "update required" message
+instead of falling back to unencrypted media. The call panel shows
+"End-to-end encrypted" once keys are exchanged; in one-to-one calls it links
+to the contact's safety number.
 
 **Endpoint limits.** Encryption protects messages in transit and on the
 server, not on a compromised device. Readable history is stored on each device
@@ -336,7 +353,7 @@ graph TD
 * **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries. Unavailable while channel media is end-to-end encrypted (a whisper would leave the channel key scope).
 * **Microphone recovery**: If the selected microphone disconnects, receiving audio and video continues. Choose and apply a device in **Capture** settings, then select **Retry microphone**. A replacement microphone never starts automatically.
 * **Personal audio controls**: **Personal audio…** in a member's menu opens a compact popover with separate voice and screen-share volume/mute controls, percentage and actual gain in dB. Personal volume uses 100% as unity and reaches +20 dB at the 200% endpoint, with a limiter for loud peaks. Capture settings include push-to-talk, channel voice activation on the audio thread with 100 ms of local pre-roll and a 450 ms release hold, continuous transmission, and local microphone testing. Guided microphone calibration recommends thresholds in the same 0.1% steps as the manual control.
-* **Private calls**: Accepted direct/group calls carry voice, camera, and screen sharing without moving participants into a voice channel.
+* **Private calls**: Accepted direct/group calls carry voice, camera, and screen sharing without moving participants into a voice channel. Call media is end-to-end encrypted (see [Encryption](#encryption)).
 * **Studio (desktop)**: compose a live picture from several sources and publish it to your voice channel as your screen share. See [Studio](#studio).
 * **Network echo test**: In **Capture** settings, explicitly join the server's echo channel to hear your microphone through the normal voice connection. Only you hear your microphone: other participants cannot hear you and you cannot hear them. Echo media is excluded from whispers, cross-participant video, and channel recordings. Mute and push-to-talk still apply; wear headphones. The return button restores your previous channel while the test remains active on that server tab. Each server automatically creates `Echo Test` on startup after role setup, granting admitted users permission to view, join and speak only in that channel. Existing channels with the configured name retain their access rules, custom metadata and history; startup updates only the known old system-created echo topic. Set Docker environment variable `NOXA_ECHO_CHANNEL_ENABLED=false` and recreate the server container to disable creation and loopback; existing channels and history are retained. Configure the name with `NOXA_ECHO_CHANNEL_NAME` or `echo_channel_name` in YAML.
 * **Connection benchmark**: A separate, explicitly started test in **Capture** sends synthetic Opus packets for 20 seconds through the server's actual WebRTC endpoint and private Echo Test. It uses a temporary guest with the current server's pinned certificate, without microphone/speaker access or moving your existing voice connection. Results include round-trip timing, arrival gaps and unmatched packets after a short drain period; Cancel, tab disconnect and application shutdown clean up the guest. Guest admission and private echo support are required. This measures packet delivery, not perceived audio quality or maximum video throughput. Unavailable while channel media is end-to-end encrypted (it would send unencrypted test media).

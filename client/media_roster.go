@@ -148,6 +148,9 @@ var (
 // current voice channel and only to a visible session in it that announces
 // exactly that (principal, media device); never to this session itself.
 func (m *connManager) checkMediaKeyTarget(req MediaKeyRequest) error {
+	if req.Scope.Type == callMediaScopeType {
+		return m.checkCallMediaKeyTarget(req)
+	}
 	if req.Scope.Type != "channel-media" {
 		return errMediaKeyScope
 	}

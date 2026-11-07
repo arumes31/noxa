@@ -32,7 +32,14 @@ function setup() {
         uniqueID: "self",
         conn: { request: async () => ({ call: structuredClone(current) }) },
     });
-    const calls = new Calls(session, {});
+    // Encryption is a pass-through stand-in: these tests cover capture
+    // ownership across hang-up (call-media-e2ee.test.mjs covers encryption).
+    const mediaFactory = () => {
+        const stub = { active: false, setRoster() {}, async start() { stub.active = true; }, receive: () => ({ ok: true }), peerConfig: config => config, protectPeer: pc => pc,
+            syncPeer() {}, endpointID: () => "", bindSender: async () => {}, bindReceiver: async () => {}, releasePeer: async () => {}, stop() { stub.active = false; } };
+        return stub;
+    };
+    const calls = new Calls(session, {}, { mediaFactory });
     calls.addEventListener("error", () => {});
     const apply = call => {
         current = call;

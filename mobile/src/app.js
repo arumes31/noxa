@@ -188,7 +188,10 @@ export function onSecureControl(fn) {
 // Encrypted channel media (Task 2): media-key controls go to the current
 // voice session only (never to chat, activity, notifications or history).
 onSecureControl(control => {
-    if (control?.kind === "media-key") app.voice?.receiveMediaKey(control);
+    if (control?.kind !== "media-key") return;
+    // (#12) Private-call keys belong to the call, never to channel voice.
+    if (control.scope?.type === "call-media") app.calls?.receiveMediaKey(control);
+    else app.voice?.receiveMediaKey(control);
 });
 
 const MEDIA_E2EE_CAPABILITY = "noxa-media-e2ee-v1";
@@ -672,7 +675,7 @@ export async function connect({ guest = null, fence } = {}) {
     app.groups.addEventListener("list", () => emit("groups"));
     app.groups.refresh().catch(() => {});
     app.calls?.close();
-    app.calls = new Calls(session, dm);
+    app.calls = new Calls(session, dm, { mediaAdapter: mediaAdapter(session) });
     watchCalls(app.calls);
     watchCallLog(app.calls);
     syncMuted();

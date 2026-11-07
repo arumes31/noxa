@@ -98,8 +98,12 @@ export function renderCall(root, id) {
             ...(pressed === undefined ? {} : { "aria-pressed": String(pressed) }), onclick,
         }, typeof name === "string" ? icon(name) : name);
         const failed = error => toast(errorText(error), "warn");
+        // (#12) Call media is end-to-end encrypted; show the key state.
+        const encryption = calls.encryption;
+        const encryptionText = encryption === "encrypted" ? t("call.e2ee.encrypted") : encryption === "partial" ? t("call.e2ee.partial") : encryption === "off" ? "" : t("call.e2ee.keying");
         replaceContent(body,
             h("p", { class: "call-status", role: "status" }, status),
+            encryptionText ? h("p", { class: "call-e2ee hint", "data-state": encryption }, icon("lock"), " ", encryptionText) : null,
             h("div", { class: "call-tiles" }, tiles),
             own,
             usage,
