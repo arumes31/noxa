@@ -344,6 +344,7 @@ graph TD
 ### 💬 Messaging and collaboration
 
 * **Encrypted messages and attachments**: Direct messages and private groups are end-to-end encrypted with Olm (see [Encryption](#encryption)); channel/global bodies use server-managed scope-key generations. Attachment keys travel inside their encrypted message bodies.
+* **Disappearing direct messages**: either side of a direct conversation can turn on a timer (30 seconds, 5 minutes, 1 hour, 1 day or 1 week; **•••** menu on desktop, conversation menu in the mobile app). The timer travels inside the end-to-end encrypted message, so each device enforces it for its own copies: a sent message disappears that long after sending, a received one that long after the device first shows it. Expired text is removed from the local history, search, previews and notifications, and redacted in the protected message store so a history replay cannot restore it. The server never sees the timer and cannot read or enforce it; anyone can still copy or screenshot a message before it disappears. Older apps show the setting change as a normal message.
 * **Message tools**: Emoji reactions, replies, pins, polls, voice messages, typing indicators, read receipts, and mentions. Inbox, history search, and saved messages are scoped to the current server; history search decrypts and matches bodies in the native client.
 * **Chat navigation**: Channel and direct-message tabs stay on one row, with an **All chats** menu for overflow. Right-click to pin or reorder, or drag within the pinned/unpinned section. Arrow keys move focus, Enter opens a chat, and Ctrl+Shift+Left/Right reorders it. Order and pins are saved locally, encrypted and separated by server and identity; closing a tab removes its pin. **Recently closed** in All chats and **Ctrl+Shift+T** reopen explicitly closed chats from the current session (up to ten); channel access is checked again. This list resets when the server or identity changes.
 * **Chat media**: Enlarging an attached video keeps the same player, playback position, volume, speed and pause state. Animated images and chat videos pause offscreen or after a minute without window focus; only visible media resumes, and manually paused videos stay paused.
@@ -993,7 +994,7 @@ features:
   passphrase-encrypted), and a camera/photo/file attach sheet.
 - **Direct messages and private groups:** end-to-end encrypted, with
   attachments, voice messages, typing and read receipts (can be turned off),
-  safety numbers (compared aloud or by scanning each other's QR code), muting, missed-call lines, and group management (rename,
+  safety numbers (compared aloud or by scanning each other's QR code), disappearing messages, muting, missed-call lines, and group management (rename,
   invite, remove, roles, owner, leave, delete).
 - **Voice and calls:** voice channels with push-to-talk or voice activation,
   microphone settings and test, per-member volume, whispering, priority

@@ -366,6 +366,10 @@ export function DeleteIdentity(arg1, arg2) {
   return window['go']['main']['App']['DeleteIdentity'](arg1, arg2);
 }
 
+export function DirectDisappearingForTab(arg1, arg2) {
+  return window['go']['main']['App']['DirectDisappearingForTab'](arg1, arg2);
+}
+
 export function Disconnect() {
   return window['go']['main']['App']['Disconnect']();
 }
@@ -982,6 +986,10 @@ export function SetDebugFrames(arg1) {
   return window['go']['main']['App']['SetDebugFrames'](arg1);
 }
 
+export function SetDirectDisappearingForTab(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SetDirectDisappearingForTab'](arg1, arg2, arg3, arg4);
+}
+
 export function SetDisplayNameForTab(arg1, arg2) {
   return window['go']['main']['App']['SetDisplayNameForTab'](arg1, arg2);
 }
@@ -1092,6 +1100,10 @@ export function ShowNativeToast(arg1) {
 
 export function StartConnectionBenchmark(arg1) {
   return window['go']['main']['App']['StartConnectionBenchmark'](arg1);
+}
+
+export function StartDirectDisappearingForTab(arg1, arg2) {
+  return window['go']['main']['App']['StartDirectDisappearingForTab'](arg1, arg2);
 }
 
 export function StartedAfterUpdate() {

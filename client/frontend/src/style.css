@@ -1063,6 +1063,11 @@ mark { background: var(--warn); color: #3a2a05; border-radius: 2px; padding: 0 1
 .msg-edited { color: var(--text-faint); font-size: 0.7143rem; }
 .msg-receipt { color: var(--text-dim); font-size: 0.7857rem; flex: 0 0 auto; }
 .msg-receipt.read { color: var(--accent); }
+/* (28) disappearing direct messages */
+.msg-disappear { margin-inline-start: 6px; color: var(--text-faint); font-size: 0.7143rem; white-space: nowrap; }
+.msg.system.disappear-notice { display: block; margin: 6px auto; padding: 2px 10px; text-align: center; color: var(--text-dim); font-size: 0.7857rem; }
+#chat-head-title .disappear-indicator { display: inline-block; margin-inline-start: 12px; color: var(--text-dim); font-size: 11px; font-weight: 600; }
+.disappear-options { display: grid; gap: 6px; margin: 8px 0 12px; }
 .msg.flash { animation: msg-flash 1.2s ease; }
 @keyframes msg-flash {
     0%, 100% { background: transparent; }

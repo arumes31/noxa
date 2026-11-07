@@ -143,6 +143,12 @@ explicit reads. No transport callback is accepted by either adapter.
   envelope digest returns the original archive without advancing state; changed
   ciphertext under the ID conflicts. Historical duplicates remain readable
   after peer revocation, but never across local logout.
+- `RedactArchive(snapshot,ref,archive) error` (disappearing messages) replaces
+  the readable archive of one Inbox or Outbox record in the snapshot. An inbox
+  record keeps its envelope digest, so a duplicate `CommitReceive` returns the
+  redacted archive. An outbox record is redacted only when it can no longer be
+  resealed: an attempt with a terminal receipt, or a legacy batch marked sent
+  (otherwise `ErrConflict`). The PWA mirror is `redactArchive(s, ref, archive)`.
 - `PendingRefs(kind,afterID,limit)` enumerates at most 200 references for recovery;
   it is not permission to send. Read and use the operation-specific retry helper.
 - `Logout(fence)` clears this device database's protected account data, sessions,

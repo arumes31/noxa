@@ -696,7 +696,7 @@ func TestRatchetProductBridge(t *testing.T) {
 		t.Fatalf("edit not applied: %+v", e)
 	}
 	// B reuses alice's logical string for its own message and edits it.
-	if _, err := B.cm.sendRatchetDirect(nil, m1, "nalice", "nbob reuses the id"); err != nil {
+	if _, err := B.cm.sendRatchetDirect(nil, m1, "nalice", "nbob reuses the id", 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := B.app.EditDirectMessageForTab(B.tab, "nalice", m1, "nbob edited his own"); err != nil {

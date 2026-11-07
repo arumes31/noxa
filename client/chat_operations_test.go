@@ -28,16 +28,16 @@ func TestUncertainComposerSendBecomesOutboxEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.keepOutboxOperation(cm, store, "direct", "bob", "ok", "op-1", "not confirmed"); err != nil {
+	if err := a.keepOutboxOperation(cm, store, "direct", "bob", "ok", "op-1", "not confirmed", 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.keepOutboxOperation(cm, store, "direct", "bob", "ok", "op-2", "not confirmed"); err != nil { // a NEW identical message
+	if err := a.keepOutboxOperation(cm, store, "direct", "bob", "ok", "op-2", "not confirmed", 0); err != nil { // a NEW identical message
 		t.Fatal(err)
 	}
 	// A store captured for another binding is refused, never written.
 	other := store
 	other.path += ".other"
-	if err := a.keepOutboxOperation(cm, other, "direct", "bob", "ok", "op-3", "x"); err == nil {
+	if err := a.keepOutboxOperation(cm, other, "direct", "bob", "ok", "op-3", "x", 0); err == nil {
 		t.Fatal("an outbox captured for another server must be refused")
 	}
 	list, err := a.ChatOutboxForTab("a", ChatOutboxRequest{Action: "list"})
@@ -79,11 +79,11 @@ func TestUncertainComposerEntriesAreNeverSilentlyDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < outboxUncertainCap; i++ {
-		if err := a.keepOutboxOperation(cm, store, "direct", "bob", "m", "op-"+strconv.Itoa(i), "x"); err != nil {
+		if err := a.keepOutboxOperation(cm, store, "direct", "bob", "m", "op-"+strconv.Itoa(i), "x", 0); err != nil {
 			t.Fatalf("entry %d: %v", i, err)
 		}
 	}
-	if err := a.keepOutboxOperation(cm, store, "direct", "bob", "m", "op-full", "x"); err == nil {
+	if err := a.keepOutboxOperation(cm, store, "direct", "bob", "m", "op-full", "x", 0); err == nil {
 		t.Fatal("a full outbox must be reported")
 	}
 	if list, err := a.ChatOutboxForTab("a", ChatOutboxRequest{Action: "list"}); err != nil || len(list.Entries) != outboxUncertainCap {

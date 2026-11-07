@@ -168,7 +168,7 @@ export function flush(session, dm, groups = null) {
                             } else if (current.kind === "conversation") {
                                 outcome = await groups.send(current.conversation, text, { reference: current.id, sentAt: current.sentAt });
                             } else {
-                                outcome = await dm.send(current.peer, text, current.nickname || "", { id: current.id, sentAt: current.sentAt });
+                                outcome = await dm.send(current.peer, text, current.nickname || "", { id: current.id, sentAt: current.sentAt, ttl: current.ttl || 0 });
                             }
                             break;
                         } catch (error) {
