@@ -220,6 +220,12 @@ func (m *connManager) dmDeviceList(uid string, force bool) ([]dmTrustedDevice, e
 		log.Printf("dm devices: refusing the device list of %s: %v", uid, err)
 		return nil, err
 	}
+	// Signed revocations (38) are pinned and keep a device out even when a
+	// later directory lists it as active again.
+	if devices, err = m.applyDeviceRevocations(uid, devices, resp.Revocations); err != nil {
+		log.Printf("dm devices: refusing the device list of %s: %v", uid, err)
+		return nil, err
+	}
 	m.dmDevices.putPinned(uid, devices, epoch, now, verifiedPin)
 	if uid == ownUID {
 		return m.withoutOwnRevokedDevices(devices)

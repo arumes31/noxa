@@ -323,6 +323,15 @@ export function renderDM(root, peer) {
         render();
     };
     const onVisible = () => readNow();
+    // (38) A device of this contact was revoked: signed by one of their own
+    // devices (verified and pinned), or by the server alone.
+    const onDeviceRevoked = event => {
+        if (event.detail.peer !== peer) return;
+        const text = t(event.detail.signed ? "dm.deviceRevokedSigned" : "dm.deviceRevokedServer", { name: nickname() });
+        toast(text, event.detail.signed ? "info" : "warn");
+        log.append(h("div", { class: "system-line device-revoked", role: "status" }, text));
+    };
+    dm.addEventListener("device-revoked", onDeviceRevoked);
     dm.addEventListener("messages", onMessages);
     dm.addEventListener("receipt", onMessages);
     dm.addEventListener("history", onHistory);
@@ -339,6 +348,7 @@ export function renderDM(root, peer) {
     checkTrust();
     return () => {
         clearTimeout(typingTimer);
+        dm.removeEventListener("device-revoked", onDeviceRevoked);
         dm.removeEventListener("messages", onMessages);
         dm.removeEventListener("receipt", onMessages);
         dm.removeEventListener("history", onHistory);

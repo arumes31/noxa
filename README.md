@@ -1035,6 +1035,22 @@ list, sign out and reset devices with `devicelist`, `devicerevoke` and
 `ResetDevices` (gRPC). Devices unused for 180 days are signed out after a
 warning at 166 days; an account's first desktop never expires.
 
+**Signed device revocations.** When you sign out one of your devices from a
+desktop or phone that is itself a trusted device of the account, that device
+signs the revocation (`noxa-device-revocation-v1` over the revoked device's
+exact keys, the time and the reason). The server stores the statement and
+lists recent revocations next to your active devices in the key directory.
+Your contacts and your other devices check the signature against your device
+chain and then pin the revocation: the device stays refused for direct
+messages and secure messaging even if a server later lists it as active
+again, its sessions end, and the conversation shows that you signed it out.
+Only your first device can revoke itself. Revocations nobody signed (an
+administrator's reset, idle expiry, an integration or an older app) are still
+applied, but clients show them as removed by the server. Older clients ignore
+the statements and keep relying on the server's device list. This release
+adds migration `069_device_revocations.sql`; run the matching `migrate`
+offline before starting the server.
+
 **Several servers.** Each server serves its own copy of the app at
 `https://<server>/app/`, so one installed app (home screen icon) belongs to one
 server, with its own sign-in, keys and notifications. **You → Servers** (or the

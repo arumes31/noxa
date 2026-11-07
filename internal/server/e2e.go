@@ -142,9 +142,13 @@ func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *net
 	}
 
 	var devices []netproto.DMDevice
+	var revocations []netproto.DeviceRevocation
 	if msg.Devices {
 		var err error
 		if devices, err = s.dmDevices(ctx, msg.UniqueID); err != nil {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encryption directory unavailable")
+		}
+		if revocations, err = s.dmRevocations(ctx, msg.UniqueID); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encryption directory unavailable")
 		}
 	}
@@ -152,9 +156,10 @@ func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *net
 		return err
 	}
 	return s.writeMessage(client, netproto.MsgKeyResponse, netproto.KeyResponse{
-		UniqueID:  msg.UniqueID,
-		PublicKey: pub,
-		Devices:   devices,
+		UniqueID:    msg.UniqueID,
+		PublicKey:   pub,
+		Devices:     devices,
+		Revocations: revocations,
 	})
 }
 

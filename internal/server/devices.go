@@ -483,7 +483,18 @@ func (s *TCPServer) handleDeviceRequest(ctx context.Context, client *Client, f *
 		if target.FirstDevice && target.DeviceID != client.currentDeviceID() {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "the first device cannot be signed out from another device")
 		}
-		d, err := s.revokeDevice(ctx, principal, r.DeviceID, store.DeviceRevokedByUser, principal)
+		var d store.Device
+		if len(r.Signature) > 0 {
+			// A signed revoke (38) is refused outright when the signature
+			// does not verify: no silent downgrade to an unsigned one.
+			signer, serr := s.deps.Devices.DeviceByID(ctx, principal, client.currentDeviceID())
+			if serr != nil || verifyRevocationSignature(principal, signer, target, r.RevokedAt, r.Signature, time.Now()) != nil {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "the device revocation signature is invalid")
+			}
+			d, err = s.revokeDeviceSigned(ctx, principal, r.DeviceID, store.SignedRevocation{SignerDeviceID: signer.DeviceID, SignedAt: r.RevokedAt, Signature: r.Signature}, principal)
+		} else {
+			d, err = s.revokeDevice(ctx, principal, r.DeviceID, store.DeviceRevokedByUser, principal)
+		}
 		if err != nil {
 			return s.deviceFailure(ctx, client, err)
 		}

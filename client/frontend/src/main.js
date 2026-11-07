@@ -1227,6 +1227,14 @@ window.runtime.EventsOn("contact_identity_changed", (event) => {
     } catch { /* an unreadable event leaves the safe default: still blocked */ }
 });
 
+// (38) a device of a contact (or of this account) was revoked; signed
+// revocations are verified and pinned on the Go side before this fires.
+window.runtime.EventsOn("device_revoked", (event) => {
+    try {
+        chatUI.onDeviceRevoked(typeof event === "string" ? JSON.parse(event) : event);
+    } catch { /* a notice only; the Go side already applied the revocation */ }
+});
+
 window.runtime.EventsOn("servererror", (msg) => {
     const text = String(msg).replace(/^\d+:\s*/, "");
     // (321) name the missing permission when the server (or a known message) identifies it.

@@ -1055,6 +1055,28 @@ export class RatchetConsumer {
      * anything by itself.
      */
     resetTrust(principal) { return this.#serial(() => this.#resetTrustRecords(principal)); }
+
+    /**
+     * Records a permanent revoked trust record for one device (38): a
+     * revocation a device of that account signed and this app verified. Its
+     * sessions end and its future messages are refused; an identity reset
+     * (resetTrust) keeps revoked records.
+     */
+    revokeDevice(principal, device) {
+        return this.#serial(async () => {
+            if (!principal || !device) throw fail("invalid");
+            const id = RatchetConsumer.trustID(principal, device);
+            const s = await this.store.read([["trust", id]]), r = rec(s, "trust", id);
+            let value = { principal, device, noxa: null };
+            if (r.revision) {
+                const saved = parse(r.data);
+                if (saved.revoked) return;
+                value = saved.value || value;
+            }
+            await this.store.setTrust(s, id, value, true);
+            this.#check();
+        });
+    }
     async #resetTrustRecords(principal) {
         for (const ref of await this.#refs("trust")) {
             let parsed;
