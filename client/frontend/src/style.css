@@ -2593,3 +2593,7 @@ body.details-collapsed #app-body {
 
 .member-media-indicator[data-state="unavailable"] { color: var(--danger, #ef6072); }
 .member-media-unavailable { display: grid; place-items: center; width: 12px; height: 12px; border: 1px solid currentColor; border-radius: 50%; font-size: 10px; font-weight: 700; line-height: 1; }
+
+/* (83) A code-split module (Settings, Studio) is loading on first use. */
+body.module-loading, body.module-loading * { cursor: progress !important; }
+#voice-studio[aria-busy="true"] { cursor: progress; opacity: .7; }
