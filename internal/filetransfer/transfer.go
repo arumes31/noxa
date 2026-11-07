@@ -58,7 +58,7 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 	_ = conn.SetDeadline(time.Now().Add(connTimeout))
 
 	if tr.Direction == "upload" {
-		err = s.receiveUpload(ctx, conn, tr)
+		err = s.receiveUpload(ctx, conn, tr, active, init.Offset)
 	} else {
 		err = s.sendDownload(ctx, conn, tr, init.Offset)
 	}
@@ -81,10 +81,13 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 	writeStatus(conn, true, "")
 }
 
-// receiveUpload reads chunk frames into an exclusive, randomly named partial
-// file, verifies the declared size and SHA-256 digest, and atomically moves the
-// file into place with a files-table record. On failure the partial is removed.
-func (s *Server) receiveUpload(ctx context.Context, conn net.Conn, tr *transfer) error {
+// receiveUpload reads chunk frames into a partial file, verifies the declared
+// size and SHA-256 digest, and atomically moves the file into place with a
+// files-table record. A single-shot upload writes an exclusive, randomly named
+// partial that is removed on any failure. A resumable upload (39) appends to
+// its deterministic partial from offset and keeps it when the connection is
+// interrupted, so the next token for the same file can continue.
+func (s *Server) receiveUpload(ctx context.Context, conn net.Conn, tr *transfer, active *activeTransfer, offset int64) error {
 	root, err := s.openBlobRoot()
 	if err != nil {
 		return err
@@ -94,26 +97,60 @@ func (s *Server) receiveUpload(ctx context.Context, conn net.Conn, tr *transfer)
 	if err := root.MkdirAll(filepath.Dir(finalPath), 0o700); err != nil {
 		return fmt.Errorf("creating channel dir: %w", err)
 	}
-	tmpID, err := randomHex(8)
-	if err != nil {
-		return fmt.Errorf("generating temporary upload name: %w", err)
-	}
-	tmpPath := finalPath + ".part-" + tmpID
 
-	f, err := root.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
+	resumable := tr.PartialPath != ""
+	var (
+		f        *os.File
+		h        hashWriter
+		tmpPath  string
+		received int64
+	)
+	if resumable {
+		release, err := s.claimPartial(tr, active)
+		if err != nil {
+			return err
+		}
+		defer release()
+		tmpPath = tr.PartialPath
+		if f, h, err = openResumablePartial(root, tmpPath, offset); err != nil {
+			return err
+		}
+		received = offset
+	} else {
+		if offset != 0 {
+			return errors.New("this upload cannot resume")
+		}
+		tmpID, err := randomHex(8)
+		if err != nil {
+			return fmt.Errorf("generating temporary upload name: %w", err)
+		}
+		tmpPath = finalPath + legacyPartialPrefix + tmpID
+		if f, err = root.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err != nil {
+			return fmt.Errorf("creating temp file: %w", err)
+		}
+		h = sha256.New()
 	}
-	// On any error path: close and remove the partial file.
-	fail := func(err error) error {
-		_ = f.Close()
+	// discard removes the partial; a resumable one also leaves the registry.
+	discard := func() {
 		_ = root.Remove(tmpPath)
+		if resumable {
+			s.forgetPartial(tmpPath)
+		}
+	}
+	// On an error path: close the partial, and remove it unless a resumable
+	// transfer was merely interrupted.
+	fail := func(err error) error {
+		if resumable && keepPartialOn(err) {
+			_ = f.Sync()
+			_ = f.Close()
+			return err
+		}
+		_ = f.Close()
+		discard()
 		return err
 	}
 
-	h := sha256.New()
 	limiter := s.limiterFor(time.Now())
-	var received int64
 
 	for {
 		frame, err := netproto.ReadFrame(conn)
@@ -147,23 +184,26 @@ func (s *Server) receiveUpload(ctx context.Context, conn net.Conn, tr *transfer)
 				return fail(fmt.Errorf("size mismatch: got %d bytes, declared %d", received, tr.Size))
 			}
 			sum := hex.EncodeToString(h.Sum(nil))
-			if digest.SHA256 != sum {
+			if digest.SHA256 != sum || (resumable && tr.SHA256 != sum) {
 				return fail(errors.New("checksum mismatch"))
 			}
 			if err := f.Sync(); err != nil {
 				_ = f.Close()
-				_ = root.Remove(tmpPath)
+				discard()
 				return fmt.Errorf("syncing file: %w", err)
 			}
 			if err := f.Close(); err != nil {
-				_ = root.Remove(tmpPath)
+				discard()
 				return fmt.Errorf("closing file: %w", err)
 			}
 			if err := s.withTransferAccess(ctx, tr, func(ctx context.Context) error {
 				return s.finalizeUpload(ctx, tr, root, tmpPath, finalPath, received, sum)
 			}); err != nil {
-				_ = root.Remove(tmpPath)
+				discard()
 				return err
+			}
+			if resumable {
+				s.forgetPartial(tmpPath)
 			}
 			s.logger.Info("upload complete",
 				zap.String("transfer_id", tr.ID),

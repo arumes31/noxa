@@ -11,6 +11,9 @@ import (
 	"noxa/internal/netproto"
 )
 
+// dataSHA256 is the SHA-256 of "data", the fixture file content.
+const dataSHA256 = "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
+
 func TestTransferInitializationRejectsNativeTabSwitch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "report.txt")
 	if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
@@ -21,11 +24,12 @@ func TestTransferInitializationRejectsNativeTabSwitch(t *testing.T) {
 		want netproto.FileTransferInit
 		call func(*App, string) string
 	}{
-		{"bytes", netproto.FileTransferInit{ChannelID: 3, Direction: "upload", Folder: "docs", Name: "report.txt", Size: 4},
+		// Uploads declare the file digest so a server can offer resume (39).
+		{"bytes", netproto.FileTransferInit{ChannelID: 3, Direction: "upload", Folder: "docs", Name: "report.txt", Size: 4, SHA256: dataSHA256},
 			func(a *App, tab string) string {
 				return a.UploadFileProgressForTab(tab, "up", 3, "docs", "report.txt", "ZGF0YQ==")
 			}},
-		{"path", netproto.FileTransferInit{ChannelID: 3, Direction: "upload", Folder: "docs", Name: "report.txt", Size: 4},
+		{"path", netproto.FileTransferInit{ChannelID: 3, Direction: "upload", Folder: "docs", Name: "report.txt", Size: 4, SHA256: dataSHA256},
 			func(a *App, tab string) string { return a.UploadPathProgressForTab(tab, "up", 3, "docs", path) }},
 		{"download", netproto.FileTransferInit{ChannelID: 3, Direction: "download", Folder: "docs", Name: "report.txt"},
 			func(a *App, tab string) string {

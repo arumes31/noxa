@@ -215,6 +215,10 @@ type transfer struct {
 	Uploader        string
 	UploaderQuotaMB int64
 	Expires         time.Time
+	// SHA256 and PartialPath are set for a resumable upload (39): the digest
+	// the client declared and the partial file the bytes go to.
+	SHA256      string
+	PartialPath string
 }
 
 // activeTransfer lets channel deletion revoke transfers that already
@@ -254,6 +258,8 @@ type Server struct {
 	// OnTransferComplete, when set, is called with the direction and result
 	// ("ok"/"error") when a transfer finishes (metrics).
 	OnTransferComplete func(direction, result string)
+	// OnOrphanSweep, when set, receives each completed orphan sweep pass.
+	OnOrphanSweep func(OrphanSweepResult)
 
 	lifecycleMu sync.Mutex
 	listener    net.Listener
@@ -279,6 +285,11 @@ type Server struct {
 	nextTransferSweep time.Time
 	activeTransfers   map[string]*activeTransfer
 	deletedChannels   map[int64]*channelCleanup
+	// partials tracks resumable upload partials by relative path (39).
+	partials map[string]*partialUpload
+	// sweep is the orphan sweep's progress across retention ticks (61).
+	sweep        orphanSweepState
+	orphanPolicy OrphanPolicy
 }
 
 // New constructs a Server. The listener is created lazily in Start.
@@ -305,6 +316,7 @@ func New(cfg Config, st FileStore, logger *zap.Logger) *Server {
 		preauthByIP:     make(map[string]int),
 		transfers:       make(map[string]*transfer),
 		activeTransfers: make(map[string]*activeTransfer),
+		partials:        make(map[string]*partialUpload),
 		deletedChannels: make(map[int64]*channelCleanup),
 	}
 	s.removeChannelDataFn = s.removeChannelData
@@ -348,6 +360,12 @@ func (s *Server) Fingerprint() string {
 // uploaderQuotaMB is that user's personal ceiling (266), resolved by the
 // caller from the client's permissions (0 = unlimited).
 func (s *Server) InitUpload(ctx context.Context, channelID int64, folder, name string, size int64, uploader string, uploaderQuotaMB int64) (string, string, error) {
+	return s.initUpload(ctx, channelID, folder, name, size, uploader, uploaderQuotaMB, nil)
+}
+
+// initUpload is InitUpload with an optional hook that completes the transfer
+// record before its token is published (resumable uploads, 39).
+func (s *Server) initUpload(ctx context.Context, channelID int64, folder, name string, size int64, uploader string, uploaderQuotaMB int64, complete func(*transfer)) (string, string, error) {
 	if s.cfg.UserQuotaMB > 0 && (uploaderQuotaMB <= 0 || s.cfg.UserQuotaMB < uploaderQuotaMB) {
 		uploaderQuotaMB = s.cfg.UserQuotaMB
 	}
@@ -393,7 +411,7 @@ func (s *Server) InitUpload(ctx context.Context, channelID int64, folder, name s
 		}
 	}
 
-	return s.register(&transfer{
+	tr := &transfer{
 		Direction:       "upload",
 		Principal:       transferPrincipal(ctx),
 		ChannelID:       channelID,
@@ -402,7 +420,11 @@ func (s *Server) InitUpload(ctx context.Context, channelID int64, folder, name s
 		Size:            size,
 		Uploader:        uploader,
 		UploaderQuotaMB: uploaderQuotaMB,
-	})
+	}
+	if complete != nil {
+		complete(tr)
+	}
+	return s.register(tr)
 }
 
 // InitDownload issues a single-use download token for an existing file.

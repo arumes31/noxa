@@ -38,6 +38,7 @@ type Sink interface {
 	IncRecordingError(operation string)
 	IncChatCryptoFailure(operation string)
 	IncPushDelivery(result string)
+	AddFileReconcile(action string, n int)
 }
 
 // RegisterDBPool exports database/sql pool pressure so MaxOpenConns,
@@ -90,6 +91,7 @@ type Metrics struct {
 	recordingErrors   *prometheus.CounterVec
 	chatCryptoFailure *prometheus.CounterVec
 	pushDeliveries    *prometheus.CounterVec
+	fileReconcile     *prometheus.CounterVec
 	readinessDuration *prometheus.HistogramVec
 	broadcastDuration prometheus.Histogram
 	broadcastBacklog  prometheus.Histogram
@@ -136,6 +138,10 @@ func New() *Metrics {
 			Namespace: "noxa", Name: "auth_failures_total",
 			Help: "Rejected authentication attempts by transport and stable reason.",
 		}, []string{"transport", "reason"}),
+		fileReconcile: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "noxa", Name: "file_reconcile_total",
+			Help: "File storage sweep results: stale_partial, orphan_blob, missing_blob, row_removed, removal_failed.",
+		}, []string{"action"}),
 		pushDeliveries: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "noxa", Name: "push_deliveries_total",
 			Help: "Web Push delivery attempts by result: ok, retry, gone or failed.",
@@ -201,7 +207,7 @@ func New() *Metrics {
 		}, func() float64 { return nonNegative(m.currentRecorderSessionCount()) }),
 		m.udpPackets, m.udpDropped, m.udpRateLimited, m.tcpConnections,
 		m.chatMessages, m.rtpForwarded, m.fileTransfers, m.authFailures, m.controlDisconnect,
-		m.recordingErrors, m.chatCryptoFailure, m.pushDeliveries, m.readinessDuration,
+		m.recordingErrors, m.chatCryptoFailure, m.pushDeliveries, m.fileReconcile, m.readinessDuration,
 		m.broadcastDuration, m.broadcastBacklog, m.buildInfo,
 	)
 	m.buildInfo.WithLabelValues(version.String(), version.Commit).Set(1)
@@ -241,6 +247,17 @@ func (m *Metrics) IncFileTransfer(direction, result string) {
 func (m *Metrics) IncAuthFailure(transport, reason string) {
 	m.authFailures.WithLabelValues(authTransportLabel(transport), authFailureReasonLabel(reason)).Inc()
 }
+func (m *Metrics) AddFileReconcile(action string, n int) {
+	switch action {
+	case "stale_partial", "orphan_blob", "missing_blob", "row_removed", "removal_failed":
+	default:
+		action = "unknown"
+	}
+	if n > 0 {
+		m.fileReconcile.WithLabelValues(action).Add(float64(n))
+	}
+}
+
 func (m *Metrics) IncPushDelivery(result string) {
 	switch result {
 	case "ok", "retry", "gone", "failed":
@@ -505,3 +522,4 @@ func (Noop) IncControlDisconnect(string, string) {}
 func (Noop) IncRecordingError(string)            {}
 func (Noop) IncChatCryptoFailure(string)         {}
 func (Noop) IncPushDelivery(string)              {}
+func (Noop) AddFileReconcile(string, int)        {}

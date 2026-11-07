@@ -829,6 +829,9 @@ type FileTransferInit struct {
 	Size      int64  `json:"size,omitempty"`
 	// Folder is the virtual folder within the channel ('' = root, wave 7).
 	Folder string `json:"folder,omitempty"`
+	// SHA256 (uploads, optional) is the whole file's hex digest. It asks for
+	// a resumable upload (39); servers without resume ignore it.
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 // FileTransferInitResponse carries an issued single-use transfer token and
@@ -844,6 +847,11 @@ type FileTransferInitResponse struct {
 	// failing legibly.
 	TLS            bool   `json:"tls,omitempty"`
 	TLSFingerprint string `json:"tls_fingerprint,omitempty"`
+	// Resumable reports a resumable upload (39): the client sends ResumeOffset
+	// as the init frame's offset and streams the file from there. The digest
+	// frame still covers the whole file.
+	Resumable    bool  `json:"resumable,omitempty"`
+	ResumeOffset int64 `json:"resume_offset,omitempty"`
 }
 
 // FileList requests the file listing of a channel. Folder selects a virtual

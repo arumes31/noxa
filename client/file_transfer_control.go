@@ -3,7 +3,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -102,22 +104,12 @@ func ftPutBytesWith(cm *connManager, channelID int64, name string, data []byte) 
 
 // ftPutBytesInFolder uploads into a virtual folder of the scope. Private-group
 // attachments use their membership-checked folder of the server-wide scope.
+// A dropped connection is retried and, on a server with resume (39),
+// continues where the server stopped.
 func ftPutBytesInFolder(cm *connManager, channelID int64, folder, name string, data []byte) error {
-	f, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
-		netproto.FileTransferInit{ChannelID: channelID, Folder: folder, Direction: "upload", Name: name, Size: int64(len(data))},
-		10*time.Second)
-	if err != nil {
-		return err
-	}
-	var init netproto.FileTransferInitResponse
-	if err := decodeJSON(f, &init); err != nil {
-		return err
-	}
-	ep, err := cm.ftTarget(init)
-	if err != nil {
-		return err
-	}
-	return cm.ftUpload(ep, init.Token, init.TransferID, data)
+	sum := sha256.Sum256(data)
+	req := uploadRequest{channelID: channelID, folder: folder, name: name, size: int64(len(data)), sum: hex.EncodeToString(sum[:])}
+	return cm.uploadWithResume("", req, bytes.NewReader(data), nil, nil)
 }
 
 // ftGetBytes runs the init handshake and reads a file off the data port.

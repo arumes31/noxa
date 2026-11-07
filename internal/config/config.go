@@ -78,19 +78,29 @@ type Config struct {
 	// backups and big uploads run at full speed when nobody is listening.
 	// Both are 0-23; equal values disable the window. A start after the end
 	// wraps past midnight (22 -> 6).
-	FileQuietHoursStart int           `mapstructure:"file_quiet_hours_start"`
-	FileQuietHoursEnd   int           `mapstructure:"file_quiet_hours_end"`
-	DatabaseURL         string        `mapstructure:"database_url"`
-	PIIKeyFile          string        `mapstructure:"pii_key_file"`
-	RedisAddr           string        `mapstructure:"redis_addr"`
-	RedisPassword       string        `mapstructure:"redis_password"`
-	RedisEnabled        bool          `mapstructure:"redis_enabled"`
-	RedisDialTimeout    time.Duration `mapstructure:"redis_dial_timeout"`
-	RedisReadTimeout    time.Duration `mapstructure:"redis_read_timeout"`
-	RedisWriteTimeout   time.Duration `mapstructure:"redis_write_timeout"`
-	RedisTLSEnabled     bool          `mapstructure:"redis_tls_enabled"`
-	RedisTLSServerName  string        `mapstructure:"redis_tls_server_name"`
-	RedisTLSCAFile      string        `mapstructure:"redis_tls_ca_file"`
+	FileQuietHoursStart int `mapstructure:"file_quiet_hours_start"`
+	FileQuietHoursEnd   int `mapstructure:"file_quiet_hours_end"`
+	// The orphan sweep (61) removes stale upload partials and blobs no files
+	// row references. file_orphan_cleanup false turns it off entirely;
+	// file_orphan_dry_run only logs what it would remove; file_orphan_grace is
+	// the minimum age of an unreferenced blob (at least 1h, default 24h);
+	// file_orphan_delete_missing_rows also removes rows whose blob is gone
+	// (off by default: an unmounted volume would look the same).
+	FileOrphanCleanup           bool          `mapstructure:"file_orphan_cleanup"`
+	FileOrphanDryRun            bool          `mapstructure:"file_orphan_dry_run"`
+	FileOrphanGrace             time.Duration `mapstructure:"file_orphan_grace"`
+	FileOrphanDeleteMissingRows bool          `mapstructure:"file_orphan_delete_missing_rows"`
+	DatabaseURL                 string        `mapstructure:"database_url"`
+	PIIKeyFile                  string        `mapstructure:"pii_key_file"`
+	RedisAddr                   string        `mapstructure:"redis_addr"`
+	RedisPassword               string        `mapstructure:"redis_password"`
+	RedisEnabled                bool          `mapstructure:"redis_enabled"`
+	RedisDialTimeout            time.Duration `mapstructure:"redis_dial_timeout"`
+	RedisReadTimeout            time.Duration `mapstructure:"redis_read_timeout"`
+	RedisWriteTimeout           time.Duration `mapstructure:"redis_write_timeout"`
+	RedisTLSEnabled             bool          `mapstructure:"redis_tls_enabled"`
+	RedisTLSServerName          string        `mapstructure:"redis_tls_server_name"`
+	RedisTLSCAFile              string        `mapstructure:"redis_tls_ca_file"`
 	// MetricsAllowRemote exposes /metrics beyond loopback on HealthAddr.
 	// Liveness and readiness remain reachable wherever HealthAddr is bound.
 	MetricsAllowRemote bool `mapstructure:"metrics_allow_remote"`
@@ -321,6 +331,10 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("file_max_size_mb", 100)
 	v.SetDefault("file_quiet_hours_start", 0)
 	v.SetDefault("file_quiet_hours_end", 0)
+	v.SetDefault("file_orphan_cleanup", true)
+	v.SetDefault("file_orphan_dry_run", false)
+	v.SetDefault("file_orphan_grace", 24*time.Hour)
+	v.SetDefault("file_orphan_delete_missing_rows", false)
 	v.SetDefault("database_url", "postgres://noxa:noxa@localhost:5432/noxa?sslmode=disable")
 	v.SetDefault("redis_addr", "localhost:6379")
 	v.SetDefault("redis_password", "")
@@ -607,6 +621,9 @@ func (c *Config) Validate() error {
 	}
 	if c.FileMaxSizeMB < 0 || c.FileMaxSizeMB > (1<<63-1)/(1024*1024) {
 		errs = append(errs, fmt.Errorf("file_max_size_mb %d must fit a nonnegative byte limit", c.FileMaxSizeMB))
+	}
+	if c.FileOrphanGrace < MinFileOrphanGrace {
+		errs = append(errs, fmt.Errorf("file_orphan_grace %s must be at least %s", c.FileOrphanGrace, MinFileOrphanGrace))
 	}
 	if c.FileQuietHoursStart < 0 || c.FileQuietHoursStart > 23 {
 		errs = append(errs, fmt.Errorf("file_quiet_hours_start %d must be between 0 and 23", c.FileQuietHoursStart))
@@ -1084,6 +1101,9 @@ func ParseQueryAllowedCIDRs(raw []string) ([]netip.Prefix, error) {
 // MinAuditPartitionRetentionMonths keeps partition retention from removing
 // audit rows the server's own 180-day row retention would still keep.
 const MinAuditPartitionRetentionMonths = 6
+
+// MinFileOrphanGrace keeps the orphan sweep from racing uploads in progress.
+const MinFileOrphanGrace = time.Hour
 
 // MaxShutdownGracePeriod bounds the pre-shutdown announcement window.
 const MaxShutdownGracePeriod = 10 * time.Minute
