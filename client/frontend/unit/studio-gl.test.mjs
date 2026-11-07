@@ -32,6 +32,11 @@ function fakeGL(log, state = { lost: false }) {
     }, handler);
 }
 
+// Publication clones are distinct, stoppable tracks, like real clones.
+function fakeTrack(readyState = "live") {
+    return { readyState, clone() { return fakeTrack(this.readyState); }, stop() { this.readyState = "ended"; } };
+}
+
 function fakeDocument({ log, glState, draws }) {
     const context2d = () => ({
         fillRect() {}, clearRect() {}, drawImage: (...args) => draws.push(args), save() {}, restore() {}, beginPath() {}, rect() {},
@@ -48,7 +53,7 @@ function fakeDocument({ log, glState, draws }) {
                     if (type === "webgl2") return glState.available ? fakeGL(log, glState) : null;
                     return context2d();
                 },
-                captureStream: () => ({ getVideoTracks: () => [{ readyState: "live", clone() { return this; }, stop() {} }] }),
+                captureStream: () => ({ getVideoTracks: () => [fakeTrack()] }),
             };
             return canvas;
         },
@@ -165,6 +170,11 @@ describe("studio engine on WebGL", () => {
         const engine = new StudioEngine({ registry: registryWith({ videoWidth: 64, videoHeight: 36 }), width: 64, height: 36,
             document: fakeDocument({ log, glState, draws }), now: () => 0, setTimer: () => 1, clearTimer() {} });
         const track = engine.outputStream().getVideoTracks()[0];
+        const captureTrack = engine.captureTrack;
+        assert.notEqual(track, captureTrack, "the publication gets a clone");
+        const stopped = engine.outputStream().getVideoTracks()[0];
+        stopped.stop();
+        assert.equal(captureTrack.readyState, "live", "a stopped clone leaves the program track live");
         const glCanvas = engine.gl.canvas;
         glState.lost = true;
         glCanvas.fire("webglcontextlost");
@@ -172,7 +182,9 @@ describe("studio engine on WebGL", () => {
         draws.length = 0;
         engine.take(frozenScene([{ id: "a", kind: "display", capture: "c", visible: true, x: 0, y: 0, w: 1, h: 1, crop: { l: 0, t: 0, r: 0, b: 0 } }]));
         assert.ok(draws.length > 0 && draws.every(call => call[0] !== glCanvas), "2D draws the media directly");
-        assert.equal(engine.outputStream().getVideoTracks()[0], track, "the program track is unchanged");
+        assert.equal(engine.captureTrack, captureTrack, "the program track is unchanged");
+        assert.equal(track.readyState, "live", "an existing publication clone keeps running");
+        assert.notEqual(engine.outputStream().getVideoTracks()[0], captureTrack);
     });
 
     it("uses 2D when asked to, even with WebGL available", () => {
