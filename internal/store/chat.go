@@ -99,6 +99,45 @@ func (s *Store) ChatHistory(ctx context.Context, channelID, beforeID int64, limi
 		q += ` ORDER BY id DESC LIMIT $2`
 		args = append(args, limit)
 	}
+	return s.queryChatHistory(ctx, channelID, q, args...)
+}
+
+// chatHistoryColumns is the column list every history query scans.
+const chatHistoryColumns = `id, from_unique_id, from_nickname, reply_to_id, version,
+	             COALESCE(client_msg_id, ''), body_enc, key_id, sent_at, edited_at, deleted_at`
+
+// ChatHistoryAround returns a window of up to limit messages centred on
+// aroundID (601), newest first: the message itself and older ones fill the
+// first half, newer ones the rest. A missing aroundID still returns its
+// neighbours. Both halves use the (channel_id, id) index.
+func (s *Store) ChatHistoryAround(ctx context.Context, channelID, aroundID int64, limit int) ([]ChatMessage, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	older := limit/2 + 1
+	newer := limit - older
+	q := `SELECT ` + chatHistoryColumns + ` FROM (
+	        (SELECT * FROM chat_messages WHERE channel_id = $1 AND id <= $2 ORDER BY id DESC LIMIT $3)
+	        UNION ALL
+	        (SELECT * FROM chat_messages WHERE channel_id = $1 AND id > $2 ORDER BY id ASC LIMIT $4)
+	      ) AS around_window ORDER BY id DESC`
+	return s.queryChatHistory(ctx, channelID, q, channelID, aroundID, older, newer)
+}
+
+// ChatHistoryAfter returns up to limit messages with id strictly above
+// afterID, newest first, so a window opened by ChatHistoryAround can page
+// towards the present.
+func (s *Store) ChatHistoryAfter(ctx context.Context, channelID, afterID int64, limit int) ([]ChatMessage, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	q := `SELECT ` + chatHistoryColumns + ` FROM (
+	        SELECT * FROM chat_messages WHERE channel_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3
+	      ) AS page ORDER BY id DESC`
+	return s.queryChatHistory(ctx, channelID, q, channelID, afterID, limit)
+}
+
+func (s *Store) queryChatHistory(ctx context.Context, channelID int64, q string, args ...any) ([]ChatMessage, error) {
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying chat history: %w", err)

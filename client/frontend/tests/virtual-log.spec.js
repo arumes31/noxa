@@ -1,0 +1,426 @@
+import { expect, test } from "./fixtures.js";
+
+// (601) Long logs render only the rows near the viewport. These tests load
+// large histories through the normal history path and check that the window
+// keeps every chat behaviour working.
+
+const rows = page => page.locator("#chat-log .msg.rich");
+
+test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+        window.__events = {};
+        window.runtime = { EventsOn: (name, fn) => { (window.__events[name] ||= []).push(fn); return () => {}; }, EventsEmit() {}, WindowIsFullscreen: async () => false };
+        window.go = { main: { App: new Proxy({}, { get(_target, method) { return async () => {
+            if (method === "GetSettings") return { language: "en", onboarding_done: true, alpha_dismissed: "test", effects_enabled: false, bookmarks: [], chat_max_lines: 200 };
+            if (["ListTabs", "GetPermissions", "ListStreamsForTab"].includes(method)) return [];
+            if (["IdentityInfo", "GetAvatar", "GetMediaLimitsForTab"].includes(method)) return {};
+            if (["Connected", "IsGuest", "GamingOverlayAvailable"].includes(method)) return false;
+            if (["ClientVersion", "ClientVersionShort"].includes(method)) return "test";
+            if (method === "ChatPinsForTab") return { pins: [] };
+            return "";
+        }; } }) } };
+    });
+    await page.goto("/");
+    await page.waitForFunction(() => !!window.__noxaShell && !!window.__noxaChat);
+});
+
+async function setupHistory(page, { latest, firstPage = 0, around = null, after = null, bodies = {} }) {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.evaluate(({ latest, firstPage, around, after, bodies }) => {
+        const v = window.__noxa;
+        v.showWorkspace(false);
+        Object.assign(v.state, { activeTabID: "server-a", myClientID: "member-a", myChannelID: 1, channels: [{ ChannelID: 1, Name: "Room" }] });
+        v.state.settings.chat_max_lines = 5000;
+        const message = id => ({ id, from_unique_id: id % 3 ? "bene" : "joshi", from_nickname: id % 3 ? "Bene" : "Joshi", body: bodies[id] ?? ((id % 1000 === 7 ? "needle " : "") + `history ${id}` + (id % 10 === 0 ? "\nsecond line" : "")), sent_at: 1700000000 + id * 60, enc_verified: true, enc_mode: "server" });
+        const range = (from, to) => { const out = []; for (let id = to; id >= from; id--) out.push(message(id)); return out; }; // newest first
+        const f = window.__virtual = { calls: [], downloads: [], pins: { pins: [] } };
+        // A 60-line text file, so its preview is truncated with "Show all".
+        const textFile = btoa(Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n"));
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "ChatHistoryForTab") return async (tab, ch, before, limit) => {
+                f.calls.push(["history", before, limit]);
+                if (!before) return { messages: range(firstPage ? Math.max(latest[0], latest[1] - firstPage + 1) : latest[0], latest[1]) };
+                if (before <= latest[0]) return { messages: [] };
+                const to = Math.min(before - 1, latest[1]);
+                return { messages: range(Math.max(latest[0], to - limit + 1), to) };
+            };
+            if (key === "ChatHistoryAroundForTab" && around) return async (tab, ch, id, limit) => {
+                f.calls.push(["around", id, limit]);
+                return { around_id: id, messages: range(around[0], around[1]) };
+            };
+            if (key === "ChatHistoryAfterForTab" && after) return async (tab, ch, id, limit) => {
+                f.calls.push(["after", id, limit]);
+                const from = id + 1, to = Math.min(after, id + limit);
+                return { after_id: id, messages: from > to ? [] : range(from, to) };
+            };
+            if (key === "ChatPinsForTab") return async () => structuredClone(f.pins);
+            if (key === "DownloadChatAttachmentForTab") return async (tab, ch, storage) => { f.downloads.push(storage); return textFile; };
+            return target[key];
+        } });
+    }, { latest, firstPage, around, after, bodies });
+}
+
+async function openChannel(page) {
+    await page.evaluate(() => window.__noxaChat.onMyChannelChanged());
+}
+
+const frame = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+
+test("100,000 messages render a bounded window and stay smooth while scrolling", async ({ page }) => {
+    await setupHistory(page, { latest: [1, 100_000] });
+    const started = Date.now();
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="100000"]')).toBeVisible();
+    const openMs = Date.now() - started;
+    const rendered = await rows(page).count();
+    expect(rendered).toBeGreaterThan(5);
+    expect(rendered).toBeLessThan(200);
+    expect(openMs).toBeLessThan(8000);
+
+    // Jumping through the whole log keeps the window small and each step fast.
+    const timings = await page.evaluate(async () => {
+        const log = document.getElementById("chat-log");
+        const out = [];
+        for (let i = 1; i <= 20; i++) {
+            const t0 = performance.now();
+            log.scrollTop = log.scrollHeight * (i / 21);
+            log.dispatchEvent(new Event("scroll"));
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            out.push({ ms: performance.now() - t0, rows: log.querySelectorAll(".msg.rich").length, first: Number(log.querySelector(".msg.rich")?.dataset.msgId) });
+        }
+        return out;
+    });
+    for (const step of timings) expect(step.rows).toBeLessThan(200);
+    const firsts = timings.map(step => step.first);
+    expect(firsts).toEqual([...firsts].sort((a, b) => a - b));
+    expect(firsts[0]).toBeGreaterThan(1000);
+    expect(firsts.at(-1)).toBeLessThan(99_000);
+    const average = timings.reduce((sum, step) => sum + step.ms, 0) / timings.length;
+    expect(average).toBeLessThan(250);
+
+    // The rows on screen are the rows the scroll position names.
+    const visible = await page.evaluate(() => {
+        const log = document.getElementById("chat-log");
+        const top = log.getBoundingClientRect().top, bottom = log.getBoundingClientRect().bottom;
+        return [...log.querySelectorAll(".msg.rich")].filter(row => { const r = row.getBoundingClientRect(); return r.bottom > top && r.top < bottom; }).length;
+    });
+    expect(visible).toBeGreaterThan(3);
+    await expect(page.locator(".chat-virtual-spacer").first()).toHaveAttribute("aria-hidden", "true");
+});
+
+test("search, jump-to and print cover rows outside the rendered window", async ({ page }) => {
+    await setupHistory(page, { latest: [1, 5000] });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="5000"]')).toBeVisible();
+    await expect(page.locator('#chat-log .msg[data-msg-id="1500"]')).toHaveCount(0);
+
+    // Search filters the data, so off-screen matches count and render.
+    await page.evaluate(() => {
+        document.getElementById("chat-search-btn").click();
+        const search = document.getElementById("chat-search");
+        search.value = "needle";
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await expect(page.locator("#chat-search-count")).toHaveText("5 of 5000 loaded messages");
+    await expect(rows(page)).toHaveCount(5);
+    await expect(page.locator("#chat-log .msg.rich mark").first()).toHaveText("needle");
+
+    // Jumping to a message hidden by the search clears it and reveals the row.
+    await page.evaluate(() => window.__noxaChat.jumpMessageReference({ kind: "channel", channel_id: 1, message_id: 1500 }));
+    await expect(page.locator('#chat-log .msg[data-msg-id="1500"]')).toHaveClass(/flash/);
+    await expect(page.locator('#chat-log .msg[data-msg-id="1500"]')).toBeInViewport();
+    await expect(page.locator("#chat-search")).toHaveValue("");
+    expect(await rows(page).count()).toBeLessThan(200);
+
+    // Printing renders every row, then restores the window.
+    await page.evaluate(() => window.dispatchEvent(new Event("beforeprint")));
+    await expect(rows(page)).toHaveCount(5000);
+    await page.evaluate(() => window.dispatchEvent(new Event("afterprint")));
+    await frame(page);
+    expect(await rows(page).count()).toBeLessThan(200);
+    await expect(page.locator('#chat-log .msg[data-msg-id="1500"]')).toBeInViewport();
+});
+
+test("a live message keeps a long log at the bottom; reading scrollback shows the pill", async ({ page }) => {
+    await setupHistory(page, { latest: [1, 1000] });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="1000"]')).toBeVisible();
+    await page.evaluate(() => window.__noxaChat.addChat({ id: 1001, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "live one", enc_verified: true, enc_mode: "server" }));
+    await expect(page.locator('#chat-log .msg[data-msg-id="1001"]')).toBeInViewport();
+    expect(await rows(page).count()).toBeLessThan(200);
+
+    await page.evaluate(() => { const log = document.getElementById("chat-log"); log.scrollTop = log.scrollHeight / 2; log.dispatchEvent(new Event("scroll")); });
+    await frame(page);
+    const firstVisible = () => page.evaluate(() => {
+        const log = document.getElementById("chat-log");
+        const top = log.getBoundingClientRect().top;
+        const row = [...log.querySelectorAll(".msg.rich")].find(el => el.getBoundingClientRect().bottom > top + 1);
+        return row ? { id: row.dataset.msgId, offset: Math.round(row.getBoundingClientRect().top - top) } : null;
+    });
+    const before = await firstVisible();
+    await page.evaluate(() => window.__noxaChat.addChat({ id: 1002, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "live two", enc_verified: true, enc_mode: "server" }));
+    await expect(page.locator("#chat-newpill")).toBeVisible();
+    await expect(page.locator('#chat-log .msg[data-msg-id="1002"]')).toHaveCount(0);
+    // The reading position held, and the loaded scrollback was not trimmed.
+    const after = await firstVisible();
+    expect(after.id).toBe(before.id);
+    expect(Math.abs(after.offset - before.offset)).toBeLessThanOrEqual(2);
+    await page.locator("#chat-newpill").click();
+    await expect(page.locator('#chat-log .msg[data-msg-id="1002"]')).toBeInViewport();
+});
+
+test("a jump far back opens a window around the message and pages back to the present", async ({ page }) => {
+    await setupHistory(page, { latest: [151, 200], around: [50, 149], after: 200 });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeVisible();
+    await jumpViaPin(page, 100);
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveClass(/flash/);
+    expect(await page.evaluate(() => window.__virtual.calls.filter(call => call[0] === "around"))).toEqual([["around", 100, 100]]);
+    // One request instead of paging: no older pages were fetched.
+    expect(await page.evaluate(() => window.__virtual.calls.filter(call => call[0] === "history").map(call => call[1]))).toEqual([0]);
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toHaveCount(0);
+    await expect(page.locator("#chat-newpill")).toHaveText(/Jump to present/);
+
+    // A live message waits while the window is detached.
+    await page.evaluate(() => window.__noxaChat.addChat({ id: 201, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "while away", enc_verified: true, enc_mode: "server" }));
+    await expect(page.locator('#chat-log .msg[data-msg-id="201"]')).toHaveCount(0);
+    await expect(page.locator("#chat-newpill")).toHaveText(/1 new/i);
+
+    // Scrolling to the bottom pages forward; reaching the present merges it.
+    for (let i = 0; i < 4; i++) {
+        await page.evaluate(() => { const log = document.getElementById("chat-log"); log.scrollTop = log.scrollHeight; log.dispatchEvent(new Event("scroll")); });
+        await frame(page);
+    }
+    await expect(page.locator('#chat-log .msg[data-msg-id="201"]')).toHaveCount(1);
+    await expect.poll(() => page.evaluate(() => window.__virtual.calls.filter(call => call[0] === "after").map(call => call[1]))).toEqual([149, 199]);
+    const ids = await page.evaluate(() => [...document.querySelectorAll("#chat-log .msg[data-msg-id]")].map(row => Number(row.dataset.msgId)));
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+    expect(new Set(ids).size).toBe(ids.length);
+});
+
+async function jumpViaPin(page, id) {
+    await page.evaluate(id => { window.__virtual.pins = { pins: [{ message_id: id, message: { body: `history ${id}`, from_nickname: "Bene" } }] }; }, id);
+    await page.locator("#chat-pins-btn").evaluate(button => button.click());
+    await page.locator('.pin-row button[title="jump to message"]').click();
+}
+
+test("jump to present drops a detached window and reloads the newest page", async ({ page }) => {
+    await setupHistory(page, { latest: [151, 200], around: [50, 149], after: 200 });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeVisible();
+    await jumpViaPin(page, 100);
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveClass(/flash/);
+    await page.locator("#chat-newpill").click();
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeInViewport();
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveCount(0);
+    await expect(page.locator("#chat-newpill")).toBeHidden();
+});
+
+test("servers without window support fall back to paging older history", async ({ page }) => {
+    await setupHistory(page, { latest: [1, 200], firstPage: 50 });
+    await page.evaluate(() => {
+        // An old server answers an around request with the latest page.
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "ChatHistoryAroundForTab") return async () => { window.__virtual.calls.push(["around-old"]); return { messages: [] }; };
+            return target[key];
+        } });
+    });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeVisible();
+    await jumpViaPin(page, 120);
+    await expect(page.locator('#chat-log .msg[data-msg-id="120"]')).toHaveClass(/flash/);
+    expect(await page.evaluate(() => window.__virtual.calls.map(call => call[0] === "history" ? call[1] : call[0]))).toEqual([0, "around-old", 151]);
+});
+
+test("attachment previews load only for rendered rows and keep their expanded state across the window", async ({ page }) => {
+    await setupHistory(page, { latest: [1, 600], bodies: { 5: "[file:early.vcx#dGVzdA==#early.txt]", 590: "[file:late.vcx#dGVzdA==#late.txt]" } });
+    await openChannel(page);
+    const late = page.locator('#chat-log .msg[data-msg-id="590"]');
+    await expect(late.locator("pre.msg-text-file")).toContainText("line 40");
+    // The off-screen attachment at the top was never fetched.
+    expect(await page.evaluate(() => window.__virtual.downloads)).toEqual(["late.vcx"]);
+
+    await late.locator(".msg-text-more").click();
+    await expect(late.locator("pre.msg-text-file")).toHaveClass(/expanded/);
+    await expect(late.locator("pre.msg-text-file")).toContainText("line 60");
+
+    // Scrolling the row out of the window and back rebuilds it: it stays
+    // expanded and renders from the preview cache, without a new download.
+    await page.evaluate(() => { const log = document.getElementById("chat-log"); log.scrollTop = 0; log.dispatchEvent(new Event("scroll")); });
+    await expect(page.locator('#chat-log .msg[data-msg-id="590"]')).toHaveCount(0);
+    await expect(page.locator('#chat-log .msg[data-msg-id="5"] pre.msg-text-file')).toContainText("line 1");
+    expect(await page.evaluate(() => window.__virtual.downloads)).toEqual(["late.vcx", "early.vcx"]);
+    await page.evaluate(() => { const log = document.getElementById("chat-log"); log.scrollTop = log.scrollHeight; log.dispatchEvent(new Event("scroll")); });
+    const again = page.locator('#chat-log .msg[data-msg-id="590"] pre.msg-text-file');
+    await expect(again).toHaveClass(/expanded/);
+    await expect(again).toContainText("line 60");
+    await expect(page.locator('#chat-log .msg[data-msg-id="590"] .msg-text-more')).toHaveCount(0);
+    expect(await page.evaluate(() => window.__virtual.downloads)).toEqual(["late.vcx", "early.vcx"]);
+});
+
+test("a jump lands on its row even when measuring the rows around it shifts every estimate", async ({ page }) => {
+    // Rows near the target are far taller than the ones measured first, so
+    // measuring them moves the estimated offset of every row above.
+    const tall = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+    const bodies = {};
+    for (let id = 1300; id <= 1700; id++) bodies[id] = `history ${id}\n${tall}`;
+    await setupHistory(page, { latest: [1, 5000], bodies });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="5000"]')).toBeVisible();
+    for (const id of [1500, 1350, 1680]) {
+        await page.evaluate(id => window.__noxaChat.jumpMessageReference({ kind: "channel", channel_id: 1, message_id: id }), id);
+        await expect(page.locator(`#chat-log .msg[data-msg-id="${id}"]`)).toHaveClass(/flash/);
+        await expect(page.locator(`#chat-log .msg[data-msg-id="${id}"]`)).toBeInViewport();
+        await expect(page.locator(".dlg-overlay")).toHaveCount(0);
+    }
+});
+
+test("a notification quick reply from an older window returns to the present and sends", async ({ page }) => {
+    await setupHistory(page, { latest: [151, 200], around: [50, 149], after: 200 });
+    await page.evaluate(() => {
+        const f = window.__virtual;
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "SendChatOperationForTab" || key === "SendChatForTab") return async (...args) => { f.calls.push(["send", ...args.slice(1)]); return ""; };
+            return target[key];
+        } });
+    });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeVisible();
+    await page.evaluate(() => { window.__virtual.pins = { pins: [{ message_id: 100, message: { body: "history 100", from_nickname: "Bene" } }] }; });
+    await page.locator("#chat-pins-btn").evaluate(button => button.click());
+    await page.locator('.pin-row button[title="jump to message"]').click();
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveClass(/flash/);
+    // The toast's "conversation" is the selected chat even while an older
+    // window is shown; the reply goes out and the newest page is back.
+    expect(await page.evaluate(() => window.__noxaChat.activeConversationKey({ visible: false }))).toBe("ch:1");
+    const result = await page.evaluate(() => window.__noxaChat.quickReplyToActive("ch:1", "on my way"));
+    expect(result).toBe("sent");
+    expect(await page.evaluate(() => window.__virtual.calls.filter(call => call[0] === "send").length)).toBe(1);
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeInViewport();
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveCount(0);
+    await expect(page.locator("#chat-newpill")).toBeHidden();
+});
+
+test("printing a log above the print limit renders only the newest rows", async ({ page }) => {
+    await setupHistory(page, { latest: [1, 6000] });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="6000"]')).toBeVisible();
+    await page.evaluate(() => window.dispatchEvent(new Event("beforeprint")));
+    await expect(rows(page)).toHaveCount(5000);
+    expect(await page.evaluate(() => [document.querySelector("#chat-log .msg.rich").dataset.msgId, [...document.querySelectorAll("#chat-log .msg.rich")].at(-1).dataset.msgId])).toEqual(["1001", "6000"]);
+    await page.evaluate(() => window.dispatchEvent(new Event("afterprint")));
+    await frame(page);
+    expect(await rows(page).count()).toBeLessThan(200);
+});
+
+test("search ignores attachment storage keys, follows edits and deletes, and keeps rows on live appends", async ({ page }) => {
+    await setupHistory(page, { latest: [1, 1000], bodies: { 400: "[file:secretstore.vcx#SECRETKEY==#report.pdf]", 990: "plain words" } });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="1000"]')).toBeVisible();
+    const search = async q => page.evaluate(q => {
+        document.getElementById("chat-search-row").classList.remove("hidden");
+        const input = document.getElementById("chat-search");
+        input.value = q;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+    }, q);
+    await search("secretstore");
+    await expect(page.locator("#chat-search-count")).toHaveText("0 of 1000 loaded messages");
+    await search("SECRETKEY");
+    await expect(page.locator("#chat-search-count")).toHaveText("0 of 1000 loaded messages");
+    await search("report.pdf");
+    await expect(page.locator("#chat-search-count")).toHaveText("1 of 1000 loaded messages");
+
+    // An edit that stops matching, or a delete, leaves the results.
+    await search("plain words");
+    await expect(page.locator("#chat-search-count")).toHaveText("1 of 1000 loaded messages");
+    await page.evaluate(() => window.__noxaChat.onChatEdited({ message_id: 990, body: "changed", version: 2, enc_verified: true }));
+    await expect(page.locator("#chat-search-count")).toHaveText("0 of 1000 loaded messages");
+    // 99 and 991-999 (990 was just edited away).
+    await search("history 99");
+    await expect(page.locator("#chat-search-count")).toHaveText("10 of 1000 loaded messages");
+    await page.evaluate(() => window.__noxaChat.onChatDeleted({ message_id: 995 }));
+    await expect(page.locator("#chat-search-count")).toHaveText("9 of 1000 loaded messages");
+    await search("");
+
+    // A live message reuses the rows already rendered.
+    await page.evaluate(() => { document.querySelector('#chat-log .msg[data-msg-id="999"]').dataset.marker = "kept"; });
+    await page.evaluate(() => window.__noxaChat.addChat({ id: 1001, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "live", enc_verified: true, enc_mode: "server" }));
+    await expect(page.locator('#chat-log .msg[data-msg-id="1001"]')).toBeInViewport();
+    await expect(page.locator('#chat-log .msg[data-msg-id="999"]')).toHaveAttribute("data-marker", "kept");
+});
+
+test("buffered live messages take edits and are not counted twice", async ({ page }) => {
+    await setupHistory(page, { latest: [151, 200], around: [50, 149], after: 200 });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeVisible();
+    await page.evaluate(() => { window.__virtual.pins = { pins: [{ message_id: 100, message: { body: "history 100", from_nickname: "Bene" } }] }; });
+    await page.locator("#chat-pins-btn").evaluate(button => button.click());
+    await page.locator('.pin-row button[title="jump to message"]').click();
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveClass(/flash/);
+
+    const live = { id: 201, channel_id: 1, from_unique_id: "bene", from: "Bene", text: "first text", enc_verified: true, enc_mode: "server" };
+    await page.evaluate(live => { window.__noxaChat.addChat(live); window.__noxaChat.addChat(live); }, live);
+    await expect(page.locator("#chat-newpill")).toHaveText(/^1 new/i);
+    await page.evaluate(() => window.__noxaChat.onChatEdited({ message_id: 201, body: "edited text", version: 2, enc_verified: true }));
+
+    for (let i = 0; i < 4; i++) {
+        await page.evaluate(() => { const log = document.getElementById("chat-log"); log.scrollTop = log.scrollHeight; log.dispatchEvent(new Event("scroll")); });
+        await frame(page);
+    }
+    await expect(page.locator('#chat-log .msg[data-msg-id="201"]')).toContainText("edited text");
+    await expect(page.locator('#chat-log .msg[data-msg-id="201"]')).toHaveCount(1);
+});
+
+test("leaving a chat that shows an older window brings back the present", async ({ page }) => {
+    await setupHistory(page, { latest: [151, 200], around: [50, 149], after: 200 });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeVisible();
+    await page.evaluate(() => { window.__virtual.pins = { pins: [{ message_id: 100, message: { body: "history 100", from_nickname: "Bene" } }] }; });
+    await page.locator("#chat-pins-btn").evaluate(button => button.click());
+    await page.locator('.pin-row button[title="jump to message"]').click();
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveClass(/flash/);
+    await page.evaluate(() => window.__noxa.openPM("joshi", "Joshi"));
+    await page.evaluate(() => { const scope = document.getElementById("chat-scope"); scope.value = "channel"; scope.dispatchEvent(new Event("change")); });
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeVisible();
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveCount(0);
+    await expect(page.locator("#chat-newpill")).toBeHidden();
+});
+
+test("a jump overtaken by jump to present does not detach the log again", async ({ page }) => {
+    await setupHistory(page, { latest: [151, 200], around: [50, 149], after: 200 });
+    await page.evaluate(() => {
+        const f = window.__virtual;
+        const app = window.go.main.App;
+        window.go.main.App = new Proxy(app, { get(target, key) {
+            if (key === "ChatHistoryAroundForTab") return (...args) => new Promise(resolve => { f.releaseAround = () => resolve(target[key](...args)); });
+            if (key === "ChatHistoryAfterForTab" && f.failAfter) return async () => { throw new Error("offline"); };
+            return target[key];
+        } });
+    });
+    await openChannel(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeVisible();
+    await page.evaluate(() => { window.__virtual.pins = { pins: [{ message_id: 100, message: { body: "history 100", from_nickname: "Bene" } }] }; });
+    await page.locator("#chat-pins-btn").evaluate(button => button.click());
+    await page.locator('.pin-row button[title="jump to message"]').click();
+    await expect.poll(() => page.evaluate(() => typeof window.__virtual.releaseAround)).toBe("function");
+    // The user sends a message meanwhile, which returns to the present.
+    await page.evaluate(() => window.__noxaChat.quickReplyToActive("ch:1", "hi"));
+    await page.evaluate(() => window.__virtual.releaseAround());
+    await frame(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="200"]')).toBeVisible();
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveCount(0);
+
+    // A forward page that fails keeps the detached window for a retry.
+    await page.evaluate(() => { window.__virtual.releaseAround = null; window.__virtual.failAfter = true; });
+    await page.locator('.pin-row button[title="jump to message"]').click();
+    await expect.poll(() => page.evaluate(() => typeof window.__virtual.releaseAround)).toBe("function");
+    await page.evaluate(() => window.__virtual.releaseAround());
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveCount(1);
+    await page.evaluate(() => { const log = document.getElementById("chat-log"); log.scrollTop = log.scrollHeight; log.dispatchEvent(new Event("scroll")); });
+    await frame(page);
+    await expect(page.locator('#chat-log .msg[data-msg-id="100"]')).toHaveCount(1);
+    await expect(page.locator("#chat-newpill")).toHaveText(/Jump to present/);
+});

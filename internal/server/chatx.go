@@ -938,7 +938,33 @@ func (s *TCPServer) chatHistoryAllowed(ctx context.Context, client *Client, msg 
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "publish an encryption key before reading history")
 	}
 
-	msgs, err := s.deps.Chat.ChatHistory(ctx, msg.ChannelID, msg.BeforeID, msg.Limit)
+	set := 0
+	for _, id := range []int64{msg.BeforeID, msg.AroundID, msg.AfterID} {
+		if id < 0 {
+			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed chat_history: negative message id")
+		}
+		if id > 0 {
+			set++
+		}
+	}
+	if set > 1 {
+		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "malformed chat_history: before_id, around_id and after_id are exclusive")
+	}
+	var (
+		msgs []store.ChatMessage
+		err  error
+	)
+	windows, _ := s.deps.Chat.(chatHistoryWindows)
+	switch {
+	case msg.AroundID > 0 && windows != nil:
+		msgs, err = windows.ChatHistoryAround(ctx, msg.ChannelID, msg.AroundID, msg.Limit)
+	case msg.AfterID > 0 && windows != nil:
+		msgs, err = windows.ChatHistoryAfter(ctx, msg.ChannelID, msg.AfterID, msg.Limit)
+	default:
+		// A store without windows answers with the latest page and no echo.
+		msg.AroundID, msg.AfterID = 0, 0
+		msgs, err = s.deps.Chat.ChatHistory(ctx, msg.ChannelID, msg.BeforeID, msg.Limit)
+	}
 	if err != nil {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "history query failed")
 	}
@@ -951,7 +977,8 @@ func (s *TCPServer) chatHistoryAllowed(ctx context.Context, client *Client, msg 
 		reactions = nil // best-effort
 	}
 
-	resp := netproto.ChatHistoryResponse{ChannelID: msg.ChannelID, Messages: []netproto.ChatHistoryEntry{}}
+	resp := netproto.ChatHistoryResponse{ChannelID: msg.ChannelID, Messages: []netproto.ChatHistoryEntry{},
+		AroundID: msg.AroundID, AfterID: msg.AfterID}
 	gens := map[uint32]bool{}
 	for _, m := range msgs {
 		e := chatHistoryEntry(m, reactions[m.ID])
@@ -963,6 +990,15 @@ func (s *TCPServer) chatHistoryAllowed(ctx context.Context, client *Client, msg 
 	resp.Keys, resp.Refused, resp.Truncated = s.scopeKeyBundle(ctx, msg.ChannelID, memberPub, gens)
 	return s.writeMessage(client, netproto.MsgChatHistoryResponse, resp)
 }
+
+// chatHistoryWindows is the optional store support for history windows
+// around a message and forward paging (601). *store.Store implements it.
+type chatHistoryWindows interface {
+	ChatHistoryAround(ctx context.Context, channelID, aroundID int64, limit int) ([]store.ChatMessage, error)
+	ChatHistoryAfter(ctx context.Context, channelID, afterID int64, limit int) ([]store.ChatMessage, error)
+}
+
+var _ chatHistoryWindows = (*store.Store)(nil)
 
 // chatHistoryEntry converts a stored message to the wire shape.
 func chatHistoryEntry(m store.ChatMessage, reactions map[string]int) netproto.ChatHistoryEntry {

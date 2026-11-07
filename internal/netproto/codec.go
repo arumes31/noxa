@@ -1191,10 +1191,16 @@ type ChannelKey struct {
 // --- Chat infrastructure (wave 5a) ------------------------------------------
 
 // ChatHistory requests a page of channel/global history. ChannelID 0 is the
-// global scope. BeforeID pages backwards (0 = latest).
+// global scope. BeforeID pages backwards (0 = latest). AroundID (601) asks for
+// a window centred on one message instead, and AfterID pages forwards from a
+// message; at most one of BeforeID, AroundID and AfterID may be set. Servers
+// that support them echo the field in the response, so a client can tell a
+// window from the latest page an older server returns.
 type ChatHistory struct {
 	ChannelID int64 `json:"channel_id"`
 	BeforeID  int64 `json:"before_id,omitempty"`
+	AroundID  int64 `json:"around_id,omitempty"`
+	AfterID   int64 `json:"after_id,omitempty"`
 	Limit     int   `json:"limit,omitempty"`
 }
 
@@ -1245,6 +1251,10 @@ type ChatHistoryEntry struct {
 type ChatHistoryResponse struct {
 	ChannelID int64              `json:"channel_id"`
 	Messages  []ChatHistoryEntry `json:"messages"`
+	// AroundID and AfterID echo the request's window (601). Both are zero
+	// from servers without window support, which answer with the latest page.
+	AroundID int64 `json:"around_id,omitempty"`
+	AfterID  int64 `json:"after_id,omitempty"`
 	// Keys carries exactly the distinct generations this page references,
 	// sealed for the caller, so a page costs no extra round trips. Refused
 	// and Truncated mean what they mean in ChatKeyBundle and MUST NOT be
