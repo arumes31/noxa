@@ -949,8 +949,17 @@ function showReconnectNotice(tabID) {
     sysMsg(message);
     toast(message, "warn");
 }
+// (#52) A scheduled shutdown names a jitter window; the first reconnect after
+// it waits a random part of that window so clients do not all return at once.
+const shutdownJitter = new Map(); // tabID -> seconds
 const tabReconnects = createTabReconnects({
     enabled: autoReconnectEnabled,
+    delay(attempt, entry) {
+        const base = reconnectDelay(attempt);
+        const jitter = attempt === 1 ? shutdownJitter.get(entry?.tabID) || 0 : 0;
+        if (attempt === 1) shutdownJitter.delete(entry?.tabID);
+        return base + Math.floor(Math.random() * jitter * 1000);
+    },
     connect: (tabID, target) => window.go.main.App.ReconnectTab(tabID, target.pw || "", target.spw || ""),
     warning(tabID, error) {
         reconnectNotices.set(tabID, { key: "runtime.rejoinFailed", error });
@@ -1855,6 +1864,8 @@ window.runtime.EventsOn("event", (json) => {
             return;
         case "server_shutdown_scheduled": {
             const seconds = Math.max(1, Math.round(Number(d?.seconds) || 0));
+            const jitter = Math.min(60, Math.max(0, Math.round(Number(d?.reconnect_jitter) || 0)));
+            if (jitter && state.activeTabID) shutdownJitter.set(String(state.activeTabID), jitter);
             // Minutes only when exact, so the warning never overstates the time left.
             const text = seconds >= 60 && seconds % 60 === 0
                 ? t("runtime.shutdownScheduledMinutes", { minutes: seconds / 60 })

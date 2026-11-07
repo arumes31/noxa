@@ -73,7 +73,7 @@ const sources = {
     "./core/chat-session.js": { ChatSession },
     "./core/direct.js": { DirectMessages }, "./core/calls.js": { Calls: Empty }, "./core/groups.js": { Groups }, "./core/voice.js": { Voice: Empty },
     "./core/saved.js": { SavedMessages: class extends EventTarget {} },
-    "./core/connection.js": { Connection: { open: async () => new FakeConnection() } }, "./core/frame.js": { Msg },
+    "./core/connection.js": { Connection: { open: async () => new FakeConnection() } }, "./core/reconnect-hint.js": { noteShutdownJitter() {}, takeShutdownJitterMs: () => 0 }, "./core/frame.js": { Msg },
     "./core/olm-directory.js": { signBundle: () => ({}) }, "./core/olm-reset.js": { signReset: () => ({}) },
     "./core/link-binding.js": { verifyLinkBinding, announcedBinding },
     "./core/ratchet-consumer.js": { RatchetConsumer, connectionTransport: () => ({ admission: none, directory: none }) },

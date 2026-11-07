@@ -105,6 +105,23 @@ type Config struct {
 	// the remaining seconds, and the server keeps serving until it elapses.
 	// A second signal skips the rest. Zero (default) shuts down immediately.
 	ShutdownGracePeriod time.Duration `mapstructure:"shutdown_grace_period"`
+
+	// IngressShield controls the anti-raid proof-of-work shield (#7): "off"
+	// (default), "auto" (raised by a connection surge) or "on" (always).
+	// While raised, a login must first solve a SHA-256 proof-of-work
+	// challenge bound to its connection; the pre-auth caps still apply.
+	IngressShield string `mapstructure:"ingress_shield"`
+	// IngressShieldArrivals and IngressShieldDistinctIPs define a surge for
+	// "auto": at least this many new control connections within one second,
+	// from at least this many distinct source addresses.
+	IngressShieldArrivals    int `mapstructure:"ingress_shield_arrivals_per_second"`
+	IngressShieldDistinctIPs int `mapstructure:"ingress_shield_distinct_ips"`
+	// IngressShieldDifficulty is the number of leading zero bits required
+	// (expected work 2^difficulty hashes).
+	IngressShieldDifficulty int `mapstructure:"ingress_shield_difficulty"`
+	// IngressShieldHold keeps an automatically raised shield up this long
+	// after the last surge second.
+	IngressShieldHold time.Duration `mapstructure:"ingress_shield_hold"`
 	// AuditPartitionRetentionMonths (301) lets noxa-migrate drop whole
 	// monthly audit_log partitions that ended more than this many months
 	// ago. 0 keeps every partition; otherwise at least 6, so it never cuts
@@ -335,6 +352,11 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("pprof_enabled", false)
 	v.SetDefault("shutdown_timeout", 30*time.Second)
 	v.SetDefault("shutdown_grace_period", time.Duration(0))
+	v.SetDefault("ingress_shield", IngressShieldOff)
+	v.SetDefault("ingress_shield_arrivals_per_second", 30)
+	v.SetDefault("ingress_shield_distinct_ips", 10)
+	v.SetDefault("ingress_shield_difficulty", 18)
+	v.SetDefault("ingress_shield_hold", 5*time.Minute)
 	v.SetDefault("audit_partition_retention_months", 0)
 	v.SetDefault("max_clients", 1024)
 	v.SetDefault("echo_channel_enabled", true)
@@ -576,6 +598,24 @@ func (c *Config) Validate() error {
 	}
 	if n := c.AuditPartitionRetentionMonths; n != 0 && (n < MinAuditPartitionRetentionMonths || n > 1200) {
 		errs = append(errs, fmt.Errorf("audit_partition_retention_months %d must be 0 (keep everything) or between %d and 1200", n, MinAuditPartitionRetentionMonths))
+	}
+	switch c.IngressShield {
+	case "", IngressShieldOff, IngressShieldAuto, IngressShieldOn:
+	default:
+		errs = append(errs, fmt.Errorf("ingress_shield %q must be off, auto or on", c.IngressShield))
+	}
+	shield := c.IngressShieldSettings()
+	if shield.Arrivals < 2 || shield.Arrivals > 100000 {
+		errs = append(errs, fmt.Errorf("ingress_shield_arrivals_per_second %d must be between 2 and 100000", shield.Arrivals))
+	}
+	if shield.DistinctIPs < 1 || shield.DistinctIPs > shield.Arrivals {
+		errs = append(errs, fmt.Errorf("ingress_shield_distinct_ips %d must be between 1 and ingress_shield_arrivals_per_second", shield.DistinctIPs))
+	}
+	if shield.Difficulty < MinIngressShieldDifficulty || shield.Difficulty > MaxIngressShieldDifficulty {
+		errs = append(errs, fmt.Errorf("ingress_shield_difficulty %d must be between %d and %d", shield.Difficulty, MinIngressShieldDifficulty, MaxIngressShieldDifficulty))
+	}
+	if shield.Hold < time.Minute || shield.Hold > time.Hour {
+		errs = append(errs, fmt.Errorf("ingress_shield_hold %s must be between 1m and 1h", shield.Hold))
 	}
 	if c.ShutdownGracePeriod < 0 || c.ShutdownGracePeriod > MaxShutdownGracePeriod {
 		errs = append(errs, fmt.Errorf("shutdown_grace_period %s must be between 0 and %s", c.ShutdownGracePeriod, MaxShutdownGracePeriod))
@@ -1084,6 +1124,52 @@ func ParseQueryAllowedCIDRs(raw []string) ([]netip.Prefix, error) {
 // MinAuditPartitionRetentionMonths keeps partition retention from removing
 // audit rows the server's own 180-day row retention would still keep.
 const MinAuditPartitionRetentionMonths = 6
+
+// Ingress shield modes (#7).
+const (
+	IngressShieldOff  = "off"
+	IngressShieldAuto = "auto"
+	IngressShieldOn   = "on"
+)
+
+// Proof-of-work difficulty bounds in leading zero bits: 16 bits is ~65k
+// hashes (milliseconds), 24 bits ~16.7M (a few seconds on a phone).
+const (
+	MinIngressShieldDifficulty = 12
+	MaxIngressShieldDifficulty = 24
+)
+
+// IngressShieldSettings is the effective shield configuration; unset (zero)
+// fields take the documented defaults so programmatic configs stay valid.
+type IngressShieldSettings struct {
+	Mode        string
+	Arrivals    int
+	DistinctIPs int
+	Difficulty  int
+	Hold        time.Duration
+}
+
+// IngressShieldSettings returns the shield settings with defaults applied.
+func (c *Config) IngressShieldSettings() IngressShieldSettings {
+	s := IngressShieldSettings{Mode: c.IngressShield, Arrivals: c.IngressShieldArrivals, DistinctIPs: c.IngressShieldDistinctIPs,
+		Difficulty: c.IngressShieldDifficulty, Hold: c.IngressShieldHold}
+	if s.Mode == "" {
+		s.Mode = IngressShieldOff
+	}
+	if s.Arrivals == 0 {
+		s.Arrivals = 30
+	}
+	if s.DistinctIPs == 0 {
+		s.DistinctIPs = min(10, s.Arrivals)
+	}
+	if s.Difficulty == 0 {
+		s.Difficulty = 18
+	}
+	if s.Hold == 0 {
+		s.Hold = 5 * time.Minute
+	}
+	return s
+}
 
 // MaxShutdownGracePeriod bounds the pre-shutdown announcement window.
 const MaxShutdownGracePeriod = 10 * time.Minute

@@ -13,6 +13,10 @@ export function classifySignIn(error) {
     if (reason === "too many failed logins, try again later") return { kind: "rateLimit" };
     if (/signed out|link it again/.test(reason)) return { kind: "revoked" };
     if (reason === "server is full") return { kind: "full" };
+    // (#52) Sent during a server's shutdown grace period.
+    const restarting = /^server is restarting; try again in ([0-9]{1,6}) seconds$/.exec(reason);
+    if (restarting) return { kind: "restarting", retryAfter: Math.min(Number(restarting[1]), 3600) };
+    if (reason === "the server is under heavy load; update noxa to connect") return { kind: "version" };
     if (reason === "guest login is disabled on this server") return { kind: "guestDisabled" };
     if (reason.startsWith("unsupported authorization model") || reason.startsWith("unsupported server authorization model")) return { kind: "version" };
     if (reason.startsWith("this server needs an update: it does not support secure sign-in")) return { kind: "serverOutdated" };
@@ -24,6 +28,8 @@ export function classifySignIn(error) {
 /** An Error carrying the server's reason and its class. */
 export function signInError(reason) {
     const error = new Error(reason || "sign-in failed");
-    error.kind = classifySignIn(error).kind;
+    const failure = classifySignIn(error);
+    error.kind = failure.kind;
+    if (failure.retryAfter) error.retryAfter = failure.retryAfter;
     return error;
 }
