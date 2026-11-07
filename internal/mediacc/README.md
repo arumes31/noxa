@@ -95,3 +95,19 @@ coverage alone is not proof of playback reliability.
 
 Remove the copy when an upstream release includes these fixes and the
 regressions pass against that release.
+
+## Pacing gain measurement (2026-11-07)
+
+`mediaPacingGain` (1.5) in `internal/webrtc/media_pacer.go` was profiled against
+1.0, 1.25 and 2.0. The test drove the real pacer under `testing/synctest` with keyframe bursts
+and a sudden halving of the estimate, then replayed its output through a modelled
+drop-tail bottleneck (100 ms buffer) at 1.0x, 1.2x and 1.5x the estimate.
+
+- Higher gains cut local queueing, but lose packets when the link is near the
+  estimate: 32–293 drops per 10 s at gains 1.5–2.0 on a 1.0–1.2x link.
+- Lower gains add 150–280 ms of p95 delay and expire packets after the
+  estimate falls.
+
+A dynamic gain would need bottleneck feedback that GCC already turns into the
+estimate, so the static 1.5 stays. The main README's "Performance measurements" section has the
+full summary.
