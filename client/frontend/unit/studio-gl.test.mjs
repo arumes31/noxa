@@ -15,6 +15,7 @@ function fakeGL(log, state = { lost: false }) {
     };
     return new Proxy({
         getShaderParameter: () => true,
+        getError: () => state.uploadError ? (state.uploadError = false, "INVALID_VALUE") : "NO_ERROR",
         getProgramParameter: () => true,
         getUniformLocation: (program, name) => name,
         getAttribLocation: () => 0,
@@ -23,7 +24,10 @@ function fakeGL(log, state = { lost: false }) {
         uniform4f: (name, ...values) => log.push(["uniform4f", name, ...values]),
         uniform1f: (name, value) => log.push(["uniform1f", name, value]),
         uniform1i: (name, value) => log.push(["uniform1i", name, value]),
-        texImage2D: (...args) => log.push(["texImage2D", args.at(-1)]),
+        texImage2D: (...args) => {
+            log.push(["texImage2D", args.at(-1)]);
+            if (state.failNextUpload) { state.failNextUpload = false; state.uploadError = true; }
+        },
         drawArrays: () => log.push(["draw"]),
     }, handler);
 }
@@ -198,5 +202,30 @@ describe("studio GL renderer selection", () => {
         for (let i = 0; i < GL_WATCH_FRAMES + 1; i++) { auto.renderProgram(clock); forced.renderProgram(clock); }
         assert.equal(auto.rendererKind, "2d");
         assert.equal(forced.rendererKind, "webgl");
+    });
+});
+
+describe("studio GL upload errors", () => {
+    it("reports a failed first upload and retries it on the next frame", () => {
+        const log = [];
+        const glState = { available: true, lost: false };
+        const doc = fakeDocument({ log, glState, draws: [] });
+        const gl = new StudioGLRenderer({ document: doc, width: 64, height: 36 });
+        const source = { width: 32, height: 16 };
+        glState.failNextUpload = true;
+        assert.equal(gl.bindSource(source), false, "an upload that set a GL error is not drawn");
+        assert.equal(gl.bindSource(source), true, "the size is checked again until an upload succeeds");
+    });
+
+    it("releases the context when the shaders fail to build", () => {
+        let released = false;
+        const doc = { createElement: () => ({ width: 0, height: 0, addEventListener() {},
+            getContext: () => new Proxy({
+                getShaderParameter: () => false, getShaderInfoLog: () => "broken", getError: () => "NO_ERROR",
+                getExtension: name => name === "WEBGL_lose_context" ? { loseContext() { released = true; } } : null,
+                getParameter: () => "GPU",
+            }, { get: (target, name) => name in target ? target[name] : (typeof name === "string" && /^[A-Z_0-9]+$/.test(name) ? name : () => ({})) }) }) };
+        assert.throws(() => new StudioGLRenderer({ document: doc, width: 64, height: 36 }), /broken/);
+        assert.equal(released, true);
     });
 });

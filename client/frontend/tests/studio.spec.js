@@ -831,14 +831,24 @@ test("a lost WebGL context falls back to 2D without changing the published track
     expect(after).toEqual({ id: trackID, state: "live" });
 });
 
-test("auto mode keeps the 2D renderer on a software WebGL rasteriser", async ({ page }) => {
-    const software = await page.evaluate(async () => {
-        const { isSoftwareRenderer } = await import("/src/studio-gl.js");
-        const gl = document.createElement("canvas").getContext("webgl2");
-        const info = gl?.getExtension("WEBGL_debug_renderer_info");
-        return !gl || isSoftwareRenderer(info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+for (const [name, expected] of [["ANGLE (Google, Vulkan (SwiftShader Device (Subzero)), SwiftShader driver)", "2d"],
+    ["ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Direct3D11)", "webgl"]]) {
+    test(`auto mode picks ${expected} when WebGL reports "${name.slice(0, 32)}…"`, async ({ page }) => {
+        // The reported renderer name is the only input that differs between a
+        // software rasteriser and a GPU, so the test controls exactly that.
+        await page.evaluate(rendererName => {
+            const original = WebGL2RenderingContext.prototype.getParameter;
+            WebGL2RenderingContext.prototype.getParameter = function (parameter) {
+                const info = this.getExtension("WEBGL_debug_renderer_info");
+                if (parameter === this.RENDERER || (info && parameter === info.UNMASKED_RENDERER_WEBGL)) return rendererName;
+                return original.call(this, parameter);
+            };
+        }, name);
+        const studio = await open(page);
+        await addDisplay(page, RED);
+        await studio.locator(".studio-transition").selectOption("cut");
+        await studio.getByRole("button", { name: "Take", exact: true }).click();
+        expect((await diagnostics(page)).renderer).toBe(expected);
+        await expectPixel(page, "program", RED);
     });
-    await open(page);
-    await addDisplay(page, RED);
-    expect((await diagnostics(page)).renderer).toBe(software ? "2d" : "webgl");
-});
+}

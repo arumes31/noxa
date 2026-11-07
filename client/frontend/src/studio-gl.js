@@ -110,7 +110,12 @@ export class StudioGLRenderer {
         this.textures = new Map();
         this.frame = 0;
         this.framebuffers = [];
-        this.init();
+        try {
+            this.init();
+        } catch (error) {
+            gl.getExtension("WEBGL_lose_context")?.loseContext();
+            throw error;
+        }
     }
 
     init() {
@@ -173,16 +178,27 @@ export class StudioGLRenderer {
         const gl = this.gl;
         let entry = this.textures.get(source);
         if (!entry) {
-            entry = { texture: this.newTexture(), version: -1, used: this.frame };
+            entry = { texture: this.newTexture(), version: -1, used: this.frame, size: "" };
             this.textures.set(source, entry);
         }
         entry.used = this.frame;
         gl.bindTexture(gl.TEXTURE_2D, entry.texture);
         if (live || entry.version !== version) {
+            // getError stalls the GPU pipeline, so an upload is checked only
+            // when the texture is new or its size changed (a failed upload,
+            // e.g. a tainted or not yet decoded source, fails at that point).
+            const size = `${source.videoWidth || source.width || 0}x${source.videoHeight || source.height || 0}`;
+            const check = entry.size !== size;
+            // Drain earlier errors (bounded: a broken driver must not hang a frame).
+            if (check) for (let i = 0; i < 8 && gl.getError() !== gl.NO_ERROR; i++) { /* drain */ }
             try {
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
             } catch {
                 return false;
+            }
+            if (check) {
+                if (gl.getError() !== gl.NO_ERROR) return false;
+                entry.size = size;
             }
             entry.version = version;
         }

@@ -33,14 +33,18 @@ test("Studio program renderer: 2D vs WebGL frame cost", async ({ page }) => {
             { id: "t", kind: "text", visible: true, x: 0.05, y: 0.8, w: 0.6, h: 0.15, text: "Benchmark overlay", size: 48, color: "#ffffff", background: "#000000", crop: { l: 0, t: 0, r: 0, b: 0 } },
         ];
         const scene = Object.freeze({ id: "bench", sources: sources.map(s => Object.freeze(s)) });
-        const measure = renderer => {
+        const nextFrame = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
+        const measure = async renderer => {
             const engine = new StudioEngine({ registry, width: 1280, height: 720, renderer, setTimer: () => 1, clearTimer() {} });
             engine.take(scene);
             const kind = engine.rendererKind;
             const readback = () => engine.programContext.getImageData(640, 360, 1, 1);
-            for (let i = 0; i < 30; i++) { engine.renderProgram(performance.now()); readback(); } // warm up
+            for (let i = 0; i < 30; i++) { await nextFrame(); engine.renderProgram(performance.now()); readback(); } // warm up
             const main = [], synced = [];
             for (let i = 0; i < 200; i++) {
+                // One animation frame between renders: the source canvases
+                // repaint every 16 ms, so each sample draws new video frames.
+                await nextFrame();
                 const t0 = performance.now();
                 engine.renderProgram(t0);
                 const t1 = performance.now();
@@ -48,7 +52,10 @@ test("Studio program renderer: 2D vs WebGL frame cost", async ({ page }) => {
                 const t2 = performance.now();
                 main.push(t1 - t0); synced.push(t2 - t0);
             }
+            // A run that fell back to another renderer is not that renderer's result.
+            const stayed = engine.rendererKind === kind;
             engine.dispose();
+            if (!stayed) return { kind, invalid: `switched to ${kind === "webgl" ? "2d" : "webgl"} during the run` };
             const median = list => list.sort((a, b) => a - b)[Math.floor(list.length / 2)];
             const p95 = list => list.sort((a, b) => a - b)[Math.floor(list.length * 0.95)];
             return { kind, mainMedian: median(main), mainP95: p95(main), syncedMedian: median(synced), syncedP95: p95(synced) };
@@ -77,10 +84,12 @@ test("Studio program renderer: 2D vs WebGL frame cost", async ({ page }) => {
         const gl = document.createElement("canvas").getContext("webgl2");
         const info = gl?.getExtension("WEBGL_debug_renderer_info");
         const gpu = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl ? gl.getParameter(gl.RENDERER) : "none";
-        return { gpu, twoD: measure("2d"), webgl: measure("webgl"),
+        return { gpu, twoD: await measure("2d"), webgl: await measure("webgl"),
             delivered2D: await delivered("2d"), deliveredWebGL: await delivered("webgl") };
     });
     console.log(JSON.stringify(result, null, 2));
     expect(result.twoD.kind).toBe("2d");
+    expect(result.twoD.invalid).toBeUndefined();
+    expect(result.webgl.invalid).toBeUndefined();
     expect(Number.isFinite(result.webgl.mainMedian)).toBe(true);
 });

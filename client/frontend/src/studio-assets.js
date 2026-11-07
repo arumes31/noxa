@@ -83,7 +83,9 @@ async function assetID(bytes) {
 export async function decodeImage(bytes, { createBitmap = globalThis.createImageBitmap } = {}) {
     const info = inspectImageBytes(bytes);
     let bitmap;
-    try { bitmap = await createBitmap(new Blob([bytes], { type: info.type })); }
+    // Premultiplied, like the 2D canvas composites: WebGL uploads an
+    // ImageBitmap as decoded and ignores its premultiply unpack flag.
+    try { bitmap = await createBitmap(new Blob([bytes], { type: info.type }), { premultiplyAlpha: "premultiply" }); }
     catch { throw new StudioImageError("image_invalid"); }
     // The decoded size must equal the declared header. A JPEG may decode
     // rotated by its EXIF orientation (5-8, most phone photos): width and
