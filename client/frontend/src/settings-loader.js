@@ -15,8 +15,15 @@ export const settingsModule = lazyModule(() => import("./settings-ui.js"));
  */
 export function openSettingsLazy(target = "general", options = {}, { toast = window.__noxa?.toast, doc = document } = {}) {
     const loaded = settingsModule.current();
-    // Opens synchronously once loaded; callers always get a promise.
-    if (loaded) return Promise.resolve(loaded.openSettings(target, options));
+    // Opens synchronously once loaded; callers always get a promise, also
+    // a rejected one when opening throws.
+    if (loaded) {
+        try {
+            return Promise.resolve(loaded.openSettings(target, options));
+        } catch (error) {
+            return Promise.reject(error);
+        }
+    }
     doc.body?.setAttribute("aria-busy", "true");
     doc.body?.classList.add("module-loading");
     return settingsModule.load().then(module => module.openSettings(target, options), error => {
@@ -28,6 +35,10 @@ export function openSettingsLazy(target = "general", options = {}, { toast = win
     });
 }
 
+/**
+ * Installs the Settings entry points used at startup and schedules the idle
+ * preload. runtime is the Wails runtime (EventsOn).
+ */
 export function installSettingsLauncher({ runtime = window.runtime, preload = true } = {}) {
     const noxa = window.__noxa;
     noxa.openSettings = (target, options) => openSettingsLazy(target, options);

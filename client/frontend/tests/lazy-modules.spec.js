@@ -59,3 +59,16 @@ test("a hotkey conflict reported before Settings first opens is shown on the hot
     });
     await expect(row.locator(".hk-err")).toHaveText("");
 });
+
+test("a Studio open still loading when voice is torn down does not show the panel", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const launcher = await import("/src/studio-launcher.js");
+        const firstLoad = launcher.studioModule.current() === null;
+        const opening = launcher.openStudioLazy({ toast: () => {}, button: null });
+        launcher.disposeStudio(); // server/channel switch while the chunk loads
+        await opening;
+        return { firstLoad, loaded: launcher.studioModule.current() !== null };
+    });
+    expect(result).toEqual({ firstLoad: true, loaded: true });
+    await expect(page.getByRole("dialog", { name: "Studio" })).toHaveCount(0);
+});

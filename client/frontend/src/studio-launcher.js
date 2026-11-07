@@ -9,13 +9,27 @@ import { sweepOrphanStudio, studioStoredIdentities } from "./studio-storage.js";
 
 export const studioModule = lazyModule(() => import("./studio-ui.js"));
 
+// Each teardown starts a new generation: an open still waiting for the chunk
+// when the server, channel or connection changes does not show the panel.
+let openGeneration = 0;
+
 /** Opens the Studio, loading it first if needed. */
 export function openStudioLazy({ toast = window.__noxa?.toast, button = document.getElementById("voice-studio") } = {}) {
     const loaded = studioModule.current();
-    // Opens synchronously once loaded; callers always get a promise.
-    if (loaded) return Promise.resolve(loaded.openStudio());
+    // Opens synchronously once loaded; callers always get a promise, also
+    // a rejected one when opening throws.
+    if (loaded) {
+        try {
+            return Promise.resolve(loaded.openStudio());
+        } catch (error) {
+            return Promise.reject(error);
+        }
+    }
+    const generation = openGeneration;
     button?.setAttribute("aria-busy", "true");
-    return studioModule.load().then(module => module.openStudio(), error => {
+    return studioModule.load().then(module => {
+        if (generation === openGeneration) module.openStudio();
+    }, error => {
         toast?.(t("studio.loadFailed", { error: String(error?.message || error) }), "warn");
         throw error;
     }).finally(() => button?.removeAttribute("aria-busy"));
@@ -26,9 +40,11 @@ export function openStudioLazy({ toast = window.__noxa?.toast, button = document
  * while the module has not been loaded: a Studio session needs it.
  */
 export function disposeStudio() {
+    openGeneration++;
     studioModule.current()?.disposeStudio();
 }
 
+/** Adds the voice-bar Studio button and finishes an interrupted Studio wipe. */
 export function initStudio() {
     // Finish a Studio wipe that an identity deletion could not complete
     // (the webview closed after the native deletion committed). Identities
