@@ -783,3 +783,62 @@ test("a hidden program source's audio is not streamed; visibility applies to aud
     expect((await diagnostics(page)).routes).toEqual(["c1"]);
     expect(await publishedRMS(page)).toBeGreaterThan(0.05);
 });
+
+test("the program composites on WebGL and matches the scene layout", async ({ page }) => {
+    // Headless runs use a software rasteriser, which "auto" refuses; force it.
+    await page.evaluate(() => window.__studio.useStudioRendererForTest("webgl"));
+    const studio = await open(page);
+    await addDisplay(page, RED);
+    await addCamera(page, BLUE);
+    // Second source (camera) is added on top; put it in the right half.
+    await page.evaluate(() => {
+        const session = window.__studio.studioSessionForTest();
+        const scene = session.studio.scenes.find(s => s.id === session.studio.selected);
+        const [display, camera] = scene.sources;
+        Object.assign(display, { x: 0, y: 0, w: 0.5, h: 1 });
+        Object.assign(camera, { x: 0.5, y: 0, w: 0.5, h: 1 });
+    });
+    await studio.locator(".studio-transition").selectOption("cut");
+    await studio.getByRole("button", { name: "Take", exact: true }).click();
+    expect((await diagnostics(page)).renderer).toBe("webgl");
+    await expectPixel(page, "program", RED, 0.25, 0.5);
+    await expectPixel(page, "program", BLUE, 0.75, 0.5);
+});
+
+test("a lost WebGL context falls back to 2D without changing the published track", async ({ page }) => {
+    await page.evaluate(() => window.__studio.useStudioRendererForTest("webgl"));
+    const studio = await open(page);
+    await addDisplay(page, GREEN);
+    await studio.locator(".studio-transition").selectOption("cut");
+    await studio.getByRole("button", { name: "Take", exact: true }).click();
+    await expectPixel(page, "program", GREEN);
+    expect((await diagnostics(page)).renderer).toBe("webgl");
+    const trackID = await page.evaluate(() => {
+        const engine = window.__studio.studioSessionForTest().engine;
+        engine.outputStream().getVideoTracks()[0].stop(); // the publication's clone
+        const id = engine.captureTrack.id;
+        engine.gl.gl.getExtension("WEBGL_lose_context").loseContext();
+        return id;
+    });
+    await expect.poll(async () => (await diagnostics(page)).renderer, { timeout: 3000 }).toBe("2d");
+    // The 2D path keeps drawing the scene onto the same program canvas, so
+    // the one program track (and any publication of it) carries on.
+    await expectPixel(page, "program", GREEN);
+    const after = await page.evaluate(() => {
+        const engine = window.__studio.studioSessionForTest().engine;
+        return { id: engine.captureTrack.id, state: engine.captureTrack.readyState };
+    });
+    expect(after).toEqual({ id: trackID, state: "live" });
+});
+
+test("auto mode keeps the 2D renderer on a software WebGL rasteriser", async ({ page }) => {
+    const software = await page.evaluate(async () => {
+        const { isSoftwareRenderer } = await import("/src/studio-gl.js");
+        const gl = document.createElement("canvas").getContext("webgl2");
+        const info = gl?.getExtension("WEBGL_debug_renderer_info");
+        return !gl || isSoftwareRenderer(info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+    });
+    await open(page);
+    await addDisplay(page, RED);
+    expect((await diagnostics(page)).renderer).toBe(software ? "2d" : "webgl");
+});

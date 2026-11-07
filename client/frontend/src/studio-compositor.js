@@ -9,10 +9,13 @@
 // neutral box; a stale video frame is never drawn.
 
 import { captureRefs } from "./studio-state.js";
+import { StudioGLRenderer, cropToUV } from "./studio-gl.js";
 
 export const STUDIO_FPS = 30;
 export const PREVIEW_FPS = 15;
 export const WEAK_PREVIEW_FPS = 5;
+// Frames the WebGL program path is observed before a slow GPU drops to 2D.
+export const GL_WATCH_FRAMES = 60;
 
 // studioClock drives ticks from a dedicated worker (page timers are throttled
 // to ~1 Hz in hidden/minimised windows; worker timers are not), falling back
@@ -74,7 +77,8 @@ function wrapLines(ctx, text, width) {
 
 export class StudioEngine {
     constructor({ registry, assets, width, height, fps = STUDIO_FPS, document = globalThis.document,
-        now = () => performance.now(), setTimer = (fn, ms) => studioClock(fn, ms), clearTimer = stop => stop?.(), label = () => "" }) {
+        now = () => performance.now(), setTimer = (fn, ms) => studioClock(fn, ms), clearTimer = stop => stop?.(), label = () => "",
+        renderer = "auto" }) {
         this.registry = registry;
         this.assets = assets;
         this.width = width;
@@ -86,6 +90,22 @@ export class StudioEngine {
         this.label = label;
         this.program = this.canvas(width, height);
         this.programContext = this.program.getContext("2d", { alpha: false });
+        // (20) The program composites on the GPU when WebGL2 is available;
+        // the 2D path stays the fallback (unavailable or lost context).
+        this.gl = null;
+        this.textCanvases = new Map();
+        // "auto" refuses software WebGL and drops to 2D when GPU frames stay
+        // slow; "webgl" forces the GPU path (tests and diagnostics).
+        this.forceGL = renderer === "webgl";
+        this.glFrames = 0;
+        this.glCost = 0;
+        if (renderer !== "2d") {
+            try {
+                this.gl = new StudioGLRenderer({ document, width, height, onLost: () => this.dropGL(), allowSoftware: this.forceGL });
+            } catch {
+                this.gl = null;
+            }
+        }
         this.preview = this.canvas(Math.max(2, Math.round(width / 2)), Math.max(2, Math.round(height / 2)));
         this.previewContext = this.preview.getContext("2d", { alpha: false });
         this.layers = null;
@@ -150,6 +170,18 @@ export class StudioEngine {
 
     get transitioning() { return !!this.transition; }
 
+    /** "webgl" or "2d": the renderer currently drawing the program. */
+    get rendererKind() { return this.gl?.usable ? "webgl" : "2d"; }
+
+    // dropGL switches the program to the 2D path for the rest of the session
+    // (lost context or a failed frame). The output track is unaffected.
+    dropGL() {
+        const gl = this.gl;
+        this.gl = null;
+        this.textCanvases.clear();
+        if (gl && !gl.lost) { try { gl.dispose(); } catch { /* already gone */ } }
+    }
+
     // outputStream hands the publication its own clones of the one stable
     // program track and of the single routed audio track. The publication
     // owns (and stops) the clones; the Studio keeps the originals, so a
@@ -173,15 +205,121 @@ export class StudioEngine {
         this.previewEvery = Math.round(this.fps / (this.cost > budget * 0.5 ? WEAK_PREVIEW_FPS : PREVIEW_FPS));
     }
 
+    // transitionProgress returns the crossfade position, or null when no
+    // transition runs (a finished one is cleared here).
+    transitionProgress(time) {
+        if (!this.transition) return null;
+        const progress = Math.min(1, Math.max(0, (time - this.transition.start) / this.transition.ms));
+        if (progress < 1) return progress;
+        this.transition = null;
+        this.outgoing = null;
+        this.registry.setHolder("outgoing", []);
+        return null;
+    }
+
     renderProgram(time) {
+        if (this.gl?.usable) {
+            try {
+                const started = this.now();
+                this.renderProgramGL(time);
+                this.watchGL(this.now() - started);
+                return;
+            } catch {
+                this.dropGL(); // draw this frame (and later ones) in 2D
+            }
+        }
+        this.renderProgram2D(time);
+    }
+
+    // watchGL: in auto mode, a GPU path that keeps spending more than half a
+    // frame on the main thread (an undetected software rasteriser, a stalled
+    // driver) is abandoned for 2D after GL_WATCH_FRAMES frames.
+    watchGL(spent) {
+        if (this.forceGL) return;
+        this.glFrames++;
+        this.glCost = this.glFrames === 1 ? spent : this.glCost * 0.9 + spent * 0.1;
+        if (this.glFrames >= GL_WATCH_FRAMES && this.glCost > 1000 / this.fps * 0.5) this.dropGL();
+    }
+
+    renderProgramGL(time) {
+        const gl = this.gl;
+        const progress = this.transitionProgress(time);
+        const used = new Set();
+        if (progress !== null) {
+            gl.target(0);
+            this.drawSceneGL(this.outgoing, used);
+            gl.target(1);
+            this.drawSceneGL(this.live, used);
+            gl.target(null);
+            gl.drawFramebuffer(0, 1);
+            gl.drawFramebuffer(1, progress);
+        } else {
+            gl.target(null);
+            this.drawSceneGL(this.live, used);
+        }
+        gl.endFrame();
+        for (const id of this.textCanvases.keys()) if (!used.has(id)) this.textCanvases.delete(id);
+        if (!gl.usable) throw new Error("WebGL context lost");
+        this.programContext.drawImage(gl.canvas, 0, 0);
+    }
+
+    drawSceneGL(scene, used) {
+        if (!scene) return;
+        for (const source of scene.sources) {
+            if (source.visible) this.drawSourceGL(source, used);
+        }
+    }
+
+    drawSourceGL(source, used) {
+        const gl = this.gl, width = this.width, height = this.height;
+        const box = { x: source.x * width, y: source.y * height, w: source.w * width, h: source.h * height };
+        if (!(box.w > 0 && box.h > 0)) return;
+        if (source.kind === "text") {
+            const text = this.textCanvas(source, box, height);
+            used.add(source.id);
+            if (text && gl.bindSource(text.canvas, { live: false, version: text.version })) gl.drawTexture(box, [0, 0, 1, 1]);
+            return;
+        }
+        const media = source.kind === "image" ? this.assets?.bitmap(source.asset) : this.registry.drawable(source.capture);
+        const mediaWidth = media?.videoWidth || media?.width || 0, mediaHeight = media?.videoHeight || media?.height || 0;
+        if (!media || !mediaWidth || !mediaHeight) {
+            gl.fill(box, NEUTRAL);
+            return;
+        }
+        const { l, t, r, b } = source.crop;
+        const target = fitRect(box, mediaWidth * (1 - l - r), mediaHeight * (1 - t - b));
+        if (!gl.bindSource(media, { live: source.kind !== "image" })) {
+            gl.fill(box, NEUTRAL);
+            return;
+        }
+        gl.drawTexture(target, cropToUV(source.crop));
+    }
+
+    // textCanvas renders a text source into a canvas the size of its box
+    // (which also clips it), re-rendered only when its content or size
+    // changes. The version tells the GPU renderer to upload it again.
+    textCanvas(source, box, height) {
+        const w = Math.max(1, Math.round(box.w)), h = Math.max(1, Math.round(box.h));
+        const key = JSON.stringify([source.text, source.size, source.color, source.background, w, h, height]);
+        let entry = this.textCanvases.get(source.id);
+        if (entry?.key === key) return entry;
+        const canvas = entry?.canvas || this.canvas(w, h);
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+        ctx.clearRect(0, 0, w, h);
+        this.drawText(ctx, source, { x: 0, y: 0, w, h }, height);
+        entry = { key, canvas, version: (entry?.version || 0) + 1 };
+        this.textCanvases.set(source.id, entry);
+        return entry;
+    }
+
+    renderProgram2D(time) {
         const ctx = this.programContext;
         if (this.transition) {
-            const progress = Math.min(1, Math.max(0, (time - this.transition.start) / this.transition.ms));
-            if (progress >= 1) {
-                this.transition = null;
-                this.outgoing = null;
-                this.registry.setHolder("outgoing", []);
-            } else {
+            const progress = this.transitionProgress(time);
+            if (progress !== null) {
                 this.layers ||= [this.canvas(this.width, this.height), this.canvas(this.width, this.height)];
                 const [from, to] = this.layers;
                 this.drawScene(from.getContext("2d", { alpha: false }), this.outgoing, this.width, this.height, false);
@@ -272,6 +410,7 @@ export class StudioEngine {
         this.captureTrack = null;
         this.registry.dispose();
         this.assets?.dispose();
+        this.dropGL();
         this.live = this.outgoing = this.draft = this.transition = null;
         for (const canvas of [this.program, this.preview, ...(this.layers || [])]) { canvas.width = 0; canvas.height = 0; }
         this.layers = null;
