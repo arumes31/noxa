@@ -595,7 +595,9 @@ function attribute(m) {
 
 function findMsg(id) {
     for (const st of store.values()) {
-        const m = st.msgs.find((x) => x.id === Number(id));
+        // (601) Live messages buffered behind a detached window count too, so
+        // edits and deletes reach them before they are merged.
+        const m = st.msgs.find((x) => x.id === Number(id)) || st.pendingLive?.find((x) => x.id === Number(id));
         if (m) return m;
     }
     return null;
@@ -816,7 +818,11 @@ export function encryptionBadgeElement(badge) {
 export const CHAT_ENCRYPTION_HELP = chatEnglish["chat.encryptionHelp"];
 
 function ensureRenderKey(m) {
-    m.renderKey ||= m.id ? "message-" + m.id : m.clientMsgID ? "client-" + m.clientMsgID : crypto.randomUUID();
+    // A direct message is identified by protocol + sender + logical ID, so
+    // two senders' equal client IDs stay distinct rows (601 keys rows by it).
+    m.renderKey ||= m.id ? "message-" + m.id
+        : m.clientMsgID ? "client-" + JSON.stringify([m.protocol || "", m.fromUID || "", m.clientMsgID])
+            : crypto.randomUUID();
     return m.renderKey;
 }
 
@@ -2967,6 +2973,10 @@ function restoreScrollAnchor(log, anchor) {
 function renderView(keepScrollFrom, { suppressMarkRead = false, skipThread = false } = {}) {
     const log = $("chat-log");
     const anchor = log.dataset.viewKey === activeKey() ? captureScrollAnchor(log) : null;
+    // (601) A detached window survives only while its chat stays open:
+    // coming back to the chat shows the present, so its unread state and
+    // read markers stay meaningful.
+    if (log.dataset.viewKey !== activeKey() && getStore(activeKey()).detached) dropDetached(getStore(activeKey()));
     virtual = null;
     log.classList.remove("chat-virtual");
     log.innerHTML = "";
@@ -3106,6 +3116,13 @@ function mountVirtual(log, key, items) {
     const bottom = spacer();
     log.append(top, bottom);
     log.classList.add("chat-virtual");
+    // Heights of rows no longer loaded anywhere are dropped once the cache
+    // outgrows what the loaded logs can use.
+    if (rowHeights.size > Math.max(20000, items.length * 2)) {
+        const live = new Set();
+        for (const st of store.values()) for (const m of st.msgs) if (m.renderKey) live.add(m.renderKey);
+        rowHeights.retain(live);
+    }
     virtual = { key, items, visible: items, keys: [], index: new Map(), prefix: null, start: 0, end: 0, top, bottom, query: null };
     setVirtualRows(items);
     top.style.height = virtual.prefix[virtual.keys.length] + "px";
@@ -3151,12 +3168,15 @@ function measureVirtualRows() {
     return changed;
 }
 
+// firstVisibleRow is the first rendered row inside the viewport, or null
+// when the user scrolled past the rendered rows into spacer space (then the
+// scroll position, not a row, says where they are).
 function firstVisibleRow(log) {
-    const top = log.getBoundingClientRect().top;
+    const box = log.getBoundingClientRect();
     for (let row = virtual.top.nextElementSibling; row && row !== virtual.bottom; row = row.nextElementSibling) {
         if (!row.dataset.scrollKey) continue;
         const rect = row.getBoundingClientRect();
-        if (rect.bottom > top) return { key: row.dataset.scrollKey, offset: rect.top - top };
+        if (rect.bottom > box.top) return rect.top < box.bottom ? { key: row.dataset.scrollKey, offset: rect.top - box.top } : null;
     }
     return null;
 }
@@ -3167,7 +3187,8 @@ function firstVisibleRow(log) {
 function renderVirtualWindow({ force = false, target = null } = {}) {
     const v = virtual;
     const log = $("chat-log");
-    if (!v || !v.top.isConnected || v.key !== activeKey()) return;
+    // While printing, every row stays rendered (renderVirtualForPrint).
+    if (!v || v.printing || !v.top.isConnected || v.key !== activeKey()) return;
     measureVirtualRows();
     // target ({ key, offset }) is a row that must end up rendered at that
     // offset (a jump). Otherwise the first visible row keeps its place.
@@ -3178,10 +3199,23 @@ function renderVirtualWindow({ force = false, target = null } = {}) {
         const listTop = contentTop(log, v.top);
         // At the bottom the window ends at the last row, whatever a stale
         // scrollTop from a taller estimate says.
-        const scrollTop = atBottom ? Math.max(0, v.prefix[v.keys.length] - log.clientHeight) : log.scrollTop - listTop;
+        // A visible anchor keeps its place in the corrected offsets: when a
+        // measurement changes the estimate for rows above it, the DOM scroll
+        // position is stale until the spacers are rewritten.
+        const anchorIndex = anchor ? v.index.get(anchor.key) : undefined;
+        const scrollTop = atBottom ? Math.max(0, v.prefix[v.keys.length] - log.clientHeight)
+            : anchorIndex !== undefined ? Math.max(0, v.prefix[anchorIndex] - anchor.offset)
+                : log.scrollTop - listTop;
         const win = computeWindow({ prefix: v.prefix, scrollTop, viewport: log.clientHeight });
         if (!force && win.start === v.start && win.end === v.end) {
+            // Spacers above the viewport can change height (new estimate):
+            // keep the anchor row, or the bottom, where it was.
             setSpacers(win.before, win.after);
+            if (atBottom && v.end === v.keys.length) log.scrollTop = log.scrollHeight;
+            else if (anchor) {
+                const row = log.querySelector(`[data-scroll-key="${CSS.escape(anchor.key)}"]`);
+                if (row) log.scrollTop += row.getBoundingClientRect().top - log.getBoundingClientRect().top - anchor.offset;
+            }
             return;
         }
         // A moving window keeps the rows it already shows: rebuilding them
@@ -3266,7 +3300,24 @@ function virtualRevealMessage(id) {
 
 function virtualSearchText(item) {
     const m = item.m;
-    return ((m.from || "") + " " + (m.text || "") + " " + previewLine(m)).toLowerCase();
+    // Attachments match by display name only, as their rendered chip does;
+    // the sealed storage reference and key never take part.
+    const text = String(m.text || "").replace(/\[file:[^\]#]*#[^\]#]*#(?:[^\]#]*#)?([^\]]*)\]/g, " $1 ");
+    return ((m.from || "") + " " + text).toLowerCase();
+}
+
+// refreshVirtualRows rebuilds the row list of a virtual log from its store
+// (live append, edit or delete) and re-applies an active search. Rows that
+// stay in the window are reused.
+function refreshVirtualRows() {
+    const v = virtual;
+    if (!v || !v.top.isConnected || v.key !== activeKey()) return false;
+    v.items = logItems(getStore(v.key).msgs, lastReadFor(v.key));
+    const q = searchQ.toLowerCase();
+    setVirtualRows(q ? v.items.filter(item => !item.divider && virtualSearchText(item).includes(q)) : v.items);
+    const total = v.items.filter(item => !item.divider).length;
+    if (q) $("chat-search-count").textContent = t("polish.matches", { count: v.visible.length, total });
+    return true;
 }
 
 // While printing, every row of a virtual log is rendered (newest
@@ -3396,10 +3447,11 @@ const MAX_JUMP_PAGES = 20;
 const AROUND_WINDOW = 100;
 const DETACHED_BUFFER = 500;
 
-async function loadAroundWindow(key, st, id, scope) {
+async function loadAroundWindow(key, st, id, scope, current) {
     if (typeof app().ChatHistoryAroundForTab !== "function") return false;
     const chID = Number(key.slice(3));
     const resp = await app().ChatHistoryAroundForTab(scope.tabID, chID, id, AROUND_WINDOW);
+    if (!current()) return false;
     // Older servers answer with the latest page and no echo.
     if (Number(resp?.around_id) !== id) return false;
     const page = (resp.messages || []).map((x) => attribute(normalize(x, chID))).reverse();
@@ -3427,19 +3479,25 @@ async function maybeLoadNewer() {
     const st = getStore(key);
     if (!st.detached || st.loading || view.kind === "dm") return;
     const scope = captureScope(readChatServerScope);
-    const stillHere = () => chatServerIsCurrent(scope) && activeKey() === key && store.get(key) === st;
+    const epoch = st.epoch || 0;
+    const stillHere = () => chatServerIsCurrent(scope) && activeKey() === key && store.get(key) === st && (st.epoch || 0) === epoch;
     const chID = Number(key.slice(3));
     const newest = st.msgs.findLast(m => m.id)?.id || 0;
     st.loading = true;
-    let page = null;
+    let resp;
     try {
-        const resp = await app().ChatHistoryAfterForTab(scope.tabID, chID, newest, PAGE);
-        if (Number(resp?.after_id) === newest) page = (resp.messages || []).map((x) => attribute(normalize(x, chID))).reverse();
-    } catch { /* stay detached; the next scroll retries */ } finally {
-        st.loading = false;
+        resp = await app().ChatHistoryAfterForTab(scope.tabID, chID, newest, PAGE);
+    } catch {
+        // Stay detached: the next scroll to the bottom retries.
+        if ((st.epoch || 0) === epoch) st.loading = false;
+        return;
     }
+    if ((st.epoch || 0) === epoch) st.loading = false;
     if (!stillHere() || !st.detached) return;
-    if (!page) { returnToPresent(key); return; }
+    // A server without forward paging answers without the echo.
+    if (Number(resp?.after_id) !== newest) { returnToPresent(key); return; }
+    const page = (resp.messages || []).map((x) => attribute(normalize(x, chID))).reverse();
+    st.truncated = st.truncated || !!resp.truncated;
     const known = new Set(st.msgs.map(m => m.id));
     st.msgs = st.msgs.concat(page.filter(m => !known.has(m.id)));
     if (page.length < PAGE) {
@@ -3455,11 +3513,22 @@ async function maybeLoadNewer() {
     renderView();
 }
 
+// dropDetached resets a store showing a detached window so the next render
+// loads the newest page. The epoch makes requests still in flight for the
+// old window stale.
+function dropDetached(st) {
+    Object.assign(st, { msgs: [], loaded: false, loading: false, end: false, truncated: false, detached: false, pendingLive: [], pendingOverflow: false, epoch: (st.epoch || 0) + 1 });
+}
+
 // returnToPresent drops a detached window and reloads the newest page.
 function returnToPresent(key = activeKey()) {
     const st = getStore(key);
-    if (!st.detached) return false;
-    Object.assign(st, { msgs: [], loaded: false, loading: false, end: false, truncated: false, detached: false, pendingLive: [], pendingOverflow: false });
+    if (!st.detached) {
+        // A jump still loading would detach the log after a send: cancel it.
+        if (st.jumpPending) Object.assign(st, { jumpPending: false, loading: false, epoch: (st.epoch || 0) + 1 });
+        return false;
+    }
+    dropDetached(st);
     resetNewCount();
     if (activeKey() === key) renderView();
     return true;
@@ -3476,18 +3545,26 @@ async function jumpToMessage(id, unavailableKey = "chat.messageUnavailable") {
     // older history to search.
     if (!st.loaded || st.loading || st.end || !oldestID() || id >= oldestID()) return unavailable();
     const scope = captureScope(readChatServerScope);
-    const stillHere = () => chatServerIsCurrent(scope) && activeKey() === key && store.get(key) === st;
+    const epoch = st.epoch || 0;
+    const stillHere = () => chatServerIsCurrent(scope) && activeKey() === key && store.get(key) === st && (st.epoch || 0) === epoch;
     st.loading = true;
     V().toast(t("chat.jumpLoading"), "info", "alert", { announce: false, record: false });
     let windowed = false;
+    st.jumpPending = true;
     try {
-        windowed = await loadAroundWindow(key, st, id, scope);
+        windowed = await loadAroundWindow(key, st, id, scope, stillHere);
     } catch {
         // Fall back to paging below.
+    } finally {
+        if ((st.epoch || 0) === epoch) st.jumpPending = false;
+    }
+    // A jump overtaken by "Jump to present" or a view change does nothing.
+    if (!stillHere()) {
+        if ((st.epoch || 0) === epoch) st.loading = false;
+        return false;
     }
     if (windowed) {
         st.loading = false;
-        if (!stillHere()) return false;
         renderView();
         return flashMsg(id) || unavailable();
     }
@@ -3666,7 +3743,14 @@ function pushMsg(key, m) {
     // (601) A jump opened a window in older history: live messages wait in
     // a bounded buffer until the window pages forward to the present.
     if (st.detached) {
-        if (!(st.pendingLive ||= []).some(existing => m.id && existing.id === m.id)) st.pendingLive.push(m);
+        st.pendingLive ||= [];
+        const buffered = st.pendingLive.find(existing => (m.id && existing.id === m.id) ||
+            (m.clientMsgID && existing.clientMsgID === m.clientMsgID && existing.fromUID === m.fromUID));
+        if (buffered) {
+            upgradeEncryption(buffered, m);
+            return "duplicate";
+        }
+        st.pendingLive.push(m);
         if (st.pendingLive.length > DETACHED_BUFFER) { st.pendingLive.shift(); st.pendingOverflow = true; }
         return "detached";
     }
@@ -3723,9 +3807,22 @@ export function trimLog(log, max) {
 
 function appendLive(m) {
     const log = $("chat-log");
-    if (virtual || getStore(activeKey()).msgs.length >= VIRTUAL_MIN_ROWS) {
-        // (601) Rebuilding a virtual log renders only its window, so a full
-        // render is cheap and keeps the row list and spacers consistent.
+    if (refreshVirtualRows()) {
+        // (601) The row list grows; rows already in the window are reused,
+        // so an inline edit or a playing video in them is not interrupted.
+        refreshThreadFor(m.id);
+        if (atBottom) {
+            scrollToBottom();
+            markRead(activeKey());
+        } else {
+            renderVirtualWindow();
+            newCount++;
+            showNewPill();
+        }
+        return;
+    }
+    if (getStore(activeKey()).msgs.length >= VIRTUAL_MIN_ROWS) {
+        // The log just became long enough to virtualize: render it once.
         const wasAtBottom = atBottom;
         renderView(undefined, { suppressMarkRead: !wasAtBottom, skipThread: true });
         refreshThreadFor(m.id);
@@ -3735,7 +3832,9 @@ function appendLive(m) {
     const anchor = captureScrollAnchor(log);
     log.appendChild(renderMsg(m));
     const max = V().state.settings?.chat_max_lines || 200;
-    trimLog(log, max);
+    // Scrollback the user is reading keeps its rows, like the store does
+    // (pushMsg); the cap applies again at the newest message.
+    if (atBottom) trimLog(log, max);
     applySearchFilter();
     restoreScrollAnchor(log, anchor);
     refreshThreadFor(m.id); // (108) a reply joins the open chain immediately
@@ -3899,6 +3998,7 @@ export function onChatEdited(d) {
     threadCache.clear(); // an edit can add or remove the reply prefix (108)
     refreshMsgEl(m);
     refreshThreadFor(m.id);
+    if (searchQ && refreshVirtualRows()) renderVirtualWindow(); // (601) the match may change
 }
 
 export function onChatDeleted(d) {
@@ -3909,6 +4009,7 @@ export function onChatDeleted(d) {
     threadCache.clear();
     refreshMsgEl(m); // tombstone style (102)
     refreshThreadFor(m.id);
+    if (searchQ && refreshVirtualRows()) renderVirtualWindow(); // (601) no longer a match
 }
 
 export function onChatPinned(d, pinned) {
@@ -5562,6 +5663,7 @@ export function resetView(options = {}) {
     }
     renderTyping();
     virtual = null;
+    flashing = null;
     rowHeights.clear();
     $("chat-log").classList.remove("chat-virtual");
     $("chat-log").innerHTML = "";

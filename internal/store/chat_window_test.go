@@ -87,6 +87,17 @@ func TestChatHistoryWindows(t *testing.T) {
 		t.Fatalf("after page = %v, want %v", got(page), want)
 	}
 
+	// The newest message has nothing after it; out-of-range limits on a
+	// forward page fall back to a normal page too.
+	none, err := s.ChatHistoryAfter(ctx, scope, ids[29], 10)
+	if err != nil || len(none) != 0 {
+		t.Fatalf("after newest = %v, err=%v; want empty", got(none), err)
+	}
+	bounded, err := s.ChatHistoryAfter(ctx, scope, ids[0], 10_000)
+	if err != nil || !slices.Equal(got(bounded), reversed(ids[1:30])) {
+		t.Fatalf("after with huge limit = %v, err=%v", got(bounded), err)
+	}
+
 	// Out-of-range limits fall back to a normal page.
 	big, err := s.ChatHistoryAround(ctx, scope, ids[29], 10_000)
 	if err != nil || len(big) != 26 {

@@ -35,6 +35,14 @@ export function createHeightCache(fallback = DEFAULT_ROW_PX) {
         },
         estimate: () => (heights.size ? sum / heights.size : fallback),
         clear() { heights.clear(); sum = 0; },
+        /** Drops every height whose key is not in keep (a Set). */
+        retain(keep) {
+            for (const [key, height] of heights) {
+                if (keep.has(key)) continue;
+                heights.delete(key);
+                sum -= height;
+            }
+        },
         get size() { return heights.size; },
     };
 }
