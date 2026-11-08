@@ -558,25 +558,43 @@ func (s *Store) SetServerSetting(ctx context.Context, key, value string, keyID u
 }
 
 // SetServerSettings persists a related set of values in one transaction.
+//
+// ⚡ Bolt Optimization:
+// 💡 What: Replaced a loop of N+1 individual ExecContext INSERT statements with a single bulk INSERT using PostgreSQL UNNEST and pq.Array().
+// 🎯 Why: Executing queries in a loop creates significant overhead from multiple database round-trips.
+// 📊 Impact: Transforms O(N) database queries into O(1) query, drastically reducing transaction time and connection holding time for large setting updates.
+// 🔬 Measurement: Benchmarking this operation with >10 keys would show a significant reduction in overall execution time compared to the previous looping approach.
 func (s *Store) SetServerSettings(ctx context.Context, values map[string]string, keyID uint32) error {
+	if len(values) == 0 {
+		return nil
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning server settings update: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	const q = `INSERT INTO server_settings (key, value, key_id) VALUES ($1, $2, $3)
+
+	// Single query optimization for bulk insert/update
+	const q = `INSERT INTO server_settings (key, value, key_id)
+	          SELECT unnest($1::text[]), unnest($2::text[]), $3
 	          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, key_id = EXCLUDED.key_id`
+
 	keys := make([]string, 0, len(values))
 	for k := range values {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	for _, key := range keys {
-		value := values[key]
-		if _, err := tx.ExecContext(ctx, q, key, value, keyID); err != nil {
-			return fmt.Errorf("setting server setting %s: %w", key, err)
-		}
+
+	vals := make([]string, 0, len(values))
+	for _, k := range keys {
+		vals = append(vals, values[k])
 	}
+
+	if _, err := tx.ExecContext(ctx, q, pq.Array(keys), pq.Array(vals), keyID); err != nil {
+		return fmt.Errorf("setting server settings: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing server settings update: %w", err)
 	}
