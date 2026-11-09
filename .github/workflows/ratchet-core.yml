@@ -39,6 +39,13 @@ jobs:
       - name: Native core and deterministic vectors
         run: go test -count=1 ./internal/e2ee/ratchet ./internal/e2ee/durable
       - run: npm ci --prefix mobile --no-audit --no-fund
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-mobile-${{ hashFiles('mobile/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-mobile-
       - name: Install browser
         working-directory: mobile
         run: npx playwright install --with-deps chromium

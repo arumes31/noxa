@@ -1246,6 +1246,7 @@ native-client tests in CI use `xvfb-run -a go test ./...`.
 | `make compose-up` / `make compose-down` | Build and start/stop the detached container stack (noXa + PostgreSQL + Redis) |
 | `make chaos` / `make webrtc-load` | Run database failure drills and simulate 100 authenticated Opus publishers |
 | `make canary` | Run encryption rotation and plaintext-leakage security canaries |
+| `make pre-push` | Run fast local checks (`gofmt`, frontend lint, version check, fast unit tests) before pushing to CI |
 | `go run ./cmd/version -check` | Check synchronized baseline versions and report the current source version |
 | `npm run quality` in `client/frontend` | Frontend lint, unit tests/coverage, accessibility scenarios, and production build |
 | `npm run test:e2e` in `client/frontend` | Full Playwright browser regression suite |
