@@ -97,9 +97,9 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/apt/archives
-          key: ${{ runner.os }}-apt-${{ hashFiles('scripts/ci-apt-setup.sh') }}
+          key: ${{ runner.os }}-apt-govulncheck-${{ hashFiles('scripts/ci-apt-setup.sh') }}
           restore-keys: |
-            ${{ runner.os }}-apt-
+            ${{ runner.os }}-apt-govulncheck-
 
       - name: install Linux client analysis dependencies
         if: matrix.module == 'client' && runner.os == 'Linux'
@@ -158,9 +158,9 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/apt/archives
-          key: ${{ runner.os }}-apt-${{ hashFiles('scripts/ci-apt-setup.sh') }}
+          key: ${{ runner.os }}-apt-gosec-${{ hashFiles('scripts/ci-apt-setup.sh') }}
           restore-keys: |
-            ${{ runner.os }}-apt-
+            ${{ runner.os }}-apt-gosec-
 
       - name: install Linux client analysis dependencies
         if: matrix.module == 'client'
@@ -251,7 +251,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          filter: blob:none
           persist-credentials: false
 
       - name: Scan repository
