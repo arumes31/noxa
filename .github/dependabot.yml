@@ -8,6 +8,9 @@ updates:
       codeql:
         patterns:
           - "github/codeql-action/*"
+      # Remaining action bumps share one PR (see the note on the gomod entry).
+      github-actions-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "gomod"
     directory: "/"
@@ -19,31 +22,61 @@ updates:
       # the mismatch; never suppress the CI vulnerability check.
       - dependency-name: "google.golang.org/grpc"
         versions: ["1.84.0"]
+    # One PR per ecosystem/directory for minor+patch bumps: every merge used to
+    # rebase ~10 open Dependabot PRs and re-run the full CI fan-out on each.
+    groups:
+      gomod-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "gomod"
     directory: "/client"
     schedule:
       interval: "weekly"
+    # One PR per ecosystem/directory for minor+patch bumps: every merge used to
+    # rebase ~10 open Dependabot PRs and re-run the full CI fan-out on each.
+    groups:
+      gomod-client-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "npm"
     directory: "/client/frontend"
     schedule:
       interval: "weekly"
+    # One PR per ecosystem/directory for minor+patch bumps: every merge used to
+    # rebase ~10 open Dependabot PRs and re-run the full CI fan-out on each.
+    groups:
+      npm-client-frontend-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "gomod"
     directory: "/client/third_party/go-webview2"
     schedule:
       interval: "weekly"
+    # One PR per ecosystem/directory for minor+patch bumps: every merge used to
+    # rebase ~10 open Dependabot PRs and re-run the full CI fan-out on each.
+    groups:
+      gomod-client-third_party-go-webview2-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "npm"
     directory: "/mobile"
     schedule:
       interval: "weekly"
+    # One PR per ecosystem/directory for minor+patch bumps: every merge used to
+    # rebase ~10 open Dependabot PRs and re-run the full CI fan-out on each.
+    groups:
+      npm-mobile-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "npm"
     directory: "/website"
     schedule:
       interval: "weekly"
+    # One PR per ecosystem/directory for minor+patch bumps: every merge used to
+    # rebase ~10 open Dependabot PRs and re-run the full CI fan-out on each.
+    groups:
+      npm-website-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "docker"
     directory: "/"
@@ -54,3 +87,8 @@ updates:
       # Upgrade these together with a rehearsed database/restore migration.
       - dependency-name: "postgres"
         update-types: ["version-update:semver-major"]
+    # One PR per ecosystem/directory for minor+patch bumps: every merge used to
+    # rebase ~10 open Dependabot PRs and re-run the full CI fan-out on each.
+    groups:
+      docker-minor-patch:
+        update-types: ["minor", "patch"]
