@@ -389,6 +389,13 @@ only.
   server's video limits); **Stop** ends it. Closing the panel while live keeps
   the program on air. Studio cannot go live while another screen share is
   running.
+* **GPU compositing**: on a hardware GPU the program is composited with
+  WebGL2 (on an Intel Iris Xe: about 0.5 ms of main-thread time per frame
+  instead of 4 ms with the 2D canvas; the delivered frame rate is the same).
+  Software WebGL (remote desktops, machines without GPU acceleration) is far
+  slower there, so Studio keeps the 2D canvas on it, and it also switches to
+  2D if GPU frames stay slow or the graphics context is lost. The published
+  track never changes when it switches.
 * **Audio**: only screen-capture audio of sources that are visible on the
   program, with audio enabled, is sent, and the routing changes only with
   **Take**. The microphone is never mixed in.
