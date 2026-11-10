@@ -1283,6 +1283,62 @@ the 720p30 profile. On an idle development machine, set
 `NOXA_BROWSER_MEDIA_PERF=1` to include the more demanding 1080p60 profile; its
 observed frame rate still depends on software-encoder and host capacity.
 
+### Performance measurements (2026-11-07)
+
+These measurements decided three proposals; none of them changed code. Rerun them before revisiting the decisions.
+
+**Media frame encryption (WebCrypto vs. a WebAssembly cipher).** The script
+`node client/frontend/scripts/bench-media-e2ee.mjs` measures the real pinned LiveKit
+e2ee worker with the noXa wrapper. Each frame is timed from enqueue to output
+(Node 26 on a Windows desktop CPU, 300 frames per case):
+
+| Frame | Encrypt p50 / p95 | Decrypt p50 / p95 |
+|---|---|---|
+| Opus 20 ms (160 B) | 0.09 / 0.17 ms | 0.10 / 0.17 ms |
+| VP8 1080p60 delta (16.7 KB) | 0.11 / 0.26 ms | 0.11 / 0.23 ms |
+| VP8 1080p60 keyframe (133 KB) | 0.34 / 0.98 ms | 0.23 / 0.62 ms |
+| VP8 1440p60 keyframe (266 KB) | 0.43 / 1.41 ms | 0.33 / 0.98 ms |
+
+The same frames through Chromium's own WebCrypto AES-GCM take no more than 0.1 ms
+at p95 for 1080p delta frames, which is Chromium's timer resolution. At p95 a 1080p60 delta frame costs
+about 1.6% of the frame budget to encrypt, and about 3% to encrypt and decrypt
+together. Keyframes, sent roughly every 2 s, cost under 10% for both. The
+decision rule was to look at a WebAssembly cipher only if 1080p60 video frames
+exceeded about 1 ms at p95. They don't, so the maintained LiveKit cryptor stays.
+
+**Video pacing gain.** The real pacer was simulated under virtual time at gains
+1.0, 1.25, 1.5 and 2.0. A modelled bottleneck link (a drop-tail queue with 100 ms of buffer)
+ran at 1.0x, 1.2x and 1.5x the congestion estimate:
+
+- A higher gain only lowers end-to-end delay when the link has spare capacity above
+  the estimate. At 1.0–1.2x it produces loss at the bottleneck: 32–293 packets
+  dropped per 10 s at gains 1.5–2.0.
+- A lower gain avoids that loss but adds 150–280 ms of p95 queueing. At 1.0–1.25 the pacer
+  starts dropping expired packets itself after the estimate falls.
+- A dynamic gain cannot tell the two cases apart without the bottleneck feedback
+  that GCC already turns into the estimate.
+- When the estimate drops below the source rate, the queue grows to seconds at
+  any gain. Fixing that is the sender's job (resolution and frame-rate adaptation).
+
+The static gain of 1.5 therefore stays (`internal/webrtc/media_pacer.go`).
+
+**Database indexes.** A scratch database seeded with 1M Olm messages and 2M
+deliveries, of which 2,000 were pending, ran the two pending-delivery sweeps:
+
+- Both use the existing partial index `olm_delivery_pending_sender`
+  (`WHERE state='pending'`) and read only pending rows: 207 buffers.
+- Warm, they take 14 ms and 10 ms. The first cold run took about 150 ms, mostly JIT start-up and uncached pages.
+
+The other hot paths are already covered by keys:
+
+- Chat history uses `(channel_id, id)`.
+- Private conversations use `(conversation_id, from_uid, client_reference)` and `(message_id, recipient_uid)`.
+- Olm copies use `(message_id, device_id)`.
+- `server_traffic_buckets` is small and indexed.
+- `audit_log` is pruned by monthly partitions.
+
+No index was added.
+
 ---
 
 ## 📂 Project Structure
