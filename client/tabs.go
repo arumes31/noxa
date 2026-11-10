@@ -185,6 +185,12 @@ func (a *App) relayTabEventFrom(tabID string, owner *connManager, name string, p
 		}
 	}
 	a.tabsMu.Unlock()
+	if name == "event" && !provisional {
+		if hint, ok := shutdownHint(tabID, text); ok {
+			// (#52) Every tab, also a background one, learns its reconnect window.
+			a.emitPlain("tab_shutdown_hint", hint)
+		}
+	}
 	if suppressed {
 		a.activationPublishMu.Lock()
 		a.tabsMu.Lock()
@@ -817,4 +823,29 @@ func (a *App) removeTab(tabID string) {
 		}
 	}
 	a.tabsMu.Unlock()
+}
+
+// tabShutdownHint tells the frontend how a tab's server wants clients to
+// spread their reconnect after an announced shutdown (#52).
+type tabShutdownHint struct {
+	TabID           string `json:"tab_id"`
+	Seconds         int    `json:"seconds"`
+	ReconnectJitter int    `json:"reconnect_jitter"`
+}
+
+func shutdownHint(tabID, text string) (tabShutdownHint, bool) {
+	if !strings.Contains(text, `"server_shutdown_scheduled"`) {
+		return tabShutdownHint{}, false
+	}
+	var env struct {
+		Type string `json:"type"`
+		Data struct {
+			Seconds         int `json:"seconds"`
+			ReconnectJitter int `json:"reconnect_jitter"`
+		} `json:"data"`
+	}
+	if json.Unmarshal([]byte(text), &env) != nil || env.Type != "server_shutdown_scheduled" || env.Data.ReconnectJitter <= 0 {
+		return tabShutdownHint{}, false
+	}
+	return tabShutdownHint{TabID: tabID, Seconds: env.Data.Seconds, ReconnectJitter: min(env.Data.ReconnectJitter, 60)}, true
 }
