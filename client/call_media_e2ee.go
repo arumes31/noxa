@@ -40,24 +40,25 @@ type callMediaStateCache struct {
 }
 
 // callMediaState returns the server's current state of a call this session
-// can read, reusing a state fetched within callMediaStateTTL.
-func (m *connManager) callMediaState(id string) (netproto.CallSession, error) {
+// can read, reusing a state fetched within callMediaStateTTL unless fresh is
+// set. cached reports whether the state came from the cache.
+func (m *connManager) callMediaState(id string, fresh bool) (call netproto.CallSession, cached bool, err error) {
 	c := &m.callMediaCache
 	c.mu.Lock()
-	if c.id == id && time.Since(c.fetched) < callMediaStateTTL {
+	if !fresh && c.id == id && time.Since(c.fetched) < callMediaStateTTL {
 		call := c.call
 		c.mu.Unlock()
-		return call, nil
+		return call, true, nil
 	}
 	c.mu.Unlock()
 	result, err := m.privateCallRequest(netproto.CallRequest{Action: "get", ID: id})
 	if err != nil || result.Call == nil {
-		return netproto.CallSession{}, errCallMediaScope
+		return netproto.CallSession{}, false, errCallMediaScope
 	}
 	c.mu.Lock()
 	c.id, c.call, c.fetched = id, *result.Call, time.Now()
 	c.mu.Unlock()
-	return *result.Call, nil
+	return *result.Call, false, nil
 }
 
 // checkCallMediaKeyTarget allows a call media key only within a live call in
@@ -77,11 +78,20 @@ func (m *connManager) checkCallMediaKeyTarget(req MediaKeyRequest) error {
 	if uid == "" || clientID == "" || deviceID == "" || req.Device == deviceID {
 		return errCallMediaTarget
 	}
-	call, err := m.callMediaState(req.Scope.ID)
+	call, cached, err := m.callMediaState(req.Scope.ID, false)
 	if err != nil {
 		return err
 	}
-	return callMediaTargetAllowed(call, uid, clientID, deviceID, req.Principal, req.Device)
+	err = callMediaTargetAllowed(call, uid, clientID, deviceID, req.Principal, req.Device)
+	if err != nil && cached {
+		// A participant who answered after the cached state: ask the server
+		// once more before refusing. The check still fails closed.
+		if call, _, err = m.callMediaState(req.Scope.ID, true); err != nil {
+			return err
+		}
+		err = callMediaTargetAllowed(call, uid, clientID, deviceID, req.Principal, req.Device)
+	}
+	return err
 }
 
 // callMediaTargetAllowed is the pure check behind checkCallMediaKeyTarget.

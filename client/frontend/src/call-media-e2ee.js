@@ -204,7 +204,8 @@ export class CallMediaE2EE {
         await Promise.all(work);
     }
 
-    releasePeer(pc) { return this.session ? this.session.releasePeer(pc) : Promise.resolve(); }
+    // Always a promise: a stopped session returns nothing to release.
+    releasePeer(pc) { return Promise.resolve(this.session?.releasePeer(pc)); }
 
     status() { return this.lastStatus; }
 

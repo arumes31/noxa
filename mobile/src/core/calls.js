@@ -44,7 +44,8 @@ export class Calls extends EventTarget {
             adapter: mediaAdapter || { status: async () => ({ supported: false, reason: "server_outdated" }) },
             sessionFactory: mediaFactory,
             onStatus: () => this.#emit("state"),
-            onError: error => this.#emit("error", Object.assign(error instanceof Error ? error : new Error(String(error)), { code: error?.code || "e2ee" })),
+            // Without its media session the call cannot be heard: end it.
+            onError: error => this.#failEncryption(error),
         });
         this.conn = session.conn;
         this.uid = session.uniqueID;
@@ -432,14 +433,22 @@ export class Calls extends EventTarget {
         const call = this.call;
         try {
             await this.e2ee.start(call);
+            if (this.call?.id === call.id && !this.e2ee.active) throw Object.assign(new Error("encrypted media stopped"), { reason: "closed" });
             return this.call?.id === call.id;
         } catch (error) {
-            if (this.call?.id === call.id) {
-                this.#emit("error", Object.assign(error instanceof Error ? error : new Error(String(error)), { code: "e2ee", reason: error?.reason || "unavailable" }));
-                this.hangUp().catch(() => {});
-            }
+            if (this.call?.id === call.id) this.#failEncryption(error);
             return false;
         }
+    }
+
+    // One error event and one hang-up per call, whichever path fails first.
+    #failedCall = "";
+    #failEncryption(error) {
+        const id = this.call?.id;
+        if (!id || this.#failedCall === id) return;
+        this.#failedCall = id;
+        this.#emit("error", Object.assign(error instanceof Error ? error : new Error(String(error)), { code: "e2ee", reason: error?.reason || "unavailable" }));
+        this.hangUp().catch(() => {});
     }
 
     /** A delivered media-key control whose scope is a private call (app.js). */

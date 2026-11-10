@@ -179,3 +179,12 @@ test("a failed start leaves no session behind", async () => {
     assert.equal(e2ee.session, null);
     assert.equal(e2ee.receive(control()).reason, "pending");
 });
+
+test("releasePeer always returns a promise, also after the session stopped", async () => {
+    const log = [];
+    const e2ee = new CallMediaE2EE({ adapter: {}, sessionFactory: options => ({ ...fakeSession(log)(options), releasePeer: () => undefined }) });
+    await e2ee.start(call([alice, bob]));
+    await e2ee.releasePeer({});
+    e2ee.stop();
+    await e2ee.releasePeer({});
+});
