@@ -110,10 +110,16 @@ func (s *TCPServer) roleFileTransferInit(ctx context.Context, client *Client, ms
 		ctx = s.roleFileContext(ctx, client, msg.ChannelID)
 		var id, token string
 		var err error
+		var resumable bool
+		var resumeOffset int64
 		if msg.Direction == "upload" {
 			// Resource ceilings apply independently of role grants, including
 			// to the owner and Administrator.
-			id, token, err = s.deps.FileTransfer.InitUpload(ctx, msg.ChannelID, msg.Folder, msg.Name, msg.Size, client.uniqueID(), s.cfg.FileUserQuotaMB)
+			if resumer, ok := s.deps.FileTransfer.(ResumableUploadBackend); ok && msg.SHA256 != "" {
+				id, token, resumeOffset, resumable, err = resumer.InitResumableUpload(ctx, msg.ChannelID, msg.Folder, msg.Name, msg.Size, client.uniqueID(), s.cfg.FileUserQuotaMB, msg.SHA256)
+			} else {
+				id, token, err = s.deps.FileTransfer.InitUpload(ctx, msg.ChannelID, msg.Folder, msg.Name, msg.Size, client.uniqueID(), s.cfg.FileUserQuotaMB)
+			}
 		} else {
 			id, token, err = s.deps.FileTransfer.InitDownload(ctx, msg.ChannelID, msg.Folder, msg.Name)
 		}
@@ -121,6 +127,6 @@ func (s *TCPServer) roleFileTransferInit(ctx context.Context, client *Client, ms
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "file transfer unavailable")
 		}
 		fingerprint := s.deps.FileTransfer.Fingerprint()
-		return s.writeMessage(client, netproto.MsgFileTransferInitResponse, netproto.FileTransferInitResponse{TransferID: id, Token: token, Port: s.deps.FileTransfer.Port(), TLS: fingerprint != "", TLSFingerprint: fingerprint})
+		return s.writeMessage(client, netproto.MsgFileTransferInitResponse, netproto.FileTransferInitResponse{TransferID: id, Token: token, Port: s.deps.FileTransfer.Port(), TLS: fingerprint != "", TLSFingerprint: fingerprint, Resumable: resumable, ResumeOffset: resumeOffset})
 	})
 }

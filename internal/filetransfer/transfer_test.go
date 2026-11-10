@@ -242,7 +242,7 @@ func TestUploadRejectsSymlinkEscape(t *testing.T) {
 	}
 	s := New(Config{Addr: ":0", RootDir: rootDir}, newFakeFileStore(), nil)
 
-	err := s.receiveUpload(context.Background(), nil, &transfer{ChannelID: 7, Name: "escape.txt", Size: 1})
+	err := s.receiveUpload(context.Background(), nil, &transfer{ChannelID: 7, Name: "escape.txt", Size: 1}, nil, 0)
 	if err == nil {
 		t.Fatal("receiveUpload followed a directory symlink outside the blob root")
 	}

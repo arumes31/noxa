@@ -690,6 +690,25 @@ func run() (retErr error) {
 		Fingerprint:     tlsFP,
 	}, dbStore, logger)
 	ftServer.OnTransferComplete = m.IncFileTransfer
+	ftServer.SetOrphanPolicy(filetransfer.OrphanPolicy{
+		Disabled:          !cfg.FileOrphanCleanup,
+		DryRun:            cfg.FileOrphanDryRun,
+		Grace:             cfg.FileOrphanGrace,
+		DeleteMissingRows: cfg.FileOrphanDeleteMissingRows,
+	})
+	ftServer.OnOrphanSweep = func(r filetransfer.OrphanSweepResult) {
+		m.AddFileReconcile("stale_partial", r.StalePartials)
+		m.AddFileReconcile("orphan_blob", r.OrphanBlobs)
+		m.AddFileReconcile("missing_blob", r.MissingBlobs)
+		m.AddFileReconcile("row_removed", r.RowsRemoved)
+		m.AddFileReconcile("removal_failed", r.RemovalFailure)
+	}
+	// Stale upload partials and unreferenced blobs (61): bounded per tick,
+	// a full pass at most every six hours.
+	stopFileSweep := retention.Start(ctx, logger,
+		retention.Task{Name: "file storage reconcile", Run: ftServer.PruneOrphanedFiles},
+	)
+	defer stopFileSweep()
 	storageProbe := newCachedProbe(storageProbeTTL, time.Now, ftServer.CheckRoot)
 	if err := storageProbe.Check(context.Background()); err != nil {
 		logger.Warn("file storage root not writable, file transfers will fail",
