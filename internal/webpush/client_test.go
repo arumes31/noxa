@@ -67,3 +67,78 @@ func TestPublicAddr(t *testing.T) {
 		}
 	}
 }
+
+// TestDeliveryClientGuardsDestinationsWithEgressProxy: a configured proxy
+// must not disable the public-address check for destinations the proxy
+// function routes directly (NO_PROXY), nor accept non-public literals.
+func TestDeliveryClientGuardsDestinationsWithEgressProxy(t *testing.T) {
+	var proxied []string
+	proxyHit := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied = append(proxied, r.Host)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer proxyHit.Close()
+	proxyURL, err := url.Parse(proxyHit.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	internal := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("delivery reached a loopback service directly")
+	}))
+	defer internal.Close()
+	internalURL, err := url.Parse(internal.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Proxy everything except the internal host (a NO_PROXY entry).
+	proxyFn := func(req *http.Request) (*url.URL, error) {
+		if req.URL.Host == internalURL.Host {
+			return nil, nil
+		}
+		return proxyURL, nil
+	}
+	client := newDeliveryClient(proxyFn)
+
+	resp, err := client.Do(postRequest(t, internal.URL))
+	if err == nil {
+		_ = resp.Body.Close()
+	}
+	if !errors.Is(err, errDestinationNotPublic) {
+		t.Fatalf("direct loopback delivery with proxy configured err=%v", err)
+	}
+
+	for _, target := range []string{"http://127.0.0.1:9/x", "http://[::1]/x", "http://169.254.169.254/x", "http://localhost/x", "http://a.localhost./x"} {
+		resp, err := client.Do(postRequest(t, target))
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		if !errors.Is(err, errDestinationNotPublic) {
+			t.Fatalf("proxied %s err=%v", target, err)
+		}
+	}
+
+	// A public name still goes through the (loopback) proxy.
+	resp, err = client.Do(postRequest(t, "http://push.example/send"))
+	if err != nil {
+		t.Fatalf("proxied public delivery err=%v", err)
+	}
+	_ = resp.Body.Close()
+	if len(proxied) != 1 || proxied[0] != "push.example" {
+		t.Fatalf("proxy saw %v", proxied)
+	}
+}
+
+func TestProxyDialAddr(t *testing.T) {
+	for raw, want := range map[string]string{
+		"http://Proxy.Internal": "proxy.internal:80", "https://p:8443": "p:8443",
+		"socks5://10.0.0.5": "10.0.0.5:1080", "http://[fd00::1]:3128": "[fd00::1]:3128",
+	} {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := proxyDialAddr(u); got != want {
+			t.Errorf("proxyDialAddr(%s)=%s, want %s", raw, got, want)
+		}
+	}
+}
