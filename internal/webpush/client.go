@@ -1,11 +1,13 @@
 package webpush
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -58,19 +60,67 @@ func publicOnlyControl(_, address string, _ syscall.RawConn) error {
 // host.
 func noRedirects(*http.Request, []*http.Request) error { return errRedirect }
 
-func newDeliveryClient(proxy func(*http.Request) (*url.URL, error)) *http.Client {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	// With an operator-configured egress proxy the proxy performs the outbound
-	// connection; only direct connections are address-checked here.
-	if p, err := proxy(&http.Request{URL: &url.URL{Scheme: "https", Host: "push.example"}}); err != nil || p == nil {
-		dialer.Control = publicOnlyControl
+// proxyTargetAllowed screens the destination of a proxied delivery. The
+// egress proxy resolves and connects on our behalf, so the dial-time address
+// check cannot see the endpoint; reject what is non-public without DNS
+// (loopback names and non-public IP literals). Names that resolve inward are
+// left to the proxy's own destination policy.
+func proxyTargetAllowed(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return false
 	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return publicAddr(ip)
+	}
+	return true
+}
+
+// proxyDialAddr mirrors net/http's canonical proxy address (host:port with
+// the scheme's default port), which is what the transport dials.
+func proxyDialAddr(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		switch u.Scheme {
+		case "https":
+			port = "443"
+		case "socks5", "socks5h":
+			port = "1080"
+		default:
+			port = "80"
+		}
+	}
+	return strings.ToLower(net.JoinHostPort(u.Hostname(), port))
+}
+
+func newDeliveryClient(proxy func(*http.Request) (*url.URL, error)) *http.Client {
+	direct := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	guarded := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second, Control: publicOnlyControl}
+	// Only connections to an operator-configured egress proxy skip the
+	// address check; every other dial (including NO_PROXY destinations when
+	// a proxy is configured) stays public-only.
+	var proxies sync.Map
 	return &http.Client{
 		Timeout:       15 * time.Second,
 		CheckRedirect: noRedirects,
 		Transport: &http.Transport{
-			Proxy:                 proxy,
-			DialContext:           dialer.DialContext,
+			Proxy: func(req *http.Request) (*url.URL, error) {
+				p, err := proxy(req)
+				if err != nil || p == nil {
+					return p, err
+				}
+				if !proxyTargetAllowed(req.URL.Hostname()) {
+					return nil, errDestinationNotPublic
+				}
+				proxies.Store(proxyDialAddr(p), struct{}{})
+				return p, nil
+			},
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				if _, ok := proxies.Load(strings.ToLower(address)); ok {
+					return direct.DialContext(ctx, network, address)
+				}
+				return guarded.DialContext(ctx, network, address)
+			},
 			ForceAttemptHTTP2:     true,
 			MaxIdleConns:          32,
 			IdleConnTimeout:       90 * time.Second,

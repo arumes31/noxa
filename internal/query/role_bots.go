@@ -25,7 +25,7 @@ var commandScopes = map[string]string{
 	"serverconfig": auth.ScopeServerRead, "medialimits": auth.ScopeServerRead, "rulesquery": auth.ScopeServerRead,
 	"chatfilterquery": auth.ScopeServerRead, "customquery": auth.ScopeServerRead,
 	"serverconfigset": auth.ScopeServerManage, "medialimitsset": auth.ScopeServerManage, "chatfilterset": auth.ScopeServerManage,
-	"servertextset": auth.ScopeServerManage, "broadcast": auth.ScopeServerManage, "customchange": auth.ScopeServerManage,
+	"servertextset": auth.ScopeServerManage, "broadcast": auth.ScopeServerManage, "ingressshield": auth.ScopeServerManage, "ingressshieldset": auth.ScopeServerManage, "customchange": auth.ScopeServerManage,
 	"integrationscopes": auth.ScopeServerManage, "integrationscopesset": auth.ScopeServerManage,
 	"rolelist": auth.ScopeRolesRead, "rolemembers": auth.ScopeRolesRead, "accesscheck": auth.ScopeRolesRead,
 	"rolechange":    auth.ScopeRolesManage,

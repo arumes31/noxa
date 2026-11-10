@@ -52,6 +52,8 @@ export const activityShared=()=>false,isMuted=()=>false,syncMuted=()=>{},watchCa
 export const enqueue=()=>{},flush=async()=>{},showPending=async()=>{},waitingCount=async()=>0;
 export const announceRead=()=>{},closeAllNotifications=async()=>{},closeNotifications=()=>{},reportVisibility=()=>{},setBadge=()=>{},syncPush=async()=>({});
 export const addServer=()=>{};
+// (#52) reconnect jitter imported by app.js.
+export const takeShutdownJitterMs=()=>0,noteShutdownJitter=()=>{},clearShutdownJitter=()=>{};
 // noxa-olm-v1 consumer imports of app.js (this fixture server advertises no capability, so none opens).
 export const Msg={},signBundle=()=>({}),signReset=()=>({}),connectionTransport=()=>({}),verifyLinkBinding=()=>'',announcedBinding=()=>'',linkBindingFromStatus=()=>null,signKeyRecord=()=>'';
 export class RatchetConsumer {}

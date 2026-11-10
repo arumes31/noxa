@@ -88,7 +88,9 @@ test.beforeEach(async ({ page }) => {
         (await import("/src/modal.js")).initModalSystem();
         window.__studio = await import("/src/studio-ui.js");
         window.__video = await import("/src/video.js");
-        window.__studio.initStudio();
+        // The Studio button and startup sweep live in the eager launcher; the
+        // panel module above is the same instance the button loads on demand.
+        (await import("/src/studio-launcher.js")).initStudio();
         // Pixel probe: the average color at a point of the program or preview canvas.
         window.__pixel = (which, x = 0.5, y = 0.5) => {
             const session = window.__studio.studioSessionForTest();
@@ -781,3 +783,72 @@ test("a hidden program source's audio is not streamed; visibility applies to aud
     expect((await diagnostics(page)).routes).toEqual(["c1"]);
     expect(await publishedRMS(page)).toBeGreaterThan(0.05);
 });
+
+test("the program composites on WebGL and matches the scene layout", async ({ page }) => {
+    // Headless runs use a software rasteriser, which "auto" refuses; force it.
+    await page.evaluate(() => window.__studio.useStudioRendererForTest("webgl"));
+    const studio = await open(page);
+    await addDisplay(page, RED);
+    await addCamera(page, BLUE);
+    // Second source (camera) is added on top; put it in the right half.
+    await page.evaluate(() => {
+        const session = window.__studio.studioSessionForTest();
+        const scene = session.studio.scenes.find(s => s.id === session.studio.selected);
+        const [display, camera] = scene.sources;
+        Object.assign(display, { x: 0, y: 0, w: 0.5, h: 1 });
+        Object.assign(camera, { x: 0.5, y: 0, w: 0.5, h: 1 });
+    });
+    await studio.locator(".studio-transition").selectOption("cut");
+    await studio.getByRole("button", { name: "Take", exact: true }).click();
+    expect((await diagnostics(page)).renderer).toBe("webgl");
+    await expectPixel(page, "program", RED, 0.25, 0.5);
+    await expectPixel(page, "program", BLUE, 0.75, 0.5);
+});
+
+test("a lost WebGL context falls back to 2D without changing the published track", async ({ page }) => {
+    await page.evaluate(() => window.__studio.useStudioRendererForTest("webgl"));
+    const studio = await open(page);
+    await addDisplay(page, GREEN);
+    await studio.locator(".studio-transition").selectOption("cut");
+    await studio.getByRole("button", { name: "Take", exact: true }).click();
+    await expectPixel(page, "program", GREEN);
+    expect((await diagnostics(page)).renderer).toBe("webgl");
+    const trackID = await page.evaluate(() => {
+        const engine = window.__studio.studioSessionForTest().engine;
+        engine.outputStream().getVideoTracks()[0].stop(); // the publication's clone
+        const id = engine.captureTrack.id;
+        engine.gl.gl.getExtension("WEBGL_lose_context").loseContext();
+        return id;
+    });
+    await expect.poll(async () => (await diagnostics(page)).renderer, { timeout: 3000 }).toBe("2d");
+    // The 2D path keeps drawing the scene onto the same program canvas, so
+    // the one program track (and any publication of it) carries on.
+    await expectPixel(page, "program", GREEN);
+    const after = await page.evaluate(() => {
+        const engine = window.__studio.studioSessionForTest().engine;
+        return { id: engine.captureTrack.id, state: engine.captureTrack.readyState };
+    });
+    expect(after).toEqual({ id: trackID, state: "live" });
+});
+
+for (const [name, expected] of [["ANGLE (Google, Vulkan (SwiftShader Device (Subzero)), SwiftShader driver)", "2d"],
+    ["ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Direct3D11)", "webgl"]]) {
+    test(`auto mode picks ${expected} when WebGL reports "${name.slice(0, 32)}…"`, async ({ page }) => {
+        // The reported renderer name is the only input that differs between a
+        // software rasteriser and a GPU, so the test controls exactly that.
+        await page.evaluate(rendererName => {
+            const original = WebGL2RenderingContext.prototype.getParameter;
+            WebGL2RenderingContext.prototype.getParameter = function (parameter) {
+                const info = this.getExtension("WEBGL_debug_renderer_info");
+                if (parameter === this.RENDERER || (info && parameter === info.UNMASKED_RENDERER_WEBGL)) return rendererName;
+                return original.call(this, parameter);
+            };
+        }, name);
+        const studio = await open(page);
+        await addDisplay(page, RED);
+        await studio.locator(".studio-transition").selectOption("cut");
+        await studio.getByRole("button", { name: "Take", exact: true }).click();
+        expect((await diagnostics(page)).renderer).toBe(expected);
+        await expectPixel(page, "program", RED);
+    });
+}

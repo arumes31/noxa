@@ -406,6 +406,13 @@ only.
   server's video limits); **Stop** ends it. Closing the panel while live keeps
   the program on air. Studio cannot go live while another screen share is
   running.
+* **GPU compositing**: on a hardware GPU the program is composited with
+  WebGL2 (on an Intel Iris Xe: about 0.5 ms of main-thread time per frame
+  instead of 4 ms with the 2D canvas; the delivered frame rate is the same).
+  Software WebGL (remote desktops, machines without GPU acceleration) is far
+  slower there, so Studio keeps the 2D canvas on it, and it also switches to
+  2D if GPU frames stay slow or the graphics context is lost. The published
+  track never changes when it switches.
 * **Audio**: only screen-capture audio of sources that are visible on the
   program, with audio enabled, is sent, and the routing changes only with
   **Take**. The microphone is never mixed in.
@@ -812,7 +819,12 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_METRICS_ALLOW_REMOTE` | `false` | Permit remote `/metrics` requests; without this opt-in, only IPv4/IPv6 loopback is accepted |
 | `NOXA_PPROF_ENABLED` | `false` | Enable runtime `/debug/pprof/` diagnostics; every pprof endpoint remains GET-only and direct-loopback-only |
 | `NOXA_SHUTDOWN_TIMEOUT` | `30s` | Positive total grace period shared by all services during orderly shutdown |
-| `NOXA_SHUTDOWN_GRACE_PERIOD` | `0s` | Announcement window before an orderly shutdown (max `10m`). After the first SIGTERM/interrupt, readiness turns unhealthy, clients get a countdown (repeated at 5 min, 1 min, 30 s and 10 s left, and sent to sessions that log in during the period) and the server keeps serving; a second signal skips the rest of the wait, and the orderly shutdown then completes within `NOXA_SHUTDOWN_TIMEOUT`. Keep your orchestrator's stop timeout (e.g. Compose `stop_grace_period`) above grace period plus shutdown timeout |
+| `NOXA_SHUTDOWN_GRACE_PERIOD` | `0s` | Announcement window before an orderly shutdown (max `10m`). After the first SIGTERM/interrupt, readiness turns unhealthy, clients get a countdown (repeated at 5 min, 1 min, 30 s and 10 s left, with a reconnect window so clients return spread over 5–60 seconds after the restart) and connected sessions keep working. New logins are refused during the period: updated clients are told when to come back and retry then, older clients see a closed connection and retry as usual; a second signal skips the rest of the wait, and the orderly shutdown then completes within `NOXA_SHUTDOWN_TIMEOUT`. Keep your orchestrator's stop timeout (e.g. Compose `stop_grace_period`) above grace period plus shutdown timeout |
+| `NOXA_INGRESS_SHIELD` | `off` | Anti-raid shield: `off`, `auto` (raised by a connection surge) or `on`. While raised, every login first solves a SHA-256 proof-of-work challenge bound to its connection (desktop and web app solve it automatically, the web app in a background worker); clients without support are refused with "update noXa". The pre-auth connection caps still apply, and linking a new device waits until the shield is lowered |
+| `NOXA_INGRESS_SHIELD_ARRIVALS_PER_SECOND` | `30` | `auto` surge threshold: new control connections within one second |
+| `NOXA_INGRESS_SHIELD_DISTINCT_IPS` | `10` | `auto` surge threshold: distinct source addresses among them (IPv6 counted per /64) |
+| `NOXA_INGRESS_SHIELD_DIFFICULTY` | `18` | Proof-of-work leading zero bits, `12`–`24` (18 ≈ 260k hashes, well under a second on a phone) |
+| `NOXA_INGRESS_SHIELD_HOLD` | `5m` | How long an automatically raised shield stays up after the last surge second (`1m`–`1h`) |
 | `NOXA_DATABASE_URL` | `postgres://...` | PostgreSQL connection URL |
 | `NOXA_REDIS_ADDR` | `localhost:6379` | Optional Redis address for pub/sub fanout |
 | `NOXA_REDIS_ENABLED` | `true` | Set `false` to run without Redis; the supplied Compose stack starts Redis by default |
@@ -1167,6 +1179,7 @@ enabling Query SSH.
 | `memberkick` | `data=<escaped_JSON_with_client_id>` | Remove a member from the server |
 | `memberban` | `data=<escaped_JSON_with_client_id_and_duration_seconds>` | Ban a connected member |
 | `broadcast` | `data=<escaped_JSON_with_text>` | Send a one-time encrypted alert (up to 2048 bytes of text, and the escaped command must fit the 4096-byte line limit) to every connected member allowed to view the server (server-level `view_channel`); requires `manage_server`, is audited and is not stored or replayed. Delivery is best effort, like other server-wide events |
+| `ingressshield` / `ingressshieldset` | — / `data=<escaped_JSON_with_override>` | Show the anti-raid shield (mode, operator override, whether it is raised, until when, difficulty), or force it with `{"override":"on"}` / `{"override":"off"}` and return it to the configured mode with `{"override":"auto"}`; requires `manage_server`, and every change is audited |
 | `messagebulkdelete` | `data=<escaped_JSON_with_channel_id_and_message_ids>` | Delete up to 100 messages of one channel (`channel_id` 0 = server chat) in one transaction and return `deleted` and `not_found` IDs. Own messages need `view_channel`, other members' messages `manage_messages` in that channel; one message the account may not delete rejects the whole request. Members get the usual delete events; deleting others' messages is audited |
 | `integrationscopes` / `integrationscopesset` | `data=<escaped_JSON_with_unique_id>` / `data={"unique_id":…,"scopes":[…]}` or `{"unique_id":…,"full":true}` | Read or replace an integration account's scope ceiling (needs `manage_server`, audited) |
 
@@ -1287,6 +1300,62 @@ the 720p30 profile. On an idle development machine, set
 `NOXA_BROWSER_MEDIA_PERF=1` to include the more demanding 1080p60 profile; its
 observed frame rate still depends on software-encoder and host capacity.
 
+### Performance measurements (2026-11-07)
+
+These measurements decided three proposals; none of them changed code. Rerun them before revisiting the decisions.
+
+**Media frame encryption (WebCrypto vs. a WebAssembly cipher).** The script
+`node client/frontend/scripts/bench-media-e2ee.mjs` measures the real pinned LiveKit
+e2ee worker with the noXa wrapper. Each frame is timed from enqueue to output
+(Node 26 on a Windows desktop CPU, 300 frames per case):
+
+| Frame | Encrypt p50 / p95 | Decrypt p50 / p95 |
+|---|---|---|
+| Opus 20 ms (160 B) | 0.09 / 0.17 ms | 0.10 / 0.17 ms |
+| VP8 1080p60 delta (16.7 KB) | 0.11 / 0.26 ms | 0.11 / 0.23 ms |
+| VP8 1080p60 keyframe (133 KB) | 0.34 / 0.98 ms | 0.23 / 0.62 ms |
+| VP8 1440p60 keyframe (266 KB) | 0.43 / 1.41 ms | 0.33 / 0.98 ms |
+
+The same frames through Chromium's own WebCrypto AES-GCM take no more than 0.1 ms
+at p95 for 1080p delta frames, which is Chromium's timer resolution. At p95 a 1080p60 delta frame costs
+about 1.6% of the frame budget to encrypt, and about 3% to encrypt and decrypt
+together. Keyframes, sent roughly every 2 s, cost under 10% for both. The
+decision rule was to look at a WebAssembly cipher only if 1080p60 video frames
+exceeded about 1 ms at p95. They don't, so the maintained LiveKit cryptor stays.
+
+**Video pacing gain.** The real pacer was simulated under virtual time at gains
+1.0, 1.25, 1.5 and 2.0. A modelled bottleneck link (a drop-tail queue with 100 ms of buffer)
+ran at 1.0x, 1.2x and 1.5x the congestion estimate:
+
+- A higher gain only lowers end-to-end delay when the link has spare capacity above
+  the estimate. At 1.0–1.2x it produces loss at the bottleneck: 32–293 packets
+  dropped per 10 s at gains 1.5–2.0.
+- A lower gain avoids that loss but adds 150–280 ms of p95 queueing. At 1.0–1.25 the pacer
+  starts dropping expired packets itself after the estimate falls.
+- A dynamic gain cannot tell the two cases apart without the bottleneck feedback
+  that GCC already turns into the estimate.
+- When the estimate drops below the source rate, the queue grows to seconds at
+  any gain. Fixing that is the sender's job (resolution and frame-rate adaptation).
+
+The static gain of 1.5 therefore stays (`internal/webrtc/media_pacer.go`).
+
+**Database indexes.** A scratch database seeded with 1M Olm messages and 2M
+deliveries, of which 2,000 were pending, ran the two pending-delivery sweeps:
+
+- Both use the existing partial index `olm_delivery_pending_sender`
+  (`WHERE state='pending'`) and read only pending rows: 207 buffers.
+- Warm, they take 14 ms and 10 ms. The first cold run took about 150 ms, mostly JIT start-up and uncached pages.
+
+The other hot paths are already covered by keys:
+
+- Chat history uses `(channel_id, id)`.
+- Private conversations use `(conversation_id, from_uid, client_reference)` and `(message_id, recipient_uid)`.
+- Olm copies use `(message_id, device_id)`.
+- `server_traffic_buckets` is small and indexed.
+- `audit_log` is pruned by monthly partitions.
+
+No index was added.
+
 ---
 
 ## 📂 Project Structure
@@ -1367,6 +1436,12 @@ budget, honouring `Retry-After`), `gone` (expired subscription, removed) and
 `failed`. Incoming webhook responses carry `X-RateLimit-Limit` (5 per
 3 seconds per hook), `X-RateLimit-Remaining` and `X-RateLimit-Reset`
 (seconds); a 429 also sets `Retry-After` to the real reset time.
+
+`noxa_ingress_shield_events_total{event}` counts the anti-raid shield:
+`raised` and `lowered` (also written to the audit log with their cause),
+`challenged`, `solved` and `failed` logins, and `rejected` clients that cannot
+solve a challenge. A raised shield with few `solved` events means a flood
+that is not finishing logins.
 
 `noxa_control_disconnects_total{transport, reason}` counts closed control
 connections (`tcp` or `ws`) by fixed reason: `eof`, `unexpected_eof`,

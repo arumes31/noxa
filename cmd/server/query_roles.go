@@ -118,6 +118,14 @@ func (q *queryBackend) SetIntegrationChatFilters(ctx context.Context, principal 
 	return q.tcp.SetIntegrationChatFilters(ctx, principal, patch)
 }
 
+func (q *queryBackend) IntegrationIngressShield(ctx context.Context, principal auth.IntegrationPrincipal) (netproto.IngressShieldStatus, error) {
+	return q.tcp.IntegrationIngressShield(ctx, principal)
+}
+
+func (q *queryBackend) SetIntegrationIngressShield(ctx context.Context, principal auth.IntegrationPrincipal, request netproto.IngressShieldSet) (netproto.IngressShieldStatus, error) {
+	return q.tcp.SetIntegrationIngressShield(ctx, principal, request)
+}
+
 func (q *queryBackend) BroadcastIntegrationAlert(ctx context.Context, principal auth.IntegrationPrincipal, request netproto.ServerBroadcast) (netproto.ServerBroadcastResult, error) {
 	return q.tcp.BroadcastIntegrationAlert(ctx, principal, request)
 }
