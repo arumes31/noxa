@@ -16,6 +16,9 @@ export const RECONNECT_MAX_ATTEMPTS = Infinity;
 export function reconnectDecision({ error = "", terminal = false, attempts = 0, maxAttempts = RECONNECT_MAX_ATTEMPTS } = {}) {
     if (terminal) return { retry: false, reason: "terminal" };
     const failure = loginFailure(error);
+    // (#52) A restarting server says when to come back.
+    // Repeated refusals still back off: never sooner than the usual delay.
+    if (failure.kind === "restarting") return { retry: true, reason: "restarting", failure, delay: Math.max(failure.retryAfter * 1000, reconnectDelay(attempts + 1)) };
     if (connectFailureIsDefinitive(failure)) return { retry: false, reason: "authentication", failure };
     if (attempts >= maxAttempts) return { retry: false, reason: "exhausted", failure };
     return { retry: true, reason: "network", failure, delay: reconnectDelay(attempts + 1) };
@@ -37,11 +40,11 @@ export function createTabReconnects(options) {
         entries.delete(tabID);
         options.changed?.(tabID, null);
     }
-    function schedule(entry) {
+    function schedule(entry, nextDelay) {
         if (!current(entry)) return;
         if (!options.enabled() && !entry.manual) { cancel(entry.tabID); return; }
         entry.attempts++;
-        const delay = entry.immediate ? 0 : (options.delay || reconnectDelay)(entry.attempts);
+        const delay = entry.immediate ? 0 : nextDelay ?? (options.delay || reconnectDelay)(entry.attempts, entry);
         entry.immediate = false;
         entry.remaining = Math.ceil(delay / 1000);
         options.scheduled?.(entry.tabID, entry);
@@ -89,7 +92,7 @@ export function createTabReconnects(options) {
                 options.stopped?.(entry.tabID, error, decision.reason);
                 return;
             }
-            schedule(entry);
+            schedule(entry, decision.reason === "restarting" ? decision.delay : undefined);
         }, delay);
         notify(entry);
     }

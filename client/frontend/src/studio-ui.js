@@ -25,12 +25,14 @@ import {
 } from "./studio-state.js";
 import { createCaptureRegistry } from "./studio-captures.js";
 import { createAssetStore, MAX_IMAGE_BYTES, StudioImageError } from "./studio-assets.js";
-import { studioLayoutKey, studioAssetDB, dropLegacyStudio, sweepOrphanStudio, studioStoredIdentities } from "./studio-storage.js";
+import { studioLayoutKey, studioAssetDB, dropLegacyStudio } from "./studio-storage.js";
 import { createStudioAudio } from "./studio-audio.js";
 import { StudioEngine, outputSize, STUDIO_FPS } from "./studio-compositor.js";
 import "./studio.css";
 
 const V = () => window.__noxa;
+// Program renderer for new sessions; tests may force one.
+let rendererOverride = "auto";
 let session = null;
 let panel = null;
 let panelID = 0;
@@ -71,7 +73,7 @@ function createSession() {
     const assetDB = studioAssetDB(uid);
     const assets = assetDB ? createAssetStore({ name: assetDB }) : createAssetStore({ indexedDB: null });
     const { width, height } = outputSize(V()?.state?.mediaLimits);
-    const engine = new StudioEngine({ registry, assets, width, height, fps: STUDIO_FPS,
+    const engine = new StudioEngine({ registry, assets, width, height, fps: STUDIO_FPS, renderer: rendererOverride,
         label: source => source.kind === "image" ? t("studio.sourceUnavailable") : t(`studio.state.${registry.state(source.capture)}`) });
     const studio = loadStudio(uid);
     session = { id, uid, registry, assets, engine, audio: null, studio, live: false, starting: false,
@@ -645,19 +647,6 @@ globalThis.addEventListener?.("noxa-identity-deleted", event => {
     if (session && event?.detail?.uid && session.uid === event.detail.uid) disposeStudio();
 });
 
-export function initStudio() {
-    // Finish a Studio wipe that an identity deletion could not complete
-    // (the webview closed after the native deletion committed).
-    // Identities are listed only when some Studio data is stored at all.
-    void studioStoredIdentities().then(owners => owners.length ? window.go?.main?.App?.ListIdentities?.() : null).then(entries => entries && sweepOrphanStudio(entries)).catch(() => {});
-    const bar = document.querySelector("#voice-bar .voice-buttons");
-    if (!bar || document.getElementById("voice-studio")) return;
-    const button = element("button", { type: "button", id: "voice-studio", class: "voice-control", onclick: () => openStudio() });
-    labelButton(button, "streamLive", t("studio.open"));
-    button.setAttribute("aria-label", t("studio.openHelp"));
-    button.title = t("studio.openHelp");
-    (bar.querySelector(".voice-secondary-actions") || bar).append(button);
-}
 
 // Test and diagnostics view of the current session (no media handles).
 export function studioDiagnostics() {
@@ -666,8 +655,14 @@ export function studioDiagnostics() {
         live: session.live, scene: session.studio.selected, program: session.engine.live?.id || "",
         captures: session.registry.ids().map(id => ({ id, refs: session.registry.refs(id), state: session.registry.state(id) })),
         routes: session.audio?.routed() || [], transitioning: session.engine.transitioning,
-        width: session.width, height: session.height,
+        width: session.width, height: session.height, renderer: session.engine.rendererKind,
     };
+}
+
+// Test hook: force the program renderer ("auto", "webgl" or "2d") for
+// sessions opened afterwards.
+export function useStudioRendererForTest(kind) {
+    rendererOverride = ["auto", "webgl", "2d"].includes(kind) ? kind : "auto";
 }
 
 // Test hook: the live session internals (engine canvases, registry).

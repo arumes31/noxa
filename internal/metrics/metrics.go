@@ -39,6 +39,7 @@ type Sink interface {
 	IncChatCryptoFailure(operation string)
 	IncPushDelivery(result string)
 	AddFileReconcile(action string, n int)
+	IncIngressShield(event string)
 }
 
 // RegisterDBPool exports database/sql pool pressure so MaxOpenConns,
@@ -92,6 +93,7 @@ type Metrics struct {
 	chatCryptoFailure *prometheus.CounterVec
 	pushDeliveries    *prometheus.CounterVec
 	fileReconcile     *prometheus.CounterVec
+	ingressShield     *prometheus.CounterVec
 	readinessDuration *prometheus.HistogramVec
 	broadcastDuration prometheus.Histogram
 	broadcastBacklog  prometheus.Histogram
@@ -142,6 +144,10 @@ func New() *Metrics {
 			Namespace: "noxa", Name: "file_reconcile_total",
 			Help: "File storage sweep results: stale_partial, orphan_blob, missing_blob, row_removed, removal_failed.",
 		}, []string{"action"}),
+		ingressShield: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "noxa", Name: "ingress_shield_events_total",
+			Help: "Anti-raid shield events: raised, lowered, challenged, solved, failed or rejected.",
+		}, []string{"event"}),
 		pushDeliveries: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "noxa", Name: "push_deliveries_total",
 			Help: "Web Push delivery attempts by result: ok, retry, gone or failed.",
@@ -207,7 +213,7 @@ func New() *Metrics {
 		}, func() float64 { return nonNegative(m.currentRecorderSessionCount()) }),
 		m.udpPackets, m.udpDropped, m.udpRateLimited, m.tcpConnections,
 		m.chatMessages, m.rtpForwarded, m.fileTransfers, m.authFailures, m.controlDisconnect,
-		m.recordingErrors, m.chatCryptoFailure, m.pushDeliveries, m.fileReconcile, m.readinessDuration,
+		m.recordingErrors, m.chatCryptoFailure, m.pushDeliveries, m.fileReconcile, m.ingressShield, m.readinessDuration,
 		m.broadcastDuration, m.broadcastBacklog, m.buildInfo,
 	)
 	m.buildInfo.WithLabelValues(version.String(), version.Commit).Set(1)
@@ -256,6 +262,15 @@ func (m *Metrics) AddFileReconcile(action string, n int) {
 	if n > 0 {
 		m.fileReconcile.WithLabelValues(action).Add(float64(n))
 	}
+}
+
+func (m *Metrics) IncIngressShield(event string) {
+	switch event {
+	case "raised", "lowered", "challenged", "solved", "failed", "rejected":
+	default:
+		event = "unknown"
+	}
+	m.ingressShield.WithLabelValues(event).Inc()
 }
 
 func (m *Metrics) IncPushDelivery(result string) {
@@ -523,3 +538,4 @@ func (Noop) IncRecordingError(string)            {}
 func (Noop) IncChatCryptoFailure(string)         {}
 func (Noop) IncPushDelivery(string)              {}
 func (Noop) AddFileReconcile(string, int)        {}
+func (Noop) IncIngressShield(string)             {}

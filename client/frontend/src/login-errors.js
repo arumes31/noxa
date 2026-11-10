@@ -29,13 +29,17 @@ export function loginFailure(error, request = {}) {
     if (reason.startsWith("this server needs an update: it does not support secure sign-in")) return { kind: "serverOutdated" };
     // Authorization (a known identity lacking a right) is not authentication.
     if (/^(permission denied|forbidden|not authorized|unauthorized|access denied|insufficient permission|registration required|guests are not allowed|guest access is disabled|invite required|invitation required)\b/.test(reason)) return { kind: "permission" };
+    // (#52) Sent by a server during its shutdown grace period.
+    const restarting = /^server is restarting; try again in ([0-9]{1,6}) seconds$/.exec(reason);
+    if (restarting) return { kind: "restarting", retryAfter: Math.min(Math.max(Number(restarting[1]), 1), 3600) };
+    if (reason === "the server is under heavy load; update noxa to connect") return { kind: "version" };
     return { kind: "unknown" };
 }
 
 // Coarse category for the connect dialog and support logs. Every kind maps to
 // exactly one category so the UI can show a label and one next step.
 const FAILURE_CATEGORIES = {
-    dns: "dns", certificate: "tls", network: "network", permission: "permission",
+    dns: "dns", certificate: "tls", network: "network", restarting: "network", permission: "permission",
     serverPassword: "authentication", account: "authentication", authentication: "authentication", banned: "authentication", rateLimit: "authentication", savedPassword: "authentication",
     minimumVersion: "version", version: "version", serverOutdated: "version",
     addressRequired: "input", nameRequired: "input", displayName: "input",
@@ -78,7 +82,7 @@ export function createLoginFeedback($) {
             badge.textContent = t(`login.category.${category}`); area.append(badge);
         }
         const message = document.createElement("p"); message.textContent = t(`login.failure.${failure.kind}`, failure); area.append(message);
-        const action = t(`login.recovery.${failure.kind}`);
+        const action = t(`login.recovery.${failure.kind}`, failure);
         const field = failure.field && $(failure.field);
         if (field) {
             const hint = document.createElement("small"); hint.id = `${field.id}-error`; hint.className = "login-field-error"; hint.textContent = action;

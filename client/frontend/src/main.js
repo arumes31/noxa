@@ -53,10 +53,10 @@ import "@fontsource-variable/outfit";
 import "@fontsource-variable/jetbrains-mono";
 import { initMenu } from "./menu.js";
 import { updateLocalSettings } from "./settings-store.js";
-import { initSettingsUI } from "./settings-ui.js";
+import { installSettingsLauncher } from "./settings-loader.js";
 import { initGamingOverlay, noteOverlayChat } from "./gaming-overlay.js";
 import { initChannelUndocking } from "./call-undocking.js";
-import { initStudio, disposeStudio } from "./studio-ui.js";
+import { initStudio, disposeStudio } from "./studio-launcher.js";
 import { refreshVoicePlayback } from "./voice-messages.js";
 import { discussionChanged, viewedDiscussionThread } from "./discussions.js";
 import { initClientInfo } from "./clientinfo.js";
@@ -949,8 +949,26 @@ function showReconnectNotice(tabID) {
     sysMsg(message);
     toast(message, "warn");
 }
+// (#52) A scheduled shutdown names a jitter window; the first reconnect after
+// it waits a random part of that window so clients do not all return at once.
+// Hints come from every tab, also background ones (tab_shutdown_hint), and
+// expire a few minutes after the announced shutdown.
+const shutdownJitter = new Map(); // tabID -> { seconds, expires }
+window.runtime.EventsOn("tab_shutdown_hint", hint => {
+    const tabID = String(hint?.tab_id || "");
+    const seconds = Math.min(60, Math.max(0, Math.round(Number(hint?.reconnect_jitter) || 0)));
+    const until = Math.min(600, Math.max(1, Math.round(Number(hint?.seconds) || 0)));
+    if (tabID && seconds) shutdownJitter.set(tabID, { seconds, expires: Date.now() + (until + 300) * 1000 });
+});
 const tabReconnects = createTabReconnects({
     enabled: autoReconnectEnabled,
+    delay(attempt, entry) {
+        const base = reconnectDelay(attempt);
+        const hint = shutdownJitter.get(entry?.tabID);
+        shutdownJitter.delete(entry?.tabID); // one reconnect series uses a hint once
+        const jitter = attempt === 1 && hint && hint.expires > Date.now() ? hint.seconds : 0;
+        return base + Math.floor(Math.random() * jitter * 1000);
+    },
     connect: (tabID, target) => window.go.main.App.ReconnectTab(tabID, target.pw || "", target.spw || ""),
     warning(tabID, error) {
         reconnectNotices.set(tabID, { key: "runtime.rejoinFailed", error });
@@ -3781,7 +3799,7 @@ initModalSystem();
 initSounds();
 initClosingAudio();
 initMenu();
-initSettingsUI();
+installSettingsLauncher();
 void initGamingOverlay();
 initChannelUndocking();
 initStudio();

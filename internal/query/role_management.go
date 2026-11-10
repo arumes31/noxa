@@ -44,6 +44,7 @@ const roleHelpText = "authorization_model=roles-v1\n" +
 	"chatfilterquery\nchatfilterset data=<escaped_partial_chat_filters>\n" +
 	"servertextset data=<escaped_JSON_with_key_and_value>\n" +
 	"broadcast data=<escaped_JSON_with_text>\n" +
+	"ingressshield\ningressshieldset data=<escaped_JSON_with_override_on_off_or_auto>\n" +
 	"messagebulkdelete data=<escaped_JSON_with_channel_id_and_message_ids>\n" +
 	"integrationscopes data=<escaped_JSON_with_unique_id>\n" +
 	"integrationscopesset data=<escaped_JSON_with_unique_id_and_scopes_or_full>\n" +
@@ -70,6 +71,9 @@ func (s *Server) executeRoleCommand(ctx context.Context, sess *session, backend 
 	}
 	if cmd.name == "broadcast" {
 		return s.executeRoleBroadcast(ctx, sess, backend, cmd)
+	}
+	if cmd.name == "ingressshield" || cmd.name == "ingressshieldset" {
+		return s.executeRoleIngressShield(ctx, sess, backend, cmd)
 	}
 	if cmd.name == "chatfilterquery" || cmd.name == "chatfilterset" {
 		return s.executeRoleFilters(ctx, sess, backend, cmd)

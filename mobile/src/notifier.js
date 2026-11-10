@@ -4,6 +4,7 @@
 // filters the server applies while the app is closed. app.js asks
 // decide() for every incoming message; everything else follows app and
 // session events.
+import { noteShutdownJitter } from "./core/reconnect-hint.js";
 import { excerpt } from "./core/search.js";
 import { ActivityLog } from "./core/activity.js";
 import { channelEvent, decide, pushFilters } from "./core/notify-policy.js";
@@ -179,6 +180,7 @@ class Notifier {
     #serverEvent({ type, data }) {
         const session = this.session;
         if (type === "server_shutdown_scheduled" || type === "server_shutdown") {
+            if (type === "server_shutdown_scheduled") noteShutdownJitter(data?.reconnect_jitter, data?.seconds);
             toast(shutdownNotice(type, data), "warn");
             return;
         }
