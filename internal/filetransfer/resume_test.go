@@ -224,3 +224,62 @@ func TestPartialNamesAreRecognized(t *testing.T) {
 		t.Fatal("two uploaders share a partial")
 	}
 }
+
+func TestAbandonedReservationsDoNotBlockResume(t *testing.T) {
+	s := New(Config{Addr: "127.0.0.1:0", RootDir: t.TempDir(), MaxSizeMB: 1}, newFakeFileStore(), nil)
+	ctx := context.Background()
+	// A refused token keeps no reservation.
+	if _, _, _, _, err := s.InitResumableUpload(ctx, 7, "", "huge.bin", 5<<20, "uid-1", 0, sha256Hex([]byte("huge"))); err == nil {
+		t.Fatal("an oversized upload was issued")
+	}
+	if len(s.partials) != 0 {
+		t.Fatalf("refused upload left %d reservations", len(s.partials))
+	}
+	// Tokens issued but never used expire; their reservations stop counting.
+	for i := 0; i < maxResumablePartialsPerUploader; i++ {
+		name := "f" + string(rune('a'+i)) + ".bin"
+		if _, _, _, resumable, err := s.InitResumableUpload(ctx, 7, "", name, 10, "uid-1", 0, sha256Hex([]byte(name))); err != nil || !resumable {
+			t.Fatalf("upload %d: %v resumable=%v", i, err, resumable)
+		}
+	}
+	s.mu.Lock()
+	for _, tr := range s.transfers {
+		tr.Expires = time.Now().Add(-time.Second)
+	}
+	s.mu.Unlock()
+	if _, _, _, resumable, err := s.InitResumableUpload(ctx, 7, "", "next.bin", 10, "uid-1", 0, sha256Hex([]byte("next"))); err != nil || !resumable {
+		t.Fatalf("expired reservations still block resume: %v resumable=%v", err, resumable)
+	}
+	if len(s.partials) != 1 {
+		t.Fatalf("registry holds %d entries, want only the live reservation", len(s.partials))
+	}
+}
+
+func TestReservationsWithPartialsOnDiskSurvivePruning(t *testing.T) {
+	s := New(Config{Addr: "127.0.0.1:0", RootDir: t.TempDir()}, newFakeFileStore(), nil)
+	ctx := context.Background()
+	sum := sha256Hex([]byte("kept"))
+	if _, _, _, resumable, err := s.InitResumableUpload(ctx, 7, "", "kept.bin", 10, "uid-1", 0, sum); err != nil || !resumable {
+		t.Fatal(err)
+	}
+	rel := resumablePartialPath(7, "", "kept.bin", "uid-1", 10, sum)
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(s.cfg.RootDir, rel)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.cfg.RootDir, rel), []byte("half"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	for _, tr := range s.transfers {
+		tr.Expires = time.Now().Add(-time.Second)
+	}
+	s.mu.Unlock()
+	s.pruneIdlePartials("", time.Now())
+	if _, ok := s.partials[rel]; !ok {
+		t.Fatal("a partial with bytes on disk lost its reservation")
+	}
+	_, _, offset, resumable, err := s.InitResumableUpload(ctx, 7, "", "kept.bin", 10, "uid-1", 0, sum)
+	if err != nil || !resumable || offset != 4 {
+		t.Fatalf("resume = %v resumable=%v offset=%d, want 4", err, resumable, offset)
+	}
+}

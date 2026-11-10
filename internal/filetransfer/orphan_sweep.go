@@ -131,6 +131,7 @@ func (s *Server) PruneOrphanedFiles(ctx context.Context, now time.Time) error {
 			s.sweep.lastPass = s.sweep.total
 			result := s.sweep.total
 			s.mu.Unlock()
+			s.pruneIdlePartials("", now)
 			s.reportOrphanPass(result)
 			return errors.Join(errs...)
 		}
@@ -139,7 +140,15 @@ func (s *Server) PruneOrphanedFiles(ctx context.Context, now time.Time) error {
 
 		result, err := s.sweepChannel(ctx, channelID, now, policy)
 		if err != nil && ctx.Err() != nil {
-			break // resume this channel on the next tick
+			// The channel restarts on the next tick. What this tick already
+			// removed will not be found again, so count it now; a dry run
+			// removed nothing and would count the same files twice.
+			if !policy.DryRun {
+				s.mu.Lock()
+				s.sweep.total.add(result)
+				s.mu.Unlock()
+			}
+			break
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("channel %d: %w", channelID, err))

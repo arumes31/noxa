@@ -235,3 +235,16 @@ func TestSplitBlobPath(t *testing.T) {
 		}
 	}
 }
+
+func TestOrphanSweepCountsRemovalsOfAnInterruptedChannel(t *testing.T) {
+	s := New(Config{Addr: "127.0.0.1:0", RootDir: t.TempDir()}, newFakeFileStore(), nil)
+	placeFile(t, s, "7/a.bin", 48*time.Hour)
+	result := OrphanSweepResult{OrphanBlobs: 1, OrphanBytes: 9}
+	s.mu.Lock()
+	s.sweep.total.add(result)
+	got := s.sweep.total
+	s.mu.Unlock()
+	if got.OrphanBlobs != 1 || got.OrphanBytes != 9 {
+		t.Fatalf("total = %+v", got)
+	}
+}

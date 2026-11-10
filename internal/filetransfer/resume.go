@@ -139,6 +139,9 @@ func (s *Server) InitResumableUpload(ctx context.Context, channelID int64, folde
 	}
 	id, token, err := s.initUpload(ctx, channelID, folder, name, size, uploader, uploaderQuotaMB, complete)
 	if err != nil {
+		// A refused token must not keep a reservation for a partial that
+		// was never written.
+		s.pruneIdlePartials(uploader, time.Now())
 		return "", "", 0, false, err
 	}
 	if !resumable {
@@ -150,6 +153,9 @@ func (s *Server) InitResumableUpload(ctx context.Context, channelID int64, folde
 // partialOffset reports the bytes already held for path and whether this
 // uploader may keep another resumable partial.
 func (s *Server) partialOffset(channelID int64, path, uploader string, size, uploaderQuotaMB int64) (int64, bool) {
+	// Reservations whose token expired unused, or whose partial is gone,
+	// must not count against this uploader's limit.
+	s.pruneIdlePartials(uploader, time.Now())
 	var held int64
 	if root, err := s.openBlobRoot(); err == nil {
 		if info, statErr := root.Lstat(path); statErr == nil && info.Mode().IsRegular() {
@@ -179,8 +185,9 @@ func (s *Server) partialOffset(channelID int64, path, uploader string, size, upl
 	if count >= maxResumablePartialsPerUploader {
 		return 0, false
 	}
-	// Partials are not charged to the quota until they are committed, so a
-	// user cannot keep more half-uploaded bytes than their quota allows.
+	// Partials are not charged to the quota. To keep users from parking
+	// more half-uploaded bytes than their quota, an upload that would take
+	// the pending partials past it is issued single-shot instead.
 	if uploaderQuotaMB > 0 && otherBytes+size > uploaderQuotaMB<<20 {
 		return 0, false
 	}
@@ -188,6 +195,55 @@ func (s *Server) partialOffset(channelID int64, path, uploader string, size, upl
 		s.partials[path] = &partialUpload{path: path, uploader: uploader, size: size}
 	}
 	return held, true
+}
+
+// pruneIdlePartials drops registry entries of uploader ("" = everyone) that
+// no transfer is writing, no unexpired token targets, and whose file no
+// longer exists: reservations of refused or abandoned tokens and partials
+// already removed from disk. Entries with a file on disk stay, so a client
+// can still resume them until the orphan sweep's TTL. It never touches files.
+func (s *Server) pruneIdlePartials(uploader string, now time.Time) {
+	s.mu.Lock()
+	var candidates []string
+	for p, partial := range s.partials {
+		if (uploader == "" || partial.uploader == uploader) && partial.active == nil && !s.pendingTokenForLocked(p, now) {
+			candidates = append(candidates, p)
+		}
+	}
+	s.mu.Unlock()
+	if len(candidates) == 0 {
+		return
+	}
+	root, err := s.openBlobRoot()
+	if err != nil {
+		return
+	}
+	var gone []string
+	for _, p := range candidates {
+		if _, err := root.Lstat(p); errors.Is(err, os.ErrNotExist) {
+			gone = append(gone, p)
+		}
+	}
+	_ = root.Close()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range gone {
+		// Recheck: a transfer may have claimed it, or a token been issued,
+		// while the file system was consulted.
+		if partial, ok := s.partials[p]; ok && partial.active == nil && !s.pendingTokenForLocked(p, now) {
+			delete(s.partials, p)
+		}
+	}
+}
+
+// pendingTokenForLocked reports an issued, unexpired token for the partial.
+func (s *Server) pendingTokenForLocked(path string, now time.Time) bool {
+	for _, tr := range s.transfers {
+		if tr.PartialPath == path && !now.After(tr.Expires) {
+			return true
+		}
+	}
+	return false
 }
 
 // claimPartial makes active the only writer of the partial. A transfer that
