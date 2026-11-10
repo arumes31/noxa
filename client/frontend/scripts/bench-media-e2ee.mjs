@@ -19,6 +19,7 @@ installMediaE2EEWorker(globalThis, { reply: message => replies.push(message) });
 
 const FRAMES = Number(process.argv[2]) || 300;
 let seq = 0;
+/** Sends one control op to the worker wrapper and resolves with its reply value. */
 async function call(op, data = {}) {
     const id = ++seq;
     globalThis.onmessage({ data: { op, seq: id, ...data } });
@@ -33,6 +34,7 @@ async function call(op, data = {}) {
     }
 }
 
+/** Minimal RTCEncodedVideoFrame / RTCEncodedAudioFrame stand-in. */
 class Frame {
     constructor(bytes, { kind, type = "key", timestamp = 0 }) {
         this.data = bytes.buffer;
@@ -44,6 +46,10 @@ class Frame {
 }
 
 let n = 0;
+/**
+ * Attaches an encode or decode endpoint. run(frame) enqueues one frame and
+ * resolves with the transformed frame and the elapsed milliseconds.
+ */
 function endpoint(operation, kind) {
     const id = `${operation === "encode" ? "tx" : "rx"}:bench${++n}`;
     let push;
@@ -64,6 +70,7 @@ function endpoint(operation, kind) {
     };
 }
 
+/** A VP8 frame of the given size: a keyframe header, or an inter-frame tag. */
 function vp8(bytes, key, fill) {
     const data = new Uint8Array(bytes);
     for (let i = 0; i < data.length; i++) data[i] = (i * 131 + fill) & 255;
@@ -71,6 +78,7 @@ function vp8(bytes, key, fill) {
     else data[0] = 0x31; // inter frame: show_frame set, key bit set to 1 (= not key)
     return data;
 }
+/** An Opus packet of the given size with a TOC byte. */
 function opus(bytes, fill) {
     const data = new Uint8Array(bytes);
     for (let i = 0; i < data.length; i++) data[i] = (i * 7 + fill) & 255;
@@ -78,7 +86,9 @@ function opus(bytes, fill) {
     return data;
 }
 
+/** The p-quantile of an ascending array. */
 const pct = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+/** Milliseconds per frame at fps. */
 const budget = fps => 1000 / fps;
 
 // Frame sizes from typical bitrates: delta = bitrate / 8 / fps; keyframes
@@ -111,7 +121,8 @@ for (const c of cases) {
     const enc = [];
     const dec = [];
     for (let i = 0; i < FRAMES + 30; i++) {
-        const ts = (i + 1) * (c.kind === "audio" ? 960 : 3000);
+        // RTP clock: Opus advances 960 ticks per 20 ms; video runs at 90 kHz.
+        const ts = (i + 1) * (c.kind === "audio" ? 960 : Math.round(90_000 / c.fps));
         const bytes = c.kind === "audio" ? opus(c.bytes, i) : vp8(c.bytes, c.key || i === 0, i);
         const type = c.kind === "video" && !(c.key || i === 0) ? "delta" : "key";
         const e = await tx.run(new Frame(bytes, { kind: c.kind, type, timestamp: ts }));

@@ -1300,8 +1300,9 @@ e2ee worker with the noXa wrapper. Each frame is timed from enqueue to output
 | VP8 1440p60 keyframe (266 KB) | 0.43 / 1.41 ms | 0.33 / 0.98 ms |
 
 The same frames through Chromium's own WebCrypto AES-GCM take no more than 0.1 ms
-at p95 for 1080p delta frames, which is Chromium's timer resolution. Encryption costs about 3% of the
-1080p60 frame budget, and keyframes, sent roughly every 2 s, cost under 10%. The
+at p95 for 1080p delta frames, which is Chromium's timer resolution. At p95 a 1080p60 delta frame costs
+about 1.6% of the frame budget to encrypt, and about 3% to encrypt and decrypt
+together. Keyframes, sent roughly every 2 s, cost under 10% for both. The
 decision rule was to look at a WebAssembly cipher only if 1080p60 video frames
 exceeded about 1 ms at p95. They don't, so the maintained LiveKit cryptor stays.
 
