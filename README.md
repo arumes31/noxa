@@ -1625,6 +1625,8 @@ The serving role cannot create tables, so `/out/migrate` maintains the partition
 
 `audit_partition_retention_months` (default `0`, keep every partition) lets `/out/migrate` drop whole monthly partitions that ended more than that many months before the current month; it must be `0` or at least `6`, so it never removes audit rows the 180-day row retention above would keep. Each dropped partition is recorded in the audit log (`audit.partition_dropped`, with the number of rows it held). Chat messages are not partitioned: reactions, pins, polls and discussions reference messages by id, and PostgreSQL only allows such references to a partitioned table through a key that includes the partition column.
 
+Migrations `070_olm_session_initial_delivery.sql` and `071_olm_session_target.sql` add two indexes to `olm_sessions` (built `CONCURRENTLY`, so the table stays writable), used by every delivered DM copy's acknowledgement and by admission. **Upgrading to this release needs the offline `/out/migrate` run**, as for 068.
+
 ### Direct-message identity verification
 
 Updated desktop clients require a signed encryption identity for direct messages,
