@@ -176,6 +176,12 @@ func (m *connManager) applyDeviceRevocations(uid string, devices []dmTrustedDevi
 	if err != nil {
 		return nil, err
 	}
+	// Revocations verified in this response apply even when they could not be
+	// pinned (no pin namespace yet, or the record is full); they are not
+	// persisted from here.
+	for _, v := range verified {
+		pins = append(pins, signedRevocationPin{DeviceID: v.DeviceID, Ed25519Public: v.Ed25519Public, SignerID: v.SignerID, SignedAt: v.SignedAt})
+	}
 	filtered := withoutPinnedRevocations(devices, pins)
 	if len(pins) > 0 {
 		if consumer, cerr := m.ratchetConsumerOn(nil); cerr == nil {
@@ -210,7 +216,13 @@ func (m *connManager) noticeDeviceRevocations(uid string, listed []netproto.Devi
 	m.revocationBaseline[uid] = true
 	tabID := m.tabID
 	var events []DeviceRevokedEvent
+	if len(listed) > netproto.MaxListedRevocations {
+		listed = listed[:netproto.MaxListedRevocations]
+	}
 	for _, r := range listed {
+		if !netproto.ValidRevocationFields(r) {
+			continue
+		}
 		key := uid + "\x00" + r.DeviceID
 		if m.revocationNotices[key] {
 			continue

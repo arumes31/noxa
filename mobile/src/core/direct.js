@@ -6,7 +6,7 @@
 // is kept in IndexedDB, encrypted with the database key.
 import { Stores, currentFence, deleteKeyIn, getSealed, keys, putSealedIn } from "./db.js";
 import { keyFingerprint, openDM, sealDM, toBase64 } from "./crypto.js";
-import { ed25519FromPEM, mergeRevocationPins, parseKeyRecord, trustedDevices, verifyRevocations, withoutRevokedPins } from "./dm-trust.js";
+import { MAX_LISTED_REVOCATIONS, ed25519FromPEM, mergeRevocationPins, parseKeyRecord, trustedDevices, verifyRevocations, withoutRevokedPins } from "./dm-trust.js";
 import { Msg } from "./frame.js";
 import { ProtocolError } from "./connection.js";
 import { RATCHET_PROTOCOL } from "./ratchet-consumer.js";
@@ -253,8 +253,8 @@ export class DirectMessages extends EventTarget {
         const signed = new Map(added.map(p => [p.device_id, p.signer]));
         const baseline = !this.#revocationBaseline.has(uid);
         this.#revocationBaseline.add(uid);
-        for (const r of Array.isArray(listed) ? listed : []) {
-            if (!r || typeof r.device_id !== "string") continue;
+        for (const r of (Array.isArray(listed) ? listed : []).slice(0, MAX_LISTED_REVOCATIONS)) {
+            if (!r || typeof r.device_id !== "string" || !r.device_id || r.device_id.length > 64 || /[\r\n\0]/.test(r.device_id)) continue;
             const key = `${uid}\u0000${r.device_id}`;
             if (this.#revocationNotices.has(key)) continue;
             const isSigned = signed.has(r.device_id);
@@ -429,7 +429,10 @@ export class DirectMessages extends EventTarget {
                     pinned = { ...pinned, signingKey: signingB64, at: pinned?.at || Date.now(), revoked: merged.pins };
                     await this.#put(Stores.pins, uid, pinned).catch(() => {});
                 }
-                for (const p of merged.pins) await this.ratchet?.revokeDevice?.(uid, p.device_id).catch(() => {});
+                // Not awaited: this lookup can run inside a ratchet operation
+                // (deviceKey), and revokeDevice queues behind it. The device is
+                // already out of entry.devices, so it is never trusted meanwhile.
+                for (const p of merged.pins) void this.ratchet?.revokeDevice?.(uid, p.device_id)?.catch(() => {});
                 entry.devices = withoutRevokedPins(entry.devices, merged.pins);
                 this.#noticeRevocations(uid, response.revocations || [], merged.added);
                 const ids = entry.devices.map(d => d.deviceID);

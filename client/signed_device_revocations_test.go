@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"sync"
 	"testing"
 
@@ -95,5 +96,48 @@ func TestRevocationNoticesSkipTheFirstListsServerRevocations(t *testing.T) {
 	m.noticeDeviceRevocations("carol", []netproto.DeviceRevocation{old}, nil)
 	if len(sink.events) != 2 {
 		t.Fatalf("carol's first list reported %+v", sink.events)
+	}
+}
+
+func TestVerifiedRevocationsApplyWithoutAPinRecord(t *testing.T) {
+	rootPub, rootPriv, err := auth.GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	phonePub, _, _ := auth.GenerateIdentityKeyPair()
+	rootKey, _ := auth.LoadPublicKey(rootPub)
+	phoneKey, _ := auth.LoadPublicKey(phonePub)
+	const x = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	sig, err := auth.SignChallenge(rootPriv, netproto.DeviceRevocationTranscript("bob", "root", "phone", phonePub, x, 7, netproto.DeviceRevocationReasonUser))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No server address: the pin namespace is unavailable, so nothing is
+	// persisted, but the verified revocation must still drop the device.
+	m := &connManager{sink: &revocationEventSink{}, id: &identity{PublicKey: rootPub}}
+	devices := []dmTrustedDevice{{DeviceID: "root", Signing: rootKey, First: true}, {DeviceID: "phone", Signing: phoneKey}}
+	listed := []netproto.DeviceRevocation{{DeviceID: "phone", Ed25519Public: phonePub, X25519Public: x, RevokedAt: 7,
+		Reason: netproto.DeviceRevocationReasonUser, SignerDeviceID: "root", SignedAt: 7, Signature: sig}}
+	got, err := m.applyDeviceRevocations("bob", devices, listed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].DeviceID != "root" {
+		t.Fatalf("kept %+v, want only root", got)
+	}
+}
+
+func TestRevocationNoticesIgnoreMalformedAndOverlongLists(t *testing.T) {
+	sink := &revocationEventSink{}
+	m := &connManager{sink: sink}
+	m.noticeDeviceRevocations("bob", nil, nil) // baseline
+	var listed []netproto.DeviceRevocation
+	for i := 0; i < netproto.MaxListedRevocations+10; i++ {
+		listed = append(listed, netproto.DeviceRevocation{DeviceID: "d" + strconv.Itoa(i), RevokedAt: 1, Reason: "idle"})
+	}
+	listed[0].DeviceID = "bad\nid"
+	m.noticeDeviceRevocations("bob", listed, nil)
+	if len(sink.events) != netproto.MaxListedRevocations-1 {
+		t.Fatalf("events = %d, want %d (capped, malformed skipped)", len(sink.events), netproto.MaxListedRevocations-1)
 	}
 }
