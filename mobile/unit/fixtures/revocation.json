@@ -1,0 +1,11 @@
+{
+  "principal": "user-uid",
+  "signer_device_id": "dev-desktop",
+  "signer_public_key_pem": "-----BEGIN PUBLIC KEY-----\nGePPva40kul5ZJAbLWQCWvglv4r6+Kio5OdwGcFnDaI=\n-----END PUBLIC KEY-----\n",
+  "device_id": "dev-phone",
+  "device_public_key_pem": "-----BEGIN PUBLIC KEY-----\nFjcWveFDqgcsuYjsmIm1gKoiZA/m2qGuZZGtYWUhH9s=\n-----END PUBLIC KEY-----\n",
+  "x25519_public_key": "uVpfkAw2drc9gnRA8ROgv52+WbKYNYpTBcMAeO1U2m8=",
+  "signed_at": 1800000000,
+  "transcript": "noxa-device-revocation-v1\nuser-uid\ndev-desktop\ndev-phone\n-----BEGIN PUBLIC KEY-----\nFjcWveFDqgcsuYjsmIm1gKoiZA/m2qGuZZGtYWUhH9s=\n-----END PUBLIC KEY-----\n\nuVpfkAw2drc9gnRA8ROgv52+WbKYNYpTBcMAeO1U2m8=\n1800000000\nuser",
+  "signature": "HQcJb0X5g8HlaxPAa5KHD+mQx3Y2Wk1F//SIQAXwZ9twvlTh9Dm0UlVXWANTkXf6SxALEy4srzUleO5/V2qcBA=="
+}

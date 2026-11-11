@@ -2,6 +2,7 @@
 // settings-registry.js), passkeys and devices.
 import { app, cancelSecureMessagingRecovery, forgetDevice, recoverSecureMessaging } from "../app.js";
 import { registerPasskey, passkeysSupported } from "../core/device.js";
+import { revokeDevice } from "../core/devices.js";
 import { Msg } from "../core/frame.js";
 import { disablePush, enablePush, needsInstallForPush, pushSupported, setPushPreferences } from "../core/push.js";
 import { t } from "../i18n.js";
@@ -157,7 +158,7 @@ export function renderYou(root) {
             const result = await renderDeviceList(session, list, { refresh, revokeButton: device => device.current || device.first_device ? null : h("button", { class: "btn btn-danger", onclick: async () => {
                 const ok = await sheet(t("settings.revoke"), device.name, [{ label: t("settings.revoke"), value: true, danger: true }, { label: t("link.cancel"), value: false }]);
                 if (!ok) return;
-                await session.conn.request(Msg.DeviceRequest, { action: "revoke", device_id: device.device_id }, Msg.DeviceResult).catch(e => toast(e.message, "warn"));
+                await revokeDevice(session, device.device_id).catch(e => toast(e.message, "warn"));
                 refresh();
             } }, t("settings.revoke")) });
             passkeys.replaceChildren(...(result.passkeys || []).map(key => h("li", { class: "row" },

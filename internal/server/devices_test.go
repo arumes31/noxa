@@ -28,6 +28,7 @@ type fakeDevices struct {
 	mu      sync.Mutex
 	devices []store.Device
 	next    int
+	signed  map[string]store.SignedRevocation
 }
 
 func (f *fakeDevices) AddDevice(_ context.Context, d store.NewDevice, limit int) (store.Device, error) {
@@ -123,6 +124,37 @@ func (f *fakeDevices) RevokeDevice(_ context.Context, principal, id, reason stri
 		return f.devices[i], nil
 	}
 	return store.Device{}, store.ErrDeviceNotFound
+}
+
+// RevokeDeviceSigned and ListDeviceRevocations implement the optional
+// deviceRevocationStore (38).
+func (f *fakeDevices) RevokeDeviceSigned(ctx context.Context, principal, id string, sig store.SignedRevocation) (store.Device, error) {
+	d, err := f.RevokeDevice(ctx, principal, id, store.DeviceRevokedByUser)
+	if err != nil {
+		return d, err
+	}
+	f.mu.Lock()
+	if f.signed == nil {
+		f.signed = map[string]store.SignedRevocation{}
+	}
+	f.signed[id] = sig
+	f.mu.Unlock()
+	return d, nil
+}
+
+func (f *fakeDevices) ListDeviceRevocations(_ context.Context, principal string, limit int) ([]store.DeviceRevocation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.DeviceRevocation
+	for i := len(f.devices) - 1; i >= 0 && len(out) < limit; i-- {
+		d := f.devices[i]
+		if d.Principal != principal || d.Active() || (!d.FirstDevice && len(d.ApprovalSignature) == 0) {
+			continue
+		}
+		out = append(out, store.DeviceRevocation{DeviceID: d.DeviceID, Ed25519Public: d.Ed25519Public, X25519Public: d.X25519Public,
+			RevokedAt: d.RevokedAt, Reason: d.RevokedReason, SignedRevocation: f.signed[d.DeviceID]})
+	}
+	return out, nil
 }
 
 func (f *fakeDevices) SignOutDevice(ctx context.Context, principal, id string) (store.Device, error) {

@@ -215,8 +215,12 @@ type DeviceRequest struct {
 	Proof   []byte `json:"proof,omitempty"` // HMAC-SHA256(secret, LinkClaimTranscript)
 	Approve bool   `json:"approve,omitempty"`
 	// Signature is the approving device's Ed25519 signature over
-	// DeviceApprovalTranscript.
+	// DeviceApprovalTranscript, or for a revoke the revoking device's
+	// signature over DeviceRevocationTranscript (optional; older clients
+	// revoke without one).
 	Signature []byte `json:"signature,omitempty"`
+	// RevokedAt is the signing time (unix seconds) in a signed revoke.
+	RevokedAt int64 `json:"revoked_at,omitempty"`
 	// ServerBinding is the approving desktop's pinned TLS binding
 	// ("tls-sha256:<hex>") and BindingSignature its Ed25519 signature over
 	// DeviceLinkBindingTranscript, relayed to the claiming device.
@@ -289,7 +293,8 @@ func (r DeviceRequest) Valid() bool {
 	case DeviceActionRename:
 		return r.DeviceID != "" && strings.TrimSpace(r.Name) != ""
 	case DeviceActionRevoke:
-		return r.DeviceID != ""
+		// A signature, when present, must be complete.
+		return r.DeviceID != "" && (len(r.Signature) == 0 && r.RevokedAt == 0 || len(r.Signature) == 64 && r.RevokedAt > 0)
 	case DeviceActionEndorse:
 		return r.DeviceID != "" && len(r.Signature) > 0
 	case DeviceActionHistoryPut:

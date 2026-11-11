@@ -56,6 +56,12 @@ type connManager struct {
 	// plain names.
 	tabID string
 
+	// revocationNotices are device revocations already reported this session
+	// (uid + "\x00" + device); revocationBaseline marks accounts whose first
+	// device list this session was taken as the starting point (38).
+	revocationNotices  map[string]bool
+	revocationBaseline map[string]bool
+
 	mu                             sync.Mutex
 	writeMu                        sync.Mutex
 	displayNameMu                  sync.Mutex

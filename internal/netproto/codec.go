@@ -1191,6 +1191,10 @@ type KeyResponse struct {
 	// Devices lists the account's active devices that can receive direct
 	// messages, when requested. Empty for accounts without linked devices.
 	Devices []DMDevice `json:"devices,omitempty"`
+	// Revocations lists recently revoked devices of the account (newest
+	// first, at most MaxListedRevocations), signed by a device of the
+	// account when its user revoked them (DeviceRevocation).
+	Revocations []DeviceRevocation `json:"revocations,omitempty"`
 }
 
 // ChannelKey delivers a scope chat key to a member, sealed with nacl/box

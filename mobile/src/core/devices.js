@@ -11,6 +11,7 @@
 import { fromBase64, keyFingerprint, publicKeyPEM, sealDM, sign, toBase64, utf8 } from "./crypto.js";
 import { HISTORY_ENVELOPE_RESERVE, encodeHistoryChunk } from "./history-envelope.js";
 import { Msg } from "./frame.js";
+import { revocationTranscript } from "./dm-trust.js";
 
 // internal/netproto/dm_devices.go
 export const MAX_HISTORY_CHUNK = 256 << 10;
@@ -18,6 +19,31 @@ export const MAX_HISTORY_CHUNKS = 256;
 export const MAX_HISTORY_BYTES = 50 << 20;
 export const MAX_HISTORY_MESSAGES = 10000;
 const SEAL_OVERHEAD = 24 + 16;
+
+/**
+ * Revokes one of the account's devices (38). When this device is a trusted
+ * device of the account (first or confirmed) and the target's keys are
+ * known, the request carries this device's signature over
+ * DeviceRevocationTranscript, so contacts can verify that the account (not
+ * the server alone) revoked it. The list is fetched again first, so the
+ * signature covers the keys the server holds now.
+ */
+export async function revokeDevice(session, deviceID) {
+    const request = { action: "revoke", device_id: deviceID };
+    const { devices } = await listDevices(session.conn);
+    const target = devices.find(d => d.device_id === deviceID);
+    if (!target) throw new Error("device not found");
+    const self = devices.find(d => d.device_id === session.deviceID);
+    if (session.deviceID && self && (self.first_device || self.confirmed) && session.identity?.edSecret &&
+        target.ed25519_public_key && validDeviceKeys(target.ed25519_public_key, target.x25519_public_key)) {
+        const signedAt = Math.floor(Date.now() / 1000);
+        const signature = sign(revocationTranscript(session.uniqueID, session.deviceID, target.device_id,
+            target.ed25519_public_key, target.x25519_public_key, signedAt, "user"), session.identity.edSecret);
+        request.signature = toBase64(signature);
+        request.revoked_at = signedAt;
+    }
+    return deviceRequest(session.conn, request);
+}
 
 function deviceRequest(conn, request, timeout = 10000) {
     return conn.request(Msg.DeviceRequest, request, Msg.DeviceResult, { accept: r => r.action === request.action, timeout });

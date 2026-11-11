@@ -1300,6 +1300,30 @@ export function onRatchetTrust(d) {
     V().toast(t(key, { name: knownPeerName(contact, "") || contact }), "warn");
 }
 
+// onDeviceRevoked (38) reports that a device of an account was revoked. A
+// signed revocation was made by one of that account's own devices and is now
+// pinned: the device stays refused whatever the server lists later. An
+// unsigned one is the server's decision alone (an administrator, idle expiry
+// or an older app). The notice also appears in the open direct conversation
+// with that contact.
+export function deviceRevokedText(d, ownUID, name) {
+    if (d.unique_id === ownUID) return t(d.signed ? "chat.ownDeviceRevokedSigned" : "chat.ownDeviceRevokedServer");
+    return t(d.signed ? "chat.deviceRevokedSigned" : "chat.deviceRevokedServer", { name });
+}
+export function onDeviceRevoked(d) {
+    if (!d || typeof d.unique_id !== "string" || !d.unique_id) return;
+    const name = knownPeerName(d.unique_id, "") || d.unique_id;
+    const text = deviceRevokedText(d, V().state.myUniqueID, name);
+    V().toast(text, d.signed ? "info" : "warn");
+    if (view.kind === "dm" && view.uid === d.unique_id) {
+        const el = document.createElement("div");
+        el.className = "msg sys device-revoked";
+        el.textContent = "— " + text + " —";
+        $("chat-log")?.appendChild(el);
+        if (atBottom) scrollToBottom();
+    }
+}
+
 // onRatchetQuarantine shows truthful locked placeholders for new-protocol
 // copies that could not be opened. They are never unread and disappear once
 // the copy opens or is no longer quarantined.

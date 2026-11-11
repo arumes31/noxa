@@ -228,3 +228,73 @@ export function trustedDevices(
             .map((d) => valid.get(d.device_id)),
     ];
 }
+
+// --- Signed device revocations (38; internal/devicetrust/revocations.go) ---
+
+/** internal/netproto DeviceRevocationTranscript. */
+export function revocationTranscript(principal, signerID, deviceID, edPublicPEM, xPublicB64, signedAt, reason) {
+    return utf8(`noxa-device-revocation-v1\n${principal}\n${signerID}\n${deviceID}\n${edPublicPEM}\n${xPublicB64}\n${signedAt}\n${reason}`);
+}
+
+export const MAX_LISTED_REVOCATIONS = 32;
+const singleLine = (s, max) => typeof s === "string" && s.length <= max && !/[\r\n\0]/.test(s);
+
+/** netproto.ValidRevocationFields for a signed entry. */
+function validSignedRevocation(r) {
+    return !!r && singleLine(r.device_id, 64) && r.device_id !== "" &&
+        typeof r.ed25519_public_key === "string" && r.ed25519_public_key.length <= 256 && !/[\r\0]/.test(r.ed25519_public_key) &&
+        singleLine(r.x25519_public_key || "", 64) && singleLine(r.signer_device_id, 64) && r.signer_device_id !== "" &&
+        r.reason === "user" && Number.isSafeInteger(r.signed_at) && r.signed_at > 0 && typeof r.signature === "string";
+}
+
+/**
+ * Returns the revocations a device of trusted (the result of trustedDevices
+ * for the same account) signed: [{deviceID, signingKey (raw), signerID,
+ * signedAt}]. Unsigned (server-only), malformed, forged or duplicate entries
+ * are left out; only the first device may revoke itself.
+ */
+export function verifyRevocations(principal, trusted, list) {
+    if (!Array.isArray(trusted) || !Array.isArray(list)) return [];
+    const byID = new Map(trusted.map(d => [d.deviceID, d]));
+    const root = trusted.find(d => d.first)?.deviceID || "";
+    const seen = new Set(), out = [];
+    for (const r of list.slice(0, MAX_LISTED_REVOCATIONS)) {
+        if (!validSignedRevocation(r) || seen.has(r.device_id)) continue;
+        const signer = byID.get(r.signer_device_id);
+        if (!signer?.signingKey) continue;
+        if (r.device_id === root && r.signer_device_id !== root) continue;
+        const signingKey = ed25519FromPEM(r.ed25519_public_key);
+        let signature;
+        try { signature = fromBase64(r.signature); } catch { continue; }
+        if (!signingKey || signature.length !== 64 || toBase64(signature) !== r.signature) continue;
+        const message = revocationTranscript(principal, r.signer_device_id, r.device_id, r.ed25519_public_key, r.x25519_public_key || "", r.signed_at, r.reason);
+        if (!verifySignature(signature, message, signer.signingKey)) continue;
+        seen.add(r.device_id);
+        out.push({ deviceID: r.device_id, signingKey, signerID: r.signer_device_id, signedAt: r.signed_at });
+    }
+    return out;
+}
+
+/**
+ * Merges verified revocations into stored pins ([{device_id, key}] with key
+ * the base64 raw signing key). Returns {pins, added}.
+ */
+export function mergeRevocationPins(pins, verified) {
+    const all = Array.isArray(pins) ? pins.filter(p => p && typeof p.device_id === "string") : [];
+    const known = new Set(all.map(p => p.device_id)), added = [];
+    for (const v of verified || []) {
+        if (known.has(v.deviceID) || all.length >= 256) continue;
+        const pin = { device_id: v.deviceID, key: toBase64(v.signingKey), signer: v.signerID };
+        all.push(pin);
+        added.push(pin);
+        known.add(v.deviceID);
+    }
+    return { pins: all, added };
+}
+
+/** Drops devices a pin names by ID or signing key. */
+export function withoutRevokedPins(devices, pins) {
+    if (!Array.isArray(pins) || !pins.length) return devices;
+    const ids = new Set(pins.map(p => p.device_id)), keys = new Set(pins.map(p => p.key));
+    return devices.filter(d => !ids.has(d.deviceID) && !(d.signingKey && keys.has(toBase64(d.signingKey))));
+}

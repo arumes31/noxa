@@ -6,7 +6,7 @@
 // is kept in IndexedDB, encrypted with the database key.
 import { Stores, currentFence, deleteKeyIn, getSealed, keys, putSealedIn } from "./db.js";
 import { keyFingerprint, openDM, sealDM, toBase64 } from "./crypto.js";
-import { ed25519FromPEM, parseKeyRecord, trustedDevices } from "./dm-trust.js";
+import { MAX_LISTED_REVOCATIONS, ed25519FromPEM, mergeRevocationPins, parseKeyRecord, trustedDevices, verifyRevocations, withoutRevokedPins } from "./dm-trust.js";
 import { Msg } from "./frame.js";
 import { ProtocolError } from "./connection.js";
 import { RATCHET_PROTOCOL, disappearKey } from "./ratchet-consumer.js";
@@ -245,6 +245,32 @@ export class DirectMessages extends EventTarget {
     #onTyping;
     #typingSent = new Map();
 
+    // Revocations already reported this session (uid + device), and accounts
+    // whose first list this session set the baseline for server-only ones.
+    #revocationNotices = new Set();
+    #revocationBaseline = new Set();
+
+    /**
+     * Emits "device-revoked" once per revocation: newly pinned signed ones,
+     * and server-only ones that appear after this session's first list of
+     * that account (they are not pinned, so old ones would repeat).
+     */
+    #noticeRevocations(uid, listed, added) {
+        const signed = new Map(added.map(p => [p.device_id, p.signer]));
+        const baseline = !this.#revocationBaseline.has(uid);
+        this.#revocationBaseline.add(uid);
+        for (const r of (Array.isArray(listed) ? listed : []).slice(0, MAX_LISTED_REVOCATIONS)) {
+            if (!r || typeof r.device_id !== "string" || !r.device_id || r.device_id.length > 64 || /[\r\n\0]/.test(r.device_id)) continue;
+            const key = `${uid}\u0000${r.device_id}`;
+            if (this.#revocationNotices.has(key)) continue;
+            const isSigned = signed.has(r.device_id);
+            if (r.signature && !isSigned) continue; // not verified, or pinned earlier
+            this.#revocationNotices.add(key);
+            if (baseline && !isSigned) continue;
+            this.#emit("device-revoked", { peer: uid, deviceID: r.device_id, signed: isSigned });
+        }
+    }
+
     #emit(type, detail) {
         if (this.#closed) return;
         this.dispatchEvent(new CustomEvent(type, { detail }));
@@ -402,6 +428,19 @@ export class DirectMessages extends EventTarget {
                 entry.signingKey = signingKey;
                 entry.encryptionKey = encryptionKey;
                 entry.devices = trustedDevices(uid, devices, signingKey, entry.encryptionKey);
+                // (38) Revocations a device of this account signed are pinned
+                // and keep the device out, whatever later directories list.
+                const merged = mergeRevocationPins(pinned?.revoked, verifyRevocations(uid, entry.devices, response.revocations || []));
+                if (merged.added.length) {
+                    pinned = { ...pinned, signingKey: signingB64, at: pinned?.at || Date.now(), revoked: merged.pins };
+                    await this.#put(Stores.pins, uid, pinned).catch(() => {});
+                }
+                // Not awaited: this lookup can run inside a ratchet operation
+                // (deviceKey), and revokeDevice queues behind it. The device is
+                // already out of entry.devices, so it is never trusted meanwhile.
+                for (const p of merged.pins) void this.ratchet?.revokeDevice?.(uid, p.device_id)?.catch(() => {});
+                entry.devices = withoutRevokedPins(entry.devices, merged.pins);
+                this.#noticeRevocations(uid, response.revocations || [], merged.added);
                 const ids = entry.devices.map(d => d.deviceID);
                 if (!pinned || !Array.isArray(pinned.devices)) {
                     // First contact (or a pin from before device tracking): remember the list.

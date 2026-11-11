@@ -372,6 +372,29 @@ func (s *Store) SignOutDevice(ctx context.Context, principal, deviceID string) (
 
 // RevokeDevice revokes a device and any passkeys retained by a prior sign-out.
 func (s *Store) RevokeDevice(ctx context.Context, principal, deviceID, reason string) (Device, error) {
+	return s.revokeDevice(ctx, principal, deviceID, reason, nil)
+}
+
+// SignedRevocation is the revoking device's signature over
+// netproto.DeviceRevocationTranscript (38).
+type SignedRevocation struct {
+	SignerDeviceID string
+	SignedAt       int64
+	Signature      []byte
+}
+
+// RevokeDeviceSigned revokes the device for its user (DeviceRevokedByUser)
+// and stores the revoking device's signature in the same transaction, so a
+// listed revocation never lacks the signature it was made with. The caller
+// verifies the signature first.
+func (s *Store) RevokeDeviceSigned(ctx context.Context, principal, deviceID string, sig SignedRevocation) (Device, error) {
+	if sig.SignerDeviceID == "" || sig.SignedAt <= 0 || len(sig.Signature) != 64 {
+		return Device{}, errors.New("invalid device revocation signature")
+	}
+	return s.revokeDevice(ctx, principal, deviceID, DeviceRevokedByUser, &sig)
+}
+
+func (s *Store) revokeDevice(ctx context.Context, principal, deviceID, reason string, sig *SignedRevocation) (Device, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Device{}, err
@@ -390,6 +413,15 @@ func (s *Store) RevokeDevice(ctx context.Context, principal, deviceID, reason st
 	if err != nil {
 		return Device{}, fmt.Errorf("revoking device: %w", err)
 	}
+	if sig != nil {
+		// A device revoked again (a passkey device) keeps its first signed
+		// statement.
+		if _, err = tx.ExecContext(ctx, `INSERT INTO device_revocations (device_id, principal, signer_device_id, signed_at, reason, signature)
+			VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (device_id) DO NOTHING`,
+			d.DeviceID, principal, sig.SignerDeviceID, sig.SignedAt, reason, sig.Signature); err != nil {
+			return Device{}, fmt.Errorf("storing device revocation: %w", err)
+		}
+	}
 	if err = bumpOlmRoster(ctx, tx, principal); err != nil {
 		return Device{}, err
 	}
@@ -397,6 +429,51 @@ func (s *Store) RevokeDevice(ctx context.Context, principal, deviceID, reason st
 		return Device{}, err
 	}
 	return d, nil
+}
+
+// DeviceRevocation is a revoked device as the key directory lists it, with
+// the revoking device's signature when its user revoked it from a device
+// that signs revocations (SignerDeviceID empty otherwise).
+type DeviceRevocation struct {
+	DeviceID      string
+	Ed25519Public string
+	X25519Public  string
+	RevokedAt     time.Time
+	Reason        string
+	SignedRevocation
+}
+
+// deviceRevocationWindow is how long the directory keeps listing a revoked
+// device. Clients pin signed revocations when they first see them.
+const deviceRevocationWindow = "90 days"
+
+// ListDeviceRevocations returns the principal's recently revoked devices
+// that had been trusted (first device or approved), newest first, at most
+// limit.
+func (s *Store) ListDeviceRevocations(ctx context.Context, principal string, limit int) ([]DeviceRevocation, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT d.device_id, d.ed25519_public, d.x25519_public, d.revoked_at, d.revoked_reason,
+			COALESCE(r.signer_device_id, ''), COALESCE(r.signed_at, 0), r.signature
+		FROM user_devices d LEFT JOIN device_revocations r ON r.device_id = d.device_id
+		WHERE d.principal = $1 AND d.revoked_at IS NOT NULL AND d.revoked_at > now() - interval '`+deviceRevocationWindow+`'
+			AND (d.first_device OR octet_length(d.approval_signature) > 0)
+		ORDER BY d.revoked_at DESC, d.id DESC LIMIT $2`, principal, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing device revocations: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []DeviceRevocation
+	for rows.Next() {
+		var r DeviceRevocation
+		if err := rows.Scan(&r.DeviceID, &r.Ed25519Public, &r.X25519Public, &r.RevokedAt, &r.Reason,
+			&r.SignerDeviceID, &r.SignedAt, &r.Signature); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // updateLockedDevices locks the complete selected set before changing any row.

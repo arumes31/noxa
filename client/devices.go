@@ -266,10 +266,61 @@ func (a *App) RevokeDeviceForTab(tabID, deviceID string) error {
 	if err != nil {
 		return err
 	}
-	if _, err = cm.deviceRequest(netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: deviceID}); err != nil {
+	req, err := cm.signedRevokeRequest(deviceID)
+	if err != nil {
+		return err
+	}
+	if _, err = cm.deviceRequest(req); err != nil {
 		return err
 	}
 	return cm.persistOwnDeviceRevocation(deviceID)
+}
+
+// signedRevokeRequest builds a revoke request signed by this desktop over the
+// target's current keys (38), so contacts and the account's other devices can
+// verify that this account revoked the device. A desktop that is not a
+// trusted device yet, or a target without published keys, revokes unsigned:
+// the server still revokes it, and clients show it as revoked by the server.
+func (m *connManager) signedRevokeRequest(deviceID string) (netproto.DeviceRequest, error) {
+	req := netproto.DeviceRequest{Action: netproto.DeviceActionRevoke, DeviceID: deviceID}
+	m.mu.Lock()
+	principal, selfDevice := m.uniqueID, m.deviceID
+	m.mu.Unlock()
+	if principal == "" || selfDevice == "" {
+		return req, nil
+	}
+	list, err := m.deviceRequest(netproto.DeviceRequest{Action: netproto.DeviceActionList})
+	if err != nil {
+		return req, err
+	}
+	var target, self *netproto.DeviceInfo
+	for i := range list.Devices {
+		switch list.Devices[i].DeviceID {
+		case deviceID:
+			target = &list.Devices[i]
+		case selfDevice:
+			self = &list.Devices[i]
+		}
+	}
+	if target == nil {
+		return req, errors.New("device not found")
+	}
+	if self == nil || !self.FirstDevice && !self.Confirmed || target.Ed25519Public == "" ||
+		!validClaimedDeviceKeys(target.Ed25519Public, target.X25519Public) {
+		return req, nil
+	}
+	id, err := m.identity()
+	if err != nil {
+		return req, err
+	}
+	signedAt := time.Now().Unix()
+	transcript := netproto.DeviceRevocationTranscript(principal, selfDevice, deviceID, target.Ed25519Public, target.X25519Public, signedAt, netproto.DeviceRevocationReasonUser)
+	signature, err := auth.SignChallenge(id.PrivateKey, transcript)
+	if err != nil {
+		return req, err
+	}
+	req.Signature, req.RevokedAt = signature, signedAt
+	return req, nil
 }
 
 // persistOwnDeviceRevocation records a revocation this user made here,
