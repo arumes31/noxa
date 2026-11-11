@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"time"
 
 	"noxa/internal/auth"
 	"noxa/internal/netproto"
@@ -38,6 +39,7 @@ func (s *TCPServer) ServeExternalConn(ctx context.Context, conn net.Conn) error 
 	s.acceptedConns[conn] = struct{}{}
 	s.connWG.Add(1)
 	s.lifecycleMu.Unlock()
+	s.noteIngressArrival(ip, time.Now())
 	s.metricsSink().IncTCPConnections()
 	s.serveConn(ctx, conn)
 	return nil

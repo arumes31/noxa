@@ -10,6 +10,8 @@ import { icon, setStatusIcon } from "./icons.js";
 import { aggregateCallConnections, callConnectionAnnouncement, describeCallConnection, initialCallConnection, reduceCallConnection, trackIsFlowing } from "./call-connection-state.js";
 import { answerCallMedia, createCallMedia, offerCallMedia } from "./private-call-media.js";
 import { callUndockButton, closeCallUndock } from "./call-undocking.js";
+import { CallMediaE2EE } from "./call-media-e2ee.js";
+import { desktopMediaAdapter, mediaErrorText } from "./channel-media.js";
 
 const V = () => window.__noxa;
 const app = () => window.go.main.App;
@@ -28,6 +30,16 @@ const callConsents = new Set();
 // The start in flight: signals that arrive before its response wait for it,
 // so consent is only ever bound to the call ID the start actually returned.
 let pendingStart = null;
+// (#12) Replaces the encrypted call media session (UI tests whose peers are
+// stand-ins without encoded transforms). Production never sets it.
+let callMediaFactory = null;
+export function useCallMediaFactory(fn) { callMediaFactory = fn || null; }
+// A delivered media-key control whose scope is a private call.
+export function receiveCallMediaKey(event) {
+    if (!session || !current(session) || !event) return { ok: false, reason: "inactive" };
+    return session.e2ee.receive({ sender: event.sender, senderDevice: event.sender_device, kind: event.kind, scope: event.scope,
+        epoch: event.epoch, expiresAt: event.expires_at, data: event.data });
+}
 function grantCallConsent(key) {
     // A call stopped locally never regains consent (stopPrivateCall marks it).
     if (callVersions.get(key) === Infinity) return false;
@@ -49,7 +61,7 @@ const acceptedPeer = (owner, uid) => current(owner) && !blocked(uid) && ownerCon
     && owner.call.participants.some(peer => peer.unique_id === uid && peer.state === "accepted");
 function failCall(owner, error) {
     if (!current(owner)) return;
-    report(error); stopPrivateCall();
+    report(error?.name === "MediaSessionError" ? mediaErrorText(error) : error); stopPrivateCall();
 }
 function node(tag, text) { const element = document.createElement(tag); if (text !== undefined) element.textContent = text; return element; }
 function action(key, callback) {
@@ -63,6 +75,7 @@ function action(key, callback) {
 }
 function closePeer(peer) {
     peer.stopRelay?.();
+    void Promise.resolve(peer.releaseEncryption?.()).catch(() => {});
     clearTimeout(peer.candidateTimer); clearTimeout(peer.connectTimer);
     peer.pc.onicecandidate = null; peer.pc.close();
     peer.audio.srcObject = null; peer.audio.remove();
@@ -137,6 +150,7 @@ export function stopPrivateCall() {
     owner.stopWatchingMicrophone?.();
     owner.stopWatchingOutput?.();
     owner.media.close();
+    owner.e2ee.stop();
     owner.stream?.getTracks().forEach(track => track.stop());
     releaseCaptureMonitor(owner);
     void owner.context?.close().catch(() => {});
@@ -189,6 +203,14 @@ async function applyCall(call, tabID, generation) {
         const panel = node("aside"); panel.className = "private-call-panel"; panel.setAttribute("aria-label", t("call.active"));
         session = { call, tabID, generation, sessionGeneration: V().state.sessionGeneration, uid, panel, peers: new Map(), stream: null, capture: null, ice: [], muted: false, deafened: false, pollBusy: false, signals: Promise.resolve(), queuedSignals: 0, nextSignalAt: 0 };
         session.media = createCallMedia(session, { current, acceptedPeer, label, report, render });
+        {
+            const owner = session;
+            owner.e2ee = new CallMediaE2EE({ adapter: desktopMediaAdapter(tabID), sessionFactory: callMediaFactory,
+                onStatus: status => { if (current(owner)) { owner.e2eeStatus = status; syncEncryptionStatus(owner); } },
+                onError: error => failCall(owner, error) });
+            // An app without call encryption cannot be heard here: say so.
+            owner.onPeerOutdated = uid => { if (acceptedPeer(owner, uid)) failCall(owner, t("call.e2ee.outdated", { name: label(uid) })); };
+        }
         document.body.append(panel);
         if (me.state === "ringing") window.__noxaNotify?.notify("poke", t("call.incomingFrom", { name: label(call.caller) }), { uid: call.caller });
         const owner = session;
@@ -209,6 +231,7 @@ async function applyCall(call, tabID, generation) {
     const owner = session;
     if (call.revision < owner.call.revision) return;
     owner.call = call;
+    owner.e2ee.update(call);
     if (owner.renderedRevision !== call.revision) { render(owner); owner.renderedRevision = call.revision; }
     const accepted = call.participants.filter(peer => peer.state === "accepted");
     for (const [peerID, peer] of owner.peers) {
@@ -218,6 +241,8 @@ async function applyCall(call, tabID, generation) {
     // Remote state may revoke or update a consented call, never create consent.
     if (me.state !== "accepted" || accepted.length < 2 || !ownerConsented(owner)) return;
     try {
+        await ensureCallEncryption(owner);
+        if (!current(owner)) return;
         await ensureCapture(owner);
         if (!current(owner)) return;
         // Membership can change while capture and ICE configuration are pending.
@@ -229,6 +254,7 @@ async function applyCall(call, tabID, generation) {
                 peer.started = true;
                 peer.chain = peer.chain.then(async () => {
                     if (!acceptedPeer(owner, participant.unique_id) || peer.pc.signalingState === "closed") return;
+                    await owner.e2ee.bindPeer(peer.pc, peerClientID(owner, participant.unique_id));
                     await peer.pc.setLocalDescription(await peer.pc.createOffer());
                     await sendDescription(owner, participant.unique_id, peer.pc);
                 }).catch(error => { if (acceptedPeer(owner, participant.unique_id)) failCall(owner, error); });
@@ -247,6 +273,7 @@ function render(owner) {
     const title = node("strong", t(incoming ? "call.incoming" : accepted < 2 ? "call.ringing" : "call.active"));
     // (141) connecting / connected / media status, text + icon (never color alone).
     owner.status = node("p"); owner.status.className = "call-connection-status";
+    owner.encryption = node("p"); owner.encryption.className = "call-e2ee-status";
     const people = node("p");
     for (const participant of owner.call.participants.filter(peer => ["accepted", "ringing"].includes(peer.state))) {
         const person = node("button", label(participant.unique_id)); person.type = "button"; person.className = "call-participant";
@@ -284,8 +311,9 @@ function render(owner) {
     }
     owner.controls = controls;
     syncPTTControl(owner, V().state.settings?.activation_mode || "ptt");
-    owner.panel.replaceChildren(title, owner.status, people, owner.media.grid, controls);
+    owner.panel.replaceChildren(title, owner.status, owner.encryption, people, owner.media.grid, controls);
     syncConnectionStatus(owner);
+    syncEncryptionStatus(owner);
     if (owner.captureLost) {
         const recovery = node("div"); recovery.setAttribute("role", "status");
         renderMicStatus(recovery, "disconnected", async () => {
@@ -321,6 +349,35 @@ function syncPeerOutput(owner, uid, peer) {
             if (current(owner) && owner.peers.get(uid) === peer && peer.sinkRequested === device) report(error);
         }
     });
+}
+
+// (#12) Starts the call's encrypted media before any peer or capture exists.
+async function ensureCallEncryption(owner) {
+    await owner.e2ee.start(owner.call);
+}
+
+function peerClientID(owner, uid) {
+    return owner.call.participants.find(peer => peer.unique_id === uid)?.client_id || "";
+}
+
+// The call panel's encryption line: keys exchanged, or still exchanging.
+// A one-to-one call links to the contact's safety number.
+function syncEncryptionStatus(owner) {
+    const element = owner.encryption;
+    if (!element) return;
+    const state = owner.e2eeStatus?.state || "off";
+    const accepted = owner.call.participants.filter(peer => peer.state === "accepted");
+    if (state === "off" || accepted.length < 2) { element.hidden = true; element.replaceChildren(); return; }
+    element.hidden = false;
+    element.dataset.state = state;
+    const key = state === "encrypted" ? "call.e2ee.encrypted" : state === "partial" ? "call.e2ee.partial" : "call.e2ee.keying";
+    setStatusIcon(element, "lock", t(key));
+    const others = accepted.filter(peer => peer.unique_id !== owner.uid);
+    if (others.length === 1 && window.__noxaChat?.openPM) {
+        const verify = node("button", t("call.e2ee.verify")); verify.type = "button"; verify.className = "call-e2ee-verify";
+        verify.onclick = () => window.__noxaChat.openPM(others[0].unique_id, label(others[0].unique_id));
+        element.append(" ", verify);
+    }
 }
 
 async function ensureCapture(owner) {
@@ -489,12 +546,14 @@ function syncConnectionStatus(owner) {
 
 function ensurePeer(owner, uid) {
     if (owner.peers.has(uid)) return owner.peers.get(uid);
-    const pc = new RTCPeerConnection(privateCallRTCConfiguration(owner.ice));
+    // (#12) Every transceiver carries the frame transform from creation on.
+    const pc = owner.e2ee.protectPeer(new RTCPeerConnection(owner.e2ee.peerConfig(privateCallRTCConfiguration(owner.ice))));
     const audio = node("audio"); audio.autoplay = true;
     // Keep playback separate from the panel, which rerenders as call state changes.
     audio.hidden = true; document.body.append(audio);
     const peer = { pc, audio, started: false, chain: Promise.resolve(), localCandidates: [], remoteCandidates: [], localCandidateCount: 0, remoteCandidateCount: 0, descriptionSent: false, candidateTimer: null, link: initialCallConnection() };
     peer.closeMedia = () => owner.media.closePeer(peer);
+    peer.releaseEncryption = () => owner.e2ee.releasePeer(pc);
     owner.peers.set(uid, peer);
     peer.stopRelay = maintainRelay(pc, {
         app: app(), tabID: owner.tabID,
@@ -633,6 +692,7 @@ export async function privateCallSignal(signal) {
     const owner = session;
     if (tabID !== V().state.activeTabID || generation !== V().state.serverGeneration || !accepted(owner)) return;
     try {
+        await ensureCallEncryption(owner);
         await ensureCapture(owner);
         if (!acceptedPeer(owner, signal.from)) return;
         const peer = ensurePeer(owner, signal.from);
@@ -667,6 +727,7 @@ export async function privateCallSignal(signal) {
                     if (microphone.sender.track !== track) await microphone.sender.replaceTrack(track);
                 });
                 await owner.media.syncPeer(peer, signal.from);
+                await owner.e2ee.bindPeer(peer.pc, peerClientID(owner, signal.from));
                 await peer.pc.setLocalDescription(await peer.pc.createAnswer());
                 await sendDescription(owner, signal.from, peer.pc);
             } else if (description.type === "answer" && peer.pc.signalingState === "have-local-offer") await peer.pc.setRemoteDescription({ type: "answer", sdp: description.sdp });
@@ -695,6 +756,9 @@ function overlaySnapshot() {
 window.__noxaPrivateCalls = { overlaySnapshot,
     active: () => !!session && current(session) && session.call.participants.some(peer => peer.unique_id === session.uid && peer.state === "accepted"),
     end: () => { if (session && current(session)) stopPrivateCall(); },
+    // (#12) Read-only encryption state for the overlay, diagnostics and tests.
+    encryption: () => (session && current(session) ? session.e2ee.status()?.state || "off" : "off"),
+    encryptionStats: () => (session && current(session) && session.e2ee.session ? session.e2ee.session.stats() : Promise.resolve(null)),
 };
 
 export async function showCallHistory() {

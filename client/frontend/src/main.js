@@ -45,7 +45,7 @@ import { initDirectMessages } from "./dm-view.js";
 import "./private-calls.css";
 import "./call-connection.css";
 import "./device-link.css";
-import { privateCallChanged, privateCallSignal, stopPrivateCall, applyPrivateCallAudioSettings } from "./private-calls.js";
+import { privateCallChanged, privateCallSignal, stopPrivateCall, applyPrivateCallAudioSettings, receiveCallMediaKey } from "./private-calls.js";
 import { createTabReconnects, reconnectDelay } from "./tab-reconnect.js";
 import { refreshPolls } from "./polls.js";
 
@@ -949,8 +949,26 @@ function showReconnectNotice(tabID) {
     sysMsg(message);
     toast(message, "warn");
 }
+// (#52) A scheduled shutdown names a jitter window; the first reconnect after
+// it waits a random part of that window so clients do not all return at once.
+// Hints come from every tab, also background ones (tab_shutdown_hint), and
+// expire a few minutes after the announced shutdown.
+const shutdownJitter = new Map(); // tabID -> { seconds, expires }
+window.runtime.EventsOn("tab_shutdown_hint", hint => {
+    const tabID = String(hint?.tab_id || "");
+    const seconds = Math.min(60, Math.max(0, Math.round(Number(hint?.reconnect_jitter) || 0)));
+    const until = Math.min(600, Math.max(1, Math.round(Number(hint?.seconds) || 0)));
+    if (tabID && seconds) shutdownJitter.set(tabID, { seconds, expires: Date.now() + (until + 300) * 1000 });
+});
 const tabReconnects = createTabReconnects({
     enabled: autoReconnectEnabled,
+    delay(attempt, entry) {
+        const base = reconnectDelay(attempt);
+        const hint = shutdownJitter.get(entry?.tabID);
+        shutdownJitter.delete(entry?.tabID); // one reconnect series uses a hint once
+        const jitter = attempt === 1 && hint && hint.expires > Date.now() ? hint.seconds : 0;
+        return base + Math.floor(Math.random() * jitter * 1000);
+    },
     connect: (tabID, target) => window.go.main.App.ReconnectTab(tabID, target.pw || "", target.spw || ""),
     warning(tabID, error) {
         reconnectNotices.set(tabID, { key: "runtime.rejoinFailed", error });
@@ -1941,6 +1959,8 @@ function syncChannelMedia() {
 window.runtime.EventsOn("media_key", payload => {
     const event = parseRuntimeObject(payload);
     if (!event) return;
+    // (#12) Private-call keys belong to the call, never to channel voice.
+    if (event.scope?.type === "call-media") { receiveCallMediaKey(event); return; }
     const result = receiveMediaKey(event);
     const startup = voiceStartupKeys;
     if (result?.reason === "inactive" && startup?.scope === voiceMediaScope()) {

@@ -32,8 +32,8 @@ func TestAnnounceShutdownBroadcastsRoundedSeconds(t *testing.T) {
 	s.AnnounceShutdown(0)                                 // nothing left to announce
 
 	want := []string{
-		`server_shutdown_scheduled {"seconds":30}`,
-		`server_shutdown_scheduled {"seconds":1}`,
+		`server_shutdown_scheduled {"seconds":30,"reconnect_jitter":5}`,
+		`server_shutdown_scheduled {"seconds":1,"reconnect_jitter":5}`,
 	}
 	if len(events) != len(want) {
 		t.Fatalf("events = %q, want %q", events, want)

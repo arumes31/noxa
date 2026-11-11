@@ -37,6 +37,33 @@ import { SLOTS } from "./media-e2ee-core.js";
 
 export const MEDIA_KEY_KIND = "media-key";
 export const MEDIA_SCOPE_TYPE = "channel-media";
+// Private calls (#12) use the same engine with one key scope per call:
+// "call:<call id>" in the engine, {type: "call-media", id} on the wire.
+export const CALL_MEDIA_SCOPE_TYPE = "call-media";
+const CALL_ID_RE = /^[0-9A-Za-z][0-9A-Za-z_-]{0,127}$/;
+
+/** The engine's scope key of a private call. */
+export function callScopeKey(callID) { return `call:${callID}`; }
+
+/**
+ * The wire scope of an engine scope key: a positive channel ID (number or
+ * decimal string) or "call:<id>". null for anything else.
+ */
+export function mediaScopeOf(key) {
+    if (typeof key === "string" && key.startsWith("call:")) {
+        const id = key.slice(5);
+        return CALL_ID_RE.test(id) ? { type: CALL_MEDIA_SCOPE_TYPE, id } : null;
+    }
+    const channel = typeof key === "number" ? key : typeof key === "string" && /^[1-9][0-9]{0,15}$/.test(key) ? Number(key) : NaN;
+    return Number.isSafeInteger(channel) && channel > 0 ? { type: MEDIA_SCOPE_TYPE, id: String(channel) } : null;
+}
+
+/** The canonical engine scope key (channel number or "call:<id>"), or null. */
+export function normalizeScopeKey(key) {
+    const scope = mediaScopeOf(key);
+    if (!scope) return null;
+    return scope.type === MEDIA_SCOPE_TYPE ? Number(scope.id) : callScopeKey(scope.id);
+}
 export const MEDIA_KEY_DATA_VERSION = 1;
 export const RENEW_MS = 5 * 60 * 1000;
 // A new epoch is activated only after its controls were admitted AND the
@@ -109,7 +136,12 @@ export function senderPid(slot) { return `self|${slotOf(slot)}`; }
 // channel count; aliases, strings and other shapes never receive keys, so
 // nobody the user cannot see gets the keys (review 2a-A P2-1).
 export function inChannel(entry, channelID) {
-    return typeof entry?.channel_id === "number" && Number.isInteger(entry.channel_id) && entry.channel_id === Number(channelID);
+    const scope = mediaScopeOf(channelID);
+    if (!scope) return false;
+    // A call roster names its call explicitly; a channel entry never counts
+    // for a call and a call entry never for a channel.
+    if (scope.type === CALL_MEDIA_SCOPE_TYPE) return typeof entry?.call_id === "string" && entry.call_id === scope.id && entry.channel_id === undefined;
+    return typeof entry?.channel_id === "number" && Number.isInteger(entry.channel_id) && entry.channel_id === Number(scope.id) && entry.call_id === undefined;
 }
 
 export function recipientsOf(roster, self) {
@@ -169,7 +201,7 @@ export async function membershipDigest(entries) {
 export function buildMediaKeyBody({ channelID, epoch, nowSeconds, client, session, kid, members, count, keys }) {
     return {
         kind: MEDIA_KEY_KIND,
-        scope: { type: MEDIA_SCOPE_TYPE, id: String(channelID) },
+        scope: mediaScopeOf(channelID),
         epoch,
         expires_at: nowSeconds + CONTROL_TTL_S,
         data: { v: MEDIA_KEY_DATA_VERSION, client: String(client), session, kid, members, n: count,
@@ -181,7 +213,8 @@ export function buildMediaKeyBody({ channelID, epoch, nowSeconds, client, sessio
 // {ok, reason} or {ok: true, value: {client, session, kid, members, n, keys}}.
 export function parseMediaKeyControl(control, channelID) {
     if (!control || control.kind !== MEDIA_KEY_KIND) return { ok: false, reason: "kind" };
-    if (control.scope?.type !== MEDIA_SCOPE_TYPE || control.scope?.id !== String(channelID)) return { ok: false, reason: "scope" };
+    const scope = mediaScopeOf(channelID);
+    if (!scope || control.scope?.type !== scope.type || control.scope?.id !== scope.id) return { ok: false, reason: "scope" };
     if (!Number.isSafeInteger(control.epoch) || control.epoch <= 0) return { ok: false, reason: "epoch" };
     const d = control.data;
     if (!d || typeof d !== "object" || Array.isArray(d)) return { ok: false, reason: "data" };
@@ -257,8 +290,9 @@ export class MediaKeyEngine {
 
     start({ channelID, clientID, principal, device }) {
         if (this.running) throw new Error("media key session already running");
-        if (!channelID || !clientID || !principal || !device) throw new Error("encrypted media needs a signed-in device");
-        this.self = { channelID: Number(channelID), clientID: String(clientID), principal: String(principal), device: String(device) };
+        const scope = normalizeScopeKey(channelID);
+        if (scope == null || !clientID || !principal || !device) throw new Error("encrypted media needs a signed-in device");
+        this.self = { channelID: scope, clientID: String(clientID), principal: String(principal), device: String(device) };
         this.#epoch = issuedEpochs.get(`${this.self.principal}\n${this.self.device}`) || 0;
         this.session = `${b64url(this.random(16))}.${RATCHET_FEATURE}`;
         const gen = ++this.#gen;

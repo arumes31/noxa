@@ -91,3 +91,14 @@ test("a server without the secure sign-in scheme is reported as needing an updat
     const text = JSON.stringify(messages);
     for (const key of ["login.failure.serverOutdated", "login.recovery.serverOutdated"]) assert.equal(text.split(key).length - 1, 2, `${key} in en and de`);
 });
+
+test("a restarting server is a retryable network condition with its delay (#52)", () => {
+    const failure = loginFailure("server is restarting; try again in 42 seconds");
+    assert.deepEqual(failure, { kind: "restarting", retryAfter: 42 });
+    assert.equal(loginErrorsModule.connectFailureCategory(failure), "network");
+    assert.equal(loginErrorsModule.connectFailureIsDefinitive(failure), false);
+    assert.equal(loginFailure("server is restarting; try again in 9999999 seconds").kind, "unknown");
+    assert.equal(loginFailure("server is restarting; try again in 0 seconds").retryAfter, 1, "at least a second");
+    const shield = loginFailure("the server is under heavy load; update noXa to connect");
+    assert.equal(shield.kind, "version");
+});

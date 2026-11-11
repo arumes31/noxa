@@ -10559,6 +10559,12 @@ test("contains disconnect and ICE-candidate rejections and reports ICE exhaustio
         document.getElementById("conn-pill").classList.add("up");
         window.__disconnectReject = true;
         await window.__noxa.disconnect();
+        // The hook below records every page timer with an ICE-ladder delay.
+        // Settings preloads on idle, and loading it injects its stylesheet
+        // through a 0 ms timer; load it (and let that timer run) first so an
+        // unrelated timer can never count as an ICE retry.
+        await import("/src/settings-ui.js");
+        await new Promise((resolve) => setTimeout(resolve, 50));
 
         const originalSetTimeout = window.setTimeout;
         const originalClearTimeout = window.clearTimeout;
@@ -12181,7 +12187,8 @@ test("disabled speech stays silent while unrelated effects work and history stay
         window.__noxa.syncOwnChannel();
         const liveMoveInitialMedia = media.length - mediaBeforeLiveMove;
         const liveMoveCueCleared = state.pendingInitialChannelCueTabID === "";
-        window.__noxa.openSettings("notifications");
+        // Settings loads on demand (idle preload); opening resolves once shown.
+        await window.__noxa.openSettings("notifications");
         const groups = [...document.querySelectorAll("#settings-content .set-subhead")].map((element) => element.querySelector("span")?.textContent || element.textContent);
         return { moveIn, moveOut, matrixOff, custom, replay, disabledSpecific, afterReplay,
             keywordChat, roleChat, ordinaryChat,

@@ -11,7 +11,7 @@
 // runtime, the server or the session cannot encrypt, and the caller must not
 // create a peer connection then.
 import { MediaE2EE, MediaE2EEUnsupported, MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, mediaE2EESupport } from "./media-e2ee.js";
-import { MediaKeyStartupInbox, MediaKeyEngine, publicationPid, senderPid } from "./media-keys.js";
+import { MediaKeyStartupInbox, MediaKeyEngine, normalizeScopeKey, publicationPid, senderPid } from "./media-keys.js";
 
 export { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, mediaE2EESupport };
 
@@ -87,11 +87,14 @@ export class MediaSession {
         this.startingChannel = null; this.startupKeys = new MediaKeyStartupInbox();
     }
 
-    // Starts encryption for a voice session in channelID. Throws
+    // Starts encryption for a voice session in channelID (a channel number
+    // or a private call's "call:<id>" scope key). Throws
     // MediaSessionError(reason): unsupported_runtime, server_outdated,
     // keyless_guest, no_device, secure_unavailable, worker.
     async start(channelID) {
-        this.startingChannel = Number(channelID);
+        const scope = normalizeScopeKey(channelID);
+        if (scope == null) throw new MediaSessionError("unavailable", "invalid encrypted media scope");
+        this.startingChannel = scope;
         const status = await this.adapter.status();
         if (this.closed) throw new MediaSessionError("closed");
         if (!status?.supported) throw new MediaSessionError(status?.reason || "server_outdated");
@@ -107,7 +110,7 @@ export class MediaSession {
         const startingMedia = this.media;
         try { await startingMedia.ready; } catch (error) { startingMedia.close(); throw new MediaSessionError("worker", String(error?.message || error)); }
         if (this.closed) { startingMedia.close(); throw new MediaSessionError("closed"); }
-        this.identity = { channelID: Number(channelID), clientID: String(status.clientID), principal: status.principal, device: status.device };
+        this.identity = { channelID: scope, clientID: String(status.clientID), principal: status.principal, device: status.device };
         this.#startEngine();
         return this;
     }
@@ -129,9 +132,11 @@ export class MediaSession {
     // the old scope is forgotten (retired) before the new epochs start.
     rescope(channelID) {
         if (!this.media || this.closed) throw new MediaSessionError("closed");
-        if (Number(channelID) === this.identity.channelID) return;
+        const scope = normalizeScopeKey(channelID);
+        if (scope == null) throw new MediaSessionError("unavailable", "invalid encrypted media scope");
+        if (scope === this.identity.channelID) return;
         this.engine.stop();
-        this.identity = { ...this.identity, channelID: Number(channelID) };
+        this.identity = { ...this.identity, channelID: scope };
         this.#startEngine();
     }
 
@@ -173,6 +178,19 @@ export class MediaSession {
 
     // Binds a single sender (e.g. after replaceTrack into a known slot).
     bindSender(sender, slot) { return this.media.bind(sender, slot ? senderPid(slot) : ""); }
+
+    // Binds a receiver whose publisher and slot are fixed by the peer itself
+    // (private calls: one peer per participant, slots in transceiver order).
+    bindReceiver(receiver, publisherClientID, slot) {
+        if (!this.media) throw new MediaSessionError("closed");
+        return this.media.bind(receiver, publisherClientID && slot ? publicationPid(publisherClientID, slot) : "");
+    }
+
+    // Protects transceivers a remote description added (before their track event).
+    syncPeer(pc) { if (!this.media) throw new MediaSessionError("closed"); this.media.syncPeer(pc); }
+    endpointID(endpoint) { return this.media ? this.media.endpointID(endpoint) : ""; }
+    // Calls fn once the receiver output its first authenticated frame.
+    onAuthenticated(receiver, fn) { this.media?.onAuthenticated(receiver, fn); }
 
     // Protects new transceivers and binds every receiver to the publisher
     // the CURRENT remote description names for its MID. A reused MID is
