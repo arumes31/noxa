@@ -278,3 +278,35 @@ func TestSSHClosesChannelWithoutShellOrExec(t *testing.T) {
 		t.Fatal("idle session channel was not closed")
 	}
 }
+
+// Unauthenticated SSH handshakes are capped per source and never take one
+// of the shared ServerQuery slots (audit #18).
+func TestSSHHandshakesDoNotTakeQuerySlots(t *testing.T) {
+	base := New("", nil, &roleQueryBackend{})
+	srv := NewSSH("", "", base)
+	var conns []net.Conn
+	for range maxSSHHandshakesPerSource + 1 {
+		a, b := net.Pipe()
+		t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
+		conns = append(conns, a)
+	}
+	for i := range maxSSHHandshakesPerSource {
+		if !srv.beginHandshake(conns[i]) {
+			t.Fatalf("handshake %d within the per-source cap refused", i)
+		}
+	}
+	if srv.beginHandshake(conns[maxSSHHandshakesPerSource]) {
+		t.Fatal("handshake beyond the per-source cap admitted")
+	}
+	base.mu.Lock()
+	taken := len(base.conns)
+	base.mu.Unlock()
+	if taken != 0 {
+		t.Fatalf("pending handshakes took %d ServerQuery slots", taken)
+	}
+	srv.endHandshake(conns[0])
+	srv.endHandshake(conns[0]) // idempotent
+	if !srv.beginHandshake(conns[maxSSHHandshakesPerSource]) {
+		t.Fatal("a released handshake slot was not reusable")
+	}
+}

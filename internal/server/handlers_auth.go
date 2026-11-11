@@ -80,7 +80,10 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	source := auth.SourceAddressKey(ip)
 	serverPasswordScope := auth.LoginFailureScope("tcp-server-password:"+source, "")
 	accountSourceScope := auth.LoginFailureScope("tcp:"+source, "")
-	principalScope := auth.LoginFailureScope("", msg.Username)
+	// Password failures are counted per transport, so wrong passwords on the
+	// public port cannot lock the same account's ServerQuery, gRPC or
+	// /events logins.
+	principalScope := auth.LoginFailureScope("tcp", msg.Username)
 	if reason, err := s.banRejectReason(ctx, client, msg.Username, ip); err != nil {
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
 	} else if reason != "" {
@@ -111,10 +114,10 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 
 	// No password: challenge-response handshake.
 	if msg.Password == "" {
-		// Reserve and release immediately to atomically reject lockouts before
-		// issuing a challenge. The signature verification below reserves the
-		// same scopes for its entire expensive authentication step.
-		attempt, allowed := s.loginLimiter.Reserve(accountSourceScope, principalScope)
+		// Reserve and release immediately to atomically reject source lockouts
+		// before issuing a challenge. An Ed25519 signature cannot be guessed,
+		// so password failures against this name must not block it.
+		attempt, allowed := s.loginLimiter.Reserve(accountSourceScope)
 		if !allowed {
 			s.metricsSink().IncAuthFailure("tcp", "locked_out")
 			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
@@ -221,9 +224,10 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "no pending challenge"})
 	}
 
+	// Only the source is limited: signatures cannot be guessed, and an account
+	// lock here would let anyone lock a key login out with wrong passwords.
 	sourceScope := auth.LoginFailureScope("tcp:"+auth.SourceAddressKey(remoteIP(client.Conn)), "")
-	principalScope := auth.LoginFailureScope("", msg.UniqueID)
-	attempt, allowed := s.loginLimiter.Reserve(sourceScope, principalScope)
+	attempt, allowed := s.loginLimiter.Reserve(sourceScope)
 	if !allowed {
 		s.metricsSink().IncAuthFailure("tcp", "locked_out")
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
@@ -252,7 +256,7 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 	client.mu.Lock()
 	client.authSigningKey = verifiedKey
 	client.mu.Unlock()
-	attempt.Succeed(principalScope)
+	attempt.Succeed()
 	return s.completeAuth(ctx, client, msg.UniqueID, nickname)
 }
 
@@ -267,11 +271,13 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	}
 
 	ip := remoteIP(client.Conn)
+	// Only the source is limited: a signature cannot be guessed, and an
+	// account scope keyed on the public, key-derived ID would let anyone lock
+	// this login out.
 	sourceScope := auth.LoginFailureScope("tcp:"+auth.SourceAddressKey(ip), "")
-	principalScope := auth.LoginFailureScope("", msg.PublicKey)
 	uniqueID, err := auth.UniqueIDFromPublicKey(msg.PublicKey)
 	if err != nil {
-		attempt, allowed := s.loginLimiter.Reserve(sourceScope, principalScope)
+		attempt, allowed := s.loginLimiter.Reserve(sourceScope)
 		if !allowed {
 			s.metricsSink().IncAuthFailure("tcp", "locked_out")
 			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
@@ -280,7 +286,6 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 		s.metricsSink().IncAuthFailure("tcp", "invalid_credentials")
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid public key"})
 	}
-	principalScope = auth.LoginFailureScope("", uniqueID)
 	// Continue with the one canonical spelling, so device lookups, key
 	// binding lookups and the session key never depend on how the PEM was
 	// formatted.
@@ -296,7 +301,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 		s.metricsSink().IncAuthFailure("tcp", "banned")
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: reason})
 	}
-	attempt, allowed := s.loginLimiter.Reserve(sourceScope, principalScope)
+	attempt, allowed := s.loginLimiter.Reserve(sourceScope)
 	if !allowed {
 		s.metricsSink().IncAuthFailure("tcp", "locked_out")
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
@@ -322,7 +327,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 		s.logger.Warn("device lookup failed", zap.String("client_id", client.ID), zap.Error(err))
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
 	} else if ok && principal != uniqueID {
-		attempt.Succeed(principalScope)
+		attempt.Succeed()
 		if userID > 0 {
 			return s.completeAuth(ctx, client, principal, nickname)
 		}
@@ -333,7 +338,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 
 	// Registered user with this identity? Then it is a normal login.
 	if _, err := s.deps.Auth.LookupUser(ctx, uniqueID); err == nil {
-		attempt.Succeed(principalScope)
+		attempt.Succeed()
 		return s.completeAuth(ctx, client, uniqueID, nickname)
 	} else if !errors.Is(err, auth.ErrUserNotFound) {
 		s.logger.Warn("user lookup failed",
@@ -346,7 +351,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	// Account with this key bound via a nickname login? The account's unique
 	// ID stays canonical even though it differs from the key-derived one.
 	if user, err := s.deps.Auth.LookupUserByPublicKey(ctx, msg.PublicKey); err == nil {
-		attempt.Succeed(principalScope)
+		attempt.Succeed()
 		return s.completeAuthForUser(ctx, client, user, nickname)
 	} else if !errors.Is(err, auth.ErrUserNotFound) {
 		s.logger.Warn("user lookup by public key failed",
@@ -356,7 +361,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
 	}
 
-	attempt.Succeed(principalScope)
+	attempt.Succeed()
 	client.mu.Lock()
 	client.verifiedGuestKey = msg.PublicKey
 	client.mu.Unlock()

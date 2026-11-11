@@ -315,8 +315,41 @@ func TestGRPCLoginFailuresArePrincipalScoped(t *testing.T) {
 		t.Fatalf("other principal was locked out: %v", err)
 	}
 	_, err = server.authenticateRoleIntegration(context.Background(), backend, "admin-uid", "pw")
-	if !errors.Is(err, auth.ErrIntegrationDenied) {
+	if !errors.Is(err, errIntegrationLoginBusy) {
 		t.Fatalf("locked principal was accepted: %v", err)
+	}
+	if code := status.Code(roleStatus(err)); code != codes.ResourceExhausted {
+		t.Fatalf("locked principal code = %v, want ResourceExhausted (retryable)", code)
+	}
+}
+
+// Two calls from one integration at once must not turn into "invalid
+// credentials" for the second one (audit #19).
+func TestGRPCConcurrentLoginIsRetryableNotUnauthenticated(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	backend := &roleGRPCBackend{authenticate: func(context.Context, string, string, string) (auth.IntegrationPrincipal, error) {
+		close(entered)
+		<-release
+		return auth.IntegrationPrincipal{}, nil
+	}}
+	limiter := query.New("127.0.0.1:0", zap.NewNop(), backend)
+	bus := eventbus.New(zap.NewNop())
+	defer bus.Close()
+	server := New("127.0.0.1:12338", backend, bus, zap.NewNop(), limiter)
+	done := make(chan error, 1)
+	go func() {
+		_, err := server.authenticateRoleIntegration(context.Background(), backend, "bot", "pw")
+		done <- err
+	}()
+	<-entered
+	_, err := server.authenticateRoleIntegration(context.Background(), backend, "bot", "pw")
+	if code := status.Code(roleStatus(err)); code != codes.ResourceExhausted {
+		t.Fatalf("parallel login code = %v (%v), want ResourceExhausted", code, err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("first login failed: %v", err)
 	}
 }
 

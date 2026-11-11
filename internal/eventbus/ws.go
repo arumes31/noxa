@@ -123,7 +123,7 @@ func newWSHandler(bus *Bus, logger *zap.Logger, cfg wsHandlerConfig) http.Handle
 		}
 
 		var attempt *auth.LoginAttempt
-		principalScope := auth.LoginFailureScope("", user)
+		principalScope := auth.LoginFailureScope("events", user)
 		if cfg.loginLimiter != nil {
 			sourceScope := auth.LoginFailureScope("ws:"+auth.SourceAddressKey(remoteIPKey(r.RemoteAddr)), "")
 			var allowed bool

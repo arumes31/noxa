@@ -161,7 +161,7 @@ func (s *Server) cmdLogin(ctx context.Context, sess *session, cmd command) bool 
 	}
 	uniqueID, password := cmd.positional[0], cmd.positional[1]
 	sourceScope := auth.LoginFailureScope("query:"+auth.SourceAddressKey(sess.remoteIP), "")
-	principalScope := auth.LoginFailureScope("", uniqueID)
+	principalScope := auth.LoginFailureScope("query", uniqueID)
 	attempt, allowed := s.ReserveLoginAttempt(sourceScope, principalScope)
 	if !allowed {
 		s.RecordAuthFailure("query", "locked_out")

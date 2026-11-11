@@ -2,9 +2,13 @@ package server
 
 import "net"
 
+// The global cap must stay far above the per-source cap: at 256/32, eight
+// sources could fill it and refuse every real login. 2048 pending handshakes
+// (each holding TLS buffers) still fit the server's memory budget, and an
+// attacker now needs 128 sources (IPv4 addresses or IPv6 /64s) to fill it.
 const (
-	maxPreauthConnections = 256
-	maxPreauthPerIP       = 32
+	maxPreauthConnections = 2048
+	maxPreauthPerIP       = 16
 	preauthFrameLimit     = 32 << 10
 )
 
