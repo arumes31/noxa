@@ -3,7 +3,8 @@
 // tools/media-e2ee-notices.mjs). The desktop bundles highlight.js
 // (BSD-3-Clause, code-block highlighting) and jsQR (Apache-2.0, safety-code
 // scanning); the mobile app bundles jsQR and qrcode-generator (MIT, safety
-// codes). Each build emits frontend-licenses.txt next to its output.
+// codes); both bundle markdown-it and turndown (MIT, chat markdown and
+// formatted paste). Each build emits frontend-licenses.txt next to its output.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -38,8 +39,14 @@ function qrcodeGeneratorLicense(dir) {
 }
 
 // [package, license file] or [package, function(dir) returning the text].
-export const DESKTOP_PACKAGES = Object.freeze([["highlight.js", "LICENSE"], ["jsqr", "LICENSE"]]);
-export const MOBILE_PACKAGES = Object.freeze([["jsqr", "LICENSE"], ["qrcode-generator", qrcodeGeneratorLicense]]);
+// Chat markdown (markdown-it and its runtime dependencies, MIT) and the
+// formatted-paste converter (turndown + GFM plugin, MIT), in both apps.
+const MARKDOWN_PACKAGES = [
+    ["markdown-it", "LICENSE"], ["entities", "LICENSE"], ["linkify-it", "LICENSE"], ["mdurl", "LICENSE"],
+    ["punycode.js", "LICENSE-MIT.txt"], ["uc.micro", "LICENSE.txt"], ["turndown", "LICENSE"], ["turndown-plugin-gfm", "LICENSE"],
+];
+export const DESKTOP_PACKAGES = Object.freeze([["highlight.js", "LICENSE"], ["jsqr", "LICENSE"], ...MARKDOWN_PACKAGES]);
+export const MOBILE_PACKAGES = Object.freeze([["jsqr", "LICENSE"], ["qrcode-generator", qrcodeGeneratorLicense], ...MARKDOWN_PACKAGES]);
 
 export function frontendNotices(nodeModules, packages = DESKTOP_PACKAGES) {
     return packages.map(([name, file]) => {

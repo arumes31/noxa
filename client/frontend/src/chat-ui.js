@@ -6,6 +6,7 @@ import { SafetyScan, SafetyScheme, checkSafetyScan } from "./safety-qr.js";
 import { scanQR } from "./qr-scan.js";
 import { AUDIO_MIME, TEXT_MAX_B64, decodeTextPreview, previewKind } from "./attachment-preview.js";
 import { clipboardFiles, preparePastedFiles } from "./paste-images.js";
+import { bindRichPaste } from "./rich-paste.js";
 import { mountComposerFormat } from "./composer-format.js";
 import { MAX_FAVORITES, MAX_RECENT, emojiIndex, recordEmojiUse, searchEmoji, storedEmoji, toggleFavorite } from "./emoji-picker-model.js";
 import { previewConversation, previewConversationFor, setPreviewConversation } from "./preview-privacy.js";
@@ -6357,6 +6358,7 @@ export function initChat() {
     });
 
     // File paste + drop + picker (98/100).
+    bindRichPaste($("chat-text"));
     $("chat-text").addEventListener("paste", (e) => {
         const files = clipboardFiles(e.clipboardData);
         if (!files.length) return;

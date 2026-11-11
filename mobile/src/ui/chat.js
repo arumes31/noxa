@@ -25,6 +25,7 @@ import { chatSearch } from "./chat-search.js";
 import { threadsButton, watchOpenThread } from "./chat-tools.js";
 import { isPoll, openCreatePoll, pollCard } from "./poll.js";
 import { aboutEncryption, blockedLine, encryptionBadge, headerActions, isBlockedUser, lineCache, menuButton, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
+import { bindRichPaste } from "../core/rich-paste.js";
 import {
     actionSheet, bindMessageTaps, canShare, composerBar, copyText, excerpt, flash, holdChannelMessage, mentionCompleter, newMessagesPill,
     openThread, pinBadge, pinsSheet, reactionChips, replyQuote, reportMessage, saveMessage, sessionMentionChoices, shareText, undoCountdown,
@@ -43,6 +44,7 @@ export function renderChat(root, scope) {
     const log = h("div", { class: "chat-log", role: "log", "aria-live": "polite", "aria-label": name });
     const typing = h("div", { class: "typing" });
     const input = h("textarea", { rows: "1", "aria-label": t("chat.placeholder", { channel: name }), placeholder: t("chat.placeholder", { channel: name }), enterkeyhint: "send" });
+    bindRichPaste(input); // formatted paste keeps its formatting as markdown
     const sendButton = h("button", { class: "send", type: "submit", "aria-label": t("chat.send") }, icon("send"));
     const { button: attachButton, picker } = attachControls(async file => {
         try {
