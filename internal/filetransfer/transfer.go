@@ -268,6 +268,18 @@ func (s *Server) finalizeUpload(ctx context.Context, tr *transfer, root *os.Root
 		}
 	}
 
+	// An object reachable at finalPath under another spelling belongs to a
+	// different metadata record, which the exact-name owner check above did
+	// not cover. Refuse before rotation, so a refused upload moves nothing.
+	// The exactly named current file is listed exactly and is not an alias.
+	if alias, err := blobAlias(root, finalPath, nil); err != nil {
+		_ = root.Remove(tmpPath)
+		return err
+	} else if alias {
+		_ = root.Remove(tmpPath)
+		return ErrNameAliasesExistingFile
+	}
+
 	// Content-derived .vcx names never collide, so rotation can only burn four
 	// store lookups on a guaranteed miss for them (91-135).
 	if !encrypted {
@@ -278,18 +290,10 @@ func (s *Server) finalizeUpload(ctx context.Context, tr *transfer, root *os.Root
 				return err
 			}
 		}
-		s.rotateVersions(ctx, tr, root)
-	}
-
-	// Rotation moved any exactly named predecessor away. An object still
-	// reachable at finalPath under another spelling belongs to a different
-	// metadata record, which the exact-name owner check above did not cover.
-	if alias, err := blobAlias(root, finalPath, nil); err != nil {
-		_ = root.Remove(tmpPath)
-		return err
-	} else if alias {
-		_ = root.Remove(tmpPath)
-		return ErrNameAliasesExistingFile
+		if err := s.rotateVersions(ctx, tr, root); err != nil {
+			_ = root.Remove(tmpPath)
+			return err
+		}
 	}
 
 	// Dedup (275): point at an identical existing blob instead of storing a
@@ -350,27 +354,33 @@ func (s *Server) checkUploadCommitQuota(ctx context.Context, tr *transfer, size 
 // rotateVersions shifts <name>.v1..v2 up one slot (dropping the oldest) and
 // renames the current file to <name>.v1 (264). Failures are logged, not
 // fatal: losing a version must not break the upload.
-func (s *Server) rotateVersions(ctx context.Context, tr *transfer, root *os.Root) {
-	rename := func(folder, from, to string) {
+func (s *Server) rotateVersions(ctx context.Context, tr *transfer, root *os.Root) error {
+	rename := func(folder, from, to string) error {
 		if _, err := s.store.GetFile(ctx, tr.ChannelID, folder, from); err != nil {
-			return // nothing to rotate
+			return nil // nothing to rotate
 		}
 		oldPath := blobPath(tr.ChannelID, folder, from)
 		newPath := blobPath(tr.ChannelID, folder, to)
 		if info, err := root.Lstat(oldPath); err == nil && !info.Mode().IsRegular() {
 			s.logger.Warn("version rotate refused non-regular blob", zap.String("from", from))
-			return
+			return nil
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			s.logger.Warn("version rotate (disk check) failed", zap.String("from", from), zap.Error(err))
-			return
+			return nil
 		}
 		if err := s.store.RenameFile(ctx, tr.ChannelID, folder, from, folder, to); err != nil {
 			s.logger.Warn("version rotate (db) failed", zap.String("from", from), zap.Error(err))
-			return
+			return nil
 		}
-		if err := root.Rename(oldPath, newPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			s.logger.Warn("version rotate (disk) failed", zap.String("from", from), zap.Error(err))
+		if err := rotateRename(root, oldPath, newPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			// Row and blob must name the same place, or the sweep would later
+			// delete the "unreferenced" blob and lose this version.
+			if rbErr := s.store.RenameFile(ctx, tr.ChannelID, folder, to, folder, from); rbErr != nil {
+				s.logger.Error("version rotate rollback (db) failed", zap.String("from", from), zap.Error(rbErr))
+			}
+			return fmt.Errorf("rotating %q to %q: %w", from, to, err)
 		}
+		return nil
 	}
 	// Oldest version falls off the end.
 	oldest := tr.Name + ".v" + strconv.Itoa(maxFileVersions)
@@ -379,9 +389,17 @@ func (s *Server) rotateVersions(ctx context.Context, tr *transfer, root *os.Root
 		_ = root.Remove(blobPath(tr.ChannelID, tr.Folder, oldest))
 	}
 	for v := maxFileVersions - 1; v >= 1; v-- {
-		rename(tr.Folder, tr.Name+".v"+strconv.Itoa(v), tr.Name+".v"+strconv.Itoa(v+1))
+		if err := rename(tr.Folder, tr.Name+".v"+strconv.Itoa(v), tr.Name+".v"+strconv.Itoa(v+1)); err != nil {
+			return err
+		}
 	}
-	rename(tr.Folder, tr.Name, tr.Name+".v1")
+	return rename(tr.Folder, tr.Name, tr.Name+".v1")
+}
+
+// rotateRename renames a blob during version rotation; tests replace it to
+// simulate a rename the OS refuses (a file held open on Windows).
+var rotateRename = func(root *os.Root, oldPath, newPath string) error {
+	return root.Rename(oldPath, newPath)
 }
 
 // sendDownload streams the file in chunk frames followed by the digest
