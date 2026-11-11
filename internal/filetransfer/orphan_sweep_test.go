@@ -248,3 +248,38 @@ func TestOrphanSweepCountsRemovalsOfAnInterruptedChannel(t *testing.T) {
 		t.Fatalf("total = %+v", got)
 	}
 }
+
+// DM and private-group attachments live in scope 0 (audit #13): stale
+// partials and unreferenced blobs there are swept too, referenced
+// attachments and group folders stay.
+func TestOrphanSweepCoversScopeZero(t *testing.T) {
+	fs := newFakeFileStore()
+	s := New(Config{Addr: "127.0.0.1:0", RootDir: t.TempDir()}, fs, nil)
+	ctx := context.Background()
+	att := strings.Repeat("c", 32) + ".vcx"
+	kept := placeFile(t, s, "0/"+att, 72*time.Hour)
+	if err := fs.AddFile(ctx, store.FileRecord{ChannelID: 0, Name: att, Size: 1, SHA256: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	keptGroup := placeFile(t, s, "0/private-groups/g1/"+att, 72*time.Hour)
+	if err := fs.AddFile(ctx, store.FileRecord{ChannelID: 0, Folder: "private-groups/g1", Name: att, Size: 1, SHA256: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	stalePartial := placeFile(t, s, "0/"+strings.Repeat("d", 32)+".vcx.part-r"+strings.Repeat("e", 32), 30*time.Hour)
+	orphan := placeFile(t, s, "0/"+strings.Repeat("f", 32)+".vcx", 48*time.Hour)
+
+	r := runSweep(t, s)
+	for _, path := range []string{kept, keptGroup} {
+		if !exists(path) {
+			t.Errorf("removed referenced %s", path)
+		}
+	}
+	for _, path := range []string{stalePartial, orphan} {
+		if exists(path) {
+			t.Errorf("kept %s", path)
+		}
+	}
+	if r.OrphanBlobs != 1 || r.StalePartials != 1 {
+		t.Fatalf("result = %+v", r)
+	}
+}

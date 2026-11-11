@@ -222,7 +222,7 @@ func (s *Server) channelDirectories() ([]int64, error) {
 			continue
 		}
 		id, err := strconv.ParseInt(entry.Name(), 10, 64)
-		if err != nil || id <= 0 || strconv.FormatInt(id, 10) != entry.Name() {
+		if err != nil || id < 0 || strconv.FormatInt(id, 10) != entry.Name() {
 			continue
 		}
 		out = append(out, id)
