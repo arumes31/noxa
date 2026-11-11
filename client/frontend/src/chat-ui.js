@@ -71,9 +71,16 @@ const V = () => window.__noxa;
 const $ = (id) => document.getElementById(id);
 
 let composerLimit = null;
+// WebKitGTK (the Linux desktop) has no CSS field-sizing: size the composer
+// to its text here. Every value change, including send and recall, ends here.
+const composerAutoSize = !globalThis.CSS?.supports?.("field-sizing", "content");
 function updateComposerCount() {
     const input = $("chat-text"), counter = $("chat-length");
     if (!input || !counter) return;
+    if (composerAutoSize) {
+        input.style.height = "auto";
+        input.style.height = `${input.scrollHeight}px`; // max-height in CSS caps it
+    }
     const text = input.value.trim();
     const bytes = new TextEncoder().encode(text).length;
     const limit = composerLimit && chatServerIsCurrent(composerLimit.scope) && $("chat-scope").value !== "direct" ? composerLimit.bytes : 0;
@@ -4505,7 +4512,9 @@ function rememberSent(text) {
 
 function recallSent(e) {
     const input = $("chat-text");
-    if (e.key === "ArrowUp" && (input.selectionStart === 0 || sentHistoryPos < sentHistory.length) && sentHistoryPos > 0) {
+    // Multi-line text: ArrowUp moves the caret until it is on the first line.
+    const onFirstLine = !input.value.slice(0, input.selectionStart).includes("\n");
+    if (e.key === "ArrowUp" && onFirstLine && (input.selectionStart === 0 || sentHistoryPos < sentHistory.length) && sentHistoryPos > 0) {
         e.preventDefault();
         if (sentHistoryPos === sentHistory.length) sentHistoryDraft = input.value;
         draftRevision++;

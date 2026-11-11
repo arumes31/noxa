@@ -106,3 +106,9 @@ test("the PWA copy of the paste converter is identical", async () => {
     const pwa = await readFile(new URL("../../../mobile/src/core/rich-paste.js", import.meta.url), "utf8");
     assert.equal(pwa.replace(/\r\n/g, "\n"), desktop.replace(/\r\n/g, "\n"));
 });
+
+test("blank lines inside pasted code survive; prose spacing is compacted", async () => {
+    const md = await htmlToMarkdown("<p><b>a</b></p><p><br></p><p><br></p><p>b</p><pre><code>x\n\n\n\ny</code></pre>");
+    assert.match(md, /```\nx\n\n\n\ny\n```/);
+    assert.doesNotMatch(md.split("```")[0], /\n{3,}/);
+});

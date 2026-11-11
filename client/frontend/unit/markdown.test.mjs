@@ -243,3 +243,12 @@ describe("full markdown", () => {
         assert.doesNotMatch(renderMarkdown("see example.test or mail@example.test"), /md-link/);
     });
 });
+
+describe("image targets", () => {
+    it("renders only https images as load buttons; http images stay links", () => {
+        assert.match(renderMarkdown("![a](https://example.test/a.png)"), /class="md-img-load"/);
+        const http = renderMarkdown("![shot](http://example.test/a.png)");
+        assert.doesNotMatch(http, /md-img-load/);
+        assert.match(http, /<a href="#" class="md-link" data-url="http:\/\/example\.test\/a\.png" title="http:\/\/example\.test\/a\.png">shot<\/a>/);
+    });
+});

@@ -76,9 +76,10 @@ function linkNode(url, label = null) {
     if (!href) return label ? h("span", {}, label) : document.createTextNode(url);
     const text = label ? null : displayURL(url);
     const link = h("a", { class: "md-link", href, target: "_blank", rel: "noopener noreferrer", title: url }, label || text);
-    // Shortened and named links show the whole address on long press.
+    // Shortened and named links show the whole address on long press; only a
+    // shortened bare URL needs the full address as its accessible name.
     if (label || text !== url) {
-        link.setAttribute("aria-label", url);
+        if (!label) link.setAttribute("aria-label", url);
         link.addEventListener("contextmenu", event => { event.preventDefault(); showFullLink(url); });
     }
     return link;

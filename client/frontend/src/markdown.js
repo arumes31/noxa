@@ -113,6 +113,11 @@ rules.link_open = (tokens, i) => {
 rules.image = (tokens, i, options, env, self) => {
     const src = tokens[i].attrGet("src");
     const alt = escapeHTML(self.renderInlineAsText(tokens[i].children, options, env));
+    // The loader only fetches https; an http image stays an ordinary link.
+    if (!/^https:\/\//i.test(src)) {
+        const url = escapeHTML(src);
+        return `<a href="#" class="md-link" data-url="${url}" title="${url}">${alt || url}</a>`;
+    }
     return `<button type="button" class="md-img-load" data-img="${imageID(src)}" data-alt="${alt}" title="${escapeHTML(src)}">🖼 ${alt || "image"}</button>`;
 };
 // __text__ keeps its noXa meaning (underline); the format toolbar emits it.

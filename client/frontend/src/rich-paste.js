@@ -58,7 +58,9 @@ async function turndown() {
 /** Converts clipboard HTML to chat markdown. */
 export async function htmlToMarkdown(html) {
     const td = await turndown();
-    return td.turndown(html).replace(/\n{3,}/g, "\n\n").trim();
+    // Compact runs of blank lines in prose only; fenced code keeps its own.
+    return td.turndown(html).split(/(```[\s\S]*?```)/)
+        .map((part, i) => (i % 2 ? part : part.replace(/\n{3,}/g, "\n\n"))).join("").trim();
 }
 
 /**
