@@ -328,7 +328,7 @@ func (s *TCPServer) finishPasskeyLogin(ctx context.Context, client *Client, rp *
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "invalid device key")
 	}
 	ip := remoteIP(client.Conn)
-	sourceScope := auth.LoginFailureScope("passkey:"+ip, "")
+	sourceScope := auth.LoginFailureScope("passkey:"+auth.SourceAddressKey(ip), "")
 	attempt, allowed := s.loginLimiter.Reserve(sourceScope)
 	if !allowed {
 		s.metricsSink().IncAuthFailure("tcp", "locked_out")

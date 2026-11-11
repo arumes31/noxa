@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -397,5 +398,52 @@ func TestLoginFailureLimiterConcurrentAccessRemainsBounded(t *testing.T) {
 	wg.Wait()
 	if len(limiter.entries) > 32 {
 		t.Fatalf("entries = %d, cap = 32", len(limiter.entries))
+	}
+}
+
+func TestLoginFailureLimiterSourceLockoutsCannotFillTheTable(t *testing.T) {
+	now := time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)
+	limiter := NewLoginFailureLimiter(LoginFailureLimiterConfig{
+		MaxFailures:     1,
+		LockoutDuration: time.Minute,
+		FailureTTL:      time.Hour,
+		MaxEntries:      4,
+		Now:             func() time.Time { return now },
+	})
+	// An attacker locks more sources than the table holds.
+	for i := 0; i < 10; i++ {
+		now = now.Add(time.Second)
+		limiter.RecordFailure(LoginFailureScope(fmt.Sprintf("passkey:2001:db8:%x::/64", i), ""))
+	}
+	// A real user from a new source with a new principal can still try.
+	user := []string{LoginFailureScope("tcp:198.51.100.7", ""), LoginFailureScope("", "alice")}
+	attempt, ok := limiter.Reserve(user...)
+	if !ok {
+		t.Fatal("source lockouts filled the table and refused a new source")
+	}
+	attempt.Cancel()
+	// The newest source lockout is still in force.
+	if limiter.Allowed(LoginFailureScope("passkey:2001:db8:9::/64", "")) {
+		t.Fatal("the newest source lockout was evicted")
+	}
+}
+
+func TestLoginFailureLimiterPrincipalLockoutsSurviveSourcePressure(t *testing.T) {
+	now := time.Date(2026, time.November, 11, 12, 0, 0, 0, time.UTC)
+	limiter := NewLoginFailureLimiter(LoginFailureLimiterConfig{
+		MaxFailures:     1,
+		LockoutDuration: time.Minute,
+		FailureTTL:      time.Hour,
+		MaxEntries:      2,
+		Now:             func() time.Time { return now },
+	})
+	account := LoginFailureScope("tcp", "admin")
+	limiter.RecordFailure(account)
+	for i := 0; i < 10; i++ {
+		now = now.Add(time.Second)
+		limiter.RecordFailure(LoginFailureScope(fmt.Sprintf("ssh:2001:db8:%x::/64", i), ""))
+	}
+	if limiter.Allowed(account) {
+		t.Fatal("a principal lockout was evicted under source pressure")
 	}
 }

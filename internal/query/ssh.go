@@ -183,7 +183,7 @@ func (s *SSHServer) passwordCallback(ctx context.Context, principal *auth.Integr
 	authFailed := errors.New("invalid loginname or password")
 	return func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 		ip := hostOnly(meta.RemoteAddr().String())
-		sourceScope := auth.LoginFailureScope("ssh:"+ip, "")
+		sourceScope := auth.LoginFailureScope("ssh:"+auth.SourceAddressKey(ip), "")
 		principalScope := auth.LoginFailureScope("", meta.User())
 		attempt, allowed := s.base.ReserveLoginAttempt(sourceScope, principalScope)
 		if !allowed {
