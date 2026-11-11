@@ -112,6 +112,9 @@ func (s *Server) receiveUpload(ctx context.Context, conn net.Conn, tr *transfer,
 		}
 		defer release()
 		tmpPath = tr.PartialPath
+		if s.partialIsStoredFile(ctx, tr.ChannelID, tr.Folder, tmpPath) {
+			return errors.New("partial upload path is a stored file")
+		}
 		if f, h, err = openResumablePartial(root, tmpPath, offset); err != nil {
 			return err
 		}
