@@ -175,8 +175,9 @@ type spamEntry struct {
 
 // spamTracker rejects the third identical message within 30 seconds (116).
 type spamTracker struct {
-	mu     sync.Mutex
-	recent map[string][]spamEntry
+	mu          sync.Mutex
+	recent      map[string][]spamEntry
+	lastCleanup time.Time
 }
 
 func newSpamTracker() *spamTracker {
@@ -189,6 +190,14 @@ func (t *spamTracker) record(uid string, sum [32]byte, now time.Time) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	cutoff := now.Add(-30 * time.Second)
+	if len(t.recent) > trackerSoftLimit && now.Sub(t.lastCleanup) >= 10*time.Second {
+		for user, entries := range t.recent {
+			if len(entries) == 0 || entries[len(entries)-1].at.Before(cutoff) {
+				delete(t.recent, user)
+			}
+		}
+		t.lastCleanup = now
+	}
 	keep := t.recent[uid][:0]
 	same := 0
 	for _, e := range t.recent[uid] {
@@ -243,9 +252,22 @@ func stripAttachmentRefs(body string) string {
 
 // slowTracker records each user's last send time per channel (114).
 type slowTracker struct {
-	mu   sync.Mutex
-	last map[string]map[int64]time.Time
+	mu          sync.Mutex
+	last        map[string]map[int64]slowSend
+	lastCleanup time.Time
 }
+
+// slowSend is one recorded send: until is when its window ends, and
+// clientMsgID lets a retry of that same message through to the store's
+// idempotency check.
+type slowSend struct {
+	at, until   time.Time
+	clientMsgID string
+}
+
+// trackerSoftLimit starts a sweep of expired keys in the spam and slow-mode
+// trackers, so per-session guest IDs cannot grow them without bound.
+const trackerSoftLimit = 10_000
 
 type typingTracker struct {
 	mu          sync.Mutex
@@ -287,26 +309,53 @@ func (t *typingTracker) allow(key string, now time.Time) bool {
 }
 
 func newSlowTracker() *slowTracker {
-	return &slowTracker{last: map[string]map[int64]time.Time{}}
+	return &slowTracker{last: map[string]map[int64]slowSend{}}
 }
 
-// check returns the remaining wait when the user is inside the slow-mode
-// window, recording the send otherwise (0 = allowed).
-func (t *slowTracker) check(uid string, channelID int64, seconds int, now time.Time) time.Duration {
+// wait returns the remaining slow-mode wait without recording anything (0 =
+// allowed). A retry of the recorded message (same non-empty client id) is
+// allowed, so the store can acknowledge it instead of reporting slow mode.
+func (t *slowTracker) wait(uid string, channelID int64, seconds int, clientMsgID string, now time.Time) time.Duration {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	prev, ok := t.last[uid][channelID]
+	if !ok || (clientMsgID != "" && prev.clientMsgID == clientMsgID) {
+		return 0
+	}
+	return max(0, time.Duration(seconds)*time.Second-now.Sub(prev.at))
+}
+
+// mark records a send that was accepted, starting its slow-mode window.
+func (t *slowTracker) mark(uid string, channelID int64, seconds int, clientMsgID string, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.last) > trackerSoftLimit && now.Sub(t.lastCleanup) >= 10*time.Second {
+		for user, sends := range t.last {
+			for channel, send := range sends {
+				if !now.Before(send.until) {
+					delete(sends, channel)
+				}
+			}
+			if len(sends) == 0 {
+				delete(t.last, user)
+			}
+		}
+		t.lastCleanup = now
+	}
 	m, ok := t.last[uid]
 	if !ok {
-		m = map[int64]time.Time{}
+		m = map[int64]slowSend{}
 		t.last[uid] = m
 	}
-	if prev, ok := m[channelID]; ok {
-		wait := time.Duration(seconds)*time.Second - now.Sub(prev)
-		if wait > 0 {
-			return wait
-		}
+	m[channelID] = slowSend{at: now, until: now.Add(time.Duration(seconds) * time.Second), clientMsgID: clientMsgID}
+}
+
+// check returns the remaining wait, recording the send when allowed (0).
+func (t *slowTracker) check(uid string, channelID int64, seconds int, now time.Time) time.Duration {
+	if wait := t.wait(uid, channelID, seconds, "", now); wait > 0 {
+		return wait
 	}
-	m[channelID] = now
+	t.mark(uid, channelID, seconds, "", now)
 	return 0
 }
 
@@ -323,11 +372,15 @@ func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg net
 	}
 
 	// (114) slow mode (channel scope; b_chat_slowmode_bypass or admins skip).
+	// The window starts only once the message is stored, so a rejected send
+	// does not use up the slot.
+	slowSeconds := 0
 	if channelID != 0 && s.cfg != nil {
 		if ch, ok := s.deps.State.GetChannel(channelID); ok && ch.SlowModeSeconds > 0 {
 			privileged := s.roleAllowed(ctx, client, channelID, authorization.BypassSlowmode)
 			if !privileged {
-				if wait := s.chatSlow.check(uid, channelID, ch.SlowModeSeconds, time.Now()); wait > 0 {
+				slowSeconds = ch.SlowModeSeconds
+				if wait := s.chatSlow.wait(uid, channelID, ch.SlowModeSeconds, msg.ClientMsgID, time.Now()); wait > 0 {
 					s.metricsSink().IncChatMessage("rejected")
 					return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed,
 						fmt.Sprintf("slow mode: wait %ds before your next message in this channel", int(wait.Seconds())+1))
@@ -442,6 +495,9 @@ func (s *TCPServer) routeScopedChat(ctx context.Context, client *Client, msg net
 		if !inserted {
 			return s.acknowledgeChat(client, msg, netproto.ChatStored, messageID)
 		}
+	}
+	if slowSeconds > 0 {
+		s.chatSlow.mark(uid, channelID, slowSeconds, msg.ClientMsgID, time.Now())
 	}
 
 	// Relay the ciphertext (clients decrypt with the scope key). The relay is

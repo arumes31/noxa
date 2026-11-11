@@ -425,3 +425,30 @@ func TestCloseClearsRegistry(t *testing.T) {
 		t.Fatalf("BroadcastToClient after Close error = %v, want ErrClosed", err)
 	}
 }
+
+// A client whose queue overflows has missed events: the overflow handler is
+// told once, so the server can disconnect it and let it resync.
+func TestOverflowHandlerRunsOncePerClient(t *testing.T) {
+	b, _ := newTestBroadcaster(t)
+	calls := make(chan string, 4)
+	b.SetOverflowHandler(func(id string) { calls <- id })
+	if _, err := b.Register("slow"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 64; i++ {
+		b.BroadcastEvent("speaking_changed", []byte(`{}`))
+	}
+	select {
+	case id := <-calls:
+		if id != "slow" {
+			t.Fatalf("overflow reported for %q", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("overflow handler not called")
+	}
+	select {
+	case id := <-calls:
+		t.Fatalf("overflow handler called again for %q", id)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
