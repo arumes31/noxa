@@ -81,7 +81,8 @@ type connManager struct {
 	addr                         string // control address (tab info)
 	clientID                     string
 	uniqueID                     string
-	deviceID                     string // linked device of this session (devices_v1)
+	deviceID                     string              // linked device of this session (devices_v1)
+	callMediaCache               callMediaStateCache // call state behind call media-key targets (#12)
 	supportsDevices              bool
 	supportsWebLogin             bool
 	supportsLinkPreview          bool

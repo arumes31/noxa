@@ -45,7 +45,7 @@ import { initDirectMessages } from "./dm-view.js";
 import "./private-calls.css";
 import "./call-connection.css";
 import "./device-link.css";
-import { privateCallChanged, privateCallSignal, stopPrivateCall, applyPrivateCallAudioSettings } from "./private-calls.js";
+import { privateCallChanged, privateCallSignal, stopPrivateCall, applyPrivateCallAudioSettings, receiveCallMediaKey } from "./private-calls.js";
 import { createTabReconnects, reconnectDelay } from "./tab-reconnect.js";
 import { refreshPolls } from "./polls.js";
 
@@ -1959,6 +1959,8 @@ function syncChannelMedia() {
 window.runtime.EventsOn("media_key", payload => {
     const event = parseRuntimeObject(payload);
     if (!event) return;
+    // (#12) Private-call keys belong to the call, never to channel voice.
+    if (event.scope?.type === "call-media") { receiveCallMediaKey(event); return; }
     const result = receiveMediaKey(event);
     const startup = voiceStartupKeys;
     if (result?.reason === "inactive" && startup?.scope === voiceMediaScope()) {

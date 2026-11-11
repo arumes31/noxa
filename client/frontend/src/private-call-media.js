@@ -4,6 +4,7 @@ import { icon } from "./icons.js";
 import { getUserShareVolume, isUserShareMuted, onShareAudioChange, setUserShareMuted, setUserShareVolume } from "./audio.js";
 import { applyCameraPreview } from "./camera-capture.js";
 import { displayAudioOptions, validateDisplayAudio } from "./display-audio.js";
+import { CALL_E2EE_MARKER, announcesCallE2EE } from "./call-media-e2ee.js";
 
 const sources = ["camera", "screen"];
 const liveTrack = (capture, kind) => capture?.stream.getTracks().find(track => track.kind === kind && track.readyState === "live") || null;
@@ -33,7 +34,8 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
     window.addEventListener("noxa-camera-preferences-changed", updateGrid);
     let audioMode = "none";
     const canPublish = () => current(owner) && owner.call.participants.some(peer => peer.unique_id === owner.uid && peer.state === "accepted");
-    const state = () => ({ camera: !!liveTrack(captures.camera, "video"), screen: !!liveTrack(captures.screen, "video") });
+    // e2ee announces call encryption (#12); older apps omit it.
+    const state = () => ({ camera: !!liveTrack(captures.camera, "video"), screen: !!liveTrack(captures.screen, "video"), e2ee: CALL_E2EE_MARKER });
 
     function sendState(peer) {
         if (peer.mediaChannel?.readyState === "open") peer.mediaChannel.send(JSON.stringify(state()));
@@ -213,6 +215,7 @@ export function createCallMedia(owner, { current, acceptedPeer, label, report, r
             try {
                 const value = JSON.parse(event.data);
                 if (!value || typeof value.camera !== "boolean" || typeof value.screen !== "boolean") return;
+                if (!announcesCallE2EE(value)) { owner.onPeerOutdated?.(uid); return; }
                 peer.remoteMedia = { camera: value.camera, screen: value.screen }; updateGrid();
             } catch { /* Ignore malformed peer UI state; it cannot authorize media. */ }
         };
