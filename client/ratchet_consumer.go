@@ -1300,6 +1300,11 @@ func (c *ratchetConsumer) sendOnce(intent ratchetIntent) (RatchetOutcome, error)
 			// A short-lived control is never resealed: its outcome stands.
 			return c.resolve(logical.AttemptID, a, true)
 		}
+		if _, _, expired := ratchetBodyDisappearing(rec.Body); expired {
+			// A disappeared message's archive is redacted: never seal the
+			// marker as new content; its outcome stands.
+			return c.resolve(logical.AttemptID, a, true)
+		}
 		return c.seal(a, ratchetIntent{LogicalID: rec.LogicalID, Scope: rec.Scope, Peer: rec.Peer, Conversation: rec.Conversation, Purpose: rec.Purpose, Reference: rec.Reference, Body: rec.Body}, true)
 	}
 	return c.seal(a, intent, false)

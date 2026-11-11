@@ -41,6 +41,8 @@ const parse = b => JSON.parse(dec.decode(b instanceof Uint8Array ? b : Uint8Arra
 const rk = (kind, id) => JSON.stringify([kind, id]);
 const rec = (s, kind, id) => s.records[rk(kind, id)];
 const b64 = b => { let s = ""; for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192)); return btoa(s); };
+/** Identity of one direct message for disappearing-message redaction. */
+export const disappearKey = (sender, logicalID) => JSON.stringify([sender || "", logicalID || ""]);
 const fail = (code, extra = {}) => Object.assign(new Error(`ratchet: ${code}`), { code, ...extra });
 const now = () => Math.floor(Date.now() / 1000);
 // A pin left behind by a verified reset receives delayed deliveries only this
@@ -738,6 +740,9 @@ export class RatchetConsumer {
             const r = original.record;
             // A short-lived control is never resealed: its outcome stands.
             if (r.purpose === "control") return this.#resolve(logical.attemptID, a, true);
+            // A disappeared message's archive is redacted: never seal the
+            // marker as new content; its outcome stands (plan item 28).
+            if (r.body?.expired === true) return this.#resolve(logical.attemptID, a, true);
             return this.#seal(a, { logicalID: r.logicalID, scope: r.scope, peer: r.scope === "direct" ? r.peer : "", conversation: r.conversation,
                 purpose: r.purpose, reference: r.reference, body: r.body }, true);
         }
@@ -984,6 +989,41 @@ export class RatchetConsumer {
         }
         for (const e of latestAttempts(attempts)) out.push(e.record);
         return out.sort((x, y) => x.sentAt - y.sentAt);
+    }
+
+    /**
+     * Disappearing messages (plan item 28): replaces the archived body of every
+     * direct record of the given messages, and of their edits, with the
+     * expired marker, so a history replay cannot bring the text back.
+     * targets: a Set of disappearKey(sender, logicalID). Resolves
+     * { found, blocked }: found = fully redacted in this archive; blocked = an
+     * own send without a terminal receipt, retried later. Mirrors
+     * ratchetConsumer.redact in Go.
+     */
+    redact(targets) { return this.ready().then(() => this.#serial(() => this.#redact(targets))); }
+    async #redact(targets) {
+        const found = new Set(), blocked = new Set();
+        for (const kind of ["inbox", "outbox"]) {
+            for (const [ref, r] of await this.#readMany(await this.#refs(kind))) {
+                let record;
+                try { record = parse(parse(r.data).archive); } catch { continue; }
+                if (record?.scope !== "direct") continue;
+                const k = disappearKey(record.sender, record.purpose === "edit" ? record.reference : record.logicalID);
+                if (!targets.has(k)) continue;
+                if (record.body?.expired === true) { found.add(k); continue; }
+                const s = await this.store.read([ref]);
+                this.#check();
+                try {
+                    await this.store.redactArchive(s, ref, enc.encode(JSON.stringify({ ...record, body: { expired: true } })));
+                    found.add(k);
+                } catch (e) {
+                    if (e.code !== "conflict") throw e;
+                    blocked.add(k);
+                }
+            }
+        }
+        for (const k of blocked) found.delete(k);
+        return { found, blocked };
     }
 
     drain() { return this.ready().then(() => this.#serial(() => this.#drain())); }

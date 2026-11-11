@@ -134,6 +134,8 @@ type App struct {
 	// dmPending holds direct-message edits and deletions whose original has
 	// not reached the local log yet (guarded by dmMu, see dm_changes.go).
 	dmPending dmPendingChanges
+	// dmDisappear schedules disappearing-message expiry (dm_disappearing.go).
+	dmDisappear dmDisappearState
 
 	// identityMu serializes identity-store reads and mutations. Identity files
 	// are account credentials, so interleaving a switch/regeneration/delete
@@ -228,6 +230,8 @@ func (a *App) startup(ctx context.Context) {
 	a.lifecycleMu.Unlock()
 	go guardCrash("window-opacity", func() { a.restoreWindowOpacity(watchCtx) })
 	go guardCrash("window-watch", func() { a.watchMinimized(watchCtx) })
+	// (28) Disappearing direct messages expire on this device.
+	go guardCrash("disappearing messages", func() { a.runDisappearingSweeper(watchCtx.Done()) })
 }
 
 // windowWatch restores the persisted opacity once the native window exists
@@ -694,7 +698,11 @@ func (a *App) SendChatOperationForTab(tabID, scope, target, text string, replyTo
 	if tracked {
 		store, storeErr = a.outboxStore(cm)
 	}
-	result, err := sendChatOperationErr(cm, scope, target, text, replyToID, operationID)
+	var ttl int64
+	if scope == "direct" {
+		ttl = cm.disappearingTTL(target)
+	}
+	result, err := sendChatOperationTTL(cm, scope, target, text, replyToID, operationID, ttl)
 	// An uncertain new-protocol send becomes an "uncertain" outbox entry under
 	// the SAME operation ID: it survives a restart, and only an explicit Retry
 	// of that entry resolves the original (a new identical message is a new
@@ -707,7 +715,7 @@ func (a *App) SendChatOperationForTab(tabID, scope, target, text string, replyTo
 			}
 		} else if ratchetUncertain(err) {
 			if storeErr == nil {
-				storeErr = a.keepOutboxOperation(cm, store, scope, target, text, operationID, result)
+				storeErr = a.keepOutboxOperation(cm, store, scope, target, text, operationID, result, ttl)
 			}
 			if storeErr != nil {
 				result += " (it could not be kept in the outbox for a later retry: " + storeErr.Error() + ")"
@@ -729,6 +737,16 @@ func sendChatOperation(cm *connManager, scope, target, text string, replyToID in
 // sendChatOperationErr also returns the new-protocol error, so the caller can
 // tell an uncertain committed attempt from a send that never started.
 func sendChatOperationErr(cm *connManager, scope, target, text string, replyToID int64, operationID string) (string, error) {
+	var ttl int64
+	if scope == "direct" {
+		ttl = cm.disappearingTTL(target)
+	}
+	return sendChatOperationTTL(cm, scope, target, text, replyToID, operationID, ttl)
+}
+
+// sendChatOperationTTL sends with the disappearing-messages timer captured by
+// the caller (direct, new protocol only).
+func sendChatOperationTTL(cm *connManager, scope, target, text string, replyToID int64, operationID string, ttl int64) (string, error) {
 	if text == "" {
 		return "empty message", nil
 	}
@@ -741,7 +759,7 @@ func sendChatOperationErr(cm *connManager, scope, target, text string, replyToID
 		if !validOperationID(operationID) {
 			return "invalid message operation", nil
 		}
-		if _, err := cm.sendRatchetDirect(nil, operationID, target, text); err != nil {
+		if _, err := cm.sendRatchetDirect(nil, operationID, target, text, ttl); err != nil {
 			return ratchetFailure(err).Error(), err
 		}
 		return "", nil

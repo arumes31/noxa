@@ -519,12 +519,17 @@ func ratchetFailure(err error) error {
 
 // sendRatchetDirect is the single durable path for direct text: immediate
 // sends and queued outbox entries pass a stable logical ID captured at intent.
-func (m *connManager) sendRatchetDirect(conn net.Conn, logicalID, peer, text string) (RatchetOutcome, error) {
+// ttl > 0 makes it a disappearing message (seconds, inside the encrypted
+// body); it is fixed at intent time so a retry reseals the same content.
+func (m *connManager) sendRatchetDirect(conn net.Conn, logicalID, peer, text string, ttl int64) (RatchetOutcome, error) {
 	c, err := m.ratchetSendConsumer(conn)
 	if err != nil {
 		return RatchetOutcome{}, err
 	}
-	intent := ratchetIntent{LogicalID: logicalID, Scope: "direct", Peer: peer, Purpose: "chat", Body: ratchetChatBody(text)}
+	if !validDisappearTTL(ttl) {
+		ttl = 0
+	}
+	intent := ratchetIntent{LogicalID: logicalID, Scope: "direct", Peer: peer, Purpose: "chat", Body: ratchetChatBodyWith(text, ttl, nil)}
 	out, err := c.send(intent)
 	if sent, ok := ratchetSent(out, err); ok {
 		// A reused operation ID with different content never reports the
@@ -738,6 +743,15 @@ func (a *App) projectRatchetRecord(m *connManager, r RatchetRecord, _ bool) {
 	}
 	e := DMEntry{FromUniqueID: r.Sender, Body: ratchetBodyText(r.Body), SentAt: int64(r.SentAt), Self: r.Self, ClientMsgID: r.LogicalID,
 		EncVerified: true, EncMode: "e2e", Protocol: ratchetProtocol, Key: r.Key, Status: status}
+	// Disappearing messages: a redacted (expired) archive record never comes
+	// back as a message; a TTL or a setting change is recorded on the entry.
+	if !applyRatchetDisappearing(&l, &e, r, time.Now()) {
+		return
+	}
+	if e.TTL > 0 {
+		e.Archive = m.ratchetArchiveServer()
+	}
+	a.noteDisappearing(e.ExpiresAt)
 	if n := len(l.Messages); n > 0 {
 		e.Seq = l.Messages[n-1].Seq + 1
 	} else {

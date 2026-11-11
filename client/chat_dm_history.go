@@ -62,6 +62,21 @@ type DMEntry struct {
 	Protocol string `json:"protocol,omitempty"`
 	Key      string `json:"key,omitempty"`
 	Status   string `json:"status,omitempty"`
+	// Disappearing messages (dm_disappearing.go). TTL is the lifetime the
+	// sender put inside the encrypted body; ExpiresAt is when this device
+	// deletes it (own copy: send time + TTL; received: first display + TTL,
+	// 0 until displayed). Expired marks a deleted-by-timer record (body gone,
+	// like Deleted). Timer is set on a "disappearing messages" setting change
+	// (seconds, 0 = off), shown as a system line.
+	TTL       int64  `json:"ttl,omitempty"`
+	ExpiresAt int64  `json:"expires_at,omitempty"`
+	Expired   bool   `json:"expired,omitempty"`
+	Timer     *int64 `json:"timer,omitempty"`
+	// Redacted: the protected archive copy of an expired message was
+	// replaced too (a connected session is needed; retried until done).
+	// Archive names the server whose archive holds the copy.
+	Redacted bool   `json:"redacted,omitempty"`
+	Archive  string `json:"archive,omitempty"`
 }
 
 // DMPeer summarises one stored conversation, so PM tabs can be restored on
@@ -84,6 +99,11 @@ type dmLog struct {
 	Peer     string    `json:"peer"`
 	Nickname string    `json:"nickname,omitempty"`
 	Messages []DMEntry `json:"messages"` // oldest first
+	// Disappearing is the conversation's current disappearing-messages
+	// timer in seconds (0 = off), from the newest setting change by either
+	// side (DisappearingAt orders concurrent changes by their send time).
+	Disappearing   int64   `json:"disappearing,omitempty"`
+	DisappearingAt float64 `json:"disappearing_at,omitempty"`
 }
 
 // dmBeforeRead is a test seam placed only around read-only public APIs. It

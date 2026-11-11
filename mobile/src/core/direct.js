@@ -9,7 +9,8 @@ import { keyFingerprint, openDM, sealDM, toBase64 } from "./crypto.js";
 import { ed25519FromPEM, parseKeyRecord, trustedDevices } from "./dm-trust.js";
 import { Msg } from "./frame.js";
 import { ProtocolError } from "./connection.js";
-import { RATCHET_PROTOCOL } from "./ratchet-consumer.js";
+import { RATCHET_PROTOCOL, disappearKey } from "./ratchet-consumer.js";
+import { DISAPPEAR_OPTIONS, disappearingFromBody, validDisappearTTL } from "./disappearing.js";
 import { decodeHistoryEnvelope, isHistoryEnvelope } from "./history-envelope.js";
 import { verifyLinkBinding } from "./link-binding.js";
 
@@ -178,6 +179,9 @@ export class DirectMessages extends EventTarget {
             this.#emit("typing", { peer: uid });
         }).catch(() => {}); };
         session.addEventListener("typing-direct", this.#onTyping);
+        // (28) Disappearing messages expire on this device.
+        this.#disappearTimer = setInterval(() => { this.sweepDisappearing().catch(() => {}); }, DISAPPEAR_SWEEP_MS);
+        this.#disappearTimer?.unref?.(); // Node (tests): never keeps the process alive
         // Write pending history before the page is frozen or unloaded.
         this.#onHide = () => { if (document.visibilityState === "hidden") this.flush(); };
         globalThis.addEventListener?.("pagehide", this.#onHide);
@@ -187,6 +191,8 @@ export class DirectMessages extends EventTarget {
     #onHide;
     #fence;
     #closed = false;
+    #disappearTimer = null;
+    #redactMisses = new Map();
     #writes = new Map();
 
     #enqueue(store, key, work) {
@@ -656,10 +662,13 @@ export class DirectMessages extends EventTarget {
     // --- Sending ----------------------------------------------------------------
 
     /** Sends text to peer, sealed for every trusted device. */
-    async send(peer, text, nickname = "", { id = crypto.randomUUID(), sentAt = Date.now() / 1000 } = {}) {
+    async send(peer, text, nickname = "", { id = crypto.randomUUID(), sentAt = Date.now() / 1000, ttl } = {}) {
         await this.ready;
         await this.#assertActive();
-        if (this.ratchet) return this.#sendRatchet(peer, text, nickname, id, sentAt);
+        // (28) The timer is fixed when the message is written: a retry of the
+        // same ID reseals the same content.
+        if (ttl === undefined) ttl = this.disappearing(peer);
+        if (this.ratchet) return this.#sendRatchet(peer, text, nickname, id, sentAt, validDisappearTTL(ttl) ? ttl : 0);
         this.#refuseLegacySend();
         const message = { id, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, pending: true, queued: false };
         this.#add(peer, nickname, message);
@@ -809,6 +818,22 @@ export class DirectMessages extends EventTarget {
         }
         const own = record.sender === this.ownUID;
         const prior = this.conversations.get(record.peer)?.messages.find(m => m.id === record.logicalID && m.from === record.sender && m.protocol === RATCHET_PROTOCOL);
+        // (28) A redacted (expired) archive record never comes back as text.
+        const disappearing = disappearingFromBody(body);
+        if (disappearing.expired) {
+            if (prior && !prior.expired) this.#add(record.peer, "", { ...prior, body: "", deleted: true, expired: true, edited: false, redacted: true });
+            return;
+        }
+        if (disappearing.timer !== null) {
+            const conversation = this.conversation(record.peer);
+            // A contact's send time is capped near this clock, so a change
+            // dated far ahead cannot block every later one.
+            const order = own ? record.sentAt : Math.min(record.sentAt, Date.now() / 1000 + TIMER_SKEW_S);
+            if (!(order < (conversation.disappearingAt || 0))) {
+                conversation.disappearing = disappearing.timer;
+                conversation.disappearingAt = order;
+            }
+        }
         const status = record.status || (own ? "" : "received");
         const message = {
             id: record.logicalID, key: record.key, protocol: RATCHET_PROTOCOL, from: record.sender, fromNickname: prior?.fromNickname || "",
@@ -819,6 +844,11 @@ export class DirectMessages extends EventTarget {
             provenance: "authenticated", origin: undefined, source: undefined,
             pending: own && status === "pending", queued: false, failed: own && (status === "rejected" || status === "aborted"),
             ...(own && status === "accepted" ? { receipt: prior?.receipt || "sent" } : {}),
+            // (28) A setting change is a system line; a message TTL counts from
+            // sending (own) or from first display on this device (received).
+            ...(disappearing.timer !== null ? { timer: disappearing.timer } : {}),
+            ...(disappearing.timer === null && disappearing.ttl ? { ttl: disappearing.ttl, expiresAt: own ? Math.floor(record.sentAt) + disappearing.ttl : prior?.expiresAt || 0 } : {}),
+            ...(prior?.expired ? { body: "", deleted: true, expired: true, redacted: !!prior.redacted } : {}),
         };
         if (!own && this.typing.delete(record.peer)) this.#emit("typing", { peer: record.peer });
         this.#add(record.peer, "", message, { notify: isNew && !own });
@@ -868,15 +898,16 @@ export class DirectMessages extends EventTarget {
         if (conversation.messages.some(m => m.id === id)) conversation.messages = conversation.messages.filter(m => m.id !== id);
     }
 
-    async #sendRatchet(peer, text, nickname, id, sentAt) {
+    async #sendRatchet(peer, text, nickname, id, sentAt, ttl = 0) {
         const existing = this.conversations.get(peer)?.messages.find(m => m.id === id && m.from === this.ownUID && m.protocol === RATCHET_PROTOCOL);
         // Never paint a changed draft over an already committed operation.
         if (!existing) {
-            this.#add(peer, nickname, { id, protocol: RATCHET_PROTOCOL, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, pending: true, queued: false });
+            this.#add(peer, nickname, { id, protocol: RATCHET_PROTOCOL, from: this.ownUID, fromNickname: this.session.nickname, self: true, body: text, verified: true, sentAt, pending: true, queued: false,
+                ...(ttl ? { ttl, expiresAt: Math.floor(sentAt) + ttl } : {}) });
         }
         const consumer = this.ratchet;
         try {
-            const outcome = await consumer.send({ logicalID: id, scope: "direct", peer, body: { text, sentAt } });
+            const outcome = await consumer.send({ logicalID: id, scope: "direct", peer, body: ttl ? { text, sentAt, ttl } : { text, sentAt } });
             // A reused ID whose committed text differs: the ORIGINAL was sent,
             // this text was not (the view shows the original).
             if (outcome.reused && (outcome.record?.body?.text ?? "") !== text) outcome.mismatch = true;
@@ -1022,7 +1053,122 @@ export class DirectMessages extends EventTarget {
         this.session.removeEventListener("typing-direct", this.#onTyping);
         globalThis.removeEventListener?.("pagehide", this.#onHide);
         globalThis.document?.removeEventListener("visibilitychange", this.#onHide);
+        clearInterval(this.#disappearTimer);
         this.flush();
         this.#closed = true;
     }
+
+    // --- Disappearing messages (plan item 28) ----------------------------------
+    //
+    // Direct messages are end-to-end encrypted, so every device enforces expiry
+    // for its own copies: the sender puts "ttl" inside the encrypted body; a
+    // setting change is a chat whose body carries "disappearing" (0 = off) next
+    // to readable text for older apps. Own copies expire TTL after sending,
+    // received ones TTL after this device first showed them. Expired text is
+    // removed from the cached conversation and redacted in the protected
+    // archive. Mirrors client/dm_disappearing.go.
+
+    /** The conversation's disappearing-messages timer in seconds (0 = off). */
+    disappearing(peer) {
+        const value = this.conversations.get(peer)?.disappearing;
+        return validDisappearTTL(value) ? value : 0;
+    }
+
+    /**
+     * Turns disappearing messages with peer on (one of DISAPPEAR_OPTIONS) or
+     * off (0). notice is the readable line older apps show.
+     */
+    async setDisappearing(peer, seconds, notice) {
+        await this.ready;
+        await this.#assertActive();
+        if (!DISAPPEAR_OPTIONS.includes(seconds)) throw Object.assign(new Error("invalid disappearing-messages timer"), { code: "invalid" });
+        if (!this.ratchet) this.#refuseLegacySend();
+        if (!this.ratchet) throw Object.assign(new Error("secure messaging is not available"), { code: "secure_unavailable" });
+        const sentAt = Date.now() / 1000;
+        await this.ratchet.send({ logicalID: "timer:" + crypto.randomUUID(), scope: "direct", peer, body: { text: notice || "Disappearing messages changed", sentAt, disappearing: seconds } });
+    }
+
+    /**
+     * Starts the timers of received disappearing messages from peer now that
+     * they are on screen. Returns how many started.
+     */
+    async startDisappearing(peer) {
+        await this.ready;
+        const conversation = this.conversations.get(peer);
+        if (!conversation || this.#closed) return 0;
+        const now = Math.floor(Date.now() / 1000);
+        let started = 0;
+        for (const m of conversation.messages) {
+            if (m.self || !(m.ttl > 0) || m.expiresAt || m.deleted || m.expired) continue;
+            m.expiresAt = now + m.ttl;
+            started++;
+        }
+        if (started) {
+            this.#write(peer);
+            this.#emit("messages", { peer, message: null, isNew: false });
+        }
+        return started;
+    }
+
+    /**
+     * Expires due messages (text removed, shown as gone) and redacts their
+     * archive copies. Runs on a timer; cheap when nothing is due.
+     */
+    async sweepDisappearing(nowMS = Date.now()) {
+        if (this.#closed) return [];
+        const now = nowMS / 1000;
+        const expired = [];
+        for (const conversation of this.conversations.values()) {
+            const ids = [];
+            for (const m of conversation.messages) {
+                if (m.expired || !(m.expiresAt > 0) || m.expiresAt > now) continue;
+                Object.assign(m, { body: "", deleted: true, expired: true, edited: false, redacted: m.protocol !== RATCHET_PROTOCOL });
+                ids.push({ from: m.from, id: m.id });
+            }
+            if (ids.length) {
+                expired.push({ peer: conversation.peer, ids });
+                this.#write(conversation.peer);
+                this.#emit("messages", { peer: conversation.peer, message: null, isNew: false });
+            }
+        }
+        await this.#redactExpired().catch(() => {});
+        return expired;
+    }
+
+    async #redactExpired() {
+        const consumer = this.ratchet;
+        if (!consumer || consumer.closed) return;
+        const pending = new Map();
+        for (const conversation of this.conversations.values()) {
+            for (const m of conversation.messages) {
+                // A queued or pending own send has no committed archive yet;
+                // it is redacted once the outbox commits it.
+                if (m.expired && !m.redacted && m.protocol === RATCHET_PROTOCOL && !m.queued && !m.pending) pending.set(disappearKey(m.from, m.id), conversation.peer);
+            }
+        }
+        if (!pending.size) return;
+        const { found, blocked } = await consumer.redact(new Set(pending.keys()));
+        const done = new Set(found);
+        // Not in this session's archive (another server, or trimmed): a few
+        // misses later there is nothing left to redact here.
+        for (const k of pending.keys()) {
+            if (found.has(k) || blocked.has(k)) { this.#redactMisses.delete(k); continue; }
+            const misses = (this.#redactMisses.get(k) || 0) + 1;
+            if (misses >= REDACT_GIVE_UP) { done.add(k); this.#redactMisses.delete(k); } else this.#redactMisses.set(k, misses);
+        }
+        const touched = new Set();
+        for (const conversation of this.conversations.values()) {
+            for (const m of conversation.messages) {
+                if (m.expired && !m.redacted && done.has(disappearKey(m.from, m.id))) { m.redacted = true; touched.add(conversation.peer); }
+            }
+        }
+        for (const peer of touched) this.#write(peer);
+    }
 }
+
+/** How often due disappearing messages are looked for. */
+const DISAPPEAR_SWEEP_MS = 5000;
+/** Archive scans that may miss a message before it counts as redacted. */
+const REDACT_GIVE_UP = 5;
+/** How far ahead of this clock a contact's timer change may be dated. */
+const TIMER_SKEW_S = 300;

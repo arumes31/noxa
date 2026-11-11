@@ -28,6 +28,9 @@ type ChatOutboxEntry struct {
 	// Attempted: a new-protocol send was started for this ID, so a committed
 	// operation may exist and may still be delivered.
 	Attempted bool `json:"attempted,omitempty"`
+	// TTL: the disappearing-messages timer captured when the message was
+	// written (direct only), so every retry reseals the same content.
+	TTL int64 `json:"ttl,omitempty"`
 }
 type ChatOutboxRequest struct {
 	Action       string `json:"action"`
@@ -267,8 +270,12 @@ func (a *App) ChatOutboxForTab(tabID string, request ChatOutboxRequest) (ChatOut
 		if !connected {
 			state = "queued"
 		}
+		var ttl int64
+		if request.Scope == "direct" {
+			ttl = cm.disappearingTTL(request.Target)
+		}
 		entries = append(entries, ChatOutboxEntry{ID: newClientMsgID(), Scope: request.Scope, Target: request.Target,
-			Text: request.Text, ReplyToID: request.ReplyToID, CreatedAt: now, DueAt: now + int64(seconds)*1000, State: state})
+			Text: request.Text, ReplyToID: request.ReplyToID, CreatedAt: now, DueAt: now + int64(seconds)*1000, State: state, TTL: ttl})
 	case "cancel", "retry", "send":
 		if index < 0 {
 			return result, errors.New("outbox entry no longer exists")
@@ -434,7 +441,7 @@ func (a *App) sendOutboxEntry(cm *connManager, store chatOutboxStore, entry Chat
 		// The queued entry ID is the stable logical ID: a retry after an
 		// uncertain attempt resolves that original operation, never reseals
 		// changed text. The consumer is pinned to this connection.
-		if _, err := cm.sendRatchetDirect(conn, entry.ID, entry.Target, entry.Text); err != nil {
+		if _, err := cm.sendRatchetDirect(conn, entry.ID, entry.Target, entry.Text, entry.TTL); err != nil {
 			// No session attached: nothing was committed or sent, so the
 			// entry stays queued (never "uncertain"), whatever the reason.
 			var notStarted *ratchetNotStarted
@@ -506,7 +513,7 @@ const outboxUncertainCap = 200
 // keepOutboxOperation records an uncertain composer send as an "uncertain"
 // outbox entry under its operation ID, in the outbox store captured before
 // the send (refused if this tab's outbox binding changed meanwhile).
-func (a *App) keepOutboxOperation(cm *connManager, store chatOutboxStore, scope, target, text, operationID, reason string) error {
+func (a *App) keepOutboxOperation(cm *connManager, store chatOutboxStore, scope, target, text, operationID, reason string, ttl int64) error {
 	if current, err := a.outboxStore(cm); err != nil || current.path != store.path {
 		return errors.New("connection or identity changed during the send")
 	}
@@ -527,7 +534,7 @@ func (a *App) keepOutboxOperation(cm *connManager, store chatOutboxStore, scope,
 		return errors.New("outbox full")
 	}
 	entries = append(entries, ChatOutboxEntry{ID: operationID, Scope: scope, Target: target, Text: text, CreatedAt: now, DueAt: now,
-		State: "uncertain", Error: reason, Attempted: true})
+		State: "uncertain", Error: reason, Attempted: true, TTL: ttl})
 	return store.save(entries)
 }
 

@@ -23,6 +23,7 @@ import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage,
 import { aboutEncryption, confirmIdentityChange, encryptionBadge, secureBanner, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 import { dmEntry } from "../core/search.js";
 import { chatSearch } from "./chat-search.js";
+import { DISAPPEAR_OPTIONS, durationLabel } from "../core/disappearing.js";
 
 export function renderDM(root, peer) {
     const session = app.session;
@@ -65,9 +66,23 @@ export function renderDM(root, peer) {
         };
     }
 
+    // (28) Disappearing messages: timer names and the countdown on a line.
+    const timerName = seconds => DISAPPEAR_OPTIONS.includes(seconds) ? t(`disappear.opt.${seconds}`) : durationLabel(seconds);
+    const countdownText = message => message.expiresAt ? durationLabel(message.expiresAt - Date.now() / 1000) : durationLabel(message.ttl);
+    const countdown = message => {
+        if (!(message.ttl > 0) || message.deleted) return null;
+        const title = message.expiresAt ? t("disappear.remaining", { time: countdownText(message) }) : t("disappear.afterRead", { timer: timerName(message.ttl) });
+        return h("span", { class: "msg-disappear", title, "aria-label": title, dataset: { expiresAt: String(message.expiresAt || 0), ttl: String(message.ttl) } }, "⏱ " + countdownText(message));
+    };
     const line = lineCache(message => {
+        if (typeof message.timer === "number" && !message.deleted) {
+            const who = message.self ? t("disappear.you") : (message.fromNickname || name);
+            return h("div", { class: "msg-system disappear-notice", role: "note" }, "⏱ " + (message.timer > 0
+                ? t("disappear.noticeOn", { name: who, timer: timerName(message.timer) })
+                : t("disappear.noticeOff", { name: who })));
+        }
         const classes = ["msg", message.self ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
-        const body = message.deleted ? h("span", { class: "msg-deleted" }, t("chat.deleted"))
+        const body = message.deleted ? h("span", { class: "msg-deleted" }, t(message.expired ? "disappear.gone" : "chat.deleted"))
             : message.body === null || message.body === undefined
                 ? h("span", { class: "msg-locked" }, t(message.quarantined === "fenced_copy" ? "chat.lockedPreviousKeys" : "chat.locked"))
                 : richBody(message.body, { conversation: "direct", session, conn: session.conn, channelID: 0 });
@@ -83,6 +98,7 @@ export function renderDM(root, peer) {
                 message.deleted ? null : encryptionBadge("e2e", message),
                 body,
                 message.edited ? h("span", { class: "msg-edited" }, t("chat.edited")) : null,
+                countdown(message),
                 // Transferred history: shown as copied from another device of this
                 // account, never as authenticated on this device.
                 message.provenance === "transferred" ? h("span", { class: "msg-edited", title: t(message.origin?.provenance === "transferred" ? "chat.transferredCopyHint" : "chat.transferredHint") }, t("chat.transferred")) : null,
@@ -110,9 +126,40 @@ export function renderDM(root, peer) {
         readNow();
     }
 
-    // Read receipts go out while the conversation is on screen.
+    // Read receipts go out while the conversation is on screen; received
+    // disappearing messages start their timers then too.
     function readNow() {
-        if (document.visibilityState === "visible" && app.viewing === tag) dm.markRead(peer);
+        if (document.visibilityState !== "visible" || app.viewing !== tag) return;
+        dm.markRead(peer);
+        dm.startDisappearing(peer).catch(() => {});
+    }
+
+    function tickCountdowns() {
+        for (const el of log.querySelectorAll(".msg-disappear")) {
+            const at = Number(el.dataset.expiresAt) || 0;
+            if (!at) continue;
+            const left = durationLabel(at - Date.now() / 1000);
+            // The log is a live region: only rewrite a changed label.
+            if (el.textContent === "⏱ " + left) continue;
+            el.textContent = "⏱ " + left;
+            el.title = t("disappear.remaining", { time: left });
+            el.setAttribute("aria-label", el.title);
+        }
+    }
+
+    async function chooseDisappearing() {
+        const current = dm.disappearing(peer);
+        const choice = await actionSheet({ title: t("disappear.title"), subtitle: t("disappear.help"), actions: DISAPPEAR_OPTIONS.map(seconds => ({
+            label: (seconds === current ? "✓ " : "") + timerName(seconds), value: String(seconds),
+        })) });
+        if (choice === undefined || choice === null || Number(choice) === current) return;
+        const seconds = Number(choice);
+        const fallback = seconds > 0 ? t("disappear.fallbackOn", { timer: timerName(seconds) }) : t("disappear.fallbackOff");
+        try {
+            await dm.setDisappearing(peer, seconds, fallback);
+        } catch (error) {
+            toast(t("disappear.failed", { error: error.code ? t(`dm.error.${error.code}`) : error.message }), "warn");
+        }
     }
 
     function renderTyping() {
@@ -218,11 +265,12 @@ export function renderDM(root, peer) {
     async function sendText(text) {
         const id = crypto.randomUUID();
         const sentAt = Date.now() / 1000;
+        const ttl = dm.disappearing(peer);
         try {
-            await dm.send(peer, text, name, { id, sentAt });
+            await dm.send(peer, text, name, { id, sentAt, ttl });
         } catch (error) {
             if (error.retryable) {
-                await queueMessage({ kind: "dm", peer, nickname: name }, text, { id, sentAt });
+                await queueMessage({ kind: "dm", peer, nickname: name, ttl }, text, { id, sentAt });
                 return;
             }
             toast(t("chat.sendFailed", { error: error.code ? t(`dm.error.${error.code}`) : error.message }), "warn");
@@ -276,6 +324,7 @@ export function renderDM(root, peer) {
         const choice = await menu(name, [
             { label: t("safety.title"), value: "safety" },
             { label: t("calls.title"), value: "calls" },
+            { label: t("disappear.title") + (dm.disappearing(peer) ? ` (${timerName(dm.disappearing(peer))})` : ""), value: "disappearing" },
             { label: t(muted ? "conv.unmute" : "conv.mute"), value: "mute" },
             { label: t("rich.exportHistory"), value: "export" },
             { label: t("rich.aboutEncryption"), value: "encryption" },
@@ -283,6 +332,7 @@ export function renderDM(root, peer) {
         ]);
         if (choice === "safety") showSafetyNumber(peer, name, () => dm.devicesOf(peer).then(paintBanner)).catch(error => toast(t("common.error", { error: error.message }), "warn"));
         else if (choice === "calls") showCalls(peer, name);
+        else if (choice === "disappearing") chooseDisappearing();
         else if (choice === "mute") { setMuted(tag, !muted); paintTitle(); toast(t(muted ? "conv.unmuted" : "conv.muted", { name })); }
         else if (choice === "export") import("./export.js").then(({ openExport }) => openExport({ title: name, kind: "dm", load: exportLoad }));
         else if (choice === "encryption") aboutEncryption();
@@ -330,7 +380,8 @@ export function renderDM(root, peer) {
     callLog.addEventListener("change", onCalls);
     document.addEventListener("visibilitychange", onVisible);
     const rerender = () => { line.clear(); render(); };
-    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log), search.stop];
+    const countdownTimer = setInterval(tickCountdowns, 1000);
+    const stops = [watchCustomEmoji(session, rerender), watchDisplaySettings(rerender), relativeTicker(log), search.stop, () => clearInterval(countdownTimer)];
     top.querySelector(".header-actions").prepend(search.button);
     root.replaceChildren(h("section", { class: "screen chat" },
         top, banner, announcementBanner(session), notice, deviceNotice, search.bar, progress, log, typing, editBar, form));

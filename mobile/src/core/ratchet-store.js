@@ -556,6 +556,33 @@ class RatchetStore {
     b.status = "sent";
     await this.#commit(s, { [key(r)]: bytes(b) });
   }
+  // Disappearing messages (plan item 28): replaces the readable archive of
+  // one received (inbox) or own committed (outbox) message. Delivery and
+  // dedupe metadata stay: an inbox record keeps its envelope digest, so a
+  // redelivery returns the redacted archive, never the original text. An
+  // outbox record is redacted only once its operation can no longer be
+  // resealed from the archive (terminal receipt, or a legacy batch marked
+  // sent). Mirrors durable.Store.RedactArchive in Go.
+  async redactArchive(s, r, archive) {
+    if (
+      !archive?.length ||
+      archive.length > Limits.record ||
+      (r?.[0] !== "inbox" && r?.[0] !== "outbox") ||
+      !validRef(r)
+    )
+      throw fail("invalid");
+    const old = this.require(s, r);
+    if (!old.revision) throw fail("invalid");
+    const rec = json(old.data);
+    if (r[0] === "outbox") {
+      if (rec.attempt) {
+        if (!["accepted", "rejected", "aborted"].includes(rec.receipt?.state))
+          throw fail("conflict");
+      } else if (rec.status !== "sent") throw fail("conflict");
+    }
+    rec.archive = Array.from(archive);
+    await this.#commit(s, { [key(r)]: bytes(rec) });
+  }
   async commitReceive(s, id, p) {
     if (!!p.account?.length !== !!p.consumedOTK) throw fail("invalid");
     if (p.envelope?.length > Limits.record || p.archive?.length > Limits.record)

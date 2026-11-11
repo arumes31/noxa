@@ -187,6 +187,8 @@ export function DefaultSettingsSnapshot():Promise<main.Settings>;
 
 export function DeleteIdentity(arg1:string,arg2:boolean):Promise<string>;
 
+export function DirectDisappearingForTab(arg1:string,arg2:string):Promise<number>;
+
 export function Disconnect():Promise<void>;
 
 export function DisconnectMemberForTab(arg1:string,arg2:string,arg3:number,arg4:string):Promise<string>;
@@ -495,6 +497,8 @@ export function SetAvatarForTab(arg1:string,arg2:string):Promise<string>;
 
 export function SetDebugFrames(arg1:boolean):Promise<void>;
 
+export function SetDirectDisappearingForTab(arg1:string,arg2:string,arg3:number,arg4:string):Promise<string>;
+
 export function SetDisplayNameForTab(arg1:string,arg2:string):Promise<string>;
 
 export function SetHotkey(arg1:string,arg2:string):Promise<string>;
@@ -550,6 +554,8 @@ export function SetWindowOpacity(arg1:number):Promise<string>;
 export function ShowNativeToast(arg1:main.NativeToastRequest):Promise<string>;
 
 export function StartConnectionBenchmark(arg1:string):Promise<main.ConnectionBenchmarkStatus>;
+
+export function StartDirectDisappearingForTab(arg1:string,arg2:string):Promise<Array<main.DMExpiry>>;
 
 export function StartedAfterUpdate():Promise<boolean>;
 

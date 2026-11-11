@@ -146,6 +146,9 @@ type connManager struct {
 	supportsOlm    bool
 	ratchetSess    *ratchetSession
 	ratchetProject func(m *connManager, r RatchetRecord, isNew bool)
+	// dmTTL returns a direct conversation's disappearing-messages timer
+	// (App, dm_disappearing.go); nil = off.
+	dmTTL func(peer string) int64
 	// ratchetControls receive delivered media controls (ratchet_control.go).
 	ratchetControls []func(RatchetControl)
 	controlQueue    []RatchetControl

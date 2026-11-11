@@ -1147,3 +1147,61 @@ func (r SendResult) Operation() (OutboundRecord, error) {
 	e := json.Unmarshal(r.Data, &out)
 	return out, e
 }
+
+// RedactArchive replaces the readable archive of one received message (Inbox)
+// or one own committed message (Outbox) with archive, for disappearing
+// messages. Delivery and dedupe metadata stay: an inbox record keeps its
+// envelope digest, so a redelivery of the same copy still matches and returns
+// the redacted archive instead of the original text. An outbox record is
+// redacted only once its operation can no longer be resealed from the archive:
+// an admission attempt with a terminal receipt, or a legacy batch marked sent.
+// The record must be part of snap (optimistic concurrency, like every write).
+func (s *Store) RedactArchive(snap Snapshot, r Ref, archive []byte) error {
+	if len(archive) == 0 || len(archive) > MaxRecordBytes || (r.Kind != Inbox && r.Kind != Outbox) || !validRef(r) {
+		return ErrInvalid
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		c, e := s.fence(tx, snap)
+		if e != nil {
+			return e
+		}
+		if _, ok := snap.Records[r]; !ok {
+			return ErrInvalid
+		}
+		if e = s.cas(tx, snap); e != nil {
+			return e
+		}
+		v, e := s.get(tx, r)
+		if e != nil {
+			return e
+		}
+		if v.Revision == 0 {
+			return ErrInvalid
+		}
+		var data []byte
+		switch r.Kind {
+		case Inbox:
+			var rec received
+			if json.Unmarshal(v.Data, &rec) != nil {
+				return ErrCorrupt
+			}
+			rec.Archive = append([]byte(nil), archive...)
+			data = encode(rec)
+		case Outbox:
+			var b sentBatch
+			if json.Unmarshal(v.Data, &b) != nil {
+				return ErrCorrupt
+			}
+			if b.Attempt != nil {
+				if b.Receipt == nil || (b.Receipt.State != "accepted" && b.Receipt.State != "rejected" && b.Receipt.State != "aborted") {
+					return ErrConflict
+				}
+			} else if b.Status != "sent" {
+				return ErrConflict
+			}
+			b.Archive = append([]byte(nil), archive...)
+			data = encode(b)
+		}
+		return s.changes(tx, c, snap, map[Ref][]byte{r: data})
+	})
+}

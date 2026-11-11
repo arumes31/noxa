@@ -11,6 +11,24 @@ export const RATCHET_PROTOCOL = "noxa-olm-v1";
 const text = value => (typeof value === "string" ? value : "");
 const bodyText = record => text(record?.body?.text);
 
+/** Largest disappearing-message TTL accepted from a sender (four weeks). */
+const DISAPPEAR_MAX_TTL = 28 * 24 * 3600;
+const validTTL = value => Number.isSafeInteger(value) && value > 0 && value <= DISAPPEAR_MAX_TTL;
+
+/**
+ * Disappearing-message fields of a decrypted body (plan item 28): the
+ * message TTL in seconds, a setting change (timer, 0 = off, else null) and
+ * the expired marker of a redacted archive record. Invalid values are ignored.
+ */
+export function disappearingFromBody(body) {
+    const b = body && typeof body === "object" ? body : {};
+    return {
+        ttl: validTTL(b.ttl) ? b.ttl : 0,
+        timer: b.disappearing === 0 || validTTL(b.disappearing) ? b.disappearing : null,
+        expired: b.expired === true,
+    };
+}
+
 /** Legacy numeric server message ID, or 0 for any new-protocol record. */
 export function legacyID(message) {
     const id = message?.id;
@@ -34,6 +52,7 @@ function sendState(record) {
  */
 export function ratchetDMMessage(record, nickname = "") {
     const sentAt = Number(record?.sent_at) || Date.now() / 1000;
+    const disappearing = disappearingFromBody(record?.body);
     return {
         id: 0,
         localSeq: 0,
@@ -58,6 +77,13 @@ export function ratchetDMMessage(record, nickname = "") {
         self: !!record?.self,
         copied: !!record?.copied,
         mentioned: false,
+        // Disappearing messages: own copies count from sending; a received
+        // copy starts when this device first shows it (Go records the time).
+        ttl: disappearing.timer === null ? disappearing.ttl : 0,
+        expiresAt: disappearing.timer === null && disappearing.ttl && record?.self ? Math.floor(sentAt) + disappearing.ttl : 0,
+        timer: disappearing.timer,
+        expired: disappearing.expired,
+        ...(disappearing.expired ? { text: "", deleted: true } : {}),
         ...sendState(record),
     };
 }

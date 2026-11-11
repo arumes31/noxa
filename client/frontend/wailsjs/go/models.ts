@@ -845,6 +845,22 @@ export namespace main {
 	        this.enc_mode = source["enc_mode"];
 	    }
 	}
+	export class DMExpiry {
+	    from_unique_id: string;
+	    client_msg_id: string;
+	    expires_at: number;
+
+	    static createFrom(source: any = {}) {
+	        return new DMExpiry(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.from_unique_id = source["from_unique_id"];
+	        this.client_msg_id = source["client_msg_id"];
+	        this.expires_at = source["expires_at"];
+	    }
+	}
 	export class DMHistoryContext {
 	    tab_id: string;
 	    identity_uid: string;

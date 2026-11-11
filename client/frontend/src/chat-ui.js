@@ -1,4 +1,5 @@
 import { joinChannelLocally } from "./local-join-intent.js";
+import { applyExpired, applyExpiries, countdownElement, needsStart, openDisappearingDialog, timerFallbackText, timerLabel, timerNotice, updateCountdown } from "./dm-disappearing.js";
 import { openImageEditor } from "./image-editor.js";
 import { isEditable } from "./image-editor-model.js";
 import { SafetyScan, SafetyScheme, checkSafetyScan } from "./safety-qr.js";
@@ -827,6 +828,8 @@ function ensureRenderKey(m) {
 }
 
 function renderMsg(m) {
+    // (28) A disappearing-messages setting change is a system line.
+    if (m.direct && typeof m.timer === "number" && !m.deleted) return renderTimerNotice(m);
     const el = document.createElement("div");
     el.className = "msg rich";
     if (m.deleted) el.classList.add("deleted");
@@ -876,7 +879,7 @@ function renderMsg(m) {
     body.className = "msg-text";
     if (m.deleted) {
         body.classList.add("tombstone");
-        body.textContent = t("polish.deleted");
+        body.textContent = t(m.expired ? "disappear.gone" : "polish.deleted");
     } else if (badge.bodyKey) {
         body.textContent = t(badge.bodyKey);
     } else {
@@ -884,6 +887,8 @@ function renderMsg(m) {
     }
     if (lock) time.appendChild(lock);
     el.appendChild(body);
+    const countdown = m.direct ? countdownElement(m) : null;
+    if (countdown) time.appendChild(countdown);
 
     if (m.edited && !m.deleted) {
         const em = document.createElement("span");
@@ -965,6 +970,88 @@ function renderMsg(m) {
     }
     if (!m.deleted && m.direct && m.self && m.clientMsgID && !m.id && view.kind === "dm") el.appendChild(renderDMActions(m, view.uid));
     return el;
+}
+
+// (28) renderTimerNotice shows a disappearing-messages setting change.
+function renderTimerNotice(m) {
+    const el = document.createElement("div");
+    el.className = "msg system disappear-notice";
+    el.dataset.scrollKey = ensureRenderKey(m);
+    el.dataset.ts = m.ts;
+    el.setAttribute("role", "note");
+    el.textContent = "⏱ " + timerNotice(m.timer, m.self ? t("disappear.you") : (m.from || "?"));
+    el.title = fmtFull(m.ts);
+    return el;
+}
+
+// (28) Conversation timers known to this view (peer -> seconds).
+const dmTimers = new Map();
+function noteDMTimer(peer, seconds) {
+    if (!peer || typeof seconds !== "number") return;
+    dmTimers.set(peer, seconds);
+    if (view.kind === "dm" && view.uid === peer) updateHeader();
+}
+async function refreshDMTimer(peer) {
+    const api = app();
+    if (!peer || typeof api.DirectDisappearingForTab !== "function") return;
+    const tabID = V().state.activeTabID;
+    try {
+        const seconds = await api.DirectDisappearingForTab(tabID, peer);
+        if (V().state.activeTabID === tabID) noteDMTimer(peer, Number(seconds) || 0);
+    } catch { /* no secure session: the menu shows "off" */ }
+}
+
+// startDisappearing starts the timers of received disappearing messages once
+// their conversation is really on screen (focused, chat tab visible).
+const startingTimers = new Set();
+async function startDisappearing(peer) {
+    const st = store.get("dm:" + peer);
+    const api = app();
+    if (!st || !needsStart(st.msgs) || startingTimers.has(peer) || typeof api.StartDirectDisappearingForTab !== "function") return;
+    if (!chatSurfaceVisible("dm:" + peer)) return;
+    const tabID = V().state.activeTabID;
+    startingTimers.add(peer);
+    try {
+        const started = await api.StartDirectDisappearingForTab(tabID, peer);
+        if (V().state.activeTabID !== tabID) return;
+        for (const m of applyExpiries(st.msgs, started || [])) refreshDMEl(m);
+    } catch { /* retried on the next render */ } finally {
+        startingTimers.delete(peer);
+    }
+}
+
+// onDMExpired applies Go's expiry of messages (text already deleted on disk
+// and in the protected archive) to the open views and notifications.
+export function onDMExpired(d) {
+    const peer = d?.peer || "";
+    const st = peer && store.get("dm:" + peer);
+    if (!st) return;
+    const changed = applyExpired(st.msgs, Array.isArray(d.messages) ? d.messages : []);
+    if (!changed.length) return;
+    if (view.kind === "dm" && view.uid === peer) for (const m of changed) refreshDMEl(m);
+    window.__noxaNativeToast?.viewed(V().state.activeTabID + "|dm:" + peer);
+    window.dispatchEvent(new CustomEvent("noxa-direct-changed"));
+}
+
+function tickDisappearing() {
+    for (const el of document.querySelectorAll("#chat-log .msg-disappear")) updateCountdown(el);
+}
+
+function openDMDisappearing(launcher) {
+    if (view.kind !== "dm" || !view.uid) return;
+    const peer = view.uid;
+    const tabID = V().state.activeTabID;
+    openDisappearingDialog({
+        current: dmTimers.get(peer) || 0,
+        launcher,
+        onSave: async (seconds) => {
+            const api = app();
+            if (typeof api.SetDirectDisappearingForTab !== "function") return t("disappear.unavailable");
+            const problem = await api.SetDirectDisappearingForTab(tabID, peer, seconds, timerFallbackText(seconds));
+            if (!problem) noteDMTimer(peer, seconds);
+            return problem || "";
+        },
+    });
 }
 
 // --- direct-message edit / delete (dm_devices_v1) ------------------------------
@@ -1165,6 +1252,8 @@ export function onRatchetMessage(d) {
         return false;
     }
     if (d.purpose !== "chat") return false;
+    // (28) A setting change moves the conversation timer (newest wins in Go).
+    if (typeof d.body?.disappearing === "number") void refreshDMTimer(peer);
     const tab = pmTabs.get(peer) || { uid: peer, nick: knownPeerName(peer, ""), unread: 0, offline: false, pendingRead: "" };
     if (!pmTabs.has(peer)) pmTabs.set(peer, tab);
     const m = ratchetDMMessage(d, d.self ? V().state.myNickname : knownPeerName(peer, ""));
@@ -1188,6 +1277,7 @@ export function onRatchetMessage(d) {
     }
     const live = key === activeKey() && !isPrivateGroupActive();
     if (live) appendLive(m);
+    if (live && m.ttl > 0 && !m.self) void startDisappearing(peer);
     else if (incoming) {
         tab.unread++;
         if (!V().state.replayingTabID) tab.unreadAt = Date.now();
@@ -2252,6 +2342,7 @@ function activatePM(uid) {
     selectDirectRecipient(uid);
     V().setDirectTargetVisible(true);
     setView({ kind: "dm", uid });
+    void refreshDMTimer(uid); // (28) the header shows a running timer
 }
 
 async function openE2EEDiagnostics() {
@@ -2763,6 +2854,11 @@ function dmMsg(e, peerNick) {
         channelID: null,
         self,
         mentioned: false,
+        // (28) Disappearing messages, recorded by Go in the sealed log.
+        ttl: Number(e.ttl) || 0,
+        expiresAt: Number(e.expires_at) || 0,
+        expired: !!e.expired,
+        timer: typeof e.timer === "number" ? e.timer : null,
     };
 }
 
@@ -3060,6 +3156,7 @@ function renderView(keepScrollFrom, { suppressMarkRead = false, skipThread = fal
     if (!suppressMarkRead && !anchor) markRead(key);
     // (501) A conversation on screen no longer needs its Windows notification.
     if (chatSurfaceVisible(key)) window.__noxaNativeToast?.viewed(V().state.activeTabID + "|" + key);
+    if (view.kind === "dm") void startDisappearing(view.uid);
 }
 
 // logItems lists the rows of a log in order: messages, plus the "— new
@@ -5241,6 +5338,17 @@ function updateHeader() {
         }
     }
     $("chat-head-title").textContent = title;
+    // (28) Disappearing messages: button in DMs, badge while a timer is on.
+    const disappearBtn = $("chat-disappear-btn");
+    if (disappearBtn) disappearBtn.classList.toggle("hidden", view.kind !== "dm" || filesOpen);
+    const timer = view.kind === "dm" && !filesOpen ? dmTimers.get(view.uid) || 0 : 0;
+    if (timer > 0) {
+        const badge = document.createElement("span");
+        badge.className = "disappear-indicator";
+        badge.textContent = "⏱ " + timerLabel(timer);
+        badge.title = t("disappear.active", { timer: timerLabel(timer) });
+        $("chat-head-title").append(badge);
+    }
     const recordingChannel = filesOpen ? st.myChannelID : ["channel", "chan"].includes(view.kind) ? activeChannelID() : 0;
     if (st.channels.some(channel => channel.ChannelID === recordingChannel && channel.Recording)) {
         const badge = document.createElement("span");
@@ -6076,6 +6184,12 @@ export function initChat() {
     window.addEventListener("noxa-language-changed", updateComposerCount);
     window.runtime.EventsOn("subscriptions", onSubscriptions);
     window.runtime.EventsOn("dm_history_identity_changed", onDMIdentityChanged);
+    // (28) Disappearing messages: Go expires them; the view follows.
+    window.runtime.EventsOn("dm_expired", onDMExpired);
+    setInterval(tickDisappearing, 1000);
+    const startVisible = () => { if (view.kind === "dm") void startDisappearing(view.uid); };
+    window.addEventListener("focus", startVisible);
+    document.addEventListener("visibilitychange", startVisible);
     window.runtime.EventsOn("tab_identity", data => {
         const identity = parseRuntimeObject(data);
         if (identity?.tab_id === V().state.activeTabID && typeof identity.identity_uid === "string") {
@@ -6177,6 +6291,8 @@ export function initChat() {
     $("chat-info-btn").onclick = openDescription;
     $("chat-e2ee-btn").onclick = openE2EEDiagnostics;
     $("chat-export-btn").onclick = exportChat;
+    const disappearBtn = $("chat-disappear-btn");
+    if (disappearBtn) disappearBtn.onclick = () => openDMDisappearing(disappearBtn);
     $("chat-search-btn").onclick = () => $("chat-search-row").classList.contains("hidden") ? openSearch() : closeSearch();
     $("chat-search-close").onclick = closeSearch;
     $("chat-search").addEventListener("input", () => {
