@@ -1,6 +1,6 @@
 module noxa/client
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/getlantern/systray v1.2.2
