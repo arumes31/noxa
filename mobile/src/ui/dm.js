@@ -67,18 +67,18 @@ export function renderDM(root, peer) {
     }
 
     // (28) Disappearing messages: timer names and the countdown on a line.
-    const timerName = seconds => t(`disappear.opt.${seconds}`);
+    const timerName = seconds => DISAPPEAR_OPTIONS.includes(seconds) ? t(`disappear.opt.${seconds}`) : durationLabel(seconds);
     const countdownText = message => message.expiresAt ? durationLabel(message.expiresAt - Date.now() / 1000) : durationLabel(message.ttl);
     const countdown = message => {
         if (!(message.ttl > 0) || message.deleted) return null;
-        const title = message.expiresAt ? t("disappear.remaining", { time: countdownText(message) }) : t("disappear.afterRead", { timer: timerName(message.ttl) || durationLabel(message.ttl) });
+        const title = message.expiresAt ? t("disappear.remaining", { time: countdownText(message) }) : t("disappear.afterRead", { timer: timerName(message.ttl) });
         return h("span", { class: "msg-disappear", title, "aria-label": title, dataset: { expiresAt: String(message.expiresAt || 0), ttl: String(message.ttl) } }, "⏱ " + countdownText(message));
     };
     const line = lineCache(message => {
         if (typeof message.timer === "number" && !message.deleted) {
             const who = message.self ? t("disappear.you") : (message.fromNickname || name);
             return h("div", { class: "msg-system disappear-notice", role: "note" }, "⏱ " + (message.timer > 0
-                ? t("disappear.noticeOn", { name: who, timer: timerName(message.timer) || durationLabel(message.timer) })
+                ? t("disappear.noticeOn", { name: who, timer: timerName(message.timer) })
                 : t("disappear.noticeOff", { name: who })));
         }
         const classes = ["msg", message.self ? "own" : "", message.pending ? "pending" : "", message.queued ? "queued" : "", message.failed ? "failed" : ""].join(" ");
@@ -139,6 +139,8 @@ export function renderDM(root, peer) {
             const at = Number(el.dataset.expiresAt) || 0;
             if (!at) continue;
             const left = durationLabel(at - Date.now() / 1000);
+            // The log is a live region: only rewrite a changed label.
+            if (el.textContent === "⏱ " + left) continue;
             el.textContent = "⏱ " + left;
             el.title = t("disappear.remaining", { time: left });
             el.setAttribute("aria-label", el.title);

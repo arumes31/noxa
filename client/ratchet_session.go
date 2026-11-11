@@ -745,8 +745,11 @@ func (a *App) projectRatchetRecord(m *connManager, r RatchetRecord, _ bool) {
 		EncVerified: true, EncMode: "e2e", Protocol: ratchetProtocol, Key: r.Key, Status: status}
 	// Disappearing messages: a redacted (expired) archive record never comes
 	// back as a message; a TTL or a setting change is recorded on the entry.
-	if !applyRatchetDisappearing(&l, &e, r) {
+	if !applyRatchetDisappearing(&l, &e, r, time.Now()) {
 		return
+	}
+	if e.TTL > 0 {
+		e.Archive = m.ratchetArchiveServer()
 	}
 	a.noteDisappearing(e.ExpiresAt)
 	if n := len(l.Messages); n > 0 {

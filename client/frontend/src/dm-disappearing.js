@@ -96,6 +96,8 @@ export function countdownElement(m, nowMS = Date.now()) {
 export function updateCountdown(el, ttl = Number(el.dataset.ttl) || 0, nowMS = Date.now()) {
     const at = Number(el.dataset.expiresAt) || 0;
     const text = at ? durationLabel(remainingSeconds(at, nowMS)) : durationLabel(ttl);
+    // The chat log is a live region: leave an unchanged label alone.
+    if (el.textContent === "⏱ " + text) return;
     el.textContent = "⏱ " + text;
     const title = at ? t("disappear.remaining", { time: text }) : t("disappear.afterRead", { timer: timerLabel(ttl) });
     el.title = title;

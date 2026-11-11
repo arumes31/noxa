@@ -1,6 +1,6 @@
 export const chatEnglish = {
     "disappear.title": "Disappearing messages",
-    "disappear.help": "New messages in this conversation disappear from every device of both of you after the time you choose: your own copy counts from sending, a received copy from when each device first shows it. Anyone can still copy or screenshot a message before it disappears.",
+    "disappear.help": "New messages in this conversation disappear from every device of both of you after the time you choose: your own copy counts from sending; received messages count from when the conversation is opened on each device. Anyone can still copy or screenshot a message before it disappears.",
     "disappear.off": "Off",
     "disappear.30s": "30 seconds",
     "disappear.5m": "5 minutes",
@@ -13,7 +13,7 @@ export const chatEnglish = {
     "disappear.fallbackOn": "I turned on disappearing messages ({timer}). Update noXa to see messages disappear.",
     "disappear.fallbackOff": "I turned off disappearing messages.",
     "disappear.remaining": "Disappears in {time}",
-    "disappear.afterRead": "Disappears {timer} after it is shown",
+    "disappear.afterRead": "Disappears {timer} after the conversation is opened",
     "disappear.gone": "This message disappeared",
     "disappear.failed": "Could not change disappearing messages: {error}",
     "disappear.active": "Disappearing messages: {timer}",
@@ -265,7 +265,7 @@ export const chatEnglish = {
 };
 export const chatGerman = {
     "disappear.title": "Verschwindende Nachrichten",
-    "disappear.help": "Neue Nachrichten in dieser Unterhaltung verschwinden nach der gewählten Zeit von allen Geräten von euch beiden: deine eigene Kopie ab dem Senden, eine empfangene ab dem Moment, in dem jedes Gerät sie zum ersten Mal anzeigt. Jeder kann eine Nachricht vorher noch kopieren oder einen Screenshot machen.",
+    "disappear.help": "Neue Nachrichten in dieser Unterhaltung verschwinden nach der gewählten Zeit von allen Geräten von euch beiden: deine eigene Kopie ab dem Senden, empfangene Nachrichten ab dem Öffnen der Unterhaltung auf dem jeweiligen Gerät. Jeder kann eine Nachricht vorher noch kopieren oder einen Screenshot machen.",
     "disappear.off": "Aus",
     "disappear.30s": "30 Sekunden",
     "disappear.5m": "5 Minuten",
@@ -278,7 +278,7 @@ export const chatGerman = {
     "disappear.fallbackOn": "Ich habe verschwindende Nachrichten eingeschaltet ({timer}). Aktualisiere noXa, damit Nachrichten verschwinden.",
     "disappear.fallbackOff": "Ich habe verschwindende Nachrichten ausgeschaltet.",
     "disappear.remaining": "Verschwindet in {time}",
-    "disappear.afterRead": "Verschwindet {timer} nach dem Anzeigen",
+    "disappear.afterRead": "Verschwindet {timer} nach dem Öffnen der Unterhaltung",
     "disappear.gone": "Diese Nachricht ist verschwunden",
     "disappear.failed": "Verschwindende Nachrichten konnten nicht geändert werden: {error}",
     "disappear.active": "Verschwindende Nachrichten: {timer}",

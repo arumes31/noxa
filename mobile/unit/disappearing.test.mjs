@@ -109,3 +109,26 @@ test("an own send without a terminal receipt is redacted later", async () => {
     assert.equal(own.redacted, true);
     dm.close();
 });
+
+test("a contact's change dated far ahead cannot block a later change", async () => {
+    const { dm, project } = await setup();
+    const now = Date.now() / 1000;
+    await project(record({ peer: "dave", logicalID: "timer:f", sentAt: now + 365 * 86400, body: { text: "on", sentAt: now + 365 * 86400, disappearing: 604800 } }));
+    assert.equal(dm.disappearing("dave"), 604800);
+    await project(record({ peer: "dave", logicalID: "timer:me", sender: "me", status: "accepted", sentAt: now + 600, body: { text: "off", sentAt: now + 600, disappearing: 0 } }));
+    assert.equal(dm.disappearing("dave"), 0);
+    dm.close();
+});
+
+test("a queued own send is not marked redacted before its archive exists", async () => {
+    const { dm, consumer } = await setup();
+    const conversation = dm.conversation("erin");
+    conversation.messages.push({ id: "q1", protocol: "noxa-olm-v1", from: "me", self: true, body: "queued", sentAt: 1000, ttl: 30, expiresAt: 1030, queued: true });
+    for (let i = 0; i < 7; i++) await dm.sweepDisappearing(2_000_000);
+    const queued = conversation.messages[0];
+    assert.equal(queued.expired, true);
+    assert.equal(queued.body, "");
+    assert.equal(queued.redacted, false, "still waits for its archive");
+    assert.equal(consumer.redactions.flat().includes(disappearKey("me", "q1")), false);
+    dm.close();
+});

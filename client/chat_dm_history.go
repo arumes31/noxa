@@ -74,7 +74,9 @@ type DMEntry struct {
 	Timer     *int64 `json:"timer,omitempty"`
 	// Redacted: the protected archive copy of an expired message was
 	// replaced too (a connected session is needed; retried until done).
-	Redacted bool `json:"redacted,omitempty"`
+	// Archive names the server whose archive holds the copy.
+	Redacted bool   `json:"redacted,omitempty"`
+	Archive  string `json:"archive,omitempty"`
 }
 
 // DMPeer summarises one stored conversation, so PM tabs can be restored on

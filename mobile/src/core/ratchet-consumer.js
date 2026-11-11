@@ -740,6 +740,9 @@ export class RatchetConsumer {
             const r = original.record;
             // A short-lived control is never resealed: its outcome stands.
             if (r.purpose === "control") return this.#resolve(logical.attemptID, a, true);
+            // A disappeared message's archive is redacted: never seal the
+            // marker as new content; its outcome stands (plan item 28).
+            if (r.body?.expired === true) return this.#resolve(logical.attemptID, a, true);
             return this.#seal(a, { logicalID: r.logicalID, scope: r.scope, peer: r.scope === "direct" ? r.peer : "", conversation: r.conversation,
                 purpose: r.purpose, reference: r.reference, body: r.body }, true);
         }

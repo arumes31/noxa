@@ -80,10 +80,14 @@ func ratchetChatBodyWith(text string, ttl int64, timer *int64) json.RawMessage {
 	}{text, float64(time.Now().UnixMilli()) / 1000, ttl, timer})
 }
 
+// dmTimerSkew is how far ahead of this device's clock a contact's send time
+// may order a timer change.
+const dmTimerSkew = 5 * time.Minute
+
 // applyRatchetDisappearing records the disappearing fields of a new direct
 // record on its log entry. It returns false for a redacted (expired) record,
 // which is never shown again as a message.
-func applyRatchetDisappearing(l *dmLog, e *DMEntry, r RatchetRecord) bool {
+func applyRatchetDisappearing(l *dmLog, e *DMEntry, r RatchetRecord, now time.Time) bool {
 	ttl, timer, expired := ratchetBodyDisappearing(r.Body)
 	if expired {
 		return false
@@ -91,8 +95,14 @@ func applyRatchetDisappearing(l *dmLog, e *DMEntry, r RatchetRecord) bool {
 	if timer != nil {
 		// A setting change is a system line and never expires itself.
 		e.Timer = timer
-		if r.SentAt >= l.DisappearingAt {
-			l.Disappearing, l.DisappearingAt = *timer, r.SentAt
+		// The send time is sender-chosen: a contact cannot date a change so
+		// far ahead that no later change could replace it.
+		order := r.SentAt
+		if limit := float64(now.Add(dmTimerSkew).Unix()); !r.Self && order > limit {
+			order = limit
+		}
+		if order >= l.DisappearingAt {
+			l.Disappearing, l.DisappearingAt = *timer, order
 		}
 		return true
 	}
@@ -117,11 +127,15 @@ type dmDisappearState struct {
 	redact   bool
 	redactAt time.Time
 	misses   map[string]int
+	// pending caches expired messages still to redact (semantic key ->
+	// archive server, "" = unknown); nil = reload from the logs.
+	pending map[string]string
 }
 
 // dmRedactRetry throttles archive scans for pending redactions, and
-// dmRedactGiveUp is how many scans may miss a message (absent from every
-// connected archive) before it counts as having nothing left to redact.
+// dmRedactGiveUp is how many scans may miss a message without a known
+// archive (absent from every archive while every tab has a session) before
+// it counts as having nothing left to redact.
 var (
 	dmRedactRetry  = 30 * time.Second
 	dmRedactGiveUp = 5
@@ -322,6 +336,11 @@ func (a *App) markRedactedWith(store dmHistoryStore, done map[string]bool) {
 	if len(done) == 0 {
 		return
 	}
+	a.dmDisappear.mu.Lock()
+	for k := range done {
+		delete(a.dmDisappear.pending, k)
+	}
+	a.dmDisappear.mu.Unlock()
 	for _, p := range store.peers() {
 		a.dmMu.Lock()
 		l, err := store.load(p.UniqueID)
@@ -342,9 +361,21 @@ func (a *App) markRedactedWith(store dmHistoryStore, done map[string]bool) {
 }
 
 // pendingRedactionsWith lists expired new-protocol messages whose archive
-// copy is not redacted yet, by semantic key.
-func (a *App) pendingRedactionsWith(store dmHistoryStore) map[string]bool {
-	out := map[string]bool{}
+// copy is not redacted yet: semantic key -> archive server ("" = unknown).
+// The list is cached until the next expiry, so a server that stays offline
+// does not make every sweep decrypt every log.
+func (a *App) pendingRedactionsWith(store dmHistoryStore) map[string]string {
+	a.dmDisappear.mu.Lock()
+	cached := a.dmDisappear.pending
+	a.dmDisappear.mu.Unlock()
+	if cached != nil {
+		out := make(map[string]string, len(cached))
+		for k, v := range cached {
+			out[k] = v
+		}
+		return out
+	}
+	out := map[string]string{}
 	for _, p := range store.peers() {
 		a.dmMu.Lock()
 		l, err := store.load(p.UniqueID)
@@ -354,10 +385,16 @@ func (a *App) pendingRedactionsWith(store dmHistoryStore) map[string]bool {
 		}
 		for _, e := range l.Messages {
 			if e.Expired && !e.Redacted && e.Protocol == ratchetProtocol {
-				out[ratchetSemanticKey(e.FromUniqueID, e.ClientMsgID)] = true
+				out[ratchetSemanticKey(e.FromUniqueID, e.ClientMsgID)] = e.Archive
 			}
 		}
 	}
+	a.dmDisappear.mu.Lock()
+	a.dmDisappear.pending = make(map[string]string, len(out))
+	for k, v := range out {
+		a.dmDisappear.pending[k] = v
+	}
+	a.dmDisappear.mu.Unlock()
 	return out
 }
 
@@ -373,11 +410,37 @@ func (a *App) sweepDisappearing(now time.Time) {
 	if !due && !redact {
 		return
 	}
-	store, err := a.captureDMHistory()
+	store, err := a.disappearingStore()
 	if err != nil {
 		return
 	}
 	a.sweepDisappearingWith(store, now, seen, due, redact)
+}
+
+// disappearingStore captures the active identity's DM history for the
+// sweeper. Unlike captureDMHistory it never creates an identity: it runs at
+// startup, before onboarding may have chosen or created one. Offline, an
+// existing identity file is read strictly under identityMu.
+func (a *App) disappearingStore() (dmHistoryStore, error) {
+	dir, err := a.dmHistoryDir()
+	if err != nil {
+		return dmHistoryStore{}, err
+	}
+	var id *identity
+	if m := a.cmLoad(); m != nil {
+		id, err = m.identity()
+	} else {
+		a.identityMu.Lock()
+		var path string
+		if _, path, err = a.resolveActive(); err == nil {
+			id, err = loadIdentityAtStrict(path)
+		}
+		a.identityMu.Unlock()
+	}
+	if err != nil {
+		return dmHistoryStore{}, err
+	}
+	return dmHistoryStoreForIdentity(dir, id)
 }
 
 // sweepDisappearingWith is sweepDisappearing on a captured store.
@@ -389,6 +452,11 @@ func (a *App) sweepDisappearingWith(store dmHistoryStore, now time.Time, seen in
 		expired, more, next := a.expireDueWith(store, now)
 		pendingRedact = pendingRedact || more
 		redact = redact || len(expired) > 0
+		if len(expired) > 0 {
+			a.dmDisappear.mu.Lock()
+			a.dmDisappear.pending = nil // reload: new messages to redact
+			a.dmDisappear.mu.Unlock()
+		}
 		for peer, list := range expired {
 			a.emitPlain(dmDisappearEvent, map[string]any{"peer": peer, "messages": list})
 		}
@@ -431,18 +499,31 @@ func (a *App) redactPendingWith(store dmHistoryStore) bool {
 	a.tabsMu.Unlock()
 	done := map[string]bool{}
 	blocked := map[string]bool{}
-	attempted := false
+	allSessions := len(managers) > 0
 	for _, m := range managers {
 		c, err := m.ratchetConsumerOn(nil)
 		if err != nil {
+			allSessions = false
 			continue
 		}
-		found, held, err := c.redact(pending)
+		// A message is redacted in the archive of the server it came
+		// through; an entry without that binding is tried everywhere.
+		server := c.d.Namespace.Server
+		targets := map[string]bool{}
+		for k, archive := range pending {
+			if archive == "" || archive == server {
+				targets[k] = true
+			}
+		}
+		if len(targets) == 0 {
+			continue
+		}
+		found, held, err := c.redact(targets)
 		if err != nil {
+			allSessions = false
 			log.Printf("disappearing messages: archive redaction: %v", err)
 			continue
 		}
-		attempted = true
 		for k := range found {
 			done[k] = true
 		}
@@ -450,21 +531,18 @@ func (a *App) redactPendingWith(store dmHistoryStore) bool {
 			blocked[k] = true
 		}
 	}
-	if !attempted {
-		return false
-	}
-	// A message no connected archive holds may belong to a server that is
-	// not connected now: it stays pending for a few scans before it counts
-	// as having nothing left to redact.
+	// A bound message waits for its own server's session, however long.
+	// Only an unbound one that no archive holds while every tab has a
+	// session counts as having nothing left to redact, after a few scans.
 	a.dmDisappear.mu.Lock()
 	if a.dmDisappear.misses == nil {
 		a.dmDisappear.misses = map[string]int{}
 	}
-	for k := range pending {
+	for k, archive := range pending {
 		switch {
 		case done[k], blocked[k]:
 			delete(a.dmDisappear.misses, k)
-		default:
+		case archive == "" && allSessions:
 			a.dmDisappear.misses[k]++
 			if a.dmDisappear.misses[k] >= dmRedactGiveUp {
 				done[k] = true
@@ -475,6 +553,17 @@ func (a *App) redactPendingWith(store dmHistoryStore) bool {
 	a.dmDisappear.mu.Unlock()
 	a.markRedactedWith(store, done)
 	return len(done) == len(pending)
+}
+
+// ratchetArchiveServer names the server whose protected archive the current
+// session writes ("" without a session).
+func (m *connManager) ratchetArchiveServer() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ratchetSess == nil || m.ratchetSess.consumer == nil {
+		return ""
+	}
+	return m.ratchetSess.consumer.d.Namespace.Server
 }
 
 // runDisappearingSweeper ticks until stop is closed.

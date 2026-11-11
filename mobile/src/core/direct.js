@@ -826,9 +826,12 @@ export class DirectMessages extends EventTarget {
         }
         if (disappearing.timer !== null) {
             const conversation = this.conversation(record.peer);
-            if (!(record.sentAt < (conversation.disappearingAt || 0))) {
+            // A contact's send time is capped near this clock, so a change
+            // dated far ahead cannot block every later one.
+            const order = own ? record.sentAt : Math.min(record.sentAt, Date.now() / 1000 + TIMER_SKEW_S);
+            if (!(order < (conversation.disappearingAt || 0))) {
                 conversation.disappearing = disappearing.timer;
-                conversation.disappearingAt = record.sentAt;
+                conversation.disappearingAt = order;
             }
         }
         const status = record.status || (own ? "" : "received");
@@ -1138,7 +1141,9 @@ export class DirectMessages extends EventTarget {
         const pending = new Map();
         for (const conversation of this.conversations.values()) {
             for (const m of conversation.messages) {
-                if (m.expired && !m.redacted && m.protocol === RATCHET_PROTOCOL) pending.set(disappearKey(m.from, m.id), conversation.peer);
+                // A queued or pending own send has no committed archive yet;
+                // it is redacted once the outbox commits it.
+                if (m.expired && !m.redacted && m.protocol === RATCHET_PROTOCOL && !m.queued && !m.pending) pending.set(disappearKey(m.from, m.id), conversation.peer);
             }
         }
         if (!pending.size) return;
@@ -1165,3 +1170,5 @@ export class DirectMessages extends EventTarget {
 const DISAPPEAR_SWEEP_MS = 5000;
 /** Archive scans that may miss a message before it counts as redacted. */
 const REDACT_GIVE_UP = 5;
+/** How far ahead of this clock a contact's timer change may be dated. */
+const TIMER_SKEW_S = 300;

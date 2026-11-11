@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io/fs"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -46,22 +47,22 @@ func TestRatchetBodyDisappearingReadsOnlyValidFields(t *testing.T) {
 func TestApplyRatchetDisappearingRecordsTimersAndSettings(t *testing.T) {
 	l := dmLog{Peer: "bob"}
 	own := DMEntry{}
-	if !applyRatchetDisappearing(&l, &own, RatchetRecord{Self: true, SentAt: 1000, Body: json.RawMessage(`{"text":"a","ttl":60}`)}) || own.TTL != 60 || own.ExpiresAt != 1060 {
+	if !applyRatchetDisappearing(&l, &own, RatchetRecord{Self: true, SentAt: 1000, Body: json.RawMessage(`{"text":"a","ttl":60}`)}, time.Unix(1000, 0)) || own.TTL != 60 || own.ExpiresAt != 1060 {
 		t.Fatalf("own copy: %+v", own)
 	}
 	in := DMEntry{}
-	if !applyRatchetDisappearing(&l, &in, RatchetRecord{SentAt: 1000, Body: json.RawMessage(`{"text":"b","ttl":60}`)}) || in.TTL != 60 || in.ExpiresAt != 0 {
+	if !applyRatchetDisappearing(&l, &in, RatchetRecord{SentAt: 1000, Body: json.RawMessage(`{"text":"b","ttl":60}`)}, time.Unix(1000, 0)) || in.TTL != 60 || in.ExpiresAt != 0 {
 		t.Fatalf("received copy starts on display only: %+v", in)
 	}
 	// Newest setting change by send time wins, whichever arrives last.
 	newer, older := DMEntry{}, DMEntry{}
-	applyRatchetDisappearing(&l, &newer, RatchetRecord{SentAt: 2000, Body: json.RawMessage(`{"text":"on","disappearing":3600}`)})
-	applyRatchetDisappearing(&l, &older, RatchetRecord{SentAt: 1500, Body: json.RawMessage(`{"text":"off","disappearing":0}`)})
+	applyRatchetDisappearing(&l, &newer, RatchetRecord{SentAt: 2000, Body: json.RawMessage(`{"text":"on","disappearing":3600}`)}, time.Unix(2000, 0))
+	applyRatchetDisappearing(&l, &older, RatchetRecord{SentAt: 1500, Body: json.RawMessage(`{"text":"off","disappearing":0}`)}, time.Unix(2000, 0))
 	if l.Disappearing != 3600 || newer.Timer == nil || *newer.Timer != 3600 || older.Timer == nil || *older.Timer != 0 || newer.TTL != 0 {
 		t.Fatalf("settings: log=%d newer=%+v older=%+v", l.Disappearing, newer, older)
 	}
 	// A redacted record is never shown again.
-	if applyRatchetDisappearing(&l, &DMEntry{}, RatchetRecord{Body: ratchetExpiredBody}) {
+	if applyRatchetDisappearing(&l, &DMEntry{}, RatchetRecord{Body: ratchetExpiredBody}, time.Unix(2000, 0)) {
 		t.Fatal("redacted record projected")
 	}
 }
@@ -89,7 +90,7 @@ func TestDisappearingMessagesStartOnDisplayAndExpireLocally(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	for _, e := range []DMEntry{
 		{FromUniqueID: "me", Self: true, Body: "mine", ClientMsgID: "m1", SentAt: 9_990, TTL: 30, ExpiresAt: 10_020, Protocol: ratchetProtocol},
-		{FromUniqueID: "bob", Body: "theirs", ClientMsgID: "b1", SentAt: 9_995, TTL: 60, Protocol: ratchetProtocol},
+		{FromUniqueID: "bob", Body: "theirs", ClientMsgID: "b1", SentAt: 9_995, TTL: 60, Protocol: ratchetProtocol, Archive: "srv-b"},
 		{FromUniqueID: "bob", Body: "keeps", ClientMsgID: "b2", SentAt: 9_996, Protocol: ratchetProtocol},
 	} {
 		if msg := a.dmHistoryAppendWith(store, "bob", "Bob", e); msg != "" {
@@ -138,12 +139,19 @@ func TestDisappearingMessagesStartOnDisplayAndExpireLocally(t *testing.T) {
 		t.Fatalf("expired text still searchable: %+v", res.Messages)
 	}
 	// Archive redaction bookkeeping: pending until marked.
+	// Each entry names the archive (server) that holds its copy.
 	pending := a.pendingRedactionsWith(store)
-	if len(pending) != 2 || !pending[ratchetSemanticKey("bob", "b1")] || !pending[ratchetSemanticKey("me", "m1")] {
+	if archive, ok := pending[ratchetSemanticKey("bob", "b1")]; len(pending) != 2 || !ok || archive != "srv-b" {
+		t.Fatalf("pending redactions: %v", pending)
+	}
+	if _, ok := pending[ratchetSemanticKey("me", "m1")]; !ok {
 		t.Fatalf("pending redactions: %v", pending)
 	}
 	a.markRedactedWith(store, map[string]bool{ratchetSemanticKey("bob", "b1"): true})
-	if pending = a.pendingRedactionsWith(store); len(pending) != 1 || !pending[ratchetSemanticKey("me", "m1")] {
+	if pending = a.pendingRedactionsWith(store); len(pending) != 1 {
+		t.Fatalf("after marking: %v", pending)
+	}
+	if _, ok := pending[ratchetSemanticKey("me", "m1")]; !ok {
 		t.Fatalf("after marking: %v", pending)
 	}
 }
@@ -211,5 +219,42 @@ func TestRatchetRedactedArchiveKeepsMetadata(t *testing.T) {
 	}
 	if body, _ := got["body"].(map[string]any); body["expired"] != true || body["text"] != nil {
 		t.Fatalf("body not redacted: %v", got["body"])
+	}
+}
+
+func TestTimerChangeDatedAheadCannotBlockLaterChanges(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	l := dmLog{Peer: "bob"}
+	// A contact dates a change a year ahead: it orders as receive time + skew.
+	applyRatchetDisappearing(&l, &DMEntry{}, RatchetRecord{SentAt: 10_000 + 365*86400, Body: json.RawMessage(`{"text":"on","disappearing":604800}`)}, now)
+	if l.Disappearing != 604800 || l.DisappearingAt != float64(now.Add(dmTimerSkew).Unix()) {
+		t.Fatalf("future change: %d at %v", l.Disappearing, l.DisappearingAt)
+	}
+	// A real change made later replaces it.
+	later := now.Add(10 * time.Minute)
+	applyRatchetDisappearing(&l, &DMEntry{}, RatchetRecord{Self: true, SentAt: float64(later.Unix()), Body: json.RawMessage(`{"text":"off","disappearing":0}`)}, later)
+	if l.Disappearing != 0 {
+		t.Fatalf("later change blocked: %d", l.Disappearing)
+	}
+}
+
+func TestDisappearingStoreNeverCreatesAnIdentity(t *testing.T) {
+	oldRoot := identityRootOverride
+	root := t.TempDir()
+	identityRootOverride = root
+	t.Cleanup(func() { identityRootOverride = oldRoot })
+	a := &App{settingsPath: filepath.Join(t.TempDir(), "settings.json")}
+	if _, err := a.disappearingStore(); err == nil {
+		t.Fatal("store without an identity")
+	}
+	var files []string
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if len(files) != 0 {
+		t.Fatalf("sweeper created identity files: %v", files)
 	}
 }
