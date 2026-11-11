@@ -26,20 +26,28 @@ function withMediaDevices(t, devices) {
     });
 }
 
-function setup() {
+function setup({ mediaFactory: customFactory } = {}) {
     let current = null;
+    const requests = [];
     const session = Object.assign(new EventTarget(), {
         uniqueID: "self",
-        conn: { request: async () => ({ call: structuredClone(current) }) },
+        conn: { request: async (_type, request) => { requests.push(request?.action); return { call: structuredClone(current) }; } },
     });
-    const calls = new Calls(session, {});
+    // Encryption is a pass-through stand-in: these tests cover capture
+    // ownership across hang-up (call-media-e2ee.test.mjs covers encryption).
+    const mediaFactory = () => {
+        const stub = { active: false, setRoster() {}, async start() { stub.active = true; }, receive: () => ({ ok: true }), peerConfig: config => config, protectPeer: pc => pc,
+            syncPeer() {}, endpointID: () => "", bindSender: async () => {}, bindReceiver: async () => {}, releasePeer: async () => {}, stop() { stub.active = false; } };
+        return stub;
+    };
+    const calls = new Calls(session, {}, { mediaFactory: customFactory || mediaFactory });
     calls.addEventListener("error", () => {});
     const apply = call => {
         current = call;
         session.dispatchEvent(new CustomEvent("server-event", { detail: { type: "private_call", data: { id: call.id } } }));
         return new Promise(resolve => setTimeout(resolve, 0));
     };
-    return { calls, apply };
+    return { calls, apply, requests };
 }
 
 const call = (states, extra = {}) => ({ id: "c1", caller: "self", created_at: 1700000000, revision: extra.revision || 1, ended_at: extra.ended_at || 0,
@@ -70,4 +78,24 @@ test("a screen share granted after the call ended is stopped", async t => {
     await sharing;
     assert.equal(track.stopped, true);
     assert.equal(calls.screen, null);
+});
+
+test("a media session failure during the call ends it once", async t => {
+    withMediaDevices(t, { getUserMedia: () => new Promise(() => {}) });
+    let fail = null;
+    const { calls, apply, requests } = setup({ mediaFactory: options => {
+        fail = options.onError;
+        const stub = { active: false, setRoster() {}, async start() { stub.active = true; }, receive: () => ({ ok: true }), peerConfig: c => c, protectPeer: pc => pc,
+            syncPeer() {}, endpointID: () => "", bindSender: async () => {}, bindReceiver: async () => {}, releasePeer: () => undefined, stop() { stub.active = false; } };
+        return stub;
+    } });
+    const errors = [];
+    calls.addEventListener("error", event => errors.push(event.detail));
+    await apply(call({ self: "accepted", kai: "accepted" }));
+    fail(new Error("Encrypted media worker stopped"));
+    fail(new Error("again"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].code, "e2ee");
+    assert.equal(requests.filter(action => action === "leave").length, 1);
 });

@@ -31,6 +31,8 @@ import { StudioEngine, outputSize, STUDIO_FPS } from "./studio-compositor.js";
 import "./studio.css";
 
 const V = () => window.__noxa;
+// Program renderer for new sessions; tests may force one.
+let rendererOverride = "auto";
 let session = null;
 let panel = null;
 let panelID = 0;
@@ -71,7 +73,7 @@ function createSession() {
     const assetDB = studioAssetDB(uid);
     const assets = assetDB ? createAssetStore({ name: assetDB }) : createAssetStore({ indexedDB: null });
     const { width, height } = outputSize(V()?.state?.mediaLimits);
-    const engine = new StudioEngine({ registry, assets, width, height, fps: STUDIO_FPS,
+    const engine = new StudioEngine({ registry, assets, width, height, fps: STUDIO_FPS, renderer: rendererOverride,
         label: source => source.kind === "image" ? t("studio.sourceUnavailable") : t(`studio.state.${registry.state(source.capture)}`) });
     const studio = loadStudio(uid);
     session = { id, uid, registry, assets, engine, audio: null, studio, live: false, starting: false,
@@ -653,8 +655,14 @@ export function studioDiagnostics() {
         live: session.live, scene: session.studio.selected, program: session.engine.live?.id || "",
         captures: session.registry.ids().map(id => ({ id, refs: session.registry.refs(id), state: session.registry.state(id) })),
         routes: session.audio?.routed() || [], transitioning: session.engine.transitioning,
-        width: session.width, height: session.height,
+        width: session.width, height: session.height, renderer: session.engine.rendererKind,
     };
+}
+
+// Test hook: force the program renderer ("auto", "webgl" or "2d") for
+// sessions opened afterwards.
+export function useStudioRendererForTest(kind) {
+    rendererOverride = ["auto", "webgl", "2d"].includes(kind) ? kind : "auto";
 }
 
 // Test hook: the live session internals (engine canvases, registry).

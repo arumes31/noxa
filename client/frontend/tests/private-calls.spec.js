@@ -3,6 +3,19 @@ import { test } from "./call-relay-fixture.js";
 
 test.use({ launchOptions: { args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"] }, permissions: ["microphone", "camera"] });
 
+const CALL_ID = "8f0a2c1e-4b8d-4d6e-9a51-3c2b1a0f9e77";
+// Delivers one media-key control from sender's page to the target account's
+// page, like the authenticated ratchet control transport. withhold(target)
+// drops controls to a device (a peer that never receives the key).
+function deliverMediaKey(pages, sender, request, withhold = () => false) {
+    const target = pages.get(request.principal);
+    if (!target || request.device !== `d-${request.principal}` || request.scope?.type !== "call-media") return { code: "not_recipient" };
+    if (withhold(request.principal)) return { state: "accepted" };
+    const event = { sender, sender_device: `d-${sender}`, kind: request.kind, scope: request.scope, epoch: request.epoch, expires_at: request.expires_at, data: request.data };
+    void target.evaluate(value => window.__callsModule.receiveCallMediaKey(value), event).catch(() => {});
+    return { state: "accepted" };
+}
+
 for (const signalingMode of ["normal", "gathering", "candidates-first", "group-media", "capture-recovery", "relay-renewal", "group-renewal"]) {
 test(`real peer call captures only after acceptance and tears down without joining a channel${signalingMode === "normal" ? "" : ` (${signalingMode})`}`, async ({ newIsolatedPage, callRelay }) => {
     test.setTimeout(60000);
@@ -18,7 +31,7 @@ test(`real peer call captures only after acceptance and tears down without joini
         await page.addInitScript(servers => { window.__callIceServers = servers; }, callRelay);
         await page.route("**/__call_test__", route => route.fulfill({ contentType: "text/html", body: '<!doctype html><title>Call test</title><link rel="stylesheet" href="/src/private-calls.css">' }));
         await page.exposeFunction("requestCall", async request => {
-            if (request.action === "start") call = { id: "call-1", caller: uid, revision: ++revision, created_at: Math.floor(Date.now()/1000), ring_until: Math.floor(Date.now()/1000)+30, ended_at: 0, participants: participantIDs.map(id => ({ unique_id: id, client_id: id, state: id === uid ? "accepted" : "ringing" })) };
+            if (request.action === "start") call = { id: CALL_ID, caller: uid, revision: ++revision, created_at: Math.floor(Date.now()/1000), ring_until: Math.floor(Date.now()/1000)+30, ended_at: 0, participants: participantIDs.map(id => ({ unique_id: id, client_id: id, device_id: `d-${id}`, state: id === uid ? "accepted" : "ringing" })) };
             if (request.action === "accept") { call.participants.find(participant => participant.unique_id === uid).state = "accepted"; call.revision = ++revision; }
             if (request.action === "start" || request.action === "accept") setTimeout(notify, 0);
             return { action: request.action, call: structuredClone(call) };
@@ -43,6 +56,9 @@ test(`real peer call captures only after acceptance and tears down without joini
             void targetPage.evaluate(value => window.__callsModule.privateCallSignal(value), signal).catch(() => {});
         });
         await page.exposeFunction("stopCall", async () => { call.ended_at = Math.floor(Date.now()/1000); call.revision = ++revision; setTimeout(notify, 0); });
+        // (#12) Media keys travel as authenticated controls to exactly one
+        // device; here the harness delivers them page to page.
+        await page.exposeFunction("relayMediaKey", async request => deliverMediaKey(pages, uid, request));
         await page.goto("http://127.0.0.1:12364/__call_test__");
         await page.evaluate(async ({ uid, signalingMode, participantIDs }) => {
             window.__captures = 0; window.__streams = []; window.__peers = []; window.__channelMoves = 0; window.__warnings = []; window.__hostCandidates = 0; window.__callGains = [];
@@ -68,6 +84,8 @@ test(`real peer call captures only after acceptance and tears down without joini
                 GetICEServersForTab: async () => window.__callIceServers,
                 SendPrivateCallDescriptionForTab: (_tab, id, target, type, sdp) => window.relayDescription(id, target, type, sdp),
                 OpenPrivateCallDescriptionForTab: async (_tab, signal) => signal.description,
+                MediaE2EEStatusForTab: async () => ({ supported: true, principal: uid, device: `d-${uid}`, client_id: uid }),
+                SendMediaKeyForTab: (_tab, request) => window.relayMediaKey(request),
                 StopPrivateCallForTab: () => window.stopCall(),
                 JoinChannelForTab: async () => { window.__channelMoves++; return ""; },
                 SaveSettings: async value => { window.__savedSettings = structuredClone(value); return ""; },
@@ -117,6 +135,13 @@ test(`real peer call captures only after acceptance and tears down without joini
                 const stats = await window.__peers[0].getStats();
                 return [...stats.values()].filter(report => report.type === "inbound-rtp" && report.kind === "audio").reduce((sum, report) => sum + (report.bytesReceived || 0), 0);
             })).toBeGreaterThan(0);
+        }
+        // (#12) Every device keyed the call and only encrypted frames left it.
+        for (const page of pages.values()) {
+            await expect.poll(() => page.evaluate(() => window.__noxaPrivateCalls.encryption()), { timeout: 15000 }).toBe("encrypted");
+            await expect(page.locator(".call-e2ee-status")).toContainText("End-to-end encrypted");
+            await expect.poll(async () => (await page.evaluate(() => window.__noxaPrivateCalls.encryptionStats()))?.encrypted || 0).toBeGreaterThan(0);
+            expect((await page.evaluate(() => window.__noxaPrivateCalls.encryptionStats())).dropped?.unencrypted || 0).toBe(0);
         }
         if (signalingMode !== "normal") {
             expect(candidateBatches.some(batch => batch.from === "alice" && batch.candidates.length > 0)).toBe(true);
@@ -345,6 +370,76 @@ test(`real peer call captures only after acceptance and tears down without joini
 });
 }
 
+// (#12) A device that never receives a call's media keys hears nothing: the
+// relay forwards only ciphertext and the frame cipher refuses it without the
+// key. The other direction, keyed normally, plays.
+test("a call peer without the media key decodes nothing", async ({ newIsolatedPage, callRelay }) => {
+    test.setTimeout(60000);
+    const pages = new Map();
+    const ids = ["alice", "bob"];
+    let call = null, revision = 0;
+    const notify = () => { for (const page of pages.values()) void page.evaluate(id => window.__callsModule.privateCallChanged({ id }), call.id).catch(() => {}); };
+    for (const uid of ids) {
+        const page = await newIsolatedPage({ permissions: ["microphone", "camera"] }); pages.set(uid, page);
+        await page.addInitScript(servers => { window.__callIceServers = servers; }, callRelay);
+        await page.route("**/__call_test__", route => route.fulfill({ contentType: "text/html", body: '<!doctype html><title>Call test</title><link rel="stylesheet" href="/src/private-calls.css">' }));
+        await page.exposeFunction("requestCall", async request => {
+            if (request.action === "start") call = { id: CALL_ID, caller: uid, revision: ++revision, created_at: Math.floor(Date.now()/1000), ring_until: Math.floor(Date.now()/1000)+30, ended_at: 0, participants: ids.map(id => ({ unique_id: id, client_id: id, device_id: `d-${id}`, state: id === uid ? "accepted" : "ringing" })) };
+            if (request.action === "accept") { call.participants.find(p => p.unique_id === uid).state = "accepted"; call.revision = ++revision; }
+            if (request.action === "start" || request.action === "accept") setTimeout(notify, 0);
+            return { action: request.action, call: structuredClone(call) };
+        });
+        await page.exposeFunction("relayDescription", async (id, target, type, sdp) => {
+            void pages.get(target).evaluate(value => window.__callsModule.privateCallSignal(value), { call_id: id, from: uid, to: target, description: { call_id: id, from: uid, to: target, type, sdp } }).catch(() => {});
+        });
+        await page.exposeFunction("stopCall", async () => {});
+        // Bob never receives Alice's keys.
+        await page.exposeFunction("relayMediaKey", async request => deliverMediaKey(pages, uid, request, target => target === "bob"));
+        await page.goto("http://127.0.0.1:12364/__call_test__");
+        await page.evaluate(async ({ uid, ids }) => {
+            window.__peers = []; window.__warnings = [];
+            const OriginalPeer = window.RTCPeerConnection;
+            window.RTCPeerConnection = class extends OriginalPeer { constructor(...args) { super(...args); window.__peers.push(this); } };
+            window.__noxa = { state: { activeTabID: "server-a", serverGeneration: 1, myUniqueID: "local-device-key", myClientID: uid, myChannelID: 0, muted: false, deafened: false, settings: { activation_mode: "continuous", blocked_users: [] }, clients: ids.map(id => ({ client_id: id, unique_id: id, nickname: id })) }, toast: message => window.__warnings.push(message), resetVoiceSession() {} };
+            window.go = { main: { App: {
+                PrivateCallForTab: (_tab, request) => window.requestCall(request),
+                GetICEServersForTab: async () => window.__callIceServers,
+                SendPrivateCallDescriptionForTab: (_tab, id, target, type, sdp) => window.relayDescription(id, target, type, sdp),
+                OpenPrivateCallDescriptionForTab: async (_tab, signal) => signal.description,
+                MediaE2EEStatusForTab: async () => ({ supported: true, principal: uid, device: `d-${uid}`, client_id: uid }),
+                SendMediaKeyForTab: (_tab, request) => window.relayMediaKey(request),
+                StopPrivateCallForTab: () => window.stopCall(),
+                JoinChannelForTab: async () => "",
+            } } };
+            window.__callsModule = await import("/src/private-calls.js");
+        }, { uid, ids });
+    }
+    const alice = pages.get("alice"), bob = pages.get("bob");
+    try {
+        await alice.evaluate(() => window.__callsModule.startPrivateCall("bob"));
+        await bob.getByRole("button", { name: "Accept", exact: true }).click();
+        for (const page of pages.values()) await expect.poll(() => page.evaluate(() => window.__peers.map(peer => peer.connectionState)), { timeout: 15000 }).toEqual(["connected"]);
+        const audioReceived = page => page.evaluate(async () => {
+            const stats = await window.__peers[0].getStats();
+            return [...stats.values()].filter(r => r.type === "inbound-rtp" && r.kind === "audio").reduce((sum, r) => sum + (r.bytesReceived || 0), 0);
+        });
+        // Packets reach Bob (the relay forwards them) ...
+        await expect.poll(() => audioReceived(bob)).toBeGreaterThan(1000);
+        // ... but without Alice's key nothing decrypts: frames are dropped as keyless.
+        const receiverDrops = page => page.evaluate(async () => {
+            const stats = await window.__noxaPrivateCalls.encryptionStats();
+            return { nokey: stats?.dropped?.nokey || 0, decrypted: stats?.decrypted || 0 };
+        });
+        await expect.poll(async () => (await receiverDrops(bob)).nokey, { timeout: 10000 }).toBeGreaterThan(5);
+        // Alice holds Bob's key and decodes him normally.
+        await expect.poll(() => audioReceived(alice)).toBeGreaterThan(1000);
+        expect((await receiverDrops(alice)).nokey).toBe(0);
+    } catch (error) {
+        for (const [uid, page] of pages) console.log(uid, JSON.stringify(await page.evaluate(async () => ({ warnings: window.__warnings, encryption: window.__noxaPrivateCalls?.encryption(), stats: await window.__noxaPrivateCalls?.encryptionStats() }))));
+        throw error;
+    } finally { await Promise.all([...pages.values()].map(page => page.close())); }
+});
+
 for (const audioLabel of ["Application Audio", "System Audio"]) {
     test(`private-call application audio validates the captured source (${audioLabel})`, async ({ page }) => {
         await mountCallRaceFixture(page);
@@ -494,6 +589,14 @@ async function mountCallRaceFixture(page) {
             ReleaseDisplayCaptureLease: async id => { window.__captureLeases.released.push(id); },
         });
         window.__callsModule = await import("/src/private-calls.js");
+        // These races exercise call ownership against a plain simulated peer
+        // that exchanges no keys: encryption is a pass-through stand-in here
+        // (real encrypted calls are covered by the real-peer tests above).
+        window.__callsModule.useCallMediaFactory(() => {
+            const stub = { active: false, setRoster() {}, async start() { stub.active = true; }, receive: () => ({ ok: true }), peerConfig: config => config, protectPeer: pc => pc,
+                syncPeer() {}, endpointID: () => "", bindSender: async () => {}, bindReceiver: async () => {}, releasePeer: async () => {}, stats: async () => null, stop() { stub.active = false; } };
+            return stub;
+        });
     });
 }
 

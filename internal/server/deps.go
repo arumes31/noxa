@@ -297,3 +297,10 @@ type Deps struct {
 	// unique ID. Delivered in the auth response (446).
 	ICEServers func(clientUniqueID string) []netproto.ICEServer
 }
+
+// ResumableUploadBackend is implemented by file-transfer backends that can
+// resume interrupted uploads (39). InitResumableUpload falls back to a plain
+// upload (resumable false) when resume is not possible for this request.
+type ResumableUploadBackend interface {
+	InitResumableUpload(ctx context.Context, channelID int64, folder, name string, size int64, uploader string, uploaderQuotaMB int64, sha256 string) (transferID, token string, offset int64, resumable bool, err error)
+}

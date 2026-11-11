@@ -103,7 +103,7 @@ func (s *TCPServer) handleFileList(ctx context.Context, client *Client, f *netpr
 		}
 
 		return s.writeMessage(client, netproto.MsgFileListResponse, netproto.FileListResponse{
-			Entries:    fileEntries(files),
+			Entries:    fileEntries(hideForeignSealedFiles(msg.ChannelID, client.uniqueID(), files)),
 			Folders:    folders,
 			UsedBytes:  used,
 			QuotaBytes: quota,
@@ -248,7 +248,7 @@ func (s *TCPServer) handleFileVersions(ctx context.Context, client *Client, f *n
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "listing versions failed")
 		}
 		return s.writeMessage(client, netproto.MsgFileVersionsResponse, netproto.FileVersionsResponse{
-			Entries: fileEntries(files),
+			Entries: fileEntries(hideForeignSealedFiles(msg.ChannelID, client.uniqueID(), files)),
 		})
 	})
 }

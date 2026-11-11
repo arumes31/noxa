@@ -1,14 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
-	"time"
-
-	"noxa/internal/netproto"
 )
 
 // UploadChatAttachmentProgressForTab preserves encrypted attachment semantics
@@ -62,21 +61,7 @@ func uploadChatCiphertext(ctx context.Context, cm *connManager, id string, chann
 	if ctx.Err() != nil {
 		return errTransferCanceled
 	}
-	frame, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
-		netproto.FileTransferInit{ChannelID: channelID, Direction: "upload", Name: storage, Size: int64(len(blob))}, 10*time.Second)
-	if err != nil {
-		return err
-	}
-	var init netproto.FileTransferInitResponse
-	if err := json.Unmarshal(frame.Payload, &init); err != nil {
-		return err
-	}
-	endpoint, err := cm.ftTarget(init)
-	if err != nil {
-		return err
-	}
-	if ctx.Err() != nil {
-		return errTransferCanceled
-	}
-	return cm.ftUploadProgress(id, endpoint, init.Token, init.TransferID, blob, p, func() bool { return ctx.Err() != nil })
+	sum := sha256.Sum256(blob)
+	req := uploadRequest{channelID: channelID, name: storage, size: int64(len(blob)), sum: hex.EncodeToString(sum[:])}
+	return cm.uploadWithResume(id, req, bytes.NewReader(blob), nil, cm.uploadProgressReporter(p), func() bool { return ctx.Err() != nil })
 }

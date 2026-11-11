@@ -6,10 +6,12 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"hash"
 	"io"
 	"log"
@@ -607,24 +609,19 @@ func (cm *connManager) uploadFileProgress(id string, channelID int64, folder, na
 	if err != nil {
 		return "invalid file data"
 	}
-	f, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
-		netproto.FileTransferInit{ChannelID: channelID, Direction: "upload", Name: name, Folder: folder, Size: int64(len(data))},
-		10*time.Second)
+	sum := sha256.Sum256(data)
+	req := uploadRequest{channelID: channelID, folder: folder, name: name, size: int64(len(data)), sum: hex.EncodeToString(sum[:])}
+	init, err := cm.initUpload(req)
 	if err != nil {
 		return err.Error()
 	}
-	var init netproto.FileTransferInitResponse
-	if err := decodeJSON(f, &init); err != nil {
-		return err.Error()
-	}
-	ep, err := cm.ftTarget(init)
-	if err != nil {
+	if _, err := cm.ftTarget(init); err != nil {
 		return err.Error()
 	}
 	// recover is per-goroutine: transfer workers need their own guard (331).
 	go guardCrash("ft upload", func() {
 		p := ftProgress{ID: id, Direction: "upload", Name: name, Total: int64(len(data)), Status: "active"}
-		err := cm.ftUploadProgress(id, ep, init.Token, init.TransferID, data, &p)
+		err := cm.uploadWithResume(id, req, bytes.NewReader(data), &init, cm.uploadProgressReporter(&p))
 		if err != nil {
 			p.Status = "error"
 			if errors.Is(err, errTransferCanceled) {
@@ -640,54 +637,25 @@ func (cm *connManager) uploadFileProgress(id string, channelID int64, folder, na
 	return ""
 }
 
+// uploadProgressReporter turns resumable-upload progress into ft_progress
+// events. The rate counts only bytes sent since the latest (re)start.
+func (cm *connManager) uploadProgressReporter(p *ftProgress) func(int64) {
+	var start time.Time
+	var base int64
+	return func(sent int64) {
+		if start.IsZero() || sent < p.Transferred {
+			start, base = time.Now(), sent
+		}
+		p.Transferred = sent
+		if d := time.Since(start).Seconds(); d > 0 {
+			p.BytesPerSec = int64(float64(sent-base) / d)
+		}
+		cm.ftEmit(*p)
+	}
+}
+
 // errTransferCanceled marks a user-aborted transfer.
 var errTransferCanceled = errors.New("transfer canceled")
-
-// ftUploadProgress streams data with per-chunk progress callbacks.
-func (m *connManager) ftUploadProgress(id string, ep ftEndpoint, token, transferID string, data []byte, p *ftProgress, canceled ...func() bool) error {
-	conn, err := transferDial(ep)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = conn.Close() }()
-	defer clearTransferDeadlines(conn)
-	untrack, tracked := m.trackTransferAt(id, ep.epoch, conn)
-	if !tracked {
-		return errTransferCanceled
-	}
-	defer untrack()
-	if len(canceled) > 0 && canceled[0]() {
-		return errTransferCanceled
-	}
-
-	if err := ftWriteJSON(conn, ftInit, map[string]string{"token": token, "transfer_id": transferID}); err != nil {
-		return err
-	}
-	const chunk = 32 * 1024
-	start := time.Now()
-	for off := 0; off < len(data); off += chunk {
-		end := off + chunk
-		if end > len(data) {
-			end = len(data)
-		}
-		if err := ftWriteFrame(conn, &netproto.Frame{Type: ftChunk, Payload: data[off:end]}); err != nil {
-			if isClosedConn(err) {
-				return errTransferCanceled
-			}
-			return err
-		}
-		p.Transferred = int64(end)
-		if d := time.Since(start).Seconds(); d > 0 {
-			p.BytesPerSec = int64(float64(end) / d)
-		}
-		m.ftEmit(*p)
-	}
-	sum := sha256.Sum256(data)
-	if err := ftWriteJSON(conn, ftDigest, map[string]string{"sha256": hex.EncodeToString(sum[:])}); err != nil {
-		return err
-	}
-	return ftReadStatus(conn)
-}
 
 // PickUploadPaths opens the native multi-file picker and returns the chosen
 // paths ([] = cancelled). Uploading by path is the streaming route: the
@@ -757,25 +725,25 @@ func (cm *connManager) uploadPathProgress(id string, channelID int64, folder str
 		return filepath.Base(path) + " is a folder"
 	}
 	name := filepath.Base(path)
-	f, err := cm.request(netproto.MsgFileTransferInit, netproto.MsgFileTransferInitResponse,
-		netproto.FileTransferInit{ChannelID: channelID, Direction: "upload", Name: name, Folder: folder, Size: st.Size()},
-		10*time.Second)
+	// The whole file is hashed first so the server can offer resume (39).
+	// Wails runs this binding off the UI thread; only the promise waits.
+	sum, err := sha256Of(src, st.Size())
+	if err != nil {
+		return fmt.Sprintf("cannot read %s: %v", name, err)
+	}
+	req := uploadRequest{channelID: channelID, folder: folder, name: name, size: st.Size(), sum: sum}
+	init, err := cm.initUpload(req)
 	if err != nil {
 		return err.Error()
 	}
-	var init netproto.FileTransferInitResponse
-	if err := decodeJSON(f, &init); err != nil {
-		return err.Error()
-	}
-	ep, err := cm.ftTarget(init)
-	if err != nil {
+	if _, err := cm.ftTarget(init); err != nil {
 		return err.Error()
 	}
 	handedOff = true
 	go guardCrash("ft upload path", func() {
 		defer func() { _ = src.Close() }()
 		p := ftProgress{ID: id, Direction: "upload", Name: name, Total: st.Size(), Status: "active"}
-		err := cm.ftUploadFile(id, ep, init.Token, init.TransferID, src, &p)
+		err := cm.uploadWithResume(id, req, src, &init, cm.uploadProgressReporter(&p))
 		if err != nil {
 			p.Status = "error"
 			if errors.Is(err, errTransferCanceled) {
@@ -789,56 +757,6 @@ func (cm *connManager) uploadPathProgress(id string, channelID int64, folder str
 		cm.ftEmit(p)
 	})
 	return ""
-}
-
-// ftUploadFile streams a file off disk to the data port, hashing as it goes so
-// nothing larger than one chunk is ever held in memory.
-func (m *connManager) ftUploadFile(id string, ep ftEndpoint, token, transferID string, src *os.File, p *ftProgress) error {
-	conn, err := transferDial(ep)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = conn.Close() }()
-	defer clearTransferDeadlines(conn)
-	untrack, tracked := m.trackTransferAt(id, ep.epoch, conn)
-	if !tracked {
-		return errTransferCanceled
-	}
-	defer untrack()
-
-	if err := ftWriteJSON(conn, ftInit, map[string]string{"token": token, "transfer_id": transferID}); err != nil {
-		return err
-	}
-	h := sha256.New()
-	buf := make([]byte, 32*1024)
-	start := time.Now()
-	for {
-		n, readErr := src.Read(buf)
-		if n > 0 {
-			if err := ftWriteFrame(conn, &netproto.Frame{Type: ftChunk, Payload: buf[:n]}); err != nil {
-				if isClosedConn(err) {
-					return errTransferCanceled
-				}
-				return err
-			}
-			h.Write(buf[:n])
-			p.Transferred += int64(n)
-			if d := time.Since(start).Seconds(); d > 0 {
-				p.BytesPerSec = int64(float64(p.Transferred) / d)
-			}
-			m.ftEmit(*p)
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return readErr
-		}
-	}
-	if err := ftWriteJSON(conn, ftDigest, map[string]string{"sha256": hex.EncodeToString(h.Sum(nil))}); err != nil {
-		return err
-	}
-	return ftReadStatus(conn)
 }
 
 // isClosedConn reports whether the error came from our own cancel close.

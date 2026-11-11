@@ -192,6 +192,56 @@ func TestConversationFoldersStayOutOfFileManagement(t *testing.T) {
 	}
 }
 
+// TestScopeZeroListingHidesOtherUsersSealedAttachments: direct-message
+// attachments live in the scope-0 root, so a listing (or version listing)
+// there must not expose other principals' sealed blobs.
+func TestScopeZeroListingHidesOtherUsersSealedAttachments(t *testing.T) {
+	env, _, ft := conversationFilesTestEnv(t)
+	defer env.stop()
+	const foreign = "fedcba9876543210fedcba9876543210.vcx"
+	const own = "00112233445566778899aabbccddeeff.vcx"
+	ft.mu.Lock()
+	ft.files = append(ft.files,
+		store.FileRecord{Name: foreign, Uploader: "admin-uid", Encrypted: true},
+		store.FileRecord{Name: own, Uploader: "user-uid", Encrypted: true},
+		store.FileRecord{Name: "notes.txt", Uploader: "admin-uid"},
+		store.FileRecord{Name: "notes.txt.v1", Uploader: "admin-uid"},
+		store.FileRecord{Name: foreign + ".v1", Uploader: "admin-uid", Encrypted: true},
+	)
+	ft.mu.Unlock()
+	member, _ := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = member.Close() }()
+
+	send(t, member, netproto.MsgFileList, netproto.FileList{})
+	var listing netproto.FileListResponse
+	if err := netproto.Decode(readOfType(t, member, netproto.MsgFileListResponse), &listing); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range listing.Entries {
+		names = append(names, e.Name)
+	}
+	if slices.Contains(names, foreign) || slices.Contains(names, foreign+".v1") {
+		t.Fatalf("foreign sealed attachment listed: %v", names)
+	}
+	if !slices.Contains(names, own) || !slices.Contains(names, "notes.txt") {
+		t.Fatalf("own sealed or plain file missing: %v", names)
+	}
+
+	send(t, member, netproto.MsgFileVersions, netproto.FileVersions{Name: foreign})
+	var versions netproto.FileVersionsResponse
+	if err := netproto.Decode(readOfType(t, member, netproto.MsgFileVersionsResponse), &versions); err != nil {
+		t.Fatal(err)
+	}
+	if len(versions.Entries) != 0 {
+		t.Fatalf("foreign sealed versions listed: %+v", versions.Entries)
+	}
+
+	if got := hideForeignSealedFiles(5, "user-uid", []store.FileRecord{{Name: foreign, Uploader: "admin-uid", Encrypted: true}}); len(got) != 1 {
+		t.Fatalf("channel listing filtered: %v", got)
+	}
+}
+
 func TestConversationFolderNamespaceIsScopeZeroOnly(t *testing.T) {
 	if conversationFolderReserved(1, testGroupFolder) {
 		t.Fatal("channel folders must not be reinterpreted as group storage")

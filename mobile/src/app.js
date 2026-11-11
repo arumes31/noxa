@@ -1,5 +1,6 @@
 // app.js — application state shared by the screens: server info, this
 // device's identity, the signed-in chat session and reconnection.
+import { clearShutdownJitter, takeShutdownJitterMs } from "./core/reconnect-hint.js";
 import { ChatSession } from "./core/chat-session.js";
 import { DirectMessages } from "./core/direct.js";
 import { Calls } from "./core/calls.js";
@@ -188,7 +189,10 @@ export function onSecureControl(fn) {
 // Encrypted channel media (Task 2): media-key controls go to the current
 // voice session only (never to chat, activity, notifications or history).
 onSecureControl(control => {
-    if (control?.kind === "media-key") app.voice?.receiveMediaKey(control);
+    if (control?.kind !== "media-key") return;
+    // (#12) Private-call keys belong to the call, never to channel voice.
+    if (control.scope?.type === "call-media") app.calls?.receiveMediaKey(control);
+    else app.voice?.receiveMediaKey(control);
 });
 
 const MEDIA_E2EE_CAPABILITY = "noxa-media-e2ee-v1";
@@ -626,6 +630,7 @@ export async function connect({ guest = null, fence } = {}) {
     activated = true;
     subscribeMissing();
     reconnectAttempt = 0;
+    clearShutdownJitter();
     setOnline(true);
     if (guest) {
         app.identity = identity;
@@ -672,7 +677,7 @@ export async function connect({ guest = null, fence } = {}) {
     app.groups.addEventListener("list", () => emit("groups"));
     app.groups.refresh().catch(() => {});
     app.calls?.close();
-    app.calls = new Calls(session, dm);
+    app.calls = new Calls(session, dm, { mediaAdapter: mediaAdapter(session) });
     watchCalls(app.calls);
     watchCallLog(app.calls);
     syncMuted();
@@ -972,8 +977,11 @@ function setOnline(online) {
     emit("online", online);
 }
 
-function scheduleReconnect() {
-    const delay = RECONNECT_STEPS[Math.min(reconnectAttempt, RECONNECT_STEPS.length - 1)];
+function scheduleReconnect(nextDelay) {
+    // (#52) The first attempt after a restart waits a random part of the
+    // window the shutdown announced; a restarting server names its own delay.
+    const step = RECONNECT_STEPS[Math.min(reconnectAttempt, RECONNECT_STEPS.length - 1)];
+    const delay = nextDelay ?? (reconnectAttempt === 0 ? step + takeShutdownJitterMs() : step);
     reconnectAttempt++;
     app.reconnects++;
     clearTimeout(reconnectTimer);
@@ -981,7 +989,8 @@ function scheduleReconnect() {
         if (!app.identity || app.paused) return;
         connect().catch(error => {
             // Revoked devices and servers that need an update never loop.
-            if (!error.revoked && error.kind !== "serverOutdated") scheduleReconnect();
+            if (error.kind === "restarting") scheduleReconnect(error.retryAfter * 1000);
+            else if (!error.revoked && error.kind !== "serverOutdated") scheduleReconnect();
         });
     }, delay);
 }

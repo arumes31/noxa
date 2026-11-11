@@ -73,8 +73,9 @@ system permissions determine the available voice, camera and notification tools.
 > **Encryption boundaries** (details in [Encryption](#encryption)): direct
 > messages and private groups are end-to-end encrypted with Olm (vodozemac),
 > and channel voice, video and screen sharing are end-to-end encrypted with a
-> key shared by the channel's members. Channel/global chat, forum bodies and
-> private calls are **not** end-to-end encrypted yet. Upgrading? Deploy the
+> key shared by the channel's members. Private calls (direct and group) are
+> end-to-end encrypted with per-call keys sent over Olm. Channel/global chat
+> and forum bodies are **not** end-to-end encrypted yet. Upgrading? Deploy the
 > server before or together with the clients: see
 > [Upgrading to end-to-end encryption](#e2ee-upgrade).
 
@@ -121,8 +122,8 @@ app:
   X25519 keys (NaCl box) and kept by the server for up to 24 hours, so it has
   no forward secrecy: someone who stores it and later obtains one of those
   long-term keys can read the copied history.
-- **Private-call signalling** still uses the static device keys (private-call
-  media is not end-to-end encrypted, see below).
+- **Private-call signalling** still uses the static device keys; private-call
+  media itself is end-to-end encrypted with per-call keys (see below).
 - **Guests.** A guest that signs in with an identity key (desktop password-less
   logins, browser guests) uses the same protocol for direct messages: its key
   is its own account root and registers its device itself. A browser guest has
@@ -226,6 +227,10 @@ the keys for that participant.
   channels (they are asked to update), cannot use end-to-end encrypted direct
   or group messages, and can send legacy direct messages only to contacts
   with a single desktop device.
+- **Private calls need current apps on both ends.** Call media is end-to-end
+  encrypted; a call between an updated and an older app ends with "needs to
+  update noXa" instead of carrying unencrypted media. No server change is
+  needed for this.
 - **Secure messaging and encrypted channel voice are always on.** There is no
   setting to turn them off. They need the server's database (the signed device
   directory and admission live there) and control-channel TLS (keys are bound
@@ -242,10 +247,22 @@ the keys for that participant.
 
 **What is not end-to-end encrypted (yet).** Channel and global chat, threads
 and forum bodies use server-managed scope keys: the server can decrypt them
-(it moderates at send time and stores history sealed). Private calls (direct
-or group calls outside channels) use WebRTC DTLS-SRTP to the server's media
-relay, so the server can access private-call media; they are labelled
-separately and are not covered by channel media encryption.
+(it moderates at send time and stores history sealed).
+
+**Private calls.** Direct and group calls outside channels are end-to-end
+encrypted with the same frame cipher as channel media (pinned LiveKit
+FrameCryptor, AES-GCM, VP8/H.264 video and Opus audio). Each participant
+device creates its own key epochs for the call and sends them as
+authenticated Olm controls to the devices that answered for the other
+accepted participants, and only to them: someone who leaves never receives a
+later epoch and someone who joins never an earlier one. The TURN relay and
+the server forward only ciphertext; the desktop additionally refuses to send a
+call key to any device the server's call state does not show as an accepted
+participant. Both apps must be current: a participant whose app does not
+announce call encryption ends the call with an "update required" message
+instead of falling back to unencrypted media. The call panel shows
+"End-to-end encrypted" once keys are exchanged; in one-to-one calls it links
+to the contact's safety number.
 
 **Endpoint limits.** Encryption protects messages in transit and on the
 server, not on a compromised device. Readable history is stored on each device
@@ -336,7 +353,7 @@ graph TD
 * **Whisper Routing**: Point-to-point and cross-channel targeted voice transmission bypasses standard channel boundaries. Unavailable while channel media is end-to-end encrypted (a whisper would leave the channel key scope).
 * **Microphone recovery**: If the selected microphone disconnects, receiving audio and video continues. Choose and apply a device in **Capture** settings, then select **Retry microphone**. A replacement microphone never starts automatically.
 * **Personal audio controls**: **Personal audio…** in a member's menu opens a compact popover with separate voice and screen-share volume/mute controls, percentage and actual gain in dB. Personal volume uses 100% as unity and reaches +20 dB at the 200% endpoint, with a limiter for loud peaks. Capture settings include push-to-talk, channel voice activation on the audio thread with 100 ms of local pre-roll and a 450 ms release hold, continuous transmission, and local microphone testing. Guided microphone calibration recommends thresholds in the same 0.1% steps as the manual control.
-* **Private calls**: Accepted direct/group calls carry voice, camera, and screen sharing without moving participants into a voice channel.
+* **Private calls**: Accepted direct/group calls carry voice, camera, and screen sharing without moving participants into a voice channel. Call media is end-to-end encrypted (see [Encryption](#encryption)).
 * **Studio (desktop)**: compose a live picture from several sources and publish it to your voice channel as your screen share. See [Studio](#studio).
 * **Network echo test**: In **Capture** settings, explicitly join the server's echo channel to hear your microphone through the normal voice connection. Only you hear your microphone: other participants cannot hear you and you cannot hear them. Echo media is excluded from whispers, cross-participant video, and channel recordings. Mute and push-to-talk still apply; wear headphones. The return button restores your previous channel while the test remains active on that server tab. Each server automatically creates `Echo Test` on startup after role setup, granting admitted users permission to view, join and speak only in that channel. Existing channels with the configured name retain their access rules, custom metadata and history; startup updates only the known old system-created echo topic. Set Docker environment variable `NOXA_ECHO_CHANNEL_ENABLED=false` and recreate the server container to disable creation and loopback; existing channels and history are retained. Configure the name with `NOXA_ECHO_CHANNEL_NAME` or `echo_channel_name` in YAML.
 * **Connection benchmark**: A separate, explicitly started test in **Capture** sends synthetic Opus packets for 20 seconds through the server's actual WebRTC endpoint and private Echo Test. It uses a temporary guest with the current server's pinned certificate, without microphone/speaker access or moving your existing voice connection. Results include round-trip timing, arrival gaps and unmatched packets after a short drain period; Cancel, tab disconnect and application shutdown clean up the guest. Guest admission and private echo support are required. This measures packet delivery, not perceived audio quality or maximum video throughput. Unavailable while channel media is end-to-end encrypted (it would send unencrypted test media).
@@ -349,6 +366,7 @@ graph TD
 * **Chat media**: Enlarging an attached video keeps the same player, playback position, volume, speed and pause state. Animated images and chat videos pause offscreen or after a minute without window focus; only visible media resumes, and manually paused videos stay paused.
 * **Attachment previews**: Text and code files (up to ~384 KB, UTF-8 only) show their first 40 lines inline with **Show all**, audio files (MP3, M4A, AAC, Ogg/Opus, WAV, FLAC) play inline, and images and videos preview as before. Previews are decrypted locally and text is never interpreted as markup; the download button stays next to each preview.
 * **Composer and attachments**: Selecting text in the message box shows a formatting toolbar (bold, italic, underline, strikethrough, code; also Ctrl+B/I/U) that inserts the usual markdown. Pasted PNG/BMP screenshots are re-encoded as high-quality WebP (quality 0.92) before encryption when that saves at least 10%; GIF, JPEG and WebP are attached unchanged. Attachments have their own right-click menu (save, open full size, copy file name). Deleting your own message offers **Don't ask again** (Settings → Chat restores the question); deleting another member's message as a moderator always asks.
+* **Resumable uploads**: The desktop client sends each upload's SHA-256 with its token request. If the connection drops, it asks for a new token up to three times (after 1, 2 and 4 seconds), and an updated server reports how many bytes it already holds, so only the rest is sent; the final digest still covers the whole file. Partials are tied to the uploader, folder, name, size and digest, and an untouched one is removed after 24 hours. They do not count against the user's quota; instead an upload is sent single-shot (without resume) when the user already keeps four partials or when the pending partials plus this upload would exceed their quota. Older servers and the mobile app keep single-shot uploads.
 * **Image editor for attachments**: A staged PNG, JPEG, WebP or BMP image has an **Edit** button (✎) that opens an editor before sending: crop (free, 1:1, 4:3, 3:2, 16:9; arrow keys move the crop area, Shift+arrow keys resize it, Enter applies), rotate 90°, **Redact** (an opaque black box for text and numbers that must stay secret), **Pixelate** (cosmetic, e.g. for faces; pixelated text can sometimes be guessed), pen, arrow, rectangle and text in any colour, with undo/redo (Ctrl+Z / Ctrl+Y). The result is a new encoding of the flattened pixels made on your device before encryption: redacted areas cannot be recovered from it, and metadata of the original (EXIF, including GPS) is dropped. Photos stay JPEG at quality 0.92; screenshots stay PNG unless WebP is at least 10% smaller. Images above 50 MP are exported scaled down to 50 MP, and editing never blocks plain sending. Cancel (or Escape, which asks first when something was changed) keeps the staged file as it was. Animated GIF, WebP and PNG (APNG) images are not offered for editing, since re-encoding would keep only one frame.
 * **Presence at a glance**: Member avatars in the channel tree carry a status dot whose shape and colour differ (online filled, away crescent, busy with a bar, offline ring); invisible members look offline. A collapsed channel's unread badge includes its subchannels.
 * **Code, emoji and pins**: Fenced code blocks show line numbers and a copy button (the copy never includes the numbers); highlight.js (BSD-3-Clause, about 190 languages, bundled locally and loaded on first use) colours blocks whose language it knows, e.g. ```` ```rust ````. The emoji picker searches shortcodes in English and German keywords, keeps recently used emoji and lets you pin favorites (right-click or Alt+click). Pinned messages open as a side drawer; jumping to a pin or a quoted reply that is older than the loaded history opens a window of 100 messages around it in one request. While you read that window, new messages wait behind a **Jump to present** pill; scrolling down pages forward until the window meets the present (servers without window support fall back to paging older history, up to about 1,000 messages back).
@@ -389,6 +407,13 @@ only.
   server's video limits); **Stop** ends it. Closing the panel while live keeps
   the program on air. Studio cannot go live while another screen share is
   running.
+* **GPU compositing**: on a hardware GPU the program is composited with
+  WebGL2 (on an Intel Iris Xe: about 0.5 ms of main-thread time per frame
+  instead of 4 ms with the 2D canvas; the delivered frame rate is the same).
+  Software WebGL (remote desktops, machines without GPU acceleration) is far
+  slower there, so Studio keeps the 2D canvas on it, and it also switches to
+  2D if GPU frames stay slow or the graphics context is lost. The published
+  track never changes when it switches.
 * **Audio**: only screen-capture audio of sources that are visible on the
   program, with audio enabled, is sent, and the routing changes only with
   **Take**. The microphone is never mixed in.
@@ -795,7 +820,12 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_METRICS_ALLOW_REMOTE` | `false` | Permit remote `/metrics` requests; without this opt-in, only IPv4/IPv6 loopback is accepted |
 | `NOXA_PPROF_ENABLED` | `false` | Enable runtime `/debug/pprof/` diagnostics; every pprof endpoint remains GET-only and direct-loopback-only |
 | `NOXA_SHUTDOWN_TIMEOUT` | `30s` | Positive total grace period shared by all services during orderly shutdown |
-| `NOXA_SHUTDOWN_GRACE_PERIOD` | `0s` | Announcement window before an orderly shutdown (max `10m`). After the first SIGTERM/interrupt, readiness turns unhealthy, clients get a countdown (repeated at 5 min, 1 min, 30 s and 10 s left, and sent to sessions that log in during the period) and the server keeps serving; a second signal skips the rest of the wait, and the orderly shutdown then completes within `NOXA_SHUTDOWN_TIMEOUT`. Keep your orchestrator's stop timeout (e.g. Compose `stop_grace_period`) above grace period plus shutdown timeout |
+| `NOXA_SHUTDOWN_GRACE_PERIOD` | `0s` | Announcement window before an orderly shutdown (max `10m`). After the first SIGTERM/interrupt, readiness turns unhealthy, clients get a countdown (repeated at 5 min, 1 min, 30 s and 10 s left, with a reconnect window so clients return spread over 5–60 seconds after the restart) and connected sessions keep working. New logins are refused during the period: updated clients are told when to come back and retry then, older clients see a closed connection and retry as usual; a second signal skips the rest of the wait, and the orderly shutdown then completes within `NOXA_SHUTDOWN_TIMEOUT`. Keep your orchestrator's stop timeout (e.g. Compose `stop_grace_period`) above grace period plus shutdown timeout |
+| `NOXA_INGRESS_SHIELD` | `off` | Anti-raid shield: `off`, `auto` (raised by a connection surge) or `on`. While raised, every login first solves a SHA-256 proof-of-work challenge bound to its connection (desktop and web app solve it automatically, the web app in a background worker); clients without support are refused with "update noXa". The pre-auth connection caps still apply, and linking a new device waits until the shield is lowered |
+| `NOXA_INGRESS_SHIELD_ARRIVALS_PER_SECOND` | `30` | `auto` surge threshold: new control connections within one second |
+| `NOXA_INGRESS_SHIELD_DISTINCT_IPS` | `10` | `auto` surge threshold: distinct source addresses among them (IPv6 counted per /64) |
+| `NOXA_INGRESS_SHIELD_DIFFICULTY` | `18` | Proof-of-work leading zero bits, `12`–`24` (18 ≈ 260k hashes, well under a second on a phone) |
+| `NOXA_INGRESS_SHIELD_HOLD` | `5m` | How long an automatically raised shield stays up after the last surge second (`1m`–`1h`) |
 | `NOXA_DATABASE_URL` | `postgres://...` | PostgreSQL connection URL |
 | `NOXA_REDIS_ADDR` | `localhost:6379` | Optional Redis address for pub/sub fanout |
 | `NOXA_REDIS_ENABLED` | `true` | Set `false` to run without Redis; the supplied Compose stack starts Redis by default |
@@ -807,6 +837,10 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_FILE_ROOT` | `./data/files` | Root storage path for uploaded channel files & avatars |
 | `NOXA_FILE_MAX_CONNECTIONS` | `128` | Concurrent accepted file-transfer connections (1–10000) |
 | `NOXA_FILE_USER_QUOTA_MB` | `0` | Per-user storage quota across uploads and moves (`0` means unlimited) |
+| `NOXA_FILE_ORPHAN_CLEANUP` | `true` | Storage sweep, at most every six hours: removes upload leftovers (single-shot `.part-*` after 1 h, resumable `.part-r*` after 24 h) and blobs no files row references; never touches a referenced path, so deduplicated hard links stay intact |
+| `NOXA_FILE_ORPHAN_DRY_RUN` | `false` | Log and count (`noxa_file_reconcile_total`) what the sweep would remove without removing anything |
+| `NOXA_FILE_ORPHAN_GRACE` | `24h` | Minimum age of an unreferenced blob before the sweep removes it (at least `1h`) |
+| `NOXA_FILE_ORPHAN_DELETE_MISSING_ROWS` | `false` | Also delete files rows whose blob is missing; by default they are only logged, since an unmounted volume looks the same |
 | `NOXA_UDP_RATE_LIMIT_PPS` / `NOXA_UDP_RATE_BURST` | `200` / `400` | UDP per-source-IP packet rate limit and burst allowance for DDoS mitigation |
 | `NOXA_PII_KEY_FILE` | `./data/keys/pii.key` | AES-256-GCM master key file path for PII encryption |
 | `NOXA_CHANNEL_TEMP_LIFETIME_SECONDS` | `60` | Grace period before an empty temporary channel is removed |
@@ -1166,6 +1200,7 @@ enabling Query SSH.
 | `memberkick` | `data=<escaped_JSON_with_client_id>` | Remove a member from the server |
 | `memberban` | `data=<escaped_JSON_with_client_id_and_duration_seconds>` | Ban a connected member |
 | `broadcast` | `data=<escaped_JSON_with_text>` | Send a one-time encrypted alert (up to 2048 bytes of text, and the escaped command must fit the 4096-byte line limit) to every connected member allowed to view the server (server-level `view_channel`); requires `manage_server`, is audited and is not stored or replayed. Delivery is best effort, like other server-wide events |
+| `ingressshield` / `ingressshieldset` | — / `data=<escaped_JSON_with_override>` | Show the anti-raid shield (mode, operator override, whether it is raised, until when, difficulty), or force it with `{"override":"on"}` / `{"override":"off"}` and return it to the configured mode with `{"override":"auto"}`; requires `manage_server`, and every change is audited |
 | `messagebulkdelete` | `data=<escaped_JSON_with_channel_id_and_message_ids>` | Delete up to 100 messages of one channel (`channel_id` 0 = server chat) in one transaction and return `deleted` and `not_found` IDs. Own messages need `view_channel`, other members' messages `manage_messages` in that channel; one message the account may not delete rejects the whole request. Members get the usual delete events; deleting others' messages is audited |
 | `integrationscopes` / `integrationscopesset` | `data=<escaped_JSON_with_unique_id>` / `data={"unique_id":…,"scopes":[…]}` or `{"unique_id":…,"full":true}` | Read or replace an integration account's scope ceiling (needs `manage_server`, audited) |
 
@@ -1286,6 +1321,62 @@ the 720p30 profile. On an idle development machine, set
 `NOXA_BROWSER_MEDIA_PERF=1` to include the more demanding 1080p60 profile; its
 observed frame rate still depends on software-encoder and host capacity.
 
+### Performance measurements (2026-11-07)
+
+These measurements decided three proposals; none of them changed code. Rerun them before revisiting the decisions.
+
+**Media frame encryption (WebCrypto vs. a WebAssembly cipher).** The script
+`node client/frontend/scripts/bench-media-e2ee.mjs` measures the real pinned LiveKit
+e2ee worker with the noXa wrapper. Each frame is timed from enqueue to output
+(Node 26 on a Windows desktop CPU, 300 frames per case):
+
+| Frame | Encrypt p50 / p95 | Decrypt p50 / p95 |
+|---|---|---|
+| Opus 20 ms (160 B) | 0.09 / 0.17 ms | 0.10 / 0.17 ms |
+| VP8 1080p60 delta (16.7 KB) | 0.11 / 0.26 ms | 0.11 / 0.23 ms |
+| VP8 1080p60 keyframe (133 KB) | 0.34 / 0.98 ms | 0.23 / 0.62 ms |
+| VP8 1440p60 keyframe (266 KB) | 0.43 / 1.41 ms | 0.33 / 0.98 ms |
+
+The same frames through Chromium's own WebCrypto AES-GCM take no more than 0.1 ms
+at p95 for 1080p delta frames, which is Chromium's timer resolution. At p95 a 1080p60 delta frame costs
+about 1.6% of the frame budget to encrypt, and about 3% to encrypt and decrypt
+together. Keyframes, sent roughly every 2 s, cost under 10% for both. The
+decision rule was to look at a WebAssembly cipher only if 1080p60 video frames
+exceeded about 1 ms at p95. They don't, so the maintained LiveKit cryptor stays.
+
+**Video pacing gain.** The real pacer was simulated under virtual time at gains
+1.0, 1.25, 1.5 and 2.0. A modelled bottleneck link (a drop-tail queue with 100 ms of buffer)
+ran at 1.0x, 1.2x and 1.5x the congestion estimate:
+
+- A higher gain only lowers end-to-end delay when the link has spare capacity above
+  the estimate. At 1.0–1.2x it produces loss at the bottleneck: 32–293 packets
+  dropped per 10 s at gains 1.5–2.0.
+- A lower gain avoids that loss but adds 150–280 ms of p95 queueing. At 1.0–1.25 the pacer
+  starts dropping expired packets itself after the estimate falls.
+- A dynamic gain cannot tell the two cases apart without the bottleneck feedback
+  that GCC already turns into the estimate.
+- When the estimate drops below the source rate, the queue grows to seconds at
+  any gain. Fixing that is the sender's job (resolution and frame-rate adaptation).
+
+The static gain of 1.5 therefore stays (`internal/webrtc/media_pacer.go`).
+
+**Database indexes.** A scratch database seeded with 1M Olm messages and 2M
+deliveries, of which 2,000 were pending, ran the two pending-delivery sweeps:
+
+- Both use the existing partial index `olm_delivery_pending_sender`
+  (`WHERE state='pending'`) and read only pending rows: 207 buffers.
+- Warm, they take 14 ms and 10 ms. The first cold run took about 150 ms, mostly JIT start-up and uncached pages.
+
+The other hot paths are already covered by keys:
+
+- Chat history uses `(channel_id, id)`.
+- Private conversations use `(conversation_id, from_uid, client_reference)` and `(message_id, recipient_uid)`.
+- Olm copies use `(message_id, device_id)`.
+- `server_traffic_buckets` is small and indexed.
+- `audit_log` is pruned by monthly partitions.
+
+No index was added.
+
 ---
 
 ## 📂 Project Structure
@@ -1366,6 +1457,12 @@ budget, honouring `Retry-After`), `gone` (expired subscription, removed) and
 `failed`. Incoming webhook responses carry `X-RateLimit-Limit` (5 per
 3 seconds per hook), `X-RateLimit-Remaining` and `X-RateLimit-Reset`
 (seconds); a 429 also sets `Retry-After` to the real reset time.
+
+`noxa_ingress_shield_events_total{event}` counts the anti-raid shield:
+`raised` and `lowered` (also written to the audit log with their cause),
+`challenged`, `solved` and `failed` logins, and `rejected` clients that cannot
+solve a challenge. A raised shield with few `solved` events means a flood
+that is not finishing logins.
 
 `noxa_control_disconnects_total{transport, reason}` counts closed control
 connections (`tcp` or `ws`) by fixed reason: `eof`, `unexpected_eof`,

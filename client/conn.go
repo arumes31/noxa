@@ -87,7 +87,8 @@ type connManager struct {
 	addr                         string // control address (tab info)
 	clientID                     string
 	uniqueID                     string
-	deviceID                     string // linked device of this session (devices_v1)
+	deviceID                     string              // linked device of this session (devices_v1)
+	callMediaCache               callMediaStateCache // call state behind call media-key targets (#12)
 	supportsDevices              bool
 	supportsWebLogin             bool
 	supportsLinkPreview          bool
@@ -517,6 +518,27 @@ func loginReasonTerminal(reason string) bool {
 	return reason == errServerLoginOutdated || reason == auth.ErrUnsafeChallenge.Error()
 }
 
+// loginReasonRetryable reports refusals that a later attempt can overcome:
+// a server error, the login rate limit, or a server that is restarting (#52).
+func loginReasonRetryable(reason string) bool {
+	if reason == "internal error" || reason == "too many failed logins, try again later" {
+		return true
+	}
+	_, restarting := netproto.ParseRestartingReason(reason)
+	return restarting
+}
+
+// powSolveTimeout bounds the proof-of-work search; the server's challenge
+// expires after a minute.
+const powSolveTimeout = 45 * time.Second
+
+// solvePowChallenge finds a nonce for an anti-raid challenge (#7).
+func solvePowChallenge(ch netproto.PowChallenge) (uint64, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), powSolveTimeout)
+	defer cancel()
+	return netproto.SolvePow(ctx, ch)
+}
+
 // challengeSigner signs a server challenge and returns the signature and
 // the public key to present in AuthSignature.
 type challengeSigner func(challenge []byte) (signature []byte, publicKey string, err error)
@@ -531,6 +553,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.mu.Unlock()
 	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	authMsg.ClientVersion = version.Short()
+	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint}
 	if m.lobbyPrivacyPreference != nil {
 		authMsg.HideLobbyPresence = m.lobbyPrivacyPreference()
 	}
@@ -550,11 +573,39 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	// Read until AuthResponse, completing a challenge round if the server
 	// asks for one.
 	var resp netproto.AuthResponse
+	powAnswered := false
 	for {
-		f, err := readOfType(conn, 5*time.Second, netproto.MsgAuthResponse, netproto.MsgAuthChallenge)
+		f, err := readOfType(conn, 5*time.Second, netproto.MsgAuthResponse, netproto.MsgAuthChallenge, netproto.MsgPowChallenge)
 		if err != nil {
 			_ = conn.Close()
 			return err.Error()
+		}
+		if netproto.MessageType(f.Type) == netproto.MsgPowChallenge {
+			// (#7) The server's anti-raid shield is raised: prove some work,
+			// then repeat the login on the same connection. One challenge per
+			// connection; a second one means the server rejected the answer.
+			if powAnswered {
+				_ = conn.Close()
+				return "proof of work rejected"
+			}
+			var ch netproto.PowChallenge
+			if err := netproto.Decode(f, &ch); err != nil {
+				_ = conn.Close()
+				return err.Error()
+			}
+			nonce, ok := solvePowChallenge(ch)
+			if !ok {
+				_ = conn.Close()
+				return "the server asked for an unsupported proof of work"
+			}
+			powAnswered = true
+			retry := authMsg
+			retry.PowPrefix, retry.PowNonce = ch.Prefix, nonce
+			if err := m.writeConn(conn, netproto.MsgAuthenticate, retry); err != nil {
+				_ = conn.Close()
+				return err.Error()
+			}
+			continue
 		}
 		if netproto.MessageType(f.Type) == netproto.MsgAuthChallenge {
 			if signer == nil {
@@ -599,7 +650,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 
 	if !resp.OK {
 		_ = conn.Close()
-		if resp.Reason != "internal error" && resp.Reason != "too many failed logins, try again later" {
+		if !loginReasonRetryable(resp.Reason) {
 			m.markReconnectTerminal()
 		}
 		if resp.Reason != "" {

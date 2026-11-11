@@ -14,6 +14,7 @@ import (
 	"noxa/internal/authorization"
 	"noxa/internal/filetransfer"
 	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 // Private-group attachments reuse the direct-message attachment pipeline:
@@ -242,6 +243,26 @@ func filterConversationFolders(scope int64, folders []string) []string {
 	for _, folder := range folders {
 		if !conversationFolderReserved(scope, folder) {
 			out = append(out, folder)
+		}
+	}
+	return out
+}
+
+// hideForeignSealedFiles drops other principals' sealed attachments from a
+// scope-0 listing. Direct-message attachments (and DM voice messages) are
+// uploaded at scope 0 under content-derived names whose key travels only in
+// the encrypted message, so listing them would hand every holder of the
+// server-wide download grant other users' DM metadata and blob names.
+// Exact-name downloads by recipients are unaffected; channel scopes keep
+// their full listing.
+func hideForeignSealedFiles(scope int64, uploader string, files []store.FileRecord) []store.FileRecord {
+	if scope != 0 {
+		return files
+	}
+	out := files[:0:0]
+	for _, rec := range files {
+		if !rec.Encrypted || rec.Uploader == uploader {
+			out = append(out, rec)
 		}
 	}
 	return out
