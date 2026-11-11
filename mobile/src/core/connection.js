@@ -84,7 +84,14 @@ export class Connection extends EventTarget {
         return this.#probe;
     }
 
-    close() {
+    /**
+     * Closes the connection. goodbye tells the server the close is deliberate,
+     * so other users hear a leave instead of a lost connection.
+     */
+    close({ goodbye = false } = {}) {
+        if (goodbye && this.open) {
+            try { this.send(Msg.Goodbye, {}); } catch { /* best effort: the close still happens */ }
+        }
         this.#shutdown(new Error("connection closed"));
         this.#socket?.close();
     }

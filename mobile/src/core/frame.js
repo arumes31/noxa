@@ -18,6 +18,7 @@ export const Msg = Object.freeze({
     OlmAdmissionRequest: 202,
     OlmAdmissionResult: 203,
     PowChallenge: 204,
+    Goodbye: 205,
     KeyPublish: 42, KeyRequest: 43, KeyResponse: 44, ChannelKey: 45,
     ChatHistory: 46, ChatHistoryResponse: 47, ChatEdit: 48, ChatDelete: 49, ChatPin: 50, ChatPins: 51, ChatPinsResponse: 52,
     Typing: 53, ChatDelivered: 54, ChatRead: 55, EmojiUpload: 56, EmojiList: 57, EmojiListResponse: 58, ChatReact: 59,

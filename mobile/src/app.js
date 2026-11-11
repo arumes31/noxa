@@ -25,6 +25,14 @@ import { notifier } from "./notifier.js";
 import { activityShared, isMuted, syncMuted, watchCallLog, resetCallLog } from "./core/conversation-prefs.js";
 
 export const app = new EventTarget();
+
+// An unloading page closes its socket without the app's help: say goodbye so
+// the server reports a leave rather than a lost connection. A page kept in the
+// back/forward cache stays connected and says nothing.
+globalThis.addEventListener?.("pagehide", event => {
+    if (event.persisted) return;
+    try { app.session?.conn?.send(Msg.Goodbye, {}); } catch { /* the page is going away */ }
+});
 notifier.install(app);
 
 app.info = null;
@@ -149,7 +157,7 @@ export async function forgetDevice(fence) {
     app.dm = null;
     const previousSession = app.session;
     app.session = null;
-    previousSession?.close();
+    previousSession?.close({ goodbye: true });
     await resetCallLog();
     await app.saved?.clear();
     await clearIdentity(fence);
@@ -530,6 +538,7 @@ export async function connect({ guest = null, fence } = {}) {
             version: app.info?.version || "0.0.0",
             nickname: guest ? guest.nickname : app.meta.guest ? (app.meta.guestNickname || app.meta.nickname) : "",
             serverPassword: guest ? guest.serverPassword : app.guestPassword || "",
+            goodbye: true,
         });
     } catch (error) {
         conn.close();

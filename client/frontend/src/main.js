@@ -29,7 +29,7 @@ import { createVoiceTransportRecovery, voiceTransportFailed } from './voice-tran
 import { createHardwareRecoveryScheduler, createVideoReceiverRecovery } from './video-hardware-recovery.js';
 import { createVideoSenderRecovery } from './video-sender-hardware-recovery.js';
 import { createChannelTree } from './channel-tree.js';
-import { captureChannelPresence, channelPresenceChanges } from './channel-presence.js';
+import { arrivalCue, captureChannelPresence, channelPresenceChanges, departureCue, notePresenceDrop, notePresenceRestored, presenceCueSuppressed } from './channel-presence.js';
 // noxa client frontend — voice ops console (vanilla JS).
 // Wails bridge: window.go.main.App.<Method>(...) calls the Go backend;
 // window.runtime.EventsOn(name, cb) receives backend events.
@@ -787,6 +787,7 @@ async function completeReconnect(c, generation, tabID, current = () => true) {
     startQualitySampler();
     noteActivity();
     clearSpeech("connection");
+    notePresenceRestored(state);
     playAlert("connection_reconnected");
     warnCertificateClock(clockWarning, c.addr);
     return alive();
@@ -1206,6 +1207,7 @@ window.runtime.EventsOn("disconnected", () => {
     state.sessionGeneration++;
     connectionOverlay.lost(state.activeTabID);
     const unexpected = !!state.lastConnect;
+    if (unexpected) notePresenceDrop(state);
     if (unexpected && state.settings?.notify_connection !== false) toast(t("runtime.connectionLost"), "warn", "conn");
     if (unexpected) playAlert("connection_lost", { delay: 1200 });
     sysMsg(t("runtime.serverDisconnected"));
@@ -1379,6 +1381,8 @@ window.runtime.EventsOn("snapshot", (json) => {
     const snap = parseRuntimeObject(json);
     if (!snap) return;
     const previousPresence = captureChannelPresence(state);
+    state.presenceDepartures = snap.departures || {};
+    state.presenceReconnected = new Set(snap.reconnected || []);
     state.canSetInvisible = snap.can_set_invisible === true;
     state.canViewAuditLog = snap.can_view_audit_log === true;
     window.dispatchEvent(new Event("noxa-audit-access-changed"));
@@ -1406,6 +1410,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     // live state (also updated by legacy events), never replayed tab history.
     if (snapshotPresenceScope === previousPresence.scope) {
         for (const change of channelPresenceChanges(previousPresence, nextPresence)) {
+            if (presenceCueSuppressed(state, change)) continue;
             window.__noxaNotify?.notify("join_leave", t(change.message, { name: change.client.nickname || t("runtime.someone") }),
                 { channelID: state.myChannelID, className: "joins", kind: "info", soundEvent: change.soundEvent, speechEvent: change.speechEvent, speechKey: presenceSpeechKey(change.client, state.myChannelID) });
         }
@@ -1566,12 +1571,15 @@ window.runtime.EventsOn("event", (json) => {
                 state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, presence_token: d.presence_token, is_speaking: false, on_mobile: !!d.on_mobile });
             }
             if (d.client_id !== state.myClientID) {
-                chatUI.sysJoinLeave(d.nickname || d.unique_id || "someone", "joined"); // (130/131)
-                if (joinedChannel === state.myChannelID && state.myChannelID !== 0) {
+                const cue = arrivalCue(!!d.reconnected);
+                chatUI.sysJoinLeave(d.nickname || d.unique_id || "someone", d.reconnected ? "reconnected" : "joined"); // (130/131)
+                const joined = state.clients.find(client => client.client_id === d.client_id);
+                if (joinedChannel === state.myChannelID && state.myChannelID !== 0 && !presenceCueSuppressed(state, { ...cue, client: joined })) {
                     // (385) joins in my channel dispatch through the matrix.
-                    window.__noxaNotify?.notify("join_leave", t("runtime.joined", { name: d.nickname || t("runtime.someone") }),
+                    window.__noxaNotify?.notify("join_leave", t(cue.message, { name: d.nickname || t("runtime.someone") }),
                         { channelID: state.myChannelID, className: "joins", kind: "info",
-                            soundEvent: "user_join", speechKey: presenceSpeechKey(state.clients.find(client => client.client_id === d.client_id), joinedChannel), noSound: actionSoundsSuppressed() });
+                            soundEvent: cue.soundEvent, speechEvent: d.reconnected ? cue.speechEvent : undefined,
+                            speechKey: presenceSpeechKey(joined, joinedChannel), noSound: actionSoundsSuppressed() });
                 }
             }
             break;
@@ -1588,15 +1596,18 @@ window.runtime.EventsOn("event", (json) => {
                         lastKnownChannel.delete(lastKnownChannel.keys().next().value);
                     }
                 }
-                chatUI.sysJoinLeave(was.nickname || was.unique_id || "someone", "left"); // (130/131)
+                const cue = departureCue(d.reason);
+                if (cue) chatUI.sysJoinLeave(was.nickname || was.unique_id || "someone", d.reason === "connection_lost" ? "lost the connection" : "left"); // (130/131)
                 // The avatar cache follows the roster, so user churn cannot grow
                 // it without bound; views that still show this user (DMs)
                 // fetch it again on demand.
                 if (was.unique_id && !state.clients.some((c) => c.unique_id === was.unique_id)) state.avatars.delete(was.unique_id);
-                if (was.client_id !== state.myClientID && was.channel_id === state.myChannelID && state.myChannelID !== 0) {
-                    window.__noxaNotify?.notify("join_leave", t("runtime.left", { name: was.nickname || t("runtime.someone") }),
-                        { channelID: state.myChannelID, className: "joins", kind: "info",
-                            soundEvent: "user_leave", speechEvent: "user_disconnected", speechKey: presenceSpeechKey(was, was.channel_id), noSound: actionSoundsSuppressed() });
+                if (cue && was.client_id !== state.myClientID && was.channel_id === state.myChannelID && state.myChannelID !== 0
+                    && !presenceCueSuppressed(state, { ...cue, client: was })) {
+                    window.__noxaNotify?.notify("join_leave", t(cue.message, { name: was.nickname || t("runtime.someone") }),
+                        { channelID: state.myChannelID, className: "joins", kind: "info", soundEvent: cue.soundEvent,
+                            speechEvent: d.reason === "connection_lost" ? cue.speechEvent : "user_disconnected",
+                            speechKey: presenceSpeechKey(was, was.channel_id), noSound: actionSoundsSuppressed() });
                 }
             }
             videoTrackRemoved(d.client_id);

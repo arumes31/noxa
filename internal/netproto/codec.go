@@ -136,6 +136,8 @@ func (m MessageType) String() string {
 	switch m {
 	case MsgPowChallenge:
 		return "PowChallenge"
+	case MsgGoodbye:
+		return "Goodbye"
 	case MsgLinkPreviewRequest:
 		return "LinkPreviewRequest"
 	case MsgLinkPreviewResult:

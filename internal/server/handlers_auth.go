@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	}
 	client.mu.Lock()
 	client.clientVersion = msg.ClientVersion
+	client.announcesGoodbye = slices.Contains(msg.ClientFeatures, netproto.ClientFeatureGoodbye)
 	client.hideLobbyPresence = msg.HideLobbyPresence
 	client.mu.Unlock()
 	if reason := s.clientVersionRejection(msg.ClientVersion); reason != "" {
