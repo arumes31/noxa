@@ -468,7 +468,7 @@ func (s *TCPServer) validatePasskeyCertificate(ctx context.Context, principal, d
 	if err != nil {
 		return nil, err
 	}
-	signing, err := deviceproof.CertificateIssuer(cert, principal, pinned)
+	signing, err := deviceproof.CertificateIssuer(cert, principal, pinned, nil)
 	expected, keyErr := auth.LoadPublicKey(issuer.Ed25519Public)
 	if err != nil || keyErr != nil || !bytes.Equal(signing, expected) {
 		return nil, deviceproof.ErrProof

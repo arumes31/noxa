@@ -1082,7 +1082,11 @@ again, its sessions end, and the conversation shows that you signed it out.
 Only your first device can revoke itself. Revocations nobody signed (an
 administrator's reset, idle expiry, an integration or an older app) are still
 applied, but clients show them as removed by the server. Older clients ignore
-the statements and keep relying on the server's device list. This release
+the statements and keep relying on the server's device list. A revoked
+device also stops vouching: devices it approved are no longer trusted until
+another trusted device approves them again (the first device always stays the
+anchor), and an ongoing encrypted call rekeys with a fresh media key as soon
+as a device fails as revoked, so it cannot derive later keys. This release
 adds migration `069_device_revocations.sql`; run the matching `migrate`
 offline before starting the server.
 
@@ -1128,12 +1132,12 @@ a visible notification.
 encrypted with Olm for every confirmed device of both people, so they reach
 the desktop and the phone (see [Encryption](#encryption)). Contacts verify each device against the identity they pinned: the
 account's first desktop, and devices it approved. After passkey sign-in, a connected trusted desktop automatically confirms the
-new device for direct messages after verifying the server's passkey proof.
+new device for direct messages after verifying the server's passkey proof. The proof's relying party must match the server name the desktop connected to (a desktop connected by IP address never auto-confirms), and a revoked device cannot appear in its approval chain.
 If no trusted desktop is online, that endorsement waits until one connects;
 manual confirmation remains available in **Connections → PWA / Mobile login**. When you approve a phone, the desktop can copy
 recent direct-message history to it (90 days by default; up to 10,000
 messages and 50 MB, deleted from the server when the phone has it or after
-24 hours). Copied records are marked as copied history. Updated apps send
+24 hours). Copied records are marked as copied history. Disappearing messages are never copied. Updated apps send
 direct messages only with end-to-end encryption; older apps can still send
 legacy direct messages to a contact with a single desktop, and are asked to
 update when the contact has several devices or uses the web app.

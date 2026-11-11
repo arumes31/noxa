@@ -330,3 +330,31 @@ test("a legacy session sharing a ratchet-capable device blocks the ratchet", asy
     assert.ok(sent.at(-1).body.epoch >= first + 2, "fresh: the legacy session did not pre-derive");
     e.stop();
 });
+
+test("a revoked device is dropped and the next epoch is fresh, never its derived successor (audit #12)", async () => {
+    const media = fakeMedia();
+    const sent = [];
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, activateMaxWaitMs: Infinity,
+        send: async c => { sent.push(c); return c.principal === "u2" ? { ok: false, error: { code: "revoked" } } : { ok: true }; } });
+    const roster = [member("c1", "u1", "d1"), member("c2", "u2", "d2")];
+    e.setRoster(roster);
+    e.start({ ...me, principal: "u-rev", device: "d-rev" });
+    try {
+    await flush();
+    announce(e, "c1", "u1", "d1", 8_200_000_000_000); announce(e, "c2", "u2", "d2", 8_200_000_000_000);
+    await flush(60);
+    const first = sent[0].body;
+    const later = sent.filter(c => c.body.epoch !== first.epoch);
+    assert.ok(later.length > 0, "the revocation forced a new epoch");
+    assert.deepEqual([...new Set(later.map(c => c.device))], ["d1"], "the revoked device gets nothing more");
+    const next = later[0].body;
+    assert.ok(next.epoch >= first.epoch + 2, "a fresh epoch, not the reserved successor number");
+    const successor = await ratchetKeys(keysOf(first));
+    assert.notDeepEqual(unb64(next.data.keys.mic), [...successor.mic], "not derivable from the revoked device's key");
+    // A later roster update does not bring the revoked device back.
+    const before = sent.length;
+    e.setRoster([...roster, member("c3", "u3", "d3")]);
+    await flush(60);
+    assert.ok(sent.slice(before).every(c => c.device !== "d2"));
+    } finally { e.stop(); }
+});

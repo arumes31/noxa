@@ -61,6 +61,11 @@ func historyMessagesSince(store dmHistoryStore, since int64, ownUID string) []ne
 			if e.SentAt < since || e.Deleted || strings.TrimSpace(e.Body) == "" || !openedChatText(e.Body) {
 				continue
 			}
+			// A disappearing message never travels: the history format has no
+			// timer, so the new device would keep it forever.
+			if e.TTL > 0 || e.ExpiresAt > 0 || e.Expired {
+				continue
+			}
 			if e.Protocol == "" && !transferableLegacyEntry(e) {
 				continue
 			}

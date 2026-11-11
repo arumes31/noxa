@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"noxa/internal/e2ee/durable"
+	"noxa/internal/netproto"
 )
 
 // dmDisappearMaxTTL bounds a received TTL (four weeks).
@@ -329,6 +330,29 @@ func (a *App) expireDueWith(store dmHistoryStore, now time.Time) (map[string][]d
 		a.dmMu.Unlock()
 	}
 	return expired, needRedact, next
+}
+
+// reopenRedactionForLateEdit marks an expired, already redacted entry for
+// redaction again when an edit of it arrives: the edit stored its own
+// readable archive record, which the next sweep must redact as well.
+func reopenRedactionForLateEdit(e *DMEntry, purpose string) bool {
+	if !e.Expired || !e.Redacted || purpose != netproto.DMActionEdit {
+		return false
+	}
+	e.Redacted = false
+	return true
+}
+
+// reopenDisappearingRedaction makes the next sweep reload the pending list
+// and redact again, after an archive record was added for an expired message.
+func (a *App) reopenDisappearingRedaction() {
+	// shortcut: a sweep already running may clear redact when it finishes; the
+	// entry stays Redacted=false so the next expiry sweep redacts it again.
+	a.dmDisappear.mu.Lock()
+	a.dmDisappear.pending = nil
+	a.dmDisappear.redact = true
+	a.dmDisappear.redactAt = time.Time{}
+	a.dmDisappear.mu.Unlock()
 }
 
 // markRedactedWith records that the archive copies of done are redacted.

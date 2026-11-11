@@ -276,6 +276,9 @@ export class MediaKeyEngine {
     #epoch = 0; #kid = 15; #keys = null; #members = ""; #sentTo = new Map();
     #busy = false; #again = false; #debounce = 0; #renew = 0; #retry = 0; #retryArmed = 0; #busyOrPending = false;
     #publishers = new Map(); #pending = []; #failed = new Map(); #reason = ""; #pendingRemovals = []; #seq = 0; #removalDebounce = false; #runFailures = 0; #runRetry = 0; #paused = false; #activating = []; #interrupt = null; #activeRecipients = []; #deliveries = new Map(); #statusTimer = 0;
+    // Devices whose key control failed as revoked or untrusted: no longer
+    // recipients, and the next epoch is fresh, never their derived successor.
+    #revoked = new Set();
     #rosterAt = 0; #settle = 0; #mismatch = [];
 
     constructor({ media, send, onStatus = () => {}, now = () => Date.now(), timers = globalThis, random = n => crypto.getRandomValues(new Uint8Array(n)), uuid = () => crypto.randomUUID(), sendTimeoutMs = SEND_TIMEOUT_MS, activateMaxWaitMs = ACTIVATE_MAX_WAIT_MS }) {
@@ -309,7 +312,7 @@ export class MediaKeyEngine {
         this.self = null; this.#keys = null; this.#publishers.clear(); this.#pending = []; this.#failed.clear(); this.#sentTo.clear();
         for (const r of this.#pendingRemovals) this.timers.clearTimeout(r.timer);
         this.timers.clearTimeout(this.#runRetry); this.#runRetry = 0; this.#paused = false; this.#activating = [];
-        this.#pendingRemovals = []; this.#removalDebounce = false; this.#deliveries.clear(); this.#activeRecipients = []; this.timers.clearTimeout(this.#statusTimer); this.#statusTimer = 0;
+        this.#pendingRemovals = []; this.#removalDebounce = false; this.#deliveries.clear(); this.#activeRecipients = []; this.#revoked.clear(); this.timers.clearTimeout(this.#statusTimer); this.#statusTimer = 0;
         const waiter = this.#interrupt; this.#interrupt = null; waiter?.resolve();
         for (const pid of pids) this.media.forget(pid).catch(() => {});
         this.#status();
@@ -325,7 +328,7 @@ export class MediaKeyEngine {
         if (this.#invisible()) { this.onInvisible?.(); return; }
         this.#rosterAt = this.now();
         this.#scheduleMembershipCheck();
-        const recipients = recipientsOf(this.#roster, this.self);
+        const recipients = this.#currentRecipients(this.self);
         const key = recipients.map(r => `${r.principal}\n${r.device}`).join("\n");
         // Publishers that left (or whose device/channel changed) lose their keys.
         for (const [client, state] of this.#publishers) {
@@ -459,7 +462,7 @@ export class MediaKeyEngine {
         const previous = this.activeEpoch || 0;
         if (this.#invisible()) { this.onInvisible?.(); return; }
         const selfKey = `${self.principal}\n${self.device}`;
-        const recipients = this.#recipients = recipientsOf(this.#roster, self);
+        const recipients = this.#recipients = this.#currentRecipients(self);
         const recipientIDs = recipients.map(r => `${r.principal}\n${r.device}`);
         // A ratchet continues the active epoch's chain; anything else is fresh.
         const head = this.#ratchetHead(reason, recipientIDs, selfKey);
@@ -607,7 +610,7 @@ export class MediaKeyEngine {
         if (!head?.chain || !head.keys) return null;
         const current = new Set(recipientIDs);
         for (const id of head.chain) {
-            if (!current.has(id)) return null;
+            if (!current.has(id) || this.#revoked.has(id)) return null;
             // Its control for the active epoch must have been delivered: only
             // then has it pre-derived the successor (back-to-back joins wait
             // for the previous ratchet to land, falling back to a fresh epoch).
@@ -648,6 +651,10 @@ export class MediaKeyEngine {
 
     #isRecipient(r) { return this.#recipients.some(c => c.principal === r.principal && c.device === r.device); }
 
+    // The roster's recipients without devices whose key control failed as
+    // revoked or untrusted in this session.
+    #currentRecipients(self) { return recipientsOf(this.#roster, self).filter(r => !this.#revoked.has(`${r.principal}\n${r.device}`)); }
+
     // Status pushes while deliveries settle, at most one per STATUS_THROTTLE_MS.
     #statusSoon() {
         if (this.#statusTimer) return;
@@ -669,6 +676,19 @@ export class MediaKeyEngine {
             const tally = this.#deliveries.get(epoch);
             const reason = String(result?.error?.code || result?.error?.message || result?.code || (typeof result?.error === "string" ? result.error : "") || result?.reason || "failed");
             if (tally) { if (result?.ok) { tally.ok.add(id); tally.failed.delete(id); } else tally.failed.set(id, reason); }
+            if (!result?.ok && (reason === "revoked" || reason === "untrusted_device")) {
+                // A revoked device could derive the next ratchet epoch itself:
+                // drop it, never retry it, and rekey with a fresh epoch.
+                this.#failed.delete(id);
+                if (this.#revoked.has(id)) return;
+                this.#revoked.add(id);
+                this.#recipients = this.#recipients.filter(c => `${c.principal}\n${c.device}` !== id);
+                this.#recipientKey = this.#recipients.map(c => `${c.principal}\n${c.device}`).join("\n");
+                this.#noteRemoval();
+                this.#schedule("removal", 0);
+                this.#statusSoon();
+                return;
+            }
             if (this.#epoch === epoch) {
                 if (result?.ok) { this.counters.sent++; this.#sentTo.set(id, epoch); this.#failed.delete(id); }
                 else {

@@ -132,3 +132,21 @@ test("a queued own send is not marked redacted before its archive exists", async
     assert.equal(consumer.redactions.flat().includes(disappearKey("me", "q1")), false);
     dm.close();
 });
+
+test("a late edit of an expired message is redacted again (audit #11)", async () => {
+    const { dm, consumer, project } = await setup();
+    await project(record({ body: { text: "secret", sentAt: 1000, ttl: 60 } }));
+    const find = () => dm.conversations.get("bob").messages.find(m => m.id === "m1");
+    await dm.startDisappearing("bob");
+    await dm.sweepDisappearing(find().expiresAt * 1000);
+    assert.equal(find().redacted, true);
+    const scans = consumer.redactions.length;
+    // A delayed edit arrives from the spool after the message expired.
+    await project(record({ logicalID: "e1", purpose: "edit", reference: "m1", body: { text: "edited secret" } }));
+    assert.equal(find().body, "", "the expired message stays empty");
+    assert.equal(find().redacted, false, "the edit's archive record still needs redacting");
+    await dm.sweepDisappearing(find().expiresAt * 1000 + 1000);
+    assert.ok(consumer.redactions.slice(scans).flat().includes(disappearKey("bob", "m1")));
+    assert.equal(find().redacted, true);
+    dm.close();
+});

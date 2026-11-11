@@ -6,11 +6,11 @@
 // is kept in IndexedDB, encrypted with the database key.
 import { Stores, currentFence, deleteKeyIn, getSealed, keys, putSealedIn } from "./db.js";
 import { keyFingerprint, openDM, sealDM, toBase64 } from "./crypto.js";
-import { MAX_LISTED_REVOCATIONS, ed25519FromPEM, mergeRevocationPins, parseKeyRecord, trustedDevices, verifyRevocations, withoutRevokedPins } from "./dm-trust.js";
+import { MAX_LISTED_REVOCATIONS, ed25519FromPEM, mergeRevocationPins, parseKeyRecord, trustedDevices, verifyRevocations, withoutRevokedApprovers, withoutRevokedPins } from "./dm-trust.js";
 import { Msg } from "./frame.js";
 import { ProtocolError } from "./connection.js";
 import { RATCHET_PROTOCOL, disappearKey } from "./ratchet-consumer.js";
-import { DISAPPEAR_OPTIONS, disappearingFromBody, validDisappearTTL } from "./disappearing.js";
+import { DISAPPEAR_OPTIONS, disappearingFromBody, lateEditReopensRedaction, validDisappearTTL } from "./disappearing.js";
 import { decodeHistoryEnvelope, isHistoryEnvelope } from "./history-envelope.js";
 import { verifyLinkBinding } from "./link-binding.js";
 
@@ -439,6 +439,10 @@ export class DirectMessages extends EventTarget {
                 // (deviceKey), and revokeDevice queues behind it. The device is
                 // already out of entry.devices, so it is never trusted meanwhile.
                 for (const p of merged.pins) void this.ratchet?.revokeDevice?.(uid, p.device_id)?.catch(() => {});
+                // A revoked device must not keep vouching: walk the chain again
+                // without it, so devices it approved are no longer trusted.
+                const reduced = withoutRevokedApprovers(devices, merged.pins);
+                if (reduced.length !== devices.length) entry.devices = trustedDevices(uid, reduced, signingKey, entry.encryptionKey);
                 entry.devices = withoutRevokedPins(entry.devices, merged.pins);
                 this.#noticeRevocations(uid, response.revocations || [], merged.added);
                 const ids = entry.devices.map(d => d.deviceID);
@@ -689,6 +693,8 @@ export class DirectMessages extends EventTarget {
             return;
         }
         if (message.from !== change.from) return;
+        // The next sweep redacts the late edit's archive record too.
+        if (lateEditReopensRedaction(message, change)) this.#add(peer, "", { ...message, redacted: false });
         if (change.action === "delete") this.#add(peer, "", { ...message, body: "", deleted: true, edited: false });
         else if (change.action === "edit" && !message.deleted) this.#add(peer, "", { ...message, body: change.text, edited: true });
     }

@@ -118,7 +118,7 @@ func TestVerifiedRevocationsApplyWithoutAPinRecord(t *testing.T) {
 	devices := []dmTrustedDevice{{DeviceID: "root", Signing: rootKey, First: true}, {DeviceID: "phone", Signing: phoneKey}}
 	listed := []netproto.DeviceRevocation{{DeviceID: "phone", Ed25519Public: phonePub, X25519Public: x, RevokedAt: 7,
 		Reason: netproto.DeviceRevocationReasonUser, SignerDeviceID: "root", SignedAt: 7, Signature: sig}}
-	got, err := m.applyDeviceRevocations("bob", devices, listed)
+	got, _, err := m.applyDeviceRevocations("bob", devices, listed)
 	if err != nil {
 		t.Fatal(err)
 	}

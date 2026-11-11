@@ -292,6 +292,23 @@ export function mergeRevocationPins(pins, verified) {
     return { pins: all, added };
 }
 
+/**
+ * Drops directory entries a pin names by ID or signing key before the
+ * approval chain is walked, so a revoked device cannot vouch for a device the
+ * server lists as approved by it. The first device is the account identity
+ * and anchors every approval, so it is never dropped here.
+ */
+export function withoutRevokedApprovers(devices, pins) {
+    if (!Array.isArray(pins) || !pins.length || !Array.isArray(devices)) return devices;
+    const ids = new Set(pins.map(p => p.device_id)), keys = new Set(pins.map(p => p.key));
+    return devices.filter(d => {
+        if (!d || d.first_device) return true;
+        if (ids.has(d.device_id)) return false;
+        const key = typeof d.ed25519_public_key === "string" ? ed25519FromPEM(d.ed25519_public_key) : null;
+        return !(key && keys.has(toBase64(key)));
+    });
+}
+
 /** Drops devices a pin names by ID or signing key. */
 export function withoutRevokedPins(devices, pins) {
     if (!Array.isArray(pins) || !pins.length) return devices;

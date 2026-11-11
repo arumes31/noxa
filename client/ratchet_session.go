@@ -720,6 +720,9 @@ func (a *App) projectRatchetRecord(m *connManager, r RatchetRecord, _ bool) {
 			return
 		}
 		if e := find(r.Sender, r.Reference); e != nil {
+			if reopenRedactionForLateEdit(e, r.Purpose) {
+				defer a.reopenDisappearingRedaction()
+			}
 			applyDMChange(e, c)
 			e.EncVerified, e.EncMode = true, "e2e"
 			_ = store.save(l)

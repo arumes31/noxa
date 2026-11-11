@@ -22,6 +22,8 @@ type fixture struct {
 	deviceEd, deviceX string
 	key               *ecdsa.PrivateKey
 	issuerPrivate     string
+	rpHost            string
+	revoked           func(netproto.DMDevice) bool
 }
 
 func makeFixture(t *testing.T) fixture {
@@ -60,7 +62,7 @@ func makeFixture(t *testing.T) fixture {
 	}
 	targetX := make([]byte, 32)
 	targetX[0] = 9
-	f := fixture{proof: netproto.PasskeyLoginProof{Certificate: cert, Nonce: make([]byte, 32)}, root: root, issuerPrivate: issuerPrivate, deviceEd: ed, deviceX: base64.StdEncoding.EncodeToString(targetX), key: key}
+	f := fixture{proof: netproto.PasskeyLoginProof{Certificate: cert, Nonce: make([]byte, 32)}, root: root, issuerPrivate: issuerPrivate, deviceEd: ed, deviceX: base64.StdEncoding.EncodeToString(targetX), key: key, rpHost: "example.test"}
 	f.assertion(t, false, 5)
 	return f
 }
@@ -109,6 +111,18 @@ func TestPasskeyProofRequiresPinnedChainAndBoundVerifiedAssertion(t *testing.T) 
 		{"cross origin", func(f *fixture) { f.assertion(t, true, 5) }, false},
 		{"no user verification", func(f *fixture) { f.assertion(t, false, 1) }, false},
 		{"no user presence", func(f *fixture) { f.assertion(t, false, 4) }, false},
+		// Audit #6: the RP must be the server this client knows, and a revoked
+		// device cannot issue (or vouch for the issuer of) a certificate.
+		{"subdomain host", func(f *fixture) { f.rpHost = "chat.example.test" }, true},
+		{"other relying party", func(f *fixture) { f.rpHost = "attacker.test" }, false},
+		{"unknown relying party", func(f *fixture) { f.rpHost = "" }, false},
+		{"revoked issuer", func(f *fixture) {
+			f.revoked = func(d netproto.DMDevice) bool { return d.DeviceID == "phone" }
+		}, false},
+		{"issuer listed as revoked", func(f *fixture) { f.proof.Certificate.Chain[1].RevokedAt = 1 }, false},
+		{"revocation of an unrelated device", func(f *fixture) {
+			f.revoked = func(d netproto.DMDevice) bool { return d.DeviceID == "tablet" }
+		}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := makeFixture(t)
@@ -117,7 +131,7 @@ func TestPasskeyProofRequiresPinnedChainAndBoundVerifiedAssertion(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = Verify("account", f.root, f.deviceEd, f.deviceX, raw)
+			err = Verify("account", f.root, f.deviceEd, f.deviceX, raw, f.rpHost, f.revoked)
 			if (err == nil) != tc.valid {
 				t.Fatalf("valid=%v, error=%v", tc.valid, err)
 			}
@@ -189,14 +203,14 @@ func TestPasskeyProofUsesCredentialAlgorithm(t *testing.T) {
 			assertion["response"], _ = json.Marshal(response)
 			f.proof.Assertion, _ = json.Marshal(assertion)
 			raw, _ := json.Marshal(f.proof)
-			if err := Verify("account", f.root, f.deviceEd, f.deviceX, raw); err != nil {
+			if err := Verify("account", f.root, f.deviceEd, f.deviceX, raw, f.rpHost, f.revoked); err != nil {
 				t.Fatal(err)
 			}
 			if tc.pss {
 				f.proof.Certificate.Algorithm = -257
 				f.proof.Certificate.Signature, _ = auth.SignChallenge(f.issuerPrivate, f.proof.Certificate.Transcript())
 				raw, _ = json.Marshal(f.proof)
-				if Verify("account", f.root, f.deviceEd, f.deviceX, raw) == nil {
+				if Verify("account", f.root, f.deviceEd, f.deviceX, raw, f.rpHost, f.revoked) == nil {
 					t.Fatal("algorithm substitution accepted")
 				}
 			}

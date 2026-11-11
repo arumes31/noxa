@@ -341,11 +341,19 @@ func testPasskeyPhoneLogin(t *testing.T, signOut, delegate bool) {
 
 	if delegate {
 		pinned, _ := auth.LoadPublicKey(root.public)
-		if err := deviceproof.Verify("user-uid", pinned, newPhone.public, newPhone.x25519, linked.PasskeyProof); err != nil {
+		if err := deviceproof.Verify("user-uid", pinned, newPhone.public, newPhone.x25519, linked.PasskeyProof, "chat.example", nil); err != nil {
 			t.Fatalf("stored proof invalid: %v", err)
 		}
-		if err := deviceproof.Verify("user-uid", pinned, newLinkTestKeys(t).public, newPhone.x25519, linked.PasskeyProof); err == nil {
+		if err := deviceproof.Verify("user-uid", pinned, newLinkTestKeys(t).public, newPhone.x25519, linked.PasskeyProof, "chat.example", nil); err == nil {
 			t.Fatal("proof authorized a substituted device")
+		}
+		// The certificate must name the host this client knows the server by
+		// (audit #6), and no known host refuses every proof.
+		if err := deviceproof.Verify("user-uid", pinned, newPhone.public, newPhone.x25519, linked.PasskeyProof, "attacker.example", nil); err == nil {
+			t.Fatal("proof accepted for another relying party")
+		}
+		if err := deviceproof.Verify("user-uid", pinned, newPhone.public, newPhone.x25519, linked.PasskeyProof, "", nil); err == nil {
+			t.Fatal("proof accepted without a known relying party")
 		}
 	} else if len(linked.PasskeyProof) != 0 {
 		t.Fatal("legacy passkey acquired an unsigned authorization")
