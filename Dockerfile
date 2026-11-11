@@ -3,7 +3,7 @@
 # noxa - voice/video server (Phase 1 base image)
 # =============================================================================
 # Multi-stage build:
-#   1. builder  - cross-compiles a static Go binary from Go 1.27.3/Alpine 3.24
+#   1. builder  - cross-compiles a static Go binary from Go 1.27.4/Alpine 3.24
 #   2. runtime  - minimal Alpine 3.24 image running as a non-root user
 #
 # NOTE on CGO: Phase 1 keeps CGO_ENABLED=0 to produce a fully static binary
@@ -30,7 +30,7 @@ RUN npx vite build --outDir /out/web/app && npx vite build -c vite.sw.config.js 
 # -----------------------------------------------------------------------------
 # Builder stage
 # -----------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
