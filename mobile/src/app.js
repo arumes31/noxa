@@ -783,7 +783,7 @@ export function disconnect() {
     app.dm?.close();
     app.dm = null;
     app.paused = true;
-    session?.close();
+    session?.close({ goodbye: true });
     emit("disconnected");
 }
 

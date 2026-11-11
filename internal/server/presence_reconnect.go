@@ -20,6 +20,10 @@ const (
 	presenceReconnectWindow = 2 * time.Minute
 	// presenceTrackerMax bounds each map; churn beyond it only drops old cues.
 	presenceTrackerMax = 1024
+	// presenceStaleAfter: a live session answers the 15 s server ping, so an
+	// older session of the same device silent this long is a dead link that a
+	// reconnect superseded, not a parallel tab.
+	presenceStaleAfter = 25 * time.Second
 )
 
 type presenceDeparture struct {
@@ -202,9 +206,10 @@ func (c *Client) departureReason() string {
 	return netproto.DepartureConnectionLost
 }
 
-// markReplacedSessions flags older registered sessions of the same device as
-// replaced by client and reports whether there were any.
-func (s *TCPServer) markReplacedSessions(client *Client) bool {
+// markReplacedSessions flags older, silent sessions of the same device as
+// replaced by client and reports whether there were any. Sessions still
+// talking are parallel (a second tab) and stay untouched.
+func (s *TCPServer) markReplacedSessions(client *Client, now time.Time) bool {
 	key, deviceBound := client.presenceSessionKey()
 	if !deviceBound {
 		return false
@@ -219,7 +224,7 @@ func (s *TCPServer) markReplacedSessions(client *Client) bool {
 	s.mu.RUnlock()
 	found := false
 	for _, other := range others {
-		if otherKey, bound := other.presenceSessionKey(); bound && otherKey == key {
+		if otherKey, bound := other.presenceSessionKey(); bound && otherKey == key && now.Sub(other.lastActivity()) > presenceStaleAfter {
 			other.replaced.Store(true)
 			found = true
 		}

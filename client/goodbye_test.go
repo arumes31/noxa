@@ -41,3 +41,17 @@ func TestDisconnectGoodbyeIsBounded(t *testing.T) {
 		t.Fatalf("disconnect took %s with an unread goodbye", elapsed)
 	}
 }
+
+// A write stuck holding the write lock must not hold the disconnect either.
+func TestDisconnectGoodbyeDoesNotWaitForAStuckWrite(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = server.Close() }()
+	m := &connManager{conn: client}
+	m.writeMu.Lock() // a write blocked on the wire
+	defer m.writeMu.Unlock()
+	start := time.Now()
+	m.disconnect()
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("disconnect waited %s for a stuck write", elapsed)
+	}
+}

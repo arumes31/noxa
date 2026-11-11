@@ -74,11 +74,9 @@ export function notePresenceRestored(state, now = Date.now()) {
  * own reconnect: inside the settle window, or a member who was already there.
  */
 export function presenceCueSuppressed(state, change, now = Date.now()) {
-    if (now < (state.presenceQuietUntil || 0)) return true;
     const uid = change.client?.unique_id;
-    if (change.kind === 'join' && uid && now < (state.presenceKnownUntil || 0) && state.presenceBeforeDrop?.has(uid)) {
-        state.presenceBeforeDrop.delete(uid);
-        return true;
-    }
-    return false;
+    // A remembered member's first return is consumed in either window, so a
+    // later genuine leave and rejoin still announces.
+    if (change.kind === 'join' && uid && now < (state.presenceKnownUntil || 0) && state.presenceBeforeDrop?.delete(uid)) return true;
+    return now < (state.presenceQuietUntil || 0);
 }

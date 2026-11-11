@@ -279,7 +279,8 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		// Arm the rules gate after identity and the tree reach the client.
 		s.sendPendingRules(ctx, client, id.guest)
 		key, _ := client.presenceSessionKey()
-		reconnected := s.presence.noteJoin(client.ID, key, s.markReplacedSessions(client), time.Now())
+		now := time.Now()
+		reconnected := s.presence.noteJoin(client.ID, key, s.markReplacedSessions(client, now), now)
 		s.broadcastEvent(eventUserJoined, userEvent{
 			ClientID:    client.ID,
 			UniqueID:    id.uniqueID,

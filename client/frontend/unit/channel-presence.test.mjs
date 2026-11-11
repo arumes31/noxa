@@ -101,6 +101,11 @@ test('after the own reconnect only the server announcement plays while the roste
     assert.equal(presenceCueSuppressed(s, join('stranger'), 1000 + RECONNECT_SETTLE_MS + 1), false, 'a genuine join after the window announces');
     assert.equal(presenceCueSuppressed(s, { kind: 'leave', client: { unique_id: 'peer-uid' } }, 1000 + RECONNECT_KNOWN_MS - 1), false, 'leaves after the window announce');
     notePresenceDrop(s);
+    s.presenceBeforeDrop.add('early-uid');
+    notePresenceRestored(s, 3000);
+    assert.equal(presenceCueSuppressed(s, join('early-uid'), 3001), true, 'a return inside the settle window is quiet');
+    assert.equal(presenceCueSuppressed(s, join('early-uid'), 3000 + RECONNECT_SETTLE_MS + 1), false, 'and consumed, so a later rejoin announces');
+    notePresenceDrop(s);
     s.presenceBeforeDrop.add('late-uid');
     notePresenceRestored(s, 5000);
     assert.equal(presenceCueSuppressed(s, join('late-uid'), 5000 + RECONNECT_KNOWN_MS + 1), false, 'the known set expires');

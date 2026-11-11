@@ -882,16 +882,22 @@ func (m *connManager) disconnect() {
 const goodbyeWriteTimeout = 500 * time.Millisecond
 
 // sendGoodbye tells the server this close is deliberate, so observers hear a
-// leave rather than a lost connection. Best effort: a dropped goodbye only
-// changes which cue other users hear.
+// leave rather than a lost connection. Best effort and bounded as a whole: a
+// write stuck on the lock or the wire only changes which cue other users hear.
 func (m *connManager) sendGoodbye(conn net.Conn) {
 	f, err := netproto.Encode(netproto.MsgGoodbye, struct{}{})
 	if err != nil {
 		return
 	}
-	m.writeMu.Lock()
+	deadline := time.Now().Add(goodbyeWriteTimeout)
+	for !m.writeMu.TryLock() {
+		if time.Now().After(deadline) {
+			return // a write is stuck; the close below unblocks it
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	defer m.writeMu.Unlock()
-	_ = conn.SetWriteDeadline(time.Now().Add(goodbyeWriteTimeout))
+	_ = conn.SetWriteDeadline(deadline)
 	_ = netproto.WriteFrame(conn, f)
 }
 

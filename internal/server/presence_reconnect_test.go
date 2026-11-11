@@ -108,3 +108,24 @@ func TestPresenceTrackerStaysBounded(t *testing.T) {
 		t.Fatalf("tracker grew past its bound: %d departures, %d lost", len(p.departures), len(p.lost))
 	}
 }
+
+func TestMarkReplacedSessionsSparesLiveParallelSessions(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	session := func(id string, lastActive time.Time) *Client {
+		return &Client{ID: id, UniqueID: "alice", deviceID: "phone", lastActive: lastActive}
+	}
+	stale := session("stale", now.Add(-presenceStaleAfter-time.Second))
+	live := session("live", now.Add(-5*time.Second))
+	fresh := session("fresh", now)
+	s := &TCPServer{clients: map[string]*Client{stale.ID: stale, live.ID: live, fresh.ID: fresh}}
+	if !s.markReplacedSessions(fresh, now) {
+		t.Fatal("a silent older session of the same device must count as replaced")
+	}
+	if !stale.replaced.Load() || live.replaced.Load() {
+		t.Fatalf("replaced: stale=%v live=%v; a live parallel tab must stay untouched", stale.replaced.Load(), live.replaced.Load())
+	}
+	s = &TCPServer{clients: map[string]*Client{live.ID: live, fresh.ID: fresh}}
+	if s.markReplacedSessions(fresh, now) {
+		t.Fatal("a second live tab is not a reconnect")
+	}
+}
