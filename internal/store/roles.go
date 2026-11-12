@@ -309,8 +309,13 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 			}
 		}
 	}
-	for id := range oldRoles {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_roles WHERE id=$1`, id); err != nil {
+	// ⚡ Optimize: batch delete old roles to reduce DB roundtrips from O(N) to O(1)
+	if len(oldRoles) > 0 {
+		var oldRoleIDs []int64
+		for id := range oldRoles {
+			oldRoleIDs = append(oldRoleIDs, id)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_roles WHERE id=ANY($1)`, pq.Array(oldRoleIDs)); err != nil {
 			return err
 		}
 	}
@@ -333,8 +338,13 @@ func writeRolePolicy(ctx context.Context, tx *sql.Tx, before, after authorizatio
 			}
 		}
 	}
-	for id := range oldMembers {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_member_roles WHERE user_id=$1`, id); err != nil {
+	// ⚡ Optimize: batch delete old member roles to reduce DB roundtrips from O(N) to O(1)
+	if len(oldMembers) > 0 {
+		var oldMemberIDs []int64
+		for id := range oldMembers {
+			oldMemberIDs = append(oldMemberIDs, id)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_member_roles WHERE user_id=ANY($1)`, pq.Array(oldMemberIDs)); err != nil {
 			return err
 		}
 	}
