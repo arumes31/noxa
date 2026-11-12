@@ -312,6 +312,21 @@ func (e *Engine) PeerConnection(clientID string) *PeerConnectionWrapper {
 	return e.peers[clientID]
 }
 
+// closePeerIf closes the peer registered under clientID only if it is still
+// w, so a caller holding an older wrapper cannot close its replacement.
+func (e *Engine) closePeerIf(clientID string, w *PeerConnectionWrapper) bool {
+	e.mu.Lock()
+	if e.peers[clientID] != w {
+		e.mu.Unlock()
+		return false
+	}
+	delete(e.peers, clientID)
+	e.mu.Unlock()
+	err := w.Close()
+	e.logger.Info("webrtc peer connection closed", zap.String("client_id", clientID), zap.Error(err))
+	return true
+}
+
 // ClosePeerConnection closes and removes the peer connection registered under
 // clientID. It is a no-op (returns nil) if no peer connection exists.
 func (e *Engine) ClosePeerConnection(clientID string) error {

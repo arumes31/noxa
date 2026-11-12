@@ -160,6 +160,37 @@ func TestIgnoredOffersClosePeer(t *testing.T) {
 	}
 }
 
+// Redeliveries refused before reaching the client (e.g. while it is parked in
+// the lobby) are not ignored offers: the peer stays for the rejoin.
+func TestRefusedRedeliveriesKeepPeer(t *testing.T) {
+	v, clock := stabilityVoice(t)
+	t.Cleanup(func() { _ = v.ClosePeer("listener") })
+	client := newClientPC(t)
+	rec := &offerRecorder{}
+	var refuse atomic.Bool
+	v.SetOfferSender(func(_ string, sdp string) error {
+		if refuse.Load() {
+			return errors.New("not in a channel")
+		}
+		rec.add(sdp)
+		return nil
+	})
+	establishVoiceSession(t, v, client, "listener")
+	v.JoinChannel("listener", 1)
+	v.JoinChannel("first", 1)
+	clock.Advance(50 * time.Millisecond)
+	if rec.count() != 1 {
+		t.Fatalf("offers = %d, want 1", rec.count())
+	}
+	refuse.Store(true)
+	for i := 0; i < 20; i++ {
+		clock.Advance(renegAnswerTimeoutMax)
+	}
+	if v.engine.PeerConnection("listener") == nil {
+		t.Fatal("refused redeliveries closed the peer")
+	}
+}
+
 // An offer that was applied locally but failed delivery (control write
 // error) used to leave the peer in have-local-offer with nothing scheduled.
 func TestUndeliveredOfferIsRetried(t *testing.T) {
