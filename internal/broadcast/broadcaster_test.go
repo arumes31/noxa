@@ -426,9 +426,18 @@ func TestCloseClearsRegistry(t *testing.T) {
 	}
 }
 
-// A client whose queue overflows has missed events: the overflow handler is
-// told once, so the server can disconnect it and let it resync.
-func TestOverflowHandlerRunsOncePerClient(t *testing.T) {
+func shortOverflowGrace(t *testing.T) {
+	t.Helper()
+	old := overflowGrace
+	overflowGrace = 50 * time.Millisecond
+	t.Cleanup(func() { overflowGrace = old })
+}
+
+// A client whose queue stays full is stuck and has missed events: the
+// overflow handler is told once, so the server can disconnect it and let it
+// resync.
+func TestOverflowHandlerRunsOncePerStuckClient(t *testing.T) {
+	shortOverflowGrace(t)
 	b, _ := newTestBroadcaster(t)
 	calls := make(chan string, 4)
 	b.SetOverflowHandler(func(id string) { calls <- id })
@@ -446,9 +455,49 @@ func TestOverflowHandlerRunsOncePerClient(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("overflow handler not called")
 	}
+	for i := 0; i < 64; i++ {
+		b.BroadcastEvent("speaking_changed", []byte(`{}`))
+	}
 	select {
 	case id := <-calls:
 		t.Fatalf("overflow handler called again for %q", id)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// A burst fills a healthy client's queue too; it drains within the grace
+// period, so its drops do not disconnect it.
+func TestOverflowHandlerIgnoresBurstDrops(t *testing.T) {
+	shortOverflowGrace(t)
+	b, _ := newTestBroadcaster(t)
+	calls := make(chan string, 4)
+	b.SetOverflowHandler(func(id string) { calls <- id })
+	ch, err := b.Register("healthy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < clientBufferSize+1; i++ {
+		b.BroadcastEvent("speaking_changed", []byte(`{}`))
+	}
+	if got := b.Stats().Dropped; got != 1 {
+		t.Fatalf("dropped = %d, want 1", got)
+	}
+	for len(ch) > 0 {
+		<-ch
+	}
+	b.mu.RLock()
+	queue := b.clients["healthy"]
+	b.mu.RUnlock()
+	deadline := time.Now().Add(2 * time.Second)
+	for queue.watching.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("overflow watch did not re-arm after the queue drained")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case id := <-calls:
+		t.Fatalf("overflow handler called for a client that drained: %q", id)
+	default:
 	}
 }

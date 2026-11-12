@@ -57,7 +57,7 @@ type Broadcaster struct {
 	// between the per-connection fan-out and the event bus, so a bot sees
 	// exactly what connected clients see.
 	tap func(eventType string, payload []byte)
-	// overflow is told once per client whose queue overflowed.
+	// overflow is told once per client whose queue stayed full (it is stuck).
 	overflow func(clientID string)
 
 	delivered atomic.Uint64
@@ -67,7 +67,15 @@ type Broadcaster struct {
 type clientQueue struct {
 	ch      chan []byte
 	dropped atomic.Uint64
+	// watching is set while a drop waits out overflowGrace, and stays set
+	// once the overflow handler ran.
+	watching atomic.Bool
 }
+
+// overflowGrace is how long a queue that dropped an event may stay full
+// before the client counts as stuck. A burst fills even healthy clients'
+// small queues; they drain within this window.
+var overflowGrace = 2 * time.Second
 
 // Stats is an operational snapshot of fan-out delivery and pressure.
 type Stats struct {
@@ -218,8 +226,9 @@ func (b *Broadcaster) BroadcastToClient(clientID string, payload []byte) error {
 }
 
 // SetOverflowHandler installs a callback run once per client whose queue
-// overflowed (it has missed events). It runs on its own goroutine, outside the
-// broadcaster's locks.
+// overflowed and was still full overflowGrace later (it is stuck and has
+// missed events). It runs on its own goroutine, outside the broadcaster's
+// locks.
 func (b *Broadcaster) SetOverflowHandler(handler func(clientID string)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -333,8 +342,8 @@ func (b *Broadcaster) observeBacklogs(depths []int) {
 func (b *Broadcaster) noteDrop(queue *clientQueue, clientID string) {
 	b.dropped.Add(1)
 	clientDrops := queue.dropped.Add(1)
-	if clientDrops == 1 && b.overflow != nil {
-		go b.overflow(clientID)
+	if b.overflow != nil && queue.watching.CompareAndSwap(false, true) {
+		go b.watchOverflow(queue, clientID, b.overflow)
 	}
 	// Log the first drop and powers of two thereafter. This preserves a clear
 	// pressure signal without allowing a stalled client to create a log storm.
@@ -342,4 +351,16 @@ func (b *Broadcaster) noteDrop(queue *clientQueue, clientID string) {
 		b.logger.Warn("broadcast: client channel full, dropping message",
 			zap.String("client_id", clientID), zap.Uint64("client_drops", clientDrops))
 	}
+}
+
+// watchOverflow reports a client whose queue is still full overflowGrace after
+// a drop: its writer has stopped draining. A client that drained re-arms the
+// watch for its next drop.
+func (b *Broadcaster) watchOverflow(queue *clientQueue, clientID string, overflow func(string)) {
+	time.Sleep(overflowGrace)
+	if len(queue.ch) < cap(queue.ch) {
+		queue.watching.Store(false)
+		return
+	}
+	overflow(clientID)
 }

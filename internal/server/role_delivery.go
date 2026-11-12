@@ -56,24 +56,25 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 			s.privateCallsMu.Lock()
 			defer s.privateCallsMu.Unlock()
 		}
+		metadata := false
 		if isPresenceSignal(presenceType) || roleSnapshotEvent(event.Type) || event.Type == eventSpeakingChanged || event.Type == eventWhisper || event.Type == eventAvatarChanged || event.Type == eventPoke || event.Type == eventPrioritySpeakerChanged || event.Type == eventScreenshareChanged || event.Type == eventStreamWatchStarted || event.Type == eventStreamUploadChanged || event.Type == eventPosition {
 			// A queued activity write must finish before moderation can
 			// acknowledge a mute/deafen, or recheck after that change. Avatar
 			// notifications likewise must not outlive the member's visibility.
 			s.roleMetadataMu.Lock()
 			defer s.roleMetadataMu.Unlock()
-			// Every other recipient waits for this lock, so a dead peer may
-			// hold it only briefly; a failed write then closes that peer.
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, metadataWriteCeiling)
-			defer cancel()
+			metadata = true
 		}
 		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
 		frame, err := s.roleBroadcastFrame(client, payload, e)
 		if err != nil || frame == nil {
 			return err
 		}
-		if err := s.writeFrameInContext(ctx, client, frame); err != nil {
+		if metadata {
+			if err := s.writeMetadataFrame(ctx, client, frame); err != nil {
+				return err
+			}
+		} else if err := s.writeFrameInContext(ctx, client, frame); err != nil {
 			return err
 		}
 		if frame.Type == uint16(netproto.MsgSnapshot) {
@@ -87,6 +88,28 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 		return nil
 	}
 	return err
+}
+
+// writeMetadataFrame writes while holding roleMetadataMu, which every other
+// recipient waits for. A busy writer is waited for only briefly, and that
+// timeout skips this delivery without closing the client: the write it waits
+// behind closes a peer that stopped reading at its own 5 s deadline. A small
+// event must reach the socket buffer within the short ceiling, but a full
+// member snapshot may legitimately need the whole write ceiling on a slow link.
+func (s *TCPServer) writeMetadataFrame(ctx context.Context, client *Client, frame *netproto.Frame) error {
+	lockCtx, cancel := context.WithTimeout(ctx, metadataWriteCeiling)
+	defer cancel()
+	if err := client.wmu.LockContext(lockCtx); err != nil {
+		return err
+	}
+	defer client.wmu.Unlock()
+	writeCtx := lockCtx
+	if frame.Type == uint16(netproto.MsgSnapshot) {
+		var cancelWrite context.CancelFunc
+		writeCtx, cancelWrite = context.WithTimeout(ctx, roleWriteCeiling)
+		defer cancelWrite()
+	}
+	return s.writeFrameLocked(writeCtx, client, frame)
 }
 
 // Structural events are replaced with a fresh filtered snapshot. In particular

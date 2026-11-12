@@ -76,6 +76,12 @@ func TestStalledRecipientDoesNotStallMetadataDelivery(t *testing.T) {
 	} else {
 		t.Logf("healthy member received the snapshot after %v", elapsed)
 	}
+	// Waiting out the short metadata ceiling skips that delivery; only a write
+	// stuck for the whole write ceiling closes the member.
+	time.Sleep(metadataWriteCeiling + 500*time.Millisecond)
+	if cause := target.closeCause.Load(); cause != nil {
+		t.Fatalf("member behind a busy writer was closed: %v", *cause)
+	}
 }
 
 func TestStatusAndDisplayNameHaveASlowBudget(t *testing.T) {
