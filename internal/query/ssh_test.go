@@ -1,6 +1,7 @@
 package query
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"noxa/internal/auth"
 )
 
 // startSSHQuery starts an SSH ServerQuery front end on an ephemeral port and
@@ -308,5 +311,21 @@ func TestSSHHandshakesDoNotTakeQuerySlots(t *testing.T) {
 	srv.endHandshake(conns[0]) // idempotent
 	if !srv.beginHandshake(conns[maxSSHHandshakesPerSource]) {
 		t.Fatal("a released handshake slot was not reusable")
+	}
+}
+
+// A `login` typed inside an SSH session counts against the SSH limiter
+// namespace, not the loopback raw port's (CodeRabbit on #308).
+func TestSSHSessionLoginUsesSSHLimiterNamespace(t *testing.T) {
+	s := New("", nil, &roleQueryBackend{})
+	s.MaxLoginFailures = 1
+	var out bytes.Buffer
+	sess := &session{w: &out, remoteIP: "192.0.2.5", sshModelRequired: true, sshModelAccepted: true}
+	s.execute(t.Context(), sess, "login integration wrong authorization_model=roles-v1")
+	if s.LoginAllowed(auth.LoginFailureScope("ssh", "integration")) {
+		t.Fatal("SSH-session login failure was not counted in the ssh namespace")
+	}
+	if !s.LoginAllowed(auth.LoginFailureScope("query", "integration")) {
+		t.Fatal("SSH-session login failure locked the raw ServerQuery namespace")
 	}
 }

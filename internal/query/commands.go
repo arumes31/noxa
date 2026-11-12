@@ -160,11 +160,17 @@ func (s *Server) cmdLogin(ctx context.Context, sess *session, cmd command) bool 
 		return s.write(sess, errorLine(errInsufficientPermissions, authorizationModelUpgrade))
 	}
 	uniqueID, password := cmd.positional[0], cmd.positional[1]
-	sourceScope := auth.LoginFailureScope("query:"+auth.SourceAddressKey(sess.remoteIP), "")
-	principalScope := auth.LoginFailureScope("query", uniqueID)
+	// A login inside an SSH session stays in the SSH limiter namespace, so
+	// it shares lockouts with SSH password auth, not the loopback raw port.
+	transport := "query"
+	if sess.sshModelRequired {
+		transport = "ssh"
+	}
+	sourceScope := auth.LoginFailureScope(transport+":"+auth.SourceAddressKey(sess.remoteIP), "")
+	principalScope := auth.LoginFailureScope(transport, uniqueID)
 	attempt, allowed := s.ReserveLoginAttempt(sourceScope, principalScope)
 	if !allowed {
-		s.RecordAuthFailure("query", "locked_out")
+		s.RecordAuthFailure(transport, "locked_out")
 		return s.write(sess, errorLine(errLoginFailed, "too many failed logins, try again later"))
 	}
 	defer attempt.Cancel()
