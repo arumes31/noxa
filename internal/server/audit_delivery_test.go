@@ -100,27 +100,50 @@ func TestStatusAndDisplayNameHaveASlowBudget(t *testing.T) {
 func TestSlowModeMarksOnlyAcceptedSends(t *testing.T) {
 	tr := newSlowTracker()
 	now := time.Now()
-	if wait := tr.wait("u", 1, 60, "a", now); wait != 0 {
+	wait, finish := tr.reserve("u", 1, 60, "a", now)
+	if wait != 0 || finish == nil {
 		t.Fatalf("first send waits %v", wait)
 	}
-	// A send rejected later (filter, store error) is never marked: the resend
-	// is allowed at once.
-	if wait := tr.wait("u", 1, 60, "b", now.Add(time.Second)); wait != 0 {
+	// While the first send is processed, a second send of the same user
+	// cannot pass too.
+	if wait, second := tr.reserve("u", 1, 60, "x", now); wait <= 0 || second != nil {
+		t.Fatal("a concurrent send passed slow mode")
+	}
+	// A rejected send (filter, store error) releases the slot.
+	finish(false)
+	wait, finish = tr.reserve("u", 1, 60, "b", now.Add(time.Second))
+	if wait != 0 {
 		t.Fatalf("resend after a rejection waits %v", wait)
 	}
-	tr.mark("u", 1, 60, "b", now)
-	if wait := tr.wait("u", 1, 60, "c", now.Add(10*time.Second)); wait <= 0 {
+	finish(true)
+	if wait, _ := tr.reserve("u", 1, 60, "c", now.Add(10*time.Second)); wait <= 0 {
 		t.Fatal("a second message inside the window was allowed")
 	}
 	// A retry of the stored message reaches the store's idempotency check.
-	if wait := tr.wait("u", 1, 60, "b", now.Add(10*time.Second)); wait != 0 {
+	wait, finish = tr.reserve("u", 1, 60, "b", now.Add(10*time.Second))
+	if wait != 0 {
 		t.Fatalf("retry of the stored message waits %v", wait)
 	}
-	if wait := tr.wait("u", 1, 60, "", now.Add(10*time.Second)); wait <= 0 {
+	finish(true)
+	if wait, _ := tr.reserve("u", 1, 60, "", now.Add(10*time.Second)); wait <= 0 {
 		t.Fatal("a send without a client id matched the recorded message")
 	}
-	if wait := tr.wait("u", 1, 60, "c", now.Add(61*time.Second)); wait != 0 {
+	if wait, _ := tr.reserve("u", 1, 60, "c", time.Now().Add(61*time.Second)); wait != 0 {
 		t.Fatalf("send after the window waits %v", wait)
+	}
+}
+
+func TestSpamIgnoresRetriesOfTheSameMessage(t *testing.T) {
+	tr := newSpamTracker()
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		if tr.record("u", [32]byte{7}, "msg-1", now.Add(time.Duration(i)*time.Second)) {
+			t.Fatalf("retry %d of one message counted as spam", i)
+		}
+	}
+	tr.record("u", [32]byte{7}, "msg-2", now)
+	if !tr.record("u", [32]byte{7}, "msg-3", now) {
+		t.Fatal("three distinct identical messages were not flagged")
 	}
 }
 
@@ -130,12 +153,12 @@ func TestChatTrackersForgetIdleUsers(t *testing.T) {
 	spam := newSpamTracker()
 	for i := 0; i <= trackerSoftLimit; i++ {
 		uid := fmt.Sprintf("guest:%d", i)
-		slow.mark(uid, 1, 5, "", now)
-		spam.record(uid, [32]byte{1}, now)
+		slow.check(uid, 1, 5, now)
+		spam.record(uid, [32]byte{1}, "", now)
 	}
 	later := now.Add(time.Minute)
-	slow.mark("guest:new", 1, 5, "", later)
-	spam.record("guest:new", [32]byte{1}, later)
+	slow.check("guest:new", 1, 5, later)
+	spam.record("guest:new", [32]byte{1}, "", later)
 	slow.mu.Lock()
 	slowKeys := len(slow.last)
 	slow.mu.Unlock()
@@ -157,8 +180,14 @@ func TestUnchangedDisplayNameIsNotBroadcast(t *testing.T) {
 	bob, _ := dialAuthed(t, env.addr, "admin-uid")
 	defer func() { _ = bob.Close() }()
 	current, _ := env.state.GetClient(aliceID)
-	send(t, bob, netproto.MsgPing, netproto.Ping{})
-	readOfType(t, bob, netproto.MsgPong) // drain bob's join-time frames
+	// Let both logins' snapshots reach bob before the unchanged rename.
+	for settle := time.Now().Add(500 * time.Millisecond); time.Now().Before(settle); {
+		_ = bob.SetReadDeadline(settle)
+		if _, err := netproto.ReadFrame(bob); err != nil {
+			break
+		}
+	}
+	_ = bob.SetReadDeadline(time.Time{})
 	send(t, alice, netproto.MsgDisplayNameSet, netproto.DisplayNameSet{Nickname: current.Nickname})
 	var saved netproto.DisplayNameSaved
 	if err := netproto.Decode(readOfType(t, alice, netproto.MsgDisplayNameSaved), &saved); err != nil || saved.Nickname != current.Nickname {

@@ -1602,6 +1602,13 @@ func (s *TCPServer) writeFrameInContext(ctx context.Context, client *Client, fra
 		defer cancel()
 	}
 	if err := client.wmu.LockContext(lockCtx); err != nil {
+		// Another write to this client is still stuck: it fell behind, and the
+		// frame dropped here would leave it with a stale view. Close it so it
+		// resyncs; a caller giving up (canceled) is not the client's fault.
+		if errors.Is(err, context.DeadlineExceeded) && client.Conn != nil {
+			client.markCloseCause(netproto.ControlCloseWriteTimeout)
+			_ = client.Conn.Close()
+		}
 		return err
 	}
 	defer client.wmu.Unlock()
