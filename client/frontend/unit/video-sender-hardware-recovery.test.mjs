@@ -327,3 +327,15 @@ test("hardware startup recovery waits for ready E2EE and resets dwell on a key e
     assert.equal(f.calls.length, 0, "the earlier key epoch cannot supply dwell time");
     f.time(25000); await recover(f.pc, stalledHardware(f)); assert.equal(f.calls.length, 1);
 });
+
+test("a failed first-frame restart ends the publication with the hardware encoder message", async () => {
+    const f = fixture(), toasts = [];
+    let invalidated = 0;
+    globalThis.window = { __noxa: { toast: (message, level) => toasts.push([message, level]) } };
+    f.publication.onInvalidated = () => { invalidated++; };
+    f.options.retry = async () => false;
+    const recover = createVideoSenderRecovery(f.options);
+    for (const at of [0, 5000, 10000]) { f.time(at); await recover(f.pc, stalledHardware(f)); }
+    assert.equal(invalidated, 1);
+    assert.deepEqual(toasts, [["Stream stopped: no hardware encoder is available.", "warn"]]);
+});

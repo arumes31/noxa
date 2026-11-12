@@ -484,3 +484,35 @@ test("startup pulse can recover an encoder whose cumulative count froze across r
     assert.equal(await f.api.retryVideoHardware("screen", f.track, () => true, { ...captureProof, hardwareStartup: true, framesEncoded: 102 }), true);
     assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [2, 1]);
 });
+
+test("each sender's cap update reads its parameters in the same task as its write", async () => {
+    const f = fixture(), writes = [];
+    // Chrome rejects setParameters once a task has passed since getParameters.
+    const strict = (sender, name) => {
+        const read = sender.getParameters;
+        let fresh = false;
+        sender.getParameters = () => { fresh = true; setTimeout(() => { fresh = false; }); return read(); };
+        sender.setParameters = async () => {
+            if (!fresh) throw new Error(`${name}: stale parameters`);
+            writes.push(name); await new Promise(resolve => setTimeout(resolve, 1));
+        };
+    };
+    const camera = { sender: { track: { id: "cam", kind: "video", readyState: "live" }, getParameters: () => ({ encodings: [{ active: true }] }) },
+        receiver: { track: { kind: "video" } }, direction: "sendonly" };
+    f.pc.getTransceivers = () => [camera, f.transceiver];
+    strict(camera.sender, "cam"); strict(f.sender, "screen");
+    await f.api.applySendCaps();
+    assert.deepEqual(writes, ["cam", "screen"]);
+});
+
+test("a hung restore after a hardware pulse ends the share instead of holding negotiation", async () => {
+    const f = fixture({ onWrite(parameters) {
+        if (parameters.encodings[0].scaleResolutionDownBy === 1) return new Promise(() => {});
+    } });
+    f.state.screenSharing = true;
+    window.__noxa.$ = () => null;
+    f.sender.replaceTrack = async () => {};
+    f.state.shareStream.getTracks = () => [];
+    assert.equal(await f.api.retryVideoHardware("screen", f.track), true);
+    assert.equal(f.state.screenSharing, false);
+});

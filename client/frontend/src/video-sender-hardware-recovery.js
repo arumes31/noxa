@@ -1,6 +1,7 @@
 import { hardwareVideoEvidence } from "./hardware-video.js";
 import { hardwareRecoveryCodec, knownSoftwareVideoEncoder } from "./video-hevc.js";
 import { createHardwareRecoveryScheduler } from "./video-hardware-recovery.js";
+import { t } from "./i18n.js";
 import { publicationSnapshot, publicationUploadActive, withdrawPublicationHEVC } from "./stream-publication.js";
 
 const scopeKey = state => JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration, state.myClientID, state.myChannelID]);
@@ -114,10 +115,20 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
                 current, capable: async () => {
                     if (codec.mimeType.toLowerCase() === "video/h265") return true;
                     return capable(codec, stat);
-                }, recover: evidence => codec.mimeType.toLowerCase() === "video/h265" ? withdraw(p.slot, p.track, current) : retry(p.slot, p.track, current,
-                    (evidence?.hardwareObserved || evidence?.hardwareStartup) && capture ? { sourceId: capture.id, codec: codec.mimeType,
-                        fmtp: codec.sdpFmtpLine, width: startup?.width ?? stat.frameWidth, height: startup?.height ?? stat.frameHeight,
-                        ...(evidence?.hardwareStartup ? { hardwareStartup: true, framesEncoded: stat.framesEncoded } : {}) } : null) });
+                }, recover: async evidence => {
+                    if (codec.mimeType.toLowerCase() === "video/h265") return withdraw(p.slot, p.track, current);
+                    const recovered = await retry(p.slot, p.track, current,
+                        (evidence?.hardwareObserved || evidence?.hardwareStartup) && capture ? { sourceId: capture.id, codec: codec.mimeType,
+                            fmtp: codec.sdpFmtpLine, width: startup?.width ?? stat.frameWidth, height: startup?.height ?? stat.frameHeight,
+                            ...(evidence?.hardwareStartup ? { hardwareStartup: true, framesEncoded: stat.framesEncoded } : {}) } : null);
+                    // An encoder that still outputs nothing after its restart
+                    // would otherwise keep a silent share alive between retries.
+                    if (recovered === false && evidence?.hardwareStartup && current()) {
+                        p.onInvalidated();
+                        window.__noxa?.toast?.(t("e2ee.reason.hardware_encoder"), "warn");
+                    }
+                    return recovered;
+                } });
         }
         await scheduler(scope, candidates, stats, pc);
     };
