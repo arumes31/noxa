@@ -299,13 +299,13 @@ func TestSpamTrackerRetainsNoPlaintext(t *testing.T) {
 	const canary = "canary-7f3a"
 	tr := newSpamTracker()
 	now := time.Now()
-	if tr.record("u", bodyDigest(canary), now) {
+	if tr.record("u", bodyDigest(canary), "", now) {
 		t.Fatal("first message tripped the spam heuristic")
 	}
-	if tr.record("u", bodyDigest(canary), now.Add(time.Second)) {
+	if tr.record("u", bodyDigest(canary), "", now.Add(time.Second)) {
 		t.Fatal("second message tripped the spam heuristic")
 	}
-	if !tr.record("u", bodyDigest(canary), now.Add(2*time.Second)) {
+	if !tr.record("u", bodyDigest(canary), "", now.Add(2*time.Second)) {
 		t.Fatal("third identical message in 30s did not trip the spam heuristic")
 	}
 	if containsCanary(t, tr, canary) {
@@ -322,7 +322,7 @@ func TestSpamTrackerStripsAttachmentKeys(t *testing.T) {
 	tripped := false
 	for i, key := range []string{"AAAAkey1", "BBBBkey2", "CCCCkey3"} {
 		body := "look: [file:ab12.vcx#" + key + "#photo.png]"
-		tripped = tr.record("u", bodyDigest(stripAttachmentRefs(body)), now.Add(time.Duration(i)*time.Second))
+		tripped = tr.record("u", bodyDigest(stripAttachmentRefs(body)), "", now.Add(time.Duration(i)*time.Second))
 	}
 	if !tripped {
 		t.Fatal("three pastes of the same image with different file keys did not trip the spam heuristic")

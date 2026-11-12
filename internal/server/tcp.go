@@ -575,7 +575,21 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 			return s.writeMessage(client, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: offerSDP})
 		})
 	}
+	if deps != nil && deps.Broadcast != nil {
+		deps.Broadcast.SetOverflowHandler(s.closeOverflowedClient)
+	}
 	return s
+}
+
+// closeOverflowedClient disconnects a client whose broadcast queue overflowed:
+// it has silently missed events, and a reconnect resends a fresh snapshot and
+// history, while staying connected would leave it with a stale view.
+func (s *TCPServer) closeOverflowedClient(clientID string) {
+	if client, ok := s.clientByID(clientID); ok {
+		s.logger.Warn("closing a client that fell behind its broadcast queue", zap.String("client_id", clientID))
+		client.markCloseCause(netproto.ControlCloseWriteTimeout)
+		_ = client.Conn.Close()
+	}
 }
 
 // Start binds the TCP listener and serves connections until ctx is cancelled
@@ -1605,6 +1619,13 @@ func (s *TCPServer) writeFrameInContext(ctx context.Context, client *Client, fra
 		defer cancel()
 	}
 	if err := client.wmu.LockContext(lockCtx); err != nil {
+		// Another write to this client is still stuck: it fell behind, and the
+		// frame dropped here would leave it with a stale view. Close it so it
+		// resyncs; a caller giving up (canceled) is not the client's fault.
+		if errors.Is(err, context.DeadlineExceeded) && client.Conn != nil {
+			client.markCloseCause(netproto.ControlCloseWriteTimeout)
+			_ = client.Conn.Close()
+		}
 		return err
 	}
 	defer client.wmu.Unlock()
@@ -1638,10 +1659,15 @@ func (s *TCPServer) writeFrameLocked(ctx context.Context, client *Client, frame 
 		defer func() { _ = client.Conn.SetWriteDeadline(time.Time{}) }()
 	}
 	if err := netproto.WriteFrame(client.Conn, frame); err != nil {
+		reason := netproto.ControlWriteCloseReason(err)
 		s.logger.Warn("write error",
-			zap.String("reason", string(netproto.ControlWriteCloseReason(err))),
+			zap.String("reason", string(reason)),
 			zap.String("msg_type", netproto.MessageType(frame.Type).String()),
 		)
+		// A timed-out write may have sent part of the frame, so the stream is
+		// unusable; closing it also stops later writes from stalling again.
+		client.markCloseCause(reason)
+		_ = client.Conn.Close()
 		return err
 	}
 	client.noteSent(len(frame.Payload))
