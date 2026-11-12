@@ -76,7 +76,14 @@ func TestLocalRelayPairDoesNotRequireNATHairpin(t *testing.T) {
 			t.Fatalf("mapped relay: n=%d from=%v err=%v", n, from, err)
 		}
 	}
-	if counts := counter.Snapshot(); counts.In != 2*int64(len("local relay packet")) || counts.Out != counts.In {
+	// Out is counted after the relay's WriteTo returns, which can be after
+	// the peer already read the packet: wait briefly for it to settle.
+	want := 2 * int64(len("local relay packet"))
+	counts := counter.Snapshot()
+	for deadline := time.Now().Add(time.Second); (counts.In != want || counts.Out != want) && time.Now().Before(deadline); counts = counter.Snapshot() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if counts.In != want || counts.Out != want {
 		t.Fatalf("relay socket traffic: %+v", counts)
 	}
 	m.Revoke("b")
