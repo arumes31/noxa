@@ -149,7 +149,7 @@ func TestDisappearingMessagesStartOnDisplayAndExpireLocally(t *testing.T) {
 	if _, ok := pending[ratchetSemanticKey("me", "m1")]; !ok {
 		t.Fatalf("pending redactions: %v", pending)
 	}
-	a.markRedactedWith(store, map[string]bool{ratchetSemanticKey("bob", "b1"): true})
+	a.markRedactedWith(store, map[string]bool{ratchetSemanticKey("bob", "b1"): true}, a.dmDisappear.reopened.Load())
 	if pending = a.pendingRedactionsWith(store); len(pending) != 1 {
 		t.Fatalf("after marking: %v", pending)
 	}
@@ -282,6 +282,10 @@ func TestLateEditOfExpiredMessageIsRedactedAgain(t *testing.T) {
 	if live := (DMEntry{Redacted: false}); reopenRedactionForLateEdit(&live, netproto.DMActionEdit) {
 		t.Fatal("an unexpired message was marked")
 	}
+	// Still waiting for redaction: a scan running now may predate the edit.
+	if waiting := (DMEntry{Expired: true}); !reopenRedactionForLateEdit(&waiting, netproto.DMActionEdit) {
+		t.Fatal("a late edit of an unredacted expired message was not reported")
+	}
 	// The sweep reloads its cached list once reopened.
 	msgs, err := store.messages("bob")
 	if err != nil {
@@ -295,5 +299,18 @@ func TestLateEditOfExpiredMessageIsRedactedAgain(t *testing.T) {
 	a.reopenDisappearingRedaction()
 	if pending := a.pendingRedactionsWith(store); pending[ratchetSemanticKey("bob", "b1")] != "srv-b" {
 		t.Fatalf("late edit not pending redaction: %v", pending)
+	}
+	// A redaction whose archive scan predates a later edit must not settle it.
+	gen := a.dmDisappear.reopened.Load()
+	a.dmDisappear.reopened.Add(1)
+	a.markRedactedWith(store, map[string]bool{ratchetSemanticKey("bob", "b1"): true}, gen)
+	a.reopenDisappearingRedaction()
+	if pending := a.pendingRedactionsWith(store); pending[ratchetSemanticKey("bob", "b1")] != "srv-b" {
+		t.Fatalf("a stale redaction settled a late edit: %v", pending)
+	}
+	a.markRedactedWith(store, map[string]bool{ratchetSemanticKey("bob", "b1"): true}, a.dmDisappear.reopened.Load())
+	a.reopenDisappearingRedaction()
+	if pending := a.pendingRedactionsWith(store); len(pending) != 0 {
+		t.Fatalf("a current redaction did not settle: %v", pending)
 	}
 }
