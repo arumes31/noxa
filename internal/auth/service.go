@@ -45,6 +45,13 @@ type AuthService struct {
 	verifyPassword   func(password, encodedHash string) error
 	verifyChallenge  func(string, []byte, []byte) error
 	lookupIdentifier func(context.Context, string) (passwordCredential, error)
+	loginLimiter     *LoginFailureLimiter // set before serving; nil disables alias budgets
+}
+
+// SetLoginLimiter installs the process-wide login limiter so a failed password
+// also counts against the account budget of the account's other identifier.
+func (a *AuthService) SetLoginLimiter(limiter *LoginFailureLimiter) {
+	a.loginLimiter = limiter
 }
 
 type passwordCredential struct {
@@ -298,6 +305,11 @@ func (a *AuthService) AuthenticateIdentifier(ctx context.Context, identifier, pa
 		return nil, fmt.Errorf("querying user credential: %w", err)
 	}
 	if !a.verifyCredential(password, credential.hash) {
+		aliases := []string{AccountPasswordScope(credential.user.UniqueID)}
+		if credential.user.Nickname != "" {
+			aliases = append(aliases, AccountPasswordScope(credential.user.Nickname))
+		}
+		a.loginLimiter.RecordAliasFailure(AccountPasswordScope(identifier), aliases...)
 		return nil, nil
 	}
 	return &credential.user, nil

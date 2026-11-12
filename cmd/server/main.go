@@ -788,6 +788,7 @@ func run() (retErr error) {
 	// One limiter owns every expensive credential verification in this process.
 	// Transports use separate source scopes while sharing this KDF gate.
 	loginLimiter := auth.NewLoginFailureLimiter(auth.LoginFailureLimiterConfig{})
+	authSvc.SetLoginLimiter(loginLimiter)
 	for _, warning := range server.AssetStorageSecurityWarnings() {
 		logger.Error("ASSET STORAGE SECURITY LIMITATION", zap.String("warning", warning))
 	}
