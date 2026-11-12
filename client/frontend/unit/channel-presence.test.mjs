@@ -74,3 +74,39 @@ test('arrival audio policy is identical whether the previous channel was visible
     assert.equal(known.speechEvent, unknown.speechEvent);
     assert.equal(known.client.presence_token, unknown.client.presence_token);
 });
+
+test('a lost connection and a reconnect use their own cues; a replaced session stays silent', () => {
+    const before = state([member('dropped'), member('replaced'), member('left')]);
+    const after = state([member('back')], {
+        presenceDepartures: { dropped: 'connection_lost', replaced: 'replaced' },
+        presenceReconnected: new Set(['back']),
+    });
+    assert.deepEqual(changes(before, after).map(change => [change.client.client_id, change.message, change.speechEvent]), [
+        ['dropped', 'runtime.connectionLostUser', 'user_connection_lost'],
+        ['left', 'runtime.left', 'user_leave'],
+        ['back', 'runtime.reconnectedUser', 'user_reconnected'],
+    ]);
+});
+
+test('after the own reconnect only the server announcement plays while the roster refills', async () => {
+    const { notePresenceDrop, notePresenceRestored, presenceCueSuppressed, RECONNECT_SETTLE_MS, RECONNECT_KNOWN_MS } = await import('../src/channel-presence.js');
+    const s = state([{ ...member('peer'), unique_id: 'peer-uid' }, { ...member('other', 9), unique_id: 'other-uid' }]);
+    notePresenceDrop(s);
+    assert.deepEqual([...s.presenceBeforeDrop], ['peer-uid'], 'only members of the own channel are remembered');
+    notePresenceRestored(s, 1000);
+    const join = uid => ({ kind: 'join', client: { unique_id: uid } });
+    assert.equal(presenceCueSuppressed(s, join('stranger'), 1000 + RECONNECT_SETTLE_MS - 1), true, 'the settle window is quiet');
+    assert.equal(presenceCueSuppressed(s, join('peer-uid'), 1000 + RECONNECT_SETTLE_MS + 1), true, 'a member from before the drop reappears quietly');
+    assert.equal(presenceCueSuppressed(s, join('peer-uid'), 1000 + RECONNECT_SETTLE_MS + 2), false, 'only once');
+    assert.equal(presenceCueSuppressed(s, join('stranger'), 1000 + RECONNECT_SETTLE_MS + 1), false, 'a genuine join after the window announces');
+    assert.equal(presenceCueSuppressed(s, { kind: 'leave', client: { unique_id: 'peer-uid' } }, 1000 + RECONNECT_KNOWN_MS - 1), false, 'leaves after the window announce');
+    notePresenceDrop(s);
+    s.presenceBeforeDrop.add('early-uid');
+    notePresenceRestored(s, 3000);
+    assert.equal(presenceCueSuppressed(s, join('early-uid'), 3001), true, 'a return inside the settle window is quiet');
+    assert.equal(presenceCueSuppressed(s, join('early-uid'), 3000 + RECONNECT_SETTLE_MS + 1), false, 'and consumed, so a later rejoin announces');
+    notePresenceDrop(s);
+    s.presenceBeforeDrop.add('late-uid');
+    notePresenceRestored(s, 5000);
+    assert.equal(presenceCueSuppressed(s, join('late-uid'), 5000 + RECONNECT_KNOWN_MS + 1), false, 'the known set expires');
+});

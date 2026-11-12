@@ -102,6 +102,12 @@ type TreeSnapshot struct {
 	TotalClients      int           `json:"total_clients"`
 	TotalChannels     int           `json:"total_channels"`
 	GeneratedAt       time.Time     `json:"generated_at"`
+	// Departures maps recently departed client IDs the recipient could see to
+	// a reason (netproto.DepartureConnectionLost or DepartureReplaced); plain
+	// leaves are absent. Reconnected lists present members whose previous
+	// session of the same device was lost moments ago.
+	Departures  map[string]string `json:"departures,omitempty"`
+	Reconnected []string          `json:"reconnected,omitempty"`
 }
 
 // clientToInfo converts a state.Client into a serializable ClientInfo, stripping

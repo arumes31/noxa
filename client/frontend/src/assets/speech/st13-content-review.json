@@ -2806,5 +2806,53 @@
     "note": "Automatic content review; not a human listening or timbre assessment.",
     "letterEdits": 0,
     "reviewStatus": "accepted-automatic-content-review"
+  },
+  "en/user_connection_lost": {
+    "sha256": "def832d68c973ea2ebd89d939c679fb80eaf8b50a61051794b1837b60f2ef504",
+    "expected": "User lost the connection.",
+    "renderText": "User lost the connection.",
+    "language": "en",
+    "automatic_transcript": "user lost the connection.",
+    "duration": 1.456,
+    "asr": "Whisper small (sherpa-onnx int8)",
+    "note": "Automatic content review; not a human listening or timbre assessment.",
+    "letterEdits": 0,
+    "reviewStatus": "accepted-automatic-content-review"
+  },
+  "en/user_reconnected": {
+    "sha256": "b127cb1d0ed51f430b56032bff174e4c93bd3796576ed860d60783e09238035f",
+    "expected": "User reconnected.",
+    "renderText": "User reconnected.",
+    "language": "en",
+    "automatic_transcript": "user reconnected.",
+    "duration": 1.169,
+    "asr": "Whisper small (sherpa-onnx int8)",
+    "note": "Automatic content review; not a human listening or timbre assessment.",
+    "letterEdits": 0,
+    "reviewStatus": "accepted-automatic-content-review"
+  },
+  "de/user_connection_lost": {
+    "sha256": "7f41f1c0fb7a923cd83e3dec5c2e6605330996e262ff0851f542944bf724961c",
+    "expected": "Ein Benutzer hat die Verbindung verloren.",
+    "renderText": "Ein Benutzer hat die Verbindung verloren.",
+    "language": "de",
+    "automatic_transcript": "Ein Benutzer hat die Verbindung verloren.",
+    "duration": 2.331,
+    "asr": "Whisper small (sherpa-onnx int8)",
+    "note": "Automatic content review; not a human listening or timbre assessment.",
+    "letterEdits": 0,
+    "reviewStatus": "accepted-automatic-content-review"
+  },
+  "de/user_reconnected": {
+    "sha256": "07b6e86251fa8f690357f42fb34b36f49ac11519890d8bbff9882ea240b82dc6",
+    "expected": "Ein Benutzer hat die Verbindung wiederhergestellt.",
+    "renderText": "Ein Benutzer hat die Verbindung wiederhergestellt.",
+    "language": "de",
+    "automatic_transcript": "Ein Benutzer hat die Verbindung wieder hergestellt.",
+    "duration": 2.738,
+    "asr": "Whisper small (sherpa-onnx int8)",
+    "note": "Automatic content review; not a human listening or timbre assessment.",
+    "letterEdits": 0,
+    "reviewStatus": "accepted-automatic-content-review"
   }
 }

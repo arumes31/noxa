@@ -123,6 +123,10 @@ type Client struct {
 	deviceIndex      *deviceSessionIndex                         // set by register; keeps the device -> sessions index current
 	webTransport     atomic.Bool                                 // connected through the mobile web app
 	closeCause       atomic.Pointer[netproto.ControlCloseReason] // first server-side close cause
+	readClose        atomic.Pointer[netproto.ControlCloseReason] // why the read loop ended
+	saidGoodbye      atomic.Bool                                 // client sent MsgGoodbye before closing
+	replaced         atomic.Bool                                 // the same device reconnected on a newer session
+	announcesGoodbye bool                                        // client sends MsgGoodbye before a deliberate close, protected by mu
 	inputAt          time.Time                                   // last input a desktop reported (activity)
 	webHidden        bool                                        // the web app reported it is in the background
 	passkey          *passkeyCeremony
@@ -335,6 +339,8 @@ func (c *Client) takeChallenge(uniqueID string) ([]byte, string, bool) {
 
 // TCPServer accepts and serves control-channel connections.
 type TCPServer struct {
+	// presence reports dropped connections and reconnects to observers.
+	presence presenceTracker
 	// noxa-olm-v1 admission (frame 202), ON by default and advertised as
 	// netproto.CapabilityOlmAdmission whenever the Olm directory is available.
 	olmAdmissionEnabled bool
@@ -1000,6 +1006,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 	}()
 	s.register(client)
 	defer func() {
+		client.readClose.Store(&closeReason)
 		if s.deps != nil && s.deps.Authority != nil {
 			// Keep the session discoverable until serialized cleanup marks it
 			// revoked; account bans must also find connections already closing.
@@ -1359,6 +1366,9 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 	case netproto.MsgPong:
 		client.notePong()
 		return nil
+	case netproto.MsgGoodbye:
+		client.saidGoodbye.Store(true)
+		return nil
 	default:
 		s.logger.Warn("unknown message type",
 			zap.String("client_id", client.ID),
@@ -1385,6 +1395,7 @@ var allowedWhileRulesPending = map[netproto.MessageType]bool{
 	netproto.MsgServerRulesAccept: true,
 	netproto.MsgPing:              true,
 	netproto.MsgPong:              true,
+	netproto.MsgGoodbye:           true,
 }
 
 // servePingLoop contains the per-connection child goroutine so a panic there
@@ -1481,6 +1492,10 @@ func (s *TCPServer) onDisconnect(client *Client) {
 			if removed != nil {
 				channelID = removed.ChannelID
 				wasInvisible = s.deps.State.PresenceHidden(removed)
+				// Recorded before the user_left broadcast so its snapshots carry the reason.
+				if key, _ := client.presenceSessionKey(); key != "" {
+					s.presence.noteDeparture(client.ID, key, client.departureReason(), channelID, wasInvisible, time.Now())
+				}
 			}
 		}
 		// Remove voice metadata in the same membership critical section. Key
@@ -1510,12 +1525,14 @@ func (s *TCPServer) onDisconnect(client *Client) {
 				ClientID: client.ID,
 				UniqueID: client.UniqueID,
 				Nickname: client.nickname(),
+				Reason:   client.departureReason(),
 			})
 		} else {
 			s.broadcastEvent(eventUserLeft, userEvent{
 				ClientID: client.ID,
 				UniqueID: client.UniqueID,
 				Nickname: client.nickname(),
+				Reason:   client.departureReason(),
 			})
 		}
 	}

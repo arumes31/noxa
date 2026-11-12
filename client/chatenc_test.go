@@ -39,6 +39,9 @@ func serveFrames(conn net.Conn, handle frameHandler) {
 		if err != nil {
 			return
 		}
+		if netproto.MessageType(f.Type) == netproto.MsgGoodbye {
+			continue // a one-way close notice; the real server never answers it
+		}
 		mt, msg, ok := handle(f)
 		if !ok {
 			continue
