@@ -1,10 +1,10 @@
+import MarkdownIt from "markdown-it";
 import { previewImage } from "./preview-image.js";
 import { t as translate } from "./i18n.js";
-// markdown.js — (91/92/93) XSS-safe mini-markdown renderer for chat.
-// Discipline: user text is HTML-escaped FIRST; every transform below only
-// injects markup built from already-escaped content. Code spans/blocks are
-// stashed away before escaping so their contents are never interpreted as
-// markdown or HTML.
+// markdown.js — (91/92/93) XSS-safe chat markdown: CommonMark + GFM tables
+// and strikethrough, parsed by markdown-it with raw HTML disabled. Every
+// renderer rule below emits only escaped text or fixed noXa markup; links
+// and images keep the delegated md-link / click-to-load placeholder forms.
 
 // ~50 common shortcode -> unicode emoji mappings (95).
 export const EMOJI = {
@@ -69,86 +69,79 @@ function detectLanguage(code) {
     return "plain";
 }
 
-function tableCells(line) {
-    return line.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
+function codeBlock(code, info) {
+    const body = code.replace(/\n$/, "");
+    const language = escapeHTML(((info.match(/^[\w+#-]+/) || [""])[0] || detectLanguage(body)).toLowerCase());
+    return `<pre class="md-pre language-${language}" data-lang="${language}">${codeGutter(body)}` +
+        `<code>${highlight(escapeHTML(body))}</code>${copyCodeButton()}</pre>`;
 }
 
-function renderTables(text) {
-    const lines = text.split(/\r?\n/);
-    const out = [];
-    for (let i = 0; i < lines.length; i++) {
-        const header = tableCells(lines[i]);
-        const separator = i + 1 < lines.length ? tableCells(lines[i + 1]) : [];
-        const isTable = lines[i].includes("|") && header.length > 1 && separator.length === header.length &&
-            separator.every((cell) => /^:?-+:?$/.test(cell));
-        if (!isTable) {
-            out.push(lines[i]);
-            continue;
-        }
-        let html = `<div class="md-table-wrap"><table class="md-table"><thead><tr>${header.map((cell) => `<th>${cell}</th>`).join("")}</tr></thead><tbody>`;
-        i += 2;
-        while (i < lines.length && lines[i].includes("|")) {
-            const cells = tableCells(lines[i]);
-            if (cells.length !== header.length) break;
-            html += `<tr>${cells.map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
-            i++;
-        }
-        html += "</tbody></table></div>";
-        out.push(html);
-        i--;
+// Raw HTML stays text, single newlines stay line breaks (chat habit), and
+// only bare http(s) URLs autolink. Indented code blocks are off: chat users
+// indent prose, and fences cover code.
+const md = new MarkdownIt({ html: false, linkify: true, typographer: false, breaks: true });
+md.linkify.set({ fuzzyLink: false, fuzzyEmail: false, fuzzyIP: false });
+md.disable("code");
+// Links and images: http(s) only. Anything else stays literal text.
+md.validateLink = (url) => /^https?:\/\//i.test(url);
+
+// GFM task items show a display-only box; the source stays plain text.
+md.core.ruler.after("inline", "noxa_tasks", (state) => {
+    const tokens = state.tokens;
+    for (let i = 2; i < tokens.length; i++) {
+        if (tokens[i].type !== "inline" || tokens[i - 2].type !== "list_item_open") continue;
+        const first = tokens[i].children?.[0];
+        if (first?.type === "text") first.content = first.content.replace(/^\[([ xX])\]\s+/, (_m, c) => (c === " " ? "☐ " : "☑ "));
     }
-    return out.join("\n");
-}
+});
 
-// renderMarkdown converts user text to a safe HTML string. Links are
-// rendered as <a class="md-link" data-url="...">; opening happens via click
-// delegation (runtime.BrowserOpenURL) wired up in chat-ui.js — never via a
-// raw href navigation inside the webview.
+const rules = md.renderer.rules;
+// :shortcode: emoji (95) on escaped text only.
+rules.text = (tokens, i) => escapeHTML(tokens[i].content).replace(/:([a-z0-9_+-]+):/gi, (m, name) => EMOJI[name.toLowerCase()] || m);
+rules.code_inline = (tokens, i) => `<code class="md-code">${escapeHTML(tokens[i].content)}</code>`;
+rules.fence = (tokens, i) => codeBlock(tokens[i].content, tokens[i].info.trim());
+// Opening happens via click delegation (runtime.BrowserOpenURL) in chat-ui.js
+// — never via a raw href navigation inside the webview. Link titles are
+// dropped: the tooltip always shows the real target.
+rules.link_open = (tokens, i) => {
+    const url = escapeHTML(tokens[i].attrGet("href"));
+    return `<a href="#" class="md-link" data-url="${url}" title="${url}">`;
+};
+// Images (channel descriptions; 113). Remote images are never fetched on
+// render: a click-to-load placeholder keeps senders from learning each
+// reader's IP address and read time.
+rules.image = (tokens, i, options, env, self) => {
+    const src = tokens[i].attrGet("src");
+    const alt = escapeHTML(self.renderInlineAsText(tokens[i].children, options, env));
+    // The loader only fetches https; an http image stays an ordinary link.
+    if (!/^https:\/\//i.test(src)) {
+        const url = escapeHTML(src);
+        return `<a href="#" class="md-link" data-url="${url}" title="${url}">${alt || url}</a>`;
+    }
+    return `<button type="button" class="md-img-load" data-img="${imageID(src)}" data-alt="${alt}" title="${escapeHTML(src)}">🖼 ${alt || "image"}</button>`;
+};
+// __text__ keeps its noXa meaning (underline); the format toolbar emits it.
+rules.strong_open = (tokens, i) => (tokens[i].markup === "__" ? "<u>" : "<strong>");
+rules.strong_close = (tokens, i) => (tokens[i].markup === "__" ? "</u>" : "</strong>");
+rules.s_open = () => "<del>";
+rules.s_close = () => "</del>";
+rules.table_open = () => `<div class="md-table-wrap"><table class="md-table">`;
+rules.table_close = () => "</table></div>";
+// Alignment would need inline style attributes; cells keep the table CSS.
+rules.th_open = () => "<th>";
+rules.td_open = () => "<td>";
+
+// renderMarkdown converts user text to a safe HTML string. A single
+// paragraph renders without a <p> wrapper so plain chat lines keep their
+// inline layout.
 export function renderMarkdown(text) {
     if (!text) return "";
-    const stash = [];
-    const push = (html) => {
-        stash.push(html);
-        return "\u0001" + (stash.length - 1) + "\u0002";
-    };
-
-    // \u0001/\u0002 delimit internal stash references. Strip them from the
-    // input so sender text can never name (and repeat) a stashed fragment.
-    let t = String(text).replace(/[\u0001\u0002]/g, "");
-    // Fenced code blocks (```lang\n...```) first — their content is opaque.
-    t = t.replace(/```(\w*)\r?\n?([\s\S]*?)(?:```|$)/g, (_m, lang, code) => {
-        const language = escapeHTML((lang || detectLanguage(code)).toLowerCase());
-        const body = code.replace(/\n$/, "");
-        return push(`<pre class="md-pre language-${language}" data-lang="${language}">${codeGutter(body)}` +
-            `<code>${highlight(escapeHTML(body))}</code>${copyCodeButton()}</pre>`);
-    });
-    // Inline code spans.
-    t = t.replace(/`([^`\n]+)`/g, (_m, code) =>
-        push(`<code class="md-code">${escapeHTML(code)}</code>`));
-
-    // Everything else gets escaped, then inline markup is applied.
-    t = escapeHTML(t);
-    t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-    t = t.replace(/__([^_\n]+)__/g, "<u>$1</u>");
-    t = t.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
-    t = t.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;!?]|$)/g, "$1<em>$2</em>");
-    // Images (channel descriptions; 113). http(s) only — no javascript:.
-    // Remote images are never fetched on render: a click-to-load placeholder
-    // keeps senders from learning each reader's IP address and read time.
-    // The markup is stashed so later passes never re-scan its attributes.
-    t = t.replace(/!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)/g, (_m, alt, url) =>
-        push(`<button type="button" class="md-img-load" data-img="${imageID(url)}" data-alt="${alt}" title="${url}">🖼 ${alt || "image"}</button>`));
-    // Autolink URLs (93): tooltip carries the full URL.
-    t = t.replace(/(?<![="'\w])(https?:\/\/[^\s<>"'\])}]+)/g,
-        (u) => `<a href="#" class="md-link" data-url="${u}" title="${u}">${u}</a>`);
-    // :shortcode: emoji (95).
-    t = t.replace(/:([a-z0-9_+-]+):/gi, (m, name) => EMOJI[name.toLowerCase()] || m);
-    t = renderTables(t);
-    t = t.replace(/\n?(<div class="md-table-wrap">[\s\S]*?<\/table><\/div>)\n?/g, "$1");
-    t = t.replace(/\n/g, "<br>");
-    // Restore stashed code.
-    t = t.replace(/\u0001(\d+)\u0002/g, (_m, i) => stash[Number(i)]);
-    return t;
+    const env = {};
+    const tokens = md.parse(String(text), env);
+    if (tokens.length === 3 && tokens[0].type === "paragraph_open") {
+        return md.renderer.renderInline(tokens[1].children, md.options, env);
+    }
+    return md.renderer.render(tokens, md.options, env).trimEnd();
 }
 
 // Image URLs validated by renderMarkdown, keyed by the opaque id a placeholder
@@ -162,9 +155,7 @@ const imageIDs = new Map();
 const IMAGE_ID_LIMIT = 2000;
 let nextImageID = 0;
 
-function imageID(escapedURL) {
-    const url = escapedURL.replace(/&(lt|gt|quot|#39);/g, (_m, name) =>
-        ({ lt: "<", gt: ">", quot: '"', "#39": "'" }[name])).replace(/&amp;/g, "&");
+function imageID(url) {
     let id = imageIDs.get(url);
     if (id === undefined) {
         id = String(++nextImageID);

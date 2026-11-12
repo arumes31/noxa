@@ -317,6 +317,7 @@ export function initWorkspace() {
 function translateWorkspace() {
     for (const [selector, attribute, key] of [
         ["#channels-heading", "text", "workspace.labels.channels"],
+        ["#chat-hint", "text", "workspace.labels.composerHint"],
         ["#tree-filter", "placeholder", "workspace.labels.findChannelsOrPeople"],
         ["#chat-scope", "aria-label", "workspace.labels.messageScope"],
         ["#chat-target", "placeholder", "workspace.labels.findAMemberOrEnterAnIdentity"],

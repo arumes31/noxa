@@ -19,6 +19,7 @@ import { actionSheet, bindMessageTaps, canShare, copyText, excerpt, saveMessage,
 import { aboutEncryption, blockedLine, encryptionBadge, secureBanner, isBlockedUser, lineCache, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 import { groupEntry } from "../core/search.js";
 import { chatSearch } from "./chat-search.js";
+import { bindRichPaste } from "../core/rich-paste.js";
 
 const EXPORT_PAGES = 20;
 
@@ -33,6 +34,7 @@ export function renderGroup(root, id) {
     const notice = h("div");
     const typing = h("div", { class: "typing", role: "status" });
     const input = h("textarea", { rows: "1", "aria-label": t("dm.placeholder", { name: title }), placeholder: t("dm.placeholder", { name: title }), enterkeyhint: "send" });
+    bindRichPaste(input); // formatted paste keeps its formatting as markdown
     const sendButton = h("button", { class: "send", type: "submit", "aria-label": t("chat.send") }, icon("send"));
     const { button: attachButton, picker } = attachControls(async file => {
         try {

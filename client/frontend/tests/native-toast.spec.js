@@ -105,7 +105,8 @@ test("a quick reply never replaces an unsent draft", async ({ page }) => {
     await page.evaluate(token => {
         for (const fn of window.__events.native_toast_activation) fn({ token, action: "reply", conversation: "one|dm:alice-uid", reply: "pong" });
     }, request.token);
-    await expect(page.locator("#chat-text")).toHaveValue("half-written thought pong");
+    // The multi-line composer keeps the appended reply on its own line.
+    await expect(page.locator("#chat-text")).toHaveValue("half-written thought\npong");
     expect(await page.evaluate(() => window.__calls.some(([, args]) => JSON.stringify(args).includes("pong")))).toBe(false);
 });
 

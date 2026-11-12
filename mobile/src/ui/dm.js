@@ -24,6 +24,7 @@ import { aboutEncryption, confirmIdentityChange, encryptionBadge, secureBanner, 
 import { dmEntry } from "../core/search.js";
 import { chatSearch } from "./chat-search.js";
 import { DISAPPEAR_OPTIONS, durationLabel } from "../core/disappearing.js";
+import { bindRichPaste } from "../core/rich-paste.js";
 
 export function renderDM(root, peer) {
     const session = app.session;
@@ -37,6 +38,7 @@ export function renderDM(root, peer) {
     const deviceNotice = h("div");
     const typing = h("div", { class: "typing", role: "status" });
     const input = h("textarea", { rows: "1", "aria-label": t("dm.placeholder", { name }), placeholder: t("dm.placeholder", { name }), enterkeyhint: "send" });
+    bindRichPaste(input); // formatted paste keeps its formatting as markdown
     const sendButton = h("button", { class: "send", type: "submit", "aria-label": t("chat.send") }, icon("send"));
     // The attach sheet (file, photo, camera) of composer-extras.js; DM files live
     // in the server-wide scope (channel 0), as on the desktop.

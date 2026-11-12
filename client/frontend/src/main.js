@@ -2253,7 +2253,11 @@ async function sendChat() {
 }
 
 $("chat-send").onclick = sendChat;
-$("chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+$("chat-text").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+    e.preventDefault();
+    sendChat();
+});
 
 // ---------------------------------------------------------------------------
 // Voice
