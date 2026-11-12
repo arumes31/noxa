@@ -38,8 +38,10 @@ type LoginFailureLimiterConfig struct {
 
 // LoginFailureLimiter bounds failed-login state. It has no background
 // goroutine: every operation prunes expired state while holding the mutex.
-// Active lockouts are never evicted to make capacity pressure unable to bypass
-// an existing lockout.
+// Active principal lockouts are never evicted, so capacity pressure cannot
+// reopen password guessing for an account. Source-only lockouts are evicted
+// (oldest first) once nothing else can make room: otherwise one attacker with
+// enough addresses could fill the table and lock every new source out.
 type LoginFailureLimiter struct {
 	mu sync.Mutex
 
@@ -109,7 +111,23 @@ func NewLoginFailureLimiter(cfg LoginFailureLimiterConfig) *LoginFailureLimiter 
 func LoginFailureScope(source, principal string) string {
 	source = strings.ToLower(strings.TrimSpace(source))
 	digest := sha256.Sum256([]byte(source + "\x00" + principal))
+	if principal == "" {
+		return sourceScopePrefix + hex.EncodeToString(digest[:])
+	}
 	return hex.EncodeToString(digest[:])
+}
+
+// sourceScopePrefix marks a scope without a principal, whose lockout may be
+// evicted under capacity pressure (see LoginFailureLimiter).
+const sourceScopePrefix = "s:"
+
+// evictableLocked reports whether entry may be dropped to make room: idle
+// failure streaks always, active lockouts only for source-only scopes.
+func evictableLocked(scope string, entry loginFailureEntry, now time.Time) bool {
+	if entry.inFlight {
+		return false
+	}
+	return !entry.lockedUntil.After(now) || strings.HasPrefix(scope, sourceScopePrefix)
 }
 
 // Reserve atomically checks scopes, reserves their per-scope verification slots,
@@ -327,7 +345,7 @@ func (l *LoginFailureLimiter) scopesAvailableLocked(scopes []string, protectedSc
 		if _, protected := protectedScopes[scope]; protected {
 			continue
 		}
-		if !entry.inFlight && !entry.lockedUntil.After(now) {
+		if evictableLocked(scope, entry, now) {
 			available++
 		}
 	}
@@ -335,8 +353,8 @@ func (l *LoginFailureLimiter) scopesAvailableLocked(scopes []string, protectedSc
 		l.overflowUntil = time.Time{}
 		return true
 	}
-	// All bounded slots hold active lockouts or KDF work. Fail closed for new
-	// scopes until a slot naturally becomes available.
+	// All bounded slots hold principal lockouts or KDF work. Fail closed for
+	// new scopes until a slot naturally becomes available.
 	l.overflowUntil = now.Add(l.lockoutDuration)
 	return false
 }
@@ -358,8 +376,8 @@ func (l *LoginFailureLimiter) pruneExpiredLocked(now time.Time) {
 
 func (l *LoginFailureLimiter) evictableCapacityLocked(now time.Time) int {
 	available := l.maxEntries - len(l.entries)
-	for _, entry := range l.entries {
-		if !entry.inFlight && !entry.lockedUntil.After(now) {
+	for scope, entry := range l.entries {
+		if evictableLocked(scope, entry, now) {
 			available++
 		}
 	}
@@ -374,20 +392,27 @@ func (l *LoginFailureLimiter) clearOverflowWhenEvictableLocked(now time.Time) {
 
 func (l *LoginFailureLimiter) makeRoomLocked(now time.Time, needed int, protectedScopes map[string]struct{}) bool {
 	for len(l.entries)+needed > l.maxEntries {
+		// Idle failure streaks go first (oldest failure); only then the
+		// source lockout that expires soonest.
 		var (
-			oldestScope string
-			oldestTime  time.Time
+			oldestScope  string
+			oldestTime   time.Time
+			oldestLocked bool
 		)
 		for scope, entry := range l.entries {
 			if _, protected := protectedScopes[scope]; protected {
 				continue
 			}
-			if entry.inFlight || entry.lockedUntil.After(now) {
+			if !evictableLocked(scope, entry, now) {
 				continue
 			}
-			if oldestScope == "" || entry.lastFailure.Before(oldestTime) {
-				oldestScope = scope
-				oldestTime = entry.lastFailure
+			locked := entry.lockedUntil.After(now)
+			at := entry.lastFailure
+			if locked {
+				at = entry.lockedUntil
+			}
+			if oldestScope == "" || (oldestLocked && !locked) || (oldestLocked == locked && at.Before(oldestTime)) {
+				oldestScope, oldestTime, oldestLocked = scope, at, locked
 			}
 		}
 		if oldestScope == "" {

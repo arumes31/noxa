@@ -169,7 +169,8 @@ func TestRoleGRPCLoginLimitsAndLegacyMutationRejection(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := c.Authenticate(roleAuthCtx(t, "integration", "pw"), &noxav1.AuthenticateRequest{Username: "locked", Password: "pw"}); status.Code(err) != codes.Unauthenticated {
+	// A locked account is retryable later, not "invalid credentials" (#19).
+	if _, err := c.Authenticate(roleAuthCtx(t, "integration", "pw"), &noxav1.AuthenticateRequest{Username: "locked", Password: "pw"}); status.Code(err) != codes.ResourceExhausted {
 		t.Fatal(err)
 	}
 	if calls.Load() != 2 {

@@ -1,6 +1,7 @@
 package query
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"noxa/internal/auth"
 )
 
 // startSSHQuery starts an SSH ServerQuery front end on an ephemeral port and
@@ -276,5 +279,53 @@ func TestSSHClosesChannelWithoutShellOrExec(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("idle session channel was not closed")
+	}
+}
+
+// Unauthenticated SSH handshakes are capped per source and never take one
+// of the shared ServerQuery slots (audit #18).
+func TestSSHHandshakesDoNotTakeQuerySlots(t *testing.T) {
+	base := New("", nil, &roleQueryBackend{})
+	srv := NewSSH("", "", base)
+	var conns []net.Conn
+	for range maxSSHHandshakesPerSource + 1 {
+		a, b := net.Pipe()
+		t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
+		conns = append(conns, a)
+	}
+	for i := range maxSSHHandshakesPerSource {
+		if !srv.beginHandshake(conns[i]) {
+			t.Fatalf("handshake %d within the per-source cap refused", i)
+		}
+	}
+	if srv.beginHandshake(conns[maxSSHHandshakesPerSource]) {
+		t.Fatal("handshake beyond the per-source cap admitted")
+	}
+	base.mu.Lock()
+	taken := len(base.conns)
+	base.mu.Unlock()
+	if taken != 0 {
+		t.Fatalf("pending handshakes took %d ServerQuery slots", taken)
+	}
+	srv.endHandshake(conns[0])
+	srv.endHandshake(conns[0]) // idempotent
+	if !srv.beginHandshake(conns[maxSSHHandshakesPerSource]) {
+		t.Fatal("a released handshake slot was not reusable")
+	}
+}
+
+// A `login` typed inside an SSH session counts against the SSH limiter
+// namespace, not the loopback raw port's (CodeRabbit on #308).
+func TestSSHSessionLoginUsesSSHLimiterNamespace(t *testing.T) {
+	s := New("", nil, &roleQueryBackend{})
+	s.MaxLoginFailures = 1
+	var out bytes.Buffer
+	sess := &session{w: &out, remoteIP: "192.0.2.5", sshModelRequired: true, sshModelAccepted: true}
+	s.execute(t.Context(), sess, "login integration wrong authorization_model=roles-v1")
+	if s.LoginAllowed(auth.LoginFailureScope("ssh", "integration")) {
+		t.Fatal("SSH-session login failure was not counted in the ssh namespace")
+	}
+	if !s.LoginAllowed(auth.LoginFailureScope("query", "integration")) {
+		t.Fatal("SSH-session login failure locked the raw ServerQuery namespace")
 	}
 }

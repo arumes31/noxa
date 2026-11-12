@@ -62,6 +62,12 @@ type SSHServer struct {
 
 	mu    sync.Mutex
 	conns map[net.Conn]struct{}
+	// handshaking holds connections that have not authenticated yet, keyed
+	// to their source; pendingBySource counts them per source. They never
+	// take a ServerQuery slot, so idle handshakes cannot lock the local
+	// admin port out.
+	handshaking     map[net.Conn]string
+	pendingBySource map[string]int
 
 	// channels counts accepted session channels across all connections.
 	channels atomic.Int64
@@ -72,12 +78,14 @@ type SSHServer struct {
 // NewSSH constructs an SSH transport in front of base.
 func NewSSH(addr, hostKeyPath string, base *Server) *SSHServer {
 	return &SSHServer{
-		base:        base,
-		logger:      base.logger,
-		Addr:        addr,
-		HostKeyPath: hostKeyPath,
-		stopCh:      make(chan struct{}),
-		conns:       make(map[net.Conn]struct{}),
+		base:            base,
+		logger:          base.logger,
+		Addr:            addr,
+		HostKeyPath:     hostKeyPath,
+		stopCh:          make(chan struct{}),
+		conns:           make(map[net.Conn]struct{}),
+		handshaking:     make(map[net.Conn]string),
+		pendingBySource: make(map[string]int),
 	}
 }
 
@@ -129,8 +137,8 @@ func (s *SSHServer) Start(ctx context.Context) error {
 			_ = conn.Close()
 			continue
 		}
-		if !s.base.registerConn(conn) {
-			s.logger.Warn("query ssh connection refused: too many connections",
+		if !s.beginHandshake(conn) {
+			s.logger.Warn("query ssh connection refused: too many pending handshakes",
 				zap.String("remote", conn.RemoteAddr().String()))
 			_ = conn.Close()
 			continue
@@ -139,10 +147,43 @@ func (s *SSHServer) Start(ctx context.Context) error {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			defer s.base.unregisterConn(conn)
+			defer s.endHandshake(conn)
 			defer s.track(conn, false)
 			s.serve(ctx, conn, cfg)
 		}()
+	}
+}
+
+// Unauthenticated SSH handshakes allowed at once, per source and in total.
+const (
+	maxSSHHandshakesPerSource = 2
+	maxSSHHandshakes          = 16
+)
+
+// beginHandshake admits an unauthenticated connection within the handshake
+// caps; endHandshake (idempotent) releases it.
+func (s *SSHServer) beginHandshake(conn net.Conn) bool {
+	source := auth.SourceAddressKey(hostOnly(conn.RemoteAddr().String()))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.handshaking) >= maxSSHHandshakes || s.pendingBySource[source] >= maxSSHHandshakesPerSource {
+		return false
+	}
+	s.handshaking[conn] = source
+	s.pendingBySource[source]++
+	return true
+}
+
+func (s *SSHServer) endHandshake(conn net.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	source, ok := s.handshaking[conn]
+	if !ok {
+		return
+	}
+	delete(s.handshaking, conn)
+	if s.pendingBySource[source]--; s.pendingBySource[source] <= 0 {
+		delete(s.pendingBySource, source)
 	}
 }
 
@@ -183,8 +224,8 @@ func (s *SSHServer) passwordCallback(ctx context.Context, principal *auth.Integr
 	authFailed := errors.New("invalid loginname or password")
 	return func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 		ip := hostOnly(meta.RemoteAddr().String())
-		sourceScope := auth.LoginFailureScope("ssh:"+ip, "")
-		principalScope := auth.LoginFailureScope("", meta.User())
+		sourceScope := auth.LoginFailureScope("ssh:"+auth.SourceAddressKey(ip), "")
+		principalScope := auth.LoginFailureScope("ssh", meta.User())
 		attempt, allowed := s.base.ReserveLoginAttempt(sourceScope, principalScope)
 		if !allowed {
 			s.base.RecordAuthFailure("ssh", "locked_out")
@@ -237,6 +278,7 @@ func (s *SSHServer) serve(ctx context.Context, nConn net.Conn, cfg *ssh.ServerCo
 		}
 		return
 	}
+	s.endHandshake(nConn)
 	if err != nil {
 		s.logger.Debug("query ssh handshake failed",
 			zap.String("remote", nConn.RemoteAddr().String()), zap.Error(err))
@@ -247,6 +289,13 @@ func (s *SSHServer) serve(ctx context.Context, nConn net.Conn, cfg *ssh.ServerCo
 			s.logger.Debug("closing query ssh connection failed", zap.Error(err))
 		}
 	}()
+	// Only an authenticated session takes one of the shared ServerQuery slots.
+	if !s.base.registerConn(nConn) {
+		s.logger.Warn("query ssh connection refused: too many connections",
+			zap.String("remote", nConn.RemoteAddr().String()))
+		return
+	}
+	defer s.base.unregisterConn(nConn)
 	go ssh.DiscardRequests(globalReqs)
 
 	s.logger.Info("query ssh client logged in",

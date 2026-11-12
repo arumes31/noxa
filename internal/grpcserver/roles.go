@@ -87,11 +87,14 @@ func (s *Server) authenticateRoleIntegration(ctx context.Context, backend query.
 	}
 	// Match the existing loopback listener's per-principal limiter. One local
 	// process must not lock every integration out via their shared source IP.
-	scope := auth.LoginFailureScope("", identifier)
+	scope := auth.LoginFailureScope("grpc", identifier)
 	attempt, allowed := s.limiter.ReserveLoginAttempt(scope)
 	if !allowed {
+		// Locked out, or another call for this integration is verifying right
+		// now: both pass with time, so the caller gets a retryable error
+		// instead of "invalid credentials" (like /events answers 429).
 		s.recordAuthFailure("locked_out")
-		return auth.IntegrationPrincipal{}, auth.ErrIntegrationDenied
+		return auth.IntegrationPrincipal{}, errIntegrationLoginBusy
 	}
 	defer attempt.Cancel()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -157,8 +160,13 @@ func roleChangeFromProto(req *noxav1.ChangeRolesRequest) authorization.RoleChang
 	return change
 }
 
+// errIntegrationLoginBusy reports a login the limiter did not admit.
+var errIntegrationLoginBusy = errors.New("integration login busy or locked")
+
 func roleStatus(err error) error {
 	switch {
+	case errors.Is(err, errIntegrationLoginBusy):
+		return status.Error(codes.ResourceExhausted, "too many authentication attempts; retry later")
 	case errors.Is(err, auth.ErrIntegrationDenied):
 		return status.Error(codes.Unauthenticated, "invalid integration credentials")
 	case errors.Is(err, authorization.ErrRoleForbidden):
