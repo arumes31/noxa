@@ -280,7 +280,7 @@ export class MediaKeyEngine {
     // held keys): no longer recipients, and the next epoch is fresh, never
     // their derived successor.
     #revoked = new Set();
-    // Devices that received a key this session.
+    // Devices that received (or may have received) a key this session.
     #keyed = new Set();
     #rosterAt = 0; #settle = 0; #mismatch = [];
 
@@ -679,9 +679,11 @@ export class MediaKeyEngine {
             const tally = this.#deliveries.get(epoch);
             const reason = String(result?.error?.code || result?.error?.message || result?.code || (typeof result?.error === "string" ? result.error : "") || result?.reason || "failed");
             if (tally) { if (result?.ok) { tally.ok.add(id); tally.failed.delete(id); } else tally.failed.set(id, reason); }
-            if (result?.ok) this.#keyed.add(id);
+            // A timed-out send may still be delivered: count it as a held key.
+            if (result?.ok || reason === "timeout") this.#keyed.add(id);
             // Untrusted without ever holding a key (a device still waiting for
-            // approval) is retried like any failure: it has nothing to ratchet.
+            // approval fails its trust check before any send) is retried like
+            // any failure: it has nothing to ratchet.
             if (!result?.ok && (reason === "revoked" || (reason === "untrusted_device" && this.#keyed.has(id)))) {
                 // A revoked device could derive the next ratchet epoch itself:
                 // drop it, never retry it, and rekey with a fresh epoch.
