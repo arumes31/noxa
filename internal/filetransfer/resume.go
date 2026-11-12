@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"noxa/internal/store"
 )
 
 const (
@@ -132,7 +134,14 @@ func (s *Server) InitResumableUpload(ctx context.Context, channelID int64, folde
 		return "", "", 0, false, err
 	}
 	path := resumablePartialPath(channelID, cleanFolder, cleanName, uploader, size, sum)
-	offset, resumable := s.partialOffset(channelID, path, uploader, size, uploaderQuotaMB)
+	// A stored file already sitting at the partial's path (planted before
+	// partial names were refused) is never resumed into, and checked before
+	// partialOffset, which may remove the path.
+	var offset int64
+	resumable := false
+	if !s.partialIsStoredFile(ctx, channelID, cleanFolder, path) {
+		offset, resumable = s.partialOffset(channelID, path, uploader, size, uploaderQuotaMB)
+	}
 	var complete func(*transfer)
 	if resumable {
 		complete = func(tr *transfer) { tr.SHA256, tr.PartialPath = sum, path }
@@ -148,6 +157,14 @@ func (s *Server) InitResumableUpload(ctx context.Context, channelID int64, folde
 		return id, token, 0, false, nil
 	}
 	return id, token, offset, true, nil
+}
+
+// partialIsStoredFile reports whether a files row names the partial's path.
+// Such a path may be a dedup hard link to another member's blob, so writing
+// to it would rewrite that member's file. A lookup error counts as stored.
+func (s *Server) partialIsStoredFile(ctx context.Context, channelID int64, folder, path string) bool {
+	_, err := s.store.GetFile(ctx, channelID, folder, filepath.Base(path))
+	return !errors.Is(err, store.ErrFileNotFound)
 }
 
 // partialOffset reports the bytes already held for path and whether this

@@ -4856,6 +4856,7 @@ function toggleEmojiPanel(target = null) {
 // Metadata and raster thumbnails are fetched by the connected server only.
 
 const linkCards = new Map(); // url -> {title: string | null}
+const LINK_CARDS_MAX = 200;
 let linkCardEl = null;
 let linkCardTimer = null;
 let linkCardGeneration = 0;
@@ -4897,7 +4898,11 @@ async function linkPreview(url, controller) {
             }
         }
     } catch { /* unavailable: domain-only card, never a direct HTTP fallback */ }
-    if (!controller.signal.aborted && exportScopeIsCurrent(owner)) linkCards.set(url, card);
+    if (!controller.signal.aborted && exportScopeIsCurrent(owner)) {
+        linkCards.set(url, card);
+        // Thumbnails are data URLs; keep the newest 200 like the PWA does.
+        if (linkCards.size > LINK_CARDS_MAX) linkCards.delete(linkCards.keys().next().value);
+    }
     return card;
 }
 

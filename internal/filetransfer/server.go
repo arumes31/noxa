@@ -372,7 +372,7 @@ func (s *Server) initUpload(ctx context.Context, channelID int64, folder, name s
 	if s.channelDeleted(channelID) {
 		return "", "", ErrChannelDeleted
 	}
-	name, err := sanitizeName(name)
+	name, err := creatableName(name)
 	if err != nil {
 		return "", "", err
 	}
@@ -574,7 +574,7 @@ func (s *Server) MoveFile(ctx context.Context, channelID int64, folder, name str
 	if err != nil {
 		return err
 	}
-	newName, err = sanitizeName(newName)
+	newName, err = creatableName(newName)
 	if err != nil {
 		return err
 	}
@@ -1132,6 +1132,22 @@ func sanitizeName(name string) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrInvalidName, name)
 	}
 	if isDOSDeviceName(name) {
+		return "", fmt.Errorf("%w: %q", ErrInvalidName, name)
+	}
+	return name, nil
+}
+
+// creatableName is sanitizeName for a name a file is created or renamed to.
+// It also refuses the upload-partial namespace: a stored file named like a
+// partial could be hard-linked (dedup) to another member's blob and then be
+// truncated and rewritten by a resume. Existing files keep working through
+// sanitizeName, so they can still be downloaded and deleted.
+func creatableName(name string) (string, error) {
+	name, err := sanitizeName(name)
+	if err != nil {
+		return "", err
+	}
+	if isResumablePartialName(name) || isLegacyPartialName(name) {
 		return "", fmt.Errorf("%w: %q", ErrInvalidName, name)
 	}
 	return name, nil

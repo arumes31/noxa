@@ -1,10 +1,13 @@
 package filetransfer
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"noxa/internal/store"
 )
 
 func caseInsensitiveRoot(t *testing.T) *os.Root {
@@ -95,5 +98,36 @@ func TestBlobAliasDetectsDifferentlySpelledFolder(t *testing.T) {
 	}
 	if body, _ := root.ReadFile(filepath.Join("7", "docs", "report.pdf")); string(body) != "victim" {
 		t.Fatalf("victim blob replaced: %q", body)
+	}
+}
+
+// An upload refused as an alias must not have rotated the current file away
+// first (audit #20): the folder "docs" sits on disk as "Docs".
+func TestRefusedAliasUploadKeepsTheCurrentFile(t *testing.T) {
+	fs := newFakeFileStore()
+	addr, s := startServer(t, fs)
+	probe := filepath.Join(s.cfg.RootDir, "probe")
+	if err := os.WriteFile(probe, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(s.cfg.RootDir, "PROBE")); err != nil {
+		t.Skip("storage directory is case-sensitive")
+	}
+	if err := os.MkdirAll(filepath.Join(s.cfg.RootDir, "7", "Docs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.cfg.RootDir, "7", "Docs", "a.txt"), []byte("current"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = fs.AddFile(context.Background(), store.FileRecord{ChannelID: 7, Folder: "docs", Name: "a.txt", Size: 7, SHA256: sha256Hex([]byte("current")), Uploader: "uid-1"})
+
+	if st := uploadStatus(t, addr, s, "docs", "a.txt", []byte("replacement")); st.OK {
+		t.Fatal("aliasing upload succeeded")
+	}
+	if _, err := fs.GetFile(context.Background(), 7, "docs", "a.txt"); err != nil {
+		t.Fatalf("current row moved by a refused upload: %v", err)
+	}
+	if _, err := fs.GetFile(context.Background(), 7, "docs", "a.txt.v1"); err == nil {
+		t.Fatal("refused upload rotated the current file to .v1")
 	}
 }

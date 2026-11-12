@@ -5,6 +5,7 @@ package filetransfer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -216,5 +217,113 @@ func TestDownloadLinkRejectsSymlinkSwap(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "outside secret") {
 		t.Fatal("download link disclosed a symlink target outside the file root")
+	}
+}
+
+// uploadStatus uploads content and returns the server's final status.
+func uploadStatus(t *testing.T, addr string, s *Server, folder, name string, content []byte) statusMsg {
+	t.Helper()
+	id, token, err := s.InitUpload(context.Background(), 7, folder, name, int64(len(content)), "uid-1", 0)
+	if err != nil {
+		t.Fatalf("InitUpload %s/%s: %v", folder, name, err)
+	}
+	conn := dialTransfer(t, addr, id, token)
+	defer func() { _ = conn.Close() }()
+	if err := netproto.WriteFrame(conn, &netproto.Frame{Type: frameChunk, Payload: content}); err != nil {
+		t.Fatalf("write chunk: %v", err)
+	}
+	if err := writeJSON(conn, frameDigest, digestMsg{SHA256: sha256Hex(content)}); err != nil {
+		t.Fatalf("write digest: %v", err)
+	}
+	return readStatus(t, conn)
+}
+
+// A blob rename the OS refuses during version rotation (a file held open on
+// Windows) must not leave the row and the blob apart (audit #10): the row is
+// moved back and the upload fails, so the current version stays reachable.
+func TestVersionRotationRollsBackWhenTheDiskRenameFails(t *testing.T) {
+	fs := newFakeFileStore()
+	addr, s := startServer(t, fs)
+	uploadOne(t, addr, s, "", "log.txt", []byte("version-1"))
+
+	orig := rotateRename
+	rotateRename = func(*os.Root, string, string) error { return errors.New("file in use") }
+	t.Cleanup(func() { rotateRename = orig })
+
+	if st := uploadStatus(t, addr, s, "", "log.txt", []byte("version-2")); st.OK {
+		t.Fatal("upload succeeded although rotation failed")
+	}
+	if _, err := fs.GetFile(context.Background(), 7, "", "log.txt"); err != nil {
+		t.Fatalf("current row lost: %v", err)
+	}
+	if _, err := fs.GetFile(context.Background(), 7, "", "log.txt.v1"); err == nil {
+		t.Fatal("row rotated to .v1 although its blob was not")
+	}
+	raw, err := os.ReadFile(filepath.Join(s.cfg.RootDir, "7", "log.txt"))
+	if err != nil || string(raw) != "version-1" {
+		t.Fatalf("current blob = %q, %v", raw, err)
+	}
+}
+
+// A rotation step that fails after earlier steps succeeded restores every
+// version, including the oldest one set aside (CodeRabbit on #309).
+func TestFailedRotationRestoresEveryVersion(t *testing.T) {
+	fs := newFakeFileStore()
+	addr, s := startServer(t, fs)
+	for i := 1; i <= 4; i++ { // log.txt + .v1..v3: rotation is full
+		uploadOne(t, addr, s, "", "log.txt", []byte(fmt.Sprintf("version-%d", i)))
+	}
+
+	orig := rotateRename
+	rotateRename = func(root *os.Root, oldPath, newPath string) error {
+		if filepath.Base(oldPath) == "log.txt" { // the last step fails
+			return errors.New("file in use")
+		}
+		return orig(root, oldPath, newPath)
+	}
+	t.Cleanup(func() { rotateRename = orig })
+
+	if st := uploadStatus(t, addr, s, "", "log.txt", []byte("version-5")); st.OK {
+		t.Fatal("upload succeeded although rotation failed")
+	}
+	for name, want := range map[string]string{"log.txt": "version-4", "log.txt.v1": "version-3", "log.txt.v2": "version-2", "log.txt.v3": "version-1"} {
+		if _, err := fs.GetFile(context.Background(), 7, "", name); err != nil {
+			t.Fatalf("row %s lost: %v", name, err)
+		}
+		raw, err := os.ReadFile(filepath.Join(s.cfg.RootDir, "7", name))
+		if err != nil || string(raw) != want {
+			t.Fatalf("%s = %q, %v; want %q", name, raw, err, want)
+		}
+	}
+	entries, _ := os.ReadDir(filepath.Join(s.cfg.RootDir, "7"))
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".rotating-") {
+			t.Fatalf("set-aside version left behind: %s", e.Name())
+		}
+	}
+}
+
+// A row that cannot be written after the new blob was published undoes the
+// rotation, so the previous file is current again (CodeRabbit on #309).
+func TestFailedPublishRestoresThePreviousFile(t *testing.T) {
+	fs := newFakeFileStore()
+	addr, s := startServer(t, fs)
+	uploadOne(t, addr, s, "", "log.txt", []byte("version-1"))
+
+	fs.mu.Lock()
+	fs.addErr = errors.New("database unavailable")
+	fs.mu.Unlock()
+	if st := uploadStatus(t, addr, s, "", "log.txt", []byte("version-2")); st.OK {
+		t.Fatal("upload succeeded although its row was not written")
+	}
+	if _, err := fs.GetFile(context.Background(), 7, "", "log.txt"); err != nil {
+		t.Fatalf("current row lost: %v", err)
+	}
+	if _, err := fs.GetFile(context.Background(), 7, "", "log.txt.v1"); err == nil {
+		t.Fatal("rotation kept although the upload failed")
+	}
+	raw, err := os.ReadFile(filepath.Join(s.cfg.RootDir, "7", "log.txt"))
+	if err != nil || string(raw) != "version-1" {
+		t.Fatalf("current blob = %q, %v", raw, err)
 	}
 }
