@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"go.uber.org/zap"
@@ -180,5 +181,8 @@ func TestIntegrationScopesRespectMemberHierarchy(t *testing.T) {
 	}
 	if err := set(botUID); err != nil {
 		t.Fatalf("narrow own scopes: %v", err)
+	}
+	if state, err := a.GetIntegrationScopes(t.Context(), botUID); err != nil || state.UniqueID != botUID || state.Full || !slices.Equal(state.Scopes, []string{auth.ScopeServerRead}) {
+		t.Fatalf("own scopes after narrowing = %+v, %v", state, err)
 	}
 }
