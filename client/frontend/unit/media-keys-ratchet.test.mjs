@@ -330,3 +330,74 @@ test("a legacy session sharing a ratchet-capable device blocks the ratchet", asy
     assert.ok(sent.at(-1).body.epoch >= first + 2, "fresh: the legacy session did not pre-derive");
     e.stop();
 });
+
+test("a revoked device is dropped and the next epoch is fresh, never its derived successor (audit #12)", async () => {
+    const media = fakeMedia();
+    const sent = [];
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, activateMaxWaitMs: Infinity,
+        send: async c => { sent.push(c); return c.principal === "u2" ? { ok: false, error: { code: "revoked" } } : { ok: true }; } });
+    const roster = [member("c1", "u1", "d1"), member("c2", "u2", "d2")];
+    e.setRoster(roster);
+    e.start({ ...me, principal: "u-rev", device: "d-rev" });
+    try {
+    await flush();
+    announce(e, "c1", "u1", "d1", 8_200_000_000_000); announce(e, "c2", "u2", "d2", 8_200_000_000_000);
+    await flush(60);
+    const first = sent[0].body;
+    const later = sent.filter(c => c.body.epoch !== first.epoch);
+    assert.ok(later.length > 0, "the revocation forced a new epoch");
+    assert.deepEqual([...new Set(later.map(c => c.device))], ["d1"], "the revoked device gets nothing more");
+    const next = later[0].body;
+    assert.ok(next.epoch >= first.epoch + 2, "a fresh epoch, not the reserved successor number");
+    const successor = await ratchetKeys(keysOf(first));
+    assert.notDeepEqual(unb64(next.data.keys.mic), [...successor.mic], "not derivable from the revoked device's key");
+    // A later roster update does not bring the revoked device back.
+    const before = sent.length;
+    e.setRoster([...roster, member("c3", "u3", "d3")]);
+    await flush(60);
+    assert.ok(sent.slice(before).every(c => c.device !== "d2"));
+    } finally { e.stop(); }
+});
+
+test("a device revoked after it held ratchet keys never sees a key derived from them (audit #12)", async () => {
+    const media = fakeMedia();
+    const sent = [];
+    let revoked = false;
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, activateMaxWaitMs: Infinity,
+        send: async c => { sent.push(c); return revoked && c.principal === "u2" ? { ok: false, error: { code: "revoked" } } : { ok: true }; } });
+    const roster = [member("c1", "u1", "d1"), member("c2", "u2", "d2"), member("c3", "u3", "d3")];
+    e.setRoster(roster);
+    e.start({ ...me, principal: "u-rev2", device: "d-rev2" });
+    try {
+        await flush();
+        announce(e, "c1", "u1", "d1", 8_300_000_000_000); announce(e, "c2", "u2", "d2", 8_300_000_000_000);
+        announce(e, "c3", "u3", "d3", 8_300_000_000_000);
+        await flush(60);
+        // d2 holds this epoch and announced ratchet support: a join ratchets.
+        e.setRoster([...roster, member("c4", "u4", "d4")]);
+        await flush(60);
+        assert.ok(sent.some(c => c.device === "d2"), "d2 received keys before its revocation");
+        // The revocation surfaces during a membership rekey.
+        revoked = true;
+        const mark = sent.length;
+        e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2"), member("c4", "u4", "d4")]);
+        await flush(80);
+        e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2"), member("c4", "u4", "d4"), member("c5", "u5", "d5")]);
+        await flush(80);
+        const after = sent.slice(mark);
+        // Conservative: every key ever addressed to d2, delivered or refused.
+        const derived = [];
+        for (const c of sent.filter(c => c.device === "d2")) {
+            let cur = keysOf(c.body);
+            for (let i = 0; i < 4; i++) { cur = await ratchetKeys(cur); derived.push([...cur.mic]); }
+        }
+        const failedEpoch = Math.max(...after.filter(c => c.device === "d2").map(c => c.body.epoch));
+        const later = after.filter(c => c.device !== "d2" && c.body.epoch > failedEpoch);
+        assert.ok(later.length > 0, "keys were distributed after the revocation");
+        assert.ok(after.every(c => c.device !== "d2" || c.body.epoch <= failedEpoch), "nothing more reaches d2");
+        for (const c of later) {
+            const mic = unb64(c.body.data.keys.mic);
+            assert.ok(!derived.some(d => d.every((v, i) => v === mic[i])), `epoch ${c.body.epoch} derives from keys d2 held`);
+        }
+    } finally { e.stop(); }
+});

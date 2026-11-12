@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"noxa/internal/netproto"
 )
 
 func TestRatchetBodyDisappearingReadsOnlyValidFields(t *testing.T) {
@@ -147,7 +149,7 @@ func TestDisappearingMessagesStartOnDisplayAndExpireLocally(t *testing.T) {
 	if _, ok := pending[ratchetSemanticKey("me", "m1")]; !ok {
 		t.Fatalf("pending redactions: %v", pending)
 	}
-	a.markRedactedWith(store, map[string]bool{ratchetSemanticKey("bob", "b1"): true})
+	a.markRedactedWith(store, map[string]bool{ratchetSemanticKey("bob", "b1"): true}, a.dmDisappear.reopened.Load())
 	if pending = a.pendingRedactionsWith(store); len(pending) != 1 {
 		t.Fatalf("after marking: %v", pending)
 	}
@@ -256,5 +258,59 @@ func TestDisappearingStoreNeverCreatesAnIdentity(t *testing.T) {
 	})
 	if len(files) != 0 {
 		t.Fatalf("sweeper created identity files: %v", files)
+	}
+}
+
+// Audit #11: a late edit of an expired, redacted message stored new archive
+// text, so the message goes back on the redaction list.
+func TestLateEditOfExpiredMessageIsRedactedAgain(t *testing.T) {
+	a, store := disappearingTestApp(t)
+	if msg := a.dmHistoryAppendWith(store, "bob", "Bob", DMEntry{FromUniqueID: "bob", Body: "", ClientMsgID: "b1", SentAt: 1, TTL: 60,
+		Protocol: ratchetProtocol, Archive: "srv-b", Deleted: true, Expired: true, Redacted: true}); msg != "" {
+		t.Fatal(msg)
+	}
+	if pending := a.pendingRedactionsWith(store); len(pending) != 0 {
+		t.Fatalf("redacted entry still pending: %v", pending)
+	}
+	e := DMEntry{Expired: true, Redacted: true}
+	if reopenRedactionForLateEdit(&e, netproto.DMActionDelete) || !e.Redacted {
+		t.Fatal("a delete reopened redaction")
+	}
+	if !reopenRedactionForLateEdit(&e, netproto.DMActionEdit) || e.Redacted {
+		t.Fatal("a late edit did not reopen redaction")
+	}
+	if live := (DMEntry{Redacted: false}); reopenRedactionForLateEdit(&live, netproto.DMActionEdit) {
+		t.Fatal("an unexpired message was marked")
+	}
+	// Still waiting for redaction: a scan running now may predate the edit.
+	if waiting := (DMEntry{Expired: true}); !reopenRedactionForLateEdit(&waiting, netproto.DMActionEdit) {
+		t.Fatal("a late edit of an unredacted expired message was not reported")
+	}
+	// The sweep reloads its cached list once reopened.
+	msgs, err := store.messages("bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := dmLog{Peer: "bob", Messages: msgs}
+	reopenRedactionForLateEdit(&l.Messages[0], netproto.DMActionEdit)
+	if err := store.save(l); err != nil {
+		t.Fatal(err)
+	}
+	a.reopenDisappearingRedaction()
+	if pending := a.pendingRedactionsWith(store); pending[ratchetSemanticKey("bob", "b1")] != "srv-b" {
+		t.Fatalf("late edit not pending redaction: %v", pending)
+	}
+	// A redaction whose archive scan predates a later edit must not settle it.
+	gen := a.dmDisappear.reopened.Load()
+	a.dmDisappear.reopened.Add(1)
+	a.markRedactedWith(store, map[string]bool{ratchetSemanticKey("bob", "b1"): true}, gen)
+	a.reopenDisappearingRedaction()
+	if pending := a.pendingRedactionsWith(store); pending[ratchetSemanticKey("bob", "b1")] != "srv-b" {
+		t.Fatalf("a stale redaction settled a late edit: %v", pending)
+	}
+	a.markRedactedWith(store, map[string]bool{ratchetSemanticKey("bob", "b1"): true}, a.dmDisappear.reopened.Load())
+	a.reopenDisappearingRedaction()
+	if pending := a.pendingRedactionsWith(store); len(pending) != 0 {
+		t.Fatalf("a current redaction did not settle: %v", pending)
 	}
 }

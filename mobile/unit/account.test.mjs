@@ -157,6 +157,15 @@ describe("history copy chunks", () => {
         assert.deepEqual(historyMessagesSince(conversations, 1500).map(m => m.client_msg_id), ["m2", "i1"]);
     });
 
+    it("never copies disappearing messages, which would become permanent", () => {
+        const timed = [{ peer: "uid-sam", messages: [
+            { id: "t1", from: "uid-me", self: true, body: "timer", sentAt: 4000, verified: true, ttl: 3600, expiresAt: 7600 },
+            { id: "t2", from: "uid-sam", body: "unread timer", sentAt: 4100, verified: true, ttl: 3600, expiresAt: 0 },
+            { id: "t3", from: "uid-sam", body: "plain", sentAt: 4200, verified: true },
+        ] }];
+        assert.deepEqual(historyMessagesSince(timed, 0).map(m => m.client_msg_id), ["t3"]);
+    });
+
     it("seals chunks the receiving device opens, oldest first", () => {
         const messages = historyMessagesSince(conversations, 0);
         const { chunks, kept } = buildHistoryChunks(messages, target.publicKey, sender.secretKey, { envelope });

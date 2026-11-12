@@ -551,10 +551,15 @@ func (a *App) ReportReadForTab(tabID, scope, id, messageID string) error {
 func (m *connManager) approvePasskeyDevices(conn net.Conn) {
 	m.mu.Lock()
 	due := m.conn == conn && conn != nil && m.supportsDMDevices && !m.isGuest
-	principal, self := m.uniqueID, m.deviceID
+	principal, self, addr := m.uniqueID, m.deviceID, m.addr
 	m.mu.Unlock()
-	if !due || self == "" {
-		return
+	rpHost := passkeyRPHost(addr)
+	if !due || self == "" || rpHost == "" {
+		return // no known relying party: passkey devices need manual approval
+	}
+	pins, ownRevoked, err := m.ownRevocationState(principal)
+	if err != nil {
+		return // an unreadable revocation record must not count as "none"
 	}
 	id, err := m.identity()
 	if err != nil {
@@ -572,9 +577,32 @@ func (m *connManager) approvePasskeyDevices(conn net.Conn) {
 	if err != nil {
 		return
 	}
-	trusted, err := verifyDMDevices(principal, pinned, encryption, directory.Devices)
+	// A revoked device cannot vouch here either (audit #6): not in the
+	// directory chain, and not inside a passkey certificate's own chain.
+	trusted, err := verifyDMDevices(principal, pinned, encryption, withoutRevokedApprovers(directory.Devices, pins, ownRevoked))
 	if err != nil {
 		return
+	}
+	// Signed revocations first listed in this response count as well: pin
+	// them, then walk the chain again without the approvers they revoke.
+	if _, pins, err = m.applyDeviceRevocations(principal, trusted, directory.Revocations); err != nil {
+		return
+	}
+	if trusted, err = verifyDMDevices(principal, pinned, encryption, withoutRevokedApprovers(directory.Devices, pins, ownRevoked)); err != nil {
+		return
+	}
+	trusted = withoutPinnedRevocations(trusted, pins)
+	// Server-revoked devices match by signing key too, so a revoked key cannot
+	// vouch inside a certificate's chain under a new device ID.
+	serverRevoked := map[string]bool{}
+	for _, d := range directory.Devices {
+		if d.RevokedAt != 0 {
+			serverRevoked[d.DeviceID] = true
+			pins = append(pins, signedRevocationPin{DeviceID: d.DeviceID, Ed25519Public: d.Ed25519Public})
+		}
+	}
+	revoked := func(d netproto.DMDevice) bool {
+		return serverRevoked[d.DeviceID] || revokedDevice(d, pins, ownRevoked)
 	}
 	known := map[string]bool{}
 	for _, d := range trusted {
@@ -598,7 +626,7 @@ func (m *connManager) approvePasskeyDevices(conn net.Conn) {
 		if !validClaimedDeviceKeys(target.Ed25519Public, target.X25519Public) {
 			continue
 		}
-		if deviceproof.Verify(principal, pinned, target.Ed25519Public, target.X25519Public, target.PasskeyProof) != nil {
+		if deviceproof.Verify(principal, pinned, target.Ed25519Public, target.X25519Public, target.PasskeyProof, rpHost, revoked) != nil {
 			continue
 		}
 		signature, err := auth.SignChallenge(id.PrivateKey, netproto.DeviceApprovalTranscript(principal, self, target.Ed25519Public, target.X25519Public))
@@ -611,6 +639,22 @@ func (m *connManager) approvePasskeyDevices(conn net.Conn) {
 		}
 		m.forgetDMDevices(principal)
 	}
+}
+
+// passkeyRPHost is the host this desktop dialed, which a passkey
+// certificate's relying-party ID must name. An IP address or an unparsable
+// address yields "": WebAuthn has no IP relying parties, so auto-endorsement
+// stays off and passkey devices need manual approval.
+func passkeyRPHost(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "" || net.ParseIP(host) != nil {
+		return ""
+	}
+	return host
 }
 
 // validClaimedDeviceKeys checks relayed claim keys before the desktop signs

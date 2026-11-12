@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import nacl from "tweetnacl";
 
-import { fromBase64, toBase64 } from "../src/core/crypto.js";
-import { ed25519FromPEM, mergeRevocationPins, revocationTranscript, verifyRevocations, withoutRevokedPins } from "../src/core/dm-trust.js";
+import { fromBase64, publicKeyPEM, toBase64 } from "../src/core/crypto.js";
+import { approvalTranscript, ed25519FromPEM, mergeRevocationPins, revocationTranscript, trustedDevices, verifyRevocations, withoutRevokedApprovers, withoutRevokedPins } from "../src/core/dm-trust.js";
 
 // Signed by Go (internal/netproto/revocation_interop_test.go).
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/revocation.json", import.meta.url)));
@@ -72,4 +72,23 @@ test("pins merge once and drop devices by ID or signing key", () => {
     assert.deepEqual(withoutRevokedPins(devices, first.pins).map(d => d.deviceID), ["dev-desktop"]);
     assert.equal(withoutRevokedPins(devices, []).length, 3);
     assert.ok(fromBase64(first.pins[0].key).length === 32);
+});
+
+test("a revoked device cannot vouch: devices it approved drop out (audit #5)", () => {
+    const principal = "alice";
+    const make = id => { const sign = nacl.sign.keyPair(); return { id, sign, pem: publicKeyPEM(sign.publicKey), x: toBase64(nacl.box.keyPair().publicKey) }; };
+    const root = make("root"), phone = make("phone"), tablet = make("tablet"), laptop = make("laptop");
+    const approve = (d, by) => ({ device_id: d.id, kind: "web", ed25519_public_key: d.pem, x25519_public_key: d.x, approved_by: by.id,
+        approval_signature: toBase64(nacl.sign.detached(approvalTranscript(principal, by.id, d.pem, d.x), by.sign.secretKey)) });
+    const list = [{ device_id: "root", kind: "desktop", first_device: true, ed25519_public_key: root.pem, x25519_public_key: root.x },
+        approve(phone, root), approve(tablet, phone), approve(laptop, root)];
+    const rootX = fromBase64(root.x);
+    assert.deepEqual(trustedDevices(principal, list, root.sign.publicKey, rootX).map(d => d.deviceID), ["root", "phone", "tablet", "laptop"]);
+    const pins = [{ device_id: "phone", key: toBase64(phone.sign.publicKey), signer: "root" }];
+    const reduced = withoutRevokedApprovers(list, pins);
+    const trusted = withoutRevokedPins(trustedDevices(principal, reduced, root.sign.publicKey, rootX), pins);
+    assert.deepEqual(trusted.map(d => d.deviceID), ["root", "laptop"]);
+    // A pin matches by key alone too, and never drops the first device.
+    assert.equal(withoutRevokedApprovers(list, [{ device_id: "renamed", key: toBase64(phone.sign.publicKey) }]).length, 3);
+    assert.equal(withoutRevokedApprovers(list, [{ device_id: "root", key: toBase64(root.sign.publicKey) }]).length, 4);
 });

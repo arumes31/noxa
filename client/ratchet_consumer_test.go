@@ -272,6 +272,24 @@ func TestRatchetDMProjectionMixedLegacy(t *testing.T) {
 	if senders["x1"] != "me" || senders["x2"] != "carl" || len(senders) != 2 {
 		t.Fatalf("legacy senders: %v", senders)
 	}
+	// Audit #7: disappearing messages never travel (the history format has
+	// no timer, so the new device would keep them forever).
+	if err := hs.save(dmLog{Peer: "dana", Messages: []DMEntry{
+		{Self: true, Body: "own timed", SentAt: 60, ClientMsgID: "d1", TTL: 3600, ExpiresAt: 3660},
+		{Body: "unread timed", SentAt: 61, ClientMsgID: "d2", EncVerified: true, EncMode: "e2e", TTL: 3600},
+		{Self: true, Body: "plain", SentAt: 62, ClientMsgID: "d3"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	var dana []string
+	for _, m := range historyMessagesSince(hs, 0, "me") {
+		if m.Peer == "dana" {
+			dana = append(dana, m.ClientMsgID)
+		}
+	}
+	if strings.Join(dana, ",") != "d3" {
+		t.Fatalf("disappearing messages exported: %v", dana)
+	}
 	// Edit/delete routing picks the new-protocol own record.
 	if p, err := app.ownDirectMessageProtocol(cm, "bob", "n1"); err != nil || p != ratchetProtocol {
 		t.Fatal(p, err)

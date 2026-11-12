@@ -32,3 +32,11 @@ export function durationLabel(seconds) {
     if (s >= 60) return Math.floor(s / 60) + "m";
     return s + "s";
 }
+
+/**
+ * A late edit of an expired, already redacted message stored its own readable
+ * archive record, so the message must be redacted again (audit #11).
+ */
+export function lateEditReopensRedaction(message, change) {
+    return change?.action === "edit" && !!message?.expired && !!message?.redacted;
+}

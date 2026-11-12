@@ -15,6 +15,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"slices"
 	"sync"
 
 	"noxa/internal/auth"
@@ -158,6 +159,59 @@ func withoutPinnedRevocations(devices []dmTrustedDevice, pins []signedRevocation
 	return out
 }
 
+// revokedDevice reports whether a pin or a local revocation names a device by
+// ID or signing key. The first device is the account identity itself and is
+// never treated as revoked here: its approvals anchor every other device.
+func revokedDevice(d netproto.DMDevice, pins []signedRevocationPin, ownRevoked []string) bool {
+	if d.FirstDevice {
+		return false
+	}
+	if slices.Contains(ownRevoked, d.DeviceID) {
+		return true
+	}
+	key, keyErr := auth.LoadPublicKey(d.Ed25519Public)
+	for _, p := range pins {
+		if p.DeviceID == d.DeviceID {
+			return true
+		}
+		if pinned, err := auth.LoadPublicKey(p.Ed25519Public); keyErr == nil && err == nil && bytes.Equal(pinned, key) {
+			return true
+		}
+	}
+	return false
+}
+
+// ownRevocationState returns uid's pinned signed revocations and, for this
+// account, the devices revoked from this desktop. Unreadable records are
+// errors: callers must not treat them as "nothing revoked".
+func (m *connManager) ownRevocationState(uid string) ([]signedRevocationPin, []string, error) {
+	var pins []signedRevocationPin
+	if path, err := m.signedRevocationsPath(uid); err == nil {
+		signedRevocationsMu.Lock()
+		r, err := readSignedRevocations(path)
+		signedRevocationsMu.Unlock()
+		if err != nil {
+			return nil, nil, err
+		}
+		pins = r.Pins
+	}
+	ownRevoked, err := m.ownRevokedDevices()
+	return pins, ownRevoked, err
+}
+
+// withoutRevokedApprovers drops revoked devices from a directory listing
+// before the approval chain is walked, so a revoked device cannot vouch for
+// a device the server lists as approved by it.
+func withoutRevokedApprovers(list []netproto.DMDevice, pins []signedRevocationPin, ownRevoked []string) []netproto.DMDevice {
+	out := make([]netproto.DMDevice, 0, len(list))
+	for _, d := range list {
+		if !revokedDevice(d, pins, ownRevoked) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 func trustedForRevocations(devices []dmTrustedDevice) []devicetrust.Device {
 	out := make([]devicetrust.Device, 0, len(devices))
 	for _, d := range devices {
@@ -169,12 +223,13 @@ func trustedForRevocations(devices []dmTrustedDevice) []devicetrust.Device {
 // applyDeviceRevocations verifies the directory's revocations against the
 // verified devices of uid, pins the signed ones, drops every pinned device,
 // records the revocations in the secure-messaging store and tells the
-// frontend about revocations it has not seen yet.
-func (m *connManager) applyDeviceRevocations(uid string, devices []dmTrustedDevice, listed []netproto.DeviceRevocation) ([]dmTrustedDevice, error) {
+// frontend about revocations it has not seen yet. It also returns every pin
+// it applied, for the second chain walk without revoked approvers.
+func (m *connManager) applyDeviceRevocations(uid string, devices []dmTrustedDevice, listed []netproto.DeviceRevocation) ([]dmTrustedDevice, []signedRevocationPin, error) {
 	verified := devicetrust.VerifyRevocations(uid, trustedForRevocations(devices), listed)
 	pins, added, err := m.pinSignedRevocations(uid, verified)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Revocations verified in this response apply even when they could not be
 	// pinned (no pin namespace yet, or the record is full); they are not
@@ -193,7 +248,7 @@ func (m *connManager) applyDeviceRevocations(uid string, devices []dmTrustedDevi
 		}
 	}
 	m.noticeDeviceRevocations(uid, listed, added)
-	return filtered, nil
+	return filtered, pins, nil
 }
 
 // noticeDeviceRevocations emits one event per revocation this session has not

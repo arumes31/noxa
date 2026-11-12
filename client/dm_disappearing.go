@@ -26,9 +26,11 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"noxa/internal/e2ee/durable"
+	"noxa/internal/netproto"
 )
 
 // dmDisappearMaxTTL bounds a received TTL (four weeks).
@@ -130,6 +132,10 @@ type dmDisappearState struct {
 	// pending caches expired messages still to redact (semantic key ->
 	// archive server, "" = unknown); nil = reload from the logs.
 	pending map[string]string
+	// reopened counts late edits of expired messages (bumped under dmMu,
+	// after the edit's archive record was committed). A sweep or redaction
+	// that started at an older count must not settle those entries.
+	reopened atomic.Uint64
 }
 
 // dmRedactRetry throttles archive scans for pending redactions, and
@@ -331,18 +337,51 @@ func (a *App) expireDueWith(store dmHistoryStore, now time.Time) (map[string][]d
 	return expired, needRedact, next
 }
 
+// reopenRedactionForLateEdit marks an expired entry for redaction again when
+// an edit of it arrives: the edit stored its own readable archive record,
+// which a later sweep must redact as well. It also reports entries still
+// waiting for redaction, since a redaction scan running now may predate the
+// edit's record.
+func reopenRedactionForLateEdit(e *DMEntry, purpose string) bool {
+	if !e.Expired || purpose != netproto.DMActionEdit {
+		return false
+	}
+	e.Redacted = false
+	return true
+}
+
+// reopenDisappearingRedaction makes the next sweep reload the pending list
+// and redact again, after an archive record was added for an expired message.
+// The caller bumped dmDisappear.reopened first, under dmMu.
+func (a *App) reopenDisappearingRedaction() {
+	a.dmDisappear.mu.Lock()
+	a.dmDisappear.pending = nil
+	a.dmDisappear.redact = true
+	a.dmDisappear.redactAt = time.Time{}
+	a.dmDisappear.mu.Unlock()
+}
+
 // markRedactedWith records that the archive copies of done are redacted.
-func (a *App) markRedactedWith(store dmHistoryStore, done map[string]bool) {
+// gen is dmDisappear.reopened from before the archive scan: once a late edit
+// was projected since, its record may postdate the scan, so nothing more is
+// settled here and the next sweep redacts again.
+func (a *App) markRedactedWith(store dmHistoryStore, done map[string]bool, gen uint64) {
 	if len(done) == 0 {
 		return
 	}
 	a.dmDisappear.mu.Lock()
-	for k := range done {
-		delete(a.dmDisappear.pending, k)
+	if a.dmDisappear.reopened.Load() == gen {
+		for k := range done {
+			delete(a.dmDisappear.pending, k)
+		}
 	}
 	a.dmDisappear.mu.Unlock()
 	for _, p := range store.peers() {
 		a.dmMu.Lock()
+		if a.dmDisappear.reopened.Load() != gen {
+			a.dmMu.Unlock()
+			return
+		}
 		l, err := store.load(p.UniqueID)
 		if err == nil {
 			changed := false
@@ -445,6 +484,7 @@ func (a *App) disappearingStore() (dmHistoryStore, error) {
 
 // sweepDisappearingWith is sweepDisappearing on a captured store.
 func (a *App) sweepDisappearingWith(store dmHistoryStore, now time.Time, seen int64, due, redact bool) {
+	gen := a.dmDisappear.reopened.Load()
 	a.dmDisappear.mu.Lock()
 	pendingRedact := a.dmDisappear.redact
 	a.dmDisappear.mu.Unlock()
@@ -478,13 +518,15 @@ func (a *App) sweepDisappearingWith(store dmHistoryStore, now time.Time, seen in
 		a.dmDisappear.mu.Unlock()
 	}
 	a.dmDisappear.mu.Lock()
-	a.dmDisappear.redact = pendingRedact
+	// A late edit projected during this sweep keeps its reopening request.
+	a.dmDisappear.redact = pendingRedact || a.dmDisappear.reopened.Load() != gen
 	a.dmDisappear.mu.Unlock()
 }
 
 // redactPendingWith redacts the archive copies of expired messages through
 // the connected sessions and reports whether nothing is left to redact.
 func (a *App) redactPendingWith(store dmHistoryStore) bool {
+	gen := a.dmDisappear.reopened.Load()
 	pending := a.pendingRedactionsWith(store)
 	if len(pending) == 0 {
 		return true
@@ -551,8 +593,8 @@ func (a *App) redactPendingWith(store dmHistoryStore) bool {
 		}
 	}
 	a.dmDisappear.mu.Unlock()
-	a.markRedactedWith(store, done)
-	return len(done) == len(pending)
+	a.markRedactedWith(store, done, gen)
+	return len(done) == len(pending) && a.dmDisappear.reopened.Load() == gen
 }
 
 // ratchetArchiveServer names the server whose protected archive the current

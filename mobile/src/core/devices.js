@@ -120,6 +120,9 @@ export function historyMessagesSince(conversations, since = 0, ownUID = "") {
     for (const conversation of conversations) {
         for (const m of conversation.messages || []) {
             if (typeof m.body !== "string" || !m.body || m.deleted || m.failed || m.queued || m.pending || m.verified === false) continue;
+            // A disappearing message never travels: the history format has no
+            // timer, so the new device would keep it forever.
+            if (m.ttl > 0 || m.expiresAt || m.expired) continue;
             // A new-protocol record travels only as a readable record of the
             // authenticated archive (or one already transferred), with its
             // provenance; placeholders and unknown protocols never do.

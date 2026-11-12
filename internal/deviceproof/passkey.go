@@ -20,7 +20,9 @@ var ErrProof = errors.New("unverified passkey device authorization")
 
 // CertificateIssuer checks the signed device chain against the locally pinned
 // account identity. Historical certificates grant no ability to receive DMs.
-func CertificateIssuer(c netproto.PasskeyCertificate, principal string, pinned ed25519.PublicKey) (ed25519.PublicKey, error) {
+// A device the chain lists as revoked, or that revoked reports, cannot vouch
+// for anything; revoked may be nil. The first device is the pinned identity.
+func CertificateIssuer(c netproto.PasskeyCertificate, principal string, pinned ed25519.PublicKey, revoked func(netproto.DMDevice) bool) (ed25519.PublicKey, error) {
 	if c.Principal != principal || len(pinned) != ed25519.PublicKeySize || len(c.Chain) == 0 || len(c.Chain) > 32 {
 		return nil, ErrProof
 	}
@@ -66,7 +68,7 @@ func CertificateIssuer(c netproto.PasskeyCertificate, principal string, pinned e
 	for changed := true; changed; {
 		changed = false
 		for id, d := range byID {
-			if trusted[id] != nil || trusted[d.ApprovedBy] == nil {
+			if trusted[id] != nil || trusted[d.ApprovedBy] == nil || d.RevokedAt != 0 || (revoked != nil && revoked(d)) {
 				continue
 			}
 			key, err := auth.LoadPublicKey(d.Ed25519Public)
@@ -86,7 +88,10 @@ func CertificateIssuer(c netproto.PasskeyCertificate, principal string, pinned e
 
 // Verify checks certificate lineage, RP/origin, user verification, credential
 // identity, and the assertion challenge committing both target device keys.
-func Verify(principal string, pinned ed25519.PublicKey, edPublic, xPublic string, raw []byte) error {
+// rpHost is the host this client knows the server by: the certificate's RP ID
+// must be that host or a parent domain of it, so a certificate minted for an
+// attacker's site is refused. An empty rpHost refuses every proof.
+func Verify(principal string, pinned ed25519.PublicKey, edPublic, xPublic string, raw []byte, rpHost string, revoked func(netproto.DMDevice) bool) error {
 	if len(raw) == 0 || len(raw) > netproto.MaxPasskeyProof {
 		return ErrProof
 	}
@@ -95,7 +100,10 @@ func Verify(principal string, pinned ed25519.PublicKey, edPublic, xPublic string
 		return ErrProof
 	}
 	c := proof.Certificate
-	if _, err := CertificateIssuer(c, principal, pinned); err != nil {
+	if rpHost == "" || (rpHost != c.RPID && !strings.HasSuffix(rpHost, "."+c.RPID)) {
+		return ErrProof
+	}
+	if _, err := CertificateIssuer(c, principal, pinned, revoked); err != nil {
 		return err
 	}
 	if _, err := auth.LoadPublicKey(edPublic); err != nil {

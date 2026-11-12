@@ -528,3 +528,37 @@ func TestParseDeviceX25519RejectsWeakKeys(t *testing.T) {
 		}
 	}
 }
+
+// A revoked device must not keep vouching (audit #5): once its pin is
+// applied, devices it approved drop out of the chain too.
+func TestRevokedApproverDropsTheDevicesItApproved(t *testing.T) {
+	const principal = "alice"
+	desktop := newTestDevice(t, "desktop", "desktop")
+	phone := newTestDevice(t, "phone", "web")
+	tablet := newTestDevice(t, "tablet", "web")
+	laptop := newTestDevice(t, "laptop", "desktop")
+	first := desktop.deviceInfo
+	first.FirstDevice = true
+	list := []netproto.DMDevice{first, phone.approve(t, principal, desktop), tablet.approve(t, principal, phone), laptop.approve(t, principal, desktop)}
+	pins := []signedRevocationPin{{DeviceID: "phone", Ed25519Public: phone.deviceInfo.Ed25519Public}}
+	trusted, err := verifyDMDevices(principal, desktop.signingKey(t), desktop.xPublic, withoutRevokedApprovers(list, pins, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := trustedIDs(withoutPinnedRevocations(trusted, pins)); got != "desktop,laptop" {
+		t.Fatalf("trusted = %q, want desktop,laptop", got)
+	}
+	// Matching by key alone (the server renamed the revoked device) and a
+	// local revocation record have the same effect.
+	renamed := []signedRevocationPin{{DeviceID: "other-id", Ed25519Public: phone.deviceInfo.Ed25519Public}}
+	if got := len(withoutRevokedApprovers(list, renamed, nil)); got != 3 {
+		t.Fatalf("key match kept %d entries, want 3", got)
+	}
+	if got := len(withoutRevokedApprovers(list, nil, []string{"phone"})); got != 3 {
+		t.Fatalf("own revocation kept %d entries, want 3", got)
+	}
+	// The first device anchors the account and is never dropped here.
+	if got := len(withoutRevokedApprovers(list, []signedRevocationPin{{DeviceID: "desktop"}}, nil)); got != 4 {
+		t.Fatalf("first device dropped: kept %d entries", got)
+	}
+}
