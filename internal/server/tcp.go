@@ -578,7 +578,10 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 	}
 	if deps != nil && deps.Broadcast != nil {
 		deps.Broadcast.SetOverflowHandler(s.closeOverflowedClient)
-		deps.Broadcast.SetResyncHandler(s.requestResync)
+		// Only the role writer turns the resync marker into a snapshot.
+		if deps.Authority != nil {
+			deps.Broadcast.SetResyncHandler(s.requestResync, snapshotRecovers)
+		}
 	}
 	return s
 }

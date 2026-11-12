@@ -13,6 +13,7 @@ import (
 
 	"noxa/internal/authorization"
 	"noxa/internal/broadcast"
+	"noxa/internal/config"
 	"noxa/internal/netproto"
 )
 
@@ -103,6 +104,49 @@ func TestStalledRecipientDoesNotStallMetadataDelivery(t *testing.T) {
 		}
 	}
 	t.Fatal("resync snapshot does not show the join the stalled member missed")
+}
+
+// Clients refetch nothing but the tree on a snapshot, so only membership,
+// speaking and typing deliveries may be replaced by a resync.
+func TestSnapshotRecoversOnlyTreeAndPresence(t *testing.T) {
+	for payload, want := range map[string]bool{
+		`{"type":"user_joined","data":{}}`:      true,
+		`{"type":"speaking_changed","data":{}}`: true,
+		roleResyncPayload:                       true,
+		`{"type":"chat","data":{}}`:             false,
+		`{"type":"poke","data":{}}`:             false,
+		`{"type":"_role_channel_delivery","data":{"channel_id":1,"payload":{"type":"typing"}}}`: true,
+		`{"type":"_role_channel_delivery","data":{"channel_id":1,"payload":{"type":"chat"}}}`:   false,
+		`not json`: false,
+	} {
+		if got := snapshotRecovers([]byte(payload)); got != want {
+			t.Errorf("snapshotRecovers(%s) = %v, want %v", payload, got, want)
+		}
+	}
+}
+
+// Without the role writer nothing turns a resync marker into a snapshot, so a
+// client that dropped events is still closed to resync by reconnecting.
+func TestLegacyServerClosesInsteadOfResync(t *testing.T) {
+	bc := broadcast.New(zap.NewNop(), nil)
+	New(&config.Config{}, zap.NewNop(), &Deps{Broadcast: bc})
+	overflows := make(chan string, 1)
+	bc.SetOverflowHandler(func(id string) { overflows <- id })
+	ch, err := bc.Register("legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i <= cap(ch); i++ {
+		_ = bc.BroadcastToClient("legacy", []byte(`{"type":"user_joined","data":{}}`))
+	}
+	for len(ch) > 0 {
+		<-ch
+	}
+	select {
+	case <-overflows:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a legacy client that dropped events was not closed")
+	}
 }
 
 func TestStatusAndDisplayNameHaveASlowBudget(t *testing.T) {

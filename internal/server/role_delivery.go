@@ -112,8 +112,13 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 	}
 	// A delivery skipped behind a busy writer leaves the client stale; a
 	// resync queued behind it is built once it is written, after this change.
+	// Clients do not refetch anything else on a snapshot: those reconnect.
 	if errors.Is(err, context.DeadlineExceeded) {
-		s.requestResync(client.ID)
+		if snapshotRecovers(payload) {
+			s.requestResync(client.ID)
+		} else {
+			s.closeOverflowedClient(client.ID)
+		}
 		return nil
 	}
 	return err
@@ -132,6 +137,31 @@ func (s *TCPServer) writeMetadataFrame(ctx context.Context, client *Client, fram
 	}
 	defer client.wmu.Unlock()
 	return s.writeFrameLocked(ctx, client, frame)
+}
+
+// snapshotRecovers reports whether a fresh snapshot replaces a missed
+// delivery: membership and speaking state live in the snapshot, and typing
+// is ephemeral. Clients do not refetch chat, DMs or other events when a
+// snapshot arrives, so a client that missed those must reconnect.
+func snapshotRecovers(payload []byte) bool {
+	var event struct {
+		Type string          `json:"type"`
+		Data json.RawMessage `json:"data"`
+	}
+	if json.Unmarshal(payload, &event) != nil {
+		return false
+	}
+	if event.Type == roleChannelDelivery {
+		var wrapper roleChannelEvent
+		if json.Unmarshal(event.Data, &wrapper) != nil || json.Unmarshal(wrapper.Payload, &event) != nil {
+			return false
+		}
+	}
+	switch event.Type {
+	case eventSpeakingChanged, eventTyping, eventConversationTyping:
+		return true
+	}
+	return roleSnapshotEvent(event.Type)
 }
 
 // requestResync queues one fresh filtered snapshot for a client that missed
