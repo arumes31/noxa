@@ -130,7 +130,8 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
                         let timer;
                         const latest = await Promise.race([sampleSenderStats(transceiver.sender, { fresh: true }).then(rows => rows.get(stat.id), () => null),
                             new Promise(resolve => { timer = setTimeout(() => resolve(null), 2000); })]).finally(() => clearTimeout(timer));
-                        if (!(latest?.framesEncoded <= stat.framesEncoded) || !current()) return recovered;
+                        // A quality change in progress also declines the retry: not a failed restart.
+                        if (!(latest?.framesEncoded <= stat.framesEncoded) || !current() || state.shareQualityUpdating) return recovered;
                         p.onInvalidated();
                         window.__noxa?.toast?.(t("e2ee.reason.hardware_encoder"), "warn");
                     }
