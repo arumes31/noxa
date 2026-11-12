@@ -108,6 +108,10 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 	// An unavailable policy closes protected delivery, not the control socket.
 	// The mutation handler still owes its saved-but-pending acknowledgement.
 	if errors.Is(err, authorization.ErrAuthorizationUnavailable) {
+		// A consumed resync owes a snapshot: reconnecting rebuilds the view.
+		if string(payload) == roleResyncPayload {
+			s.closeOverflowedClient(client.ID)
+		}
 		return nil
 	}
 	// A delivery skipped behind a busy writer leaves the client stale; a
