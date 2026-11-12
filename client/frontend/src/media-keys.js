@@ -276,9 +276,12 @@ export class MediaKeyEngine {
     #epoch = 0; #kid = 15; #keys = null; #members = ""; #sentTo = new Map();
     #busy = false; #again = false; #debounce = 0; #renew = 0; #retry = 0; #retryArmed = 0; #busyOrPending = false;
     #publishers = new Map(); #pending = []; #failed = new Map(); #reason = ""; #pendingRemovals = []; #seq = 0; #removalDebounce = false; #runFailures = 0; #runRetry = 0; #paused = false; #activating = []; #interrupt = null; #activeRecipients = []; #deliveries = new Map(); #statusTimer = 0;
-    // Devices whose key control failed as revoked or untrusted: no longer
-    // recipients, and the next epoch is fresh, never their derived successor.
+    // Devices whose key control failed as revoked (or untrusted after they
+    // held keys): no longer recipients, and the next epoch is fresh, never
+    // their derived successor.
     #revoked = new Set();
+    // Devices that received a key this session.
+    #keyed = new Set();
     #rosterAt = 0; #settle = 0; #mismatch = [];
 
     constructor({ media, send, onStatus = () => {}, now = () => Date.now(), timers = globalThis, random = n => crypto.getRandomValues(new Uint8Array(n)), uuid = () => crypto.randomUUID(), sendTimeoutMs = SEND_TIMEOUT_MS, activateMaxWaitMs = ACTIVATE_MAX_WAIT_MS }) {
@@ -312,7 +315,7 @@ export class MediaKeyEngine {
         this.self = null; this.#keys = null; this.#publishers.clear(); this.#pending = []; this.#failed.clear(); this.#sentTo.clear();
         for (const r of this.#pendingRemovals) this.timers.clearTimeout(r.timer);
         this.timers.clearTimeout(this.#runRetry); this.#runRetry = 0; this.#paused = false; this.#activating = [];
-        this.#pendingRemovals = []; this.#removalDebounce = false; this.#deliveries.clear(); this.#activeRecipients = []; this.#revoked.clear(); this.timers.clearTimeout(this.#statusTimer); this.#statusTimer = 0;
+        this.#pendingRemovals = []; this.#removalDebounce = false; this.#deliveries.clear(); this.#activeRecipients = []; this.#revoked.clear(); this.#keyed.clear(); this.timers.clearTimeout(this.#statusTimer); this.#statusTimer = 0;
         const waiter = this.#interrupt; this.#interrupt = null; waiter?.resolve();
         for (const pid of pids) this.media.forget(pid).catch(() => {});
         this.#status();
@@ -676,7 +679,10 @@ export class MediaKeyEngine {
             const tally = this.#deliveries.get(epoch);
             const reason = String(result?.error?.code || result?.error?.message || result?.code || (typeof result?.error === "string" ? result.error : "") || result?.reason || "failed");
             if (tally) { if (result?.ok) { tally.ok.add(id); tally.failed.delete(id); } else tally.failed.set(id, reason); }
-            if (!result?.ok && (reason === "revoked" || reason === "untrusted_device")) {
+            if (result?.ok) this.#keyed.add(id);
+            // Untrusted without ever holding a key (a device still waiting for
+            // approval) is retried like any failure: it has nothing to ratchet.
+            if (!result?.ok && (reason === "revoked" || (reason === "untrusted_device" && this.#keyed.has(id)))) {
                 // A revoked device could derive the next ratchet epoch itself:
                 // drop it, never retry it, and rekey with a fresh epoch.
                 this.#failed.delete(id);
