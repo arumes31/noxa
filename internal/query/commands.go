@@ -167,14 +167,17 @@ func (s *Server) cmdLogin(ctx context.Context, sess *session, cmd command) bool 
 		transport = "ssh"
 	}
 	sourceScope := auth.LoginFailureScope(transport+":"+auth.SourceAddressKey(sess.remoteIP), "")
-	principalScope := auth.LoginFailureScope(transport, uniqueID)
-	attempt, allowed := s.ReserveLoginAttempt(sourceScope, principalScope)
+	scopes := []string{sourceScope, auth.LoginFailureScope(transport, uniqueID)}
+	if transport == "ssh" {
+		scopes = append(scopes, auth.AccountPasswordScope(uniqueID))
+	}
+	attempt, allowed := s.ReserveLoginAttempt(scopes...)
 	if !allowed {
 		s.RecordAuthFailure(transport, "locked_out")
 		return s.write(sess, errorLine(errLoginFailed, "too many failed logins, try again later"))
 	}
 	defer attempt.Cancel()
-	return s.roleLogin(ctx, sess, roleBackend, uniqueID, password, attempt, principalScope)
+	return s.roleLogin(ctx, sess, roleBackend, uniqueID, password, attempt, scopes[1:]...)
 }
 
 // LoginAllowed reports whether the shared ServerQuery brute-force limiter

@@ -323,6 +323,35 @@ func TestGRPCLoginFailuresArePrincipalScoped(t *testing.T) {
 	}
 }
 
+// gRPC shares the account password budget with the other public transports,
+// so failures elsewhere count toward its lockout (audit2 #9).
+func TestGRPCLoginSharesAccountBudget(t *testing.T) {
+	backend := &roleGRPCBackend{authenticate: func(_ context.Context, _, password, _ string) (auth.IntegrationPrincipal, error) {
+		if password == "pw" {
+			return auth.IntegrationPrincipal{}, nil
+		}
+		return auth.IntegrationPrincipal{}, auth.ErrIntegrationDenied
+	}}
+	limiter := query.New("127.0.0.1:0", zap.NewNop(), backend)
+	limiter.MaxLoginFailures = 2
+	bus := eventbus.New(zap.NewNop())
+	defer bus.Close()
+	server := New("127.0.0.1:12338", backend, bus, zap.NewNop(), limiter)
+
+	if _, err := server.authenticateRoleIntegration(context.Background(), backend, "bot", "wrong"); !errors.Is(err, auth.ErrIntegrationDenied) {
+		t.Fatalf("failed login = %v", err)
+	}
+	// One failure on another transport (for example SSH or /events).
+	attempt, ok := limiter.ReserveLoginAttempt(auth.LoginFailureScope("ssh", "bot"), auth.AccountPasswordScope("bot"))
+	if !ok {
+		t.Fatal("other transport reservation refused")
+	}
+	attempt.Fail()
+	if _, err := server.authenticateRoleIntegration(context.Background(), backend, "bot", "pw"); !errors.Is(err, errIntegrationLoginBusy) {
+		t.Fatalf("login after shared budget spent = %v, want errIntegrationLoginBusy", err)
+	}
+}
+
 // Two calls from one integration at once must not turn into "invalid
 // credentials" for the second one (audit #19).
 func TestGRPCConcurrentLoginIsRetryableNotUnauthenticated(t *testing.T) {

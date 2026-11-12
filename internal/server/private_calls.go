@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,8 +43,11 @@ func (s *TCPServer) handlePrivateCall(ctx context.Context, client *Client, frame
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "private calls unavailable")
 		}
 		if request.Action == "history" {
-			s.privateCallsMu.Lock()
-			defer s.privateCallsMu.Unlock()
+			if s.chatRate != nil && !s.chatRate.allowLimit("call-history:"+client.UniqueID, time.Now(), 4) {
+				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "call history rate limit exceeded")
+			}
+			// Database work stays outside privateCallsMu so history reads
+			// cannot stall call signaling; the lock only covers the live overlay.
 			var history []netproto.CallSession
 			var err error
 			next := ""
@@ -65,11 +69,12 @@ func (s *TCPServer) handlePrivateCall(ctx context.Context, client *Client, frame
 			if err != nil {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "call history unavailable")
 			}
+			stored := slices.Clone(history)
+			s.privateCallsMu.Lock()
 			for i := range history {
-				stored := history[i]
-				if live, found := s.privateCalls[stored.ID]; found {
+				if live, found := s.privateCalls[history[i].ID]; found {
 					history[i] = live
-				} else if stored.EndedAt == 0 {
+				} else if history[i].EndedAt == 0 {
 					history[i].Revision++
 					history[i].EndedAt = time.Now().Unix()
 					for j := range history[i].Participants {
@@ -81,7 +86,12 @@ func (s *TCPServer) handlePrivateCall(ctx context.Context, client *Client, frame
 						}
 					}
 				}
-				if history[i].Revision > stored.Revision {
+			}
+			s.privateCallsMu.Unlock()
+			// SavePrivateCall only applies a higher revision, so a repair racing
+			// a call that ended meanwhile cannot overwrite the real end.
+			for i := range history {
+				if history[i].Revision > stored[i].Revision {
 					if err := backend.SavePrivateCall(ctx, history[i]); err != nil {
 						return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "call history recovery unavailable")
 					}

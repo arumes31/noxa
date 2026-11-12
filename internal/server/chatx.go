@@ -1622,6 +1622,7 @@ func (s *TCPServer) handleEmojiUpload(ctx context.Context, client *Client, f *ne
 		if err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "emoji write failed")
 		}
+		s.audit(ctx, client.UniqueID, "emoji_upload", msg.Name, ext)
 		s.broadcastEvent(eventEmojiAdded, map[string]any{"name": msg.Name, "file_name": fileName, "by": client.UniqueID})
 		return s.acknowledgeAsset(client, msg.AckRequested, netproto.MsgEmojiUpload, msg.Name, "")
 	})

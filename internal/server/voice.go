@@ -379,6 +379,11 @@ func (s *TCPServer) recordingControlAllowed(ctx context.Context, client *Client,
 			zap.String("output", session.FilePath),
 		)
 	case "stop":
+		// Only the initiator or someone ranked above them may stop a recording.
+		if owner, ok := s.roleRecordingOwners.Load(msg.ChannelID); ok && owner.(int64) != client.userID() &&
+			!ctx.Value(roleLeaseKey{}).(roleLease).evaluator.CanManageMember(client.userID(), owner.(int64)) {
+			return authorization.ErrRoleForbidden
+		}
 		if err := s.deps.Recorder.Stop(msg.ChannelID); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeNotFound, "recording stop failed")
 		}

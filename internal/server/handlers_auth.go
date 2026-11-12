@@ -82,10 +82,11 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	source := auth.SourceAddressKey(ip)
 	serverPasswordScope := auth.LoginFailureScope("tcp-server-password:"+source, "")
 	accountSourceScope := auth.LoginFailureScope("tcp:"+source, "")
-	// Password failures are counted per transport, so wrong passwords on the
-	// public port cannot lock the same account's ServerQuery, gRPC or
-	// /events logins.
+	// Password failures are counted per transport and in the account budget
+	// shared with /events, SSH and gRPC; only the loopback ServerQuery port
+	// keeps a separate budget the public port cannot lock.
 	principalScope := auth.LoginFailureScope("tcp", msg.Username)
+	accountScope := auth.AccountPasswordScope(msg.Username)
 	if reason, err := s.banRejectReason(ctx, client, msg.Username, ip); err != nil {
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
 	} else if reason != "" {
@@ -137,7 +138,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 		return s.writeMessage(client, netproto.MsgAuthChallenge, netproto.AuthChallenge{Challenge: challenge, Scheme: netproto.AuthChallengeSchemeV1})
 	}
 
-	attempt, allowed := s.loginLimiter.Reserve(accountSourceScope, principalScope)
+	attempt, allowed := s.loginLimiter.Reserve(accountSourceScope, principalScope, accountScope)
 	if !allowed {
 		s.metricsSink().IncAuthFailure("tcp", "locked_out")
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
@@ -182,7 +183,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 			client.mu.Unlock()
 		}
 	}
-	attempt.Succeed(principalScope)
+	attempt.Succeed(principalScope, accountScope)
 	return s.completeAuthForUser(ctx, client, user, msg.Nickname)
 }
 

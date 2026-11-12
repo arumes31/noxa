@@ -124,10 +124,11 @@ func newWSHandler(bus *Bus, logger *zap.Logger, cfg wsHandlerConfig) http.Handle
 
 		var attempt *auth.LoginAttempt
 		principalScope := auth.LoginFailureScope("events", user)
+		accountScope := auth.AccountPasswordScope(user)
 		if cfg.loginLimiter != nil {
 			sourceScope := auth.LoginFailureScope("ws:"+auth.SourceAddressKey(remoteIPKey(r.RemoteAddr)), "")
 			var allowed bool
-			attempt, allowed = cfg.loginLimiter.Reserve(sourceScope, principalScope)
+			attempt, allowed = cfg.loginLimiter.Reserve(sourceScope, principalScope, accountScope)
 			if !allowed {
 				recordWSAuthFailure(cfg.failures, "locked_out")
 				http.Error(w, "too many authentication attempts", http.StatusTooManyRequests)
@@ -155,7 +156,7 @@ func newWSHandler(bus *Bus, logger *zap.Logger, cfg wsHandlerConfig) http.Handle
 			return
 		}
 		if attempt != nil {
-			attempt.Succeed(principalScope)
+			attempt.Succeed(principalScope, accountScope)
 		}
 		// (807) A scoped integration needs events:read for the event stream.
 		if !principal.AllowsScope(auth.ScopeEventsRead) {

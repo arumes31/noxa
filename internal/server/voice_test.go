@@ -626,6 +626,38 @@ func TestRecordingControl(t *testing.T) {
 	})
 }
 
+// A member with RecordChannel cannot stop a higher-ranked member's recording;
+// the owner (ranked above everyone) can stop anyone's (audit2 #14).
+func TestRecordingStopRespectsMemberHierarchy(t *testing.T) {
+	env := startTestEnvWithCapabilities(t, authorization.RecordChannel)
+	defer env.stop()
+	env.state.AddChannel(testChannel(1))
+	owner, _ := dialAuthed(t, env.addr, "admin-uid")
+	defer closeVoiceTestResource(t, owner)
+	member, _ := dialAuthed(t, env.addr, "user-uid")
+	defer closeVoiceTestResource(t, member)
+
+	send(t, owner, netproto.MsgRecordingControl, netproto.RecordingControl{ChannelID: 1, Action: "start"})
+	waitFor(t, "recording started", func() bool { return env.recorder.startedCount() == 1 })
+	send(t, member, netproto.MsgRecordingControl, netproto.RecordingControl{ChannelID: 1, Action: "stop"})
+	var e netproto.Error
+	if err := netproto.Decode(readOfType(t, member, netproto.MsgError), &e); err != nil || e.Code != errCodePermissionDenied {
+		t.Fatalf("lower-ranked stop = %+v, %v; want permission denied", e, err)
+	}
+	env.recorder.mu.Lock()
+	stopped := len(env.recorder.stopped)
+	env.recorder.mu.Unlock()
+	if stopped != 0 {
+		t.Fatal("lower-ranked member stopped the owner's recording")
+	}
+	send(t, owner, netproto.MsgRecordingControl, netproto.RecordingControl{ChannelID: 1, Action: "stop"})
+	waitFor(t, "owner stopped recording", func() bool {
+		env.recorder.mu.Lock()
+		defer env.recorder.mu.Unlock()
+		return len(env.recorder.stopped) == 1
+	})
+}
+
 func TestRecordingStartRejectsUnknownChannel(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()

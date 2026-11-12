@@ -117,6 +117,14 @@ func LoginFailureScope(source, principal string) string {
 	return hex.EncodeToString(digest[:])
 }
 
+// AccountPasswordScope is the failure budget an account's real password
+// shares across the public transports (tcp, /events, ssh, grpc), so rotating
+// interfaces does not multiply guesses. The loopback ServerQuery port keeps
+// only its own per-transport budget so public failures cannot lock it out.
+func AccountPasswordScope(principal string) string {
+	return LoginFailureScope("account", principal)
+}
+
 // sourceScopePrefix marks a scope without a principal, whose lockout may be
 // evicted under capacity pressure (see LoginFailureLimiter).
 const sourceScopePrefix = "s:"

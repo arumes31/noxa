@@ -329,3 +329,21 @@ func TestSSHSessionLoginUsesSSHLimiterNamespace(t *testing.T) {
 		t.Fatal("SSH-session login failure locked the raw ServerQuery namespace")
 	}
 }
+
+// SSH password failures also spend the account budget shared with TCP,
+// /events and gRPC; the loopback raw port never does (audit2 #9).
+func TestPasswordFailuresShareAccountBudgetExceptRawQuery(t *testing.T) {
+	s := New("", nil, &roleQueryBackend{})
+	s.MaxLoginFailures = 1
+	var out bytes.Buffer
+	raw := &session{w: &out, remoteIP: "192.0.2.6"}
+	s.execute(t.Context(), raw, "login integration wrong authorization_model=roles-v1")
+	if !s.LoginAllowed(auth.AccountPasswordScope("integration")) {
+		t.Fatal("raw ServerQuery failure spent the shared account budget")
+	}
+	sess := &session{w: &out, remoteIP: "192.0.2.5", sshModelRequired: true, sshModelAccepted: true}
+	s.execute(t.Context(), sess, "login integration wrong authorization_model=roles-v1")
+	if s.LoginAllowed(auth.AccountPasswordScope("integration")) {
+		t.Fatal("SSH failure did not spend the shared account budget")
+	}
+}
