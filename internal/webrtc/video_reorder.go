@@ -172,6 +172,7 @@ func (q *videoReorder) flushFormats(now time.Time, force bool, emit func(*rtp.Pa
 		q.next++
 		emit(entry.packet, entry.codec)
 	}
+	q.pending = nil // a map never shrinks; drop buckets grown by a large gap
 	q.expires, q.dirty = time.Time{}, false
 	q.wait, q.waitUntil = 0, time.Time{}
 }
@@ -205,6 +206,7 @@ func (q *videoReorder) flushGapsFormats(now time.Time, force bool, emit func(*rt
 		q.next = pending.sequence + 1
 		emit(entry.packet, entry.codec)
 	}
+	q.pending = nil
 	q.expires, q.dirty = time.Time{}, false
 	q.wait, q.waitUntil = 0, time.Time{}
 }

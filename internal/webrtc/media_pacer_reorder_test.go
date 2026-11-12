@@ -145,7 +145,7 @@ func TestMediaPacerVideoStorageIsLazyAndAudioLifetimeUnchanged(t *testing.T) {
 			t.Fatal(err)
 		}
 		p.mu.Lock()
-		if len(p.queue) != mediaPacerPackets || time.Until(p.queue[p.head].expires) != mediaPacerLifetime {
+		if len(p.queue) != mediaPacerInitialPackets || time.Until(p.queue[p.head].expires) != mediaPacerLifetime {
 			t.Error("video storage or deadline mismatch")
 		}
 		p.mu.Unlock()

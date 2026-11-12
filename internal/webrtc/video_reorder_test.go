@@ -329,3 +329,22 @@ func TestVideoReorderDoesNotDelayOrderedOrPromptlyRepairedMedia(t *testing.T) {
 		t.Fatal("completed repair waited for the maximum buffer time")
 	}
 }
+
+func TestVideoReorderReleasesPendingStorageWhenDrained(t *testing.T) {
+	var q videoReorder
+	now := time.Now()
+	emit := func(*rtp.Packet, string) {}
+	q.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 1}}, "video/VP8", now, emit)
+	for sequence := uint16(3); sequence < 1003; sequence++ {
+		q.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: sequence}}, "video/VP8", now, emit)
+	}
+	q.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 2}}, "video/VP8", now, emit) // repairs the gap
+	if q.pending != nil {
+		t.Fatal("drained reorder queue retained its grown map")
+	}
+	q.push(&rtp.Packet{Header: rtp.Header{SequenceNumber: 1004}}, "video/VP8", now, emit)
+	q.flush(now.Add(time.Hour), false, emit) // an abandoned gap drains through flushGaps
+	if q.pending != nil || q.next != 1005 {
+		t.Fatalf("gap flush retained its map or lost order: next=%d", q.next)
+	}
+}

@@ -181,3 +181,61 @@ func TestMediaPacerQueueIsBoundedAndUnbindClearsIt(t *testing.T) {
 		t.Fatal("unbind retained buffered media")
 	}
 }
+
+func TestMediaPacerQueueGrowsInOrderAcrossWrap(t *testing.T) {
+	p := &mediaPacer{streams: make(map[uint32]*pacedStream)}
+	p.AddStream(1, interceptor.RTPWriterFunc(func(*rtp.Header, []byte, interceptor.Attributes) (int, error) { return 1, nil }))
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	expires := time.Now().Add(time.Hour)
+	packet := func(sequence uint16) pacedPacket {
+		return pacedPacket{header: rtp.Header{SequenceNumber: sequence}, stream: p.streams[1], expires: expires, size: 1}
+	}
+	var next, want uint16
+	push := func(n int) {
+		for range n {
+			p.pushLocked(packet(next))
+			next++
+		}
+	}
+	push(mediaPacerInitialPackets)
+	for range mediaPacerInitialPackets / 2 {
+		p.popLocked()
+		want++
+	}
+	push(mediaPacerInitialPackets / 2)
+	if len(p.queue) != mediaPacerInitialPackets || p.head == 0 || p.count != len(p.queue) {
+		t.Fatalf("setup is not a full wrapped ring: len=%d head=%d count=%d", len(p.queue), p.head, p.count)
+	}
+	// A busy requeue into the full ring grows it and keeps its head position.
+	want--
+	if !p.requeueBusyLocked(packet(want)) || len(p.queue) != 2*mediaPacerInitialPackets {
+		t.Fatalf("busy requeue did not grow the ring: len=%d", len(p.queue))
+	}
+	push(mediaPacerPackets - p.count)
+	if len(p.queue) != mediaPacerPackets || p.count != mediaPacerPackets {
+		t.Fatalf("ring did not grow to its cap: len=%d count=%d", len(p.queue), p.count)
+	}
+	for p.count > 0 {
+		if got := p.popLocked().header.SequenceNumber; got != want {
+			t.Fatalf("order lost: got %d want %d", got, want)
+		}
+		want++
+	}
+}
+
+func TestMediaPacerSocketWriteDoesNotHoldFeedbackLock(t *testing.T) {
+	p := &mediaPacer{streams: make(map[uint32]*pacedStream)}
+	var free bool
+	p.AddStream(1, interceptor.RTPWriterFunc(func(*rtp.Header, []byte, interceptor.Attributes) (int, error) {
+		// RTCP feedback (and the NACK/PLI chain behind it) takes historyMu.
+		if free = p.historyMu.TryLock(); free {
+			p.historyMu.Unlock()
+		}
+		return 1, nil
+	}))
+	p.streams[1].twccID = 3
+	if !p.writePacket(pacedPacket{header: rtp.Header{Version: 2, SSRC: 1}, stream: p.streams[1]}) || !free || p.sent != 1 {
+		t.Fatalf("feedback lock held across the socket write: free=%v sent=%d", free, p.sent)
+	}
+}
