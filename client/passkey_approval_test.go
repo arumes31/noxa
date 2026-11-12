@@ -14,7 +14,7 @@ import (
 )
 
 func TestPasskeyAutoApprovalRequiresLocallyVerifiedProof(t *testing.T) {
-	for _, name := range []string{"valid", "forged", "smuggled line"} {
+	for _, name := range []string{"valid", "forged", "smuggled line", "other relying party", "dialed by IP"} {
 		valid := name == "valid"
 		t.Run(name, func(t *testing.T) {
 			var directory netproto.KeyResponse
@@ -46,6 +46,15 @@ func TestPasskeyAutoApprovalRequiresLocallyVerifiedProof(t *testing.T) {
 			})
 			cm.mu.Lock()
 			cm.uniqueID, cm.deviceID, cm.supportsDMDevices = "account", "self", true
+			// The certificate's RP ID must match the host this desktop dialed.
+			switch name {
+			case "other relying party":
+				cm.addr = "chat.attacker.test:9987"
+			case "dialed by IP":
+				cm.addr = "192.0.2.10:9987"
+			default:
+				cm.addr = "chat.example.test:9987"
+			}
 			conn := cm.conn
 			cm.mu.Unlock()
 			id, err := cm.identity()

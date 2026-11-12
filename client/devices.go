@@ -585,7 +585,7 @@ func (m *connManager) approvePasskeyDevices(conn net.Conn) {
 	}
 	// Signed revocations first listed in this response count as well: pin
 	// them, then walk the chain again without the approvers they revoke.
-	if trusted, pins, err = m.applyDeviceRevocations(principal, trusted, directory.Revocations); err != nil {
+	if _, pins, err = m.applyDeviceRevocations(principal, trusted, directory.Revocations); err != nil {
 		return
 	}
 	if trusted, err = verifyDMDevices(principal, pinned, encryption, withoutRevokedApprovers(directory.Devices, pins, ownRevoked)); err != nil {
