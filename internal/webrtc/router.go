@@ -139,7 +139,7 @@ func defaultSlot(kind webrtc.RTPCodecType) string {
 // pubSlot is one output track (and its sender) for a single (subscriber,
 // publisher, slot) triple.
 type pubSlot struct {
-	receiverReport    *audioReceiverReport // protected by Router.mu; expires with this binding
+	receiverReport    atomic.Pointer[audioReceiverReport] // written under Router.mu read lock; expires with this binding
 	track             *webrtc.TrackLocalStaticRTP
 	sender            *webrtc.RTPSender
 	egress            *mediaEgressStream
@@ -644,15 +644,17 @@ func (r *Router) publisherSlotsLocked(publisherID string) []string {
 // does not exist yet. It returns true when a track was added. Callers must
 // hold mu.
 func (r *Router) addSlotLocked(pc *PeerConnectionWrapper, subscriberID, publisherID string, t *pubTrack, slot string) bool {
-	if !r.publisherAllowedLocked(subscriberID, publisherID) {
-		return false
-	}
 	kind, ok := slotKinds[slot]
 	if !ok {
 		return false
 	}
 	set := t.slots(kind)
+	// Existing pairs skip the guard: revocation removes them through
+	// prunePublishersLocked, and restore passes revisit every pair.
 	if _, exists := set[slot]; exists {
+		return false
+	}
+	if !r.publisherAllowedLocked(subscriberID, publisherID) {
 		return false
 	}
 
@@ -776,9 +778,7 @@ func flushTrackRemovals(removals []pendingTrackRemoval) {
 // publisher) are only created by the echo-channel path; all other callers
 // exclude them. It returns true when tracks were added. Callers must hold mu.
 func (r *Router) addPublisherLocked(subscriberID, publisherID string) bool {
-	if !r.publisherAllowedLocked(subscriberID, publisherID) {
-		return false
-	}
+	// addSlotLocked checks the publisher guard for every slot it creates.
 	pc, ok := r.pubPeers[subscriberID]
 	if !ok {
 		return false // no connection yet; EnsurePublishers syncs on attach
@@ -2422,9 +2422,11 @@ var qualityToRID = map[string]string{
 }
 
 // SetVideoQuality records the subscriber's preferred simulcast layer and
-// requests a keyframe for the new layer from every publisher in the
-// subscriber's channel (switching layers mid-stream requires a keyframe of
-// the new layer). Quality must be "high", "mid", or "low".
+// requests a keyframe for the new layer from every video source the
+// subscriber actively receives (switching layers mid-stream requires a
+// keyframe of the new layer). Each request passes that output's keyframe
+// gate, so one member cannot make unwatched cameras encode keyframes.
+// Quality must be "high", "mid", or "low".
 func (r *Router) SetVideoQuality(clientID, quality string) error {
 	rid, ok := qualityToRID[quality]
 	if !ok {
@@ -2433,10 +2435,14 @@ func (r *Router) SetVideoQuality(clientID, quality string) error {
 
 	r.mu.Lock()
 	r.layerPrefs[clientID] = rid
-	channelID, inChannel := r.clientChan[clientID]
 	var publishers []videoSourceRef
-	if inChannel {
-		publishers = r.videoPublishersLocked(channelID, clientID)
+	now := time.Now()
+	for publisherID, tracks := range r.pubTracks[clientID] {
+		for slot, output := range tracks.video {
+			if r.activeWatchLocked(clientID, publisherID, slot) && output.keyframeGate.Allow(now, output.videoBacklog()) {
+				publishers = append(publishers, videoSourceRef{publisher: publisherID, slot: slot})
+			}
+		}
 	}
 	r.mu.Unlock()
 
@@ -2640,6 +2646,9 @@ func (r *Router) rtcpRelayLoop(clientID string, sender *webrtc.RTPSender) {
 		if err != nil {
 			return
 		}
+		// All PLIs/FIRs read from this sender name the same output: one relay
+		// per compound packet covers a whole burst.
+		keyframe := false
 		for _, pkt := range pkts {
 			switch report := pkt.(type) {
 			case *rtcp.ReceiverReport:
@@ -2647,8 +2656,11 @@ func (r *Router) rtcpRelayLoop(clientID string, sender *webrtc.RTPSender) {
 			case *rtcp.SenderReport:
 				r.recordAudioReceiverReports(clientID, sender, report.Reports)
 			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
-				r.relayKeyframeRequest(clientID, sender)
+				keyframe = true
 			}
+		}
+		if keyframe {
+			r.relayKeyframeRequest(clientID, sender)
 		}
 	}
 }

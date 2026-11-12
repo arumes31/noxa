@@ -93,3 +93,34 @@ func TestOfferGuardPrunesMetadataBeforeSDPCreation(t *testing.T) {
 		t.Fatal("removed publisher remains in generated SDP")
 	}
 }
+
+// Restore passes run for every subscriber on every refresh; pairs that already
+// exist must not pay the publisher guard again. Revocation still prunes them.
+func TestRestoreSkipsGuardForExistingPairs(t *testing.T) {
+	e, err := New(testLogger(), nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = e.Close() }()
+	r := NewRouter(nil)
+	attachFakePeer(t, e, r, "listener")
+	attachFakePeer(t, e, r, "speaker")
+	r.JoinChannel(1, "listener")
+	r.JoinChannel(1, "speaker")
+	if pubTrackFor(r, "listener", "speaker") == nil {
+		t.Fatal("fixture pair missing")
+	}
+	calls := 0
+	r.SetPublisherGuard(func(PublisherAccess) bool { calls++; return true })
+	r.mu.Lock()
+	calls = 0
+	changed := r.restoreSubscriberLocked("listener")
+	r.mu.Unlock()
+	if changed || calls != 0 {
+		t.Fatalf("restore of an existing pair: changed=%v guard calls=%d, want none", changed, calls)
+	}
+	r.SetPublisherGuard(func(pair PublisherAccess) bool { return pair.PublisherID != "speaker" })
+	if pubTrackFor(r, "listener", "speaker") != nil {
+		t.Fatal("revoked pair kept its tracks")
+	}
+}

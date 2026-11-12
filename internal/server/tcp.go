@@ -560,8 +560,9 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 				// renegotiation (e.g. a screen share starting) would drop all
 				// voice to and from it. Membership/moderation changes still
 				// serialize against it, and roleMetadataMu stays exclusive.
-				return s.withRoleChannelLease(context.Background(), client, authorization.Connect, true, true, func(ctx context.Context, _ int64) error {
-					s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
+				// The publisher snapshot is refreshed by the policy, membership
+				// and visibility changes themselves; PrepareSubscriber applies it.
+				return s.withRoleChannelLease(context.Background(), client, authorization.Connect, true, true, func(context.Context, int64) error {
 					return send()
 				})
 			})

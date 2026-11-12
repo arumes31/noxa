@@ -130,6 +130,36 @@ func TestRedeliveredOfferDropsDepartedPublishers(t *testing.T) {
 	}
 }
 
+// A client that never answers is not redelivered to forever: its outputs and
+// relay goroutines would grow with every join. After renegMaxRedeliveries the
+// peer is closed (membership kept) so the client recovers with a fresh offer.
+func TestIgnoredOffersClosePeer(t *testing.T) {
+	v, clock := stabilityVoice(t)
+	t.Cleanup(func() { _ = v.ClosePeer("listener") })
+	client := newClientPC(t)
+	rec := &offerRecorder{}
+	v.SetOfferSender(func(_ string, sdp string) error { rec.add(sdp); return nil })
+	establishVoiceSession(t, v, client, "listener")
+	v.JoinChannel("listener", 1)
+	v.JoinChannel("first", 1)
+	clock.Advance(50 * time.Millisecond)
+	for i := 0; i < 20 && v.engine.PeerConnection("listener") != nil; i++ {
+		clock.Advance(renegAnswerTimeoutMax)
+	}
+	if v.engine.PeerConnection("listener") != nil {
+		t.Fatal("peer that ignores every offer was never closed")
+	}
+	if rec.count() != 1+renegMaxRedeliveries {
+		t.Fatalf("offers = %d, want the offer plus %d redeliveries", rec.count(), renegMaxRedeliveries)
+	}
+	v.router.mu.RLock()
+	channel := v.router.clientChan["listener"]
+	v.router.mu.RUnlock()
+	if channel != 1 {
+		t.Fatalf("closing the ignored peer dropped channel membership: %d", channel)
+	}
+}
+
 // An offer that was applied locally but failed delivery (control write
 // error) used to leave the peer in have-local-offer with nothing scheduled.
 func TestUndeliveredOfferIsRetried(t *testing.T) {

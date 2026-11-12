@@ -307,9 +307,8 @@ func (s *TCPServer) handleVideoQuality(ctx context.Context, client *Client, f *n
 func (s *TCPServer) applyVideoQuality(ctx context.Context, client *Client, msg netproto.VideoQuality) error {
 	var err error
 	if msg.PublisherID != "" || msg.Slot != "" || msg.Generation != 0 || msg.Session != 0 {
-		// Refresh the immutable publisher-access snapshot under the same lease
-		// used for this control; hidden or revoked publications cannot be tuned.
-		s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
+		// Hidden or revoked publications cannot be tuned: the router checks the
+		// publisher snapshot that policy and membership changes keep current.
 		err = s.deps.Voice.SetStreamVideoQuality(client.ID, msg.PublisherID, msg.Slot, msg.Generation, msg.Session, msg.Quality)
 	} else {
 		err = s.deps.Voice.SetVideoQuality(client.ID, msg.Quality)

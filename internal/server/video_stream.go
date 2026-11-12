@@ -87,12 +87,9 @@ func (s *TCPServer) handleVideoStreamControl(ctx context.Context, client *Client
 	}
 	return lease(ctx, client, capability, active, func(ctx context.Context, channelID int64) error {
 		voice := s.deps.Voice
-		// Real policy, membership, rules and visibility changes refresh this
-		// snapshot under their mutation barriers. Polling must not acquire the
-		// router's global watch writer merely to reinstall the same predicate.
-		if !sharedLease {
-			s.refreshRolePublishers(ctx.Value(roleLeaseKey{}).(roleLease).evaluator)
-		}
+		// Real policy, membership, rules and visibility changes refresh the
+		// publisher snapshot under their mutation barriers. Stream actions must
+		// not take the router's global writer merely to reinstall it.
 		result := netproto.VideoStreamResult{Action: msg.Action, PublisherID: msg.PublisherID, Slot: msg.Slot, Generation: msg.Generation, Revision: msg.Revision, Active: msg.Active, Streams: []netproto.VideoStream{}}
 		var err error
 		var started bool

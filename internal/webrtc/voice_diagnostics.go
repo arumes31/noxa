@@ -149,8 +149,10 @@ func (r *Router) recordAudioReceiverReports(clientID string, sender *webrtc.RTPS
 		return
 	}
 	parameters := sender.GetParameters()
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	// A read lock keeps the binding alive; the report itself is stored
+	// atomically so RTCP never waits for (or blocks) Router.mu writers.
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	for _, tracks := range r.pubTracks[clientID] {
 		for _, output := range tracks.audio {
 			if output.sender != sender {
@@ -159,7 +161,7 @@ func (r *Router) recordAudioReceiverReports(clientID string, sender *webrtc.RTPS
 			for _, report := range reports {
 				for _, encoding := range parameters.Encodings {
 					if report.SSRC == uint32(encoding.SSRC) {
-						output.receiverReport = &audioReceiverReport{report: report, receivedAt: time.Now()}
+						output.receiverReport.Store(&audioReceiverReport{report: report, receivedAt: time.Now()})
 						return
 					}
 				}
@@ -174,10 +176,10 @@ func (r *Router) voiceReceiverReports(clientID string) []netproto.VoiceServerTra
 	r.mu.RLock()
 	for publisher, tracks := range r.pubTracks[clientID] {
 		for slot, output := range tracks.audio {
-			if output.receiverReport == nil {
+			sample := output.receiverReport.Load()
+			if sample == nil {
 				continue
 			}
-			sample := output.receiverReport
 			age := max(0, now.Sub(sample.receivedAt).Milliseconds())
 			// RTCP encodes cumulative loss as signed 24-bit, despite Pion's
 			// unsigned field. Widen before subtracting to avoid overflow.

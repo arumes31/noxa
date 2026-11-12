@@ -47,8 +47,8 @@ type relaySession struct {
 }
 
 // Manager lives with the control authority; restarting fails closed. Its lock
-// serializes issuance, allocation registration and revocation. Packet I/O uses
-// short bounded operations under this same barrier, never remote policy reads.
+// serializes issuance, allocation registration and revocation. Packet I/O
+// authorizes under this same barrier, never with remote policy reads.
 type Manager struct {
 	mu               sync.Mutex
 	endpoints        map[netip.AddrPort]*relaySocket
@@ -341,13 +341,29 @@ func (s *relaySocket) ReadFrom(p []byte) (int, net.Addr, error) {
 	}
 }
 func (s *relaySocket) WriteTo(p []byte, addr net.Addr) (int, error) {
+	addr, err := s.routeWrite(len(p), addr)
+	if err != nil {
+		return 0, err
+	}
+	// The write runs outside the registry lock: one full socket buffer must
+	// not stall every relay. A revocation racing it closes this socket, so at
+	// most a packet authorized just before the revocation still leaves.
+	if err := s.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		return 0, err
+	}
+	return s.PacketConn.WriteTo(p, addr)
+}
+
+// routeWrite authorizes an outbound packet under the revocation barrier and
+// returns its destination.
+func (s *relaySocket) routeWrite(n int, addr net.Addr) (net.Addr, error) {
 	s.manager.mu.Lock()
 	defer s.manager.mu.Unlock()
 	if s.closed || !s.manager.validLocked(s.grant) {
-		return 0, net.ErrClosed
+		return nil, net.ErrClosed
 	}
-	if !s.allowedLocked(addr) || !s.out.AllowN(s.manager.now(), len(p)) {
-		return 0, ErrDenied
+	if !s.allowedLocked(addr) || !s.out.AllowN(s.manager.now(), n) {
+		return nil, ErrDenied
 	}
 	if udp, ok := addr.(*net.UDPAddr); ok {
 		endpoint := udp.AddrPort()
@@ -356,11 +372,7 @@ func (s *relaySocket) WriteTo(p []byte, addr net.Addr) (int, error) {
 			addr = net.UDPAddrFromAddrPort(peer.localEndpoint)
 		}
 	}
-	// No unbounded network wait under the revocation barrier.
-	if err := s.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
-		return 0, err
-	}
-	return s.PacketConn.WriteTo(p, addr)
+	return addr, nil
 }
 
 // An exact active allocation can be a peer for private calls on this relay.
