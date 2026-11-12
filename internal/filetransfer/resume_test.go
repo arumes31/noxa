@@ -3,6 +3,7 @@ package filetransfer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"noxa/internal/netproto"
+	"noxa/internal/store"
 )
 
 // dialTransferAt connects and sends an init frame with a resume offset.
@@ -281,5 +283,61 @@ func TestReservationsWithPartialsOnDiskSurvivePruning(t *testing.T) {
 	_, _, offset, resumable, err := s.InitResumableUpload(ctx, 7, "", "kept.bin", 10, "uid-1", 0, sum)
 	if err != nil || !resumable || offset != 4 {
 		t.Fatalf("resume = %v resumable=%v offset=%d, want 4", err, resumable, offset)
+	}
+}
+
+// A stored file named like an upload partial could be dedup-linked to another
+// member's blob and then truncated by a resume (audit #1): such names can no
+// longer be created, by upload or by rename.
+func TestPartialNamesCannotBeCreated(t *testing.T) {
+	fs := newFakeFileStore()
+	_, s := startServer(t, fs)
+	ctx := context.Background()
+	for _, name := range []string{"a.txt" + resumablePartialPrefix + strings.Repeat("ab", 16), "a.txt" + legacyPartialPrefix + strings.Repeat("cd", 8)} {
+		if _, _, err := s.InitUpload(ctx, 7, "", name, 10, "uid-1", 0); !errors.Is(err, ErrInvalidName) {
+			t.Fatalf("upload as %q = %v, want ErrInvalidName", name, err)
+		}
+		if err := s.RenameFile(ctx, 7, "", "kept.txt", "", name); !errors.Is(err, ErrInvalidName) {
+			t.Fatalf("rename to %q = %v, want ErrInvalidName", name, err)
+		}
+	}
+	// Ordinary names that merely contain the marker stay valid.
+	if _, _, err := s.InitUpload(ctx, 7, "", "notes.part-review.txt", 10, "uid-1", 0); err != nil {
+		t.Fatalf("ordinary name refused: %v", err)
+	}
+}
+
+// A partial path that a stored file row already names (planted before such
+// names were refused) is never resumed into, so the linked blob stays intact.
+func TestResumeNeverWritesIntoAStoredFile(t *testing.T) {
+	fs := newFakeFileStore()
+	_, s := startServer(t, fs)
+	ctx := context.Background()
+	victim := []byte("victim report contents")
+	victimPath := s.filePath(7, "", "report.pdf")
+	if err := os.MkdirAll(filepath.Dir(victimPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(victimPath, victim, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = fs.AddFile(ctx, store.FileRecord{ChannelID: 7, Name: "report.pdf", Size: int64(len(victim)), SHA256: sha256Hex(victim), Uploader: "victim"})
+
+	sum := sha256Hex([]byte("attacker bytes"))
+	rel := resumablePartialPath(7, "", "a.txt", "attacker", int64(len(victim)), sum)
+	if err := os.Link(victimPath, filepath.Join(s.cfg.RootDir, rel)); err != nil {
+		t.Skipf("hard links unsupported here: %v", err)
+	}
+	_ = fs.AddFile(ctx, store.FileRecord{ChannelID: 7, Name: filepath.Base(rel), Size: int64(len(victim)), SHA256: sha256Hex(victim), Uploader: "attacker"})
+
+	_, _, _, resumable, err := s.InitResumableUpload(ctx, 7, "", "a.txt", int64(len(victim)), "attacker", 0, sum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumable {
+		t.Fatal("resume offered into a stored file's path")
+	}
+	if got, err := os.ReadFile(victimPath); err != nil || !bytes.Equal(got, victim) {
+		t.Fatalf("victim file changed: %q, %v", got, err)
 	}
 }

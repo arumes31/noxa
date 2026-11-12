@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"noxa/internal/authorization"
 	"noxa/internal/netproto"
@@ -13,6 +14,11 @@ import (
 // after checking the current policy, holding that revision through the write.
 // Enqueue-time checks alone cannot revoke data waiting behind a slow socket.
 const roleChannelDelivery = "_role_channel_delivery"
+
+// metadataWriteCeiling bounds a delivery made while holding roleMetadataMu.
+// Writes to a healthy peer land in its socket buffer at once; only a peer that
+// stopped reading blocks, and it must not stall delivery to everyone else.
+const metadataWriteCeiling = 1500 * time.Millisecond
 
 type roleChannelEvent struct {
 	ChannelID int64           `json:"channel_id"`
@@ -56,6 +62,11 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 			// notifications likewise must not outlive the member's visibility.
 			s.roleMetadataMu.Lock()
 			defer s.roleMetadataMu.Unlock()
+			// Every other recipient waits for this lock, so a dead peer may
+			// hold it only briefly; a failed write then closes that peer.
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, metadataWriteCeiling)
+			defer cancel()
 		}
 		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
 		frame, err := s.roleBroadcastFrame(client, payload, e)

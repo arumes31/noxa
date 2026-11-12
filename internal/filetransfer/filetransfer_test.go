@@ -18,9 +18,10 @@ import (
 
 // fakeFileStore implements FileStore in memory.
 type fakeFileStore struct {
-	mu    sync.Mutex
-	files map[string]store.FileRecord
-	added []store.FileRecord
+	mu     sync.Mutex
+	files  map[string]store.FileRecord
+	added  []store.FileRecord
+	addErr error // returned by AddFile when set
 }
 
 func TestServerCloseBeforeStart(t *testing.T) {
@@ -174,6 +175,9 @@ func key(channelID int64, folder, name string) string {
 func (f *fakeFileStore) AddFile(_ context.Context, rec store.FileRecord) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.addErr != nil {
+		return f.addErr
+	}
 	f.files[key(rec.ChannelID, rec.Folder, rec.Name)] = rec
 	f.added = append(f.added, rec)
 	return nil

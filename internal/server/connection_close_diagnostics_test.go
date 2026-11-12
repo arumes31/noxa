@@ -20,6 +20,9 @@ type closeDiagnosticWriteConn struct {
 
 func (c closeDiagnosticWriteConn) Write([]byte) (int, error) { return 0, c.failure }
 
+// Close is called after a failed write; the stub has no connection to close.
+func (c closeDiagnosticWriteConn) Close() error { return nil }
+
 func TestControlWriteDiagnosticDoesNotExposeConnectionData(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

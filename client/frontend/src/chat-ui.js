@@ -6,6 +6,7 @@ import { SafetyScan, SafetyScheme, checkSafetyScan } from "./safety-qr.js";
 import { scanQR } from "./qr-scan.js";
 import { AUDIO_MIME, TEXT_MAX_B64, decodeTextPreview, previewKind } from "./attachment-preview.js";
 import { clipboardFiles, preparePastedFiles } from "./paste-images.js";
+import { bindRichPaste } from "./rich-paste.js";
 import { mountComposerFormat } from "./composer-format.js";
 import { MAX_FAVORITES, MAX_RECENT, emojiIndex, recordEmojiUse, searchEmoji, storedEmoji, toggleFavorite } from "./emoji-picker-model.js";
 import { previewConversation, previewConversationFor, setPreviewConversation } from "./preview-privacy.js";
@@ -70,9 +71,16 @@ const V = () => window.__noxa;
 const $ = (id) => document.getElementById(id);
 
 let composerLimit = null;
+// WebKitGTK (the Linux desktop) has no CSS field-sizing: size the composer
+// to its text here. Every value change, including send and recall, ends here.
+const composerAutoSize = !globalThis.CSS?.supports?.("field-sizing", "content");
 function updateComposerCount() {
     const input = $("chat-text"), counter = $("chat-length");
     if (!input || !counter) return;
+    if (composerAutoSize) {
+        input.style.height = "auto";
+        input.style.height = `${input.scrollHeight}px`; // max-height in CSS caps it
+    }
     const text = input.value.trim();
     const bytes = new TextEncoder().encode(text).length;
     const limit = composerLimit && chatServerIsCurrent(composerLimit.scope) && $("chat-scope").value !== "direct" ? composerLimit.bytes : 0;
@@ -4504,7 +4512,9 @@ function rememberSent(text) {
 
 function recallSent(e) {
     const input = $("chat-text");
-    if (e.key === "ArrowUp" && (input.selectionStart === 0 || sentHistoryPos < sentHistory.length) && sentHistoryPos > 0) {
+    // Multi-line text: ArrowUp moves the caret until it is on the first line.
+    const onFirstLine = !input.value.slice(0, input.selectionStart).includes("\n");
+    if (e.key === "ArrowUp" && onFirstLine && (input.selectionStart === 0 || sentHistoryPos < sentHistory.length) && sentHistoryPos > 0) {
         e.preventDefault();
         if (sentHistoryPos === sentHistory.length) sentHistoryDraft = input.value;
         draftRevision++;
@@ -4846,6 +4856,7 @@ function toggleEmojiPanel(target = null) {
 // Metadata and raster thumbnails are fetched by the connected server only.
 
 const linkCards = new Map(); // url -> {title: string | null}
+const LINK_CARDS_MAX = 200;
 let linkCardEl = null;
 let linkCardTimer = null;
 let linkCardGeneration = 0;
@@ -4887,7 +4898,11 @@ async function linkPreview(url, controller) {
             }
         }
     } catch { /* unavailable: domain-only card, never a direct HTTP fallback */ }
-    if (!controller.signal.aborted && exportScopeIsCurrent(owner)) linkCards.set(url, card);
+    if (!controller.signal.aborted && exportScopeIsCurrent(owner)) {
+        linkCards.set(url, card);
+        // Thumbnails are data URLs; keep the newest 200 like the PWA does.
+        if (linkCards.size > LINK_CARDS_MAX) linkCards.delete(linkCards.keys().next().value);
+    }
     return card;
 }
 
@@ -6357,6 +6372,7 @@ export function initChat() {
     });
 
     // File paste + drop + picker (98/100).
+    bindRichPaste($("chat-text"));
     $("chat-text").addEventListener("paste", (e) => {
         const files = clipboardFiles(e.clipboardData);
         if (!files.length) return;

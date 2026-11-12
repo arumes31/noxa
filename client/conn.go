@@ -556,7 +556,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.mu.Unlock()
 	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	authMsg.ClientVersion = version.Short()
-	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint}
+	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye}
 	if m.lobbyPrivacyPreference != nil {
 		authMsg.HideLobbyPresence = m.lobbyPrivacyPreference()
 	}
@@ -871,9 +871,34 @@ func (m *connManager) disconnect() {
 	conn, waiters, transferConns := m.detachLocked()
 	m.mu.Unlock()
 	if conn != nil {
+		m.sendGoodbye(conn)
 		log.Printf("control connection closed reason=%s epoch=%d", netproto.ControlCloseLocal, epoch)
 	}
 	m.finishDetach(conn, waiters, transferConns, false)
+}
+
+// goodbyeWriteTimeout keeps a quit on a dead network from waiting for the
+// regular write timeout.
+const goodbyeWriteTimeout = 500 * time.Millisecond
+
+// sendGoodbye tells the server this close is deliberate, so observers hear a
+// leave rather than a lost connection. Best effort and bounded as a whole: a
+// write stuck on the lock or the wire only changes which cue other users hear.
+func (m *connManager) sendGoodbye(conn net.Conn) {
+	f, err := netproto.Encode(netproto.MsgGoodbye, struct{}{})
+	if err != nil {
+		return
+	}
+	deadline := time.Now().Add(goodbyeWriteTimeout)
+	for !m.writeMu.TryLock() {
+		if time.Now().After(deadline) {
+			return // a write is stuck; the close below unblocks it
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	defer m.writeMu.Unlock()
+	_ = conn.SetWriteDeadline(deadline)
+	_ = netproto.WriteFrame(conn, f)
 }
 
 func (m *connManager) finishDetach(conn net.Conn, waiters []chan requestResult, transferConns []net.Conn, emitDisconnected bool) {

@@ -360,3 +360,53 @@ test("the emoji picker searches in English and German and keeps recents and favo
     await expect.poll(() => page.evaluate(() => window.__saved.emoji_favorites)).toEqual(["❤️"]);
     expect(await page.evaluate(() => window.__saved.emoji_recents)).toEqual(["❤️"]);
 });
+
+test("a formatted paste becomes markdown; Ctrl+Shift+V stays plain; Shift+Enter adds a line", async ({ page }) => {
+    const input = page.locator("#chat-text");
+    await expect(input).toHaveJSProperty("tagName", "TEXTAREA");
+    const paste = (html, text) => input.evaluate((el, [h, t]) => {
+        el.focus();
+        const data = new DataTransfer();
+        data.setData("text/html", h);
+        data.setData("text/plain", t);
+        el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+    }, [html, text]);
+    await paste('<p><b>bold</b> and <a href="https://example.test/">docs</a></p><ul><li>one</li><li>two</li></ul>', "bold and docs one two");
+    await expect(input).toHaveValue("**bold** and [docs](https://example.test/)\n\n- one\n- two");
+    await expect(page.locator("#chat-length")).toBeVisible();
+
+    await input.fill("");
+    // The shortcut marks the next paste as plain (a real keypress would paste the empty clipboard).
+    const prevented = await input.evaluate((el) => {
+        el.dispatchEvent(new KeyboardEvent("keydown", { key: "V", ctrlKey: true, shiftKey: true, bubbles: true }));
+        const data = new DataTransfer();
+        data.setData("text/html", "<b>x</b>");
+        const event = new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true });
+        el.dispatchEvent(event);
+        return event.defaultPrevented;
+    });
+    expect(prevented).toBe(false);
+
+    await input.fill("first");
+    await input.press("Shift+Enter");
+    await input.pressSequentially("second");
+    await expect(input).toHaveValue("first\nsecond");
+});
+
+test("messages render headings, lists, quotes and named links", async ({ page }) => {
+    await page.evaluate(async () => {
+        await (await import("/src/chat-ui.js")).onConnect();
+        (await import("/src/chat-ui.js")).addChat({ id: 8810, channel_id: 1, from_unique_id: "alice-uid", from: "Alice", enc_verified: true, enc_mode: "server",
+            text: "# Title\n\n- one\n- [x] two\n\n> quoted\n\nSee [docs](https://example.test/d) and <b>raw</b>" });
+    });
+    const body = page.locator('.msg[data-msg-id="8810"] .msg-text');
+    await expect(body.locator("h1")).toHaveText("Title");
+    await expect(body.locator("li")).toHaveText(["one", "☑ two"]);
+    await expect(body.locator("blockquote")).toHaveText("quoted");
+    const link = body.locator("a.md-link");
+    await expect(link).toHaveText("docs");
+    await expect(link).toHaveAttribute("data-url", "https://example.test/d");
+    await expect(link).toHaveAttribute("href", "#");
+    await expect(body).toContainText("<b>raw</b>");
+    await expect(body.locator("b")).toHaveCount(0);
+});

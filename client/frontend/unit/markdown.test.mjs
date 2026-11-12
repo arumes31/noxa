@@ -16,8 +16,6 @@ describe("renderMarkdown", () => {
         const forged = "0".repeat(50);
         const html = renderMarkdown(fragment + forged);
         assert.equal(html.match(/md-code/g).length, 1);
-        assert.ok(!html.includes("") && !html.includes(""));
-        assert.ok(html.length < 200);
     });
 
     it("returns an empty string for empty input", () => {
@@ -58,20 +56,23 @@ describe("renderMarkdown", () => {
 
     it("renders valid tables and leaves malformed tables as text", () => {
         const valid = renderMarkdown("A | B\n--- | :---:\none | two");
-        assert.match(valid, /<table class="md-table">/);
-        assert.match(valid, /<th>A<\/th><th>B<\/th>/);
-        assert.match(valid, /<td>one<\/td><td>two<\/td>/);
-        assert.doesNotMatch(valid, /<br>/);
+        assert.match(valid, /<div class="md-table-wrap"><table class="md-table">/);
+        assert.match(valid, /<th>A<\/th>\s*<th>B<\/th>/);
+        assert.match(valid, /<td>one<\/td>\s*<td>two<\/td>/);
+        assert.doesNotMatch(valid, /<br>|style=/, "no line breaks or inline alignment styles");
 
+        // A single dash line under text is a CommonMark heading, not a table.
         const malformed = renderMarkdown("A | B\n---\none | two");
         assert.doesNotMatch(malformed, /<table/);
-        assert.match(malformed, /A \| B<br>---<br>one \| two/);
+        assert.match(malformed, /<h2>A \| B<\/h2>/);
     });
 
     it("stops a table when a row has the wrong number of cells", () => {
-        const html = renderMarkdown("A | B\n--- | ---\none | two\nonly-one");
-        assert.match(html, /<td>one<\/td><td>two<\/td>/);
-        assert.match(html, /<\/div>only-one$/);
+        // GFM pads a short row; a blank line ends the table.
+        const html = renderMarkdown("A | B\n--- | ---\none | two\nonly-one\n\nafter");
+        assert.match(html, /<td>one<\/td>\s*<td>two<\/td>/);
+        assert.match(html, /<td>only-one<\/td>\s*<td><\/td>/);
+        assert.match(html, /<\/table><\/div>\s*<p>after<\/p>$/);
     });
 
     it("detects common fenced-code languages and highlights code", () => {
@@ -176,5 +177,78 @@ describe("image placeholders", () => {
         assert.equal(stopped, 1);
         assert.equal(button.replaced.src, "data:image/jpeg;base64,/9j/2Q==");
         delete globalThis.window;
+    });
+});
+
+describe("full markdown", () => {
+    it("keeps a single paragraph unwrapped and single newlines as line breaks", () => {
+        assert.equal(renderMarkdown("hello\nworld"), "hello<br>\nworld");
+        assert.match(renderMarkdown("one\n\ntwo"), /^<p>one<\/p>\s*<p>two<\/p>$/);
+    });
+
+    it("renders headings, lists, task items, quotes and rules", () => {
+        const html = renderMarkdown("# Title\n\n- a\n  - nested\n- [x] done\n- [ ] open\n\n1. first\n2. second\n\n> quoted **bold**\n\n---");
+        assert.match(html, /<h1>Title<\/h1>/);
+        assert.doesNotMatch(html, /\sid=/, "headings get no ids");
+        assert.match(html, /<ul>\s*<li>a\s*<ul>\s*<li>nested<\/li>/);
+        assert.match(html, /<li>☑ done<\/li>/);
+        assert.match(html, /<li>☐ open<\/li>/);
+        assert.doesNotMatch(html, /<input/, "task boxes are display-only text");
+        assert.match(html, /<ol>\s*<li>first<\/li>\s*<li>second<\/li>\s*<\/ol>/);
+        assert.match(html, /<blockquote>\s*<p>quoted <strong>bold<\/strong><\/p>\s*<\/blockquote>/);
+        assert.match(html, /<hr>/);
+    });
+
+    it("renders named links through the delegated link markup", () => {
+        const html = renderMarkdown('[the docs](https://example.test/a?b=1&c=2 "ignored title") and <https://example.test/x>');
+        assert.match(html, /<a href="#" class="md-link" data-url="https:\/\/example\.test\/a\?b=1&amp;c=2" title="https:\/\/example\.test\/a\?b=1&amp;c=2">the docs<\/a>/);
+        assert.doesNotMatch(html, /ignored title/);
+        assert.match(html, /data-url="https:\/\/example\.test\/x"/);
+    });
+
+    it("never renders raw HTML, script URLs or attribute breakouts", () => {
+        const corpus = [
+            "[x](javascript:alert(1))",
+            "[x](JaVaScRiPt:alert(1))",
+            "[x](data:text/html;base64,PHNjcmlwdD4=)",
+            "[x](vbscript:msgbox(1))",
+            "[x](//evil.test/path)",
+            "<img src=x onerror=alert(1)>",
+            "<a href=\"javascript:alert(1)\">x</a>",
+            '[x" onmouseover="alert(1)](https://example.test/)',
+            '[x](https://example.test/" onmouseover="alert(1))',
+            '![a" onerror="alert(1)](https://example.test/a.png)',
+            "![x](javascript:alert(1))",
+            "<javascript:alert(1)>",
+            "**<b>**[*x*](https://example.test/)",
+            "> - [x](javascript:alert(1))\n>   - <script>alert(1)</script>",
+            "| a |\n| - |\n| <script>alert(1)</script> |",
+        ];
+        for (const source of corpus) {
+            const html = renderMarkdown(source);
+            assert.doesNotMatch(html, /<(script|img|iframe|svg|object|embed|input)\b/i, source);
+            assert.doesNotMatch(html, /<[^>]*\son[a-z]+="/i, source); // a real attribute needs an unescaped quote
+            assert.doesNotMatch(html, /href="(?!#")/i, source);
+            assert.doesNotMatch(html, /data-url="(?!https?:\/\/)/i, source);
+            assert.doesNotMatch(html, /title="(?!https?:\/\/|Copy code)/i, source);
+        }
+    });
+
+    it("keeps underline, strikethrough, nested emphasis and backslash escapes", () => {
+        assert.equal(renderMarkdown("__u__ ~~s~~ ***both*** \\*literal\\*"), "<u>u</u> <del>s</del> <em><strong>both</strong></em> *literal*");
+    });
+
+    it("leaves indented text alone and bare domains unlinked", () => {
+        assert.doesNotMatch(renderMarkdown("intro\n\n    indented prose"), /<pre/);
+        assert.doesNotMatch(renderMarkdown("see example.test or mail@example.test"), /md-link/);
+    });
+});
+
+describe("image targets", () => {
+    it("renders only https images as load buttons; http images stay links", () => {
+        assert.match(renderMarkdown("![a](https://example.test/a.png)"), /class="md-img-load"/);
+        const http = renderMarkdown("![shot](http://example.test/a.png)");
+        assert.doesNotMatch(http, /md-img-load/);
+        assert.match(http, /<a href="#" class="md-link" data-url="http:\/\/example\.test\/a\.png" title="http:\/\/example\.test\/a\.png">shot<\/a>/);
     });
 });

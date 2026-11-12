@@ -86,7 +86,8 @@ test("undo keeps a newer draft and prevents transmission", async ({ page }) => {
  expect(await page.evaluate(() => window.__sent.length)).toBe(0);
  await page.locator("#chat-text").fill("New draft");
  await page.locator(".chat-delivery-strip").getByRole("button", { name: "Undo", exact: true }).click();
- await expect(page.locator("#chat-text")).toHaveValue("First message New draft");
+ // The composer is multi-line: a restored message keeps the newer draft on its own line.
+ await expect(page.locator("#chat-text")).toHaveValue("First message\nNew draft");
  expect(await page.evaluate(() => window.__outbox.length)).toBe(0);
 });
 

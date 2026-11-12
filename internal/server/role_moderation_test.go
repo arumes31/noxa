@@ -263,14 +263,30 @@ func TestRoleKickNotBlockedByBroadcastToStalledTarget(t *testing.T) {
 
 	started := time.Now()
 	send(t, owner, netproto.MsgKickClient, netproto.KickClient{ClientID: memberID, FromServer: true, AckRequested: true})
-	frame := readOfType(t, owner, netproto.MsgClientRemoved)
-	var removed netproto.ClientRemoved
-	if err := json.Unmarshal(frame.Payload, &removed); err != nil {
-		t.Fatal(err)
+	// The stalled member may already be disconnected because its writer fell
+	// behind; then the kick finds no session and answers with an error. Either
+	// way the kick must not wait behind the stalled broadcast.
+	for {
+		_ = owner.SetReadDeadline(time.Now().Add(roleWriteCeiling + 3*time.Second))
+		frame, err := netproto.ReadFrame(owner)
+		if err != nil {
+			t.Fatalf("no kick outcome: %v", err)
+		}
+		if netproto.MessageType(frame.Type) == netproto.MsgError {
+			break
+		}
+		if netproto.MessageType(frame.Type) == netproto.MsgClientRemoved {
+			var removed netproto.ClientRemoved
+			if err := json.Unmarshal(frame.Payload, &removed); err != nil {
+				t.Fatal(err)
+			}
+			if removed.ClientID != memberID {
+				t.Fatalf("wrong kick acknowledgement: %+v", removed)
+			}
+			break
+		}
 	}
-	if removed.ClientID != memberID {
-		t.Fatalf("wrong kick acknowledgement: %+v", removed)
-	}
+	_ = owner.SetReadDeadline(time.Time{})
 	elapsed := time.Since(started)
 	t.Logf("kick completed after %v", elapsed)
 	if elapsed > roleWriteCeiling+3*time.Second {

@@ -113,6 +113,10 @@ func roleSnapshotEvent(kind string) bool {
 func (s *TCPServer) roleSnapshotWithOwnMove(client *Client, e *authorization.RoleEvaluator) *broadcast.TreeSnapshot {
 	snapshot := buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID())
 	s.decorateOwnChannelMove(snapshot, client, e)
+	userID := client.userID()
+	s.presence.decorate(snapshot, func(channelID int64) bool {
+		return channelID <= 0 || e.Evaluate(userID, channelID, authorization.ViewChannel).Allowed
+	}, time.Now())
 	return snapshot
 }
 
