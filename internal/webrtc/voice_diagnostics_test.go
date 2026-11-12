@@ -118,13 +118,13 @@ func TestVoiceReceiverReportsUseAudioBindingAndRTCPUnits(t *testing.T) {
 			}
 		})
 	}
-	router.mu.Lock()
-	if output.receiverReport == nil {
-		router.mu.Unlock()
+	sample := output.receiverReport.Load()
+	if sample == nil {
 		t.Fatal("no receiver report retained for freshness check")
 	}
-	output.receiverReport.receivedAt = time.Now().Add(-16 * time.Second)
-	router.mu.Unlock()
+	stale := *sample
+	stale.receivedAt = time.Now().Add(-16 * time.Second)
+	output.receiverReport.Store(&stale)
 	got := router.voiceReceiverReports("listener")
 	if len(got) != 1 || !got[0].Stale || got[0].AgeMS < 15000 {
 		t.Fatalf("old receiver report not marked stale: %+v", got)

@@ -82,6 +82,9 @@ const (
 	// renegAnswerTimeoutMax caps the watchdog backoff for a client that keeps
 	// ignoring offers (one SDP per interval, never a constant cost).
 	renegAnswerTimeoutMax = 30 * time.Second
+	// renegMaxRedeliveries bounds redeliveries of one unanswered offer; the
+	// next expiry closes the peer connection instead.
+	renegMaxRedeliveries = 5
 	// renegStaleOffer is the age after which a client offer colliding with an
 	// outstanding server offer triggers immediate redelivery of that offer:
 	// the client evidently did not receive it, and is waiting for it to
@@ -467,6 +470,20 @@ func (v *Voice) redeliverOffer(clientID string, st *renegState, seq uint64, wrap
 		}
 		v.renegMu.Unlock()
 		v.resumePending(clientID)
+		return
+	}
+	v.renegMu.Lock()
+	abandon := v.reneg[clientID] == st && st.expired >= renegMaxRedeliveries
+	v.renegMu.Unlock()
+	if abandon {
+		// Every redelivery reruns the publisher pass and the peer keeps
+		// gaining unnegotiated outputs. Closing it (channel kept, like a
+		// rebuild) makes the client recover its transport with a fresh offer.
+		v.logger.Warn("client ignored renegotiation offers; closing its peer connection",
+			zap.String("client_id", clientID))
+		v.stopReneg(clientID)
+		v.router.DetachPeerKeepChannel(clientID)
+		_ = v.engine.ClosePeerConnection(clientID)
 		return
 	}
 	send := func() error {

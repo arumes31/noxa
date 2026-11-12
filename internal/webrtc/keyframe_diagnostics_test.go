@@ -169,6 +169,7 @@ func TestKeyframeDiagnosticsSemanticCallers(t *testing.T) {
 			case "stream_quality":
 				err = r.SetStreamVideoQuality("sub", "pub", SlotScreen, generation, session, "high")
 			case "legacy_quality":
+				r.pubTracks["sub"] = map[string]*pubTrack{"pub": {video: map[string]*pubSlot{SlotScreen: {sender: &webrtc.RTPSender{}}}}}
 				err = r.SetVideoQuality("sub", "high")
 			case "join":
 				r.JoinChannel(1, "sub")

@@ -299,7 +299,7 @@ func TestKeyframeRequestOnJoinRequiresVideoConsumer(t *testing.T) {
 }
 
 // TestKeyframeRequestOnQualityChange verifies SetVideoQuality triggers a PLI
-// for the newly selected layer.
+// for the newly selected layer, only for video the subscriber watches.
 func TestKeyframeRequestOnQualityChange(t *testing.T) {
 	r := NewRouter(nil)
 	pub := &fakeRTCPWriter{}
@@ -308,11 +308,19 @@ func TestKeyframeRequestOnQualityChange(t *testing.T) {
 	r.JoinChannel(1, "viewer")
 	r.mu.Lock()
 	r.rtcpWriters["pub"] = pub
+	r.pubTracks["viewer"] = map[string]*pubTrack{"pub": {video: map[string]*pubSlot{SlotCam: {sender: &webrtc.RTPSender{}}}}}
 	r.mu.Unlock()
 	registerVideoSource(r, "pub", SlotCam, "f", 9001)
 	registerVideoSource(r, "pub", SlotCam, "q", 9003)
 
 	before := pub.pliCount()
+	if err := r.SetVideoQuality("viewer", "low"); err != nil {
+		t.Fatalf("SetVideoQuality: %v", err)
+	}
+	if got := pub.pliCount(); got != before {
+		t.Fatalf("unwatched camera asked for a keyframe: PLIs = %d", got)
+	}
+	activateTestWatch(r, "viewer", "pub", SlotCam)
 	if err := r.SetVideoQuality("viewer", "low"); err != nil {
 		t.Fatalf("SetVideoQuality: %v", err)
 	}

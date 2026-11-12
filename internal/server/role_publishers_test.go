@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"noxa/internal/authorization"
@@ -14,12 +15,21 @@ func TestRoleChannelWhisperHidesSourceMetadataFromIneligibleRecipient(t *testing
 	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect, authorization.Speak}
 	backend.policy.Channels[0].Overrides = []authorization.RoleOverride{{UserID: 1, Capability: authorization.ViewChannel, Effect: authorization.Deny}}
 	backend.policy.Channels = append(backend.policy.Channels, authorization.ChannelPolicy{ChannelID: 2})
-	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	// Policy changes refresh the publisher snapshot through the production
+	// reconcile hook; renegotiation offers no longer reinstall it.
+	var srv atomic.Pointer[TCPServer]
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(ctx context.Context, before, after *authorization.RoleEvaluator) error {
+		if s := srv.Load(); s != nil {
+			return s.ReconcileRolePolicy(ctx, before, after)
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	env := startTestEnvDeps(t, nil, nil, func(d *Deps) { d.Authority = authority })
 	defer env.stop()
+	srv.Store(env.srv)
 	for _, ch := range []int64{1, 2} {
 		env.state.AddChannel(testChannel(ch))
 	}
@@ -57,7 +67,7 @@ func TestRoleChannelWhisperHidesSourceMetadataFromIneligibleRecipient(t *testing
 		current := voice.publisherGuard
 		voice.mu.Unlock()
 		if !current(pair) {
-			t.Error("SDP preparation failed to refresh the role grant")
+			t.Error("policy change failed to refresh the role grant")
 		}
 		if env.srv.roleMetadataMu.TryLock() {
 			env.srv.roleMetadataMu.Unlock()
