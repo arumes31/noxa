@@ -100,7 +100,7 @@ func (c *Client) rememberOwnChannelMove(from, to int64, forced bool) {
 func roleSnapshotEvent(kind string) bool {
 	switch kind {
 	case eventUserJoined, eventUserLeft, eventUserMoved, eventMediaDeviceChanged, eventChannelCreated, eventChannelDeleted,
-		eventChannelUpdated, eventStatusChanged, eventNicknameChanged, eventMemberVoiceChanged, eventAudioStateChanged, eventVoiceQueueChanged, eventKicked:
+		eventChannelUpdated, eventStatusChanged, eventNicknameChanged, eventMemberVoiceChanged, eventAudioStateChanged, eventVoiceQueueChanged, eventKicked, roleResyncDelivery:
 		return true
 	default:
 		return false

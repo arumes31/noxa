@@ -123,6 +123,7 @@ type Client struct {
 	deviceIndex      *deviceSessionIndex                         // set by register; keeps the device -> sessions index current
 	webTransport     atomic.Bool                                 // connected through the mobile web app
 	closeCause       atomic.Pointer[netproto.ControlCloseReason] // first server-side close cause
+	resyncPending    atomic.Bool                                 // a resync snapshot is queued (role_delivery.go)
 	readClose        atomic.Pointer[netproto.ControlCloseReason] // why the read loop ended
 	saidGoodbye      atomic.Bool                                 // client sent MsgGoodbye before closing
 	replaced         atomic.Bool                                 // the same device reconnected on a newer session
@@ -578,13 +579,18 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 	}
 	if deps != nil && deps.Broadcast != nil {
 		deps.Broadcast.SetOverflowHandler(s.closeOverflowedClient)
+		// Only the role writer turns the resync marker into a snapshot.
+		if deps.Authority != nil {
+			deps.Broadcast.SetResyncHandler(s.requestResync, snapshotRecovers)
+		}
 	}
 	return s
 }
 
-// closeOverflowedClient disconnects a client whose broadcast queue overflowed:
-// it has silently missed events, and a reconnect resends a fresh snapshot and
-// history, while staying connected would leave it with a stale view.
+// closeOverflowedClient disconnects a client whose broadcast queue overflowed
+// and whose writer then stopped draining it: it is stuck, and a reconnect
+// resends a fresh snapshot and history. A client that catches up is resynced
+// in place instead (requestResync).
 func (s *TCPServer) closeOverflowedClient(clientID string) {
 	if client, ok := s.clientByID(clientID); ok {
 		s.logger.Warn("closing a client that fell behind its broadcast queue", zap.String("client_id", clientID))
@@ -1620,10 +1626,12 @@ func (s *TCPServer) writeFrameInContext(ctx context.Context, client *Client, fra
 		defer cancel()
 	}
 	if err := client.wmu.LockContext(lockCtx); err != nil {
-		// Another write to this client is still stuck: it fell behind, and the
-		// frame dropped here would leave it with a stale view. Close it so it
-		// resyncs; a caller giving up (canceled) is not the client's fault.
-		if errors.Is(err, context.DeadlineExceeded) && client.Conn != nil {
+		// Another write to this client was stuck for the whole write ceiling:
+		// it fell behind, and the frame dropped here would leave it with a
+		// stale view. Close it so it resyncs. A caller's own shorter deadline
+		// or cancellation only skips this write; a slow but healthy link may
+		// legitimately hold the writer for up to the ceiling.
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil && client.Conn != nil {
 			client.markCloseCause(netproto.ControlCloseWriteTimeout)
 			_ = client.Conn.Close()
 		}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -426,29 +427,208 @@ func TestCloseClearsRegistry(t *testing.T) {
 	}
 }
 
-// A client whose queue overflows has missed events: the overflow handler is
-// told once, so the server can disconnect it and let it resync.
-func TestOverflowHandlerRunsOncePerClient(t *testing.T) {
+func shortOverflowGrace(t *testing.T, grace time.Duration) {
+	t.Helper()
+	old := overflowGrace
+	overflowGrace = grace
+	t.Cleanup(func() { overflowGrace = old })
+}
+
+func watchHandlers(b *Broadcaster) (overflows, resyncs chan string) {
+	overflows, resyncs = make(chan string, 4), make(chan string, 4)
+	b.SetOverflowHandler(func(id string) { overflows <- id })
+	// Events named "chat" stand for those a resync cannot replace.
+	b.SetResyncHandler(func(id string) { resyncs <- id }, func(payload []byte) bool {
+		return !strings.Contains(string(payload), `"chat"`)
+	})
+	return overflows, resyncs
+}
+
+func drain(ch <-chan []byte) {
+	for len(ch) > 0 {
+		<-ch
+	}
+}
+
+func expectCall(t *testing.T, calls chan string, want, what string) {
+	t.Helper()
+	select {
+	case id := <-calls:
+		if id != want {
+			t.Fatalf("%s reported for %q, want %q", what, id, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("%s handler not called", what)
+	}
+}
+
+func expectNoCall(t *testing.T, calls chan string, wait time.Duration, what string) {
+	t.Helper()
+	select {
+	case id := <-calls:
+		t.Fatalf("unexpected %s for %q", what, id)
+	case <-time.After(wait):
+	}
+}
+
+// A client whose writer takes no event from its full queue is stuck and has
+// missed events: the overflow handler is told once, so the server can
+// disconnect it and let it resync.
+func TestOverflowHandlerRunsOncePerStuckClient(t *testing.T) {
+	shortOverflowGrace(t, 50*time.Millisecond)
 	b, _ := newTestBroadcaster(t)
-	calls := make(chan string, 4)
-	b.SetOverflowHandler(func(id string) { calls <- id })
+	overflows, resyncs := watchHandlers(b)
 	if _, err := b.Register("slow"); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 64; i++ {
 		b.BroadcastEvent("speaking_changed", []byte(`{}`))
 	}
-	select {
-	case id := <-calls:
-		if id != "slow" {
-			t.Fatalf("overflow reported for %q", id)
+	expectCall(t, overflows, "slow", "overflow")
+	for i := 0; i < 64; i++ {
+		b.BroadcastEvent("speaking_changed", []byte(`{}`))
+	}
+	expectNoCall(t, overflows, 200*time.Millisecond, "second overflow")
+	expectNoCall(t, resyncs, 10*time.Millisecond, "resync")
+}
+
+// A burst fills a healthy client's queue too. It drains, so its drop is
+// replaced by a resync instead of a disconnect.
+func TestDrainedClientIsResyncedNotClosed(t *testing.T) {
+	shortOverflowGrace(t, 50*time.Millisecond)
+	b, _ := newTestBroadcaster(t)
+	overflows, resyncs := watchHandlers(b)
+	ch, err := b.Register("healthy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < clientBufferSize+1; i++ {
+		b.BroadcastEvent("speaking_changed", []byte(`{}`))
+	}
+	if got := b.Stats().Dropped; got != 1 {
+		t.Fatalf("dropped = %d, want 1", got)
+	}
+	drain(ch)
+	expectCall(t, resyncs, "healthy", "resync")
+	expectNoCall(t, overflows, 100*time.Millisecond, "overflow")
+	// The watch ended, so a later drop is watched (and resynced) again.
+	for i := 0; i < clientBufferSize+1; i++ {
+		b.BroadcastEvent("speaking_changed", []byte(`{}`))
+	}
+	drain(ch)
+	expectCall(t, resyncs, "healthy", "second resync")
+}
+
+// A client that drains and is refilled within the grace period is full at
+// the check but its writer moved: it is watched again, not closed.
+func TestRefilledQueueThatMovedIsNotClosed(t *testing.T) {
+	shortOverflowGrace(t, 300*time.Millisecond)
+	b, _ := newTestBroadcaster(t)
+	overflows, resyncs := watchHandlers(b)
+	ch, err := b.Register("busy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < clientBufferSize+1; i++ {
+		b.BroadcastEvent("speaking_changed", []byte(`{}`))
+	}
+	drain(ch)
+	for i := 0; i < clientBufferSize+1; i++ {
+		b.BroadcastEvent("speaking_changed", []byte(`{}`))
+	}
+	expectNoCall(t, overflows, 500*time.Millisecond, "overflow")
+	expectNoCall(t, resyncs, 10*time.Millisecond, "resync while full")
+	drain(ch)
+	expectCall(t, resyncs, "busy", "resync")
+	expectNoCall(t, overflows, 400*time.Millisecond, "overflow")
+}
+
+// A queue that its writer drains but producers refill before every check
+// never has room: it is behind, and is closed after overflowRounds periods
+// rather than missing events forever.
+func TestFullQueueThatKeepsMovingIsClosed(t *testing.T) {
+	shortOverflowGrace(t, 50*time.Millisecond)
+	b, _ := newTestBroadcaster(t)
+	overflows, resyncs := watchHandlers(b)
+	ch, err := b.Register("behind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < clientBufferSize+1; i++ {
+		b.BroadcastEvent("speaking_changed", []byte(`{}`))
+	}
+	b.mu.RLock()
+	queue := b.clients["behind"]
+	b.mu.RUnlock()
+	stop := make(chan struct{})
+	pumped := make(chan struct{})
+	go func() {
+		defer close(pumped)
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Millisecond):
+				// Take one and refill under sendMu, so no check sees room.
+				b.sendMu.Lock()
+				b.mu.RLock()
+				<-ch
+				b.trySend(queue, "behind", []byte(`{}`))
+				b.trySend(queue, "behind", []byte(`{}`))
+				b.mu.RUnlock()
+				b.sendMu.Unlock()
+			}
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("overflow handler not called")
+	}()
+	expectCall(t, overflows, "behind", "overflow")
+	close(stop)
+	<-pumped
+	expectNoCall(t, resyncs, 10*time.Millisecond, "resync")
+}
+
+// A dropped event that a snapshot cannot replace (chat) is not resynced: the
+// client is closed so it reconnects and refetches it.
+func TestLossyDropClosesInsteadOfResync(t *testing.T) {
+	shortOverflowGrace(t, 50*time.Millisecond)
+	b, _ := newTestBroadcaster(t)
+	overflows, resyncs := watchHandlers(b)
+	ch, err := b.Register("chatty")
+	if err != nil {
+		t.Fatal(err)
 	}
-	select {
-	case id := <-calls:
-		t.Fatalf("overflow handler called again for %q", id)
-	case <-time.After(100 * time.Millisecond):
+	for i := 0; i < clientBufferSize; i++ {
+		b.BroadcastEvent("speaking_changed", []byte(`{}`))
 	}
+	b.BroadcastEvent("chat", []byte(`{}`))
+	drain(ch)
+	expectCall(t, overflows, "chatty", "overflow")
+	expectNoCall(t, resyncs, 10*time.Millisecond, "resync")
+}
+
+// A watch ends when its queue is unregistered, even while the closed queue
+// stays full and no overflow handler is set.
+func TestWatchEndsWhenQueueUnregistered(t *testing.T) {
+	shortOverflowGrace(t, 20*time.Millisecond)
+	b, _ := newTestBroadcaster(t)
+	resyncs := make(chan string, 4)
+	b.SetResyncHandler(func(id string) { resyncs <- id }, func([]byte) bool { return true })
+	before := runtime.NumGoroutine()
+	if _, err := b.Register("gone"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < clientBufferSize+1; i++ {
+		b.BroadcastEvent("speaking_changed", []byte(`{}`))
+	}
+	if runtime.NumGoroutine() <= before {
+		t.Fatal("no watch started for the drop")
+	}
+	b.Unregister("gone")
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before {
+		if time.Now().After(deadline) {
+			t.Fatalf("watch still running after Unregister: %d goroutines, want %d", runtime.NumGoroutine(), before)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	expectNoCall(t, resyncs, 10*time.Millisecond, "resync")
 }

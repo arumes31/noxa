@@ -57,8 +57,12 @@ type Broadcaster struct {
 	// between the per-connection fan-out and the event bus, so a bot sees
 	// exactly what connected clients see.
 	tap func(eventType string, payload []byte)
-	// overflow is told once per client whose queue overflowed.
+	// overflow is told once per client whose writer stopped draining its
+	// queue, or whose missed events a resync cannot replace; resync is told
+	// when a client caught up whose dropped events recovers all accepted.
 	overflow func(clientID string)
+	resync   func(clientID string)
+	recovers func(payload []byte) bool
 
 	delivered atomic.Uint64
 	dropped   atomic.Uint64
@@ -67,7 +71,24 @@ type Broadcaster struct {
 type clientQueue struct {
 	ch      chan []byte
 	dropped atomic.Uint64
+	// sent, watching and lossy are guarded by sendMu, like every producer.
+	// sent counts accepted events: with the queue full, it grows only when
+	// the writer took one out. watching is set while a drop is being watched,
+	// and stays set once the overflow handler ran. lossy marks a watched drop
+	// that a resync cannot replace.
+	sent     uint64
+	watching bool
+	lossy    bool
 }
+
+// overflowGrace is how long a full queue may go without its writer taking a
+// single event before the client counts as stuck. A burst fills even healthy
+// clients' small queues; they keep draining within this window.
+var overflowGrace = 2 * time.Second
+
+// overflowRounds bounds how many grace periods a queue may stay full while
+// moving: a writer that never catches up keeps missing events.
+const overflowRounds = 3
 
 // Stats is an operational snapshot of fan-out delivery and pressure.
 type Stats struct {
@@ -218,12 +239,25 @@ func (b *Broadcaster) BroadcastToClient(clientID string, payload []byte) error {
 }
 
 // SetOverflowHandler installs a callback run once per client whose queue
-// overflowed (it has missed events). It runs on its own goroutine, outside the
+// overflowed and whose writer then took no event for overflowGrace (it is
+// stuck and has missed events). It runs on its own goroutine, outside the
 // broadcaster's locks.
 func (b *Broadcaster) SetOverflowHandler(handler func(clientID string)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.overflow = handler
+}
+
+// SetResyncHandler installs a callback run when a client that dropped events
+// drained its queue again: it is healthy but missed events, so it needs a
+// fresh view. recovers reports whether that resync replaces a dropped
+// payload; a client that dropped anything else is given to the overflow
+// handler instead. The handler runs on its own goroutine, outside the
+// broadcaster's locks; recovers runs under them and must be quick.
+func (b *Broadcaster) SetResyncHandler(handler func(clientID string), recovers func(payload []byte) bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.resync, b.recovers = handler, recovers
 }
 
 // SetEventTap installs an observer invoked for every BroadcastEvent, before
@@ -313,10 +347,11 @@ func (b *Broadcaster) broadcastToAllLocked(payload []byte) []int {
 // queue after the capacity check and the channel cannot close.
 func (b *Broadcaster) trySend(queue *clientQueue, clientID string, payload []byte) (bool, int) {
 	if len(queue.ch) == cap(queue.ch) {
-		b.noteDrop(queue, clientID)
+		b.noteDrop(queue, clientID, payload)
 		return false, cap(queue.ch)
 	}
 	queue.ch <- bytes.Clone(payload)
+	queue.sent++
 	b.delivered.Add(1)
 	return true, len(queue.ch)
 }
@@ -330,16 +365,58 @@ func (b *Broadcaster) observeBacklogs(depths []int) {
 	}
 }
 
-func (b *Broadcaster) noteDrop(queue *clientQueue, clientID string) {
+func (b *Broadcaster) noteDrop(queue *clientQueue, clientID string, payload []byte) {
 	b.dropped.Add(1)
 	clientDrops := queue.dropped.Add(1)
-	if clientDrops == 1 && b.overflow != nil {
-		go b.overflow(clientID)
+	if !queue.lossy && (b.recovers == nil || !b.recovers(payload)) {
+		queue.lossy = true
+	}
+	if !queue.watching && (b.overflow != nil || b.resync != nil) {
+		queue.watching = true
+		go b.watchOverflow(queue, clientID, queue.sent, overflowGrace, b.overflow, b.resync)
 	}
 	// Log the first drop and powers of two thereafter. This preserves a clear
 	// pressure signal without allowing a stalled client to create a log storm.
 	if clientDrops == 1 || clientDrops&(clientDrops-1) == 0 {
 		b.logger.Warn("broadcast: client channel full, dropping message",
 			zap.String("client_id", clientID), zap.Uint64("client_drops", clientDrops))
+	}
+}
+
+// watchOverflow follows a client that dropped an event. A writer that took no
+// event for overflowGrace, or whose queue stayed full for overflowRounds
+// periods, is behind: overflow closes it. A queue with room again ends the
+// watch under sendMu, so a later drop starts a new one; resync replaces the
+// events it missed unless one of them was lossy. A queue that was
+// unregistered ends the watch.
+func (b *Broadcaster) watchOverflow(queue *clientQueue, clientID string, sent uint64, grace time.Duration, overflow, resync func(string)) {
+	for rounds := 1; ; rounds++ {
+		time.Sleep(grace)
+		b.sendMu.Lock()
+		b.mu.RLock()
+		gone := b.closed || b.clients[clientID] != queue
+		b.mu.RUnlock()
+		progressed := queue.sent != sent
+		sent = queue.sent
+		full := len(queue.ch) == cap(queue.ch)
+		lossy := queue.lossy
+		if !full {
+			queue.watching, queue.lossy = false, false
+		}
+		b.sendMu.Unlock()
+		switch {
+		case gone:
+			return
+		case !full && !lossy:
+			if resync != nil {
+				resync(clientID)
+			}
+			return
+		case (!full || !progressed || rounds >= overflowRounds) && overflow != nil:
+			overflow(clientID)
+			return
+		case !full:
+			return
+		}
 	}
 }
