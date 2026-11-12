@@ -359,6 +359,24 @@ test("a revoked device is dropped and the next epoch is fresh, never its derived
     } finally { e.stop(); }
 });
 
+test("a device still waiting for approval is retried and gets keys once approved", async () => {
+    const media = fakeMedia();
+    const sent = [];
+    let approved = false;
+    const e = new MediaKeyEngine({ media, timers: fastTimers, sendTimeoutMs: Infinity, activateMaxWaitMs: Infinity,
+        send: async c => { sent.push(c); return !approved && c.device === "d2" ? { ok: false, error: { code: "untrusted_device" } } : { ok: true }; } });
+    e.setRoster([member("c1", "u1", "d1"), member("c2", "u2", "d2")]);
+    e.start({ ...me, principal: "u-pend", device: "d-pend" });
+    try {
+        await flush(60);
+        assert.ok(sent.some(c => c.device === "d2"), "the pending device was tried");
+        approved = true;
+        const mark = sent.length;
+        await flush(200);
+        assert.ok(sent.slice(mark).some(c => c.device === "d2"), "retried after approval, not struck off");
+    } finally { e.stop(); }
+});
+
 test("a device revoked after it held ratchet keys never sees a key derived from them (audit #12)", async () => {
     const media = fakeMedia();
     const sent = [];
