@@ -15,6 +15,13 @@ import (
 // Enqueue-time checks alone cannot revoke data waiting behind a slow socket.
 const roleChannelDelivery = "_role_channel_delivery"
 
+// roleResyncDelivery is internal to the outbound queue too: the writer turns
+// it into a fresh filtered snapshot for a client that missed events.
+const (
+	roleResyncDelivery = "_role_resync"
+	roleResyncPayload  = `{"type":"` + roleResyncDelivery + `"}`
+)
+
 // metadataWriteCeiling bounds a delivery made while holding roleMetadataMu.
 // Writes to a healthy peer land in its socket buffer at once; only a peer that
 // stopped reading blocks, and it must not stall delivery to everyone else.
@@ -30,6 +37,22 @@ func (s *TCPServer) writeRoleBroadcast(client *Client, payload []byte) error {
 }
 
 func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Client, payload []byte) error {
+	if string(payload) == roleResyncPayload {
+		// Cleared before the snapshot is built: a change after this point
+		// queues its own event or another resync.
+		client.resyncPending.Store(false)
+		// Wait for a busy writer outside every shared lock, so the snapshot
+		// rarely waits under roleMetadataMu and a stuck writer cannot keep
+		// that lock busy with retries.
+		waitCtx, cancel := context.WithTimeout(ctx, roleWriteCeiling)
+		err := client.wmu.LockContext(waitCtx)
+		cancel()
+		if err != nil {
+			s.requestResync(client.ID)
+			return nil
+		}
+		client.wmu.Unlock()
+	}
 	err := s.withRoleSession(ctx, client, func(ctx context.Context) error {
 		var event struct {
 			Type string          `json:"type"`
@@ -84,32 +107,44 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 	})
 	// An unavailable policy closes protected delivery, not the control socket.
 	// The mutation handler still owes its saved-but-pending acknowledgement.
-	if errors.Is(err, authorization.ErrAuthorizationUnavailable) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, authorization.ErrAuthorizationUnavailable) {
+		return nil
+	}
+	// A delivery skipped behind a busy writer leaves the client stale; a
+	// resync queued behind it is built once it is written, after this change.
+	if errors.Is(err, context.DeadlineExceeded) {
+		s.requestResync(client.ID)
 		return nil
 	}
 	return err
 }
 
 // writeMetadataFrame writes while holding roleMetadataMu, which every other
-// recipient waits for. A busy writer is waited for only briefly, and that
-// timeout skips this delivery without closing the client: the write it waits
-// behind closes a peer that stopped reading at its own 5 s deadline. A small
-// event must reach the socket buffer within the short ceiling, but a full
-// member snapshot may legitimately need the whole write ceiling on a slow link.
+// recipient waits for, so waiting for the writer and the write share the
+// short ceiling. A wait that runs out skips this delivery without closing the
+// client (it is resynced instead): the write it waits behind closes a peer
+// that stopped reading at its own 5 s deadline.
 func (s *TCPServer) writeMetadataFrame(ctx context.Context, client *Client, frame *netproto.Frame) error {
-	lockCtx, cancel := context.WithTimeout(ctx, metadataWriteCeiling)
+	ctx, cancel := context.WithTimeout(ctx, metadataWriteCeiling)
 	defer cancel()
-	if err := client.wmu.LockContext(lockCtx); err != nil {
+	if err := client.wmu.LockContext(ctx); err != nil {
 		return err
 	}
 	defer client.wmu.Unlock()
-	writeCtx := lockCtx
-	if frame.Type == uint16(netproto.MsgSnapshot) {
-		var cancelWrite context.CancelFunc
-		writeCtx, cancelWrite = context.WithTimeout(ctx, roleWriteCeiling)
-		defer cancelWrite()
+	return s.writeFrameLocked(ctx, client, frame)
+}
+
+// requestResync queues one fresh filtered snapshot for a client that missed
+// events; further requests coalesce until the writer takes it. A full queue
+// drops it, and the broadcaster asks again once that queue drains.
+func (s *TCPServer) requestResync(clientID string) {
+	client, ok := s.clientByID(clientID)
+	if !ok || s.deps == nil || s.deps.Broadcast == nil || !client.resyncPending.CompareAndSwap(false, true) {
+		return
 	}
-	return s.writeFrameLocked(writeCtx, client, frame)
+	if err := s.deps.Broadcast.BroadcastToClient(clientID, []byte(roleResyncPayload)); err != nil {
+		client.resyncPending.Store(false)
+	}
 }
 
 // Structural events are replaced with a fresh filtered snapshot. In particular
@@ -195,7 +230,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		// Status changes of members the recipient cannot see (an invisible
 		// user) must not be revealed by the arrival of an identical snapshot.
 		return s.roleSnapshotFrame(client, e)
-	case eventUserJoined, eventUserLeft, eventUserMoved, eventMediaDeviceChanged, eventChannelCreated, eventChannelDeleted, eventChannelUpdated, eventNicknameChanged, eventMemberVoiceChanged, eventAudioStateChanged, eventVoiceQueueChanged:
+	case eventUserJoined, eventUserLeft, eventUserMoved, eventMediaDeviceChanged, eventChannelCreated, eventChannelDeleted, eventChannelUpdated, eventNicknameChanged, eventMemberVoiceChanged, eventAudioStateChanged, eventVoiceQueueChanged, roleResyncDelivery:
 		return s.roleSnapshotFullFrame(client, e)
 	case eventAvatarChanged, eventSpeakingChanged, eventPrioritySpeakerChanged, eventPosition, eventScreenshareChanged:
 		var event struct {

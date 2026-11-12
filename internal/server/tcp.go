@@ -123,6 +123,7 @@ type Client struct {
 	deviceIndex      *deviceSessionIndex                         // set by register; keeps the device -> sessions index current
 	webTransport     atomic.Bool                                 // connected through the mobile web app
 	closeCause       atomic.Pointer[netproto.ControlCloseReason] // first server-side close cause
+	resyncPending    atomic.Bool                                 // a resync snapshot is queued (role_delivery.go)
 	readClose        atomic.Pointer[netproto.ControlCloseReason] // why the read loop ended
 	saidGoodbye      atomic.Bool                                 // client sent MsgGoodbye before closing
 	replaced         atomic.Bool                                 // the same device reconnected on a newer session
@@ -577,13 +578,15 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 	}
 	if deps != nil && deps.Broadcast != nil {
 		deps.Broadcast.SetOverflowHandler(s.closeOverflowedClient)
+		deps.Broadcast.SetResyncHandler(s.requestResync)
 	}
 	return s
 }
 
-// closeOverflowedClient disconnects a client whose broadcast queue overflowed:
-// it has silently missed events, and a reconnect resends a fresh snapshot and
-// history, while staying connected would leave it with a stale view.
+// closeOverflowedClient disconnects a client whose broadcast queue overflowed
+// and whose writer then stopped draining it: it is stuck, and a reconnect
+// resends a fresh snapshot and history. A client that catches up is resynced
+// in place instead (requestResync).
 func (s *TCPServer) closeOverflowedClient(clientID string) {
 	if client, ok := s.clientByID(clientID); ok {
 		s.logger.Warn("closing a client that fell behind its broadcast queue", zap.String("client_id", clientID))

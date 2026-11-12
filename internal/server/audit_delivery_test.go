@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"noxa/internal/authorization"
+	"noxa/internal/broadcast"
 	"noxa/internal/netproto"
 )
 
@@ -40,7 +42,9 @@ func TestFailedWriteClosesTheConnection(t *testing.T) {
 }
 
 // A stalled recipient may hold the metadata lock only briefly: another member
-// still receives the same delivery well before the general write ceiling.
+// still receives the same delivery well before the general write ceiling. The
+// stalled member is not closed for it; once its writer frees, a resync
+// snapshot replaces the delivery it missed.
 func TestStalledRecipientDoesNotStallMetadataDelivery(t *testing.T) {
 	backend := serverRoleFixture()
 	backend.policy.Roles[0].Permissions = []authorization.Capability{authorization.ViewChannel, authorization.Connect}
@@ -53,7 +57,7 @@ func TestStalledRecipientDoesNotStallMetadataDelivery(t *testing.T) {
 	env.state.AddChannel(testChannel(1))
 	stalled, stalledID := dialAuthed(t, env.addr, "admin-uid")
 	defer func() { _ = stalled.Close() }()
-	actor, _ := dialAuthed(t, env.addr, "user-uid")
+	actor, actorID := dialAuthed(t, env.addr, "user-uid")
 	defer func() { _ = actor.Close() }()
 	for _, conn := range []net.Conn{stalled, actor} {
 		send(t, conn, netproto.MsgPing, netproto.Ping{})
@@ -64,7 +68,6 @@ func TestStalledRecipientDoesNotStallMetadataDelivery(t *testing.T) {
 		t.Fatal("stalled member missing")
 	}
 	target.wmu.Lock()
-	defer target.wmu.Unlock()
 
 	started := time.Now()
 	// The join is delivered to both members as a snapshot under the metadata
@@ -80,8 +83,26 @@ func TestStalledRecipientDoesNotStallMetadataDelivery(t *testing.T) {
 	// stuck for the whole write ceiling closes the member.
 	time.Sleep(metadataWriteCeiling + 500*time.Millisecond)
 	if cause := target.closeCause.Load(); cause != nil {
+		target.wmu.Unlock()
 		t.Fatalf("member behind a busy writer was closed: %v", *cause)
 	}
+	target.wmu.Unlock()
+	// An older queued snapshot may come first; a resync built after the join
+	// must follow.
+	for deadline := time.Now().Add(roleWriteCeiling + 2*time.Second); time.Now().Before(deadline); {
+		var snapshot broadcast.TreeSnapshot
+		if err := json.Unmarshal(readOfType(t, stalled, netproto.MsgSnapshot).Payload, &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		for _, node := range snapshot.RootChannels {
+			for _, member := range node.Clients {
+				if member.ClientID == actorID && member.ChannelID == 1 {
+					return
+				}
+			}
+		}
+	}
+	t.Fatal("resync snapshot does not show the join the stalled member missed")
 }
 
 func TestStatusAndDisplayNameHaveASlowBudget(t *testing.T) {
