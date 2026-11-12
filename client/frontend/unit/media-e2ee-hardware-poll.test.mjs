@@ -223,6 +223,10 @@ test("a static source that delivers no new frames keeps its hardware proof", asy
     Object.assign(still.counters, { encoded: 10, frames: 100 });
     for (const at of [1, 5001, 15002, 30003]) await still.sample(at, "hardware");
     assert.equal(still.stopped(), 0, "no new captured frames means nothing to encode");
+    still.counters.frames = 101;
+    await still.sample(30304, "hardware");
+    for (const at of [35004, 45005, 60006]) await still.sample(at, "hardware");
+    assert.equal(still.stopped(), 0, "one stray captured frame cannot end a later static share");
 });
 
 test("a missing active key epoch does not renew the hardware deadline", async t => {

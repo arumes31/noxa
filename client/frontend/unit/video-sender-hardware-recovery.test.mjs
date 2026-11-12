@@ -340,3 +340,21 @@ for (const resumed of [false, true]) test(`a failed first-frame restart ${resume
     assert.equal(invalidated, resumed ? 0 : 1);
     assert.deepEqual(toasts, resumed ? [] : [["Stream stopped: no hardware encoder is available.", "warn"]]);
 });
+
+test("a failed first-frame restart keeps the share when its stats sample never settles", async t => {
+    const f = fixture();
+    let invalidated = 0;
+    globalThis.window = { __noxa: { toast() {} } };
+    f.publication.onInvalidated = () => { invalidated++; };
+    f.options.retry = async () => false;
+    f.transceiver.sender.getStats = () => new Promise(() => {});
+    const recover = createVideoSenderRecovery(f.options);
+    for (const at of [0, 5000]) { f.time(at); await recover(f.pc, stalledHardware(f)); }
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    f.time(10000);
+    const pending = recover(f.pc, stalledHardware(f));
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    t.mock.timers.tick(2000);
+    await pending;
+    assert.equal(invalidated, 0);
+});

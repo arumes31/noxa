@@ -224,13 +224,16 @@ export class MediaE2EE {
                 // acknowledgement must still belong to this live source. A
                 // hardware encoder that stops encoding while capture delivers
                 // frames loses its proof; a static source delivers none.
+                // Both counters compare with the previous sample.
                 const row = evidence === "hardware" && hardwareVideoRow(report, source.id);
                 const capture = row && report.get(row.mediaSourceId);
-                const delivered = capture?.frames !== undefined ? capture.frames > captured : capture?.framesPerSecond > 0;
-                if (row) hardwareSeen = true;
-                if (row && (row.framesEncoded > encoded || !delivered)) {
-                    resetDeadline(); encoded = row.framesEncoded ?? encoded; captured = capture?.frames ?? captured;
-                } else armDeadline();
+                const encodedGrew = row && row.framesEncoded > encoded;
+                // Unknown capture progress counts as static on purpose: runtimes
+                // without media-source counters must not end static shares.
+                const captureGrew = capture?.frames !== undefined ? capture.frames > captured : capture?.framesPerSecond > 0;
+                if (row) { hardwareSeen = true; encoded = row.framesEncoded ?? encoded; captured = capture?.frames ?? captured; }
+                if (row && (encodedGrew || !captureGrew)) resetDeadline();
+                else armDeadline();
             } catch {
                 // The independent timer also covers never-settling requests.
                 // Worker-side hardware permission still expires independently.

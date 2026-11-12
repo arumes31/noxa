@@ -126,7 +126,10 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
                     // would otherwise keep a silent share alive between retries.
                     if (recovered === false && evidence?.hardwareStartup && current()) {
                         // A retry also declines when output resumed on its own.
-                        const latest = await sampleSenderStats(transceiver.sender, { fresh: true }).then(rows => rows.get(stat.id), () => null);
+                        // Bounded: an unanswered sample never ends the share.
+                        let timer;
+                        const latest = await Promise.race([sampleSenderStats(transceiver.sender, { fresh: true }).then(rows => rows.get(stat.id), () => null),
+                            new Promise(resolve => { timer = setTimeout(() => resolve(null), 2000); })]).finally(() => clearTimeout(timer));
                         if (!(latest?.framesEncoded <= stat.framesEncoded) || !current()) return recovered;
                         p.onInvalidated();
                         window.__noxa?.toast?.(t("e2ee.reason.hardware_encoder"), "warn");
