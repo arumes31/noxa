@@ -134,3 +134,51 @@ func TestIntegrationDevicesRespectMemberHierarchy(t *testing.T) {
 		t.Fatalf("list lower-ranked principal: %v", err)
 	}
 }
+
+// ManageServer does not bypass the hierarchy for scope ceilings either: a
+// lower-ranked bot cannot narrow the owner's bot, but may narrow its own.
+func TestIntegrationScopesRespectMemberHierarchy(t *testing.T) {
+	db := integrationManagementStore(t)
+	a := auth.New(db, zap.NewNop())
+	botUID, err := a.RegisterUser(t.Context(), "scope-delegate", "integration-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerUID, err := a.RegisterUser(t.Context(), "scope-owner", "owner-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB().ExecContext(t.Context(), "UPDATE users SET integration_enabled=TRUE WHERE unique_id IN ($1,$2)", botUID, ownerUID); err != nil {
+		t.Fatal(err)
+	}
+	principal, err := a.AuthenticateIntegration(t.Context(), botUID, "integration-password", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := a.LookupUser(t.Context(), ownerUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := serverRoleFixture()
+	backend.policy.OwnerID = owner.ID
+	backend.policy.Roles = append(backend.policy.Roles, authorization.Role{ID: 40, Name: "Ops", Position: 1, Permissions: []authorization.Capability{authorization.ManageServer}})
+	backend.policy.Members = []authorization.RoleMember{{UserID: principal.UserID(), RoleIDs: []int64{40}}}
+	authority, err := authorization.NewAuthority(t.Context(), backend, func(context.Context, *authorization.RoleEvaluator, *authorization.RoleEvaluator) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(&config.Config{}, zap.NewNop(), &Deps{Authority: authority, Auth: a})
+	set := func(uid string) error {
+		_, err := srv.SetIntegrationScopes(t.Context(), principal, netproto.IntegrationScopesSet{UniqueID: uid, Scopes: []string{auth.ScopeServerRead}})
+		return err
+	}
+	if err := set(ownerUID); !errors.Is(err, authorization.ErrRoleForbidden) {
+		t.Fatalf("narrow owner's bot err = %v, want ErrRoleForbidden", err)
+	}
+	if state, err := a.GetIntegrationScopes(t.Context(), ownerUID); err != nil || !state.Full {
+		t.Fatalf("owner scopes after refused change = %+v, %v", state, err)
+	}
+	if err := set(botUID); err != nil {
+		t.Fatalf("narrow own scopes: %v", err)
+	}
+}

@@ -88,7 +88,8 @@ func (s *Server) authenticateRoleIntegration(ctx context.Context, backend query.
 	// Match the existing loopback listener's per-principal limiter. One local
 	// process must not lock every integration out via their shared source IP.
 	scope := auth.LoginFailureScope("grpc", identifier)
-	attempt, allowed := s.limiter.ReserveLoginAttempt(scope)
+	accountScope := auth.AccountPasswordScope(identifier)
+	attempt, allowed := s.limiter.ReserveLoginAttempt(scope, accountScope)
 	if !allowed {
 		// Locked out, or another call for this integration is verifying right
 		// now: both pass with time, so the caller gets a retryable error
@@ -107,7 +108,7 @@ func (s *Server) authenticateRoleIntegration(ctx context.Context, backend query.
 		}
 		return auth.IntegrationPrincipal{}, err
 	}
-	attempt.Succeed(scope)
+	attempt.Succeed(scope, accountScope)
 	return p, nil
 }
 

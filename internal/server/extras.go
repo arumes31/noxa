@@ -179,10 +179,10 @@ func (s *TCPServer) setChannelIcon(ctx context.Context, client *Client, msg netp
 	}
 
 	s.broadcastEvent(eventChannelIconChanged, channelEvent{ChannelID: msg.ChannelID})
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	s.auditInChannels(auditCtx, client.uniqueID(), "channel_icon_set", name, "", msg.ChannelID)
+	cancel()
 	if acknowledge {
-		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		s.auditInChannels(auditCtx, client.uniqueID(), "channel_icon_set", name, "", msg.ChannelID)
-		cancel()
 		replyCtx, cancelReply := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancelReply()
 		return s.writeMessageInContext(replyCtx, client, netproto.MsgRoleChannelIconSaved, netproto.RoleChannelIconSaved{ChannelID: msg.ChannelID})

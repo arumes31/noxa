@@ -226,7 +226,8 @@ func (s *SSHServer) passwordCallback(ctx context.Context, principal *auth.Integr
 		ip := hostOnly(meta.RemoteAddr().String())
 		sourceScope := auth.LoginFailureScope("ssh:"+auth.SourceAddressKey(ip), "")
 		principalScope := auth.LoginFailureScope("ssh", meta.User())
-		attempt, allowed := s.base.ReserveLoginAttempt(sourceScope, principalScope)
+		accountScope := auth.AccountPasswordScope(meta.User())
+		attempt, allowed := s.base.ReserveLoginAttempt(sourceScope, principalScope, accountScope)
 		if !allowed {
 			s.base.RecordAuthFailure("ssh", "locked_out")
 			return nil, errors.New("too many failed logins, try again later")
@@ -247,7 +248,7 @@ func (s *SSHServer) passwordCallback(ctx context.Context, principal *auth.Integr
 			return nil, errors.New("integration authentication unavailable")
 		}
 		*principal = p
-		attempt.Succeed(principalScope)
+		attempt.Succeed(principalScope, accountScope)
 		return nil, nil
 	}
 }

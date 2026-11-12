@@ -165,6 +165,17 @@ func (s *TCPServer) SetIntegrationScopes(ctx context.Context, principal auth.Int
 		if !e.Evaluate(principal.UserID(), 0, authorization.ManageServer).Allowed {
 			return authorization.ErrRoleForbidden
 		}
+		// ManageServer does not bypass the hierarchy: a lower-ranked bot
+		// cannot lock out a higher-ranked account's bot.
+		if request.UniqueID != principal.UniqueID() {
+			targetID, err := s.integrationDeviceTarget(ctx, request.UniqueID)
+			if err != nil {
+				return err
+			}
+			if !e.CanManageMember(principal.UserID(), targetID) {
+				return authorization.ErrRoleForbidden
+			}
+		}
 		store, ok := s.integrationScopeStore()
 		if !ok {
 			return authorization.ErrAuthorizationUnavailable

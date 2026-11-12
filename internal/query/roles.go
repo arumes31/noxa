@@ -38,7 +38,7 @@ func (s *Server) roleBackend() RoleIntegrationBackend {
 	return b
 }
 
-func (s *Server) roleLogin(ctx context.Context, sess *session, b RoleIntegrationBackend, identifier, password string, attempt *auth.LoginAttempt, principalScope string) bool {
+func (s *Server) roleLogin(ctx context.Context, sess *session, b RoleIntegrationBackend, identifier, password string, attempt *auth.LoginAttempt, successScopes ...string) bool {
 	sess.authed, sess.username, sess.principal = false, "", auth.IntegrationPrincipal{}
 	p, err := b.AuthenticateIntegration(ctx, identifier, password, sess.remoteIP)
 	if errors.Is(err, auth.ErrIntegrationDenied) {
@@ -50,7 +50,7 @@ func (s *Server) roleLogin(ctx context.Context, sess *session, b RoleIntegration
 		s.logger.Warn("query integration login error", zap.Error(err))
 		return s.write(sess, errorLine(errServerError, "integration authentication unavailable"))
 	}
-	attempt.Succeed(principalScope)
+	attempt.Succeed(successScopes...)
 	sess.authed, sess.username, sess.principal = true, p.UniqueID(), p
 	sess.authorizationModel = netproto.AuthorizationModelRolesV1
 	return s.write(sess, "authorization_model="+sess.authorizationModel+"\n"+errorLine(errOK, "ok"))
