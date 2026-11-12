@@ -1304,12 +1304,18 @@ native-client tests in CI use `xvfb-run -a go test ./...`.
 | `make compose-up` / `make compose-down` | Build and start/stop the detached container stack (noXa + PostgreSQL + Redis) |
 | `make chaos` / `make webrtc-load` | Run database failure drills and simulate 100 authenticated Opus publishers |
 | `make canary` | Run encryption rotation and plaintext-leakage security canaries |
+| `make pre-push` | Run fast local checks (`gofmt`, frontend lint, version check, fast unit tests) before pushing to CI |
 | `go run ./cmd/version -check` | Check synchronized baseline versions and report the current source version |
 | `npm run quality` in `client/frontend` | Frontend lint, unit tests/coverage, accessibility scenarios, and production build |
 | `npm run test:e2e` in `client/frontend` | Full Playwright browser regression suite |
 | `go test -tags integration -run '^TestBrowserScreenSimulcast$' -count=1 ./internal/webrtc` | Real Chromium publishers/receiver through a local SFU; requires the frontend dependencies and installed Chromium |
 | `go test ./...` in `client/third_party/go-webview2` | Standalone Windows WebView2 fork tests |
 | `buf lint` / `make proto` | Lint protobuf contracts / regenerate committed Go stubs; CI pins Buf 1.72.0 |
+
+Go sources check out with LF line endings (`.gitattributes`), so `gofmt` in
+`make pre-push` passes on Windows. A checkout made before that rule keeps its
+CRLF files; refresh them once on a clean tree with
+`git ls-files -z '*.go' | xargs -0 rm -f && git checkout -- .`.
 
 Database-backed tests need a **disposable PostgreSQL database** through
 `NOXA_TEST_DATABASE_URL`; some fixtures also create scratch databases and need

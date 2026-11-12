@@ -92,12 +92,26 @@ jobs:
           mkdir -p client/frontend/dist
           touch client/frontend/dist/.security-placeholder
 
+      - name: Cache apt packages
+        if: matrix.module == 'client' && runner.os == 'Linux'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/apt/archives
+          key: ${{ runner.os }}-apt-govulncheck-${{ hashFiles('scripts/ci-apt-setup.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-govulncheck-
+
       - name: install Linux client analysis dependencies
         if: matrix.module == 'client' && runner.os == 'Linux'
         run: |
           bash "$GITHUB_WORKSPACE/scripts/ci-apt-setup.sh"
+          if [ -d "$HOME/.cache/apt/archives" ]; then
+            sudo cp -n "$HOME"/.cache/apt/archives/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+          fi
           sudo apt-get update
           sudo apt-get install -y libx11-dev libxtst-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+          mkdir -p "$HOME/.cache/apt/archives"
+          cp -n /var/cache/apt/archives/*.deb "$HOME/.cache/apt/archives/" 2>/dev/null || true
 
       - name: Install govulncheck v1.6.0
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
@@ -139,12 +153,26 @@ jobs:
           mkdir -p client/frontend/dist
           touch client/frontend/dist/.security-placeholder
 
+      - name: Cache apt packages
+        if: matrix.module == 'client'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/apt/archives
+          key: ${{ runner.os }}-apt-gosec-${{ hashFiles('scripts/ci-apt-setup.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-gosec-
+
       - name: install Linux client analysis dependencies
         if: matrix.module == 'client'
         run: |
           bash "$GITHUB_WORKSPACE/scripts/ci-apt-setup.sh"
+          if [ -d "$HOME/.cache/apt/archives" ]; then
+            sudo cp -n "$HOME"/.cache/apt/archives/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+          fi
           sudo apt-get update
           sudo apt-get install -y libx11-dev libxtst-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+          mkdir -p "$HOME/.cache/apt/archives"
+          cp -n /var/cache/apt/archives/*.deb "$HOME/.cache/apt/archives/" 2>/dev/null || true
 
       - name: Install gosec v2.29.0 with Go 1.27 export reader
         shell: bash

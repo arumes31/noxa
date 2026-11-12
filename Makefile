@@ -19,7 +19,7 @@ UPDATE_LDFLAGS = \
 	-X noxa/internal/version.UpdateRepo=$(NOXA_UPDATE_REPO) \
 	-X noxa/internal/version.UpdatePublicKeys=$(NOXA_UPDATE_PUBLIC_KEYS)
 
-.PHONY: all build client-build run version version-check migrate proto tidy test cover fmt vet docker-build docker-run docker-stop compose-up compose-down compose-logs chaos chaos-webrtc profile-db query-load webrtc-load canary clean help
+.PHONY: all build client-build run version version-check pre-push migrate proto tidy test cover fmt vet docker-build docker-run docker-stop compose-up compose-down compose-logs chaos chaos-webrtc profile-db query-load webrtc-load canary clean help
 
 all: build
 
@@ -48,6 +48,20 @@ version:
 ## version-check: verify all tracked package versions match VERSION
 version-check:
 	$(VERSION_TOOL) -check
+
+## pre-push: run fast local checks before pushing to CI
+pre-push: version-check
+	@set -e; \
+	echo "Checking gofmt..."; \
+	fmt="$$($(GO)fmt -l . 2>/dev/null || gofmt -l .)"; \
+	if [ -n "$$fmt" ]; then \
+		echo "gofmt issues in:"; echo "$$fmt"; exit 1; \
+	fi; \
+	echo "Running frontend lint..."; \
+	(cd client/frontend && node scripts/lint.mjs); \
+	echo "Running fast unit tests..."; \
+	$(GO) test -short -count=1 ./cmd/... ./internal/version; \
+	echo "Pre-push verification passed successfully!"
 
 ## migrate: run database migrations (go run ./cmd/migrate)
 migrate:
