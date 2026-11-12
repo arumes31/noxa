@@ -461,6 +461,26 @@ func TestAuthenticateIdentifierAliasesShareAccountBudget(t *testing.T) {
 			t.Fatalf("alternating identifiers kept a separate budget for %q", identifier)
 		}
 	}
+	// Concurrent nickname and unique-ID attempts still share one budget.
+	limiter = NewLoginFailureLimiter(LoginFailureLimiterConfig{})
+	svc.loginLimiter = limiter
+	for i := 0; i < (DefaultLoginFailureMaxFailures+1)/2; i++ {
+		byName, ok1 := limiter.Reserve(AccountPasswordScope("bob"))
+		byID, ok2 := limiter.Reserve(AccountPasswordScope("uid"))
+		if !ok1 || !ok2 {
+			t.Fatalf("pair %d locked early", i)
+		}
+		for _, identifier := range identifiers {
+			_, _ = svc.AuthenticateIdentifier(context.Background(), identifier, "wrong")
+		}
+		byName.Fail()
+		byID.Fail()
+	}
+	for _, identifier := range identifiers {
+		if limiter.Allowed(AccountPasswordScope(identifier)) {
+			t.Fatalf("concurrent pairs kept a separate budget for %q", identifier)
+		}
+	}
 	// A transport that never reserved the account budget does not feed it.
 	other := NewLoginFailureLimiter(LoginFailureLimiterConfig{MaxFailures: 1})
 	svc.loginLimiter = other

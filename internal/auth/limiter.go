@@ -299,6 +299,8 @@ func (l *LoginFailureLimiter) RecordFailure(scopes ...string) {
 // ID shares one budget. Nothing is recorded unless scope is reserved right
 // now: a transport that does not reserve the account budget never feeds it.
 // The reserved scope itself is skipped here; its attempt's Fail counts it.
+// An alias with its own attempt in flight still counts: that attempt's Fail
+// counts only itself, and concurrent nickname/ID pairs must share the budget.
 func (l *LoginFailureLimiter) RecordAliasFailure(scope string, aliases ...string) {
 	if l == nil {
 		return
@@ -310,7 +312,9 @@ func (l *LoginFailureLimiter) RecordAliasFailure(scope string, aliases ...string
 	}
 	now := l.now()
 	for _, alias := range uniqueLoginScopes(aliases) {
-		l.recordFailureLocked(alias, now)
+		if alias != scope {
+			l.countFailureLocked(alias, now)
+		}
 	}
 	l.clearOverflowWhenEvictableLocked(now)
 }
@@ -326,6 +330,19 @@ func (l *LoginFailureLimiter) recordFailureLocked(scope string, now time.Time) {
 
 	if entry.inFlight {
 		return
+	}
+	l.countFailureLocked(scope, now)
+}
+
+// countFailureLocked adds one failure to scope even while an attempt is in
+// flight; finishing that attempt keeps it (it reads the entry back).
+func (l *LoginFailureLimiter) countFailureLocked(scope string, now time.Time) {
+	entry, ok := l.entries[scope]
+	if !ok {
+		if !l.makeRoomLocked(now, 1, nil) {
+			return
+		}
+		entry = loginFailureEntry{}
 	}
 	entry.failures++
 	entry.lastFailure = now
