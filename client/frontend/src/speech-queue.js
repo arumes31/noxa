@@ -31,6 +31,8 @@ export const SPEECH_EVENTS = {
     user_join: { priority: 1, category: "channel", effect: "user_join", matrix: "join_leave", cooldown: 1000 },
     user_leave: { priority: 1, category: "channel", effect: "user_leave", matrix: "join_leave", cooldown: 1000 },
     user_disconnected: { priority: 1, category: "channel", effect: "user_leave", matrix: "join_leave", cooldown: 1000 },
+    user_connection_lost: { priority: 1, category: "channel", effect: "user_leave", matrix: "join_leave", cooldown: 1000 },
+    user_reconnected: { priority: 1, category: "channel", effect: "user_join", matrix: "join_leave", cooldown: 1000 },
     user_moved: { priority: 1, category: "channel", effect: "user_move_out", matrix: "join_leave", cooldown: 1000 },
     poke: { priority: 2, category: "notification", effect: "poke", matrix: "poke", cooldown: 5000 },
     buddy_online: { priority: 1, category: "notification", effect: "buddy_online", matrix: "buddy_online", cooldown: 5000 },

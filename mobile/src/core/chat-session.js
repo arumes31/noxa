@@ -102,13 +102,13 @@ export class ChatSession extends EventTarget {
         for (const deliver of pending) deliver();
     }
 
-    close() {
+    close({ goodbye = false } = {}) {
         this.#pendingIncoming = null;
         this.#pendingIncomingBytes = 0;
         clearTimeout(this.#relayTimer);
         this.#relayListeners.clear();
         this.#unsubscribe.forEach(stop => stop());
-        this.conn.close();
+        this.conn.close({ goodbye });
     }
 
     #emit(type, detail) {

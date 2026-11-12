@@ -71,14 +71,15 @@ async function showFullLink(url) {
     if (choice === "copy") navigator.clipboard?.writeText(url).then(() => toast(t("rich.copied")), () => {});
 }
 
-function linkNode(url) {
+function linkNode(url, label = null) {
     const href = safeURL(url);
-    if (!href) return document.createTextNode(url);
-    const text = displayURL(url);
-    const link = h("a", { class: "md-link", href, target: "_blank", rel: "noopener noreferrer", title: url }, text);
-    // Shortened links show the whole address on long press.
-    if (text !== url) {
-        link.setAttribute("aria-label", url);
+    if (!href) return label ? h("span", {}, label) : document.createTextNode(url);
+    const text = label ? null : displayURL(url);
+    const link = h("a", { class: "md-link", href, target: "_blank", rel: "noopener noreferrer", title: url }, label || text);
+    // Shortened and named links show the whole address on long press; only a
+    // shortened bare URL needs the full address as its accessible name.
+    if (label || text !== url) {
+        if (!label) link.setAttribute("aria-label", url);
         link.addEventListener("contextmenu", event => { event.preventDefault(); showFullLink(url); });
     }
     return link;
@@ -112,7 +113,13 @@ function renderNode(node, context) {
         case "code": return h("figure", { class: "md-pre" },
             node.language ? h("figcaption", { class: "md-lang" }, node.language) : null,
             h("pre", { tabindex: "0" }, h("code", {}, node.code)));
-        case "link": return linkNode(node.url);
+        case "link": return linkNode(node.url, node.children ? renderNodes(node.children, context) : null);
+        case "paragraph": return h("p", {}, renderNodes(node.children, context));
+        case "heading": return h(`h${Math.min(6, Math.max(1, node.level || 1))}`, { class: "md-heading" }, renderNodes(node.children, context));
+        case "blockquote": return h("blockquote", {}, renderNodes(node.children, context));
+        case "list": return h(node.ordered ? "ol" : "ul", node.ordered && node.start !== 1 ? { start: String(node.start) } : {},
+            node.children.map(item => h("li", {}, renderNodes(item.children, context))));
+        case "hr": return h("hr");
         case "emoji": return h("span", { class: "emoji", title: `:${node.name}:` }, node.char);
         case "custom-emoji": return customEmojiNode(node.name, context.session);
         case "mention": return h("span", { class: node.everyone ? "md-mention everyone" : "md-mention", dataset: { uid: node.uid || "" } }, `@${node.name}`);

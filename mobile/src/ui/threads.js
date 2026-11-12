@@ -16,6 +16,7 @@ import { personName } from "./tool-sources.js";
 import { encryptionBadge, headerActions, lineCache, menuButton, relativeTicker, timeNode, watchDisplaySettings, withDays } from "./message-view.js";
 import "./chat-tools-strings.js";
 import "./chat-tools.css";
+import { bindRichPaste } from "../core/rich-paste.js";
 
 function when(seconds) {
     if (!seconds) return "";
@@ -236,6 +237,7 @@ export function renderThread(root, arg) {
     const footer = h("div");
     const title = h("span", {}, t("threads.thread"));
     const input = h("textarea", { rows: "1", "aria-label": t("threads.reply"), placeholder: t("threads.reply"), enterkeyhint: "send", maxlength: "12000" });
+    bindRichPaste(input); // formatted paste keeps its formatting as markdown
     const sendButton = h("button", { class: "send", type: "submit", "aria-label": t("chat.send") }, icon("send"));
     const older = h("button", { class: "btn", style: "align-self:center;margin:8px 0" }, t("chat.loadOlder"));
     let thread = null;

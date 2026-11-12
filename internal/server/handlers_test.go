@@ -2388,3 +2388,61 @@ func TestBanEventsCarryExpiryAndTargetChannel(t *testing.T) {
 	})
 
 }
+
+// Wrong passwords against an account must not block its key login, and
+// failures on the public port must not lock the same name on other
+// transports (audit #8).
+func TestPasswordLockoutDoesNotBlockKeyLogin(t *testing.T) {
+	limiter := auth.NewLoginFailureLimiter(auth.LoginFailureLimiterConfig{
+		MaxFailures:     2,
+		LockoutDuration: time.Minute,
+		FailureTTL:      time.Minute,
+		MaxEntries:      32,
+	})
+	env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.LoginLimiter = limiter })
+	defer env.stop()
+
+	pubPEM, privPEM, err := auth.GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateIdentityKeyPair: %v", err)
+	}
+	uid, err := auth.UniqueIDFromPublicKey(pubPEM)
+	if err != nil {
+		t.Fatalf("UniqueIDFromPublicKey: %v", err)
+	}
+	env.auth.pubkeys[uid] = pubPEM
+	env.auth.users[uid] = &auth.User{ID: 3, UniqueID: uid, Nickname: "keyuser"}
+
+	// An attacker has locked the account's password scope on the TCP port.
+	for range 2 {
+		limiter.RecordFailure(auth.LoginFailureScope("tcp", uid))
+	}
+	if limiter.Allowed(auth.LoginFailureScope("tcp", uid)) {
+		t.Fatal("setup: password scope is not locked")
+	}
+	for _, other := range []string{"query", "ssh", "grpc", "events"} {
+		if !limiter.Allowed(auth.LoginFailureScope(other, uid)) {
+			t.Fatalf("TCP password failures locked the %s login of the same name", other)
+		}
+	}
+
+	conn := dialRetry(t, env.addr)
+	defer func() { _ = conn.Close() }()
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: uid, AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
+	var ch netproto.AuthChallenge
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &ch); err != nil {
+		t.Fatalf("decode auth challenge: %v", err)
+	}
+	sig, err := auth.SignChallenge(privPEM, ch.Challenge)
+	if err != nil {
+		t.Fatalf("SignChallenge: %v", err)
+	}
+	send(t, conn, netproto.MsgAuthSignature, netproto.AuthSignature{UniqueID: uid, Signature: sig})
+	var resp netproto.AuthResponse
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &resp); err != nil {
+		t.Fatalf("decode auth response: %v", err)
+	}
+	if !resp.OK || resp.UniqueID != uid {
+		t.Fatalf("key login refused while only the password scope is locked: %+v", resp)
+	}
+}

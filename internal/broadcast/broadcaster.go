@@ -57,6 +57,8 @@ type Broadcaster struct {
 	// between the per-connection fan-out and the event bus, so a bot sees
 	// exactly what connected clients see.
 	tap func(eventType string, payload []byte)
+	// overflow is told once per client whose queue overflowed.
+	overflow func(clientID string)
 
 	delivered atomic.Uint64
 	dropped   atomic.Uint64
@@ -215,6 +217,15 @@ func (b *Broadcaster) BroadcastToClient(clientID string, payload []byte) error {
 	return ErrChannelFull
 }
 
+// SetOverflowHandler installs a callback run once per client whose queue
+// overflowed (it has missed events). It runs on its own goroutine, outside the
+// broadcaster's locks.
+func (b *Broadcaster) SetOverflowHandler(handler func(clientID string)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.overflow = handler
+}
+
 // SetEventTap installs an observer invoked for every BroadcastEvent, before
 // the client fan-out. The tap must not block (231).
 func (b *Broadcaster) SetEventTap(tap func(eventType string, payload []byte)) {
@@ -322,6 +333,9 @@ func (b *Broadcaster) observeBacklogs(depths []int) {
 func (b *Broadcaster) noteDrop(queue *clientQueue, clientID string) {
 	b.dropped.Add(1)
 	clientDrops := queue.dropped.Add(1)
+	if clientDrops == 1 && b.overflow != nil {
+		go b.overflow(clientID)
+	}
 	// Log the first drop and powers of two thereafter. This preserves a clear
 	// pressure signal without allowing a stalled client to create a log storm.
 	if clientDrops == 1 || clientDrops&(clientDrops-1) == 0 {

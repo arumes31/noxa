@@ -183,7 +183,7 @@ func (s *TCPServer) validateDiscussionBody(ctx context.Context, client *Client, 
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "slow mode — wait before sending")
 		}
 	}
-	if s.chatSpam != nil && s.chatSpam.record(client.UniqueID, bodyDigest(moderated), time.Now()) {
+	if s.chatSpam != nil && s.chatSpam.record(client.UniqueID, bodyDigest(moderated), "", time.Now()) {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "possible spam detected")
 	}
 	return nil

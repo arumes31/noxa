@@ -14,7 +14,7 @@ type requestBucket struct {
 }
 type sessionRequestBudget struct {
 	mu      sync.Mutex
-	buckets [5]requestBucket
+	buckets [6]requestBucket
 }
 
 func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) bool {
@@ -33,6 +33,9 @@ func (b *sessionRequestBudget) allow(mt netproto.MessageType, now time.Time) boo
 		class, burst, rate = 1, 24, 4
 	case netproto.MsgICECandidate, netproto.MsgWebRTCOffer, netproto.MsgWebRTCAnswer:
 		class, burst, rate = 2, 256, 64
+	case netproto.MsgSetStatus, netproto.MsgDisplayNameSet:
+		// Each change rebuilds a snapshot for every recipient.
+		class, burst, rate = 5, 5, 0.5
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()

@@ -16,9 +16,10 @@ test("inline markup nests and keeps text verbatim", () => {
 
 test("code blocks are opaque and keep their language", () => {
     const nodes = parseMarkdown("before\n```js\nlet **x** = 1;\n```\nafter");
-    assert.equal(nodes[0].text, "before");
+    assert.deepEqual(nodes.map(n => n.type), ["paragraph", "code", "paragraph"]);
+    assert.equal(plainText(nodes[0].children), "before");
     assert.deepEqual(nodes[1], { type: "code", code: "let **x** = 1;", language: "js" });
-    assert.equal(nodes[2].text, "after");
+    assert.equal(plainText(nodes[2].children), "after");
 });
 
 test("links are detected without trailing punctuation and listed once", () => {
@@ -47,9 +48,10 @@ test("shortcodes, custom emoji and mentions become nodes", () => {
 });
 
 test("tables parse header and rows and newlines become breaks", () => {
-    const nodes = parseMarkdown("a\nb\n| h1 | h2 |\n| --- | --- |\n| 1 | **2** |\n| 3 | 4 |\ntail");
-    assert.equal(nodes[0].text, "a");
-    assert.equal(nodes[1].type, "br");
+    // GFM: a table interrupts the paragraph and runs until a blank line.
+    const nodes = parseMarkdown("a\nb\n| h1 | h2 |\n| --- | --- |\n| 1 | **2** |\n| 3 | 4 |\n\ntail");
+    assert.equal(nodes[0].children[0].text, "a");
+    assert.equal(nodes[0].children[1].type, "br");
     const table = nodes.find(n => n.type === "table");
     assert.equal(plainText(table.header[1]), "h2");
     assert.equal(table.rows.length, 2);
@@ -66,4 +68,38 @@ test("preview providers are classified by host", () => {
     assert.equal(previewProvider("https://example.org/page"), "web");
     assert.equal(previewProvider("http://example.org/page"), null);
     assert.equal(previewProvider("not a url"), null);
+});
+
+test("block markdown becomes heading, list, quote and rule nodes", () => {
+    const nodes = parseMarkdown("# Title\n\n- a\n  - nested\n- [x] done\n\n3. third\n\n> quoted **bold**\n\n---");
+    assert.deepEqual(nodes.map(n => n.type), ["heading", "list", "list", "blockquote", "hr"]);
+    assert.equal(nodes[0].level, 1);
+    assert.equal(plainText(nodes[0].children), "Title");
+    const [bullets, ordered] = [nodes[1], nodes[2]];
+    assert.equal(bullets.ordered, false);
+    assert.equal(bullets.children[0].type, "item");
+    assert.equal(bullets.children[0].children.find(n => n.type === "list").children[0].type, "item");
+    assert.equal(plainText(bullets.children[1].children), "☑ done");
+    assert.equal(ordered.ordered, true);
+    assert.equal(ordered.start, 3);
+    assert.equal(nodes[3].children[0].children[1].type, "strong");
+});
+
+test("named links keep their text; unsafe targets stay literal text", () => {
+    const nodes = parseMarkdown("[docs](https://example.com/d) [bad](javascript:alert(1)) ![pic](https://example.com/p.png) <b>raw</b>");
+    const links = nodes.filter(n => n.type === "link");
+    assert.deepEqual(links.map(l => l.url), ["https://example.com/d", "https://example.com/p.png"]);
+    assert.equal(plainText(links[0].children), "docs");
+    assert.equal(plainText(links[1].children), "pic", "images are links labelled with their alt text");
+    assert.match(plainText(nodes), /\[bad\]\(javascript:alert\(1\)\)/);
+    assert.match(plainText(nodes), /<b>raw<\/b>/, "raw HTML is plain text");
+    assert.deepEqual(linksIn(nodes), ["https://example.com/d", "https://example.com/p.png"]);
+});
+
+test("__text__ is underline and bare URLs keep the short display form", () => {
+    const nodes = parseMarkdown("__u__ https://example.com/x");
+    assert.equal(nodes[0].type, "u");
+    const link = nodes.find(n => n.type === "link");
+    assert.equal(link.url, "https://example.com/x");
+    assert.equal(link.children, undefined);
 });

@@ -166,7 +166,7 @@
                     <button id="chat-target-toggle" type="button" aria-label="Show connected members" title="Show connected members">⌄</button>
                     <div id="chat-target-options" class="hidden" role="listbox"></div>
                 </div>
-                <input id="chat-text" placeholder="message…" aria-label="Message" aria-describedby="chat-length" autocomplete="off" />
+                <textarea id="chat-text" rows="1" placeholder="message…" aria-label="Message" aria-describedby="chat-hint chat-length" autocomplete="off"></textarea><span id="chat-hint" class="sr-only">Enter sends, Shift+Enter adds a line.</span>
                 <span id="chat-length" class="composer-count" hidden></span>
                 <input id="chat-file" type="file" multiple class="hidden" aria-label="Choose attachments" />
                 <button id="chat-attach" class="icon-btn" title="Attach files (or paste / drop them here)" aria-label="Attach files">📎</button>

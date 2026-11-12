@@ -362,3 +362,29 @@ test('explicit legacy user_left retains the genuine disconnected announcement', 
     });
     await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual([expected]);
 });
+
+test('a lost connection and the reconnect of the same device use their own announcements', async ({ page }) => {
+    const expected = await page.evaluate(async () => {
+        const { presenceSpeechKey, variedSpeechClip } = await import('/src/speech-variation.js');
+        const previous = window.__noxa.state.clients.find(client => client.client_id === 'peer');
+        const back = { client_id: 'peer-2', unique_id: previous.unique_id, nickname: previous.nickname, channel_id: 7, reconnected: true };
+        const expected = ['speech_en_' + variedSpeechClip('user_connection_lost', presenceSpeechKey(previous, 7)),
+            'speech_en_' + variedSpeechClip('user_reconnected', presenceSpeechKey(back, 7))];
+        const emit = (type, data) => { for (const callback of window.__events.event) callback(JSON.stringify({ type, data })); };
+        emit('user_left', { client_id: 'peer', reason: 'connection_lost' });
+        window.__emitReconnect = () => emit('user_joined', back);
+        return expected;
+    });
+    // The device comes back seconds later in practice; a newer cue would replace a queued one.
+    await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual(expected.slice(0, 1));
+    await page.evaluate(() => window.__emitReconnect());
+    await expect.poll(() => page.evaluate(() => window.__spoken)).toEqual(expected);
+});
+
+test('a replaced session leaves silently', async ({ page }) => {
+    await page.evaluate(() => {
+        for (const callback of window.__events.event) callback(JSON.stringify({ type: 'user_left', data: { client_id: 'peer', reason: 'replaced' } }));
+    });
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => window.__spoken)).toEqual([]);
+});

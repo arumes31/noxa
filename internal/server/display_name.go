@@ -29,6 +29,10 @@ func (s *TCPServer) handleDisplayNameSet(ctx context.Context, client *Client, f 
 		if client.isWebTransport() {
 			name = s.dedupeNickname(name, true, client.ID)
 		}
+		if current, ok := s.deps.State.GetClient(client.ID); ok && current.Nickname == name {
+			// Nothing anyone can see changes: no snapshot per recipient.
+			return s.writeMetadataReply(client, netproto.MsgDisplayNameSaved, netproto.DisplayNameSaved{ClientID: client.ID, Nickname: name})
+		}
 		for _, member := range s.deps.State.ListClients() {
 			if member.ClientID != client.ID && member.Nickname == name {
 				return s.sendErrorFor(client, requestOrigin(ctx), errCodeMalformed, "display name is already in use")
@@ -43,6 +47,6 @@ func (s *TCPServer) handleDisplayNameSet(ctx context.Context, client *Client, f 
 		e := ctx.Value(roleLeaseKey{}).(roleLease).evaluator
 		s.refreshRolePublishers(e)
 		s.broadcastEvent(eventNicknameChanged, netproto.DisplayNameSaved{ClientID: client.ID, Nickname: name})
-		return s.writeCommittedReply(client, netproto.MsgDisplayNameSaved, netproto.DisplayNameSaved{ClientID: client.ID, Nickname: name})
+		return s.writeMetadataReply(client, netproto.MsgDisplayNameSaved, netproto.DisplayNameSaved{ClientID: client.ID, Nickname: name})
 	})
 }
