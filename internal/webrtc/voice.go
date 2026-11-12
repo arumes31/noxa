@@ -45,6 +45,9 @@ type renegState struct {
 	offeredAt   time.Time
 	answerTimer renegTimer
 	expired     int
+	// ignored counts redeliveries actually sent to the client and left
+	// unanswered; refused ones (e.g. while parked in the lobby) do not count.
+	ignored     int
 	outstanding string // SDP of the unanswered offer, for redelivery
 }
 
@@ -369,6 +372,7 @@ func (v *Voice) sendRenegotiation(clientID string, expected *renegState, generat
 		st.offeredAt = st.lastSent
 		st.outstanding = offer
 		st.expired = 0
+		st.ignored = 0
 		v.renegMu.Unlock()
 
 		if sender != nil {
@@ -473,7 +477,7 @@ func (v *Voice) redeliverOffer(clientID string, st *renegState, seq uint64, wrap
 		return
 	}
 	v.renegMu.Lock()
-	abandon := v.reneg[clientID] == st && st.expired >= renegMaxRedeliveries
+	abandon := v.reneg[clientID] == st && st.ignored >= renegMaxRedeliveries
 	v.renegMu.Unlock()
 	if abandon {
 		// Every redelivery reruns the publisher pass and the peer keeps
@@ -481,9 +485,9 @@ func (v *Voice) redeliverOffer(clientID string, st *renegState, seq uint64, wrap
 		// rebuild) makes the client recover its transport with a fresh offer.
 		v.logger.Warn("client ignored renegotiation offers; closing its peer connection",
 			zap.String("client_id", clientID))
-		v.stopReneg(clientID)
-		v.router.DetachPeerKeepChannel(clientID)
-		_ = v.engine.ClosePeerConnection(clientID)
+		// Only this exact peer: a rebuild may have replaced it meanwhile. The
+		// client's fresh offer then rebuilds (stopReneg, detach) as usual.
+		_ = v.engine.closePeerIf(clientID, wrapper)
 		return
 	}
 	send := func() error {
@@ -514,6 +518,9 @@ func (v *Voice) redeliverOffer(clientID string, st *renegState, seq uint64, wrap
 	v.renegMu.Lock()
 	if v.reneg[clientID] == st && st.offerSeq == seq {
 		st.expired++
+		if err == nil {
+			st.ignored++
+		}
 	}
 	v.renegMu.Unlock()
 	if errors.Is(err, ErrNoPeer) {
@@ -766,6 +773,7 @@ func (v *Voice) HandleAnswer(clientID, answerSDP string) error {
 	if current := v.reneg[clientID]; st != nil && current == st {
 		st.unanswered = 0
 		st.expired = 0
+		st.ignored = 0
 		st.outstanding = ""
 		st.offerSeq++
 		if st.answerTimer != nil {
