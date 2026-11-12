@@ -217,7 +217,7 @@ func TestMediaRTXSequenceAuthorizationAndCoalescing(t *testing.T) {
 	}
 }
 
-func TestMediaRTXSequenceCapacityRetainsExistingAndPrimary(t *testing.T) {
+func TestMediaRTXSequenceCapacityEvictsOnlyUnboundState(t *testing.T) {
 	var writes int
 	writer := interceptor.RTPWriterFunc(func(h *rtp.Header, payload []byte, _ interceptor.Attributes) (int, error) {
 		writes++
@@ -225,13 +225,12 @@ func TestMediaRTXSequenceCapacityRetainsExistingAndPrimary(t *testing.T) {
 	})
 	p := sequencePacer(writer)
 	for i := uint32(1); i < mediaRTXSequenceStates; i++ {
-		p.removeStream(11, 22+i-1)
-		p.AddStream(11, writer)
-		p.addRTX(11, 22+i)
+		p.AddStream(100000+i, writer)
+		p.addRTX(100000+i, 200000+i)
 	}
-	p.removeStream(11, 22+mediaRTXSequenceStates-1)
-	p.AddStream(11, writer)
-	p.addRTX(11, 9000)
+	// Every state is bound: nothing may be evicted.
+	p.AddStream(9001, writer)
+	p.addRTX(9001, 9000)
 	packet := sequencePacket(9000)
 	if n, err := p.Write(&packet.Header, packet.Payload, nil); n != 0 || !errors.Is(err, errMediaRTXSequenceLimit) {
 		t.Fatalf("capacity exhaustion silently accepted: n=%d err=%v", n, err)
@@ -239,13 +238,18 @@ func TestMediaRTXSequenceCapacityRetainsExistingAndPrimary(t *testing.T) {
 	if p.count != 0 || p.diagnostics.droppedRetired != 1 || len(p.rtxSequences) != mediaRTXSequenceStates {
 		t.Fatal("limit accounting or bounded state failed")
 	}
-	flushTerminalDiagnosticPacket(t, p, sequencePacket(11))
-	p.removeStream(11, 9000)
-	p.AddStream(11, writer)
-	p.addRTX(11, 22)
+	flushTerminalDiagnosticPacket(t, p, sequencePacket(9001))
+	// A retired slot's state makes room for a new slot's RTX.
+	p.removeStream(100001, 200001)
+	p.AddStream(9003, writer)
+	p.addRTX(9003, 9002)
+	if _, kept := p.rtxSequences[200001]; kept || p.rtxSequences[9002] == nil || len(p.rtxSequences) != mediaRTXSequenceStates {
+		t.Fatal("cap did not evict the unbound RTX state")
+	}
+	flushTerminalDiagnosticPacket(t, p, sequencePacket(9002))
 	flushTerminalDiagnosticPacket(t, p, sequencePacket(22))
-	if writes != 2 || p.rtxSequences[22].next != 101 {
-		t.Fatal("capacity exhaustion evicted existing state or disabled primary")
+	if writes != 3 || p.rtxSequences[22].next != 101 {
+		t.Fatal("capacity eviction touched bound state or disabled primary")
 	}
 	other := sequencePacer(writer)
 	if other.rtxSequences[22] == p.rtxSequences[22] || other.rtxSequences[22].next != 100 {

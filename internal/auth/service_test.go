@@ -434,3 +434,38 @@ func TestLookupActiveBanEquivalentIPs(t *testing.T) {
 		t.Fatal("unrelated address matched")
 	}
 }
+
+func TestAuthenticateIdentifierAliasesShareAccountBudget(t *testing.T) {
+	limiter := NewLoginFailureLimiter(LoginFailureLimiterConfig{})
+	svc := &AuthService{
+		lookupIdentifier: func(context.Context, string) (passwordCredential, error) {
+			return passwordCredential{user: User{UniqueID: "uid", Nickname: "bob"}, hash: "stored"}, nil
+		},
+		verifyPassword: func(string, string) error { return errors.New("password mismatch") },
+		loginLimiter:   limiter,
+	}
+	identifiers := []string{"bob", "uid"}
+	for i := range DefaultLoginFailureMaxFailures {
+		identifier := identifiers[i%2]
+		attempt, ok := limiter.Reserve(AccountPasswordScope(identifier))
+		if !ok {
+			t.Fatalf("attempt %d via %q locked early", i, identifier)
+		}
+		if user, err := svc.AuthenticateIdentifier(context.Background(), identifier, "wrong"); user != nil || err != nil {
+			t.Fatalf("wrong password accepted: %v %v", user, err)
+		}
+		attempt.Fail()
+	}
+	for _, identifier := range identifiers {
+		if limiter.Allowed(AccountPasswordScope(identifier)) {
+			t.Fatalf("alternating identifiers kept a separate budget for %q", identifier)
+		}
+	}
+	// A transport that never reserved the account budget does not feed it.
+	other := NewLoginFailureLimiter(LoginFailureLimiterConfig{MaxFailures: 1})
+	svc.loginLimiter = other
+	_, _ = svc.AuthenticateIdentifier(context.Background(), "bob", "wrong")
+	if !other.Allowed(AccountPasswordScope("uid")) {
+		t.Fatal("unreserved login fed the account budget")
+	}
+}

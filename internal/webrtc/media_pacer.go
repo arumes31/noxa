@@ -21,6 +21,7 @@ import (
 // A repaired upstream gap can release the whole reorder window at once.
 // Keep it bounded while the existing congestion-paced worker drains it.
 const mediaPacerPackets = videoReorderPackets
+const mediaPacerInitialPackets = 64
 const mediaPacerBytes = videoReorderBytes
 const mediaPacerLifetime = videoReorderWait + 500*time.Millisecond
 
@@ -44,6 +45,8 @@ var errMediaRTXSequenceLimit = errors.New("media pacer RTX sequence state limit 
 
 // Retained for the peer connection lifetime, including unbind/rebind of an
 // SSRC. Restarting its sequence under the same SRTP key could reuse an index.
+// Only at the state cap is an unbound SSRC's state evicted: every added slot
+// gets a new sender with fresh random SSRCs, so a removed one does not return.
 // Only the final pacing worker advances next; binding only shares the pointer.
 type mediaRTXSequence struct{ next uint16 }
 
@@ -89,7 +92,7 @@ type mediaPacer struct {
 	egress                            *mediaEgressRegistry
 	transportSequence                 uint16 // owned by the pacing worker
 	historyMu                         sync.Mutex
-	sent                              uint64 // historyMu covers insertion and feedback delivery
+	sent                              uint64 // historyMu covers sequence assignment and feedback bounds, never the socket write
 	audioQueue                        [mediaAudioPackets]pacedPacket
 	audioHead, audioCount, audioBytes int
 	// Voice has its own worker: it is woken per packet, never waits for the
@@ -101,7 +104,7 @@ type mediaPacer struct {
 	audioSent       atomic.Int64
 	diagnostics     mediaPacerCounters           // protected by mu; video only
 	queuedRepairs   map[mediaRepairKey]struct{}  // protected by mu; bounded by video queue
-	rtxSequences    map[uint32]*mediaRTXSequence // protected by mu; bounded, never evicted
+	rtxSequences    map[uint32]*mediaRTXSequence // protected by mu; bounded, unbound entries evicted at the cap
 	inputBins       [mediaInputBins]int          // protected by mu; primary video bytes per bin
 	inputBin        int
 	inputBinStart   time.Time
@@ -138,6 +141,14 @@ func (p *mediaPacer) addRTX(ssrc, rtx uint32) {
 	}
 	if stream := p.streams[ssrc]; stream != nil {
 		state := p.rtxSequences[rtx]
+		if state == nil && len(p.rtxSequences) >= mediaRTXSequenceStates {
+			for old := range p.rtxSequences {
+				if p.streams[old] == nil {
+					delete(p.rtxSequences, old)
+					break
+				}
+			}
+		}
 		if state == nil && len(p.rtxSequences) < mediaRTXSequenceStates {
 			if p.rtxSequences == nil {
 				p.rtxSequences = make(map[uint32]*mediaRTXSequence)
@@ -317,11 +328,21 @@ func (p *mediaPacer) popAudioLocked() pacedPacket {
 	return packet
 }
 
-func (p *mediaPacer) pushLocked(packet pacedPacket) {
-	if p.queue == nil {
-		p.queue = make([]pacedPacket, mediaPacerPackets)
+// growLocked doubles a full video ring, up to mediaPacerPackets. Most peers
+// never queue more than a few frames, so the full window is not preallocated.
+func (p *mediaPacer) growLocked() {
+	if p.count < len(p.queue) || len(p.queue) == mediaPacerPackets {
+		return
 	}
-	p.queue[(p.head+p.count)%mediaPacerPackets] = packet
+	queue := make([]pacedPacket, min(max(2*len(p.queue), mediaPacerInitialPackets), mediaPacerPackets))
+	n := copy(queue, p.queue[p.head:])
+	copy(queue[n:], p.queue[:p.head])
+	p.queue, p.head = queue, 0
+}
+
+func (p *mediaPacer) pushLocked(packet pacedPacket) {
+	p.growLocked()
+	p.queue[(p.head+p.count)%len(p.queue)] = packet
 	p.count++
 	p.bytes += packet.size
 	if packet.repair.stream != nil {
@@ -334,7 +355,7 @@ func (p *mediaPacer) pushLocked(packet pacedPacket) {
 func (p *mediaPacer) popLocked() pacedPacket {
 	packet := p.queue[p.head]
 	p.queue[p.head] = pacedPacket{}
-	p.head = (p.head + 1) % mediaPacerPackets
+	p.head = (p.head + 1) % len(p.queue)
 	p.count--
 	p.bytes -= packet.size
 	delete(p.queuedRepairs, packet.repair)
@@ -529,7 +550,8 @@ func (p *mediaPacer) requeueBusyLocked(packet pacedPacket) bool {
 		p.diagnostics.droppedQueueFull++
 		return false
 	}
-	p.head = (p.head - 1 + mediaPacerPackets) % mediaPacerPackets
+	p.growLocked()
+	p.head = (p.head - 1 + len(p.queue)) % len(p.queue)
 	p.queue[p.head] = packet
 	p.count++
 	p.bytes += packet.size
@@ -563,21 +585,23 @@ func (p *mediaPacer) writePacketRetry(packet pacedPacket, retryBusy bool) (bool,
 		}
 		if packet.stream.twccID != 0 {
 			p.historyMu.Lock()
-			defer p.historyMu.Unlock()
 			var extension [2]byte
 			binary.BigEndian.PutUint16(extension[:], p.transportSequence)
 			if err := header.SetExtension(packet.stream.twccID, extension[:]); err != nil {
+				p.historyMu.Unlock()
 				return 0, err
 			}
 			p.transportSequence++
+			// Count the sequence before writing: a slow socket write must not
+			// hold feedback (and the NACK/PLI read chain behind it). The remote
+			// cannot report it before it is written, and the GCC history skips
+			// any forged report for a sequence it has not recorded yet.
+			p.sent++
+			p.historyMu.Unlock()
 		}
 		// GCC accounts the send here, after queue expiry and final permission
 		// checks. Locally discarded packets cannot manufacture network loss.
-		n, err := packet.stream.writer.Write(header, payload, attrs)
-		if packet.stream.twccID != 0 {
-			p.sent++
-		}
-		return n, err
+		return packet.stream.writer.Write(header, payload, attrs)
 	})
 	if p.egress == nil { // Standalone pacing tests have no router bindings.
 		n, err := write.Write(&packet.header, packet.payload, packet.attrs)

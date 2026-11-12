@@ -21,6 +21,14 @@ func (s *pubSlot) startVideoProbe(packet *rtp.Packet, ticket mediaTicket) {
 	if pacer == nil || !active || pacer.videoStarted.Load() {
 		return
 	}
+	// Without transport-cc the probe never starts and videoStarted never
+	// latches: skip the router-wide demand scan instead of repeating it per packet.
+	pacer.mu.Lock()
+	eligible := pacer.videoProbeEligibleLocked(ssrc)
+	pacer.mu.Unlock()
+	if !eligible {
+		return
+	}
 	// Binding precedes ICE/DTLS completion. Do not spend the feedback window
 	// while the transport cannot yet send or acknowledge the queued packets.
 	if !ticket.router.videoTransportConnected(ticket.delivery.RecipientID) {
@@ -66,10 +74,14 @@ func (s *pubSlot) videoPacerBound() bool {
 	return ready
 }
 
+func (p *mediaPacer) videoProbeEligibleLocked(ssrc uint32) bool {
+	stream := p.streams[ssrc]
+	return !p.closed && stream != nil && stream.active && !stream.audio && stream.twccID != 0 && p.startVideoProbe != nil
+}
+
 func (p *mediaPacer) startVideo(ssrc uint32, demand int) bool {
 	p.mu.Lock()
-	stream := p.streams[ssrc]
-	if p.closed || stream == nil || !stream.active || stream.audio || stream.twccID == 0 || p.startVideoProbe == nil || !p.videoStarted.CompareAndSwap(false, true) {
+	if !p.videoProbeEligibleLocked(ssrc) || !p.videoStarted.CompareAndSwap(false, true) {
 		p.mu.Unlock()
 		return false
 	}

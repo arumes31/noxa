@@ -83,3 +83,31 @@ func TestVideoStartupRequiresTWCCAndCannotResetOnAnotherWatch(t *testing.T) {
 		t.Fatal("later video overrode an established congestion estimate")
 	}
 }
+
+func TestVideoStartupWithoutTWCCSkipsRouterScan(t *testing.T) {
+	r := NewRouter(nil)
+	p := newMediaPacer()
+	defer func() { _ = p.Close() }()
+	p.startVideoProbe = func(int) bool { return true }
+	p.AddStream(1, interceptor.RTPWriterFunc(func(*rtp.Header, []byte, interceptor.Attributes) (int, error) { return 1, nil }))
+	slot := &pubSlot{egress: &mediaEgressStream{active: true, pacer: p}}
+	slot.egress.outputSSRC.Store(1)
+	// A per-packet router scan would block on the held router lock.
+	r.mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		slot.startVideoProbe(&rtp.Packet{Payload: []byte{1}}, mediaTicket{router: r, videoSource: 1})
+		close(done)
+	}()
+	select {
+	case <-done:
+		r.mu.Unlock()
+	case <-time.After(time.Second):
+		r.mu.Unlock()
+		<-done
+		t.Fatal("video without transport-cc rescanned router state")
+	}
+	if p.videoStarted.Load() {
+		t.Fatal("video without transport-cc consumed the probe")
+	}
+}

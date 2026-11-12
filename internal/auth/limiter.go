@@ -294,6 +294,27 @@ func (l *LoginFailureLimiter) RecordFailure(scopes ...string) {
 	l.clearOverflowWhenEvictableLocked(now)
 }
 
+// RecordAliasFailure mirrors a failed verification reserved under scope onto
+// the account's other identifier scopes, so alternating nickname and unique
+// ID shares one budget. Nothing is recorded unless scope is reserved right
+// now: a transport that does not reserve the account budget never feeds it.
+// The reserved scope itself is skipped here; its attempt's Fail counts it.
+func (l *LoginFailureLimiter) RecordAliasFailure(scope string, aliases ...string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if entry, ok := l.entries[scope]; !ok || !entry.inFlight {
+		return
+	}
+	now := l.now()
+	for _, alias := range uniqueLoginScopes(aliases) {
+		l.recordFailureLocked(alias, now)
+	}
+	l.clearOverflowWhenEvictableLocked(now)
+}
+
 func (l *LoginFailureLimiter) recordFailureLocked(scope string, now time.Time) {
 	entry, ok := l.entries[scope]
 	if !ok {
