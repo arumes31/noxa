@@ -236,6 +236,7 @@ const maxFileVersions = 3
 func (s *Server) finalizeUpload(ctx context.Context, tr *transfer, root *os.Root, tmpPath, finalPath string, size int64, sum string) error {
 	s.fileOpsMu.Lock()
 	defer s.fileOpsMu.Unlock()
+	published := false
 	if tr.revoked.Load() {
 		return ErrAccessRevoked
 	}
@@ -290,10 +291,19 @@ func (s *Server) finalizeUpload(ctx context.Context, tr *transfer, root *os.Root
 				return err
 			}
 		}
-		if err := s.rotateVersions(ctx, tr, root); err != nil {
+		finishRotation, undoRotation, err := s.rotateVersions(ctx, tr, root)
+		if err != nil {
 			_ = root.Remove(tmpPath)
 			return err
 		}
+		// Until the new file is published, a failure restores every version.
+		defer func() {
+			if published {
+				finishRotation()
+			} else {
+				undoRotation()
+			}
+		}()
 	}
 
 	// Dedup (275): point at an identical existing blob instead of storing a
@@ -314,10 +324,16 @@ func (s *Server) finalizeUpload(ctx context.Context, tr *transfer, root *os.Root
 			return fmt.Errorf("finalizing file: %w", err)
 		}
 	}
-	return s.store.AddFile(ctx, store.FileRecord{
+	if err := s.store.AddFile(ctx, store.FileRecord{
 		ChannelID: tr.ChannelID, Folder: tr.Folder, Name: tr.Name,
 		Size: size, SHA256: sum, Uploader: tr.Uploader, Encrypted: encrypted,
-	})
+	}); err != nil {
+		// Free the name so the rotation undo can put the previous file back.
+		_ = root.Remove(finalPath)
+		return err
+	}
+	published = true
+	return nil
 }
 
 // checkUploadCommitQuota runs under fileOpsMu, before rotation or publication.
@@ -351,50 +367,109 @@ func (s *Server) checkUploadCommitQuota(ctx context.Context, tr *transfer, size 
 	return nil
 }
 
-// rotateVersions shifts <name>.v1..v2 up one slot (dropping the oldest) and
-// renames the current file to <name>.v1 (264). Failures are logged, not
-// fatal: losing a version must not break the upload.
-func (s *Server) rotateVersions(ctx context.Context, tr *transfer, root *os.Root) error {
-	rename := func(folder, from, to string) error {
-		if _, err := s.store.GetFile(ctx, tr.ChannelID, folder, from); err != nil {
+// rotateVersions makes room for a new upload of tr.Name: name -> .v1 -> .v2
+// ... and the oldest version is set aside. Every step moves the row and the
+// blob together; a step that cannot (disk check, row rename or blob rename
+// failure) aborts the upload. undo restores every completed step; finish
+// drops the set-aside oldest version and runs only once the new file is
+// published, so a failed upload changes no retained version.
+func (s *Server) rotateVersions(ctx context.Context, tr *transfer, root *os.Root) (finish, undo func(), err error) {
+	type step struct{ from, to string }
+	var done []step
+	folder := tr.Folder
+	rollbackCtx := func() (context.Context, context.CancelFunc) {
+		// The upload's context may already be canceled (client gone).
+		return context.WithTimeout(context.WithoutCancel(ctx), rotateRollbackTimeout)
+	}
+	undo = func() {
+		rctx, cancel := rollbackCtx()
+		defer cancel()
+		for i := len(done) - 1; i >= 0; i-- {
+			st := done[i]
+			if err := rotateRename(root, blobPath(tr.ChannelID, folder, st.to), blobPath(tr.ChannelID, folder, st.from)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				s.logger.Error("version rotate undo (disk) failed", zap.String("from", st.to), zap.Error(err))
+			}
+			if err := s.store.RenameFile(rctx, tr.ChannelID, folder, st.to, folder, st.from); err != nil {
+				s.logger.Error("version rotate undo (db) failed", zap.String("from", st.to), zap.Error(err))
+			}
+		}
+		done = nil
+	}
+	rename := func(from, to string) error {
+		if _, err := s.store.GetFile(ctx, tr.ChannelID, folder, from); errors.Is(err, store.ErrFileNotFound) {
 			return nil // nothing to rotate
+		} else if err != nil {
+			return fmt.Errorf("rotating %q: %w", from, err)
 		}
 		oldPath := blobPath(tr.ChannelID, folder, from)
 		newPath := blobPath(tr.ChannelID, folder, to)
 		if info, err := root.Lstat(oldPath); err == nil && !info.Mode().IsRegular() {
-			s.logger.Warn("version rotate refused non-regular blob", zap.String("from", from))
-			return nil
+			return fmt.Errorf("rotating %q: not a regular file", from)
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			s.logger.Warn("version rotate (disk check) failed", zap.String("from", from), zap.Error(err))
-			return nil
+			return fmt.Errorf("rotating %q: %w", from, err)
 		}
 		if err := s.store.RenameFile(ctx, tr.ChannelID, folder, from, folder, to); err != nil {
-			s.logger.Warn("version rotate (db) failed", zap.String("from", from), zap.Error(err))
-			return nil
+			return fmt.Errorf("rotating %q to %q: %w", from, to, err)
 		}
 		if err := rotateRename(root, oldPath, newPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			// Row and blob must name the same place, or the sweep would later
 			// delete the "unreferenced" blob and lose this version.
-			if rbErr := s.store.RenameFile(ctx, tr.ChannelID, folder, to, folder, from); rbErr != nil {
+			rctx, cancel := rollbackCtx()
+			defer cancel()
+			if rbErr := s.store.RenameFile(rctx, tr.ChannelID, folder, to, folder, from); rbErr != nil {
 				s.logger.Error("version rotate rollback (db) failed", zap.String("from", from), zap.Error(rbErr))
 			}
 			return fmt.Errorf("rotating %q to %q: %w", from, to, err)
 		}
+		done = append(done, step{from, to})
 		return nil
 	}
-	// Oldest version falls off the end.
+	fail := func(err error) (func(), func(), error) {
+		undo()
+		return nil, nil, err
+	}
+
+	// The oldest version is set aside under a unique name, not deleted yet.
 	oldest := tr.Name + ".v" + strconv.Itoa(maxFileVersions)
-	if _, err := s.store.GetFile(ctx, tr.ChannelID, tr.Folder, oldest); err == nil {
-		_ = s.store.DeleteFile(ctx, tr.ChannelID, tr.Folder, oldest)
-		_ = root.Remove(blobPath(tr.ChannelID, tr.Folder, oldest))
+	aside := ""
+	if _, err := s.store.GetFile(ctx, tr.ChannelID, folder, oldest); err == nil {
+		suffix, err := randomHex(8)
+		if err != nil {
+			return nil, nil, err
+		}
+		aside = oldest + ".rotating-" + suffix
+		if err := rename(oldest, aside); err != nil {
+			return fail(err)
+		}
+	} else if !errors.Is(err, store.ErrFileNotFound) {
+		return nil, nil, fmt.Errorf("rotating %q: %w", oldest, err)
 	}
 	for v := maxFileVersions - 1; v >= 1; v-- {
-		if err := rename(tr.Folder, tr.Name+".v"+strconv.Itoa(v), tr.Name+".v"+strconv.Itoa(v+1)); err != nil {
-			return err
+		if err := rename(tr.Name+".v"+strconv.Itoa(v), tr.Name+".v"+strconv.Itoa(v+1)); err != nil {
+			return fail(err)
 		}
 	}
-	return rename(tr.Folder, tr.Name, tr.Name+".v1")
+	if err := rename(tr.Name, tr.Name+".v1"); err != nil {
+		return fail(err)
+	}
+	finish = func() {
+		if aside == "" {
+			return
+		}
+		rctx, cancel := rollbackCtx()
+		defer cancel()
+		if err := s.store.DeleteFile(rctx, tr.ChannelID, folder, aside); err != nil {
+			s.logger.Warn("dropping oldest version (db) failed", zap.String("name", aside), zap.Error(err))
+			return // the sweep must not see a blob without its row
+		}
+		_ = root.Remove(blobPath(tr.ChannelID, folder, aside))
+	}
+	return finish, undo, nil
 }
+
+// rotateRollbackTimeout bounds rotation rollback and cleanup, which run on a
+// context detached from the (possibly canceled) upload.
+const rotateRollbackTimeout = 10 * time.Second
 
 // rotateRename renames a blob during version rotation; tests replace it to
 // simulate a rename the OS refuses (a file held open on Windows).

@@ -134,11 +134,13 @@ func (s *Server) InitResumableUpload(ctx context.Context, channelID int64, folde
 		return "", "", 0, false, err
 	}
 	path := resumablePartialPath(channelID, cleanFolder, cleanName, uploader, size, sum)
-	offset, resumable := s.partialOffset(channelID, path, uploader, size, uploaderQuotaMB)
-	if resumable && s.partialIsStoredFile(ctx, channelID, cleanFolder, path) {
-		// A stored file already sits at the partial's path (planted before
-		// partial names were refused): never resume into it.
-		resumable = false
+	// A stored file already sitting at the partial's path (planted before
+	// partial names were refused) is never resumed into, and checked before
+	// partialOffset, which may remove the path.
+	var offset int64
+	resumable := false
+	if !s.partialIsStoredFile(ctx, channelID, cleanFolder, path) {
+		offset, resumable = s.partialOffset(channelID, path, uploader, size, uploaderQuotaMB)
 	}
 	var complete func(*transfer)
 	if resumable {
