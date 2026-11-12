@@ -2,6 +2,7 @@ import { hardwareVideoEvidence } from "./hardware-video.js";
 import { hardwareRecoveryCodec, knownSoftwareVideoEncoder } from "./video-hevc.js";
 import { createHardwareRecoveryScheduler } from "./video-hardware-recovery.js";
 import { t } from "./i18n.js";
+import { sampleSenderStats } from "./peer-stats.js";
 import { publicationSnapshot, publicationUploadActive, withdrawPublicationHEVC } from "./stream-publication.js";
 
 const scopeKey = state => JSON.stringify([state.activeTabID, state.serverGeneration, state.sessionGeneration, state.myClientID, state.myChannelID]);
@@ -124,6 +125,9 @@ export function createVideoSenderRecovery({ state, retry, snapshot = publication
                     // An encoder that still outputs nothing after its restart
                     // would otherwise keep a silent share alive between retries.
                     if (recovered === false && evidence?.hardwareStartup && current()) {
+                        // A retry also declines when output resumed on its own.
+                        const latest = await sampleSenderStats(transceiver.sender, { fresh: true }).then(rows => rows.get(stat.id), () => null);
+                        if (!(latest?.framesEncoded <= stat.framesEncoded) || !current()) return recovered;
                         p.onInvalidated();
                         window.__noxa?.toast?.(t("e2ee.reason.hardware_encoder"), "warn");
                     }
