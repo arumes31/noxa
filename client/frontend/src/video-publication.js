@@ -405,11 +405,12 @@ export function createVideoPublication({ policy }) {
     // not reveal that native input and must never become a replacement scale.
     // Capability queries alone do not guarantee hardware on every runtime; the
     // recovery scheduler must confirm the result using actual encoder stats.
+    // Resolves null when it declines before the pulse, false when the pulse failed.
     function retryVideoHardware(slot, track, stillRelevant = () => true, captureRecovery = null) {
         const { state } = V(), pc = state.pc, scope = captureMediaScope();
         const transceiver = slot === "screen" ? state.shareVideoTransceiver : pc?.getTransceivers().find(item => item.sender.track === track);
         const sender = transceiver?.sender;
-        if (!pc || !sender || !["screen", "cam"].includes(slot)) return Promise.resolve(false);
+        if (!pc || !sender || !["screen", "cam"].includes(slot)) return Promise.resolve(null);
         const owns = () => state.pc === pc && mediaScopeIsCurrent(scope) && !transceiver.stopped && sender.track === track &&
             track?.readyState === "live" && (slot === "screen" ? state.shareVideoTransceiver === transceiver &&
                 state.shareStream?.getVideoTracks()[0] === track : state.localStream?.getVideoTracks().includes(track));
@@ -417,7 +418,7 @@ export function createVideoPublication({ policy }) {
             publicationUploadActive(slot, track) !== false;
         return queuePeerNegotiation(pc, () => {
             const pending = (capUpdates.get(pc) || Promise.resolve()).catch(() => {}).then(async () => {
-                if (!current() || !navigator.mediaCapabilities?.encodingInfo) return false;
+                if (!current() || !navigator.mediaCapabilities?.encodingInfo) return null;
                 const sample = async () => {
                     const reports = await sampleSenderStats(sender, { fresh: true });
                     const video = [...reports.values()].filter(row => row.type === "outbound-rtp" && !row.isRemote &&
@@ -455,7 +456,7 @@ export function createVideoPublication({ policy }) {
                         Number.isSafeInteger(row.framesEncoded) && row.framesEncoded >= 0) &&
                     after.framesEncoded >= before.framesEncoded && after.capture.frames > before.capture.frames &&
                     after.capture.timestamp > before.capture.timestamp && after.capture.timestamp - before.capture.timestamp <= 15000;
-                if (!current() || parameters.encodings?.length !== 1 || encoding.active === false || !Number.isFinite(scale) || scale < 1 || !eligible(first)) return false;
+                if (!current() || parameters.encodings?.length !== 1 || encoding.active === false || !Number.isFinite(scale) || scale < 1 || !eligible(first)) return null;
                 const recoverySize = dimensions(first);
                 // The shared bounded cache retains hung native queries; a later
                 // retry must not launch additional work for the same geometry.
@@ -465,14 +466,14 @@ export function createVideoPublication({ policy }) {
                     frameWidth: recoverySize.width / divisor, frameHeight: recoverySize.height / divisor,
                     framesPerSecond: encodedRate,
                 })));
-                if (supported.some(value => !value)) return false;
+                if (supported.some(value => !value)) return null;
                 await pause(150);
                 const baseline = await sample();
                 if (!current() || !eligible(baseline) || baseline.id !== first.id || baseline.codecId !== first.codecId || baseline.ssrc !== first.ssrc ||
                     baseline.timestamp <= first.timestamp ||
                     !(baseline.framesEncoded > first.framesEncoded || capturedProgress(first, baseline)) ||
                     dimensions(baseline).width !== recoverySize.width || dimensions(baseline).height !== recoverySize.height ||
-                    track.getSettings().width !== size.width || track.getSettings().height !== size.height) return false;
+                    track.getSettings().width !== size.width || track.getSettings().height !== size.height) return null;
                 const originalScale = encoding.scaleResolutionDownBy;
                 const pulseScale = scale * 2;
                 let pulsed = false;
@@ -484,9 +485,9 @@ export function createVideoPublication({ policy }) {
                         dimensions(ready).width !== recoverySize.width || dimensions(ready).height !== recoverySize.height ||
                         (!(baseline.framesEncoded > first.framesEncoded) &&
                             (ready.timestamp <= baseline.timestamp || !capturedProgress(baseline, ready))) ||
-                        track.getSettings().width !== size.width || track.getSettings().height !== size.height) return false;
+                        track.getSettings().width !== size.width || track.getSettings().height !== size.height) return null;
                     const pulse = sender.getParameters();
-                    if (pulse.encodings?.length !== 1 || (pulse.encodings[0].scaleResolutionDownBy ?? 1) !== scale || pulse.encodings[0].active === false) return false;
+                    if (pulse.encodings?.length !== 1 || (pulse.encodings[0].scaleResolutionDownBy ?? 1) !== scale || pulse.encodings[0].active === false) return null;
                     pulse.encodings[0].scaleResolutionDownBy = pulseScale;
                     pulsed = true;
                     await sender.setParameters(pulse);
@@ -802,6 +803,16 @@ export function createVideoPublication({ policy }) {
             return;
         }
         audioMode = validateDisplayAudio(display, audioMode);
+        // Orientation is known only after capture: a portrait screen or window
+        // turns the preset box before the geometry crop below fixes its size.
+        // Region crops keep the unturned box.
+        const raw = surface !== "region" && surface !== "studio" ? display.getVideoTracks()[0]?.getSettings() : null;
+        if (raw?.height > raw?.width) {
+            p.portrait = true;
+            try { await display.getVideoTracks()[0].applyConstraints(screenShareConstraints(p, limits)); }
+            catch (error) { discardDisplay(display); V().sysMsg(tLabel("desktop.screen.capture.failed") + error.message); return; }
+            if (!current()) { discardDisplay(display); return; }
+        }
         // Full-window/screen capture needs the same per-frame even geometry as
         // region capture. GPU textures can change size without honoring the
         // source adapter's advertised constraints (e.g. 1620 -> 1621 pixels).
@@ -1065,6 +1076,8 @@ export function createVideoPublication({ policy }) {
             try {
                 await queuePeerNegotiation(pc, async () => {
                     if (!alive()) return;
+                    // The captured source keeps its orientation across every quality update.
+                    if (capturePreferences.get(track)?.portrait) next.portrait = true;
                     if (bitrateOnly) {
                         if (!await applyScreenBitrate(track, next, alive) || !alive()) return;
                         for (const key of Object.keys(profile)) delete profile[key];

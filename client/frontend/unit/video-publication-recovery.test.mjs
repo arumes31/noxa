@@ -150,7 +150,7 @@ test("hardware retry skips invalid geometry, unsupported hardware, and stale fra
         { row: { frameWidth: 320, frameHeight: 180 } }, { row: { frameWidth: 2560, frameHeight: 1440 } },
         { row: { powerEfficientEncoder: true } }, { capable: false }, { stale: true }]) {
         const f = fixture(options);
-        assert.equal(await f.api.retryVideoHardware("screen", f.track), false);
+        assert.equal(await f.api.retryVideoHardware("screen", f.track), null);
         assert.equal(f.writes.length, 0);
     }
 });
@@ -278,7 +278,7 @@ test("delayed adaptation or unknown limitation prevents the pulse without changi
             let reads = 0;
             options.onStats = () => { if (++reads === atRead) Object.assign(options.row, change); };
             const f = fixture(options);
-            assert.equal(await f.api.retryVideoHardware("screen", f.track), false);
+            assert.equal(await f.api.retryVideoHardware("screen", f.track), null);
             assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), []);
             assert.equal(f.sender.getParameters().degradationPreference, "maintain-framerate");
         }
@@ -314,7 +314,7 @@ test("stalled-output pulse rejects absent proof, idle, changed or stale capture 
         };
         const f = fixture(options);
         const proof = mode === "no-proof" ? null : mode === "wrong-proof" ? { ...captureProof, sourceId: "other" } : captureProof;
-        assert.equal(await f.api.retryVideoHardware("screen", f.track, () => true, proof), false, mode);
+        assert.equal(await f.api.retryVideoHardware("screen", f.track, () => true, proof), null, mode);
         assert.deepEqual(f.writes.map(p => p.encodings[0].scaleResolutionDownBy), [], mode);
         assert.equal(f.sender.getParameters().degradationPreference, "maintain-framerate");
     }
@@ -385,7 +385,7 @@ test("a changed sender-stat identity on the final preflight cannot mutate a send
     let reads = 0; const options = { row: {} };
     options.onStats = () => { if (++reads === 3) options.row.ssrc = 999; };
     const f = fixture(options);
-    assert.equal(await f.api.retryVideoHardware("screen", f.track), false);
+    assert.equal(await f.api.retryVideoHardware("screen", f.track), null);
     assert.equal(f.writes.length, 0);
 });
 
@@ -434,7 +434,7 @@ test("first-frame pulse refuses missing proof, stopped capture, stale geometry a
         if(mode==="no-hardware-support")options.capable=false;
         options.onStats=()=>{if(mode==="late-output"&&++reads===2)Object.assign(options.row,{framesEncoded:1,frameWidth:1920,frameHeight:1080});};
         const f=fixture(options),proof=mode==="no-proof"?null:{...captureProof,hardwareStartup:true,...(mode==="wrong-source"?{sourceId:"other"}:{})};
-        assert.equal(await f.api.retryVideoHardware("screen",f.track,()=>true,proof),false,mode);
+        assert.equal(await f.api.retryVideoHardware("screen",f.track,()=>true,proof),null,mode);
         assert.deepEqual(f.writes,[],mode);
     }
 });
@@ -458,6 +458,22 @@ test("first-frame stall reaches the shared scheduler and real pulse path with un
     assert.deepEqual(f.queries.map(q => [q.video.width, q.video.height, q.video.framerate]), [[1920, 1080, 30], [960, 540, 30]]);
     assert.ok(f.writes.every(p => p.encodings.length === 1 && p.encodings[0].maxBitrate === 8000000));
     assert.equal(f.sender.track, f.track);
+});
+
+test("a first-frame retry declined before its pulse does not end the share", async () => {
+    let time = 0, invalidated = 0;
+    // The half-size capability check declines before any parameter write.
+    const f = fixture({ capture: {}, maxFramerate: 30, capability: config => config.video.width !== 960, row: { framesEncoded: 0,
+        frameWidth: undefined, frameHeight: undefined, powerEfficientEncoder: true, encoderImplementation: "MediaFoundationVideoEncodeAccelerator", targetBitrate: 5000000 } });
+    const publication = { pc: f.pc, track: f.track, slot: "screen", generation: "1", onInvalidated: () => { invalidated++; },
+        scope: { tabID: "a", generation: 1, session: 1, clientID: "me", channelID: 1 } };
+    const recover = createVideoSenderRecovery({ state: f.state, retry: f.api.retryVideoHardware,
+        snapshot: () => [{ publication, generation: "1" }], uploadActive: () => true,
+        scheduler: createHardwareRecoveryScheduler({ now: () => time }) });
+    for (const at of [0, 5000, 10000]) { time = at; await recover(f.pc, await f.sender.getStats()); }
+    assert.deepEqual(f.queries.map(q => [q.video.width, q.video.height]), [[1920, 1080], [960, 540]]);
+    assert.deepEqual(f.writes, []);
+    assert.equal(invalidated, 0);
 });
 
 

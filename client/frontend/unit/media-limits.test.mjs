@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { videoConstraints, trackFitsVideoLimits, capVideoEncodings, screenBitrateHeadroom } from "../src/media-limits.js";
 import { shareQuality, screenShareConstraints } from "../src/screen-share-quality.js";
+import { sourceConstraints } from "../src/share-frame-geometry.js";
 
 test("screen resolutions leave bitrate adaptive and honor server bounds", () => {
     for (const [preset, width, height] of [["qhd", 2560, 1440], ["uhd", 3840, 2160]]) {
@@ -10,6 +11,20 @@ test("screen resolutions leave bitrate adaptive and honor server bounds", () => 
         assert.deepEqual(screenShareConstraints(profile), { width: { ideal: width, max: width }, height: { ideal: height, max: height }, frameRate: { ideal: 30, max: 30 } });
         assert.deepEqual(screenShareConstraints(profile, { video_max_width: 1280, video_max_height: 720 }).height, { ideal: 720, max: 720 });
     }
+});
+
+test("a captured portrait source keeps its full size; landscape keeps the preset box", () => {
+    const hd = shareQuality("hd"), whole = { x: 0, y: 0, width: 1, height: 1 };
+    // The browser scales a source to fit both maxima, as the geometry crop does.
+    const fitted = (native, profile, limits) => {
+        const box = sourceConstraints(native, whole, screenShareConstraints(profile, limits));
+        return [box.width.max, box.height.max];
+    };
+    assert.deepEqual(fitted({ width: 1080, height: 1920 }, { ...hd, portrait: true }), [1080, 1920]);
+    assert.deepEqual(fitted({ width: 1080, height: 1920 }, hd), [608, 1080], "the unturned box would downscale it");
+    assert.deepEqual(fitted({ width: 2048, height: 1536 }, hd), [1440, 1080], "4:3 stays within 1920x1080");
+    assert.deepEqual(fitted({ width: 1080, height: 1920 }, { ...hd, portrait: true }, { video_max_width: 1920, video_max_height: 1080 }), [608, 1080],
+        "server bounds are never turned");
 });
 
 test("original capture removes size preferences while retaining server and frame-rate limits", () => {
