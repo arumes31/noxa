@@ -166,6 +166,8 @@ func TestIntegrationWebhookTCPManagementHTTPEncryptedDeliveryAndRevocation(t *te
 	if _, err := db.DB().ExecContext(t.Context(), `DELETE FROM bans WHERE value='admin-uid'`); err != nil {
 		t.Fatal(err)
 	}
+	// A poll body would store as text that clients render as a broken poll.
+	post(created.Token, `{"content":"`+netproto.PollPrefix+`{}"}`, 400)
 	manage(netproto.WebhookRequest{Action: "revoke", ID: created.ID})
 	post(created.Token, `{"content":"Revoked"}`, 401)
 	var count int

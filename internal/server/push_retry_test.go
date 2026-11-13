@@ -17,6 +17,7 @@ import (
 
 	"noxa/internal/config"
 	"noxa/internal/metrics"
+	"noxa/internal/store"
 	"noxa/internal/webpush"
 )
 
@@ -68,7 +69,7 @@ func TestSendPushRetriesTemporaryFailures(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		start := time.Now()
-		if err := s.sendPushWithRetry(ctx, webpush.Subscription{}, webpush.Message{}); err != nil {
+		if err := s.sendPushWithRetry(ctx, "u", webpush.Subscription{}, webpush.Message{}); err != nil {
 			t.Fatalf("sendPushWithRetry = %v", err)
 		}
 		if len(sender.calls) != 3 {
@@ -89,7 +90,7 @@ func TestSendPushDoesNotRetryPermanentFailures(t *testing.T) {
 		for _, failure := range []error{webpush.ErrGone, &webpush.StatusError{Status: 400}, errors.New("encrypt: bad key")} {
 			sender := &scriptedSender{results: []error{failure}}
 			s := retryServer(sender, &pushRecorder{})
-			if err := s.sendPushWithRetry(context.Background(), webpush.Subscription{}, webpush.Message{}); !errors.Is(err, failure) {
+			if err := s.sendPushWithRetry(context.Background(), "u", webpush.Subscription{}, webpush.Message{}); !errors.Is(err, failure) {
 				t.Fatalf("error = %v, want %v", err, failure)
 			}
 			if len(sender.calls) != 1 {
@@ -107,7 +108,7 @@ func TestSendPushStopsWhenTheWaitExceedsTheDeadline(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		start := time.Now()
-		if err := s.sendPushWithRetry(ctx, webpush.Subscription{}, webpush.Message{}); !errors.Is(err, long) {
+		if err := s.sendPushWithRetry(ctx, "u", webpush.Subscription{}, webpush.Message{}); !errors.Is(err, long) {
 			t.Fatalf("error = %v", err)
 		}
 		if time.Since(start) != 0 || len(sender.calls) != 1 {
@@ -135,4 +136,72 @@ func TestPushRetryableClassifiesErrors(t *testing.T) {
 			t.Errorf("pushRetryable(%v) = %v, want %v", err, got, want)
 		}
 	}
+}
+
+func TestPushSlotWaitTimeoutRecordsNothing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pushes := &fakePushes{fakeDevices: &fakeDevices{}}
+		sub := store.PushSubscription{DeviceID: "d1", Principal: "u", Endpoint: "https://push.example/1"}
+		_ = pushes.SavePushSubscription(t.Context(), sub)
+		sender := &scriptedSender{}
+		s := New(&config.Config{}, zap.NewNop(), &Deps{Push: sender, Devices: pushes})
+		for range pushConcurrency {
+			s.push.sem <- struct{}{} // every global slot busy
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		s.deliverPush(ctx, sub, pushNotice{Kind: pushKindDM, Tag: "dm:ivy"})
+		if len(sender.calls) != 0 || pushes.records != 0 {
+			t.Fatalf("sends = %d, recorded results = %d; a send that never left must record nothing", len(sender.calls), pushes.records)
+		}
+	})
+}
+
+// gateSender holds every send until released and counts sends per endpoint.
+type gateSender struct {
+	mu      sync.Mutex
+	started map[string]int
+	release chan struct{}
+}
+
+func (g *gateSender) PublicKey() string { return "k" }
+
+func (g *gateSender) Send(ctx context.Context, sub webpush.Subscription, _ webpush.Message) error {
+	g.mu.Lock()
+	g.started[sub.Endpoint]++
+	g.mu.Unlock()
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+func TestPushLimitsSendsInFlightPerUser(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g := &gateSender{started: map[string]int{}, release: make(chan struct{})}
+		s := New(&config.Config{}, zap.NewNop(), &Deps{Push: g})
+		var wg sync.WaitGroup
+		send := func(principal string) {
+			wg.Go(func() {
+				_ = s.sendPushOnce(context.Background(), principal, webpush.Subscription{Endpoint: principal}, webpush.Message{})
+			})
+		}
+		for range pushPerUser + 1 {
+			send("busy")
+		}
+		send("other")
+		synctest.Wait()
+		g.mu.Lock()
+		busy, other := g.started["busy"], g.started["other"]
+		g.mu.Unlock()
+		close(g.release)
+		wg.Wait()
+		if busy != pushPerUser || other != 1 {
+			t.Fatalf("in flight: busy = %d, other = %d; want %d and 1", busy, other, pushPerUser)
+		}
+		if g.started["busy"] != pushPerUser+1 || len(s.push.userSem) != 0 {
+			t.Fatalf("busy sends = %d, user slots left = %d", g.started["busy"], len(s.push.userSem))
+		}
+	})
 }

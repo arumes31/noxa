@@ -343,6 +343,7 @@ func (s *Server) trusted(addr netip.Addr) bool {
 func (s *Server) appHandler() http.Handler {
 	files := http.StripPrefix("/app/", http.FileServer(http.Dir(s.cfg.AppDir)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setStaticWriteDeadline(w)
 		rel := strings.TrimPrefix(path.Clean(r.URL.Path), "/app")
 		rel = strings.TrimPrefix(rel, "/")
 		if rel == "" || rel == "index.html" {
@@ -375,7 +376,17 @@ func (s *Server) appHandler() http.Handler {
 	})
 }
 
+// staticWriteTimeout cuts a static response to a reader that stalls. It is
+// set per handler, not as http.Server.WriteTimeout, which would also end
+// hijacked WebSockets.
+const staticWriteTimeout = 60 * time.Second
+
+func setStaticWriteDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(staticWriteTimeout))
+}
+
 func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
+	setStaticWriteDeadline(w)
 	w.Header().Set("Cache-Control", "no-cache")
 	http.ServeFile(w, r, filepath.Join(s.cfg.AppDir, "index.html"))
 }

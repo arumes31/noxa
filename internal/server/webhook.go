@@ -151,6 +151,10 @@ func (s *TCPServer) IncomingWebhookHandler() http.Handler {
 				if s.cfg != nil && s.cfg.ChatMaxLength > 0 && len(payload.Content) > s.cfg.ChatMaxLength {
 					return "", 0, authorization.ErrRoleInvalid
 				}
+				// A poll needs its own store row; posted as text it would render as a broken poll.
+				if strings.HasPrefix(payload.Content, netproto.PollPrefix) {
+					return "", 0, authorization.ErrRoleInvalid
+				}
 				if err = s.moderateBody(ctx, payload.Content); err != nil {
 					return "", 0, authorization.ErrRoleInvalid
 				}

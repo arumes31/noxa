@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -58,36 +59,150 @@ func commitRecordingPacket(t *testing.T, capture *channelCapture, packet *rtp.Pa
 	}
 }
 
-func TestChannelRecordingCapacityFailureIsExplicit(t *testing.T) {
+func readCaptureManifest(t *testing.T, path string) captureManifest {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest captureManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}
+
+// waitProcesses waits until the recorder owns exactly n source processes.
+func waitProcesses(t *testing.T, c *ChannelRecorder, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for c.processes.SessionCount() != n && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := c.processes.SessionCount(); got != n {
+		t.Fatalf("source processes = %d, want %d", got, n)
+	}
+}
+
+func TestChannelRecordingSkipsSourcesAtCapacity(t *testing.T) {
 	cfg := testConfig(privateTempDir(t))
 	cfg.MaxConcurrent = 1
 	c := NewChannelRecorder(cfg, testLogger())
+	var launches atomic.Int32
+	c.processes.Exec = func(ctx context.Context, name string, args ...string) Command {
+		launches.Add(1)
+		return autoRecordingProcess(ctx, name, args...)
+	}
+	session, err := c.Start(context.Background(), 1, &fakeTapRouter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	capture := c.sessions[1]
+	c.mu.Unlock()
+	packet := &rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 1}, Payload: []byte{1}}
+	commitRecordingPacket(t, capture, packet, webrtc.MediaDelivery{SenderID: "alice", Slot: webrtc.SlotMic})
+	waitProcesses(t, c, 1)
+	// bob is over the limit: skipped once, not retried per packet, and the
+	// recording keeps going.
+	for range 3 {
+		if err := capture.WriteMedia(packet, webrtc.MediaDelivery{SenderID: "bob", Slot: webrtc.SlotMic}, func(write func() error) error { return write() }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitRecordingPacket(t, capture, packet, webrtc.MediaDelivery{SenderID: "alice", Slot: webrtc.SlotMic})
+	select {
+	case <-session.Done():
+		t.Fatalf("capacity ended the whole recording: %v", capture.result)
+	default:
+	}
+	if got := launches.Load(); got != 1 {
+		t.Fatalf("ffmpeg launches = %d, want 1 (bob skipped without a process)", got)
+	}
+	if err := c.Stop(1); err != nil {
+		t.Fatalf("stop = %v", err)
+	}
+	manifest := readCaptureManifest(t, session.FilePath)
+	if len(manifest.Tracks) != 1 || manifest.Tracks[0].Publisher != "alice" || len(manifest.Notes) != 1 || !strings.Contains(manifest.Notes[0], "bob") {
+		t.Fatalf("manifest = %+v", manifest)
+	}
+	if c.processes.SessionCount() != 0 {
+		t.Fatal("process budget leaked")
+	}
+}
+
+func TestChannelRecordingKeepsIdleAudioSources(t *testing.T) {
+	previous := captureIdleTimeout
+	captureIdleTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { captureIdleTimeout = previous })
+	c := NewChannelRecorder(testConfig(privateTempDir(t)), testLogger())
 	c.processes.Exec = autoRecordingProcess
 	session, err := c.Start(context.Background(), 1, &fakeTapRouter{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.Done() == nil {
-		t.Fatal("missing lifecycle completion")
+	c.mu.Lock()
+	capture := c.sessions[1]
+	c.mu.Unlock()
+	keyframe := &rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42}, Payload: []byte{0x10, 0, 0, 0, 0x9d, 1, 0x2a, 0, 0, 0, 0}}
+	commitRecordingPacket(t, capture, keyframe, webrtc.MediaDelivery{SenderID: "alice", Slot: webrtc.SlotMic, Codec: "audio/opus"})
+	commitRecordingPacket(t, capture, keyframe, webrtc.MediaDelivery{SenderID: "alice", Slot: webrtc.SlotCam, Codec: "video/VP8"})
+	waitProcesses(t, c, 2)
+	// Both go silent: the idle camera ends, the muted microphone keeps its process.
+	waitProcesses(t, c, 1)
+	time.Sleep(5 * captureIdleTimeout)
+	if got := c.processes.SessionCount(); got != 1 {
+		t.Fatalf("source processes after idle = %d, want the audio one", got)
+	}
+	if err := c.Stop(1); err != nil {
+		t.Fatal(err)
+	}
+	if c.processes.SessionCount() != 0 {
+		t.Fatal("idle audio source not cleaned up on stop")
+	}
+	manifest := readCaptureManifest(t, session.FilePath)
+	audio := 0
+	for _, track := range manifest.Tracks {
+		if track.Slot == webrtc.SlotMic {
+			audio++
+		}
+	}
+	if audio != 1 {
+		t.Fatalf("audio segments = %d, want 1: %+v", audio, manifest.Tracks)
+	}
+}
+
+func TestChannelRecordingListsTrackBeforeProcessStarts(t *testing.T) {
+	c := NewChannelRecorder(testConfig(privateTempDir(t)), testLogger())
+	var session *Session
+	listed := make(chan bool, 1)
+	c.processes.Exec = func(ctx context.Context, name string, args ...string) Command {
+		// Runs on the recording worker: report, never t.Fatal, from here.
+		var manifest captureManifest
+		raw, _ := os.ReadFile(session.FilePath)
+		_ = json.Unmarshal(raw, &manifest)
+		output := filepath.Base(args[len(args)-1])
+		found := false
+		for _, track := range manifest.Tracks {
+			found = found || track.File == output
+		}
+		listed <- found
+		return autoRecordingProcess(ctx, name, args...)
+	}
+	var err error
+	session, err = c.Start(context.Background(), 1, &fakeTapRouter{})
+	if err != nil {
+		t.Fatal(err)
 	}
 	c.mu.Lock()
 	capture := c.sessions[1]
 	c.mu.Unlock()
-	for _, publisher := range []string{"alice", "bob"} {
-		if err := capture.WriteMedia(&rtp.Packet{Header: rtp.Header{SSRC: 1}, Payload: []byte{1}}, webrtc.MediaDelivery{SenderID: publisher, Slot: webrtc.SlotMic}, func(write func() error) error { return write() }); err != nil {
-			t.Fatal(err)
-		}
+	commitRecordingPacket(t, capture, &rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 1}, Payload: []byte{1}}, webrtc.MediaDelivery{SenderID: "alice", Slot: webrtc.SlotMic})
+	if !<-listed {
+		t.Fatal("ffmpeg started before its output was listed in the manifest")
 	}
-	select {
-	case <-session.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("capacity failure did not signal lifecycle completion")
-	}
-	if !errors.Is(capture.result, ErrCapacity) {
-		t.Fatalf("capacity failure hidden: %v", capture.result)
-	}
-	if c.processes.SessionCount() != 0 {
-		t.Fatal("process budget leaked")
+	if err := c.Stop(1); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -139,7 +254,7 @@ func TestSourceRecordingRequiresCoordinatorRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
-	if _, err := r.start(context.Background(), 1, &fakeTapRouter{}, "audio", root); err == nil {
+	if _, err := r.start(context.Background(), 1, &fakeTapRouter{}, "audio", root, nil); err == nil {
 		t.Fatal("different directory identity accepted")
 	}
 }

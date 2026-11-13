@@ -27,7 +27,7 @@ func TestFFmpegFinalizesIdleAudio(t *testing.T) {
 	}
 	r := New(testConfig(privateTempDir(t)), testLogger())
 	t.Cleanup(func() { _ = r.Close() })
-	s, err := r.start(context.Background(), 1, &fakeTapRouter{}, "audio", nil)
+	s, err := r.start(context.Background(), 1, &fakeTapRouter{}, "audio", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestFFmpegDiscardsUnstartedSource(t *testing.T) {
 	}
 	r := New(testConfig(privateTempDir(t)), testLogger())
 	t.Cleanup(func() { _ = r.Close() })
-	s, err := r.start(context.Background(), 1, &fakeTapRouter{}, "video", nil)
+	s, err := r.start(context.Background(), 1, &fakeTapRouter{}, "video", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
