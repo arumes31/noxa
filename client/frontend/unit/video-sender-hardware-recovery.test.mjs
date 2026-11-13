@@ -327,3 +327,46 @@ test("hardware startup recovery waits for ready E2EE and resets dwell on a key e
     assert.equal(f.calls.length, 0, "the earlier key epoch cannot supply dwell time");
     f.time(25000); await recover(f.pc, stalledHardware(f)); assert.equal(f.calls.length, 1);
 });
+
+for (const resumed of [false, true]) test(`a failed first-frame restart ${resumed ? "keeps a share whose output resumed" : "ends the publication with the hardware encoder message"}`, async () => {
+    const f = fixture(), toasts = [];
+    let invalidated = 0;
+    globalThis.window = { __noxa: { toast: (message, level) => toasts.push([message, level]) } };
+    f.publication.onInvalidated = () => { invalidated++; };
+    f.options.retry = async () => false;
+    f.transceiver.sender.getStats = async () => stalledHardware(f, resumed ? { framesEncoded: 5 } : {});
+    const recover = createVideoSenderRecovery(f.options);
+    for (const at of [0, 5000, 10000]) { f.time(at); await recover(f.pc, stalledHardware(f)); }
+    assert.equal(invalidated, resumed ? 0 : 1);
+    assert.deepEqual(toasts, resumed ? [] : [["Stream stopped: no hardware encoder is available.", "warn"]]);
+});
+
+test("a retry declined by a quality change in progress keeps the share", async () => {
+    const f = fixture();
+    let invalidated = 0;
+    globalThis.window = { __noxa: { toast() {} } };
+    f.publication.onInvalidated = () => { invalidated++; };
+    f.options.retry = async () => { f.options.state.shareQualityUpdating = {}; return false; };
+    f.transceiver.sender.getStats = async () => stalledHardware(f);
+    const recover = createVideoSenderRecovery(f.options);
+    for (const at of [0, 5000, 10000]) { f.time(at); await recover(f.pc, stalledHardware(f)); }
+    assert.equal(invalidated, 0);
+});
+
+test("a failed first-frame restart keeps the share when its stats sample never settles", async t => {
+    const f = fixture();
+    let invalidated = 0;
+    globalThis.window = { __noxa: { toast() {} } };
+    f.publication.onInvalidated = () => { invalidated++; };
+    f.options.retry = async () => false;
+    f.transceiver.sender.getStats = () => new Promise(() => {});
+    const recover = createVideoSenderRecovery(f.options);
+    for (const at of [0, 5000]) { f.time(at); await recover(f.pc, stalledHardware(f)); }
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    f.time(10000);
+    const pending = recover(f.pc, stalledHardware(f));
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    t.mock.timers.tick(2000);
+    await pending;
+    assert.equal(invalidated, 0);
+});

@@ -229,6 +229,12 @@ test("invalid operations are refused and an endpoint attaches once", async () =>
     assert.match(replies.find(r => r.seq === id).value, /already attached/);
 });
 
+test("a posted attach without seq reports attach-failed like the script transform", async () => {
+    const ep = endpoint("decode");
+    globalThis.onmessage({ data: { op: "attach", id: ep.id, operation: "decode", kind: "audio", readable: new ReadableStream(), writable: new WritableStream() } });
+    assert.match(replies.find(r => r.event === "attach-failed" && r.id === ep.id)?.error || "", /already attached/);
+});
+
 // Review 2a-B P1-2: equal (kid, epoch) across publications must never keep
 // the former publication's key after a rebind.
 test("rebinding with a colliding (kid, epoch) outputs only the new publication", async () => {

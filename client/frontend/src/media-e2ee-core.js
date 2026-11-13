@@ -484,7 +484,11 @@ export function installMediaE2EEWorker(scope, { reply } = {}) {
         if (!handler) { respond(false, "unknown media operation"); return; }
         // attach must run synchronously so no frame can arrive unhandled.
         if (op === "attach") {
-            try { respond(true, handler(data)); } catch (error) { respond(false, String(error?.message || error)); }
+            try { respond(true, handler(data)); } catch (error) {
+                // The page posts attach without a seq; report like onrtctransform.
+                if (seq === undefined) send({ event: "attach-failed", id: data.id, error: String(error?.message || error) });
+                else respond(false, String(error?.message || error));
+            }
             return;
         }
         serial(() => handler(data)).then(value => respond(true, value), error => respond(false, String(error?.message || error)));

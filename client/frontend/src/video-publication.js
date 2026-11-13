@@ -303,7 +303,13 @@ export function createVideoPublication({ policy }) {
                     const scale = screenResolution(sender, screenTrack).scale;
                     for (const encoding of encodings) encoding.scaleResolutionDownBy = Math.max(encoding.scaleResolutionDownBy || 1, scale);
                 }
-                if (encodings.length) await sender.setParameters(parameters);
+                if (!encodings.length) continue;
+                // Chrome accepts only a getParameters result from the same task;
+                // an earlier sender's await would invalidate a stale read.
+                const fresh = sender.getParameters();
+                fresh.encodings = encodings;
+                if (parameters.degradationPreference) fresh.degradationPreference = parameters.degradationPreference;
+                await sender.setParameters(fresh);
             }
             const audioSender = state.shareAudioTransceiver?.sender;
             if (audioSender && (audioSender.track || state.shareStream?.getAudioTracks().some(track => track.readyState === "live")) && current()) {
@@ -509,9 +515,13 @@ export function createVideoPublication({ policy }) {
                         if (restore.encodings?.length === 1 && restore.encodings[0].scaleResolutionDownBy === pulseScale) {
                             if (originalScale === undefined) delete restore.encodings[0].scaleResolutionDownBy;
                             else restore.encodings[0].scaleResolutionDownBy = originalScale;
-                            // Do not race mutation promises: a runtime that never
-                            // settles setParameters cannot safely accept later writes.
-                            await sender.setParameters(restore);
+                            // A runtime that never settles setParameters cannot safely
+                            // accept later writes: end the publication instead of
+                            // holding negotiation and cap updates behind it.
+                            let timer;
+                            const restored = await Promise.race([sender.setParameters(restore).then(() => true),
+                                new Promise(resolve => { timer = setTimeout(() => resolve(false), 5000); })]).finally(() => clearTimeout(timer));
+                            if (!restored && owns()) void (slot === "screen" ? doStopShare() : stopCamera());
                         }
                     }
                 }

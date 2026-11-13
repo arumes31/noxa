@@ -173,7 +173,7 @@ for(const failedPid of ["","self|screen"])test(`a failed source ${failedPid?"reb
 
 async function hardwarePollFixture(t) {
     let clock = 1, evidence = "hardware", stopped = 0;
-    const proofs = [];
+    const proofs = [], counters = {};
     t.mock.method(performance, "now", () => clock);
     t.mock.timers.enable({ apis: ["setTimeout"] });
     class Worker {
@@ -193,8 +193,8 @@ async function hardwarePollFixture(t) {
     const sender = { track, createEncodedStreams: () => ({ readable: {}, writable: {} }),
         getParameters: () => ({ encodings: [{ active: true }] }),
         getStats: async () => evidence === "pending" ? new Map() : new Map([
-            ["source", { trackIdentifier: sender.track.id }],
-            ["video", { type: "outbound-rtp", kind: "video", mediaSourceId: "source",
+            ["source", { trackIdentifier: sender.track.id, frames: counters.frames }],
+            ["video", { type: "outbound-rtp", kind: "video", mediaSourceId: "source", framesEncoded: counters.encoded,
                 powerEfficientEncoder: evidence === "hardware", encoderImplementation: evidence === "hardware" ? "Intel QSV MFT" : "OpenH264" }],
         ]),
     };
@@ -202,9 +202,40 @@ async function hardwarePollFixture(t) {
     media.stats = async () => ({ endpoint: { activeEpoch: 1 } });
     await media.bind(sender, "self|screen");
     t.after(() => media.close());
-    return { media, sender, track, proofs, stopped: () => stopped,
+    return { media, sender, track, proofs, counters, stopped: () => stopped,
         async sample(at, value) { clock = at; evidence = value; await media.hardwarePollers.get(media.endpointID(sender))?.(); } };
 }
+
+test("a hardware encoder that stops encoding captured frames loses its proof", async t => {
+    const f = await hardwarePollFixture(t);
+    Object.assign(f.counters, { encoded: 10, frames: 100 });
+    await f.sample(1, "hardware");
+    Object.assign(f.counters, { frames: 200 });
+    await f.sample(5001, "hardware");
+    assert.equal(f.stopped(), 0);
+    Object.assign(f.counters, { frames: 300 });
+    await f.sample(15002, "hardware");
+    assert.equal(f.stopped(), 1, "a stalled encoder cannot keep the share alive");
+});
+
+test("a static source that delivers no new frames keeps its hardware proof", async t => {
+    const still = await hardwarePollFixture(t);
+    Object.assign(still.counters, { encoded: 10, frames: 100 });
+    for (const at of [1, 5001, 15002, 30003]) await still.sample(at, "hardware");
+    assert.equal(still.stopped(), 0, "no new captured frames means nothing to encode");
+    still.counters.frames = 101;
+    await still.sample(30304, "hardware");
+    for (const at of [35004, 45005, 60006]) await still.sample(at, "hardware");
+    assert.equal(still.stopped(), 0, "one stray captured frame cannot end a later static share");
+});
+
+test("a missing active key epoch does not renew the hardware deadline", async t => {
+    const f = await hardwarePollFixture(t);
+    f.media.stats = async () => ({ endpoint: { activeEpoch: 0 } });
+    await f.sample(1, "hardware");
+    await f.sample(10002, "hardware");
+    assert.equal(f.stopped(), 1);
+});
 
 test("an established hardware stream gets a fresh deadline after a transient missing report", async t => {
     const f = await hardwarePollFixture(t);

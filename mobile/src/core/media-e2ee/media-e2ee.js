@@ -4,7 +4,7 @@
 // track event), before any negotiation can carry its media. Unsupported
 // runtimes fail with an explicit error; there is no plaintext mode.
 import { sampleSenderStats } from "./peer-stats.js";
-import { hardwareVideoEvidence } from "./hardware-video.js";
+import { hardwareVideoEvidence, hardwareVideoRow } from "./hardware-video.js";
 import { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, SLOTS, validEpoch, validKid, validPid } from "./media-e2ee-core.js";
 
 export { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, SLOTS };
@@ -155,7 +155,7 @@ export class MediaE2EE {
     #watchHardware(sender, id) {
         const owner = this.endpoints.get(sender), generation = owner.gen;
         let track = null, started = null, hardwareSeen = false, recoveringSoftware = false, checking = false, watching = true;
-        let scheduled = null, deadline = null, deadlineAt = null;
+        let scheduled = null, deadline = null, deadlineAt = null, encoded = 0, captured = 0;
         const clearTimer = timer => { if (timer !== null) { clearTimeout(timer); this.hardwareTimers.delete(timer); } };
         const clearDeadline = () => { clearTimer(deadline); deadline = deadlineAt = null; };
         const stopWatch = () => {
@@ -207,7 +207,7 @@ export class MediaE2EE {
             try {
                 const cryptor = await this.stats(sender);
                 if (!current(source) || !active()) return;
-                if (!cryptor.endpoint?.activeEpoch) { resetDeadline(); return; }
+                if (!cryptor.endpoint?.activeEpoch) { armDeadline(); return; }
                 const report = await sampleSenderStats(sender, { fresh: true });
                 if (!current(source) || !active()) return;
                 const evidence = hardwareVideoEvidence(report, source.id);
@@ -220,11 +220,20 @@ export class MediaE2EE {
                 if (evidence === "software" && !hardwareSeen) stopUnverified("hardware_encoder");
                 await proof;
                 if (!current(source) || !active()) return;
-                if (evidence === "hardware") {
-                    // Measure loss of proof, not total capture age. A positive
-                    // acknowledgement must still belong to this live source.
-                    resetDeadline(); hardwareSeen = true;
-                } else armDeadline();
+                // Measure loss of proof, not total capture age. A positive
+                // acknowledgement must still belong to this live source. A
+                // hardware encoder that stops encoding while capture delivers
+                // frames loses its proof; a static source delivers none.
+                // Both counters compare with the previous sample.
+                const row = evidence === "hardware" && hardwareVideoRow(report, source.id);
+                const capture = row && report.get(row.mediaSourceId);
+                const encodedGrew = row && row.framesEncoded > encoded;
+                // Unknown capture progress counts as static on purpose: runtimes
+                // without media-source counters must not end static shares.
+                const captureGrew = capture?.frames !== undefined ? capture.frames > captured : capture?.framesPerSecond > 0;
+                if (row) { hardwareSeen = true; encoded = row.framesEncoded ?? encoded; captured = capture?.frames ?? captured; }
+                if (row && (encodedGrew || !captureGrew)) resetDeadline();
+                else armDeadline();
             } catch {
                 // The independent timer also covers never-settling requests.
                 // Worker-side hardware permission still expires independently.
