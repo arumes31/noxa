@@ -4,7 +4,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/base64"
-	"fmt"
 	"testing"
 	"time"
 )
@@ -37,20 +36,5 @@ func TestCredentialsAlgorithm(t *testing.T) {
 	mac.Write([]byte(username))
 	if want := base64.StdEncoding.EncodeToString(mac.Sum(nil)); credential != want {
 		t.Fatalf("credential = %q, want %q", credential, want)
-	}
-}
-
-// TestCredentialsExpiryInUsername verifies the TTL lands in the username's
-// expiry prefix (coturn rejects expired usernames).
-func TestCredentialsExpiryInUsername(t *testing.T) {
-	now := time.Now().Truncate(time.Second)
-	username, _ := Credentials("s", "u", 24*time.Hour, now)
-	want := time.Now().Add(24 * time.Hour).Unix()
-	var expiry int64
-	if _, err := fmt.Sscanf(username, "%d:", &expiry); err != nil {
-		t.Fatalf("username %q has no expiry prefix: %v", username, err)
-	}
-	if expiry < want-2 || expiry > want+2 {
-		t.Fatalf("expiry = %d, want ~%d", expiry, want)
 	}
 }

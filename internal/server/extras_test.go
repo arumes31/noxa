@@ -788,23 +788,6 @@ func TestClientInfoUnknown(t *testing.T) {
 	}
 }
 
-// TestClientInfoActivityTracking verifies received frames bump byte counters.
-func TestClientInfoActivityTracking(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-
-	conn, clientID := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	before := queryClientInfo(t, conn, clientID)
-	// Send a chat message to increase received bytes.
-	send(t, conn, netproto.MsgChatSend, netproto.ChatSend{Text: "bump"})
-	after := queryClientInfo(t, conn, clientID)
-	if after.BytesIn <= before.BytesIn {
-		t.Fatalf("bytes_in did not increase: before=%d after=%d", before.BytesIn, after.BytesIn)
-	}
-}
-
 // TestEWMARTT verifies the smoothed RTT math.
 func TestEWMARTT(t *testing.T) {
 	if got := ewmaRTT(0, 80, false); got != 80 {

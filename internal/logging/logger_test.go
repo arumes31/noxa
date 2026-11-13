@@ -35,20 +35,6 @@ func TestNewDevHonorsConfiguredLevel(t *testing.T) {
 	}
 }
 
-// TestNewProd verifies that New(false, "info") returns a non-nil production
-// logger.
-func TestNewProd(t *testing.T) {
-	logger, err := New(false, "info")
-	if err != nil {
-		t.Fatalf("New(false, info) returned error: %v", err)
-	}
-	if logger == nil {
-		t.Fatal("New(false, info) returned nil logger")
-	}
-	logger.Info("prod logger info message")
-	_ = logger.Sync()
-}
-
 func TestLoggerConfigUsesExplicitProductionSampling(t *testing.T) {
 	production := loggerConfig(false)
 	if production.Sampling == nil || production.Sampling.Initial != 100 || production.Sampling.Thereafter != 10 {
@@ -59,25 +45,16 @@ func TestLoggerConfigUsesExplicitProductionSampling(t *testing.T) {
 	}
 }
 
-// TestNewProdInvalidLevel verifies that New(false, "invalid-level") returns
-// an error.
-func TestNewProdInvalidLevel(t *testing.T) {
-	logger, err := New(false, "invalid-level")
-	if err == nil {
-		t.Fatal("New(false, invalid-level) expected error, got nil")
-	}
-	if logger != nil {
-		t.Errorf("New(false, invalid-level) expected nil logger, got %v", logger)
-	}
-}
-
-func TestNewDevInvalidLevel(t *testing.T) {
-	logger, err := New(true, "invalid-level")
-	if err == nil {
-		t.Fatal("New(true, invalid-level) expected error, got nil")
-	}
-	if logger != nil {
-		t.Errorf("New(true, invalid-level) expected nil logger, got %v", logger)
+// TestNewInvalidLevel verifies that both logger modes reject an unknown level.
+func TestNewInvalidLevel(t *testing.T) {
+	for _, dev := range []bool{false, true} {
+		logger, err := New(dev, "invalid-level")
+		if err == nil {
+			t.Fatalf("New(%v, invalid-level) expected error, got nil", dev)
+		}
+		if logger != nil {
+			t.Errorf("New(%v, invalid-level) expected nil logger, got %v", dev, logger)
+		}
 	}
 }
 

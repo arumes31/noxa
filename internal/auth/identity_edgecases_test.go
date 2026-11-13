@@ -7,79 +7,37 @@ import (
 	"testing"
 )
 
-func TestLoadPublicKeyRejectsMalformedPEM(t *testing.T) {
+func TestLoadKeyRejectsMalformedPEM(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		encoded string
-		wantErr string
+	for _, key := range []struct {
+		kind, block, otherBlock string
+		size                    int
+		load                    func(string) error
 	}{
-		{name: "empty", wantErr: "decode public key PEM"},
-		{name: "not PEM", encoded: "not a pem block", wantErr: "decode public key PEM"},
-		{
-			name:    "wrong block type",
-			encoded: encodeTestPEM("PRIVATE KEY", make([]byte, ed25519.PublicKeySize)),
-			wantErr: "unexpected PEM block type",
-		},
-		{
-			name:    "short key",
-			encoded: encodeTestPEM("PUBLIC KEY", make([]byte, ed25519.PublicKeySize-1)),
-			wantErr: "invalid ed25519 public key length",
-		},
-		{
-			name:    "long key",
-			encoded: encodeTestPEM("PUBLIC KEY", make([]byte, ed25519.PublicKeySize+1)),
-			wantErr: "invalid ed25519 public key length",
-		},
-	}
+		{"public", "PUBLIC KEY", "PRIVATE KEY", ed25519.PublicKeySize, func(s string) error { _, err := LoadPublicKey(s); return err }},
+		{"private", "PRIVATE KEY", "PUBLIC KEY", ed25519.PrivateKeySize, func(s string) error { _, err := LoadPrivateKey(s); return err }},
+	} {
+		tests := []struct {
+			name    string
+			encoded string
+			wantErr string
+		}{
+			{name: "empty", wantErr: "decode " + key.kind + " key PEM"},
+			{name: "not PEM", encoded: "not a pem block", wantErr: "decode " + key.kind + " key PEM"},
+			{name: "wrong block type", encoded: encodeTestPEM(key.otherBlock, make([]byte, key.size)), wantErr: "unexpected PEM block type"},
+			{name: "short key", encoded: encodeTestPEM(key.block, make([]byte, key.size-1)), wantErr: "invalid ed25519 " + key.kind + " key length"},
+			{name: "long key", encoded: encodeTestPEM(key.block, make([]byte, key.size+1)), wantErr: "invalid ed25519 " + key.kind + " key length"},
+		}
+		for _, test := range tests {
+			t.Run(key.kind+"/"+test.name, func(t *testing.T) {
+				t.Parallel()
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			if _, err := LoadPublicKey(test.encoded); err == nil || !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("LoadPublicKey() error = %v, want text %q", err, test.wantErr)
-			}
-		})
-	}
-}
-
-func TestLoadPrivateKeyRejectsMalformedPEM(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		encoded string
-		wantErr string
-	}{
-		{name: "empty", wantErr: "decode private key PEM"},
-		{name: "not PEM", encoded: "not a pem block", wantErr: "decode private key PEM"},
-		{
-			name:    "wrong block type",
-			encoded: encodeTestPEM("PUBLIC KEY", make([]byte, ed25519.PrivateKeySize)),
-			wantErr: "unexpected PEM block type",
-		},
-		{
-			name:    "short key",
-			encoded: encodeTestPEM("PRIVATE KEY", make([]byte, ed25519.PrivateKeySize-1)),
-			wantErr: "invalid ed25519 private key length",
-		},
-		{
-			name:    "long key",
-			encoded: encodeTestPEM("PRIVATE KEY", make([]byte, ed25519.PrivateKeySize+1)),
-			wantErr: "invalid ed25519 private key length",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			if _, err := LoadPrivateKey(test.encoded); err == nil || !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("LoadPrivateKey() error = %v, want text %q", err, test.wantErr)
-			}
-		})
+				if err := key.load(test.encoded); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("Load %s key error = %v, want text %q", key.kind, err, test.wantErr)
+				}
+			})
+		}
 	}
 }
 

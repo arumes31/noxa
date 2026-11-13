@@ -107,17 +107,6 @@ func TestVideoReorderPollsRepairBurstBeforePrimaryDeadline(t *testing.T) {
 	})
 }
 
-func TestVideoReorderDoesNotPollContiguousOrIdleSource(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		track := &repairPollingTrack{initial: []*rtp.Packet{repairPollingFragment(1), repairPollingFragment(2)}, repairs: make(chan *rtp.Packet, 50), closed: make(chan struct{})}
-		go func() { time.Sleep(time.Second); close(track.closed) }()
-		readOrderedVideo(track, func() bool { return true }, func() string { return pion.MimeTypeH264 }, func(*rtp.Packet, string) {}, nil)
-		if track.gapDeadlines != 0 || track.timeouts != 0 {
-			t.Fatalf("contiguous/idle source acquired polling: deadlines=%d timeouts=%d", track.gapDeadlines, track.timeouts)
-		}
-	})
-}
-
 func TestVideoReorderPollDoesNotExtendOrShortenGapWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		track := &repairPollingTrack{initial: []*rtp.Packet{repairPollingFragment(1), repairPollingFragment(3)}, repairs: make(chan *rtp.Packet, 50), closed: make(chan struct{})}

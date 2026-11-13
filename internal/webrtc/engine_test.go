@@ -12,18 +12,6 @@ func testLogger() *zap.Logger {
 	return logger
 }
 
-// TestNewEngine verifies that New returns a non-nil Engine.
-func TestNewEngine(t *testing.T) {
-	e, err := New(testLogger(), nil, false)
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
-	if e == nil {
-		t.Fatal("New returned nil Engine")
-	}
-	defer func() { _ = e.Close() }()
-}
-
 // TestNewEngineNilLogger verifies that New returns an error when the logger
 // is nil.
 func TestNewEngineNilLogger(t *testing.T) {

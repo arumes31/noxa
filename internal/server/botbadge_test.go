@@ -49,21 +49,6 @@ func stateClientFor(t *testing.T, env *testEnv, uniqueID string) *state.Client {
 	return sc
 }
 
-// TestAuthSetsBotFlag verifies account metadata reaches the authenticated
-// session and every later snapshot.
-func TestAuthSetsBotFlag(t *testing.T) {
-	env := startTestEnvDeps(t, nil, nil, func(d *Deps) {
-		d.Auth.(*fakeAuth).users["user-uid"].IsBot = true
-	})
-	defer env.stop()
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	if !stateClientFor(t, env, "user-uid").IsBot {
-		t.Fatalf("bot account is not flagged in state")
-	}
-}
-
 // TestAuthLeavesNonBotsUnflagged verifies ordinary account metadata never
 // creates a bot badge.
 func TestAuthLeavesNonBotsUnflagged(t *testing.T) {

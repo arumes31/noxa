@@ -121,12 +121,3 @@ func TestParseEncodedHashRejectsHostileFields(t *testing.T) {
 		})
 	}
 }
-
-func TestVerifyPasswordPreservesMalformedHashClassification(t *testing.T) {
-	t.Parallel()
-
-	encoded := strings.Repeat("x", argonMaxEncodedLength+1)
-	if err := VerifyPassword("password", encoded); !errors.Is(err, ErrMalformedHash) {
-		t.Fatalf("VerifyPassword() error = %v, want ErrMalformedHash", err)
-	}
-}

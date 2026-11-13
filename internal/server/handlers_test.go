@@ -1498,77 +1498,51 @@ func TestServerPasswordSuccessDoesNotClearAccountSourceFailures(t *testing.T) {
 	}
 }
 
-func TestImmediateGuestDoesNotClearAccountSourceFailures(t *testing.T) {
-	limiter := auth.NewLoginFailureLimiter(auth.LoginFailureLimiterConfig{
-		MaxFailures:     2,
-		LockoutDuration: time.Minute,
-		FailureTTL:      time.Minute,
-		MaxEntries:      32,
-	})
-	env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.LoginLimiter = limiter })
-	defer env.stop()
+func TestOtherSuccessfulLoginDoesNotClearAccountSourceFailures(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		success netproto.Authenticate
+		locked  string
+	}{
+		{name: "immediate guest", success: netproto.Authenticate{Anonymous: true, Nickname: "guest"}, locked: "admin-uid"},
+		{name: "other account", success: netproto.Authenticate{Username: "admin-uid", Password: "pw"}, locked: "user-uid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			limiter := auth.NewLoginFailureLimiter(auth.LoginFailureLimiterConfig{
+				MaxFailures:     2,
+				LockoutDuration: time.Minute,
+				FailureTTL:      time.Minute,
+				MaxEntries:      32,
+			})
+			env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.LoginLimiter = limiter })
+			defer env.stop()
 
-	authenticate := func(msg netproto.Authenticate) netproto.AuthResponse {
-		t.Helper()
-		conn := dialRetry(t, env.addr)
-		defer func() { _ = conn.Close() }()
-		send(t, conn, netproto.MsgAuthenticate, msg)
-		frame := readOfType(t, conn, netproto.MsgAuthResponse)
-		var response netproto.AuthResponse
-		if err := netproto.Decode(frame, &response); err != nil {
-			t.Fatalf("decode auth response: %v", err)
-		}
-		return response
-	}
+			authenticate := func(msg netproto.Authenticate) netproto.AuthResponse {
+				t.Helper()
+				conn := dialRetry(t, env.addr)
+				defer func() { _ = conn.Close() }()
+				send(t, conn, netproto.MsgAuthenticate, msg)
+				frame := readOfType(t, conn, netproto.MsgAuthResponse)
+				var response netproto.AuthResponse
+				if err := netproto.Decode(frame, &response); err != nil {
+					t.Fatalf("decode auth response: %v", err)
+				}
+				return response
+			}
 
-	if response := authenticate(netproto.Authenticate{Username: "first", Password: "wrong"}); response.OK {
-		t.Fatalf("initial failed login = %+v", response)
-	}
-	if response := authenticate(netproto.Authenticate{Anonymous: true, Nickname: "guest"}); !response.OK {
-		t.Fatalf("immediate guest login = %+v", response)
-	}
-	if response := authenticate(netproto.Authenticate{Username: "second", Password: "wrong"}); response.OK {
-		t.Fatalf("second failed login = %+v", response)
-	}
-	if response := authenticate(netproto.Authenticate{Username: "admin-uid", Password: "pw"}); response.Reason != "too many failed logins, try again later" {
-		t.Fatalf("immediate guest cleared account source failures: %+v", response)
-	}
-}
-
-func TestSuccessfulOtherAccountDoesNotClearAccountSourceFailures(t *testing.T) {
-	limiter := auth.NewLoginFailureLimiter(auth.LoginFailureLimiterConfig{
-		MaxFailures:     2,
-		LockoutDuration: time.Minute,
-		FailureTTL:      time.Minute,
-		MaxEntries:      32,
-	})
-	env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.LoginLimiter = limiter })
-	defer env.stop()
-
-	authenticate := func(msg netproto.Authenticate) netproto.AuthResponse {
-		t.Helper()
-		conn := dialRetry(t, env.addr)
-		defer func() { _ = conn.Close() }()
-		send(t, conn, netproto.MsgAuthenticate, msg)
-		frame := readOfType(t, conn, netproto.MsgAuthResponse)
-		var response netproto.AuthResponse
-		if err := netproto.Decode(frame, &response); err != nil {
-			t.Fatalf("decode auth response: %v", err)
-		}
-		return response
-	}
-
-	if response := authenticate(netproto.Authenticate{Username: "first", Password: "wrong"}); response.OK {
-		t.Fatalf("initial failed login = %+v", response)
-	}
-	if response := authenticate(netproto.Authenticate{Username: "admin-uid", Password: "pw"}); !response.OK {
-		t.Fatalf("successful other account login = %+v", response)
-	}
-	if response := authenticate(netproto.Authenticate{Username: "second", Password: "wrong"}); response.OK {
-		t.Fatalf("second failed login = %+v", response)
-	}
-	if response := authenticate(netproto.Authenticate{Username: "user-uid", Password: "pw"}); response.Reason != "too many failed logins, try again later" {
-		t.Fatalf("successful other account cleared source failures: %+v", response)
+			if response := authenticate(netproto.Authenticate{Username: "first", Password: "wrong"}); response.OK {
+				t.Fatalf("initial failed login = %+v", response)
+			}
+			if response := authenticate(test.success); !response.OK {
+				t.Fatalf("%s login = %+v", test.name, response)
+			}
+			if response := authenticate(netproto.Authenticate{Username: "second", Password: "wrong"}); response.OK {
+				t.Fatalf("second failed login = %+v", response)
+			}
+			if response := authenticate(netproto.Authenticate{Username: test.locked, Password: "pw"}); response.Reason != "too many failed logins, try again later" {
+				t.Fatalf("%s cleared account source failures: %+v", test.name, response)
+			}
+		})
 	}
 }
 

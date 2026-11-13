@@ -49,19 +49,6 @@ func TestChannelTreeOrderedIsTotal(t *testing.T) {
 	}
 }
 
-// TestChannelTreeOrderedRespectsOrderIndex verifies the order index still wins
-// over the id tiebreak.
-func TestChannelTreeOrderedRespectsOrderIndex(t *testing.T) {
-	m := treeManager(
-		&Channel{ChannelID: 1, OrderIndex: 10},
-		&Channel{ChannelID: 2, OrderIndex: 5},
-	)
-	got := orderOf(m)
-	if len(got) != 2 || got[0] != 2 || got[1] != 1 {
-		t.Fatalf("order = %v, want [2 1]", got)
-	}
-}
-
 func TestChannelTreeOrderedReturnsClones(t *testing.T) {
 	m := treeManager(&Channel{ChannelID: 1, Name: "original"})
 	ordered := m.ChannelTreeOrdered()

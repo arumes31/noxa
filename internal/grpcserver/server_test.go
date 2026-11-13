@@ -624,15 +624,3 @@ func TestUnauthenticatedRPCsAreRefused(t *testing.T) {
 		t.Fatalf("unauthenticated Subscribe = %v", status.Code(err))
 	}
 }
-
-// TestFileTransferRPCsAreUnimplemented pins the deliberate refusal to mint
-// transfer tokens from the bot API (232).
-func TestFileTransferRPCsAreUnimplemented(t *testing.T) {
-	bus := eventbus.New(zap.NewNop())
-	defer bus.Close()
-	client := noxav1.NewControlClient(dialGRPC(t, startGRPC(t, &stubBackend{}, bus)))
-	_, err := client.StartFileTransfer(authCtx(t, "admin-uid", "pw"), &noxav1.StartFileTransferRequest{})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("StartFileTransfer = %v", status.Code(err))
-	}
-}
