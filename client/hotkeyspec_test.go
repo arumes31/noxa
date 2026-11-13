@@ -4,21 +4,15 @@ import "testing"
 
 import "golang.design/x/hotkey"
 
-func TestExtendedHotkeySpecs(t *testing.T) {
-	for _, spec := range []string{"PageUp", "Ctrl+PageDown", "Home", "End", "Insert", "Backspace", "ArrowUp", "Numpad0", "Numpad9", "NumpadAdd", "NumpadDecimal", "F24", "CapsLock", "AudioVolumeMute"} {
-		t.Run(spec, func(t *testing.T) {
-			if _, _, err := parseHotkeySpec(spec); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
 func TestParseHotkeySpec(t *testing.T) {
 	cases := []struct {
 		spec    string
 		wantErr bool
 	}{
+		{"PageUp", false}, {"Ctrl+PageDown", false}, {"Home", false}, {"End", false},
+		{"Insert", false}, {"Backspace", false}, {"ArrowUp", false}, {"Numpad0", false},
+		{"Numpad9", false}, {"NumpadAdd", false}, {"NumpadDecimal", false}, {"F24", false},
+		{"CapsLock", false}, {"AudioVolumeMute", false},
 		{"Space", false},
 		{"Ctrl+M", false},
 		{"Ctrl+Shift+F5", false},

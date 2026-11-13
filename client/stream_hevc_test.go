@@ -6,46 +6,69 @@ import (
 	"noxa/internal/netproto"
 )
 
-func TestStreamHEVCRequiresAuthenticatedCapability(t *testing.T) {
-	app, cm, capture := voiceDiagnosticApp(t, false)
-	cm.clientID, cm.authorizationModel = "self", netproto.AuthorizationModelRolesV1
-	cm.supportsStreamCodec, cm.supportsStreamSourceQuality = true, true
-	request := netproto.VideoStreamControl{Action: "publish", Slot: "screen", Active: true, QualityMode: "source", Codecs: []string{"h265", "h264", "vp8"}, HEVCLevelID: 153, CodecRevision: 1}
-	if app.SupportsStreamHEVCForTab("a") {
-		t.Fatal("legacy server advertised HEVC")
-	}
-	if _, err := app.VideoStreamControlForTab("a", request); err == nil || capture.data.Len() != 0 {
-		t.Fatal("HEVC written to old server")
-	}
-	cm.supportsStreamHEVC = true
-	if !app.SupportsStreamHEVCForTab("a") || app.SupportsStreamHEVCForTab("missing") {
-		t.Fatal("capability not tab scoped")
-	}
-	for _, field := range []string{"codec", "source", "identity", "model", "connection"} {
-		t.Run(field, func(t *testing.T) {
-			switch field {
-			case "codec":
-				cm.supportsStreamCodec = false
-				defer func() { cm.supportsStreamCodec = true }()
-			case "source":
-				cm.supportsStreamSourceQuality = false
-				defer func() { cm.supportsStreamSourceQuality = true }()
-			case "identity":
-				cm.clientID = ""
-				defer func() { cm.clientID = "self" }()
-			case "model":
-				cm.authorizationModel = ""
-				defer func() { cm.authorizationModel = netproto.AuthorizationModelRolesV1 }()
-			case "connection":
-				conn := cm.conn
-				cm.conn = nil
-				defer func() { cm.conn = conn }()
+// HEVC and codec refresh each need their own capability on an authenticated,
+// complete stream session; neither request reaches a server without it.
+func TestStreamCapabilitiesRequireAuthenticatedSession(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		request  netproto.VideoStreamControl
+		enable   func(*connManager)
+		supports func(*App, string) bool
+	}{
+		{
+			"hevc",
+			netproto.VideoStreamControl{Action: "publish", Slot: "screen", Active: true, QualityMode: "source", Codecs: []string{"h265", "h264", "vp8"}, HEVCLevelID: 153, CodecRevision: 1},
+			func(cm *connManager) { cm.supportsStreamHEVC = true },
+			(*App).SupportsStreamHEVCForTab,
+		},
+		{
+			"codec refresh",
+			netproto.VideoStreamControl{Action: "publish", Slot: "screen", Generation: 7, Active: true, QualityMode: "source", Codecs: []string{"vp8", "h264"}},
+			func(cm *connManager) { cm.supportsStreamCodecRefresh = true },
+			(*App).SupportsStreamCodecRefreshForTab,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, cm, capture := voiceDiagnosticApp(t, false)
+			cm.clientID, cm.authorizationModel = "self", netproto.AuthorizationModelRolesV1
+			cm.supportsStreamCodec, cm.supportsStreamSourceQuality = true, true
+			if tc.supports(app, "a") {
+				t.Fatal("legacy server accepted")
 			}
-			if app.SupportsStreamHEVCForTab("a") {
-				t.Fatal("unscoped HEVC accepted")
+			if _, err := app.VideoStreamControlForTab("a", tc.request); err == nil || capture.data.Len() != 0 {
+				t.Fatal("request written to legacy server")
 			}
-			if _, err := app.VideoStreamControlForTab("a", request); err == nil || capture.data.Len() != 0 {
-				t.Fatal("unscoped HEVC transmitted")
+			tc.enable(cm)
+			if !tc.supports(app, "a") || tc.supports(app, "missing") {
+				t.Fatal("capability not tab scoped")
+			}
+			for _, field := range []string{"codec", "source", "identity", "model", "connection"} {
+				t.Run(field, func(t *testing.T) {
+					switch field {
+					case "codec":
+						cm.supportsStreamCodec = false
+						defer func() { cm.supportsStreamCodec = true }()
+					case "source":
+						cm.supportsStreamSourceQuality = false
+						defer func() { cm.supportsStreamSourceQuality = true }()
+					case "identity":
+						cm.clientID = ""
+						defer func() { cm.clientID = "self" }()
+					case "model":
+						cm.authorizationModel = ""
+						defer func() { cm.authorizationModel = netproto.AuthorizationModelRolesV1 }()
+					case "connection":
+						conn := cm.conn
+						cm.conn = nil
+						defer func() { cm.conn = conn }()
+					}
+					if tc.supports(app, "a") {
+						t.Fatal("unauthenticated/incomplete capability accepted")
+					}
+					if _, err := app.VideoStreamControlForTab("a", tc.request); err == nil || capture.data.Len() != 0 {
+						t.Fatal("unscoped request transmitted")
+					}
+				})
 			}
 		})
 	}

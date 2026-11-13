@@ -119,48 +119,27 @@ func TestCheckForUpdateUpToDate(t *testing.T) {
 	}
 }
 
-func TestCheckForUpdateNotFound(t *testing.T) {
-	withUpdateRepo(t, "o/r")
-	srv := httptest.NewServer(http.NotFoundHandler())
-	defer srv.Close()
-
-	old := updateAPIBase
-	updateAPIBase = srv.URL
-	defer func() { updateAPIBase = old }()
-
-	a := &App{}
-	if _, err := a.CheckForUpdate(); err == nil {
-		t.Fatal("expected error on 404")
-	}
-}
-
-func TestCheckForUpdateBadJSON(t *testing.T) {
-	withUpdateRepo(t, "o/r")
-	srv := fakeGitHub(t, `{not json`)
-	defer srv.Close()
-
-	old := updateAPIBase
-	updateAPIBase = srv.URL
-	defer func() { updateAPIBase = old }()
-
-	a := &App{}
-	if _, err := a.CheckForUpdate(); err == nil {
-		t.Fatal("expected error on bad JSON")
-	}
-}
-
-func TestCheckForUpdateNoSource(t *testing.T) {
-	withUpdateRepo(t, "noxa/noxa") // placeholder slug
-	a := &App{}
-	if _, err := a.CheckForUpdate(); err == nil {
-		t.Fatal("expected error for placeholder update repo")
-	}
-}
-
-func TestCheckForUpdateRejectsInvalidRepo(t *testing.T) {
-	withUpdateRepo(t, "owner/repo/extra")
-	if _, err := (&App{}).CheckForUpdate(); err == nil {
-		t.Fatal("expected invalid repository to be rejected")
+func TestCheckForUpdateFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, repo string
+		server     func(*testing.T) *httptest.Server
+	}{
+		{"not found", "o/r", func(*testing.T) *httptest.Server { return httptest.NewServer(http.NotFoundHandler()) }},
+		{"bad json", "o/r", func(t *testing.T) *httptest.Server { return fakeGitHub(t, `{not json`) }},
+		{"placeholder repo", "noxa/noxa", nil},
+		{"invalid repo", "owner/repo/extra", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withUpdateRepo(t, tc.repo)
+			if tc.server != nil {
+				srv := tc.server(t)
+				defer srv.Close()
+				withUpdateAPIBase(t, srv.URL)
+			}
+			if _, err := (&App{}).CheckForUpdate(); err == nil {
+				t.Fatal("expected CheckForUpdate to fail")
+			}
+		})
 	}
 }
 
