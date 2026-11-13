@@ -4,7 +4,7 @@
 // it. Share hands the file to the system sheet when the browser can, else
 // it downloads.
 import { t } from "../i18n.js";
-import { h, toast } from "./dom.js";
+import { h, inertOthers, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import "./rich-strings.js";
 import "./lightbox.css";
@@ -22,6 +22,7 @@ export function openLightbox({ url, blob, name }) {
     const zoomButton = h("button", { class: "icon-btn", type: "button", "aria-label": t("rich.zoom"), "aria-pressed": "false", onclick: zoom }, "⤢");
     const close = () => {
         overlay.remove();
+        restoreInert();
         document.removeEventListener("keydown", onKey);
         opener?.focus?.();
     };
@@ -73,6 +74,7 @@ export function openLightbox({ url, blob, name }) {
     });
     document.addEventListener("keydown", onKey);
     document.body.append(overlay);
+    const restoreInert = inertOthers(overlay);
     overlay.querySelector("button")?.focus();
     return close;
 }

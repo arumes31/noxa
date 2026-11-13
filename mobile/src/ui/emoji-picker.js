@@ -5,7 +5,7 @@
 import { EMOJI_GROUPS, QUICK_EMOJI } from "../core/markdown.js";
 import { searchEmoji } from "../core/message-format.js";
 import { t } from "../i18n.js";
-import { h } from "./dom.js";
+import { h, inertOthers } from "./dom.js";
 import "./rich-strings.js";
 import "./emoji-picker.css";
 
@@ -21,6 +21,7 @@ export function openEmojiPicker({ session = null, title = t("rich.emoji.title"),
         const opener = document.activeElement;
         const close = value => {
             overlay.remove();
+            restoreInert();
             document.removeEventListener("keydown", onKey);
             opener?.focus?.();
             resolve(value);
@@ -62,6 +63,7 @@ export function openEmojiPicker({ session = null, title = t("rich.emoji.title"),
                 search, results, groups));
         document.addEventListener("keydown", onKey);
         document.body.append(overlay);
+        const restoreInert = inertOthers(overlay);
         if (session) {
             session.emojiList().then(list => {
                 custom = list.map(e => e.name).sort();

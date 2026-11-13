@@ -412,6 +412,23 @@ test("frontend UI module behaviors", { concurrency: false }, async (t) => {
         assert.equal(chat.directStoreForTest("bob").msgs.some(m => m.quarantined), false);
     });
 
+    await t.test("chat link cards cache only successful preview fetches", async (t) => {
+        let calls = 0, busy = true;
+        const LinkPreviewForTab = async () => {
+            calls++;
+            if (busy) throw new Error("link preview busy");
+            return { title: "Example" };
+        };
+        replaceGlobal(t, "window", { __noxa: { state: { activeTabID: "a" } }, go: { main: { App: { LinkPreviewForTab } } } });
+        const chat = await import("../src/chat-ui.js");
+        const url = "https://example.test/link-card-retry";
+        assert.equal((await chat.linkPreviewForTest(url)).title, null, "a failure still shows a domain-only card");
+        busy = false;
+        assert.equal((await chat.linkPreviewForTest(url)).title, "Example", "a transient failure is not cached");
+        assert.equal((await chat.linkPreviewForTest(url)).title, "Example");
+        assert.equal(calls, 2, "a successful card is cached");
+    });
+
     await t.test("chat notifications never carry attachment keys or unopened bodies", async (t) => {
         replaceGlobal(t, "window", { __noxa: { state: { myNickname: "Dan" } } });
         const chat = await import("../src/chat-ui.js");

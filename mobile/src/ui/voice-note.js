@@ -319,7 +319,7 @@ function openRecorder(composerCtx, { hold = false } = {}) {
             recorder.start(250);
             started = Date.now();
             status.textContent = hold ? t("vnote.holdHint") : t("vnote.recording");
-            if (releasedEarly) recorder.stop();
+            if (releasedEarly) { releasedEarly = false; recorder.stop(); }
             startMeter();
             timer = setInterval(() => {
                 const ms = Math.min(VOICE_MAX_MS, Date.now() - started);

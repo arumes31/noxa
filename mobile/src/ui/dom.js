@@ -68,6 +68,18 @@ export function refreshAvatars(uid) {
     }).catch(() => {});
 }
 
+/**
+ * Keeps focus and screen readers inside an open modal: makes the other body
+ * children inert and returns the undo. Only nodes it changed are restored, so
+ * nested dialogs unwind correctly. Live regions (toasts) stay announced.
+ */
+export function inertOthers(dialog) {
+    const changed = [...document.body.children].filter(node =>
+        node !== dialog && !node.inert && !node.matches('[aria-live]:not([aria-live="off"])'));
+    for (const node of changed) node.inert = true;
+    return () => { for (const node of changed) node.inert = false; };
+}
+
 export function toast(message, kind = "info") {
     const host = document.getElementById("toasts");
     if (!host) return;

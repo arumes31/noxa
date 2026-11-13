@@ -1374,6 +1374,7 @@ function applyQuarantinePlaceholders() {
 }
 // Test view of one direct conversation's in-memory store (create: start an
 // empty one, as an opened conversation would).
+export function linkPreviewForTest(url) { return linkPreview(url, new AbortController()); }
 export function directStoreForTest(uid, create = false) { return create ? getStore("dm:" + uid) : store.get("dm:" + uid) || null; }
 export function onRatchetQuarantine(d) {
     const list = Array.isArray(d?.placeholders) ? d.placeholders : [];
@@ -4884,6 +4885,7 @@ function closeLinkCard() {
 async function linkPreview(url, controller) {
     if (linkCards.has(url)) return linkCards.get(url);
     let card = { title: null, desc: null, image: null };
+    let fetched = false;
     const owner = captureScope(readExportScope);
     try {
         const data = await window.go.main.App.LinkPreviewForTab(owner.tabID, url);
@@ -4897,8 +4899,10 @@ async function linkPreview(url, controller) {
                 card.blockedTitle = t("midnight.previewBlockedHelp", { host: image.host || t("midnight.previewBlockedUnknownHost") });
             }
         }
+        fetched = true;
     } catch { /* unavailable: domain-only card, never a direct HTTP fallback */ }
-    if (!controller.signal.aborted && exportScopeIsCurrent(owner)) {
+    // A failure (e.g. "link preview busy") shows a domain-only card now and is retried next time.
+    if (fetched && !controller.signal.aborted && exportScopeIsCurrent(owner)) {
         linkCards.set(url, card);
         // Thumbnails are data URLs; keep the newest 200 like the PWA does.
         if (linkCards.size > LINK_CARDS_MAX) linkCards.delete(linkCards.keys().next().value);
