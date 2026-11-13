@@ -24,6 +24,9 @@ import (
 // connTimeout bounds a single transfer connection.
 const connTimeout = 10 * time.Minute
 
+// uploadIdleTimeout bounds the wait for each upload frame; a var for tests.
+var uploadIdleTimeout = 30 * time.Second
+
 // serve handles one file-transfer connection: validate the init frame's
 // token, then run the upload or download flow.
 func (s *Server) serve(ctx context.Context, conn net.Conn) {
@@ -55,10 +58,11 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 	}
 	defer s.deactivateTransfer(active)
 	s.releasePreauth(conn)
-	_ = conn.SetDeadline(time.Now().Add(connTimeout))
+	connDeadline := time.Now().Add(connTimeout)
+	_ = conn.SetDeadline(connDeadline)
 
 	if tr.Direction == "upload" {
-		err = s.receiveUpload(ctx, conn, tr, active, init.Offset)
+		err = s.receiveUpload(ctx, conn, tr, active, init.Offset, connDeadline)
 	} else {
 		err = s.sendDownload(ctx, conn, tr, init.Offset)
 	}
@@ -87,7 +91,7 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 // partial that is removed on any failure. A resumable upload (39) appends to
 // its deterministic partial from offset and keeps it when the connection is
 // interrupted, so the next token for the same file can continue.
-func (s *Server) receiveUpload(ctx context.Context, conn net.Conn, tr *transfer, active *activeTransfer, offset int64) error {
+func (s *Server) receiveUpload(ctx context.Context, conn net.Conn, tr *transfer, active *activeTransfer, offset int64, connDeadline time.Time) error {
 	root, err := s.openBlobRoot()
 	if err != nil {
 		return err
@@ -156,6 +160,11 @@ func (s *Server) receiveUpload(ctx context.Context, conn net.Conn, tr *transfer,
 	limiter := s.limiterFor(time.Now())
 
 	for {
+		deadline := time.Now().Add(uploadIdleTimeout)
+		if connDeadline.Before(deadline) {
+			deadline = connDeadline
+		}
+		_ = conn.SetReadDeadline(deadline)
 		frame, err := netproto.ReadFrame(conn)
 		if err != nil {
 			return fail(fmt.Errorf("reading chunk: %w", err))

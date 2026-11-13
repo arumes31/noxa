@@ -30,6 +30,7 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -115,6 +116,8 @@ type Config struct {
 	// MaxConcurrent bounds starting plus active ffmpeg processes. Zero uses
 	// the conservative default; values above maxConcurrentLimit are rejected.
 	MaxConcurrent int
+	// MaxSeconds caps each recording's duration via ffmpeg -t. 0 = unlimited.
+	MaxSeconds int
 	// WindowsACLReady is an explicit operator assertion that Dir has a
 	// restricted inheritable NTFS DACL. os.Chmod cannot establish that policy.
 	WindowsACLReady bool
@@ -159,6 +162,9 @@ func (c Config) validate() error {
 	}
 	if len(c.AudioArgs)+len(c.VideoArgs) > 128 {
 		return fmt.Errorf("%w: too many ffmpeg arguments", ErrInvalidConfig)
+	}
+	if c.MaxSeconds < 0 {
+		return fmt.Errorf("%w: max recording seconds must not be negative", ErrInvalidConfig)
 	}
 	if c.MaxConcurrent < 1 || c.MaxConcurrent > maxConcurrentLimit {
 		return fmt.Errorf("%w: max concurrent recordings must be between 1 and %d", ErrInvalidConfig, maxConcurrentLimit)
@@ -1493,7 +1499,11 @@ func (r *Recorder) monitor(s *Session, processResult *processWait) {
 		r.logger.Warn("recording cleanup completed after stop deadline", fields...)
 	}
 
-	if !s.stopping.Load() {
+	if !s.stopping.Load() && waitErr == nil && r.cfg.MaxSeconds > 0 {
+		// ffmpeg ends cleanly once -t is reached; finalize already ran as for a stop.
+		r.logger.Info("recording reached its maximum duration",
+			zap.Int64("channel_id", s.channelID), zap.Int("max_seconds", r.cfg.MaxSeconds))
+	} else if !s.stopping.Load() {
 		r.reportError("unexpected_exit")
 		fields := []zap.Field{
 			zap.Int64("channel_id", s.channelID),
@@ -1803,6 +1813,9 @@ func (r *Recorder) buildStreamArgs(sdpPath, outPath, kind string) []string {
 	}
 	if kind != "audio" {
 		args = append(args, r.cfg.VideoArgs...)
+	}
+	if r.cfg.MaxSeconds > 0 {
+		args = append(args, "-t", strconv.Itoa(r.cfg.MaxSeconds))
 	}
 	return append(args, "-n", outPath)
 }

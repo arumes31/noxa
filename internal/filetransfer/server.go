@@ -74,6 +74,13 @@ const maxFolderLen = 4096
 // registry is full.
 var ErrTooManyPendingTransfers = errors.New("filetransfer: too many pending transfers")
 
+// maxActivePerPrincipal stops one account from holding every file-port slot.
+const maxActivePerPrincipal = 8
+
+// ErrTooManyActiveTransfers is returned when the principal already runs
+// maxActivePerPrincipal transfers.
+var ErrTooManyActiveTransfers = errors.New("filetransfer: too many active transfers")
+
 // ErrQuotaExceeded is returned at issuance or commit when the channel's file quota
 // would be exceeded.
 var ErrQuotaExceeded = errors.New("filetransfer: channel quota exceeded")
@@ -1059,6 +1066,17 @@ func (s *Server) activateTransferLocked(tr *transfer, conn net.Conn) (*activeTra
 	if s.channelDeletedLocked(tr.ChannelID) {
 		return nil, ErrChannelDeleted
 	}
+	if key, ok := principalKeyOf(tr.Principal); ok {
+		n := 0
+		for _, a := range s.activeTransfers {
+			if k, ok := principalKeyOf(a.authorization.Principal); ok && k == key {
+				n++
+			}
+		}
+		if n >= maxActivePerPrincipal {
+			return nil, ErrTooManyActiveTransfers
+		}
+	}
 	active := &activeTransfer{
 		authorization: tr,
 		transferID:    tr.ID,
@@ -1068,6 +1086,17 @@ func (s *Server) activateTransferLocked(tr *transfer, conn net.Conn) (*activeTra
 	}
 	s.activeTransfers[tr.ID] = active
 	return active, nil
+}
+
+// principalKeyOf keys accounts by user ID and guests (user ID 0) by session.
+func principalKeyOf(p *Principal) (Principal, bool) {
+	if p == nil {
+		return Principal{}, false
+	}
+	if p.UserID != 0 {
+		return Principal{UserID: p.UserID}, true
+	}
+	return Principal{SessionID: p.SessionID}, true
 }
 
 func (s *Server) deactivateTransfer(active *activeTransfer) {

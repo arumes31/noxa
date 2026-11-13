@@ -355,6 +355,7 @@ type TCPServer struct {
 	keyLookupRate         *chatRateLimiter
 	previewOnce           sync.Once
 	previewService        *linkpreview.Service
+	previewInFlight       sync.Map // unique ID -> struct{}: one preview fetch per user
 	spoolDelivery         [64]sync.Mutex
 	privateCallsMu        sync.Mutex
 	privateCalls          map[string]netproto.CallSession

@@ -115,6 +115,7 @@ func TestSnapshotRecoversOnlyTreeAndPresence(t *testing.T) {
 		roleResyncPayload:                       true,
 		`{"type":"chat","data":{}}`:             false,
 		`{"type":"poke","data":{}}`:             false,
+		`{"type":"kicked","data":{}}`:           false,
 		`{"type":"_role_channel_delivery","data":{"channel_id":1,"payload":{"type":"typing"}}}`: true,
 		`{"type":"_role_channel_delivery","data":{"channel_id":1,"payload":{"type":"chat"}}}`:   false,
 		`not json`: false,

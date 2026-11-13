@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -303,5 +305,55 @@ func TestFileMutationOwnershipUsesCurrentScopedRights(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestActiveTransfersCappedPerPrincipal(t *testing.T) {
+	s := New(Config{Addr: ":0", RootDir: t.TempDir()}, newFakeFileStore(), nil)
+	activate := func(id string, p Principal) error {
+		_, err := s.activateTransfer(&transfer{ID: id, ChannelID: 7, Principal: &p}, nil)
+		return err
+	}
+	for i := range maxActivePerPrincipal {
+		// Different sessions of one account share its cap.
+		if err := activate(fmt.Sprintf("a%d", i), Principal{UserID: 2, SessionID: fmt.Sprint(i)}); err != nil {
+			t.Fatalf("transfer %d: %v", i, err)
+		}
+	}
+	if err := activate("over", Principal{UserID: 2, SessionID: "other"}); !errors.Is(err, ErrTooManyActiveTransfers) {
+		t.Fatalf("transfer over the cap: err = %v", err)
+	}
+	if err := activate("b", Principal{UserID: 3, SessionID: "s"}); err != nil {
+		t.Fatalf("other user refused: %v", err)
+	}
+	// Guests (user 0) are keyed by session, so one guest cannot starve another.
+	for i := range maxActivePerPrincipal {
+		if err := activate(fmt.Sprintf("g%d", i), Principal{SessionID: "guest-1"}); err != nil {
+			t.Fatalf("guest transfer %d: %v", i, err)
+		}
+	}
+	if err := activate("g-over", Principal{SessionID: "guest-1"}); !errors.Is(err, ErrTooManyActiveTransfers) {
+		t.Fatalf("guest over the cap: err = %v", err)
+	}
+	if err := activate("g2", Principal{SessionID: "guest-2"}); err != nil {
+		t.Fatalf("other guest refused: %v", err)
+	}
+}
+
+func TestIdleUploadClosedAfterIdleTimeout(t *testing.T) {
+	old := uploadIdleTimeout
+	uploadIdleTimeout = 200 * time.Millisecond
+	defer func() { uploadIdleTimeout = old }()
+	addr, s := startServer(t, newFakeFileStore())
+	id, token, err := s.InitUpload(WithPrincipal(t.Context(), Principal{UserID: 2, SessionID: "session"}), 7, "", "idle.txt", 10, "user", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialTransfer(t, addr, id, token)
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	// The server closes the stalled upload; the client sees EOF or a status.
+	if _, err := io.ReadAll(conn); err != nil {
+		t.Fatalf("idle upload stayed open: %v", err)
 	}
 }

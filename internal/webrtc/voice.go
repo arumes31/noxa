@@ -485,9 +485,12 @@ func (v *Voice) redeliverOffer(clientID string, st *renegState, seq uint64, wrap
 		// rebuild) makes the client recover its transport with a fresh offer.
 		v.logger.Warn("client ignored renegotiation offers; closing its peer connection",
 			zap.String("client_id", clientID))
-		// Only this exact peer: a rebuild may have replaced it meanwhile. The
-		// client's fresh offer then rebuilds (stopReneg, detach) as usual.
-		_ = v.engine.closePeerIf(clientID, wrapper)
+		// Only this exact peer: a rebuild may have replaced it meanwhile, and
+		// then owns the reneg state and router attachment.
+		if v.engine.closePeerIf(clientID, wrapper) {
+			v.stopRenegIf(clientID, st)
+			v.router.detachPeerKeepChannelIf(clientID, wrapper)
+		}
 		return
 	}
 	send := func() error {
@@ -826,6 +829,22 @@ func (v *Voice) stopReneg(clientID string) {
 		}
 		delete(v.reneg, clientID)
 	}
+}
+
+// stopRenegIf is stopReneg limited to st, so it spares a replacement's state.
+func (v *Voice) stopRenegIf(clientID string, st *renegState) {
+	v.renegMu.Lock()
+	defer v.renegMu.Unlock()
+	if v.reneg[clientID] != st {
+		return
+	}
+	if st.timer != nil {
+		st.timer.Stop()
+	}
+	if st.answerTimer != nil {
+		st.answerTimer.Stop()
+	}
+	delete(v.reneg, clientID)
 }
 
 // JoinChannel records channel membership for routing.
