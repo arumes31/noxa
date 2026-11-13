@@ -149,13 +149,17 @@ func buildMigratedTemplate(admin *sql.DB) (string, error) {
 	}
 	if err := s.Migrate(); err != nil {
 		_ = s.Close()
-		return fail(fmt.Errorf("migrating template database: %w", err))
+		return fail(fmt.Errorf("%w: %w", errTemplateMigration, err))
 	}
 	if err := s.Close(); err != nil {
 		return fail(fmt.Errorf("closing template database: %w", err))
 	}
 	return name, nil
 }
+
+// errTemplateMigration marks a schema failure, which fails tests even when no
+// database URL is configured; only missing infrastructure is skipped.
+var errTemplateMigration = errors.New("migrating template database")
 
 func scratchStore(t *testing.T, migrated bool) *Store {
 	t.Helper()
@@ -184,8 +188,8 @@ func scratchStore(t *testing.T, migrated bool) *Store {
 		})
 		if err := migratedTemplate.err; err != nil {
 			_ = admin.Close()
-			if configured {
-				t.Fatalf("preparing configured template database: %v", err)
+			if configured || errors.Is(err, errTemplateMigration) {
+				t.Fatalf("preparing template database: %v", err)
 			}
 			t.Skipf("cannot prepare a template database (%v); skipping test", err)
 		}
