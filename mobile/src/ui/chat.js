@@ -49,9 +49,11 @@ export function renderChat(root, scope) {
     const { button: attachButton, picker } = attachControls(async file => {
         try {
             const token = await uploadAttachment(session.conn, scope, file);
-            const caption = input.value.trim();
-            input.value = "";
-            await session.send(scope, caption ? `${caption} ${token}` : token);
+            // An edit in progress keeps its text; the file goes out on its own.
+            const caption = editing ? "" : input.value.trim();
+            const reply = replyTo?.id || 0;
+            if (!editing) { input.value = ""; stopReply(); }
+            await sendText(caption ? `${caption} ${token}` : token, reply);
         } catch (error) {
             toast(t("file.uploadFailed", { error: error.message }), "warn");
         }

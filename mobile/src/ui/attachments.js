@@ -14,8 +14,26 @@ import { voiceNotePlayer } from "./voice-note.js";
 import "./rich-strings.js";
 
 const MAX_CACHED = 80;
-const cache = new Map(); // location|storage|key -> Promise<{url, blob}>
+const MAX_CACHED_BYTES = 150 * 1024 * 1024;
+const cache = new Map(); // location|storage|key -> Promise<{url, blob}>, least recently used first; .entry once decrypted
 let cacheEpoch = 0;
+
+// Drops least recently used entries over either cap. An entry still loading,
+// still shown (image, paused GIF, video) or just requested stays cached.
+function evict(keep) {
+    let bytes = 0;
+    for (const pending of cache.values()) bytes += pending.entry?.blob.size || 0;
+    if (cache.size <= MAX_CACHED && bytes <= MAX_CACHED_BYTES) return;
+    const shown = new Set([...document.querySelectorAll("img, video")].flatMap(node => [node.src, node.dataset.animated]));
+    for (const [key, pending] of cache) {
+        if (cache.size <= MAX_CACHED && bytes <= MAX_CACHED_BYTES) break;
+        const entry = pending.entry;
+        if (key === keep || !entry || shown.has(entry.url)) continue;
+        cache.delete(key);
+        bytes -= entry.blob.size;
+        URL.revokeObjectURL(entry.url);
+    }
+}
 
 // Cached plaintext is found only with the same location, storage name AND
 // attachment key that decrypted it, never by storage name alone.
@@ -27,24 +45,26 @@ function cacheKey(ref, channelID) {
 /** {url, blob} of a decrypted attachment, fetched once per location, name and key. */
 export function attachmentURL(ref, { conn, channelID }) {
     const key = cacheKey(ref, channelID);
-    if (!cache.has(key)) {
-        const epoch = cacheEpoch;
-        const pending = fetchAttachment(conn, channelID, ref)
-            .then(plain => {
-                // A decryption that finishes after sign-out publishes nothing.
-                if (epoch !== cacheEpoch) throw new Error("attachment cache cleared");
-                const blob = new Blob([plain], { type: mimeOf(ref.name) });
-                return { url: URL.createObjectURL(blob), blob };
-            })
-            .catch(error => { if (cache.get(key) === pending) cache.delete(key); throw error; });
-        cache.set(key, pending);
-        if (cache.size > MAX_CACHED) {
-            const [oldest, url] = cache.entries().next().value;
-            cache.delete(oldest);
-            url.then(entry => URL.revokeObjectURL(entry.url)).catch(() => {});
-        }
+    const hit = cache.get(key);
+    if (hit) {
+        cache.delete(key);
+        cache.set(key, hit);
+        return hit;
     }
-    return cache.get(key);
+    const epoch = cacheEpoch;
+    const pending = fetchAttachment(conn, channelID, ref)
+        .then(plain => {
+            // A decryption that finishes after sign-out publishes nothing.
+            if (epoch !== cacheEpoch) throw new Error("attachment cache cleared");
+            const blob = new Blob([plain], { type: mimeOf(ref.name) });
+            const entry = { url: URL.createObjectURL(blob), blob };
+            if (cache.get(key) === pending) { pending.entry = entry; evict(key); }
+            return entry;
+        })
+        .catch(error => { if (cache.get(key) === pending) cache.delete(key); throw error; });
+    cache.set(key, pending);
+    evict(key);
+    return pending;
 }
 
 /** Drops every decrypted attachment and revokes its URL (sign-out, account replacement). */
