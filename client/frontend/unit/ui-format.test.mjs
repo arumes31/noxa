@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setLanguage, t } from "../src/i18n.js";
 import { channelPath, formatTransferETA, titleWhenTruncated } from "../src/ui-format.js";
-import { quickWinEnglish, quickWinGerman } from "../src/quick-win-messages.js";
 
 test("transfer ETA handles unknown values and minute/hour boundaries in both languages", () => {
     for (const language of ["en", "de"]) {
@@ -18,12 +17,6 @@ test("transfer ETA handles unknown values and minute/hour boundaries in both lan
         assert.equal(formatTransferETA(3601), t("eta.hours", { count: 2 }));
     }
     setLanguage("en");
-});
-
-test("UI translation catalogs keep matching keys and placeholders", () => {
-    assert.deepEqual(Object.keys(quickWinEnglish).sort(), Object.keys(quickWinGerman).sort());
-    const placeholders = value => [...value.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort();
-    for (const key of Object.keys(quickWinEnglish)) assert.deepEqual(placeholders(quickWinEnglish[key]), placeholders(quickWinGerman[key]), key);
 });
 
 function fakeElement(scrollWidth, clientWidth) {

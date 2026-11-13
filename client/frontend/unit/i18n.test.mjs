@@ -3,8 +3,6 @@ import { afterEach, describe, it, mock } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { parse } from "acorn";
 import { analyze } from "eslint-scope";
-import { settingsEnglish, settingsGerman } from "../src/settings-messages.js";
-import { interfaceEnglish, interfaceGerman } from "../src/interface-messages.js";
 import { SOUND_DEFINITIONS, SOUND_EVENT_GROUPS } from "../src/sound-catalog.js";
 
 import { applyStaticLabels, catalogParity, currentLanguage, interpolate, setLanguage, t } from "../src/i18n.js";
@@ -45,7 +43,10 @@ describe("language selection and translation", () => {
                     assert.ok(german, `${file}: missing German catalog`);
                     assert.deepEqual(Object.keys(english).sort(), Object.keys(german).sort(), file);
                     const placeholders = text => [...text.matchAll(/\{([\w.]+)\}/g)].map(match => match[1]).sort();
-                    for (const key of Object.keys(english)) assert.deepEqual(placeholders(english[key]), placeholders(german[key]), `${file}: ${key}`);
+                    for (const key of Object.keys(english)) {
+                        assert.ok(german[key].trim(), `${file}: empty German ${key}`);
+                        assert.deepEqual(placeholders(english[key]), placeholders(german[key]), `${file}: ${key}`);
+                    }
                 }
                 continue;
             }
@@ -67,39 +68,12 @@ describe("language selection and translation", () => {
             }
         }
     });
-    it("covers menu and updater text in both languages with matching placeholders", () => {
-        assert.deepEqual(Object.keys(interfaceEnglish).sort(), Object.keys(interfaceGerman).sort());
-        for (const [key, english] of Object.entries(interfaceEnglish)) {
-            const placeholders = text => [...text.matchAll(/\{([^}]+)\}/g)].map(match => match[1]).sort();
-            assert.ok(interfaceGerman[key].trim(), key);
-            assert.deepEqual(placeholders(english), placeholders(interfaceGerman[key]), key);
-        }
-        for (const name of ["menu", "updater", "clipboard"]) {
-            const source = readFileSync(new URL(`../src/${name}.js`, import.meta.url), "utf8");
-            for (const language of ["en", "de"]) {
-                setLanguage(language);
-                for (const [, key] of source.matchAll(/\bt\("([^"]+)"/g)) {
-                    assert.notEqual(t(key), key, `${name}: missing ${language} ${key}`);
-                }
-            }
-        }
-    });
-    it("covers settings keys, sound events and matching placeholders in both languages", () => {
-        assert.deepEqual(Object.keys(settingsEnglish).sort(), Object.keys(settingsGerman).sort());
-        const source = readFileSync(new URL("../src/settings-ui.js", import.meta.url), "utf8");
+    it("covers every sound event in both languages without repeating events", () => {
         for (const language of ["en", "de"]) {
             setLanguage(language);
-            for (const [, key] of source.matchAll(/\bt\("([^"]+)"\)/g)) {
-                assert.notEqual(t(key), key, `missing ${language} ${key}`);
-            }
             for (const event of Object.keys(SOUND_DEFINITIONS)) {
                 assert.notEqual(t("settings.sound." + event), "settings.sound." + event);
             }
-        }
-        for (const [key, english] of Object.entries(settingsEnglish)) {
-            const placeholders = text => [...text.matchAll(/\{([a-z]+)\}/g)].map(m => m[1]).sort();
-            assert.ok(settingsGerman[key].trim(), key);
-            assert.deepEqual(placeholders(english), placeholders(settingsGerman[key]), key);
         }
         const events = SOUND_EVENT_GROUPS.flatMap(group => group.events.map(([event]) => event));
         assert.equal(new Set(events).size, events.length, "sound settings must not repeat events");

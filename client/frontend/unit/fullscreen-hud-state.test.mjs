@@ -6,7 +6,6 @@ import {
     createAutoHide, createChatPeek, createQuickReply, hudLayout, hudSpeakers, pingQuality, telemetryParts,
 } from "../src/fullscreen-hud-state.js";
 import { placementRect, presetZones, zonesHit } from "../src/overlay-zones.js";
-import { fullscreenEnglish, fullscreenGerman } from "../src/fullscreen-messages.js";
 
 // A manual clock: schedule() queues, advance() fires what is due in order.
 function fakeClock() {
@@ -316,11 +315,6 @@ describe("telemetry pill", () => {
 });
 
 describe("fullscreen strings and stylesheet", () => {
-    it("has every string in English and German", () => {
-        assert.deepEqual(Object.keys(fullscreenGerman).sort(), Object.keys(fullscreenEnglish).sort());
-        for (const [key, value] of Object.entries(fullscreenGerman)) assert.ok(value.trim(), key);
-    });
-
     it("keeps backgrounds static and honours both reduced-motion switches", () => {
         const css = readFileSync(new URL("../src/arctic-fullscreen.css", import.meta.url), "utf8");
         assert.doesNotMatch(css, /infinite/, "no continuous animation");
