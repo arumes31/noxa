@@ -1267,7 +1267,7 @@ func (r *Router) AttachPeer(clientID string, pc *PeerConnectionWrapper) error {
 // tracks in both directions, tap outputs, RTCP writer, video sources, layer
 // preference, whisper configuration, and channel membership.
 func (r *Router) DetachPeer(clientID string) {
-	r.detachPeer(clientID, true)
+	r.detachPeer(clientID, true, nil)
 }
 
 // DetachPeerKeepChannel is DetachPeer without the channel leave, for peer
@@ -1280,13 +1280,24 @@ func (r *Router) DetachPeer(clientID string) {
 // not its transport: dropping whisper intent would broadcast private audio.
 // Track creation and each packet still pass the current authorization guards.
 func (r *Router) DetachPeerKeepChannel(clientID string) {
-	r.detachPeer(clientID, false)
+	r.detachPeer(clientID, false, nil)
 }
 
-// detachPeer implements DetachPeer / DetachPeerKeepChannel.
-func (r *Router) detachPeer(clientID string, leaveChannel bool) {
-	r.sourceTiming.forgetPublisher(clientID)
+// detachPeerKeepChannelIf is DetachPeerKeepChannel only while w is still the
+// attached peer, so a stale caller cannot detach its replacement.
+func (r *Router) detachPeerKeepChannelIf(clientID string, w *PeerConnectionWrapper) {
+	r.detachPeer(clientID, false, w)
+}
+
+// detachPeer implements DetachPeer / DetachPeerKeepChannel. A non-nil only
+// limits it to that attached peer.
+func (r *Router) detachPeer(clientID string, leaveChannel bool, only *PeerConnectionWrapper) {
 	r.mu.Lock()
+	if only != nil && r.pubPeers[clientID] != only {
+		r.mu.Unlock()
+		return
+	}
+	r.sourceTiming.forgetPublisher(clientID) // leaf lock
 	r.beginDeferredTrackRemovalsLocked()
 	r.invalidateVideoLocked(clientID)
 	r.forgetVoiceFanoutLocked(clientID)

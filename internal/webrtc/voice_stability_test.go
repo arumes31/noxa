@@ -160,6 +160,61 @@ func TestIgnoredOffersClosePeer(t *testing.T) {
 	}
 }
 
+// Giving up on an ignored peer also clears its reneg timers and router
+// attachment instead of leaving them until the client re-offers.
+func TestIgnoredOffersGiveUpClearsRenegAndRouter(t *testing.T) {
+	v, clock := stabilityVoice(t)
+	t.Cleanup(func() { _ = v.ClosePeer("listener") })
+	client := newClientPC(t)
+	v.SetOfferSender(func(string, string) error { return nil })
+	establishVoiceSession(t, v, client, "listener")
+	v.JoinChannel("listener", 1)
+	v.JoinChannel("first", 1)
+	clock.Advance(50 * time.Millisecond)
+	for i := 0; i < 20 && v.engine.PeerConnection("listener") != nil; i++ {
+		clock.Advance(renegAnswerTimeoutMax)
+	}
+	if v.engine.PeerConnection("listener") != nil {
+		t.Fatal("peer that ignores every offer was never closed")
+	}
+	v.renegMu.Lock()
+	_, reneg := v.reneg["listener"]
+	v.renegMu.Unlock()
+	v.router.mu.RLock()
+	attached := v.router.pubPeers["listener"]
+	v.router.mu.RUnlock()
+	if reneg || attached != nil {
+		t.Fatalf("after give-up: reneg state kept = %v, router peer = %p", reneg, attached)
+	}
+}
+
+// The conditional cleanup spares a replacement peer and its reneg state.
+func TestGiveUpCleanupSparesReplacement(t *testing.T) {
+	v, _ := stabilityVoice(t)
+	stale := &PeerConnectionWrapper{closed: make(chan struct{})}
+	replacement := &PeerConnectionWrapper{closed: make(chan struct{})}
+	v.router.mu.Lock()
+	v.router.pubPeers["listener"] = replacement
+	v.router.mu.Unlock()
+	current := &renegState{}
+	v.renegMu.Lock()
+	v.reneg["listener"] = current
+	v.renegMu.Unlock()
+
+	v.stopRenegIf("listener", &renegState{})
+	v.router.detachPeerKeepChannelIf("listener", stale)
+
+	v.renegMu.Lock()
+	kept := v.reneg["listener"]
+	v.renegMu.Unlock()
+	v.router.mu.RLock()
+	attached := v.router.pubPeers["listener"]
+	v.router.mu.RUnlock()
+	if kept != current || attached != replacement {
+		t.Fatalf("replacement touched: reneg kept = %v, router peer replaced = %v", kept == current, attached == replacement)
+	}
+}
+
 // Redeliveries refused before reaching the client (e.g. while it is parked in
 // the lobby) are not ignored offers: the peer stays for the rejoin.
 func TestRefusedRedeliveriesKeepPeer(t *testing.T) {

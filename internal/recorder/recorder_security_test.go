@@ -249,6 +249,40 @@ func TestUnexpectedProcessExitCleansSessionAndArtifacts(t *testing.T) {
 	waitForRouterRemovals(t, router, 1)
 }
 
+// ffmpeg exits cleanly when -t is reached: the recording finalizes like a stop
+// and is not reported as a crash.
+func TestDurationCapExitIsNotUnexpected(t *testing.T) {
+	dir := privateTempDir(t)
+	observed := make(chan string, 2)
+	cfg := testConfig(dir)
+	cfg.MaxSeconds = 60
+	recorder := New(cfg, zap.NewNop(), Observers{OnError: func(operation string) { observed <- operation }})
+	exec := &fakeExec{}
+	recorder.Exec = exec.run
+	session, err := recorder.Start(context.Background(), 9, &fakeTapRouter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(session.FilePath, []byte("recording"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	exec.cmd.release()
+	select {
+	case <-session.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("capped process exit was not observed")
+	}
+	waitForSessionCount(t, recorder, 0)
+	select {
+	case operation := <-observed:
+		t.Fatalf("capped recording reported %q", operation)
+	default:
+	}
+	if _, err := os.Stat(session.FilePath); err != nil {
+		t.Fatalf("capped recording output: %v", err)
+	}
+}
+
 func TestMissingRecordingOutputIsReported(t *testing.T) {
 	recorder := New(testConfig(privateTempDir(t)), zap.NewNop())
 	command := newFakeCommand("")

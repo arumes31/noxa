@@ -108,6 +108,7 @@ func recorderConfig(cfg config.RecordingConfig) recorder.Config {
 		VideoArgs:       append([]string(nil), cfg.VideoArgs...),
 		AudioArgs:       append([]string(nil), cfg.AudioArgs...),
 		MaxConcurrent:   cfg.MaxConcurrent,
+		MaxSeconds:      cfg.MaxSeconds,
 		WindowsACLReady: cfg.WindowsACLReady,
 	}
 }

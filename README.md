@@ -867,6 +867,7 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_REDIS_TLS_ENABLED` | `false` | Enable verified Redis TLS (TLS 1.2+); optional server name and CA file use `NOXA_REDIS_TLS_SERVER_NAME` / `NOXA_REDIS_TLS_CA_FILE` |
 | `NOXA_RECORDING_ENABLED` / `NOXA_RECORDING_DIR` | `false` / `recordings` | Opt-in server recording; requires FFmpeg and recording permissions |
 | `NOXA_RECORDING_MAX_CONCURRENT` | `4` | Combined budget for starting and active recording sessions |
+| `NOXA_RECORDING_MAX_SECONDS` | `14400` | Longest single recording (4 h); it then ends like a normal stop. `0` = unlimited |
 | `NOXA_RECORDING_WINDOWS_ACL_READY` | `false` | Acknowledge restricted, inheritable NTFS DACL provisioned on the recording directory for Windows |
 
 `NOXA_CHAT_MASTER_KEY` takes precedence over `NOXA_CHAT_MASTER_KEY_FILE`.

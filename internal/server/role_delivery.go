@@ -164,6 +164,9 @@ func snapshotRecovers(payload []byte) bool {
 	switch event.Type {
 	case eventSpeakingChanged, eventTyping, eventConversationTyping:
 		return true
+	case eventKicked:
+		// The kicked target gets the raw event, its only "you were removed" notice.
+		return false
 	}
 	return roleSnapshotEvent(event.Type)
 }
