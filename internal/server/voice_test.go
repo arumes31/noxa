@@ -262,10 +262,11 @@ func TestWebRTCOfferAnswer(t *testing.T) {
 
 	// The server must have installed its voice callbacks at construction.
 	env.voice.mu.Lock()
-	if env.voice.canTalkFn == nil || env.voice.onSpeakingFn == nil || env.voice.canVideoFn == nil {
+	installed := env.voice.canTalkFn != nil && env.voice.onSpeakingFn != nil && env.voice.canVideoFn != nil
+	env.voice.mu.Unlock()
+	if !installed {
 		t.Fatal("voice handlers not installed by server.New")
 	}
-	env.voice.mu.Unlock()
 
 	send(t, conn, netproto.MsgWebRTCOffer, netproto.WebRTCOffer{SDP: "client-offer-sdp"})
 	f := readOfType(t, conn, netproto.MsgWebRTCAnswer)
