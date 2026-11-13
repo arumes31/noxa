@@ -31,12 +31,16 @@ type Config struct {
 	// ClientMinVersion gates native client admission. 0.0.0 accepts any version;
 	// exactly 9.9.9 uses the running server version as the minimum.
 	ClientMinVersion string `mapstructure:"client_min_version"`
-	LogLevel         string `mapstructure:"log_level"`
-	DevMode          bool   `mapstructure:"dev_mode"`
-	TCPAddr          string `mapstructure:"tcp_addr"`
-	UDPAddr          string `mapstructure:"udp_addr"`
-	GRPCAddr         string `mapstructure:"grpc_addr"`
-	HealthAddr       string `mapstructure:"health_addr"`
+	// ClientRecommendedVersion is announced to clients, which update in the
+	// background when below it. Empty uses the running server version; "none"
+	// disables it.
+	ClientRecommendedVersion string `mapstructure:"client_recommended_version"`
+	LogLevel                 string `mapstructure:"log_level"`
+	DevMode                  bool   `mapstructure:"dev_mode"`
+	TCPAddr                  string `mapstructure:"tcp_addr"`
+	UDPAddr                  string `mapstructure:"udp_addr"`
+	GRPCAddr                 string `mapstructure:"grpc_addr"`
+	HealthAddr               string `mapstructure:"health_addr"`
 	// HealthTLSEnabled serves the health listener (probes, /events, /hooks and
 	// /dl links) over TLS with the control certificate. Requires tls_enabled.
 	HealthTLSEnabled bool `mapstructure:"health_tls_enabled"`
@@ -323,6 +327,7 @@ func newConfigViper() *viper.Viper {
 	// Defaults -----------------------------------------------------------------
 	v.SetDefault("server_name", "noXa")
 	v.SetDefault("client_min_version", "0.0.0")
+	v.SetDefault("client_recommended_version", "")
 	v.SetDefault("server_password", "")
 	v.SetDefault("allow_anonymous", false)
 	v.SetDefault("log_level", "info")
@@ -535,6 +540,9 @@ func (c *Config) Validate() error {
 
 	errs := []error{}
 	if _, err := version.NewClientMinimum(c.ClientMinVersion, version.Short()); err != nil {
+		errs = append(errs, err)
+	}
+	if _, err := version.ClientRecommended(c.ClientRecommendedVersion, version.Short()); err != nil {
 		errs = append(errs, err)
 	}
 	if strings.TrimSpace(c.ServerName) == "" {

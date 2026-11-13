@@ -86,3 +86,26 @@ func TestClientMinimumUnknownServerFailsStartupValidation(t *testing.T) {
 		t.Fatalf("explicit any depends on server version: %v", err)
 	}
 }
+
+func TestClientRecommendedConfiguration(t *testing.T) {
+	t.Setenv("NOXA_DEV_MODE", "true")
+	for _, recommended := range []string{"", "none", "0.6.1", "v0.6.1-rc.1"} {
+		v := newConfigViper()
+		v.Set("dev_mode", true)
+		v.Set("client_recommended_version", recommended)
+		if cfg, err := decodeConfig(v); err != nil || cfg.ClientRecommendedVersion != recommended {
+			t.Fatalf("%q: config=%+v error=%v", recommended, cfg, err)
+		}
+	}
+	v := newConfigViper()
+	v.Set("dev_mode", true)
+	v.Set("client_recommended_version", "latest")
+	if _, err := decodeConfig(v); err == nil || !strings.Contains(err.Error(), "client_recommended_version") {
+		t.Fatalf("invalid recommended version accepted: %v", err)
+	}
+	t.Chdir(t.TempDir())
+	t.Setenv("NOXA_CLIENT_RECOMMENDED_VERSION", "none")
+	if cfg, err := Load(); err != nil || cfg.ClientRecommendedVersion != "none" {
+		t.Fatalf("environment=%+v error=%v", cfg, err)
+	}
+}

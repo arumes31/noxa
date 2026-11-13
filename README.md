@@ -796,6 +796,19 @@ clients. This is a compatibility gate on self-reported version metadata, not
 binary attestation. ServerQuery/gRPC integration accounts remain governed by their
 separate authorization contract and cannot create native channel membership.
 
+**Soft updates.** The server also announces a recommended client version
+(`client_recommended_version` / `NOXA_CLIENT_RECOMMENDED_VERSION`) together with
+the minimum in its login reply. Empty (the default) recommends the server's own
+release version (a development build recommends nothing); `none` turns it off.
+A desktop client on an older release downloads and verifies the newest release in
+the background, shows a short notice, and restarts into it right away, even
+during a call; the restart restores the session. Turning off automatic
+installation in the update settings disables this, and development builds never
+update this way. A login refused by the hard minimum offers **Update now**.
+While a member restarts into an update, others see an "updating…" badge in its
+place without a leave sound; a return within 60 seconds clears the badge
+silently, otherwise the usual leave notice follows.
+
 
 This table lists commonly used settings and built-in defaults. See
 [`internal/config/config.go`](internal/config/config.go) for the complete schema
@@ -807,6 +820,7 @@ and validation, [`config.yaml`](config.yaml) for a development example, and
 | `NOXA_SERVER_NAME` / `NOXA_SERVER_PASSWORD` | `noXa` / empty | Displayed server name and admission password; required in production unless `NOXA_ALLOW_ANONYMOUS=true` |
 | `NOXA_ALLOW_ANONYMOUS` | `false` | Acknowledge that an empty server password admits anyone, including anonymous guests, when `NOXA_DEV_MODE=false` |
 | `NOXA_CLIENT_MIN_VERSION` | `0.0.0` | Native client minimum; `0.0.0` permits any version, exactly `9.9.9` requires the running server version or newer, e.g. `0.5.94` requires that release or newer |
+| `NOXA_CLIENT_RECOMMENDED_VERSION` | empty | Client version desktop clients update to in the background; empty uses the server's release version, `none` disables, e.g. `0.6.3` |
 | `NOXA_DEV_MODE` | `false` | Production validation by default; the checked-in development profiles explicitly opt in to `true` |
 | `NOXA_TCP_ADDR` | `:12333` | Primary control TCP listener address |
 | `NOXA_UDP_ADDR` | `:12334` | UDP keepalive ping/pong listener address |

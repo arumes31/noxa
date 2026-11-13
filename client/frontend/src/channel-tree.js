@@ -511,6 +511,14 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             pr.title = t("runtime.priority");
             row.appendChild(pr);
         }
+        // The kept place of a member restarting into an update.
+        if (c.updating) {
+            const updating = document.createElement("span");
+            updating.className = "role-chip group-badge member-updating";
+            updating.textContent = t("runtime.updatingBadge");
+            updating.title = t("runtime.updatingTitle");
+            row.appendChild(updating);
+        }
         // Keep the mobile label readable alongside the member role.
         if (c.on_mobile) {
             const phone = document.createElement("span");

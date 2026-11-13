@@ -1,5 +1,7 @@
 package main
 
+import "noxa/internal/version"
+
 // SessionInfo is one connection's UI identity and transport status.
 type SessionInfo struct {
 	MobileAccountKey   string `json:"mobile_account_key"`
@@ -11,6 +13,9 @@ type SessionInfo struct {
 	IsGuest            bool   `json:"is_guest"`
 	Connected          bool   `json:"connected"`
 	Security           string `json:"security"`
+	// UpdateRecommended is the server's recommended client version when this
+	// build is an older release; empty otherwise (and always for dev builds).
+	UpdateRecommended string `json:"update_recommended,omitempty"`
 }
 
 // SessionInfoForTab captures the initiating tab before reading its session.
@@ -36,5 +41,15 @@ func (a *App) SessionInfoForTab(tabID string) (SessionInfo, error) {
 		ManagedRelay:       m.managedRelay,
 		ClientID:           m.clientID, Nickname: m.nickname, IsGuest: m.isGuest,
 		Connected: true, Security: connectionSecurity(m.tlsUsed, m.fingerprint, m.newServer),
+		UpdateRecommended: recommendedUpdate(m.recommendedVersion, version.Short()),
 	}, nil
+}
+
+// recommendedUpdate returns recommended when current is a release older than
+// it. Dev builds and unparseable versions never update on a server's advice.
+func recommendedUpdate(recommended, current string) string {
+	if !version.IsRelease(current) || !version.IsRelease(recommended) || !version.Compare(recommended, current) {
+		return ""
+	}
+	return recommended
 }

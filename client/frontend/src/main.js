@@ -60,7 +60,7 @@ import { initStudio, disposeStudio } from "./studio-launcher.js";
 import { refreshVoicePlayback } from "./voice-messages.js";
 import { discussionChanged, viewedDiscussionThread } from "./discussions.js";
 import { initClientInfo } from "./clientinfo.js";
-import { initUpdater, startupAutoCheck, reconnectAutoCheck } from "./updater.js";
+import { initUpdater, startupAutoCheck, reconnectAutoCheck, recommendedUpdateCheck } from "./updater.js";
 import { showConnectSplash } from "./connect-splash.js";
 import { playUpdateIntro } from "./update-intro.js";
 import { playEvent, playAlert, clearSpeech, reconcileNotificationMute, initSounds, updateSoundOutput, updateConversationDucking, soundEngine, speechQueue } from "./sounds.js";
@@ -708,6 +708,7 @@ async function rememberTabConnect(c, expectedGeneration = null, tabID = "", curr
     if (!current() || (expectedGeneration !== null && expectedGeneration !== reconnectGeneration)) return false;
     if (tabID) state.tabConnects.set(tabID, c);
     else if (active) state.tabConnects.set(active.id, c);
+    void recommendedUpdateCheck(tabID || active?.id);
     if (tabID && (active?.id !== tabID || (state.activeTabID && state.activeTabID !== tabID))) return false;
     state.lastSuccessfulConnect = { ...c };
     state.lastConnect = c;
@@ -1383,6 +1384,7 @@ window.runtime.EventsOn("snapshot", (json) => {
     const previousPresence = captureChannelPresence(state);
     state.presenceDepartures = snap.departures || {};
     state.presenceReconnected = new Set(snap.reconnected || []);
+    state.presenceReturned = new Set(snap.returned || []);
     state.canSetInvisible = snap.can_set_invisible === true;
     state.canViewAuditLog = snap.can_view_audit_log === true;
     window.dispatchEvent(new Event("noxa-audit-access-changed"));
@@ -1412,7 +1414,7 @@ window.runtime.EventsOn("snapshot", (json) => {
         for (const change of channelPresenceChanges(previousPresence, nextPresence)) {
             if (presenceCueSuppressed(state, change)) continue;
             window.__noxaNotify?.notify("join_leave", t(change.message, { name: change.client.nickname || t("runtime.someone") }),
-                { channelID: state.myChannelID, className: "joins", kind: "info", soundEvent: change.soundEvent, speechEvent: change.speechEvent, speechKey: presenceSpeechKey(change.client, state.myChannelID) });
+                { channelID: state.myChannelID, className: "joins", kind: "info", soundEvent: change.soundEvent, speechEvent: change.speechEvent, speechKey: presenceSpeechKey(change.client, state.myChannelID), noSound: !!change.quiet });
         }
     }
     snapshotPresenceScope = nextPresence.scope;
@@ -1570,7 +1572,8 @@ window.runtime.EventsOn("event", (json) => {
             } else {
                 state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, presence_token: d.presence_token, is_speaking: false, on_mobile: !!d.on_mobile });
             }
-            if (d.client_id !== state.myClientID) {
+            // A return from an update is quiet: the roster updates, nothing is announced.
+            if (d.client_id !== state.myClientID && !d.returned) {
                 const cue = arrivalCue(!!d.reconnected);
                 chatUI.sysJoinLeave(d.nickname || d.unique_id || "someone", d.reconnected ? "reconnected" : "joined"); // (130/131)
                 const joined = state.clients.find(client => client.client_id === d.client_id);
@@ -1597,7 +1600,7 @@ window.runtime.EventsOn("event", (json) => {
                     }
                 }
                 const cue = departureCue(d.reason);
-                if (cue) chatUI.sysJoinLeave(was.nickname || was.unique_id || "someone", d.reason === "connection_lost" ? "lost the connection" : "left"); // (130/131)
+                if (cue) chatUI.sysJoinLeave(was.nickname || was.unique_id || "someone", cue.quiet ? t("runtime.updatingVerb") : d.reason === "connection_lost" ? "lost the connection" : "left"); // (130/131)
                 // The avatar cache follows the roster, so user churn cannot grow
                 // it without bound; views that still show this user (DMs)
                 // fetch it again on demand.
@@ -1607,7 +1610,7 @@ window.runtime.EventsOn("event", (json) => {
                     window.__noxaNotify?.notify("join_leave", t(cue.message, { name: was.nickname || t("runtime.someone") }),
                         { channelID: state.myChannelID, className: "joins", kind: "info", soundEvent: cue.soundEvent,
                             speechEvent: d.reason === "connection_lost" ? cue.speechEvent : "user_disconnected",
-                            speechKey: presenceSpeechKey(was, was.channel_id), noSound: actionSoundsSuppressed() });
+                            speechKey: presenceSpeechKey(was, was.channel_id), noSound: actionSoundsSuppressed() || !!cue.quiet });
                 }
             }
             videoTrackRemoved(d.client_id);

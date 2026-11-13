@@ -393,6 +393,7 @@ function memberRow(client, className = "side-member") {
     h("span", { class: "member-name" }, self ? t("layout.self", { name: client.nickname }) : client.nickname),
     client.self_deafened || client.server_deafened ? h("span", { class: "member-state", title: t("voice.undeafen") }, "🔈") : null,
     client.self_muted || client.server_muted ? h("span", { class: "member-state", title: t("voice.muted"), "aria-label": t("voice.muted") }, "🔇") : null,
+    client.updating ? h("span", { class: "row-meta member-updating", title: t("presence.updatingTitle") }, t("presence.updatingBadge")) : null,
     client.on_mobile ? h("span", { class: "row-meta", title: t("presence.onMobile") }, t("presence.mobileBadge")) : null));
 }
 

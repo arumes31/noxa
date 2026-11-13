@@ -61,3 +61,10 @@ func IsPrerelease(value string) bool {
 	parsed, valid := parseSemver(value)
 	return valid && len(parsed.prerelease) > 0
 }
+
+// IsRelease reports whether value is a valid semantic version without a
+// prerelease part. Development builds are prereleases.
+func IsRelease(value string) bool {
+	parsed, valid := parseSemver(value)
+	return valid && len(parsed.prerelease) == 0
+}

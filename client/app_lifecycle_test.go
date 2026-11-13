@@ -102,6 +102,9 @@ func TestApplyAndRestartLaunchesBeforeQuitAndStopsOnLaunchError(t *testing.T) {
 	if len(order) != 2 || order[0] != "launch" || order[1] != "quit" {
 		t.Fatalf("restart order = %v, want launch then quit", order)
 	}
+	if !quitForUpdate.Swap(false) {
+		t.Fatal("an update restart must send its goodbyes with the update reason")
+	}
 
 	quitCalled := false
 	restartLaunch = func(string) error { return errors.New("injected launch failure") }
@@ -111,6 +114,9 @@ func TestApplyAndRestartLaunchesBeforeQuitAndStopsOnLaunchError(t *testing.T) {
 	}
 	if quitCalled {
 		t.Fatal("restart quit after launch failure")
+	}
+	if quitForUpdate.Load() {
+		t.Fatal("a failed restart must not mark later goodbyes as an update")
 	}
 }
 

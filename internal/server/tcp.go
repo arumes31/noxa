@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -126,6 +127,7 @@ type Client struct {
 	resyncPending    atomic.Bool                                 // a resync snapshot is queued (role_delivery.go)
 	readClose        atomic.Pointer[netproto.ControlCloseReason] // why the read loop ended
 	saidGoodbye      atomic.Bool                                 // client sent MsgGoodbye before closing
+	updating         atomic.Bool                                 // that goodbye said the client restarts into an update
 	replaced         atomic.Bool                                 // the same device reconnected on a newer session
 	announcesGoodbye bool                                        // client sends MsgGoodbye before a deliberate close, protected by mu
 	inputAt          time.Time                                   // last input a desktop reported (activity)
@@ -1389,6 +1391,7 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		client.notePong()
 		return nil
 	case netproto.MsgGoodbye:
+		client.updating.Store(goodbyeIsUpdate(f.Payload))
 		client.saidGoodbye.Store(true)
 		return nil
 	default:
@@ -1398,6 +1401,14 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 		)
 		return s.sendErrorFor(client, mt, errCodeUnknown, fmt.Sprintf("unknown message type %d", f.Type))
 	}
+}
+
+// goodbyeIsUpdate reports whether a MsgGoodbye payload says the client quits
+// to install an update. The reason is optional: an empty or unreadable
+// payload is a plain goodbye.
+func goodbyeIsUpdate(payload []byte) bool {
+	var goodbye netproto.Goodbye
+	return json.Unmarshal(payload, &goodbye) == nil && goodbye.Reason == netproto.GoodbyeReasonUpdate
 }
 
 // requestOriginContextKey keeps the immutable origin local to one dispatch
@@ -1516,7 +1527,13 @@ func (s *TCPServer) onDisconnect(client *Client) {
 				wasInvisible = s.deps.State.PresenceHidden(removed)
 				// Recorded before the user_left broadcast so its snapshots carry the reason.
 				if key, _ := client.presenceSessionKey(); key != "" {
-					s.presence.noteDeparture(client.ID, key, client.departureReason(), channelID, wasInvisible, time.Now())
+					now := time.Now()
+					reason := client.departureReason()
+					s.presence.noteDeparture(client.ID, key, reason, channelID, wasInvisible, now)
+					if reason == netproto.DepartureUpdating {
+						s.presence.noteUpdating(key, updatingGhost(removed), wasInvisible, now)
+						time.AfterFunc(presenceUpdateWindow, func() { s.expireUpdatingDeparture(key, client.ID, client.UniqueID, client.nickname()) })
+					}
 				}
 			}
 		}

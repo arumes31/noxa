@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -119,6 +120,7 @@ type connManager struct {
 	// AuthResponse (nil = use client defaults).
 	iceServers          []netproto.ICEServer
 	managedRelay        bool
+	recommendedVersion  string // the server's recommended client version from AUTH
 	relayLease          netproto.RelayResponse
 	relayRefreshAt      time.Time
 	mediaLimits         netproto.MediaLimits
@@ -728,6 +730,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsConversationActivity = slices.Contains(resp.Capabilities, netproto.CapabilityConversationActivity)
 	m.iceServers = resp.ICEServers
 	m.managedRelay = slices.Contains(resp.Capabilities, netproto.CapabilityManagedRelay)
+	m.recommendedVersion = resp.ClientRecommendedVersion
 	m.relayLease = netproto.RelayResponse{}
 	m.relayRefreshAt = time.Time{}
 	m.mediaLimits = netproto.MediaLimits{}
@@ -881,11 +884,19 @@ func (m *connManager) disconnect() {
 // regular write timeout.
 const goodbyeWriteTimeout = 500 * time.Millisecond
 
+// quitForUpdate is set once the process quits to restart into an update, so
+// the goodbyes of the shutdown tell observers it will be back shortly.
+var quitForUpdate atomic.Bool
+
 // sendGoodbye tells the server this close is deliberate, so observers hear a
 // leave rather than a lost connection. Best effort and bounded as a whole: a
 // write stuck on the lock or the wire only changes which cue other users hear.
 func (m *connManager) sendGoodbye(conn net.Conn) {
-	f, err := netproto.Encode(netproto.MsgGoodbye, struct{}{})
+	var goodbye netproto.Goodbye
+	if quitForUpdate.Load() {
+		goodbye.Reason = netproto.GoodbyeReasonUpdate
+	}
+	f, err := netproto.Encode(netproto.MsgGoodbye, goodbye)
 	if err != nil {
 		return
 	}

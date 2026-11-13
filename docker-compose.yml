@@ -112,6 +112,8 @@ services:
     environment:
       # Preserve an explicit empty value so invalid admission policy fails startup.
       NOXA_CLIENT_MIN_VERSION: ${NOXA_CLIENT_MIN_VERSION-0.0.0}
+      # Empty = the server's release version; none = no background client updates.
+      NOXA_CLIENT_RECOMMENDED_VERSION: ${NOXA_CLIENT_RECOMMENDED_VERSION:-}
       NOXA_ECHO_CHANNEL_ENABLED: ${NOXA_ECHO_CHANNEL_ENABLED:-true}
       NOXA_ECHO_CHANNEL_NAME: ${NOXA_ECHO_CHANNEL_NAME:-Echo Test}
       # --- Logging ---

@@ -110,3 +110,25 @@ test('after the own reconnect only the server announcement plays while the roste
     notePresenceRestored(s, 5000);
     assert.equal(presenceCueSuppressed(s, join('late-uid'), 5000 + RECONNECT_KNOWN_MS + 1), false, 'the known set expires');
 });
+
+test('an updating member keeps its place quietly, returns silently, and expires into a plain leave', async () => {
+    const { departureCue, arrivalCue } = await import('../src/channel-presence.js');
+    const before = state([member('peer')]);
+    const updating = state([{ ...member('peer'), updating: true }]);
+    const quiet = changes(before, updating);
+    assert.deepEqual(quiet.map(change => [change.client.client_id, change.kind, change.message, change.soundEvent, change.quiet]),
+        [['peer', 'updating', 'runtime.updatingUser', undefined, true]]);
+    assert.deepEqual(changes(updating, updating), [], 'the status is announced once');
+    assert.deepEqual(changes(state([]), updating), [], 'a kept place is no arrival');
+
+    const returned = state([member('peer-new')], { presenceDepartures: { peer: 'replaced' }, presenceReturned: new Set(['peer-new']) });
+    assert.deepEqual(changes(updating, returned), [], 'a return clears the status without join or reconnect sounds');
+
+    const expired = changes(updating, state([]));
+    assert.deepEqual(expired.map(change => [change.kind, change.message, change.soundEvent]), [['leave', 'runtime.left', 'user_leave']]);
+
+    assert.equal(departureCue('updating').quiet, true);
+    assert.equal(departureCue('updating').soundEvent, undefined);
+    assert.equal(arrivalCue(false, true), null);
+    assert.equal(arrivalCue(true).speechEvent, 'user_reconnected');
+});

@@ -22,3 +22,8 @@ test("a deliberate close says goodbye first; a plain close does not", async () =
     try { Connection.prototype.close.call(fake, { goodbye: true }); } catch { /* private fields of a fake instance */ }
     assert.deepEqual(sent, [Msg.Goodbye]);
 });
+
+test("an update restart gets a quiet updating line and its return none", () => {
+    assert.deepEqual(presenceLines(clients, "user_left", { client_id: "c1", reason: "updating" }, 1).map(l => [l.scope, l.kind]), [[0, "updating"], [7, "updating"]]);
+    assert.deepEqual(presenceLines([], "user_joined", { client_id: "c2", nickname: "Ann", channel_id: 7, returned: true }, 1), []);
+});

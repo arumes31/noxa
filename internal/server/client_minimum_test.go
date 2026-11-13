@@ -171,3 +171,39 @@ func TestClientMinimumSentinelAndExplicitAnyNative(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthResponseAnnouncesClientVersions(t *testing.T) {
+	env := startTestEnvDeps(t, nil, func(c *config.Config) {
+		c.ClientMinVersion = "0.5.94"
+		c.ClientRecommendedVersion = "v0.6.3"
+	}, nil)
+	defer env.stop()
+	for clientVersion, ok := range map[string]bool{"0.6.0": true, "0.5.0": false} {
+		conn := dialRetry(t, env.addr)
+		send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", ClientVersion: clientVersion})
+		var response netproto.AuthResponse
+		if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &response); err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.Close()
+		if response.OK != ok || response.ClientMinVersion != "0.5.94" || response.ClientRecommendedVersion != "0.6.3" {
+			t.Fatalf("%s: response=%+v", clientVersion, response)
+		}
+	}
+}
+
+func TestAnnouncedRecommendedVersionDefaultsAndDisables(t *testing.T) {
+	server := func(recommended string) *TCPServer {
+		return &TCPServer{cfg: &config.Config{ClientRecommendedVersion: recommended}}
+	}
+	var resp netproto.AuthResponse
+	server("none").announceClientVersions(&resp)
+	if resp.ClientRecommendedVersion != "" || resp.ClientMinVersion != "" {
+		t.Fatalf("none / zero minimum = %+v", resp)
+	}
+	want, _ := version.ClientRecommended("", version.Short())
+	server("").announceClientVersions(&resp)
+	if resp.ClientRecommendedVersion != want {
+		t.Fatalf("default = %q, want the server's own version %q", resp.ClientRecommendedVersion, want)
+	}
+}

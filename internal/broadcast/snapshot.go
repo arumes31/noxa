@@ -52,6 +52,9 @@ type ClientInfo struct {
 	OnMobile bool `json:"on_mobile,omitempty"`
 	// MediaDevice names the session's device for encrypted media keys.
 	MediaDevice string `json:"media_device,omitempty"`
+	// Updating marks the kept place of a member restarting into an update;
+	// the session itself is gone.
+	Updating bool `json:"updating,omitempty"`
 }
 
 // ChannelNode represents a single channel in the tree snapshot. It embeds the
@@ -105,9 +108,11 @@ type TreeSnapshot struct {
 	// Departures maps recently departed client IDs the recipient could see to
 	// a reason (netproto.DepartureConnectionLost or DepartureReplaced); plain
 	// leaves are absent. Reconnected lists present members whose previous
-	// session of the same device was lost moments ago.
+	// session of the same device was lost moments ago. Returned lists present
+	// members that came back from an update (announce quietly).
 	Departures  map[string]string `json:"departures,omitempty"`
 	Reconnected []string          `json:"reconnected,omitempty"`
+	Returned    []string          `json:"returned,omitempty"`
 }
 
 // clientToInfo converts a state.Client into a serializable ClientInfo, stripping

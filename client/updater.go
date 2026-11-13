@@ -555,6 +555,7 @@ func (a *App) ApplyAndRestart() string {
 		}
 		return err.Error()
 	}
+	quitForUpdate.Store(true)
 	a.quitting.Store(true)
 	wailsQuit(a.ctx)
 	return ""

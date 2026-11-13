@@ -149,7 +149,7 @@ export function renderChat(root, scope) {
     });
 
     function systemLine(item) {
-        const text = entry => t(entry.kind === "lost" ? "act.connectionLost" : entry.kind === "reconnected" ? "act.reconnected"
+        const text = entry => t(entry.kind === "lost" ? "act.connectionLost" : entry.kind === "updating" ? "act.updating" : entry.kind === "reconnected" ? "act.reconnected"
             : scope === 0 ? (entry.kind === "joined" ? "act.joinedServer" : "act.leftServer") : (entry.kind === "joined" ? "act.joined" : "act.left"), { name: entry.name });
         if (!item.group) return h("div", { class: "sys-line", role: "note" }, text(item));
         return h("div", { class: "sys-line", role: "note" }, h("details", {},

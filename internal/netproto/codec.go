@@ -532,6 +532,11 @@ type AuthResponse struct {
 	UniqueID string `json:"unique_id,omitempty"`
 	Nickname string `json:"nickname,omitempty"`
 	Reason   string `json:"reason,omitempty"`
+	// ClientMinVersion is the server's hard client minimum (empty: none).
+	// ClientRecommendedVersion is the version clients below it should update
+	// to in the background (empty: none). Both are normalized SemVer.
+	ClientMinVersion         string `json:"client_min_version,omitempty"`
+	ClientRecommendedVersion string `json:"client_recommended_version,omitempty"`
 	// ICEServers carries the ICE servers the client should use for WebRTC
 	// (STUN defaults plus TURN entries with time-limited credentials when the
 	// server has TURN configured). Empty means "client defaults".
