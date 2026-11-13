@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
@@ -21,8 +22,9 @@ import (
 // fakePushes adds an in-memory PushStore to fakeDevices.
 type fakePushes struct {
 	*fakeDevices
-	pmu  sync.Mutex
-	subs map[string]store.PushSubscription // by device ID
+	pmu     sync.Mutex
+	subs    map[string]store.PushSubscription // by device ID
+	records int                               // RecordPushResult calls
 }
 
 func (f *fakePushes) SavePushSubscription(_ context.Context, p store.PushSubscription) error {
@@ -103,7 +105,12 @@ func (f *fakePushes) DeletePushEndpoint(_ context.Context, endpoint string) erro
 	return nil
 }
 
-func (f *fakePushes) RecordPushResult(context.Context, string, bool, int) error { return nil }
+func (f *fakePushes) RecordPushResult(context.Context, string, bool, int) error {
+	f.pmu.Lock()
+	defer f.pmu.Unlock()
+	f.records++
+	return nil
+}
 
 type sentPush struct {
 	endpoint string
@@ -205,6 +212,33 @@ func browserSubscription(t *testing.T, endpoint string) *netproto.PushSubscripti
 	}
 }
 
+// subAuth is the auth secret of the account's only push subscription.
+func (p pushTestEnv) subAuth(t *testing.T) []byte {
+	t.Helper()
+	subs, _ := p.pushes.PushSubscriptions(t.Context(), "user-uid")
+	if len(subs) != 1 {
+		t.Fatalf("subscriptions = %d, want 1", len(subs))
+	}
+	return subs[0].Auth
+}
+
+func TestPushTopicIsKeyedPerSubscription(t *testing.T) {
+	a, b := []byte("auth-secret-a"), []byte("auth-secret-b")
+	topic := pushTopic(a, "dm:ivy")
+	if pushTopic(bytes.Clone(a), "dm:ivy") != topic {
+		t.Fatal("topic changes for the same subscription and tag")
+	}
+	if pushTopic(a, "dm:ivy") == pushTopic(b, "dm:ivy") {
+		t.Fatal("topic links the same conversation across subscriptions")
+	}
+	if pushTopic(a, "dm:ivy") == pushTopic(a, "dm:rowan") {
+		t.Fatal("topic does not separate conversations")
+	}
+	if len(pushTopic(a, "dm:ivy")) > 32 {
+		t.Fatal("topic longer than RFC 8030 allows")
+	}
+}
+
 func TestPushSubscriptionAndPreferences(t *testing.T) {
 	p := startPushTestEnv(t)
 	phone, _ := p.phoneSession(t, "Pixel")
@@ -258,7 +292,7 @@ func TestPushSkipsForegroundPhoneAndHidesDetails(t *testing.T) {
 	})
 	p.env.srv.pushNotify("user-uid", pushNotice{Kind: pushKindDM, Tag: "dm:ivy", From: "Ivy"})
 	got := p.sender.next(t)
-	if got.payload.Kind != pushKindDM || got.payload.From != "Ivy" || got.payload.Tag != "dm:ivy" || got.msg.Topic != pushTopic("dm:ivy") {
+	if got.payload.Kind != pushKindDM || got.payload.From != "Ivy" || got.payload.Tag != "dm:ivy" || got.msg.Topic != pushTopic(p.subAuth(t), "dm:ivy") {
 		t.Fatalf("push = %+v", got)
 	}
 
@@ -330,7 +364,7 @@ func TestPushWaitsWhileDesktopIsActiveAndReadCancels(t *testing.T) {
 
 	// Reading a conversation whose notification was shown clears it.
 	send(t, desktop, netproto.MsgDeviceRequest, netproto.DeviceRequest{Action: netproto.DeviceActionRead, Read: &netproto.ReadMarker{Scope: netproto.ReadScopeDM, ID: "rowan"}})
-	if got := p.sender.next(t); got.payload.Kind != pushKindClear || got.payload.Tag != "dm:rowan" || got.msg.Topic != pushTopic("dm:rowan") {
+	if got := p.sender.next(t); got.payload.Kind != pushKindClear || got.payload.Tag != "dm:rowan" || got.msg.Topic != pushTopic(p.subAuth(t), "dm:rowan") {
 		t.Fatalf("clear push = %+v", got.payload)
 	}
 

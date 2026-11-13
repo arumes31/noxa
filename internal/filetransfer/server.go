@@ -808,8 +808,13 @@ func copyBlobAndRemove(root *os.Root, oldPath, newPath string, renameErr error) 
 }
 
 // ChannelQuotaState resolves the per-channel axis (265): physical usage
-// against the configured channel ceiling.
+// against the configured channel ceiling. Scope 0 is not a channel: it holds
+// every DM/group attachment and global file, so only the uploader axis
+// applies there and its usage is not reported.
 func (s *Server) ChannelQuotaState(ctx context.Context, channelID int64) (Quota, error) {
+	if channelID == 0 {
+		return Quota{}, nil
+	}
 	used, err := s.store.ChannelFileUsage(ctx, channelID)
 	if err != nil {
 		return Quota{}, err

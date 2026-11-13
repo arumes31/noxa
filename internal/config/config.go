@@ -259,7 +259,8 @@ type RecordingConfig struct {
 	VideoArgs []string `mapstructure:"video_args"`
 	// AudioArgs are the ffmpeg audio output options.
 	AudioArgs []string `mapstructure:"audio_args"`
-	// MaxConcurrent bounds starting plus active ffmpeg subprocesses.
+	// MaxConcurrent bounds starting plus active ffmpeg subprocesses, one per
+	// recorded source, server-wide.
 	MaxConcurrent int `mapstructure:"max_concurrent"`
 	// MaxSeconds caps one recording's duration (ffmpeg -t). 0 = unlimited.
 	MaxSeconds int `mapstructure:"max_seconds"`
@@ -448,7 +449,7 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("recording.format", "webm")
 	v.SetDefault("recording.video_args", []string{"-c:v", "copy"})
 	v.SetDefault("recording.audio_args", []string{"-c:a", "copy"})
-	v.SetDefault("recording.max_concurrent", 4)
+	v.SetDefault("recording.max_concurrent", 16)
 	v.SetDefault("recording.max_seconds", 14400)
 	v.SetDefault("recording.windows_acl_ready", false)
 

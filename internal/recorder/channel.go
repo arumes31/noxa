@@ -22,6 +22,16 @@ import (
 
 const captureQueueBytes = 2 * 1024 * 1024
 
+// captureIdleTimeout ends a video source that sent nothing for this long; the
+// next keyframe starts a new segment. Tests shorten it.
+var captureIdleTimeout = 10 * time.Second
+
+// captureAudioIdleTimeout ends a silent audio source. A muted microphone sends
+// nothing, and the tap only sees packets (no departure signal reaches the
+// recorder), so this is long enough to span normal mute pauses yet still frees
+// the process and capacity slot of a source that left. Tests shorten it.
+var captureAudioIdleTimeout = 10 * time.Minute
+
 // ChannelRecorder coordinates separate participant/slot files. The underlying
 // Recorder retains ownership of every subprocess through complete cleanup;
 // its global MaxConcurrent limit applies to processes, not just channels.
@@ -46,7 +56,10 @@ type captureManifest struct {
 	EndedAt   *time.Time      `json:"ended_at,omitempty"`
 	Alignment string          `json:"alignment"`
 	Tracks    []*captureTrack `json:"tracks"`
-	Error     string          `json:"error,omitempty"`
+	// Notes lists sources that were not recorded, e.g. at the server-wide
+	// process limit.
+	Notes []string `json:"notes,omitempty"`
+	Error string   `json:"error,omitempty"`
 }
 type captureTrack struct {
 	Publisher string `json:"publisher"`
@@ -66,6 +79,13 @@ type capturePacket struct {
 	size     int
 }
 type captureSource struct{ publisher, slot string }
+
+// captureStream identifies one stream of a source; a new SSRC or epoch is a
+// new stream.
+type captureStream struct {
+	ssrc  uint32
+	epoch uint64
+}
 type captureChild struct {
 	id                         int64
 	session                    *Session
@@ -93,6 +113,7 @@ type channelCapture struct {
 	queued       int
 	queue        chan capturePacket
 	children     map[captureSource]*captureChild // worker-owned
+	skipped      map[captureSource]captureStream // worker-owned: streams refused at capacity
 	ownedMu      sync.Mutex
 	ownedIDs     map[int64]struct{}
 	manifest     captureManifest // worker-owned
@@ -380,7 +401,13 @@ func (s *channelCapture) run(stopStartupCancellation func() bool) {
 					return
 				default:
 				}
-				if now.Sub(child.lastSeen) > 10*time.Second {
+				// Audio is silent while muted; a short timeout would start a new
+				// process per unmute until the 1024 segment cap ends the recording.
+				idle := captureIdleTimeout
+				if !child.video {
+					idle = captureAudioIdleTimeout
+				}
+				if now.Sub(child.lastSeen) > idle {
 					s.result = s.finishChild(child)
 					delete(s.children, source)
 					if s.result != nil {
@@ -462,6 +489,9 @@ func (s *channelCapture) consume(entry capturePacket) error {
 		delete(s.children, source)
 		child = nil
 	}
+	if skip, ok := s.skipped[source]; ok && skip == (captureStream{entry.packet.SSRC, d.SourceEpoch}) {
+		return nil
+	}
 	if child == nil {
 		if len(s.manifest.Tracks) >= 1024 {
 			return errors.New("recording segment limit reached")
@@ -474,7 +504,31 @@ func (s *channelCapture) consume(entry capturePacket) error {
 		s.ownedMu.Lock()
 		s.ownedIDs[id] = struct{}{}
 		s.ownedMu.Unlock()
-		process, err := s.owner.processes.start(s.ctx, id, &captureChildRouter{}, kind, s.root)
+		track := &captureTrack{Publisher: d.SenderID, Slot: d.Slot, SSRC: entry.packet.SSRC, Epoch: d.SourceEpoch, Codec: codec, StartMS: entry.at.Sub(s.started).Milliseconds()}
+		// List the files before ffmpeg can write them, so a crash or a failed
+		// manifest write later cannot leave media retention never deletes.
+		process, err := s.owner.processes.start(s.ctx, id, &captureChildRouter{}, kind, s.root, func(outputName string) error {
+			track.File = outputName
+			s.manifest.Tracks = append(s.manifest.Tracks, track)
+			return s.writeManifest()
+		})
+		if err != nil {
+			track.File = "" // start removed the files; writeManifest omits the track
+		}
+		if errors.Is(err, ErrCapacity) {
+			// The limit counts recorded sources server-wide. Skip this stream
+			// and keep recording the others; a new stream of the source retries.
+			s.ownedMu.Lock()
+			delete(s.ownedIDs, id)
+			s.ownedMu.Unlock()
+			if s.skipped == nil {
+				s.skipped = make(map[captureSource]captureStream)
+			}
+			s.skipped[source] = captureStream{entry.packet.SSRC, d.SourceEpoch}
+			s.owner.processes.logger.Warn("recording source skipped: concurrent recording limit reached", zap.Int64("channel_id", s.channelID), zap.String("publisher", d.SenderID), zap.String("slot", d.Slot))
+			s.manifest.Notes = append(s.manifest.Notes, fmt.Sprintf("%s %s from %dms not recorded: concurrent recording limit reached", d.SenderID, d.Slot, entry.at.Sub(s.started).Milliseconds()))
+			return s.writeManifest()
+		}
 		if err != nil {
 			s.stop()
 			// Failed startup may still own a process or a wedged collaborator.
@@ -495,13 +549,8 @@ func (s *channelCapture) consume(entry capturePacket) error {
 			s.ownedMu.Unlock()
 			return fmt.Errorf("recording %s source: %w", d.Slot, err)
 		}
-		track := &captureTrack{Publisher: d.SenderID, Slot: d.Slot, SSRC: entry.packet.SSRC, Epoch: d.SourceEpoch, Codec: codec, File: filepath.Base(process.FilePath), StartMS: entry.at.Sub(s.started).Milliseconds()}
 		child = &captureChild{id: id, session: process, track: track, video: video, readyAt: time.Now().Add(250 * time.Millisecond), lastSeen: entry.at}
 		s.children[source] = child
-		s.manifest.Tracks = append(s.manifest.Tracks, track)
-		if err := s.writeManifest(); err != nil {
-			return err
-		}
 	}
 	child.lastSeen = entry.at
 	if time.Now().Before(child.readyAt) {

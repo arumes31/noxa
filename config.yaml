@@ -150,8 +150,11 @@ recording:
   format: webm
   video_args: ["-c:v", "copy"]
   audio_args: ["-c:a", "copy"]
-  # Hard process/memory budget: starting and active sessions both count.
-  max_concurrent: 4
+  # Server-wide budget of recorded sources: each participant's mic, screen
+  # audio, camera and screen is one FFmpeg process (starting or active). A
+  # source over the limit is skipped and noted in the recording manifest; the
+  # rest of the recording continues. Also caps simultaneous channel recordings.
+  max_concurrent: 16
   # Longest single recording in seconds (ffmpeg -t); 0 = unlimited.
   max_seconds: 14400
   # Windows only: pre-create recording.dir, apply a restricted inheritable

@@ -466,6 +466,25 @@ func TestInitUploadLimits(t *testing.T) {
 	}
 }
 
+// TestScopeZeroSkipsChannelQuota: scope 0 holds every DM/group attachment
+// and global file, so the channel quota must not cap it; the uploader quota
+// still does.
+func TestScopeZeroSkipsChannelQuota(t *testing.T) {
+	ctx := context.Background()
+	fs := newFakeFileStore()
+	_ = fs.AddFile(ctx, store.FileRecord{ChannelID: 0, Name: "dm.bin", Size: 2 << 20, SHA256: "a", Uploader: "someone"})
+	s := New(Config{Addr: ":0", RootDir: t.TempDir(), ChannelQuotaMB: 2}, fs, nil)
+	if _, _, err := s.InitUpload(ctx, 0, "", "next.bin", 1<<20, "u", 0); err != nil {
+		t.Fatalf("scope 0 upload over the channel quota = %v, want nil", err)
+	}
+	if _, quota, err := s.ChannelQuota(ctx, 0); err != nil || quota != 0 {
+		t.Fatalf("scope 0 listing quota = %d, %v; want 0", quota, err)
+	}
+	if _, _, err := s.InitUpload(ctx, 0, "", "big.bin", 2<<20, "someone", 3); !errors.Is(err, ErrUploaderQuotaExceeded) {
+		t.Fatalf("scope 0 upload over the uploader quota = %v, want ErrUploaderQuotaExceeded", err)
+	}
+}
+
 // TestQuotaAxes covers the two quota axes (265/266): the channel axis ignores
 // deduped copies, and the uploader axis follows the user across channels.
 func TestQuotaAxes(t *testing.T) {

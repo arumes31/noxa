@@ -86,7 +86,7 @@ var ErrInvalidPacket = errors.New("recorder: RTP packet is nil")
 const (
 	defaultStopGracePeriod = 5 * time.Second
 	defaultKillWait        = 5 * time.Second
-	defaultMaxConcurrent   = 4
+	defaultMaxConcurrent   = 16
 	maxConcurrentLimit     = 64
 )
 
@@ -505,12 +505,14 @@ func (r *Recorder) reportError(operation string) {
 // taps in the router so a copy of the channel's audio and video reaches the
 // process.
 func (r *Recorder) Start(ctx context.Context, channelID int64, router TapRouter) (_ *Session, retErr error) {
-	return r.start(ctx, channelID, router, "", nil)
+	return r.start(ctx, channelID, router, "", nil, nil)
 }
 
 // start owns one process. ChannelRecorder supplies exactly one media kind for
 // each source segment, so FFmpeg never waits for an absent second input.
-func (r *Recorder) start(ctx context.Context, channelID int64, router TapRouter, kind string, expectedRoot *os.Root) (_ *Session, retErr error) {
+// reserve, when set, is told the output file name after the files exist and
+// before ffmpeg starts; an error aborts the start and removes the files.
+func (r *Recorder) start(ctx context.Context, channelID int64, router TapRouter, kind string, expectedRoot *os.Root, reserve func(outputName string) error) (_ *Session, retErr error) {
 	defer func() {
 		if retErr != nil {
 			r.reportError("start")
@@ -626,6 +628,11 @@ func (r *Recorder) start(ctx context.Context, channelID int64, router TapRouter,
 	}
 	if err := verifyRecordingRoot(recordingDir, root); err != nil {
 		return nil, err
+	}
+	if reserve != nil {
+		if err := reserve(outputName); err != nil {
+			return nil, err
+		}
 	}
 
 	processCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))

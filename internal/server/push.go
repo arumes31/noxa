@@ -47,8 +47,11 @@ const (
 	pushDesktopActiveWindow = 2 * time.Minute
 	pushMaxFailures         = 5
 	// pushShownMemory bounds how long a sent notification can be cleared.
-	pushShownMemory  = 24 * time.Hour
-	pushConcurrency  = 16
+	pushShownMemory = 24 * time.Hour
+	pushConcurrency = 16
+	// pushPerUser caps one account's sends in flight, so its devices cannot
+	// hold every global slot.
+	pushPerUser      = 2
 	pushCallTTL      = 30 * time.Second
 	pushMessageTTL   = 24 * time.Hour
 	pushSendDeadline = 20 * time.Second
@@ -107,10 +110,22 @@ type pushState struct {
 	shown     map[pushKey]time.Time
 	lastSweep time.Time
 	sem       chan struct{}
+	// userSem holds each recipient account's slots while it has sends
+	// waiting or in flight.
+	userSem map[string]*userSlots
 	// reachable remembers accounts whose phones subscribed since start, so
 	// a mention can reach a phone whose app is closed.
 	reachable map[string]pushAccount
 }
+
+type userSlots struct {
+	ch   chan struct{}
+	refs int
+}
+
+// errPushNotSent reports that the context ended while the send waited for a
+// slot: nothing reached the push service, so it is not a delivery failure.
+var errPushNotSent = errors.New("push not sent: no send slot before the deadline")
 
 type pushAccount struct {
 	nickname string
@@ -122,6 +137,7 @@ func newPushState() *pushState {
 		pending:   make(map[pushKey]*pendingPush),
 		shown:     make(map[pushKey]time.Time),
 		sem:       make(chan struct{}, pushConcurrency),
+		userSem:   make(map[string]*userSlots),
 		reachable: make(map[string]pushAccount),
 	}
 }
@@ -136,8 +152,11 @@ func (s *TCPServer) pushStore() (PushStore, bool) {
 
 // pushTopic maps a tag to an RFC 8030 topic, so a newer push for the same
 // conversation (including a clear) replaces one the service still holds.
-func pushTopic(tag string) string {
-	sum := sha256.Sum256([]byte(tag))
+// The topic travels in clear, so it is keyed with the subscription's private
+// auth secret: the push service cannot link it to a conversation or match it
+// across subscriptions.
+func pushTopic(auth []byte, tag string) string {
+	sum := sha256.Sum256(append(append([]byte(nil), auth...), tag...))
 	return base64.RawURLEncoding.EncodeToString(sum[:24])
 }
 
@@ -315,27 +334,39 @@ func (s *TCPServer) deliverPush(ctx context.Context, sub store.PushSubscription,
 	}
 	// A notice can wait behind desktop activity or another send. Re-read the
 	// subscription so a later mute, sign-out or privacy change takes effect.
+	// This check lets filtered notices skip the slot queue; prepare repeats it
+	// once the slots are held.
 	current, err := pushes.PushSubscriptionForDevice(ctx, sub.Principal, sub.DeviceID)
 	if err != nil || pushFiltered(current.Filters, n, time.Now()) {
 		return
 	}
 	sub = current
-	payload := pushPayload{Kind: n.Kind, Tag: n.Tag, Video: n.Video, At: time.Now().Unix()}
-	if !sub.HideDetails {
-		payload.From, payload.Place = n.From, n.Place
+	// prepare runs for each attempt after both slots are acquired, so a
+	// mute or HideDetails set while the send waited still applies.
+	prepare := func(ctx context.Context) (webpush.Subscription, webpush.Message, error) {
+		current, err := pushes.PushSubscriptionForDevice(ctx, sub.Principal, sub.DeviceID)
+		if err != nil || pushFiltered(current.Filters, n, time.Now()) {
+			return webpush.Subscription{}, webpush.Message{}, errPushNotSent
+		}
+		sub = current
+		payload := pushPayload{Kind: n.Kind, Tag: n.Tag, Video: n.Video, At: time.Now().Unix()}
+		if !sub.HideDetails {
+			payload.From, payload.Place = n.From, n.Place
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return webpush.Subscription{}, webpush.Message{}, errPushNotSent
+		}
+		msg := webpush.Message{Payload: body, TTL: pushMessageTTL, Urgency: webpush.UrgencyNormal, Topic: pushTopic(sub.Auth, n.Tag)}
+		switch n.Kind {
+		case pushKindCall:
+			msg.TTL, msg.Urgency = pushCallTTL, webpush.UrgencyHigh
+		case pushKindClear:
+			msg.TTL = time.Hour
+		}
+		return webpush.Subscription{Endpoint: sub.Endpoint, P256dh: sub.P256dh, Auth: sub.Auth}, msg, nil
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	msg := webpush.Message{Payload: body, TTL: pushMessageTTL, Urgency: webpush.UrgencyNormal, Topic: pushTopic(n.Tag)}
-	switch n.Kind {
-	case pushKindCall:
-		msg.TTL, msg.Urgency = pushCallTTL, webpush.UrgencyHigh
-	case pushKindClear:
-		msg.TTL = time.Hour
-	}
-	err = s.sendPushWithRetry(ctx, webpush.Subscription{Endpoint: sub.Endpoint, P256dh: sub.P256dh, Auth: sub.Auth}, msg)
+	err = s.sendPushWithRetry(ctx, sub.Principal, prepare)
 	recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), pushRecordTimeout)
 	defer cancelRecord()
 	switch {
@@ -345,8 +376,8 @@ func (s *TCPServer) deliverPush(ctx context.Context, sub store.PushSubscription,
 			s.logger.Warn("dropping expired push subscription failed", zap.Error(err))
 		}
 		return
-	case errors.Is(err, context.Canceled):
-		return // shutdown or a superseded notice, not a delivery failure
+	case errors.Is(err, context.Canceled), errors.Is(err, errPushNotSent):
+		return // shutdown, a superseded notice or no slot: not a delivery failure
 	case err != nil:
 		s.metricsSink().IncPushDelivery("failed")
 		s.logger.Info("push delivery failed", zap.String("device_id", sub.DeviceID), zap.Error(err))
@@ -618,10 +649,16 @@ var pushRetryDelays = []time.Duration{2 * time.Second, 6 * time.Second}
 // sendPushWithRetry sends once and retries a temporary failure (429, 5xx or
 // a network error) up to len(pushRetryDelays) times, honouring Retry-After.
 // The send slot is held only while a request is in flight. A wait that would
-// pass the context deadline ends the attempts with the last error.
-func (s *TCPServer) sendPushWithRetry(ctx context.Context, sub webpush.Subscription, msg webpush.Message) error {
+// pass the context deadline ends the attempts with the last error, as does
+// a retry that gets no slot: errPushNotSent means no attempt was made at all.
+func (s *TCPServer) sendPushWithRetry(ctx context.Context, principal string, prepare pushPrepare) error {
+	var last error
 	for attempt := 0; ; attempt++ {
-		err := s.sendPushOnce(ctx, sub, msg)
+		err := s.sendPushOnce(ctx, principal, prepare)
+		if errors.Is(err, errPushNotSent) && last != nil {
+			return last
+		}
+		last = err
 		if err == nil || attempt >= len(pushRetryDelays) || !pushRetryable(err) {
 			return err
 		}
@@ -644,12 +681,43 @@ func (s *TCPServer) sendPushWithRetry(ctx context.Context, sub webpush.Subscript
 	}
 }
 
-func (s *TCPServer) sendPushOnce(ctx context.Context, sub webpush.Subscription, msg webpush.Message) error {
+// pushPrepare builds one attempt's request from the current subscription, or
+// returns errPushNotSent when the notice should no longer be sent.
+type pushPrepare func(ctx context.Context) (webpush.Subscription, webpush.Message, error)
+
+// sendPushOnce takes one of the recipient account's slots, then a global
+// slot, so an account's extra sends wait without holding global slots.
+func (s *TCPServer) sendPushOnce(ctx context.Context, principal string, prepare pushPrepare) error {
+	s.push.mu.Lock()
+	user := s.push.userSem[principal]
+	if user == nil {
+		user = &userSlots{ch: make(chan struct{}, pushPerUser)}
+		s.push.userSem[principal] = user
+	}
+	user.refs++
+	s.push.mu.Unlock()
+	defer func() {
+		s.push.mu.Lock()
+		if user.refs--; user.refs == 0 {
+			delete(s.push.userSem, principal)
+		}
+		s.push.mu.Unlock()
+	}()
+	select {
+	case user.ch <- struct{}{}:
+		defer func() { <-user.ch }()
+	case <-ctx.Done():
+		return errPushNotSent
+	}
 	select {
 	case s.push.sem <- struct{}{}:
 		defer func() { <-s.push.sem }()
 	case <-ctx.Done():
-		return ctx.Err()
+		return errPushNotSent
+	}
+	sub, msg, err := prepare(ctx)
+	if err != nil {
+		return err
 	}
 	return s.deps.Push.Send(ctx, sub, msg)
 }

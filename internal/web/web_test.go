@@ -355,3 +355,31 @@ func TestAdmissionGroupsIPv6ByPrefix(t *testing.T) {
 		t.Fatal("neighbouring IPv4 address shared a bucket")
 	}
 }
+
+// deadlineRecorder records the write deadline a handler sets.
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadline time.Time
+}
+
+func (d *deadlineRecorder) SetWriteDeadline(t time.Time) error {
+	d.deadline = t
+	return nil
+}
+
+func TestStaticResponsesHaveAWriteDeadline(t *testing.T) {
+	srv, err := New(testConfig(t), "noXa test", &echoControl{}, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/app/", "/app/assets/main-abc.js", "/link", "/invite/42"} {
+		rec := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+		srv.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "https://chat.example"+path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s = %d", path, rec.Code)
+		}
+		if left := time.Until(rec.deadline); left <= 0 || left > staticWriteTimeout {
+			t.Fatalf("%s write deadline in %s, want within %s", path, left, staticWriteTimeout)
+		}
+	}
+}

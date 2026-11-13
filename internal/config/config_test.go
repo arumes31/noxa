@@ -172,9 +172,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Recording.MaxSeconds != 14400 {
 		t.Errorf("Recording.MaxSeconds = %d, want 14400", cfg.Recording.MaxSeconds)
 	}
-	if cfg.Recording.MaxConcurrent != 4 || cfg.Recording.WindowsACLReady {
+	if cfg.Recording.MaxConcurrent != 16 || cfg.Recording.WindowsACLReady {
 		t.Errorf(
-			"recording defaults = max %d, windows ACL ready %t; want 4/false",
+			"recording defaults = max %d, windows ACL ready %t; want 16/false",
 			cfg.Recording.MaxConcurrent,
 			cfg.Recording.WindowsACLReady,
 		)
