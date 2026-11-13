@@ -803,6 +803,16 @@ export function createVideoPublication({ policy }) {
             return;
         }
         audioMode = validateDisplayAudio(display, audioMode);
+        // Orientation is known only after capture: a portrait screen or window
+        // turns the preset box before the geometry crop below fixes its size.
+        // Region crops keep the unturned box.
+        const raw = surface !== "region" && surface !== "studio" ? display.getVideoTracks()[0]?.getSettings() : null;
+        if (raw?.height > raw?.width) {
+            p.portrait = true;
+            try { await display.getVideoTracks()[0].applyConstraints(screenShareConstraints(p, limits)); }
+            catch (error) { discardDisplay(display); V().sysMsg(tLabel("desktop.screen.capture.failed") + error.message); return; }
+            if (!current()) { discardDisplay(display); return; }
+        }
         // Full-window/screen capture needs the same per-frame even geometry as
         // region capture. GPU textures can change size without honoring the
         // source adapter's advertised constraints (e.g. 1620 -> 1621 pixels).
@@ -1074,6 +1084,7 @@ export function createVideoPublication({ policy }) {
                         return;
                     }
                     const previous = track.getConstraints(), hint = track.contentHint, preferred = capturePreferences.get(track);
+                    if (preferred?.portrait) next.portrait = true; // the captured source keeps its orientation
                     try {
                         await track.applyConstraints({ ...previous, ...screenShareConstraints(next, state.mediaLimits) });
                         if (!alive()) return;

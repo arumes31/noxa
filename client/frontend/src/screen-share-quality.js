@@ -29,11 +29,11 @@ export function screenShareConstraints(profile, limits) {
         return { width: bounded ? { max: limits.video_max_width } : {},
             height: bounded ? { max: limits.video_max_height } : {}, frameRate: { ideal: profile.fps, max: profile.fps } };
     }
-    const constraints = videoConstraints(profile.width, profile.height, profile.fps, limits);
-    // Without a server bound either orientation fits: a portrait monitor keeps its long edge.
-    const edge = Math.max(constraints.width.ideal, constraints.height.ideal);
-    constraints.width.max = bounded ? constraints.width.ideal : edge;
-    constraints.height.max = bounded ? constraints.height.ideal : edge;
+    // A captured portrait source turns the preset box; server bounds stay as they are.
+    const turned = profile.portrait && !bounded;
+    const constraints = videoConstraints(turned ? profile.height : profile.width, turned ? profile.width : profile.height, profile.fps, limits);
+    constraints.width.max = constraints.width.ideal;
+    constraints.height.max = constraints.height.ideal;
     constraints.frameRate.max = profile.fps;
     return constraints;
 }

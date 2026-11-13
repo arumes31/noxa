@@ -33,9 +33,9 @@ test("the source is scaled so the cropped area fits the chosen quality", () => {
     assert.deepEqual(sourceConstraints(native, half, hd), { width: { ideal: 3840, max: 3840 }, height: { ideal: 2160, max: 2160 }, frameRate: hd.frameRate });
     const whole = sourceConstraints(native, { x: 0, y: 0, width: 1, height: 1 }, hd);
     assert.deepEqual([whole.width.max, whole.height.max], [1920, 1080]);
-    // A tall area keeps the preset's long edge as its height.
+    // A tall area is limited by height.
     const tall = sourceConstraints(native, { x: 0.4, y: 0, width: 0.1, height: 1 }, hd);
-    assert.deepEqual([tall.width.max, tall.height.max], [3413, 1920]);
+    assert.deepEqual([tall.width.max, tall.height.max], [1920, 1080]);
     // Original quality only follows server limits.
     const original = screenShareConstraints(shareQuality("original"), null);
     assert.deepEqual(sourceConstraints(native, half, original).width, { ideal: 3840, max: 3840 });
