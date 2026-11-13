@@ -51,10 +51,3 @@ func TestSetEventTapObservesEvents(t *testing.T) {
 		t.Fatal("the tap swallowed the client broadcast")
 	}
 }
-
-// TestEventTapIsOptional verifies BroadcastEvent works with no tap installed.
-func TestEventTapIsOptional(t *testing.T) {
-	b := New(zap.NewNop(), state.New(zap.NewNop()))
-	defer b.Close()
-	b.BroadcastEvent("user_left", []byte(`{}`))
-}

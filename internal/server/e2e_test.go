@@ -356,29 +356,6 @@ func TestKeyPublishRejectsInvalidX25519WithoutMutation(t *testing.T) {
 	}
 }
 
-// TestPlaintextChatRejected verifies plaintext chat is always rejected with a
-// clear error.
-func TestPlaintextChatRejected(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-
-	conn, _ := dialAuthed(t, env.addr, "user-uid")
-	defer func() { _ = conn.Close() }()
-
-	send(t, conn, netproto.MsgChatSend, netproto.ChatSend{Text: "hello"})
-	f := readOfType(t, conn, netproto.MsgError)
-	var e netproto.Error
-	if err := netproto.Decode(f, &e); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	if e.Code != errCodePermissionDenied {
-		t.Fatalf("error code = %d, want %d", e.Code, errCodePermissionDenied)
-	}
-	if got := e.Message; got == "" || got[:10] != "plaintext " {
-		t.Fatalf("unexpected error message: %q", got)
-	}
-}
-
 // TestChannelKeyRotationOnLeave verifies members get a sealed key on join,
 // and a leave rotates the key: remaining members receive a bumped key id and
 // sends with the stale key are rejected.

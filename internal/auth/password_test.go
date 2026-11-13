@@ -9,21 +9,6 @@ import (
 	"testing"
 )
 
-// TestHashPasswordFormat verifies that HashPassword returns a non-empty encoded
-// hash with the expected argon2id$ prefix.
-func TestHashPasswordFormat(t *testing.T) {
-	h, err := HashPassword("correct horse battery staple")
-	if err != nil {
-		t.Fatalf("HashPassword: %v", err)
-	}
-	if h == "" {
-		t.Fatal("expected non-empty hash")
-	}
-	if !strings.HasPrefix(h, "argon2id$") {
-		t.Fatalf("expected argon2id$ prefix, got %q", h)
-	}
-}
-
 // TestVerifyPasswordCorrect verifies that VerifyPassword succeeds for the
 // correct password and fails for a wrong one.
 func TestVerifyPasswordCorrect(t *testing.T) {

@@ -262,7 +262,7 @@ func TestWebRTCOfferAnswer(t *testing.T) {
 
 	// The server must have installed its voice callbacks at construction.
 	env.voice.mu.Lock()
-	if env.voice.canTalkFn == nil || env.voice.onSpeakingFn == nil {
+	if env.voice.canTalkFn == nil || env.voice.onSpeakingFn == nil || env.voice.canVideoFn == nil {
 		t.Fatal("voice handlers not installed by server.New")
 	}
 	env.voice.mu.Unlock()
@@ -695,18 +695,6 @@ func TestRecordingControlDenied(t *testing.T) {
 	}
 	if got := env.recorder.startedCount(); got != 0 {
 		t.Fatalf("recordings started = %d, want 0", got)
-	}
-}
-
-// TestVideoGateInstalled verifies the server installs the video-publish gate.
-func TestVideoGateInstalled(t *testing.T) {
-	env := startTestEnv(t, nil)
-	defer env.stop()
-
-	env.voice.mu.Lock()
-	defer env.voice.mu.Unlock()
-	if env.voice.canVideoFn == nil {
-		t.Fatal("video gate not installed by server.New")
 	}
 }
 

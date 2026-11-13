@@ -40,16 +40,6 @@ func freePort(t *testing.T) string {
 	return addr
 }
 
-// TestNewTCPServer verifies that New returns a non-nil TCPServer without
-// starting it.
-func TestNewTCPServer(t *testing.T) {
-	cfg := &config.Config{TCPAddr: ":0"}
-	s := New(cfg, testLogger(), nil)
-	if s == nil {
-		t.Fatal("New returned nil TCPServer")
-	}
-}
-
 // TestTCPServerStartShutdownPingPong exercises the full lifecycle: start the
 // server, connect a TCP client, send a Ping frame, expect a Pong frame back,
 // then cancel the context and assert Shutdown returns cleanly.

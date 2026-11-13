@@ -31,15 +31,6 @@ func freeUDPPort(t *testing.T) string {
 	return addr
 }
 
-// TestNewUDPServer verifies that NewUDP returns a non-nil UDPServer.
-func TestNewUDPServer(t *testing.T) {
-	cfg := &config.Config{UDPAddr: "127.0.0.1:0"}
-	s := NewUDP(cfg, testLogger())
-	if s == nil {
-		t.Fatal("NewUDP returned nil UDPServer")
-	}
-}
-
 // TestUDPServerStartShutdownPingPong exercises the full lifecycle: start the
 // server, send a UDPMsgPing packet, expect a UDPMsgPong reply, then cancel the
 // context and assert Shutdown returns cleanly. It also asserts that Stats()

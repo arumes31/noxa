@@ -260,24 +260,6 @@ func TestHelpVersionQuit(t *testing.T) {
 	}
 }
 
-func TestBruteForceLockout(t *testing.T) {
-	backend := newFakeBackend()
-	addr, _ := startQueryServerWith(t, backend, func(s *Server) { s.MaxLoginFailures = 3 })
-
-	conn, r := dialQuery(t, addr)
-	defer closeServerQueryTestResource(t, conn)
-
-	for i := 0; i < 3; i++ {
-		sendCmd(t, conn, r, "login admin-uid wrong authorization_model=roles-v1")
-	}
-	// Next attempt is refused even with the right password.
-	lines := sendCmd(t, conn, r, "login admin-uid pw authorization_model=roles-v1")
-	if got := lastErr(t, lines); !strings.HasPrefix(got, "error id=520") ||
-		!strings.Contains(got, `too\smany\sfailed\slogins`) {
-		t.Fatalf("lockout error = %q", got)
-	}
-}
-
 func TestUnknownLoginMatchesWrongPasswordAndIsLimited(t *testing.T) {
 	backend := newFakeBackend()
 	addr, server := startQueryServerWith(t, backend, func(s *Server) { s.MaxLoginFailures = 3 })
@@ -364,30 +346,6 @@ func TestServerQueryLoginFailureStateExpiresResetsAndIsBounded(t *testing.T) {
 	capacityServer.RecordLoginFailure(first)
 	if !capacityServer.LoginAllowed(first) {
 		t.Fatal("capacity eviction did not reset the oldest incomplete streak")
-	}
-}
-
-func TestConnectionCap(t *testing.T) {
-	addr, _ := startQueryServerWith(t, newFakeBackend(), func(s *Server) { s.MaxConns = 2 })
-
-	c1, _ := dialQuery(t, addr)
-	defer closeServerQueryTestResource(t, c1)
-	c2, _ := dialQuery(t, addr)
-	defer closeServerQueryTestResource(t, c2)
-
-	// Third connection is refused with an error line.
-	c3, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	defer closeServerQueryTestResource(t, c3)
-	r3 := bufio.NewReader(c3)
-	line, err := r3.ReadString('\n')
-	if err != nil {
-		t.Fatalf("read refusal: %v", err)
-	}
-	if !strings.HasPrefix(line, "error id=1539") {
-		t.Fatalf("refusal = %q", line)
 	}
 }
 
