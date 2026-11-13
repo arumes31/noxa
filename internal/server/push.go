@@ -334,27 +334,39 @@ func (s *TCPServer) deliverPush(ctx context.Context, sub store.PushSubscription,
 	}
 	// A notice can wait behind desktop activity or another send. Re-read the
 	// subscription so a later mute, sign-out or privacy change takes effect.
+	// This check lets filtered notices skip the slot queue; prepare repeats it
+	// once the slots are held.
 	current, err := pushes.PushSubscriptionForDevice(ctx, sub.Principal, sub.DeviceID)
 	if err != nil || pushFiltered(current.Filters, n, time.Now()) {
 		return
 	}
 	sub = current
-	payload := pushPayload{Kind: n.Kind, Tag: n.Tag, Video: n.Video, At: time.Now().Unix()}
-	if !sub.HideDetails {
-		payload.From, payload.Place = n.From, n.Place
+	// prepare runs for each attempt after both slots are acquired, so a
+	// mute or HideDetails set while the send waited still applies.
+	prepare := func(ctx context.Context) (webpush.Subscription, webpush.Message, error) {
+		current, err := pushes.PushSubscriptionForDevice(ctx, sub.Principal, sub.DeviceID)
+		if err != nil || pushFiltered(current.Filters, n, time.Now()) {
+			return webpush.Subscription{}, webpush.Message{}, errPushNotSent
+		}
+		sub = current
+		payload := pushPayload{Kind: n.Kind, Tag: n.Tag, Video: n.Video, At: time.Now().Unix()}
+		if !sub.HideDetails {
+			payload.From, payload.Place = n.From, n.Place
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return webpush.Subscription{}, webpush.Message{}, errPushNotSent
+		}
+		msg := webpush.Message{Payload: body, TTL: pushMessageTTL, Urgency: webpush.UrgencyNormal, Topic: pushTopic(sub.Auth, n.Tag)}
+		switch n.Kind {
+		case pushKindCall:
+			msg.TTL, msg.Urgency = pushCallTTL, webpush.UrgencyHigh
+		case pushKindClear:
+			msg.TTL = time.Hour
+		}
+		return webpush.Subscription{Endpoint: sub.Endpoint, P256dh: sub.P256dh, Auth: sub.Auth}, msg, nil
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	msg := webpush.Message{Payload: body, TTL: pushMessageTTL, Urgency: webpush.UrgencyNormal, Topic: pushTopic(sub.Auth, n.Tag)}
-	switch n.Kind {
-	case pushKindCall:
-		msg.TTL, msg.Urgency = pushCallTTL, webpush.UrgencyHigh
-	case pushKindClear:
-		msg.TTL = time.Hour
-	}
-	err = s.sendPushWithRetry(ctx, sub.Principal, webpush.Subscription{Endpoint: sub.Endpoint, P256dh: sub.P256dh, Auth: sub.Auth}, msg)
+	err = s.sendPushWithRetry(ctx, sub.Principal, prepare)
 	recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), pushRecordTimeout)
 	defer cancelRecord()
 	switch {
@@ -637,10 +649,16 @@ var pushRetryDelays = []time.Duration{2 * time.Second, 6 * time.Second}
 // sendPushWithRetry sends once and retries a temporary failure (429, 5xx or
 // a network error) up to len(pushRetryDelays) times, honouring Retry-After.
 // The send slot is held only while a request is in flight. A wait that would
-// pass the context deadline ends the attempts with the last error.
-func (s *TCPServer) sendPushWithRetry(ctx context.Context, principal string, sub webpush.Subscription, msg webpush.Message) error {
+// pass the context deadline ends the attempts with the last error, as does
+// a retry that gets no slot: errPushNotSent means no attempt was made at all.
+func (s *TCPServer) sendPushWithRetry(ctx context.Context, principal string, prepare pushPrepare) error {
+	var last error
 	for attempt := 0; ; attempt++ {
-		err := s.sendPushOnce(ctx, principal, sub, msg)
+		err := s.sendPushOnce(ctx, principal, prepare)
+		if errors.Is(err, errPushNotSent) && last != nil {
+			return last
+		}
+		last = err
 		if err == nil || attempt >= len(pushRetryDelays) || !pushRetryable(err) {
 			return err
 		}
@@ -663,9 +681,13 @@ func (s *TCPServer) sendPushWithRetry(ctx context.Context, principal string, sub
 	}
 }
 
+// pushPrepare builds one attempt's request from the current subscription, or
+// returns errPushNotSent when the notice should no longer be sent.
+type pushPrepare func(ctx context.Context) (webpush.Subscription, webpush.Message, error)
+
 // sendPushOnce takes one of the recipient account's slots, then a global
 // slot, so an account's extra sends wait without holding global slots.
-func (s *TCPServer) sendPushOnce(ctx context.Context, principal string, sub webpush.Subscription, msg webpush.Message) error {
+func (s *TCPServer) sendPushOnce(ctx context.Context, principal string, prepare pushPrepare) error {
 	s.push.mu.Lock()
 	user := s.push.userSem[principal]
 	if user == nil {
@@ -692,6 +714,10 @@ func (s *TCPServer) sendPushOnce(ctx context.Context, principal string, sub webp
 		defer func() { <-s.push.sem }()
 	case <-ctx.Done():
 		return errPushNotSent
+	}
+	sub, msg, err := prepare(ctx)
+	if err != nil {
+		return err
 	}
 	return s.deps.Push.Send(ctx, sub, msg)
 }

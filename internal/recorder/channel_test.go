@@ -75,7 +75,12 @@ func readCaptureManifest(t *testing.T, path string) captureManifest {
 // waitProcesses waits until the recorder owns exactly n source processes.
 func waitProcesses(t *testing.T, c *ChannelRecorder, n int) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	waitProcessesWithin(t, c, n, 2*time.Second)
+}
+
+func waitProcessesWithin(t *testing.T, c *ChannelRecorder, n int, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
 	for c.processes.SessionCount() != n && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
@@ -132,9 +137,9 @@ func TestChannelRecordingSkipsSourcesAtCapacity(t *testing.T) {
 }
 
 func TestChannelRecordingKeepsIdleAudioSources(t *testing.T) {
-	previous := captureIdleTimeout
-	captureIdleTimeout = 150 * time.Millisecond
-	t.Cleanup(func() { captureIdleTimeout = previous })
+	previous, previousAudio := captureIdleTimeout, captureAudioIdleTimeout
+	captureIdleTimeout, captureAudioIdleTimeout = 150*time.Millisecond, 3*time.Second
+	t.Cleanup(func() { captureIdleTimeout, captureAudioIdleTimeout = previous, previousAudio })
 	c := NewChannelRecorder(testConfig(privateTempDir(t)), testLogger())
 	c.processes.Exec = autoRecordingProcess
 	session, err := c.Start(context.Background(), 1, &fakeTapRouter{})
@@ -154,11 +159,16 @@ func TestChannelRecordingKeepsIdleAudioSources(t *testing.T) {
 	if got := c.processes.SessionCount(); got != 1 {
 		t.Fatalf("source processes after idle = %d, want the audio one", got)
 	}
+	// A source that left is released after the long audio timeout, while the
+	// recording keeps running.
+	waitProcessesWithin(t, c, 0, 3*captureAudioIdleTimeout)
+	select {
+	case <-session.Done():
+		t.Fatalf("audio idle ended the recording: %v", capture.result)
+	default:
+	}
 	if err := c.Stop(1); err != nil {
 		t.Fatal(err)
-	}
-	if c.processes.SessionCount() != 0 {
-		t.Fatal("idle audio source not cleaned up on stop")
 	}
 	manifest := readCaptureManifest(t, session.FilePath)
 	audio := 0

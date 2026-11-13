@@ -26,6 +26,12 @@ const captureQueueBytes = 2 * 1024 * 1024
 // next keyframe starts a new segment. Tests shorten it.
 var captureIdleTimeout = 10 * time.Second
 
+// captureAudioIdleTimeout ends a silent audio source. A muted microphone sends
+// nothing, and the tap only sees packets (no departure signal reaches the
+// recorder), so this is long enough to span normal mute pauses yet still frees
+// the process and capacity slot of a source that left. Tests shorten it.
+var captureAudioIdleTimeout = 10 * time.Minute
+
 // ChannelRecorder coordinates separate participant/slot files. The underlying
 // Recorder retains ownership of every subprocess through complete cleanup;
 // its global MaxConcurrent limit applies to processes, not just channels.
@@ -395,9 +401,13 @@ func (s *channelCapture) run(stopStartupCancellation func() bool) {
 					return
 				default:
 				}
-				// Audio is silent while muted; a new process per unmute would
-				// add segments until the 1024 cap ends the recording.
-				if child.video && now.Sub(child.lastSeen) > captureIdleTimeout {
+				// Audio is silent while muted; a short timeout would start a new
+				// process per unmute until the 1024 segment cap ends the recording.
+				idle := captureIdleTimeout
+				if !child.video {
+					idle = captureAudioIdleTimeout
+				}
+				if now.Sub(child.lastSeen) > idle {
 					s.result = s.finishChild(child)
 					delete(s.children, source)
 					if s.result != nil {

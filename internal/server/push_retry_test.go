@@ -53,6 +53,13 @@ func (r *pushRecorder) IncPushDelivery(result string) {
 	r.results = append(r.results, result)
 }
 
+// fixedPush prepares the same request for every attempt.
+func fixedPush(sub webpush.Subscription) pushPrepare {
+	return func(context.Context) (webpush.Subscription, webpush.Message, error) {
+		return sub, webpush.Message{}, nil
+	}
+}
+
 func retryServer(sender *scriptedSender, rec *pushRecorder) *TCPServer {
 	return New(&config.Config{}, zap.NewNop(), &Deps{Push: sender, Metrics: rec})
 }
@@ -69,7 +76,7 @@ func TestSendPushRetriesTemporaryFailures(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		start := time.Now()
-		if err := s.sendPushWithRetry(ctx, "u", webpush.Subscription{}, webpush.Message{}); err != nil {
+		if err := s.sendPushWithRetry(ctx, "u", fixedPush(webpush.Subscription{})); err != nil {
 			t.Fatalf("sendPushWithRetry = %v", err)
 		}
 		if len(sender.calls) != 3 {
@@ -90,7 +97,7 @@ func TestSendPushDoesNotRetryPermanentFailures(t *testing.T) {
 		for _, failure := range []error{webpush.ErrGone, &webpush.StatusError{Status: 400}, errors.New("encrypt: bad key")} {
 			sender := &scriptedSender{results: []error{failure}}
 			s := retryServer(sender, &pushRecorder{})
-			if err := s.sendPushWithRetry(context.Background(), "u", webpush.Subscription{}, webpush.Message{}); !errors.Is(err, failure) {
+			if err := s.sendPushWithRetry(context.Background(), "u", fixedPush(webpush.Subscription{})); !errors.Is(err, failure) {
 				t.Fatalf("error = %v, want %v", err, failure)
 			}
 			if len(sender.calls) != 1 {
@@ -108,7 +115,7 @@ func TestSendPushStopsWhenTheWaitExceedsTheDeadline(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		start := time.Now()
-		if err := s.sendPushWithRetry(ctx, "u", webpush.Subscription{}, webpush.Message{}); !errors.Is(err, long) {
+		if err := s.sendPushWithRetry(ctx, "u", fixedPush(webpush.Subscription{})); !errors.Is(err, long) {
 			t.Fatalf("error = %v", err)
 		}
 		if time.Since(start) != 0 || len(sender.calls) != 1 {
@@ -184,7 +191,7 @@ func TestPushLimitsSendsInFlightPerUser(t *testing.T) {
 		var wg sync.WaitGroup
 		send := func(principal string) {
 			wg.Go(func() {
-				_ = s.sendPushOnce(context.Background(), principal, webpush.Subscription{Endpoint: principal}, webpush.Message{})
+				_ = s.sendPushOnce(context.Background(), principal, fixedPush(webpush.Subscription{Endpoint: principal}))
 			})
 		}
 		for range pushPerUser + 1 {
@@ -202,6 +209,64 @@ func TestPushLimitsSendsInFlightPerUser(t *testing.T) {
 		}
 		if g.started["busy"] != pushPerUser+1 || len(s.push.userSem) != 0 {
 			t.Fatalf("busy sends = %d, user slots left = %d", g.started["busy"], len(s.push.userSem))
+		}
+	})
+}
+
+func TestPushRetryWithoutSlotKeepsTheDeliveryError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		unavailable := &webpush.StatusError{Status: 503}
+		sender := &scriptedSender{results: []error{unavailable}}
+		s := retryServer(sender, &pushRecorder{})
+		fill := sync.OnceFunc(func() {
+			// Other sends take every global slot during the retry backoff.
+			go func() {
+				for range pushConcurrency {
+					s.push.sem <- struct{}{}
+				}
+			}()
+		})
+		prepare := func(context.Context) (webpush.Subscription, webpush.Message, error) {
+			fill()
+			return webpush.Subscription{}, webpush.Message{}, nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.sendPushWithRetry(ctx, "u", prepare); !errors.Is(err, unavailable) {
+			t.Fatalf("error = %v, want the 503 from the attempt that was made", err)
+		}
+		if len(sender.calls) != 1 {
+			t.Fatalf("attempts = %d, want 1", len(sender.calls))
+		}
+	})
+}
+
+func TestPushRebuildsPayloadAfterSlotWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pushes := &fakePushes{fakeDevices: &fakeDevices{}}
+		sub := store.PushSubscription{DeviceID: "d1", Principal: "u", Endpoint: "https://push.example/1", Auth: []byte("auth")}
+		_ = pushes.SavePushSubscription(t.Context(), sub)
+		sender := &fakeSender{sent: make(chan sentPush, 1), gone: map[string]bool{}}
+		s := New(&config.Config{}, zap.NewNop(), &Deps{Push: sender, Devices: pushes})
+		for range pushConcurrency {
+			s.push.sem <- struct{}{}
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			s.deliverPush(context.Background(), sub, pushNotice{Kind: pushKindDM, Tag: "dm:ivy", From: "Ivy"})
+		}()
+		synctest.Wait() // queued behind the busy slots
+		if err := pushes.SetPushPreferences(t.Context(), "u", "d1", true, false); err != nil {
+			t.Fatal(err)
+		}
+		for range pushConcurrency {
+			<-s.push.sem
+		}
+		<-done
+		got := <-sender.sent
+		if got.payload.From != "" || got.payload.Kind != pushKindDM {
+			t.Fatalf("payload = %+v; HideDetails set while queued must apply", got.payload)
 		}
 	})
 }
