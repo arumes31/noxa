@@ -1076,6 +1076,8 @@ export function createVideoPublication({ policy }) {
             try {
                 await queuePeerNegotiation(pc, async () => {
                     if (!alive()) return;
+                    // The captured source keeps its orientation across every quality update.
+                    if (capturePreferences.get(track)?.portrait) next.portrait = true;
                     if (bitrateOnly) {
                         if (!await applyScreenBitrate(track, next, alive) || !alive()) return;
                         for (const key of Object.keys(profile)) delete profile[key];
@@ -1084,7 +1086,6 @@ export function createVideoPublication({ policy }) {
                         return;
                     }
                     const previous = track.getConstraints(), hint = track.contentHint, preferred = capturePreferences.get(track);
-                    if (preferred?.portrait) next.portrait = true; // the captured source keeps its orientation
                     try {
                         await track.applyConstraints({ ...previous, ...screenShareConstraints(next, state.mediaLimits) });
                         if (!alive()) return;
