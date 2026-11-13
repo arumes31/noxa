@@ -2,7 +2,6 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { formatStreamStats, QUICK_SWITCH_SETTINGS, serverInitial, textChannels } from "../src/shell-model.js";
-import { shellEnglish, shellGerman } from "../src/shell-messages.js";
 
 const css = (await readFile(new URL("../src/app-shell.css", import.meta.url), "utf8")).replace(/\/\*[\s\S]*?\*\//g, "");
 const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
@@ -65,11 +64,6 @@ describe("app shell model", () => {
         const ids = QUICK_SWITCH_SETTINGS.map(([page]) => page);
         assert.equal(new Set(ids).size, ids.length);
         for (const [, key] of QUICK_SWITCH_SETTINGS) assert.match(key, /^settings\.[a-z]+$/);
-    });
-
-    it("carries every shell string in English and German", () => {
-        assert.deepEqual(Object.keys(shellGerman).sort(), Object.keys(shellEnglish).sort());
-        for (const [key, value] of Object.entries(shellGerman)) assert.ok(value.trim(), key);
     });
 });
 

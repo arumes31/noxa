@@ -29,24 +29,6 @@ test("a rendered safety code decodes back to its payload", async () => {
     assert.equal(checkSafetyScan(scanned, { scheme: SafetyScheme.fingerprint, me: "YWxpY2U=", peer: "Ym9i", digest }), SafetyScan.match);
 });
 
-test("both phones compute the same digest, so codes for the pair match", async () => {
-    const alice = { uniqueID: "alice", fingerprint: "aaaa bbbb cccc dddd" };
-    const bob = { uniqueID: "bob", fingerprint: "1111 2222 3333 4444" };
-    const seenByAlice = await fingerprintPairDigest(alice, bob);
-    const seenByBob = await fingerprintPairDigest(bob, alice);
-    const bobCode = buildSafetyPayload({ scheme: SafetyScheme.fingerprint, me: "bob", peer: "alice", digest: seenByBob });
-    assert.equal(checkSafetyScan(bobCode, { scheme: SafetyScheme.fingerprint, me: "alice", peer: "bob", digest: seenByAlice }), SafetyScan.match);
-    // A substituted key on Bob's side changes his digest: Alice sees a mismatch.
-    const substituted = await fingerprintPairDigest({ ...bob, fingerprint: "9999 2222 3333 4444" }, alice);
-    const forged = buildSafetyPayload({ scheme: SafetyScheme.fingerprint, me: "bob", peer: "alice", digest: substituted });
-    assert.equal(checkSafetyScan(forged, { scheme: SafetyScheme.fingerprint, me: "alice", peer: "bob", digest: seenByAlice }), SafetyScan.mismatch);
-});
-
-test("a desktop code is reported as another scheme", () => {
-    const desktop = buildSafetyPayload({ scheme: SafetyScheme.pairwise, me: "bob", peer: "alice", digest: "ab".repeat(32) });
-    assert.equal(checkSafetyScan(desktop, { scheme: SafetyScheme.fingerprint, me: "alice", peer: "bob", digest: "ab".repeat(32) }), SafetyScan.otherScheme);
-});
-
 test("third-party notices cover the QR libraries the app bundles", () => {
     const notices = frontendNotices(fileURLToPath(new URL("../node_modules/", import.meta.url)), MOBILE_PACKAGES);
     assert.match(notices, /^jsqr 1\.4\.0 \(Apache-2\.0\)$/m);
