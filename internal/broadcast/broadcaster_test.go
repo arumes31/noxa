@@ -438,7 +438,7 @@ func watchHandlers(b *Broadcaster) (overflows, resyncs chan string) {
 	overflows, resyncs = make(chan string, 4), make(chan string, 4)
 	b.SetOverflowHandler(func(id string) { overflows <- id })
 	// Events named "chat" stand for those a resync cannot replace.
-	b.SetResyncHandler(func(id string) { resyncs <- id }, func(payload []byte) bool {
+	b.SetResyncHandler(func(id string) { resyncs <- id }, func(_ string, payload []byte) bool {
 		return !strings.Contains(string(payload), `"chat"`)
 	})
 	return overflows, resyncs
@@ -611,7 +611,7 @@ func TestWatchEndsWhenQueueUnregistered(t *testing.T) {
 	shortOverflowGrace(t, 20*time.Millisecond)
 	b, _ := newTestBroadcaster(t)
 	resyncs := make(chan string, 4)
-	b.SetResyncHandler(func(id string) { resyncs <- id }, func([]byte) bool { return true })
+	b.SetResyncHandler(func(id string) { resyncs <- id }, func(string, []byte) bool { return true })
 	before := runtime.NumGoroutine()
 	if _, err := b.Register("gone"); err != nil {
 		t.Fatal(err)

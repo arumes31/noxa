@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -405,5 +406,48 @@ func TestChatAttachmentRejectsTruncatedContentAddressedCiphertext(t *testing.T) 
 	// Names that are not content-derived predate the scheme and stay readable.
 	if got, err := a.chatAttachmentBytes(7, "legacy-name.vcx", keyB64); err != nil || !bytes.Equal(got, plain) {
 		t.Fatalf("non-content-derived name = %d bytes, %v", len(got), err)
+	}
+}
+
+// Inline images download together; the server allows each user 8 transfers.
+func TestChatAttachmentDownloadsRunFourAtATime(t *testing.T) {
+	a := appWithCM(newConnManager(context.Background()))
+	entered, release := make(chan struct{}, 8), make(chan struct{})
+	a.chatAttachmentFetch = func(*connManager, int64, string, string) ([]byte, error) {
+		entered <- struct{}{}
+		<-release
+		return []byte("png"), nil
+	}
+	done := make(chan error, 7)
+	for range 6 {
+		go func() {
+			_, err := a.chatAttachmentBytesAt(nil, attachmentLocation{channelID: 1}, "photo.png", "")
+			done <- err
+		}()
+	}
+	for range 4 {
+		<-entered
+	}
+	select {
+	case <-entered:
+		t.Fatal("a fifth attachment download started while four were running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	// Another server's connection has its own slots.
+	other := newConnManager(context.Background())
+	go func() {
+		_, err := a.chatAttachmentBytesAt(other, attachmentLocation{channelID: 1}, "photo.png", "")
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a busy server blocked another server's attachment download")
+	}
+	close(release)
+	for range 7 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
 	}
 }

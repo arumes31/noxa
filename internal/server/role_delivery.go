@@ -118,7 +118,7 @@ func (s *TCPServer) writeRoleBroadcastInContext(ctx context.Context, client *Cli
 	// resync queued behind it is built once it is written, after this change.
 	// Clients do not refetch anything else on a snapshot: those reconnect.
 	if errors.Is(err, context.DeadlineExceeded) {
-		if snapshotRecovers(payload) {
+		if snapshotRecovers(client.ID, payload) {
 			s.requestResync(client.ID)
 		} else {
 			s.closeOverflowedClient(client.ID)
@@ -147,7 +147,7 @@ func (s *TCPServer) writeMetadataFrame(ctx context.Context, client *Client, fram
 // delivery: membership and speaking state live in the snapshot, and typing
 // is ephemeral. Clients do not refetch chat, DMs or other events when a
 // snapshot arrives, so a client that missed those must reconnect.
-func snapshotRecovers(payload []byte) bool {
+func snapshotRecovers(recipientID string, payload []byte) bool {
 	var event struct {
 		Type string          `json:"type"`
 		Data json.RawMessage `json:"data"`
@@ -165,8 +165,10 @@ func snapshotRecovers(payload []byte) bool {
 	case eventSpeakingChanged, eventTyping, eventConversationTyping:
 		return true
 	case eventKicked:
-		// The kicked target gets the raw event, its only "you were removed" notice.
-		return false
+		// The kicked target gets the raw event, its only "you were removed"
+		// notice; bystanders are sent a full snapshot for it anyway.
+		var kick kickEvent
+		return json.Unmarshal(event.Data, &kick) == nil && kick.ClientID != recipientID
 	}
 	return roleSnapshotEvent(event.Type)
 }

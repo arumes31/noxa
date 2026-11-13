@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { sha256 } from "@noble/hashes/sha2.js";
 
 import { fromBase64, toBase64 } from "../src/core/crypto.js";
-import { fileToken, openAttachment, parseFileTokens, sealAttachment, storageName } from "../src/core/files.js";
+import { downloadBlob, fileToken, openAttachment, parseFileTokens, sealAttachment, storageName } from "../src/core/files.js";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/interop.json", import.meta.url)));
 
@@ -30,4 +30,24 @@ test("attachments seal, name and round-trip like the desktop", async () => {
     // Tampering is detected.
     blob[blob.length - 1] ^= 1;
     await assert.rejects(openAttachment(blob, master));
+});
+
+test("downloads run four at a time; a queued download aborts without a slot", async () => {
+    const pending = [];
+    const conn = { request: () => new Promise((_, reject) => pending.push(reject)) };
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+    const download = signal => downloadBlob(conn, 7, "a.vcx", 1, "ws://unused", { signal });
+    const running = [0, 1, 2, 3, 4].map(() => download().catch(error => error));
+    const queued = new AbortController();
+    const canceled = download(queued.signal);
+    await settle();
+    assert.equal(pending.length, 4);
+    queued.abort();
+    await assert.rejects(canceled, { name: "AbortError" });
+    // The first failure frees its slot for the fifth download, not the canceled one.
+    pending[0](new Error("offline"));
+    await settle();
+    assert.equal(pending.length, 5);
+    for (const reject of pending.slice(1)) reject(new Error("offline"));
+    await Promise.all(running);
 });

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -56,7 +57,10 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 		writeStatus(conn, false, err.Error())
 		return
 	}
-	defer s.deactivateTransfer(active)
+	// Release the slot before the final status: a client that opens its next
+	// transfer on OK must not be counted against this one (per-principal cap).
+	release := sync.OnceFunc(func() { s.deactivateTransfer(active) })
+	defer release()
 	s.releasePreauth(conn)
 	connDeadline := time.Now().Add(connTimeout)
 	_ = conn.SetDeadline(connDeadline)
@@ -66,6 +70,7 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 	} else {
 		err = s.sendDownload(ctx, conn, tr, init.Offset)
 	}
+	release()
 	if s.OnTransferComplete != nil {
 		result := "ok"
 		if err != nil {

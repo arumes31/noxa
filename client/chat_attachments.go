@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -165,6 +166,16 @@ const maxInlineAttachmentBase64Bytes = 8 << 20
 
 var errChatAttachmentPreviewTooLarge = errors.New("attachment is too large to preview")
 
+// Each attachment download holds one of its server's 8 per-user transfer
+// slots (shared with uploads), and a chat fetches every inline image at once.
+// The limit is per server connection: one slow server must not stall others.
+var chatAttachmentSlots sync.Map // *connManager -> chan struct{}
+
+func attachmentSlots(cm *connManager) chan struct{} {
+	slots, _ := chatAttachmentSlots.LoadOrStore(cm, make(chan struct{}, 4))
+	return slots.(chan struct{})
+}
+
 // chatAttachmentBytesForCM fetches and opens one attachment with the captured
 // manager. A native save dialog may suspend the UI; retaining this manager
 // prevents a concurrent tab switch from redirecting the later download to a
@@ -200,6 +211,8 @@ func (a *App) chatAttachmentBytesAt(cm *connManager, location attachmentLocation
 		// legacy plaintext reference is never resolved inside a group folder.
 		return nil, errors.New("invalid attachment key")
 	}
+	slots := attachmentSlots(cm)
+	slots <- struct{}{}
 	if a.chatAttachmentFetch != nil {
 		blob, err = a.chatAttachmentFetch(cm, channelID, location.folder, storage)
 	} else {
@@ -209,6 +222,7 @@ func (a *App) chatAttachmentBytesAt(cm *connManager, location attachmentLocation
 		}
 		blob, err = a.ftGetBytesInFolderWithLimit(cm, channelID, location.folder, storage, int64(maxWireBytes))
 	}
+	<-slots
 	if err != nil {
 		return nil, err
 	}

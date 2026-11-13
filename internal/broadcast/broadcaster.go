@@ -62,7 +62,7 @@ type Broadcaster struct {
 	// when a client caught up whose dropped events recovers all accepted.
 	overflow func(clientID string)
 	resync   func(clientID string)
-	recovers func(payload []byte) bool
+	recovers func(clientID string, payload []byte) bool
 
 	delivered atomic.Uint64
 	dropped   atomic.Uint64
@@ -254,7 +254,7 @@ func (b *Broadcaster) SetOverflowHandler(handler func(clientID string)) {
 // payload; a client that dropped anything else is given to the overflow
 // handler instead. The handler runs on its own goroutine, outside the
 // broadcaster's locks; recovers runs under them and must be quick.
-func (b *Broadcaster) SetResyncHandler(handler func(clientID string), recovers func(payload []byte) bool) {
+func (b *Broadcaster) SetResyncHandler(handler func(clientID string), recovers func(clientID string, payload []byte) bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.resync, b.recovers = handler, recovers
@@ -368,7 +368,7 @@ func (b *Broadcaster) observeBacklogs(depths []int) {
 func (b *Broadcaster) noteDrop(queue *clientQueue, clientID string, payload []byte) {
 	b.dropped.Add(1)
 	clientDrops := queue.dropped.Add(1)
-	if !queue.lossy && (b.recovers == nil || !b.recovers(payload)) {
+	if !queue.lossy && (b.recovers == nil || !b.recovers(clientID, payload)) {
 		queue.lossy = true
 	}
 	if !queue.watching && (b.overflow != nil || b.resync != nil) {

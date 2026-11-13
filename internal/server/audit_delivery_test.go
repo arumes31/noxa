@@ -110,17 +110,18 @@ func TestStalledRecipientDoesNotStallMetadataDelivery(t *testing.T) {
 // speaking and typing deliveries may be replaced by a resync.
 func TestSnapshotRecoversOnlyTreeAndPresence(t *testing.T) {
 	for payload, want := range map[string]bool{
-		`{"type":"user_joined","data":{}}`:      true,
-		`{"type":"speaking_changed","data":{}}`: true,
-		roleResyncPayload:                       true,
-		`{"type":"chat","data":{}}`:             false,
-		`{"type":"poke","data":{}}`:             false,
-		`{"type":"kicked","data":{}}`:           false,
+		`{"type":"user_joined","data":{}}`:                   true,
+		`{"type":"speaking_changed","data":{}}`:              true,
+		roleResyncPayload:                                    true,
+		`{"type":"chat","data":{}}`:                          false,
+		`{"type":"poke","data":{}}`:                          false,
+		`{"type":"kicked","data":{"client_id":"target"}}`:    false,
+		`{"type":"kicked","data":{"client_id":"bystander"}}`: true,
 		`{"type":"_role_channel_delivery","data":{"channel_id":1,"payload":{"type":"typing"}}}`: true,
 		`{"type":"_role_channel_delivery","data":{"channel_id":1,"payload":{"type":"chat"}}}`:   false,
 		`not json`: false,
 	} {
-		if got := snapshotRecovers([]byte(payload)); got != want {
+		if got := snapshotRecovers("target", []byte(payload)); got != want {
 			t.Errorf("snapshotRecovers(%s) = %v, want %v", payload, got, want)
 		}
 	}
