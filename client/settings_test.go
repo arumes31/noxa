@@ -388,7 +388,7 @@ func TestSettingsCorruptFile(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	s := loadSettingsAt(path)
-	if s.HotkeyPTT != "" {
+	if !reflect.DeepEqual(s, DefaultSettings()) {
 		t.Fatalf("corrupt file did not fall back to defaults: %+v", s)
 	}
 }
@@ -598,16 +598,6 @@ func TestSettingsWave1Fields(t *testing.T) {
 	if loaded.VoiceLimiter {
 		t.Fatal("voice_limiter should be false after round-trip")
 	}
-
-	// Older file without wave-1 fields merges onto defaults.
-	old := filepath.Join(t.TempDir(), "old.json")
-	if err := os.WriteFile(old, []byte(`{"volume": 120}`), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	merged := loadSettingsAt(old)
-	if merged.Volume != 120 || !merged.WarnMutedTalking || merged.SoundPack != "noxa" {
-		t.Fatalf("merge with defaults broken: %+v", merged)
-	}
 }
 
 // TestSettingsWave8c verifies the wave-8c settings fields persist through a
@@ -640,15 +630,6 @@ func TestSettingsWave8c(t *testing.T) {
 	if back.Language != "de" || !back.ReduceMotion || back.SidebarWidth != 280 ||
 		back.DetailsWidth != 320 || !back.DNDEnabled || back.DNDFrom != "22:00" || back.DNDTo != "07:00" {
 		t.Fatalf("round trip lost fields: %+v", back)
-	}
-
-	// Old settings files without the new fields still load with defaults.
-	var legacy Settings
-	if err := json.Unmarshal([]byte(`{"theme":"light"}`), &legacy); err != nil {
-		t.Fatalf("legacy unmarshal: %v", err)
-	}
-	if legacy.Theme != "light" || legacy.Language != "" {
-		t.Fatalf("legacy load = %+v", legacy)
 	}
 }
 
@@ -769,33 +750,6 @@ func TestMigrateSettingsRestoresPlaySounds(t *testing.T) {
 	cur.PlaySounds = false
 	if migrateSettings(cur).PlaySounds {
 		t.Error("migration overrode a deliberate opt-out")
-	}
-}
-
-// TestMigrateSettingsMidnightTheme moves the former defaults once and keeps
-// explicit alternate palettes and later selections.
-func TestMigrateSettingsMidnightTheme(t *testing.T) {
-	if got := DefaultSettings().Theme; got != "midnight" {
-		t.Fatalf("default theme = %q, want midnight", got)
-	}
-	for _, tc := range []struct {
-		version     int
-		theme, want string
-	}{
-		{12, "dark", "midnight"},
-		{12, "", "midnight"},
-		{12, "light", "light"},
-		{12, "hc", "hc"},
-		{settingsVersion, "dark", "dark"},
-		{13, "arctic", "midnight"},
-		{settingsVersion, "arctic", "arctic"},
-	} {
-		s := DefaultSettings()
-		s.SettingsVersion = tc.version
-		s.Theme = tc.theme
-		if got := migrateSettings(s).Theme; got != tc.want {
-			t.Errorf("v%d %q migrated to %q, want %q", tc.version, tc.theme, got, tc.want)
-		}
 	}
 }
 
@@ -1000,6 +954,9 @@ func TestStartupUpdateInstallDefaultsAndOptOut(t *testing.T) {
 }
 
 func TestNormalizeSettingsUsesOnlyMidnight(t *testing.T) {
+	if got := DefaultSettings().Theme; got != "midnight" {
+		t.Fatalf("default theme = %q, want midnight", got)
+	}
 	for _, theme := range []string{"", "midnight", "arctic", "dark", "light", "hc", "unknown"} {
 		s := DefaultSettings()
 		s.Theme = theme

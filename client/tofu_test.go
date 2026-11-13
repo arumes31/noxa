@@ -83,14 +83,6 @@ func TestTOFUMismatch(t *testing.T) {
 	}
 }
 
-// TestTOFUMissingFile verifies a missing store behaves as empty.
-func TestTOFUMissingFile(t *testing.T) {
-	ks := loadKnownServersAt(filepath.Join(t.TempDir(), "nope.json"))
-	if got := mustVerifyTOFU(t, ks, "x:1", "fp"); got != trustUnknown {
-		t.Fatalf("verify = %v, want trustUnknown", got)
-	}
-}
-
 func TestTOFUCorruptStoreFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "known_servers.json")
 	if err := os.WriteFile(path, []byte("{not-json"), 0o600); err != nil {

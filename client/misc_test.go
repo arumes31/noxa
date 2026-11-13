@@ -41,26 +41,36 @@ func TestConfigDirReturnsUserConfigFailure(t *testing.T) {
 	}
 }
 
+// The second case checks record separators and escape sequences cannot forge
+// a second log record.
 func TestLogChatWritesTimestampedDailyLog(t *testing.T) {
-	closeDailyLogs()
 	t.Cleanup(closeDailyLogs)
-	originalDir, originalNow := miscUserConfigDir, chatLogNow
-	base := t.TempDir()
-	miscUserConfigDir = func() (string, error) { return base, nil }
-	chatLogNow = func() time.Time { return time.Date(2026, time.August, 22, 12, 34, 56, 0, time.UTC) }
-	t.Cleanup(func() {
-		miscUserConfigDir = originalDir
-		chatLogNow = originalNow
-	})
+	for _, tc := range []struct{ line, want string }{
+		{"hello from test", "[2026-08-22 12:34:56] hello from test\n"},
+		{
+			"[channel] mallory: hi\r\n[2026-08-22 12:34:57] [channel] alice: forged\\n\x1b[2J\u2028",
+			`[2026-08-22 12:34:56] [channel] mallory: hi\r\n[2026-08-22 12:34:57] [channel] alice: forged\\n\u001b[2J\u2028` + "\n",
+		},
+	} {
+		closeDailyLogs()
+		originalDir, originalNow := miscUserConfigDir, chatLogNow
+		base := t.TempDir()
+		miscUserConfigDir = func() (string, error) { return base, nil }
+		chatLogNow = func() time.Time { return time.Date(2026, time.August, 22, 12, 34, 56, 0, time.UTC) }
+		t.Cleanup(func() {
+			miscUserConfigDir = originalDir
+			chatLogNow = originalNow
+		})
 
-	(&App{}).LogChat("hello from test")
-	closeDailyLogs()
-	raw, err := os.ReadFile(filepath.Join(base, "noxa", "chat.log"))
-	if err != nil {
-		t.Fatalf("read chat log: %v", err)
-	}
-	if got, want := string(raw), "[2026-08-22 12:34:56] hello from test\n"; got != want {
-		t.Fatalf("chat log = %q, want %q", got, want)
+		(&App{}).LogChat(tc.line)
+		closeDailyLogs()
+		raw, err := os.ReadFile(filepath.Join(base, "noxa", "chat.log"))
+		if err != nil {
+			t.Fatalf("read chat log: %v", err)
+		}
+		if got := string(raw); got != tc.want {
+			t.Fatalf("chat log = %q, want %q", got, tc.want)
+		}
 	}
 }
 
@@ -70,30 +80,6 @@ func TestLogChatIgnoresConfigDirectoryFailure(t *testing.T) {
 	t.Cleanup(func() { miscUserConfigDir = original })
 
 	(&App{}).LogChat("must not reach the filesystem")
-}
-
-func TestLogChatEscapesRecordSeparators(t *testing.T) {
-	closeDailyLogs()
-	t.Cleanup(closeDailyLogs)
-	originalDir, originalNow := miscUserConfigDir, chatLogNow
-	base := t.TempDir()
-	miscUserConfigDir = func() (string, error) { return base, nil }
-	chatLogNow = func() time.Time { return time.Date(2026, time.August, 22, 12, 34, 56, 0, time.UTC) }
-	t.Cleanup(func() {
-		miscUserConfigDir = originalDir
-		chatLogNow = originalNow
-	})
-
-	(&App{}).LogChat("[channel] mallory: hi\r\n[2026-08-22 12:34:57] [channel] alice: forged\\n\x1b[2J\u2028")
-	closeDailyLogs()
-	raw, err := os.ReadFile(filepath.Join(base, "noxa", "chat.log"))
-	if err != nil {
-		t.Fatalf("read chat log: %v", err)
-	}
-	want := `[2026-08-22 12:34:56] [channel] mallory: hi\r\n[2026-08-22 12:34:57] [channel] alice: forged\\n\u001b[2J\u2028` + "\n"
-	if got := string(raw); got != want {
-		t.Fatalf("chat log = %q, want %q", got, want)
-	}
 }
 
 func TestClampLogLine(t *testing.T) {
