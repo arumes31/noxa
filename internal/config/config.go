@@ -261,6 +261,8 @@ type RecordingConfig struct {
 	AudioArgs []string `mapstructure:"audio_args"`
 	// MaxConcurrent bounds starting plus active ffmpeg subprocesses.
 	MaxConcurrent int `mapstructure:"max_concurrent"`
+	// MaxSeconds caps one recording's duration (ffmpeg -t). 0 = unlimited.
+	MaxSeconds int `mapstructure:"max_seconds"`
 	// WindowsACLReady acknowledges that Dir was provisioned with a restricted,
 	// inheritable NTFS DACL; chmod alone cannot enforce it on Windows.
 	WindowsACLReady bool `mapstructure:"windows_acl_ready"`
@@ -447,6 +449,7 @@ func newConfigViper() *viper.Viper {
 	v.SetDefault("recording.video_args", []string{"-c:v", "copy"})
 	v.SetDefault("recording.audio_args", []string{"-c:a", "copy"})
 	v.SetDefault("recording.max_concurrent", 4)
+	v.SetDefault("recording.max_seconds", 14400)
 	v.SetDefault("recording.windows_acl_ready", false)
 
 	setWebDefaults(v)
@@ -862,6 +865,9 @@ func (c *Config) Validate() error {
 	case "webm", "mp4":
 	default:
 		errs = append(errs, fmt.Errorf("recording.format %q must be webm or mp4", c.Recording.Format))
+	}
+	if c.Recording.MaxSeconds < 0 {
+		errs = append(errs, fmt.Errorf("recording.max_seconds %d must not be negative", c.Recording.MaxSeconds))
 	}
 	if c.Recording.Enabled {
 		if strings.TrimSpace(c.Recording.Dir) == "" {

@@ -72,11 +72,12 @@ func TestRecorderConfigWiring(t *testing.T) {
 		VideoArgs:       []string{"-c:v", "copy"},
 		AudioArgs:       []string{"-c:a", "aac"},
 		MaxConcurrent:   9,
+		MaxSeconds:      60,
 		WindowsACLReady: true,
 	}
 	got := recorderConfig(input)
 	if !got.Enabled || got.Dir != input.Dir || got.FFmpegPath != input.FFmpegPath ||
-		got.Format != input.Format || got.MaxConcurrent != input.MaxConcurrent ||
+		got.Format != input.Format || got.MaxConcurrent != input.MaxConcurrent || got.MaxSeconds != input.MaxSeconds ||
 		got.WindowsACLReady != input.WindowsACLReady ||
 		!reflect.DeepEqual(got.VideoArgs, input.VideoArgs) || !reflect.DeepEqual(got.AudioArgs, input.AudioArgs) {
 		t.Fatalf("recorderConfig() = %+v, want all application recording fields", got)

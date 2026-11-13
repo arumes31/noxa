@@ -22,6 +22,29 @@ func TestLinkPreviewRequiresAuthAndRejectsLocalTargets(t *testing.T) {
 		t.Fatalf("unsafe request: %+v", got)
 	}
 }
+func TestLinkPreviewOneInFlightPerUser(t *testing.T) {
+	var srv *TCPServer
+	env, _ := privateCallsTestEnv(t, func(s *TCPServer) { srv = s })
+	defer env.stop()
+	client, _ := dialAuthed(t, env.addr, "user-uid")
+	defer func() { _ = client.Close() }()
+	srv.previewInFlight.Store("user-uid", struct{}{}) // a fetch of this user is running
+	send(t, client, netproto.MsgLinkPreviewRequest, netproto.LinkPreviewRequest{Provider: "web", Resource: "https://127.0.0.1/"})
+	if got := readError(t, client); got.Code != errCodeUnavailable || got.Message != "link preview busy" {
+		t.Fatalf("second concurrent preview: %+v", got)
+	}
+	other, _ := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = other.Close() }()
+	send(t, other, netproto.MsgLinkPreviewRequest, netproto.LinkPreviewRequest{Provider: "web", Resource: "https://127.0.0.1/"})
+	if got := readError(t, other); got.Message == "link preview busy" {
+		t.Fatalf("other user blocked: %+v", got)
+	}
+	srv.previewInFlight.Delete("user-uid")
+	send(t, client, netproto.MsgLinkPreviewRequest, netproto.LinkPreviewRequest{Provider: "web", Resource: "https://127.0.0.1/"})
+	if got := readError(t, client); got.Message == "link preview busy" {
+		t.Fatalf("finished preview still blocks: %+v", got)
+	}
+}
 func TestLinkPreviewHasIndependentRateBudget(t *testing.T) {
 	var budget sessionRequestBudget
 	now := time.Now()

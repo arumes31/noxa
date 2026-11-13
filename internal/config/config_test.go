@@ -32,6 +32,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("NOXA_VIDEO_MAX_WIDTH", "1920")
 	t.Setenv("NOXA_VIDEO_MAX_HEIGHT", "1080")
 	t.Setenv("NOXA_RECORDING_MAX_CONCURRENT", "7")
+	t.Setenv("NOXA_RECORDING_MAX_SECONDS", "600")
 	t.Setenv("NOXA_RECORDING_WINDOWS_ACL_READY", "true")
 
 	// Ensure no config.yaml is picked up from the working directory by
@@ -76,6 +77,7 @@ func TestLoadFromEnv(t *testing.T) {
 		{"VideoMaxWidth", cfg.VideoMaxWidth, 1920},
 		{"VideoMaxHeight", cfg.VideoMaxHeight, 1080},
 		{"Recording.MaxConcurrent", cfg.Recording.MaxConcurrent, 7},
+		{"Recording.MaxSeconds", cfg.Recording.MaxSeconds, 600},
 		{"Recording.WindowsACLReady", cfg.Recording.WindowsACLReady, true},
 	}
 	for _, c := range cases {
@@ -166,6 +168,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if len(cfg.WebRTC.ICEServers) == 0 {
 		t.Error("WebRTC.ICEServers is empty, want default STUN server")
+	}
+	if cfg.Recording.MaxSeconds != 14400 {
+		t.Errorf("Recording.MaxSeconds = %d, want 14400", cfg.Recording.MaxSeconds)
 	}
 	if cfg.Recording.MaxConcurrent != 4 || cfg.Recording.WindowsACLReady {
 		t.Errorf(
@@ -409,6 +414,11 @@ func TestValidateRejectsUnsafeValues(t *testing.T) {
 				c.Recording.WindowsACLReady = true
 			},
 			wantErr: "recording.max_concurrent",
+		},
+		{
+			name:    "negative recording duration cap",
+			mutate:  func(c *Config) { c.Recording.MaxSeconds = -1 },
+			wantErr: "recording.max_seconds",
 		},
 		{
 			name: "excessive recording concurrency",

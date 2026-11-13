@@ -260,6 +260,22 @@ func TestBuildArgsDefaults(t *testing.T) {
 	}
 }
 
+// TestBuildArgsMaxSeconds verifies the duration cap is an output option just
+// before the output file, and absent when unlimited.
+func TestBuildArgsMaxSeconds(t *testing.T) {
+	r := New(Config{Enabled: true, Dir: t.TempDir(), MaxSeconds: 14400}, testLogger())
+	if joined := strings.Join(r.buildArgs("in.sdp", "out.webm"), " "); !strings.HasSuffix(joined, "-c:v copy -t 14400 -n out.webm") {
+		t.Errorf("args %q lack the duration cap before the output", joined)
+	}
+	r = New(Config{Enabled: true, Dir: t.TempDir()}, testLogger())
+	if joined := strings.Join(r.buildArgs("in.sdp", "out.webm"), " "); strings.Contains(joined, "-t ") {
+		t.Errorf("unlimited recording has a duration cap: %q", joined)
+	}
+	if err := (Config{Dir: "x", FFmpegPath: "ffmpeg", Format: "webm", MaxConcurrent: 1, MaxSeconds: -1, WindowsACLReady: true}).validate(); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("negative max seconds accepted: %v", err)
+	}
+}
+
 // TestBuildArgsHardwareEncoder verifies operator-configured hardware codec
 // args land in the command line.
 func TestBuildArgsHardwareEncoder(t *testing.T) {
