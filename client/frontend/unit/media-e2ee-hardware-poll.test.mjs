@@ -194,7 +194,7 @@ async function hardwarePollFixture(t) {
         getParameters: () => ({ encodings: [{ active: true }] }),
         getStats: async () => evidence === "pending" ? new Map() : new Map([
             ["source", { trackIdentifier: sender.track.id, frames: counters.frames }],
-            ["video", { type: "outbound-rtp", kind: "video", mediaSourceId: "source", framesEncoded: counters.encoded,
+            ["video", { id: counters.id ?? "video", type: "outbound-rtp", kind: "video", mediaSourceId: "source", framesEncoded: counters.encoded,
                 powerEfficientEncoder: evidence === "hardware", encoderImplementation: evidence === "hardware" ? "Intel QSV MFT" : "OpenH264" }],
         ]),
     };
@@ -216,6 +216,30 @@ test("a hardware encoder that stops encoding captured frames loses its proof", a
     Object.assign(f.counters, { frames: 300 });
     await f.sample(15002, "hardware");
     assert.equal(f.stopped(), 1, "a stalled encoder cannot keep the share alive");
+});
+
+test("an uplink outage that pauses encoding keeps the hardware proof", async t => {
+    const f = await hardwarePollFixture(t);
+    f.sender.transport = { iceTransport: { state: "connected" } };
+    Object.assign(f.counters, { encoded: 10, frames: 100 });
+    await f.sample(1, "hardware");
+    f.sender.transport.iceTransport.state = "disconnected";
+    for (const [at, frames] of [[5001, 200], [15002, 300], [30003, 400]]) {
+        f.counters.frames = frames;
+        await f.sample(at, "hardware");
+    }
+    assert.equal(f.stopped(), 0, "the browser does not encode while ICE is disconnected");
+});
+
+test("a new outbound row whose counter restarted is not a stalled encoder", async t => {
+    const f = await hardwarePollFixture(t);
+    Object.assign(f.counters, { encoded: 500, frames: 100 });
+    await f.sample(1, "hardware");
+    Object.assign(f.counters, { id: "video-new-ssrc", encoded: 5, frames: 200 });
+    await f.sample(5001, "hardware");
+    Object.assign(f.counters, { encoded: 50, frames: 300 });
+    await f.sample(15002, "hardware");
+    assert.equal(f.stopped(), 0);
 });
 
 test("a static source that delivers no new frames keeps its hardware proof", async t => {

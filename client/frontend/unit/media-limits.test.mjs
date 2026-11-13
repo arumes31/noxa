@@ -7,9 +7,15 @@ test("screen resolutions leave bitrate adaptive and honor server bounds", () => 
     for (const [preset, width, height] of [["qhd", 2560, 1440], ["uhd", 3840, 2160]]) {
         const profile = shareQuality(preset);
         assert.deepEqual(profile, { width, height, fps: 30 });
-        assert.deepEqual(screenShareConstraints(profile), { width: { ideal: width, max: width }, height: { ideal: height, max: height }, frameRate: { ideal: 30, max: 30 } });
+        assert.deepEqual(screenShareConstraints(profile), { width: { ideal: width, max: width }, height: { ideal: height, max: width }, frameRate: { ideal: 30, max: 30 } });
         assert.deepEqual(screenShareConstraints(profile, { video_max_width: 1280, video_max_height: 720 }).height, { ideal: 720, max: 720 });
     }
+});
+
+test("an unbounded preset lets a portrait monitor keep its full long edge", () => {
+    const { width, height } = screenShareConstraints(shareQuality("hd"));
+    // A 1080x1920 monitor must fit both maxima without downscaling to ~607x1080.
+    assert.ok(width.max >= 1080 && height.max >= 1920, JSON.stringify({ width, height }));
 });
 
 test("original capture removes size preferences while retaining server and frame-rate limits", () => {

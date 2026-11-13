@@ -155,7 +155,7 @@ export class MediaE2EE {
     #watchHardware(sender, id) {
         const owner = this.endpoints.get(sender), generation = owner.gen;
         let track = null, started = null, hardwareSeen = false, recoveringSoftware = false, checking = false, watching = true;
-        let scheduled = null, deadline = null, deadlineAt = null, encoded = 0, captured = 0;
+        let scheduled = null, deadline = null, deadlineAt = null, encoded = 0, captured = 0, encoderRow;
         const clearTimer = timer => { if (timer !== null) { clearTimeout(timer); this.hardwareTimers.delete(timer); } };
         const clearDeadline = () => { clearTimer(deadline); deadline = deadlineAt = null; };
         const stopWatch = () => {
@@ -227,12 +227,16 @@ export class MediaE2EE {
                 // Both counters compare with the previous sample.
                 const row = evidence === "hardware" && hardwareVideoRow(report, source.id);
                 const capture = row && report.get(row.mediaSourceId);
-                const encodedGrew = row && row.framesEncoded > encoded;
+                // A new outbound row (SSRC or encoder) restarts its counter.
+                const encodedGrew = row && (row.id !== encoderRow || row.framesEncoded > encoded);
                 // Unknown capture progress counts as static on purpose: runtimes
                 // without media-source counters must not end static shares.
                 const captureGrew = capture?.frames !== undefined ? capture.frames > captured : capture?.framesPerSecond > 0;
-                if (row) { hardwareSeen = true; encoded = row.framesEncoded ?? encoded; captured = capture?.frames ?? captured; }
-                if (row && (encodedGrew || !captureGrew)) resetDeadline();
+                // Chrome pauses encoding while the transport is down: not a stalled encoder.
+                const ice = sender.transport?.iceTransport?.state;
+                const offline = ice !== undefined && !["connected", "completed"].includes(ice);
+                if (row) { hardwareSeen = true; encoded = row.framesEncoded ?? encoded; captured = capture?.frames ?? captured; encoderRow = row.id; }
+                if (row && (encodedGrew || !captureGrew || offline)) resetDeadline();
                 else armDeadline();
             } catch {
                 // The independent timer also covers never-settling requests.
