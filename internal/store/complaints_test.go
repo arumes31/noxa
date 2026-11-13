@@ -2,80 +2,27 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"sync"
 	"testing"
 	"time"
 )
 
-// testDedicatedDBStore creates a fresh scratch database only when the
+// testDedicatedDBStore returns an isolated migrated database only when the
 // operator explicitly supplied a test URL. It never falls back to the shared
 // developer database, so broad operations such as DeleteAllComplaints stay
 // isolated even when the supplied database has existing data.
 func testDedicatedDBStore(t *testing.T) *Store {
 	t.Helper()
-	base := os.Getenv("NOXA_TEST_DATABASE_URL")
-	if base == "" {
+	if os.Getenv("NOXA_TEST_DATABASE_URL") == "" {
 		t.Skip("NOXA_TEST_DATABASE_URL is required for dedicated DB tests")
 	}
-	admin, err := sql.Open("postgres", base)
-	if err != nil {
-		t.Fatalf("opening dedicated DB admin connection: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := admin.PingContext(ctx); err != nil {
-		_ = admin.Close()
-		t.Fatalf("pinging dedicated DB: %v", err)
-	}
-	name := fmt.Sprintf("noxa_9a_%d", time.Now().UnixNano())
-	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+name); err != nil {
-		_ = admin.Close()
-		t.Fatalf("creating dedicated scratch database: %v", err)
-	}
-	dropScratch := func() error {
-		dropCtx, dropCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer dropCancel()
-		_, err := admin.ExecContext(dropCtx, "DROP DATABASE IF EXISTS "+name)
-		return err
-	}
-	u, err := url.Parse(base)
-	if err != nil {
-		if dropErr := dropScratch(); dropErr != nil {
-			t.Errorf("dropping dedicated scratch database after URL parse failure: %v", dropErr)
-		}
-		_ = admin.Close()
-		t.Fatalf("parsing dedicated DB URL: %v", err)
-	}
-	u.Path = "/" + name
-	u.RawPath = ""
-	s, err := New(u.String(), testLogger(), 8, 2, time.Minute)
-	if err != nil {
-		if dropErr := dropScratch(); dropErr != nil {
-			t.Errorf("dropping dedicated scratch database after open failure: %v", dropErr)
-		}
-		_ = admin.Close()
-		t.Fatalf("opening dedicated scratch database: %v", err)
-	}
-	if err := s.Migrate(); err != nil {
-		_ = s.Close()
-		if dropErr := dropScratch(); dropErr != nil {
-			t.Errorf("dropping dedicated scratch database after migration failure: %v", dropErr)
-		}
-		_ = admin.Close()
-		t.Fatalf("migrating dedicated scratch database: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-		if err := dropScratch(); err != nil {
-			t.Errorf("dropping dedicated scratch database %s: %v", name, err)
-		}
-		_ = admin.Close()
-	})
+	s := testMigratedStore(t)
+	// Concurrency tests need more than the scratch default of two connections.
+	s.db.SetMaxOpenConns(8)
+	s.db.SetMaxIdleConns(2)
 	return s
 }
 

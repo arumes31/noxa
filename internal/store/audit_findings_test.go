@@ -10,7 +10,7 @@ import (
 )
 
 func TestToggleReactionEnforcesLimits(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	if err := s.Migrate(); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestCanonicalDeviceKeyLookup(t *testing.T) {
 		t.Fatal("opaque value treated as key")
 	}
 
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	if err := s.Migrate(); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestCanonicalDeviceKeyLookup(t *testing.T) {
 }
 
 func TestAddDeviceRequiresAuthorizingPasskey(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	if err := s.Migrate(); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestAddDeviceRequiresAuthorizingPasskey(t *testing.T) {
 }
 
 func TestPendingMessagesForFiltersBySession(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	if err := s.Migrate(); err != nil {
 		t.Fatal(err)
 	}

@@ -56,7 +56,7 @@ func TestOfflineMessageKeyBindingMigration(t *testing.T) {
 }
 
 func TestOfflineMessageKeyBindingRoundTrip(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	ctx := t.Context()
 	if err := s.Migrate(); err != nil {
 		t.Fatal(err)
