@@ -418,7 +418,7 @@ func TestChatAttachmentDownloadsRunFourAtATime(t *testing.T) {
 		<-release
 		return []byte("png"), nil
 	}
-	done := make(chan error, 6)
+	done := make(chan error, 7)
 	for range 6 {
 		go func() {
 			_, err := a.chatAttachmentBytesAt(nil, attachmentLocation{channelID: 1}, "photo.png", "")
@@ -433,8 +433,19 @@ func TestChatAttachmentDownloadsRunFourAtATime(t *testing.T) {
 		t.Fatal("a fifth attachment download started while four were running")
 	case <-time.After(100 * time.Millisecond):
 	}
+	// Another server's connection has its own slots.
+	other := newConnManager(context.Background())
+	go func() {
+		_, err := a.chatAttachmentBytesAt(other, attachmentLocation{channelID: 1}, "photo.png", "")
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a busy server blocked another server's attachment download")
+	}
 	close(release)
-	for range 6 {
+	for range 7 {
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
