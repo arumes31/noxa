@@ -13,17 +13,20 @@ const any = new Proxy(function () {}, {
 
 test("an early hold release stops only the first recording, not Record again", async () => {
     const source = await fs.readFile(new URL("../src/ui/voice-note.js", import.meta.url), "utf8");
-    const buttons = []; // [label, onclick] of recorder buttons
+    let actions = null; // the recorder's action row; replaceChildren() installs its current buttons
     const h = (tag, props = {}, ...children) => {
         const listeners = {};
         const classes = new Set();
-        if (tag === "button") buttons.push([children.flat()[0], props?.onclick]);
         const target = {
+            label: children.flat()[0], onclick: props?.onclick, shown: [],
+            replaceChildren: (...nodes) => { target.shown = nodes.flat(); },
             addEventListener: (type, fn) => { listeners[type] = fn; },
             fire: (type, event) => listeners[type](event),
             classList: { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c) },
         };
-        return new Proxy(target, { get: (o, key) => key in o ? o[key] : any, set: (o, key, value) => { o[key] = value; return true; } });
+        const element = new Proxy(target, { get: (o, key) => key in o ? o[key] : any, set: (o, key, value) => { o[key] = value; return true; } });
+        if (props?.class === "voice-actions") actions = element;
+        return element;
     };
     const prompts = [];
     const recorders = [];
@@ -33,8 +36,8 @@ test("an early hold release stops only the first recording, not Record again", a
         stop() {
             if (this.state === "inactive") return;
             this.state = "inactive";
-            this.ondataavailable({ data: new Blob(["x"]) });
-            this.onstop?.();
+            // Like a browser: the last data and onstop arrive after stop() returns.
+            Promise.resolve().then(() => { this.ondataavailable({ data: new Blob(["x"]) }); this.onstop?.(); });
         }
     }
     const navigator = { mediaDevices: { getUserMedia: () => new Promise(resolve => prompts.push(resolve)) }, vibrate() {} };
@@ -67,9 +70,9 @@ test("an early hold release stops only the first recording, not Record again", a
     assert.equal(recorders.length, 1);
     assert.equal(recorders[0].state, "inactive", "the early-released recording stops at once");
 
-    const again = buttons.findLast(([label]) => label === "vnote.again");
+    const again = actions.shown.find(button => button.label === "vnote.again");
     assert.ok(again, "the preview offers Record again");
-    again[1]();
+    again.onclick();
     await grant();
     assert.equal(recorders.length, 2);
     assert.equal(recorders[1].state, "recording", "Record again keeps recording");
