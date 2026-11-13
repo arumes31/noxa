@@ -5114,6 +5114,11 @@ test("sound previews use draft volume, finish Test All, and cancel on close @a11
     await expect(page.getByRole("status").filter({ hasText: "Preview finished" })).toBeVisible({ timeout: 70_000 });
     expect(await page.evaluate(() => new Set(window.__previewedSounds.map(x => x.name)).size)).toBe(37 + 8);
     expect(await page.evaluate(() => window.__previewedSounds.map(x => x.name))).toContain("speech_en_client_updating");
+    // Exact English Test All order (sounds.spec.js runs only the German pass).
+    expect(await page.evaluate(() => window.__previewedSounds.map(x => x.name))).toEqual(await page.evaluate(async () => {
+        const { SPEECH_EVENTS, SOUND_EVENTS } = await import("/src/sounds.js");
+        return [...Object.keys(SPEECH_EVENTS).map(event => `speech_en_${event}`), ...SOUND_EVENTS];
+    }));
     await page.getByRole("button", { name: "Preview Speak connection status", exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.__noxa.speechQueue.current?.preview)).toBe(true);
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
