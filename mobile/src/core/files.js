@@ -318,8 +318,50 @@ export async function uploadStream(conn, location, name, file, { onProgress, sig
     }
 }
 
+// Every download holds one of the server's 8 per-user transfer slots (shared
+// with uploads), and a chat opens one per inline image: run 4 at a time.
+const MAX_DOWNLOADS = 4;
+let downloadsActive = 0;
+const downloadQueue = [];
+
+function acquireDownload(signal) {
+    if (signal?.aborted) return Promise.reject(aborted());
+    if (downloadsActive < MAX_DOWNLOADS) {
+        downloadsActive++;
+        return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+        const onAbort = () => {
+            downloadQueue.splice(downloadQueue.indexOf(start), 1);
+            reject(aborted());
+        };
+        const start = () => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+        downloadQueue.push(start);
+    });
+}
+
+// A finished download hands its slot straight to the next queued one.
+function releaseDownload() {
+    const next = downloadQueue.shift();
+    if (next) next();
+    else downloadsActive--;
+}
+
 /** Downloads a file's bytes and checks the server's digest. onProgress(bytes); signal cancels. */
 export async function downloadBlob(conn, location, storage, maxBytes, url = transferURL(), { onProgress, signal } = {}) {
+    await acquireDownload(signal);
+    try {
+        return await fetchBlob(conn, location, storage, maxBytes, url, { onProgress, signal });
+    } finally {
+        releaseDownload();
+    }
+}
+
+async function fetchBlob(conn, location, storage, maxBytes, url, { onProgress, signal }) {
     const init = await initTransfer(conn, { ...where(location), direction: "download", name: storage });
     if (signal?.aborted) throw aborted();
     const socket = await openTransferSocket(url);

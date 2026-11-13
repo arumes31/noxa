@@ -165,6 +165,10 @@ const maxInlineAttachmentBase64Bytes = 8 << 20
 
 var errChatAttachmentPreviewTooLarge = errors.New("attachment is too large to preview")
 
+// Each attachment download holds one of the server's 8 per-user transfer
+// slots (shared with uploads), and a chat fetches every inline image at once.
+var chatAttachmentSlots = make(chan struct{}, 4)
+
 // chatAttachmentBytesForCM fetches and opens one attachment with the captured
 // manager. A native save dialog may suspend the UI; retaining this manager
 // prevents a concurrent tab switch from redirecting the later download to a
@@ -200,6 +204,7 @@ func (a *App) chatAttachmentBytesAt(cm *connManager, location attachmentLocation
 		// legacy plaintext reference is never resolved inside a group folder.
 		return nil, errors.New("invalid attachment key")
 	}
+	chatAttachmentSlots <- struct{}{}
 	if a.chatAttachmentFetch != nil {
 		blob, err = a.chatAttachmentFetch(cm, channelID, location.folder, storage)
 	} else {
@@ -209,6 +214,7 @@ func (a *App) chatAttachmentBytesAt(cm *connManager, location attachmentLocation
 		}
 		blob, err = a.ftGetBytesInFolderWithLimit(cm, channelID, location.folder, storage, int64(maxWireBytes))
 	}
+	<-chatAttachmentSlots
 	if err != nil {
 		return nil, err
 	}

@@ -497,3 +497,66 @@ func TestInvalidToken(t *testing.T) {
 		t.Fatal("invalid token accepted")
 	}
 }
+
+// probeConn runs onWrite before each write the server makes.
+type probeConn struct {
+	net.Conn
+	onWrite func()
+}
+
+func (c *probeConn) Write(p []byte) (int, error) {
+	c.onWrite()
+	return c.Conn.Write(p)
+}
+
+// A client opens its next transfer as soon as it reads OK, so the finished
+// transfer must leave the per-principal count before that status is written.
+func TestTransferSlotFreedBeforeFinalStatus(t *testing.T) {
+	fs := newFakeFileStore()
+	s := New(Config{Addr: ":0", RootDir: t.TempDir()}, fs, nil)
+	content := []byte("inline image")
+	if err := os.MkdirAll(filepath.Join(s.cfg.RootDir, "7"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.cfg.RootDir, "7", "img.png"), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.AddFile(context.Background(), store.FileRecord{
+		ChannelID: 7, Name: "img.png", Size: int64(len(content)), SHA256: sha256Hex(content),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	id, token, err := s.InitDownload(context.Background(), 7, "", "img.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	activeAtLastWrite := false
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		s.serve(t.Context(), &probeConn{Conn: server, onWrite: func() {
+			s.mu.Lock()
+			activeAtLastWrite = s.activeTransfers[id] != nil
+			s.mu.Unlock()
+		}})
+	}()
+	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
+	if err := writeJSON(client, frameInit, initMsg{Token: token, TransferID: id}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		f, err := netproto.ReadFrame(client)
+		if err != nil {
+			t.Fatalf("read frame: %v", err)
+		}
+		if f.Type == frameStatus {
+			break
+		}
+	}
+	<-served
+	if activeAtLastWrite {
+		t.Fatal("the transfer still held its slot when the final status was written")
+	}
+}
