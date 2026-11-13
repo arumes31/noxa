@@ -1503,6 +1503,10 @@ func (r *Recorder) monitor(s *Session, processResult *processWait) {
 		// ffmpeg ends cleanly once -t is reached; finalize already ran as for a stop.
 		r.logger.Info("recording reached its maximum duration",
 			zap.Int64("channel_id", s.channelID), zap.Int("max_seconds", r.cfg.MaxSeconds))
+		if resultErr := s.result(); resultErr != nil {
+			r.logger.Warn("recording cleanup failed after reaching its maximum duration",
+				zap.Int64("channel_id", s.channelID), zap.String("output", s.filePath), zap.Error(resultErr))
+		}
 	} else if !s.stopping.Load() {
 		r.reportError("unexpected_exit")
 		fields := []zap.Field{
