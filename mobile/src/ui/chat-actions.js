@@ -11,7 +11,7 @@ import { enqueue, remove as removeQueued } from "../core/outbox.js";
 import { SavedMessages } from "../core/saved.js";
 import { DelayedSends } from "../core/undo-send.js";
 import { t } from "../i18n.js";
-import { avatar, clock, h, toast } from "./dom.js";
+import { avatar, clock, h, inertOthers, toast } from "./dom.js";
 import { icon } from "./icons.js";
 import "./chat-actions-strings.js";
 import "./chat-actions.css";
@@ -42,6 +42,7 @@ function overlay(label, children, onClose) {
         if (done) return;
         done = true;
         node.remove();
+        restoreInert();
         document.removeEventListener("keydown", onKey);
         opener?.focus?.({ preventScroll: true });
         onClose(value);
@@ -50,6 +51,7 @@ function overlay(label, children, onClose) {
         h("div", { class: "sheet act-sheet", role: "dialog", "aria-modal": "true", "aria-label": label }, children(close)));
     document.addEventListener("keydown", onKey);
     document.body.append(node);
+    const restoreInert = inertOthers(node);
     node.querySelector("input, textarea, .btn, button")?.focus({ preventScroll: true });
     return { node, close };
 }

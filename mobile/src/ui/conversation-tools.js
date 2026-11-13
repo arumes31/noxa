@@ -4,7 +4,7 @@
 // toggle.
 import { isMuted, setMuted } from "../core/conversation-prefs.js";
 import { t } from "../i18n.js";
-import { h, sheet } from "./dom.js";
+import { h, inertOthers, sheet } from "./dom.js";
 import "./conversation-strings.js";
 import "./conversation.css";
 
@@ -19,6 +19,7 @@ export function panel(title, content, { label = title } = {}) {
     const close = () => {
         if (!overlay.isConnected) return;
         overlay.remove();
+        restoreInert();
         document.removeEventListener("keydown", onKey);
         if (previous?.isConnected) previous.focus?.();
         resolve();
@@ -29,6 +30,7 @@ export function panel(title, content, { label = title } = {}) {
         h("h2", { class: "sheet-title" }, title), content, closeButton);
     const overlay = h("div", { class: "sheet-overlay", onclick: event => { if (event.target === overlay) close(); } }, node);
     document.body.append(overlay);
+    const restoreInert = inertOthers(overlay);
     document.addEventListener("keydown", onKey);
     (node.querySelector("input, button:not(:last-child)") || closeButton).focus();
     return { node, close, closed };
