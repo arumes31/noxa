@@ -7,7 +7,7 @@ import (
 )
 
 func TestBulkDeleteChatMessages(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	if err := s.Migrate(); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}

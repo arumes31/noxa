@@ -37,7 +37,7 @@ func TestReactionCacheExpiresAndIsBounded(t *testing.T) {
 }
 
 func TestToggleReaction(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	if err := s.Migrate(); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}

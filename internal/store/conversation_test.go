@@ -18,7 +18,7 @@ import (
 
 func conversationTestStore(t *testing.T) (*Store, netproto.Conversation) {
 	t.Helper()
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	if err := s.Migrate(); err != nil {
 		t.Fatal(err)
 	}

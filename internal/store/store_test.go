@@ -77,6 +77,88 @@ func testDBURL() string {
 // instead surface connection, setup, and permission failures.
 func testScratchStore(t *testing.T) *Store {
 	t.Helper()
+	return scratchStore(t, false)
+}
+
+// testMigratedStore is testScratchStore for tests that need isolation but
+// not an empty database: it clones a template migrated once per test binary,
+// which is far cheaper than replaying every migration per test.
+func testMigratedStore(t *testing.T) *Store {
+	t.Helper()
+	return scratchStore(t, true)
+}
+
+// migratedTemplate is the per-binary template database behind
+// testMigratedStore; TestMain drops it after the run.
+var migratedTemplate struct {
+	once sync.Once
+	name string
+	err  error
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if name := migratedTemplate.name; name != "" {
+		if err := dropTestDatabase(name); err != nil {
+			fmt.Fprintf(os.Stderr, "dropping template database %s: %v\n", name, err)
+		}
+	}
+	os.Exit(code)
+}
+
+func dropTestDatabase(name string) error {
+	admin, err := sql.Open("postgres", testDBURL())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = admin.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err = admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+name)
+	return err
+}
+
+func scratchDatabaseURL(name string) (string, error) {
+	u, err := url.Parse(testDBURL())
+	if err != nil {
+		return "", err
+	}
+	u.Path = "/" + name
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+// buildMigratedTemplate creates and migrates the template, then closes every
+// connection to it, because CREATE DATABASE ... TEMPLATE refuses a source
+// that has other sessions.
+func buildMigratedTemplate(admin *sql.DB) (string, error) {
+	name := fmt.Sprintf("noxa_tpl_%d_%d", os.Getpid(), time.Now().UnixNano())
+	if _, err := admin.ExecContext(context.Background(), "CREATE DATABASE "+name); err != nil {
+		return "", fmt.Errorf("creating template database: %w", err)
+	}
+	fail := func(err error) (string, error) {
+		return "", errors.Join(err, dropTestDatabase(name))
+	}
+	dsn, err := scratchDatabaseURL(name)
+	if err != nil {
+		return fail(fmt.Errorf("parsing database URL: %w", err))
+	}
+	s, err := New(dsn, zap.NewNop(), 2, 1, time.Minute)
+	if err != nil {
+		return fail(fmt.Errorf("opening template database: %w", err))
+	}
+	if err := s.Migrate(); err != nil {
+		_ = s.Close()
+		return fail(fmt.Errorf("migrating template database: %w", err))
+	}
+	if err := s.Close(); err != nil {
+		return fail(fmt.Errorf("closing template database: %w", err))
+	}
+	return name, nil
+}
+
+func scratchStore(t *testing.T, migrated bool) *Store {
+	t.Helper()
 	configured := os.Getenv("NOXA_TEST_DATABASE_URL") != ""
 	base := testDBURL()
 	admin, err := sql.Open("postgres", base)
@@ -95,8 +177,25 @@ func testScratchStore(t *testing.T) *Store {
 		}
 		t.Skipf("no database available (%v); skipping migration test", err)
 	}
+	create := "CREATE DATABASE "
+	if migrated {
+		migratedTemplate.once.Do(func() {
+			migratedTemplate.name, migratedTemplate.err = buildMigratedTemplate(admin)
+		})
+		if err := migratedTemplate.err; err != nil {
+			_ = admin.Close()
+			if configured {
+				t.Fatalf("preparing configured template database: %v", err)
+			}
+			t.Skipf("cannot prepare a template database (%v); skipping test", err)
+		}
+	}
 	name := fmt.Sprintf("noxa_scratch_%d", time.Now().UnixNano())
-	if _, err := admin.ExecContext(t.Context(), "CREATE DATABASE "+name); err != nil {
+	create += name
+	if migrated {
+		create += " TEMPLATE " + migratedTemplate.name
+	}
+	if _, err := admin.ExecContext(t.Context(), create); err != nil {
 		_ = admin.Close()
 		if configured {
 			t.Fatalf("creating configured scratch database: %v", err)
@@ -104,12 +203,12 @@ func testScratchStore(t *testing.T) *Store {
 		t.Skipf("cannot create a scratch database (%v); skipping migration test", err)
 	}
 	dropScratch := func() error {
-		dropCtx, dropCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		dropCtx, dropCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer dropCancel()
 		_, err := admin.ExecContext(dropCtx, "DROP DATABASE IF EXISTS "+name)
 		return err
 	}
-	u, err := url.Parse(base)
+	dsn, err := scratchDatabaseURL(name)
 	if err != nil {
 		if dropErr := dropScratch(); dropErr != nil {
 			t.Errorf("dropping scratch database after URL parse failure: %v", dropErr)
@@ -120,8 +219,7 @@ func testScratchStore(t *testing.T) *Store {
 		}
 		t.Skipf("database URL is not parseable (%v); skipping migration test", err)
 	}
-	u.Path = "/" + name
-	s, err := New(u.String(), zap.NewNop(), 2, 1, time.Minute)
+	s, err := New(dsn, zap.NewNop(), 2, 1, time.Minute)
 	if err != nil {
 		if dropErr := dropScratch(); dropErr != nil {
 			t.Errorf("dropping scratch database after open failure: %v", dropErr)
@@ -139,8 +237,6 @@ func testScratchStore(t *testing.T) *Store {
 	return s
 }
 
-// testAdditionalStore opens a distinct pool to the same scratch database,
-// modeling a second noxa process for advisory-lock tests.
 func testAdditionalStore(t *testing.T, existing *Store) *Store {
 	t.Helper()
 	var databaseName string
@@ -705,7 +801,7 @@ func TestMigrateSerializesConcurrentStores(t *testing.T) {
 }
 
 func TestMigrationRepairsInvalidConcurrentIndex(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if err := s.MigrateContext(ctx); err != nil {
@@ -820,7 +916,7 @@ func TestMigrationRepairsInvalidConcurrentIndex(t *testing.T) {
 }
 
 func TestMigrationRejectsValidConcurrentIndexWithWrongDefinition(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	initialCtx, cancelInitial := context.WithTimeout(context.Background(), time.Minute)
 	if err := s.MigrateContext(initialCtx); err != nil {
 		cancelInitial()
@@ -945,7 +1041,7 @@ func TestMigrationRejectsValidConcurrentIndexWithWrongDefinition(t *testing.T) {
 }
 
 func TestMigrationIgnoresShadowSchemaIndex(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if err := s.MigrateContext(ctx); err != nil {

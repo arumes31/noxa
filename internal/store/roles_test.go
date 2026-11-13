@@ -14,7 +14,7 @@ import (
 
 func roleTestStore(t *testing.T) (*Store, int64, int64) {
 	t.Helper()
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	if err := s.Migrate(); err != nil {
 		t.Fatal(err)
 	}

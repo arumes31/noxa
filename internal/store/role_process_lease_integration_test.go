@@ -71,7 +71,7 @@ func TestRoleProcessLeaseDetectsLostLock(t *testing.T) {
 }
 
 func TestOfflineRegistrationRefreshesAuthoritySnapshot(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	if err := s.MigrateContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}

@@ -8,7 +8,7 @@ import (
 // The offline spool is bounded per mailbox and per sender, so a registered
 // sender cannot grow a victim's undelivered backlog without limit.
 func TestSpoolMessageEnforcesMailboxQuota(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	if err := s.Migrate(); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestSpoolMessageEnforcesMailboxQuota(t *testing.T) {
 // Revoking a device drops the offline copies only that device could open, so
 // they neither linger forever nor keep counting against its mailbox.
 func TestRevokeDeviceDropsItsSpooledCopies(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	if err := s.Migrate(); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestRevokeDeviceDropsItsSpooledCopies(t *testing.T) {
 
 // A channel holds at most MaxPinsPerChannel pins; re-pinning stays idempotent.
 func TestPinChatMessageEnforcesChannelCap(t *testing.T) {
-	s := testScratchStore(t)
+	s := testMigratedStore(t)
 	if err := s.Migrate(); err != nil {
 		t.Fatal(err)
 	}
