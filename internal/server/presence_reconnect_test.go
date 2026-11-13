@@ -203,7 +203,7 @@ func TestPresenceTrackerKeepsUpdatingPlaceAndReturnsQuietly(t *testing.T) {
 	if after.Departures["old"] != netproto.DepartureReplaced {
 		t.Fatalf("the kept place must vanish silently, departures = %v", after.Departures)
 	}
-	if p.expireUpdating("alice|dev", "old") {
+	if expired, _ := p.expireUpdating("alice|dev", "old"); expired {
 		t.Fatal("a returned member must not expire into a leave")
 	}
 }
@@ -220,10 +220,12 @@ func TestPresenceTrackerUpdatingExpiresIntoLeave(t *testing.T) {
 	if len(late.RootChannels[0].Clients) != 0 {
 		t.Fatal("the place is kept past 60 s")
 	}
-	if p.expireUpdating("alice|dev", "other") {
+	if expired, _ := p.expireUpdating("alice|dev", "other"); expired {
 		t.Fatal("expiry of another session must not end this kept place")
 	}
-	if !p.expireUpdating("alice|dev", "old") || p.expireUpdating("alice|dev", "old") {
+	first, _ := p.expireUpdating("alice|dev", "old")
+	second, _ := p.expireUpdating("alice|dev", "old")
+	if !first || second {
 		t.Fatal("expiry must end the kept place exactly once")
 	}
 	gone := updatingSnapshot()
@@ -262,5 +264,33 @@ func TestExpiredUpdatingDepartureBroadcastsLeave(t *testing.T) {
 	case raw := <-events:
 		t.Fatalf("a second expiry broadcast %s", raw)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// The expiry timer is armed for every update goodbye, invisible members too:
+// their leave must not name them to a non-admin observer.
+func TestExpiredInvisibleUpdatingDepartureNamesNobody(t *testing.T) {
+	bc := broadcast.New(zap.NewNop(), nil)
+	s := New(&config.Config{}, zap.NewNop(), &Deps{Broadcast: bc})
+	events, err := bc.Register("observer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.presence.noteUpdating("ghost|dev", broadcast.ClientInfo{ClientID: "old", UniqueID: "ghost", Nickname: "Ghost", ChannelID: 7}, true, time.Now())
+	s.expireUpdatingDeparture("ghost|dev", "old", "ghost", "Ghost")
+	select {
+	case raw := <-events:
+		var env struct {
+			Type string          `json:"type"`
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &env); err != nil {
+			t.Fatal(err)
+		}
+		if env.Type != eventUserLeft || string(env.Data) != `{"client_id":"old"}` {
+			t.Fatalf("invisible expiry event = %s %s, want an anonymous user_left", env.Type, env.Data)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no leave after the update window")
 	}
 }

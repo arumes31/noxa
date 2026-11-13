@@ -126,16 +126,17 @@ func (p *presenceTracker) noteReturn(clientID, key string, now time.Time) bool {
 }
 
 // expireUpdating ends the kept place of clientID that did not come back and
-// reports whether it was still kept; its end is then an ordinary leave.
-func (p *presenceTracker) expireUpdating(key, clientID string) bool {
+// reports whether it was still kept (its end is then an ordinary leave) and
+// whether the member was invisible.
+func (p *presenceTracker) expireUpdating(key, clientID string) (expired, hidden bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	kept, ok := p.updating[key]
 	if !ok || kept.ghost.ClientID != clientID {
-		return false
+		return false, false
 	}
 	delete(p.updating, key)
-	return true
+	return true, kept.hidden
 }
 
 // noteJoin reports whether a new session is a reconnect: its device was lost
@@ -380,8 +381,15 @@ func updatingGhost(member *state.Client) broadcast.ClientInfo {
 // expireUpdatingDeparture turns a kept place whose member did not come back
 // into an ordinary leave.
 func (s *TCPServer) expireUpdatingDeparture(key, clientID, uniqueID, nickname string) {
-	if !s.presence.expireUpdating(key, clientID) {
+	expired, hidden := s.presence.expireUpdating(key, clientID)
+	if !expired {
 		return // came back in time
+	}
+	if hidden {
+		// An invisible member's leave is admin-only (381), as in onDisconnect.
+		// Role snapshots filter it per recipient; the legacy event names nobody.
+		s.broadcastToAdmins(eventUserLeft, userEvent{ClientID: clientID})
+		return
 	}
 	s.broadcastEvent(eventUserLeft, userEvent{ClientID: clientID, UniqueID: uniqueID, Nickname: nickname})
 }

@@ -370,19 +370,19 @@ export const recommendedUpdateCheck = createRecommendedUpdate({
     notify: (key, values) => V().sysMsg(t(key, values)),
     download: async info => {
         downloading = true;
-        try { return await window.go.main.App.DownloadAndApply(info); } finally { downloading = false; }
+        try {
+            const error = await window.go.main.App.DownloadAndApply(info);
+            if (!error) applied = true; // staged: the update dialog can restart into it
+            return error;
+        } finally { downloading = false; }
     },
     restart: async () => {
-        applied = true;
         restarting = true;
-        try {
-            await prepareAndRestart();
-            return true;
-        } catch (error) {
-            V().sysMsg(t("updater.restartFailed", { error }));
-            return false;
-        } finally { restarting = false; }
+        try { await prepareAndRestart(); } finally { restarting = false; }
+        return true;
     },
+    // The launcher rolled the old version back: allow a fresh download later.
+    unstage: () => { applied = false; },
 });
 
 async function restartUpdate(m) {
