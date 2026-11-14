@@ -245,9 +245,9 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 		}
 	}()
 	failure := tab.cm.connectNamed(saved.Addr, saved.Nickname, saved.DisplayName, saved.Passwords.Password, saved.Passwords.ServerPassword)
-	// Once the server accepted the handover commit, the session lives here
-	// under the rotated token, whatever fails afterwards: keep it (never hand
-	// it back to the old process, which can no longer resume it).
+	// Once the commit was sent, the session may live here (under the token
+	// both processes hold): keep it whatever fails afterwards, and never
+	// signal the old process to keep it.
 	tab.cm.mu.Lock()
 	moved := handover != nil && tab.cm.handoverCommitted
 	tab.cm.mu.Unlock()
@@ -263,6 +263,9 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 		// becomes the selected one.
 		tab.info.Addr, tab.info.Nickname, tab.bookmark = saved.Addr, saved.Nickname, saved.Bookmark
 		tab.loginPasswords = &saved.Passwords
+		if tab.lastVoiceChannel == 0 {
+			tab.lastVoiceChannel = saved.ChannelID // a reconnect rejoins it
+		}
 	}
 	owned := registered && !tab.reconnectSuppressed && a.activeID == "" && len(a.tabs) == 1
 	a.tabsMu.Unlock()
@@ -310,7 +313,7 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	}
 	a.onTabConnected(cm, saved.Bookmark, saved.Addr, saved.Nickname, saved.DisplayName)
 	if !connected {
-		// The normal reconnect presents the rotated resume token.
+		// The normal reconnect presents the session's resume token.
 		result["warning"] = "connection lost while restoring; reconnecting"
 		a.finishActivateSerialized(id, cm, journal, generation)
 		go tab.cm.emit("disconnected", "") // publishes after activationPublishMu is released

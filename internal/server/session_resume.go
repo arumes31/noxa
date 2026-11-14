@@ -336,6 +336,8 @@ func (s *TCPServer) claimResume(ctx context.Context, client *Client, uniqueID st
 	// A no-op for a session that already departed; a still open one closes
 	// silently and parks for this resume.
 	owner.resumeTakeover.Store(true)
+	// Bound the close (TLS close_notify) and unblock stuck writes on it.
+	_ = owner.Conn.SetDeadline(time.Now().Add(time.Second))
 	_ = owner.Conn.Close()
 	if owner.gone != nil {
 		timer := time.NewTimer(resumeTakeoverWait)

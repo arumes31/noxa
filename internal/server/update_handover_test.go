@@ -323,8 +323,8 @@ func TestHandoverCommitKeepsItsSlotAgainstARacingLogin(t *testing.T) {
 	if r := <-raced; r.OK || r.Reason != "server is full" {
 		t.Fatalf("racing login = %+v, want refused as full", r)
 	}
-	if env.srv.handoverSlots.Load() != 0 {
-		t.Fatal("the reservation outlived the publication")
+	if env.srv.sessionCount("") != 1 {
+		t.Fatal("the committed session is counted twice or its reservation outlived the publication")
 	}
 }
 
@@ -349,5 +349,30 @@ func TestHandoverCommitKeepsTheTokenForAResume(t *testing.T) {
 	defer func() { _ = back.Close() }()
 	if !again.Resumed || again.ClientID != first.ClientID {
 		t.Fatalf("resume with the pre-commit token = %+v", again)
+	}
+}
+
+// Another commit's reservation for a session that is still live counts once:
+// it must not make a concurrent commit look like a full server.
+func TestHandoverReservationsCountEachSessionOnce(t *testing.T) {
+	env := startTestEnvFull(t, nil, func(c *config.Config) { c.MaxClients = 2 })
+	defer env.stop()
+	other, otherID := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = other.Close() }()
+	old, first := dialResumable(t, env.addr, userLogin(""))
+	defer func() { _ = old.Close() }()
+	env.srv.reserveHandoverSlot(otherID) // a concurrent commit, before its takeover
+	if got := env.srv.sessionCount(""); got != 2 {
+		t.Fatalf("sessions = %d, want 2 (a live reserved session counts once)", got)
+	}
+	standby, resp := dialHandover(t, env.addr, userLogin(first.ResumeToken))
+	defer func() { _ = standby.Close() }()
+	if !resp.Standby {
+		t.Fatalf("standby reply = %+v", resp)
+	}
+	send(t, standby, netproto.MsgHandoverCommit, struct{}{})
+	var done netproto.AuthResponse
+	if err := netproto.Decode(readOfType(t, standby, netproto.MsgAuthResponse), &done); err != nil || !done.OK {
+		t.Fatalf("commit next to another pending commit = %+v %v", done, err)
 	}
 }

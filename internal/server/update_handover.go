@@ -77,13 +77,57 @@ func (c *Client) handoverToken() string {
 func (s *TCPServer) releaseHandoverSlot(c *Client) {
 	c.mu.Lock()
 	held := c.handover != nil && c.handover.slotHeld
+	var id string
 	if held {
 		c.handover.slotHeld = false
+		id = c.handover.clientID
 	}
 	c.mu.Unlock()
 	if held {
-		s.handoverSlots.Add(-1)
+		s.mu.Lock()
+		if s.handoverReserved[id]--; s.handoverReserved[id] <= 0 {
+			delete(s.handoverReserved, id)
+		}
+		s.mu.Unlock()
 	}
+}
+
+// reserveHandoverSlot keeps clientID's slot counted across its takeover.
+func (s *TCPServer) reserveHandoverSlot(clientID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.handoverReserved == nil {
+		s.handoverReserved = map[string]int{}
+	}
+	s.handoverReserved[clientID]++
+}
+
+// sessionCount counts distinct sessions for the capacity limit: authenticated
+// client IDs and IDs reserved for handover commits, except excluding.
+func (s *TCPServer) sessionCount(excluding string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ids := make(map[string]struct{}, len(s.clients)+len(s.handoverReserved))
+	for id, c := range s.clients {
+		if c.isAuthed() {
+			ids[id] = struct{}{}
+		}
+	}
+	for id := range s.handoverReserved {
+		ids[id] = struct{}{}
+	}
+	delete(ids, excluding)
+	return len(ids)
+}
+
+// handoverTarget is the session a committing standby takes over, else "".
+func (c *Client) handoverTarget() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.handover == nil || !c.handover.committing {
+		return ""
+	}
+	return c.handover.clientID
 }
 
 func (c *Client) handoverCommitting() bool {
@@ -201,7 +245,7 @@ func (s *TCPServer) handleHandoverCommit(ctx context.Context, client *Client) er
 	client.mu.Lock()
 	client.handover.slotHeld = true
 	client.mu.Unlock()
-	s.handoverSlots.Add(1)
+	s.reserveHandoverSlot(standby.clientID)
 	err := s.finishAuth(ctx, client, standby.identity)
 	s.releaseHandoverSlot(client)
 	client.dropHandover()

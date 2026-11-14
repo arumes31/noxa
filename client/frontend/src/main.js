@@ -3532,8 +3532,7 @@ function setDeafened(on) {
     window.go.main.App.SetMuted(state.muted);
     applyVoiceState();
     refreshVoicePlayback();
-    $("remote-video").muted = on;
-    if (remoteChain.master) remoteChain.master.gain.value = on ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
+    applyOutputSettings($("remote-video")); // keeps every output gate, handover silence included
     playEvent(on ? "deafen_on" : "deafen_off");
     renderTree();
     publishAudioState();

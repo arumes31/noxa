@@ -434,7 +434,8 @@ func commitThenDropServer(t *testing.T, mode string) (string, *atomic.Bool) {
 				if mode == "reply lost" {
 					return // the server committed, but its reply never arrives
 				}
-				done := netproto.AuthResponse{OK: true, Resumed: true, ClientID: "c-1", UniqueID: "u", Nickname: "account", ResumeToken: "rotated"}
+				// A commit keeps the token the standby presented.
+				done := netproto.AuthResponse{OK: true, Resumed: true, ClientID: "c-1", UniqueID: "u", Nickname: "account", ResumeToken: "token"}
 				if mode == "setup failed after commit" {
 					done.MediaLimitsRevision = 5 // fails the client's setup after the commit
 				}
@@ -485,12 +486,8 @@ func testHandoverKeepsMovedSession(t *testing.T, mode string) {
 	if !waitReconnect(t, outcome) {
 		t.Fatal("the old process was not released")
 	}
-	wantToken := "rotated"
-	if mode == "reply lost" {
-		wantToken = "token" // the pre-commit token the server keeps
-	}
-	if a.activeID != tabID || a.tabs[tabID].cm.resumeTokenSnapshot() != wantToken {
-		t.Fatal("the restored tab must stay selected with the rotated token for its resume")
+	if a.activeID != tabID || a.tabs[tabID].cm.resumeTokenSnapshot() != "token" || a.tabs[tabID].lastVoiceChannel != saved.ChannelID {
+		t.Fatal("the restored tab must stay selected with the session's token and voice channel for its resume")
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {

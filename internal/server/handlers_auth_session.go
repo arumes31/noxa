@@ -165,13 +165,9 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		}
 		// Metadata serialization makes capacity check and publication atomic.
 		// Idle sockets are deliberately excluded from the configured user limit.
-		// Slots reserved for handover commits count as sessions; a commit
-		// does not count its own reservation.
-		reserved := int(s.handoverSlots.Load())
-		if client.handoverCommitting() {
-			reserved--
-		}
-		if max := s.EffectiveMaxClients(ctx); max > 0 && s.authenticatedClientCount()+reserved >= max {
+		// Sessions are counted by client ID, live or reserved for a handover
+		// commit, each once; a commit does not count the session it takes over.
+		if max := s.EffectiveMaxClients(ctx); max > 0 && s.sessionCount(client.handoverTarget()) >= max {
 			rejection = "server is full"
 			return authorization.ErrRoleForbidden
 		}
