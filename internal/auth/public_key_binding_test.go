@@ -32,14 +32,14 @@ func TestBindPublicKeyRefusesAnotherAccountsKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.BindPublicKey(ctx, victim.ID, key); err != nil {
+	if err := svc.BindPublicKey(ctx, victim.ID, key, true); err != nil {
 		t.Fatalf("victim bind: %v", err)
 	}
 	// Re-binding the same key to its owner stays idempotent.
-	if err := svc.BindPublicKey(ctx, victim.ID, key); err != nil {
+	if err := svc.BindPublicKey(ctx, victim.ID, key, true); err != nil {
 		t.Fatalf("victim re-bind: %v", err)
 	}
-	if err := svc.BindPublicKey(ctx, attacker.ID, key); !errors.Is(err, ErrPublicKeyInUse) {
+	if err := svc.BindPublicKey(ctx, attacker.ID, key, true); !errors.Is(err, ErrPublicKeyInUse) {
 		t.Fatalf("attacker bind = %v, want ErrPublicKeyInUse", err)
 	}
 	got, err := svc.LookupUserByPublicKey(ctx, key)
@@ -62,11 +62,11 @@ func TestBindPublicKeyRefusesAnotherAccountsKey(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = db.DB().ExecContext(context.Background(), "DELETE FROM users WHERE unique_id = $1", derivedUID)
 	})
-	if err := svc.BindPublicKey(ctx, attacker.ID, derivedKey); !errors.Is(err, ErrPublicKeyInUse) {
+	if err := svc.BindPublicKey(ctx, attacker.ID, derivedKey, true); !errors.Is(err, ErrPublicKeyInUse) {
 		t.Fatalf("derived-ID bind = %v, want ErrPublicKeyInUse", err)
 	}
 
-	if err := svc.BindPublicKey(ctx, attacker.ID, "not a key"); err == nil {
+	if err := svc.BindPublicKey(ctx, attacker.ID, "not a key", true); err == nil {
 		t.Fatal("malformed key bound")
 	}
 }
@@ -108,17 +108,101 @@ func TestBindPublicKeyRefusesGuestAndDeviceKeys(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = db.DB().ExecContext(context.Background(), "DELETE FROM user_devices WHERE device_id = $1", "dev-"+nick)
 	})
-	if err := svc.BindPublicKey(ctx, attacker.ID, guestKey); !errors.Is(err, ErrPublicKeyInUse) {
+	if err := svc.BindPublicKey(ctx, attacker.ID, guestKey, true); !errors.Is(err, ErrPublicKeyInUse) {
 		t.Fatalf("guest root key bind = %v, want ErrPublicKeyInUse", err)
 	}
-	if err := svc.BindPublicKey(ctx, attacker.ID, deviceKey); !errors.Is(err, ErrPublicKeyInUse) {
+	if err := svc.BindPublicKey(ctx, attacker.ID, deviceKey, true); !errors.Is(err, ErrPublicKeyInUse) {
 		t.Fatalf("device key bind = %v, want ErrPublicKeyInUse", err)
 	}
 	own, _, err := GenerateIdentityKeyPair()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.BindPublicKey(ctx, attacker.ID, own); err != nil {
+	if err := svc.BindPublicKey(ctx, attacker.ID, own, true); err != nil {
 		t.Fatalf("own fresh key bind: %v", err)
+	}
+}
+
+// An unproven binding never routes a key login; a proven binding of the same
+// key by another account replaces it, and its own proven login upgrades it.
+func TestUnprovenBindingNeverRoutesAndProvenWins(t *testing.T) {
+	svc, db := testAuthServiceWithStore(t)
+	ctx := t.Context()
+	register := func(prefix string) *User {
+		t.Helper()
+		uid, err := svc.RegisterUser(ctx, uniqueNickname(prefix), "binding-password")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, _ = db.DB().ExecContext(context.Background(), "DELETE FROM users WHERE unique_id = $1", uid)
+		})
+		u, err := svc.LookupUser(ctx, uid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	attacker := register("unproven-attacker")
+	owner := register("unproven-owner")
+	key, private, err := GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindPublicKey(ctx, attacker.ID, key, false); err != nil {
+		t.Fatalf("unproven bind: %v", err)
+	}
+	if _, err := svc.LookupUserByPublicKey(ctx, key); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("unproven binding routed a key lookup: %v", err)
+	}
+	challenge, err := GenerateChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := SignLoginChallenge(private, challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := svc.AuthenticateIdentityChallenge(ctx, attacker.UniqueID, challenge, signature); ok {
+		t.Fatal("an unproven binding authenticated a challenge login")
+	}
+	// An unproven claim cannot take a key from another account either.
+	if err := svc.BindPublicKey(ctx, owner.ID, key, false); !errors.Is(err, ErrPublicKeyInUse) {
+		t.Fatalf("second unproven bind = %v, want ErrPublicKeyInUse", err)
+	}
+	if err := svc.BindPublicKey(ctx, owner.ID, key, true); err != nil {
+		t.Fatalf("proven bind over an unproven claim: %v", err)
+	}
+	if got, err := svc.LookupUserByPublicKey(ctx, key); err != nil || got.ID != owner.ID {
+		t.Fatalf("lookup = %+v, %v; want the proven owner", got, err)
+	}
+	if err := svc.BindPublicKey(ctx, attacker.ID, key, false); !errors.Is(err, ErrPublicKeyInUse) {
+		t.Fatalf("unproven claim of a proven key = %v, want ErrPublicKeyInUse", err)
+	}
+	// An unproven rebind by the owner (older client again) keeps it proven.
+	if err := svc.BindPublicKey(ctx, owner.ID, key, false); err != nil {
+		t.Fatalf("owner unproven rebind: %v", err)
+	}
+	if got, err := svc.LookupUserByPublicKey(ctx, key); err != nil || got.ID != owner.ID {
+		t.Fatalf("owner rebind downgraded the key: %+v, %v", got, err)
+	}
+
+	// Upgrade: an unproven binding becomes routable once proven.
+	upgraded, upgradedPrivate, err := GenerateIdentityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindPublicKey(ctx, attacker.ID, upgraded, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindPublicKey(ctx, attacker.ID, upgraded, true); err != nil {
+		t.Fatal(err)
+	}
+	signature, err = SignLoginChallenge(upgradedPrivate, challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc.AuthenticateIdentityChallenge(ctx, attacker.UniqueID, challenge, signature); !ok || err != nil {
+		t.Fatalf("upgraded binding challenge login = %v, %v", ok, err)
 	}
 }

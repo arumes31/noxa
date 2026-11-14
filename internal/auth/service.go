@@ -151,7 +151,8 @@ func (a *AuthService) AuthenticateChallenge(ctx context.Context, uniqueID string
 // avoiding a second lookup that could race an account key replacement.
 func (a *AuthService) AuthenticateIdentityChallenge(ctx context.Context, uniqueID string, challenge, signature []byte) (string, bool, error) {
 	var pubPEM string
-	const q = `SELECT COALESCE(public_key, '') FROM users WHERE unique_id = $1`
+	// An unproven binding never authenticates; it verifies like an unbound key.
+	const q = `SELECT CASE WHEN public_key_proven THEN COALESCE(public_key, '') ELSE '' END FROM users WHERE unique_id = $1`
 	err := a.store.DB().QueryRowContext(ctx, q, uniqueID).Scan(&pubPEM)
 	missing := errors.Is(err, sql.ErrNoRows)
 	if err != nil && !missing {
@@ -365,7 +366,7 @@ func (a *AuthService) LookupUserByPublicKey(ctx context.Context, publicKey strin
 	if c, err := CanonicalPublicKey(publicKey); err == nil {
 		canonical = c
 	}
-	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot, COALESCE(identity_display_name, '') FROM users WHERE public_key = $1 OR public_key = $2 LIMIT 2`
+	const q = `SELECT id, unique_id, COALESCE(nickname, ''), is_bot, COALESCE(identity_display_name, '') FROM users WHERE (public_key = $1 OR public_key = $2) AND public_key_proven LIMIT 2`
 	rows, err := a.store.DB().QueryContext(ctx, q, canonical, publicKey)
 	if err != nil {
 		return nil, fmt.Errorf("querying user by public key: %w", err)
@@ -398,7 +399,12 @@ func (a *AuthService) LookupUserByPublicKey(ctx context.Context, publicKey strin
 // account, one whose derived unique ID is another account's or a linked
 // guest's principal, or another principal's device key is refused with
 // ErrPublicKeyInUse so a login cannot claim someone else's identity key.
-func (a *AuthService) BindPublicKey(ctx context.Context, userID int64, publicKey string) error {
+//
+// proven says the login signed for the key. An unproven binding (an older
+// client's password login) serves that account's sessions but never routes
+// a key login; a proven binding upgrades it, and replaces another account's
+// unproven claim of the same key.
+func (a *AuthService) BindPublicKey(ctx context.Context, userID int64, publicKey string, proven bool) error {
 	derivedUniqueID, err := UniqueIDFromPublicKey(publicKey)
 	if err != nil {
 		return fmt.Errorf("binding public key: %w", err)
@@ -410,16 +416,29 @@ func (a *AuthService) BindPublicKey(ctx context.Context, userID int64, publicKey
 	if err != nil {
 		return fmt.Errorf("binding public key: %w", err)
 	}
-	const q = `UPDATE users SET public_key = $2
+	tx, err := a.store.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("binding public key: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if proven {
+		if _, err := tx.ExecContext(ctx, `UPDATE users SET public_key = NULL, public_key_proven = TRUE
+			WHERE id <> $1 AND NOT public_key_proven AND (public_key = $2 OR public_key = $3)`, userID, canonical, publicKey); err != nil {
+			return fmt.Errorf("binding public key: %w", err)
+		}
+	}
+	// An unproven rebind of the key an account already proved keeps it proven.
+	const q = `UPDATE users SET public_key = $2,
+			public_key_proven = $5::boolean OR COALESCE(public_key_proven AND public_key IN ($2, $4), FALSE)
 		WHERE id = $1 AND NOT EXISTS (
 			SELECT 1 FROM users other
 			WHERE other.id <> $1 AND (other.public_key = $2 OR other.public_key = $4 OR other.unique_id = $3)
 		) AND NOT EXISTS (
 			-- another principal's device key, or a linked guest derived from this key
 			SELECT 1 FROM user_devices d
-			WHERE d.user_id IS DISTINCT FROM $1 AND (d.principal = $3 OR d.ed25519_public = $2 OR d.ed25519_public = $4)
+			WHERE d.key_proven AND d.user_id IS DISTINCT FROM $1 AND (d.principal = $3 OR d.ed25519_public = $2 OR d.ed25519_public = $4)
 		)`
-	result, err := a.store.DB().ExecContext(ctx, q, userID, canonical, derivedUniqueID, publicKey)
+	result, err := tx.ExecContext(ctx, q, userID, canonical, derivedUniqueID, publicKey, proven)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrPublicKeyInUse
@@ -432,6 +451,9 @@ func (a *AuthService) BindPublicKey(ctx context.Context, userID int64, publicKey
 	}
 	if affected == 0 {
 		return ErrPublicKeyInUse
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("binding public key: %w", err)
 	}
 	return nil
 }

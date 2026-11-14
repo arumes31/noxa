@@ -58,7 +58,7 @@ func (fakeAuth) LookupActiveBan(context.Context, string, string) (*auth.Ban, err
 	return nil, nil
 }
 
-func (fakeAuth) BindPublicKey(context.Context, int64, string) error {
+func (fakeAuth) BindPublicKey(context.Context, int64, string, bool) error {
 	return nil
 }
 

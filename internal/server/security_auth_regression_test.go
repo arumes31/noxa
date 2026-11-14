@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"noxa/internal/auth"
+	"noxa/internal/e2ee"
 	"noxa/internal/netproto"
 	"noxa/internal/state"
 )
@@ -19,39 +20,105 @@ func authReply(t *testing.T, conn net.Conn) netproto.AuthResponse {
 	return resp
 }
 
-// A password login that presents someone else's identity key without proving
-// it must not bind it, and the key's owner keeps signing in as themselves.
-func TestPasswordLoginDoesNotBindUnprovenKey(t *testing.T) {
-	env := startTestEnv(t, nil)
+// An older client's password login presents its key without a proof: the
+// key still serves the session (signed directory publish, device
+// registration) but is recorded unproven.
+func TestOldClientPasswordLoginKeepsUnprovenKeySession(t *testing.T) {
+	devices := &fakeDevices{}
+	env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.Devices = devices })
+	defer env.stop()
+	keys := newLinkTestKeys(t)
+	conn := dialRetry(t, env.addr)
+	defer func() { _ = conn.Close() }()
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: keys.public, AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
+	resp := authReply(t, conn)
+	if !resp.OK {
+		t.Fatalf("password login: %s", resp.Reason)
+	}
+	readOfType(t, conn, netproto.MsgSnapshot)
+	env.auth.mu.Lock()
+	bindings := append([][3]any(nil), env.auth.bindings...)
+	env.auth.mu.Unlock()
+	if len(bindings) != 1 || bindings[0][1] != keys.public || bindings[0][2] != false {
+		t.Fatalf("bindings = %v, want one unproven binding", bindings)
+	}
+	pub, _ := testX25519(t)
+	signer, _ := auth.LoadPrivateKey(keys.private)
+	record, err := e2ee.SignKeyRecord("user-uid", pub, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send(t, conn, netproto.MsgKeyPublish, netproto.KeyPublish{PublicKey: record})
+	readOfType(t, conn, netproto.MsgChannelKey)
+	if got, _ := env.srv.senderDMKey(mustServerClient(t, env, resp.ClientID)); got != record {
+		t.Fatal("signed directory publish refused for an older client")
+	}
+	listed := deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionList})
+	if len(listed.Devices) != 1 || !listed.Devices[0].Current {
+		t.Fatalf("device registration for an older client = %+v", listed.Devices)
+	}
+	if d, err := devices.DeviceByKey(t.Context(), keys.public); err != nil || !d.KeyUnproven {
+		t.Fatalf("registered device = %+v, %v; want an unproven key", d, err)
+	}
+
+	// A later proven login (updated client) upgrades binding and device.
+	proven := dialRetry(t, env.addr)
+	defer func() { _ = proven.Close() }()
+	sendProvenPasswordAuth(t, proven, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: keys.public, AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}}, keys.private)
+	if resp := authReply(t, proven); !resp.OK {
+		t.Fatalf("proven login: %s", resp.Reason)
+	}
+	waitFor(t, "device key proven", func() bool {
+		d, err := devices.DeviceByKey(t.Context(), keys.public)
+		return err == nil && !d.KeyUnproven
+	})
+	env.auth.mu.Lock()
+	last := env.auth.bindings[len(env.auth.bindings)-1]
+	env.auth.mu.Unlock()
+	if last[2] != true {
+		t.Fatalf("proven login binding = %v, want proven", last)
+	}
+	if u, err := env.auth.LookupUserByPublicKey(t.Context(), keys.public); err != nil || u.UniqueID != "user-uid" {
+		t.Fatalf("proven key does not route to its account: %+v, %v", u, err)
+	}
+}
+
+// Someone else's key presented without a proof binds and registers only as
+// unproven, so it never routes the key owner's guest login into the account.
+func TestUnprovenKeyNeverRoutesKeyLogin(t *testing.T) {
+	devices := &fakeDevices{}
+	env := startTestEnvDeps(t, nil, nil, func(deps *Deps) { deps.Devices = devices })
 	defer env.stop()
 	victim := newLinkTestKeys(t)
 	attacker := newLinkTestKeys(t)
 
 	conn := dialRetry(t, env.addr)
 	defer func() { _ = conn.Close() }()
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: victim.public})
-	resp := authReply(t, conn)
-	if !resp.OK {
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: victim.public, AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
+	if resp := authReply(t, conn); !resp.OK {
 		t.Fatalf("password login: %s", resp.Reason)
 	}
-	if key := mustServerClient(t, env, resp.ClientID).sessionKey(); key != "" {
-		t.Fatal("an unproven key became the session's signing key")
+	readOfType(t, conn, netproto.MsgSnapshot)
+	deviceCall(t, conn, netproto.DeviceRequest{Action: netproto.DeviceActionList}) // registers the device
+	if d, err := devices.DeviceByKey(t.Context(), victim.public); err != nil || !d.KeyUnproven {
+		t.Fatalf("attacker device = %+v, %v; want an unproven key", d, err)
 	}
 
-	// A proof made with another key does not count either.
+	// A proof made with another key is not a proof.
 	forged := dialRetry(t, env.addr)
 	defer func() { _ = forged.Close() }()
 	sendProvenPasswordAuth(t, forged, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: victim.public}, attacker.private)
 	if resp := authReply(t, forged); !resp.OK {
 		t.Fatalf("password login with a bad proof: %s", resp.Reason)
 	}
-
 	env.auth.mu.Lock()
-	bound := len(env.auth.bindings)
-	env.auth.mu.Unlock()
-	if bound != 0 {
-		t.Fatalf("unproven key bound: %v", env.auth.bindings)
+	for _, b := range env.auth.bindings {
+		if b[2] != false {
+			t.Errorf("binding %v recorded as proven", b)
+		}
 	}
+	env.auth.mu.Unlock()
+
 	_, guest := keyLogin(t, env.addr, victim)
 	if !guest.OK || !guest.Guest || guest.UniqueID != victim.uniqueID {
 		t.Fatalf("victim key login = %+v, want its own guest identity", guest)

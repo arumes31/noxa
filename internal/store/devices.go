@@ -61,6 +61,10 @@ type Device struct {
 	ExpiryWarnedAt    time.Time
 	RevokedAt         time.Time
 	RevokedReason     string
+	// KeyUnproven marks a key an older client's password login presented
+	// without signing for it: it serves that account's sessions but never
+	// routes a key login, and a proven registration of the key replaces it.
+	KeyUnproven bool
 }
 
 // Active reports whether the device is not revoked.
@@ -81,23 +85,27 @@ type NewDevice struct {
 	// device. AddDevice rechecks under the roster lock (also held by passkey
 	// deletion and device revocation) that the credential still exists.
 	RequireCredentialID []byte
+	// KeyUnproven registers a key the session never signed for (Device).
+	KeyUnproven bool
 }
 
 const deviceColumns = `device_id, principal, COALESCE(user_id, 0), kind, name, ed25519_public,
 	x25519_public, first_device, approved_by, approval_signature, created_at, last_seen_at,
-	expiry_warned_at, revoked_at, revoked_reason, passkey_proof`
+	expiry_warned_at, revoked_at, revoked_reason, passkey_proof, key_proven`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanDevice(row rowScanner) (Device, error) {
 	var d Device
 	var warned, revoked sql.NullTime
+	var proven bool
 	err := row.Scan(&d.DeviceID, &d.Principal, &d.UserID, &d.Kind, &d.Name, &d.Ed25519Public,
 		&d.X25519Public, &d.FirstDevice, &d.ApprovedBy, &d.ApprovalSignature, &d.CreatedAt,
-		&d.LastSeenAt, &warned, &revoked, &d.RevokedReason, &d.PasskeyProof)
+		&d.LastSeenAt, &warned, &revoked, &d.RevokedReason, &d.PasskeyProof, &proven)
 	if err != nil {
 		return Device{}, err
 	}
+	d.KeyUnproven = !proven
 	d.ExpiryWarnedAt = warned.Time
 	d.RevokedAt = revoked.Time
 	return d, nil
@@ -157,6 +165,13 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 			return Device{}, ErrPasskeyNotFound
 		}
 	}
+	// A proven key wins over another principal's unproven claim of it.
+	if !d.KeyUnproven {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM user_devices WHERE NOT key_proven AND principal <> $3
+			AND (ed25519_public=$1 OR ed25519_public=$2)`, d.Ed25519Public, submitted, d.Principal); err != nil {
+			return Device{}, fmt.Errorf("adding device: %w", err)
+		}
+	}
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_devices WHERE ed25519_public=$1 OR ed25519_public=$2)`, d.Ed25519Public, submitted).Scan(&exists); err != nil {
 		return Device{}, fmt.Errorf("adding device: %w", err)
@@ -170,9 +185,10 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 	// account ID comes from) would sign its holder into this principal.
 	if derived, ok := deviceKeyUniqueID(d.Ed25519Public); ok {
 		var identity bool
+		// An unproven account binding does not block a proven device key.
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE unique_id <> $1
-			AND (unique_id = $2 OR public_key = $3 OR public_key = $4))`,
-			d.Principal, derived, d.Ed25519Public, submitted).Scan(&identity); err != nil {
+			AND (unique_id = $2 OR ((public_key = $3 OR public_key = $4) AND (public_key_proven OR $5))))`,
+			d.Principal, derived, d.Ed25519Public, submitted, d.KeyUnproven).Scan(&identity); err != nil {
 			return Device{}, fmt.Errorf("adding device: %w", err)
 		}
 		if identity {
@@ -191,11 +207,11 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 		userID = d.UserID
 	}
 	row := tx.QueryRowContext(ctx, `INSERT INTO user_devices
-		(device_id, principal, user_id, kind, name, ed25519_public, x25519_public, first_device, approved_by, approval_signature, passkey_proof)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		(device_id, principal, user_id, kind, name, ed25519_public, x25519_public, first_device, approved_by, approval_signature, passkey_proof, key_proven)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING `+deviceColumns,
 		uuid.NewString(), d.Principal, userID, d.Kind, NormalizeDeviceName(d.Name), d.Ed25519Public,
-		d.X25519Public, active == 0, d.ApprovedBy, d.ApprovalSignature, d.PasskeyProof)
+		d.X25519Public, active == 0, d.ApprovedBy, d.ApprovalSignature, d.PasskeyProof, !d.KeyUnproven)
 	device, err := scanDevice(row)
 	if err != nil {
 		return Device{}, fmt.Errorf("adding device: %w", err)
@@ -207,6 +223,14 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 		return Device{}, fmt.Errorf("adding device: %w", err)
 	}
 	return device, nil
+}
+
+// MarkDeviceKeyProven records that a session signed for the device's key.
+func (s *Store) MarkDeviceKeyProven(ctx context.Context, deviceID string) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE user_devices SET key_proven = TRUE WHERE device_id = $1`, deviceID); err != nil {
+		return fmt.Errorf("marking device key proven: %w", err)
+	}
+	return nil
 }
 
 // DeviceByKey returns the device registered with the identity key, revoked

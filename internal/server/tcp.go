@@ -120,6 +120,7 @@ type Client struct {
 	// Retained only after successful guest proof, for explicit role enrollment.
 	verifiedGuestKey string
 	authSigningKey   string                                      // bound to the successful authentication attempt
+	authKeyProven    bool                                        // the login signed for authSigningKey
 	deviceID         string                                      // linked device of this session, if registered
 	deviceIndex      *deviceSessionIndex                         // set by register; keeps the device -> sessions index current
 	webTransport     atomic.Bool                                 // connected through the mobile web app

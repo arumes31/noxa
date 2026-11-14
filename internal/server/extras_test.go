@@ -602,7 +602,7 @@ func TestNicknamePasswordLogin(t *testing.T) {
 
 	env.auth.mu.Lock()
 	defer env.auth.mu.Unlock()
-	if len(env.auth.bindings) != 1 || env.auth.bindings[0][0] != int64(2) || env.auth.bindings[0][1] != keys.public {
+	if len(env.auth.bindings) != 1 || env.auth.bindings[0][0] != int64(2) || env.auth.bindings[0][1] != keys.public || env.auth.bindings[0][2] != true {
 		t.Fatalf("bindings = %v, want [(2, proven key)]", env.auth.bindings)
 	}
 }

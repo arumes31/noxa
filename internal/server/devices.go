@@ -31,6 +31,7 @@ type DeviceStore interface {
 	DeviceByID(ctx context.Context, principal, deviceID string) (store.Device, error)
 	ListDevices(ctx context.Context, principal string, includeRevoked bool) ([]store.Device, error)
 	TouchDevice(ctx context.Context, deviceID string, at time.Time) error
+	MarkDeviceKeyProven(ctx context.Context, deviceID string) error
 	RenameDevice(ctx context.Context, principal, deviceID, name string) (store.Device, error)
 	RevokeDevice(ctx context.Context, principal, deviceID, reason string) (store.Device, error)
 	SignOutDevice(ctx context.Context, principal, deviceID string) (store.Device, error)
@@ -188,6 +189,14 @@ func deviceInfo(d store.Device, currentDeviceID string) netproto.DeviceInfo {
 	return info
 }
 
+// keyProven reports whether the login signed for sessionKey: guest keys
+// always did, an older client's password login may not have.
+func (c *Client) keyProven() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.authSigningKey == "" || c.authKeyProven
+}
+
 func (c *Client) sessionKey() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -294,6 +303,9 @@ func (s *TCPServer) deviceLoginPrincipal(ctx context.Context, publicKey string) 
 	if err != nil {
 		return "", 0, false, err
 	}
+	if d.KeyUnproven {
+		return "", 0, false, nil // never routes a key login
+	}
 	if !d.Active() {
 		return "", 0, false, errDeviceRevoked
 	}
@@ -357,6 +369,11 @@ func (s *TCPServer) attachSessionDevice(ctx context.Context, client *Client, pri
 	if err := s.deps.Devices.TouchDevice(ctx, d.DeviceID, time.Now()); err != nil {
 		s.logger.Warn("recording device activity failed", zap.Error(err))
 	}
+	if d.KeyUnproven && client.keyProven() {
+		if err := s.deps.Devices.MarkDeviceKeyProven(ctx, d.DeviceID); err != nil {
+			s.logger.Warn("recording proven device key failed", zap.Error(err))
+		}
+	}
 	return d.DeviceID
 }
 
@@ -388,6 +405,7 @@ func (s *TCPServer) ensureDesktopDevice(ctx context.Context, client *Client) (st
 		Name:          name,
 		Ed25519Public: key,
 		X25519Public:  client.x25519(),
+		KeyUnproven:   !client.keyProven(),
 	}, s.cfg.Web.DeviceLimit())
 	if err != nil {
 		return store.Device{}, err

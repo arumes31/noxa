@@ -52,7 +52,7 @@ func (f *fakeDevices) AddDevice(_ context.Context, d store.NewDevice, limit int)
 		DeviceID: "dev-" + string(rune('a'+f.next)), Principal: d.Principal, UserID: d.UserID, Kind: d.Kind,
 		Name: store.NormalizeDeviceName(d.Name), Ed25519Public: d.Ed25519Public, X25519Public: d.X25519Public,
 		FirstDevice: active == 0, ApprovedBy: d.ApprovedBy, ApprovalSignature: d.ApprovalSignature, PasskeyProof: d.PasskeyProof,
-		CreatedAt: now, LastSeenAt: now,
+		CreatedAt: now, LastSeenAt: now, KeyUnproven: d.KeyUnproven,
 	}
 	f.devices = append(f.devices, device)
 	return device, nil
@@ -102,6 +102,15 @@ func (f *fakeDevices) TouchDevice(_ context.Context, id string, at time.Time) er
 	defer f.mu.Unlock()
 	if i, ok := f.find(func(d store.Device) bool { return d.DeviceID == id }); ok {
 		f.devices[i].LastSeenAt = at
+	}
+	return nil
+}
+
+func (f *fakeDevices) MarkDeviceKeyProven(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if i, ok := f.find(func(d store.Device) bool { return d.DeviceID == id }); ok {
+		f.devices[i].KeyUnproven = false
 	}
 	return nil
 }

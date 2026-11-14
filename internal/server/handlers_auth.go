@@ -183,24 +183,26 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	}
 
 	client.mu.Lock()
-	client.authSigningKey = ""
+	client.authSigningKey, client.authKeyProven = "", false
 	client.mu.Unlock()
-	// Bind the client's identity key so future challenge logins work, but
-	// only when it signed a challenge issued on this connection: a password
-	// alone must never claim someone else's identity key (or make it this
-	// session's signing key, which later registers it as a device).
-	if msg.PublicKey != "" && len(proofChallenge) > 0 && auth.VerifyLoginChallenge(msg.PublicKey, proofChallenge, msg.PublicKeyProof) == nil {
+	// Bind the client's identity key so future challenge logins work. Only a
+	// key signed for (a challenge issued on this connection) is proven and may
+	// route key logins; an older client's unproven key still serves this
+	// password session (signing key, device), which is harmless because the
+	// account holder cannot sign with someone else's key.
+	if msg.PublicKey != "" {
+		proven := len(proofChallenge) > 0 && auth.VerifyLoginChallenge(msg.PublicKey, proofChallenge, msg.PublicKeyProof) == nil
 		if canonical, err := auth.CanonicalPublicKey(msg.PublicKey); err == nil {
 			msg.PublicKey = canonical
 		}
-		if err := s.deps.Auth.BindPublicKey(ctx, user.ID, msg.PublicKey); err != nil {
+		if err := s.deps.Auth.BindPublicKey(ctx, user.ID, msg.PublicKey, proven); err != nil {
 			s.logger.Warn("public key binding failed",
 				zap.String("client_id", client.ID),
 				zap.Error(err),
 			)
 		} else {
 			client.mu.Lock()
-			client.authSigningKey = msg.PublicKey
+			client.authSigningKey, client.authKeyProven = msg.PublicKey, proven
 			client.mu.Unlock()
 		}
 	}
@@ -278,7 +280,7 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 	}
 
 	client.mu.Lock()
-	client.authSigningKey = verifiedKey
+	client.authSigningKey, client.authKeyProven = verifiedKey, true
 	client.mu.Unlock()
 	attempt.Succeed()
 	return s.completeAuth(ctx, client, msg.UniqueID, nickname)
@@ -333,7 +335,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	}
 
 	client.mu.Lock()
-	client.authSigningKey = msg.PublicKey
+	client.authSigningKey, client.authKeyProven = msg.PublicKey, true
 	client.mu.Unlock()
 
 	// A linked device signs in as the account that approved it.
