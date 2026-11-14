@@ -110,7 +110,8 @@ func updateLaunchedProcess(getenv func(string) string) bool {
 // StartedAfterUpdate reports whether this is the first start of a freshly
 // installed update, so the frontend can play its one-time intro. It carries
 // no address, nonce or path.
-func (a *App) StartedAfterUpdate() bool { return startedAfterUpdate }
+// A handover takes over seamlessly, so it plays no intro.
+func (a *App) StartedAfterUpdate() bool { return startedAfterUpdate && incomingHandover == nil }
 
 // ConfirmUpdateStartup is called after the frontend's modules and native
 // settings have initialized. It exposes no callback address, path, or command

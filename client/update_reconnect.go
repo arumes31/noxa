@@ -73,7 +73,7 @@ func (a *App) PrepareUpdateStreamResume(raw string) string {
 	if err != nil {
 		return "cannot preserve stream settings"
 	}
-	current := a.snapshotUpdateConnection()
+	current, _ := a.snapshotUpdateConnection()
 	if current == nil || saved.Addr != current.Addr || saved.ChannelID != current.ChannelID || saved.Identity.PublicKey != current.Identity.PublicKey {
 		return ""
 	}
@@ -95,7 +95,8 @@ func (a *App) PrepareUpdateReconnect(muted, deafened, mutedBeforeDeafen bool) st
 		return "an update is already processing"
 	}
 	a.updateReconnect = ""
-	snapshot := a.snapshotUpdateConnection()
+	a.updateHandoverCM, a.updateHandoverToken = nil, ""
+	snapshot, cm := a.snapshotUpdateConnection()
 	if snapshot == nil {
 		// A chained update may run before the successor consumes the handoff.
 		if startedAfterUpdate && !a.updateReconnectConsumed {
@@ -109,15 +110,16 @@ func (a *App) PrepareUpdateReconnect(muted, deafened, mutedBeforeDeafen bool) st
 		return "Cannot preserve the connection for restart: " + err.Error()
 	}
 	a.updateReconnect = encoded
+	a.updateHandoverCM, a.updateHandoverToken = cm, snapshot.ResumeToken
 	return ""
 }
 
-func (a *App) snapshotUpdateConnection() *updateReconnectEnvelope {
+func (a *App) snapshotUpdateConnection() (*updateReconnectEnvelope, *connManager) {
 	a.tabsMu.Lock()
 	tab := a.tabs[a.activeID]
 	if tab == nil || tab.cm == nil || tab.reconnectSuppressed {
 		a.tabsMu.Unlock()
-		return nil
+		return nil, nil
 	}
 	cm := tab.cm
 	saved := updateReconnectEnvelope{Version: 1, Expires: time.Now().Add(10 * time.Minute).Unix(), Addr: tab.info.Addr,
@@ -129,7 +131,7 @@ func (a *App) snapshotUpdateConnection() *updateReconnectEnvelope {
 	cm.mu.Lock()
 	if cm.conn == nil || cm.closed || cm.id == nil {
 		cm.mu.Unlock()
-		return nil
+		return nil, nil
 	}
 	saved.Identity = *cm.id
 	saved.DisplayName = cm.displayName
@@ -139,9 +141,9 @@ func (a *App) snapshotUpdateConnection() *updateReconnectEnvelope {
 	current := a.tabs[a.activeID] == tab && !tab.reconnectSuppressed
 	a.tabsMu.Unlock()
 	if !current {
-		return nil
+		return nil, nil
 	}
-	return &saved
+	return &saved, cm
 }
 
 func encodeUpdateReconnect(saved updateReconnectEnvelope, protect func([]byte) ([]byte, error)) (string, error) {
@@ -188,25 +190,36 @@ func decodeUpdateReconnect(encoded string, now time.Time, unprotect func([]byte)
 // RestoreUpdateConnection is invoked after genuine frontend readiness, before
 // bookmark auto-connect. Only the updater-launched process can consume it once.
 func (a *App) RestoreUpdateConnection() map[string]any {
+	result, owner := a.restoreUpdateConnectionOnce()
+	// A handover process whose restoration did not take over the session
+	// hands it back. Only the call that consumed the restoration decides; a
+	// skipped or repeated call never cancels one in progress.
+	if h := incomingHandover; h != nil && owner {
+		h.abandon(a)
+	}
+	return result
+}
+
+func (a *App) restoreUpdateConnectionOnce() (map[string]any, bool) {
 	a.update.mu.Lock()
 	if a.updateReconnectConsumed || a.UpdateStartupPending() {
 		a.update.mu.Unlock()
-		return map[string]any{"attempted": false}
+		return map[string]any{"attempted": false}, false
 	}
 	a.updateReconnectConsumed = true
 	encoded := os.Getenv(updateReconnectEnv)
 	_ = os.Unsetenv(updateReconnectEnv)
 	a.update.mu.Unlock()
 	if !startedAfterUpdate || encoded == "" {
-		return map[string]any{"attempted": false}
+		return map[string]any{"attempted": false}, true
 	}
 	result := map[string]any{"attempted": true}
 	saved, err := decodeUpdateReconnect(encoded, time.Now(), unprotectBytes)
 	if err != nil {
 		result["error"] = err.Error()
-		return result
+		return result, true
 	}
-	return a.restoreUpdateConnection(saved)
+	return a.restoreUpdateConnection(saved), true
 }
 
 func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string]any {
@@ -219,30 +232,57 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	a.emitPlain("update_connection_restoring", map[string]bool{"muted": saved.Muted, "deafened": saved.Deafened, "muted_before_deafen": saved.MutedBeforeDeafen})
 	id, tab := a.newTabWithIdentity(&saved.Identity)
 	tab.cm.setResumeToken(saved.ResumeToken)
+	handover := incomingHandover
+	if handover != nil {
+		tab.cm.mu.Lock()
+		tab.cm.handoverBegin = func() bool { return handover.signal(handoverCommitting) == nil }
+		tab.cm.mu.Unlock()
+	}
 	committed := false
 	defer func() {
 		if !committed {
 			a.CloseTab(id)
 		}
 	}()
-	if failure := tab.cm.connectNamed(saved.Addr, saved.Nickname, saved.DisplayName, saved.Passwords.Password, saved.Passwords.ServerPassword); failure != "" {
+	failure := tab.cm.connectNamed(saved.Addr, saved.Nickname, saved.DisplayName, saved.Passwords.Password, saved.Passwords.ServerPassword)
+	// Once the commit was sent, the session may live here (under the token
+	// both processes hold): keep it whatever fails afterwards, and never
+	// signal the old process to keep it.
+	tab.cm.mu.Lock()
+	moved := handover != nil && tab.cm.handoverCommitted
+	tab.cm.mu.Unlock()
+	if failure != "" && !moved {
 		a.removeTab(id)
 		result["error"] = failure
 		return result
 	}
 	a.tabsMu.Lock()
-	owned := a.tabs[id] == tab && !tab.reconnectSuppressed && a.activeID == "" && len(a.tabs) == 1
-	if owned {
+	registered := a.tabs[id] == tab
+	if registered {
+		// A kept tab reconnects from these, so record them whether or not it
+		// becomes the selected one.
 		tab.info.Addr, tab.info.Nickname, tab.bookmark = saved.Addr, saved.Nickname, saved.Bookmark
 		tab.loginPasswords = &saved.Passwords
+		if tab.lastVoiceChannel == 0 {
+			tab.lastVoiceChannel = saved.ChannelID // a reconnect rejoins it
+		}
 	}
+	owned := registered && !tab.reconnectSuppressed && a.activeID == "" && len(a.tabs) == 1
 	a.tabsMu.Unlock()
 	if !owned {
-		tab.cm.disconnect()
+		if moved {
+			committed = true
+			handover.commit(a)
+			if !tab.cm.connected() {
+				go tab.cm.emit("disconnected", "")
+			}
+		} else {
+			tab.cm.disconnect()
+		}
 		result["error"] = "connection restoration was cancelled"
 		return result
 	}
-	if saved.ChannelID > 0 {
+	if saved.ChannelID > 0 && failure == "" {
 		if warning := tab.cm.joinChannel(saved.ChannelID); warning != "" {
 			result["warning"] = warning
 		}
@@ -251,15 +291,43 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	defer a.activationPublishMu.Unlock()
 	connected := tab.cm.connected()
 	a.tabsMu.Lock()
-	if !connected || a.tabs[id] != tab || tab.reconnectSuppressed || a.activeID != "" || len(a.tabs) != 1 {
+	// After a handover commit the session belongs to this process even if
+	// its connection dropped meanwhile: keep the tab and resume it as usual.
+	if (!connected && !moved) || a.tabs[id] != tab || tab.reconnectSuppressed || a.activeID != "" || len(a.tabs) != 1 {
 		a.tabsMu.Unlock()
+		if moved {
+			committed = true // keep the moved session (see above)
+			handover.commit(a)
+			if !connected {
+				go tab.cm.emit("disconnected", "")
+			}
+		}
 		result["error"] = "connection restoration was cancelled"
 		return result
 	}
 	cm, journal, generation, _ := a.activateLocked(id)
 	a.tabsMu.Unlock()
 	committed = true
+	if moved {
+		handover.commit(a)
+		// The commit signal can take a moment: a drop meanwhile must still
+		// lead to the reconnect below.
+		connected = connected && tab.cm.connected()
+	}
 	a.onTabConnected(cm, saved.Bookmark, saved.Addr, saved.Nickname, saved.DisplayName)
+	if !connected {
+		// The frontend starts the normal reconnect (with the session's token)
+		// once it has recorded this tab; see result["reconnect"].
+		a.tabsMu.Lock()
+		tab.info.Connected = false
+		tab.reconnectAllowed = !tab.reconnectSuppressed
+		a.tabsMu.Unlock()
+		result["warning"] = "connection lost while restoring; reconnecting"
+		result["reconnect"] = true
+		a.finishActivateSerialized(id, cm, journal, generation)
+		result["tab_id"] = id
+		return result
+	}
 	if saved.ChannelID > 0 && result["warning"] == nil {
 		a.emitPlain("tab_voice_restored", map[string]any{"tab_id": id, "client_id": tab.cm.clientIDSnapshot(), "channel_id": saved.ChannelID})
 	}

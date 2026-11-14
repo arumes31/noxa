@@ -109,17 +109,17 @@ func TestUpdateReconnectSnapshotUsesActiveConnection(t *testing.T) {
 	tab.cm.conn = local
 	tab.cm.displayName = "Daniel"
 	a.activate(active)
-	got := a.snapshotUpdateConnection()
+	got, _ := a.snapshotUpdateConnection()
 	if got == nil || got.ChannelID != 42 || got.Nickname != "account" || got.DisplayName != "Daniel" || got.Bookmark != "home" || got.Identity.PublicKey != id.PublicKey || got.Passwords != *tab.loginPasswords {
 		t.Fatal("active connection snapshot incomplete")
 	}
 	tab.reconnectSuppressed = true
-	if a.snapshotUpdateConnection() != nil {
+	if got, _ := a.snapshotUpdateConnection(); got != nil {
 		t.Fatal("intentional disconnect was captured")
 	}
 	tab.reconnectSuppressed = false
 	tab.cm.closed = true
-	if a.snapshotUpdateConnection() != nil {
+	if got, _ := a.snapshotUpdateConnection(); got != nil {
 		t.Fatal("closed socket was captured")
 	}
 }

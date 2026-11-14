@@ -103,13 +103,25 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 	// A presented resume token continues an earlier session of this identity
 	// (an ephemeral guest gets its old guest identity back). Everything below
 	// is still checked afresh: bans, devices, capacity and channel access.
+	if client.handoverRequested() {
+		return s.enterHandoverStandby(client, id)
+	}
 	resumed := s.claimResume(ctx, client, id.uniqueID)
+	if hook := afterHandoverTakeover; hook != nil && client.handoverCommitting() {
+		hook()
+	}
+	if resumed == nil && client.handoverCommitting() {
+		// The session ended or was resumed elsewhere meanwhile: never let a
+		// commit become a second, fresh session.
+		_ = s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: netproto.ReasonHandoverUnavailable})
+		return errHandoverUnavailable
+	}
 	var parked *resumeParked
 	if resumed != nil {
 		parked = resumed.parked
 		id.uniqueID = parked.uniqueID
 	}
-	var rejection string
+	var rejection, keptToken string
 	err := s.withRolePolicy(ctx, func(ctx context.Context) error {
 		s.roleMetadataMu.Lock()
 		defer s.roleMetadataMu.Unlock()
@@ -153,7 +165,9 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		}
 		// Metadata serialization makes capacity check and publication atomic.
 		// Idle sockets are deliberately excluded from the configured user limit.
-		if max := s.EffectiveMaxClients(ctx); max > 0 && s.authenticatedClientCount() >= max {
+		// Sessions are counted by client ID, live or reserved for a handover
+		// commit, each once; a commit does not count the session it takes over.
+		if max := s.EffectiveMaxClients(ctx); max > 0 && s.sessionCount(client.handoverTarget()) >= max {
 			rejection = "server is full"
 			return authorization.ErrRoleForbidden
 		}
@@ -167,6 +181,13 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		}
 		client.setIdentity(id.uniqueID, id.nickname, id.userID, id.bot)
 		s.publishAuthenticatedSession(ctx, client, id)
+		s.releaseHandoverSlot(client) // now counted as a session, atomically
+		if token := client.handoverToken(); token != "" && parked != nil {
+			// A handover commit keeps the token both processes hold, and
+			// registers it at once: a failure after publication (or a lost
+			// reply) still leaves the session resumable with it.
+			keptToken = s.resume.reissue(client, id.uniqueID, resumeBinding(id.uniqueID, client.sessionKey()), token)
+		}
 		if parked != nil {
 			s.restoreResumedSession(ctx, client, parked, id.guest)
 			key, _ := client.presenceSessionKey()
@@ -221,10 +242,14 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		Nickname:           id.nickname,
 		Guest:              id.guest,
 		TLSFingerprint:     s.tlsFingerprint,
-		Capabilities:       []string{netproto.CapabilityLobbyPrivacy, netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity},
+		Capabilities:       []string{netproto.CapabilityLobbyPrivacy, netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity, netproto.CapabilityHandover},
 	}
 	s.announceClientVersions(&resp)
-	resp.ResumeToken = s.resume.issue(client, id.uniqueID, resumeBinding(id.uniqueID, client.sessionKey()))
+	if keptToken != "" {
+		resp.ResumeToken = keptToken
+	} else {
+		resp.ResumeToken = s.resume.issue(client, id.uniqueID, resumeBinding(id.uniqueID, client.sessionKey()))
+	}
 	resp.Resumed = parked != nil
 	if s.deps.Relay != nil {
 		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityManagedRelay)

@@ -64,7 +64,11 @@ type App struct {
 	// Explicit Quit and update restart bypass close-to-tray.
 	quitting atomic.Bool
 	// update.mu guards the one-shot native restart envelope.
-	updateReconnect         string
+	updateReconnect string
+	// The session captured with updateReconnect and its token: the only one
+	// an update handover may move (protected by update.mu).
+	updateHandoverCM        *connManager
+	updateHandoverToken     string
 	updateReconnectConsumed bool
 	// closeMu guards the renderer readiness and one pending goodbye handshake.
 	closeMu                 sync.Mutex
@@ -193,7 +197,10 @@ func (a *App) requireCM() (*connManager, error) {
 func (a *App) cmStore(cm *connManager) { a.cm.Store(cm) }
 
 func (a *App) domReady(ctx context.Context) {
-	restoreUpdateWindow()
+	// A handover window stays hidden until it takes over the session.
+	if incomingHandover == nil {
+		restoreUpdateWindow()
+	}
 	if err := a.restoreWindowOpacityOnce(ctx); err != nil && err != context.Canceled {
 		log.Printf("window opacity at DOM-ready: %v", err)
 	}
@@ -211,6 +218,9 @@ func (a *App) startup(ctx context.Context) {
 		a.knownServers = &knownServers{Servers: map[string]string{}, loadErr: trustStoreUnavailable("locate path: %v", err)}
 	}
 	a.registerHotkeys()
+	if h := incomingHandover; h != nil {
+		h.watchParent(a)
+	}
 	// (501) Windows Action Center notifications: per-user registration only.
 	go guardCrash("native notifications", a.initNativeToasts)
 	// (291) restore always-on-top.

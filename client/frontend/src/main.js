@@ -1057,10 +1057,11 @@ window.addEventListener("noxa-language-changed", () => {
     reconnectCancel.textContent = t("runtime.cancelReconnect");
     tabReconnects.refresh(state.activeTabID);
 });
-window.runtime.EventsOn("tab_disconnected", tabID => {
+function startTabReconnect(tabID) {
     connectionOverlay.lost(String(tabID));
     if (scopedReconnectAvailable()) tabReconnects.start(String(tabID), state.tabConnects.get(String(tabID)));
-});
+}
+window.runtime.EventsOn("tab_disconnected", startTabReconnect);
 window.runtime.EventsOn("tab_closed", tabID => {
     tabID = String(tabID);
     if (tabID === state.activeTabID) cancelShareResume();
@@ -2801,7 +2802,7 @@ function applyLiveAudioSettings() {
         applyVoiceState();
         if (remoteChain.ctx) await selectAudioOutput(remoteChain.ctx);
         if (remoteChain.master) {
-            remoteChain.master.gain.value = state.deafened ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
+            remoteChain.master.gain.value = state.deafened || state.handoverSilenced ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
         }
         // Local preview elements must stay muted to avoid microphone feedback.
         applyOutputSettings($("remote-video"));
@@ -3325,7 +3326,7 @@ function applyVoiceState() {
     }
     if (!state.localStream) return;
     const mode = state.settings?.activation_mode || "ptt";
-    let audible = !state.muted && !state.deafened;
+    let audible = !state.muted && !state.deafened && !state.handoverSilenced;
     // Keep the raw track's enablement consistent for local UI consumers.
     // The worklet independently gates the transmitted track in VAD mode.
     if (mode !== "continuous") audible = audible && state.pttActive;
@@ -3510,6 +3511,17 @@ window.runtime.EventsOn("update_connection_restoring", audio => {
     refreshVoicePlayback();
     renderTree();
 });
+// Update handover: the updated app takes over this session, so this one goes
+// silent at once. The silence is its own gate, separate from the user's mute
+// and deafen state (which the server keeps), so no toggle can lift it; it
+// ends only if the handover is abandoned.
+window.runtime.EventsOn("update_handover", phase => {
+    if (phase !== "commit" && phase !== "abandon") return;
+    state.handoverSilenced = phase === "commit";
+    applyVoiceState();
+    applyOutputSettings($("remote-video"));
+    refreshVoicePlayback();
+});
 function setDeafened(on) {
     if (updateStartupBlocked()) return;
     if (state.deafened === on) return;
@@ -3521,8 +3533,7 @@ function setDeafened(on) {
     window.go.main.App.SetMuted(state.muted);
     applyVoiceState();
     refreshVoicePlayback();
-    $("remote-video").muted = on;
-    if (remoteChain.master) remoteChain.master.gain.value = on ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
+    applyOutputSettings($("remote-video")); // keeps every output gate, handover silence included
     playEvent(on ? "deafen_on" : "deafen_off");
     renderTree();
     publishAudioState();
@@ -3780,6 +3791,7 @@ window.__noxa = {
     updateReconnectAudio: () => ({ muted: state.muted, deafened: state.deafened, mutedBeforeDeafen }),
     completeUpdateReconnect: result => completeReconnect({ addr: result.addr, nick: result.nick,
         displayName: result.displayName || "", bookmark: result.bookmark || "", pw: "", spw: "" }, null, result.tab_id),
+    startTabReconnect,
     state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT, noteActivity,
     setDeafened, joinChannelLocally, refreshPermissions, applyVoiceState, applyOutputSettings, applyLiveAudioSettings,
     startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor, prepareChannelMicrophone, readRemoteAudioLevel,

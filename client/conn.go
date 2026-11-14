@@ -89,7 +89,16 @@ type connManager struct {
 	clientID                     string
 	// resumeToken continues this session after a lost connection or an
 	// update restart. Memory only: never persisted or given to the renderer.
-	resumeToken         string
+	resumeToken string
+	// supportsHandover: the server keeps an update handover login in standby
+	// until it commits (handover_v1).
+	supportsHandover bool
+	// handoverBegin, set only on an update handover login, is called once the
+	// server holds the login in standby; true commits it.
+	handoverBegin func() bool
+	// handoverCommitted: the server accepted this login's handover commit, so
+	// the session lives here now even if the connection setup fails later.
+	handoverCommitted   bool
 	uniqueID            string
 	deviceID            string              // linked device of this session (devices_v1)
 	callMediaCache      callMediaStateCache // call state behind call media-key targets (#12)
@@ -559,10 +568,17 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.mu.Lock()
 	m.reconnectTerminal = false
 	authMsg.ResumeToken = m.resumeToken
+	handoverBegin := m.handoverBegin
+	m.handoverBegin = nil // one handover attempt; later logins are ordinary
+	m.handoverCommitted = false
 	m.mu.Unlock()
 	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	authMsg.ClientVersion = version.Short()
 	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume}
+	if handoverBegin != nil {
+		authMsg.Handover = true
+		authMsg.ClientFeatures = append(authMsg.ClientFeatures, netproto.ClientFeatureHandover)
+	}
 	if m.lobbyPrivacyPreference != nil {
 		authMsg.HideLobbyPresence = m.lobbyPrivacyPreference()
 	}
@@ -583,8 +599,14 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	// asks for one.
 	var resp netproto.AuthResponse
 	powAnswered := false
+	committed := false
 	for {
-		f, err := readOfType(conn, 5*time.Second, netproto.MsgAuthResponse, netproto.MsgAuthChallenge, netproto.MsgPowChallenge)
+		// A commit waits for the server to close the old session first.
+		timeout := 5 * time.Second
+		if committed {
+			timeout = 15 * time.Second
+		}
+		f, err := readOfType(conn, timeout, netproto.MsgAuthResponse, netproto.MsgAuthChallenge, netproto.MsgPowChallenge)
 		if err != nil {
 			_ = conn.Close()
 			return err.Error()
@@ -645,9 +667,47 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 			}
 			continue
 		}
+		resp = netproto.AuthResponse{} // a commit reply replaces the standby one
 		if err := netproto.Decode(f, &resp); err != nil {
 			_ = conn.Close()
 			return err.Error()
+		}
+		if resp.OK && resp.Standby && handoverBegin != nil && !committed {
+			// Standby: the old process keeps the session until this commit.
+			if !handoverBegin() {
+				_ = conn.Close()
+				return "update handover cancelled"
+			}
+			committed = true
+			// From here on the session may already live here: never hand it
+			// back, whether or not the reply arrives (its token stays valid).
+			m.mu.Lock()
+			m.handoverCommitted = true
+			m.mu.Unlock()
+			if err := m.writeConn(conn, netproto.MsgHandoverCommit, struct{}{}); err != nil {
+				_ = conn.Close()
+				return err.Error()
+			}
+			continue
+		}
+		if resp.Standby {
+			_ = conn.Close()
+			return netproto.ReasonHandoverUnavailable
+		}
+		if resp.OK && handoverBegin != nil && !committed {
+			// A server that ignored the standby request already moved the
+			// session here: keep it like a commit, never as a plain login.
+			m.mu.Lock()
+			m.handoverCommitted = true
+			m.mu.Unlock()
+		}
+		if resp.OK {
+			// Keep the issued token before anything else can fail: the server
+			// now holds this session (after a handover commit, the only one)
+			// under it, and a resume needs it.
+			m.mu.Lock()
+			m.resumeToken = resp.ResumeToken
+			m.mu.Unlock()
 		}
 		if resp.OK && resp.MediaLimitsRevision != 0 && !hasCompleteAuthMediaLimits(f) {
 			m.markReconnectTerminal()
@@ -733,6 +793,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.supportsStreamCodecRefresh = slices.Contains(resp.Capabilities, netproto.CapabilityStreamCodecRefresh)
 	m.supportsStreamReceiverRecovery = slices.Contains(resp.Capabilities, netproto.CapabilityStreamReceiverRecovery)
 	m.supportsConversationActivity = slices.Contains(resp.Capabilities, netproto.CapabilityConversationActivity)
+	m.supportsHandover = slices.Contains(resp.Capabilities, netproto.CapabilityHandover)
 	m.iceServers = resp.ICEServers
 	m.managedRelay = slices.Contains(resp.Capabilities, netproto.CapabilityManagedRelay)
 	m.recommendedVersion = resp.ClientRecommendedVersion
@@ -927,7 +988,7 @@ func (m *connManager) finishDetach(conn net.Conn, waiters []chan requestResult, 
 	}
 	m.notifyWaiters(waiters, requestResult{err: net.ErrClosed})
 	closeTransfers(transferConns)
-	if emitDisconnected {
+	if emitDisconnected && !deferHandoverDisconnect(m) {
 		m.emit("disconnected", "")
 	}
 }

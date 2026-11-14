@@ -67,6 +67,7 @@ type resumeEntry struct {
 	parked   *resumeParked // set when the session departed
 	at       time.Time     // when it was parked
 	claimed  bool          // a resume is taking over the live owner
+	standby  *Client       // a handover standby waiting to commit (update_handover.go)
 }
 
 // resumeStore holds resume tokens in memory only: a server restart forgets
@@ -104,6 +105,20 @@ func (r *resumeStore) issue(owner *Client, uniqueID, binding string) string {
 	if _, err := rand.Read(token[:]); err != nil {
 		return ""
 	}
+	return r.issueToken(owner, uniqueID, binding, token)
+}
+
+// reissue gives owner the presented token again (an update handover commit:
+// both processes hold it, so whichever survives a lost reply can resume).
+func (r *resumeStore) reissue(owner *Client, uniqueID, binding, presented string) string {
+	raw, err := base64.RawURLEncoding.DecodeString(presented)
+	if err != nil || len(raw) != 32 {
+		return r.issue(owner, uniqueID, binding)
+	}
+	return r.issueToken(owner, uniqueID, binding, [32]byte(raw))
+}
+
+func (r *resumeStore) issueToken(owner *Client, uniqueID, binding string, token [32]byte) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.byHash == nil {
@@ -132,19 +147,10 @@ func (r *resumeStore) issue(owner *Client, uniqueID, binding string) string {
 // gone before takeParked, so no late cleanup of the old session can touch
 // the client ID the resume reuses.
 func (r *resumeStore) claim(presented, binding string) (clientID string, owner *Client, ok bool) {
-	raw, err := base64.RawURLEncoding.DecodeString(presented)
-	if err != nil || len(raw) != 32 {
-		return "", nil, false
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	entry := r.byHash[sha256.Sum256(raw)]
-	if entry == nil || entry.claimed {
-		return "", nil, false
-	}
-	tokenOK := subtle.ConstantTimeCompare(entry.token[:], raw)
-	bindingOK := subtle.ConstantTimeCompare([]byte(entry.binding), []byte(binding))
-	if tokenOK&bindingOK != 1 {
+	entry := r.matchLocked(presented, binding)
+	if entry == nil {
 		return "", nil, false
 	}
 	if entry.parked != nil && r.clock().Sub(entry.at) > resumeGraceWindow {
@@ -154,6 +160,25 @@ func (r *resumeStore) claim(presented, binding string) (clientID string, owner *
 	delete(r.byHash, entry.hash)
 	entry.claimed = true
 	return entry.clientID, entry.owner, true
+}
+
+// matchLocked returns the unclaimed entry of a presented token bound to
+// binding, or nil. A mismatch leaves the entry untouched.
+func (r *resumeStore) matchLocked(presented, binding string) *resumeEntry {
+	raw, err := base64.RawURLEncoding.DecodeString(presented)
+	if err != nil || len(raw) != 32 {
+		return nil
+	}
+	entry := r.byHash[sha256.Sum256(raw)]
+	if entry == nil || entry.claimed {
+		return nil
+	}
+	tokenOK := subtle.ConstantTimeCompare(entry.token[:], raw)
+	bindingOK := subtle.ConstantTimeCompare([]byte(entry.binding), []byte(binding))
+	if tokenOK&bindingOK != 1 {
+		return nil
+	}
+	return entry
 }
 
 // takeParked hands over the entry a claimed owner parked while closing.
@@ -311,6 +336,8 @@ func (s *TCPServer) claimResume(ctx context.Context, client *Client, uniqueID st
 	// A no-op for a session that already departed; a still open one closes
 	// silently and parks for this resume.
 	owner.resumeTakeover.Store(true)
+	// Bound the close (TLS close_notify) and unblock stuck writes on it.
+	_ = owner.Conn.SetDeadline(time.Now().Add(time.Second))
 	_ = owner.Conn.Close()
 	if owner.gone != nil {
 		timer := time.NewTimer(resumeTakeoverWait)

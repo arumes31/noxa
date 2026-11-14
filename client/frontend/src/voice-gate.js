@@ -61,7 +61,7 @@ export async function createMicrophoneGate(raw, readState, onActivity = () => {}
             if (disposed) return;
             const state = readState();
             const mode = state.settings?.activation_mode || "ptt";
-            blocked = !!(failed || state.muted || state.deafened || (mode === "ptt" && !state.pttActive));
+            blocked = !!(failed || state.muted || state.deafened || state.handoverSilenced || (mode === "ptt" && !state.pttActive));
             // Hard mute is synchronous. Re-enabling waits for the audio thread
             // to acknowledge the configuration and clear any private pre-roll.
             if (blocked) track.enabled = false;
