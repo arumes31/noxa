@@ -7,6 +7,8 @@ import (
 	"os"
 	"slices"
 	"time"
+
+	"noxa/internal/netproto"
 )
 
 const updateReconnectEnv = "NOXA_UPDATE_RECONNECT"
@@ -253,7 +255,13 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	}
 	a.tabsMu.Unlock()
 	if !owned {
-		tab.cm.disconnect()
+		if handover != nil {
+			// The server already moved the session here: never end it with
+			// a goodbye; a silent drop keeps it resumable.
+			tab.cm.dropWithoutGoodbye()
+		} else {
+			tab.cm.disconnect()
+		}
 		result["error"] = "connection restoration was cancelled"
 		return result
 	}
@@ -266,7 +274,9 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	defer a.activationPublishMu.Unlock()
 	connected := tab.cm.connected()
 	a.tabsMu.Lock()
-	if !connected || a.tabs[id] != tab || tab.reconnectSuppressed || a.activeID != "" || len(a.tabs) != 1 {
+	// After a handover commit the session belongs to this process even if
+	// its connection dropped meanwhile: keep the tab and resume it as usual.
+	if (!connected && handover == nil) || a.tabs[id] != tab || tab.reconnectSuppressed || a.activeID != "" || len(a.tabs) != 1 {
 		a.tabsMu.Unlock()
 		result["error"] = "connection restoration was cancelled"
 		return result
@@ -280,6 +290,14 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 		handover.commit(a)
 	}
 	a.onTabConnected(cm, saved.Bookmark, saved.Addr, saved.Nickname, saved.DisplayName)
+	if !connected {
+		// The normal reconnect presents the rotated resume token.
+		result["warning"] = "connection lost while restoring; reconnecting"
+		a.finishActivateSerialized(id, cm, journal, generation)
+		go tab.cm.emit("disconnected", "") // publishes after activationPublishMu is released
+		result["tab_id"] = id
+		return result
+	}
 	if saved.ChannelID > 0 && result["warning"] == nil {
 		a.emitPlain("tab_voice_restored", map[string]any{"tab_id": id, "client_id": tab.cm.clientIDSnapshot(), "channel_id": saved.ChannelID})
 	}
@@ -290,4 +308,15 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 		result["stream_channel_id"] = saved.ChannelID
 	}
 	return result
+}
+
+// dropWithoutGoodbye closes the connection like a network loss, so the server
+// keeps the session for a resume instead of ending it.
+func (m *connManager) dropWithoutGoodbye() {
+	m.mu.Lock()
+	conn := m.conn
+	m.mu.Unlock()
+	if conn != nil {
+		m.terminateConn(conn, false, netproto.ControlCloseLocal)
+	}
 }

@@ -39,6 +39,7 @@ func prepareIncomingHandover() {
 	if h == nil {
 		return
 	}
+	h.parentWait = holdUpdateParent()
 	edge.SetHandoverBrowserCheck(func(arguments string) {
 		if arguments == h.config.BrowserArgs {
 			return

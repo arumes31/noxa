@@ -366,6 +366,11 @@ type incomingUpdateHandover struct {
 	config         updateHandoverConfig
 	address, nonce string
 	once           sync.Once
+	// parentWait waits for the old process; opened at start while it is
+	// certainly alive. parentGone closes once it has exited.
+	parentWait func(context.Context) error
+	parentGone chan struct{}
+	shown      sync.Once
 }
 
 // incomingHandover is set when the old process started this one to take over
@@ -386,7 +391,7 @@ func loadIncomingHandover(getenv func(string) string, afterUpdate bool) *incomin
 	if _, ok := config.oldHash(); !ok {
 		return nil
 	}
-	return &incomingUpdateHandover{config: config, address: getenv(updateReadyAddressEnv), nonce: getenv(updateReadyNonceEnv)}
+	return &incomingUpdateHandover{config: config, address: getenv(updateReadyAddressEnv), nonce: getenv(updateReadyNonceEnv), parentGone: make(chan struct{})}
 }
 
 func (h *incomingUpdateHandover) signal(kind byte) error {
@@ -411,7 +416,6 @@ func (h *incomingUpdateHandover) abandon(a *App) {
 // has exited.
 func (h *incomingUpdateHandover) commit(a *App) {
 	h.once.Do(func() {
-		waitParent := holdUpdateParent()
 		// The old process also detects the move on its own if this is lost.
 		for attempt := 0; attempt < 3; attempt++ {
 			err := h.signal(handoverCommitted)
@@ -420,12 +424,12 @@ func (h *incomingUpdateHandover) commit(a *App) {
 			}
 			log.Printf("update handover: commit signal: %v", err)
 		}
-		showHandoverWindow(a)
+		h.show(a)
 		go guardCrash("update handover cleanup", func() {
-			ctx, cancel := context.WithTimeout(context.Background(), updateHandoverTimeoutForCleanup)
-			defer cancel()
-			if err := waitParent(ctx); err != nil {
-				log.Printf("update handover: previous process still running; its executable is retained: %v", err)
+			select {
+			case <-h.parentGone:
+			case <-time.After(updateHandoverTimeoutForCleanup):
+				log.Print("update handover: previous process still running; its executable is retained")
 				return
 			}
 			// Hotkeys the old process held become available now.
@@ -433,6 +437,28 @@ func (h *incomingUpdateHandover) commit(a *App) {
 			h.removePrevious()
 		})
 	})
+}
+
+// watchParent shows this window whenever the old process exits, unless this
+// process is quitting: a handover process is never left hidden, even when it
+// hangs and the old process gave up on it.
+func (h *incomingUpdateHandover) watchParent(a *App) {
+	if h.parentWait == nil {
+		return
+	}
+	go guardCrash("update handover parent", func() {
+		if err := h.parentWait(context.Background()); err != nil {
+			log.Printf("update handover: cannot watch the previous process: %v", err)
+		}
+		close(h.parentGone)
+		if !a.quitting.Load() {
+			h.show(a)
+		}
+	})
+}
+
+func (h *incomingUpdateHandover) show(a *App) {
+	h.shown.Do(func() { showHandoverWindow(a) })
 }
 
 const updateHandoverTimeoutForCleanup = 90 * time.Second

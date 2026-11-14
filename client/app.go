@@ -214,6 +214,9 @@ func (a *App) startup(ctx context.Context) {
 		a.knownServers = &knownServers{Servers: map[string]string{}, loadErr: trustStoreUnavailable("locate path: %v", err)}
 	}
 	a.registerHotkeys()
+	if h := incomingHandover; h != nil {
+		h.watchParent(a)
+	}
 	// (501) Windows Action Center notifications: per-user registration only.
 	go guardCrash("native notifications", a.initNativeToasts)
 	// (291) restore always-on-top.

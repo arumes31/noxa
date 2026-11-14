@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -315,5 +316,135 @@ func TestHandoverLoginCommitsOnlyAfterTheOldProcessAgrees(t *testing.T) {
 			}
 		}
 		cm.disconnect()
+	}
+}
+
+func TestHandoverWindowAppearsWhenOldProcessExits(t *testing.T) {
+	original := showUpdateWindow
+	t.Cleanup(func() { showUpdateWindow = original })
+	shows := make(chan struct{}, 4)
+	showUpdateWindow = func(context.Context) { shows <- struct{}{} }
+	for _, quitting := range []bool{false, true} {
+		release := make(chan struct{})
+		h := &incomingUpdateHandover{parentGone: make(chan struct{}),
+			parentWait: func(context.Context) error { <-release; return nil }}
+		a := &App{ctx: context.Background()}
+		a.quitting.Store(quitting)
+		h.watchParent(a)
+		select {
+		case <-shows:
+			t.Fatal("shown while the old process still runs")
+		case <-time.After(50 * time.Millisecond):
+		}
+		close(release)
+		<-h.parentGone
+		select {
+		case <-shows:
+			if quitting {
+				t.Fatal("a quitting handover process showed its window")
+			}
+		case <-time.After(300 * time.Millisecond):
+			if !quitting {
+				t.Fatal("a handover process stayed hidden after the old process exited")
+			}
+		}
+	}
+}
+
+// commitThenDropServer commits a standby login, then drops the connection
+// when the restored client rejoins its channel. It reports any goodbye.
+func commitThenDropServer(t *testing.T) (string, *atomic.Bool) {
+	t.Helper()
+	cert, _, err := tlscert.Ensure(t.TempDir(), "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	var goodbye atomic.Bool
+	write := func(conn net.Conn, resp netproto.AuthResponse) {
+		resp.AuthorizationModel = netproto.AuthorizationModelRolesV1
+		f, _ := netproto.Encode(netproto.MsgAuthResponse, resp)
+		_ = netproto.WriteFrame(conn, f)
+	}
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		if _, err := netproto.ReadFrame(conn); err != nil {
+			return
+		}
+		write(conn, netproto.AuthResponse{OK: true, Standby: true, ClientID: "c-1", UniqueID: "u"})
+		for {
+			frame, err := netproto.ReadFrame(conn)
+			if err != nil {
+				return
+			}
+			switch netproto.MessageType(frame.Type) {
+			case netproto.MsgHandoverCommit:
+				write(conn, netproto.AuthResponse{OK: true, Resumed: true, ClientID: "c-1", UniqueID: "u", Nickname: "account", ResumeToken: "rotated"})
+			case netproto.MsgGoodbye:
+				goodbye.Store(true)
+			case netproto.MsgJoinChannel:
+				return // the connection drops right after the commit
+			}
+		}
+	}()
+	return listener.Addr().String(), &goodbye
+}
+
+func TestHandoverKeepsMovedSessionWhenRestorationLosesConnection(t *testing.T) {
+	originalShow, originalHandover := showUpdateWindow, incomingHandover
+	t.Cleanup(func() { showUpdateWindow, incomingHandover = originalShow, originalHandover })
+	showUpdateWindow = func(context.Context) {}
+	r := handoverChannel(t)
+	incomingHandover = &incomingUpdateHandover{address: r.address(), nonce: r.nonce, parentGone: make(chan struct{})}
+	var committing atomic.Int32
+	outcome := serveAsync(t.Context(), r, os.Getpid(), nil, &committing)
+
+	addr, goodbye := commitThenDropServer(t)
+	a := newTabApp(t)
+	var mu sync.Mutex
+	var events []string
+	a.eventEmit = func(name string, _ any) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, name)
+	}
+	saved := testUpdateEnvelope(t)
+	saved.Addr = addr
+	saved.ResumeToken = "token"
+	got := a.restoreUpdateConnection(&saved)
+	tabID, _ := got["tab_id"].(string)
+	if tabID == "" || got["error"] != nil {
+		t.Fatalf("a moved session was given up: %v", got)
+	}
+	defer a.CloseTab(tabID)
+	if waitReconnect(t, outcome) != handoverMoved {
+		t.Fatal("the old process was not released")
+	}
+	if a.activeID != tabID || a.tabs[tabID].cm.resumeTokenSnapshot() != "rotated" {
+		t.Fatal("the restored tab must stay selected with the rotated token for its resume")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		reconnecting := slices.Contains(events, "tab_disconnected")
+		mu.Unlock()
+		if reconnecting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the restored tab did not start its normal reconnect")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if goodbye.Load() {
+		t.Fatal("a moved session was ended with a goodbye")
 	}
 }
