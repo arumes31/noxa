@@ -84,9 +84,15 @@ func TestKeyRequestHonorsRequestContext(t *testing.T) {
 		t.Fatalf("encode key request: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	// The source-keyed lookup limiter (fix 1) reads the connection's address.
+	serverConn, clientConn := net.Pipe()
+	defer func() { _ = serverConn.Close() }()
+	defer func() { _ = clientConn.Close() }()
 	done := make(chan error, 1)
 	go func() {
-		done <- env.srv.handleKeyRequest(ctx, &Client{ID: "requester", UniqueID: "user-uid"}, frame)
+		// A member (user id != 0) reaches the durable lookup unrestricted; the
+		// guest scope gate short-circuits before it (see TestGuest* below).
+		done <- env.srv.handleKeyRequest(ctx, &Client{ID: "requester", UniqueID: "user-uid", UserID: 2, Conn: serverConn}, frame)
 	}()
 	select {
 	case <-started:
@@ -238,6 +244,164 @@ func TestKeyPublishAndRequest(t *testing.T) {
 	}
 	if resp2.PublicKey != "" {
 		t.Fatalf("unknown user key = %q, want empty", resp2.PublicKey)
+	}
+}
+
+// addKeySession registers one online session in both the server registry and
+// the state manager, so directory-scope checks can resolve it.
+func addKeySession(t *testing.T, env *testEnv, clientID, uid string, userID, channelID int64, status, pub string) {
+	t.Helper()
+	c := &Client{ID: clientID, Conn: newBlockingTCPConn()}
+	c.setIdentity(uid, uid, userID, false)
+	env.srv.clients[clientID] = c
+	env.state.AddClient(&state.Client{ClientID: clientID, UniqueID: uid, UserID: userID, Nickname: uid})
+	if channelID != 0 {
+		if err := env.state.MoveClient(clientID, channelID); err != nil {
+			t.Fatalf("move %s to channel %d: %v", clientID, channelID, err)
+		}
+	}
+	if status != "" {
+		env.state.SetStatus(clientID, status, "")
+	}
+	if pub != "" {
+		env.state.SetE2EPublicKey(clientID, pub)
+	}
+}
+
+// keyLookup runs one key_request through the handler and returns the decoded
+// KeyResponse. It fails if the handler answered with anything but a response,
+// which is what a refused guest lookup must still produce (no error oracle).
+func keyLookup(t *testing.T, srv *TCPServer, caller *Client, msg netproto.KeyRequest) netproto.KeyResponse {
+	t.Helper()
+	serverConn, clientConn := net.Pipe()
+	defer func() { _ = serverConn.Close() }()
+	defer func() { _ = clientConn.Close() }()
+	caller.Conn = serverConn
+	frame, err := netproto.Encode(netproto.MsgKeyRequest, msg)
+	if err != nil {
+		t.Fatalf("encode key request: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- srv.handleKeyRequest(context.Background(), caller, frame) }()
+	response := readFrame(t, clientConn)
+	if err := <-done; err != nil {
+		t.Fatalf("handleKeyRequest: %v", err)
+	}
+	if netproto.MessageType(response.Type) != netproto.MsgKeyResponse {
+		t.Fatalf("response type = %s, want KeyResponse", netproto.MessageType(response.Type))
+	}
+	var out netproto.KeyResponse
+	if err := netproto.Decode(response, &out); err != nil {
+		t.Fatalf("decode key response: %v", err)
+	}
+	return out
+}
+
+// TestGuestKeyLookupScopedToVisibleScope covers fix 3: a guest may resolve a
+// principal's directory key only when it shares a visible scope with it
+// (self, or an online, visible co-member), while a member stays unrestricted.
+// A refusal is byte-for-byte a normal empty lookup, so the directory cannot be
+// harvested or used to probe which unique IDs exist.
+func TestGuestKeyLookupScopedToVisibleScope(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+	env.state.AddChannel(testChannel(1))
+
+	memberKey := b64e(make([]byte, 32))
+	env.auth.e2eByUID = map[string]string{
+		"member-uid":    memberKey, // visible co-member (user 3)
+		"invisible-uid": memberKey, // invisible, admin-only (user 4)
+		"offline-uid":   memberKey, // registered but offline (user 5)
+	}
+
+	addKeySession(t, env, "member", "member-uid", 3, 1, "", memberKey)
+	addKeySession(t, env, "invisible", "invisible-uid", 4, 1, "invisible", memberKey)
+	// The guest's own session, so it can read back its just-published key.
+	guestKey := b64e(append(make([]byte, 31), 7))
+	addKeySession(t, env, "guest", "guest-uid", 0, 1, "", guestKey)
+
+	guest := func() *Client { return &Client{ID: "guest-caller", UniqueID: "guest-uid"} }
+
+	// An unknown user: the benign empty shape every refusal must be identical to.
+	unknown := keyLookup(t, env.srv, guest(), netproto.KeyRequest{UniqueID: "nobody"})
+	if unknown.PublicKey != "" || len(unknown.Devices) != 0 {
+		t.Fatalf("unknown lookup leaked data: %+v", unknown)
+	}
+
+	t.Run("self lookup allowed", func(t *testing.T) {
+		got := keyLookup(t, env.srv, guest(), netproto.KeyRequest{UniqueID: "guest-uid"})
+		if got.PublicKey != guestKey {
+			t.Fatalf("self key = %q, want %q", got.PublicKey, guestKey)
+		}
+	})
+	t.Run("co-channel visible member allowed", func(t *testing.T) {
+		got := keyLookup(t, env.srv, guest(), netproto.KeyRequest{UniqueID: "member-uid"})
+		if got.PublicKey != memberKey {
+			t.Fatalf("co-member key = %q, want %q", got.PublicKey, memberKey)
+		}
+	})
+	t.Run("invisible co-member refused without presence leak", func(t *testing.T) {
+		got := keyLookup(t, env.srv, guest(), netproto.KeyRequest{UniqueID: "invisible-uid"})
+		if got.PublicKey != unknown.PublicKey || len(got.Devices) != len(unknown.Devices) {
+			t.Fatalf("invisible lookup = %+v, want identical to unknown %+v", got, unknown)
+		}
+	})
+	t.Run("unshared offline principal refused indistinguishably", func(t *testing.T) {
+		got := keyLookup(t, env.srv, guest(), netproto.KeyRequest{UniqueID: "offline-uid"})
+		if got.PublicKey != unknown.PublicKey || got.UniqueID != "offline-uid" {
+			t.Fatalf("offline lookup = %+v, want empty key like unknown", got)
+		}
+	})
+	t.Run("member resolves arbitrary principal unrestricted", func(t *testing.T) {
+		member := &Client{ID: "member-caller", UniqueID: "user-uid", UserID: 2}
+		got := keyLookup(t, env.srv, member, netproto.KeyRequest{UniqueID: "offline-uid"})
+		if got.PublicKey != memberKey {
+			t.Fatalf("member lookup of offline principal = %q, want %q", got.PublicKey, memberKey)
+		}
+	})
+	t.Run("device directory withheld from caller with no device", func(t *testing.T) {
+		member := &Client{ID: "member-caller", UniqueID: "user-uid", UserID: 2}
+		got := keyLookup(t, env.srv, member, netproto.KeyRequest{UniqueID: "member-uid", Devices: true})
+		if got.PublicKey != memberKey {
+			t.Fatalf("key = %q, want %q", got.PublicKey, memberKey)
+		}
+		if len(got.Devices) != 0 {
+			t.Fatalf("device directory served to a caller with no registered device: %+v", got.Devices)
+		}
+	})
+}
+
+// TestKeyLookupRateLimitKeyedBySource covers fix 1: the key-lookup budget is
+// keyed on the source address, not the caller's unique id, so a guest cannot
+// reset it by reconnecting under a fresh id. Two callers with different unique
+// ids but the same source share one budget.
+func TestKeyLookupRateLimitKeyedBySource(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+	env.srv.keyLookupRate = newChatRateLimiter(1, time.Hour)
+
+	request := func(uid string) netproto.MessageType {
+		serverConn, clientConn := net.Pipe()
+		defer func() { _ = serverConn.Close() }()
+		defer func() { _ = clientConn.Close() }()
+		frame, err := netproto.Encode(netproto.MsgKeyRequest, netproto.KeyRequest{UniqueID: "target"})
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		done := make(chan error, 1)
+		go func() {
+			done <- env.srv.handleKeyRequest(context.Background(), &Client{ID: "c-" + uid, UniqueID: uid, UserID: 2, Conn: serverConn}, frame)
+		}()
+		response := readFrame(t, clientConn)
+		<-done
+		return netproto.MessageType(response.Type)
+	}
+	if got := request("first-uid"); got != netproto.MsgKeyResponse {
+		t.Fatalf("first lookup = %s, want key response", got)
+	}
+	// A different unique id over the same (pipe) source is already out of budget.
+	if got := request("second-uid"); got != netproto.MsgError {
+		t.Fatalf("second lookup under a fresh unique id = %s, want rate-limit error", got)
 	}
 }
 
