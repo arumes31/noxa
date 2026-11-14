@@ -1,6 +1,7 @@
 package turn
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -96,7 +97,7 @@ func TestTCPPreAuthSourceQuotaDoesNotConsumeAllSlots(t *testing.T) {
 		return c
 	}
 	var first net.Conn
-	for range 8 {
+	for range maxPendingPerSource {
 		dial()
 		c, e := limited.Accept()
 		if e != nil {
@@ -112,7 +113,7 @@ func TestTCPPreAuthSourceQuotaDoesNotConsumeAllSlots(t *testing.T) {
 	_ = rejected.SetReadDeadline(time.Now().Add(time.Second))
 	var b [1]byte
 	if _, e := rejected.Read(b[:]); e == nil {
-		t.Fatal("source quota admitted ninth pending socket")
+		t.Fatal("source quota admitted an extra pending socket")
 	} else if timeout, ok := e.(net.Error); ok && timeout.Timeout() {
 		t.Fatal("over-quota socket was not promptly closed")
 	}
@@ -125,5 +126,77 @@ func TestTCPPreAuthSourceQuotaDoesNotConsumeAllSlots(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("released source budget was not reclaimed")
+	}
+}
+
+// fakeAddrListener hands out pipe ends that report chosen remote addresses.
+type fakeAddrListener struct{ conns chan net.Conn }
+
+func (l fakeAddrListener) Accept() (net.Conn, error) {
+	c, ok := <-l.conns
+	if !ok {
+		return nil, net.ErrClosed
+	}
+	return c, nil
+}
+func (l fakeAddrListener) Close() error   { return nil }
+func (l fakeAddrListener) Addr() net.Addr { return &net.TCPAddr{} }
+
+type remoteAddrConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c remoteAddrConn) RemoteAddr() net.Addr { return c.remote }
+
+func TestTCPPreAuthGroupsIPv6AndCapsPendingPool(t *testing.T) {
+	fake := fakeAddrListener{conns: make(chan net.Conn, 64)}
+	limited := limitedTCPListener(fake, 16)
+	defer func() { _ = limited.Close() }()
+	offer := func(ip string, port int) net.Conn {
+		a, b := net.Pipe()
+		t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
+		fake.conns <- remoteAddrConn{Conn: a, remote: &net.TCPAddr{IP: net.ParseIP(ip), Port: port}}
+		return b
+	}
+	for i := range maxPendingPerSource {
+		offer(fmt.Sprintf("2001:db8:1:2::%x", i+1), 1000)
+	}
+	// Rejected: same /64; admitted: a fresh source, which Accept returns next.
+	rejected := offer("2001:db8:1:2:ffff::1", 1000)
+	offer("192.0.2.1", 1000)
+	for range maxPendingPerSource + 1 {
+		if _, err := limited.Accept(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c, ok := limited.conns["[2001:db8:1:2:ffff::1]:1000"]; ok {
+		t.Fatalf("same /64 bypassed the source quota: %v", c.RemoteAddr())
+	}
+	_ = rejected.SetReadDeadline(time.Now().Add(time.Second))
+	var b [1]byte
+	if _, err := rejected.Read(b[:]); err == nil {
+		t.Fatal("over-quota stream left open")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("over-quota stream was not promptly closed")
+	}
+	// The pending pool is half the socket limit.
+	for i := 2; limited.pending < limited.maxPending; i++ {
+		offer(fmt.Sprintf("192.0.2.%d", i), 1000)
+		if _, err := limited.Accept(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if limited.maxPending != 8 {
+		t.Fatalf("pending pool = %d, want half of 16", limited.maxPending)
+	}
+	overflow := offer("198.51.100.1", 1000)
+	go func() { _, _ = limited.Accept() }()
+	defer close(fake.conns)
+	_ = overflow.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := overflow.Read(b[:]); err == nil {
+		t.Fatal("pending pool overflow left open")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("pending pool overflow was not promptly closed")
 	}
 }

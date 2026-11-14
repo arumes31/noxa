@@ -13,7 +13,7 @@ import {
     verifySignature,
 } from "./olm-keys.js";
 
-import { fromBase64, toBase64, utf8 } from "./crypto.js";
+import { fromBase64, toBase64, uniqueIDFromPublicKey, utf8 } from "./crypto.js";
 
 const RECORD_PREFIX = "noxa-dm-key-v1:";
 
@@ -74,6 +74,16 @@ export function parseKeyRecord(encoded, uid) {
     ]);
     if (!nacl.sign.detached.verify(message, signature, signingKey)) return null;
     return { signingKey, encryptionKey };
+}
+
+/**
+ * Whether uid is the key-derived unique ID of signingKey (raw bytes), as a
+ * key-login account has. Such a contact can never legitimately have another
+ * key. Password accounts carry uids of the same shape from a key nobody holds,
+ * so the shape alone proves nothing: only a pinned matching key does.
+ */
+export function keyCertifiesUID(signingKey, uid) {
+    return signingKey?.length === 32 && uniqueIDFromPublicKey(signingKey) === uid;
 }
 
 /**

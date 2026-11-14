@@ -12,6 +12,17 @@ import (
 const updateReconnectEnv = "NOXA_UPDATE_RECONNECT"
 const updateReconnectMaxBytes = 32 * 1024
 
+// launchUpdateReconnect is the envelope the previous version handed over in
+// updateReconnectEnv, taken out of the environment at startup so WebView2 and
+// other children never inherit it. Updater children get it from
+// ApplyAndRestart, which sets the variable only for their launch.
+var launchUpdateReconnect string
+
+func takeLaunchUpdateReconnect() {
+	launchUpdateReconnect = os.Getenv(updateReconnectEnv)
+	_ = os.Unsetenv(updateReconnectEnv)
+}
+
 // Credentials stay native and OS-protected, even while crossing the updater
 // supervisor. Nothing is persisted in settings or exposed to the renderer.
 type updateReconnectEnvelope struct {
@@ -100,7 +111,7 @@ func (a *App) PrepareUpdateReconnect(muted, deafened, mutedBeforeDeafen bool) st
 	if snapshot == nil {
 		// A chained update may run before the successor consumes the handoff.
 		if startedAfterUpdate && !a.updateReconnectConsumed {
-			a.updateReconnect = os.Getenv(updateReconnectEnv)
+			a.updateReconnect = launchUpdateReconnect
 		}
 		return ""
 	}
@@ -207,7 +218,8 @@ func (a *App) restoreUpdateConnectionOnce() (map[string]any, bool) {
 		return map[string]any{"attempted": false}, false
 	}
 	a.updateReconnectConsumed = true
-	encoded := os.Getenv(updateReconnectEnv)
+	encoded := launchUpdateReconnect
+	launchUpdateReconnect = ""
 	_ = os.Unsetenv(updateReconnectEnv)
 	a.update.mu.Unlock()
 	if !startedAfterUpdate || encoded == "" {

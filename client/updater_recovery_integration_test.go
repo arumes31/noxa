@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"os"
 	"os/exec"
@@ -100,10 +101,10 @@ func TestClientUpdateRecoveryHelperProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := applyClientUpdate(bytes.NewReader(payload)); err != nil {
+	if err := applyClientUpdate(bytes.NewReader(payload), sha256.Sum256(payload)); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyClientUpdate(bytes.NewReader(payload)); err == nil {
+	if err := applyClientUpdate(bytes.NewReader(payload), sha256.Sum256(payload)); err == nil {
 		t.Fatal("a pending update was overwritten by a duplicate apply")
 	}
 	// Process creation/antivirus scheduling on loaded Windows CI can exceed
@@ -157,7 +158,7 @@ func TestClientUpdateRecoveryHelperProcess(t *testing.T) {
 	}
 	// This line is reached by the still-running previous app after rollback.
 	// A second apply proves the restored, still-mapped target can be updated.
-	if err := applyClientUpdate(bytes.NewReader(payload)); err != nil {
+	if err := applyClientUpdate(bytes.NewReader(payload), sha256.Sum256(payload)); err != nil {
 		t.Fatalf("retry after rollback: %v", err)
 	}
 	if err := restoreFailedClientUpdate(clientUpdateRecovery.pending, errors.New("test retry cleanup")); !errors.Is(err, errUpdateRestored) {

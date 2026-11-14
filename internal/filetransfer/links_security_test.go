@@ -1,6 +1,7 @@
 package filetransfer
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net/http"
@@ -155,8 +156,9 @@ func (r *deadlineRecorder) SetWriteDeadline(deadline time.Time) error {
 	return nil
 }
 
-func TestDownloadLinkClearsWriteDeadlineBeforeServingRange(t *testing.T) {
-	registry, rel := newTestLinkRegistry(t, []byte("abcdef"))
+func TestDownloadLinkSizesWriteDeadlineBeforeServingRange(t *testing.T) {
+	content := bytes.Repeat([]byte("abcdef"), 64<<10) // 384 KiB: 6 s at 64 KiB/s
+	registry, rel := newTestLinkRegistry(t, content)
 	token, _, err := registry.Create(rel, "shared.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -168,8 +170,9 @@ func TestDownloadLinkClearsWriteDeadlineBeforeServingRange(t *testing.T) {
 	if recorder.Code != http.StatusPartialContent || recorder.Body.String() != "bcd" {
 		t.Fatalf("range response = %d %q, want 206 bcd", recorder.Code, recorder.Body.String())
 	}
-	if !recorder.deadline.IsZero() {
-		t.Fatalf("write deadline = %s, want cleared", recorder.deadline)
+	want := time.Now().Add(linkWriteGrace + 6*time.Second)
+	if d := recorder.deadline.Sub(want); d > 0 || d < -5*time.Second {
+		t.Fatalf("write deadline = %s, want about %s", recorder.deadline, want)
 	}
 }
 

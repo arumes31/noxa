@@ -259,6 +259,18 @@ func (d *downloadDestination) checkDestination() error {
 var linkDownloadPart = func(root *os.Root, part, dest string) error { return root.Link(part, dest) }
 
 func (d *downloadDestination) finalize() error {
+	if err := d.publish(); err != nil {
+		return err
+	}
+	// Mark before the partial cleanup, so a cleanup failure never leaves an unmarked download.
+	markDownloaded(filepath.Join(d.root.Name(), d.leaf))
+	if d.existing != nil {
+		return nil // the rename consumed the partial
+	}
+	return d.root.Remove(d.leaf + partSuffix)
+}
+
+func (d *downloadDestination) publish() error {
 	if err := d.checkDestination(); err != nil {
 		return err
 	}
@@ -297,5 +309,5 @@ func (d *downloadDestination) finalize() error {
 			return closeErr
 		}
 	}
-	return d.root.Remove(part)
+	return nil
 }

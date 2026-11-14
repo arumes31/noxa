@@ -1176,10 +1176,11 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 	// A direct message with a scope generation and no E2E flag was sealed
 	// with the global scope key, so the server could read or have written
 	// it. DMs are end-to-end only (this client never sends one like that and
-	// current servers refuse them): it opens like a global message, stays a
-	// direct message, and is always shown as downgraded, never verified.
-	serverDM := chat.Direct && !chat.E2E && chat.KeyID != 0
-	if !serverDM && (chat.Direct || chat.E2E || chat.KeyID == 0) {
+	// current servers refuse them): it is dropped, never placed in a DM thread.
+	if chat.Direct && !chat.E2E && chat.KeyID != 0 {
+		return ""
+	}
+	if chat.Direct || chat.E2E || chat.KeyID == 0 {
 		// Legacy servers only supplied e2e. Keep scope after presentChat strips
 		// encryption metadata, even for a missing-key placeholder.
 		chat.Direct = true
@@ -1197,9 +1198,6 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 	}
 
 	scope := scopeOf(chat)
-	if serverDM {
-		scope = 0
-	}
 	blob := chat.Text
 	text, ok := m.resolveScopeText(scope, chat.KeyID, blob)
 	if !ok {
@@ -1211,9 +1209,6 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 		}, func(text string) {
 			chat.Text, chat.EncVerified = text, openedChatText(text)
 			chat.EncMode = verifiedMode(chat.EncVerified, "server")
-			if serverDM {
-				markDowngradedDM(&chat)
-			}
 			presentChat(&chat)
 			m.emit("event", rewrapChat("chat", chat, payload))
 		}) {
@@ -1227,9 +1222,6 @@ func (m *connManager) decryptChatEvent(data json.RawMessage, payload string) str
 	// opened itself, never for a placeholder.
 	chat.Text, chat.EncVerified = text, openedChatText(text)
 	chat.EncMode = verifiedMode(chat.EncVerified, "server")
-	if serverDM {
-		markDowngradedDM(&chat)
-	}
 	presentChat(&chat)
 	return rewrapChat("chat", chat, payload)
 }
@@ -1242,18 +1234,6 @@ const dmModeDowngraded = "downgraded"
 // errPeerNoE2EKey refuses a DM to a peer whose client published no
 // end-to-end key. The text reaches the UI as the send error.
 var errPeerNoE2EKey = errors.New("this contact's client has no end-to-end encryption key — they need to update noxa")
-
-// markDowngradedDM withdraws the shield from a server-encrypted DM: DMs must
-// be end-to-end, and the server could have written this body itself. A body
-// opened with the server key is shown, but unverified under the "downgraded"
-// warning badge; an unopened placeholder keeps no mode.
-func markDowngradedDM(chat *netproto.ChatBroadcast) {
-	mode := ""
-	if chat.EncVerified {
-		mode = dmModeDowngraded
-	}
-	chat.EncVerified, chat.EncMode = false, mode
-}
 
 // verifiedMode names the encryption path of a body this client opened; an
 // unopened body has none.
@@ -1461,12 +1441,48 @@ func (m *connManager) decryptDMAsync(chat netproto.ChatBroadcast, payload string
 		chat.Text = missingKeyText
 	} else if plain, err := openDM(chat.Text, peer, priv); err != nil {
 		chat.Text = missingKeyText
+	} else if !m.legacyDMs.first(chat.Text) {
+		return // a relayed replay of a box already shown
 	} else {
 		chat.Text = plain
 		chat.EncVerified, chat.EncMode = true, "e2e"
 	}
 	presentChat(&chat)
 	m.emit("event", rewrapChat("chat", chat, payload))
+}
+
+// legacyDMReplay remembers opened legacy (NaCl box) DM ciphertexts. The box
+// carries no message ID or counter, so without this a relay could replay it.
+// shortcut: in memory and capped, so a replay after a restart or beyond the cap
+// is shown again; upgrade to a persisted set if legacy DMs stay in use.
+type legacyDMReplay struct {
+	mu    sync.Mutex
+	seen  map[[sha256.Size]byte]struct{}
+	order [][sha256.Size]byte
+}
+
+const legacyDMReplayCap = 4096
+
+// first reports whether the opened box is new, and remembers it. The decoded
+// bytes are compared, since several base64 spellings decode to one box.
+func (r *legacyDMReplay) first(box string) bool {
+	raw, _ := base64.StdEncoding.DecodeString(box)
+	sum := sha256.Sum256(raw)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, dup := r.seen[sum]; dup {
+		return false
+	}
+	if r.seen == nil {
+		r.seen = make(map[[sha256.Size]byte]struct{})
+	}
+	if len(r.order) >= legacyDMReplayCap {
+		delete(r.seen, r.order[0])
+		r.order = r.order[1:]
+	}
+	r.seen[sum] = struct{}{}
+	r.order = append(r.order, sum)
+	return true
 }
 
 func parseDMPublicKey(encoded string) ([32]byte, bool) {

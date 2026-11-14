@@ -22,7 +22,7 @@ describe("Batch 7C frontend hardening contracts", () => {
         assert.match(menu, /https:\/\/github\.com\/arumes31\/noxa\/issues/);
         assert.match(menu, /rel="noopener noreferrer"/);
         assert.match(menu, /overlay\.isConnected\s*&&\s*versionEl\.isConnected/);
-        assert.match(menu, /BrowserOpenURL\(link\.href\)/);
+        assert.match(menu, /openExternalURL\(link\.href\)/);
     });
 
     it("keeps chat retries scoped and attachment previews safe and lazy", async () => {

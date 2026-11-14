@@ -116,13 +116,13 @@ func TestProxyQuotasUseClientAddressAndRejectDuplicateTuple(t *testing.T) {
 		_, _ = fmt.Fprintf(c, "PROXY TCP4 %s 127.0.0.1 %d 12341\r\n", ip, port)
 		return c
 	}
-	for i := range 8 {
+	for i := range maxPendingPerSource {
 		send("192.0.2.7", 10000+i)
 		if _, err := l.Accept(); err != nil {
 			t.Fatal(err)
 		}
 	}
-	rejected := send("192.0.2.7", 10008)
+	rejected := send("192.0.2.7", 10000+maxPendingPerSource)
 	accepted := make(chan net.Conn, 1)
 	go func() { c, _ := l.Accept(); accepted <- c }()
 	requireProxyClosed(t, rejected)

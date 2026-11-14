@@ -282,13 +282,20 @@ func (r *LinkRegistry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Disposition", disposition)
 	// The health HTTP server has finite write deadlines for small operational
 	// responses. A valid download may legitimately outlive that deadline, so
-	// clear it only after authenticating and opening this GET request.
-	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
+	// replace it only after authenticating and opening this GET request, with
+	// one sized for a slow reader: 5 minutes plus 64 KiB/s of the file.
+	deadline := time.Now().Add(linkWriteGrace + time.Duration(info.Size()/linkMinReadRate)*time.Second)
+	if err := http.NewResponseController(w).SetWriteDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		http.Error(w, "download unavailable", http.StatusInternalServerError)
 		return
 	}
 	http.ServeContent(w, req, l.name, info.ModTime(), f)
 }
+
+const (
+	linkWriteGrace  = 5 * time.Minute
+	linkMinReadRate = 64 << 10 // bytes per second a download reader must sustain
+)
 
 func linkTokenFromPath(path string) (string, bool) {
 	const prefix = "/dl/"

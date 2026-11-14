@@ -682,6 +682,10 @@ export function OpenDownloadFolderForTab(arg1, arg2) {
   return window['go']['main']['App']['OpenDownloadFolderForTab'](arg1, arg2);
 }
 
+export function OpenExternalURL(arg1) {
+  return window['go']['main']['App']['OpenExternalURL'](arg1);
+}
+
 export function OpenLogFolder() {
   return window['go']['main']['App']['OpenLogFolder']();
 }

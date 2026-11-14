@@ -62,7 +62,6 @@ func TestLiveChatCarriesEncryptionMode(t *testing.T) {
 	}{
 		{name: "channel", chat: netproto.ChatBroadcast{ChannelID: "42", Text: seal("room", channelKey), Enc: true, KeyID: 7}, text: "room", mode: "server", verified: true},
 		{name: "global", chat: netproto.ChatBroadcast{Text: seal("all", globalKey), Enc: true, KeyID: 9}, text: "all", mode: "server", verified: true},
-		{name: "server encrypted direct is downgraded", chat: netproto.ChatBroadcast{Direct: true, ToUniqueID: "me", Text: seal("dm", globalKey), Enc: true, KeyID: 9}, text: "dm", mode: "downgraded", direct: true},
 		{name: "tampered channel", chat: netproto.ChatBroadcast{ChannelID: "42", Text: seal("room", globalKey), Enc: true, KeyID: 7}, text: decryptFailedText},
 		{name: "plaintext channel", chat: netproto.ChatBroadcast{ChannelID: "42", Text: "plain", EncVerified: true}, text: refusedPlainText},
 		{name: "plaintext global claiming a mode", chat: netproto.ChatBroadcast{Text: "plain", EncMode: "e2e"}, text: refusedPlainText},
@@ -135,6 +134,15 @@ func TestEndToEndDirectMessageCarriesLockMode(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no decrypted event")
+	}
+	// The legacy box has no message ID: a relayed replay is dropped.
+	if out := bravo.maybeDecryptEvent(string(payload)); out != "" {
+		t.Fatalf("expected asynchronous decrypt, got %s", out)
+	}
+	select {
+	case out := <-sink:
+		t.Fatalf("replayed legacy DM shown again: %s", out)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 
