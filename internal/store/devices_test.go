@@ -276,9 +276,16 @@ func TestProvenDeviceKeyWinsOverUnprovenClaim(t *testing.T) {
 	if _, err := s.AddDevice(ctx, unprovenOther, 3); !errors.Is(err, ErrDeviceKeyInUse) {
 		t.Fatalf("second unproven claim err = %v, want ErrDeviceKeyInUse", err)
 	}
+	var before, after int64
+	if err := s.DB().QueryRowContext(ctx, `SELECT version FROM olm_rosters WHERE principal=$1`, attacker).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
 	proven := newTestDevice(owner, 0)
 	proven.Ed25519Public = pub
 	won, err := s.AddDevice(ctx, proven, 3)
+	if err := s.DB().QueryRowContext(ctx, `SELECT version FROM olm_rosters WHERE principal=$1`, attacker).Scan(&after); err != nil || after != before+1 {
+		t.Fatalf("claimant roster version %d -> %d (%v), want a bump", before, after, err)
+	}
 	if err != nil || won.KeyUnproven || won.Principal != owner {
 		t.Fatalf("proven device = %+v, %v", won, err)
 	}

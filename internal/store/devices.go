@@ -152,7 +152,31 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('user_devices:' || $1, 0))`, d.Principal); err != nil {
 		return Device{}, fmt.Errorf("adding device: locking principal: %w", err)
 	}
-	if _, err = lockOlmRosters(ctx, tx, []string{d.Principal}); err != nil {
+	// A proven key wins over another principal's unproven claim of it. The
+	// claimants' rosters change too, so they are locked with this one (in one
+	// sorted call) and bumped when their row goes.
+	rosters := []string{d.Principal}
+	var claimants []string
+	if !d.KeyUnproven {
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT principal FROM user_devices WHERE NOT key_proven AND principal <> $3
+			AND (ed25519_public=$1 OR ed25519_public=$2)`, d.Ed25519Public, submitted, d.Principal)
+		if err != nil {
+			return Device{}, fmt.Errorf("adding device: %w", err)
+		}
+		for rows.Next() {
+			var p string
+			if err := rows.Scan(&p); err != nil {
+				_ = rows.Close()
+				return Device{}, fmt.Errorf("adding device: %w", err)
+			}
+			claimants = append(claimants, p)
+		}
+		if err := rows.Close(); err != nil {
+			return Device{}, fmt.Errorf("adding device: %w", err)
+		}
+		rosters = append(rosters, claimants...)
+	}
+	if _, err = lockOlmRosters(ctx, tx, rosters); err != nil {
 		return Device{}, err
 	}
 	if d.RequireCredentialID != nil {
@@ -165,11 +189,16 @@ func (s *Store) AddDevice(ctx context.Context, d NewDevice, limit int) (Device, 
 			return Device{}, ErrPasskeyNotFound
 		}
 	}
-	// A proven key wins over another principal's unproven claim of it.
-	if !d.KeyUnproven {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM user_devices WHERE NOT key_proven AND principal <> $3
-			AND (ed25519_public=$1 OR ed25519_public=$2)`, d.Ed25519Public, submitted, d.Principal); err != nil {
+	if len(claimants) > 0 {
+		// Dependent rows (push subscriptions, passkeys, Olm keys, ...) cascade.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM user_devices WHERE NOT key_proven AND principal = ANY($3)
+			AND (ed25519_public=$1 OR ed25519_public=$2)`, d.Ed25519Public, submitted, pq.Array(claimants)); err != nil {
 			return Device{}, fmt.Errorf("adding device: %w", err)
+		}
+		for _, p := range claimants {
+			if err := bumpOlmRoster(ctx, tx, p); err != nil {
+				return Device{}, err
+			}
 		}
 	}
 	var exists bool
