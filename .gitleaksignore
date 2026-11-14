@@ -48,4 +48,3 @@ e73af7b0af468464abe08bfec06b55b632d7a26d:client/frontend/tests/encryption-toolti
 # Windows toast test token (501): a fixed 32-hex-character test value,
 # not a credential; later commits build it at runtime instead.
 6dcbc66b69fd55089c1d69a0ecd8e9ca62da86c0:client/native_toast_test.go:generic-api-key:12
-eaaf693aae943846f691697495d3e558c3b72d6d:mobile/unit/dm-key-derived.test.mjs:generic-api-key:10
