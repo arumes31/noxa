@@ -52,7 +52,7 @@ func (f *fakeDevices) AddDevice(_ context.Context, d store.NewDevice, limit int)
 		DeviceID: "dev-" + string(rune('a'+f.next)), Principal: d.Principal, UserID: d.UserID, Kind: d.Kind,
 		Name: store.NormalizeDeviceName(d.Name), Ed25519Public: d.Ed25519Public, X25519Public: d.X25519Public,
 		FirstDevice: active == 0, ApprovedBy: d.ApprovedBy, ApprovalSignature: d.ApprovalSignature, PasskeyProof: d.PasskeyProof,
-		CreatedAt: now, LastSeenAt: now,
+		CreatedAt: now, LastSeenAt: now, KeyUnproven: d.KeyUnproven,
 	}
 	f.devices = append(f.devices, device)
 	return device, nil
@@ -102,6 +102,15 @@ func (f *fakeDevices) TouchDevice(_ context.Context, id string, at time.Time) er
 	defer f.mu.Unlock()
 	if i, ok := f.find(func(d store.Device) bool { return d.DeviceID == id }); ok {
 		f.devices[i].LastSeenAt = at
+	}
+	return nil
+}
+
+func (f *fakeDevices) MarkDeviceKeyProven(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if i, ok := f.find(func(d store.Device) bool { return d.DeviceID == id }); ok {
+		f.devices[i].KeyUnproven = false
 	}
 	return nil
 }
@@ -271,7 +280,7 @@ func namedKeyLoginOn(t *testing.T, conn net.Conn, keys linkTestKeys, nickname st
 func desktopLogin(t *testing.T, addr string, keys linkTestKeys) net.Conn {
 	t.Helper()
 	conn := dialRetry(t, addr)
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: keys.public})
+	sendProvenPasswordAuth(t, conn, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: keys.public}, keys.private)
 	var resp netproto.AuthResponse
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &resp); err != nil {
 		t.Fatal(err)
@@ -772,4 +781,24 @@ func TestSelfRootedWebGuestRegistersDevice(t *testing.T) {
 			t.Fatalf("%s self-registered from the browser: %v", name, err)
 		}
 	}
+}
+
+// sendProvenPasswordAuth sends a password login that proves msg.PublicKey:
+// a password-less Authenticate first fetches a challenge on this connection,
+// which the login then signs (Authenticate.PublicKeyProof).
+func sendProvenPasswordAuth(t *testing.T, conn net.Conn, msg netproto.Authenticate, private string) {
+	t.Helper()
+	probe := msg
+	probe.Password, probe.PublicKey = "", ""
+	send(t, conn, netproto.MsgAuthenticate, probe)
+	var challenge netproto.AuthChallenge
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := auth.SignLoginChallenge(private, challenge.Challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg.PublicKeyProof = proof
+	send(t, conn, netproto.MsgAuthenticate, msg)
 }

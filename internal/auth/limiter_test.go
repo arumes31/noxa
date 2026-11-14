@@ -85,17 +85,22 @@ func TestLoginFailureLimiterEvictionPreservesActiveLockouts(t *testing.T) {
 		MaxFailures:     1,
 		LockoutDuration: time.Minute,
 		FailureTTL:      time.Hour,
-		MaxEntries:      1,
+		MaxEntries:      2,
 		Now:             func() time.Time { return now },
 	})
 	lockedScope := LoginFailureScope("tcp", "locked")
+	sourceScope := LoginFailureScope("tcp:192.0.2.1", "")
 	locked.RecordFailure(lockedScope)
+	locked.RecordFailure(sourceScope)
 	locked.RecordFailure(LoginFailureScope("tcp", "new"))
 	if locked.Allowed(lockedScope) {
-		t.Fatal("active lockout was evicted under capacity pressure")
+		t.Fatal("a principal lockout was evicted before a source lockout")
 	}
-	if len(locked.entries) != 1 {
-		t.Fatalf("locked entries = %d, want 1", len(locked.entries))
+	if !locked.Allowed(sourceScope) {
+		t.Fatal("the source lockout was not the one evicted")
+	}
+	if len(locked.entries) != 2 {
+		t.Fatalf("locked entries = %d, want 2", len(locked.entries))
 	}
 }
 
@@ -121,7 +126,9 @@ func TestLoginFailureScopeNormalizesComponents(t *testing.T) {
 	}
 }
 
-func TestLoginFailureLimiterSaturationFailsClosedForNewScopes(t *testing.T) {
+// Principal lockouts on invented names must not fill the table and refuse
+// every new caller: the one expiring soonest makes room.
+func TestLoginFailureLimiterPrincipalLockoutsCannotFillTheTable(t *testing.T) {
 	now := time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC)
 	limiter := NewLoginFailureLimiter(LoginFailureLimiterConfig{
 		MaxFailures:     1,
@@ -130,14 +137,54 @@ func TestLoginFailureLimiterSaturationFailsClosedForNewScopes(t *testing.T) {
 		MaxEntries:      2,
 		Now:             func() time.Time { return now },
 	})
-	limiter.RecordFailure(LoginFailureScope("tcp", "first"))
-	limiter.RecordFailure(LoginFailureScope("tcp", "second"))
+	first := LoginFailureScope("tcp", "first")
+	second := LoginFailureScope("tcp", "second")
+	limiter.RecordFailure(first)
+	now = now.Add(time.Second)
+	limiter.RecordFailure(second)
 	newScope := LoginFailureScope("tcp", "third")
-	if limiter.Allowed(newScope) {
-		t.Fatal("new scope was allowed when every bounded entry was actively locked")
+	attempt, ok := limiter.Reserve(newScope)
+	if !ok {
+		t.Fatal("principal lockouts filled the table and refused a new scope")
 	}
-	if _, ok := limiter.Reserve(newScope); ok {
-		t.Fatal("new scope reserved KDF work when every bounded entry was actively locked")
+	attempt.Cancel()
+	if !limiter.Allowed(first) || limiter.Allowed(second) {
+		t.Fatal("eviction did not pick the principal lockout expiring soonest")
+	}
+	// Every slot held by KDF work in flight still fails closed.
+	busy := NewLoginFailureLimiter(LoginFailureLimiterConfig{MaxEntries: 1, Now: func() time.Time { return now }})
+	held, ok := busy.Reserve(first)
+	if !ok {
+		t.Fatal("first reservation rejected")
+	}
+	defer held.Cancel()
+	if _, ok := busy.Reserve(second); ok {
+		t.Fatal("a reservation evicted KDF work in flight")
+	}
+}
+
+func TestLoginFailureLimiterSignatureReservationTakesNoKDFSlot(t *testing.T) {
+	limiter := NewLoginFailureLimiter(LoginFailureLimiterConfig{MaxFailures: 1, MaxConcurrentKDF: 1})
+	held, ok := limiter.Reserve(LoginFailureScope("tcp", "busy"))
+	if !ok {
+		t.Fatal("reservation rejected")
+	}
+	defer held.Cancel()
+	source := LoginFailureScope("tcp:192.0.2.9", "")
+	attempt, ok := limiter.ReserveSignature(source)
+	if !ok {
+		t.Fatal("a saturated KDF pool locked a signature path out")
+	}
+	if _, ok := limiter.ReserveSignature(source); ok {
+		t.Fatal("a second signature check for the same scope ran concurrently")
+	}
+	attempt.Fail()
+	if _, ok := limiter.ReserveSignature(source); ok {
+		t.Fatal("a signature lockout was not enforced")
+	}
+	// Finishing a signature attempt released no KDF slot it never held.
+	if _, ok := limiter.Reserve(LoginFailureScope("tcp", "other")); ok {
+		t.Fatal("a signature attempt freed a KDF slot")
 	}
 }
 

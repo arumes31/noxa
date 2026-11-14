@@ -120,6 +120,7 @@ type Client struct {
 	// Retained only after successful guest proof, for explicit role enrollment.
 	verifiedGuestKey string
 	authSigningKey   string                                      // bound to the successful authentication attempt
+	authKeyProven    bool                                        // the login signed for authSigningKey
 	deviceID         string                                      // linked device of this session, if registered
 	deviceIndex      *deviceSessionIndex                         // set by register; keeps the device -> sessions index current
 	webTransport     atomic.Bool                                 // connected through the mobile web app
@@ -462,6 +463,9 @@ type TCPServer struct {
 
 	loginLimiter           *auth.LoginFailureLimiter
 	channelPasswordLimiter *auth.LoginFailureLimiter
+	// verifiedSecrets lets a known-correct server or channel password skip
+	// the KDF (verified_secrets.go).
+	verifiedSecrets verifiedSecrets
 
 	mu      sync.RWMutex
 	clients map[string]*Client

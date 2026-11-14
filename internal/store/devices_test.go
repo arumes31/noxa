@@ -251,3 +251,59 @@ func TestAddDeviceRejectsAnotherAccountsIdentityKey(t *testing.T) {
 		t.Fatalf("key-derived account's own key as own device: %v", err)
 	}
 }
+
+// An unproven device key never blocks its proven owner: a proven
+// registration replaces another principal's unproven claim, an unproven
+// account binding does not block it, and MarkDeviceKeyProven upgrades.
+func TestProvenDeviceKeyWinsOverUnprovenClaim(t *testing.T) {
+	s := pollTestStore(t)
+	ctx := t.Context()
+	stamp := time.Now().UnixNano()
+	attacker := fmt.Sprintf("unproven-attacker-%d", stamp)
+	owner := fmt.Sprintf("proven-owner-%d", stamp)
+	pub := testIdentityKey(t)
+	if _, err := s.DB().ExecContext(ctx, `INSERT INTO users(unique_id,nickname,public_key,public_key_proven) VALUES($1,$1,$2,FALSE)`, attacker, pub); err != nil {
+		t.Fatal(err)
+	}
+	claim := newTestDevice(attacker, 0)
+	claim.Ed25519Public, claim.KeyUnproven = pub, true
+	d, err := s.AddDevice(ctx, claim, 3)
+	if err != nil || !d.KeyUnproven {
+		t.Fatalf("unproven device = %+v, %v", d, err)
+	}
+	unprovenOther := newTestDevice(owner, 0)
+	unprovenOther.Ed25519Public, unprovenOther.KeyUnproven = pub, true
+	if _, err := s.AddDevice(ctx, unprovenOther, 3); !errors.Is(err, ErrDeviceKeyInUse) {
+		t.Fatalf("second unproven claim err = %v, want ErrDeviceKeyInUse", err)
+	}
+	var before, after int64
+	if err := s.DB().QueryRowContext(ctx, `SELECT version FROM olm_rosters WHERE principal=$1`, attacker).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	proven := newTestDevice(owner, 0)
+	proven.Ed25519Public = pub
+	won, err := s.AddDevice(ctx, proven, 3)
+	if err := s.DB().QueryRowContext(ctx, `SELECT version FROM olm_rosters WHERE principal=$1`, attacker).Scan(&after); err != nil || after != before+1 {
+		t.Fatalf("claimant roster version %d -> %d (%v), want a bump", before, after, err)
+	}
+	if err != nil || won.KeyUnproven || won.Principal != owner {
+		t.Fatalf("proven device = %+v, %v", won, err)
+	}
+	if got, err := s.DeviceByKey(ctx, pub); err != nil || got.Principal != owner {
+		t.Fatalf("key resolves to %+v, %v; want the proven owner", got, err)
+	}
+
+	other := testIdentityKey(t)
+	upgrade := newTestDevice(attacker, 1)
+	upgrade.Ed25519Public, upgrade.KeyUnproven = other, true
+	d, err = s.AddDevice(ctx, upgrade, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkDeviceKeyProven(ctx, d.DeviceID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.DeviceByKey(ctx, other); err != nil || got.KeyUnproven {
+		t.Fatalf("upgraded device = %+v, %v", got, err)
+	}
+}

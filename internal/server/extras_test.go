@@ -569,7 +569,7 @@ func TestGuestWithIdentity(t *testing.T) {
 // --- nickname login + identity binding ---------------------------------------
 
 // TestNicknamePasswordLogin verifies password auth by nickname: the account's
-// unique ID is returned, and the client's presented public key is bound.
+// unique ID is returned, and the client's proven public key is bound.
 func TestNicknamePasswordLogin(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
@@ -578,12 +578,13 @@ func TestNicknamePasswordLogin(t *testing.T) {
 
 	conn := dialRetry(t, env.addr)
 	defer func() { _ = conn.Close() }()
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{
+	keys := newLinkTestKeys(t)
+	sendProvenPasswordAuth(t, conn, netproto.Authenticate{
 		Username:            "user", // nickname, not the unique ID
 		Password:            "pw",
-		PublicKey:           "CLIENT-PUB-PEM",
+		PublicKey:           keys.public,
 		AuthorizationModels: []string{netproto.AuthorizationModelRolesV1},
-	})
+	}, keys.private)
 	f := readOfType(t, conn, netproto.MsgAuthResponse)
 	var resp netproto.AuthResponse
 	if err := netproto.Decode(f, &resp); err != nil {
@@ -601,8 +602,8 @@ func TestNicknamePasswordLogin(t *testing.T) {
 
 	env.auth.mu.Lock()
 	defer env.auth.mu.Unlock()
-	if len(env.auth.bindings) != 1 || env.auth.bindings[0][0] != int64(2) || env.auth.bindings[0][1] != "CLIENT-PUB-PEM" {
-		t.Fatalf("bindings = %v, want [(2, CLIENT-PUB-PEM)]", env.auth.bindings)
+	if len(env.auth.bindings) != 1 || env.auth.bindings[0][0] != int64(2) || env.auth.bindings[0][1] != keys.public || env.auth.bindings[0][2] != true {
+		t.Fatalf("bindings = %v, want [(2, proven key)]", env.auth.bindings)
 	}
 }
 

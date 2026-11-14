@@ -62,7 +62,7 @@ type fakeAuth struct {
 	getE2EKeyFn    func(context.Context, string) (string, error)
 
 	mu       sync.Mutex
-	bindings [][2]any // (userID, publicKey) recorded by BindPublicKey
+	bindings [][3]any // (userID, publicKey, proven) recorded by BindPublicKey
 	e2eKeys  map[int64]string
 	e2eByUID map[string]string
 }
@@ -137,6 +137,8 @@ func (f *fakeAuth) LookupUser(_ context.Context, uniqueID string) (*auth.User, e
 }
 
 func (f *fakeAuth) LookupUserByPublicKey(_ context.Context, publicKey string) (*auth.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	u, ok := f.pubkeyIndex[publicKey]
 	if !ok {
 		return nil, auth.ErrUserNotFound
@@ -144,10 +146,17 @@ func (f *fakeAuth) LookupUserByPublicKey(_ context.Context, publicKey string) (*
 	return u, nil
 }
 
-func (f *fakeAuth) BindPublicKey(_ context.Context, userID int64, publicKey string) error {
+// BindPublicKey records the binding and, like the real store, makes a proven
+// key resolve to the account.
+func (f *fakeAuth) BindPublicKey(_ context.Context, userID int64, publicKey string, proven bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.bindings = append(f.bindings, [2]any{userID, publicKey})
+	f.bindings = append(f.bindings, [3]any{userID, publicKey, proven})
+	for _, u := range f.users {
+		if proven && u.ID == userID && f.pubkeyIndex != nil {
+			f.pubkeyIndex[publicKey] = u
+		}
+	}
 	return nil
 }
 

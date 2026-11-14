@@ -289,7 +289,7 @@ func standbyServer(t *testing.T, mode string) (string, <-chan netproto.Authentic
 			return
 		}
 		defer func() { _ = conn.Close() }()
-		frame, err := netproto.ReadFrame(conn)
+		frame, err := readLoginFrame(conn)
 		var request netproto.Authenticate
 		if err != nil || netproto.Decode(frame, &request) != nil {
 			return

@@ -53,6 +53,8 @@ type resumeParked struct {
 	selfDeafened    bool
 	serverMuted     bool
 	serverDeafened  bool
+	status          string // presence status; invisible is re-checked on resume
+	statusMessage   string
 	watching        []resumeWatch // publishers this session watched
 	watchers        []resumeWatch // sessions watching this one
 }
@@ -406,6 +408,8 @@ func (s *TCPServer) parkSession(client *Client, removed *state.Client, reason st
 		selfDeafened:   removed.SelfDeafened,
 		serverMuted:    removed.ServerMuted,
 		serverDeafened: removed.ServerDeafened,
+		status:         removed.Status,
+		statusMessage:  removed.StatusMessage,
 	}
 	if ch, ok := s.deps.State.GetChannel(removed.ChannelID); ok {
 		parked.channelPassword = ch.PasswordHash
@@ -442,6 +446,15 @@ func (s *TCPServer) restoreResumedSession(ctx context.Context, client *Client, p
 		_, _ = s.deps.State.SetServerVoiceState(client.ID, &muted, &deafened)
 	}
 	lease, ok := ctx.Value(roleLeaseKey{}).(roleLease)
+	// Restored before the resume is announced, so an invisible admin never
+	// shows up; invisible stays admin-only, as in handleSetStatus.
+	status := parked.status
+	if status == "invisible" && (!ok || !lease.evaluator.Evaluate(client.userID(), 0, authorization.Administrator).Allowed) {
+		status = ""
+	}
+	if status != "" || parked.statusMessage != "" {
+		s.deps.State.SetStatus(client.ID, status, parked.statusMessage)
+	}
 	if parked.channelID <= 0 || !ok {
 		return
 	}

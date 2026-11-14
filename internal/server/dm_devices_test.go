@@ -103,7 +103,7 @@ func (e dmTestEnv) desktopAs(t *testing.T, uid string, keys linkTestKeys) (net.C
 	t.Helper()
 	conn := dialRetry(t, e.env.addr)
 	t.Cleanup(func() { _ = conn.Close() })
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: uid, Password: "pw", PublicKey: keys.public, X25519PublicKey: keys.x25519})
+	sendProvenPasswordAuth(t, conn, netproto.Authenticate{Username: uid, Password: "pw", PublicKey: keys.public, X25519PublicKey: keys.x25519}, keys.private)
 	var resp netproto.AuthResponse
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &resp); err != nil || !resp.OK {
 		t.Fatalf("%s login = %+v, %v", uid, resp, err)

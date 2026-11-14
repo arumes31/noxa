@@ -35,7 +35,7 @@ type AuthBackend interface {
 	LookupUser(ctx context.Context, uniqueID string) (*auth.User, error)
 	LookupUserByPublicKey(ctx context.Context, publicKey string) (*auth.User, error)
 	LookupActiveBan(ctx context.Context, uniqueID, ip string) (*auth.Ban, error)
-	BindPublicKey(ctx context.Context, userID int64, publicKey string) error
+	BindPublicKey(ctx context.Context, userID int64, publicKey string, proven bool) error
 	// E2EE key directory (wave 4b): registered users' X25519 keys persist.
 	SetE2EPublicKey(ctx context.Context, userID int64, publicKey string) error
 	GetE2EPublicKey(ctx context.Context, uniqueID string) (string, error)

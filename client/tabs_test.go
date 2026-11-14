@@ -589,7 +589,7 @@ func startTabAuthServer(t *testing.T, connectionCount int) string {
 
 func serveTabAuthConnection(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
-	frame, err := netproto.ReadFrame(conn)
+	frame, err := readLoginFrame(conn)
 	if err != nil {
 		return
 	}
