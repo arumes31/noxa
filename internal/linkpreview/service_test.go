@@ -154,6 +154,37 @@ func TestImageMIMEAndGlobalConcurrencyBound(t *testing.T) {
 	}
 }
 
+func TestOneSiteHoldsOneSlot(t *testing.T) {
+	s := New()
+	started, release := make(chan struct{}), make(chan struct{})
+	s.client = &http.Client{Transport: transportFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "a.slow.example.com" {
+			close(started)
+			<-release
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"image/png"}}, Body: io.NopCloser(bytes.NewReader(pngFixture(t))), Request: req}, nil
+	})}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Preview(context.Background(), netproto.LinkPreviewRequest{Provider: "image", Resource: "https://a.slow.example.com/x.png"})
+		done <- err
+	}()
+	<-started
+	if _, err := s.Preview(context.Background(), netproto.LinkPreviewRequest{Provider: "web", Resource: "https://b.slow.example.com/"}); err == nil {
+		t.Fatal("a second fetch from the same site took a slot")
+	}
+	if _, err := s.Preview(context.Background(), netproto.LinkPreviewRequest{Provider: "image", Resource: "https://other.example.org/x.png"}); err != nil {
+		t.Fatalf("another site blocked: %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Preview(context.Background(), netproto.LinkPreviewRequest{Provider: "image", Resource: "https://c.slow.example.com/x.png"}); err != nil {
+		t.Fatalf("site not released: %v", err)
+	}
+}
+
 func TestResolvedDialRejectsMixedDNSAndPinsPublicAddress(t *testing.T) {
 	for _, addresses := range [][]netip.Addr{
 		{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("127.0.0.1")},

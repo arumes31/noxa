@@ -24,6 +24,7 @@ import (
 
 	"golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
+	"golang.org/x/net/publicsuffix"
 	"noxa/internal/netproto"
 )
 
@@ -102,7 +103,7 @@ func resolvedDial(ctx context.Context, network, host, port string, lookup func(c
 	return nil, err
 }
 func newHTTPClient() *http.Client {
-	return &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{
+	return &http.Client{Timeout: previewTimeout, Transport: &http.Transport{
 		Proxy: nil, DialContext: safeDial, DisableKeepAlives: true, MaxResponseHeaderBytes: 16 << 10,
 		TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 4 * time.Second,
 	}, CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -122,11 +123,32 @@ type Service struct {
 	mu     sync.Mutex
 	cache  map[netproto.LinkPreviewRequest]cacheEntry
 	slots  chan struct{}
+	hosts  map[string]struct{} // sites with a fetch in flight; mu guards it
 	client *http.Client
 }
 
+// previewTimeout bounds one preview, thumbnail included.
+const previewTimeout = 6 * time.Second
+
 func New() *Service {
-	return &Service{cache: make(map[netproto.LinkPreviewRequest]cacheEntry), slots: make(chan struct{}, 4), client: newHTTPClient()}
+	return &Service{cache: make(map[netproto.LinkPreviewRequest]cacheEntry), slots: make(chan struct{}, 8), hosts: make(map[string]struct{}), client: newHTTPClient()}
+}
+
+// siteKey names the site a web or image preview fetches, so one slow site
+// (or its many subdomains) holds at most one slot. Fixed providers have none.
+func siteKey(r netproto.LinkPreviewRequest) string {
+	if r.Provider != "web" && r.Provider != "image" {
+		return ""
+	}
+	u, err := url.Parse(r.Resource)
+	if err != nil {
+		return r.Resource
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if site, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil {
+		return site
+	}
+	return host
 }
 func (s *Service) Preview(ctx context.Context, r netproto.LinkPreviewRequest) (netproto.LinkPreviewResult, error) {
 	var empty netproto.LinkPreviewResult
@@ -139,13 +161,29 @@ func (s *Service) Preview(ctx context.Context, r netproto.LinkPreviewRequest) (n
 	if ok && time.Now().Before(cached.expires) {
 		return cached.result, nil
 	}
+	if site := siteKey(r); site != "" {
+		s.mu.Lock()
+		_, busy := s.hosts[site]
+		if !busy {
+			s.hosts[site] = struct{}{}
+		}
+		s.mu.Unlock()
+		if busy {
+			return empty, errUnavailable
+		}
+		defer func() {
+			s.mu.Lock()
+			delete(s.hosts, site)
+			s.mu.Unlock()
+		}()
+	}
 	select {
 	case s.slots <- struct{}{}:
 		defer func() { <-s.slots }()
 	default:
 		return empty, errUnavailable
 	}
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, previewTimeout)
 	defer cancel()
 	result, err := s.fetch(ctx, r)
 	if err != nil {

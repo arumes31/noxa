@@ -304,18 +304,13 @@ registerSettings("data", [
 
 // --- About ------------------------------------------------------------------------
 
-/** Whether the server has a newer app: a waiting service worker or a changed version. */
+/** Whether the server has a newer app: a waiting service worker. */
 export async function checkForUpdate() {
     const registration = await navigator.serviceWorker?.getRegistration("/app/").catch(() => null);
     if (registration) {
         await registration.update().catch(() => {});
         if (registration.waiting || registration.installing) return { ready: true, registration };
     }
-    try {
-        const response = await fetch("/api/v1/web/info", { cache: "no-store" });
-        const info = response.ok ? await response.json() : null;
-        if (info?.version && app.info?.version && info.version !== app.info.version) return { ready: true, registration };
-    } catch { /* offline: nothing newer is known */ }
     return { ready: false, registration };
 }
 

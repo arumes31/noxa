@@ -21,3 +21,18 @@ func TestCheckRemoteSDPBudget(t *testing.T) {
 		t.Fatalf("over-budget description err=%v", err)
 	}
 }
+
+func TestCheckRemoteSDPBudgetCapsMediaSections(t *testing.T) {
+	var sdp strings.Builder
+	sdp.WriteString("v=0\r\n")
+	for range maxRemoteMediaSections {
+		sdp.WriteString("m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:x\r\n")
+	}
+	if err := checkRemoteSDPBudget(sdp.String()); err != nil {
+		t.Fatalf("description within budget rejected: %v", err)
+	}
+	sdp.WriteString("m=video 9 UDP/TLS/RTP/SAVPF 96\r\n")
+	if err := checkRemoteSDPBudget(sdp.String()); !errors.Is(err, ErrSDPTooManyMediaSections) {
+		t.Fatalf("over-budget description err=%v", err)
+	}
+}

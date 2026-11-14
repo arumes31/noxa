@@ -140,15 +140,31 @@ func (w *PeerConnectionWrapper) RemoteSDP() <-chan webrtc.SessionDescription {
 // simulcast and RTX uses a few dozen.
 const maxRemoteSSRCAttributes = 512
 
+// maxRemoteMediaSections bounds the m= sections of a client description.
+// Each one becomes a Pion transceiver. A subscriber's description carries one
+// section per received slot (mic, cam, screen, screen audio) of every other
+// member, so a full 64-seat voice channel needs about 4*63 plus its own few
+// and the data channel; the rest is headroom for recycled sections.
+const maxRemoteMediaSections = 384
+
 // ErrSDPTooManySSRCs rejects a remote description over the SSRC budget.
 var ErrSDPTooManySSRCs = errors.New("webrtc: session description declares too many SSRCs")
 
+// ErrSDPTooManyMediaSections rejects a remote description with too many m= lines.
+var ErrSDPTooManyMediaSections = errors.New("webrtc: session description declares too many media sections")
+
 func checkRemoteSDPBudget(sdp string) error {
-	n := 0
+	ssrcs, sections := 0, 0
 	for line := range strings.Lines(sdp) {
-		if strings.HasPrefix(strings.TrimSpace(line), "a=ssrc") {
-			if n++; n > maxRemoteSSRCAttributes {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "a=ssrc") {
+			if ssrcs++; ssrcs > maxRemoteSSRCAttributes {
 				return ErrSDPTooManySSRCs
+			}
+		}
+		if strings.HasPrefix(line, "m=") {
+			if sections++; sections > maxRemoteMediaSections {
+				return ErrSDPTooManyMediaSections
 			}
 		}
 	}

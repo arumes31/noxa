@@ -30,6 +30,14 @@ func TestSessionRequestBudgets(t *testing.T) {
 	if a.allow(netproto.MsgICECandidate, now) {
 		t.Fatal("unbounded ICE")
 	}
+	for i := 0; i < 32; i++ {
+		if !a.allow(netproto.MsgWebRTCOffer, now) {
+			t.Fatal("offer burst affected by ICE")
+		}
+	}
+	if a.allow(netproto.MsgWebRTCOffer, now) {
+		t.Fatal("unbounded offers")
+	}
 	if !a.allow(netproto.MsgPing, now) {
 		t.Fatal("heartbeat throttled")
 	}

@@ -159,23 +159,33 @@ export async function signIn(conn, identity, { version, nickname = "", serverPas
         client_features: [CLIENT_FEATURE_POW, CLIENT_FEATURE_RETRY_HINT, ...(goodbye ? [CLIENT_FEATURE_GOODBYE, CLIENT_FEATURE_RESUME] : [])],
         ...(resumeToken ? { resume_token: resumeToken } : {}),
     };
-    let first = await conn.request(Msg.Authenticate, authenticate, [Msg.AuthChallenge, Msg.AuthResponse, Msg.PowChallenge], { timeout: 10000 });
-    if (first.algorithm) {
-        // (#7) The server's anti-raid shield is raised: solve its challenge
-        // (in a worker) and repeat the login on the same connection.
-        // A closed connection or cancelled login stops the search at once.
-        const abort = new AbortController();
-        const stop = () => abort.abort();
-        conn.addEventListener?.("close", stop, { once: true });
-        let nonce;
-        try {
-            nonce = await solvePow(first, { signal: abort.signal });
-        } finally {
-            conn.removeEventListener?.("close", stop);
+    const begin = async () => {
+        let first = await conn.request(Msg.Authenticate, authenticate, [Msg.AuthChallenge, Msg.AuthResponse, Msg.PowChallenge], { timeout: 10000 });
+        if (first.algorithm) {
+            // (#7) The server's anti-raid shield is raised: solve its challenge
+            // (in a worker) and repeat the login on the same connection.
+            // A closed connection or cancelled login stops the search at once.
+            const abort = new AbortController();
+            const stop = () => abort.abort();
+            conn.addEventListener?.("close", stop, { once: true });
+            let nonce;
+            try {
+                nonce = await solvePow(first, { signal: abort.signal });
+            } finally {
+                conn.removeEventListener?.("close", stop);
+            }
+            first = await conn.request(Msg.Authenticate, { ...authenticate, pow_prefix: first.prefix, pow_nonce: String(nonce) },
+                [Msg.AuthChallenge, Msg.AuthResponse, Msg.PowChallenge], { timeout: 10000 });
+            if (first.algorithm) throw signInError("proof of work rejected");
         }
-        first = await conn.request(Msg.Authenticate, { ...authenticate, pow_prefix: first.prefix, pow_nonce: String(nonce) },
-            [Msg.AuthChallenge, Msg.AuthResponse, Msg.PowChallenge], { timeout: 10000 });
-        if (first.algorithm) throw signInError("proof of work rejected");
+        return first;
+    };
+    let first = await begin();
+    // Signed-out callers do not learn the server build, so a server with a
+    // client minimum names it here; the app it serves meets it. Retry once.
+    if (!first.challenge && first.client_min_version && first.client_min_version !== authenticate.client_version) {
+        authenticate.client_version = first.client_min_version;
+        first = await begin();
     }
     if (!first.challenge) throw signInError(first.reason);
     // Strict: sign only the advertised domain-separated scheme; an older

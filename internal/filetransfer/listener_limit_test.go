@@ -3,6 +3,7 @@ package filetransfer
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -171,4 +172,54 @@ func TestPreauthSourceCapAndOversizedHeaderRelease(t *testing.T) {
 	waitForAcceptedConnections(t, s, 7)
 	dial()
 	waitForAcceptedConnections(t, s, 8)
+}
+
+// addrConn is a pipe end that reports a chosen remote address.
+type addrConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c addrConn) RemoteAddr() net.Addr { return c.remote }
+
+func TestPreauthGroupsIPv6AndKeepsHalfTheSlots(t *testing.T) {
+	s := New(Config{Addr: "127.0.0.1:0", RootDir: t.TempDir(), MaxConnections: 32}, newFakeFileStore(), nil)
+	conn := func(ip string) net.Conn {
+		a, b := net.Pipe()
+		t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
+		return addrConn{Conn: a, remote: &net.TCPAddr{IP: net.ParseIP(ip), Port: 1}}
+	}
+	var admitted []net.Conn
+	defer func() {
+		for _, c := range admitted {
+			s.release(c)
+		}
+	}()
+	for i := range maxPreauthPerSource {
+		c := conn(fmt.Sprintf("2001:db8:1:2::%x", i+1))
+		if !s.admit(c) {
+			t.Fatalf("connection %d from the /64 rejected", i)
+		}
+		admitted = append(admitted, c)
+	}
+	if s.admit(conn("2001:db8:1:2:ffff::1")) {
+		t.Fatal("another address in the same /64 bypassed the source cap")
+	}
+	for i := 0; len(admitted) < 16; i++ {
+		c := conn(fmt.Sprintf("192.0.2.%d", i+1))
+		if !s.admit(c) {
+			t.Fatalf("pre-auth connection %d rejected below half the slots", len(admitted))
+		}
+		admitted = append(admitted, c)
+	}
+	if s.admit(conn("198.51.100.1")) {
+		t.Fatal("pre-auth connections took more than half the slots")
+	}
+	// An authenticated transfer leaves pre-auth accounting and frees room.
+	s.releasePreauth(admitted[len(admitted)-1])
+	if c := conn("198.51.100.1"); !s.admit(c) {
+		t.Fatal("slot not reusable after authentication")
+	} else {
+		admitted = append(admitted, c)
+	}
 }

@@ -308,10 +308,9 @@ self.addEventListener("notificationclick", event => {
 async function declineCall(id) {
     const stored = await loadIdentity();
     if (!stored?.meta?.linked) return;
-    const info = await (await fetch("/api/v1/web/info", { cache: "no-store" })).json();
     const conn = await Connection.open();
     try {
-        await signIn(conn, stored.identity, { version: info.version || "0.0.0" });
+        await signIn(conn, stored.identity, { version: "0.0.0" });
         await conn.request(Msg.CallRequest, { action: "decline", id }, Msg.CallResult, { accept: r => r.action === "decline" });
     } finally {
         conn.close();
@@ -366,10 +365,9 @@ const sameIdentity = (a, b) => !!a?.edPublic && !!b?.edPublic &&
 async function reportSubscription(sub) {
     const stored = await loadIdentity();
     if (!stored?.meta?.linked) return;
-    const info = await (await fetch("/api/v1/web/info", { cache: "no-store" })).json();
     const conn = await Connection.open();
     try {
-        await signIn(conn, stored.identity, { version: info.version || "0.0.0" });
+        await signIn(conn, stored.identity, { version: "0.0.0" });
         const [current, latest] = await Promise.all([self.registration.pushManager.getSubscription(), loadIdentity()]);
         if (current?.endpoint !== sub.endpoint || !latest?.meta?.linked || !sameIdentity(latest.identity, stored.identity)) return;
         await registerSubscription(conn, sub);
@@ -401,10 +399,9 @@ async function waitForKeys(session, scopes, timeout = 8000) {
 async function signedIn(work = async () => true) {
     const stored = await loadIdentity();
     if (!stored?.meta?.linked) return;
-    const info = await (await fetch("/api/v1/web/info", { cache: "no-store" })).json();
     const conn = await Connection.open();
     try {
-        const auth = await signIn(conn, stored.identity, { version: info.version || "0.0.0" });
+        const auth = await signIn(conn, stored.identity, { version: "0.0.0" });
         const session = new ChatSession(conn, stored.identity, auth);
         // Offline DMs are replayed immediately after authentication.
         const dm = new DirectMessages(session, stored.meta, { fence: stored.fence });

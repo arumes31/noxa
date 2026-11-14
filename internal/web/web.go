@@ -34,7 +34,6 @@ import (
 	"noxa/internal/health"
 	"noxa/internal/netproto"
 	"noxa/internal/tlscert"
-	"noxa/internal/version"
 )
 
 // ProtocolVersion is the web app protocol this server speaks. A bundle with
@@ -67,11 +66,10 @@ type Info struct {
 	PublicURL       string `json:"public_url"`
 	RPID            string `json:"rp_id"`
 	ProtocolVersion int    `json:"protocol_version"`
-	// Version is the server build; the bundle reports it as its client
-	// version because the server always serves its own matching app.
-	Version                string `json:"version"`
-	GuestLogin             bool   `json:"guest_login"`
-	ServerPasswordRequired bool   `json:"server_password_required"`
+	// The server build is not published here; like /healthz, it stays
+	// hidden from unauthenticated callers.
+	GuestLogin             bool `json:"guest_login"`
+	ServerPasswordRequired bool `json:"server_password_required"`
 }
 
 // Server is the mobile web listener.
@@ -168,7 +166,22 @@ func (s *Server) Handle(pattern string, h http.Handler) {
 
 // Handler returns the full handler chain, for tests and embedding.
 func (s *Server) Handler() http.Handler {
-	return securityHeaders(health.RequireSecureCredentials(s.mux, s.proxies...))
+	return bodyReadDeadline(securityHeaders(health.RequireSecureCredentials(s.mux, s.proxies...)))
+}
+
+// requestReadTimeout bounds how long a request may take to arrive, body
+// included. Without it a client that trickles a large declared body holds the
+// connection while net/http discards it. It is set per request, not as
+// http.Server.ReadTimeout, which would also end hijacked WebSockets.
+var requestReadTimeout = 30 * time.Second
+
+func bodyReadDeadline(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ws" && r.URL.Path != "/ft" {
+			_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(requestReadTimeout))
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Start serves until Shutdown. It returns nil after a graceful shutdown.
@@ -255,7 +268,6 @@ func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 		PublicURL:       origin,
 		RPID:            s.cfg.RPID(),
 		ProtocolVersion: ProtocolVersion,
-		Version:         version.Short(),
 		GuestLogin:      guests, ServerPasswordRequired: password,
 	})
 }

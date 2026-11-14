@@ -209,6 +209,9 @@ func TestInfoAndAppRoutes(t *testing.T) {
 	if info.RPID != "chat.example" || info.ProtocolVersion != ProtocolVersion || info.PublicURL != "https://chat.example" {
 		t.Fatalf("info = %+v", info)
 	}
+	if strings.Contains(string(resp.body), `"version"`) {
+		t.Fatalf("info discloses the server build: %s", resp.body)
+	}
 	if csp := resp.header.Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
 		t.Fatalf("missing CSP: %q", csp)
 	}
@@ -381,5 +384,58 @@ func TestStaticResponsesHaveAWriteDeadline(t *testing.T) {
 		if left := time.Until(rec.deadline); left <= 0 || left > staticWriteTimeout {
 			t.Fatalf("%s write deadline in %s, want within %s", path, left, staticWriteTimeout)
 		}
+	}
+}
+
+func TestSlowBodyIsCutWhileWebSocketsStayOpen(t *testing.T) {
+	old := requestReadTimeout
+	requestReadTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { requestReadTimeout = old })
+	ts := newTestServer(t, testConfig(t), &echoControl{})
+
+	ws, err := dialWS(t, ts, "https://chat.example")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = ws.Close() }()
+
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	// A body under net/http's post-handler discard limit is drained after
+	// the reply, so only the read deadline ends a trickle.
+	if _, err := io.WriteString(conn, "POST /app/share HTTP/1.1\r\nHost: chat.example\r\nX-Forwarded-Proto: https\r\nContent-Length: 200000\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, conn)
+		close(closed)
+	}()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	timeout := time.After(5 * time.Second)
+trickle:
+	for {
+		select {
+		case <-closed:
+			break trickle
+		case <-timeout:
+			t.Fatal("slow body kept the connection open past the read deadline")
+		case <-tick.C:
+			_, _ = conn.Write([]byte{'x'})
+		}
+	}
+
+	// The hijacked WebSocket outlives the request read deadline.
+	if _, err := ws.Write([]byte{7}); err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	got := make([]byte, 1)
+	if _, err := io.ReadFull(ws, got); err != nil || got[0] != 7 {
+		t.Fatalf("websocket after deadline: %v %v", got, err)
 	}
 }
