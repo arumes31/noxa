@@ -193,7 +193,10 @@ func (a *App) requireCM() (*connManager, error) {
 func (a *App) cmStore(cm *connManager) { a.cm.Store(cm) }
 
 func (a *App) domReady(ctx context.Context) {
-	restoreUpdateWindow()
+	// A handover window stays hidden until it takes over the session.
+	if incomingHandover == nil {
+		restoreUpdateWindow()
+	}
 	if err := a.restoreWindowOpacityOnce(ctx); err != nil && err != context.Canceled {
 		log.Printf("window opacity at DOM-ready: %v", err)
 	}
@@ -211,6 +214,9 @@ func (a *App) startup(ctx context.Context) {
 		a.knownServers = &knownServers{Servers: map[string]string{}, loadErr: trustStoreUnavailable("locate path: %v", err)}
 	}
 	a.registerHotkeys()
+	if h := incomingHandover; h != nil {
+		h.watchParent(a)
+	}
 	// (501) Windows Action Center notifications: per-user registration only.
 	go guardCrash("native notifications", a.initNativeToasts)
 	// (291) restore always-on-top.

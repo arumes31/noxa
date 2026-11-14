@@ -103,7 +103,16 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 	// A presented resume token continues an earlier session of this identity
 	// (an ephemeral guest gets its old guest identity back). Everything below
 	// is still checked afresh: bans, devices, capacity and channel access.
+	if client.handoverRequested() {
+		return s.enterHandoverStandby(client, id)
+	}
 	resumed := s.claimResume(ctx, client, id.uniqueID)
+	if resumed == nil && client.handoverCommitting() {
+		// The session ended or was resumed elsewhere meanwhile: never let a
+		// commit become a second, fresh session.
+		_ = s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: netproto.ReasonHandoverUnavailable})
+		return errHandoverUnavailable
+	}
 	var parked *resumeParked
 	if resumed != nil {
 		parked = resumed.parked
@@ -153,7 +162,9 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		}
 		// Metadata serialization makes capacity check and publication atomic.
 		// Idle sockets are deliberately excluded from the configured user limit.
-		if max := s.EffectiveMaxClients(ctx); max > 0 && s.authenticatedClientCount() >= max {
+		// A handover commit takes over its old session's slot (already
+		// freed by the takeover) and must not lose it to a racing login.
+		if max := s.EffectiveMaxClients(ctx); max > 0 && (resumed == nil || !client.handoverCommitting()) && s.authenticatedClientCount() >= max {
 			rejection = "server is full"
 			return authorization.ErrRoleForbidden
 		}
@@ -221,7 +232,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		Nickname:           id.nickname,
 		Guest:              id.guest,
 		TLSFingerprint:     s.tlsFingerprint,
-		Capabilities:       []string{netproto.CapabilityLobbyPrivacy, netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity},
+		Capabilities:       []string{netproto.CapabilityLobbyPrivacy, netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity, netproto.CapabilityHandover},
 	}
 	s.announceClientVersions(&resp)
 	resp.ResumeToken = s.resume.issue(client, id.uniqueID, resumeBinding(id.uniqueID, client.sessionKey()))

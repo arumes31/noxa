@@ -33,9 +33,9 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
         const s = state.settings || {};
         el.volume = Math.min(1, (s.volume ?? 100) / 100);
         void selectAudioOutput(el);
-        el.muted = state.deafened;
+        el.muted = state.deafened || !!state.handoverSilenced;
         if (remoteChain.master) {
-            remoteChain.master.gain.value = state.deafened ? 0 : Math.min(2, (s.volume ?? 100) / 100);
+            remoteChain.master.gain.value = state.deafened || state.handoverSilenced ? 0 : Math.min(2, (s.volume ?? 100) / 100);
         }
     }
 
@@ -130,7 +130,7 @@ export function createRemoteAudio({ state, toast, sysMsg, voiceEpoch }) {
             spatialVoice = new SpatialVoice(ctx);
             const master = ctx.createGain();
             remoteChain.master = master;
-            master.gain.value = state.deafened ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
+            master.gain.value = state.deafened || state.handoverSilenced ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
 
             // (52) voice limiter/compressor (default on). Gain normalization (53)
             // is per publisher and lives in attachRemoteAudio.

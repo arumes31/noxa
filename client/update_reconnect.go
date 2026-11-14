@@ -188,25 +188,36 @@ func decodeUpdateReconnect(encoded string, now time.Time, unprotect func([]byte)
 // RestoreUpdateConnection is invoked after genuine frontend readiness, before
 // bookmark auto-connect. Only the updater-launched process can consume it once.
 func (a *App) RestoreUpdateConnection() map[string]any {
+	result, owner := a.restoreUpdateConnectionOnce()
+	// A handover process whose restoration did not take over the session
+	// hands it back. Only the call that consumed the restoration decides; a
+	// skipped or repeated call never cancels one in progress.
+	if h := incomingHandover; h != nil && owner {
+		h.abandon(a)
+	}
+	return result
+}
+
+func (a *App) restoreUpdateConnectionOnce() (map[string]any, bool) {
 	a.update.mu.Lock()
 	if a.updateReconnectConsumed || a.UpdateStartupPending() {
 		a.update.mu.Unlock()
-		return map[string]any{"attempted": false}
+		return map[string]any{"attempted": false}, false
 	}
 	a.updateReconnectConsumed = true
 	encoded := os.Getenv(updateReconnectEnv)
 	_ = os.Unsetenv(updateReconnectEnv)
 	a.update.mu.Unlock()
 	if !startedAfterUpdate || encoded == "" {
-		return map[string]any{"attempted": false}
+		return map[string]any{"attempted": false}, true
 	}
 	result := map[string]any{"attempted": true}
 	saved, err := decodeUpdateReconnect(encoded, time.Now(), unprotectBytes)
 	if err != nil {
 		result["error"] = err.Error()
-		return result
+		return result, true
 	}
-	return a.restoreUpdateConnection(saved)
+	return a.restoreUpdateConnection(saved), true
 }
 
 func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string]any {
@@ -219,6 +230,12 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	a.emitPlain("update_connection_restoring", map[string]bool{"muted": saved.Muted, "deafened": saved.Deafened, "muted_before_deafen": saved.MutedBeforeDeafen})
 	id, tab := a.newTabWithIdentity(&saved.Identity)
 	tab.cm.setResumeToken(saved.ResumeToken)
+	handover := incomingHandover
+	if handover != nil {
+		tab.cm.mu.Lock()
+		tab.cm.handoverBegin = func() bool { return handover.signal(handoverCommitting) == nil }
+		tab.cm.mu.Unlock()
+	}
 	committed := false
 	defer func() {
 		if !committed {
@@ -238,7 +255,15 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	}
 	a.tabsMu.Unlock()
 	if !owned {
-		tab.cm.disconnect()
+		if handover != nil {
+			// The server already moved the session here with a new token:
+			// keep the connected tab and release the old process instead of
+			// handing back a session it can no longer resume.
+			committed = true
+			handover.commit(a)
+		} else {
+			tab.cm.disconnect()
+		}
 		result["error"] = "connection restoration was cancelled"
 		return result
 	}
@@ -251,15 +276,34 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	defer a.activationPublishMu.Unlock()
 	connected := tab.cm.connected()
 	a.tabsMu.Lock()
-	if !connected || a.tabs[id] != tab || tab.reconnectSuppressed || a.activeID != "" || len(a.tabs) != 1 {
+	// After a handover commit the session belongs to this process even if
+	// its connection dropped meanwhile: keep the tab and resume it as usual.
+	if (!connected && handover == nil) || a.tabs[id] != tab || tab.reconnectSuppressed || a.activeID != "" || len(a.tabs) != 1 {
 		a.tabsMu.Unlock()
+		if handover != nil {
+			committed = true // keep the moved session (see above)
+			handover.commit(a)
+		}
 		result["error"] = "connection restoration was cancelled"
 		return result
 	}
 	cm, journal, generation, _ := a.activateLocked(id)
 	a.tabsMu.Unlock()
 	committed = true
+	// Only a fully restored session releases the old process; any earlier
+	// failure hands the session back through the abandon in the caller.
+	if handover != nil {
+		handover.commit(a)
+	}
 	a.onTabConnected(cm, saved.Bookmark, saved.Addr, saved.Nickname, saved.DisplayName)
+	if !connected {
+		// The normal reconnect presents the rotated resume token.
+		result["warning"] = "connection lost while restoring; reconnecting"
+		a.finishActivateSerialized(id, cm, journal, generation)
+		go tab.cm.emit("disconnected", "") // publishes after activationPublishMu is released
+		result["tab_id"] = id
+		return result
+	}
 	if saved.ChannelID > 0 && result["warning"] == nil {
 		a.emitPlain("tab_voice_restored", map[string]any{"tab_id": id, "client_id": tab.cm.clientIDSnapshot(), "channel_id": saved.ChannelID})
 	}
@@ -271,3 +315,4 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	}
 	return result
 }
+

@@ -133,6 +133,7 @@ type Client struct {
 	gone             chan struct{}                               // closed once the connection's cleanup finished
 	resumeOffer      string                                      // presented resume token, protected by mu
 	announcesResume  bool                                        // client presents resume tokens, protected by mu
+	handover         *handoverStandby                            // update handover login state, protected by mu
 	announcesGoodbye bool                                        // client sends MsgGoodbye before a deliberate close, protected by mu
 	inputAt          time.Time                                   // last input a desktop reported (activity)
 	webHidden        bool                                        // the web app reported it is in the background
@@ -1014,6 +1015,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 	defer cancelAuth()
 	passkeyWindowGranted := false
 	powWindowGranted := false
+	standbyWindowGranted := false
 
 	_, web := conn.(webTransportConn)
 	client := &Client{
@@ -1120,6 +1122,18 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 
+		// An accepted commit gets its own bounded completion window; the
+		// standby deadline only cuts off when a commit may start.
+		if !authDeadline.IsZero() && netproto.MessageType(frame.Type) == netproto.MsgHandoverCommit && client.inHandoverStandby() {
+			cancelAuth()
+			authDeadline = time.Now().Add(handoverCommitWindow)
+			authCtx, cancelAuth = context.WithDeadline(ctx, authDeadline)
+			defer cancelAuth()
+			if err := conn.SetDeadline(authDeadline); err != nil {
+				frame.Release()
+				return
+			}
+		}
 		requestCtx := ctx
 		if !authDeadline.IsZero() {
 			requestCtx = authCtx
@@ -1172,6 +1186,23 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 				}
 			}
 		}
+		// An update handover standby stays unauthenticated (and in its
+		// pre-auth admission slot) until it commits or its window ends.
+		if !authDeadline.IsZero() && !standbyWindowGranted && !client.isAuthed() {
+			if deadline := client.handoverDeadline(); !deadline.IsZero() {
+				if authCtx.Err() != nil {
+					return
+				}
+				cancelAuth()
+				authDeadline = deadline
+				authCtx, cancelAuth = context.WithDeadline(ctx, authDeadline)
+				defer cancelAuth()
+				standbyWindowGranted = true
+				if err := conn.SetDeadline(authDeadline); err != nil {
+					return
+				}
+			}
+		}
 		if !authDeadline.IsZero() && client.isAuthed() {
 			if authCtx.Err() != nil {
 				return
@@ -1192,6 +1223,10 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Frame) error {
 	mt := netproto.MessageType(f.Type)
 	ctx = context.WithValue(ctx, requestOriginContextKey{}, mt)
+	// A handover standby may only commit (or keep its connection alive).
+	if client.inHandoverStandby() && mt != netproto.MsgHandoverCommit && mt != netproto.MsgPing && mt != netproto.MsgPong {
+		return errHandoverUnavailable
+	}
 	if !client.isAuthed() && (mt == netproto.MsgAuthenticate || mt == netproto.MsgAuthSignature || mt == netproto.MsgDeviceRequest) {
 		client.mu.Lock()
 		client.authRequests++
@@ -1209,7 +1244,7 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 	}
 
 	if !client.isAuthed() && mt != netproto.MsgAuthenticate && mt != netproto.MsgAuthSignature && mt != netproto.MsgPing &&
-		mt != netproto.MsgDeviceRequest {
+		mt != netproto.MsgDeviceRequest && mt != netproto.MsgHandoverCommit {
 		return s.sendErrorFor(client, mt, errCodeNotAuthenticated, "not authenticated")
 	}
 	if client.isAuthed() && !client.requestBudget.allow(mt, time.Now()) {
@@ -1404,6 +1439,8 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 	case netproto.MsgPong:
 		client.notePong()
 		return nil
+	case netproto.MsgHandoverCommit:
+		return s.handleHandoverCommit(ctx, client)
 	case netproto.MsgGoodbye:
 		client.updating.Store(goodbyeIsUpdate(f.Payload))
 		client.saidGoodbye.Store(true)
@@ -1499,6 +1536,9 @@ func (s *TCPServer) pingLoop(client *Client, stop <-chan struct{}) {
 // departure to the remaining clients, and trigger the temp-channel cleanup
 // check for the channel it left.
 func (s *TCPServer) onDisconnect(client *Client) {
+	if clientID, pending := client.dropHandover(); pending {
+		s.resume.endHandover(clientID, client)
+	}
 	if s.deps != nil && s.deps.Relay != nil {
 		s.deps.Relay.Remove(client.ID)
 	}

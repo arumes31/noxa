@@ -187,7 +187,16 @@ func (f *fakeAuth) GetE2EPublicKey(ctx context.Context, uniqueID string) (string
 	return key, nil
 }
 
+// setBan adds a ban while the server may be reading bans.
+func (f *fakeAuth) setBan(key string, ban *auth.Ban) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bans[key] = ban
+}
+
 func (f *fakeAuth) LookupActiveBan(_ context.Context, uniqueID, ip string) (*auth.Ban, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if b, ok := f.bans[uniqueID]; ok {
 		return b, nil
 	}
