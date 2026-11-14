@@ -240,7 +240,9 @@ function showRouteLoadFailure() {
 }
 
 // Unsent text in any field also holds a quiet reload back, so a draft is never thrown away.
-const hasDraft = () => [...document.querySelectorAll("textarea, input[type=text], input:not([type]), [contenteditable=true]")]
+const DRAFT_FIELDS = "textarea, [contenteditable]:not([contenteditable=false]), "
+    + "input:not([type=checkbox], [type=radio], [type=range], [type=hidden], [type=button], [type=submit], [type=reset], [type=file], [type=color], [type=image])";
+const hasDraft = () => [...document.querySelectorAll(DRAFT_FIELDS)]
     .some(field => (field.value ?? field.textContent).trim() !== "");
 const inVoice = () => !!(app.voice?.active || app.calls?.active) || hasDraft();
 
@@ -309,6 +311,7 @@ const FORCED_RELOAD_KEY = "noxa-update-required-reload";
  * A cached older app met a newer server: it cannot work, so it reloads at
  * once, even in voice. A second mismatch right after that reload (stale
  * bundle) falls back to the banner instead of a reload loop.
+ * Returns true when a reload is under way.
  */
 async function updateRequired() {
     let recent = false;
@@ -316,12 +319,16 @@ async function updateRequired() {
         recent = Date.now() - Number(sessionStorage.getItem(FORCED_RELOAD_KEY) || 0) < 60000;
         if (!recent) sessionStorage.setItem(FORCED_RELOAD_KEY, String(Date.now()));
     } catch { /* Without storage, the banner is the safe choice. */ recent = true; }
-    if (recent) return showUpdateBanner(t("update.required"));
+    if (recent) {
+        showUpdateBanner(t("update.required"));
+        return false;
+    }
     try {
         const registration = await navigator.serviceWorker?.getRegistration("/app/");
         await registration?.update();
     } catch { /* Reload still fetches the current bundle from the network. */ }
-    applyUpdate();
+    await applyUpdate();
+    return true;
 }
 
 async function boot() {
@@ -332,7 +339,8 @@ async function boot() {
         return;
     }
     registerServiceWorker();
-    if (app.info.protocol_version !== PROTOCOL_VERSION) updateRequired();
+    // Stop before the invite or link fragment is consumed, so the reload keeps it.
+    if (app.info.protocol_version !== PROTOCOL_VERSION && await updateRequired()) return;
     // An invitation waits for the session; its token must not stay in the URL.
     const invite = inviteFromLocation();
     if (invite) {
