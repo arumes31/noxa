@@ -10,6 +10,7 @@ import { app, joinVoice, leaveVoice, startCall, startGroupCall } from "../app.js
 import * as tabs from "../core/chat-tabs.js";
 import * as settings from "../core/settings.js";
 import { rank } from "../core/switcher.js";
+import { keptBadgeKind, memberConnecting } from "../core/presence.js";
 import { Voice } from "../core/voice.js";
 import { addStrings, t } from "../i18n.js";
 import { avatar, h, sheet, toast } from "./dom.js";
@@ -390,10 +391,10 @@ function memberRow(client, className = "side-member") {
         "aria-label": link ? t("dm.messageTo", { name: client.nickname }) : null,
     },
     speakingAvatar(client),
-    h("span", { class: "member-name" }, self ? t("layout.self", { name: client.nickname }) : client.nickname),
+    h("span", { class: memberConnecting(client) ? "member-name member-connecting" : "member-name" }, self ? t("layout.self", { name: client.nickname }) : client.nickname),
     client.self_deafened || client.server_deafened ? h("span", { class: "member-state", title: t("voice.undeafen") }, "🔈") : null,
     client.self_muted || client.server_muted ? h("span", { class: "member-state", title: t("voice.muted"), "aria-label": t("voice.muted") }, "🔇") : null,
-    client.updating ? h("span", { class: "row-meta member-updating", title: t("presence.updatingTitle") }, t("presence.updatingBadge")) : null,
+    keptBadgeKind(client) ? h("span", { class: "row-meta member-updating", title: t(`presence.${keptBadgeKind(client)}Title`) }, t(`presence.${keptBadgeKind(client)}Badge`)) : null,
     client.on_mobile ? h("span", { class: "row-meta", title: t("presence.onMobile") }, t("presence.mobileBadge")) : null));
 }
 

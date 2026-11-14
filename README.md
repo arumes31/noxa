@@ -806,8 +806,19 @@ during a call; the restart restores the session. Turning off automatic
 installation in the update settings disables this, and development builds never
 update this way. A login refused by the hard minimum offers **Update now**.
 While a member restarts into an update, others see an "updating…" badge in its
-place without a leave sound; a return within 60 seconds clears the badge
+place without a leave sound; a return within two minutes clears the badge
 silently, otherwise the usual leave notice follows.
+
+**Session resume.** Every login reply carries a single-use resume token (kept in
+memory only, by the server and the client). After a dropped connection or an
+update restart the desktop and the web app log in as usual and present it; within
+two minutes the server continues the session with the same client ID, channel,
+mute/deafen state and stream watches, re-checking bans, devices and channel
+access. Meanwhile others see a quiet "reconnecting…" (or "updating…") badge, and
+members whose voice is still connecting (also after a normal join) show a wave
+across their name (static with reduced motion). A deliberate leave, kick, ban or
+expiry ends the session as before; a server restart forgets all tokens. A page
+reload of the web app starts a new session.
 
 
 This table lists commonly used settings and built-in defaults. See

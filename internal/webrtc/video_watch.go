@@ -424,3 +424,29 @@ func (v *Voice) VideoPublications(subscriber string) []VideoPublication {
 	return v.router.VideoPublications(subscriber)
 }
 func (v *Voice) RevokeVideo(publisher, slot string) { v.router.RevokeVideo(publisher, slot) }
+
+// VideoWatchPairs lists clientID's active watches as {publisher, slot} and
+// the active watches of its publications as {subscriber, slot}, so a resumed
+// session can ask both sides to watch again after its peer is rebuilt.
+func (v *Voice) VideoWatchPairs(clientID string) (watching, watchers [][2]string) {
+	return v.router.videoWatchPairs(clientID)
+}
+
+func (r *Router) videoWatchPairs(clientID string) (watching, watchers [][2]string) {
+	r.watchMu.RLock()
+	defer r.watchMu.RUnlock()
+	for key, watch := range r.watches {
+		if !watch.active || key.subscriber == key.publisher {
+			continue
+		}
+		if key.subscriber == clientID {
+			watching = append(watching, [2]string{key.publisher, key.slot})
+		} else if key.publisher == clientID {
+			watchers = append(watchers, [2]string{key.subscriber, key.slot})
+		}
+	}
+	less := func(a, b [2]string) bool { return a[0]+"|"+a[1] < b[0]+"|"+b[1] }
+	sort.Slice(watching, func(i, j int) bool { return less(watching[i], watching[j]) })
+	sort.Slice(watchers, func(i, j int) bool { return less(watchers[i], watchers[j]) })
+	return watching, watchers
+}

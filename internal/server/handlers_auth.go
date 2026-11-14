@@ -48,6 +48,8 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	client.announcesGoodbye = slices.Contains(msg.ClientFeatures, netproto.ClientFeatureGoodbye)
 	client.hideLobbyPresence = msg.HideLobbyPresence
 	client.mu.Unlock()
+	// Spent only after this login succeeds and only for the same identity.
+	client.setResumeOffer(msg.ResumeToken, slices.Contains(msg.ClientFeatures, netproto.ClientFeatureResume))
 	if reason := s.clientVersionRejection(msg.ClientVersion); reason != "" {
 		return s.rejectClientVersion(client, reason)
 	}

@@ -55,6 +55,12 @@ type ClientInfo struct {
 	// Updating marks the kept place of a member restarting into an update;
 	// the session itself is gone.
 	Updating bool `json:"updating,omitempty"`
+	// Reconnecting marks the kept place of a member whose connection dropped
+	// and that may still resume its session.
+	Reconnecting bool `json:"reconnecting,omitempty"`
+	// Connecting marks a member whose voice is not connected yet: from a
+	// channel join or resume until its peer connects, and every kept place.
+	Connecting bool `json:"connecting,omitempty"`
 }
 
 // ChannelNode represents a single channel in the tree snapshot. It embeds the

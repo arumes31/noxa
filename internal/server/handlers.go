@@ -44,6 +44,9 @@ type userEvent struct {
 	Reconnected bool `json:"reconnected,omitempty"`
 	// Returned on user_joined: the device came back from an update; announce quietly.
 	Returned bool `json:"returned,omitempty"`
+	// Resumed on user_joined: the session continued under the same client ID
+	// after a lost connection or an update; nothing to announce.
+	Resumed bool `json:"resumed,omitempty"`
 }
 
 // channelEvent is the payload of channel_created / channel_deleted events.
@@ -107,6 +110,7 @@ func (s *TCPServer) sendSnapshot(client *Client) error {
 		s.roleMetadataMu.Lock()
 		defer s.roleMetadataMu.Unlock()
 		snapshot := buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID())
+		s.decorateConnecting(snapshot)
 		if err := s.writeMessage(client, netproto.MsgSnapshot, snapshot); err != nil {
 			return err
 		}

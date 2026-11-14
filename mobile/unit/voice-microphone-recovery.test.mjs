@@ -41,6 +41,7 @@ async function fixture(t, { captureTimeout = 30000 } = {}) {
         "./voice-gate.js": gates,
         "./media-e2ee/media-session.js": {MediaSession:Media, MediaSessionError:class extends Error {}, MEDIA_E2EE_VERSION:"test-encrypted", MEDIA_E2EE_CODEC_VERSION:"test"},
         "./media-e2ee/media-keys.js": {MediaKeyStartupInbox:class {clear() {} drain() {}}},
+        "./stream-resume.js": {createResumeWatches: () => ({note: () => false, take: () => false})},
     };
     Object.assign(imports["./video.js"], {CameraSource:class {}, capSender() {}, preferReceiveCodecs() {}, watchCodecNames() {}, wireQuality() {}});
     const context=vm.createContext({EventTarget,CustomEvent,DOMException,performance,console,RTCPeerConnection:Peer,navigator:{mediaDevices:{getUserMedia:(...args)=>acquire(...args)}},setInterval:()=>1,clearInterval(){},setTimeout:(fn,ms,...args)=>setTimeout(fn,ms===30000?captureTimeout:ms,...args),clearTimeout});

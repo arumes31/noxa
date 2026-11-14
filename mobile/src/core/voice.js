@@ -24,6 +24,11 @@ import { LevelMeter, Mixer, installAudioUnlock } from "./voice-audio.js";
 import { MutedTalkingWarning, PushToTalkLatch, VoiceGate, parseKeyKind, playbackGain } from "./voice-gate.js";
 import { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, MediaSession, MediaSessionError } from "./media-e2ee/media-session.js";
 import { MediaKeyStartupInbox } from "./media-e2ee/media-keys.js";
+import { createResumeWatches } from "./stream-resume.js";
+
+// Watches to restore after a session resume (stream_watch_resume); shared by
+// the Voice of the old and of the new session.
+const resumeWatches = createResumeWatches();
 
 const MsgChannelJoined = 158;
 const STATS_INTERVAL = 2000;
@@ -1004,6 +1009,10 @@ export class Voice extends EventTarget {
     // --- Server events and statistics ---------------------------------------
 
     #serverEvent({ type, data }) {
+        if (type === "stream_watch_resume") {
+            if (resumeWatches.note(data?.publisher_id, data?.slot)) this.#emit("tracks");
+            return;
+        }
         if (!data?.client_id) return;
         if (type === "priority_speaker_changed") {
             // No snapshot follows this event; update the tree in place.
@@ -1179,6 +1188,11 @@ export class Voice extends EventTarget {
     async streams() {
         const result = await this.conn.request(Msg.VideoStreamControl, { action: "list" }, Msg.VideoStreamResult, { accept: r => r.action === "list" });
         this.#watchSession = String(result.session ?? "0");
+        // A watch held before a session resume restarts through the normal request.
+        for (const stream of result.streams || []) {
+            const key = `${stream.publisher_id}|${stream.slot}`;
+            if (!this.watching.has(key) && resumeWatches.take(key)) this.watch(stream).catch(() => {});
+        }
         return result.streams || [];
     }
 

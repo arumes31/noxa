@@ -47,3 +47,12 @@ function preferredSession(candidate, current, selfID) {
     if (!!candidate.on_mobile !== !!current.on_mobile) return !candidate.on_mobile;
     return !!candidate.is_speaking && !current.is_speaking;
 }
+
+/**
+ * Whether a member's voice is still connecting: after a channel join or a
+ * resume until its peer connects, and while its place is kept for an update
+ * or a reconnect. The name then shows a decorative wave (style.css).
+ */
+export function memberConnecting(client) {
+    return !!(client?.connecting || client?.updating || client?.reconnecting);
+}

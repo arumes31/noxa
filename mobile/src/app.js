@@ -66,6 +66,9 @@ app.saved = typeof indexedDB === "undefined" ? null : new SavedMessages();
 const RECONNECT_STEPS = [1000, 2000, 5000, 10000, 20000, 30000];
 let reconnectAttempt = 0;
 let reconnectTimer = 0;
+// The session resume token (memory only: never stored, so a page reload
+// starts a new session). Bound to the identity it was issued to.
+let resume = { identity: null, token: "" };
 let connectionGeneration = 0;
 
 function emit(type, detail) {
@@ -539,6 +542,7 @@ export async function connect({ guest = null, fence } = {}) {
             nickname: guest ? guest.nickname : app.meta.guest ? (app.meta.guestNickname || app.meta.nickname) : "",
             serverPassword: guest ? guest.serverPassword : app.guestPassword || "",
             goodbye: true,
+            resumeToken: resume.identity === identity ? resume.token : "",
         });
     } catch (error) {
         conn.close();
@@ -549,6 +553,7 @@ export async function connect({ guest = null, fence } = {}) {
         }
         throw error;
     }
+    resume = { identity, token: auth.resume_token || "" };
     const session = new ChatSession(conn, identity, auth, { deferIncoming: true });
     let activated = false;
     let ratchet = null, ratchetError = null;
@@ -770,6 +775,7 @@ export async function joinVoice(channelID, password = "") {
  */
 export function disconnect() {
     connectionGeneration++;
+    resume = { identity: null, token: "" }; // a deliberate leave ends the session
     clearTimeout(reconnectTimer);
     stopRatchet();
     const session = app.session;

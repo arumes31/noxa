@@ -26,7 +26,10 @@ import (
 // registry of active peer connections keyed by
 // clientID. The Engine is safe for concurrent use.
 type Engine struct {
-	logger           *zap.Logger
+	logger *zap.Logger
+	// peerState observes connection state changes of every peer (set once
+	// before peers are created; see SetPeerStateHandler).
+	peerState        func(clientID string, state webrtc.PeerConnectionState)
 	api              *webrtc.API
 	udpMux           ice.UDPMux
 	egress           *mediaEgressRegistry
@@ -277,6 +280,7 @@ func (e *Engine) NewPeerConnection(clientID string) (*PeerConnectionWrapper, err
 	}
 
 	wrapper := newPeerConnectionWrapper(pc, clientID, e.logger)
+	wrapper.stateHook = e.peerState
 	wrapper.egress = e.egress
 	wrapper.upstreamFeedback = e.upstreamFeedback.take(lease, pc.ID())
 	wrapper.videoBounds = e.videoBounds

@@ -21,3 +21,17 @@ test("sessions of one account fold into a single row led by the viewer, then the
  assert.equal(accountKey(phone), accountKey(desktop));
  assert.equal(deviceKind(phone), "mobile"); assert.equal(deviceKind(desktop), "desktop");
 });
+
+test('the connecting wave follows the server marks and stops for reduced motion', async () => {
+    const { memberConnecting } = await import('../src/member-presence.js');
+    assert.equal(memberConnecting({ connecting: true }), true, 'joining or resuming until the peer connects');
+    assert.equal(memberConnecting({ reconnecting: true }), true);
+    assert.equal(memberConnecting({ updating: true }), true);
+    assert.equal(memberConnecting({ channel_id: 3 }), false, 'a connected member has no wave');
+    assert.equal(memberConnecting(null), false);
+    const { readFile } = await import('node:fs/promises');
+    const css = await readFile(new URL('../src/style.css', import.meta.url), 'utf8');
+    const reduced = css.slice(css.lastIndexOf('@media (prefers-reduced-motion: reduce)'));
+    assert.match(css, /\.member-connecting \{[^}]*animation: member-connecting-wave/);
+    assert.match(reduced, /\.member-connecting \{[^}]*animation: none[^}]*opacity/, 'reduced motion shows a static dimmed name');
+});

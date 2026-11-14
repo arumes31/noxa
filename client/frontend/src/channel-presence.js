@@ -13,11 +13,15 @@ export function captureChannelPresence(state) {
 
 // A member restarting into an update keeps its place: a quiet status, no sound.
 const UPDATING_CUE = Object.freeze({ kind: 'updating', message: 'runtime.updatingUser', quiet: true });
+// A member whose connection dropped keeps its place while it may resume.
+const RECONNECTING_CUE = Object.freeze({ kind: 'reconnecting', message: 'runtime.reconnectingUser', quiet: true });
+const keptCue = client => client?.updating ? UPDATING_CUE : client?.reconnecting ? RECONNECTING_CUE : null;
 
 /** The cue for a member leaving: a lost connection, a silent replacement, an update restart, or a plain leave. */
 export function departureCue(reason, moved = false) {
     if (reason === 'replaced') return null; // the same device is already back on a new session
     if (reason === 'updating') return UPDATING_CUE;
+    if (reason === 'reconnecting') return RECONNECTING_CUE;
     if (reason === 'connection_lost') {
         return { kind: 'leave', message: 'runtime.connectionLostUser', soundEvent: 'user_leave', speechEvent: 'user_connection_lost' };
     }
@@ -41,8 +45,10 @@ export function channelPresenceChanges(before, after) {
         if (id === after.selfID || client.channel_id !== after.channelID) continue;
         const next = after.clients.get(id);
         if (next?.channel_id === after.channelID) {
-            // The server keeps an updating member's place, marked as updating.
-            if (next.updating && !client.updating) changes.push({ client, ...UPDATING_CUE });
+            // The server keeps an updating or reconnecting member's place, marked
+            // as such; a resumed session simply loses the mark, silently.
+            const kept = keptCue(next);
+            if (kept && keptCue(client) !== kept) changes.push({ client, ...kept });
             continue;
         }
         // A filtered snapshot can omit a private destination, so absence alone
@@ -51,7 +57,7 @@ export function channelPresenceChanges(before, after) {
         if (cue) changes.push({ client, ...cue });
     }
     for (const [id, client] of after.clients) {
-        if (id === after.selfID || client.updating || client.channel_id !== after.channelID || before.clients.get(id)?.channel_id === after.channelID) continue;
+        if (id === after.selfID || keptCue(client) || client.channel_id !== after.channelID || before.clients.get(id)?.channel_id === after.channelID) continue;
         const cue = arrivalCue(after.reconnected.has(id), after.returned.has(id));
         if (cue) changes.push({ client, ...cue });
     }

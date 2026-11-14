@@ -81,3 +81,17 @@ export class AutoAway {
         this.timer = 0;
     }
 }
+
+/**
+ * Whether a member's voice is still connecting: after a channel join or a
+ * resume until its peer connects, and while its place is kept for an update
+ * or a reconnect. The name then shows a decorative wave (layout.css).
+ */
+export function memberConnecting(client) {
+    return !!(client?.connecting || client?.updating || client?.reconnecting);
+}
+
+/** Which kept-place badge a member shows: "updating", "reconnecting" or "". */
+export function keptBadgeKind(client) {
+    return client?.updating ? "updating" : client?.reconnecting ? "reconnecting" : "";
+}

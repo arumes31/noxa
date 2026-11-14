@@ -26,8 +26,9 @@ const (
 	// reconnect superseded, not a parallel tab.
 	presenceStaleAfter = 25 * time.Second
 	// presenceUpdateWindow keeps the place of a member that quit to install an
-	// update; a return within it is quiet, otherwise it becomes a leave.
-	presenceUpdateWindow = 60 * time.Second
+	// update or lost a resumable connection; a return within it is quiet,
+	// otherwise it becomes a leave. It is the session resume grace window.
+	presenceUpdateWindow = resumeGraceWindow
 )
 
 // presenceUpdating is the kept place of a member restarting into an update.
@@ -66,12 +67,12 @@ func (p *presenceTracker) noteDeparture(clientID, key, reason string, channelID 
 		switch reason {
 		case netproto.DepartureConnectionLost:
 			p.lost = setBounded(p.lost, key, now)
-		case "", netproto.DepartureUpdating:
+		case "", netproto.DepartureUpdating, netproto.DepartureReconnecting:
 			delete(p.lost, key)
 		}
 	}
-	// An updating member keeps its place (noteUpdating) instead of a departure.
-	if reason != "" && reason != netproto.DepartureUpdating {
+	// A kept member keeps its place (noteUpdating) instead of a departure.
+	if reason != "" && reason != netproto.DepartureUpdating && reason != netproto.DepartureReconnecting {
 		if p.departures == nil {
 			p.departures = map[string]presenceDeparture{}
 		}
@@ -85,8 +86,9 @@ func (p *presenceTracker) noteDeparture(clientID, key, reason string, channelID 
 	}
 }
 
-// noteUpdating keeps the place of a member that quit to install an update.
-func (p *presenceTracker) noteUpdating(key string, ghost broadcast.ClientInfo, hidden bool, now time.Time) {
+// noteUpdating keeps the place of a member that quit to install an update
+// (reason updating) or lost a resumable connection (reason reconnecting).
+func (p *presenceTracker) noteUpdating(key string, ghost broadcast.ClientInfo, reason string, hidden bool, now time.Time) {
 	if key == "" {
 		return
 	}
@@ -102,7 +104,9 @@ func (p *presenceTracker) noteUpdating(key string, ghost broadcast.ClientInfo, h
 			break
 		}
 	}
-	ghost.Updating = true
+	ghost.Updating = reason == netproto.DepartureUpdating
+	ghost.Reconnecting = reason == netproto.DepartureReconnecting
+	ghost.Connecting = true
 	p.updating[key] = presenceUpdating{ghost: ghost, hidden: hidden, at: now}
 }
 
@@ -125,18 +129,30 @@ func (p *presenceTracker) noteReturn(clientID, key string, now time.Time) bool {
 	return true
 }
 
-// expireUpdating ends the kept place of clientID that did not come back and
-// reports whether it was still kept (its end is then an ordinary leave) and
-// whether the member was invisible.
-func (p *presenceTracker) expireUpdating(key, clientID string) (expired, hidden bool) {
+// expireUpdating ends the kept place of clientID kept at at that did not come
+// back and reports whether it was still kept (its end is then an ordinary
+// leave) and whether the member was invisible. A later kept place of the same
+// session (after a resume and another drop) has its own timer.
+func (p *presenceTracker) expireUpdating(key, clientID string, at time.Time) (expired, hidden bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	kept, ok := p.updating[key]
-	if !ok || kept.ghost.ClientID != clientID {
+	if !ok || kept.ghost.ClientID != clientID || !kept.at.Equal(at) {
 		return false, false
 	}
 	delete(p.updating, key)
 	return true, kept.hidden
+}
+
+// dropKept removes the kept place of a session that resumed under the same
+// client ID: it simply continues, so nothing is announced.
+func (p *presenceTracker) dropKept(key, clientID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if kept, ok := p.updating[key]; ok && kept.ghost.ClientID == clientID {
+		delete(p.updating, key)
+	}
+	delete(p.departures, clientID)
 }
 
 // noteJoin reports whether a new session is a reconnect: its device was lost
@@ -378,10 +394,11 @@ func updatingGhost(member *state.Client) broadcast.ClientInfo {
 	}
 }
 
-// expireUpdatingDeparture turns a kept place whose member did not come back
-// into an ordinary leave.
-func (s *TCPServer) expireUpdatingDeparture(key, clientID, uniqueID, nickname string) {
-	expired, hidden := s.presence.expireUpdating(key, clientID)
+// expireUpdatingDeparture turns a kept place (kept at at) whose member did not
+// come back into an ordinary leave and forgets its resume token.
+func (s *TCPServer) expireUpdatingDeparture(key, clientID, uniqueID, nickname string, at time.Time) {
+	s.resume.expire(clientID, at)
+	expired, hidden := s.presence.expireUpdating(key, clientID, at)
 	if !expired {
 		return // came back in time
 	}

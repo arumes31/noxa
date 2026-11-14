@@ -53,6 +53,7 @@ type fakeVoice struct {
 
 	whispers       []whisperCall
 	whisperTargets map[string][]string // clientID -> targets of its active whisper
+	watchPairs     func(string) (watching, watchers [][2]string)
 }
 
 type whisperCall struct {
@@ -150,6 +151,17 @@ func (f *fakeVoice) ClosePeer(clientID string) error {
 	defer f.mu.Unlock()
 	f.closed = append(f.closed, clientID)
 	return nil
+}
+
+// VideoWatchPairs serves session_resume tests (optional interface).
+func (f *fakeVoice) VideoWatchPairs(clientID string) (watching, watchers [][2]string) {
+	f.mu.Lock()
+	pairs := f.watchPairs
+	f.mu.Unlock()
+	if pairs == nil {
+		return nil, nil
+	}
+	return pairs(clientID)
 }
 
 func (f *fakeVoice) JoinChannel(clientID string, channelID int64) {

@@ -75,7 +75,7 @@ import {
     renegotiate, answerRemoteOffer, queuePeerNegotiation, applyVideoLimits, adaptScreenResolution, retryVideoHardware, videoPresentationDiagnostics,
 } from "./video.js";
 import * as chatUI from "./chat-ui.js";
-import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget } from "./stream-controls.js";
+import { startStreamSession, stopStreamSession, streamSessionIsCurrent, receiveStreamTrack, removeStreamTrack, receiveShareAudio, removeShareAudio, refreshStreamUploads, streamReceiverRecoveryTarget, noteResumeWatch } from "./stream-controls.js";
 import { startRemoteMedia, reconcileRemoteMedia, gatePresents } from "./remote-media.js";
 import { startChannelMedia, stopChannelMedia, channelMedia, receiveMediaKey, mediaErrorText, onChannelMediaStatus } from "./channel-media.js";
 import { MediaKeyStartupInbox } from "./media-keys.js";
@@ -1572,8 +1572,8 @@ window.runtime.EventsOn("event", (json) => {
             } else {
                 state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, presence_token: d.presence_token, is_speaking: false, on_mobile: !!d.on_mobile });
             }
-            // A return from an update is quiet: the roster updates, nothing is announced.
-            if (d.client_id !== state.myClientID && !d.returned) {
+            // A return from an update or a resumed session is quiet: the roster updates, nothing is announced.
+            if (d.client_id !== state.myClientID && !d.returned && !d.resumed) {
                 const cue = arrivalCue(!!d.reconnected);
                 chatUI.sysJoinLeave(d.nickname || d.unique_id || "someone", d.reconnected ? "reconnected" : "joined"); // (130/131)
                 const joined = state.clients.find(client => client.client_id === d.client_id);
@@ -1600,7 +1600,7 @@ window.runtime.EventsOn("event", (json) => {
                     }
                 }
                 const cue = departureCue(d.reason);
-                if (cue) chatUI.sysJoinLeave(was.nickname || was.unique_id || "someone", cue.quiet ? t("runtime.updatingVerb") : d.reason === "connection_lost" ? "lost the connection" : "left"); // (130/131)
+                if (cue) chatUI.sysJoinLeave(was.nickname || was.unique_id || "someone", cue.quiet ? t(cue.kind === "reconnecting" ? "runtime.reconnectingVerb" : "runtime.updatingVerb") : d.reason === "connection_lost" ? "lost the connection" : "left"); // (130/131)
                 // The avatar cache follows the roster, so user churn cannot grow
                 // it without bound; views that still show this user (DMs)
                 // fetch it again on demand.
@@ -1935,6 +1935,9 @@ window.runtime.EventsOn("event", (json) => {
             return;
         case "stream_upload_changed":
             refreshStreamUploads(d);
+            return;
+        case "stream_watch_resume":
+            noteResumeWatch(d);
             return;
         case "screenshare_changed": {
             // (73) remember who is sharing: the grid labels those tiles, and

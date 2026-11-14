@@ -147,14 +147,17 @@ export const CLIENT_FEATURE_RETRY_HINT = "retry-hint-v1";
 // The app sends Msg.Goodbye before a deliberate close (internal/netproto/goodbye.go);
 // short worker sessions do not announce it and keep the legacy reading.
 export const CLIENT_FEATURE_GOODBYE = "goodbye-v1";
+// The app presents its resume token on reconnect (internal/netproto/goodbye.go).
+export const CLIENT_FEATURE_RESUME = "resume-v1";
 
-export async function signIn(conn, identity, { version, nickname = "", serverPassword = "", goodbye = false } = {}) {
+export async function signIn(conn, identity, { version, nickname = "", serverPassword = "", goodbye = false, resumeToken = "" } = {}) {
     const uniqueID = uniqueIDFromPublicKey(identity.edPublic);
     const x25519 = toBase64(identity.xPublic);
     const authenticate = {
         client_version: version, authorization_models: ["roles-v1"], username: uniqueID, anonymous: true,
         nickname, server_password: serverPassword, x25519_public_key: x25519,
-        client_features: [CLIENT_FEATURE_POW, CLIENT_FEATURE_RETRY_HINT, ...(goodbye ? [CLIENT_FEATURE_GOODBYE] : [])],
+        client_features: [CLIENT_FEATURE_POW, CLIENT_FEATURE_RETRY_HINT, ...(goodbye ? [CLIENT_FEATURE_GOODBYE, CLIENT_FEATURE_RESUME] : [])],
+        ...(resumeToken ? { resume_token: resumeToken } : {}),
     };
     let first = await conn.request(Msg.Authenticate, authenticate, [Msg.AuthChallenge, Msg.AuthResponse, Msg.PowChallenge], { timeout: 10000 });
     if (first.algorithm) {

@@ -2,7 +2,7 @@
 // and avatar editors of the You screen's profile card.
 import { app } from "../app.js";
 import { AVATAR_SIZE, cropSquare, dataURLBase64, panBy, zoomTo, MAX_ZOOM } from "../core/avatar-crop.js";
-import { STATUSES, presenceOf, statusOf } from "../core/presence.js";
+import { STATUSES, keptBadgeKind, presenceOf, statusOf } from "../core/presence.js";
 import { setAvatar } from "../core/social.js";
 import { t } from "../i18n.js";
 import { notifier } from "../notifier.js";
@@ -179,4 +179,10 @@ export function avatarEditor({ camera = false } = {}) {
         });
     };
     input.click();
+}
+
+/** The quiet "updating…" / "reconnecting…" badge of a kept place, or null. */
+export function keptBadge(client) {
+    const kind = keptBadgeKind(client);
+    return kind ? h("span", { class: "row-meta member-updating", title: t(`presence.${kind}Title`) }, t(`presence.${kind}Badge`)) : null;
 }

@@ -7,10 +7,13 @@ import { receiverVideoCodecs } from "./video-codecs.js";
 import { receiverHEVCSupport, hevcReadmissionDelay } from "./video-hevc.js";
 import { createReceiverRegistry } from "./remote-receivers.js";
 import { channelMedia } from "./channel-media.js";
+import { createResumeWatches } from "./stream-resume.js";
 
 const V = () => window.__noxa;
 let session = null;
 const key = stream => `${stream.publisher_id}|${stream.slot}`;
+// Watches to restore after a session resume (stream_watch_resume).
+const resumeWatches = createResumeWatches();
 const current = s => session === s && V().state.pc === s.pc && mediaScopeIsCurrent(s.scope);
 
 export function streamSessionIsCurrent(pc) { return !!session && session.pc === pc && current(session); }
@@ -392,6 +395,8 @@ async function poll(s) {
             entry.quality_mode = stream.quality_mode;
             const revision = BigInt(stream.watch_revision);
             if (revision > entry.revision) entry.revision = revision;
+            // A watch held before a session resume restarts through the normal request.
+            if (!entry.watching && !entry.pending && resumeWatches.take(id)) void toggleWatch(s, entry);
             entry.pollError = "";
             refreshWatchHEVC(s, entry);
             // Encrypted channel media: the server holds no previews (they would be
@@ -424,6 +429,11 @@ async function poll(s) {
             s.pollAgain = false;
         }
     }
+}
+
+/** Remembers a watch a resumed session asks to restore and looks for it now. */
+export function noteResumeWatch(data) {
+    if (resumeWatches.note(data?.publisher_id, data?.slot) && session && current(session)) void poll(session);
 }
 
 export function refreshStreamUploads(data) {

@@ -18,6 +18,9 @@ import (
 // candidates and the local/remote SDP through buffered channels for the
 // signaling layer to consume.
 type PeerConnectionWrapper struct {
+	// stateHook reports connection state changes (Engine.peerState). It is
+	// set by the engine before any remote description, so before callbacks.
+	stateHook   func(clientID string, state webrtc.PeerConnectionState)
 	mediaPolicy MediaPolicy
 	pc          *webrtc.PeerConnection
 	clientID    string
@@ -98,6 +101,9 @@ func newPeerConnectionWrapper(pc *webrtc.PeerConnection, clientID string, logger
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		if state == webrtc.PeerConnectionStateConnected {
 			w.notifyVideoStartup()
+		}
+		if w.stateHook != nil {
+			w.stateHook(w.clientID, state)
 		}
 	})
 
