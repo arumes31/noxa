@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"noxa/internal/updatepatch"
 )
@@ -52,5 +53,6 @@ func run(args []string) error {
 	if !bytes.Equal(got, newFile) {
 		return fmt.Errorf("verify patch: output differs from %s", *newPath)
 	}
-	return os.WriteFile(*outPath, patch, 0o644)
+	// #nosec G703 -- output path is the operator's own CLI argument (release CI).
+	return os.WriteFile(filepath.Clean(*outPath), patch, 0o600)
 }

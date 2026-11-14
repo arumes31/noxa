@@ -53,10 +53,14 @@ func Apply(oldFile []byte, patch io.Reader, maxSize int64) ([]byte, error) {
 		return nil, fmt.Errorf("patch base must be between 1 and %d bytes", MaxFileSize)
 	}
 	maxSize = min(maxSize, MaxFileSize)
+	if maxSize <= 0 {
+		return nil, fmt.Errorf("patch output limit must be positive")
+	}
+	window := windowFor(len(oldFile), int(maxSize))
 	dec, err := zstd.NewReader(patch,
 		zstd.WithDecoderDictRaw(dictID, oldFile),
-		zstd.WithDecoderMaxWindow(uint64(windowFor(len(oldFile), int(maxSize)))),
-		zstd.WithDecoderMaxMemory(uint64(maxSize)),
+		zstd.WithDecoderMaxWindow(uint64(window)),  // #nosec G115 -- positive, bounded by 2*MaxFileSize
+		zstd.WithDecoderMaxMemory(uint64(maxSize)), // #nosec G115 -- checked 1..MaxFileSize above
 		zstd.WithDecoderConcurrency(1),
 	)
 	if err != nil {
