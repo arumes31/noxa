@@ -1626,6 +1626,8 @@ window.runtime.EventsOn("event", (json) => {
         case "user_moved": {
             const c = state.clients.find((c) => c.client_id === d.client_id);
             const previousRemoteChannelID = Number(c?.channel_id) || 0;
+            // A kept-place return silences only that member's first move after it, wherever it lands.
+            const quietReturn = d.client_id !== state.myClientID && keptPlaceMoveIn(state, d.client_id);
             const nextChannelID = Number(d.channel_id) || 0;
             const previousSpeechKey = presenceSpeechKey(c, previousRemoteChannelID);
             if (c) { c.channel_id = nextChannelID; c.presence_token = d.presence_token ?? c.presence_token; }
@@ -1671,7 +1673,6 @@ window.runtime.EventsOn("event", (json) => {
             } else if (c && nextChannelID === state.myChannelID && state.myChannelID !== 0
                 && previousRemoteChannelID !== nextChannelID) {
                 // A member back from an update or a drop rejoins its channel without a join cue.
-                const quietReturn = keptPlaceMoveIn(state, d.client_id);
                 window.__noxaNotify?.notify("join_leave", t("runtime.movedIn", { name: c.nickname || t("runtime.someone") }),
                     { channelID: state.myChannelID, className: "joins", kind: "info",
                         soundEvent: "user_move_in", speechKey: presenceSpeechKey(c, nextChannelID), noSound: actionSoundsSuppressed() || quietReturn });

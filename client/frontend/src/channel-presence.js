@@ -41,14 +41,22 @@ export function arrivalCue(reconnected, returned = false) {
  * a resumed drop). It returns silently, and its move back into the channel is
  * quiet too: the returned mark is kept until keptPlaceMoveIn consumes it.
  */
-export function keptPlaceReturn(state, event) {
-    if (event.returned) (state.presenceReturned ||= new Set()).add(event.client_id);
+export function keptPlaceReturn(state, event, now = Date.now()) {
+    if (event.returned) {
+        (state.presenceReturned ||= new Set()).add(event.client_id);
+        (state.presenceReturnedAt ||= new Map()).set(event.client_id, now);
+    }
     return !!(event.returned || event.resumed);
 }
 
+// The move back follows the return within seconds; a later move is an ordinary one.
+const KEPT_PLACE_MOVE_MS = 15000;
+
 /** Consumes a kept-place return: true once for its move back into the channel. */
-export function keptPlaceMoveIn(state, clientID) {
-    return !!state.presenceReturned?.delete(clientID);
+export function keptPlaceMoveIn(state, clientID, now = Date.now()) {
+    const at = state.presenceReturnedAt?.get(clientID);
+    state.presenceReturnedAt?.delete(clientID);
+    return !!state.presenceReturned?.delete(clientID) && (at === undefined || now - at <= KEPT_PLACE_MOVE_MS);
 }
 
 export function channelPresenceChanges(before, after) {

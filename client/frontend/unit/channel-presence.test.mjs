@@ -158,6 +158,9 @@ test('a kept-place return plays no join or move-in cue; a real leave still annou
     assert.equal(keptPlaceMoveIn(live, 'peer'), false, 'a later move announces again');
     assert.equal(keptPlaceMoveIn(live, 'other'), false);
     assert.equal(keptPlaceReturn(live, { client_id: 'new' }), false, 'an ordinary join announces');
+    // A move long after the return is an ordinary one.
+    keptPlaceReturn(live, { client_id: 'late', returned: true }, 1000);
+    assert.equal(keptPlaceMoveIn(live, 'late', 1000 + 60000), false, 'a late move announces');
     // The kept place's departure is quiet; a window that expired is a real leave.
     for (const reason of ['updating', 'reconnecting']) assert.equal(departureCue(reason).quiet, true);
     assert.equal(departureCue(undefined).soundEvent, 'user_leave');
