@@ -2,6 +2,7 @@
 // by QR link (#id=…&k=…) or hidden code, then compare the two-digit code.
 import { app, connect, newIdentity, rememberLinkedIdentity } from "../app.js";
 import { beginIdentity } from "../core/identity-store.js";
+import { holdUpdates } from "../core/update-policy.js";
 import { Connection } from "../core/connection.js";
 import { claimLink, LinkState, linkWithPasskey, passkeysSupported, waitForDecision } from "../core/device.js";
 import { linkBindingFromStatus, verifyLinkBinding } from "../core/link-binding.js";
@@ -152,6 +153,7 @@ export async function runLink(root, link, { onSignedIn, fence }) {
     const cancel = h("button", { class: "btn btn-block", type: "button", onclick: () => { abort.abort(); renderConnect(root, { onSignedIn }); } }, t("link.cancel"));
     root.replaceChildren(h("main", { class: "connect" }, brand(), h("div", { class: "card" }, h("div", { class: "spinner", role: "progressbar", "aria-label": t("link.waiting") })), cancel));
     let conn;
+    const releaseUpdates = holdUpdates();
     try {
         fence = fence || await beginIdentity();
         conn = await Connection.open();
@@ -188,6 +190,8 @@ export async function runLink(root, link, { onSignedIn, fence }) {
     } catch (error) {
         conn?.close();
         if (error?.name !== "AbortError") fail(signInMessage(error));
+    } finally {
+        releaseUpdates();
     }
 
     function fail(message) {

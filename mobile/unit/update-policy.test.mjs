@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { updatePolicy } from "../src/core/update-policy.js";
+import { holdUpdates, updatePolicy, updatesHeld } from "../src/core/update-policy.js";
 
 function setup(voice) {
     const state = { voice, reloads: 0 };
@@ -33,4 +33,15 @@ test("voice changes without an installed update never reload", () => {
     const { state, policy } = setup(false);
     assert.equal(policy.check(), false);
     assert.equal(state.reloads, 0);
+});
+
+test("a hold defers the update until it is released", () => {
+    let reloads = 0;
+    const policy = updatePolicy({ inVoice: () => updatesHeld(), reload: () => reloads++ });
+    const release = holdUpdates();
+    assert.equal(policy.ready(), false);
+    release();
+    assert.equal(reloads, 1);
+    release();
+    assert.equal(reloads, 1);
 });

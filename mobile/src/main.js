@@ -12,7 +12,7 @@ import { inviteFromLocation, setPendingInvite } from "./core/invite.js";
 import { t, lang } from "./i18n.js";
 import { h, sheet, toast } from "./ui/dom.js";
 import { afterRoute, onWideChange, screenRoot } from "./ui/layout.js";
-import { updatePolicy } from "./core/update-policy.js";
+import { updatePolicy, updatesHeld } from "./core/update-policy.js";
 import "./ui/call-waiting.js";
 
 // Each screen is its own chunk, so Connect and Home load without the rest.
@@ -244,7 +244,7 @@ const DRAFT_FIELDS = "textarea, [contenteditable]:not([contenteditable=false]), 
     + "input:not([type=checkbox], [type=radio], [type=range], [type=hidden], [type=button], [type=submit], [type=reset], [type=file], [type=color], [type=image])";
 const hasDraft = () => [...document.querySelectorAll(DRAFT_FIELDS)]
     .some(field => (field.value ?? field.textContent).trim() !== "");
-const inVoice = () => !!(app.voice?.active || app.calls?.active) || hasDraft();
+const inVoice = () => !!(app.voice?.active || app.calls?.active) || hasDraft() || updatesHeld();
 
 /** Activates the waiting service worker, then reloads into the new version.
  * Automatic updates (auto) step back if a call or draft started meanwhile. */
