@@ -13,6 +13,7 @@ import { clearSpeech } from "./sounds.js";
 import { initConversations } from "./conversations.js";
 import { retainPresenceTabs } from "./presence.js";
 import { offerUpdateShareResume } from "./update-share-resume.js";
+import { beginQuietRestore, endQuietRestore } from "./update-announcement.js";
 import { cancelShareResume } from "./video.js";
 
 const V = () => window.__noxa;
@@ -472,22 +473,26 @@ export function initTabs() {
         if (!ready || updateStartupBlocked() || await V().startupUpdateFinished()) return;
         if (!await V().updateStartupConfirmed()) return;
         if (typeof App().RestoreUpdateConnection === "function") {
-            const restored = await App().RestoreUpdateConnection();
-            if (restored?.attempted) {
-                if (restored.tab_id) await V().completeUpdateReconnect(restored);
-                // A handed-over session that lost its connection reconnects
-                // now that its tab's reconnect record exists.
-                if (restored.tab_id && restored.reconnect) V().startTabReconnect(restored.tab_id);
-                if (restored.tab_id && !restored.error && !restored.warning) offerUpdateShareResume(restored);
-                if (restored.error || restored.warning) {
-                    const message = restored.error || restored.warning;
-                    V().sysMsg(message);
-                    V().toast(message, "warn");
+            let restored;
+            beginQuietRestore(V().state);
+            try {
+                restored = await App().RestoreUpdateConnection();
+                if (restored?.attempted) {
+                    if (restored.tab_id) await V().completeUpdateReconnect(restored);
+                    // A handed-over session that lost its connection reconnects
+                    // now that its tab's reconnect record exists.
+                    if (restored.tab_id && restored.reconnect) V().startTabReconnect(restored.tab_id);
+                    if (restored.tab_id && !restored.error && !restored.warning) offerUpdateShareResume(restored);
+                    if (restored.error || restored.warning) {
+                        const message = restored.error || restored.warning;
+                        V().sysMsg(message);
+                        V().toast(message, "warn");
+                    }
+                    // Restore the selected session, not the cold-start guest bookmarks:
+                    // those would duplicate this server or switch away from its voice channel.
+                    return;
                 }
-                // Restore the selected session, not the cold-start guest bookmarks:
-                // those would duplicate this server or switch away from its voice channel.
-                return;
-            }
+            } finally { endQuietRestore(V().state, !!restored?.tab_id); }
         }
         setTimeout(autoConnectBookmarks, 300);
     }).catch(() => {});

@@ -36,6 +36,21 @@ export function arrivalCue(reconnected, returned = false) {
         : { kind: 'join', message: 'runtime.joined', soundEvent: 'user_join', speechEvent: 'user_join' };
 }
 
+/**
+ * Whether a live user_joined is a member back in its kept place (an update or
+ * a resumed drop). It returns silently, and its move back into the channel is
+ * quiet too: the returned mark is kept until keptPlaceMoveIn consumes it.
+ */
+export function keptPlaceReturn(state, event) {
+    if (event.returned) (state.presenceReturned ||= new Set()).add(event.client_id);
+    return !!(event.returned || event.resumed);
+}
+
+/** Consumes a kept-place return: true once for its move back into the channel. */
+export function keptPlaceMoveIn(state, clientID) {
+    return !!state.presenceReturned?.delete(clientID);
+}
+
 export function channelPresenceChanges(before, after) {
     if (!before || before.scope !== after.scope || before.replaying || after.replaying
         || !after.selfID || !after.channelID || before.channelID !== after.channelID
