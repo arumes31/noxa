@@ -714,6 +714,9 @@ async function rememberTabConnect(c, expectedGeneration = null, tabID = "", curr
     if (tabID && (active?.id !== tabID || (state.activeTabID && state.activeTabID !== tabID))) return false;
     state.lastSuccessfulConnect = { ...c };
     state.lastConnect = c;
+    // A fresh connection starts with no pending shutdown: a marker replayed from
+    // the previous session must not suppress this one's first genuine loss.
+    shutdownNotice.forget(tabID || active?.id);
     return true;
 }
 
@@ -1063,6 +1066,9 @@ window.addEventListener("noxa-language-changed", () => {
     tabReconnects.refresh(state.activeTabID);
 });
 function startTabReconnect(tabID) {
+    // A background tab's drop is handled here, not by "disconnected"; clear any
+    // shutdown marker so it cannot carry into a later, unrelated loss.
+    shutdownNotice.forget(String(tabID));
     connectionOverlay.lost(String(tabID));
     if (scopedReconnectAvailable()) tabReconnects.start(String(tabID), state.tabConnects.get(String(tabID)));
 }

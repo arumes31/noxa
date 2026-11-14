@@ -28,3 +28,10 @@ test("no announcement means a normal drop announces", () => {
     const n = createShutdownNotice(() => 0);
     assert.equal(n.consume("tabA"), false);
 });
+
+test("forget clears a pending marker (tab reconnect / background drop)", () => {
+    const n = createShutdownNotice(() => 0);
+    n.announce("tabA", 30000);
+    n.forget("tabA");
+    assert.equal(n.consume("tabA"), false, "a reconnected tab has no stale marker");
+});
