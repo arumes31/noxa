@@ -99,6 +99,14 @@ func endHandoverSilence(replay bool) {
 	}
 }
 
+// handoverSessionTaken reports whether a connection closed during the commit,
+// which the server does when it moves the session to the new process.
+func handoverSessionTaken() bool {
+	handoverSilence.Lock()
+	defer handoverSilence.Unlock()
+	return len(handoverSilence.deferred) > 0
+}
+
 func deferHandoverDisconnect(m *connManager) bool {
 	handoverSilence.Lock()
 	defer handoverSilence.Unlock()
@@ -205,87 +213,116 @@ func launchHandoverClient(exe string, onCommitting func(pid int)) (moved, fallba
 	}
 	ctx, cancelHandover := context.WithTimeout(context.Background(), updateHandoverWait)
 	defer cancelHandover()
-	if serveUpdateHandover(ctx, readiness, cmd.Process.Pid, exited, onCommitting) {
+	switch serveUpdateHandover(ctx, readiness, cmd.Process.Pid, exited, onCommitting) {
+	case handoverMoved:
 		return true, false, nil
+	case handoverUnconfirmed:
+		// The final signal may be lost after a successful commit. Once the
+		// server closed this session's connection, the session lives in the
+		// new process (with the only valid token): leave it running.
+		if handoverSessionTaken() {
+			log.Print("update handover: no confirmation, but the server moved the session; leaving it to the new process")
+			return true, false, nil
+		}
 	}
 	return stop(errors.New("the updated app did not take over the session"))
 }
 
+// handoverOutcome is how a handover ended for the old process.
+type handoverOutcome int
+
+const (
+	handoverKept        handoverOutcome = iota // abandoned, failed or never committed: keep the session
+	handoverMoved                              // the new process confirmed the move
+	handoverUnconfirmed                        // committing, then no final signal before the deadline
+)
+
+type handoverSignal struct {
+	kind    byte
+	handled chan struct{}
+}
+
 // serveUpdateHandover accepts the child's signals until a final one, the
-// child's exit or ctx's end. It reports whether the session moved.
-func serveUpdateHandover(ctx context.Context, r *updateReadiness, childPID int, exited <-chan error, onCommitting func(pid int)) bool {
+// child's exit or ctx's end. A signal is acknowledged only after it was
+// handled, so the child commits only once this process is silent.
+func serveUpdateHandover(ctx context.Context, r *updateReadiness, childPID int, exited <-chan error, onCommitting func(pid int)) handoverOutcome {
 	nonce, err := hex.DecodeString(r.nonce)
 	if err != nil {
-		return false
+		return handoverKept
 	}
 	stop := context.AfterFunc(ctx, r.close)
 	defer stop()
 	done := make(chan struct{})
 	defer close(done)
-	signals := make(chan byte)
+	signals := make(chan handoverSignal)
 	go func() {
 		for {
 			conn, err := r.listener.Accept()
 			if err != nil {
 				return
 			}
-			kind := acceptUpdateHandoverSignal(ctx, conn, nonce, childPID)
+			serveUpdateHandoverSignal(ctx, conn, nonce, childPID, signals, done)
 			_ = conn.Close()
-			if kind == 0 {
-				continue
-			}
-			select {
-			case signals <- kind:
-			case <-done:
-				return
-			}
 		}
 	}()
 	committing := false
 	for {
 		select {
 		case <-ctx.Done():
-			return false
+			if committing {
+				return handoverUnconfirmed
+			}
+			return handoverKept
 		case <-exited:
-			return false
-		case kind := <-signals:
-			switch kind {
+			return handoverKept
+		case signal := <-signals:
+			outcome, final := handoverKept, false
+			switch signal.kind {
 			case handoverCommitting:
 				if !committing {
 					committing = true
 					onCommitting(childPID)
 				}
 			case handoverCommitted:
-				return true
+				outcome, final = handoverMoved, true
 			case handoverAbandoned:
-				return false
+				final = true
+			}
+			close(signal.handled)
+			if final {
+				return outcome
 			}
 		}
 	}
 }
 
-// acceptUpdateHandoverSignal reads one signal: the readiness challenge, the
-// child's PID and the signal byte. Anything else is ignored.
-func acceptUpdateHandoverSignal(ctx context.Context, conn net.Conn, nonce []byte, childPID int) byte {
+// serveUpdateHandoverSignal reads one signal (the readiness challenge, the
+// child's PID and the signal byte), waits until it was handled and then
+// acknowledges it. Anything else is ignored.
+func serveUpdateHandoverSignal(ctx context.Context, conn net.Conn, nonce []byte, childPID int, signals chan<- handoverSignal, done <-chan struct{}) {
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	if err := conn.SetDeadline(time.Now().Add(updateReadyIOTimeout)); err != nil {
-		return 0
+		return
 	}
 	var message [41]byte
 	if _, err := io.ReadFull(conn, message[:]); err != nil ||
 		subtle.ConstantTimeCompare(message[:32], nonce) != 1 ||
 		binary.BigEndian.Uint64(message[32:40]) != uint64(childPID) { // #nosec G115 -- OS process IDs are positive.
-		return 0
+		return
 	}
-	kind := message[40]
-	if kind < handoverCommitting || kind > handoverAbandoned {
-		return 0
+	signal := handoverSignal{kind: message[40], handled: make(chan struct{})}
+	if signal.kind < handoverCommitting || signal.kind > handoverAbandoned {
+		return
 	}
-	if _, err := conn.Write([]byte{1}); err != nil {
-		return 0
+	select {
+	case signals <- signal:
+	case <-done:
+		return
 	}
-	return kind
+	<-signal.handled
+	_ = conn.SetDeadline(time.Now().Add(updateReadyIOTimeout))
+	_, _ = conn.Write([]byte{1})
 }
 
 // sendUpdateHandoverSignal is B's side: one acknowledged signal to A.
@@ -375,7 +412,12 @@ func (h *incomingUpdateHandover) abandon(a *App) {
 func (h *incomingUpdateHandover) commit(a *App) {
 	h.once.Do(func() {
 		waitParent := holdUpdateParent()
-		if err := h.signal(handoverCommitted); err != nil {
+		// The old process also detects the move on its own if this is lost.
+		for attempt := 0; attempt < 3; attempt++ {
+			err := h.signal(handoverCommitted)
+			if err == nil {
+				break
+			}
 			log.Printf("update handover: commit signal: %v", err)
 		}
 		showHandoverWindow(a)

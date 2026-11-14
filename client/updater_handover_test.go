@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"net"
 	"os"
@@ -26,10 +27,11 @@ func handoverChannel(t *testing.T) *updateReadiness {
 	return r
 }
 
-func serveAsync(ctx context.Context, r *updateReadiness, pid int, exited <-chan error, committing *atomic.Int32) <-chan bool {
-	result := make(chan bool, 1)
+func serveAsync(ctx context.Context, r *updateReadiness, pid int, exited <-chan error, committing *atomic.Int32) <-chan handoverOutcome {
+	result := make(chan handoverOutcome, 1)
 	go func() {
 		result <- serveUpdateHandover(ctx, r, pid, exited, func(got int) {
+			time.Sleep(50 * time.Millisecond) // the acknowledgement must wait for this
 			if got == pid {
 				committing.Add(1)
 			}
@@ -38,23 +40,40 @@ func serveAsync(ctx context.Context, r *updateReadiness, pid int, exited <-chan 
 	return result
 }
 
+// wrongNonce flips one bit, so it always differs from nonce.
+func wrongNonce(t *testing.T, nonce string) string {
+	t.Helper()
+	raw, err := hex.DecodeString(nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[0] ^= 1
+	return hex.EncodeToString(raw)
+}
+
 func TestUpdateHandoverCommitSilencesThenMoves(t *testing.T) {
 	r := handoverChannel(t)
 	var committing atomic.Int32
 	result := serveAsync(t.Context(), r, 4242, nil, &committing)
 	// Signals with a wrong challenge or process are ignored.
-	if err := sendUpdateHandoverSignal(r.address(), "00"+r.nonce[2:], 4242, handoverCommitted); err == nil {
+	if err := sendUpdateHandoverSignal(r.address(), wrongNonce(t, r.nonce), 4242, handoverCommitted); err == nil {
 		t.Fatal("a wrong challenge was acknowledged")
 	}
 	if err := sendUpdateHandoverSignal(r.address(), r.nonce, 1, handoverCommitted); err == nil {
 		t.Fatal("another process was acknowledged")
 	}
-	for _, kind := range []byte{handoverCommitting, handoverCommitting, handoverCommitted} {
+	if err := sendUpdateHandoverSignal(r.address(), r.nonce, 4242, handoverCommitting); err != nil {
+		t.Fatal(err)
+	}
+	if committing.Load() != 1 {
+		t.Fatal("committing was acknowledged before the old process went silent")
+	}
+	for _, kind := range []byte{handoverCommitting, handoverCommitted} {
 		if err := sendUpdateHandoverSignal(r.address(), r.nonce, 4242, kind); err != nil {
 			t.Fatalf("signal %d: %v", kind, err)
 		}
 	}
-	if !<-result {
+	if <-result != handoverMoved {
 		t.Fatal("a committed handover did not move the session")
 	}
 	if committing.Load() != 1 {
@@ -72,21 +91,47 @@ func TestUpdateHandoverAbandonTimeoutAndExitKeepSession(t *testing.T) {
 	if err := sendUpdateHandoverSignal(r.address(), r.nonce, 7, handoverAbandoned); err != nil {
 		t.Fatal(err)
 	}
-	if <-result {
+	if <-result != handoverKept {
 		t.Fatal("an abandoned handover moved the session")
 	}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
-	if <-serveAsync(ctx, handoverChannel(t), 7, nil, &committing) {
+	if <-serveAsync(ctx, handoverChannel(t), 7, nil, &committing) != handoverKept {
 		t.Fatal("a silent child moved the session")
 	}
 
 	exited := make(chan error, 1)
 	exited <- errors.New("crashed")
-	if <-serveAsync(t.Context(), handoverChannel(t), 7, exited, &committing) {
+	if <-serveAsync(t.Context(), handoverChannel(t), 7, exited, &committing) != handoverKept {
 		t.Fatal("an exited child moved the session")
 	}
+}
+
+// A lost final signal after "committing" is reported as unconfirmed; the
+// launcher then keeps the new process if the server moved the session.
+func TestUpdateHandoverLostConfirmationIsUnconfirmed(t *testing.T) {
+	var committing atomic.Int32
+	r := handoverChannel(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	result := serveAsync(ctx, r, 9, nil, &committing)
+	if err := sendUpdateHandoverSignal(r.address(), r.nonce, 9, handoverCommitting); err != nil {
+		t.Fatal(err)
+	}
+	if <-result != handoverUnconfirmed {
+		t.Fatal("a commit without confirmation must stay undecided")
+	}
+
+	beginHandoverSilence()
+	if handoverSessionTaken() {
+		t.Fatal("no connection closed, yet the session counts as taken")
+	}
+	deferHandoverDisconnect(&connManager{sink: &eventRecorder{}})
+	if !handoverSessionTaken() {
+		t.Fatal("a connection closed during the commit means the server moved the session")
+	}
+	endHandoverSilence(false)
 }
 
 func TestIncomingHandoverConfiguration(t *testing.T) {

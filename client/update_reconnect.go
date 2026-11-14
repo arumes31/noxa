@@ -245,9 +245,6 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 		result["error"] = failure
 		return result
 	}
-	if handover != nil {
-		handover.commit(a)
-	}
 	a.tabsMu.Lock()
 	owned := a.tabs[id] == tab && !tab.reconnectSuppressed && a.activeID == "" && len(a.tabs) == 1
 	if owned {
@@ -277,6 +274,11 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	cm, journal, generation, _ := a.activateLocked(id)
 	a.tabsMu.Unlock()
 	committed = true
+	// Only a fully restored session releases the old process; any earlier
+	// failure hands the session back through the abandon in the caller.
+	if handover != nil {
+		handover.commit(a)
+	}
 	a.onTabConnected(cm, saved.Bookmark, saved.Addr, saved.Nickname, saved.DisplayName)
 	if saved.ChannelID > 0 && result["warning"] == nil {
 		a.emitPlain("tab_voice_restored", map[string]any{"tab_id": id, "client_id": tab.cm.clientIDSnapshot(), "channel_id": saved.ChannelID})

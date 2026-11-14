@@ -2801,7 +2801,7 @@ function applyLiveAudioSettings() {
         applyVoiceState();
         if (remoteChain.ctx) await selectAudioOutput(remoteChain.ctx);
         if (remoteChain.master) {
-            remoteChain.master.gain.value = state.deafened ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
+            remoteChain.master.gain.value = state.deafened || state.handoverSilenced ? 0 : Math.min(2, (state.settings?.volume ?? 100) / 100);
         }
         // Local preview elements must stay muted to avoid microphone feedback.
         applyOutputSettings($("remote-video"));
@@ -3325,7 +3325,7 @@ function applyVoiceState() {
     }
     if (!state.localStream) return;
     const mode = state.settings?.activation_mode || "ptt";
-    let audible = !state.muted && !state.deafened;
+    let audible = !state.muted && !state.deafened && !state.handoverSilenced;
     // Keep the raw track's enablement consistent for local UI consumers.
     // The worklet independently gates the transmitted track in VAD mode.
     if (mode !== "continuous") audible = audible && state.pttActive;
@@ -3511,17 +3511,12 @@ window.runtime.EventsOn("update_connection_restoring", audio => {
     renderTree();
 });
 // Update handover: the updated app takes over this session, so this one goes
-// silent at once (locally only; the server keeps the session's audio state)
-// and speaks again only if the handover is abandoned.
-let handoverAudio = null;
+// silent at once. The silence is its own gate, separate from the user's mute
+// and deafen state (which the server keeps), so no toggle can lift it; it
+// ends only if the handover is abandoned.
 window.runtime.EventsOn("update_handover", phase => {
-    if (phase === "commit" && !handoverAudio) {
-        handoverAudio = { muted: state.muted, deafened: state.deafened };
-        state.muted = state.deafened = true;
-    } else if (phase === "abandon" && handoverAudio) {
-        ({ muted: state.muted, deafened: state.deafened } = handoverAudio);
-        handoverAudio = null;
-    } else return;
+    if (phase !== "commit" && phase !== "abandon") return;
+    state.handoverSilenced = phase === "commit";
     applyVoiceState();
     applyOutputSettings($("remote-video"));
     refreshVoicePlayback();
