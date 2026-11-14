@@ -313,10 +313,15 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	}
 	a.onTabConnected(cm, saved.Bookmark, saved.Addr, saved.Nickname, saved.DisplayName)
 	if !connected {
-		// The normal reconnect presents the session's resume token.
+		// The frontend starts the normal reconnect (with the session's token)
+		// once it has recorded this tab; see result["reconnect"].
+		a.tabsMu.Lock()
+		tab.info.Connected = false
+		tab.reconnectAllowed = !tab.reconnectSuppressed
+		a.tabsMu.Unlock()
 		result["warning"] = "connection lost while restoring; reconnecting"
+		result["reconnect"] = true
 		a.finishActivateSerialized(id, cm, journal, generation)
-		go tab.cm.emit("disconnected", "") // publishes after activationPublishMu is released
 		result["tab_id"] = id
 		return result
 	}

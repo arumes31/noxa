@@ -694,6 +694,13 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 			_ = conn.Close()
 			return netproto.ReasonHandoverUnavailable
 		}
+		if resp.OK && handoverBegin != nil && !committed {
+			// A server that ignored the standby request already moved the
+			// session here: keep it like a commit, never as a plain login.
+			m.mu.Lock()
+			m.handoverCommitted = true
+			m.mu.Unlock()
+		}
 		if resp.OK {
 			// Keep the issued token before anything else can fail: the server
 			// now holds this session (after a handover commit, the only one)

@@ -1057,10 +1057,11 @@ window.addEventListener("noxa-language-changed", () => {
     reconnectCancel.textContent = t("runtime.cancelReconnect");
     tabReconnects.refresh(state.activeTabID);
 });
-window.runtime.EventsOn("tab_disconnected", tabID => {
+function startTabReconnect(tabID) {
     connectionOverlay.lost(String(tabID));
     if (scopedReconnectAvailable()) tabReconnects.start(String(tabID), state.tabConnects.get(String(tabID)));
-});
+}
+window.runtime.EventsOn("tab_disconnected", startTabReconnect);
 window.runtime.EventsOn("tab_closed", tabID => {
     tabID = String(tabID);
     if (tabID === state.activeTabID) cancelShareResume();
@@ -3790,6 +3791,7 @@ window.__noxa = {
     updateReconnectAudio: () => ({ muted: state.muted, deafened: state.deafened, mutedBeforeDeafen }),
     completeUpdateReconnect: result => completeReconnect({ addr: result.addr, nick: result.nick,
         displayName: result.displayName || "", bookmark: result.bookmark || "", pw: "", spw: "" }, null, result.tab_id),
+    startTabReconnect,
     state, $, toast, announceLive, sysMsg, showLogin, showWorkspace, disconnect, sendChat, setPTT, noteActivity,
     setDeafened, joinChannelLocally, refreshPermissions, applyVoiceState, applyOutputSettings, applyLiveAudioSettings,
     startVADMonitor: startVoiceMonitor, stopVADMonitor: stopVoiceMonitor, prepareChannelMicrophone, readRemoteAudioLevel,

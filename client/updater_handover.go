@@ -32,6 +32,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -347,6 +348,21 @@ type incomingUpdateHandover struct {
 	parentWait func(context.Context) error
 	parentGone chan struct{}
 	shown      sync.Once
+	confirmed  atomic.Bool // the old process acknowledged "committed"
+}
+
+// settled reports that the old process can no longer restart with the
+// session's token: it acknowledged the commit or has exited.
+func (h *incomingUpdateHandover) settled() bool {
+	if h.confirmed.Load() {
+		return true
+	}
+	select {
+	case <-h.parentGone:
+		return true
+	default:
+		return false
+	}
 }
 
 // incomingHandover is set when the old process started this one to take over
@@ -396,6 +412,7 @@ func (h *incomingUpdateHandover) commit(a *App) {
 		for attempt := 0; attempt < 3; attempt++ {
 			err := h.signal(handoverCommitted)
 			if err == nil {
+				h.confirmed.Store(true)
 				break
 			}
 			log.Printf("update handover: commit signal: %v", err)

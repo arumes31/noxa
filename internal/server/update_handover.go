@@ -246,10 +246,9 @@ func (s *TCPServer) handleHandoverCommit(ctx context.Context, client *Client) er
 	client.handover.slotHeld = true
 	client.mu.Unlock()
 	s.reserveHandoverSlot(standby.clientID)
-	err := s.finishAuth(ctx, client, standby.identity)
-	s.releaseHandoverSlot(client)
-	client.dropHandover()
-	return err
+	defer client.dropHandover()
+	defer s.releaseHandoverSlot(client) // every path; publication releases it first
+	return s.finishAuth(ctx, client, standby.identity)
 }
 
 // handoverAdmission runs the identity checks a commit must pass before the

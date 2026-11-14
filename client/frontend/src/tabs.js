@@ -475,6 +475,9 @@ export function initTabs() {
             const restored = await App().RestoreUpdateConnection();
             if (restored?.attempted) {
                 if (restored.tab_id) await V().completeUpdateReconnect(restored);
+                // A handed-over session that lost its connection reconnects
+                // now that its tab's reconnect record exists.
+                if (restored.tab_id && restored.reconnect) V().startTabReconnect(restored.tab_id);
                 if (restored.tab_id && !restored.error && !restored.warning) offerUpdateShareResume(restored);
                 if (restored.error || restored.warning) {
                     const message = restored.error || restored.warning;

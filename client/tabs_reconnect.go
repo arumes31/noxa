@@ -14,6 +14,11 @@ import (
 // the in-memory credentials are supplied by the caller. A candidate connection
 // cannot publish into the selected view until its ownership is committed.
 func (a *App) ReconnectTab(tabID, password, serverPassword string) ConnectTabResult {
+	// A handover replacement may rotate the session's token only once the
+	// old process can no longer fall back to it (see handoverSettled).
+	if h := incomingHandover; h != nil && !h.settled() {
+		return ConnectTabResult{Error: "waiting for the previous version to close"}
+	}
 	a.tabsMu.Lock()
 	source := a.tabs[tabID]
 	if source == nil || !source.reconnectAllowed || source.replacement != nil {
