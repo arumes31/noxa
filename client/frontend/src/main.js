@@ -1916,8 +1916,9 @@ window.runtime.EventsOn("event", (json) => {
                 ? t("runtime.shutdownScheduledMinutes", { minutes: seconds / 60 })
                 : t("runtime.shutdownScheduledSeconds", { seconds });
             toast(text, "warn", "conn");
-            // The drop is expected until a bit past the announced time.
-            shutdownNotice.announce(state.activeTabID, (seconds + 60) * 1000);
+            // Only the imminent server_shutdown (below) arms drop suppression:
+            // the server always sends it right before closing, so an unrelated
+            // network loss during a long countdown still announces normally.
             return;
         }
         case "server_shutdown":
