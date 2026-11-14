@@ -156,8 +156,8 @@ func (r *resumeStore) claim(presented, binding string) (clientID string, owner *
 	return entry.clientID, entry.owner, true
 }
 
-// takeParked hands over the state a claimed owner parked while closing.
-func (r *resumeStore) takeParked(clientID string) *resumeParked {
+// takeParked hands over the entry a claimed owner parked while closing.
+func (r *resumeStore) takeParked(clientID string) *resumeEntry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry := r.byClient[clientID]
@@ -165,7 +165,38 @@ func (r *resumeStore) takeParked(clientID string) *resumeParked {
 		return nil
 	}
 	r.deleteLocked(entry)
-	return entry.parked
+	return entry
+}
+
+// abandon releases a claim whose takeover did not finish: a parked entry
+// becomes expirable again (its token stays spent), a live one is dropped so
+// its owner later leaves normally.
+func (r *resumeStore) abandon(clientID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry := r.byClient[clientID]
+	if entry == nil || !entry.claimed {
+		return
+	}
+	if entry.parked == nil {
+		r.deleteLocked(entry)
+		return
+	}
+	entry.claimed = false
+}
+
+// reinstate puts a taken entry back, token included, when the resuming login
+// was refused afterwards (e.g. the server was full), so a retry within the
+// grace window can still resume. The original park time is kept.
+func (r *resumeStore) reinstate(entry *resumeEntry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.byClient == nil || r.byClient[entry.clientID] != nil || r.clock().Sub(entry.at) > resumeGraceWindow {
+		return
+	}
+	entry.claimed = false
+	r.byHash[entry.hash] = entry
+	r.byClient[entry.clientID] = entry
 }
 
 // park keeps a departed session's state for the grace window. It reports
@@ -264,13 +295,17 @@ func (c *Client) resumable() bool {
 // claimResume spends the client's presented token, if any, before its
 // session is published. A half-open old connection of the same session is
 // closed silently, like a replaced one, and its cleanup awaited.
-func (s *TCPServer) claimResume(ctx context.Context, client *Client, uniqueID string) *resumeParked {
+func (s *TCPServer) claimResume(ctx context.Context, client *Client, uniqueID string) *resumeEntry {
 	token := client.takeResumeOffer()
 	if token == "" {
 		return nil
 	}
 	clientID, owner, ok := s.resume.claim(token, resumeBinding(uniqueID, client.sessionKey()))
-	if !ok || owner == nil || owner == client {
+	if !ok {
+		return nil
+	}
+	if owner == nil || owner == client {
+		s.resume.abandon(clientID)
 		return nil
 	}
 	// A no-op for a session that already departed; a still open one closes
@@ -283,12 +318,18 @@ func (s *TCPServer) claimResume(ctx context.Context, client *Client, uniqueID st
 		select {
 		case <-owner.gone:
 		case <-timer.C:
+			s.resume.abandon(clientID)
 			return nil
 		case <-ctx.Done():
+			s.resume.abandon(clientID)
 			return nil
 		}
 	}
-	return s.resume.takeParked(clientID)
+	entry := s.resume.takeParked(clientID)
+	if entry == nil {
+		s.resume.abandon(clientID)
+	}
+	return entry
 }
 
 // adoptClientID gives a resuming session its old client ID before it is
@@ -456,15 +497,25 @@ func (s *TCPServer) resumeStreamWatches(client *Client, parked *resumeParked) {
 	}
 }
 
-// streamWatchResumeFor validates a stream_watch_resume delivery: it names a
-// publisher other than the recipient that the recipient may see now.
-func streamWatchResumeFor(recipientID string, data json.RawMessage) bool {
+// streamWatchResumeVisible validates a stream_watch_resume delivery at send
+// time: it names another, currently connected publisher in a channel the
+// recipient may view, and an invisible publisher only to recipients allowed
+// to see connection info. A stale hint never reveals a member.
+func (s *TCPServer) streamWatchResumeVisible(recipient *Client, e *authorization.RoleEvaluator, data json.RawMessage) bool {
 	var event struct {
 		PublisherID string `json:"publisher_id"`
 		Slot        string `json:"slot"`
 	}
-	return json.Unmarshal(data, &event) == nil && event.PublisherID != "" && event.PublisherID != recipientID &&
-		slices.Contains([]string{"screen", "cam"}, event.Slot)
+	if json.Unmarshal(data, &event) != nil || event.PublisherID == "" || event.PublisherID == recipient.ID ||
+		!slices.Contains([]string{"screen", "cam"}, event.Slot) || s.deps == nil || s.deps.State == nil {
+		return false
+	}
+	publisher, ok := s.deps.State.GetClient(event.PublisherID)
+	if !ok || publisher.ChannelID <= 0 || !e.Evaluate(recipient.userID(), publisher.ChannelID, authorization.ViewChannel).Allowed {
+		return false
+	}
+	return !s.deps.State.PresenceHidden(publisher) || publisher.UniqueID == recipient.uniqueID() ||
+		e.Evaluate(recipient.userID(), 0, authorization.ViewConnectionInfo).Allowed
 }
 
 // clientInChannel reports whether the session is a member of channelID now.

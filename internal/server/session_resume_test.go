@@ -9,6 +9,7 @@ import (
 
 	"noxa/internal/auth"
 	"noxa/internal/broadcast"
+	"noxa/internal/config"
 	"noxa/internal/netproto"
 	"noxa/internal/state"
 )
@@ -37,8 +38,8 @@ func TestResumeStoreTokenIsBoundSingleUseAndRotated(t *testing.T) {
 	if !ok || id != "c-1" || owner2 != owner {
 		t.Fatalf("claim = %q %v %v, want c-1 after mismatches left it untouched", id, owner2, ok)
 	}
-	if parked := r.takeParked("c-1"); parked == nil || parked.channelID != 7 {
-		t.Fatalf("parked state = %+v", parked)
+	if taken := r.takeParked("c-1"); taken == nil || taken.parked.channelID != 7 {
+		t.Fatalf("parked state = %+v", taken)
 	}
 	if _, _, ok := r.claim(token, resumeBinding("alice", "key-a")); ok {
 		t.Fatal("a token must be single use")
@@ -234,7 +235,7 @@ func TestSessionResumeKeepsClientIDChannelAndVoiceStateQuietly(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
 	env.state.AddChannel(testChannel(1))
-	observer, _ := dialAuthed(t, env.addr, "admin-uid")
+	observer, observerID := dialAuthed(t, env.addr, "admin-uid")
 	defer func() { _ = observer.Close() }()
 	send(t, observer, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
 
@@ -253,7 +254,7 @@ func TestSessionResumeKeepsClientIDChannelAndVoiceStateQuietly(t *testing.T) {
 		if clientID != id {
 			return nil, nil
 		}
-		return [][2]string{{"c-publisher", "screen"}}, [][2]string{{"c-viewer", "cam"}}
+		return [][2]string{{"c-gone", "cam"}, {observerID, "screen"}}, [][2]string{{observerID, "cam"}}
 	}
 	env.voice.mu.Unlock()
 
@@ -279,7 +280,10 @@ func TestSessionResumeKeepsClientIDChannelAndVoiceStateQuietly(t *testing.T) {
 		m := snapshotMember(s, id)
 		return m != nil && !m.Reconnecting && m.ChannelID == 1
 	}, quietFor(t, id))
-	if watch := readEventOfType(t, resumed, eventStreamWatchResume); string(watch) != `{"publisher_id":"c-publisher","slot":"screen"}` {
+	if watch := readEventOfType(t, resumed, eventStreamWatchResume); string(watch) != `{"publisher_id":"`+observerID+`","slot":"screen"}` {
+		t.Fatalf("watch resume = %s (a gone publisher must not be hinted)", watch)
+	}
+	if watch := readEventOfType(t, observer, eventStreamWatchResume); string(watch) != `{"publisher_id":"`+id+`","slot":"cam"}` {
 		t.Fatalf("watch resume = %s", watch)
 	}
 	// The client rejoins its channel as usual: acknowledged without a move.
@@ -390,16 +394,17 @@ func TestSessionResumeExpiresIntoLeave(t *testing.T) {
 		at = entry.at
 		return true
 	})
-	env.srv.presence.mu.Lock()
-	for k, kept := range env.srv.presence.updating {
-		if kept.ghost.ClientID == first.ClientID {
-			key = k
+	// The kept place is published after the park: wait for it too.
+	waitFor(t, "kept place published", func() bool {
+		env.srv.presence.mu.Lock()
+		defer env.srv.presence.mu.Unlock()
+		for k, kept := range env.srv.presence.updating {
+			if kept.ghost.ClientID == first.ClientID {
+				key = k
+			}
 		}
-	}
-	env.srv.presence.mu.Unlock()
-	if key == "" {
-		t.Fatal("no kept place for the parked session")
-	}
+		return key != ""
+	})
 	env.srv.expireUpdatingDeparture(key, first.ClientID, "user-uid", "user", at)
 	if env.srv.resume.len() != 0 {
 		t.Fatal("the grace window ended but the token is still held")
@@ -474,6 +479,12 @@ func TestLegacyClientKeepsLostConnectionAnnouncement(t *testing.T) {
 	}
 	_ = conn.Close()
 	waitFor(t, "token revoked", func() bool { return env.srv.resume.len() == 0 })
+	waitFor(t, "departure recorded", func() bool {
+		env.srv.presence.mu.Lock()
+		defer env.srv.presence.mu.Unlock()
+		_, ok := env.srv.presence.departures[resp.ClientID]
+		return ok
+	})
 	env.srv.presence.mu.Lock()
 	defer env.srv.presence.mu.Unlock()
 	if len(env.srv.presence.updating) != 0 || env.srv.presence.departures[resp.ClientID].reason != netproto.DepartureConnectionLost {
@@ -593,5 +604,109 @@ func TestVoiceConnectingEndsAfterGraceAndOnLeave(t *testing.T) {
 	s.forgetVoiceConnecting("c-2")
 	if s.voiceConnectingNow("c-2") {
 		t.Fatal("leaving the channel must drop the mark")
+	}
+}
+
+// A resume refused for capacity keeps its claim: once there is room again,
+// the same token still continues the session within the grace window.
+func TestRefusedResumeStaysResumable(t *testing.T) {
+	env := startTestEnvFull(t, nil, func(c *config.Config) { c.MaxClients = 1 })
+	defer env.stop()
+	user, first := dialResumable(t, env.addr, userLogin(""))
+	_ = user.Close()
+	waitFor(t, "session parked", func() bool { _, ok := env.state.GetClient(first.ClientID); return !ok })
+	blocker, _ := dialAuthed(t, env.addr, "admin-uid")
+	conn := dialRetry(t, env.addr)
+	defer func() { _ = conn.Close() }()
+	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", ResumeToken: first.ResumeToken,
+		ClientFeatures: []string{netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume}})
+	var refused netproto.AuthResponse
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &refused); err != nil || refused.OK {
+		t.Fatalf("expected a full server, got %+v %v", refused, err)
+	}
+	_ = blocker.Close()
+	waitFor(t, "room again", func() bool { return env.srv.authenticatedClientCount() == 0 })
+	back, resp := dialResumable(t, env.addr, userLogin(first.ResumeToken))
+	defer func() { _ = back.Close() }()
+	if !resp.Resumed || resp.ClientID != first.ClientID {
+		t.Fatal("a capacity refusal spent the resume")
+	}
+}
+
+// After a resume with a fresh encryption key the client gets the restored
+// channel's current key and can read the first channel message.
+func TestResumedClientReadsChannelWithFreshKey(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+	env.state.AddChannel(testChannel(1))
+	alice, _ := dialAuthed(t, env.addr, "admin-uid")
+	defer func() { _ = alice.Close() }()
+	apub, apriv := testX25519(t)
+	publishKey(t, alice, apub)
+	send(t, alice, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
+	readChannelKeyFor(t, alice, 1)
+
+	oldPub, _ := testX25519(t)
+	request := userLogin("")
+	request.X25519PublicKey = b64e(oldPub[:])
+	user, first := dialResumable(t, env.addr, request)
+	send(t, user, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
+	waitFor(t, "user in channel", func() bool { c, ok := env.state.GetClient(first.ClientID); return ok && c.ChannelID == 1 })
+	_ = user.Close()
+	rotated := readChannelKeyFor(t, alice, 1) // the departure rotates the channel key
+	aliceKey := unsealScopeKey(t, rotated, apub, apriv)
+
+	pub, priv := testX25519(t)
+	request = userLogin(first.ResumeToken)
+	request.X25519PublicKey = b64e(pub[:])
+	resumed, second := dialResumable(t, env.addr, request)
+	defer func() { _ = resumed.Close() }()
+	if !second.Resumed {
+		t.Fatal("not resumed")
+	}
+	ck := readChannelKeyFor(t, resumed, 1)
+	if ck.KeyID != rotated.KeyID {
+		t.Fatalf("resumed client got generation %d, channel uses %d", ck.KeyID, rotated.KeyID)
+	}
+	userKey := unsealScopeKey(t, ck, pub, priv)
+	send(t, alice, netproto.MsgChatSend, netproto.ChatSend{ChannelID: "1", Text: sealScopeTest(t, aliceKey, "welcome back"), Enc: true, KeyID: rotated.KeyID})
+	var chat netproto.ChatBroadcast
+	if err := json.Unmarshal(readEventOfType(t, resumed, eventChat), &chat); err != nil {
+		t.Fatal(err)
+	}
+	if got := openScopeTest(t, userKey, chat.Text); got != "welcome back" {
+		t.Fatalf("decrypted %q", got)
+	}
+}
+
+func TestResumeStoreAbandonAndReinstate(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	r := resumeStore{now: func() time.Time { return now }}
+	live := &Client{ID: "live"}
+	token := r.issue(live, "a", "a|")
+	if _, _, ok := r.claim(token, "a|"); !ok {
+		t.Fatal("claim failed")
+	}
+	r.abandon("live") // takeover timed out while the owner was still open
+	if r.len() != 0 {
+		t.Fatal("an abandoned live claim leaked")
+	}
+
+	parked := &Client{ID: "parked"}
+	token = r.issue(parked, "b", "b|")
+	r.park(parked, &resumeParked{clientID: "parked"}, now)
+	r.claim(token, "b|")
+	r.abandon("parked")
+	if !r.expire("parked", now) {
+		t.Fatal("an abandoned parked claim must expire normally")
+	}
+
+	token = r.issue(parked, "b", "b|")
+	r.park(parked, &resumeParked{clientID: "parked"}, now)
+	r.claim(token, "b|")
+	entry := r.takeParked("parked")
+	r.reinstate(entry)
+	if _, _, ok := r.claim(token, "b|"); !ok {
+		t.Fatal("a reinstated claim must accept the same token again")
 	}
 }

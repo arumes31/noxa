@@ -103,8 +103,10 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 	// A presented resume token continues an earlier session of this identity
 	// (an ephemeral guest gets its old guest identity back). Everything below
 	// is still checked afresh: bans, devices, capacity and channel access.
-	parked := s.claimResume(ctx, client, id.uniqueID)
-	if parked != nil {
+	resumed := s.claimResume(ctx, client, id.uniqueID)
+	var parked *resumeParked
+	if resumed != nil {
+		parked = resumed.parked
 		id.uniqueID = parked.uniqueID
 	}
 	var rejection string
@@ -173,6 +175,11 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		return nil
 	})
 	if err != nil {
+		if resumed != nil {
+			// Refused before publication (full, banned, ...): a retry within
+			// the grace window may still resume; every check runs again then.
+			s.resume.reinstate(resumed)
+		}
 		if rejection == "" {
 			rejection = "internal error"
 		} else {
@@ -308,6 +315,13 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 				OnMobile: client.isWebTransport(),
 				Resumed:  true,
 			})
+			// The client also gets the restored channel's key with its current
+			// encryption key (it publishes it again too; a duplicate is harmless).
+			if member, ok := s.deps.State.GetClient(client.ID); ok && member.ChannelID > 0 {
+				if err := s.deliverScopeKey(ctx, client, member.ChannelID); err != nil {
+					s.logger.Debug("channel key after resume", zap.Error(err))
+				}
+			}
 			s.resumeStreamWatches(client, parked)
 			return nil
 		}

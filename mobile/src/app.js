@@ -553,7 +553,8 @@ export async function connect({ guest = null, fence } = {}) {
         }
         throw error;
     }
-    resume = { identity, token: auth.resume_token || "" };
+    // A disconnect or a newer attempt since this sign-in keeps its own token state.
+    if (attempt === connectionGeneration) resume = { identity, token: auth.resume_token || "" };
     const session = new ChatSession(conn, identity, auth, { deferIncoming: true });
     let activated = false;
     let ratchet = null, ratchetError = null;

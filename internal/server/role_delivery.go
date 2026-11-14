@@ -383,7 +383,7 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		}
 	case eventStreamWatchResume:
 		// Addressed request to watch again; the watch itself is authorized anew.
-		if !streamWatchResumeFor(client.ID, envelope.Data) {
+		if !s.streamWatchResumeVisible(client, e, envelope.Data) {
 			return nil, nil
 		}
 	case eventConversationChanged:
