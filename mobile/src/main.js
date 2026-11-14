@@ -12,7 +12,7 @@ import { inviteFromLocation, setPendingInvite } from "./core/invite.js";
 import { t, lang } from "./i18n.js";
 import { h, sheet, toast } from "./ui/dom.js";
 import { afterRoute, onWideChange, screenRoot } from "./ui/layout.js";
-import { updatePolicy, updatesHeld } from "./core/update-policy.js";
+import { holdUpdates, updatePolicy, updatesHeld } from "./core/update-policy.js";
 import "./ui/call-waiting.js";
 
 // Each screen is its own chunk, so Connect and Home load without the rest.
@@ -263,7 +263,7 @@ async function applyUpdate({ auto = false } = {}) {
         }
     } catch { /* Reload still works without service-worker access. */ }
     if (auto && inVoice()) {
-        pendingUpdate.ready();
+        if (!pendingUpdate.ready()) showUpdateBanner(t("update.ready"));
         return;
     }
     location.reload();
@@ -326,6 +326,12 @@ async function updateRequired() {
     try {
         const registration = await navigator.serviceWorker?.getRegistration("/app/");
         await registration?.update();
+        // update() can resolve while the new worker is still installing.
+        const worker = registration?.installing;
+        if (worker) await new Promise(resolve => {
+            worker.addEventListener("statechange", () => { if (worker.state !== "installing") resolve(); });
+            setTimeout(resolve, 10000);
+        });
     } catch { /* Reload still fetches the current bundle from the network. */ }
     await applyUpdate();
     return true;
@@ -354,12 +360,18 @@ async function boot() {
         // Nothing is claimed until the user confirms, naming the stored
         // account the link would replace. An unreadable stored identity
         // must not block re-linking.
-        await loadDevice().catch(() => null);
-        const { confirmLink, runLink } = await screens.connect();
-        const current = app.identity ? (app.meta.nickname || app.meta.uniqueID || "?") : "";
-        if (await confirmLink(root, { current })) {
-            await runLink(root, link, { onSignedIn });
-            return;
+        // The link now lives only in memory: no automatic update reload until it is decided.
+        const releaseUpdates = holdUpdates();
+        try {
+            await loadDevice().catch(() => null);
+            const { confirmLink, runLink } = await screens.connect();
+            const current = app.identity ? (app.meta.nickname || app.meta.uniqueID || "?") : "";
+            if (await confirmLink(root, { current })) {
+                await runLink(root, link, { onSignedIn });
+                return;
+            }
+        } finally {
+            releaseUpdates();
         }
     }
     await loadDevice();
