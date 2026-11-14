@@ -62,7 +62,7 @@ func gatedReconnectServer(t *testing.T, handlers ...frameHandler) (string, <-cha
 		accepted = conn
 		mu.Unlock()
 		defer func() { _ = conn.Close() }()
-		frame, err := netproto.ReadFrame(conn)
+		frame, err := readLoginFrame(conn)
 		if err != nil {
 			return
 		}

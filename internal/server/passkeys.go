@@ -329,7 +329,7 @@ func (s *TCPServer) finishPasskeyLogin(ctx context.Context, client *Client, rp *
 	}
 	ip := remoteIP(client.Conn)
 	sourceScope := auth.LoginFailureScope("passkey:"+auth.SourceAddressKey(ip), "")
-	attempt, allowed := s.loginLimiter.Reserve(sourceScope)
+	attempt, allowed := s.loginLimiter.ReserveSignature(sourceScope) // a WebAuthn assertion does no KDF work
 	if !allowed {
 		s.metricsSink().IncAuthFailure("tcp", "locked_out")
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "too many failed sign-ins, try again later")

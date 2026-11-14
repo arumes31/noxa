@@ -480,7 +480,7 @@ func (m *connManager) connectNamed(addr, nickname, displayName, password, server
 			ServerPassword:  serverPassword,
 			PublicKey:       id.PublicKey,
 			X25519PublicKey: encPub,
-		}, nil)
+		}, loginSigner(id)) // proves PublicKey (Authenticate.PublicKeyProof)
 	}
 
 	// Guest login with the client's own identity (key-derived unique ID). The
@@ -591,7 +591,16 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 		return err.Error()
 	}
 
-	if err := m.writeConn(conn, netproto.MsgAuthenticate, authMsg); err != nil {
+	// A password login proves its identity key: a password-less probe on this
+	// connection fetches a challenge, which the password login then signs.
+	// Servers only bind (and sign with) a proven key; older servers ignore the
+	// proof field, and a probe answered without a challenge is the answer.
+	proving := authMsg.Password != "" && authMsg.PublicKey != "" && signer != nil
+	pending := authMsg
+	if proving {
+		pending.Password, pending.PublicKey, pending.ResumeToken, pending.Handover = "", "", "", false
+	}
+	if err := m.writeConn(conn, netproto.MsgAuthenticate, pending); err != nil {
 		_ = conn.Close()
 		return err.Error()
 	}
@@ -631,7 +640,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 				return "the server asked for an unsupported proof of work"
 			}
 			powAnswered = true
-			retry := authMsg
+			retry := pending
 			retry.PowPrefix, retry.PowNonce = ch.Prefix, nonce
 			if err := m.writeConn(conn, netproto.MsgAuthenticate, retry); err != nil {
 				_ = conn.Close()
@@ -639,8 +648,27 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 			}
 			continue
 		}
+		if netproto.MessageType(f.Type) == netproto.MsgAuthChallenge && proving {
+			proving = false
+			var ch netproto.AuthChallenge
+			if err := netproto.Decode(f, &ch); err != nil {
+				_ = conn.Close()
+				return err.Error()
+			}
+			// A challenge this client will not sign leaves the login unproven,
+			// as before; the password still decides.
+			if sig, _, reason := answerChallenge(ch, signer); reason == "" {
+				authMsg.PublicKeyProof = sig
+			}
+			pending = authMsg
+			if err := m.writeConn(conn, netproto.MsgAuthenticate, pending); err != nil {
+				_ = conn.Close()
+				return err.Error()
+			}
+			continue
+		}
 		if netproto.MessageType(f.Type) == netproto.MsgAuthChallenge {
-			if signer == nil {
+			if signer == nil || authMsg.Password != "" {
 				_ = conn.Close()
 				return "server requested a challenge but no identity is available"
 			}
