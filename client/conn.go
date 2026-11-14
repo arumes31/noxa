@@ -982,6 +982,7 @@ func (m *connManager) terminateConn(conn net.Conn, emitDisconnected bool, reason
 	toClose, waiters, transferConns := m.detachLocked()
 	m.mu.Unlock()
 	log.Printf("control connection closed reason=%s epoch=%d", reason, epoch)
+	noteHandoverClose(m, reason)
 	m.finishDetach(toClose, waiters, transferConns, emitDisconnected)
 	return true
 }

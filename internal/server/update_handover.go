@@ -18,6 +18,10 @@ import (
 // the old session simply continues. Tests shorten it.
 var handoverStandbyWindow = 20 * time.Second
 
+// handoverCommitWindow bounds an accepted commit: closing the old session and
+// completing the login.
+var handoverCommitWindow = 15 * time.Second
+
 var errHandoverUnavailable = errors.New(netproto.ReasonHandoverUnavailable)
 
 // handoverStandby is a connection's handover login. A requested login has a
@@ -49,6 +53,13 @@ func (c *Client) handoverRequested() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.handover != nil && c.handover.deadline.IsZero()
+}
+
+// inHandoverStandby reports a standby that has not started its commit.
+func (c *Client) inHandoverStandby() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.handover != nil && !c.handover.deadline.IsZero() && !c.handover.committing
 }
 
 func (c *Client) handoverCommitting() bool {
@@ -145,9 +156,33 @@ func (s *TCPServer) handleHandoverCommit(ctx context.Context, client *Client) er
 		_ = s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: netproto.ReasonHandoverUnavailable})
 		return errHandoverUnavailable
 	}
+	// Admission first: a commit refused for a ban or a signed-out device must
+	// leave the live old session untouched. (Capacity is not checked: the
+	// commit replaces the old session's slot, see finishAuth.)
+	if reason, err := s.handoverAdmission(ctx, client, standby.identity.uniqueID); reason != "" || err != nil {
+		if reason == "" {
+			reason = "internal error"
+		}
+		client.dropHandover()
+		s.resume.endHandover(standby.clientID, client)
+		_ = s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: reason})
+		return errHandoverUnavailable
+	}
 	s.resume.endHandover(standby.clientID, client)
 	client.setResumeOffer(standby.token, true)
 	err := s.finishAuth(ctx, client, standby.identity)
 	client.dropHandover()
 	return err
+}
+
+// handoverAdmission runs the identity checks a commit must pass before the
+// old session is closed. finishAuth repeats them atomically afterwards.
+func (s *TCPServer) handoverAdmission(ctx context.Context, client *Client, uniqueID string) (string, error) {
+	if s.deps == nil || s.deps.Auth == nil {
+		return "", errHandoverUnavailable
+	}
+	if reason, err := s.banRejectReason(ctx, client, uniqueID, remoteIP(client.Conn)); reason != "" || err != nil {
+		return reason, err
+	}
+	return s.sessionDeviceRejection(ctx, client, uniqueID)
 }

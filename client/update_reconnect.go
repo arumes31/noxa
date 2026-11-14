@@ -7,8 +7,6 @@ import (
 	"os"
 	"slices"
 	"time"
-
-	"noxa/internal/netproto"
 )
 
 const updateReconnectEnv = "NOXA_UPDATE_RECONNECT"
@@ -190,34 +188,36 @@ func decodeUpdateReconnect(encoded string, now time.Time, unprotect func([]byte)
 // RestoreUpdateConnection is invoked after genuine frontend readiness, before
 // bookmark auto-connect. Only the updater-launched process can consume it once.
 func (a *App) RestoreUpdateConnection() map[string]any {
-	result := a.restoreUpdateConnectionOnce()
-	// A handover process that did not take over the session hands it back.
-	if h := incomingHandover; h != nil {
+	result, owner := a.restoreUpdateConnectionOnce()
+	// A handover process whose restoration did not take over the session
+	// hands it back. Only the call that consumed the restoration decides; a
+	// skipped or repeated call never cancels one in progress.
+	if h := incomingHandover; h != nil && owner {
 		h.abandon(a)
 	}
 	return result
 }
 
-func (a *App) restoreUpdateConnectionOnce() map[string]any {
+func (a *App) restoreUpdateConnectionOnce() (map[string]any, bool) {
 	a.update.mu.Lock()
 	if a.updateReconnectConsumed || a.UpdateStartupPending() {
 		a.update.mu.Unlock()
-		return map[string]any{"attempted": false}
+		return map[string]any{"attempted": false}, false
 	}
 	a.updateReconnectConsumed = true
 	encoded := os.Getenv(updateReconnectEnv)
 	_ = os.Unsetenv(updateReconnectEnv)
 	a.update.mu.Unlock()
 	if !startedAfterUpdate || encoded == "" {
-		return map[string]any{"attempted": false}
+		return map[string]any{"attempted": false}, true
 	}
 	result := map[string]any{"attempted": true}
 	saved, err := decodeUpdateReconnect(encoded, time.Now(), unprotectBytes)
 	if err != nil {
 		result["error"] = err.Error()
-		return result
+		return result, true
 	}
-	return a.restoreUpdateConnection(saved)
+	return a.restoreUpdateConnection(saved), true
 }
 
 func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string]any {
@@ -256,9 +256,11 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	a.tabsMu.Unlock()
 	if !owned {
 		if handover != nil {
-			// The server already moved the session here: never end it with
-			// a goodbye; a silent drop keeps it resumable.
-			tab.cm.dropWithoutGoodbye()
+			// The server already moved the session here with a new token:
+			// keep the connected tab and release the old process instead of
+			// handing back a session it can no longer resume.
+			committed = true
+			handover.commit(a)
 		} else {
 			tab.cm.disconnect()
 		}
@@ -278,6 +280,10 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	// its connection dropped meanwhile: keep the tab and resume it as usual.
 	if (!connected && handover == nil) || a.tabs[id] != tab || tab.reconnectSuppressed || a.activeID != "" || len(a.tabs) != 1 {
 		a.tabsMu.Unlock()
+		if handover != nil {
+			committed = true // keep the moved session (see above)
+			handover.commit(a)
+		}
 		result["error"] = "connection restoration was cancelled"
 		return result
 	}
@@ -310,13 +316,3 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	return result
 }
 
-// dropWithoutGoodbye closes the connection like a network loss, so the server
-// keeps the session for a resume instead of ending it.
-func (m *connManager) dropWithoutGoodbye() {
-	m.mu.Lock()
-	conn := m.conn
-	m.mu.Unlock()
-	if conn != nil {
-		m.terminateConn(conn, false, netproto.ControlCloseLocal)
-	}
-}

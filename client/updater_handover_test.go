@@ -124,15 +124,23 @@ func TestUpdateHandoverLostConfirmationIsUnconfirmed(t *testing.T) {
 		t.Fatal("a commit without confirmation must stay undecided")
 	}
 
-	beginHandoverSilence()
+	// Only a clean server close of the handed-over connection is evidence.
+	target, other := &connManager{sink: &eventRecorder{}}, &connManager{sink: &eventRecorder{}}
+	beginHandoverSilence(target)
+	noteHandoverClose(other, netproto.ControlCloseEOF)
+	noteHandoverClose(target, netproto.ControlCloseReadError)
+	noteHandoverClose(target, netproto.ControlCloseReadTimeout)
 	if handoverSessionTaken() {
-		t.Fatal("no connection closed, yet the session counts as taken")
+		t.Fatal("another tab's close or a network failure counted as a takeover")
 	}
-	deferHandoverDisconnect(&connManager{sink: &eventRecorder{}})
+	noteHandoverClose(target, netproto.ControlCloseEOF)
 	if !handoverSessionTaken() {
-		t.Fatal("a connection closed during the commit means the server moved the session")
+		t.Fatal("the server closing the handed-over connection means the session moved")
 	}
 	endHandoverSilence(false)
+	if handoverSessionTaken() {
+		t.Fatal("takeover evidence outlived its handover")
+	}
 }
 
 func TestIncomingHandoverConfiguration(t *testing.T) {
@@ -168,20 +176,25 @@ func TestHandoverSilenceDefersAndReplaysDisconnect(t *testing.T) {
 		defer r.mu.Unlock()
 		return len(r.events)
 	}
-	replayed, dropped := &eventRecorder{}, &eventRecorder{}
-	if deferHandoverDisconnect(&connManager{sink: replayed}) {
+	replayed, dropped, other := &eventRecorder{}, &eventRecorder{}, &eventRecorder{}
+	target := &connManager{sink: replayed}
+	if deferHandoverDisconnect(target) {
 		t.Fatal("deferred outside a handover")
 	}
-	beginHandoverSilence()
-	if !deferHandoverDisconnect(&connManager{sink: replayed}) {
+	beginHandoverSilence(target)
+	if deferHandoverDisconnect(&connManager{sink: other}) {
+		t.Fatal("another tab's disconnect was deferred")
+	}
+	if !deferHandoverDisconnect(target) {
 		t.Fatal("not deferred during a commit")
 	}
 	endHandoverSilence(true)
 	if emitted(replayed) != 1 {
 		t.Fatal("an abandoned handover must replay the disconnect")
 	}
-	beginHandoverSilence()
-	deferHandoverDisconnect(&connManager{sink: dropped})
+	moved := &connManager{sink: dropped}
+	beginHandoverSilence(moved)
+	deferHandoverDisconnect(moved)
 	endHandoverSilence(false)
 	if emitted(dropped) != 0 {
 		t.Fatal("a moved session must not announce its old connection's close")
@@ -446,5 +459,19 @@ func TestHandoverKeepsMovedSessionWhenRestorationLosesConnection(t *testing.T) {
 	}
 	if goodbye.Load() {
 		t.Fatal("a moved session was ended with a goodbye")
+	}
+}
+
+func TestSkippedRestorationNeverAbandonsTheHandover(t *testing.T) {
+	original := incomingHandover
+	t.Cleanup(func() { incomingHandover = original })
+	incomingHandover = &incomingUpdateHandover{parentGone: make(chan struct{})}
+	a := newTabApp(t)
+	a.updateReconnectConsumed = true // another call owns the restoration
+	if got := a.RestoreUpdateConnection(); got["attempted"] != false {
+		t.Fatalf("result = %v", got)
+	}
+	if a.quitting.Load() {
+		t.Fatal("a repeated restoration call abandoned the handover in progress")
 	}
 }

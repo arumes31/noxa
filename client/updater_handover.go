@@ -33,6 +33,8 @@ import (
 	"sync"
 	"time"
 
+	"noxa/internal/netproto"
+
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -71,49 +73,60 @@ func (c updateHandoverConfig) oldHash() ([sha256.Size]byte, bool) {
 
 // --- old process (A) ---------------------------------------------------------
 
-// handoverSilence defers the old session's "disconnected" events while B
-// commits: the server closes A's connection then, and a cue or reconnect
-// would only matter if the commit fails.
+// handoverSilence defers the "disconnected" event of the session being handed
+// over while B commits: the server closes that connection then, and a cue or
+// reconnect only matters if the commit fails. Other tabs are unaffected.
 var handoverSilence struct {
 	sync.Mutex
-	active   bool
-	deferred []*connManager
+	target   *connManager
+	deferred bool
+	taken    bool
 }
 
-func beginHandoverSilence() {
+func beginHandoverSilence(target *connManager) {
 	handoverSilence.Lock()
-	handoverSilence.active = true
+	handoverSilence.target, handoverSilence.deferred, handoverSilence.taken = target, false, false
 	handoverSilence.Unlock()
 }
 
-// endHandoverSilence stops deferring; replay delivers the deferred events.
+// endHandoverSilence stops deferring; replay delivers a deferred event.
 func endHandoverSilence(replay bool) {
 	handoverSilence.Lock()
-	deferred := handoverSilence.deferred
-	handoverSilence.active, handoverSilence.deferred = false, nil
+	target, deferred := handoverSilence.target, handoverSilence.deferred
+	handoverSilence.target, handoverSilence.deferred, handoverSilence.taken = nil, false, false
 	handoverSilence.Unlock()
-	if replay {
-		for _, m := range deferred {
-			m.emit("disconnected", "")
-		}
+	if replay && deferred {
+		target.emit("disconnected", "")
 	}
 }
 
-// handoverSessionTaken reports whether a connection closed during the commit,
-// which the server does when it moves the session to the new process.
+// noteHandoverClose records how the handed-over connection ended. The server
+// closes it deliberately when it moves the session (a clean end of stream);
+// a network failure looks different and is no evidence of a move.
+func noteHandoverClose(m *connManager, reason netproto.ControlCloseReason) {
+	handoverSilence.Lock()
+	defer handoverSilence.Unlock()
+	if m == handoverSilence.target && m != nil && reason == netproto.ControlCloseEOF {
+		handoverSilence.taken = true
+	}
+}
+
+// handoverSessionTaken reports whether the server closed the handed-over
+// connection during the commit, which it does when it moves the session.
 func handoverSessionTaken() bool {
 	handoverSilence.Lock()
 	defer handoverSilence.Unlock()
-	return len(handoverSilence.deferred) > 0
+	return handoverSilence.taken
 }
 
 func deferHandoverDisconnect(m *connManager) bool {
 	handoverSilence.Lock()
 	defer handoverSilence.Unlock()
-	if handoverSilence.active {
-		handoverSilence.deferred = append(handoverSilence.deferred, m)
+	if m == nil || m != handoverSilence.target {
+		return false
 	}
-	return handoverSilence.active
+	handoverSilence.deferred = true
+	return true
 }
 
 // updateHandoverPossible reports whether the active session can move: the
@@ -135,8 +148,9 @@ func (a *App) updateHandoverPossible(resume string) bool {
 // fallback is false only when the restart path must not run either (a
 // replacement that could not be stopped).
 func (a *App) handOverUpdate(exe string) (moved, fallback bool, err error) {
+	target := a.cmLoad() // the session whose token the replacement presents
 	committing := func(pid int) {
-		beginHandoverSilence()
+		beginHandoverSilence(target)
 		allowUpdateForeground(pid)
 		a.emitPlain("update_handover", "commit")
 	}

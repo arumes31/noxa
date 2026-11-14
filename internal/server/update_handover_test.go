@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"noxa/internal/auth"
 	"noxa/internal/broadcast"
+	"noxa/internal/config"
 	"noxa/internal/netproto"
 )
 
@@ -81,15 +83,10 @@ func TestHandoverStandbyIsInvisibleUntilCommitMovesSessionQuietly(t *testing.T) 
 	if env.srv.authenticatedClientCount() != authed {
 		t.Fatal("a standby must not become a session")
 	}
-	// Others' activity does not reach the standby, and it can do nothing.
+	// Others' activity does not reach the standby.
 	send(t, old, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 2})
 	waitFor(t, "user moved", func() bool { c, _ := env.state.GetClient(first.ClientID); return c.ChannelID == 2 })
 	expectSilent(t, standby, "the standby")
-	send(t, standby, netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1})
-	var refused netproto.Error
-	if err := netproto.Decode(readOfType(t, standby, netproto.MsgError), &refused); err != nil || refused.Code != errCodeNotAuthenticated {
-		t.Fatalf("standby request = %+v %v, want not authenticated", refused, err)
-	}
 
 	send(t, standby, netproto.MsgHandoverCommit, struct{}{})
 	var done netproto.AuthResponse
@@ -220,5 +217,78 @@ func TestResumeStoreHandoverMarksWithoutSpending(t *testing.T) {
 	r.park(owner, &resumeParked{clientID: "c-1"}, time.Now())
 	if _, ok := r.beginHandover(token, "alice|k", standby); ok {
 		t.Fatal("a claimed session accepted a standby")
+	}
+}
+
+func TestHandoverStandbyAcceptsOnlyTheCommit(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+	old, first := dialResumable(t, env.addr, userLogin(""))
+	defer func() { _ = old.Close() }()
+	for name, request := range map[string]struct {
+		mt  netproto.MessageType
+		msg any
+	}{
+		"device request": {netproto.MsgDeviceRequest, struct{}{}},
+		"auth signature": {netproto.MsgAuthSignature, netproto.AuthSignature{UniqueID: "user-uid"}},
+		"channel join":   {netproto.MsgJoinChannel, netproto.JoinChannel{ChannelID: 1}},
+	} {
+		var standby net.Conn
+		waitFor(t, "standby for "+name, func() bool {
+			conn, resp := dialHandover(t, env.addr, userLogin(first.ResumeToken))
+			if resp.Standby {
+				standby = conn
+				return true
+			}
+			_ = conn.Close()
+			return false
+		})
+		authed := env.srv.authenticatedClientCount()
+		send(t, standby, request.mt, request.msg)
+		expectClosed(t, standby, name+" on a standby")
+		if env.srv.authenticatedClientCount() != authed {
+			t.Fatalf("%s published a session from a standby", name)
+		}
+	}
+	if c, ok := env.state.GetClient(first.ClientID); !ok || c.ClientID != first.ClientID {
+		t.Fatal("refused standby requests touched the live session")
+	}
+}
+
+func TestHandoverCommitRefusedByAdmissionKeepsOldSession(t *testing.T) {
+	env := startTestEnvFull(t, nil, func(c *config.Config) { c.MaxClients = 1 })
+	defer env.stop()
+	old, first := dialResumable(t, env.addr, userLogin(""))
+	defer func() { _ = old.Close() }()
+	standby, resp := dialHandover(t, env.addr, userLogin(first.ResumeToken))
+	defer func() { _ = standby.Close() }()
+	if !resp.Standby {
+		t.Fatalf("standby reply = %+v", resp)
+	}
+	env.auth.setBan("user-uid", &auth.Ban{ID: 9, Type: 1, Value: "user-uid", Reason: "spam"})
+	send(t, standby, netproto.MsgHandoverCommit, struct{}{})
+	var refused netproto.AuthResponse
+	if err := netproto.Decode(readOfType(t, standby, netproto.MsgAuthResponse), &refused); err != nil || refused.OK {
+		t.Fatalf("banned commit = %+v %v", refused, err)
+	}
+	expectClosed(t, standby, "a refused commit")
+	send(t, old, netproto.MsgPing, netproto.Ping{})
+	readOfType(t, old, netproto.MsgPong)
+	if _, ok := env.state.GetClient(first.ClientID); !ok {
+		t.Fatal("a refused commit closed the old session")
+	}
+
+	// Lifting the ban: at the configured limit of one, the commit still
+	// takes over its own session's slot.
+	env.auth.setBan("user-uid", nil)
+	again, retry := dialHandover(t, env.addr, userLogin(first.ResumeToken))
+	defer func() { _ = again.Close() }()
+	if !retry.Standby {
+		t.Fatalf("standby after refusal = %+v", retry)
+	}
+	send(t, again, netproto.MsgHandoverCommit, struct{}{})
+	var done netproto.AuthResponse
+	if err := netproto.Decode(readOfType(t, again, netproto.MsgAuthResponse), &done); err != nil || !done.OK || done.ClientID != first.ClientID {
+		t.Fatalf("commit at capacity = %+v %v", done, err)
 	}
 }

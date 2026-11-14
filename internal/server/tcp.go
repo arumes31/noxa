@@ -1122,6 +1122,18 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 
+		// An accepted commit gets its own bounded completion window; the
+		// standby deadline only cuts off when a commit may start.
+		if !authDeadline.IsZero() && netproto.MessageType(frame.Type) == netproto.MsgHandoverCommit && client.inHandoverStandby() {
+			cancelAuth()
+			authDeadline = time.Now().Add(handoverCommitWindow)
+			authCtx, cancelAuth = context.WithDeadline(ctx, authDeadline)
+			defer cancelAuth()
+			if err := conn.SetDeadline(authDeadline); err != nil {
+				frame.Release()
+				return
+			}
+		}
 		requestCtx := ctx
 		if !authDeadline.IsZero() {
 			requestCtx = authCtx
@@ -1211,6 +1223,10 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Frame) error {
 	mt := netproto.MessageType(f.Type)
 	ctx = context.WithValue(ctx, requestOriginContextKey{}, mt)
+	// A handover standby may only commit (or keep its connection alive).
+	if client.inHandoverStandby() && mt != netproto.MsgHandoverCommit && mt != netproto.MsgPing && mt != netproto.MsgPong {
+		return errHandoverUnavailable
+	}
 	if !client.isAuthed() && (mt == netproto.MsgAuthenticate || mt == netproto.MsgAuthSignature || mt == netproto.MsgDeviceRequest) {
 		client.mu.Lock()
 		client.authRequests++
