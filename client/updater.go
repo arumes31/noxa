@@ -634,6 +634,21 @@ func (a *App) ApplyAndRestart() string {
 			_ = os.Unsetenv(updateReconnectEnv)
 		}
 	}()
+	// Move the session to the replacement before quitting when possible;
+	// otherwise restart as before (the session resumes after the restart).
+	if a.updateHandoverPossible(resume) {
+		moved, fallback, err := handOverSession(a, exe)
+		if moved {
+			quitForUpdate.Store(true)
+			a.quitting.Store(true)
+			wailsQuit(a.ctx)
+			return ""
+		}
+		if !fallback {
+			return err.Error()
+		}
+		log.Printf("update handover fell back to a restart: %v", err)
+	}
 	// #nosec G204 -- exe is the current executable path returned by the OS, not user input.
 	if err := restartLaunch(exe); err != nil {
 		if errors.Is(err, errUpdateRestored) {
@@ -648,5 +663,7 @@ func (a *App) ApplyAndRestart() string {
 }
 
 var restartLaunch = launchClientUpdateAfterExit
+
+var handOverSession = (*App).handOverUpdate
 
 var wailsQuit = wailsRuntime.Quit

@@ -188,6 +188,15 @@ func decodeUpdateReconnect(encoded string, now time.Time, unprotect func([]byte)
 // RestoreUpdateConnection is invoked after genuine frontend readiness, before
 // bookmark auto-connect. Only the updater-launched process can consume it once.
 func (a *App) RestoreUpdateConnection() map[string]any {
+	result := a.restoreUpdateConnectionOnce()
+	// A handover process that did not take over the session hands it back.
+	if h := incomingHandover; h != nil {
+		h.abandon(a)
+	}
+	return result
+}
+
+func (a *App) restoreUpdateConnectionOnce() map[string]any {
 	a.update.mu.Lock()
 	if a.updateReconnectConsumed || a.UpdateStartupPending() {
 		a.update.mu.Unlock()
@@ -219,6 +228,12 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	a.emitPlain("update_connection_restoring", map[string]bool{"muted": saved.Muted, "deafened": saved.Deafened, "muted_before_deafen": saved.MutedBeforeDeafen})
 	id, tab := a.newTabWithIdentity(&saved.Identity)
 	tab.cm.setResumeToken(saved.ResumeToken)
+	handover := incomingHandover
+	if handover != nil {
+		tab.cm.mu.Lock()
+		tab.cm.handoverBegin = func() bool { return handover.signal(handoverCommitting) == nil }
+		tab.cm.mu.Unlock()
+	}
 	committed := false
 	defer func() {
 		if !committed {
@@ -229,6 +244,9 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 		a.removeTab(id)
 		result["error"] = failure
 		return result
+	}
+	if handover != nil {
+		handover.commit(a)
 	}
 	a.tabsMu.Lock()
 	owned := a.tabs[id] == tab && !tab.reconnectSuppressed && a.activeID == "" && len(a.tabs) == 1

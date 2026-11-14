@@ -53,6 +53,8 @@ func runApp() {
 		return
 	}
 
+	prepareIncomingHandover()
+
 	// Create an instance of the app structure
 	app := NewApp()
 	runDesktop(app)
@@ -65,6 +67,8 @@ func runWails(app *App) {
 		Width:     1024,
 		Height:    768,
 		Frameless: runtime.GOOS == "windows",
+		// An update handover stays hidden until it takes over the session.
+		StartHidden: incomingHandover != nil,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

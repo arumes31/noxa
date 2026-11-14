@@ -50,6 +50,9 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	client.mu.Unlock()
 	// Spent only after this login succeeds and only for the same identity.
 	client.setResumeOffer(msg.ResumeToken, slices.Contains(msg.ClientFeatures, netproto.ClientFeatureResume))
+	if !client.requestHandover(msg.Handover) {
+		return errHandoverUnavailable // a standby may only commit
+	}
 	if reason := s.clientVersionRejection(msg.ClientVersion); reason != "" {
 		return s.rejectClientVersion(client, reason)
 	}

@@ -825,6 +825,19 @@ across their name (static with reduced motion). A deliberate leave, kick, ban or
 expiry ends the session as before; a server restart forgets all tokens. A page
 reload of the web app starts a new session.
 
+**Update handover.** On an updated server, a connected desktop client moves its
+session to the new version before the old one exits. The new process starts
+hidden and logs in with the session's resume token as the same account and
+device; the server holds that login in standby (invisible, in no channel, no
+presence or broadcasts, counted as a pending login, one per session, at most
+20 seconds). The old process then goes silent and the new one commits: the
+server moves client ID, channel and stream watches to it and closes the old
+connection without a leave or join, the new window appears where the old one
+was, and the new process rejoins voice and receives the current keys as usual.
+If anything fails in between, the old session continues and the client falls
+back to the restart with session resume. Older clients and servers keep the
+restart.
+
 
 This table lists commonly used settings and built-in defaults. See
 [`internal/config/config.go`](internal/config/config.go) for the complete schema

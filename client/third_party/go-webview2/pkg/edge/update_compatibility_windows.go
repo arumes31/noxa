@@ -29,6 +29,26 @@ type updateBrowserStartupState struct {
 	started bool
 	legacy  UpdateCompatibilityPolicy
 	pid     atomic.Uint32
+	args    string       // the options this process's browser was created with
+	check   func(string) // update handover: verifies args before creation
+}
+
+// SetHandoverBrowserCheck installs a check that sees the browser options
+// before the environment is created. An update handover starts beside the old
+// process and joins its browser only with identical options, so the check
+// ends the process instead of failing visibly on a mismatch.
+func SetHandoverBrowserCheck(check func(arguments string)) {
+	updateBrowserStartup.mu.Lock()
+	defer updateBrowserStartup.mu.Unlock()
+	updateBrowserStartup.check = check
+}
+
+// UpdateBrowserArguments returns the browser options of this process, empty
+// before browser startup.
+func UpdateBrowserArguments() string {
+	updateBrowserStartup.mu.Lock()
+	defer updateBrowserStartup.mu.Unlock()
+	return updateBrowserStartup.args
 }
 
 // SetLegacyUpdateCompatibility selects the shared legacy Wails browser options
@@ -54,6 +74,21 @@ func (s *updateBrowserStartupState) enableLegacy(policy UpdateCompatibilityPolic
 }
 
 func (s *updateBrowserStartupState) arguments(fragments []string) (string, error) {
+	args, err := s.selectArguments(fragments)
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	s.args = args
+	check := s.check
+	s.mu.Unlock()
+	if check != nil {
+		check(args)
+	}
+	return args, nil
+}
+
+func (s *updateBrowserStartupState) selectArguments(fragments []string) (string, error) {
 	s.mu.Lock()
 	s.started = true
 	legacy := s.legacy

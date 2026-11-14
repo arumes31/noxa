@@ -138,6 +138,8 @@ func (m MessageType) String() string {
 		return "PowChallenge"
 	case MsgGoodbye:
 		return "Goodbye"
+	case MsgHandoverCommit:
+		return "HandoverCommit"
 	case MsgLinkPreviewRequest:
 		return "LinkPreviewRequest"
 	case MsgLinkPreviewResult:
@@ -505,6 +507,9 @@ type Authenticate struct {
 	// client ID and channel) when it still holds it for this account, device
 	// key and grace window. Absent or stale tokens mean a fresh session.
 	ResumeToken string `json:"resume_token,omitempty"`
+	// Handover asks for a standby login that continues the token's live
+	// session only on MsgHandoverCommit (ClientFeatureHandover).
+	Handover bool `json:"handover,omitempty"`
 }
 
 // CapabilityGroupAssignAck advertises support for GroupAssign.AckRequested.
@@ -566,6 +571,9 @@ type AuthResponse struct {
 	// reports that the presented token continued an earlier session.
 	ResumeToken string `json:"resume_token,omitempty"`
 	Resumed     bool   `json:"resumed,omitempty"`
+	// Standby answers a handover login: the connection waits invisibly for
+	// MsgHandoverCommit. ClientID names the session it would continue.
+	Standby bool `json:"standby,omitempty"`
 }
 
 // ICEServer describes one ICE server for a WebRTC RTCPeerConnection,

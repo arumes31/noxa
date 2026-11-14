@@ -193,7 +193,10 @@ func (a *App) requireCM() (*connManager, error) {
 func (a *App) cmStore(cm *connManager) { a.cm.Store(cm) }
 
 func (a *App) domReady(ctx context.Context) {
-	restoreUpdateWindow()
+	// A handover window stays hidden until it takes over the session.
+	if incomingHandover == nil {
+		restoreUpdateWindow()
+	}
 	if err := a.restoreWindowOpacityOnce(ctx); err != nil && err != context.Canceled {
 		log.Printf("window opacity at DOM-ready: %v", err)
 	}

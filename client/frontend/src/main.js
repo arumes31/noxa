@@ -3510,6 +3510,22 @@ window.runtime.EventsOn("update_connection_restoring", audio => {
     refreshVoicePlayback();
     renderTree();
 });
+// Update handover: the updated app takes over this session, so this one goes
+// silent at once (locally only; the server keeps the session's audio state)
+// and speaks again only if the handover is abandoned.
+let handoverAudio = null;
+window.runtime.EventsOn("update_handover", phase => {
+    if (phase === "commit" && !handoverAudio) {
+        handoverAudio = { muted: state.muted, deafened: state.deafened };
+        state.muted = state.deafened = true;
+    } else if (phase === "abandon" && handoverAudio) {
+        ({ muted: state.muted, deafened: state.deafened } = handoverAudio);
+        handoverAudio = null;
+    } else return;
+    applyVoiceState();
+    applyOutputSettings($("remote-video"));
+    refreshVoicePlayback();
+});
 function setDeafened(on) {
     if (updateStartupBlocked()) return;
     if (state.deafened === on) return;
