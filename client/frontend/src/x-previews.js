@@ -1,3 +1,4 @@
+import { openExternalURL } from "./external-url.js";
 import { t } from "./i18n.js";
 import { loadPreviewMetadata } from "./preview-metadata.js";
 
@@ -34,7 +35,7 @@ export function renderXPostPreviews(container, { enabled, scope, isCurrent, conv
         });
         card.onclick = () => {
             if (!card.isConnected || !isCurrent()) return;
-            Promise.resolve().then(() => window.runtime.BrowserOpenURL(post.url)).catch(() => {
+            Promise.resolve().then(() => openExternalURL(post.url)).catch(() => {
                 if (isCurrent()) window.__noxa.toast(t("midnight.xPostOpenFailed"), "warn");
             });
         };

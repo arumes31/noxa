@@ -27,6 +27,10 @@ var dmDeclined sync.Map
 
 var errDMIdentityChanged = errors.New("contact identity changed; confirm the new fingerprint before messaging or calling")
 
+// errDMIdentitySubstituted: the server offered another key for a contact whose
+// unique ID is derived from the pinned key. It cannot be accepted.
+var errDMIdentitySubstituted = errors.New("the server offered a key that does not belong to this contact; refusing it")
+
 type dmIdentityPin struct {
 	Version     int      `json:"version"`
 	Fingerprint string   `json:"fingerprint"`
@@ -57,10 +61,15 @@ type ContactIdentityChange struct {
 type peerConfirmationRegistry struct {
 	mu      sync.Mutex
 	serial  uint64
-	pending map[string]chan bool
+	pending map[string]pendingPeerConfirmation
 }
 
-var peerConfirmations = &peerConfirmationRegistry{pending: map[string]chan bool{}}
+type pendingPeerConfirmation struct {
+	answer chan bool
+	change ContactIdentityChange
+}
+
+var peerConfirmations = &peerConfirmationRegistry{pending: map[string]pendingPeerConfirmation{}}
 
 // peerConfirmationTimeout bounds how long a send or call waits for the
 // dialog. Expiry keeps the safe default: the new key stays untrusted.
@@ -70,14 +79,22 @@ var peerConfirmationEmitter = func(ctx context.Context, change ContactIdentityCh
 	wailsRuntime.EventsEmit(ctx, "contact_identity_changed", change)
 }
 
-func (r *peerConfirmationRegistry) open() (string, chan bool) {
+func (r *peerConfirmationRegistry) open(change ContactIdentityChange) (ContactIdentityChange, chan bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.serial++
-	id := strconv.FormatUint(r.serial, 10)
+	change.RequestID = strconv.FormatUint(r.serial, 10)
 	answer := make(chan bool, 1)
-	r.pending[id] = answer
-	return id, answer
+	r.pending[change.RequestID] = pendingPeerConfirmation{answer: answer, change: change}
+	return change, answer
+}
+
+// lookup returns the change a still pending request asks about.
+func (r *peerConfirmationRegistry) lookup(id string) (ContactIdentityChange, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p, ok := r.pending[id]
+	return p.change, ok
 }
 
 func (r *peerConfirmationRegistry) close(id string) {
@@ -90,7 +107,7 @@ func (r *peerConfirmationRegistry) close(id string) {
 // expired or already answered requests.
 func (r *peerConfirmationRegistry) answer(id string, trust bool) bool {
 	r.mu.Lock()
-	answer, ok := r.pending[id]
+	p, ok := r.pending[id]
 	if ok {
 		delete(r.pending, id)
 	}
@@ -98,7 +115,7 @@ func (r *peerConfirmationRegistry) answer(id string, trust bool) bool {
 	if !ok {
 		return false
 	}
-	answer <- trust
+	p.answer <- trust
 	return true
 }
 
@@ -110,9 +127,9 @@ func frontendPeerConfirmation(ctx context.Context) func(string, string, string, 
 		return nil
 	}
 	return func(server, uid, oldFingerprint, newFingerprint string) bool {
-		id, answer := peerConfirmations.open()
-		defer peerConfirmations.close(id)
-		peerConfirmationEmitter(ctx, ContactIdentityChange{RequestID: id, Server: server, Contact: uid, OldFingerprint: oldFingerprint, NewFingerprint: newFingerprint})
+		change, answer := peerConfirmations.open(ContactIdentityChange{Server: server, Contact: uid, OldFingerprint: oldFingerprint, NewFingerprint: newFingerprint})
+		defer peerConfirmations.close(change.RequestID)
+		peerConfirmationEmitter(ctx, change)
 		timer := time.NewTimer(peerConfirmationTimeout)
 		defer timer.Stop()
 		select {
@@ -129,12 +146,44 @@ func frontendPeerConfirmation(ctx context.Context) func(string, string, string, 
 // AnswerContactIdentityChange is the dialog's reply (item 241). The request
 // ID comes from the "contact_identity_changed" event; an empty result means
 // the decision was delivered.
+// Trusting additionally needs a native confirmation, so script in the webview
+// alone can never accept a changed key.
 func (a *App) AnswerContactIdentityChange(requestID string, trust bool) string {
+	if trust {
+		change, ok := peerConfirmations.lookup(requestID)
+		if !ok {
+			return "this key change is no longer waiting for a decision"
+		}
+		if !nativeContactKeyConfirmation(a.ctx, change) {
+			peerConfirmations.answer(requestID, false) // a native No is a decline
+			return "the new key was not confirmed"
+		}
+	}
 	if !peerConfirmations.answer(requestID, trust) {
 		return "this key change is no longer waiting for a decision"
 	}
 	return ""
 }
+
+// nativeContactKeyConfirmation asks in a native dialog, outside the webview,
+// whether the changed key may be trusted. Only an explicit Yes trusts it.
+var nativeContactKeyConfirmation = func(ctx context.Context, change ContactIdentityChange) bool {
+	if ctx == nil {
+		return false
+	}
+	choice, err := wailsRuntime.MessageDialog(ctx, wailsRuntime.MessageDialogOptions{
+		Type:  wailsRuntime.QuestionDialog,
+		Title: "Trust the new contact key?",
+		Message: "The key of " + change.Contact + " on " + change.Server + " changed.\n\n" +
+			"Previous fingerprint: " + change.OldFingerprint + "\nNew fingerprint: " + change.NewFingerprint + "\n\n" +
+			"Trust it only if you compared the new fingerprint with your contact.",
+		Buttons:       []string{"Yes", "No"},
+		DefaultButton: "No",
+		CancelButton:  "No",
+	})
+	return err == nil && choice == "Yes"
+}
+
 func (m *connManager) peerPinPath(uid string) (string, string, error) {
 	id, err := m.identity()
 	if err != nil {
@@ -259,6 +308,22 @@ func (m *connManager) verifyPeerRecordAt(uid, encoded string, prompt bool, path,
 			return [32]byte{}, err
 		}
 		return record.PublicKey(), nil
+	}
+	// A pinned key that derives uid (key-login account) is the account itself:
+	// a different key can only be a substitution, so it is refused without a
+	// prompt and never blocks or replaces the pinned identity.
+	if e2ee.FingerprintCertifiesUID(pin.Fingerprint, uid) {
+		if pin.Fingerprint != fingerprint {
+			dmTrustMu.Unlock()
+			return [32]byte{}, errDMIdentitySubstituted
+		}
+		if pin.Pending != "" {
+			pin.Pending = ""
+			if err = writeDMPin(path, pin); err != nil {
+				dmTrustMu.Unlock()
+				return [32]byte{}, err
+			}
+		}
 	}
 	if pin.Pending == "" && pin.Fingerprint == fingerprint {
 		dmTrustMu.Unlock()

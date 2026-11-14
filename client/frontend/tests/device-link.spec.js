@@ -9,6 +9,7 @@ test.beforeEach(async ({ page }) => {
             { device_id: 'dev-desktop', kind: 'desktop', name: 'Desktop', fingerprint: 'aaaa bbbb cccc dddd', current: true, first_device: true, created_at: 1, last_seen_at: Math.floor(Date.now() / 1000) },
         ];
         window.go = { main: { App: new Proxy({}, { get(_target, method) { return async (...args) => {
+            if (method === "OpenExternalURL") { await window.runtime.BrowserOpenURL(args[0]); return ""; }
             window.__calls.push([method, ...args]);
             if (method === 'GetSettings') return { language: 'en', onboarding_done: true, alpha_dismissed: 'test', effects_enabled: false,
                 play_sounds: false, bookmarks: [], chat_max_lines: 200 };

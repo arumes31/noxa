@@ -38,8 +38,42 @@ func waitForContactIdentityChange(t *testing.T, emitted func() []ContactIdentity
 	return ContactIdentityChange{}
 }
 
+// nativeConfirmationAnswers replaces the native dialog with a fixed answer.
+func nativeConfirmationAnswers(t *testing.T, yes bool) *[]ContactIdentityChange {
+	t.Helper()
+	var asked []ContactIdentityChange
+	previous := nativeContactKeyConfirmation
+	nativeContactKeyConfirmation = func(_ context.Context, change ContactIdentityChange) bool {
+		asked = append(asked, change)
+		return yes
+	}
+	t.Cleanup(func() { nativeContactKeyConfirmation = previous })
+	return &asked
+}
+
+// Webview script alone cannot trust a changed key: the native dialog must agree.
+func TestContactKeyTrustNeedsNativeConfirmation(t *testing.T) {
+	emitted := captureContactIdentityChanges(t)
+	asked := nativeConfirmationAnswers(t, false)
+	confirm := frontendPeerConfirmation(context.Background())
+	results := make(chan bool, 1)
+	go func() { results <- confirm("srv", "peer", "old-fp", "new-fp") }()
+	change := waitForContactIdentityChange(t, emitted)
+	app := &App{}
+	if err := app.AnswerContactIdentityChange(change.RequestID, true); err == "" {
+		t.Fatal("trust accepted without native confirmation")
+	}
+	if len(*asked) != 1 || (*asked)[0].NewFingerprint != "new-fp" || (*asked)[0].Contact != "peer" {
+		t.Fatalf("native dialog asked = %+v", *asked)
+	}
+	if <-results {
+		t.Fatal("natively declined key trusted")
+	}
+}
+
 func TestFrontendPeerConfirmationWaitsForDialogAnswer(t *testing.T) {
 	emitted := captureContactIdentityChanges(t)
+	nativeConfirmationAnswers(t, true)
 	confirm := frontendPeerConfirmation(context.Background())
 	results := make(chan bool, 1)
 	go func() { results <- confirm("chat.example.test:9987", "peer", "old-fp", "new-fp") }()
@@ -69,6 +103,7 @@ func TestFrontendPeerConfirmationWaitsForDialogAnswer(t *testing.T) {
 
 func TestFrontendPeerConfirmationDefaultsToBlocking(t *testing.T) {
 	emitted := captureContactIdentityChanges(t)
+	nativeConfirmationAnswers(t, true)
 	previous := peerConfirmationTimeout
 	peerConfirmationTimeout = 20 * time.Millisecond
 	t.Cleanup(func() { peerConfirmationTimeout = previous })

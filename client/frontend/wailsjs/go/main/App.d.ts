@@ -345,6 +345,8 @@ export function Notify(arg1:string,arg2:string):Promise<string>;
 
 export function OpenDownloadFolderForTab(arg1:string,arg2:string):Promise<string>;
 
+export function OpenExternalURL(arg1:string):Promise<string>;
+
 export function OpenLogFolder():Promise<string>;
 
 export function OpenPrivateCallDescriptionForTab(arg1:string,arg2:netproto.CallSignal):Promise<main.PrivateCallDescription>;

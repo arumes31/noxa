@@ -560,6 +560,10 @@ func (a *App) DownloadAndApply(info UpdateInfo) (result string) {
 		return "update rejected: " + err.Error()
 	}
 
+	signed, err := hex.DecodeString(manifestChecksum(string(sums), clientAssetName))
+	if err != nil || len(signed) != sha256.Size {
+		return "update rejected: invalid checksum in signed manifest"
+	}
 	f, err := tmpRoot.Open(clientAssetName)
 	if err != nil {
 		return err.Error()
@@ -572,7 +576,7 @@ func (a *App) DownloadAndApply(info UpdateInfo) (result string) {
 		_ = f.Close()
 		return err.Error()
 	}
-	if err := applyClientUpdate(f); err != nil {
+	if err := applyClientUpdate(f, [sha256.Size]byte(signed)); err != nil {
 		_ = f.Close()
 		return fmt.Sprintf("self-update failed (old version still running): %v", err)
 	}

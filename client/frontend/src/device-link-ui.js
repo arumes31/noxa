@@ -1,6 +1,7 @@
 // device-link-ui.js — "PWA / Mobile login": link a phone with a QR
 // code or hidden code, compare the two-digit code, approve, and manage the
 // account's linked devices.
+import { openExternalURL } from "./external-url.js";
 import { closeDialog, confirmDialog, isCurrentServerDialog, mountServerDialog, promptDialog } from "./modal.js";
 import { relativeTime } from "./dm-model.js";
 import { t } from "./i18n.js";
@@ -119,7 +120,7 @@ export function openDeviceLinkDialog({ quickGuide = false, fromHelp = false } = 
             event.preventDefault();
             event.stopPropagation();
             if (!live()) return;
-            void Promise.resolve().then(() => window.runtime.BrowserOpenURL(target.href))
+            void Promise.resolve().then(() => openExternalURL(target.href))
                 .catch(error => { if (live()) v.toast(t("devices.failed", { error: error?.message || String(error) }), "warn"); });
         };
         pwaPane.append(open, el("span", "device-link-pwa-url", target.href));

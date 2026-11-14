@@ -5,8 +5,8 @@
 // this device arrive live or from the server's per-device spool. History
 // is kept in IndexedDB, encrypted with the database key.
 import { Stores, currentFence, deleteKeyIn, getSealed, keys, putSealedIn } from "./db.js";
-import { keyFingerprint, openDM, sealDM, toBase64 } from "./crypto.js";
-import { MAX_LISTED_REVOCATIONS, ed25519FromPEM, mergeRevocationPins, parseKeyRecord, trustedDevices, verifyRevocations, withoutRevokedApprovers, withoutRevokedPins } from "./dm-trust.js";
+import { fromBase64, keyFingerprint, openDM, sealDM, toBase64 } from "./crypto.js";
+import { MAX_LISTED_REVOCATIONS, ed25519FromPEM, keyCertifiesUID, mergeRevocationPins, parseKeyRecord, trustedDevices, verifyRevocations, withoutRevokedApprovers, withoutRevokedPins } from "./dm-trust.js";
 import { Msg } from "./frame.js";
 import { ProtocolError } from "./connection.js";
 import { RATCHET_PROTOCOL, disappearKey } from "./ratchet-consumer.js";
@@ -418,7 +418,11 @@ export class DirectMessages extends EventTarget {
             }
             // After an explicit confirmation only the confirmed identity may be pinned.
             const unconfirmed = !pinned?.signingKey && pinned?.confirmed && pinned.confirmed !== fingerprint;
-            if ((pinned?.signingKey && pinned.signingKey !== signingB64) || unconfirmed) {
+            if (!own && pinned?.signingKey && pinned.signingKey !== signingB64 && keyCertifiesUID(fromBase64(pinned.signingKey), uid)) {
+                // The pinned key derives this uid (key-login account), so any
+                // other key is a substitution: refused without a prompt, the
+                // pin untouched. Trust stays unavailable.
+            } else if ((pinned?.signingKey && pinned.signingKey !== signingB64) || unconfirmed) {
                 entry.trust = Trust.changed;
                 if (own) entry.block = ownRootMismatch();
                 // A changed identity is no longer the one the user verified.
@@ -564,6 +568,8 @@ export class DirectMessages extends EventTarget {
         // Pin exactly the identity the user compared and confirmed, never
         // whatever the server returns on the refresh below.
         if (typeof fingerprint !== "string" || !fingerprint) throw new Error("the confirmed fingerprint is required");
+        const prior = await this.#pin(uid);
+        if (uid !== this.ownUID && prior?.signingKey && keyCertifiesUID(fromBase64(prior.signingKey), uid)) throw new Error("this contact's key is bound to its account and cannot be replaced");
         // The explicit confirmation is stored durably with the (now unpinned)
         // contact: the ratchet consumer applies the reset on its next trust
         // check even if no session is live now or the immediate reset fails.

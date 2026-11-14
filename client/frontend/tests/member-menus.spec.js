@@ -6,6 +6,7 @@ test.beforeEach(async ({ page }) => {
         window.__saved = { language: "en", activation_mode: "ptt", volume: 100, user_volumes: {}, bookmarks: [], onboarding_done: true, alpha_dismissed: "0.5.0-dev+gabc123", chat_max_lines: 200, window_opacity: 100 };
         window.runtime = { EventsOn: (name, fn) => { (window.__events[name] ||= []).push(fn); return () => {}; }, EventsEmit() {}, WindowIsFullscreen: async () => false, BrowserOpenURL: url => window.__links.push(url) };
         window.go = { main: { App: new Proxy({}, { get(_target, method) { return async (...args) => {
+            if (method === "OpenExternalURL") { await window.runtime.BrowserOpenURL(args[0]); return ""; }
             if (method === "GetSettings") return structuredClone(window.__saved);
             if (method === "SaveSettings") { if (window.__saveWait) await window.__saveWait; if (window.__saveFail) return "save failed"; window.__saved = structuredClone(args[0]); return ""; }
             if (method === "MoveClientForTab") { window.__moves.push(args); return window.__moveError || ""; }

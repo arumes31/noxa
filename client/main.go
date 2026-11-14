@@ -53,6 +53,12 @@ func runApp() {
 		return
 	}
 
+	// The legacy compatibility frontend never consumes the reconnect envelope:
+	// its environment forwards it to the successor started through the supervisor.
+	if !(*App)(nil).UpdateStartupPending() {
+		takeLaunchUpdateReconnect()
+	}
+
 	prepareIncomingHandover()
 
 	// Create an instance of the app structure

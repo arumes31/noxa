@@ -1,4 +1,5 @@
 // menu.js — TS3-style menu bar with dropdown menus.
+import { openExternalURL } from "./external-url.js";
 import { isActivationKey, wrappedIndex } from "./a11y.js";
 import { closeDialog, mountDialog } from "./modal.js";
 import { copyToClipboard } from "./clipboard.js";
@@ -216,7 +217,7 @@ function dlgAbout() {
             // browser opening, and the ignored rejection is only a failed
             // hand-off after this dialog has already handled the click.
             void Promise.resolve()
-                .then(() => window.runtime.BrowserOpenURL(link.href))
+                .then(() => openExternalURL(link.href))
                 .catch(() => {});
         };
     }

@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/base64"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -30,13 +29,14 @@ func TestUpdateReconnectDPAPIProtectionAndChainedUpdate(t *testing.T) {
 	previous := startedAfterUpdate
 	startedAfterUpdate = true
 	defer func() { startedAfterUpdate = previous }()
-	t.Setenv(updateReconnectEnv, encrypted)
+	launchUpdateReconnect = encrypted
+	defer func() { launchUpdateReconnect = "" }()
 	a := newTabApp(t)
 	if got := a.PrepareUpdateReconnect(false, false, false); got != "" || a.updateReconnect != encrypted {
 		t.Fatal("chained updater dropped unconsumed reconnect")
 	}
 	a.updateReconnectConsumed = true
-	_ = os.Unsetenv(updateReconnectEnv)
+	launchUpdateReconnect = ""
 	if got := a.PrepareUpdateReconnect(false, false, false); got != "" || a.updateReconnect != "" {
 		t.Fatal("consumed handoff reused")
 	}
