@@ -10,6 +10,7 @@ import { maintainRelay } from "./relay-renewal.js";
 import { manageAvatarPlayback } from "./avatar-playback.js";
 import { closeContextMenu } from "./context-menu.js";
 import { createConnectionOverlay } from "./connection-overlay.js";
+import { createShutdownNotice } from "./shutdown-notice.js";
 import { initializeUpdateTransition, updateStartupBlocked, refreshUpdateTransition } from "./update-transition.js";
 import "./update-transition.css";
 import { stopDisplayCapture } from "./display-capture-lease.js";
@@ -957,6 +958,9 @@ function showReconnectNotice(tabID) {
 // Hints come from every tab, also background ones (tab_shutdown_hint), and
 // expire a few minutes after the announced shutdown.
 const shutdownJitter = new Map(); // tabID -> { seconds, expires }
+// Marks a tab whose server announced a shutdown, so the following drop does not
+// re-announce "connection lost" (the shutdown notice already covered it).
+const shutdownNotice = createShutdownNotice();
 window.runtime.EventsOn("tab_shutdown_hint", hint => {
     const tabID = String(hint?.tab_id || "");
     const seconds = Math.min(60, Math.max(0, Math.round(Number(hint?.reconnect_jitter) || 0)));
@@ -1211,9 +1215,13 @@ window.runtime.EventsOn("disconnected", () => {
     connectionOverlay.lost(state.activeTabID);
     const unexpected = !!state.lastConnect;
     if (unexpected) notePresenceDrop(state);
-    if (unexpected && state.settings?.notify_connection !== false) toast(t("runtime.connectionLost"), "warn", "conn");
-    if (unexpected) playAlert("connection_lost", { delay: 1200 });
-    sysMsg(t("runtime.serverDisconnected"));
+    // A drop the server already announced as a shutdown needs no second
+    // "connection lost" alert: the shutdown notice said it and a reconnect is
+    // scheduled. Suppress the toast and sound (not the overlay/reconnect).
+    const announcedShutdown = shutdownNotice.consume(state.activeTabID);
+    if (unexpected && !announcedShutdown && state.settings?.notify_connection !== false) toast(t("runtime.connectionLost"), "warn", "conn");
+    if (unexpected && !announcedShutdown) playAlert("connection_lost", { delay: 1200 });
+    if (!announcedShutdown) sysMsg(t("runtime.serverDisconnected"));
     // (32/33) whisper state is per-connection: client IDs and the server-side
     // whisper list do not survive a reconnect.
     activeWhisperers.clear();
@@ -1908,6 +1916,8 @@ window.runtime.EventsOn("event", (json) => {
                 ? t("runtime.shutdownScheduledMinutes", { minutes: seconds / 60 })
                 : t("runtime.shutdownScheduledSeconds", { seconds });
             toast(text, "warn", "conn");
+            // The drop is expected until a bit past the announced time.
+            shutdownNotice.announce(state.activeTabID, (seconds + 60) * 1000);
             return;
         }
         case "server_shutdown":
@@ -1915,6 +1925,8 @@ window.runtime.EventsOn("event", (json) => {
                 playAlert("server_shutdown");
                 toast(t("runtime.shutdown"), "warn", "conn");
             }
+            // The socket closes imminently; the following drop is expected.
+            shutdownNotice.announce(state.activeTabID, 30000);
             break;
         case "kicked": {
             const self = d.client_id === state.myClientID;
