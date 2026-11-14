@@ -239,7 +239,10 @@ function showRouteLoadFailure() {
             } }, t("update.reloadPage")))));
 }
 
-const inVoice = () => !!(app.voice?.active || app.calls?.active);
+// Unsent text in any field also holds a quiet reload back, so a draft is never thrown away.
+const hasDraft = () => [...document.querySelectorAll("textarea, input[type=text], input:not([type]), [contenteditable=true]")]
+    .some(field => (field.value ?? field.textContent).trim() !== "");
+const inVoice = () => !!(app.voice?.active || app.calls?.active) || hasDraft();
 
 /** Activates the waiting service worker, then reloads into the new version. */
 async function applyUpdate() {
@@ -262,6 +265,7 @@ async function applyUpdate() {
 const pendingUpdate = updatePolicy({ inVoice, reload: applyUpdate });
 app.addEventListener("voice", () => pendingUpdate.check());
 app.addEventListener("call", () => pendingUpdate.check());
+for (const type of ["input", "focusout", "visibilitychange"]) document.addEventListener(type, () => pendingUpdate.check());
 
 /** A persistent banner with an Update button (tap = activate + reload). */
 function showUpdateBanner(message) {
