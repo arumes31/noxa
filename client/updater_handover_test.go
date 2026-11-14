@@ -565,3 +565,17 @@ func TestHandoverReplacementWaitsBeforeRotatingTheToken(t *testing.T) {
 		t.Fatal("a confirmed commit must allow reconnects")
 	}
 }
+
+func TestAbandonKeepsTheReplacementWhenTheOldProcessIsGone(t *testing.T) {
+	original := showUpdateWindow
+	t.Cleanup(func() { showUpdateWindow = original })
+	shown := 0
+	showUpdateWindow = func(context.Context) { shown++ }
+	h := &incomingUpdateHandover{parentGone: make(chan struct{})}
+	close(h.parentGone)
+	a := &App{ctx: context.Background()}
+	h.abandon(a)
+	if a.quitting.Load() || shown != 1 {
+		t.Fatalf("quitting %v shown %d: with no old process left the replacement must stay open and visible", a.quitting.Load(), shown)
+	}
+}

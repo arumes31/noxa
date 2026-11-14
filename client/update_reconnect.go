@@ -310,6 +310,9 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	committed = true
 	if moved {
 		handover.commit(a)
+		// The commit signal can take a moment: a drop meanwhile must still
+		// lead to the reconnect below.
+		connected = connected && tab.cm.connected()
 	}
 	a.onTabConnected(cm, saved.Bookmark, saved.Addr, saved.Nickname, saved.DisplayName)
 	if !connected {

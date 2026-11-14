@@ -393,6 +393,15 @@ func (h *incomingUpdateHandover) signal(kind byte) error {
 // abandon tells A to keep the session and ends this hidden process.
 func (h *incomingUpdateHandover) abandon(a *App) {
 	h.once.Do(func() {
+		select {
+		case <-h.parentGone:
+			// No old process is left to take the session back: stay open
+			// (visible) for an ordinary reconnect or sign-in.
+			log.Print("update handover: previous process already exited; continuing normally")
+			h.show(a)
+			return
+		default:
+		}
 		if err := h.signal(handoverAbandoned); err != nil {
 			log.Printf("update handover: abandon signal: %v", err)
 		}

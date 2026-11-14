@@ -121,7 +121,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		parked = resumed.parked
 		id.uniqueID = parked.uniqueID
 	}
-	var rejection string
+	var rejection, keptToken string
 	err := s.withRolePolicy(ctx, func(ctx context.Context) error {
 		s.roleMetadataMu.Lock()
 		defer s.roleMetadataMu.Unlock()
@@ -182,6 +182,12 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		client.setIdentity(id.uniqueID, id.nickname, id.userID, id.bot)
 		s.publishAuthenticatedSession(ctx, client, id)
 		s.releaseHandoverSlot(client) // now counted as a session, atomically
+		if token := client.handoverToken(); token != "" && parked != nil {
+			// A handover commit keeps the token both processes hold, and
+			// registers it at once: a failure after publication (or a lost
+			// reply) still leaves the session resumable with it.
+			keptToken = s.resume.reissue(client, id.uniqueID, resumeBinding(id.uniqueID, client.sessionKey()), token)
+		}
 		if parked != nil {
 			s.restoreResumedSession(ctx, client, parked, id.guest)
 			key, _ := client.presenceSessionKey()
@@ -239,10 +245,8 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		Capabilities:       []string{netproto.CapabilityLobbyPrivacy, netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity, netproto.CapabilityHandover},
 	}
 	s.announceClientVersions(&resp)
-	if token := client.handoverToken(); token != "" && parked != nil {
-		// A handover commit keeps the token: the old process and the
-		// replacement both hold it, so a lost commit reply loses nothing.
-		resp.ResumeToken = s.resume.reissue(client, id.uniqueID, resumeBinding(id.uniqueID, client.sessionKey()), token)
+	if keptToken != "" {
+		resp.ResumeToken = keptToken
 	} else {
 		resp.ResumeToken = s.resume.issue(client, id.uniqueID, resumeBinding(id.uniqueID, client.sessionKey()))
 	}

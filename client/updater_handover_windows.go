@@ -23,7 +23,13 @@ func allowUpdateForeground(pid int) {
 func holdUpdateParent() func(context.Context) error {
 	parent, err := openUpdateProcess(updateProcessIdentity{PID: uint32(os.Getppid())}) // #nosec G115 -- OS process IDs fit DWORD.
 	if err != nil {
-		return func(context.Context) error { return err }
+		// Not proof of exit: treat the old process as alive, so the
+		// reconnect gate stays closed until confirmation or its timeout.
+		log.Printf("update handover: cannot watch the previous process: %v", err)
+		return func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}
 	}
 	return func(ctx context.Context) error {
 		defer parent.close()

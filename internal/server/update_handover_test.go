@@ -376,3 +376,22 @@ func TestHandoverReservationsCountEachSessionOnce(t *testing.T) {
 		t.Fatalf("commit next to another pending commit = %+v %v", done, err)
 	}
 }
+
+func TestHandoverStandbyAnswersKeepalives(t *testing.T) {
+	env := startTestEnv(t, nil)
+	defer env.stop()
+	old, first := dialResumable(t, env.addr, userLogin(""))
+	defer func() { _ = old.Close() }()
+	standby, resp := dialHandover(t, env.addr, userLogin(first.ResumeToken))
+	defer func() { _ = standby.Close() }()
+	if !resp.Standby {
+		t.Fatalf("standby reply = %+v", resp)
+	}
+	send(t, standby, netproto.MsgPong, netproto.Pong{})
+	expectSilent(t, standby, "a standby answering a ping")
+	send(t, standby, netproto.MsgHandoverCommit, struct{}{})
+	var done netproto.AuthResponse
+	if err := netproto.Decode(readOfType(t, standby, netproto.MsgAuthResponse), &done); err != nil || !done.OK {
+		t.Fatalf("commit after a pong = %+v %v", done, err)
+	}
+}

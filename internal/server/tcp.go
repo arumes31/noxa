@@ -1247,7 +1247,7 @@ func (s *TCPServer) dispatch(ctx context.Context, client *Client, f *netproto.Fr
 	}
 
 	if !client.isAuthed() && mt != netproto.MsgAuthenticate && mt != netproto.MsgAuthSignature && mt != netproto.MsgPing &&
-		mt != netproto.MsgDeviceRequest && mt != netproto.MsgHandoverCommit {
+		mt != netproto.MsgDeviceRequest && mt != netproto.MsgHandoverCommit && mt != netproto.MsgPong {
 		return s.sendErrorFor(client, mt, errCodeNotAuthenticated, "not authenticated")
 	}
 	if client.isAuthed() && !client.requestBudget.allow(mt, time.Now()) {
