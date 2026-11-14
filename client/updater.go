@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,6 +23,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"noxa/internal/updatemanifest"
+	"noxa/internal/updatepatch"
 	"noxa/internal/version"
 )
 
@@ -36,6 +38,8 @@ type UpdateInfo struct {
 	SHA256URL    string `json:"sha256url"`
 	SignatureURL string `json:"signatureUrl"`
 	Size         int64  `json:"size"`
+	// patchURL is the delta from the running version, if the release has one.
+	patchURL string
 }
 
 // githubRelease is the subset of the GitHub release API response we use.
@@ -52,6 +56,8 @@ const (
 	clientAssetName        = "noxa-client-windows-amd64.exe"
 	checksumsName          = "checksums.txt"
 	checksumsSignatureName = "checksums.txt.sig"
+	clientPatchPrefix      = "noxa-client-windows-amd64-from-"
+	clientPatchFile        = "client.patch"
 	metadataTimeout        = 10 * time.Second
 	updateTimeout          = 10 * time.Minute
 	maxReleaseMetadata     = 1 << 20
@@ -59,6 +65,14 @@ const (
 	maxSignatureSize       = 16 << 10
 	maxClientAssetSize     = 512 << 20
 )
+
+// currentExecutable is the patch base (overridable in tests).
+var currentExecutable = os.Executable
+
+// clientPatchName is the release asset that patches the running version.
+func clientPatchName() string {
+	return clientPatchPrefix + version.Short() + ".patch"
+}
 
 var updateHTTPClient = &http.Client{
 	Timeout: updateTimeout,
@@ -246,6 +260,8 @@ func checkForUpdateContext(ctx context.Context) (UpdateInfo, error) {
 			info.SHA256URL = asset.URL
 		case checksumsSignatureName:
 			info.SignatureURL = asset.URL
+		case clientPatchName():
+			info.patchURL = asset.URL
 		}
 	}
 	if info.URL == "" {
@@ -264,6 +280,9 @@ func checkForUpdateContext(ctx context.Context) (UpdateInfo, error) {
 		if _, err := parseUpdateURL(rawURL); err != nil {
 			return UpdateInfo{}, fmt.Errorf("release %s has unsafe asset URL: %w", rel.TagName, err)
 		}
+	}
+	if _, err := parseUpdateURL(info.patchURL); err != nil {
+		info.patchURL = "" // the full download stays available
 	}
 	return info, nil
 }
@@ -408,6 +427,73 @@ func verifyChecksum(root *os.Root, fileName, checksumsText, assetName string) er
 	return nil
 }
 
+// manifestChecksum returns the SHA-256 listed for assetName, or "".
+func manifestChecksum(checksumsText, assetName string) string {
+	for _, line := range strings.Split(checksumsText, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[1] == assetName {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
+// downloadClientAsset stores the new client as clientAssetName in root. It
+// prefers a signed delta patch from the running version and falls back to the
+// full executable on any patch failure, so every version can still update.
+func downloadClientAsset(ctx context.Context, root *os.Root, info UpdateInfo, sums string, onProgress func(updateProgress)) error {
+	if info.patchURL != "" && manifestChecksum(sums, clientPatchName()) != "" {
+		err := downloadPatchedClient(ctx, root, info, sums, onProgress)
+		if err == nil || ctx.Err() != nil {
+			return err
+		}
+		log.Printf("delta update failed, downloading the full client: %v", err)
+		_ = root.Remove(clientAssetName)
+	}
+	return downloadTo(ctx, info.URL, root, clientAssetName, maxClientAssetSize, onProgress)
+}
+
+// downloadPatchedClient rebuilds the new client from the running executable.
+// Both the patch and its output must match the signed manifest.
+func downloadPatchedClient(ctx context.Context, root *os.Root, info UpdateInfo, sums string, onProgress func(updateProgress)) error {
+	// A patch larger than the full executable would save nothing.
+	if err := downloadTo(ctx, info.patchURL, root, clientPatchFile, info.Size, onProgress); err != nil {
+		return err
+	}
+	if err := verifyChecksum(root, clientPatchFile, sums, clientPatchName()); err != nil {
+		return fmt.Errorf("patch: %w", err)
+	}
+	exe, err := currentExecutable()
+	if err != nil {
+		return err
+	}
+	base, err := os.Open(exe) // #nosec G304 -- the running executable, not user input
+	if err != nil {
+		return err
+	}
+	baseBytes, err := readLimited(base, updatepatch.MaxFileSize)
+	_ = base.Close()
+	if err != nil {
+		return fmt.Errorf("read running executable: %w", err)
+	}
+	patch, err := root.Open(clientPatchFile)
+	if err != nil {
+		return err
+	}
+	patched, err := updatepatch.Apply(baseBytes, patch, maxClientAssetSize)
+	_ = patch.Close()
+	if err != nil {
+		return err
+	}
+	if err := root.WriteFile(clientAssetName, patched, 0o600); err != nil {
+		return err
+	}
+	if err := verifyChecksum(root, clientAssetName, sums, clientAssetName); err != nil {
+		return fmt.Errorf("patched client: %w", err)
+	}
+	return nil
+}
+
 // DownloadAndApply downloads the update asset, verifies its checksum, and
 // self-applies it (renaming the running exe via minio/selfupdate). It emits
 // update_progress events with percentage and transfer-rate details. Returns ""
@@ -464,7 +550,7 @@ func (a *App) DownloadAndApply(info UpdateInfo) (result string) {
 	if err := verifySignedManifest(sums, signature, info.Version); err != nil {
 		return "update rejected: " + err.Error()
 	}
-	if err := downloadTo(ctx, info.URL, tmpRoot, clientAssetName, maxClientAssetSize, a.emitUpdateProgress); err != nil {
+	if err := downloadClientAsset(ctx, tmpRoot, info, string(sums), a.emitUpdateProgress); err != nil {
 		return err.Error()
 	}
 	if err := a.updatePhase(ctx, "verifying"); err != nil {
