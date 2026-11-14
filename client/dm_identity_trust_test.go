@@ -155,3 +155,39 @@ func TestDelayedDirectoryRecordKeepsOriginalTrustNamespace(t *testing.T) {
 		t.Fatal("original trust namespace lost", err)
 	}
 }
+
+// A contact whose unique ID is derived from its pinned signing key cannot be
+// given another key: no prompt, no pending change, the pin stays usable.
+func TestKeyDerivedContactRefusesSubstitutedKey(t *testing.T) {
+	cm := newTestConnManager()
+	cm.id = mustTempIdentity(t)
+	cm.addr = "trust-test.invalid:9987"
+	pub, _ := genPair(t)
+	owner := mustTempIdentity(t)
+	uid, err := auth.UniqueIDFromPublicKey(owner.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	genuine := signedTestRecord(t, uid, pub, owner)
+	forged := signedTestRecord(t, uid, pub, mustTempIdentity(t))
+	if _, err := cm.verifyPeerRecord(uid, genuine, false); err != nil {
+		t.Fatal(err)
+	}
+	cm.confirmPeerChange = func(string, string, string, string) bool {
+		t.Fatal("a substituted key reached the confirmation prompt")
+		return true
+	}
+	if _, err := cm.verifyPeerRecord(uid, forged, true); !errors.Is(err, errDMIdentitySubstituted) {
+		t.Fatal("substituted key not refused", err)
+	}
+	if _, err := cm.verifyPeerRecord(uid, genuine, false); err != nil {
+		t.Fatal("refused substitution blocked the genuine key", err)
+	}
+	// A password-account style uid (not derived from the key) keeps TOFU plus confirmation.
+	if _, err := cm.verifyPeerRecord("password-peer", signedTestRecord(t, "password-peer", pub, owner), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cm.verifyPeerRecord("password-peer", signedTestRecord(t, "password-peer", pub, mustTempIdentity(t)), false); !errors.Is(err, errDMIdentityChanged) {
+		t.Fatal("password account change not routed to confirmation", err)
+	}
+}

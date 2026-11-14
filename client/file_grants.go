@@ -259,6 +259,14 @@ func (d *downloadDestination) checkDestination() error {
 var linkDownloadPart = func(root *os.Root, part, dest string) error { return root.Link(part, dest) }
 
 func (d *downloadDestination) finalize() error {
+	if err := d.publish(); err != nil {
+		return err
+	}
+	markDownloaded(filepath.Join(d.root.Name(), d.leaf))
+	return nil
+}
+
+func (d *downloadDestination) publish() error {
 	if err := d.checkDestination(); err != nil {
 		return err
 	}

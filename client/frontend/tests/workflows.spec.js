@@ -6150,6 +6150,7 @@ test.beforeEach(async ({ page }) => {
         const app = new Proxy({}, {
             get(_target, nativeMethod) {
                 if (nativeMethod === "UploadChatAttachmentProgressForTab") return undefined;
+                if (nativeMethod === "OpenExternalURL") return async url => { await window.runtime.BrowserOpenURL(url); return ""; };
                 // The production send entry: routed through window.go.main.App to
                 // the SendChat/SendChatReply handlers (so per-suite proxies see
                 // it), recording the stable operation ID of every call.

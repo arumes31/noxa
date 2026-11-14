@@ -100,7 +100,7 @@ const rules = md.renderer.rules;
 rules.text = (tokens, i) => escapeHTML(tokens[i].content).replace(/:([a-z0-9_+-]+):/gi, (m, name) => EMOJI[name.toLowerCase()] || m);
 rules.code_inline = (tokens, i) => `<code class="md-code">${escapeHTML(tokens[i].content)}</code>`;
 rules.fence = (tokens, i) => codeBlock(tokens[i].content, tokens[i].info.trim());
-// Opening happens via click delegation (runtime.BrowserOpenURL) in chat-ui.js
+// Opening happens via click delegation (openExternalURL) in chat-ui.js
 // — never via a raw href navigation inside the webview. Link titles are
 // dropped: the tooltip always shows the real target.
 rules.link_open = (tokens, i) => {

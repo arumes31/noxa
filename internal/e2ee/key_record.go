@@ -82,3 +82,17 @@ func (r KeyRecord) Fingerprint() string {
 	h := sha256.Sum256(r.SigningKey)
 	return hex.EncodeToString(h[:])
 }
+
+// FingerprintCertifiesUID reports whether uid is the key-derived unique ID
+// (auth.UniqueIDFromPublicKey: base64(base64(sha256(key)))) of the signing key
+// with this Fingerprint. Such a uid is bound to that key: no other key can
+// ever speak for it, so a different key for it is a substitution, not a
+// legitimate change. Password accounts also carry uids of this shape (from a
+// discarded server key), so the shape alone proves nothing.
+func FingerprintCertifiesUID(fingerprint, uid string) bool {
+	sum, err := hex.DecodeString(fingerprint)
+	if err != nil || len(sum) != sha256.Size {
+		return false
+	}
+	return base64.StdEncoding.EncodeToString([]byte(base64.StdEncoding.EncodeToString(sum))) == uid
+}

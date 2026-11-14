@@ -1,3 +1,4 @@
+import { openExternalURL } from "./external-url.js";
 import { blockedPreviewPlaceholder, resolvePreviewImage } from "./preview-source-policy.js";
 import { t } from "./i18n.js";
 import { loadPreviewMetadata } from "./preview-metadata.js";
@@ -82,7 +83,7 @@ export function renderYouTubePreviews(container, { enabled, scope, isCurrent, co
         queueMicrotask(() => { void load(); });
         card.onclick = () => {
             if (!card.isConnected || !isCurrent()) return;
-            Promise.resolve().then(() => window.runtime.BrowserOpenURL(video.url)).catch(() => {
+            Promise.resolve().then(() => openExternalURL(video.url)).catch(() => {
                 if (isCurrent()) window.__noxa.toast(t("midnight.videoOpenFailed"), "warn");
             });
         };

@@ -98,6 +98,11 @@ func TestDecryptedDMRetainsScopeAndUsesRecipientForOwnEcho(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A second box: the receiver drops a replay of one it already showed.
+	again, err := alpha.encryptChat("direct", "bravo", "private Grüße 🌿")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name      string
 		manager   *connManager
@@ -107,7 +112,7 @@ func TestDecryptedDMRetainsScopeAndUsesRecipientForOwnEcho(t *testing.T) {
 	}{
 		{name: "receiver", manager: bravo, cipher: message.Text, recipient: "bravo", verified: true},
 		{name: "sender echo", manager: alpha, cipher: message.Text, recipient: "bravo", verified: true},
-		{name: "legacy incoming scope", manager: bravo, cipher: message.Text, verified: true},
+		{name: "legacy incoming scope", manager: bravo, cipher: again.Text, verified: true},
 		{name: "legacy echo cannot verify without recipient", manager: alpha, cipher: message.Text},
 		{name: "corrupt incoming remains private", manager: bravo, cipher: "corrupt", recipient: "bravo"},
 	} {

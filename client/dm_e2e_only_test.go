@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"noxa/internal/netproto"
 )
@@ -103,10 +102,10 @@ func TestStaleKeyRetryNeverFallsBack(t *testing.T) {
 	}
 }
 
-// TestServerSealedDMIsAlwaysDowngraded: this client never sends a DM sealed
-// with the server-held key, so every such DM (from anyone, or an own echo) is
-// shown with its body but unverified under the "downgraded" warning.
-func TestServerSealedDMIsAlwaysDowngraded(t *testing.T) {
+// TestServerSealedDMIsDropped: this client never sends a DM sealed with the
+// server-held key, so every such DM (from anyone, or an own echo) is dropped
+// before it can reach a DM thread, whether or not its generation is known.
+func TestServerSealedDMIsDropped(t *testing.T) {
 	cm := newTestConnManager()
 	cm.uniqueID = "me"
 	globalKey := [32]byte{5}
@@ -119,77 +118,15 @@ func TestServerSealedDMIsAlwaysDowngraded(t *testing.T) {
 		{Direct: true, FromUniqueID: "stranger", ToUniqueID: "me", Text: blob, Enc: true, KeyID: 9},
 		{Direct: true, FromUniqueID: "friend", ToUniqueID: "me", Text: blob, Enc: true, KeyID: 9, EncVerified: true, EncMode: "server"},
 		{Direct: true, FromUniqueID: "me", ToUniqueID: "friend", Text: blob, Enc: true, KeyID: 9},
+		{Direct: true, FromUniqueID: "friend", ToUniqueID: "me", Text: blob, Enc: true, KeyID: 11},
 	} {
-		data := presentedChat(t, cm, chat)
-		if data["enc_verified"] != nil || data["enc_mode"] != "downgraded" || data["direct"] != true || data["text"] != "dm" {
-			t.Fatalf("server-sealed DM %s→%s = %+v", chat.FromUniqueID, chat.ToUniqueID, data)
+		payload, err := json.Marshal(map[string]any{"type": "chat", "data": chat})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-}
-
-// TestServerSealedDMIsDowngradedAfterKeyFetch covers the delayed path: the
-// global generation is unknown when the DM arrives, is pulled, and the
-// re-emitted event is downgraded just like the immediate one.
-func TestServerSealedDMIsDowngradedAfterKeyFetch(t *testing.T) {
-	globalKey := [32]byte{6}
-	var cm *connManager
-	_, cm = newPipedApp(t, func(f *netproto.Frame) (netproto.MessageType, any, bool) {
-		if netproto.MessageType(f.Type) == netproto.MsgChatKeyRequest {
-			cm.scopeKeys.put(0, 11, globalKey)
+		if out := cm.maybeDecryptEvent(string(payload)); out != "" {
+			t.Fatalf("server-sealed DM %s→%s reached the UI: %s", chat.FromUniqueID, chat.ToUniqueID, out)
 		}
-		return 0, nil, false
-	})
-	sink := make(dmPresentationSink, 16)
-	cm.sink = sink
-	cm.mu.Lock()
-	cm.uniqueID = "me"
-	cm.mu.Unlock()
-	blob, err := sealScope("late dm", globalKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := json.Marshal(map[string]any{"type": "chat", "data": netproto.ChatBroadcast{
-		Direct: true, FromUniqueID: "friend", ToUniqueID: "me", Text: blob, Enc: true, KeyID: 11,
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out := cm.maybeDecryptEvent(string(payload)); out != "" {
-		t.Fatalf("expected a deferred decrypt, got %s", out)
-	}
-	deadline := time.After(5 * time.Second)
-	for {
-		select {
-		case out := <-sink:
-			var event struct {
-				Type string         `json:"type"`
-				Data map[string]any `json:"data"`
-			}
-			if err := json.Unmarshal([]byte(out), &event); err != nil || event.Type != "chat" {
-				continue
-			}
-			if event.Data["enc_verified"] != nil || event.Data["enc_mode"] != "downgraded" || event.Data["direct"] != true || event.Data["text"] != "late dm" {
-				t.Fatalf("delayed server-sealed DM = %+v", event.Data)
-			}
-			return
-		case <-deadline:
-			t.Fatal("no re-emitted chat event")
-		}
-	}
-}
-
-// TestMarkDowngradedDMKeepsPlaceholdersModeless: an unopened body is never
-// labelled downgraded, and marking never verifies anything.
-func TestMarkDowngradedDMKeepsPlaceholdersModeless(t *testing.T) {
-	unopened := netproto.ChatBroadcast{Direct: true, Text: missingKeyText}
-	markDowngradedDM(&unopened)
-	if unopened.EncVerified || unopened.EncMode != "" {
-		t.Fatalf("placeholder marked: %+v", unopened)
-	}
-	opened := netproto.ChatBroadcast{Direct: true, Text: "hi", EncVerified: true, EncMode: "server"}
-	markDowngradedDM(&opened)
-	if opened.EncVerified || opened.EncMode != "downgraded" {
-		t.Fatalf("opened server DM = %+v", opened)
 	}
 }
 

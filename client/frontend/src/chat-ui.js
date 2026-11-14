@@ -1,3 +1,4 @@
+import { openExternalURL } from "./external-url.js";
 import { joinChannelLocally } from "./local-join-intent.js";
 import { applyExpired, applyExpiries, countdownElement, needsStart, openDisappearingDialog, timerFallbackText, timerLabel, timerNotice, updateCountdown } from "./dm-disappearing.js";
 import { openImageEditor } from "./image-editor.js";
@@ -1751,7 +1752,7 @@ export function bindSharedLinks(root) {
         if (!link || !root.contains(link)) return;
         e.preventDefault();
         const url = link.getAttribute("data-url");
-        if (url) window.runtime.BrowserOpenURL(url);
+        if (url) void openExternalURL(url).catch(() => {});
     });
     bindLinkCardHover(root);
 }
@@ -5332,7 +5333,7 @@ function showSearchResults(q, response, scope) {
     });
     overlay.addEventListener("click", event => {
         const link = event.target.closest(".md-link[data-url]");
-        if (link && current()) { event.preventDefault(); window.runtime.BrowserOpenURL(link.dataset.url); }
+        if (link && current()) { event.preventDefault(); void openExternalURL(link.dataset.url).catch(() => {}); }
     });
     searchResultsPanel = overlay;
     mountServerDialog(overlay, { onClose: () => { if (searchResultsPanel === overlay) searchResultsPanel = null; } });
@@ -6319,7 +6320,7 @@ export function initChat() {
         if (link) {
             e.preventDefault();
             const url = link.getAttribute("data-url");
-            if (url) window.runtime.BrowserOpenURL(url);
+            if (url) void openExternalURL(url).catch(() => {});
             return;
         }
         const q = e.target.closest(".msg-quote");

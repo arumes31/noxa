@@ -37,7 +37,9 @@ var updateStartupStability = time.Second
 
 // applyClientUpdate receives only an asset already authenticated by the signed
 // manifest, checksum, and executable-format checks in DownloadAndApply.
-func applyClientUpdate(asset io.Reader) error {
+// signed is the manifest's SHA-256: selfupdate re-checks the bytes it actually
+// installs against it, so a file swapped after verification is never applied.
+func applyClientUpdate(asset io.Reader, signed [sha256.Size]byte) error {
 	if !clientUpdateRecovery.TryLock() {
 		return fmt.Errorf("another update operation is already running")
 	}
@@ -74,7 +76,7 @@ func applyClientUpdate(asset io.Reader) error {
 		return closeErr
 	}
 	newHash := sha256.New()
-	options := selfupdate.Options{TargetPath: exe, OldSavePath: previousPath}
+	options := selfupdate.Options{TargetPath: exe, OldSavePath: previousPath, Checksum: signed[:]}
 	applyErr := selfupdate.Apply(io.TeeReader(asset, newHash), options)
 	applyErr = retryClientUpdateCommit(applyErr, options, oldHash, [sha256.Size]byte(newHash.Sum(nil)))
 	if err := applyErr; err != nil {

@@ -129,18 +129,28 @@ func TestUpdateReconnectRequiresUpdateLaunchAndConsumesOnce(t *testing.T) {
 	defer func() { startedAfterUpdate = previous }()
 	for _, afterUpdate := range []bool{false, true} {
 		startedAfterUpdate = afterUpdate
-		t.Setenv(updateReconnectEnv, "invalid")
+		launchUpdateReconnect = "invalid"
 		a := newTabApp(t)
 		got := a.RestoreUpdateConnection()
 		if got["attempted"] != afterUpdate {
 			t.Fatalf("unexpected restore for update=%v: %v", afterUpdate, got)
 		}
-		if os.Getenv(updateReconnectEnv) != "" {
-			t.Fatal("handoff remained in process environment")
+		if launchUpdateReconnect != "" {
+			t.Fatal("handoff remained after consumption")
 		}
 		if a.RestoreUpdateConnection()["attempted"] != false {
 			t.Fatal("handoff consumed twice")
 		}
+	}
+}
+
+// The envelope leaves the environment at startup, before WebView2 starts.
+func TestLaunchUpdateReconnectLeavesEnvironment(t *testing.T) {
+	defer func() { launchUpdateReconnect = "" }()
+	t.Setenv(updateReconnectEnv, "sealed")
+	takeLaunchUpdateReconnect()
+	if _, present := os.LookupEnv(updateReconnectEnv); present || launchUpdateReconnect != "sealed" {
+		t.Fatal("reconnect envelope stayed inheritable")
 	}
 }
 

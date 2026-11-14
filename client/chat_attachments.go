@@ -439,5 +439,6 @@ func (a *App) saveChatAttachmentAt(cm *connManager, location attachmentLocation,
 	if err := write(dest, plain); err != nil {
 		return "", err
 	}
+	markDownloaded(dest)
 	return dest, nil
 }

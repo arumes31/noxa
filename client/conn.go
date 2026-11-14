@@ -147,6 +147,7 @@ type connManager struct {
 
 	// E2EE chat (wave 4b): peer key cache + per-scope channel keys.
 	pubKeys           *pubKeyCache
+	legacyDMs         legacyDMReplay
 	scopeKeys         *scopeKeyStore
 	confirmPeerChange func(server, uid, oldFingerprint, newFingerprint string) bool
 	decryptSem        chan struct{}
