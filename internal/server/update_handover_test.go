@@ -93,7 +93,7 @@ func TestHandoverStandbyIsInvisibleUntilCommitMovesSessionQuietly(t *testing.T) 
 	if err := netproto.Decode(readOfType(t, standby, netproto.MsgAuthResponse), &done); err != nil {
 		t.Fatal(err)
 	}
-	if !done.OK || !done.Resumed || done.ClientID != first.ClientID || done.ResumeToken == "" || done.ResumeToken == first.ResumeToken {
+	if !done.OK || !done.Resumed || done.ClientID != first.ClientID || done.ResumeToken != first.ResumeToken {
 		t.Fatalf("commit reply = %+v", done)
 	}
 	readOfType(t, standby, netproto.MsgSnapshot)
@@ -293,24 +293,7 @@ func TestHandoverCommitRefusedByAdmissionKeepsOldSession(t *testing.T) {
 	}
 }
 
-// readGoodbye reads conn until a goodbye or the close and returns its reason.
-func readGoodbye(t *testing.T, conn net.Conn) (string, bool) {
-	t.Helper()
-	_ = conn.SetReadDeadline(time.Now().Add(waitDeadline))
-	for {
-		f, err := netproto.ReadFrame(conn)
-		if err != nil {
-			return "", false
-		}
-		if netproto.MessageType(f.Type) == netproto.MsgGoodbye {
-			var goodbye netproto.Goodbye
-			_ = netproto.Decode(f, &goodbye)
-			return goodbye.Reason, true
-		}
-	}
-}
-
-func TestHandoverCommitTellsOldConnectionAndKeepsItsSlot(t *testing.T) {
+func TestHandoverCommitKeepsItsSlotAgainstARacingLogin(t *testing.T) {
 	env := startTestEnvFull(t, nil, func(c *config.Config) { c.MaxClients = 1 })
 	defer env.stop()
 	old, first := dialResumable(t, env.addr, userLogin(""))
@@ -340,20 +323,31 @@ func TestHandoverCommitTellsOldConnectionAndKeepsItsSlot(t *testing.T) {
 	if r := <-raced; r.OK || r.Reason != "server is full" {
 		t.Fatalf("racing login = %+v, want refused as full", r)
 	}
-	if reason, ok := readGoodbye(t, old); !ok || reason != netproto.GoodbyeReasonHandover {
-		t.Fatalf("old connection goodbye = %q %v, want the handover proof", reason, ok)
+	if env.srv.handoverSlots.Load() != 0 {
+		t.Fatal("the reservation outlived the publication")
 	}
-	waitFor(t, "slot reservation released", func() bool { return env.srv.handoverSlots.Load() == 0 })
 }
 
-func TestOrdinaryResumeTakeoverSendsNoHandoverGoodbye(t *testing.T) {
+// A lost commit reply loses nothing: the committed session keeps the token
+// both processes hold, so either can resume it.
+func TestHandoverCommitKeepsTheTokenForAResume(t *testing.T) {
 	env := startTestEnv(t, nil)
 	defer env.stop()
 	old, first := dialResumable(t, env.addr, userLogin(""))
 	defer func() { _ = old.Close() }()
-	resumed, _ := dialResumable(t, env.addr, userLogin(first.ResumeToken))
-	defer func() { _ = resumed.Close() }()
-	if reason, ok := readGoodbye(t, old); ok {
-		t.Fatalf("a plain resume sent goodbye %q", reason)
+	standby, resp := dialHandover(t, env.addr, userLogin(first.ResumeToken))
+	if !resp.Standby {
+		t.Fatalf("standby reply = %+v", resp)
+	}
+	send(t, standby, netproto.MsgHandoverCommit, struct{}{})
+	readOfType(t, standby, netproto.MsgAuthResponse)
+	// Whoever holds the token, the replacement now drops; the pre-commit
+	// token still resumes the session.
+	_ = standby.Close()
+	waitFor(t, "session parked", func() bool { _, ok := env.state.GetClient(first.ClientID); return !ok })
+	back, again := dialResumable(t, env.addr, userLogin(first.ResumeToken))
+	defer func() { _ = back.Close() }()
+	if !again.Resumed || again.ClientID != first.ClientID {
+		t.Fatalf("resume with the pre-commit token = %+v", again)
 	}
 }

@@ -328,4 +328,3 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	}
 	return result
 }
-

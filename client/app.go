@@ -64,11 +64,11 @@ type App struct {
 	// Explicit Quit and update restart bypass close-to-tray.
 	quitting atomic.Bool
 	// update.mu guards the one-shot native restart envelope.
-	updateReconnect         string
+	updateReconnect string
 	// The session captured with updateReconnect and its token: the only one
 	// an update handover may move (protected by update.mu).
-	updateHandoverCM    *connManager
-	updateHandoverToken string
+	updateHandoverCM        *connManager
+	updateHandoverToken     string
 	updateReconnectConsumed bool
 	// closeMu guards the renderer readiness and one pending goodbye handshake.
 	closeMu                 sync.Mutex

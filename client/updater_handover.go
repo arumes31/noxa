@@ -29,16 +29,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
-
-	"noxa/internal/netproto"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 const updateHandoverEnv = "NOXA_UPDATE_HANDOVER"
+
+// updateHandoverSupported: only Windows implements the hidden start, the
+// browser sharing check and the old-process watch a handover relies on.
+// Elsewhere both sides keep the restart. Tests override it.
+var updateHandoverSupported = runtime.GOOS == "windows"
 
 // Handover signals from B to A.
 const (
@@ -80,12 +84,11 @@ var handoverSilence struct {
 	sync.Mutex
 	target   *connManager
 	deferred bool
-	taken    bool
 }
 
 func beginHandoverSilence(target *connManager) {
 	handoverSilence.Lock()
-	handoverSilence.target, handoverSilence.deferred, handoverSilence.taken = target, false, false
+	handoverSilence.target, handoverSilence.deferred = target, false
 	handoverSilence.Unlock()
 }
 
@@ -93,34 +96,11 @@ func beginHandoverSilence(target *connManager) {
 func endHandoverSilence(replay bool) {
 	handoverSilence.Lock()
 	target, deferred := handoverSilence.target, handoverSilence.deferred
-	handoverSilence.target, handoverSilence.deferred, handoverSilence.taken = nil, false, false
+	handoverSilence.target, handoverSilence.deferred = nil, false
 	handoverSilence.Unlock()
 	if replay && deferred {
 		target.emit("disconnected", "")
 	}
-}
-
-// noteHandoverGoodbye records the server's explicit goodbye to the handed-over
-// connection: sent only when a commit moved its session, right before the
-// server closes it. Nothing else (a shutdown, a network loss) counts.
-func noteHandoverGoodbye(m *connManager, f *netproto.Frame) {
-	var goodbye netproto.Goodbye
-	if netproto.Decode(f, &goodbye) != nil || goodbye.Reason != netproto.GoodbyeReasonHandover {
-		return
-	}
-	handoverSilence.Lock()
-	defer handoverSilence.Unlock()
-	if m != nil && m == handoverSilence.target {
-		handoverSilence.taken = true
-	}
-}
-
-// handoverSessionTaken reports whether the server told the handed-over
-// connection that its session moved.
-func handoverSessionTaken() bool {
-	handoverSilence.Lock()
-	defer handoverSilence.Unlock()
-	return handoverSilence.taken
 }
 
 func deferHandoverDisconnect(m *connManager) bool {
@@ -137,7 +117,7 @@ func deferHandoverDisconnect(m *connManager) bool {
 // still connected to a server that supports handover, with the token that
 // travels to the replacement.
 func (a *App) updateHandoverPossible(resume string, cm *connManager, token string) bool {
-	if resume == "" || a.ctx == nil || cm == nil || token == "" || !cm.connected() {
+	if !updateHandoverSupported || resume == "" || a.ctx == nil || cm == nil || token == "" || !cm.connected() {
 		return false
 	}
 	cm.mu.Lock()
@@ -227,29 +207,14 @@ func launchHandoverClient(exe string, onCommitting func(pid int)) (moved, fallba
 	}
 	ctx, cancelHandover := context.WithTimeout(context.Background(), updateHandoverWait)
 	defer cancelHandover()
-	switch serveUpdateHandover(ctx, readiness, cmd.Process.Pid, exited, onCommitting) {
-	case handoverMoved:
+	if serveUpdateHandover(ctx, readiness, cmd.Process.Pid, exited, onCommitting) {
 		return true, false, nil
-	case handoverUnconfirmed:
-		// The final signal may be lost after a successful commit. Once the
-		// server closed this session's connection, the session lives in the
-		// new process (with the only valid token): leave it running.
-		if handoverSessionTaken() {
-			log.Print("update handover: no confirmation, but the server moved the session; leaving it to the new process")
-			return true, false, nil
-		}
 	}
+	// Without confirmation the restart is always safe: a commit keeps the
+	// session's token, so the restarted app resumes the session wherever the
+	// server holds it.
 	return stop(errors.New("the updated app did not take over the session"))
 }
-
-// handoverOutcome is how a handover ended for the old process.
-type handoverOutcome int
-
-const (
-	handoverKept        handoverOutcome = iota // abandoned, failed or never committed: keep the session
-	handoverMoved                              // the new process confirmed the move
-	handoverUnconfirmed                        // committing, then no final signal before the deadline
-)
 
 type handoverSignal struct {
 	kind    byte
@@ -259,10 +224,10 @@ type handoverSignal struct {
 // serveUpdateHandover accepts the child's signals until a final one, the
 // child's exit or ctx's end. A signal is acknowledged only after it was
 // handled, so the child commits only once this process is silent.
-func serveUpdateHandover(ctx context.Context, r *updateReadiness, childPID int, exited <-chan error, onCommitting func(pid int)) handoverOutcome {
+func serveUpdateHandover(ctx context.Context, r *updateReadiness, childPID int, exited <-chan error, onCommitting func(pid int)) bool {
 	nonce, err := hex.DecodeString(r.nonce)
 	if err != nil {
-		return handoverKept
+		return false
 	}
 	stop := context.AfterFunc(ctx, r.close)
 	defer stop()
@@ -283,14 +248,11 @@ func serveUpdateHandover(ctx context.Context, r *updateReadiness, childPID int, 
 	for {
 		select {
 		case <-ctx.Done():
-			if committing {
-				return handoverUnconfirmed
-			}
-			return handoverKept
+			return false
 		case <-exited:
-			return handoverKept
+			return false
 		case signal := <-signals:
-			outcome, final := handoverKept, false
+			moved, final := false, false
 			switch signal.kind {
 			case handoverCommitting:
 				if !committing {
@@ -298,13 +260,13 @@ func serveUpdateHandover(ctx context.Context, r *updateReadiness, childPID int, 
 					onCommitting(childPID)
 				}
 			case handoverCommitted:
-				outcome, final = handoverMoved, true
+				moved, final = true, true
 			case handoverAbandoned:
 				final = true
 			}
 			close(signal.handled)
 			if final {
-				return outcome
+				return moved
 			}
 		}
 	}
@@ -394,7 +356,7 @@ var incomingHandover = loadIncomingHandover(os.Getenv, startedAfterUpdate)
 func loadIncomingHandover(getenv func(string) string, afterUpdate bool) *incomingUpdateHandover {
 	raw := getenv(updateHandoverEnv)
 	_ = os.Unsetenv(updateHandoverEnv)
-	if raw == "" || !afterUpdate || len(raw) > 4096 {
+	if raw == "" || !afterUpdate || !updateHandoverSupported || len(raw) > 4096 {
 		return nil
 	}
 	var config updateHandoverConfig

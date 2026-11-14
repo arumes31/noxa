@@ -105,6 +105,20 @@ func (r *resumeStore) issue(owner *Client, uniqueID, binding string) string {
 	if _, err := rand.Read(token[:]); err != nil {
 		return ""
 	}
+	return r.issueToken(owner, uniqueID, binding, token)
+}
+
+// reissue gives owner the presented token again (an update handover commit:
+// both processes hold it, so whichever survives a lost reply can resume).
+func (r *resumeStore) reissue(owner *Client, uniqueID, binding, presented string) string {
+	raw, err := base64.RawURLEncoding.DecodeString(presented)
+	if err != nil || len(raw) != 32 {
+		return r.issue(owner, uniqueID, binding)
+	}
+	return r.issueToken(owner, uniqueID, binding, [32]byte(raw))
+}
+
+func (r *resumeStore) issueToken(owner *Client, uniqueID, binding string, token [32]byte) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.byHash == nil {
@@ -322,9 +336,6 @@ func (s *TCPServer) claimResume(ctx context.Context, client *Client, uniqueID st
 	// A no-op for a session that already departed; a still open one closes
 	// silently and parks for this resume.
 	owner.resumeTakeover.Store(true)
-	if client.handoverCommitting() {
-		s.sendHandoverGoodbye(owner)
-	}
 	_ = owner.Conn.Close()
 	if owner.gone != nil {
 		timer := time.NewTimer(resumeTakeoverWait)

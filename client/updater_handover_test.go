@@ -28,8 +28,8 @@ func handoverChannel(t *testing.T) *updateReadiness {
 	return r
 }
 
-func serveAsync(ctx context.Context, r *updateReadiness, pid int, exited <-chan error, committing *atomic.Int32) <-chan handoverOutcome {
-	result := make(chan handoverOutcome, 1)
+func serveAsync(ctx context.Context, r *updateReadiness, pid int, exited <-chan error, committing *atomic.Int32) <-chan bool {
+	result := make(chan bool, 1)
 	go func() {
 		result <- serveUpdateHandover(ctx, r, pid, exited, func(got int) {
 			time.Sleep(50 * time.Millisecond) // the acknowledgement must wait for this
@@ -74,7 +74,7 @@ func TestUpdateHandoverCommitSilencesThenMoves(t *testing.T) {
 			t.Fatalf("signal %d: %v", kind, err)
 		}
 	}
-	if <-result != handoverMoved {
+	if !<-result {
 		t.Fatal("a committed handover did not move the session")
 	}
 	if committing.Load() != 1 {
@@ -92,26 +92,26 @@ func TestUpdateHandoverAbandonTimeoutAndExitKeepSession(t *testing.T) {
 	if err := sendUpdateHandoverSignal(r.address(), r.nonce, 7, handoverAbandoned); err != nil {
 		t.Fatal(err)
 	}
-	if <-result != handoverKept {
+	if <-result {
 		t.Fatal("an abandoned handover moved the session")
 	}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
-	if <-serveAsync(ctx, handoverChannel(t), 7, nil, &committing) != handoverKept {
+	if <-serveAsync(ctx, handoverChannel(t), 7, nil, &committing) {
 		t.Fatal("a silent child moved the session")
 	}
 
 	exited := make(chan error, 1)
 	exited <- errors.New("crashed")
-	if <-serveAsync(t.Context(), handoverChannel(t), 7, exited, &committing) != handoverKept {
+	if <-serveAsync(t.Context(), handoverChannel(t), 7, exited, &committing) {
 		t.Fatal("an exited child moved the session")
 	}
 }
 
-// A lost final signal after "committing" is reported as unconfirmed; the
-// launcher then keeps the new process if the server moved the session.
-func TestUpdateHandoverLostConfirmationIsUnconfirmed(t *testing.T) {
+// A lost final signal after "committing" is no move: the old process restarts,
+// which is safe because a commit keeps the session's token.
+func TestUpdateHandoverLostConfirmationRestarts(t *testing.T) {
 	var committing atomic.Int32
 	r := handoverChannel(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
@@ -120,38 +120,13 @@ func TestUpdateHandoverLostConfirmationIsUnconfirmed(t *testing.T) {
 	if err := sendUpdateHandoverSignal(r.address(), r.nonce, 9, handoverCommitting); err != nil {
 		t.Fatal(err)
 	}
-	if <-result != handoverUnconfirmed {
-		t.Fatal("a commit without confirmation must stay undecided")
-	}
-
-	// Only the server's explicit handover goodbye to the handed-over
-	// connection is evidence: not a plain goodbye, not another tab's.
-	goodbye := func(reason string) *netproto.Frame {
-		f, err := netproto.Encode(netproto.MsgGoodbye, netproto.Goodbye{Reason: reason})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return f
-	}
-	target, other := &connManager{sink: &eventRecorder{}}, &connManager{sink: &eventRecorder{}}
-	beginHandoverSilence(target)
-	other.dispatch(goodbye(netproto.GoodbyeReasonHandover))
-	target.dispatch(goodbye(""))
-	target.dispatch(goodbye(netproto.GoodbyeReasonUpdate))
-	if handoverSessionTaken() {
-		t.Fatal("another tab's goodbye or a plain one counted as a takeover")
-	}
-	target.dispatch(goodbye(netproto.GoodbyeReasonHandover))
-	if !handoverSessionTaken() {
-		t.Fatal("the server's handover goodbye means the session moved")
-	}
-	endHandoverSilence(false)
-	if handoverSessionTaken() {
-		t.Fatal("takeover evidence outlived its handover")
+	if <-result {
+		t.Fatal("an unconfirmed commit counted as a move")
 	}
 }
 
 func TestIncomingHandoverConfiguration(t *testing.T) {
+	enableHandover(t)
 	valid := `{"version":1,"previous":"C:\\noxa\\.noxa-previous-1.exe","old_hash":"` + string(make64('a')) + `","browser_args":"--x"}`
 	env := map[string]string{updateHandoverEnv: valid, updateReadyAddressEnv: "127.0.0.1:1", updateReadyNonceEnv: "ab"}
 	getenv := func(key string) string { return env[key] }
@@ -209,7 +184,31 @@ func TestHandoverSilenceDefersAndReplaysDisconnect(t *testing.T) {
 	}
 }
 
+func enableHandover(t *testing.T) {
+	t.Helper()
+	original := updateHandoverSupported
+	updateHandoverSupported = true
+	t.Cleanup(func() { updateHandoverSupported = original })
+}
+
+func TestHandoverIsDisabledWithoutPlatformSupport(t *testing.T) {
+	original := updateHandoverSupported
+	updateHandoverSupported = false
+	t.Cleanup(func() { updateHandoverSupported = original })
+	env := map[string]string{updateHandoverEnv: `{"version":1,"old_hash":"` + string(make64('a')) + `"}`}
+	if loadIncomingHandover(func(k string) string { return env[k] }, true) != nil {
+		t.Fatal("a handover started hidden where the old process cannot be watched")
+	}
+	client, server := net.Pipe()
+	defer func() { _ = client.Close(); _ = server.Close() }()
+	cm := &connManager{conn: client, supportsHandover: true, resumeToken: "t"}
+	if (&App{ctx: context.Background()}).updateHandoverPossible("saved", cm, "t") {
+		t.Fatal("the old process offered a handover without platform support")
+	}
+}
+
 func TestApplyAndRestartHandsOverOrFallsBack(t *testing.T) {
+	enableHandover(t)
 	originalLaunch, originalQuit, originalHandover := restartLaunch, wailsQuit, handOverSession
 	t.Cleanup(func() { restartLaunch, wailsQuit, handOverSession = originalLaunch, originalQuit, originalHandover })
 	client, server := net.Pipe()
@@ -267,7 +266,7 @@ func TestApplyAndRestartHandsOverOrFallsBack(t *testing.T) {
 
 // standbyServer answers a handover login with a standby and the commit with
 // the resumed session.
-func standbyServer(t *testing.T) (string, <-chan netproto.Authenticate, <-chan struct{}) {
+func standbyServer(t *testing.T, replyLost bool) (string, <-chan netproto.Authenticate, <-chan struct{}) {
 	t.Helper()
 	cert, _, err := tlscert.Ensure(t.TempDir(), "", "", nil)
 	if err != nil {
@@ -304,7 +303,10 @@ func standbyServer(t *testing.T) (string, <-chan netproto.Authenticate, <-chan s
 			}
 			if netproto.MessageType(frame.Type) == netproto.MsgHandoverCommit {
 				commits <- struct{}{}
-				write(conn, netproto.AuthResponse{OK: true, Resumed: true, ClientID: "c-1", UniqueID: "u", ResumeToken: "rotated"})
+				if replyLost {
+					return // the commit reply never arrives
+				}
+				write(conn, netproto.AuthResponse{OK: true, Resumed: true, ClientID: "c-1", UniqueID: "u", ResumeToken: "token"})
 			}
 		}
 	}()
@@ -312,38 +314,49 @@ func standbyServer(t *testing.T) (string, <-chan netproto.Authenticate, <-chan s
 }
 
 func TestHandoverLoginCommitsOnlyAfterTheOldProcessAgrees(t *testing.T) {
-	for _, agree := range []bool{true, false} {
-		addr, requests, commits := standbyServer(t)
+	for _, mode := range []string{"agree", "refuse", "reply lost"} {
+		addr, requests, commits := standbyServer(t, mode == "reply lost")
 		cm := newConnManager(t.Context())
 		cm.sink = &eventRecorder{}
 		cm.id = mustTempIdentity(t)
 		cm.resumeToken = "token"
 		asked := 0
-		cm.handoverBegin = func() bool { asked++; return agree }
+		cm.handoverBegin = func() bool { asked++; return mode != "refuse" }
 		failure := cm.connectNamed(addr, "owner", "", "pw", "")
 		request := <-requests
 		if !request.Handover || !slices.Contains(request.ClientFeatures, netproto.ClientFeatureHandover) || request.ResumeToken != "token" {
-			t.Fatalf("handover login = %+v", request)
+			t.Fatalf("%s: handover login = %+v", mode, request)
 		}
-		if asked != 1 {
-			t.Fatalf("old process asked %d times", asked)
+		cm.mu.Lock()
+		begin, committed, token := cm.handoverBegin, cm.handoverCommitted, cm.resumeToken
+		cm.mu.Unlock()
+		if asked != 1 || begin != nil {
+			t.Fatalf("%s: old process asked %d times; the hook must be used once", mode, asked)
 		}
-		if agree {
-			if failure != "" {
-				t.Fatal(failure)
+		switch mode {
+		case "agree":
+			if failure != "" || !committed {
+				t.Fatalf("agree: %q committed %v", failure, committed)
 			}
 			<-commits
-			if cm.clientIDSnapshot() != "c-1" || cm.resumeTokenSnapshot() != "rotated" {
+			if cm.clientIDSnapshot() != "c-1" || token != "token" {
 				t.Fatal("the committed session was not installed")
 			}
-		} else {
-			if failure == "" {
-				t.Fatal("a refused handover connected")
+		case "refuse":
+			if failure == "" || committed {
+				t.Fatal("a refused handover connected or counted as committed")
 			}
 			select {
 			case <-commits:
 				t.Fatal("committed without the old process's agreement")
 			case <-time.After(100 * time.Millisecond):
+			}
+		case "reply lost":
+			<-commits
+			// The commit was sent: the session may live here now, under the
+			// token both processes hold. It must never be handed back.
+			if failure == "" || !committed || token != "token" {
+				t.Fatalf("reply lost: %q committed %v token %q", failure, committed, token)
 			}
 		}
 		cm.disconnect()
@@ -384,7 +397,7 @@ func TestHandoverWindowAppearsWhenOldProcessExits(t *testing.T) {
 
 // commitThenDropServer commits a standby login, then drops the connection
 // when the restored client rejoins its channel. It reports any goodbye.
-func commitThenDropServer(t *testing.T, badLimits bool) (string, *atomic.Bool) {
+func commitThenDropServer(t *testing.T, mode string) (string, *atomic.Bool) {
 	t.Helper()
 	cert, _, err := tlscert.Ensure(t.TempDir(), "", "", nil)
 	if err != nil {
@@ -418,8 +431,11 @@ func commitThenDropServer(t *testing.T, badLimits bool) (string, *atomic.Bool) {
 			}
 			switch netproto.MessageType(frame.Type) {
 			case netproto.MsgHandoverCommit:
+				if mode == "reply lost" {
+					return // the server committed, but its reply never arrives
+				}
 				done := netproto.AuthResponse{OK: true, Resumed: true, ClientID: "c-1", UniqueID: "u", Nickname: "account", ResumeToken: "rotated"}
-				if badLimits {
+				if mode == "setup failed after commit" {
 					done.MediaLimitsRevision = 5 // fails the client's setup after the commit
 				}
 				write(conn, done)
@@ -434,14 +450,12 @@ func commitThenDropServer(t *testing.T, badLimits bool) (string, *atomic.Bool) {
 }
 
 func TestHandoverKeepsMovedSessionWhenRestorationLosesConnection(t *testing.T) {
-	for _, badLimits := range []bool{false, true} {
-		t.Run(map[bool]string{false: "dropped at rejoin", true: "setup failed after commit"}[badLimits], func(t *testing.T) {
-			testHandoverKeepsMovedSession(t, badLimits)
-		})
+	for _, mode := range []string{"dropped at rejoin", "setup failed after commit", "reply lost"} {
+		t.Run(mode, func(t *testing.T) { testHandoverKeepsMovedSession(t, mode) })
 	}
 }
 
-func testHandoverKeepsMovedSession(t *testing.T, badLimits bool) {
+func testHandoverKeepsMovedSession(t *testing.T, mode string) {
 	originalShow, originalHandover := showUpdateWindow, incomingHandover
 	t.Cleanup(func() { showUpdateWindow, incomingHandover = originalShow, originalHandover })
 	showUpdateWindow = func(context.Context) {}
@@ -450,7 +464,7 @@ func testHandoverKeepsMovedSession(t *testing.T, badLimits bool) {
 	var committing atomic.Int32
 	outcome := serveAsync(t.Context(), r, os.Getpid(), nil, &committing)
 
-	addr, goodbye := commitThenDropServer(t, badLimits)
+	addr, goodbye := commitThenDropServer(t, mode)
 	a := newTabApp(t)
 	var mu sync.Mutex
 	var events []string
@@ -468,10 +482,14 @@ func testHandoverKeepsMovedSession(t *testing.T, badLimits bool) {
 		t.Fatalf("a moved session was given up: %v", got)
 	}
 	defer a.CloseTab(tabID)
-	if waitReconnect(t, outcome) != handoverMoved {
+	if !waitReconnect(t, outcome) {
 		t.Fatal("the old process was not released")
 	}
-	if a.activeID != tabID || a.tabs[tabID].cm.resumeTokenSnapshot() != "rotated" {
+	wantToken := "rotated"
+	if mode == "reply lost" {
+		wantToken = "token" // the pre-commit token the server keeps
+	}
+	if a.activeID != tabID || a.tabs[tabID].cm.resumeTokenSnapshot() != wantToken {
 		t.Fatal("the restored tab must stay selected with the rotated token for its resume")
 	}
 	deadline := time.Now().Add(2 * time.Second)

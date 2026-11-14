@@ -185,6 +185,7 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		}
 		client.setIdentity(id.uniqueID, id.nickname, id.userID, id.bot)
 		s.publishAuthenticatedSession(ctx, client, id)
+		s.releaseHandoverSlot(client) // now counted as a session, atomically
 		if parked != nil {
 			s.restoreResumedSession(ctx, client, parked, id.guest)
 			key, _ := client.presenceSessionKey()
@@ -242,7 +243,13 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		Capabilities:       []string{netproto.CapabilityLobbyPrivacy, netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity, netproto.CapabilityHandover},
 	}
 	s.announceClientVersions(&resp)
-	resp.ResumeToken = s.resume.issue(client, id.uniqueID, resumeBinding(id.uniqueID, client.sessionKey()))
+	if token := client.handoverToken(); token != "" && parked != nil {
+		// A handover commit keeps the token: the old process and the
+		// replacement both hold it, so a lost commit reply loses nothing.
+		resp.ResumeToken = s.resume.reissue(client, id.uniqueID, resumeBinding(id.uniqueID, client.sessionKey()), token)
+	} else {
+		resp.ResumeToken = s.resume.issue(client, id.uniqueID, resumeBinding(id.uniqueID, client.sessionKey()))
+	}
 	resp.Resumed = parked != nil
 	if s.deps.Relay != nil {
 		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityManagedRelay)

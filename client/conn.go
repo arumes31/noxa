@@ -95,10 +95,10 @@ type connManager struct {
 	supportsHandover bool
 	// handoverBegin, set only on an update handover login, is called once the
 	// server holds the login in standby; true commits it.
-	handoverBegin       func() bool
+	handoverBegin func() bool
 	// handoverCommitted: the server accepted this login's handover commit, so
 	// the session lives here now even if the connection setup fails later.
-	handoverCommitted bool
+	handoverCommitted   bool
 	uniqueID            string
 	deviceID            string              // linked device of this session (devices_v1)
 	callMediaCache      callMediaStateCache // call state behind call media-key targets (#12)
@@ -569,6 +569,8 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.reconnectTerminal = false
 	authMsg.ResumeToken = m.resumeToken
 	handoverBegin := m.handoverBegin
+	m.handoverBegin = nil // one handover attempt; later logins are ordinary
+	m.handoverCommitted = false
 	m.mu.Unlock()
 	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	authMsg.ClientVersion = version.Short()
@@ -677,6 +679,11 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 				return "update handover cancelled"
 			}
 			committed = true
+			// From here on the session may already live here: never hand it
+			// back, whether or not the reply arrives (its token stays valid).
+			m.mu.Lock()
+			m.handoverCommitted = true
+			m.mu.Unlock()
 			if err := m.writeConn(conn, netproto.MsgHandoverCommit, struct{}{}); err != nil {
 				_ = conn.Close()
 				return err.Error()
@@ -693,7 +700,6 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 			// under it, and a resume needs it.
 			m.mu.Lock()
 			m.resumeToken = resp.ResumeToken
-			m.handoverCommitted = committed
 			m.mu.Unlock()
 		}
 		if resp.OK && resp.MediaLimitsRevision != 0 && !hasCompleteAuthMediaLimits(f) {
@@ -756,7 +762,6 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.addr = addr
 	m.clientID = resp.ClientID
 	m.resumeToken = resp.ResumeToken
-	m.handoverBegin = nil // one handover per login
 	m.uniqueID = resp.UniqueID
 	m.deviceID = resp.DeviceID
 	m.supportsDevices = slices.Contains(resp.Capabilities, netproto.CapabilityDevices)
@@ -1344,10 +1349,6 @@ func (m *connManager) dispatchAccepted(conn net.Conn, epoch uint64, checkSource 
 		if err := netproto.Decode(f, &protocolErr); err != nil {
 			return
 		}
-	}
-	if mt == netproto.MsgGoodbye {
-		noteHandoverGoodbye(m, f) // the server moved this session (update handover)
-		return
 	}
 	if hook := m.beforeDispatchLock; hook != nil {
 		hook()
