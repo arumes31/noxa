@@ -1931,9 +1931,12 @@ window.runtime.EventsOn("event", (json) => {
             if (!actionSoundsSuppressed()) {
                 playAlert("server_shutdown");
                 toast(t("runtime.shutdown"), "warn", "conn");
+                // A live shutdown's socket closes imminently, so the following
+                // drop is expected and needs no second alert. Guarded by the
+                // replay check: a journal replay (tab switch) must not arm a
+                // marker for a connection that already dropped.
+                shutdownNotice.announce(state.activeTabID, 30000);
             }
-            // The socket closes imminently; the following drop is expected.
-            shutdownNotice.announce(state.activeTabID, 30000);
             break;
         case "kicked": {
             const self = d.client_id === state.myClientID;
