@@ -7,7 +7,7 @@ import { installFakeIndexedDB } from "./fake-idb.mjs";
 installFakeIndexedDB();
 const { DirectMessages } = await import("../src/core/direct.js");
 const { generateIdentity } = await import("../src/core/crypto.js");
-const { keyCertifiesUID, signKeyRecord, ed25519FromPEM } = await import("../src/core/dm-trust.js");
+const { keyCertifiesUID, signKeyRecord, ed25519FromPEM } = await import("../src/core/dm-trust.js"); // gitleaks:allow (import name, not a secret)
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/interop.json", import.meta.url)));
 
 const session = uid => Object.assign(new EventTarget(), { conn: { open: true, send() {} }, identity: generateIdentity(), uniqueID: uid, deviceID: uid + "-dev", nickname: uid });
