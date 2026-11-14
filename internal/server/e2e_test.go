@@ -253,7 +253,7 @@ func addKeySession(t *testing.T, env *testEnv, clientID, uid string, userID, cha
 	t.Helper()
 	c := &Client{ID: clientID, Conn: newBlockingTCPConn()}
 	c.setIdentity(uid, uid, userID, false)
-	env.srv.clients[clientID] = c
+	env.srv.register(c) // under the server lock; a bare map write races the serve goroutine (-race)
 	env.state.AddClient(&state.Client{ClientID: clientID, UniqueID: uid, UserID: userID, Nickname: uid})
 	if channelID != 0 {
 		if err := env.state.MoveClient(clientID, channelID); err != nil {

@@ -159,12 +159,15 @@ func (s *TCPServer) lookupSessionKey(ctx context.Context, client *Client, f *net
 
 	// The per-device directory (device count, kinds, per-device keys) is a
 	// fingerprinting surface and is only needed to seal a per-device DM, which
-	// requires the caller to hold a registered device itself. Anonymous guests
-	// (no device) cannot send per-device DMs, so they get the account key only,
-	// never the directory (red-team 2026-11).
+	// requires the caller to hold a registered device itself. A device-less
+	// anonymous guest cannot send per-device DMs, so it gets the account key
+	// only, never the directory (red-team 2026-11). Members always receive it:
+	// a member resolving a contact to DM may issue the lookup before its own
+	// device row is observed on this session, and withholding it then would
+	// break the DM's device trust (untrusted_device).
 	var devices []netproto.DMDevice
 	var revocations []netproto.DeviceRevocation
-	if msg.Devices && client.currentDeviceID() != "" {
+	if msg.Devices && (client.userID() != 0 || client.currentDeviceID() != "") {
 		var err error
 		if devices, err = s.dmDevices(ctx, msg.UniqueID); err != nil {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodeUnavailable, "encryption directory unavailable")
