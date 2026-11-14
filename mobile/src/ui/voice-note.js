@@ -225,7 +225,8 @@ function openRecorder(composerCtx, { hold = false } = {}) {
     };
     const releaseUpdates = holdUpdates();
     view.closed.then(() => {
-        releaseUpdates();
+        // A send in flight keeps the hold until the message is handed off.
+        if (!sending) releaseUpdates();
         closed = true;
         if (recorder && recorder.state !== "inactive") { recorder.onstop = null; recorder.stop(); }
         release();
@@ -264,6 +265,7 @@ function openRecorder(composerCtx, { hold = false } = {}) {
                 send.disabled = false;
             } finally {
                 sending = false;
+                if (closed) releaseUpdates();
             }
         }, "btn-primary");
         actions.replaceChildren(send, button(t("vnote.again"), start), button(t("vnote.discard"), () => view.close(), "btn-danger"));
