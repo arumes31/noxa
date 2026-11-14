@@ -5,7 +5,7 @@ import { combineUnread, descendantUnread } from "./channel-unread.js";
 import { isUserMuted } from "./audio.js";
 import * as chatUI from "./chat-ui.js";
 import { isClientMicrophoneMuted, publishAudioState } from "./audio-state.js";
-import { memberIsInLobby, visibleInChannelTree } from "./member-presence.js";
+import { memberConnecting, memberIsInLobby, visibleInChannelTree } from "./member-presence.js";
 import { createMemberMediaIndicator } from "./member-media-indicator.js";
 import { roleIconElement } from "./role-icons.js";
 import { deniedActionMessage, missingPermissionHint } from "./permission-denied.js";
@@ -430,6 +430,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             c.priority_speaker && t("runtime.priority"),
             c.is_guest === true && t("runtime.guestAccount"),
             c.on_mobile && t("runtime.onMobile"),
+            c.connecting && !c.updating && !c.reconnecting && t("runtime.connectingMember"),
             streamLabel,
             inVoice && c.client_id === state.myClientID && state.muted && t("runtime.muted"),
             c.client_id === state.myClientID && state.deafened && t("runtime.deaf")].filter(Boolean).join(", "));
@@ -456,7 +457,7 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             fetchAvatar(c.unique_id);
         }
         const name = document.createElement("span");
-        name.className = "client-name";
+        name.className = memberConnecting(c) ? "client-name member-connecting" : "client-name";
         const fullName = (c.nickname || c.unique_id) + (c.client_id === state.myClientID ? t("workspace.you") : "");
         name.textContent = fullName;
         // (178) nickname color from the first applicable server group.
@@ -511,13 +512,15 @@ export function createChannelTree({ P, $, syncTrayVoice, state, toast, fetchAvat
             pr.title = t("runtime.priority");
             row.appendChild(pr);
         }
-        // The kept place of a member restarting into an update.
-        if (c.updating) {
-            const updating = document.createElement("span");
-            updating.className = "role-chip group-badge member-updating";
-            updating.textContent = t("runtime.updatingBadge");
-            updating.title = t("runtime.updatingTitle");
-            row.appendChild(updating);
+        // The kept place of a member restarting into an update or whose
+        // connection dropped and may still resume its session.
+        if (c.updating || c.reconnecting) {
+            const kind = c.updating ? "updating" : "reconnecting";
+            const badge = document.createElement("span");
+            badge.className = "role-chip group-badge member-updating";
+            badge.textContent = t(`runtime.${kind}Badge`);
+            badge.title = t(`runtime.${kind}Title`);
+            row.appendChild(badge);
         }
         // Keep the mobile label readable alongside the member role.
         if (c.on_mobile) {

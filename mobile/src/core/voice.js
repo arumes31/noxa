@@ -24,6 +24,14 @@ import { LevelMeter, Mixer, installAudioUnlock } from "./voice-audio.js";
 import { MutedTalkingWarning, PushToTalkLatch, VoiceGate, parseKeyKind, playbackGain } from "./voice-gate.js";
 import { MEDIA_E2EE_VERSION, MEDIA_E2EE_CODEC_VERSION, MediaSession, MediaSessionError } from "./media-e2ee/media-session.js";
 import { MediaKeyStartupInbox } from "./media-e2ee/media-keys.js";
+import { createResumeWatches } from "./stream-resume.js";
+
+// Watches to restore after a session resume (stream_watch_resume); shared by
+// the Voice of the old and of the new session.
+const resumeWatches = createResumeWatches();
+// Failed automatic watches retry a few times, then the hint is dropped.
+const RESUME_WATCH_ATTEMPTS = 3;
+const resumeRetries = new Map();
 
 const MsgChannelJoined = 158;
 const STATS_INTERVAL = 2000;
@@ -1004,6 +1012,10 @@ export class Voice extends EventTarget {
     // --- Server events and statistics ---------------------------------------
 
     #serverEvent({ type, data }) {
+        if (type === "stream_watch_resume") {
+            if (resumeWatches.note(data?.publisher_id, data?.slot)) this.#emit("tracks");
+            return;
+        }
         if (!data?.client_id) return;
         if (type === "priority_speaker_changed") {
             // No snapshot follows this event; update the tree in place.
@@ -1179,7 +1191,37 @@ export class Voice extends EventTarget {
     async streams() {
         const result = await this.conn.request(Msg.VideoStreamControl, { action: "list" }, Msg.VideoStreamResult, { accept: r => r.action === "list" });
         this.#watchSession = String(result.session ?? "0");
+        // A watch held before a session resume restarts through the normal request.
+        for (const stream of result.streams || []) {
+            const key = `${stream.publisher_id}|${stream.slot}`;
+            if (resumeWatches.take(key)) this.#resumeWatch(key, stream);
+        }
         return result.streams || [];
+    }
+
+    /**
+     * Restores one watch a resumed session asked for. A key still selected
+     * (its publisher resumed and republished) is refreshed to the listed
+     * publication. A failure rolls back what it set, unless the user acted in
+     * the meantime, and keeps the hint for a bounded number of retries.
+     */
+    #resumeWatch(key, stream) {
+        const current = this.watched.get(key);
+        if (this.watching.has(key) && current && String(current.generation) === String(stream.generation)) return;
+        const wasWatching = this.watching.has(key), previous = current;
+        const revision = this.#watchRevision + 1;
+        this.watch(stream).then(() => resumeRetries.delete(key)).catch(() => {
+            if (this.#watchRevision === revision) {
+                if (wasWatching) this.watched.set(key, previous);
+                else { this.watching.delete(key); this.watched.delete(key); }
+                this.#emit("tracks");
+            }
+            const attempts = (resumeRetries.get(key) || 0) + 1;
+            if (attempts < RESUME_WATCH_ATTEMPTS && this.#watchRevision === revision) {
+                resumeRetries.set(key, attempts);
+                resumeWatches.note(stream.publisher_id, stream.slot);
+            } else resumeRetries.delete(key);
+        });
     }
 
     /** Starts or stops receiving one published stream. */

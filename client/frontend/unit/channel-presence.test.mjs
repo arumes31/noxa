@@ -132,3 +132,19 @@ test('an updating member keeps its place quietly, returns silently, and expires 
     assert.equal(arrivalCue(false, true), null);
     assert.equal(arrivalCue(true).speechEvent, 'user_reconnected');
 });
+
+test('a reconnecting member shows its own quiet badge and a resume under the same client ID is silent', async () => {
+    const { departureCue } = await import('../src/channel-presence.js');
+    const before = state([member('peer')]);
+    const reconnecting = state([{ ...member('peer'), reconnecting: true }]);
+    assert.deepEqual(changes(before, reconnecting).map(change => [change.kind, change.message, change.soundEvent, change.quiet]),
+        [['reconnecting', 'runtime.reconnectingUser', undefined, true]]);
+    assert.deepEqual(changes(reconnecting, reconnecting), [], 'announced once');
+    assert.deepEqual(changes(state([]), reconnecting), [], 'a kept place is no arrival');
+    assert.deepEqual(changes(reconnecting, state([member('peer')])), [], 'a resume clears the badge without sounds');
+    const updating = state([{ ...member('peer'), updating: true }]);
+    assert.deepEqual(changes(reconnecting, updating).map(change => change.kind), ['updating'], 'the label follows the server');
+    assert.deepEqual(changes(reconnecting, state([])).map(change => change.kind), ['leave'], 'expiry is a plain leave');
+    assert.equal(departureCue('reconnecting').quiet, true);
+    assert.equal(departureCue('reconnecting').soundEvent, undefined);
+});

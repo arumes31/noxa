@@ -67,6 +67,8 @@ func (s *TCPServer) banRoleMember(ctx context.Context, e *authorization.RoleEval
 	for _, c := range sessions {
 		c.revokeSession()
 	}
+	// Parked sessions of the banned account are no longer resumable either.
+	s.resume.revokeAccount(result.UniqueID)
 	var recordings []int64
 	if target.userID() > 0 {
 		s.roleRecordingOwners.Range(func(key, value any) bool {

@@ -872,3 +872,20 @@ func (v *Voice) WhisperTargets(clientID string) []string {
 func (v *Voice) PeerCount() int {
 	return v.engine.PeerCount()
 }
+
+// SetPeerStateHandler reports when a client's peer connection becomes
+// connected (true) or loses its connection (false: disconnected or failed).
+// Install it before the first peer is created; it runs on Pion's callback
+// goroutine and must not block.
+func (v *Voice) SetPeerStateHandler(fn func(clientID string, connected bool)) {
+	v.engine.mu.Lock()
+	defer v.engine.mu.Unlock()
+	v.engine.peerState = func(clientID string, state webrtc.PeerConnectionState) {
+		switch state {
+		case webrtc.PeerConnectionStateConnected:
+			fn(clientID, true)
+		case webrtc.PeerConnectionStateDisconnected, webrtc.PeerConnectionStateFailed:
+			fn(clientID, false)
+		}
+	}
+}

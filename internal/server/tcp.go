@@ -129,6 +129,10 @@ type Client struct {
 	saidGoodbye      atomic.Bool                                 // client sent MsgGoodbye before closing
 	updating         atomic.Bool                                 // that goodbye said the client restarts into an update
 	replaced         atomic.Bool                                 // the same device reconnected on a newer session
+	resumeTakeover   atomic.Bool                                 // a resume of this session is closing it
+	gone             chan struct{}                               // closed once the connection's cleanup finished
+	resumeOffer      string                                      // presented resume token, protected by mu
+	announcesResume  bool                                        // client presents resume tokens, protected by mu
 	announcesGoodbye bool                                        // client sends MsgGoodbye before a deliberate close, protected by mu
 	inputAt          time.Time                                   // last input a desktop reported (activity)
 	webHidden        bool                                        // the web app reported it is in the background
@@ -344,6 +348,10 @@ func (c *Client) takeChallenge(uniqueID string) ([]byte, string, bool) {
 type TCPServer struct {
 	// presence reports dropped connections and reconnects to observers.
 	presence presenceTracker
+	// resume holds the resume tokens and parked sessions (session_resume.go).
+	resume resumeStore
+	// connecting marks members whose voice is still connecting (voice_connecting.go).
+	connecting voiceConnecting
 	// noxa-olm-v1 admission (frame 202), ON by default and advertised as
 	// netproto.CapabilityOlmAdmission whenever the Olm directory is available.
 	olmAdmissionEnabled bool
@@ -551,6 +559,9 @@ func New(cfg *config.Config, logger *zap.Logger, deps *Deps) *TCPServer {
 	if deps != nil && deps.Voice != nil {
 		deps.Voice.SetHandlers(s.canTalk, s.onSpeakingChanged)
 		deps.Voice.SetVideoHandlers(s.canPublishVideo)
+		if states, ok := deps.Voice.(interface{ SetPeerStateHandler(func(string, bool)) }); ok {
+			states.SetPeerStateHandler(s.onPeerState)
+		}
 		if deps.Authority != nil {
 			deps.Voice.SetMediaGuard(s.guardRoleMedia)
 			deps.Voice.SetPublisherGuard(func(webrtc.PublisherAccess) bool { return false })
@@ -1009,6 +1020,7 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 		ID:         newClientID(),
 		Conn:       conn,
 		lastActive: time.Now(),
+		gone:       make(chan struct{}),
 	}
 	client.webTransport.Store(web)
 	var closeReason netproto.ControlCloseReason
@@ -1030,15 +1042,17 @@ func (s *TCPServer) handleConn(ctx context.Context, conn net.Conn) {
 	}()
 	s.register(client)
 	defer func() {
+		// A resume of this session waits for its cleanup before reusing the ID.
+		defer close(client.gone)
 		client.readClose.Store(&closeReason)
 		if s.deps != nil && s.deps.Authority != nil {
 			// Keep the session discoverable until serialized cleanup marks it
 			// revoked; account bans must also find connections already closing.
 			s.onDisconnect(client)
-			s.unregister(client.ID)
+			s.unregisterClient(client)
 			return
 		}
-		s.unregister(client.ID)
+		s.unregisterClient(client)
 		s.onDisconnect(client)
 	}()
 
@@ -1489,6 +1503,8 @@ func (s *TCPServer) onDisconnect(client *Client) {
 		s.deps.Relay.Remove(client.ID)
 	}
 	if !client.needsDisconnectCleanup() || s.deps == nil {
+		// Already removed (a kick or ban cleans up itself): never resumable.
+		s.resume.revoke(client)
 		return
 	}
 	if s.deps.Authority != nil && s.deps.FileTransfer != nil {
@@ -1500,6 +1516,11 @@ func (s *TCPServer) onDisconnect(client *Client) {
 	var channelID int64
 	var wasInvisible bool
 	var alreadyCleaned bool
+	// Revoked before this cleanup (kick, ban, removal, device revocation):
+	// such a session never keeps its place for a resume.
+	revoked := client.sessionRevoked()
+	departure := client.departureReason()
+	kept := false
 	func() {
 		if s.deps.Authority != nil {
 			s.roleMetadataMu.Lock()
@@ -1513,7 +1534,7 @@ func (s *TCPServer) onDisconnect(client *Client) {
 		}
 		if s.deps.Authority != nil {
 			client.revokeSession()
-			s.unregister(client.ID)
+			s.unregisterClient(client)
 		}
 		if s.deps.State != nil {
 			var removed *state.Client
@@ -1528,11 +1549,16 @@ func (s *TCPServer) onDisconnect(client *Client) {
 				// Recorded before the user_left broadcast so its snapshots carry the reason.
 				if key, _ := client.presenceSessionKey(); key != "" {
 					now := time.Now()
-					reason := client.departureReason()
-					s.presence.noteDeparture(client.ID, key, reason, channelID, wasInvisible, now)
-					if reason == netproto.DepartureUpdating {
-						s.presence.noteUpdating(key, updatingGhost(removed), wasInvisible, now)
-						time.AfterFunc(presenceUpdateWindow, func() { s.expireUpdatingDeparture(key, client.ID, client.UniqueID, client.nickname()) })
+					departure = client.departureReason()
+					if reason := s.parkSession(client, removed, departure, revoked, now); reason != "" {
+						departure, kept = reason, true
+					}
+					s.presence.noteDeparture(client.ID, key, departure, channelID, wasInvisible, now)
+					// A session taken over by its own resume needs no kept place.
+					if (departure == netproto.DepartureUpdating || departure == netproto.DepartureReconnecting) && !client.resumeTakeover.Load() {
+						s.presence.noteUpdating(key, updatingGhost(removed), departure, wasInvisible, now)
+						id, uniqueID, nickname := client.ID, client.UniqueID, client.nickname()
+						time.AfterFunc(presenceUpdateWindow, func() { s.expireUpdatingDeparture(key, id, uniqueID, nickname, now) })
 					}
 				}
 			}
@@ -1551,27 +1577,36 @@ func (s *TCPServer) onDisconnect(client *Client) {
 	// that raced the cleanup (no Authority locks) never outlives the session.
 	s.mediaSeats.release(client.ID)
 	if alreadyCleaned {
+		s.resume.revoke(client)
 		return
 	}
+	if !kept {
+		s.resume.revoke(client)
+	}
+	s.forgetVoiceConnecting(client.ID)
 	s.disconnectPrivateCall(client.ID)
 
 	if s.deps.Broadcast != nil {
 		s.deps.Broadcast.Unregister(client.ID)
-		if wasInvisible {
+		// A session taken over by its resume continues at once under the same
+		// client ID, so its departure stays silent.
+		switch {
+		case client.resumeTakeover.Load():
+		case wasInvisible:
 			// Invisible users were never visible to non-admins; their leave
 			// is admin-only too (381).
 			s.broadcastToAdmins(eventUserLeft, userEvent{
 				ClientID: client.ID,
 				UniqueID: client.UniqueID,
 				Nickname: client.nickname(),
-				Reason:   client.departureReason(),
+				Reason:   departure,
 			})
-		} else {
+		default:
 			s.broadcastEvent(eventUserLeft, userEvent{
 				ClientID: client.ID,
 				UniqueID: client.UniqueID,
 				Nickname: client.nickname(),
-				Reason:   client.departureReason(),
+				Reason:   departure,
 			})
 		}
 	}
@@ -1731,6 +1766,20 @@ func (s *TCPServer) unregister(id string) {
 	delete(s.clients, id)
 	s.mu.Unlock()
 	if c != nil {
+		c.detachDeviceIndex()
+	}
+}
+
+// unregisterClient removes c only while it still owns its ID: a resumed
+// session may already have taken the ID over.
+func (s *TCPServer) unregisterClient(c *Client) {
+	s.mu.Lock()
+	owned := s.clients[c.ID] == c
+	if owned {
+		delete(s.clients, c.ID)
+	}
+	s.mu.Unlock()
+	if owned {
 		c.detachDeviceIndex()
 	}
 }

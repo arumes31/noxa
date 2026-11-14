@@ -5,10 +5,12 @@ import fs from "node:fs/promises";
 import vm from "node:vm";
 import { Msg } from "../src/core/frame.js";
 import * as gates from "../src/core/voice-gate.js";
+import * as streamResume from "../src/core/stream-resume.js";
 
 async function fixture(t, { captureTimeout = 30000 } = {}) {
     let acquire = async () => { throw new DOMException("Microphone busy", "NotReadableError"); };
     const peers = [], offers = [], bindings = [], tracks = [], replacements = [], handlers = {};
+    let streamControl = async data => ({ action: data.action, session: "1", streams: [] });
     class Track extends EventTarget {
         constructor() { super(); this.id = `mic-${tracks.length}`; this.kind = "audio"; this.enabled = true; this.readyState = "live"; tracks.push(this); }
         stop() { this.readyState = "ended"; }
@@ -41,6 +43,7 @@ async function fixture(t, { captureTimeout = 30000 } = {}) {
         "./voice-gate.js": gates,
         "./media-e2ee/media-session.js": {MediaSession:Media, MediaSessionError:class extends Error {}, MEDIA_E2EE_VERSION:"test-encrypted", MEDIA_E2EE_CODEC_VERSION:"test"},
         "./media-e2ee/media-keys.js": {MediaKeyStartupInbox:class {clear() {} drain() {}}},
+        "./stream-resume.js": streamResume,
     };
     Object.assign(imports["./video.js"], {CameraSource:class {}, capSender() {}, preferReceiveCodecs() {}, watchCodecNames() {}, wireQuality() {}});
     const context=vm.createContext({EventTarget,CustomEvent,DOMException,performance,console,RTCPeerConnection:Peer,navigator:{mediaDevices:{getUserMedia:(...args)=>acquire(...args)}},setInterval:()=>1,clearInterval(){},setTimeout:(fn,ms,...args)=>setTimeout(fn,ms===30000?captureTimeout:ms,...args),clearTimeout});
@@ -48,11 +51,11 @@ async function fixture(t, { captureTimeout = 30000 } = {}) {
     await module.link(name => new vm.SyntheticModule(Object.keys(imports[name]),function(){for(const [key,value] of Object.entries(imports[name])) this.setExport(key,value);},{context}));
     await module.evaluate();
     const session=Object.assign(new EventTarget(), {clientID:"self",clients:()=>[],channels:()=>[],self:()=>null,relayServers:async()=>[],onRelayRenewal:()=>()=>{},conn:{open:true,on:(type,fn)=>{handlers[type]=fn;return ()=>{};},send(){},request:async(type,data)=>{
-        if(type===Msg.WebRTCOffer) {offers.push(data);return {sdp:"v=0"};}return {channel_id:data.channel_id};
+        if(type===Msg.WebRTCOffer) {offers.push(data);return {sdp:"v=0"};}if(type===Msg.VideoStreamControl)return streamControl(data);return {channel_id:data.channel_id};
     }}});
     const voice=new module.namespace.Voice(session,null,{media:{status:async()=>({supported:true,principal:"alice",device:"phone",clientID:"self"})}});
     t.after(()=>voice.close());
-    return {voice, peers, offers, bindings, replacements,
+    return {voice, session, peers, offers, bindings, replacements, setStreamControl: fn => { streamControl = fn; },
         blockNegotiation: async () => {
             const pc=voice.pc, original=pc.setRemoteDescription.bind(pc);
             let entered, release;const started=new Promise(resolve=>{entered=resolve;});
@@ -160,4 +163,39 @@ test("a live but detached input is never reported as transmitting",async t=>{
     assert.equal(await f.voice.retryMicrophone(),true);assert.equal(f.voice.microphoneAvailable,true);
     f.peers[0].transceivers[0].sender.track=null;
     assert.equal(stream.getAudioTracks()[0].readyState,"live");assert.equal(f.voice.microphoneAvailable,false);assert.equal(f.voice.transmitting,false);
+});
+
+test("a resume hint refreshes a still selected watch to the republished source", async t => {
+    const f = await fixture(t);
+    const watches = [];
+    f.setStreamControl(async data => {
+        if (data.action === "watch") { watches.push(data); return { action: "watch", session: "1" }; }
+        return { action: "list", session: "1", streams: [{ publisher_id: "pub", slot: "screen", generation: "2" }] };
+    });
+    f.voice.watching.add("pub|screen");
+    f.voice.watched.set("pub|screen", { publisher_id: "pub", slot: "screen", generation: "1" });
+    f.session.dispatchEvent(new CustomEvent("server-event", { detail: { type: "stream_watch_resume", data: { publisher_id: "pub", slot: "screen" } } }));
+    await f.voice.streams();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(watches.length, 1);
+    assert.equal(watches[0].generation, "2");
+    assert.equal(String(f.voice.watched.get("pub|screen").generation), "2");
+    await f.voice.streams();
+    assert.equal(watches.length, 1, "the hint is used once");
+});
+
+test("a failed automatic watch rolls back and retries a bounded number of times", async t => {
+    const f = await fixture(t);
+    let attempts = 0;
+    f.setStreamControl(async data => {
+        if (data.action === "watch") { attempts++; throw new Error("busy"); }
+        return { action: "list", session: "1", streams: [{ publisher_id: "pub", slot: "cam", generation: "4" }] };
+    });
+    f.session.dispatchEvent(new CustomEvent("server-event", { detail: { type: "stream_watch_resume", data: { publisher_id: "pub", slot: "cam" } } }));
+    for (let i = 0; i < 5; i++) {
+        await f.voice.streams();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.equal(f.voice.watching.has("pub|cam"), false, "no optimistic state survives a failure");
+    }
+    assert.equal(attempts, 3);
 });

@@ -100,6 +100,15 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
 		}
 	}
+	// A presented resume token continues an earlier session of this identity
+	// (an ephemeral guest gets its old guest identity back). Everything below
+	// is still checked afresh: bans, devices, capacity and channel access.
+	resumed := s.claimResume(ctx, client, id.uniqueID)
+	var parked *resumeParked
+	if resumed != nil {
+		parked = resumed.parked
+		id.uniqueID = parked.uniqueID
+	}
 	var rejection string
 	err := s.withRolePolicy(ctx, func(ctx context.Context) error {
 		s.roleMetadataMu.Lock()
@@ -151,11 +160,26 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		if id.customName || client.isWebTransport() {
 			id.nickname = s.dedupeNickname(id.nickname, client.isWebTransport(), "")
 		}
+		if parked != nil {
+			if _, stale := s.deps.State.GetClient(parked.clientID); stale || !s.adoptClientID(client, parked.clientID) {
+				parked = nil
+			}
+		}
 		client.setIdentity(id.uniqueID, id.nickname, id.userID, id.bot)
 		s.publishAuthenticatedSession(ctx, client, id)
+		if parked != nil {
+			s.restoreResumedSession(ctx, client, parked, id.guest)
+			key, _ := client.presenceSessionKey()
+			s.presence.dropKept(key, client.ID)
+		}
 		return nil
 	})
 	if err != nil {
+		if resumed != nil {
+			// Refused before publication (full, banned, ...): a retry within
+			// the grace window may still resume; every check runs again then.
+			s.resume.reinstate(resumed)
+		}
 		if rejection == "" {
 			rejection = "internal error"
 		} else {
@@ -200,6 +224,8 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 		Capabilities:       []string{netproto.CapabilityLobbyPrivacy, netproto.CapabilityLinkPreview, netproto.CapabilityAudioState, netproto.CapabilityVoiceTelemetry, netproto.CapabilityStreamVideoQuality, netproto.CapabilityStreamDiagnostics, netproto.CapabilityStreamSourceQuality, netproto.CapabilityStreamCodec, netproto.CapabilityStreamHEVC, netproto.CapabilityStreamCodecRefresh, netproto.CapabilityStreamReceiverRecovery, netproto.CapabilityConversationActivity},
 	}
 	s.announceClientVersions(&resp)
+	resp.ResumeToken = s.resume.issue(client, id.uniqueID, resumeBinding(id.uniqueID, client.sessionKey()))
+	resp.Resumed = parked != nil
 	if s.deps.Relay != nil {
 		resp.Capabilities = append(resp.Capabilities, netproto.CapabilityManagedRelay)
 	}
@@ -279,6 +305,26 @@ func (s *TCPServer) finishAuth(ctx context.Context, client *Client, id authIdent
 
 		// Arm the rules gate after identity and the tree reach the client.
 		s.sendPendingRules(ctx, client, id.guest)
+		if parked != nil {
+			// The same client ID simply continues: observers' snapshots lose
+			// the kept place's badge, with no join or reconnect cue.
+			s.broadcastEvent(eventUserJoined, userEvent{
+				ClientID: client.ID,
+				UniqueID: id.uniqueID,
+				Nickname: id.nickname,
+				OnMobile: client.isWebTransport(),
+				Resumed:  true,
+			})
+			// The client also gets the restored channel's key with its current
+			// encryption key (it publishes it again too; a duplicate is harmless).
+			if member, ok := s.deps.State.GetClient(client.ID); ok && member.ChannelID > 0 {
+				if err := s.deliverScopeKey(ctx, client, member.ChannelID); err != nil {
+					s.logger.Debug("channel key after resume", zap.Error(err))
+				}
+			}
+			s.resumeStreamWatches(client, parked)
+			return nil
+		}
 		key, _ := client.presenceSessionKey()
 		now := time.Now()
 		overlapping := s.markReplacedSessions(client, now)

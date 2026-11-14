@@ -42,6 +42,9 @@ func (a *App) ReconnectTab(tabID, password, serverPassword string) ConnectTabRes
 		return ConnectTabResult{Error: "the original server connection is unavailable"}
 	}
 	cm := a.newTabManager(tabID, identity)
+	// The session's resume token lets the server continue it (same client ID
+	// and channel) instead of announcing a leave and a join.
+	cm.setResumeToken(old.resumeTokenSnapshot())
 	candidate := &tabState{cm: cm, info: info, bookmark: bookmark,
 		loginPasswords: &loginPasswords{Password: password, ServerPassword: serverPassword}}
 	candidate.info.Connected = false
@@ -138,6 +141,18 @@ func (a *App) ReconnectTab(tabID, password, serverPassword string) ConnectTabRes
 		a.emitTabsUpdate()
 	}
 	return ConnectTabResult{TabID: tabID, Warning: warning}
+}
+
+func (m *connManager) resumeTokenSnapshot() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resumeToken
+}
+
+func (m *connManager) setResumeToken(token string) {
+	m.mu.Lock()
+	m.resumeToken = token
+	m.mu.Unlock()
 }
 
 func (m *connManager) markReconnectTerminal() {

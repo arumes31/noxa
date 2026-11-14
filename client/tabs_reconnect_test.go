@@ -80,7 +80,7 @@ func gatedReconnectServer(t *testing.T, handlers ...frameHandler) (string, <-cha
 		if nickname == "" {
 			nickname = request.Username
 		}
-		response, _ := netproto.Encode(netproto.MsgAuthResponse, netproto.AuthResponse{OK: true, AuthorizationModel: netproto.AuthorizationModelRolesV1, ClientID: "recovered-client", UniqueID: "original-user", Nickname: nickname})
+		response, _ := netproto.Encode(netproto.MsgAuthResponse, netproto.AuthResponse{OK: true, AuthorizationModel: netproto.AuthorizationModelRolesV1, ClientID: "recovered-client", UniqueID: "original-user", Nickname: nickname, ResumeToken: "rotated-token"})
 		if netproto.WriteFrame(conn, response) != nil {
 			return
 		}

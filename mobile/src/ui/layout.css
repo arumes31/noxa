@@ -187,3 +187,21 @@ kbd { font-family: var(--font-mono); font-size: .68rem; padding: 2px 6px; border
 @media (prefers-reduced-motion: reduce) {
     .speak-ring, .splitter::after { transition: none; }
 }
+
+/* A member whose voice is still connecting (joining, resuming, updating,
+   reconnecting): a decorative wave across the name; the state itself is in
+   the badge text. */
+.member-connecting {
+    -webkit-mask-image: linear-gradient(90deg, #000 35%, rgba(0, 0, 0, .3) 50%, #000 65%);
+    mask-image: linear-gradient(90deg, #000 35%, rgba(0, 0, 0, .3) 50%, #000 65%);
+    -webkit-mask-size: 300% 100%;
+    mask-size: 300% 100%;
+    animation: member-connecting-wave 1.6s linear infinite;
+}
+@keyframes member-connecting-wave {
+    from { -webkit-mask-position: 100% 0; mask-position: 100% 0; }
+    to { -webkit-mask-position: 0 0; mask-position: 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .member-connecting { animation: none; -webkit-mask-image: none; mask-image: none; opacity: .6; }
+}

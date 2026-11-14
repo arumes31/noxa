@@ -33,3 +33,12 @@ const (
 	// kept for a short while; a return is quiet, no return becomes a leave.
 	DepartureUpdating = "updating"
 )
+
+// DepartureReconnecting: a resumable session lost its connection. Like an
+// update, its place is kept for the resume grace window and a resume is quiet.
+const DepartureReconnecting = "reconnecting"
+
+// ClientFeatureResume announces that the client presents its resume token on
+// reconnect. Only such sessions keep their place after a lost connection;
+// others keep the legacy "lost connection" / "reconnected" announcements.
+const ClientFeatureResume = "resume-v1"

@@ -87,18 +87,21 @@ type connManager struct {
 	connEpoch                    uint64
 	addr                         string // control address (tab info)
 	clientID                     string
-	uniqueID                     string
-	deviceID                     string              // linked device of this session (devices_v1)
-	callMediaCache               callMediaStateCache // call state behind call media-key targets (#12)
-	supportsDevices              bool
-	supportsWebLogin             bool
-	supportsLinkPreview          bool
-	supportsDMDevices            bool                      // per-device direct messages (dm_devices_v1)
-	activityReportedAt           time.Time                 // last input report (devices_v1)
-	deviceLinks                  map[string]deviceLinkKeys // links created by this session
-	nickname                     string
-	displayName                  string // requested public name; separate from the account login
-	isGuest                      bool
+	// resumeToken continues this session after a lost connection or an
+	// update restart. Memory only: never persisted or given to the renderer.
+	resumeToken         string
+	uniqueID            string
+	deviceID            string              // linked device of this session (devices_v1)
+	callMediaCache      callMediaStateCache // call state behind call media-key targets (#12)
+	supportsDevices     bool
+	supportsWebLogin    bool
+	supportsLinkPreview bool
+	supportsDMDevices   bool                      // per-device direct messages (dm_devices_v1)
+	activityReportedAt  time.Time                 // last input report (devices_v1)
+	deviceLinks         map[string]deviceLinkKeys // links created by this session
+	nickname            string
+	displayName         string // requested public name; separate from the account login
+	isGuest             bool
 	// keyless: an ephemeral "guest:" session without an identity key (only a
 	// third-party client can get one: the desktop always signs in with its key).
 	keyless bool
@@ -555,10 +558,11 @@ type challengeSigner func(challenge []byte) (signature []byte, publicKey string,
 func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, signer challengeSigner) string {
 	m.mu.Lock()
 	m.reconnectTerminal = false
+	authMsg.ResumeToken = m.resumeToken
 	m.mu.Unlock()
 	authMsg.AuthorizationModels = []string{netproto.AuthorizationModelRolesV1}
 	authMsg.ClientVersion = version.Short()
-	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye}
+	authMsg.ClientFeatures = []string{netproto.ClientFeaturePow, netproto.ClientFeatureRetryHint, netproto.ClientFeatureGoodbye, netproto.ClientFeatureResume}
 	if m.lobbyPrivacyPreference != nil {
 		authMsg.HideLobbyPresence = m.lobbyPrivacyPreference()
 	}
@@ -704,6 +708,7 @@ func (m *connManager) connectWith(addr string, authMsg netproto.Authenticate, si
 	m.rulesPending = false
 	m.addr = addr
 	m.clientID = resp.ClientID
+	m.resumeToken = resp.ResumeToken
 	m.uniqueID = resp.UniqueID
 	m.deviceID = resp.DeviceID
 	m.supportsDevices = slices.Contains(resp.Capabilities, netproto.CapabilityDevices)

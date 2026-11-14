@@ -45,3 +45,17 @@ test("an older server (no advertised scheme) gets no signature and a 'server nee
     await assert.rejects(signIn(conn, identity, { version: "1" }), e => e.kind === "serverOutdated" && classifySignIn(e).kind === "serverOutdated");
     assert.equal(conn.sent.length, 1, "no signature is sent");
 });
+
+test("the app login announces resume and presents its token; worker logins do neither", async () => {
+    const identity = generateIdentity();
+    const challenge = nacl.randomBytes(32);
+    challenge[0] = 0x41;
+    const app = fakeConn(challenge);
+    await signIn(app, identity, { version: "1", goodbye: true, resumeToken: "tok" });
+    assert.equal(app.sent[0].resume_token, "tok");
+    assert.ok(app.sent[0].client_features.includes("resume-v1"));
+    const worker = fakeConn(challenge);
+    await signIn(worker, identity, { version: "1" });
+    assert.equal(worker.sent[0].resume_token, undefined);
+    assert.ok(!worker.sent[0].client_features.includes("resume-v1"));
+});

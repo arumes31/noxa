@@ -381,6 +381,11 @@ func (s *TCPServer) roleBroadcastFrame(client *Client, payload []byte, e *author
 		if !ok || !sender.isAuthed() || !e.Evaluate(sender.userID(), 0, authorization.PokeMembers).Allowed || !s.rolePokeTargetVisible(e, sender, client.ID) {
 			return nil, nil
 		}
+	case eventStreamWatchResume:
+		// Addressed request to watch again; the watch itself is authorized anew.
+		if !s.streamWatchResumeVisible(client, e, envelope.Data) {
+			return nil, nil
+		}
 	case eventConversationChanged:
 		// Addressed invalidation only. No content/membership crosses this queue;
 		// fetching either requires a current database membership lease.

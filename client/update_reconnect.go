@@ -28,6 +28,8 @@ type updateReconnectEnvelope struct {
 	Deafened          bool                `json:"deafened"`
 	MutedBeforeDeafen bool                `json:"muted_before_deafen"`
 	Stream            *updateStreamResume `json:"stream,omitempty"`
+	// ResumeToken lets the updated process continue the session.
+	ResumeToken string `json:"resume_token,omitempty"`
 }
 
 type updateStreamResume struct {
@@ -131,6 +133,7 @@ func (a *App) snapshotUpdateConnection() *updateReconnectEnvelope {
 	}
 	saved.Identity = *cm.id
 	saved.DisplayName = cm.displayName
+	saved.ResumeToken = cm.resumeToken
 	cm.mu.Unlock()
 	a.tabsMu.Lock()
 	current := a.tabs[a.activeID] == tab && !tab.reconnectSuppressed
@@ -215,6 +218,7 @@ func (a *App) restoreUpdateConnection(saved *updateReconnectEnvelope) map[string
 	}
 	a.emitPlain("update_connection_restoring", map[string]bool{"muted": saved.Muted, "deafened": saved.Deafened, "muted_before_deafen": saved.MutedBeforeDeafen})
 	id, tab := a.newTabWithIdentity(&saved.Identity)
+	tab.cm.setResumeToken(saved.ResumeToken)
 	committed := false
 	defer func() {
 		if !committed {

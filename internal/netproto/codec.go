@@ -500,6 +500,11 @@ type Authenticate struct {
 	// so the server can seal the global scope key and the MOTD into
 	// AuthResponse (133).
 	X25519PublicKey string `json:"x25519_public_key,omitempty"`
+	// ResumeToken is the token of an earlier AuthResponse. It never replaces
+	// the login above: it only lets the server continue that session (same
+	// client ID and channel) when it still holds it for this account, device
+	// key and grace window. Absent or stale tokens mean a fresh session.
+	ResumeToken string `json:"resume_token,omitempty"`
 }
 
 // CapabilityGroupAssignAck advertises support for GroupAssign.AckRequested.
@@ -556,6 +561,11 @@ type AuthResponse struct {
 	// Connect() returns — no new frame, no ordering rule, no race. Channel
 	// keys still arrive via MsgChannelKey after key publish.
 	ChatKeys []ChannelKey `json:"chat_keys,omitempty"`
+	// ResumeToken is a single-use secret for continuing this session after a
+	// lost connection or an update restart; keep it in memory only. Resumed
+	// reports that the presented token continued an earlier session.
+	ResumeToken string `json:"resume_token,omitempty"`
+	Resumed     bool   `json:"resumed,omitempty"`
 }
 
 // ICEServer describes one ICE server for a WebRTC RTCPeerConnection,

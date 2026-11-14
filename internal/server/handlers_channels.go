@@ -188,7 +188,9 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 		if client.rulesBlocked() {
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "accept the server rules before joining a channel")
 		}
-		if !s.roleAllowed(ctx, client, msg.ChannelID, authorization.BypassChannelPassword) {
+		// A member already inside (e.g. a resumed session rejoining the
+		// channel it was restored to) needs no password to stay there.
+		if !s.clientInChannel(client.ID, msg.ChannelID) && !s.roleAllowed(ctx, client, msg.ChannelID, authorization.BypassChannelPassword) {
 			passwordHash = ch.PasswordHash
 		}
 		approved = true
@@ -236,7 +238,7 @@ func (s *TCPServer) joinChannelAllowed(ctx context.Context, client *Client, msg 
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, state.ErrTextChannel.Error())
 	}
 
-	bypassPassword := s.roleAllowed(ctx, client, msg.ChannelID, authorization.BypassChannelPassword)
+	bypassPassword := s.clientInChannel(client.ID, msg.ChannelID) || s.roleAllowed(ctx, client, msg.ChannelID, authorization.BypassChannelPassword)
 	if ch.PasswordHash != "" && !bypassPassword && ch.PasswordHash != verifiedHash {
 		return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "channel password changed, retry joining")
 	}
@@ -271,6 +273,7 @@ func (s *TCPServer) leaveOwnChannelInContext(ctx context.Context, client *Client
 			return err
 		}
 	}
+	s.forgetVoiceConnecting(client.ID)
 	s.deps.State.SetPrioritySpeaker(client.ID, false)
 	// The voice peer outlives the channel: the seat is parked (counted
 	// nowhere) so the next join still meets the destination's cap.
@@ -327,6 +330,12 @@ func (s *TCPServer) moveClientWithCause(ctx context.Context, clientID string, ch
 		if previousChannelID != channelID {
 			if client, ok := s.clientByID(clientID); ok {
 				client.rememberOwnChannelMove(previousChannelID, channelID, forced)
+			}
+			// Shown as connecting until its voice peer connects (or the grace ends).
+			if channelID > 0 {
+				s.markVoiceConnecting(clientID, false)
+			} else {
+				s.forgetVoiceConnecting(clientID)
 			}
 			// Moving invalidates publications even when the destination permits sharing.
 			s.deps.State.SetSharing(clientID, false)

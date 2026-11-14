@@ -39,7 +39,7 @@ class FakeConnection extends EventTarget {
 const tick = (ms = 60) => new Promise(r => setTimeout(r, ms));
 async function until(check, ms = 5000) { const end = Date.now() + ms; while (!check() && Date.now() < end) await tick(20); }
 
-const world = { signInAs: "alice", capabilities: [], sent: [], dms: [], ownEntry: null, consumers: [] };
+const world = { signInAs: "alice", signIns: [], capabilities: [], sent: [], dms: [], ownEntry: null, consumers: [] };
 class DirectMessages extends EventTarget {
     constructor(session, meta) {
         super();
@@ -78,7 +78,7 @@ const sources = {
     "./core/link-binding.js": { verifyLinkBinding, announcedBinding },
     "./core/ratchet-consumer.js": { RatchetConsumer, connectionTransport: () => ({ admission: none, directory: none }) },
     "./core/crypto.js": { generateIdentity }, "./core/dm-trust.js": { signKeyRecord: () => "record" },
-    "./core/device.js": { signIn: async () => ({ unique_id: world.signInAs, device_id: "phone-" + world.signInAs, client_id: "c1", capabilities: [...world.capabilities], tls_fingerprint: "ab".repeat(32) }) },
+    "./core/device.js": { signIn: async (_conn, _identity, options = {}) => ({ ...(world.signIns.push(options), {}), resume_token: "tok-" + world.signIns.length, unique_id: world.signInAs, device_id: "phone-" + world.signInAs, client_id: "c1", capabilities: [...world.capabilities], tls_fingerprint: "ab".repeat(32) }) },
     "./core/identity-store.js": identityStore, "./core/outbox.js": outbox,
     "./core/push.js": { announceRead: none, closeAllNotifications: none, closeNotifications: none, reportVisibility: none, setBadge: none, syncPush: async () => ({}) },
     "./core/settings.js": { get: () => [] }, "./core/servers.js": { addServer: () => [] },
@@ -188,4 +188,17 @@ test("P1-1: a server key for this account that the linking desktop did not vouch
         world.capabilities = []; world.ownEntry = null;
         disconnect();
     }
+});
+
+test("a reconnect presents the session's resume token from memory; a deliberate disconnect forgets it", async () => {
+    await accountWithData("alice");
+    world.signIns.length = 0;
+    await connect();
+    await connect(); // the reconnect path after a dropped connection
+    assert.equal(world.signIns[0].resumeToken, "", "a fresh start has no token");
+    assert.equal(world.signIns[1].resumeToken, "tok-1", "the reconnect resumes the session");
+    disconnect();
+    app.paused = false;
+    await connect();
+    assert.equal(world.signIns[2].resumeToken, "", "a deliberate leave ends the session");
 });

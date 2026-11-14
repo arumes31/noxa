@@ -168,7 +168,7 @@ func TestPresenceTrackerKeepsUpdatingPlaceAndReturnsQuietly(t *testing.T) {
 	var p presenceTracker
 	now := time.Unix(1_000_000, 0)
 	p.noteDeparture("old", "alice|dev", netproto.DepartureUpdating, 7, false, now)
-	p.noteUpdating("alice|dev", broadcast.ClientInfo{ClientID: "old", UniqueID: "alice", Nickname: "Alice", ChannelID: 7}, false, now)
+	p.noteUpdating("alice|dev", broadcast.ClientInfo{ClientID: "old", UniqueID: "alice", Nickname: "Alice", ChannelID: 7}, netproto.DepartureUpdating, false, now)
 
 	during := updatingSnapshot()
 	p.decorate(during, func(int64) bool { return true }, "bob|dev", now.Add(50*time.Second))
@@ -190,7 +190,7 @@ func TestPresenceTrackerKeepsUpdatingPlaceAndReturnsQuietly(t *testing.T) {
 	}
 
 	if !p.noteReturn("new", "alice|dev", now.Add(59*time.Second)) {
-		t.Fatal("a login within 60 s must be a quiet return")
+		t.Fatal("a login within the grace window must be a quiet return")
 	}
 	if p.noteJoin("x", "alice|dev", false, now.Add(59*time.Second)) {
 		t.Fatal("an updating departure must not also count as a lost connection")
@@ -203,7 +203,7 @@ func TestPresenceTrackerKeepsUpdatingPlaceAndReturnsQuietly(t *testing.T) {
 	if after.Departures["old"] != netproto.DepartureReplaced {
 		t.Fatalf("the kept place must vanish silently, departures = %v", after.Departures)
 	}
-	if expired, _ := p.expireUpdating("alice|dev", "old"); expired {
+	if expired, _ := p.expireUpdating("alice|dev", "old", now); expired {
 		t.Fatal("a returned member must not expire into a leave")
 	}
 }
@@ -211,20 +211,23 @@ func TestPresenceTrackerKeepsUpdatingPlaceAndReturnsQuietly(t *testing.T) {
 func TestPresenceTrackerUpdatingExpiresIntoLeave(t *testing.T) {
 	var p presenceTracker
 	now := time.Unix(1_000_000, 0)
-	p.noteUpdating("alice|dev", broadcast.ClientInfo{ClientID: "old", ChannelID: 7}, false, now)
+	p.noteUpdating("alice|dev", broadcast.ClientInfo{ClientID: "old", ChannelID: 7}, netproto.DepartureUpdating, false, now)
 	if p.noteReturn("late", "alice|dev", now.Add(presenceUpdateWindow+time.Second)) {
-		t.Fatal("a login after 60 s is not a quiet return")
+		t.Fatal("a login after the grace window is not a quiet return")
 	}
 	late := updatingSnapshot()
 	p.decorate(late, func(int64) bool { return true }, "", now.Add(presenceUpdateWindow+time.Second))
 	if len(late.RootChannels[0].Clients) != 0 {
-		t.Fatal("the place is kept past 60 s")
+		t.Fatal("the place is kept past the grace window")
 	}
-	if expired, _ := p.expireUpdating("alice|dev", "other"); expired {
+	if expired, _ := p.expireUpdating("alice|dev", "other", now); expired {
 		t.Fatal("expiry of another session must not end this kept place")
 	}
-	first, _ := p.expireUpdating("alice|dev", "old")
-	second, _ := p.expireUpdating("alice|dev", "old")
+	if stale, _ := p.expireUpdating("alice|dev", "old", now.Add(time.Second)); stale {
+		t.Fatal("a timer of an earlier kept place must not end a later one")
+	}
+	first, _ := p.expireUpdating("alice|dev", "old", now)
+	second, _ := p.expireUpdating("alice|dev", "old", now)
 	if !first || second {
 		t.Fatal("expiry must end the kept place exactly once")
 	}
@@ -242,8 +245,9 @@ func TestExpiredUpdatingDepartureBroadcastsLeave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.presence.noteUpdating("alice|dev", broadcast.ClientInfo{ClientID: "old", ChannelID: 7}, false, time.Now())
-	s.expireUpdatingDeparture("alice|dev", "old", "alice", "Alice")
+	at := time.Now()
+	s.presence.noteUpdating("alice|dev", broadcast.ClientInfo{ClientID: "old", ChannelID: 7}, netproto.DepartureUpdating, false, at)
+	s.expireUpdatingDeparture("alice|dev", "old", "alice", "Alice", at)
 	select {
 	case raw := <-events:
 		var env struct {
@@ -259,7 +263,7 @@ func TestExpiredUpdatingDepartureBroadcastsLeave(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no leave after the update window")
 	}
-	s.expireUpdatingDeparture("alice|dev", "old", "alice", "Alice")
+	s.expireUpdatingDeparture("alice|dev", "old", "alice", "Alice", at)
 	select {
 	case raw := <-events:
 		t.Fatalf("a second expiry broadcast %s", raw)
@@ -276,8 +280,9 @@ func TestExpiredInvisibleUpdatingDepartureNamesNobody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.presence.noteUpdating("ghost|dev", broadcast.ClientInfo{ClientID: "old", UniqueID: "ghost", Nickname: "Ghost", ChannelID: 7}, true, time.Now())
-	s.expireUpdatingDeparture("ghost|dev", "old", "ghost", "Ghost")
+	at := time.Now()
+	s.presence.noteUpdating("ghost|dev", broadcast.ClientInfo{ClientID: "old", UniqueID: "ghost", Nickname: "Ghost", ChannelID: 7}, netproto.DepartureUpdating, true, at)
+	s.expireUpdatingDeparture("ghost|dev", "old", "ghost", "Ghost", at)
 	select {
 	case raw := <-events:
 		var env struct {

@@ -3,12 +3,12 @@
 // card. The given channel's members come first.
 import { guestBadge } from "./guest-badge.js";
 import { app } from "../app.js";
-import { statusOf } from "../core/presence.js";
+import { memberConnecting, statusOf } from "../core/presence.js";
 import { rolesOf } from "../core/social.js";
 import { t } from "../i18n.js";
 import { avatar, h } from "./dom.js";
 import { header, nav } from "./common.js";
-import { statusDot, statusLine } from "./presence-ui.js";
+import { keptBadge, statusDot, statusLine } from "./presence-ui.js";
 import "./social-strings.js";
 import "./social.css";
 
@@ -23,11 +23,11 @@ function memberRow(client, session) {
     },
     h("span", { class: "avatar-wrap" }, avatar(client.nickname, "md", client.unique_id), statusDot(statusOf(client))),
     h("span", { class: "row-main" },
-        h("span", { class: "row-title", style: roles[0]?.color ? `color:${roles[0].color}` : null }, client.nickname, self ? ` (${t("dm.you")})` : ""),
+        h("span", { class: memberConnecting(client) ? "row-title member-connecting" : "row-title", style: roles[0]?.color ? `color:${roles[0].color}` : null }, client.nickname, self ? ` (${t("dm.you")})` : ""),
         sub ? h("span", { class: "row-sub" }, sub) : null,
         roles.length ? h("span", { class: "role-chips inline" }, roles.slice(0, 3).map(role => h("span", { class: "role-chip", style: role.color ? `--role:${role.color}` : null }, role.name))) : null),
     guestBadge(client),
-    client.updating ? h("span", { class: "row-meta member-updating", title: t("presence.updatingTitle") }, t("presence.updatingBadge")) : null,
+    keptBadge(client),
     client.on_mobile ? h("span", { class: "row-meta", title: t("presence.onMobile") }, t("presence.mobileBadge")) : null));
 }
 

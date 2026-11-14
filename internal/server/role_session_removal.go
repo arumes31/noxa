@@ -71,7 +71,7 @@ func (s *TCPServer) removeRoleSession(ctx context.Context, target *Client, event
 	if s.deps.Relay != nil {
 		s.deps.Relay.Revoke(target.ID)
 	}
-	s.unregister(target.ID)
+	s.unregisterClient(target)
 	s.disconnectPrivateCall(target.ID)
 	if s.deps.FileTransfer != nil {
 		s.deps.FileTransfer.RevokeTransfers(func(p filetransfer.Principal, _ int64, _ string) bool { return p.SessionID != target.ID })

@@ -114,6 +114,7 @@ func (s *TCPServer) roleSnapshotWithOwnMove(client *Client, e *authorization.Rol
 	snapshot := buildRoleSnapshot(s.deps.State, e, client.userID(), client.uniqueID())
 	s.decorateOwnChannelMove(snapshot, client, e)
 	userID := client.userID()
+	s.decorateConnecting(snapshot)
 	key, _ := client.presenceSessionKey()
 	s.presence.decorate(snapshot, func(channelID int64) bool {
 		return channelID <= 0 || e.Evaluate(userID, channelID, authorization.ViewChannel).Allowed
