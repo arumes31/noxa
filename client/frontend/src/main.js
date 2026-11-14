@@ -29,7 +29,8 @@ import { createVoiceTransportRecovery, voiceTransportFailed } from './voice-tran
 import { createHardwareRecoveryScheduler, createVideoReceiverRecovery } from './video-hardware-recovery.js';
 import { createVideoSenderRecovery } from './video-sender-hardware-recovery.js';
 import { createChannelTree } from './channel-tree.js';
-import { arrivalCue, captureChannelPresence, channelPresenceChanges, departureCue, notePresenceDrop, notePresenceRestored, presenceCueSuppressed } from './channel-presence.js';
+import { arrivalCue, captureChannelPresence, channelPresenceChanges, departureCue, keptPlaceMoveIn, keptPlaceReturn, notePresenceDrop, notePresenceRestored, presenceCueSuppressed } from './channel-presence.js';
+import { quietRestore } from './update-announcement.js';
 // noxa client frontend — voice ops console (vanilla JS).
 // Wails bridge: window.go.main.App.<Method>(...) calls the Go backend;
 // window.runtime.EventsOn(name, cb) receives backend events.
@@ -789,7 +790,7 @@ async function completeReconnect(c, generation, tabID, current = () => true) {
     noteActivity();
     clearSpeech("connection");
     notePresenceRestored(state);
-    playAlert("connection_reconnected");
+    if (!quietRestore(state)) playAlert("connection_reconnected");
     warnCertificateClock(clockWarning, c.addr);
     return alive();
 }
@@ -1358,6 +1359,10 @@ let snapshotPresenceScope = '';
 function actionSoundsSuppressed() {
     return !!state.replayingTabID;
 }
+// The own channel cue, silent while an update restores this session.
+function playOwnChannelCue(event, options) {
+    if (!quietRestore(state)) playAlert(event, options);
+}
 
 // A tab switch replays the other tab's journal so the view can be rebuilt.
 // That history is not live join/leave activity and must never play cues.
@@ -1453,7 +1458,7 @@ function syncOwnChannel({ audible = true, ownMove } = {}) {
         // must flush the pending new-tab join from this equality branch.
         const initialCuePending = state.pendingInitialChannelCueTabID === state.activeTabID;
         if (initialCuePending && channelID > 0 && !actionSoundsSuppressed()) {
-            playAlert("channel_join");
+            playOwnChannelCue("channel_join");
             state.pendingInitialChannelCueTabID = "";
         }
         ensureVoiceForChannel();
@@ -1469,10 +1474,10 @@ function syncOwnChannel({ audible = true, ownMove } = {}) {
     if ((audible || initialCuePending) && !actionSoundsSuppressed()) {
         if (channelID > 0) {
             const forcedMove = ownMove?.forced === true && Number(ownMove.channel_id) === channelID;
-            playAlert(forcedMove ? "moved_by_admin" : "channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
+            playOwnChannelCue(forcedMove ? "moved_by_admin" : "channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
             playedCue = true;
         } else if (previousChannelID > 0 && !state.channels.some(ch => ch.SystemKind === "home")) {
-            playAlert("channel_leave");
+            playOwnChannelCue("channel_leave");
             playedCue = true;
         }
     }
@@ -1574,7 +1579,7 @@ window.runtime.EventsOn("event", (json) => {
                 state.clients.push({ client_id: d.client_id, unique_id: d.unique_id, nickname: d.nickname, channel_id: joinedChannel, presence_token: d.presence_token, is_speaking: false, on_mobile: !!d.on_mobile });
             }
             // A return from an update or a resumed session is quiet: the roster updates, nothing is announced.
-            if (d.client_id !== state.myClientID && !d.returned && !d.resumed) {
+            if (d.client_id !== state.myClientID && !keptPlaceReturn(state, d)) {
                 const cue = arrivalCue(!!d.reconnected);
                 chatUI.sysJoinLeave(d.nickname || d.unique_id || "someone", d.reconnected ? "reconnected" : "joined"); // (130/131)
                 const joined = state.clients.find(client => client.client_id === d.client_id);
@@ -1621,6 +1626,8 @@ window.runtime.EventsOn("event", (json) => {
         case "user_moved": {
             const c = state.clients.find((c) => c.client_id === d.client_id);
             const previousRemoteChannelID = Number(c?.channel_id) || 0;
+            // A kept-place return silences only that member's first move after it, wherever it lands.
+            const quietReturn = d.client_id !== state.myClientID && keptPlaceMoveIn(state, d.client_id);
             const nextChannelID = Number(d.channel_id) || 0;
             const previousSpeechKey = presenceSpeechKey(c, previousRemoteChannelID);
             if (c) { c.channel_id = nextChannelID; c.presence_token = d.presence_token ?? c.presence_token; }
@@ -1643,11 +1650,10 @@ window.runtime.EventsOn("event", (json) => {
                 let playedOwnCue = false;
                 if (!actionSoundsSuppressed()) {
                     if (nextChannelID > 0 && nextChannelID !== previousChannelID) {
-                        if (forcedMove) playAlert("moved_by_admin", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
-                        else playAlert("channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
+                        playOwnChannelCue(forcedMove ? "moved_by_admin" : "channel_join", { effect: previousChannelID > 0 ? "own_channel_switch" : "own_channel_join" });
                         playedOwnCue = true;
                     } else if (nextChannelID === 0 && previousChannelID > 0 && !state.channels.some(ch => ch.SystemKind === "home")) {
-                        playAlert("channel_leave");
+                        playOwnChannelCue("channel_leave");
                         playedOwnCue = true;
                     }
                 }
@@ -1666,9 +1672,10 @@ window.runtime.EventsOn("event", (json) => {
                 ensureVoiceForChannel();
             } else if (c && nextChannelID === state.myChannelID && state.myChannelID !== 0
                 && previousRemoteChannelID !== nextChannelID) {
+                // A member back from an update or a drop rejoins its channel without a join cue.
                 window.__noxaNotify?.notify("join_leave", t("runtime.movedIn", { name: c.nickname || t("runtime.someone") }),
                     { channelID: state.myChannelID, className: "joins", kind: "info",
-                        soundEvent: "user_move_in", speechKey: presenceSpeechKey(c, nextChannelID), noSound: actionSoundsSuppressed() });
+                        soundEvent: "user_move_in", speechKey: presenceSpeechKey(c, nextChannelID), noSound: actionSoundsSuppressed() || quietReturn });
             } else if (c && previousRemoteChannelID === state.myChannelID && state.myChannelID !== 0
                 && previousRemoteChannelID !== nextChannelID) {
                 const forcedMove = nextChannelID > 0 && d.by_client_id && d.by_client_id !== d.client_id;

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { captureChannelPresence, channelPresenceChanges } from '../src/channel-presence.js';
+import { captureChannelPresence, channelPresenceChanges, departureCue, keptPlaceMoveIn, keptPlaceReturn } from '../src/channel-presence.js';
 
 const member = (id, channel_id = 7) => ({ client_id: id, nickname: id, channel_id });
 const state = (clients, extra = {}) => ({ activeTabID: 'server-a', serverGeneration: 1, sessionGeneration: 1,
@@ -147,4 +147,26 @@ test('a reconnecting member shows its own quiet badge and a resume under the sam
     assert.deepEqual(changes(reconnecting, state([])).map(change => change.kind), ['leave'], 'expiry is a plain leave');
     assert.equal(departureCue('reconnecting').quiet, true);
     assert.equal(departureCue('reconnecting').soundEvent, undefined);
+});
+
+test('a kept-place return plays no join or move-in cue; a real leave still announces', () => {
+    const live = {};
+    // Back from an update with a new session, or resumed under the same ID.
+    assert.equal(keptPlaceReturn(live, { client_id: 'peer', returned: true }), true);
+    assert.equal(keptPlaceReturn(live, { client_id: 'other', resumed: true }), true);
+    assert.equal(keptPlaceMoveIn(live, 'peer'), true, 'its move back into the channel is quiet');
+    assert.equal(keptPlaceMoveIn(live, 'peer'), false, 'a later move announces again');
+    assert.equal(keptPlaceMoveIn(live, 'other'), false);
+    assert.equal(keptPlaceReturn(live, { client_id: 'new' }), false, 'an ordinary join announces');
+    // A move long after the return is an ordinary one.
+    keptPlaceReturn(live, { client_id: 'late', returned: true }, 1000);
+    assert.equal(keptPlaceMoveIn(live, 'late', 1000 + 60000), false, 'a late move announces');
+    // The kept place's departure is quiet; a window that expired is a real leave.
+    for (const reason of ['updating', 'reconnecting']) assert.equal(departureCue(reason).quiet, true);
+    assert.equal(departureCue(undefined).soundEvent, 'user_leave');
+    assert.equal(departureCue(undefined).quiet, undefined);
+    // Snapshot path: the ghost turns into the returned session silently.
+    const ghost = { ...member('ghost'), updating: true };
+    assert.deepEqual(changes(state([ghost]), state([member('peer')], { presenceDepartures: { ghost: 'replaced' }, presenceReturned: new Set(['peer']) })), []);
+    assert.deepEqual(changes(state([member('peer')]), state([], { presenceDepartures: { peer: 'left' } })).map(change => change.soundEvent), ['user_leave']);
 });

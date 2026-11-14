@@ -767,9 +767,9 @@ test("handoff failure keeps the current client running", async ({ page }) => {
     expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
 });
 
-for (const scenario of [{ connected: true }, { connected: false }, { connected: true, muted: true }, { connected: true, speechOff: true }]) {
-    test(`update speech only for an unmuted connected client ${JSON.stringify(scenario)}`, async ({ page }) => {
-        await boot(page, { disconnected: !scenario.connected });
+for (const scenario of [{ connected: true }, { connected: false }, { connected: true, muted: true }, { connected: true, speechOff: true }, { connected: true, fast: true }]) {
+    test(`update speech only for an unmuted connected client still updating after the delay ${JSON.stringify(scenario)}`, async ({ page }) => {
+        await boot(page, { disconnected: !scenario.connected, restartPending: !scenario.fast });
         await page.evaluate(async scenario => {
             const state = window.__noxa.state;
             state.activeTabID = "update-test";
@@ -788,19 +788,20 @@ for (const scenario of [{ connected: true }, { connected: false }, { connected: 
         }, scenario);
         await page.getByRole("button", { name: "Update now", exact: true }).click();
         await page.getByRole("button", { name: "Restart now", exact: true }).click();
-        const speaks = scenario.connected && !scenario.muted && !scenario.speechOff;
-        if (speaks) {
-            await expect.poll(() => page.evaluate(() => window.__updateSpeech)).toEqual(["speech_en_client_updating"]);
-            expect(await page.evaluate(() => window.__calls.ApplyAndRestart || 0)).toBe(0);
-            await page.evaluate(() => window.__finishUpdateSpeech());
-        }
+        const speaks = scenario.connected && !scenario.muted && !scenario.speechOff && !scenario.fast;
+        // The restart starts at once; the speech waits about 3 s for it.
         await expect.poll(() => page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
+        if (speaks) {
+            await expect.poll(() => page.evaluate(() => window.__updateSpeech), { timeout: 10000 }).toEqual(["speech_en_client_updating"]);
+            await page.evaluate(() => window.__finishUpdateSpeech());
+        } else await page.waitForTimeout(3500); // a finished (fast) update cancelled it
+        await page.evaluate(() => window.__finishRestart?.());
         expect(await page.evaluate(() => window.__updateSpeech.length)).toBe(speaks ? 1 : 0);
     });
 }
 
 test("an audio preload timeout cannot delay restart or play after it", async ({ page }) => {
-    await boot(page);
+    await boot(page, { restartPending: true });
     await page.evaluate(async () => {
         window.__noxa.state.activeTabID = "update-test";
         const { soundEngine } = await import("/src/sounds.js");
@@ -813,9 +814,12 @@ test("an audio preload timeout cannot delay restart or play after it", async ({ 
     await page.getByRole("button", { name: "Update now", exact: true }).click();
     await page.clock.install();
     await page.getByRole("button", { name: "Restart now", exact: true }).click();
+    // The restart runs at once; the speech starts only after its delay.
+    await expect.poll(() => page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
+    await page.clock.runFor(3000);
     await page.waitForFunction(() => !!window.__finishUpdatePreload);
     await page.clock.runFor(7500);
-    await expect.poll(() => page.evaluate(() => window.__calls.ApplyAndRestart)).toBe(1);
+    await page.evaluate(() => window.__finishRestart());
     await page.evaluate(() => window.__finishUpdatePreload());
     await page.clock.runFor(1000);
     expect(await page.evaluate(() => window.__lateUpdateSpeech)).toBe(0);

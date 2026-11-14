@@ -6,7 +6,7 @@ import { createUpdateCountdown } from "./update-countdown.js";
 import { createPeriodicUpdateCheck } from "./update-periodic.js";
 import { measuredUpdateProgress } from "./update-core.js";
 import { createUpdateLogo } from "./update-logo.js";
-import { announceConnectedUpdate } from "./update-announcement.js";
+import { announceConnectedUpdate, UPDATE_ANNOUNCEMENT_DELAY_MS } from "./update-announcement.js";
 import { createRecommendedUpdate } from "./update-recommended.js";
 import { playUpdateAnnouncement } from "./sounds.js";
 import { updateShareSettings } from "./video.js";
@@ -343,8 +343,14 @@ function showRestart(m) {
 // Saves the session for the new process, then restarts into the staged update.
 async function prepareAndRestart() {
     const app = window.go.main.App;
-    await announceConnectedUpdate({ getState: () => V()?.state,
+    // Spoken only if the update is still running after the delay; a fast
+    // handover or restart cancels it (this process exits or hands over).
+    const announcement = announceConnectedUpdate({ getState: () => V()?.state, delayMs: UPDATE_ANNOUNCEMENT_DELAY_MS,
         sessionInfo: tab => app.SessionInfoForTab(tab), play: playUpdateAnnouncement });
+    try { await restartIntoUpdate(app); } finally { announcement.cancel(); }
+}
+
+async function restartIntoUpdate(app) {
     if (typeof app.PrepareUpdateReconnect === "function") {
         const audio = window.__noxa.updateReconnectAudio();
         const preparationError = await app.PrepareUpdateReconnect(audio.muted, audio.deafened, audio.mutedBeforeDeafen);
