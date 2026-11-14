@@ -16,7 +16,7 @@ func TestSignedDirectoryRecordRequiresAuthenticatedSigner(t *testing.T) {
 	}
 	conn := dialRetry(t, env.addr)
 	defer func() { _ = conn.Close() }()
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: public, AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}})
+	sendProvenPasswordAuth(t, conn, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: public, AuthorizationModels: []string{netproto.AuthorizationModelRolesV1}}, private)
 	var response netproto.AuthResponse
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &response); err != nil || !response.OK {
 		t.Fatal("authentication failed", err)

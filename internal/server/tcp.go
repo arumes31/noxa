@@ -462,6 +462,9 @@ type TCPServer struct {
 
 	loginLimiter           *auth.LoginFailureLimiter
 	channelPasswordLimiter *auth.LoginFailureLimiter
+	// verifiedSecrets lets a known-correct server or channel password skip
+	// the KDF (verified_secrets.go).
+	verifiedSecrets verifiedSecrets
 
 	mu      sync.RWMutex
 	clients map[string]*Client

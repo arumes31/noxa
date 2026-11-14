@@ -466,8 +466,8 @@ func (m MessageType) String() string {
 // the server starts a challenge-response handshake and replies with an
 // AuthChallenge. ServerPassword is required when the server has a global
 // password set. PublicKey is the client's Ed25519 identity key (PEM); on a
-// successful nickname login the server binds it to the account so future
-// challenge logins work with the same key.
+// successful password login that also proves it (PublicKeyProof) the server
+// binds it to the account so future challenge logins work with the same key.
 //
 // Anonymous guest login (TS3-style): with Anonymous set and no Username or
 // Password, the server authenticates the client immediately as a guest with
@@ -495,7 +495,12 @@ type Authenticate struct {
 	Nickname  string `json:"nickname,omitempty"`
 	Anonymous bool   `json:"anonymous,omitempty"`
 	PublicKey string `json:"public_key,omitempty"`
-	Token     string `json:"token,omitempty"`
+	// PublicKeyProof proves PublicKey on a password login: the login signature
+	// (AuthChallengeSchemeV1) over the AuthChallenge this connection received
+	// for an earlier password-less Authenticate. Without it the key is neither
+	// bound nor used as the session's signing key.
+	PublicKeyProof []byte `json:"public_key_proof,omitempty"`
+	Token          string `json:"token,omitempty"`
 	// X25519PublicKey is the client's ENCRYPTION key (base64, 32 bytes) — the
 	// same value MsgKeyPublish carries. PublicKey above is the Ed25519
 	// identity key and cannot be sealed to, so this is supplied at auth time

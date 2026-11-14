@@ -271,7 +271,7 @@ func namedKeyLoginOn(t *testing.T, conn net.Conn, keys linkTestKeys, nickname st
 func desktopLogin(t *testing.T, addr string, keys linkTestKeys) net.Conn {
 	t.Helper()
 	conn := dialRetry(t, addr)
-	send(t, conn, netproto.MsgAuthenticate, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: keys.public})
+	sendProvenPasswordAuth(t, conn, netproto.Authenticate{Username: "user-uid", Password: "pw", PublicKey: keys.public}, keys.private)
 	var resp netproto.AuthResponse
 	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthResponse), &resp); err != nil {
 		t.Fatal(err)
@@ -772,4 +772,24 @@ func TestSelfRootedWebGuestRegistersDevice(t *testing.T) {
 			t.Fatalf("%s self-registered from the browser: %v", name, err)
 		}
 	}
+}
+
+// sendProvenPasswordAuth sends a password login that proves msg.PublicKey:
+// a password-less Authenticate first fetches a challenge on this connection,
+// which the login then signs (Authenticate.PublicKeyProof).
+func sendProvenPasswordAuth(t *testing.T, conn net.Conn, msg netproto.Authenticate, private string) {
+	t.Helper()
+	probe := msg
+	probe.Password, probe.PublicKey = "", ""
+	send(t, conn, netproto.MsgAuthenticate, probe)
+	var challenge netproto.AuthChallenge
+	if err := netproto.Decode(readOfType(t, conn, netproto.MsgAuthChallenge), &challenge); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := auth.SignLoginChallenge(private, challenge.Challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg.PublicKeyProof = proof
+	send(t, conn, netproto.MsgAuthenticate, msg)
 }

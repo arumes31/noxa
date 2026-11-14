@@ -393,10 +393,11 @@ func (a *AuthService) LookupUserByPublicKey(ctx context.Context, publicKey strin
 }
 
 // BindPublicKey records a client's identity public key on an account (after
-// a successful nickname login), enabling future challenge-response logins
-// with that key. A key already bound to another account, or one whose derived
-// unique ID is another account's, is refused with ErrPublicKeyInUse so a
-// password login cannot claim someone else's identity key.
+// a password login that also proved the key), enabling future
+// challenge-response logins with that key. A key already bound to another
+// account, one whose derived unique ID is another account's or a linked
+// guest's principal, or another principal's device key is refused with
+// ErrPublicKeyInUse so a login cannot claim someone else's identity key.
 func (a *AuthService) BindPublicKey(ctx context.Context, userID int64, publicKey string) error {
 	derivedUniqueID, err := UniqueIDFromPublicKey(publicKey)
 	if err != nil {
@@ -413,6 +414,10 @@ func (a *AuthService) BindPublicKey(ctx context.Context, userID int64, publicKey
 		WHERE id = $1 AND NOT EXISTS (
 			SELECT 1 FROM users other
 			WHERE other.id <> $1 AND (other.public_key = $2 OR other.public_key = $4 OR other.unique_id = $3)
+		) AND NOT EXISTS (
+			-- another principal's device key, or a linked guest derived from this key
+			SELECT 1 FROM user_devices d
+			WHERE d.user_id IS DISTINCT FROM $1 AND (d.principal = $3 OR d.ed25519_public = $2 OR d.ed25519_public = $4)
 		)`
 	result, err := a.store.DB().ExecContext(ctx, q, userID, canonical, derivedUniqueID, publicKey)
 	if err != nil {

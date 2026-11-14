@@ -56,6 +56,13 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	if reason := s.clientVersionRejection(msg.ClientVersion); reason != "" {
 		return s.rejectClientVersion(client, reason)
 	}
+	// The challenge a key proof signs was issued for an earlier attempt on
+	// this connection; take it before negotiation clears it. It only ever
+	// proves the key, never authenticates, and is spent either way.
+	var proofChallenge []byte
+	if msg.Password != "" && len(msg.PublicKeyProof) > 0 {
+		proofChallenge, _, _ = client.takeChallenge("")
+	}
 	if !s.negotiateAuthorization(client, msg.AuthorizationModels) {
 		return s.rejectAuthorizationModel(client)
 	}
@@ -81,8 +88,10 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "anonymous login takes no password"})
 	}
 
-	// Reject banned clients before verifying any password. IP bans apply to
-	// everyone, including guests, while account bans apply to the presented ID.
+	// Reject IP-banned clients before verifying any password; IP bans apply
+	// to everyone, including guests. Account bans are checked only after
+	// authentication (finishAuth, canonical unique ID), so an unauthenticated
+	// caller cannot ask whether, and why, an account is banned.
 	ip := remoteIP(client.Conn)
 	source := auth.SourceAddressKey(ip)
 	serverPasswordScope := auth.LoginFailureScope("tcp-server-password:"+source, "")
@@ -92,7 +101,7 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	// keeps a separate budget the public port cannot lock.
 	principalScope := auth.LoginFailureScope("tcp", msg.Username)
 	accountScope := auth.AccountPasswordScope(msg.Username)
-	if reason, err := s.banRejectReason(ctx, client, msg.Username, ip); err != nil {
+	if reason, err := s.banRejectReason(ctx, client, "", ip); err != nil {
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
 	} else if reason != "" {
 		s.metricsSink().IncAuthFailure("tcp", "banned")
@@ -100,19 +109,22 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	}
 
 	// Global server password: when set, the client must supply it.
-	if s.deps.ServerPasswordHash != "" {
+	// A password that already verified skips the KDF, so clients that know
+	// it cannot occupy the shared KDF slots by reconnecting.
+	if hash := s.deps.ServerPasswordHash; hash != "" && !s.verifiedSecrets.known(hash, msg.ServerPassword) {
 		attempt, allowed := s.loginLimiter.Reserve(serverPasswordScope)
 		if !allowed {
 			s.metricsSink().IncAuthFailure("tcp", "locked_out")
 			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
 		}
 		defer attempt.Cancel()
-		if err := s.verifyServerPassword(msg.ServerPassword, s.deps.ServerPasswordHash); err != nil {
+		if err := s.verifyServerPassword(msg.ServerPassword, hash); err != nil {
 			attempt.Fail()
 			s.metricsSink().IncAuthFailure("tcp", "server_password")
 			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "invalid server password"})
 		}
 		attempt.Succeed(serverPasswordScope)
+		s.verifiedSecrets.remember(hash, msg.ServerPassword)
 	}
 
 	// Immediate ephemeral guest login.
@@ -123,9 +135,10 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	// No password: challenge-response handshake.
 	if msg.Password == "" {
 		// Reserve and release immediately to atomically reject source lockouts
-		// before issuing a challenge. An Ed25519 signature cannot be guessed,
-		// so password failures against this name must not block it.
-		attempt, allowed := s.loginLimiter.Reserve(accountSourceScope)
+		// before issuing a challenge; no KDF slot is taken, as no password work
+		// happens. An Ed25519 signature cannot be guessed, so password failures
+		// against this name must not block it.
+		attempt, allowed := s.loginLimiter.ReserveSignature(accountSourceScope)
 		if !allowed {
 			s.metricsSink().IncAuthFailure("tcp", "locked_out")
 			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
@@ -172,8 +185,11 @@ func (s *TCPServer) handleAuthenticate(ctx context.Context, client *Client, f *n
 	client.mu.Lock()
 	client.authSigningKey = ""
 	client.mu.Unlock()
-	// Bind the client's identity key so future challenge logins work.
-	if msg.PublicKey != "" {
+	// Bind the client's identity key so future challenge logins work, but
+	// only when it signed a challenge issued on this connection: a password
+	// alone must never claim someone else's identity key (or make it this
+	// session's signing key, which later registers it as a device).
+	if msg.PublicKey != "" && len(proofChallenge) > 0 && auth.VerifyLoginChallenge(msg.PublicKey, proofChallenge, msg.PublicKeyProof) == nil {
 		if canonical, err := auth.CanonicalPublicKey(msg.PublicKey); err == nil {
 			msg.PublicKey = canonical
 		}
@@ -235,7 +251,7 @@ func (s *TCPServer) handleAuthSignature(ctx context.Context, client *Client, f *
 	// Only the source is limited: signatures cannot be guessed, and an account
 	// lock here would let anyone lock a key login out with wrong passwords.
 	sourceScope := auth.LoginFailureScope("tcp:"+auth.SourceAddressKey(remoteIP(client.Conn)), "")
-	attempt, allowed := s.loginLimiter.Reserve(sourceScope)
+	attempt, allowed := s.loginLimiter.ReserveSignature(sourceScope)
 	if !allowed {
 		s.metricsSink().IncAuthFailure("tcp", "locked_out")
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
@@ -285,7 +301,7 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 	sourceScope := auth.LoginFailureScope("tcp:"+auth.SourceAddressKey(ip), "")
 	uniqueID, err := auth.UniqueIDFromPublicKey(msg.PublicKey)
 	if err != nil {
-		attempt, allowed := s.loginLimiter.Reserve(sourceScope)
+		attempt, allowed := s.loginLimiter.ReserveSignature(sourceScope)
 		if !allowed {
 			s.metricsSink().IncAuthFailure("tcp", "locked_out")
 			return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})
@@ -301,15 +317,9 @@ func (s *TCPServer) handleGuestSignature(ctx context.Context, client *Client, ms
 		msg.PublicKey = canonical
 	}
 
-	// A guest could bypass the Authenticate-time unique-ID ban check by
-	// withholding the ID until now; re-check with the derived ID.
-	if reason, err := s.banRejectReason(ctx, client, uniqueID, ip); err != nil {
-		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "internal error"})
-	} else if reason != "" {
-		s.metricsSink().IncAuthFailure("tcp", "banned")
-		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: reason})
-	}
-	attempt, allowed := s.loginLimiter.Reserve(sourceScope)
+	// Bans of the derived (or linked) identity are checked by finishAuth once
+	// the signature has proven it, never before.
+	attempt, allowed := s.loginLimiter.ReserveSignature(sourceScope)
 	if !allowed {
 		s.metricsSink().IncAuthFailure("tcp", "locked_out")
 		return s.writeMessage(client, netproto.MsgAuthResponse, netproto.AuthResponse{Reason: "too many failed logins, try again later"})

@@ -198,7 +198,9 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 	}); err != nil || !approved {
 		return err
 	}
-	if passwordHash != "" {
+	// A password that already verified for this hash skips the KDF, so a
+	// member who knows it cannot hold the two shared KDF slots by rejoining.
+	if passwordHash != "" && !s.verifiedSecrets.known(passwordHash, msg.Password) {
 		source := auth.LoginFailureScope("channel:"+auth.SourceAddressKey(remoteIP(client.Conn)), "")
 		principal := auth.LoginFailureScope("channel", fmt.Sprintf("%s:%d", client.UniqueID, msg.ChannelID))
 		attempt, allowed := s.channelPasswordLimiter.Reserve(source, principal)
@@ -211,6 +213,7 @@ func (s *TCPServer) handleJoinChannel(ctx context.Context, client *Client, f *ne
 			return s.sendErrorFor(client, requestOrigin(ctx), errCodePermissionDenied, "invalid channel password")
 		}
 		attempt.Succeed(principal)
+		s.verifiedSecrets.remember(passwordHash, msg.Password)
 	}
 	return s.roleAction(ctx, client, msg.ChannelID, authorization.Connect, func(ctx context.Context) error {
 		return s.joinChannelAllowed(ctx, client, msg, passwordHash)

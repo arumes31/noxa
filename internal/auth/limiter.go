@@ -38,10 +38,11 @@ type LoginFailureLimiterConfig struct {
 
 // LoginFailureLimiter bounds failed-login state. It has no background
 // goroutine: every operation prunes expired state while holding the mutex.
-// Active principal lockouts are never evicted, so capacity pressure cannot
-// reopen password guessing for an account. Source-only lockouts are evicted
-// (oldest first) once nothing else can make room: otherwise one attacker with
-// enough addresses could fill the table and lock every new source out.
+// Under capacity pressure idle failure streaks are evicted first, then
+// source-only lockouts, and only then the principal lockout that expires
+// soonest: otherwise one attacker with enough addresses or invented names
+// could fill the table and lock every new caller out. Only scopes with KDF
+// work in flight are never evicted.
 type LoginFailureLimiter struct {
 	mu sync.Mutex
 
@@ -70,6 +71,7 @@ type loginFailureEntry struct {
 type LoginAttempt struct {
 	limiter *LoginFailureLimiter
 	scopes  []string
+	kdf     bool // holds a global KDF slot
 	once    sync.Once
 }
 
@@ -129,19 +131,35 @@ func AccountPasswordScope(principal string) string {
 // evicted under capacity pressure (see LoginFailureLimiter).
 const sourceScopePrefix = "s:"
 
-// evictableLocked reports whether entry may be dropped to make room: idle
-// failure streaks always, active lockouts only for source-only scopes.
-func evictableLocked(scope string, entry loginFailureEntry, now time.Time) bool {
-	if entry.inFlight {
-		return false
+// evictionRank: idle streaks (0) go before source lockouts (1), which go
+// before principal lockouts (2).
+func evictionRank(scope string, entry loginFailureEntry, now time.Time) int {
+	switch {
+	case !entry.lockedUntil.After(now):
+		return 0
+	case strings.HasPrefix(scope, sourceScopePrefix):
+		return 1
+	default:
+		return 2
 	}
-	return !entry.lockedUntil.After(now) || strings.HasPrefix(scope, sourceScopePrefix)
+}
+
+// ReserveSignature is Reserve for verifications that do no KDF work (a
+// signature check, a challenge issue): it checks lockouts and holds the
+// per-scope slots but takes no global KDF slot, so saturated password work
+// cannot block key logins.
+func (l *LoginFailureLimiter) ReserveSignature(scopes ...string) (*LoginAttempt, bool) {
+	return l.reserve(false, scopes)
 }
 
 // Reserve atomically checks scopes, reserves their per-scope verification slots,
 // and acquires a bounded global KDF slot. A false result means no expensive
 // password work may be started for that attempt.
 func (l *LoginFailureLimiter) Reserve(scopes ...string) (*LoginAttempt, bool) {
+	return l.reserve(true, scopes)
+}
+
+func (l *LoginFailureLimiter) reserve(kdf bool, scopes []string) (*LoginAttempt, bool) {
 	scopes = uniqueLoginScopes(scopes)
 	if l == nil || len(scopes) == 0 {
 		return &LoginAttempt{}, true
@@ -153,7 +171,7 @@ func (l *LoginFailureLimiter) Reserve(scopes ...string) (*LoginAttempt, bool) {
 	now := l.now()
 	l.pruneExpiredLocked(now)
 	protectedScopes := loginScopeSet(scopes)
-	if l.inFlight >= l.maxConcurrentKDF || !l.scopesAvailableLocked(scopes, protectedScopes, now) {
+	if (kdf && l.inFlight >= l.maxConcurrentKDF) || !l.scopesAvailableLocked(scopes, protectedScopes, now) {
 		return nil, false
 	}
 	newScopes := 0
@@ -170,8 +188,10 @@ func (l *LoginFailureLimiter) Reserve(scopes ...string) (*LoginAttempt, bool) {
 		entry.inFlight = true
 		l.entries[scope] = entry
 	}
-	l.inFlight++
-	return &LoginAttempt{limiter: l, scopes: scopes}, true
+	if kdf {
+		l.inFlight++
+	}
+	return &LoginAttempt{limiter: l, scopes: scopes, kdf: kdf}, true
 }
 
 // Succeed releases every reserved scope after a successful verification and
@@ -252,7 +272,9 @@ func (a *LoginAttempt) finish(result loginAttemptResult, successScopes []string)
 			}
 		}
 		if finished {
-			l.inFlight--
+			if a.kdf {
+				l.inFlight--
+			}
 			l.clearOverflowWhenEvictableLocked(now)
 		}
 	})
@@ -391,7 +413,7 @@ func (l *LoginFailureLimiter) scopesAvailableLocked(scopes []string, protectedSc
 		if _, protected := protectedScopes[scope]; protected {
 			continue
 		}
-		if evictableLocked(scope, entry, now) {
+		if !entry.inFlight {
 			available++
 		}
 	}
@@ -399,7 +421,7 @@ func (l *LoginFailureLimiter) scopesAvailableLocked(scopes []string, protectedSc
 		l.overflowUntil = time.Time{}
 		return true
 	}
-	// All bounded slots hold principal lockouts or KDF work. Fail closed for
+	// All bounded slots hold KDF work in flight. Fail closed for
 	// new scopes until a slot naturally becomes available.
 	l.overflowUntil = now.Add(l.lockoutDuration)
 	return false
@@ -420,10 +442,10 @@ func (l *LoginFailureLimiter) pruneExpiredLocked(now time.Time) {
 	l.clearOverflowWhenEvictableLocked(now)
 }
 
-func (l *LoginFailureLimiter) evictableCapacityLocked(now time.Time) int {
+func (l *LoginFailureLimiter) evictableCapacityLocked() int {
 	available := l.maxEntries - len(l.entries)
-	for scope, entry := range l.entries {
-		if evictableLocked(scope, entry, now) {
+	for _, entry := range l.entries {
+		if !entry.inFlight {
 			available++
 		}
 	}
@@ -431,34 +453,34 @@ func (l *LoginFailureLimiter) evictableCapacityLocked(now time.Time) int {
 }
 
 func (l *LoginFailureLimiter) clearOverflowWhenEvictableLocked(now time.Time) {
-	if l.evictableCapacityLocked(now) > 0 || !l.overflowUntil.After(now) {
+	if l.evictableCapacityLocked() > 0 || !l.overflowUntil.After(now) {
 		l.overflowUntil = time.Time{}
 	}
 }
 
 func (l *LoginFailureLimiter) makeRoomLocked(now time.Time, needed int, protectedScopes map[string]struct{}) bool {
 	for len(l.entries)+needed > l.maxEntries {
-		// Idle failure streaks go first (oldest failure); only then the
-		// source lockout that expires soonest.
+		// Lowest rank first (see evictionRank); within a rank the oldest
+		// failure or the lockout that expires soonest.
 		var (
-			oldestScope  string
-			oldestTime   time.Time
-			oldestLocked bool
+			oldestScope string
+			oldestTime  time.Time
+			oldestRank  int
 		)
 		for scope, entry := range l.entries {
 			if _, protected := protectedScopes[scope]; protected {
 				continue
 			}
-			if !evictableLocked(scope, entry, now) {
+			if entry.inFlight {
 				continue
 			}
-			locked := entry.lockedUntil.After(now)
+			rank := evictionRank(scope, entry, now)
 			at := entry.lastFailure
-			if locked {
+			if rank > 0 {
 				at = entry.lockedUntil
 			}
-			if oldestScope == "" || (oldestLocked && !locked) || (oldestLocked == locked && at.Before(oldestTime)) {
-				oldestScope, oldestTime, oldestLocked = scope, at, locked
+			if oldestScope == "" || rank < oldestRank || (rank == oldestRank && at.Before(oldestTime)) {
+				oldestScope, oldestTime, oldestRank = scope, at, rank
 			}
 		}
 		if oldestScope == "" {
