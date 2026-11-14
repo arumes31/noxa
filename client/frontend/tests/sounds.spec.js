@@ -296,7 +296,10 @@ for (const language of ["en", "de"]) {
     });
 }
 
-for (const language of ["en", "de"]) {
+// English Test All runs through the Settings button in workflows.spec.js
+// ("sound previews use draft volume, finish Test All..."), which asserts the
+// exact English order; each pass plays ~70 s of real audio, so run it once.
+for (const language of ["de"]) {
     test(`Test All plays every ${language} announcement once and no retired click`, async ({ page }) => {
         test.setTimeout(100_000);
         await useSilentPreviewOutput(page);
